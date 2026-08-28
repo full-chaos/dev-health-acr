@@ -368,7 +368,7 @@ func TestRankCohort_InvestmentMixThresholdLabels(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			value, labels, _, available := investmentMixSignal([]CanonicalFact{investmentFact("A", tc.themes, tc.bugfix)}, Coverage{})
+			value, labels, _, _, _, available := investmentMixSignal([]CanonicalFact{investmentFact("A", tc.themes, tc.bugfix)}, Coverage{})
 			if !available {
 				t.Fatalf("investmentMixSignal() available = false, want true")
 			}
@@ -391,7 +391,7 @@ func TestRankCohort_MixShiftDirectionLabels(t *testing.T) {
 	priorTowardOperational := map[string]float64{
 		ThemeFeatureDelivery: 0.4, ThemeOperational: 0.1, ThemeMaintenance: 0.2, ThemeQuality: 0.2, ThemeRisk: 0.1,
 	}
-	_, labels, _, available := investmentMixSignal([]CanonicalFact{investmentFactWithPrior("A", current, priorTowardOperational, 0)}, Coverage{})
+	_, labels, _, _, _, available := investmentMixSignal([]CanonicalFact{investmentFactWithPrior("A", current, priorTowardOperational, 0)}, Coverage{})
 	if !available {
 		t.Fatal("investmentMixSignal() available = false")
 	}
@@ -405,7 +405,7 @@ func TestRankCohort_MixShiftDirectionLabels(t *testing.T) {
 	priorFeatureLow := map[string]float64{
 		ThemeFeatureDelivery: 0.1, ThemeOperational: 0.3, ThemeMaintenance: 0.3, ThemeQuality: 0.2, ThemeRisk: 0.1,
 	}
-	_, labels, _, available = investmentMixSignal([]CanonicalFact{investmentFactWithPrior("B", currentTowardFeature, priorFeatureLow, 0)}, Coverage{})
+	_, labels, _, _, _, available = investmentMixSignal([]CanonicalFact{investmentFactWithPrior("B", currentTowardFeature, priorFeatureLow, 0)}, Coverage{})
 	if !available {
 		t.Fatal("investmentMixSignal() available = false")
 	}
@@ -421,7 +421,7 @@ func TestRankCohort_MixShiftDirectionLabels(t *testing.T) {
 	priorQualityLow := map[string]float64{
 		ThemeFeatureDelivery: 0.2, ThemeOperational: 0.3, ThemeMaintenance: 0.4, ThemeQuality: 0.1, ThemeRisk: 0.0,
 	}
-	_, labels, _, available = investmentMixSignal([]CanonicalFact{investmentFactWithPrior("C", currentTowardQuality, priorQualityLow, 0)}, Coverage{})
+	_, labels, _, _, _, available = investmentMixSignal([]CanonicalFact{investmentFactWithPrior("C", currentTowardQuality, priorQualityLow, 0)}, Coverage{})
 	if !available {
 		t.Fatal("investmentMixSignal() available = false")
 	}
@@ -444,7 +444,7 @@ func TestRankCohort_MixShiftTieBreaksByTaxonomyOrder(t *testing.T) {
 	prior := map[string]float64{
 		ThemeFeatureDelivery: 0.1, ThemeOperational: 0.1, ThemeMaintenance: 0.5, ThemeQuality: 0.1, ThemeRisk: 0.2,
 	}
-	_, labels, _, available := investmentMixSignal([]CanonicalFact{investmentFactWithPrior("A", current, prior, 0)}, Coverage{})
+	_, labels, _, _, _, available := investmentMixSignal([]CanonicalFact{investmentFactWithPrior("A", current, prior, 0)}, Coverage{})
 	if !available {
 		t.Fatal("investmentMixSignal() available = false")
 	}

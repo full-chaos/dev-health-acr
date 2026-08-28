@@ -338,6 +338,10 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 			// legitimate there and is left alone.
 			EvidenceRefIDs: copyStrings(driver.EvidenceRefIDs),
 			ClaimedFactIDs: append([]string(nil), driver.ClaimedFactIDs...),
+			// AffectedSubjects (CHAOS-4398 PR3, design doc §4a) copied
+			// verbatim -- ties a cohort-answer driver back to which
+			// team(s) it explains.
+			AffectedSubjects: append([]contractsv1.ContextFabricSubjectRef(nil), driver.AffectedSubjects...),
 		})
 	}
 	// Claimed facts the canonical result carried but no retained driver
@@ -403,6 +407,14 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 			Rank:             member.Rank,
 			InclusionReasons: reasons,
 			EvidenceRefIDs:   append([]string(nil), member.EvidenceRefIDs...),
+			// RankingComputed/AttentionRank/Score/RankingBasis/DataCompleteness
+			// (CHAOS-4398 PR3, design doc §4a) are copied verbatim -- see
+			// ContextFabricProjectedCohortMember's own doc comment.
+			RankingComputed:  member.RankingComputed,
+			AttentionRank:    member.AttentionRank,
+			Score:            member.Score,
+			RankingBasis:     append([]string(nil), member.RankingBasis...),
+			DataCompleteness: member.DataCompleteness,
 		})
 	}
 	return &contractsv1.ContextFabricProjectedCohort{

@@ -3870,6 +3870,17 @@
               },
               "maxItems": 4,
               "uniqueItems": true
+            },
+            "concentration": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "concentration_method": {
+              "type": "string",
+              "enum": [
+                "max_share"
+              ]
             }
           },
           "required": [
@@ -4012,6 +4023,54 @@
                   "threshold_labels": {
                     "maxItems": 0
                   }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "signal": {
+                    "const": "investment_mix"
+                  }
+                },
+                "required": [
+                  "signal"
+                ]
+              },
+              "then": {
+                "required": [
+                  "concentration",
+                  "concentration_method"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "signal": {
+                    "not": {
+                      "const": "investment_mix"
+                    }
+                  }
+                },
+                "required": [
+                  "signal"
+                ]
+              },
+              "then": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "concentration"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "concentration_method"
+                      ]
+                    }
+                  ]
                 }
               }
             }

@@ -1104,6 +1104,16 @@ type ContextFabricCohortMemberDriver struct {
 	// contributed a plain value with no named threshold crossed. Every
 	// entry is a member of RankingBasis and is prefixed by Signal + ".".
 	ThresholdLabels []string `json:"threshold_labels,omitempty"`
+	// Concentration/ConcentrationMethod (CHAOS-4398 PR3) make the
+	// investment_mix family's mix_concentrated threshold evidence checkable
+	// by number, present iff Signal=="investment_mix" and the family was
+	// available. ConcentrationMethod is a closed vocabulary named
+	// generically -- "max_share" today (the largest single canonical theme
+	// share), "hhi" once CHAOS-4414 lands a real Herfindahl-Hirschman Index
+	// -- so a future method swap changes the METHOD value, never the field
+	// name or shape. Absent for every other signal.
+	Concentration       *float64 `json:"concentration,omitempty"`
+	ConcentrationMethod string   `json:"concentration_method,omitempty"`
 }
 
 // ContextFabricCohortMemberDriverWindow is CHAOS-4398 PR2's closed

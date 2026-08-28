@@ -179,9 +179,18 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	"structured.cohort.rationale",
 	"structured.cohort.members[].subject.label",
 	"structured.cohort.members[].inclusion_reasons[]",
+	// CHAOS-4398 PR3: RankingTable rows reuse the SAME generic scalar-bag
+	// row shape key_facts[].rows[].fields{}.string already gets below --
+	// same reasoning, same leaf-name treatment.
+	"structured.cohort.ranking_table[].fields{}.string",
 	"structured.principal_drivers[].title",
 	"structured.principal_drivers[].summary",
 	"structured.principal_drivers[].qualification",
+	// CHAOS-4398 PR3: AffectedSubjects' Label gets the SAME conservative
+	// entity-display-label treatment as every other subject.label leaf in
+	// this list (e.g. cohort.members[].subject.label above) -- source-
+	// system-derived text, not a closed vocabulary.
+	"structured.principal_drivers[].affected_subjects[].label",
 	"structured.key_facts[].subject.label",
 	// The model names the fact FIELD alongside its value (the synthesis
 	// prompt bounds claimed_fact.field), so it is model-facing text, not a

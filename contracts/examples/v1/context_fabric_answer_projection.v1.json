@@ -36,7 +36,14 @@
         ],
         "evidence_ref_ids": [
           "evidence_team_chaos_roster"
-        ]
+        ],
+        "ranking_computed": true,
+        "attention_rank": 1,
+        "score": 42,
+        "ranking_basis": [
+          "health.compounding_risk"
+        ],
+        "data_completeness": "degraded"
       },
       {
         "subject": {
@@ -68,6 +75,13 @@
       ],
       "claimed_fact_ids": [
         "claim_readiness_ask_dev"
+      ],
+      "affected_subjects": [
+        {
+          "kind": "project",
+          "canonical_id": "project_ask_dev",
+          "label": "Ask Dev"
+        }
       ]
     }
   ],

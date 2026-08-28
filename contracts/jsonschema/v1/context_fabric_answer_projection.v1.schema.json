@@ -448,6 +448,49 @@
           },
           "maxItems": 500,
           "uniqueItems": true
+        },
+        "ranking_computed": {
+          "type": "boolean"
+        },
+        "attention_rank": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "ranking_basis": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "enum": [
+              "investment_mix",
+              "health.compounding_risk",
+              "operational_deficiencies.severity",
+              "readiness.coverage_gap",
+              "workload.forecast_pressure",
+              "investment_mix.reactive_share_high",
+              "investment_mix.deliberate_share_low",
+              "investment_mix.mix_concentrated",
+              "investment_mix.mix_shift_toward_operational",
+              "investment_mix.mix_shift_toward_feature",
+              "investment_mix.mix_shift_other"
+            ]
+          },
+          "maxItems": 16,
+          "uniqueItems": true
+        },
+        "data_completeness": {
+          "type": "string",
+          "enum": [
+            "complete",
+            "partial",
+            "degraded"
+          ]
         }
       },
       "required": [
@@ -497,6 +540,13 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/ProjectedCohortMember"
+          },
+          "maxItems": 250
+        },
+        "ranking_table": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectedFactRow"
           },
           "maxItems": 250
         }
@@ -589,6 +639,13 @@
           },
           "maxItems": 250,
           "uniqueItems": true
+        },
+        "affected_subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SubjectRef"
+          },
+          "maxItems": 250
         }
       },
       "required": [

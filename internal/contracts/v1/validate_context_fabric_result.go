@@ -631,6 +631,25 @@ func (d ContextFabricCohortMemberDriver) validate(bounds contextFabricBounds) er
 			return fmt.Errorf("cohort member driver threshold label is not a recognized value for its signal")
 		}
 	}
+	// Concentration/ConcentrationMethod (CHAOS-4398 PR3) are present iff
+	// Signal is investment_mix -- every other family never computes a
+	// concentration measure. investmentMixSignal always sets both together
+	// whenever the family is available (cohort_ranking.go), so a driver
+	// entry (which only exists when its family WAS available) always
+	// carries both for investment_mix, never one without the other.
+	if d.Signal == investmentMixSignalName {
+		if d.Concentration == nil {
+			return fmt.Errorf("cohort member investment_mix driver is missing concentration")
+		}
+		if math.IsNaN(*d.Concentration) || math.IsInf(*d.Concentration, 0) || *d.Concentration < 0 || *d.Concentration > 1 {
+			return fmt.Errorf("cohort member driver concentration violates v1 bounds")
+		}
+		if !validContextFabricCohortMemberDriverConcentrationMethod(d.ConcentrationMethod) {
+			return fmt.Errorf("cohort member driver concentration_method is not a recognized value")
+		}
+	} else if d.Concentration != nil || d.ConcentrationMethod != "" {
+		return fmt.Errorf("cohort member driver concentration is only valid for investment_mix")
+	}
 	return nil
 }
 

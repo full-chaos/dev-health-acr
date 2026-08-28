@@ -32,6 +32,13 @@
       ],
       "claimed_fact_ids": [
         "claim_readiness_ask_dev"
+      ],
+      "affected_subjects": [
+        {
+          "kind": "project",
+          "canonical_id": "project_ask_dev",
+          "label": "Ask Dev"
+        }
       ]
     }
   ],

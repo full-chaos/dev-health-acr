@@ -142,6 +142,13 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.CohortMemberDriver.properties.value.maximum":              1,
 		"common#$defs.CohortMemberDriver.properties.weight.minimum":             0,
 		"common#$defs.CohortMemberDriver.properties.weight_contributed.minimum": 0,
+		// CHAOS-4398 PR3: concentration is only present/probeable for
+		// investment_mix drivers (the allOf/if-then above already proves
+		// that presence rule structurally); its own [0,1] range bound is
+		// declaratively mapped for the SAME cross-field-entanglement
+		// reason as value/weight/weight_contributed above.
+		"common#$defs.CohortMemberDriver.properties.concentration.minimum": 0,
+		"common#$defs.CohortMemberDriver.properties.concentration.maximum": 1,
 		// Not probeable, and honestly so (codex round-9 F1): no valid
 		// document can carry more fact_requirements than there are distinct
 		// kinds, so the probe cannot build a control past the vocabulary and

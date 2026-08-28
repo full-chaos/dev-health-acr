@@ -537,6 +537,22 @@ func validContextFabricCohortMemberDriverWindow(value ContextFabricCohortMemberD
 	}
 }
 
+// contextFabricCohortMemberDriverConcentrationMethods is CHAOS-4398 PR3's
+// CLOSED vocabulary for ContextFabricCohortMemberDriver.ConcentrationMethod,
+// mirrored from internal/contextfabric/cohort_ranking.go's
+// ConcentrationMethod* constants (same cross-package mirroring discipline
+// as contextFabricCohortMemberDriverWeights above). "max_share" is the only
+// method today; CHAOS-4414 adds "hhi" -- a real Herfindahl-Hirschman Index
+// -- as a genuinely NEW closed-vocab value, never a rename of this field.
+var contextFabricCohortMemberDriverConcentrationMethods = map[string]struct{}{
+	"max_share": {},
+}
+
+func validContextFabricCohortMemberDriverConcentrationMethod(value string) bool {
+	_, ok := contextFabricCohortMemberDriverConcentrationMethods[value]
+	return ok
+}
+
 func validResolutionState(value ContextFabricResolutionState) bool {
 	switch value {
 	case ContextFabricResolutionCommitted, ContextFabricResolutionProposed, ContextFabricResolutionAmbiguous, ContextFabricResolutionUnresolved:
