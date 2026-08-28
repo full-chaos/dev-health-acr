@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/authverify"
 )
 
 // minWorkloadAccessTokenLifetime is the shortest lifetime this issuer will
@@ -23,12 +24,12 @@ type serviceAccessTokenIssuer struct {
 	now         func() time.Time
 }
 
-// NewWorkloadAccessTokenIssuer builds the production AccessTokenIssuer,
+// NewWorkloadAccessTokenIssuer builds the production authverify.AccessTokenIssuer,
 // reusing credentials -- the SAME *Service every other credential issuance
 // path (self-service create, device flow, rotation) already goes through
 // -- so a workload-exchanged token is created, hashed, and stored exactly
 // like any other credential.
-func NewWorkloadAccessTokenIssuer(credentials *Service, now func() time.Time) (AccessTokenIssuer, error) {
+func NewWorkloadAccessTokenIssuer(credentials *Service, now func() time.Time) (authverify.AccessTokenIssuer, error) {
 	if credentials == nil {
 		return nil, errors.New("credential service is required")
 	}
@@ -38,9 +39,9 @@ func NewWorkloadAccessTokenIssuer(credentials *Service, now func() time.Time) (A
 	return &serviceAccessTokenIssuer{credentials: credentials, now: now}, nil
 }
 
-func (s *serviceAccessTokenIssuer) Issue(ctx context.Context, binding WorkloadBinding, scope []string, subjectExpiresAt time.Time) (IssuedCredential, error) {
+func (s *serviceAccessTokenIssuer) Issue(ctx context.Context, binding authverify.WorkloadBinding, scope []string, subjectExpiresAt time.Time) (authverify.IssuedToken, error) {
 	now := s.now().UTC()
-	expiresAt := now.Add(WorkloadAccessTokenLifetime)
+	expiresAt := now.Add(authverify.WorkloadAccessTokenLifetime)
 	if subjectExpiresAt.Before(expiresAt) {
 		expiresAt = subjectExpiresAt
 	}
@@ -50,11 +51,15 @@ func (s *serviceAccessTokenIssuer) Issue(ctx context.Context, binding WorkloadBi
 		// validation should already have caught an outright-expired
 		// subject token, so this is mainly the near-expiry edge (see
 		// minWorkloadAccessTokenLifetime's own doc comment).
-		return IssuedCredential{}, ErrSubjectTokenInvalid
+		return authverify.IssuedToken{}, authverify.ErrSubjectTokenInvalid
 	}
-	return s.credentials.Create(ctx, CreateCredentialRequest{
+	cred, err := s.credentials.Create(ctx, CreateCredentialRequest{
 		OrgID: binding.OrgID, Name: "workload:" + binding.BindingID, RepositoryScopes: binding.RepositoryScopes,
 		Scopes: scope, CreatedBy: binding.BindingID, ExpiresAt: &expiresAt,
 		IssuanceProvenance: storage.CredentialIssuanceProvenanceWorkloadExchange, WorkloadBindingID: binding.BindingID,
 	})
+	if err != nil {
+		return authverify.IssuedToken{}, err
+	}
+	return authverify.IssuedToken{Token: cred.Token, ExpiresAt: cred.Credential.ExpiresAt}, nil
 }

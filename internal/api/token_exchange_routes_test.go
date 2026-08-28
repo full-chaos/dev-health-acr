@@ -14,10 +14,11 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-go/authverify"
 )
 
 type fakeWorkloadTokenExchanger struct {
-	result auth.WorkloadTokenExchangeResult
+	result authverify.WorkloadTokenExchangeResult
 	err    error
 	// lastSubjectToken/lastScope record what the handler passed through,
 	// so a test can assert the form body was parsed correctly.
@@ -25,7 +26,7 @@ type fakeWorkloadTokenExchanger struct {
 	lastScope        []string
 }
 
-func (f *fakeWorkloadTokenExchanger) Exchange(_ context.Context, subjectToken string, requestedScope []string) (auth.WorkloadTokenExchangeResult, error) {
+func (f *fakeWorkloadTokenExchanger) Exchange(_ context.Context, subjectToken string, requestedScope []string) (authverify.WorkloadTokenExchangeResult, error) {
 	f.lastSubjectToken = subjectToken
 	f.lastScope = requestedScope
 	return f.result, f.err
@@ -55,7 +56,7 @@ func tokenExchangeFormRequest(form url.Values) *http.Request {
 }
 
 func TestTokenExchange_happyPathReturnsAnOAuthTokenResponse(t *testing.T) {
-	exchanger := &fakeWorkloadTokenExchanger{result: auth.WorkloadTokenExchangeResult{
+	exchanger := &fakeWorkloadTokenExchanger{result: authverify.WorkloadTokenExchangeResult{
 		AccessToken: "fcacr_workload_test", ExpiresIn: 600, Scope: []string{auth.ScopeContextRead, auth.ScopeEvidenceRead},
 	}}
 	app := newTokenExchangeTestApp(t, exchanger)
@@ -84,7 +85,7 @@ func TestTokenExchange_happyPathReturnsAnOAuthTokenResponse(t *testing.T) {
 }
 
 func TestTokenExchange_narrowedScopeIsForwardedToExchange(t *testing.T) {
-	exchanger := &fakeWorkloadTokenExchanger{result: auth.WorkloadTokenExchangeResult{AccessToken: "fcacr_x", ExpiresIn: 60}}
+	exchanger := &fakeWorkloadTokenExchanger{result: authverify.WorkloadTokenExchangeResult{AccessToken: "fcacr_x", ExpiresIn: 60}}
 	app := newTokenExchangeTestApp(t, exchanger)
 	form := url.Values{}
 	form.Set("grant_type", contractsv1.TokenExchangeGrantType)
@@ -142,7 +143,7 @@ func TestTokenExchange_missingSubjectTokenIsInvalidRequest(t *testing.T) {
 }
 
 func TestTokenExchange_invalidSubjectTokenMapsToInvalidGrant(t *testing.T) {
-	app := newTokenExchangeTestApp(t, &fakeWorkloadTokenExchanger{err: auth.ErrSubjectTokenInvalid})
+	app := newTokenExchangeTestApp(t, &fakeWorkloadTokenExchanger{err: authverify.ErrSubjectTokenInvalid})
 	form := url.Values{}
 	form.Set("grant_type", contractsv1.TokenExchangeGrantType)
 	form.Set("subject_token", "jwt")
@@ -156,7 +157,7 @@ func TestTokenExchange_unresolvedBindingMapsToInvalidGrantNotUnauthorizedClient(
 	// A disabled/unresolved binding must not be distinguishable from an
 	// invalid subject token to the caller -- see
 	// storageGrantResolver.Resolve's own doc comment.
-	app := newTokenExchangeTestApp(t, &fakeWorkloadTokenExchanger{err: auth.ErrWorkloadBindingNotFound})
+	app := newTokenExchangeTestApp(t, &fakeWorkloadTokenExchanger{err: authverify.ErrWorkloadBindingNotFound})
 	form := url.Values{}
 	form.Set("grant_type", contractsv1.TokenExchangeGrantType)
 	form.Set("subject_token", "jwt")
@@ -167,7 +168,7 @@ func TestTokenExchange_unresolvedBindingMapsToInvalidGrantNotUnauthorizedClient(
 }
 
 func TestTokenExchange_scopeNotGrantedMapsToInvalidScope(t *testing.T) {
-	app := newTokenExchangeTestApp(t, &fakeWorkloadTokenExchanger{err: auth.ErrScopeNotGranted})
+	app := newTokenExchangeTestApp(t, &fakeWorkloadTokenExchanger{err: authverify.ErrScopeNotGranted})
 	form := url.Values{}
 	form.Set("grant_type", contractsv1.TokenExchangeGrantType)
 	form.Set("subject_token", "jwt")
@@ -221,7 +222,7 @@ func TestTokenExchange_unconfiguredExchangerDegradesTo503(t *testing.T) {
 // fail-closed exactly as before -- WebAssertions really is required for
 // those.
 func TestTokenExchange_succeedsWithoutWebAssertionsWhileDeviceCodeGrantStaysFailClosed(t *testing.T) {
-	exchanger := &fakeWorkloadTokenExchanger{result: auth.WorkloadTokenExchangeResult{
+	exchanger := &fakeWorkloadTokenExchanger{result: authverify.WorkloadTokenExchangeResult{
 		AccessToken: "fcacr_workload_test", ExpiresIn: 600, Scope: []string{auth.ScopeContextRead},
 	}}
 	app, _ := newHostedTestApp(t, nil, nil, nil, nil, nil)

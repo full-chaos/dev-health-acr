@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/authverify"
 )
 
 const (
@@ -37,7 +38,7 @@ type WebAssertionOptions struct {
 type WebAssertionVerifier struct {
 	issuer       string
 	audience     string
-	jwksPath     string
+	jwks         *authverify.Ed25519JWKSVerifier
 	now          func() time.Time
 	maxBodyBytes int64
 	replays      webAssertionReplays
@@ -76,7 +77,7 @@ func NewWebAssertionVerifier(options WebAssertionOptions) (*WebAssertionVerifier
 		options.MaxBodyBytes = defaultWebAssertionBodyBytes
 	}
 	verifier := &WebAssertionVerifier{
-		issuer: strings.TrimSpace(options.Issuer), audience: strings.TrimSpace(options.Audience), jwksPath: options.JWKSPath,
+		issuer: strings.TrimSpace(options.Issuer), audience: strings.TrimSpace(options.Audience), jwks: authverify.NewEd25519JWKSVerifier(options.JWKSPath),
 		now: options.Now, maxBodyBytes: options.MaxBodyBytes,
 		replays: webAssertionReplays{byJTI: make(map[string]time.Time), capacity: defaultReplayCapacity},
 	}

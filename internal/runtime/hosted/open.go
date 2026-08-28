@@ -172,7 +172,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		investigationResults = investigationResultStore
 	}
 	// Same typed-nil guard: workloadTokenExchange is a concrete
-	// *auth.WorkloadTokenExchangeService, nil whenever CHAOS-4013 is
+	// *authverify.WorkloadTokenExchangeService, nil whenever CHAOS-4013 is
 	// unconfigured (see buildWorkloadTokenExchange's doc comment).
 	var workloadTokenExchanger api.WorkloadTokenExchanger
 	if workloadTokenExchange != nil {

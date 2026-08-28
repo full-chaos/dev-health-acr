@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-go/authverify"
 )
 
 // Environment variables read by buildWorkloadTokenExchange. Both
@@ -53,7 +54,7 @@ func workloadTokenExchangeConfigured(lookup func(string) (string, bool)) bool {
 // lifecycle every other issuance path already uses) into the one service
 // api.RuntimeDependencies.WorkloadTokenExchange needs. Returns (nil, nil)
 // when unconfigured.
-func buildWorkloadTokenExchange(postgres postgresComponents, now func() time.Time, lookup func(string) (string, bool)) (*auth.WorkloadTokenExchangeService, error) {
+func buildWorkloadTokenExchange(postgres postgresComponents, now func() time.Time, lookup func(string) (string, bool)) (*authverify.WorkloadTokenExchangeService, error) {
 	if !workloadTokenExchangeConfigured(lookup) {
 		return nil, nil
 	}
@@ -66,7 +67,7 @@ func buildWorkloadTokenExchange(postgres postgresComponents, now func() time.Tim
 	if err != nil {
 		return nil, fmt.Errorf("build kubernetes api http client: %w", err)
 	}
-	validator, err := auth.NewKubernetesTokenReviewValidator(auth.KubernetesTokenReviewOptions{
+	validator, err := authverify.NewKubernetesTokenReviewValidator(authverify.KubernetesTokenReviewOptions{
 		HTTPClient:   httpClient,
 		APIServerURL: stringEnvOrDefault(lookup, envKubernetesAPIServerURL, defaultKubernetesAPIServerURL),
 		// ReviewerToken is acr-api's OWN in-cluster service-account token
@@ -93,7 +94,7 @@ func buildWorkloadTokenExchange(postgres postgresComponents, now func() time.Tim
 	if err != nil {
 		return nil, fmt.Errorf("build workload access token issuer: %w", err)
 	}
-	return auth.NewWorkloadTokenExchangeService(validator, resolver, issuer)
+	return authverify.NewWorkloadTokenExchangeService(validator, resolver, issuer)
 }
 
 // kubernetesAPIHTTPClient layers the in-cluster CA bundle (when present --

@@ -83,7 +83,7 @@ func TestWorkloadBindingStore_lookupMissReturnsErrNotFound(t *testing.T) {
 
 func TestWorkloadBindingStore_disabledBindingIsStillReturnedForTheResolverToReject(t *testing.T) {
 	// The store itself is a plain lookup -- disabling is enforced by
-	// auth.GrantResolver, not here (see storageGrantResolver.Resolve).
+	// authverify.GrantResolver, not here (see storageGrantResolver.Resolve).
 	ctx := context.Background()
 	db := newCredentialStoreDatabase(t, ctx)
 	_, err := db.ExecContext(ctx, `

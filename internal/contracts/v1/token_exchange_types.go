@@ -34,9 +34,9 @@ type TokenExchangeRequest struct {
 
 // Validate checks the RFC 8693 structural shape only. It does not (and
 // cannot) validate the subject_token itself -- that is
-// auth.SubjectTokenValidator's job (Kubernetes TokenReview) -- nor does it
-// resolve scope narrowing, which happens against the resolved
-// auth.WorkloadBinding after the subject token is validated.
+// authverify.SubjectTokenValidator's job (Kubernetes TokenReview) -- nor
+// does it resolve scope narrowing, which happens against the resolved
+// authverify.WorkloadBinding after the subject token is validated.
 func (r TokenExchangeRequest) Validate() error {
 	if r.GrantType != TokenExchangeGrantType {
 		return fmt.Errorf("grant_type must be %q", TokenExchangeGrantType)
