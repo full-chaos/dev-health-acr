@@ -87,7 +87,7 @@ Canonical intent documents (Linear, Dev Health Ops project):
 
 One-line definition: *Ask Dev turns a natural engineering question into a bounded investigation across canonical facts, organizational context, graph evidence, and derived findings, then returns the strongest defensible explanation, evidence, uncertainty, and next action in the form best suited to the user's intent.*
 
-Design checks every Ask Dev / acr / ops-metrics change must pass (North Star §22):
+Design checks every Ask Dev / acr / ops-metrics change must pass — checks 1–15 are North Star §22 principles; checks 16–18 are repository operating rules from the review doc above:
 1. Intent determines evidence — never answer the nearest measurable question.
 2. Retrieval is part of reasoning — correct intent with failed retrieval is a failed answer.
 3. Preserve semantic distinctions — status ≠ completion ≠ readiness ≠ health ≠ pressure ≠ investment ≠ burden ≠ productivity.
@@ -109,7 +109,7 @@ Design checks every Ask Dev / acr / ops-metrics change must pass (North Star §2
 
 Contract rule: any acr contract widening ⇒ ask-dev pin bump before any live proof. Team authorization is ownership-derived (`team_repo_ownership` rows), so team answers are impossible until ownership is synced.
 
-Data vocabulary: "local" = the admin@test.com org (`70d529e0`, REAL synced data on the compose stack); `dev-hops fixtures generate` = contrived CI data; "prod" = read-only post-deploy readback. Team = project/repo OWNERSHIP only (never person→membership→team); ownership is sync-derived, provider-agnostic; no manual mappings.
+Data vocabulary (dev-health-ops / kiac local stack): "local" = the admin@test.com org (`70d529e0`, REAL synced data on that stack); `dev-hops fixtures generate` = contrived CI data; "prod" = read-only post-deploy readback. Team = project/repo OWNERSHIP only (never person→membership→team); ownership is sync-derived, provider-agnostic; no manual TEAM mappings. acr's own fullstack e2e (`scripts/e2e/compose.sh`, `docs/fullstack-acceptance.md`) seeds a synthetic corpus, not this org — do not treat that e2e data as "local" in this vocabulary.
 
 Checks that bite hardest here: 1, 2, 4, 5, 8, 11, 12, 16 — acr assembles the evidence and scores/drivers the North Star checks measure; a defect here propagates to every consumer (Ask Dev, ops-metrics).
 
