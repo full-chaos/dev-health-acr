@@ -99,20 +99,21 @@ stays offers-only (no ranking/drivers); those are CHAOS-4398, below.
 ```mermaid
 flowchart TD
   Q["Question: 'which teams are struggling and why?'"] --> INTERPRET["Interpret<br/>Runtime.InterpretQuestion (LLM)<br/>Shape=discovered_cohort"]
-  INTERPRET --> CENSUS["Cohort census<br/>DiscoverContext: fulltextSearchNodes<br/>+ ExactNameCandidates (#314/CHAOS-4395)"]
-  CENSUS --> AUTHZ["Authorize<br/>graphrank.AuthorizedAttributes<br/>ownership-derived (#313/CHAOS-4390)"]
+  INTERPRET --> CENSUS["Cohort census<br/>DiscoverContext: fulltextSearchNodes today<br/>+ ExactNameCandidates -- IN FLIGHT (#314/CHAOS-4395,<br/>not yet merged as of this writing)"]
+  CENSUS --> AUTHZ["Authorize<br/>graphrank.AuthorizedAttributes<br/>ownership-derived (#313/CHAOS-4390, MERGED)"]
   AUTHZ --> FACTS["Per-member fact production<br/>investigationScopeSubjects fans out<br/>health / workload / readiness /<br/>operational_deficiencies / investment (NEW join, see 4)"]
   FACTS --> RANK["RankCohort (NEW, deterministic)<br/>runs after fact reads, before synthesis<br/>Score + RankingBasis + DataCompleteness"]
-  RANK --> DRIVERS["Per-member drivers (NEW, budget-bounded)<br/>ContextFabricDriverJudgment<br/>top-3 for top 16 ranked members only (§5a)<br/>reuses existing type, no new contract type"]
-  DRIVERS --> SYNTH["Synthesize<br/>model narrates score/drivers in closed vocab<br/>Score is server-computed, never model input --<br/>existing Rows guard keeps its strip-and-tolerate<br/>behavior unchanged (model-authored Rows<br/>stripped, answer still returned, cf_model_rows_stripped)"]
-  SYNTH --> ROWS["Rows panel<br/>ContextFabricProjectedCohort.RankingTable"]
-  ROWS --> PROJECT["Projection (NEW wiring, §4a)<br/>projectCohort/projectDriver must copy<br/>Score/RankingBasis/DataCompleteness/AffectedSubjects<br/>onto the projected types -- not automatic"]
-  PROJECT --> ASKDEV["Ask Dev / Workbench<br/>shared answerprojection Rows renderer<br/>needs contract pin bump (new fields)"]
+  RANK --> DRIVERS["Per-member drivers (NEW, budget-bounded)<br/>ContextFabricDriverJudgment<br/>emit up to top-3 for top 16 ranked members (canonical-result<br/>safety margin, §5a) -- actual rendered count is bounded<br/>further and separately by the request's own driver budget"]
+  DRIVERS --> SYNTH["Synthesize<br/>Score is passed to the model as read-only grounding<br/>context (like any other canonical fact) so it CAN<br/>narrate the real number -- it still never computes<br/>or overrides one. Existing Rows guard keeps its<br/>strip-and-tolerate behavior unchanged (model-authored<br/>Rows stripped, answer still returned, cf_model_rows_stripped)"]
+  SYNTH --> ROWS["Rows panel<br/>ContextFabricProjectedCohort.RankingTable (NEW field, §4a)"]
+  ROWS --> PROJECT["Projection (NEW wiring, §4a)<br/>projectCohort/projectDriver must copy<br/>Score/RankingBasis/DataCompleteness/AffectedSubjects<br/>onto the projected types -- not automatic. New fields<br/>are optional/omitempty: a v1 result computed before<br/>this change simply omits them, it is not a false zero"]
+  PROJECT --> ASKDEV["Ask Dev / Workbench<br/>shared answerprojection Rows renderer<br/>needs contract pin bump (new optional fields)"]
 
   classDef gap fill:#78350f,stroke:#f59e0b,color:#ffffff
   classDef fixed fill:#14532d,stroke:#22c55e,color:#ffffff
   classDef newnode fill:#1e3a5f,stroke:#3b82f6,color:#ffffff
-  class CENSUS,AUTHZ fixed
+  class CENSUS gap
+  class AUTHZ fixed
   class RANK,DRIVERS,ROWS,PROJECT newnode
 ```
 
@@ -120,13 +121,22 @@ The model never computes or narrates a number it was not given — the same
 discipline as canonical theme roll-up (root `AGENTS.md`) and
 `attachCanonicalRows` (`model_runtime.go:575`, "only place `Rows` is set").
 `RankCohort` sits in that same ordering slot: after fact reads, before
-`SynthesizeAnswer`. `Score` is never a field the model can set in the first
-place (it is computed server-side and only ever narrated), so it needs no new
-guard of its own; the existing `StripModelAuthoredClaimedFactRows` path
-already tolerates a model-authored `Rows` claim by stripping it and
-continuing (`cf_model_rows_stripped`), not by rejecting the whole answer —
-this design does not change that behavior and the diagram above corrects an
-earlier draft that mischaracterized it as a hard rejection.
+`SynthesizeAnswer`. `Score` is computed server-side and the model can never
+override it, but it **is** passed into the synthesis prompt as an
+already-computed, read-only grounding value — the same way any other
+canonical fact reaches the model — so the model can narrate the actual number
+without contradicting "never narrates a number it was not given"; an earlier
+draft of this design said `Score` is "never model input" in the same breath
+as asking the model to narrate it, which cannot both be true, and this is the
+correction. The existing `StripModelAuthoredClaimedFactRows` path already
+tolerates a model-authored `Rows` claim by stripping it and continuing
+(`cf_model_rows_stripped`), not by rejecting the whole answer — this design
+does not change that behavior. `CENSUS` above is marked `gap`, not `fixed`:
+`DiscoverContext` still sources cohort members from `fulltextSearchNodes`
+only on `main` as of this writing (§2b); PR #314/CHAOS-4395 adding
+`ExactNameCandidates` is in flight, not merged, and this diagram must be
+updated to `fixed` in the same PR that merges it, per the standing update
+rule in `context-fabric-architecture-diagrams.md`.
 
 ## 4. Data model
 
@@ -157,13 +167,20 @@ erDiagram
     }
 ```
 
-`Score`/`RankingBasis`/`DataCompleteness` are additive fields on the existing
-`ContextFabricCohortMember` (`context_fabric_types.go:995`) — a contract
-widening, which per standing rule requires an ask-dev pin bump before the
-Workbench/chat surface can render them. `ContextFabricDriverJudgment` is
-reused as-is; no new contract type — but its `Category` is a **closed
-vocabulary** (`ContextFabricDriverCategory`, `context_fabric_types.go:417`)
-with no `investment_mix` member. Term 1's drivers must use the existing
+`Score`/`RankingBasis`/`DataCompleteness` are **additive, optional**
+(`omitempty`) fields on the existing `ContextFabricCohortMember`
+(`context_fabric_types.go:995`) — additive-optional is the only form allowed
+to stay in the v1 contract (root `AGENTS.md`: "Additive optional fields may
+stay in v1... changed meaning... require a new major contract"). Absence of
+these fields on a stored/serialized result means exactly one thing: this
+result was computed before CHAOS-4398 landed (or by a producer that has not
+adopted ranking yet) — it is **not** a signal of zero score or degraded data,
+and validation/schema must not require them. This is a contract widening,
+which per standing rule requires an ask-dev pin bump before the Workbench/
+chat surface can render them. `ContextFabricDriverJudgment` is reused as-is;
+no new contract type — but its `Category` is a **closed vocabulary**
+(`ContextFabricDriverCategory`, `context_fabric_types.go:417`) with no
+`investment_mix` member. Term 1's drivers must use the existing
 `ContextFabricDriverCategoryInvestment` (`"investment"`) and carry the
 finer-grained closed-vocab label (`reactive_share_high`,
 `deliberate_share_low`, `mix_concentrated`, `mix_shift_toward_*`) in `Title`,
@@ -180,9 +197,16 @@ Adding fields to `ContextFabricCohortMember`/`ContextFabricDriverJudgment`
 `InclusionReasons`, `EvidenceRefIDs` today — no `Score`/`RankingBasis`/
 `DataCompleteness`. `ContextFabricProjectedDriver` carries `Category`,
 `Title`, `Summary`, etc. but **no `AffectedSubjects`**, so a projected driver
-cannot be tied back to which cohort member it explains. Whatever function
-builds `ContextFabricProjectedCohort` (the `projectCohort`-shaped code path)
-must be extended to copy all four new/newly-needed fields, and per the
+cannot be tied back to which cohort member it explains. `ContextFabricProjectedCohort`
+also has no field for a ranking table at all today — `RankingTable` in the
+pipeline diagram above is a **new** field this design adds to it (type
+`[]ContextFabricClaimedFactRow`, the same reused row type
+`ContextFabricProjectedFact.Rows` already uses, `context_fabric_answer_projection.go:234`),
+not a rename of something that exists. Whatever function builds
+`ContextFabricProjectedCohort` (the `projectCohort`-shaped code path) must be
+extended to copy/compute all five new/newly-needed pieces (`Score`,
+`RankingBasis`, `DataCompleteness`, `AffectedSubjects`, `RankingTable`), all
+as `omitempty` for the same v1-compatibility reason as above, and per the
 [contract-first rule](../contract-versioning.md) that requires, in the same
 PR: the Go projected types, the JSON Schema, the OpenAPI document, MCP
 embedded schema copies, golden fixtures under `contracts/examples/v1`, and
@@ -193,18 +217,32 @@ investigation result.
 
 ## 5. Score formula
 
-Weighted, renormalized over available signals only — a missing signal family
-is excluded from the denominator, never scored as zero. Every signal is
-normalized to `[0,1]` **before** its weight is applied (below); without this
-the weighted sum is not deterministic and can land outside the declared
-`[0,100]` `Score` range, which the first draft of this design left
-unspecified.
+Weighted, renormalized over available signals only — a signal family whose
+**source was unavailable/pruned/errored** is excluded from the denominator,
+never scored as zero. Every signal is normalized to `[0,1]` **before** its
+weight is applied (below); without this the weighted sum is not
+deterministic and can land outside the declared `[0,100]` `Score` range,
+which the first draft of this design left unspecified.
+
+**"Missing" means the source did not answer, not that it answered zero.**
+`OperationalDeficienciesProvider` (and every fact provider in this design)
+returns `contextfabric.FactProviderResult{State: SourceAvailable}` with zero
+`Facts` when a team genuinely has no currently-fired rules — that is a
+**successful read of "no risk,"** not an unavailable source. Treating a
+successful empty read as "missing" would exclude the 20-point deficiency
+weight and renormalize the remaining, mostly-adverse signals upward,
+penalizing a healthy team for having nothing wrong. The rule for every
+signal family in this formula (and for `DataCompleteness` in §5c) is:
+**available = `State == SourceAvailable`, independent of row count**; missing
+= any other state (pruned, unavailable, error). A team with zero fired
+deficiency rules gets deficiency severity `0` (a real, computed value, full
+weight applied), not an excluded family.
 
 | # | Signal | Source | Normalization to `[0,1]` | Weight | Direction |
 |---|---|---|---|---|---|
 | 1 | Investment-mix imbalance (driver family #1, chris direction) | new team-scoped `theme_distribution` (§6) | already `[0,1]` by construction — see sub-formula | 30 | see sub-formula |
 | 2 | Health risk | `health.compounding_risk` | already `[0,1]` (the canonical score's own persisted range — `docs/reference` ops metric) | 25 | higher risk → higher score |
-| 3 | Deficiency severity | `operational_deficiencies.severity` (string; a team can have several fired rules at once) | map each fired rule's severity string to an ordinal (`low=0.25, medium=0.5, high=0.75, critical=1.0` — **the exact severity value set must be confirmed against `recommendations_daily` in PR1**, this mapping is a proposed default, not verified against live data), then take the **max** across the team's fired rules (worst case governs, not an average) | 20 | higher mapped value → higher score |
+| 3 | Deficiency severity | `operational_deficiencies.severity` (string; a team can have several fired rules at once, or legitimately zero) | zero fired rules (`SourceAvailable`, empty `Facts`) → `0`. Otherwise map each fired rule's severity string to an ordinal (`low=0.25, medium=0.5, high=0.75, critical=1.0` — **the exact severity value set must be confirmed against `recommendations_daily` in PR1**, this mapping is a proposed default, not verified against live data), then take the **max** across the team's fired rules (worst case governs, not an average) | 20 | higher mapped value → higher score |
 | 4 | Readiness gap | `1 - readiness.estimate_coverage_ratio` | already `[0,1]` since `estimate_coverage_ratio` is itself `[0,1]` | 15 | lower coverage → higher score |
 | 5 | Workload pressure | `workload.forecast_p50_days` | min-max normalized **within the cohort being ranked** (`(x - min) / (max - min)` over the cohort's own values that day; `0.5` when every member ties, i.e. `max == min`) — a z-score is unbounded and can be negative, so it cannot feed a weighted `[0,100]` sum directly | 10 | longer forecast → higher score |
 
@@ -247,24 +285,51 @@ not in the closed `ContextFabricDriverCategory` vocabulary
 (`context_fabric_types.go:417`) and would be rejected by
 `ContextFabricDriverJudgment.Validate`.
 
-### 5a. Driver budget (P1, must be resolved before PR2)
+### 5a. Driver budget (P1, must be resolved before PR2) — two independent budgets
 
-`ContextFabricDriversMaxCount` is **50** total driver judgments per answer
-(`context_fabric_model_bounds.go:236`), and `MaxCohortMembers` defaults to
-**250** (`answer_reuse.go:213`) — both bounds are real and independent. Top-3
-drivers per member is infeasible past 16 members (`16 × 3 = 48 ≤ 50`; 17
-members already exceeds it), and a cohort that trips the total budget fails
-answer validation entirely, which would make the largest, most-in-need-of-an-
-answer cohorts the ones most likely to error. Design rule: emit top-3 drivers
-only for the **top 16 members by `Score`** (ties broken by pool order, same
-tiebreak as ranking itself); members ranked 17th and beyond get `Score` +
-`RankingBasis` + `DataCompleteness` (already enough to render a ranked Rows
-table) but zero `ContextFabricDriverJudgment` entries. This is the same
-"disclose the bound, do not silently drop" pattern `Cohort.Truncated` already
-uses for membership itself. `16` is derived from `floor(50/3)`; if a future
-PR needs more members with full drivers, it must either version the driver
-contract or reduce the per-member driver count, not silently violate
-`ContextFabricDriversMaxCount`.
+There are **two separate, independent driver limits**, and the canonical-
+result cap alone is not the binding constraint a caller actually experiences:
+
+1. **Canonical-result validation cap**: `ContextFabricDriversMaxCount` is
+   **50** total driver judgments per answer
+   (`context_fabric_model_bounds.go:236`), and `MaxCohortMembers` defaults to
+   **250** (`answer_reuse.go:213`). Top-3 drivers per member is infeasible
+   past 16 members (`16 × 3 = 48 ≤ 50`; 17 members already exceeds it), and a
+   cohort that trips this budget fails answer validation entirely — the
+   largest, most-in-need-of-an-answer cohorts would be the ones most likely
+   to error. Design rule, at emission time (`RankCohort`/driver generation):
+   emit top-3 drivers only for the **top 16 members by `Score`** (ties broken
+   by pool order); members ranked 17th and beyond get `Score` +
+   `RankingBasis` + `DataCompleteness` (already enough to render a ranked
+   Rows table) but zero `ContextFabricDriverJudgment` entries — the same
+   "disclose the bound, do not silently drop" pattern `Cohort.Truncated`
+   already uses for membership. `16` is `floor(50/3)`; a future PR needing
+   more members with full drivers must version the driver contract or reduce
+   the per-member count, not silently violate `ContextFabricDriversMaxCount`.
+
+2. **Projection-time render budget** (`answerprojection.Budget.MaxDrivers`,
+   `project.go:34`) is a **much smaller, separate, request-scoped** limit
+   applied AFTER the canonical result exists: MCP requests default it to
+   **5** (`internal/mcp/investigate_question.go:20`), the shared projection
+   package defaults to **10** (`project.go:46`), and a caller can raise it up
+   to `ContextFabricProjectedDriversMaxCount`. This budget is **shared across
+   every driver family in the whole answer**, not reserved for cohort
+   drivers, and `projectDrivers` truncates by sorting on `Standing` (then
+   `DriverID` as a tiebreak) — **not** by cohort rank
+   (`answerprojection/project.go:267-274`). So on a typical MCP answer, only
+   ~5 of the up-to-48 canonical cohort drivers this design emits will
+   actually render, and which 5 survive depends entirely on `Standing`, not
+   on which team scored highest. To make the most-in-need team's drivers the
+   ones that actually survive a small budget, this design's driver emission
+   should set `Standing=ContextFabricDriverPrincipal` for the single
+   highest-`Score` member's top driver and `ContextFabricDriverContributing`
+   for the rest, and derive each `DriverID` so it sorts by member rank as the
+   tiebreak (e.g. `cohort-<org>-<rank:02d>-<n>`) — this is a recommendation
+   for PR2 to finalize, not a fully specified algorithm here, but the
+   two-budget distinction itself is not optional: a design that only cites
+   the 50-cap and ignores the request-level 5/10 default will ship a feature
+   where teams "struggling most" routinely do not appear in what the caller
+   actually sees.
 
 ### 5b. Zero-signal team (P1, must be resolved in PR1)
 
@@ -288,7 +353,10 @@ data" rather than a fabricated number.
 The first draft's `partial` (`≥1 missing`) and `degraded` (`≤2 available`)
 ranges overlapped whenever exactly 1 or 2 families were missing. Corrected,
 non-overlapping thresholds over the 5 top-level signal families (term 1
-counts as one family):
+counts as one family). "Available" here uses the same `SourceAvailable`
+definition as §5 — a family that returned zero rows via a successful read
+(e.g. a team with no fired deficiency rules) counts as **available**, not
+missing:
 
 | Families available | `DataCompleteness` |
 |---|---|
@@ -323,13 +391,18 @@ for this shape to call as-is. See the ops-side deprecation note:
 
 - Cohort ranking/drivers implementation itself (CHAOS-4398 is Backlog as of
   this writing) — this page documents the design, not a shipped capability.
-  Update this page's pipeline diagram's node classes (`fixed` vs. `newnode`)
-  as each of CHAOS-4398's 4 stacked PRs lands. §4a, §5a, §5b, and §5c resolve
-  contract/bound conflicts a review of this design surfaced (driver-count
-  budget, nullable score, non-overlapping completeness, the projection gap,
-  the `Category` vocabulary, and severity/workload normalization) — PR1/PR2
-  implement against the corrected versions in those sections, not the
-  original unbounded framing.
+  Update this page's pipeline diagram's node classes (`fixed` vs. `gap` vs.
+  `newnode`) as each of CHAOS-4398's 4 stacked PRs — and CHAOS-4395 — lands.
+  Two review passes on this design surfaced and this page now resolves:
+  the driver-count budget being two independent limits not one (§5a), the
+  score-narration/model-input contradiction (§3), v1 optional-field
+  compatibility for the new member fields (§4/§4a), an undefined
+  `RankingTable` field (§4a), nullable score for the zero-signal case (§5b),
+  non-overlapping completeness ranges (§5c), the `Category` vocabulary
+  (§4/§5), signed mix-shift direction (§5), and the missing-vs-successfully-
+  empty distinction for deficiency (and every other) signal family (§5).
+  PR1/PR2/PR3 implement against these corrected sections, not any earlier
+  unbounded framing.
 - The severity→ordinal mapping in §5 row 3 is a proposed default that must be
   checked against `recommendations_daily`'s real severity value set in PR1,
   not assumed correct from this page alone.
