@@ -120,10 +120,6 @@ func TestContextFabricCohortMember_RankingFieldsWithoutComputedRejected(t *testi
 
 // baseDriverForBasis returns a single valid driver for
 // baseRankedCohortMember's own RankingBasis ("health.compounding_risk")
-// whose WeightContributed exactly equals its Score (42.0): weight 25,
-// value 1.68 -> 25*1.68 == 42.
-// baseDriverForBasis returns a single valid driver for
-// baseRankedCohortMember's own RankingBasis ("health.compounding_risk")
 // whose WeightContributed exactly equals its Score (42.0). As the sole
 // driver, availableWeight==Weight (25), so
 // 100*Weight*Value/availableWeight == 100*Value -- Value=0.42 gives
@@ -380,5 +376,33 @@ func TestContextFabricCohortMemberDriver_CurrentVsPriorOnlyValidForInvestmentMix
 	}
 	if err := member.Validate(); err == nil {
 		t.Fatal("Validate() = nil for a non-investment_mix driver claiming current_vs_prior, want an error")
+	}
+}
+
+// TestContextFabricCohortMember_MultiDriverCompensatingErrorsRejected is a
+// codex R2 coverage-gap request: with TWO drivers, a naive AGGREGATE-only
+// check (Sum(WeightContributed)==Score) can be satisfied even when EVERY
+// individual driver's own WeightContributed is wrong, as long as the
+// errors happen to cancel out. availableWeight=40 (25+15); the true
+// per-driver values are 31.25 (health, value=0.5) and 18.75 (readiness,
+// value=0.5), summing to 50 -- this test instead claims 25/25 (each off
+// by 6.25 in opposite directions, same aggregate sum), which the R1
+// per-driver formula check (not just the aggregate one) must reject.
+func TestContextFabricCohortMember_MultiDriverCompensatingErrorsRejected(t *testing.T) {
+	t.Parallel()
+	score := 50.0
+	member := ContextFabricCohortMember{
+		Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team:CHAOS", Label: "Fullchaos"},
+		Rank:    1, InclusionReasons: []string{"matched"}, RankingComputed: true,
+		Score: &score, AttentionRank: 1,
+		RankingBasis:     []string{"health.compounding_risk", "readiness.coverage_gap"},
+		DataCompleteness: ContextFabricCohortDataPartial,
+		Drivers: []ContextFabricCohortMemberDriver{
+			{Signal: "health.compounding_risk", Value: 0.5, Weight: 25, WeightContributed: 25, Window: ContextFabricCohortMemberDriverWindowCurrent}, // true value 31.25
+			{Signal: "readiness.coverage_gap", Value: 0.5, Weight: 15, WeightContributed: 25, Window: ContextFabricCohortMemberDriverWindowCurrent},  // true value 18.75
+		},
+	}
+	if err := member.Validate(); err == nil {
+		t.Fatal("Validate() = nil for two drivers whose individually-wrong weight_contributed values happen to sum correctly, want an error")
 	}
 }

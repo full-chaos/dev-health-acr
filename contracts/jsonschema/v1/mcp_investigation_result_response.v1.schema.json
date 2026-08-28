@@ -3932,6 +3932,27 @@
                   }
                 }
               }
+            },
+            {
+              "if": {
+                "properties": {
+                  "signal": {
+                    "not": {
+                      "const": "investment_mix"
+                    }
+                  }
+                },
+                "required": [
+                  "signal"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "threshold_labels": {
+                    "maxItems": 0
+                  }
+                }
+              }
             }
           ]
         }
