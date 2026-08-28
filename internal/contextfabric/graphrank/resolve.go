@@ -2467,34 +2467,27 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			}
 		}
 	}
-	// CHAOS-4417: the PRE-CONFIRMATION analog of the confirmedKind block
-	// just above -- same trigger shape (nothing committed yet, resolution-
-	// wide searchTruncated), but reached when NO receipt has confirmed a
-	// kind at all (confirmedKind == nil), which is exactly turn 1's shape
-	// for a repository/project/team question. See
-	// applyLowPopulationKindScopedRescue's own doc comment
-	// (chaos4417_low_population_kind_scope.go) for the full mechanism and
-	// why it tries up to three kinds and refuses to commit when more than
-	// one independently does.
+	// CHAOS-4417 (team-lead ruling, offer-only shape -- see
+	// chaos4417_low_population_kind_scope.go's own doc comment): the
+	// PRE-CONFIRMATION analog of the confirmedKind block just above, but
+	// this rescue NEVER commits -- it only produces OFFER candidates
+	// (unioned into kindOfferCandidates below, exactly like the CHAOS-4038
+	// coverage floor's own coverageCandidates). Committing a
+	// pre-confirmation, low-population-kind candidate requires
+	// kind-scoped candidate-pool narrowing, which request.ExpectedKinds is
+	// deliberately walled off from today without the CHAOS-3972
+	// kindInsensitivityProof precondition (ports.go) -- out of this
+	// ticket's scope; see the CHAOS-4417 follow-up ticket. Reached when NO
+	// receipt has confirmed a kind (confirmedKind == nil) and the
+	// resolution-wide search truncated with nothing committed -- exactly
+	// turn 1's shape for a repository/project/team question.
+	var lowPopulationOfferCandidates []contextfabric.SubjectCandidate
 	if !offersOnly && confirmedKind == nil && searchTruncated && len(resolution.Committed) == 0 {
-		scopedResolution, scopedBases, scopedDigests, scopedOK, scopeErr := applyLowPopulationKindScopedRescue(
-			ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete,
-			effectiveSearchLimit, unscopedVisibility, gate, gateValid, retrievalDegraded, coverageFloorDegraded,
-			// codex R2 (P1, confirmed): the caller's own already-visible
-			// population -- see applyLowPopulationKindScopedRescue's own
-			// doc comment for why a candidate found here of ANY kind must
-			// be able to arbitrate against a low-population-kind
-			// candidate, not just this pass's own three exhaustive finds.
-			candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms,
-		)
-		if scopeErr != nil {
-			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, scopeErr
+		offered, offerErr := applyLowPopulationKindOffers(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, effectiveSearchLimit)
+		if offerErr != nil {
+			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, offerErr
 		}
-		if scopedOK {
-			resolution = scopedResolution
-			commitBases.ResetTo(scopedBases)
-			commitDigests.ResetTo(scopedDigests)
-		}
+		lowPopulationOfferCandidates = offered
 	}
 	// CHAOS-3899 (design brief v5 §6 Slice A) runs the full evidence round
 	// for measurement, strictly AFTER resolution's own COMMIT-GATE decision
@@ -2597,6 +2590,22 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// unionCandidatesForOffer's own doc comment (chaos3900_structure_
 	// offers.go) for why this union must dedupe by subject, not merely
 	// concatenate.
+	//
+	// CHAOS-4417: lowPopulationOfferCandidates (the pre-confirmation
+	// low-population-kind rescue's own exhaustively-proven-complete finds)
+	// join coverageCandidates here -- same bucket, same union, same
+	// "additive, offer-only, never touched candidatesBySubject/pool"
+	// contract CHAOS-4038's own coverage-floor finds already carry. Simple
+	// append, not a dedup-aware merge: chaos4417LowPopulationScopedKinds'
+	// own three buildConfirmedKindScopedSnapshot calls each key their own
+	// SubjectCandidate map by that call's own kind, so no SubjectKey can
+	// collide either within this slice or against coverageCandidates
+	// (CHAOS-4038 covers a disjoint kind set for its own repository/
+	// project/team contribution -- see kindCoverageFloorKinds); dedup
+	// against resolution.Candidates still happens inside
+	// unionCandidatesForOffer below, exactly as it already does for
+	// coverageCandidates.
+	coverageCandidates = append(coverageCandidates, lowPopulationOfferCandidates...)
 	kindOfferCandidates := unionCandidatesForOffer(resolution.Candidates, coverageCandidates)
 	// CHAOS-4234: a coverage-floor find the final cut dropped still reaches
 	// the offer builders through the union above -- emit its own

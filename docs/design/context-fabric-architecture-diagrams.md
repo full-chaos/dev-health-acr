@@ -201,16 +201,16 @@ flowchart TD
   POOL --> GATE["ResolveFromMergedCandidatesWithGateAndBasis<br/>graphrank/resolution.go:401<br/>corroboration trace (resolution.go:444-462)<br/>-> ranked_cut trace -> MaxSubjectCandidates cut -> commit decision"]
   GATE --> COMMITTABLE["resolution.Candidates / .Committed<br/>ONLY ever built from 'pool'<br/>(resolve.go:1926-1933, explicit doc comment)"]
 
-  GATE -->|"nothing committed AND<br/>searchTruncated AND<br/>confirmedKind == nil<br/>(turn 1's shape)"| LOWPOP{"applyLowPopulationKindScopedRescue<br/>chaos4417_low_population_kind_scope.go<br/>CHAOS-4417"}
-  LOWPOP -->|"deps.VectorMechanismConfigured:<br/>skip entirely, zero SearchKind calls"| GATE
-  LOWPOP -->|"else, per kind in {repository,<br/>project, team} IN ORDER: EXHAUSTIVE<br/>SearchKind census, reusing<br/>CHAOS-4154's buildConfirmedKindScopedSnapshot<br/>-- stops at the FIRST incomplete kind<br/>(fail closed, codex R1 P1)"| ISOPOOL[("UNION of every complete<br/>kind's isolated pool<br/>NEVER merged into 'pool'")]
-  ISOPOOL --> LOWGATE["re-run gate ONCE over the union<br/>(codex R1 P1: NOT per-kind --<br/>a per-kind gate call cannot see a<br/>cross-kind TopFloor/TopGap rival),<br/>searchTruncated=false"]
-  LOWGATE -->|"union gate commits"| COMMITTABLE
-  LOWGATE -.->|"any kind incomplete, empty union,<br/>or union gate declines:<br/>original ambiguous/clarify stands"| GATE
+  GATE -->|"nothing committed AND<br/>searchTruncated AND<br/>confirmedKind == nil<br/>(turn 1's shape)"| LOWPOP{"applyLowPopulationKindOffers<br/>chaos4417_low_population_kind_scope.go<br/>CHAOS-4417"}
+  LOWPOP -->|"deps.VectorMechanismConfigured:<br/>skip entirely, zero SearchKind calls"| DONE4417(("no offer"))
+  LOWPOP -->|"else, per kind in {repository,<br/>project, team}: EXHAUSTIVE SearchKind<br/>census, reusing CHAOS-4154's<br/>buildConfirmedKindScopedSnapshot --<br/>an INCOMPLETE kind is skipped,<br/>NOT fatal (an offer is a suggestion,<br/>not a proof)"| LOWOFFER["candidates from every COMPLETE<br/>kind's own census"]
+  LOWOFFER -.->|"NEVER commits -- see caption:<br/>no kind authority pre-confirmation<br/>(team-lead R4 ruling)"| COMMITTABLE
 
   OOP --> UNION["unionCandidatesForOffer"]
   POOL -.-> UNION
+  LOWOFFER --> UNION
   UNION --> OFFERS["offer builders: kindOfferMaterial,<br/>candidateOfferMaterial, handleOfferMaterial<br/>-- an offer/suggestion only"]
+  OFFERS -.->|"turn 2: caller confirms the offered<br/>candidate -> ConfirmedExpectedKind receipt<br/>-> CHAOS-4132/CHAOS-4154's EXISTING,<br/>already-sound confirmed-kind path commits"| COMMITTABLE
 
   GATE -.->|"emits 'corroboration' trace event<br/>ONLY for candidates that reached 'pool'"| TRACE["ResolutionTraceEvent Stage=corroboration"]
   TRACE --> EXPPOOL["harness field expected_subject_in_pool<br/>(chaos3742_two_turn_confirmation_test.go:2309)<br/>reads TRUE only if the subject's find<br/>reached POOL, never offerOnlyPool"]
@@ -218,7 +218,7 @@ flowchart TD
   classDef gap fill:#78350f,stroke:#f59e0b,color:#ffffff
   classDef fixed fill:#14532d,stroke:#22c55e,color:#ffffff
   class OFFERONLY,OOP,EXPPOOL gap
-  class COMMITTABLE,LOWPOP,ISOPOOL,LOWGATE fixed
+  class COMMITTABLE,LOWPOP,LOWOFFER fixed
 ```
 
 **Caption.** Every resolution builds candidates through two independently
@@ -245,41 +245,48 @@ CHAOS-4348 (project/team subjects showing 0/20 "in pool" on 2026-08-26,
 started from a false premise of unreachability rather than the real
 gap — missing facts, not missing pool membership (see diagram 4).
 
-**CHAOS-4417 (repository/project/team, PRE-confirmation):** even when a
-find genuinely reaches `pool`, `resolution.go`'s commit-gate switch checks
-resolution-wide `searchTruncated` before LoneFloor/TopFloor -- a single
-unscoped `Search`/`SearchQuestion` call truncating on a HIGH-population
-kind (e.g. 37,001 `ci_pipeline_run` nodes) forces the whole resolution
-`ambiguous`, even for a genuinely lone, low-population repository/project/
-team candidate the SAME call also found. CHAOS-4154 already built this
-exact isolated-census-and-re-decide mechanism for a RECEIPT-confirmed kind
-(`confirmedKind != nil`); CHAOS-4417 runs the identical
-`buildConfirmedKindScopedSnapshot` primitive PRE-confirmation, for the
-fixed, small, identity-census-enumerable kind set
-(`isAliasLookupScopedKind`) only -- never for `pull_request`/`work_item`/
-`ci_pipeline_run`, whose populations are exactly what `searchTruncated`
-exists to protect against. Requires EVERY attempted kind's own census to
-be proven complete (fails closed and stops at the first incomplete kind
-otherwise -- an untested sibling could hide a rival) and never attempts
-any kind at all when this deployment has a live vector mechanism
-configured (`buildConfirmedKindScopedSnapshot` can never prove completeness
-there, CHAOS-4154's own documented consequence). Unions every complete
-kind's isolated population into ONE pool and re-runs the commit gate
-EXACTLY ONCE over that union -- never per kind: an earlier design that
-ran the gate separately per kind let a repository candidate clear LoneFloor
-in isolation even though the SAME candidate would fail TopFloor against a
-genuine cross-kind rival once both were visible together (codex R1,
-CHAOS-4417 PR #320). Unioning restores the SAME cross-kind arbitration an
-ordinary untruncated resolution already gets. Seeded with the CALLER's own
-already-visible `candidatesBySubject` FIRST (codex R2, same PR): the R1
-union alone still missed a genuinely visible rival of a kind OUTSIDE
-repository/project/team (e.g. a real work_item candidate the ordinary,
-truncated search had already found) -- that candidate is now unioned in
-too, purely to BLOCK a low-population-kind candidate via TopFloor/TopGap
-when competitive; a commit is credited ONLY when the WINNING candidate
-itself is repository/project/team (`allCommittedAreLowPopulationKind`) --
-this mechanism never claims completeness for, or lets itself commit,
-any other kind.
+**CHAOS-4417 (repository/project/team, PRE-confirmation, OFFER-only):**
+even when a find genuinely reaches `pool`, `resolution.go`'s commit-gate
+switch checks resolution-wide `searchTruncated` before LoneFloor/TopFloor
+-- a single unscoped `Search`/`SearchQuestion` call truncating on a
+HIGH-population kind (e.g. 37,001 `ci_pipeline_run` nodes) forces the
+whole resolution `ambiguous`, even for a genuinely lone, low-population
+repository/project/team candidate the SAME call also found, and the
+shared cut can ALSO crowd such a candidate out of the offer boundary
+entirely. CHAOS-4154 already built an isolated-census-and-re-decide
+mechanism for a RECEIPT-confirmed kind (`confirmedKind != nil`), but that
+mechanism's soundness rests on CALLER AUTHORITY: a confirmed kind makes
+every OTHER kind categorically out of scope, not merely improbable, which
+is what lets it safely bypass `searchTruncated` for a STATISTICAL
+LoneFloor/TopFloor commit. CHAOS-4417 has no such authority
+pre-confirmation -- `request.ExpectedKinds` (the only "the interpreted
+question implies a kind" signal available) is DELIBERATELY walled off
+from candidate-pool narrowing today without the CHAOS-3972
+`kindInsensitivityProof` precondition (`ports.go`'s own doc comment) --
+so an earlier LoneFloor-commit design for this ticket (codex rounds 1-3,
+CHAOS-4417 PR #320) was caught unsound at R3: only STRING EQUALITY can
+survive resolution-wide truncation (`internal/contextfabric/AGENTS.md:313`,
+CHAOS-3810 -- "no unseen row can outrank it"), never a statistical
+ranking decided over a population this ticket cannot prove complete for
+every kind that could rank above it.
+**Team-lead R4 ruling: this rescue NEVER commits.** It reuses
+`buildConfirmedKindScopedSnapshot` PRE-confirmation, for the fixed,
+small, identity-census-enumerable kind set (`isAliasLookupScopedKind`)
+only, to produce OFFER candidates -- the SAME "additive, never touches
+`pool`/`candidatesBySubject`" contract CHAOS-4038's own coverage floor
+already carries for these three kinds, just EXHAUSTIVE rather than
+bounded/early-exit. An incomplete kind's own census is skipped, not
+fatal (an offer is a suggestion, not a proof, so the fail-closed
+discipline a commit needs does not apply); a live vector mechanism still
+skips the whole pass up front (buildConfirmedKindScopedSnapshot can never
+prove completeness there). The offered candidates join `coverageCandidates`
+into the SAME `unionCandidatesForOffer` union CHAOS-4038 already feeds --
+one bucket, one contract. Commit still happens ONLY through the EXISTING,
+already-sound CHAOS-4132/CHAOS-4154 confirmed-kind path once the caller
+confirms the offered candidate at turn 2 -- the two-turn shape the corpus
+harness measures directly. Follow-up ticket (not built here): "Turn-1
+commit under interpretation kind authority requires kindInsensitivityProof
+wiring" (CF, Medium, related 4417/3972).
 
 **In-flight fix (not yet merged as of this writing):** `lane-4347-project`
 (branch `chaos-4348-project-team-pool`) is building two new search arms
