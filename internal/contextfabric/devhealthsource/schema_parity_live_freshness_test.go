@@ -8,7 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
-	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 // TestProductionSchemaSnapshotStaysFreshAgainstLiveClickHouse is CHAOS-3789
@@ -23,7 +23,7 @@ import (
 // regenerate productionColumns -- the moment the two disagree.
 //
 // Gated behind ACR_CLICKHOUSE_INTEGRATION_DSN, the same env var
-// internal/runtime/clickhouse's own integration suite uses
+// github.com/full-chaos/dev-health-go/clickhouse's own integration suite uses
 // (integration_support_test.go), rather than testcontainers: freshness can
 // only be checked against a database that already carries production's
 // real schema, which a fresh empty container never does. Unset, this test

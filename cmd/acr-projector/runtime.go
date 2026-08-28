@@ -17,10 +17,10 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pglifecycle"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pgprojection"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
-	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
 	storagepostgres "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
 	migrations "github.com/full-chaos/dev-health-acr/migrations/postgres"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 // Runtime is the composed acr-projector process. Coordinator is nil when

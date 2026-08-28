@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 func TestLoad_requires_complete_runtime_when_backing_stores_are_explicit(t *testing.T) {
@@ -267,7 +267,7 @@ func TestLoad_acceptsPgBouncerConnectionKindWithAdminDSN(t *testing.T) {
 // TestLoad_defaultsClickHouseMaxBytesToRead is CHAOS-3848's part-1 closure
 // test: pre-fix, Config had no ClickHouseMaxBytesToRead field at all, so an
 // unset environment left the value that reached
-// internal/runtime/clickhouse.Options at its Go zero (0), which
+// github.com/full-chaos/dev-health-go/clickhouse.Options at its Go zero (0), which
 // applyOptions's own defaultPositiveUint64 fallback happened to paper over
 // -- but nothing pinned that the CONFIGURED default was the raised 64 MiB
 // ceiling rather than the stale 16 MiB one. This fails red against the old

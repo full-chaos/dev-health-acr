@@ -79,7 +79,7 @@ type Config struct {
 	ClickHouseCACertPath string
 	// ClickHouseMaxBytesToRead (CHAOS-3848, ACR_CLICKHOUSE_MAX_BYTES_TO_READ)
 	// is the per-query max_bytes_to_read ceiling handed to every production
-	// ClickHouse client (internal/runtime/clickhouse.Options.MaxBytesToRead).
+	// ClickHouse client (github.com/full-chaos/dev-health-go/clickhouse.Options.MaxBytesToRead).
 	// Falls back to runtimeclickhouse.DefaultMaxBytesToRead when unset; an
 	// explicitly configured zero is rejected by Validate rather than silently
 	// reinterpreted as "unset".

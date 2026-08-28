@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
-	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 func openClickHouse(_ context.Context, request clickHouseOpenRequest) (clickHouseComponents, error) {

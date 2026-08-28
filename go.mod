@@ -2,6 +2,11 @@ module github.com/full-chaos/dev-health-acr
 
 go 1.25.0
 
+require github.com/full-chaos/dev-health-go v0.0.0
+
+// TODO(CHAOS-4377): replace with tagged v0.1.0 before merge
+replace github.com/full-chaos/dev-health-go => /Users/chris/projects/full-chaos/worktrees/dev-health-go
+
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.47.0
 	github.com/FalkorDB/falkordb-go/v2 v2.1.0

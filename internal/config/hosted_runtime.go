@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	runtimeclickhouse "github.com/full-chaos/dev-health-acr/internal/runtime/clickhouse"
 	runtimepostgres "github.com/full-chaos/dev-health-acr/internal/runtime/postgres"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
 const defaultHostedPostgresPingTimeout = 5 * time.Second
