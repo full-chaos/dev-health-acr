@@ -1073,6 +1073,20 @@ type ContextFabricCohortMember struct {
 // WeightContributed is the actual points this family added to Score
 // (100*Weight*Value/availableWeight) -- summing WeightContributed across
 // every driver on a member reconstructs Score exactly.
+//
+// Documented asymmetry (CHAOS-4398 PR2 R4, codex R3 findings 2/5): the
+// Go write-path validator (validateDrivers, validate_context_fabric_result.go)
+// is the AUTHORITY on this shape's cross-array/cross-field invariants --
+// one driver per RankingBasis family with no duplicates, and a persisted
+// row's fields are never silently null/zero. The published JSON Schema is
+// a permissive STRUCTURAL SUPERSET: Draft 2020-12's declarative
+// constraints cannot express "no duplicate signal in this array" or
+// "these two fields must both be present, not just individually
+// null-safe" without contortions this repo's own contractcheck engine
+// doesn't support (e.g. no `contains`/`minContains`/`maxContains`, so
+// even "at most one mix_shift_* label" is Go-only, not schema-enforced).
+// A payload the schema accepts is not guaranteed valid; a payload Go's
+// write-path accepts always is. Tracked follow-up: CHAOS-4416.
 type ContextFabricCohortMemberDriver struct {
 	Signal            string  `json:"signal"`
 	Value             float64 `json:"value"`

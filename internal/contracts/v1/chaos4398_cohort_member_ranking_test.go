@@ -67,26 +67,29 @@ func TestContextFabricCohortMember_RankingBasisAcceptsEveryClosedLabel(t *testin
 		"investment_mix.reactive_share_high", "investment_mix.deliberate_share_low",
 		"investment_mix.mix_concentrated", "investment_mix.mix_shift_other",
 	}
+	score := 60.0
 	member := baseRankedCohortMember()
+	member.Score = &score
 	member.DataCompleteness = ContextFabricCohortDataComplete
 	member.RankingBasis = labels
-	// One driver per family, uniform value=0.42 so
-	// Sum(WeightContributed) == Score (42.0, baseRankedCohortMember's own
-	// value) exactly: weight*0.42 summed across 30+25+20+15+10==100 total
-	// weight is 100*0.42==42.
+	// investment_mix claims ALL 4 threshold labels -- its own Value must
+	// equal the exact sum of their sub-weights (codex R3 finding 3):
+	// 0.35+0.30+0.15+0.20 == 1.0. WeightContributed values below are each
+	// 100*Weight*Value/availableWeight (availableWeight==100, all 5
+	// families present): 30, 10, 10, 6, 4 -- summing to Score (60).
 	member.Drivers = []ContextFabricCohortMemberDriver{
 		// At most 4 threshold labels can co-occur in practice
 		// (RankCohort's own investmentMixSignal fires at most one of the
 		// three mutually exclusive mix_shift_* labels) -- the bound is 4,
 		// not 6, so this uses only the realistic subset.
-		{Signal: "investment_mix", Value: 0.42, Weight: 30, WeightContributed: 12.6, Window: ContextFabricCohortMemberDriverWindowCurrentVsPrior, ThresholdLabels: []string{
+		{Signal: "investment_mix", Value: 1.0, Weight: 30, WeightContributed: 30, Window: ContextFabricCohortMemberDriverWindowCurrentVsPrior, ThresholdLabels: []string{
 			"investment_mix.reactive_share_high", "investment_mix.deliberate_share_low",
 			"investment_mix.mix_concentrated", "investment_mix.mix_shift_other",
 		}},
-		{Signal: "health.compounding_risk", Value: 0.42, Weight: 25, WeightContributed: 10.5, Window: ContextFabricCohortMemberDriverWindowCurrent},
-		{Signal: "operational_deficiencies.severity", Value: 0.42, Weight: 20, WeightContributed: 8.4, Window: ContextFabricCohortMemberDriverWindowCurrent},
-		{Signal: "readiness.coverage_gap", Value: 0.42, Weight: 15, WeightContributed: 6.3, Window: ContextFabricCohortMemberDriverWindowCurrent},
-		{Signal: "workload.forecast_pressure", Value: 0.42, Weight: 10, WeightContributed: 4.2, Window: ContextFabricCohortMemberDriverWindowCurrent},
+		{Signal: "health.compounding_risk", Value: 0.4, Weight: 25, WeightContributed: 10, Window: ContextFabricCohortMemberDriverWindowCurrent},
+		{Signal: "operational_deficiencies.severity", Value: 0.5, Weight: 20, WeightContributed: 10, Window: ContextFabricCohortMemberDriverWindowCurrent},
+		{Signal: "readiness.coverage_gap", Value: 0.4, Weight: 15, WeightContributed: 6, Window: ContextFabricCohortMemberDriverWindowCurrent},
+		{Signal: "workload.forecast_pressure", Value: 0.4, Weight: 10, WeightContributed: 4, Window: ContextFabricCohortMemberDriverWindowCurrent},
 	}
 	if err := member.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil for the full closed vocabulary", err)
@@ -396,7 +399,7 @@ func TestContextFabricCohortMember_MultiDriverCompensatingErrorsRejected(t *test
 		Rank:    1, InclusionReasons: []string{"matched"}, RankingComputed: true,
 		Score: &score, AttentionRank: 1,
 		RankingBasis:     []string{"health.compounding_risk", "readiness.coverage_gap"},
-		DataCompleteness: ContextFabricCohortDataPartial,
+		DataCompleteness: ContextFabricCohortDataDegraded, // 2 drivers -> degraded, per codex R3 finding 4
 		Drivers: []ContextFabricCohortMemberDriver{
 			{Signal: "health.compounding_risk", Value: 0.5, Weight: 25, WeightContributed: 25, Window: ContextFabricCohortMemberDriverWindowCurrent}, // true value 31.25
 			{Signal: "readiness.coverage_gap", Value: 0.5, Weight: 15, WeightContributed: 25, Window: ContextFabricCohortMemberDriverWindowCurrent},  // true value 18.75
@@ -404,5 +407,106 @@ func TestContextFabricCohortMember_MultiDriverCompensatingErrorsRejected(t *test
 	}
 	if err := member.Validate(); err == nil {
 		t.Fatal("Validate() = nil for two drivers whose individually-wrong weight_contributed values happen to sum correctly, want an error")
+	}
+}
+
+// ---------------------------------------------------------------------
+// Codex R3 (dev-health-acr #319) regression tests -- fixed per R4 ruling
+// ---------------------------------------------------------------------
+
+// investmentMixDriverForLabels builds a valid investment_mix driver whose
+// Value is the exact sum of the given threshold labels' sub-weights (the
+// invariant codex R3 finding 3 requires), sole driver so
+// availableWeight==Weight (30) and WeightContributed==100*Value.
+func investmentMixDriverForLabels(labels ...string) ContextFabricCohortMemberDriver {
+	var value float64
+	for _, label := range labels {
+		value += contextFabricInvestmentMixSubWeights[label]
+	}
+	return ContextFabricCohortMemberDriver{
+		Signal: "investment_mix", Value: value, Weight: 30, WeightContributed: 100 * value,
+		Window: ContextFabricCohortMemberDriverWindowCurrent, ThresholdLabels: labels,
+	}
+}
+
+// TestContextFabricCohortMemberDriver_TwoMixShiftLabelsRejected is codex R3
+// finding 1 (part A): investmentMixSignal fires at most ONE of the three
+// mutually-exclusive mix_shift_* labels.
+func TestContextFabricCohortMemberDriver_TwoMixShiftLabelsRejected(t *testing.T) {
+	t.Parallel()
+	score := 100.0
+	driver := investmentMixDriverForLabels("investment_mix.mix_shift_toward_operational", "investment_mix.mix_shift_toward_feature")
+	driver.Window = ContextFabricCohortMemberDriverWindowCurrentVsPrior
+	member := ContextFabricCohortMember{
+		Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team:CHAOS", Label: "Fullchaos"},
+		Rank:    1, InclusionReasons: []string{"matched"}, RankingComputed: true,
+		Score: &score, AttentionRank: 1,
+		RankingBasis:     []string{"investment_mix", "investment_mix.mix_shift_toward_operational", "investment_mix.mix_shift_toward_feature"},
+		DataCompleteness: ContextFabricCohortDataDegraded,
+		Drivers:          []ContextFabricCohortMemberDriver{driver},
+	}
+	if err := member.Validate(); err == nil {
+		t.Fatal("Validate() = nil for a driver claiming two mutually-exclusive mix_shift labels, want an error")
+	}
+}
+
+// TestContextFabricCohortMemberDriver_MixShiftLabelRequiresCurrentVsPrior
+// is codex R3 finding 1 (part B): a driver claiming any mix_shift_* label
+// must have Window==current_vs_prior.
+func TestContextFabricCohortMemberDriver_MixShiftLabelRequiresCurrentVsPrior(t *testing.T) {
+	t.Parallel()
+	score := 100.0
+	driver := investmentMixDriverForLabels("investment_mix.mix_shift_other")
+	driver.Window = ContextFabricCohortMemberDriverWindowCurrent // wrong: should be current_vs_prior
+	member := ContextFabricCohortMember{
+		Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team:CHAOS", Label: "Fullchaos"},
+		Rank:    1, InclusionReasons: []string{"matched"}, RankingComputed: true,
+		Score: &score, AttentionRank: 1,
+		RankingBasis:     []string{"investment_mix", "investment_mix.mix_shift_other"},
+		DataCompleteness: ContextFabricCohortDataDegraded,
+		Drivers:          []ContextFabricCohortMemberDriver{driver},
+	}
+	if err := member.Validate(); err == nil {
+		t.Fatal("Validate() = nil for a driver claiming mix_shift_other with window=current, want an error")
+	}
+}
+
+// TestContextFabricCohortMemberDriver_ValueMustMatchClaimedLabelSum is
+// codex R3 finding 3: an investment_mix driver's Value must equal the
+// EXACT sum of the sub-weights of its own ThresholdLabels -- a driver
+// claiming "reactive_share_high" fired (0.35) while reporting Value: 0
+// must be rejected.
+func TestContextFabricCohortMemberDriver_ValueMustMatchClaimedLabelSum(t *testing.T) {
+	t.Parallel()
+	score := 0.0
+	driver := ContextFabricCohortMemberDriver{
+		Signal: "investment_mix", Value: 0, Weight: 30, WeightContributed: 0,
+		Window:          ContextFabricCohortMemberDriverWindowCurrent,
+		ThresholdLabels: []string{"investment_mix.reactive_share_high"}, // claims 0.35, but Value says 0
+	}
+	member := ContextFabricCohortMember{
+		Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team:CHAOS", Label: "Fullchaos"},
+		Rank:    1, InclusionReasons: []string{"matched"}, RankingComputed: true,
+		Score: &score, AttentionRank: 1,
+		RankingBasis:     []string{"investment_mix", "investment_mix.reactive_share_high"},
+		DataCompleteness: ContextFabricCohortDataDegraded,
+		Drivers:          []ContextFabricCohortMemberDriver{driver},
+	}
+	if err := member.Validate(); err == nil {
+		t.Fatal("Validate() = nil for a driver claiming reactive_share_high with Value=0, want an error")
+	}
+}
+
+// TestContextFabricCohortMember_DataCompletenessMustMatchDriverCount is
+// codex R3 finding 4: DataCompleteness must agree with len(Drivers) --
+// complete requires all 5 families, degraded requires <=2, partial
+// otherwise. A "complete" member with only 1 driver must be rejected.
+func TestContextFabricCohortMember_DataCompletenessMustMatchDriverCount(t *testing.T) {
+	t.Parallel()
+	member := baseRankedCohortMember() // 1 driver's worth of RankingBasis
+	member.DataCompleteness = ContextFabricCohortDataComplete
+	member.Drivers = []ContextFabricCohortMemberDriver{baseDriverForBasis()}
+	if err := member.Validate(); err == nil {
+		t.Fatal("Validate() = nil for data_completeness=complete with only 1 driver, want an error")
 	}
 }

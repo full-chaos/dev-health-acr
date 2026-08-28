@@ -576,14 +576,22 @@
       "rows": [
         {
           "fields": {
-            "requirement": { "string": "Release acceptance review" },
-            "status": { "string": "open" }
+            "requirement": {
+              "string": "Release acceptance review"
+            },
+            "status": {
+              "string": "open"
+            }
           }
         },
         {
           "fields": {
-            "requirement": { "string": "Production readiness checklist" },
-            "status": { "string": "complete" }
+            "requirement": {
+              "string": "Production readiness checklist"
+            },
+            "status": {
+              "string": "complete"
+            }
           }
         }
       ]
@@ -645,5 +653,58 @@
       "provenance": "clarification_confirmed",
       "disposition": "applied"
     }
-  ]
+  ],
+  "cohort": {
+    "kind": "team",
+    "members": [
+      {
+        "subject": {
+          "kind": "team",
+          "canonical_id": "team:CHAOS",
+          "label": "CHAOS"
+        },
+        "rank": 1,
+        "inclusion_reasons": [
+          "Matched by kind census over the org's team roster."
+        ],
+        "evidence_ref_ids": [
+          "evidence_team_chaos_roster"
+        ],
+        "ranking_computed": true,
+        "attention_rank": 1,
+        "score": 42.0,
+        "ranking_basis": [
+          "health.compounding_risk"
+        ],
+        "data_completeness": "degraded",
+        "drivers": [
+          {
+            "signal": "health.compounding_risk",
+            "value": 0.42,
+            "weight": 25,
+            "weight_contributed": 42.0,
+            "window": "current"
+          }
+        ]
+      },
+      {
+        "subject": {
+          "kind": "team",
+          "canonical_id": "team:platform",
+          "label": "Platform"
+        },
+        "rank": 2,
+        "inclusion_reasons": [
+          "Matched by kind census over the org's team roster."
+        ],
+        "evidence_ref_ids": [
+          "evidence_team_platform_roster"
+        ]
+      }
+    ],
+    "exclusions": [],
+    "rationale": "Matched every team owning at least one repository in the org.",
+    "complete": true,
+    "truncated": false
+  }
 }

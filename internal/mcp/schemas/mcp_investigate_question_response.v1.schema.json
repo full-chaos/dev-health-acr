@@ -4274,6 +4274,67 @@
             "subject",
             "rank",
             "inclusion_reasons"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "data_completeness": {
+                    "const": "complete"
+                  }
+                },
+                "required": [
+                  "data_completeness"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "drivers": {
+                    "minItems": 5,
+                    "maxItems": 5
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "data_completeness": {
+                    "const": "partial"
+                  }
+                },
+                "required": [
+                  "data_completeness"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "drivers": {
+                    "minItems": 3,
+                    "maxItems": 4
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "data_completeness": {
+                    "const": "degraded"
+                  }
+                },
+                "required": [
+                  "data_completeness"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "drivers": {
+                    "maxItems": 2
+                  }
+                }
+              }
+            }
           ]
         },
         "CohortExclusion": {

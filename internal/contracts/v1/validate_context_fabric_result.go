@@ -528,11 +528,34 @@ func (m ContextFabricCohortMember) validateDrivers(bounds contextFabricBounds) e
 				return fmt.Errorf("cohort member driver weight_contributed does not match its formula value")
 			}
 		}
+		// Codex R3 finding 3: investmentMixSignal's Value is BY
+		// CONSTRUCTION the sum of exactly the sub-weights of whichever
+		// ThresholdLabels fired -- a driver claiming a label without the
+		// matching contribution in Value (or vice versa) is fabricated.
+		// Codex R3 finding 1: mix_shift_* is mutually exclusive (at most
+		// one fires) and REQUIRES Window==current_vs_prior when present
+		// (the reverse is not required: a prior-window comparison can
+		// legitimately find no shift worth a label).
+		var subWeightSum float64
+		var mixShiftLabels int
 		for _, label := range driver.ThresholdLabels {
 			if _, claimed := basisSubLabels[label]; !claimed {
 				return fmt.Errorf("cohort member driver threshold label is not present in ranking_basis")
 			}
 			claimedSubLabels[label] = struct{}{}
+			subWeightSum += contextFabricInvestmentMixSubWeights[label]
+			if _, isMixShift := contextFabricMixShiftLabels[label]; isMixShift {
+				mixShiftLabels++
+			}
+		}
+		if mixShiftLabels > 1 {
+			return fmt.Errorf("cohort member driver claims more than one mutually-exclusive mix_shift label")
+		}
+		if mixShiftLabels == 1 && driver.Window != ContextFabricCohortMemberDriverWindowCurrentVsPrior {
+			return fmt.Errorf("cohort member driver claims a mix_shift label without window current_vs_prior")
+		}
+		if driver.Signal == investmentMixSignalName && math.Abs(driver.Value-subWeightSum) > 1e-6 {
+			return fmt.Errorf("cohort member driver value does not match the sum of its claimed threshold labels")
 		}
 		weightContributedSum += driver.WeightContributed
 	}
@@ -544,6 +567,28 @@ func (m ContextFabricCohortMember) validateDrivers(bounds contextFabricBounds) e
 
 	if m.Score != nil && math.Abs(weightContributedSum-*m.Score) > 1e-6 {
 		return fmt.Errorf("cohort member drivers do not sum to score")
+	}
+
+	// Codex R3 finding 4: DataCompleteness must agree with how many
+	// families actually contributed a driver -- mirrors scoreMember's own
+	// switch (cohort_ranking.go): complete iff all 5, degraded iff <=2,
+	// partial otherwise. Write-path only (bounds.cohortMemberDriversRequired):
+	// a PR1-era row's DataCompleteness reflects its own RankingBasis
+	// family count from before Drivers existed, which this len(m.Drivers)
+	// check cannot see on the legacy read path.
+	if bounds.cohortMemberDriversRequired {
+		var want ContextFabricCohortDataCompleteness
+		switch {
+		case len(m.Drivers) == len(contextFabricCohortMemberDriverWeights):
+			want = ContextFabricCohortDataComplete
+		case len(m.Drivers) <= 2:
+			want = ContextFabricCohortDataDegraded
+		default:
+			want = ContextFabricCohortDataPartial
+		}
+		if m.DataCompleteness != want {
+			return fmt.Errorf("cohort member data_completeness does not match its driver count")
+		}
 	}
 	return nil
 }
