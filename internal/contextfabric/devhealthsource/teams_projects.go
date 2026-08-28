@@ -798,6 +798,22 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 // collapse of the teams table itself never splits by anything narrower
 // than the team's own row.
 //
+// Codex round-2 finding (HIGH): the outer aggregation used to filter to
+// `WHERE latest_is_open` BEFORE computing `latest_update`, so a repository
+// whose ownership just got REVOKED (latest_is_open flips to false) drops
+// out of the aggregation entirely -- taking its own updated_at with it.
+// If that revoked repository held the team's highest ownership timestamp,
+// `latest_update` regresses to an OLDER value (or NULL, falling back to
+// the epoch), which can be LOWER than what an earlier page already
+// consumed -- sincePredicate's strict `>` then skips the team forever, and
+// the revocation itself is what never gets picked up: exactly the stale-
+// authorization failure mode this join exists to close, now triggered by
+// a revocation instead of a grant. `groupUniqArrayIf(repo_full_name,
+// latest_is_open)` fixes this: the repository LIST is still filtered to
+// open-only, but `max(updated_at)` is computed over EVERY row in the
+// group -- open and closed alike -- so the watermark advances on a
+// revocation exactly as reliably as it does on a grant.
+//
 // Codex C5 (sincePredicate's own doc comment): every column this join's
 // caller selects from `teams` MUST be qualified (tm.id, tm.updated_at, ...)
 // -- team_repo_ownership carries its own updated_at, and an unqualified
@@ -825,7 +841,7 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 const noTeamOwnershipSentinel = "acr-context-fabric:no-team-repository-ownership"
 
 const ownedRepositoriesJoinSQL = `LEFT JOIN (
-	SELECT team_id, groupUniqArray(repo_full_name) AS repos, max(updated_at) AS latest_update
+	SELECT team_id, groupUniqArrayIf(repo_full_name, latest_is_open) AS repos, max(updated_at) AS latest_update
 	FROM (
 		SELECT team_id, repo_full_name, max(updated_at) AS updated_at,
 			argMax(tuple(valid_to), (valid_from, valid_to IS NULL, ifNull(valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open
@@ -833,7 +849,6 @@ const ownedRepositoriesJoinSQL = `LEFT JOIN (
 		WHERE org_id = {org_id:String} AND valid_from <= now64(3)
 		GROUP BY team_id, repo_full_name
 	)
-	WHERE latest_is_open
 	GROUP BY team_id
 ) AS tro ON tro.team_id = tm.id`
 

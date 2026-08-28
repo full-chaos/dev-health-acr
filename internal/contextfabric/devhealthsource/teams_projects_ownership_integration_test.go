@@ -241,6 +241,88 @@ func subTeamAuthorizationRefreshedByOwnershipOnlyChange(t *testing.T, ctx contex
 	}
 }
 
+// subTeamAuthorizationRefreshedByRevokingLastOpenRepository is codex
+// round-2's HIGH finding: the outer watermark aggregation used to filter
+// to `WHERE latest_is_open` BEFORE computing `max(updated_at)`, so
+// revoking a team's ONLY open repository removed that repository's row
+// from the aggregation entirely -- taking its own updated_at with it.
+// The watermark then regressed (or fell back to the epoch), which can sit
+// BELOW what an earlier page already consumed, and sincePredicate's
+// strict `>` then skips the team forever: the revocation itself is what
+// never gets picked up, leaving the now-invalid repository authorized
+// indefinitely. This seeds exactly that sequence -- grant, converge,
+// revoke the team's ONLY open repository, converge again -- and proves
+// the team is re-emitted with the repository excluded.
+func subTeamAuthorizationRefreshedByRevokingLastOpenRepository(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	seed := func(validFrom time.Time, validTo any, updatedAt time.Time) {
+		if err := fixture.direct.Exec(ctx,
+			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			fixture.orgID, "github", "TEAM-GITHUB", nil, "acme/only-repo", "exact", "native", uint8(1), uint16(1), int32(1), validFrom, validTo, updatedAt); err != nil {
+			t.Fatalf("seed team_repo_ownership: %v", err)
+		}
+	}
+	grantedAt := ownershipFirstSeen
+	seed(grantedAt, nil, grantedAt)
+
+	cursor := ""
+	converge := func() {
+		for page := 0; page < 10; page++ {
+			batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
+				OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
+			})
+			if err != nil {
+				t.Fatalf("converge page %d: %v", page, err)
+			}
+			if !available {
+				return
+			}
+			cursor = batch.NextCursor
+		}
+	}
+	converge()
+
+	// Revoke the team's ONLY open repository: a NEW assertion (later
+	// valid_from, later updated_at) that closes it.
+	revokedAt := time.Now().UTC()
+	seed(revokedAt, revokedAt, revokedAt)
+
+	found := false
+	excluded := false
+	for page := 0; page < 10; page++ {
+		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
+			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
+		})
+		if err != nil {
+			t.Fatalf("post-revoke page %d: %v", page, err)
+		}
+		if !available {
+			break
+		}
+		cursor = batch.NextCursor
+		for _, e := range batch.Entities {
+			if e.Subject.CanonicalID != "team:TEAM-GITHUB" {
+				continue
+			}
+			found = true
+			excluded = true
+			for _, repo := range e.Authorization.RepositorySlugs {
+				if repo == "acme/only-repo" {
+					excluded = false
+				}
+			}
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		t.Fatal("TEAM-GITHUB was never re-emitted after its only open repository was revoked -- the watermark regressed when the last open row dropped out of the aggregation")
+	}
+	if !excluded {
+		t.Fatal("TEAM-GITHUB was re-emitted but acme/only-repo is still in RepositorySlugs after revocation")
+	}
+}
+
 // subTeamAuthorizationOwnershipJoinScopedToOneOrganization proves the
 // team_repo_ownership join itself carries the same org_id isolation as
 // every other producer in this package (CHAOS-3642/3649 discipline): a
@@ -323,6 +405,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"team authorization carries current owned repositories", "30000000-0000-4000-8000-000000000008", subTeamAuthorizationCarriesCurrentOwnedRepositories},
 		{"team authorization collapses a stale open assertion superseded by a later close", "30000000-0000-4000-8000-000000000009", subTeamAuthorizationCollapsesStaleOpenAssertion},
 		{"team authorization is refreshed by an ownership-only change", "30000000-0000-4000-8000-00000000000a", subTeamAuthorizationRefreshedByOwnershipOnlyChange},
+		{"team authorization is refreshed by revoking the last open repository", "30000000-0000-4000-8000-00000000000c", subTeamAuthorizationRefreshedByRevokingLastOpenRepository},
 		{"team authorization ownership join is scoped to one organization", "30000000-0000-4000-8000-00000000000b", subTeamAuthorizationOwnershipJoinScopedToOneOrganization},
 	}
 	for _, testCase := range cases {
