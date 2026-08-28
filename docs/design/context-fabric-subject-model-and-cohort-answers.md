@@ -28,7 +28,7 @@ answers:
 | `project` | `projects` table; graph node via `teams_projects.go` | `team_project_ownership` (project→team) | first-class, cohort-capable — `interpretedCohortKind` already selects `SubjectProject` for project-shaped questions and `DiscoveredCohort` admits project nodes the same way it admits team nodes. The real limitation is narrower: `interpretedCohortKind` picks exactly **one** kind per question (a substring heuristic, `graphrank/discover.go:296`), so a mixed team+project cohort in one question is not supported — that is a distinct, pre-existing gap, not "project is single-subject only" |
 | `repository` | `repositories`/`tables.go` | N/A (leaf; owned by team indirectly via ownership tables, never a direct graph edge — see diagram 3 caveat below) | first-class |
 | `metric` | `ContextFabricSubjectMetric` constant declared (`model.go:92`) | — | **declared, not wired** — no query producer reads it yet |
-| person | — | — | **not a subject kind in acr.** No `SubjectPerson` exists. This is by design, not an oversight: the platform contract bars person-level productivity/health/workload/staffing rankings (root `AGENTS.md`, "Visualization Guardrails"); a `person` subject able to carry a ranking would need a governance decision first, not a silent addition. |
+| person | — | — | **not a subject kind in acr.** No `SubjectPerson` exists. This is by design, not an oversight: the dev-health **platform** root `AGENTS.md` (`../../AGENTS.md` from this repo — distinct from this repo's own `AGENTS.md`) bars person-to-person rankings under "Visualization Guardrails," and the Context Fabric project's own Linear description states the finer "no person-level productivity, health, workload, or staffing ranking" as a non-negotiable boundary; a `person` subject able to carry a ranking would need a governance decision first, not a silent addition. |
 
 **No direct repository↔project or repository↔team graph edge exists, by
 design** — `project` here is a work-tracking project (Linear-shaped), not a
@@ -102,10 +102,10 @@ flowchart TD
   INTERPRET --> CENSUS["Cohort census<br/>DiscoverContext: fulltextSearchNodes today<br/>+ ExactNameCandidates -- IN FLIGHT (#314/CHAOS-4395,<br/>not yet merged as of this writing)"]
   CENSUS --> AUTHZ["Authorize<br/>graphrank.AuthorizedAttributes<br/>ownership-derived (#313/CHAOS-4390, MERGED)"]
   AUTHZ --> FACTS["Per-member fact production (NEW requirement injection, §3a)<br/>investigationScopeSubjects fans out subjects, but fact KINDS<br/>still come from Interpretation.FactRequirements + graphContext.FactRequirements<br/>(engine.go:1217-1222 mergeFactRequirements) -- cohort ranking must force-add<br/>health / workload / readiness / operational_deficiencies / investment (NEW join, see 4)<br/>the same way graphContext.FactRequirements already injects non-model requirements"]
-  FACTS --> RANK["RankCohort (NEW, deterministic)<br/>runs after fact reads, before synthesis<br/>Score + RankingBasis + DataCompleteness"]
-  RANK --> DRIVERS["Per-member drivers (NEW, budget-bounded)<br/>ContextFabricDriverJudgment<br/>emit up to top-3 for top 16 ranked members (canonical-result<br/>safety margin, §5a) -- actual rendered count is bounded<br/>further and separately by the request's own driver budget"]
-  DRIVERS --> SYNTH["Synthesize<br/>Score is passed to the model as read-only grounding<br/>context (like any other canonical fact) so it CAN<br/>narrate the real number -- it still never computes<br/>or overrides one. Existing Rows guard keeps its<br/>strip-and-tolerate behavior unchanged (model-authored<br/>Rows stripped, answer still returned, cf_model_rows_stripped)"]
-  SYNTH --> ROWS["Rows panel<br/>ContextFabricProjectedCohort.RankingTable (NEW field, §4a)"]
+  FACTS --> RANK["RankCohort (NEW, deterministic)<br/>runs after fact reads, before synthesis<br/>Score + RankingBasis + DataCompleteness ONLY --<br/>no ContextFabricDriverJudgment emission here (see DRIVERS below)"]
+  RANK --> SYNTH["Synthesize (open question, see below)<br/>Score is server-computed, model never overrides it,<br/>but HOW a narrated score gets grounded/checked is<br/>NOT YET SPECIFIED -- PR3 picks: new canonical-observation<br/>claim type, or fully server-templated non-model text.<br/>Existing Rows guard keeps its strip-and-tolerate<br/>behavior unchanged (model-authored Rows stripped,<br/>answer still returned, cf_model_rows_stripped)"]
+  SYNTH --> DRIVERS["Per-member drivers (NEW, budget-bounded, AFTER synthesis, §5a)<br/>ContextFabricDriverJudgment -- moved here so the cohort's share<br/>of ContextFabricDriversMaxCount=50 is computed as<br/>50 - len(synthesisDrivers), the ACTUAL count synthesis returned,<br/>never a fixed pre-synthesis guess. Emits top-3 for top<br/>floor(available/3) ranked members, capped at 16"]
+  DRIVERS --> ROWS["Rows panel<br/>ContextFabricProjectedCohort.RankingTable (NEW field, §4a)"]
   ROWS --> PROJECT["Projection (NEW wiring, §4a)<br/>projectCohort/projectDriver must copy<br/>Score/RankingBasis/DataCompleteness/AffectedSubjects<br/>onto the projected types -- not automatic. New fields<br/>are optional/omitempty: a v1 result computed before<br/>this change simply omits them, it is not a false zero"]
   PROJECT --> ASKDEV["Ask Dev / Workbench<br/>shared answerprojection Rows renderer<br/>needs contract pin bump (new optional fields)"]
 
@@ -118,17 +118,27 @@ flowchart TD
 ```
 
 The model never computes or narrates a number it was not given — the same
-discipline as canonical theme roll-up (root `AGENTS.md`) and
-`attachCanonicalRows` (`model_runtime.go:575`, "only place `Rows` is set").
+discipline as canonical theme roll-up (dev-health platform root `AGENTS.md`,
+`../../AGENTS.md` from this repo) and `attachCanonicalRows`
+(`model_runtime.go:575`, "only place `Rows` is set").
 `RankCohort` sits in that same ordering slot: after fact reads, before
 `SynthesizeAnswer`. `Score` is computed server-side and the model can never
-override it, but it **is** passed into the synthesis prompt as an
-already-computed, read-only grounding value — the same way any other
-canonical fact reaches the model — so the model can narrate the actual number
-without contradicting "never narrates a number it was not given"; an earlier
-draft of this design said `Score` is "never model input" in the same breath
-as asking the model to narrate it, which cannot both be true, and this is the
-correction. The existing `StripModelAuthoredClaimedFactRows` path already
+override it — an earlier draft of this design said `Score` is "never model
+input" in the same breath as asking the model to narrate it, which cannot
+both be true, and that self-contradiction is corrected here, but the fix is
+**not yet fully specified**: `SynthesisDraft.ValidateAgainst` grounds a
+claim's stated numbers only against `input.Facts.Facts` today, so simply
+including `Score` in the synthesis prompt text (as this design's earlier
+revision proposed) does not, by itself, stop the model from narrating a
+different number in prose — nothing currently checks a narrated score claim
+against the canonical value the way `ValidateAgainst` checks fact claims.
+PR3 (synthesis + Rows) must resolve this one of two ways: (a) add `Score` as
+a server-authored canonical observation/claim that `ValidateAgainst` can
+ground against, the same mechanism claimed facts use, or (b) keep score
+narration entirely deterministic and server-templated (e.g. "Score: 74/100"
+composed outside the model, never asked of the model as free text) — this
+design does not pick between them; either is compatible with everything
+else here. The existing `StripModelAuthoredClaimedFactRows` path already
 tolerates a model-authored `Rows` claim by stripping it and continuing
 (`cf_model_rows_stripped`), not by rejecting the whole answer — this design
 does not change that behavior. `CENSUS` above is marked `gap`, not `fixed`:
@@ -259,25 +269,39 @@ successful empty read as "missing" would exclude the 20-point deficiency
 weight and renormalize the remaining, mostly-adverse signals upward,
 penalizing a healthy team for having nothing wrong.
 
-**Availability is per-member, not per-provider-call.** `FactProviderResult.State`
-describes the whole batch read for a family, not any one team: if readiness
-returns a row for team A but none for team B in the same call, the call is
-still `SourceAvailable` overall, which would wrongly mark team B "available"
-with no value to normalize. The rule, applied per `(member, signal family)`
-pair:
-- **available-with-value**: the family's batch `State == SourceAvailable`
-  AND this specific member has a fact row in the result.
+**Availability is per-member AND per-target-scalar, not per-provider-call.**
+`FactProviderResult.State` describes the whole batch read for a family, not
+any one team: if readiness returns a row for team A but none for team B in
+the same call, the call is still `SourceAvailable` overall, which would
+wrongly mark team B "available" with no value to normalize. It goes one
+level deeper than "has a row," too: a present row can still omit the
+specific field this formula needs — `health.go` only sets `compounding_risk`
+when its own `hasRisk` flag is true, `readiness.go` only sets
+`estimate_coverage_ratio` when `HasRatio` is true, and the same
+has/value-guard pattern applies to `workload.forecast_p50_days`. Treating
+"a row exists" as sufficient would count these no-value rows as available,
+wrongly inflating both the family's contribution and `DataCompleteness`. The
+rule, applied per `(member, signal family)` pair:
+- **available-with-value**: this specific member has a fact row in the
+  result carrying a non-empty value for the exact target field this
+  formula's normalization step reads (`compounding_risk`,
+  `estimate_coverage_ratio`, `forecast_p50_days`, or a deficiency severity
+  string), AND the batch state for the row that carried it was
+  `SourceAvailable` or `SourceTruncated` (a truncated batch can still carry
+  a fully valid retained row for this member — truncation truncates the
+  batch's row count, it does not retroactively invalidate a row that
+  survived truncation).
 - **available-zero** (a defined exception, not a general rule): this member
-  has no deficiency row AND the batch state is `SourceAvailable` — this is
-  the one family where "no row" has an established meaning ("no currently
-  fired rules"). No other family in this table gets a free zero for an
-  absent row.
-- **missing** for this member: the batch state is anything other than
-  `SourceAvailable` (pruned/unavailable/error/`SourceTruncated` needs the
-  same per-row check — a truncated batch can still carry a valid row for
-  this specific member, so truncation truncates the batch, not automatically
-  every member in it), OR the member has no row and the family is not
-  deficiency.
+  has no deficiency row at all AND the batch state is `SourceAvailable` —
+  this is the one family where "no row" has an established meaning ("no
+  currently fired rules"). No other family in this table gets a free zero
+  for an absent row or an absent target field.
+- **missing** for this member: the batch state is `SourcePruned`/
+  `SourceUnavailable`/error (never per-row for these three — an
+  unsuccessful batch read has no valid rows to salvage), OR the batch state
+  is `SourceAvailable`/`SourceTruncated` but this member has no row, OR this
+  member has a row that does not carry the required target field (the
+  `hasRisk`/`HasRatio`-style guard was false).
 
 | # | Signal | Source | Normalization to `[0,1]` | Weight | Direction |
 |---|---|---|---|---|---|
@@ -328,7 +352,12 @@ direction: label `mix_shift_toward_operational` if that theme is
 `mix_shift_other` (a third closed-vocab value, added here) if the largest
 mover is `maintenance`, `quality`, or `risk` — the two-label vocabulary in
 the plan draft cannot represent a shift that moves mass into neither named
-theme.
+theme. **Tie-break (P2):** two themes can land on the same largest positive
+delta, especially with quantized/rounded shares — `RankCohort` must stay
+deterministic (§1's pipeline discipline), so ties are broken by the fixed
+taxonomy order `feature_delivery, operational, maintenance, quality, risk`
+(the same order `investment_taxonomy.py`/`taxonomies/investment.md` already
+declare canonically), never by map iteration or row order.
 
 No new categories are invented in the taxonomy sense — every label maps onto
 the fixed 5-theme/15-subcategory taxonomy (root `AGENTS.md`: "no
@@ -349,30 +378,46 @@ result cap alone is not the binding constraint a caller actually experiences:
    **50** total driver judgments **for the whole answer**
    (`context_fabric_model_bounds.go:236`) — `result.Drivers` is one array
    shared with every other driver-producing part of synthesis (status,
-   blockers, health, etc. on the cohort's own members' single-subject-style
-   facts), not a budget cohort ranking owns alone. `MaxCohortMembers`
-   defaults to **250** (`answer_reuse.go:213`). A design that reserves a
-   fixed 48 of the 50 slots for cohort drivers (`16 members × 3`) leaves at
-   most 2 slots for every other driver the same answer produces — appending
-   even a handful of ordinary drivers would then fail validation, which is
-   the same class of bug this section exists to prevent, just moved one
-   layer up. Corrected design rule, at emission time (`RankCohort`/driver
-   generation, which must run with visibility into how many non-cohort
-   driver judgments the same synthesis pass has already produced or reserved
-   this run): let `available = ContextFabricDriversMaxCount -
-   reserved_for_non_cohort_drivers` (a number PR1 must define an explicit,
-   conservative reservation for — e.g. reserve a fixed floor such as 10 for
-   non-cohort drivers before computing the cohort's share); emit top-3
-   drivers only for the **top `floor(available/3)` members by `Score`**
-   (ties broken by pool order), capped at 16 as an upper bound even if more
-   budget is technically available (a Rows table with drivers for 40+ teams
-   is not a more useful answer). Members beyond that cutoff get `Score` +
-   `RankingBasis` + `DataCompleteness` (already enough to render a ranked
-   Rows table) but zero `ContextFabricDriverJudgment` entries — the same
-   "disclose the bound, do not silently drop" pattern `Cohort.Truncated`
-   already uses for membership. A future PR needing a higher guaranteed
-   member-with-drivers count must version the driver contract, not silently
-   violate `ContextFabricDriversMaxCount` or starve non-cohort drivers.
+   blockers, health, etc.), not a budget cohort ranking owns alone.
+   `MaxCohortMembers`'s **250** (`answer_reuse.go:213`) is the ceiling used
+   only for reuse rechecks, not a caller default — real request defaults are
+   much smaller (MCP defaults cohort membership to **20**,
+   `internal/mcp/investigate_question.go:21`; the shared answer-projection
+   default is **25**, `project.go:47`); a request can still ask for up to
+   250, so the budget problem below must hold at that ceiling, not just at
+   the common-case defaults.
+
+   **Ordering problem this design's first two drafts got wrong:** §3's
+   pipeline runs `RankCohort` (computing `Score`/`RankingBasis`/
+   `DataCompleteness`) before `SynthesizeAnswer`, because narration needs
+   the score already computed. But that does **not** mean cohort *driver
+   judgments* (the `ContextFabricDriverJudgment` entries themselves) must
+   also be emitted before synthesis — and they should not be, because
+   before synthesis runs, nothing yet knows how many non-cohort drivers
+   (status, blockers, health, etc.) the model's own synthesis pass will
+   produce. A fixed reservation (e.g. "reserve 10 slots for everything
+   else") is not a safety guarantee: the synthesis prompt/contract
+   currently permits up to the full 50, so a synthesis pass that legitimately
+   returns more than the reserved amount, combined with a cohort emission
+   sized against that reservation, can still exceed
+   `ContextFabricDriversMaxCount` when the two are appended together.
+   Corrected design: split ranking from driver emission across the pipeline
+   boundary. `RankCohort` (Score/RankingBasis/DataCompleteness) stays before
+   synthesis, unchanged. Cohort **driver judgment** emission moves to
+   **after** `SynthesizeAnswer` returns and **before** the commit-affirmation
+   gate: compute `available = ContextFabricDriversMaxCount -
+   len(synthesisDrivers)` from the actual synthesis output (not a guess),
+   then emit top-3 drivers only for the **top `floor(available/3)` members
+   by `Score`** (ties broken by pool order), capped at 16 as an upper bound
+   even if more budget is technically available (a Rows table with drivers
+   for 40+ teams is not a more useful answer). Members beyond that cutoff
+   get `Score` + `RankingBasis` + `DataCompleteness` (already enough to
+   render a ranked Rows table) but zero `ContextFabricDriverJudgment`
+   entries — the same "disclose the bound, do not silently drop" pattern
+   `Cohort.Truncated` already uses for membership. A future PR needing a
+   higher guaranteed member-with-drivers count must version the driver
+   contract or cap the synthesis prompt's own driver allowance lower, not
+   silently violate `ContextFabricDriversMaxCount`.
 
 2. **Projection-time render budget** (`answerprojection.Budget.MaxDrivers`,
    `project.go:34`) is a **much smaller, separate, request-scoped** limit
@@ -485,26 +530,33 @@ for this shape to call as-is. See the ops-side deprecation note:
   this writing) — this page documents the design, not a shipped capability.
   Update this page's pipeline diagram's node classes (`fixed` vs. `gap` vs.
   `newnode`) as each of CHAOS-4398's 4 stacked PRs — and CHAOS-4395 — lands.
-  Three review passes on this design surfaced and this page now resolves:
-  the driver-count budget being a global, shared budget rather than a
-  cohort-reserved one, on top of a separate smaller projection-time render
-  budget (§5a); the score-narration/model-input contradiction (§3); fact
-  requirements for ranking not auto-flowing from cohort subject fan-out and
-  needing explicit injection (§3a); v1 optional-field compatibility for the
-  new member fields, including that a nil pointer with `omitempty` cannot by
-  itself distinguish "no ranking attempted" from "ranking attempted, no
-  signal" (§4/§4a/§5b); that `Rank`'s existing pool-order meaning must not be
-  repurposed, requiring a separate `AttentionRank` field (§5b); an undefined
-  `RankingTable` field (§4a); per-member (not per-provider-batch) signal
-  availability and an explicit multi-scope aggregation policy for
+  Four review passes on this design surfaced and this page now resolves:
+  the driver-count budget being global and shared, computed **after**
+  synthesis from the actual non-cohort driver count rather than a
+  pre-synthesis guess, on top of a separate smaller projection-time render
+  budget (§5a); that grounding a narrated `Score` against the canonical
+  value is an open PR3 design choice, not something merely showing it in
+  the prompt already solves (§3); fact requirements for ranking not
+  auto-flowing from cohort subject fan-out and needing explicit injection
+  (§3a); v1 optional-field compatibility for the new member fields,
+  including that a nil pointer with `omitempty` cannot by itself distinguish
+  "no ranking attempted" from "ranking attempted, no signal" (§4/§4a/§5b);
+  that `Rank`'s existing pool-order meaning must not be repurposed, requiring
+  a separate `AttentionRank` field (§5b); an undefined `RankingTable` field
+  (§4a); per-member **and per-target-field** (not per-provider-batch, not
+  just per-row) signal availability, a resolved `SourceTruncated` handling
+  rule, and an explicit multi-scope aggregation policy for
   readiness/workload (§5); non-overlapping completeness ranges counted per
   member (§5c); the `Category` vocabulary (§4/§5); signed mix-shift direction
-  (§5); and the missing-vs-successfully-empty distinction for deficiency
-  (§5). PR1/PR2/PR3 implement against these corrected sections, not any
+  with a deterministic tie-break (§5); the missing-vs-successfully-empty
+  distinction for deficiency (§5); accurate `MaxCohortMembers` default
+  citations (§5a); and mislabeled `AGENTS.md` citations that conflated this
+  repo's own `AGENTS.md` with the dev-health platform root one two levels up
+  (§1/§3). PR1/PR2/PR3 implement against these corrected sections, not any
   earlier framing.
-- The severity→ordinal mapping in §5 row 3 is a proposed default that must be
-  checked against `recommendations_daily`'s real severity value set in PR1,
-  not assumed correct from this page alone.
+- The severity→ordinal mapping in §5 row 3 and the score-narration grounding
+  mechanism (§3) are proposed defaults / open choices that must be confirmed
+  or decided in PR1/PR3, not assumed correct from this page alone.
 - `metric` and `person` subject handling — out of scope; see §1.
 - Chat-vs-Workbench structure-offer parity and the "cannot re-ask" chat
   defect — tracked separately (`.remember/context-fabric/drafts/subject-model-requirement.md`
