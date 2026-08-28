@@ -144,20 +144,25 @@ func (a *App) requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := strings.TrimSpace(r.Header.Get("X-Request-ID"))
 		// CodeQL go/log-injection (CHAOS-4355 response-bound follow-up,
-		// alert #54): reject any caller-supplied header carrying a control
-		// character (CR/LF included) BEFORE it can reach any log line,
-		// rather than relying solely on observability.parseRequestID's
-		// stricter req_+32-hex format check a few lines below to catch it
-		// indirectly. Functionally the two guards agree today (a value
-		// with an embedded control character can never match that strict
-		// format either -- confirmed with a live repro sending
-		// "evil\nFAKE_LOG_LINE=injected", which the pre-existing fallback
-		// already replaced with a clean generated ID), but a scanner
-		// tracing this function alone has no way to see that -- and
-		// neither does a future reader who only reads THIS function. This
-		// makes the guard explicit at the one point untrusted input enters
-		// the request-ID pipeline, per CWE-117's own remediation ("remove
-		// line breaks from user input").
+		// alert #54): strip CR/LF from the caller-supplied header value
+		// directly -- CWE-117's own remediation ("remove line breaks from
+		// user input", using strings.Replace) -- BEFORE it can reach any
+		// log line, rather than relying solely on
+		// observability.parseRequestID's stricter req_+32-hex format check
+		// a few lines below to catch it indirectly. Functionally the two
+		// guards already agreed (a value with an embedded control
+		// character can never match that strict format either -- confirmed
+		// with a live repro sending "evil\nFAKE_LOG_LINE=injected", which
+		// the pre-existing fallback already replaced with a clean
+		// generated ID before this change existed), but a scanner tracing
+		// this function alone has no way to see that indirect path, and
+		// neither does a future reader who only reads THIS function.
+		requestID = strings.ReplaceAll(requestID, "\r", "")
+		requestID = strings.ReplaceAll(requestID, "\n", "")
+		// Reject any OTHER control character CR/LF stripping does not
+		// cover (CWE-117 names log forgery broadly, not only line-break
+		// injection): mirrors internal/limits/policy.go's validIdentifier
+		// check for the same class of caller-supplied identifier.
 		if requestID == "" || len(requestID) > 128 || !isSafeRequestIDHeaderValue(requestID) {
 			requestID = a.requestID()
 		}
