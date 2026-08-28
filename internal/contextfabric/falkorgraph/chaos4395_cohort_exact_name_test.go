@@ -230,3 +230,127 @@ func TestDiscoverContextCohortAuthzDroppedNotInflatedByOverlappingArms(t *testin
 		t.Fatalf("cohortMembersAuthzDropped = %d, want exactly 1 -- the same unauthorized subject returned by both fulltext and exact-name must not be double-counted", telemetry.cohortMembersAuthzDropped)
 	}
 }
+
+// TestDiscoverContextDiscoveredCohortWithCommittedSubjectNeverCallsExactNameCandidates
+// is codex round-2 finding P1: Shape alone is not enough to gate the
+// exact-name fetch. request.Resolution is upstream of DiscoverContext and
+// not something it validates -- a discovered_cohort request can still
+// carry a committed subject (an exact hint, a prior-turn carry-over).
+// Appending the org-wide census onto an already-anchored request would
+// widen a subject-specific investigation into an organization-wide
+// cohort, so the fetch requires BOTH the shape AND a genuinely empty
+// Resolution.Committed.
+func TestDiscoverContextDiscoveredCohortWithCommittedSubjectNeverCallsExactNameCandidates(t *testing.T) {
+	origin := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_anchor", Label: "Anchor"}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "$kinds"):
+			t.Fatal("chaos4348ExactNameCandidates must not be called when Resolution.Committed is non-empty, even for ShapeDiscoveredCohort")
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			return nil, nil
+		default:
+			return []row{fakeSubjectNodeRow("team", "team_anchor", "Anchor")}, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
+	request := cohortDiscoveryRequest(contextfabric.ShapeDiscoveredCohort)
+	request.Resolution.Committed = []contextfabric.SubjectRef{origin}
+
+	if _, err := adapter.DiscoverContext(context.Background(), principal, request); err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+}
+
+// TestDiscoverContextTruncatedExactNameForcesCohortIncomplete is codex
+// round-2 finding P2: DiscoveredCohort computes Cohort.Complete purely
+// from len(members) vs. MaxCohortMembers, with no way to know its own node
+// source was truncated upstream. A truncated census with fewer than
+// MaxCohortMembers matching members would otherwise report Complete=true
+// despite genuinely missing some -- Coverage.Partial alone is not enough
+// if a caller trusts the Cohort field directly.
+func TestDiscoverContextTruncatedExactNameForcesCohortIncomplete(t *testing.T) {
+	overLimitRows := make([]row, exactNameCandidateQueryLimit+1)
+	for i := range overLimitRows {
+		overLimitRows[i] = fakeSubjectNodeRow("team", fmt.Sprintf("team_%d", i), fmt.Sprintf("Team %d", i))
+		overLimitRows[i]["n"].(*node).Properties["authorization_repositories"] = "*"
+	}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "$kinds"):
+			return overLimitRows, nil
+		default:
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1"}
+	request := cohortDiscoveryRequest(contextfabric.ShapeDiscoveredCohort)
+	request.Request.Options.MaxCohortMembers = exactNameCandidateQueryLimit + 100 // above the census size, so len(members) < MaxCohortMembers
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil {
+		t.Fatal("Cohort = nil, want members from the (truncated) census")
+	}
+	if result.Cohort.Complete {
+		t.Fatal("Cohort.Complete = true, want false -- the census that built this cohort was truncated, so it cannot claim completeness even though len(members) < MaxCohortMembers")
+	}
+}
+
+// TestDiscoverContextExactNameCohortMembershipIsDeterministic is codex
+// round-2 finding P2: chaos4348ExactNameCandidates' Cypher carries no
+// ORDER BY, so FalkorDB's own return order is unspecified. Two identical
+// calls whose underlying fake returns the SAME node set in a DIFFERENT
+// order must still select the SAME cohort member once bounded by
+// MaxCohortMembers.
+func TestDiscoverContextExactNameCohortMembershipIsDeterministic(t *testing.T) {
+	makeRows := func(reversed bool) []row {
+		names := []string{"team_alpha", "team_beta", "team_gamma"}
+		if reversed {
+			names = []string{"team_gamma", "team_beta", "team_alpha"}
+		}
+		rows := make([]row, len(names))
+		for i, name := range names {
+			rows[i] = fakeSubjectNodeRow("team", name, name)
+			rows[i]["n"].(*node).Properties["authorization_repositories"] = "*"
+		}
+		return rows
+	}
+	runOnce := func(reversed bool) string {
+		fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+			switch {
+			case strings.Contains(cypher, "fulltext"):
+				return nil, nil
+			case strings.Contains(cypher, "$kinds"):
+				return makeRows(reversed), nil
+			default:
+				return nil, nil
+			}
+		}}
+		adapter := newFakeAdapter(t, fake)
+		principal := storage.Principal{OrgID: "org-1"}
+		request := cohortDiscoveryRequest(contextfabric.ShapeDiscoveredCohort)
+		request.Request.Options.MaxCohortMembers = 1
+		result, err := adapter.DiscoverContext(context.Background(), principal, request)
+		if err != nil {
+			t.Fatalf("DiscoverContext() error = %v", err)
+		}
+		if result.Cohort == nil || len(result.Cohort.Members) != 1 {
+			t.Fatalf("Cohort = %#v, want exactly 1 member", result.Cohort)
+		}
+		return result.Cohort.Members[0].Subject.CanonicalID
+	}
+	forward := runOnce(false)
+	backward := runOnce(true)
+	if forward != backward {
+		t.Fatalf("selected member differs by input order: forward=%q backward=%q -- exact-name cohort membership is not deterministic", forward, backward)
+	}
+}
