@@ -58,7 +58,18 @@ func TestChaos4386TerminalReason(t *testing.T) {
 			t.Errorf("chaos4386TerminalReason = %q, want %q (a closed class, not the raw text)", got, "degraded_reason_disclosed")
 		}
 	})
-	t.Run("no_match falls back to warning_disclosed when no degraded reason, never the raw text", func(t *testing.T) {
+	t.Run("no_match with a Limitations entry classifies as limitation_disclosed, never the raw text", func(t *testing.T) {
+		// codex confirmation pass 3 (P2, confirmed): this is where a
+		// NORMAL production no_match (empty subject pool, window/
+		// structure veto) puts its explanation -- DegradedReasons/
+		// Warnings both stay empty on that path.
+		result := chaos4386ResultWithStatus(contractsv1.ContextFabricInvestigationNoMatch)
+		result.Limitations = []string{"no candidate matched the requested subject -- this raw text must never appear in the classification"}
+		if got := chaos4386TerminalReason(result); got != "limitation_disclosed" {
+			t.Errorf("chaos4386TerminalReason = %q, want %q (a closed class, not the raw text)", got, "limitation_disclosed")
+		}
+	})
+	t.Run("no_match falls back to warning_disclosed when no degraded reason or limitation, never the raw text", func(t *testing.T) {
 		result := chaos4386ResultWithStatus(contractsv1.ContextFabricInvestigationNoMatch)
 		result.Warnings = []string{"no candidate matched -- this raw text must never appear in the classification"}
 		if got := chaos4386TerminalReason(result); got != "warning_disclosed" {

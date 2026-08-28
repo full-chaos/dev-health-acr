@@ -258,8 +258,13 @@ func (m *chaos4386MeasuringInvestigator) snapshot() []int64 {
 // secondary, independent channel, so a future/alternate path that
 // populates ONLY that field is still classified correctly. Every other
 // non-complete status (partial/degraded/no_match) carries its
-// explanation, when the engine gave one, in Coverage.DegradedReasons or,
-// failing that, Warnings.
+// explanation, when the engine gave one, in Coverage.DegradedReasons,
+// Limitations, or, failing those, Warnings -- Limitations specifically
+// (codex confirmation pass 3, P2, confirmed) is where a normal production
+// no_match (an empty subject pool, a window/structure veto) puts its
+// explanation, while DegradedReasons/Warnings both stay empty on that
+// path; without checking it, the common no_match case classified as
+// "undisclosed" despite a real, disclosed reason.
 func chaos4386TerminalReason(result contractsv1.ContextFabricInvestigationResult) string {
 	switch result.Status {
 	case contractsv1.ContextFabricInvestigationComplete:
@@ -272,6 +277,9 @@ func chaos4386TerminalReason(result contractsv1.ContextFabricInvestigationResult
 	default:
 		if len(result.Coverage.DegradedReasons) > 0 {
 			return "degraded_reason_disclosed"
+		}
+		if len(result.Limitations) > 0 {
+			return "limitation_disclosed"
 		}
 		if len(result.Warnings) > 0 {
 			return "warning_disclosed"
