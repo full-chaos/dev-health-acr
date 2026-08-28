@@ -35,6 +35,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 func Open(ctx context.Context, cfg config.Config, options Options) (*Runtime, error) {
@@ -594,7 +595,14 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		}
 	}
 	factRegistry, err := contextfabric.NewFactCapabilityRegistry(
-		devhealthfacts.NewProviders(clickhouse.queryClient),
+		// CHAOS-4377: wired through NewInstrumentedProviders, not
+		// NewProviders directly, with readers.NewSlogInstrumentation over
+		// this runtime's own request.options.Logger -- see
+		// devhealthfacts.NewInstrumentedProviders' own doc comment for why
+		// this is log/slog and never readers.NewOTelInstrumentation
+		// (suppressGenkitTelemetryExport below leaves no live OTel exporter
+		// for it to report through).
+		devhealthfacts.NewInstrumentedProviders(clickhouse.queryClient, readers.NewSlogInstrumentation(request.options.Logger, slog.LevelInfo)),
 		// CHAOS-4099 stage 2: the real ScopeExpander over the SAME
 		// ClickHouse client every FactProvider above shares -- activating
 		// the 3 ratified project-origin policies (fact_scope.go's own
