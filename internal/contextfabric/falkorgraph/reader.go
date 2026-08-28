@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -546,6 +547,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// distinguishes real degradation from ordinary, silent filtering, and it
 	// alone drives Coverage.Partial.
 	failedLookups := 0
+	// exactNameTruncated (CHAOS-4395, codex round-1 P1) reports whether
+	// chaos4348ExactNameCandidates' bounded org-wide kind census was cut
+	// off before it finished -- only ever set for a discovered_cohort
+	// request (see that call site below), and fed into Coverage.Partial/
+	// DegradedReasons so a cohort built from an incomplete census never
+	// silently claims completeness.
+	exactNameTruncated := false
 	// edgeFilters (CHAOS-3888) aggregates every edge resolveEdge excluded as
 	// edgeFiltered across BOTH sources this function reads from (hopWalk's
 	// committed-origin traversal below, and the full-text-adjacent-edge loop
@@ -670,7 +678,100 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 
 	admission := graphrank.AdmitEdges(principal.OrgID, orderedResolved, request.Request.Options, isInternalSubject)
-	cohort, cohortAuthzDropped := graphrank.DiscoveredCohort(principal, request, resolvedNodes, isInternalSubject)
+	// CHAOS-4395: DiscoveredCohort's ONLY node source used to be
+	// textNodes/resolvedNodes above -- fulltextSearchNodes over the raw
+	// question TEXT. A cohort question that names no member by label/alias
+	// ("which teams are struggling") cannot lexically match anything, so
+	// the cohort starved even when Shape was correctly interpreted as
+	// discovered_cohort and authorization would otherwise allow it.
+	// CHAOS-4348's chaos4348ExactNameCandidates is the kind-exhaustive,
+	// term-free fetch that already exists for exactly this problem on the
+	// single-subject path (graphrank.applyExactNameArm) -- this wires the
+	// SAME fetch into the cohort path (never touches resolvedNodes/
+	// orderedResolved/Paths/unbounded-validity accounting above, which
+	// stay fulltext+hop-walk only, unchanged for every non-cohort
+	// investigation, proven by a dedicated test).
+	//
+	// Codex round-1 finding (P1): scoped to ShapeDiscoveredCohort ONLY,
+	// deliberately excluding ShapeExplicitCohort. explicit_cohort means the
+	// question NAMES specific members ("compare the frontend and backend
+	// teams") -- chaos4348ExactNameCandidates returns the WHOLE org-wide
+	// kind census with no term filtering at all, so admitting it for an
+	// explicit_cohort request would widen a question that named two teams
+	// into a cohort containing every team in the org. discovered_cohort is
+	// the one shape that means "no term to match, give me the kind's whole
+	// census" -- the only shape this broad a fetch is ever correct for.
+	//
+	// Codex round-1 finding (P2, authzDropped double-count): exactNameNodes
+	// is merged through the SAME seenNode dedup map hopWalk/fulltext
+	// already populate above, so a subject BOTH fulltext and exact-name
+	// return (or that exact-name alone returns twice, though it cannot)
+	// contributes to DiscoveredCohort's authzDropped/membership accounting
+	// exactly once, never inflated by which arm(s) found it.
+	cohortNodes := resolvedNodes
+	// Codex round-2 finding (P1): gating on Shape alone is not enough. A
+	// discovered_cohort request can still carry a resolved, committed
+	// subject (an exact hint, a prior-turn carry-over) -- request.Resolution
+	// is upstream of this method and not something DiscoverContext itself
+	// produces or validates. Appending the org-wide census onto a request
+	// that already has a committed anchor would widen a subject-anchored
+	// investigation into an organization-wide cohort. The exact-name fetch
+	// is therefore reserved for a GENUINELY subjectless discovered_cohort
+	// request: Shape says "census", AND nothing was already committed.
+	if request.Interpretation.Shape == contextfabric.ShapeDiscoveredCohort && len(request.Resolution.Committed) == 0 {
+		exactNameNodes, truncated, exactNameErr := a.chaos4348ExactNameCandidates(ctx, key, principal.OrgID, temporal)
+		if exactNameErr != nil {
+			// CHAOS-4077: same never-projected-graph degrade-gracefully
+			// discipline as the hopWalk/fulltextSearchNodes error sites
+			// above.
+			return contextfabric.GraphContext{}, graphNotProjectedError(exactNameErr)
+		}
+		// Codex round-1 finding (P1, truncation disclosure): unlike the
+		// fulltext call above (whose truncation signal genuinely has no
+		// consumer here, per that call's own doc comment), a truncated
+		// exact-name fetch means the kind's census itself was incomplete
+		// -- a cohort built from it can silently under-count and still
+		// report Complete=true. Disclosed below via Coverage.Partial/
+		// DegradedReasons, the same mechanism this function already uses
+		// for endpoint_lookup_failed/unknown_relationship_type, AND (codex
+		// round-2 P2) forced onto Cohort.Complete directly below --
+		// DiscoveredCohort has no truncation signal of its own to derive
+		// that from.
+		exactNameTruncated = truncated
+		// Codex round-2 finding (P2, determinism): chaos4348ExactNameCandidates'
+		// Cypher carries no ORDER BY, so FalkorDB's return order is
+		// unspecified -- and DiscoveredCohort ranks members in INPUT
+		// order and stops at MaxCohortMembers, so an unordered census
+		// could select different members across otherwise-identical
+		// calls (CHAOS-3782 answer-reuse needs reproducibility). Sorted
+		// by subject key before merging, scoped to this cohort path only
+		// -- never touches chaos4348ExactNameCandidates' own single-
+		// subject callers.
+		sortCandidateNodesBySubjectKey(exactNameNodes)
+		cohortNodes = make([]graphrank.CandidateNode, 0, len(resolvedNodes)+len(exactNameNodes))
+		cohortNodes = append(cohortNodes, resolvedNodes...)
+		for _, n := range exactNameNodes {
+			subject, ok := graphrank.NodeSubject(n)
+			if !ok {
+				continue
+			}
+			nk := graphrank.SubjectKey(subject)
+			if seenNode[nk] {
+				continue
+			}
+			seenNode[nk] = true
+			cohortNodes = append(cohortNodes, n)
+		}
+	}
+	cohort, cohortAuthzDropped := graphrank.DiscoveredCohort(principal, request, cohortNodes, isInternalSubject)
+	if cohort != nil && exactNameTruncated {
+		// Codex round-2 finding (P2): DiscoveredCohort computes Complete
+		// purely from len(members) vs. MaxCohortMembers, with no way to
+		// know its own node source was truncated upstream -- a truncated
+		// census with fewer than MaxCohortMembers matching members would
+		// otherwise report Complete=true despite genuinely missing some.
+		cohort.Complete = false
+	}
 	factRequirements := admission.FactRequirements
 	if cohort != nil {
 		factRequirements = graphrank.MergeFactRequirements(factRequirements, contextfabric.FactHealth, contextfabric.FactWorkload)
@@ -721,13 +822,24 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// scanned, so the number describes this answer rather than the graph.
 	unbounded := 0
 	if temporal.active {
-		unbounded = countUnboundedValidity(resolvedNodes, orderedResolved)
+		// Codex round-2 finding (P1): cohortNodes -- not resolvedNodes --
+		// is what this call's answer actually rests on when Shape is
+		// discovered_cohort: it is resolvedNodes PLUS the deduped
+		// exact-name additions (identical to resolvedNodes for every
+		// other Shape, since cohortNodes is only reassigned inside that
+		// branch above). Counting resolvedNodes alone would silently
+		// exclude an exact-name-sourced cohort member from this
+		// historical-axis disclosure.
+		unbounded = countUnboundedValidity(cohortNodes, orderedResolved)
 	}
 
-	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated
 	var degradedReasons []string
 	if failedLookups > 0 {
 		degradedReasons = append(degradedReasons, fmt.Sprintf("endpoint_lookup_failed:%d", failedLookups))
+	}
+	if exactNameTruncated {
+		degradedReasons = append(degradedReasons, "exact_name_candidates_truncated")
 	}
 	if admission.DroppedUnknownRelationshipTypeCount > 0 {
 		degradedReasons = append(degradedReasons, fmt.Sprintf("unknown_relationship_type:%d", admission.DroppedUnknownRelationshipTypeCount))
@@ -780,6 +892,28 @@ func countUnboundedValidity(nodes []graphrank.CandidateNode, edges []graphrank.R
 func mustSubject(n graphrank.CandidateNode) contextfabric.SubjectRef {
 	subject, _ := graphrank.NodeSubject(n)
 	return subject
+}
+
+// sortCandidateNodesBySubjectKey sorts nodes in place by graphrank.SubjectKey
+// (kind + canonical id) -- CHAOS-4395's determinism fix for
+// chaos4348ExactNameCandidates' cohort use: that fetch's own Cypher carries
+// no ORDER BY, and DiscoveredCohort ranks members by INPUT order before
+// stopping at MaxCohortMembers, so an unranked, unsorted census could admit
+// different members across repeated identical calls. A node whose Subject
+// cannot be read sorts last (stable, never causes a panic); this list is
+// filtered for exactly that a few lines after the caller uses it.
+func sortCandidateNodesBySubjectKey(nodes []graphrank.CandidateNode) {
+	sort.SliceStable(nodes, func(i, j int) bool {
+		si, iok := graphrank.NodeSubject(nodes[i])
+		sj, jok := graphrank.NodeSubject(nodes[j])
+		if !iok {
+			return false
+		}
+		if !jok {
+			return true
+		}
+		return graphrank.SubjectKey(si) < graphrank.SubjectKey(sj)
+	})
 }
 
 func ptrTime[T any](v T) *T { return &v }
