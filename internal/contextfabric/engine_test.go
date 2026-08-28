@@ -358,6 +358,9 @@ type recordingTelemetry struct {
 	// a test asserts the exact outcome/chain-depth pair, never merely that
 	// something fired.
 	windowCarries []windowCarryRecord
+	// modelRowsStripped (CHAOS-4355 follow-up) mirrors the SAME
+	// list-not-count discipline.
+	modelRowsStripped []int
 }
 
 // windowCarryRecord (CHAOS-4360) mirrors priorSubjectReceiptSkipReasonRecord's
@@ -499,6 +502,10 @@ func (r *recordingTelemetry) RecordOfferPhrasing(_ context.Context, _ storage.Pr
 
 func (r *recordingTelemetry) RecordProjectedRowsCount(_ context.Context, _ storage.Principal, count int, truncated bool) {
 	r.projectedRowsCounts = append(r.projectedRowsCounts, projectedRowsCountRecord{count: count, truncated: truncated})
+}
+
+func (r *recordingTelemetry) RecordModelRowsStripped(_ context.Context, _ storage.Principal, claims int) {
+	r.modelRowsStripped = append(r.modelRowsStripped, claims)
 }
 
 func mustEngineForPriorReceiptTest(t *testing.T, graph GraphReader, store InvestigationResultStore, telemetry EngineTelemetry) *Engine {

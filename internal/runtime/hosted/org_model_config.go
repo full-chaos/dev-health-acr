@@ -57,7 +57,13 @@ func buildOrgModelConfigStore(postgres postgresComponents, lookup func(string) (
 // callers must apply the typed-nil-interface guard this package's other
 // optional-dependency wiring already uses (see open.go's orgModelConfigs
 // conversion) before assigning it into an interface-typed field.
-func wrapWithOrgModelRuntimeResolver(deploymentDefault contextfabric.ModelRuntime, orgConfigs *pgmodelconfig.Store, lookup func(string) (string, bool)) (contextfabric.ModelRuntime, *modelruntimeresolver.Resolver, error) {
+//
+// telemetry (CHAOS-4355 follow-up) is stamped onto defaults before
+// NewModelProviderBuild closes over it, so every per-organization runtime
+// this resolver builds reports RecordModelRowsStripped through the SAME
+// sink the deployment-default runtime uses (open()'s own engineTelemetry),
+// never a second, independently-resolved instance.
+func wrapWithOrgModelRuntimeResolver(deploymentDefault contextfabric.ModelRuntime, orgConfigs *pgmodelconfig.Store, lookup func(string) (string, bool), telemetry contextfabric.EngineTelemetry) (contextfabric.ModelRuntime, *modelruntimeresolver.Resolver, error) {
 	if orgConfigs == nil {
 		return deploymentDefault, nil, nil
 	}
@@ -65,6 +71,7 @@ func wrapWithOrgModelRuntimeResolver(deploymentDefault contextfabric.ModelRuntim
 	if err != nil {
 		return nil, nil, fmt.Errorf("load context fabric model defaults for per-organization runtimes: %w", err)
 	}
+	defaults.Telemetry = telemetry
 	resolver := modelruntimeresolver.New(deploymentDefault, orgConfigs, modelruntimeresolver.NewModelProviderBuild(defaults))
 	return resolver, resolver, nil
 }

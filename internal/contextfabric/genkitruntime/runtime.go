@@ -268,7 +268,22 @@ const (
 	// sentence), which now advertises "flow" and "landscape" too -- the
 	// same prompt-bytes-changed rationale as
 	// DefaultInterpretationPromptVersion's v9 bump, on the sibling prompt.
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v12"
+	//
+	// v12 -> v13 (CHAOS-4355 follow-up, codex R1 P2 finding): the SYSTEM
+	// prompt text is unchanged, but modelFacingFacts now drops every
+	// Rows-shaped canonical fact field from the "canonical_facts" payload
+	// synthesisInputFromDomain builds -- a genuine, measured change to
+	// what this call sends the model (TestBuildSynthesisPromptExcludesRowsShapedCanonicalFields
+	// measures the byte delta), not merely a per-request data variation:
+	// two calls for the IDENTICAL question/facts now send DIFFERENT bytes
+	// depending on which side of this change ran. Per this constant's own
+	// "any prompt change" standing rule above (v6-v12), a row saved under
+	// the OLD (Rows-visible) payload must not silently satisfy a reuse
+	// lookup as though it were generated under the NEW (Rows-excluded)
+	// one -- the version-bump-forces-a-cold-cache mechanism this constant
+	// exists for is exactly what CHAOS-3862's
+	// TestCHAOS3862_PromptVersionChangeInvalidatesStoredAnswerReuse pins.
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v13"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation
@@ -357,6 +372,14 @@ type Config struct {
 	// slog.LevelInfo, gated only by whatever level this logger's handler
 	// itself filters at.
 	Logger *slog.Logger
+	// Telemetry is OPTIONAL (nil-safe) -- CHAOS-4355 follow-up:
+	// SynthesizeAnswer reports RecordModelRowsStripped here, once per call
+	// where the model still authored a ClaimedFact.Rows despite the
+	// prompt no longer showing it any Rows-shaped field (see
+	// synthesisInputFromDomain/modelFacingFacts). A nil Telemetry (every
+	// test that builds a Runtime without one) is exactly pre-CHAOS-4355
+	// behavior.
+	Telemetry contextfabric.EngineTelemetry
 }
 
 type Runtime struct {
@@ -744,6 +767,22 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	}
 	draft, err := output.toDomain()
 	if err == nil {
+		// CHAOS-4355 follow-up (tolerance): this is the production
+		// ModelRuntime's OWN ValidateAgainst call -- the actual live 422
+		// source (see the matching comment on the classification below) --
+		// so the strip belongs HERE, before that call, not only in
+		// RuntimeAnswerSynthesizer.Synthesize's defensive re-check, which
+		// never even runs when this call already rejects. Rows are
+		// attached server-side from the SAME canonical fact a claim
+		// cites (contextfabric.attachCanonicalRows), never from the
+		// model, so a model-authored Rows array here is pure noise: never
+		// a reason to reject an otherwise-valid answer, and never
+		// content this receipt/log line should reflect either way.
+		var stripped int
+		draft.ClaimedFacts, stripped = contextfabric.StripModelAuthoredClaimedFactRows(draft.ClaimedFacts)
+		if stripped > 0 && r.config.Telemetry != nil {
+			r.config.Telemetry.RecordModelRowsStripped(ctx, principal, stripped)
+		}
 		err = draft.ValidateAgainst(input)
 	}
 	if err != nil {
@@ -1341,8 +1380,40 @@ func synthesisInputFromDomain(input contextfabric.SynthesisInput) synthesisInput
 		Question: input.Request.Question, Interpretation: input.Interpretation,
 		Resolution: input.Graph.Resolution, Cohort: input.Graph.Cohort,
 		Paths: input.Graph.Paths, DriverCandidates: input.Graph.DriverCandidates,
-		Facts: input.Facts.Facts, Coverage: mergeCoverage(input.Graph.Coverage, input.Facts.Coverage),
+		Facts: modelFacingFacts(input.Facts.Facts), Coverage: mergeCoverage(input.Graph.Coverage, input.Facts.Coverage),
 	}
+}
+
+// modelFacingFacts returns a copy of facts with every Rows-shaped field
+// (CHAOS-4347) dropped before the fact set is serialized into the
+// synthesis prompt (CHAOS-4355 follow-up). A model shown a Rows-shaped
+// field in canonical_facts has nothing to do with it but echo the shape
+// back into its own ClaimedFacts.Rows, which
+// SynthesisDraft.ValidateAgainst unconditionally rejects (rows are
+// attached server-side, from the SAME canonical fact, only AFTER
+// validation -- engine.go's attachCanonicalRows). Every scalar field the
+// model can legitimately ground a claim in is untouched -- only the
+// table-shaped entries are excluded, never a fact's identity
+// (Kind/Subject) or its other fields. Used by both the real Synthesize
+// call and BuildSynthesisPrompt (exchange_support.go), so a non-genkit
+// responder sees byte-identical input to what genkit actually sends.
+func modelFacingFacts(facts []contextfabric.CanonicalFact) []contextfabric.CanonicalFact {
+	out := make([]contextfabric.CanonicalFact, len(facts))
+	for i, fact := range facts {
+		clone := fact
+		if len(fact.Fields) > 0 {
+			fields := make(map[string]contextfabric.FactValue, len(fact.Fields))
+			for key, value := range fact.Fields {
+				if len(value.Rows) > 0 {
+					continue
+				}
+				fields[key] = value
+			}
+			clone.Fields = fields
+		}
+		out[i] = clone
+	}
+	return out
 }
 
 type synthesisOutput struct {

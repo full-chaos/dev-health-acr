@@ -45,7 +45,51 @@ func ClassifyInterpretationRejection(question InterpretedQuestion, cause error) 
 func ClassifySynthesisRejection(draft SynthesisDraft, input SynthesisInput, cause error) error {
 	wrapped := fmt.Errorf("%w: %w: %w", ErrSynthesisRejected, ErrModelOutput, cause)
 	bound, diagnosed := diagnoseSynthesisDraftBound(draft, input)
-	return withBoundViolation(wrapped, bound, diagnosed)
+	err := withBoundViolation(wrapped, bound, diagnosed)
+	// CHAOS-4355 follow-up: attach WHICH claim a claim-scoped bound came
+	// from, when there is one, so the server-side diagnostic log line
+	// (writeContextFabricFailure) can name it without the HTTP layer ever
+	// needing draft itself. claimIndexForBound is a pure, additive lookup
+	// kept separate from diagnoseSynthesisDraftBound's own return
+	// signature -- see that function's doc comment for why its
+	// statement-by-statement mirror shape stays untouched.
+	if violation, ok := err.(*ModelBoundViolation); ok {
+		violation.ClaimIndex = claimIndexForBound(draft, bound)
+	}
+	return err
+}
+
+// boundClaimedFactRowsModelAuthored is the registry name
+// diagnoseSynthesisDraftBound and claimIndexForBound both use for the
+// CHAOS-4355 model-authored-Rows rejection, kept as one constant so the two
+// can never drift on the literal string.
+const boundClaimedFactRowsModelAuthored = "synthesis.claimed_fact.rows.model_authored"
+
+// claimIndexForBound returns the index of the FIRST ClaimedFacts entry
+// diagnoseSynthesisDraftBound's claims loop would attribute bound to, or -1
+// when bound is empty or not claim-scoped (an interpretation bound, or a
+// driver/finding bound). This deliberately duplicates only the claims
+// loop's two NAMED-bound conditions (claim.Validate() failure and
+// model-authored Rows) rather than folding an index into
+// diagnoseSynthesisDraftBound's own return signature, so that function's
+// "literal, statement-by-statement mirror" contract -- and the CHAOS-3784
+// round-4 regression tests pinning it -- stay byte-for-byte unchanged. A
+// business-rule-only claim rejection (duplicate ID, subject out of bounds,
+// contradicts canonical value, ...) has no bound name to begin with
+// (diagnosed=false), so it never reaches here.
+func claimIndexForBound(d SynthesisDraft, bound string) int {
+	if bound == "" {
+		return -1
+	}
+	for i, claim := range d.ClaimedFacts {
+		if bound == boundClaimedFactRowsModelAuthored && len(claim.Rows) > 0 {
+			return i
+		}
+		if b, ok := contractsv1.DiagnoseContextFabricClaimedFactBound(claim); ok && b == bound {
+			return i
+		}
+	}
+	return -1
 }
 
 // diagnoseSynthesisDraftBound is a literal, statement-by-statement MIRROR
@@ -138,6 +182,17 @@ func diagnoseSynthesisDraftBound(d SynthesisDraft, input SynthesisInput) (bound 
 	for _, claim := range d.ClaimedFacts {
 		if err := claim.Validate(); err != nil {
 			return contractsv1.DiagnoseContextFabricClaimedFactBound(claim)
+		}
+		// Mirrors ValidateAgainst's own model_runtime.go:295-296 statement,
+		// which sits here -- AFTER claim.Validate() (Rows structurally
+		// valid, e.g. within ContextFabricClaimedFactMaxRows), BEFORE the
+		// claimedByID-uniqueness check. Before this statement existed, a
+		// Rows-authorship rejection fell through every remaining
+		// business-rule check below with no name (CHAOS-4355 diagnosis,
+		// 19:10 08-27): the caller got a 422 with no violated_bound at
+		// all, indistinguishable from any other synthesis_rejected cause.
+		if len(claim.Rows) > 0 {
+			return boundClaimedFactRowsModelAuthored, true
 		}
 		if _, exists := claimedByID[claim.ClaimID]; exists {
 			return "", false

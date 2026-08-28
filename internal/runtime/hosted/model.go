@@ -28,7 +28,15 @@ import (
 //
 // lookup is injected rather than hard-wired to os.LookupEnv so the
 // composition gate is directly testable; production passes os.LookupEnv.
-func newContextFabricModelRuntime(ctx context.Context, lookup func(string) (string, bool)) (contextfabric.ModelRuntime, error) {
+//
+// telemetry (CHAOS-4355 follow-up) is threaded onto modelConfig so the
+// deployment-default genkitruntime.Runtime this builds can report
+// RecordModelRowsStripped through the SAME sink every other engine
+// telemetry signal for this investigation uses -- open()'s own
+// engineTelemetry, never a second, independently-resolved instance. A nil
+// telemetry (every existing caller before this ticket) is exactly
+// pre-CHAOS-4355 behavior.
+func newContextFabricModelRuntime(ctx context.Context, lookup func(string) (string, bool), telemetry contextfabric.EngineTelemetry) (contextfabric.ModelRuntime, error) {
 	if !modelprovider.Configured(lookup) {
 		return nil, nil
 	}
@@ -36,6 +44,7 @@ func newContextFabricModelRuntime(ctx context.Context, lookup func(string) (stri
 	if err != nil {
 		return nil, fmt.Errorf("load context fabric model configuration: %w", err)
 	}
+	modelConfig.Telemetry = telemetry
 	runtime, err := modelprovider.New(ctx, modelConfig)
 	if err != nil {
 		return nil, fmt.Errorf("initialize context fabric model runtime: %w", err)

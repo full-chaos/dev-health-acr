@@ -695,6 +695,9 @@ func mustRuntime(t *testing.T, generator generator, override Config) *Runtime {
 	if override.PhrasingModel != "" {
 		config.PhrasingModel = override.PhrasingModel
 	}
+	if override.Telemetry != nil {
+		config.Telemetry = override.Telemetry
+	}
 	runtime, err := newWithGenerator(config, generator)
 	if err != nil {
 		t.Fatalf("newWithGenerator() error = %v", err)

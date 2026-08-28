@@ -524,6 +524,19 @@ type EngineTelemetry interface {
 	// producer emitted a renderable table this call" stays distinguishable
 	// from "nobody is counting".
 	RecordProjectedRowsCount(ctx context.Context, principal storage.Principal, count int, truncated bool)
+	// RecordModelRowsStripped (CHAOS-4355 follow-up, cf_model_rows_stripped)
+	// reports the count of ClaimedFacts entries whose model-authored Rows
+	// was cleared before draft.ValidateAgainst ran, so an operator can tell
+	// how often the model still attempts to author Rows despite
+	// CHAOS-4364's model-facing facts excluding Rows-shaped fields from
+	// the prompt (RuntimeAnswerSynthesizer.Synthesize's own doc comment
+	// names the two call sites that can fire this). Called ONLY when
+	// claims>0 -- the "nothing to do is not an outcome" convention this
+	// file's other gated telemetry already follows, since a call that
+	// strips nothing is byte-identical to every pre-CHAOS-4355 Synthesize
+	// call and reporting a zero here on every single call would drown the
+	// signal in noise.
+	RecordModelRowsStripped(ctx context.Context, principal storage.Principal, claims int)
 }
 
 // Engine coordinates one open-ended investigation. It deliberately composes

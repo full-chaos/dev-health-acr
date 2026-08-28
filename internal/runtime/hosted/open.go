@@ -650,6 +650,15 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		reuseSnapshotter = investigationStore
 		reuseEpochSnapshotter = investigationStore
 	}
+	// CHAOS-4355: resolved once, here (before either model runtime is
+	// built) and shared with BOTH newContextFabricModelRuntime and
+	// wrapWithOrgModelRuntimeResolver below AND RuntimeAnswerSynthesizer
+	// further down, so every one of this investigation's engine-telemetry
+	// signals -- RecordProjectedRowsCount, RecordModelRowsStripped -- reports
+	// through the IDENTICAL sink, never a second, independently-resolved
+	// instance that could silently diverge from the CHAOS-4103
+	// Options.EngineTelemetry override.
+	engineTelemetry := contextFabricEngineTelemetry(request.options)
 	// nil when no model provider is configured; see the function doc
 	// comment and newContextFabricModelRuntime. CHAOS-3742: an explicit
 	// ModelRuntimeOverride takes priority over the env-driven deployment
@@ -658,12 +667,12 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// caller opts in.
 	deploymentDefaultRuntime := request.options.ModelRuntimeOverride
 	if deploymentDefaultRuntime == nil {
-		deploymentDefaultRuntime, err = newContextFabricModelRuntime(ctx, os.LookupEnv)
+		deploymentDefaultRuntime, err = newContextFabricModelRuntime(ctx, os.LookupEnv, engineTelemetry)
 		if err != nil {
 			return nil, nil, nil, nil, nil, nil, err
 		}
 	}
-	modelRuntime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefaultRuntime, orgModelConfigStore, os.LookupEnv)
+	modelRuntime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefaultRuntime, orgModelConfigStore, os.LookupEnv, engineTelemetry)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, err
 	}
@@ -727,13 +736,9 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		cancel()
 		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize structure selection sink: %w", err)
 	}
-	// CHAOS-4355: resolved once and shared with RuntimeAnswerSynthesizer
-	// below, so its own RecordProjectedRowsCount reports through the
-	// IDENTICAL sink every other engine-telemetry signal for this
-	// investigation does -- never a second, independently-resolved
-	// instance that could silently diverge from the CHAOS-4103
-	// Options.EngineTelemetry override.
-	engineTelemetry := contextFabricEngineTelemetry(request.options)
+	// engineTelemetry was resolved earlier (before either model runtime was
+	// built -- see that declaration's own doc comment) so this and the
+	// model runtimes above share one instance.
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
 		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, Sink: receiptSink},
 		Graph:       graphReader,

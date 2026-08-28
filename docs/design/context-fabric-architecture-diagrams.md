@@ -63,8 +63,8 @@ flowchart TD
   PRUNE --> BUNDLE
   UNEXP --> BUNDLE
   READ --> BUNDLE["CanonicalFactBundle + Coverage"]
-  BUNDLE --> SYN["Synthesize (model call)<br/>RuntimeAnswerSynthesizer.Synthesize<br/>model_runtime.go:596"]
-  SYN --> ROWS["attachCanonicalRows (CHAOS-4355)<br/>model-authored Rows rejected in ValidateAgainst;<br/>engine copies Rows verbatim from the canonical fact<br/>each claim cites -- model_runtime.go"]
+  BUNDLE --> SYN["Synthesize (model call)<br/>RuntimeAnswerSynthesizer.Synthesize<br/>model_runtime.go:596<br/><b>CHAOS-4355 follow-up:</b> modelFacingFacts<br/>(genkitruntime/runtime.go) drops every<br/>Rows-shaped field from canonical_facts<br/>BEFORE this prompt is sent"]
+  SYN --> ROWS["attachCanonicalRows (CHAOS-4355)<br/>model-authored Rows STRIPPED + tolerated<br/>(cf_model_rows_stripped), never rejected --<br/>engine copies Rows verbatim from the canonical fact<br/>each claim cites -- model_runtime.go"]
   ROWS --> OVERRIDE["applySynthesisStatusOverride<br/>CHAOS-4098 -- decisive clarification_required -> no_match<br/>runs BEFORE the commit gate"]
   OVERRIDE --> GATE2{"CHAOS-4085 DP9 commit-affirmation gate<br/>applyCommitAffirmation<br/>chaos4085_commit_affirmation.go:447"}
   GATE2 -->|"exempt / affirmed"| COMMIT["Commit subject(s)"]
@@ -418,18 +418,45 @@ is genuinely a set of rows, not a lossy single scalar. Deliberately does
 NOT touch `ContextFabricScalarValue` itself (also the projection-write
 contract's property-value type, which documents "nested objects and
 arrays remain disallowed" as a deliberate invariant for THAT surface).
-**Updated 2026-08-27 (CHAOS-4355): now wired into synthesis, still never
-into prompts.** `MetricsProvider`'s project rollup remains the only producer
-of a `Rows`-bearing fact today, but a driver's cited claim now DOES carry
-it: `attachCanonicalRows` (`internal/contextfabric/model_runtime.go`), the
-one place a `ClaimedFact.Rows` is ever set, copies it verbatim from the
-canonical fact each claim cites, immediately after
-`SynthesisDraft.ValidateAgainst` passes -- ValidateAgainst itself still
-rejects any claim where the MODEL set Rows directly, unconditionally, so
-the model is never the source. `answerprojection.Project` carries it
-through unchanged (`project.go`'s `projectDrivers`, unchanged since #300).
-The prompt itself was NOT changed -- the model is never told Rows exist,
-so no new prompt version was needed. The sidecar's own answer-rendering
+**Updated 2026-08-27 (CHAOS-4355): now wired into synthesis.** A driver's
+cited claim now carries `Rows`: `attachCanonicalRows`
+(`internal/contextfabric/model_runtime.go`), the one place a `ClaimedFact.Rows`
+is ever set, copies it verbatim from the canonical fact each claim cites,
+immediately after `SynthesisDraft.ValidateAgainst` passes.
+`answerprojection.Project` carries it through unchanged (`project.go`'s
+`projectDrivers`, unchanged since #300).
+
+**Correction, same day (CHAOS-4355 follow-up):** the paragraph above
+originally claimed "the prompt itself was NOT changed -- the model is never
+told Rows exist." That was never actually true and was never verified
+against the running code: `synthesisInputFromDomain`
+(`internal/contextfabric/genkitruntime/runtime.go`) put `input.Facts.Facts`
+straight into the `canonical_facts` prompt payload, unfiltered, since
+CHAOS-4347 (#300) first added `FactValue.Rows` -- any producer's
+Rows-shaped field (by CHAOS-4364, six of them: health/workload/readiness/
+investment/flow/landscape) was serialized to the model verbatim. This is
+exactly what taught the model to echo a fabricated `Rows` array back onto
+its own `ClaimedFacts`, which `ValidateAgainst` unconditionally rejects --
+the kiac pilot rev 19 3/3 `synthesis_rejected` 422s (CHAOS-4355 diagnosis,
+19:10 08-27), live-reproduced again through the Workbench during this
+follow-up. The fix: `modelFacingFacts` (same file) drops every Rows-shaped
+field from the canonical facts BEFORE they reach the prompt -- the model
+still sees every scalar field on the same fact, just never the table --
+and `StripModelAuthoredClaimedFactRows` (`internal/contextfabric/model_runtime.go`)
+tolerates (strips, with `cf_model_rows_stripped` telemetry) a claim that
+still authors `Rows` despite that, rather than rejecting the whole answer.
+`ValidateAgainst` itself is UNCHANGED and still rejects a model-authored
+`Rows` unconditionally (defense in depth); `diagnoseSynthesisDraftBound`
+now mirrors that check so a bypass of the strip is at least diagnosable
+(`violated_bound`/`claim_index`, logged server-side, not only in the
+response body). The SYSTEM prompt template text (`synthesisSystemPrompt`)
+is unchanged, but `modelFacingFacts` genuinely changes what bytes
+`synthesisInputFromDomain` sends the model -- codex R1 correctly flagged
+that as a "prompt change" under this constant's own standing rule, since
+the reuse key binds on it: `DefaultSynthesisPromptVersion` moved
+`v12` -> `v13` so a row saved under the OLD (Rows-visible) payload can
+never satisfy a reuse lookup as though it were generated under the NEW
+(Rows-excluded) one. The sidecar's own answer-rendering
 closure test (`internal/sidecar/render_answer_untrusted_test.go`) still
 carves out the render-layer half of this: a claim can now carry Rows, but
 nothing in `dev-health-web`/Ask Dev renders them yet (see

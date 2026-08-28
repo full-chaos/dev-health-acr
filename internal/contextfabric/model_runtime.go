@@ -54,7 +54,15 @@ var (
 // never contains model output.
 type ModelBoundViolation struct {
 	Bound string
-	err   error
+	// ClaimIndex is the zero-based index into SynthesisDraft.ClaimedFacts
+	// the violated Bound is attributable to, or -1 when Bound is not
+	// claim-scoped (an interpretation bound, or a driver/finding bound).
+	// Set only by ClassifySynthesisRejection (via claimIndexForBound in
+	// bound_diagnosis.go), CHAOS-4355 follow-up, so a server-side log line
+	// can name WHICH claim tripped a rejection without exposing any
+	// model-authored content.
+	ClaimIndex int
+	err        error
 }
 
 func (e *ModelBoundViolation) Error() string { return e.err.Error() }
@@ -63,9 +71,11 @@ func (e *ModelBoundViolation) Unwrap() error { return e.err }
 // NewModelBoundViolation constructs a *ModelBoundViolation wrapping err with
 // the given registry bound name. Exported so a caller that already knows
 // the violated bound -- or a test simulating one -- can attach it without
-// reaching into an unexported field.
+// reaching into an unexported field. ClaimIndex defaults to -1 (not
+// claim-scoped); ClassifySynthesisRejection overwrites it after
+// construction when the diagnosed bound came from the claims loop.
 func NewModelBoundViolation(bound string, err error) *ModelBoundViolation {
-	return &ModelBoundViolation{Bound: bound, err: err}
+	return &ModelBoundViolation{Bound: bound, ClaimIndex: -1, err: err}
 }
 
 // withBoundViolation wraps err in a *ModelBoundViolation carrying bound when
@@ -505,6 +515,29 @@ func factValueEqualsScalar(fv FactValue, sv ScalarValue) bool {
 	}
 }
 
+// StripModelAuthoredClaimedFactRows returns a copy of claims with any
+// non-empty Rows cleared, plus the count of claims that carried one.
+// SynthesisDraft.ValidateAgainst unconditionally rejects a claim with
+// non-empty Rows -- Rows are attached server-side, from the SAME canonical
+// fact the claim cites, only after validation (attachCanonicalRows below)
+// -- so a model-authored Rows array is a benign hallucination to discard,
+// never a reason to reject an otherwise-valid, closure-passing answer
+// (CHAOS-4355 follow-up). Exported so both this package's
+// RuntimeAnswerSynthesizer.Synthesize and genkitruntime.Runtime's own
+// production ValidateAgainst call site (the actual live rejection source)
+// can apply the identical strip before validating.
+func StripModelAuthoredClaimedFactRows(claims []ClaimedFact) (cleaned []ClaimedFact, strippedCount int) {
+	cleaned = make([]ClaimedFact, len(claims))
+	for i, claim := range claims {
+		if len(claim.Rows) > 0 {
+			claim.Rows = nil
+			strippedCount++
+		}
+		cleaned[i] = claim
+	}
+	return cleaned, strippedCount
+}
+
 func lookupCanonicalFact(facts []CanonicalFact, kind FactKind, subject SubjectRef) (CanonicalFact, bool) {
 	key := subjectKeyForModel(subject)
 	for _, fact := range facts {
@@ -729,6 +762,25 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	}
 	draft, receipt, err := r.Runtime.SynthesizeAnswer(ctx, principal, input)
 	if err == nil {
+		// CHAOS-4355 follow-up (tolerance): a model that still authors
+		// ClaimedFact.Rows despite CHAOS-4364's model-facing facts no
+		// longer showing it any Rows-shaped field (a bare hallucination,
+		// not a value it could have copied) must not have its WHOLE
+		// otherwise-valid answer rejected for it -- Rows are attached
+		// server-side from the SAME canonical fact the claim cites, in
+		// attachCanonicalRows below, so a model-authored Rows array is
+		// pure noise to discard, never signal to trust or reject on. This
+		// is defense-in-depth alongside the identical strip
+		// genkitruntime.Runtime.SynthesizeAnswer already applies before
+		// its OWN ValidateAgainst call (the actual production rejection
+		// site) -- a draft reaching here has normally already been
+		// stripped, so stripped is normally 0; this still runs for any
+		// ModelRuntime implementation that does not strip on its own.
+		var stripped int
+		draft.ClaimedFacts, stripped = StripModelAuthoredClaimedFactRows(draft.ClaimedFacts)
+		if stripped > 0 && r.Telemetry != nil {
+			r.Telemetry.RecordModelRowsStripped(ctx, principal, stripped)
+		}
 		if validateErr := draft.ValidateAgainst(input); validateErr != nil {
 			receipt.Outcome = "invalid_output"
 			err = ClassifySynthesisRejection(draft, input, validateErr)
