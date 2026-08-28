@@ -148,7 +148,20 @@ only on `main` as of this writing (§2b); PR #314/CHAOS-4395 adding
 updated to `fixed` in the same PR that merges it, per the standing update
 rule in `context-fabric-architecture-diagrams.md`.
 
-### 3a. Fact requirement injection (P1, must be resolved in PR1)
+### 3a. Fact requirement injection (P1, must be resolved in PR1) — RESOLVED
+
+PR1 (`internal/contextfabric/engine.go`, `chaos-4398-cohort-rank`): when
+`graphContext.Cohort != nil`, the five ranking-formula kinds
+(`health`/`workload`/`readiness`/`operational_deficiencies`/`investment`)
+are injected as the LAST group into
+`mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements,
+cohortRankingRequirements)` — first-kind-wins keeps a more specific existing
+requirement (its own `Subjects`/`Parameters`) if the interpreter or graph
+already asked for that kind, and only fills a kind that is otherwise absent.
+Pinned by `TestEngineRanksDiscoveredCohortBetweenFactReadAndSynthesis`: the
+interpreter's own `FactRequirements` name only `FactHealth`, and the test
+asserts the fact reader observes all five kinds in the merged
+`Requirements`.
 
 `investigationScopeSubjects` (fact_planner.go) only fans the SUBJECT set out
 to `request.Cohort.Members` — it does not decide which fact KINDS get read.
@@ -222,7 +235,24 @@ which is already a free-text string field — not by widening the `Category`
 enum. "No person-to-person rankings" is unaffected — a team cohort ranks
 teams, never individual people.
 
-### 4a. Projection gap (P1, must be closed in PR1 or PR3)
+### 4a. Projection gap (P1, must be closed in PR1 or PR3) — DEFERRED to PR3
+
+**Lane decision (`lane-4398-cohort`, PR1):** closed in PR3, not PR1. PR1's
+scope (per the CHAOS-4398 build order) is the canonical-result-side contract
+(`ContextFabricCohortMember`'s five new fields, §4 above) and the
+deterministic `RankCohort` engine pass that populates them — never the
+per-member drivers (PR2) or the answer-projection/Rows-panel surface this
+section describes (PR3). Extending
+`ContextFabricProjectedCohortMember`/`ContextFabricProjectedDriver`/
+`ContextFabricProjectedCohort.RankingTable` together with their JSON
+Schema/OpenAPI/MCP/golden-fixture/parity-test updates is real, additional
+contract-first work this section correctly scopes — tracked as a PR3
+follow-up in the CHAOS-4398 PR1 body, not silently dropped. Until PR3 lands,
+the ranking fields are real on the canonical `ContextFabricInvestigationResult`
+but invisible to every consumer that only reads the answer-projection
+surface (API/MCP `investigate_question`/Ask Dev) — the same "contract
+widened, ask-dev pin bump owed before the next live proof" situation the
+20:50 08-27 standing rule already names.
 
 Adding fields to `ContextFabricCohortMember`/`ContextFabricDriverJudgment`
 (the canonical result types) does **not** make them reach API/MCP/Ask Dev.
@@ -307,11 +337,11 @@ rule, applied per `(member, signal family)` pair:
 |---|---|---|---|---|---|
 | 1 | Investment-mix imbalance (driver family #1, chris direction) | new team-scoped `theme_distribution` (§6) | already `[0,1]` by construction — see sub-formula | 30 | see sub-formula |
 | 2 | Health risk | `health.compounding_risk` | already `[0,1]` (the canonical score's own persisted range — `docs/reference` ops metric) | 25 | higher risk → higher score |
-| 3 | Deficiency severity | `operational_deficiencies.severity` (string; a team can have several fired rules at once, or legitimately zero — see the available-zero exception above) | zero fired rules (`SourceAvailable`, no row for this member) → `0`. Otherwise map each fired rule's severity string to an ordinal (`low=0.25, medium=0.5, high=0.75, critical=1.0` — **the exact severity value set must be confirmed against `recommendations_daily` in PR1**, this mapping is a proposed default, not verified against live data), then take the **max** across the team's fired rules (worst case governs, not an average) | 20 | higher mapped value → higher score |
+| 3 | Deficiency severity | `operational_deficiencies.severity` (string; a team can have several fired rules at once, or legitimately zero — see the available-zero exception above) | **Confirmed in PR1** (ops's `recommendations/schema.py`: `Severity = Literal["warning", "critical"]` — a CLOSED two-value vocabulary, not the four-value placeholder this row originally proposed; also verified against live `recommendations_daily` data). Mapping: `warning=0.5, critical=1.0`; zero fired rules (`SourceAvailable`, no row for this member) → `0`. Take the **max** across the team's fired rules (worst case governs, not an average) | 20 | higher mapped value → higher score |
 | 4 | Readiness gap | `1 - readiness.estimate_coverage_ratio` | already `[0,1]` since `estimate_coverage_ratio` is itself `[0,1]` | 15 | lower coverage → higher score |
 | 5 | Workload pressure | `workload.forecast_p50_days` | min-max normalized **within the cohort being ranked** (`(x - min) / (max - min)` over the cohort's own values that day; `0.5` when every member ties, i.e. `max == min`) — a z-score is unbounded and can be negative, so it cannot feed a weighted `[0,100]` sum directly | 10 | longer forecast → higher score |
 
-**Multi-scope aggregation (P1, must be resolved in PR1).** `readiness` and
+**Multi-scope aggregation (P1, must be resolved in PR1) — RESOLVED.** `readiness` and
 `workload` providers can each emit multiple facts per team — readiness
 partitions by provider and work scope, workload partitions by work scope —
 so "the" `estimate_coverage_ratio`/`forecast_p50_days` for a member is not a
@@ -444,7 +474,18 @@ result cap alone is not the binding constraint a caller actually experiences:
    where teams "struggling most" routinely do not appear in what the caller
    actually sees.
 
-### 5b. Zero-signal team (P1, must be resolved in PR1)
+### 5b. Zero-signal team (P1, must be resolved in PR1) — RESOLVED
+
+PR1 implements this section's own resolution verbatim:
+`ContextFabricCohortMember` gains `RankingComputed bool`, `Score *float64`,
+`AttentionRank int`, `RankingBasis []string`, `DataCompleteness` — `Rank` is
+untouched. `RankCohort` (`internal/contextfabric/cohort_ranking.go`) sets
+`Score = nil` exactly when zero families are available, places nil-`Score`
+members last in `AttentionRank` (ties broken by pool order via
+`sort.SliceStable`), and never reorders `Cohort.Members` itself. Pinned by
+`TestRankCohort_ZeroAvailableSignalsIsNilScoreDegradedEmptyBasis` and
+`TestRankCohort_NilScoreMembersRankLastTiedByPoolOrder`.
+
 
 A team with rows in **none** of the 5 signal families (§5's "explicitly
 supported" degraded case) has an empty weight denominator — `Score` cannot be

@@ -241,6 +241,11 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// string leaf (rows[].fields{}.string), the map-value collapse
 		// stringPathsIn already uses for a dynamic-key map (see
 		// FactRequirement.parameters' own additionalProperties leaf).
+		// CHAOS-4398 PR1: unchanged -- ProjectedCohortMember (the answer
+		// surface's own narrower shape) does not yet carry Score/
+		// RankingBasis/DataCompleteness. Widening the projection is PR3's
+		// job (cohort-answer-plan.md item 8: needs an ask-dev pin bump,
+		// tracked as a PR1 follow-up), not this PR's.
 		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 154},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
@@ -256,7 +261,10 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// leaves, same reasoning as the answer_projection surface above.
 		// CHAOS-4347: 239 -> 240 -- ClaimedFact.Rows' own new string leaf,
 		// same reasoning as the answer_projection surface above.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 240},
+		// CHAOS-4398: 240 -> 242 -- same two new string leaves as the
+		// answer_projection surface above (ContextFabricCohortMember is
+		// shared by both surfaces).
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 242},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -351,7 +359,15 @@ func trustedBecauseClosed(path string) bool {
 		// closed-vocabulary string validated against its own registry
 		// (validCommitGate) before a result is stored -- never model prose,
 		// the same standing as member/offer_source/disposition above.
-		"commit_gate":
+		"commit_gate",
+		// CHAOS-4398: "data_completeness" (ContextFabricCohortDataCompleteness)
+		// is validated against its own closed registry
+		// (validContextFabricCohortDataCompleteness) before a result is
+		// stored. "ranking_basis" is an ARRAY of closed-vocabulary signal
+		// names RankCohort selects from a fixed formula-term registry --
+		// never free-form model prose, the same standing "missing" above
+		// has for its own closed-enum array.
+		"data_completeness", "ranking_basis":
 		return true
 	// Opaque identifiers and digests: frozen handles, never prose.
 	case "result_id", "request_id", "receipt_id", "driver_id", "claim_id",

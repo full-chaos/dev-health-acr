@@ -83,6 +83,14 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		}
 		omittedUnrepresentableCount += omitted
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		// CHAOS-4398 §0: the CANONICAL theme/subcategory read, a
+		// deliberately SEPARATE call from readTeamInvestment above -- see
+		// readTeamThemeMix's own doc comment for why this is a new
+		// producer join, not a reuse of the legacy investment_metrics_daily
+		// path.
+		if scanErr := p.readTeamThemeMix(ctx, orgID, teamSubjects, &facts, timeBound); scanErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query team theme mix", scanErr)
+		}
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
@@ -147,6 +155,206 @@ func (p *InvestmentProvider) readTeamInvestment(ctx context.Context, orgID strin
 		})
 	}
 	return len(rows), omittedUnrepresentableCount, nil
+}
+
+// canonicalInvestmentThemes is the fixed 5-theme taxonomy
+// (ops/src/dev_health_ops/investment_taxonomy.py's THEMES; AGENTS.md: "no
+// synonyms/overrides") in a stable iteration order, so readTeamThemeMix's
+// normalization is deterministic regardless of map iteration order.
+var canonicalInvestmentThemes = [...]string{
+	contextfabric.ThemeFeatureDelivery, contextfabric.ThemeOperational,
+	contextfabric.ThemeMaintenance, contextfabric.ThemeQuality, contextfabric.ThemeRisk,
+}
+
+// readTeamThemeMix reads the CANONICAL investment theme/subcategory
+// distribution (CHAOS-4398 §0: work_unit_investments via
+// readers.ReadTeamThemeMix, the CHAOS-2600 ownership-precedence majority
+// vote bridge) for the given team subjects -- NEVER investment_metrics_daily,
+// the deprecated legacy rule set readTeamInvestment above reads.
+//
+// The canonical theme_*/prior_theme_*/theme_quality_bugfix fields are
+// MERGED onto an existing FactInvestment fact for the team when one already
+// exists (readTeamInvestment's own legacy per-(area,stream) facts,
+// appended BEFORE this call in ReadFacts), rather than always creating a
+// separate fact (codex round-2 finding, fixed from an earlier "always
+// separate" draft of this function): CHAOS-4355 sends every canonical
+// fact's fields to the model unfiltered, and synthesis's own evidence-
+// closure check (model_runtime.go's lookupCanonicalFact) resolves a claim
+// to the FIRST fact matching (Kind, Subject) in the fact list -- a
+// standalone canonical fact appended AFTER the legacy ones would be
+// shadowed by them whenever a claim cites a theme_* field, rejecting an
+// otherwise-valid claim. Merging guarantees whichever FactInvestment fact
+// lookupCanonicalFact finds first for this team already carries the
+// canonical fields (field-key-safe: no overlap between the legacy
+// area/stream columns and this producer's columns). A team with NO legacy
+// facts still gets a standalone fact, as before.
+// internal/contextfabric/cohort_ranking.go's investmentMixSignal finds
+// whichever fact carries the canonical fields by field PRESENCE
+// (theme_feature_delivery), never by position -- unaffected by which
+// physical fact object the fields ended up merged into.
+//
+// timeBound.neutral() bounds the CURRENT window read. When timeBound also
+// carries an explicit start (never inferred -- CHAOS-4040: a window this
+// producer invented on its own would be exactly the "commit under an
+// inferred window" the ticket forbids), a SECOND, explicit query reads the
+// prior comparable window [start-duration, start) for RankCohort's
+// mix-shift sub-signal. A team with no prior-window data gets NO
+// prior_theme_* fields at all -- omitted, never zero-filled -- and
+// RankCohort's mix-shift sub-signal degrades gracefully (it simply never
+// fires for that team), matching every other missing-signal case in this
+// package.
+//
+// A team with zero current-window weighted effort (the reader returned no
+// rows, or all its rows summed to a non-positive total -- effort_value is
+// never negative in practice, but this guards the divide regardless) gets
+// NO theme fields either: a fabricated 0.0 share across all five themes
+// would read as "we know this team's mix is exactly nothing" rather than
+// "we have no mix to report", which is the same degrade-not-fabricate
+// distinction CHAOS-3781 already draws for every other signal here.
+//
+// Attribution key (codex round-1 AND round-2 review, source-verified):
+// readers.ReadTeamThemeMix joins work_item_team_attributions on
+// work_item_id ALONE, without repo_id -- a DELIBERATE match to ops's own
+// reference (PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE,
+// api/queries/investment.py), which this producer exists to port
+// faithfully, not to redesign unilaterally. Per-provider safety differs:
+// github ("ghpr:{owner}/{repo}#{n}") and gitlab ("{group}/{project}!{n}")
+// work_item_ids embed their repo (external_ingest/ids.py), so no two
+// DIFFERENT repos can legitimately produce the same string. jira/linear
+// do NOT ("jira:{external_key}", "linear:{external_key}" --
+// external_ingest/ids.py:72-75, confirmed against source, per codex
+// round-2): two DISTINCT issues in the same org sharing an external key
+// (e.g. two connected Jira sites, or a workspace migration) could
+// theoretically collide within one org_id (work_item_team_attributions'
+// own WHERE already scopes by org_id, so no CROSS-org collision is
+// possible either way). This is a PRE-EXISTING characteristic of the
+// Python reference this Go port matches exactly -- not a defect this PR
+// introduces or worsens -- and fixing it well requires giving
+// work_item_team_attributions' own attribution key provider-instance
+// awareness across BOTH the Python reference and this port together, a
+// team-attribution-family change bigger than this producer. Follow-up:
+// CHAOS-4404.
+func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) error {
+	ids, bySubject := subjectIndex(subjects, teamPrefix)
+	if len(ids) == 0 {
+		return nil
+	}
+	current, err := readers.ReadTeamThemeMix(ctx, p.facts.client, orgID, ids, timeBound.neutral())
+	if err != nil {
+		return err
+	}
+	var prior []readers.TeamThemeMixRow
+	if timeBound.active && timeBound.hasStart {
+		duration := timeBound.end.Sub(timeBound.start)
+		priorBound := factTimeBound{active: true, hasStart: true, start: timeBound.start.Add(-duration), end: timeBound.start}
+		prior, err = readers.ReadTeamThemeMix(ctx, p.facts.client, orgID, ids, priorBound.neutral())
+		if err != nil {
+			return err
+		}
+	}
+
+	type teamMix struct {
+		teamName      string
+		currentTheme  map[string]float64
+		currentBugfix float64
+		priorTheme    map[string]float64
+	}
+	byTeam := make(map[string]*teamMix, len(ids))
+	entry := func(teamID, teamName string) *teamMix {
+		m, ok := byTeam[teamID]
+		if !ok {
+			m = &teamMix{currentTheme: map[string]float64{}, priorTheme: map[string]float64{}}
+			byTeam[teamID] = m
+		}
+		if m.teamName == "" {
+			m.teamName = teamName
+		}
+		return m
+	}
+	for _, row := range current {
+		m := entry(row.TeamID, row.TeamName)
+		switch row.Kind {
+		case "theme":
+			m.currentTheme[row.Key] = row.WeightedEffort
+		case "subcategory":
+			if row.Key == readers.BugfixSubcategoryKey {
+				m.currentBugfix = row.WeightedEffort
+			}
+		}
+	}
+	for _, row := range prior {
+		if row.Kind != "theme" {
+			continue
+		}
+		entry(row.TeamID, row.TeamName).priorTheme[row.Key] = row.WeightedEffort
+	}
+
+	for teamID, m := range byTeam {
+		subject, ok := bySubject[teamID]
+		if !ok {
+			continue
+		}
+		currentTotal := 0.0
+		for _, theme := range canonicalInvestmentThemes {
+			currentTotal += m.currentTheme[theme]
+		}
+		if currentTotal <= 0 {
+			continue
+		}
+		fields := make(map[string]contextfabric.FactValue, 2*len(canonicalInvestmentThemes)+1)
+		for _, theme := range canonicalInvestmentThemes {
+			fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(m.currentTheme[theme] / currentTotal)
+		}
+		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(m.currentBugfix / currentTotal)
+
+		priorTotal := 0.0
+		for _, theme := range canonicalInvestmentThemes {
+			priorTotal += m.priorTheme[theme]
+		}
+		if priorTotal > 0 {
+			for _, theme := range canonicalInvestmentThemes {
+				fields[contextfabric.FactFieldPriorTheme(theme)] = contextfabric.NumberFactValue(m.priorTheme[theme] / priorTotal)
+			}
+		}
+
+		// Merge onto an EXISTING FactInvestment fact for this team when one
+		// exists, rather than always appending a new one (codex round-2
+		// finding): synthesis's own evidence-closure check
+		// (model_runtime.go's lookupCanonicalFact) resolves a claim to the
+		// FIRST fact matching (Kind, Subject) in the investigation's fact
+		// list -- and CHAOS-4355 already sends every canonical fact's
+		// fields to the model unfiltered, so a model claim citing
+		// theme_feature_delivery for a team that ALSO has
+		// readTeamInvestment's legacy per-(area,stream) facts (appended
+		// BEFORE this call, in ReadFacts) would resolve against whichever
+		// legacy fact happens to be first, find no such field, and be
+		// rejected -- a live-reachable synthesis failure, not a PR2/PR3-only
+		// risk. Merging these fields into the FIRST existing FactInvestment
+		// fact for this team (field-key-safe: no overlap between the
+		// legacy area/stream columns and this producer's theme_*/
+		// prior_theme_* columns) guarantees whichever fact lookupCanonicalFact
+		// finds first already carries them. A team with NO legacy facts
+		// still gets a standalone one, as before.
+		merged := false
+		targetKey := contextfabric.FactSubjectKey(subject)
+		for i := range *facts {
+			if (*facts)[i].Kind != contextfabric.FactInvestment || contextfabric.FactSubjectKey((*facts)[i].Subject) != targetKey {
+				continue
+			}
+			for field, value := range fields {
+				(*facts)[i].Fields[field] = value
+			}
+			merged = true
+			break
+		}
+		if !merged {
+			*facts = append(*facts, contextfabric.CanonicalFact{
+				Kind: contextfabric.FactInvestment, Subject: subject, Fields: fields,
+				EvidenceRefIDs: []string{evidenceRefID("team", teamID)},
+			})
+		}
+	}
+	return nil
 }
 
 // readProjectInvestment rolls FactInvestment up for a project through

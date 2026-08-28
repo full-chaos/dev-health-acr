@@ -2,6 +2,7 @@ package v1
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -161,6 +162,12 @@ func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
 	}
 	seen := make(map[string]struct{}, len(c.Members))
 	lastRank := 0
+	// attentionRanks (codex round-2 finding): RankCohort assigns AttentionRank
+	// as a DENSE 1..N ranking over every member it ranks -- checked here,
+	// across all members, since a per-member validate() call cannot see
+	// its siblings.
+	attentionRanks := make(map[int]struct{}, len(c.Members))
+	rankedCount := 0
 	for _, member := range c.Members {
 		if err := member.validate(bounds); err != nil {
 			return fmt.Errorf("members: %w", err)
@@ -174,6 +181,18 @@ func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
 		}
 		seen[key] = struct{}{}
 		lastRank = member.Rank
+		if member.RankingComputed {
+			if _, exists := attentionRanks[member.AttentionRank]; exists {
+				return fmt.Errorf("cohort member attention ranks must be unique")
+			}
+			attentionRanks[member.AttentionRank] = struct{}{}
+			rankedCount++
+		}
+	}
+	for rank := 1; rank <= rankedCount; rank++ {
+		if _, ok := attentionRanks[rank]; !ok {
+			return fmt.Errorf("cohort member attention ranks must be a dense 1..N sequence over every ranked member")
+		}
 	}
 	for _, exclusion := range c.Exclusions {
 		if err := exclusion.validate(bounds); err != nil {
@@ -252,6 +271,12 @@ type contextFabricBounds struct {
 	candidateEvidenceRefs       int
 	cohortExclusionReasonLength int
 	memberEvidenceRefs          int
+	// cohortMemberRankingBasis/-Length bound CHAOS-4398's new RankingBasis
+	// field. Both bound sets share ONE value: RankingBasis is a brand-new
+	// field with no legacy persisted rows to stay lenient for (unlike every
+	// other pair above, which predates this bounds split).
+	cohortMemberRankingBasis       int
+	cohortMemberRankingBasisLength int
 }
 
 // contextFabricRelationshipPathMaxNodes is the Go-enforced ceiling on path
@@ -263,53 +288,57 @@ const contextFabricRelationshipPathMaxNodes = 51
 
 // contextFabricWriteBounds matches the published JSON Schema exactly.
 var contextFabricWriteBounds = contextFabricBounds{
-	closedFindingKinds:          true,
-	rawTextLength:               true,
-	cohortInclusionReasons:      32,
-	cohortInclusionReasonLength: 1000,
-	narrativeCount:              ContextFabricLimitationsMaxCount,
-	narrativeLength:             ContextFabricLimitationMaxLength,
-	coverageEntries:             100,
-	matchedTerms:                32,
-	matchedTermLength:           512,
-	matchReasons:                32,
-	matchReasonLength:           1000,
-	pathEvidenceRefs:            200,
-	pathWhyRelevantLength:       2000,
-	factParameterValueLength:    ContextFabricFactRequirementParameterValueMaxLength,
-	judgmentLength:              ContextFabricDirectJudgmentMaxLength,
-	deterministicAnswerLength:   ContextFabricDeterministicAnswerMaxLength,
-	nestedEvidenceRefs:          ContextFabricNestedEvidenceRefIDsMaxCount,
-	interpretationTerms:         ContextFabricSubjectTermsMaxCount,
-	candidateEvidenceRefs:       100,
-	cohortExclusionReasonLength: 1000,
-	memberEvidenceRefs:          100,
+	closedFindingKinds:             true,
+	rawTextLength:                  true,
+	cohortInclusionReasons:         32,
+	cohortInclusionReasonLength:    1000,
+	narrativeCount:                 ContextFabricLimitationsMaxCount,
+	narrativeLength:                ContextFabricLimitationMaxLength,
+	coverageEntries:                100,
+	matchedTerms:                   32,
+	matchedTermLength:              512,
+	matchReasons:                   32,
+	matchReasonLength:              1000,
+	pathEvidenceRefs:               200,
+	pathWhyRelevantLength:          2000,
+	factParameterValueLength:       ContextFabricFactRequirementParameterValueMaxLength,
+	judgmentLength:                 ContextFabricDirectJudgmentMaxLength,
+	deterministicAnswerLength:      ContextFabricDeterministicAnswerMaxLength,
+	nestedEvidenceRefs:             ContextFabricNestedEvidenceRefIDsMaxCount,
+	interpretationTerms:            ContextFabricSubjectTermsMaxCount,
+	candidateEvidenceRefs:          100,
+	cohortExclusionReasonLength:    1000,
+	memberEvidenceRefs:             100,
+	cohortMemberRankingBasis:       16,
+	cohortMemberRankingBasisLength: 128,
 }
 
 // contextFabricLegacyBounds is what the Go validator alone used to accept.
 // It exists ONLY so already-persisted rows stay readable.
 var contextFabricLegacyBounds = contextFabricBounds{
-	closedFindingKinds:          false,
-	rawTextLength:               false,
-	cohortInclusionReasons:      50,
-	cohortInclusionReasonLength: 1024,
-	narrativeCount:              250,
-	narrativeLength:             4000,
-	coverageEntries:             250,
-	matchedTerms:                100,
-	matchedTermLength:           512,
-	matchReasons:                100,
-	matchReasonLength:           1024,
-	pathEvidenceRefs:            500,
-	pathWhyRelevantLength:       4000,
-	factParameterValueLength:    1024,
-	judgmentLength:              8000,
-	deterministicAnswerLength:   16000,
-	nestedEvidenceRefs:          ContextFabricEvidenceRefIDsMaxCount,
-	interpretationTerms:         100,
-	candidateEvidenceRefs:       500,
-	cohortExclusionReasonLength: 2000,
-	memberEvidenceRefs:          500,
+	closedFindingKinds:             false,
+	rawTextLength:                  false,
+	cohortInclusionReasons:         50,
+	cohortInclusionReasonLength:    1024,
+	narrativeCount:                 250,
+	narrativeLength:                4000,
+	coverageEntries:                250,
+	matchedTerms:                   100,
+	matchedTermLength:              512,
+	matchReasons:                   100,
+	matchReasonLength:              1024,
+	pathEvidenceRefs:               500,
+	pathWhyRelevantLength:          4000,
+	factParameterValueLength:       1024,
+	judgmentLength:                 8000,
+	deterministicAnswerLength:      16000,
+	nestedEvidenceRefs:             ContextFabricEvidenceRefIDsMaxCount,
+	interpretationTerms:            100,
+	candidateEvidenceRefs:          500,
+	cohortExclusionReasonLength:    2000,
+	memberEvidenceRefs:             500,
+	cohortMemberRankingBasis:       16,
+	cohortMemberRankingBasisLength: 128,
 }
 
 // Validate enforces the CURRENT contract bounds. This is the write path and
@@ -331,6 +360,53 @@ func (m ContextFabricCohortMember) validate(bounds contextFabricBounds) error {
 	}
 	if m.Rank < 1 || len(m.InclusionReasons) < 1 || len(m.InclusionReasons) > bounds.cohortInclusionReasons || !uniqueTrimmedStrings(m.InclusionReasons, bounds.cohortInclusionReasonLength) || !optionalEvidenceRefs(m.EvidenceRefIDs, bounds.memberEvidenceRefs) {
 		return fmt.Errorf("cohort member violates v1 bounds")
+	}
+	// RankingComputed is the explicit disambiguator (subject-model-and-
+	// cohort-answers.md §4): false means ranking has not run, and every
+	// other ranking field must then be absent/zero -- a Score/AttentionRank/
+	// DataCompleteness present without RankingComputed would be exactly the
+	// "was this really scored, or does it just look like it" ambiguity a
+	// bare omitempty float64 could never resolve. True means all three are
+	// REQUIRED together; RankingBasis alone may still be empty (zero
+	// available signal families -- "nothing contributed", not a producer
+	// bug).
+	if !m.RankingComputed {
+		if m.Score != nil || m.AttentionRank != 0 || m.DataCompleteness != "" || len(m.RankingBasis) > 0 {
+			return fmt.Errorf("cohort member ranking fields set without ranking_computed")
+		}
+		return nil
+	}
+	// Score may be nil: the design's own zero-signal-family exception
+	// (subject-model-and-cohort-answers.md §5b) -- an empty weight
+	// denominator cannot be honestly turned into a number, and scoring it
+	// 0 would render the least-observed member as the healthiest. A
+	// present Score must still be a FINITE value in [0,100] -- codex
+	// review: `< 0`/`> 100` alone both evaluate false for NaN, which would
+	// otherwise pass through unrejected.
+	if m.Score != nil && (math.IsNaN(*m.Score) || math.IsInf(*m.Score, 0) || *m.Score < 0 || *m.Score > 100) {
+		return fmt.Errorf("cohort member score violates v1 bounds")
+	}
+	if m.AttentionRank < 1 {
+		return fmt.Errorf("cohort member attention rank violates v1 bounds")
+	}
+	if !validContextFabricCohortDataCompleteness(m.DataCompleteness) || m.DataCompleteness == "" {
+		return fmt.Errorf("cohort member data completeness is not a recognized value")
+	}
+	// A nil Score is ONLY the §5b zero-signal-family shape: DataCompleteness
+	// must read degraded and RankingBasis must be empty together with it --
+	// a nil Score paired with any OTHER completeness value, or a non-empty
+	// basis, would claim signals contributed to a score that does not
+	// exist.
+	if m.Score == nil && (m.DataCompleteness != ContextFabricCohortDataDegraded || len(m.RankingBasis) > 0) {
+		return fmt.Errorf("cohort member nil score must be paired with degraded completeness and an empty ranking basis")
+	}
+	if len(m.RankingBasis) > bounds.cohortMemberRankingBasis || !uniqueTrimmedStrings(m.RankingBasis, bounds.cohortMemberRankingBasisLength) {
+		return fmt.Errorf("cohort member ranking basis violates v1 bounds")
+	}
+	for _, entry := range m.RankingBasis {
+		if !validContextFabricCohortRankingBasisLabel(entry) {
+			return fmt.Errorf("cohort member ranking basis is not a recognized closed-vocabulary value")
+		}
 	}
 	return nil
 }

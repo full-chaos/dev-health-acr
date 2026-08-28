@@ -417,7 +417,7 @@ source for the SAME kind).
 | metrics | `repo_metrics_daily`; **+`team_metrics_daily`** (team, direct); **+`team_project_ownership` ⋈ `team_metrics_daily`** (project, summed-counts rollup, CHAOS-4347) | repository, **team, project** |
 | health | `compounding_risk_daily`; **+`team_project_ownership` ⋈ `compounding_risk_daily` (team layer) and +`team_project_ownership` ⋈ `team_repo_ownership` ⋈ `compounding_risk_daily` (repo layer, one hop further), both landing in one `risk_breakdown` Rows table (project, CHAOS-4363)** | repository, team, **project** |
 | workload | `capacity_forecasts`; **+`team_project_ownership` ⋈ `capacity_forecasts`, per-team `team_breakdown` Rows, never summed/averaged (project, CHAOS-4363)** | team, **project** |
-| investment | `investment_metrics_daily`; **+`team_project_ownership` ⋈ `investment_metrics_daily`, per-team `team_breakdown` Rows, never summed across (investment_area, project_stream) (project, CHAOS-4363)** | team, **project** |
+| investment | `investment_metrics_daily`; **+`team_project_ownership` ⋈ `investment_metrics_daily`, per-team `team_breakdown` Rows, never summed across (investment_area, project_stream) (project, CHAOS-4363)**; **+`work_unit_investments` ⋈ `work_item_team_attributions` (CHAOS-4398), the CANONICAL 5-theme distribution — `theme_*`/`theme_quality_bugfix`/`prior_theme_*` SCALAR fields on the SAME team fact, never `investment_metrics_daily`'s deprecated legacy taxonomy; see §7** | team, **project** |
 | readiness | `estimate_coverage_metrics_daily`; **+`team_project_ownership` ⋈ `estimate_coverage_metrics_daily`, per-team `team_breakdown` Rows, never summed across work scopes (project, CHAOS-4363)** | team, **project** |
 | operational_deficiencies | `recommendations_daily` | team |
 | source_health | `backfill_log` | organization |
@@ -814,6 +814,80 @@ both before and after). Both safety invariants held in the GREEN run too
 (`wrong_commit_count=0`, `window_unsafe_commit_count=0`). Artifact (not
 committed, reproduced from this doc's own numbers):
 `.remember/trial-results/gen-trial-chaos4360_nturn-20260827T221125Z-17687.json`.
+
+---
+
+## 7 — Cohort ranking (CHAOS-4398, PR1)
+
+`ContextFabricCohort.Members` used to carry only pool order (a fixed
+`InclusionReasons` sentence, no score) — "which teams are struggling and
+why?" had no DATA behind it, only an offers-only list. `RankCohort`
+(`internal/contextfabric/cohort_ranking.go`) is a NEW deterministic pass,
+wired between the fact read and `Synthesize` — the same discipline
+`attachCanonicalRows` already applies to `ClaimedFact.Rows`: the server
+computes a number from facts it already read, the model only ever narrates
+a number it was given, never re-derives one.
+
+**Full design (score formula, sub-formula, contract shape, and the P1
+resolutions for fact-requirement injection / zero-signal handling /
+multi-scope aggregation) lives in
+[`context-fabric-subject-model-and-cohort-answers.md`](context-fabric-subject-model-and-cohort-answers.md)
+§3–§6 — the ratified, four-round-reviewed source of truth (merged as #316
+before this PR). Duplicating it here would create a second copy that could
+drift; this section stays a short pointer plus the two diagrams that doc
+does not carry.**
+
+```mermaid
+flowchart TB
+    A["DiscoverContext<br/>graphrank.DiscoveredCohort<br/>(pool order only)"] --> B["ReadFacts<br/>CanonicalFactRequest.Cohort<br/>already wired (fact_planner.go);<br/>5 ranking kinds INJECTED (§3a)"]
+    B --> C{"graphContext.Cohort != nil?"}
+    C -- no --> F["Synthesize<br/>(single-subject path, unchanged)"]
+    C -- yes --> D["RankCohort(cohort, facts.Facts, facts.Coverage)<br/>NEW, engine.go, between B and F"]
+    D --> D1["per member: 5 signal families,<br/>renormalized over AVAILABLE only<br/>(missing excluded, never zero-filled;<br/>Score=nil if zero available -- §5b)"]
+    D1 --> D2["AttentionRank = score-sorted position<br/>(nil-Score last); Members/Rank NEVER reordered"]
+    D2 --> E["RecordCohortRanked telemetry<br/>member_count, formula_version,<br/>degraded_member_count, signals_available{}"]
+    D2 --> F
+    F --> G["result.Cohort = graphContext.Cohort<br/>(already ranked; synthesizer never sets it)"]
+```
+
+**The theme-mix producer is a NEW acr fact read, not a reuse of the existing
+`FactInvestment`.** The pre-existing team read (`investment_metrics_daily`,
+`readTeamInvestment`) is fed by a **deprecated** legacy rule set
+(`ops/src/dev_health_ops/config/investment_areas.yaml`: "do not use this
+file for canonical WorkUnit categorization") — its `investment_area` values
+are free-form legacy labels, not the canonical 5-theme taxonomy AGENTS.md
+fixes. `readTeamThemeMix` (`devhealthfacts/investment.go`) instead reads
+`work_unit_investments.theme_distribution_json`/`subcategory_distribution_json`
+(computed once at categorization time, never recomputed) via a NEW shared
+reader, `readers.ReadTeamThemeMix`
+(`github.com/full-chaos/dev-health-go` v0.3.0, `readers/investment_theme.go`),
+attributed to teams through the SAME CHAOS-2600 ownership-precedence
+majority-vote bridge ops's `investment.py` `build_unit_team_subquery`/
+`PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE` already computes for the
+Investment view — never `author_membership`/`assignee_membership`
+(CHAOS-4321: ownership only, never a person's memberships). The two
+`FactInvestment` facts a team can now carry (legacy per-`(area,stream)`
+rows, plus one NEW fact carrying the canonical `theme_*` fields) are kept
+SEPARATE and found by field PRESENCE, never by list position — mixing them
+into one fact would make which one carries the canonical fields a matter of
+query result ordering.
+
+```mermaid
+flowchart LR
+    WUI["work_unit_investments<br/>theme_distribution_json<br/>subcategory_distribution_json"] -->|ARRAY JOIN theme_kv| J
+    WITA["work_item_team_attributions<br/>FINAL, is_primary=1,<br/>latest computed_at"] -->|majority vote per work unit,<br/>lexicographically-largest tie-break| J["ReadTeamThemeMix<br/>(dev-health-go/readers)"]
+    J -->|current window| P["readTeamThemeMix<br/>(acr devhealthfacts/investment.go)<br/>normalizes to shares, sums to ~1.0"]
+    J -.->|SECOND explicit query,<br/>[start-duration, start)<br/>ONLY when window has an explicit start<br/>(CHAOS-4040: never inferred)| P
+    P --> F2["FactInvestment (team)<br/>theme_*, theme_quality_bugfix,<br/>prior_theme_* (omitted if no prior data)"]
+```
+
+**Not yet built** (tracked as PR1 follow-ups, subject-model-and-cohort-answers.md §7):
+per-member `ContextFabricDriverJudgment`s (PR2), the `RankingTable` Rows
+panel on `ContextFabricProjectedCohort` + `ContextFabricProjectedCohortMember`/
+`ContextFabricProjectedDriver` extension + synthesis prompt bump (PR3, §4a),
+and the harness cohort-question seeds + ask-dev contract pin bump (PR4, per
+the 20:50 08-27 standing rule: any acr PR widening the investigation
+contract lists an ask-dev pin bump as a follow-up).
 
 ---
 

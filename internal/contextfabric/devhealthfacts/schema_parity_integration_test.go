@@ -51,6 +51,10 @@ var factSchemaTables = []string{
 	// subject branches specifically (codex R3 P2: those branches were
 	// otherwise never parity-tested against production typing).
 	"work_item_metrics_daily", "ic_landscape_rolling_30d", "projects", "team_project_ownership",
+	// CHAOS-4398: readTeamThemeMix's canonical theme-mix source (never
+	// investment_metrics_daily, above -- see that reader's own doc
+	// comment).
+	"work_unit_investments", "work_item_team_attributions",
 }
 
 // TestLiveSchemaParityAcrossEveryFactProvider is the round-2 F1 guard: no
@@ -147,6 +151,18 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 		"proj-parity", orgID, "github", "PARITY", "Parity Project", uint8(1), "active", "", at)
 	seed("team_project_ownership", `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		orgID, "github", "CHAOS", "proj-parity", "PARITY", "native", at, nil, at)
+	// CHAOS-4398: readTeamThemeMix's own tables -- work_unit_investments'
+	// evidence names WI-1 (already seeded above), and
+	// work_item_team_attributions attributes WI-1 to team CHAOS
+	// (is_primary=1), so the majority-vote bridge has a real row to
+	// resolve through.
+	seed("work_unit_investments", `INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"wu-parity", at, at, 10.0,
+		map[string]float64{"feature_delivery": 0.6, "operational": 0.1, "maintenance": 0.1, "quality": 0.1, "risk": 0.1},
+		map[string]float64{"quality.bugfix": 0.02},
+		`{"issues":["WI-1"],"prs":[]}`, at, orgID)
+	seed("work_item_team_attributions", `INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, team_name, source, is_primary, confidence, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		orgID, repoID, "WI-1", "CHAOS", "Fullchaos", "native_team", uint8(1), "high", at)
 
 	principal := storage.Principal{OrgID: orgID}
 	subjects := map[contextfabric.FactKind]contextfabric.SubjectRef{
