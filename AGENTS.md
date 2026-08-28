@@ -151,6 +151,21 @@ pinned OpenCode release; it runs in its own workflow, not in `make verify`. See
 - `docs/adr/**`: architecture decision owner.
 - `internal/panelharness/**`, `cmd/acr-panel-harness/**`: CHAOS-3860 P6 activation harness owner (design brief §4's "harness/ops" sharding row). Speaks the hosted API as an external HTTP client with real credentials; never touches Postgres directly and never writes `consensus_evidence` (see `docs/design/context-fabric-panel-run-manifest.md`).
 
+## WORKTREES AND BRANCHES
+
+Agents keep creating branches that track `origin/main`, then a bare `git push` pushes straight to `main`. The canonical recipe, every time:
+
+```bash
+git worktree add --no-track -b <branch> <path> origin/main
+# or, without a worktree: git switch -c <branch> --no-track origin/main
+git push -u origin HEAD:<branch>
+```
+
+- `--no-track` is required. A branch created without it silently tracks `origin/main`, and a bare `git push` from that branch pushes to `main`, not your branch.
+- Push with an explicit refspec, `HEAD:<branch>` (or `-u origin HEAD:<branch>` the first time) — never a bare `git push`.
+- Verify before the *first* push: `git for-each-ref --format='%(refname:short) -> %(upstream:short)' refs/heads/<branch>` must print nothing after `->`. After `git push -u` sets the upstream, the same command legitimately prints `origin/<branch>` — the check that matters from then on is that it never prints `origin/main`.
+- **`dev-health-go` trap:** that repo sets `push.default=upstream`. A tracked branch plus a bare `git push` pushes `main` there even faster than elsewhere — the same `--no-track` + explicit-refspec recipe is mandatory, no exceptions.
+
 ## NOTES
 
 - Development `acr-api` may be alive but intentionally not ready until hosting supplies all runtime adapters.
