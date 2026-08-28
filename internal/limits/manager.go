@@ -205,6 +205,42 @@ func (c *Claim) Complete(usage ResourceUsage) error {
 	return c.result
 }
 
+// CompleteWithBudget completes the claim like Complete, but evaluates
+// usage against override instead of the RequestClass's own configured
+// resource budget. The class's admission/rate-limit accounting
+// (PerOrgLimit/PerCredentialLimit/concurrency, all decided at Claim() time)
+// is entirely unaffected -- override only changes which ceiling the
+// resource-usage check applies, and usage is still what gets recorded
+// into the org/credential window totals Usage() reports, exactly as
+// Complete records it. This exists for a caller that legitimately needs a
+// per-request resource ceiling looser (or tighter) than its RequestClass's
+// shared default along one dimension, without a false accounting record
+// on that dimension and without a new RequestClass fragmenting the shared
+// rate-limit window (CHAOS-4355: a Context Fabric investigation response
+// can legitimately carry far more estimated tokens than
+// RequestClassContext's shared MaxTokens permits, while its actual byte
+// size stays governed by that same class's MaxBytes).
+func (c *Claim) CompleteWithBudget(usage ResourceUsage, override ResourceBudget) error {
+	if c == nil || c.manager == nil {
+		return nil
+	}
+	if usage.Items < 0 || usage.Tokens < 0 || usage.Bytes < 0 {
+		return ErrInvalidUsage
+	}
+	if !override.valid() {
+		return ErrInvalidPolicy
+	}
+	c.once.Do(func() {
+		if !override.allows(usage) {
+			c.result = ErrResourceBudgetExceeded
+			c.manager.complete(c, usage, false)
+			return
+		}
+		c.manager.complete(c, usage, true)
+	})
+	return c.result
+}
+
 func (c *Claim) DoneClaim() { _ = c.Complete(ResourceUsage{}) }
 
 func (m *Manager) complete(claim *Claim, usage ResourceUsage, accepted bool) {

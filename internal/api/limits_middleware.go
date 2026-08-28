@@ -45,6 +45,16 @@ func CompleteUsage(ctx context.Context, usage limits.ResourceUsage) error {
 	return claim.Complete(usage)
 }
 
+// CompleteUsageWithBudget is CompleteUsage, except it evaluates usage
+// against override instead of the request's RequestClass's own configured
+// resource budget -- see limits.Claim.CompleteWithBudget's doc comment for
+// why a route needs this rather than a new RequestClass or a change to the
+// class's shared policy.
+func CompleteUsageWithBudget(ctx context.Context, usage limits.ResourceUsage, override limits.ResourceBudget) error {
+	claim, _ := ctx.Value(limitClaimContextKey{}).(*limits.Claim)
+	return claim.CompleteWithBudget(usage, override)
+}
+
 func writeRateLimitError(w http.ResponseWriter, r *http.Request, retryAfter time.Duration) {
 	var details map[string]any
 	if retryAfter > 0 {

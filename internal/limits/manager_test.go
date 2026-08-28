@@ -218,6 +218,80 @@ func TestManagerUsesQuotaEpochForRolloverRetry(t *testing.T) {
 	}
 }
 
+// TestClaimCompleteWithBudgetOverridesTheCeilingButRecordsRealUsage is the
+// CHAOS-4355 unit-level guard for Claim.CompleteWithBudget: an override
+// budget can admit usage the class's OWN configured budget would reject
+// along one dimension (here, Tokens), but the accepted usage recorded into
+// Manager.Usage()'s org/credential window totals is exactly what the
+// caller passed -- never a false or zeroed record, and never the ceiling
+// itself.
+func TestClaimCompleteWithBudgetOverridesTheCeilingButRecordsRealUsage(t *testing.T) {
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	manager := newTestManager(t, func() time.Time { return now }, PolicySet{
+		Context: ContextPolicy{Window: time.Minute, PerOrgLimit: 10, PerCredentialLimit: 10, Resources: ResourceBudget{MaxTokens: 4000, MaxBytes: 262144}},
+	})
+	subject := Subject{OrgID: "org-a", CredentialID: "credential-a"}
+
+	claim, decision, err := manager.Claim(context.Background(), subject, RequestClassContext)
+	if err != nil || !decision.Allowed {
+		t.Fatalf("claim = (%v, %#v, %v), want allowed", claim, decision, err)
+	}
+	// 17700 exceeds the class's own MaxTokens (4000, set above) -- Complete
+	// would reject this. CompleteWithBudget must not.
+	usage := ResourceUsage{Items: 3, Tokens: 17700, Bytes: 70797}
+	override := ResourceBudget{MaxItems: 30, MaxTokens: 0, MaxBytes: 262144}
+	if err := claim.CompleteWithBudget(usage, override); err != nil {
+		t.Fatalf("CompleteWithBudget with MaxTokens=0 override = %v, want nil (unlimited Tokens must admit 17700)", err)
+	}
+
+	got, err := manager.Usage(subject, RequestClassContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := UsageCounters{Admitted: 1, Completed: 1, Items: 3, Tokens: 17700, Bytes: 70797}
+	if got.Org != want {
+		t.Fatalf("org usage = %#v, want %#v -- CompleteWithBudget must record the REAL usage, not the override or zero", got.Org, want)
+	}
+	if got.Credential != want {
+		t.Fatalf("credential usage = %#v, want %#v", got.Credential, want)
+	}
+}
+
+// TestClaimCompleteWithBudgetStillRejectsOverTheOverrideCeiling proves the
+// override is a real budget, not a bypass: a dimension the override DOES
+// bound (Bytes here) still rejects, and the rejection is still recorded
+// (Denied, not Completed).
+func TestClaimCompleteWithBudgetStillRejectsOverTheOverrideCeiling(t *testing.T) {
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	manager := newTestManager(t, func() time.Time { return now }, PolicySet{
+		Context: ContextPolicy{Window: time.Minute, PerOrgLimit: 10, PerCredentialLimit: 10, Resources: ResourceBudget{MaxTokens: 4000, MaxBytes: 262144}},
+	})
+	subject := Subject{OrgID: "org-a", CredentialID: "credential-a"}
+
+	claim, decision, err := manager.Claim(context.Background(), subject, RequestClassContext)
+	if err != nil || !decision.Allowed {
+		t.Fatalf("claim = (%v, %#v, %v), want allowed", claim, decision, err)
+	}
+	usage := ResourceUsage{Items: 1, Tokens: 100, Bytes: 300000}
+	override := ResourceBudget{MaxItems: 30, MaxTokens: 0, MaxBytes: 262144}
+	if err := claim.CompleteWithBudget(usage, override); !errors.Is(err, ErrResourceBudgetExceeded) {
+		t.Fatalf("CompleteWithBudget over MaxBytes = %v, want ErrResourceBudgetExceeded", err)
+	}
+
+	got, err := manager.Usage(subject, RequestClassContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Completed tracks lifecycle completion (a Complete/CompleteWithBudget
+	// call was made) regardless of accept/deny -- see manager.go's
+	// complete(), which increments it unconditionally before branching on
+	// accepted. Denied and the resource counters are what distinguish a
+	// rejected claim: Denied increments, Items/Tokens/Bytes do not.
+	if got.Org.Completed != 1 || got.Org.Denied != 1 || got.Org.Items != 0 || got.Org.Tokens != 0 || got.Org.Bytes != 0 {
+		t.Fatalf("org usage = %#v, want Completed=1 Denied=1 and zero resource counters -- a rejected claim must not record accepted usage", got.Org)
+	}
+}
+
 func newTestManager(t *testing.T, now func() time.Time, policies PolicySet, concurrency ...int) *Manager {
 	t.Helper()
 	limit := 0

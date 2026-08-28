@@ -12,17 +12,30 @@ import (
 )
 
 const (
-	defaultListenAddress      = ":8080"
-	defaultEnvironment        = "development"
-	defaultMinimumSidecar     = "0.1.0"
-	defaultEntitlementKey     = "agent_context_runtime"
-	defaultRequestTimeout     = 15 * time.Second
-	defaultReadHeaderTimeout  = 5 * time.Second
-	defaultReadTimeout        = 20 * time.Second
-	defaultWriteTimeout       = 20 * time.Second
-	defaultIdleTimeout        = 60 * time.Second
-	defaultShutdownTimeout    = 10 * time.Second
-	defaultMaxItems           = 30
+	defaultListenAddress     = ":8080"
+	defaultEnvironment       = "development"
+	defaultMinimumSidecar    = "0.1.0"
+	defaultEntitlementKey    = "agent_context_runtime"
+	defaultRequestTimeout    = 15 * time.Second
+	defaultReadHeaderTimeout = 5 * time.Second
+	defaultReadTimeout       = 20 * time.Second
+	defaultWriteTimeout      = 20 * time.Second
+	defaultIdleTimeout       = 60 * time.Second
+	defaultShutdownTimeout   = 10 * time.Second
+	defaultMaxItems          = 30
+	// defaultMaxOutputTokens stays 4000: it is also the ceiling
+	// cmd/acr-api/server_build.go advertises as CapabilityLimits.MaxOutputTokens,
+	// and internal/contracts/v1's Context Packet (validate_request.go) and
+	// MCP (mcp_validate.go) wire validators independently cap a caller's
+	// requested max_output_tokens at 16000 -- raising this shared knob
+	// (CHAOS-4355 codex R1 P2) would advertise a capability those
+	// validators then reject. Sized for a text-only synthesized answer;
+	// see context_fabric_routes.go's separate handling for why Context
+	// Fabric responses do NOT gate on this value (CHAOS-4347/CHAOS-4363
+	// gave a ClaimedFact an optional Rows table that made a Tokens
+	// estimate derived from Bytes redundant with, and often tighter than,
+	// ACR_MAX_SERIALIZED_BYTES -- see
+	// internal/api/context_fabric_response_bound_test.go).
 	defaultMaxOutputTokens    = 4000
 	defaultMaxSerializedBytes = 262144
 	defaultRequestsPerMinute  = 60
@@ -342,6 +355,11 @@ func (c Config) Validate() error {
 	if c.MaxItems < 1 || c.MaxItems > 50 {
 		return errors.New("ACR_MAX_ITEMS must be between 1 and 50")
 	}
+	// 16000 matches the Context Packet/MCP wire validators' own ceiling on
+	// a caller-requested max_output_tokens (internal/contracts/v1) -- see
+	// defaultMaxOutputTokens's doc comment for why this must stay aligned
+	// with those rather than the (separately raised) Context Fabric
+	// response path.
 	if c.MaxOutputTokens < 500 || c.MaxOutputTokens > 16000 {
 		return errors.New("ACR_MAX_OUTPUT_TOKENS must be between 500 and 16000")
 	}
