@@ -391,6 +391,23 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 	t.logger.InfoContext(ctx, "context fabric fact scope expansion outcome", args...)
 }
 
+// RecordCohortRanked implements EngineTelemetry (CHAOS-4398). Content-safe:
+// counts and a version string only, per CohortRankedEvent's own doc comment
+// -- never a team name or a score value. Info level -- a ranked cohort is
+// the system working, not a degradation; DegradedMemberCount is the signal
+// an operator watches for a real data gap, and it travels as its own field
+// rather than as a log level so a fully-degraded org does not get treated
+// as an error.
+func (t SlogEngineTelemetry) RecordCohortRanked(ctx context.Context, principal storage.Principal, event CohortRankedEvent) {
+	t.logger.InfoContext(ctx, "context fabric cohort ranked", append([]any{
+		"org_id", principal.OrgID,
+		"member_count", event.MemberCount,
+		"formula_version", event.FormulaVersion,
+		"degraded_member_count", event.DegradedMemberCount,
+		"signals_available", event.SignalsAvailable,
+	}, requestIDLogAttrs(ctx)...)...)
+}
+
 // RecordCategoryFactComposition implements EngineTelemetry (CHAOS-4347) --
 // the operator-visible record of a status-category requirement being
 // expanded into a composed fact-kind set. Content-safe: two closed enums

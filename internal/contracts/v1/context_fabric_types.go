@@ -993,11 +993,75 @@ type ContextFabricCohort struct {
 }
 
 type ContextFabricCohortMember struct {
-	Subject          ContextFabricSubjectRef `json:"subject"`
-	Rank             int                     `json:"rank"`
-	InclusionReasons []string                `json:"inclusion_reasons"`
-	EvidenceRefIDs   []string                `json:"evidence_ref_ids,omitempty"`
+	Subject ContextFabricSubjectRef `json:"subject"`
+	// Rank is UNCHANGED by CHAOS-4398 -- it stays the pre-existing pool
+	// order (append order out of discovery), never redefined to mean
+	// score order. AttentionRank below is the new, score-derived order;
+	// keeping the two separate is what
+	// docs/design/context-fabric-subject-model-and-cohort-answers.md §4
+	// ratified after review found the alternative (repurposing Rank)
+	// ambiguous for any consumer that persisted or cited a Rank value
+	// before ranking existed.
+	Rank             int      `json:"rank"`
+	InclusionReasons []string `json:"inclusion_reasons"`
+	EvidenceRefIDs   []string `json:"evidence_ref_ids,omitempty"`
+	// RankingComputed, AttentionRank, Score, RankingBasis, and
+	// DataCompleteness are CHAOS-4398's additive v1 ranking fields
+	// (docs/design/context-fabric-subject-model-and-cohort-answers.md §4).
+	// RankingComputed is the explicit disambiguator: false (the zero
+	// value) means ranking has not run for this cohort (an offers-only
+	// discovery, or a request that never confirmed a window) -- every
+	// other ranking field is then absent/zero too. Once a ranking pass
+	// (internal/contextfabric.RankCohort) runs, RankingComputed is true
+	// and Score/AttentionRank/DataCompleteness are ALWAYS set together;
+	// RankingBasis is empty exactly when zero signal families were
+	// available for this member (DataCompleteness still reads "degraded"
+	// -- an empty basis is what "nothing contributed" means, not a
+	// producer bug).
+	RankingComputed bool `json:"ranking_computed,omitempty"`
+	// AttentionRank is the score-derived order (1 = highest Score, ties
+	// broken by pool order / Rank) -- present iff RankingComputed. Never
+	// reorders Members itself: the wire array stays in POOL order always,
+	// so a consumer that only reads Rank/array order sees byte-identical
+	// behavior to before this ticket.
+	AttentionRank int `json:"attention_rank,omitempty"`
+	// Score is the deterministic, server-computed attention score in
+	// [0,100], present iff RankingComputed. A pointer (not omitempty
+	// float64): a real computed score of exactly 0.0 must round-trip
+	// distinctly from "never ranked" -- see the field's own contract test.
+	// Never model-authored: the same discipline AGENTS.md states for
+	// canonical theme roll-up applies here -- a model narrates this
+	// number, it never computes or overrides it (see
+	// internal/contextfabric/model_runtime.go's Rows guard for the
+	// sibling discipline on ClaimedFact.Rows).
+	Score *float64 `json:"score,omitempty"`
+	// RankingBasis names the closed-vocabulary signals (e.g.
+	// "investment_mix.reactive_share_high", "health.compounding_risk") that
+	// contributed to Score, in the deterministic formula's own term order --
+	// never free-form model prose.
+	RankingBasis []string `json:"ranking_basis,omitempty"`
+	// DataCompleteness states how many of the formula's signal families this
+	// member actually had rows for -- complete (all contributed), partial
+	// (at least one missing, renormalized over what's available), or
+	// degraded (two or fewer contributed). A team with zero rows in every
+	// family still gets a Score (renormalized) and DataCompleteness=degraded
+	// -- it is never silently dropped from the ranking table, which would
+	// misrepresent "which teams are struggling" by hiding the
+	// least-observed team. Present iff RankingComputed.
+	DataCompleteness ContextFabricCohortDataCompleteness `json:"data_completeness,omitempty"`
 }
+
+// ContextFabricCohortDataCompleteness is CHAOS-4398's closed vocabulary for
+// how many of RankCohort's signal families a cohort member's Score actually
+// drew from. The empty string means "ranking has not run" -- see
+// ContextFabricCohortMember's own doc comment.
+type ContextFabricCohortDataCompleteness string
+
+const (
+	ContextFabricCohortDataComplete ContextFabricCohortDataCompleteness = "complete"
+	ContextFabricCohortDataPartial  ContextFabricCohortDataCompleteness = "partial"
+	ContextFabricCohortDataDegraded ContextFabricCohortDataCompleteness = "degraded"
+)
 
 type ContextFabricCohortExclusion struct {
 	Subject ContextFabricSubjectRef `json:"subject"`

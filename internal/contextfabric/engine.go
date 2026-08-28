@@ -537,6 +537,39 @@ type EngineTelemetry interface {
 	// call and reporting a zero here on every single call would drown the
 	// signal in noise.
 	RecordModelRowsStripped(ctx context.Context, principal storage.Principal, claims int)
+	// RecordCohortRanked (CHAOS-4398) reports the outcome of ONE RankCohort
+	// pass: how many members were scored, the deterministic formula
+	// version (prompt-changes-are-behavior-changes discipline applied to
+	// this deterministic function too -- a later formula revision is a
+	// counted, diagnosable event, not a silent drift), how many members
+	// landed DataCompleteness=degraded, and a per-signal-family count of
+	// how many members that family actually contributed to (the
+	// "signals_available histogram" the ticket asks for) -- so a signal
+	// family that stops contributing across an entire org (a producer
+	// outage, not a real data gap) is visible in telemetry before anyone
+	// notices the ranking went flat. Declared on THIS interface, not an
+	// optional side interface, for the same reason every sibling method
+	// above is: a branch that can go missing by omission is the
+	// CHAOS-4089 failure mode this repo keeps re-learning. Called once
+	// per RankCohort call that actually ran (cohort != nil, members > 0);
+	// never called for an offers-only cohort that never reaches ranking.
+	RecordCohortRanked(ctx context.Context, principal storage.Principal, event CohortRankedEvent)
+}
+
+// CohortRankedEvent is RecordCohortRanked's content-safe payload: counts and
+// a closed-vocabulary formula version only, never a subject name, a score
+// value, or any text a team could be identified by -- the "no
+// person-to-person rankings" guardrail's team-to-team analogue does not
+// license leaking WHICH team ranked where into an operator log line.
+type CohortRankedEvent struct {
+	MemberCount         int
+	FormulaVersion      string
+	DegradedMemberCount int
+	// SignalsAvailable maps a top-level signal-family name (the same
+	// RankingSignal* constants cohort_ranking.go's RankingBasis values
+	// draw from) to the count of members whose Score actually drew from
+	// it this call.
+	SignalsAvailable map[string]int
 }
 
 // Engine coordinates one open-ended investigation. It deliberately composes
@@ -1215,11 +1248,32 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// first-kind-wins dedup sees the composed kinds like any other
 	// requirement. See composeStatusCategoryRequirements' own doc comment.
 	statusComposedRequirements := e.composeStatusCategoryRequirements(ctx, principal, interpretation.FactRequirements, subjects)
+	// CHAOS-4398 (subject-model-and-cohort-answers.md §3a, "must be resolved
+	// in PR1"): investigationScopeSubjects only fans the SUBJECT set out to
+	// cohort members -- it does not decide which fact KINDS get read. If
+	// the interpreter's own FactRequirements for "which teams are
+	// struggling" named only a subset of the ranking formula's five
+	// families, the other providers would never run and RankCohort could
+	// not compute the documented formula -- a silent, non-obvious failure
+	// mode, not a validation error. So for any cohort answer, the five
+	// ranking-formula kinds are injected here, LAST in merge order (so a
+	// more specific existing requirement for the same kind -- e.g. one
+	// carrying its own Subjects/Parameters -- always wins; this only fills
+	// a kind that is otherwise absent). RankCohort's own per-signal
+	// "missing" handling still applies if a given provider returns no rows
+	// for a given member even after being read.
+	var cohortRankingRequirements []FactRequirement
+	if graphContext.Cohort != nil {
+		cohortRankingRequirements = []FactRequirement{
+			{Kind: FactHealth}, {Kind: FactWorkload}, {Kind: FactReadiness},
+			{Kind: FactOperationalDeficiencies}, {Kind: FactInvestment},
+		}
+	}
 	factRequest := CanonicalFactRequest{
 		Question:     interpretation,
 		Subjects:     subjects,
 		Cohort:       graphContext.Cohort,
-		Requirements: mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements),
+		Requirements: mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements),
 	}
 	// The invariant, asserted rather than assumed (CHAOS-3810). The guard
 	// above is what makes this unreachable today; this is what keeps it
@@ -1244,6 +1298,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	e.recordFactScopeExpansion(ctx, principal, facts.Scope)
 	if err != nil {
 		return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("read canonical facts: %w", err))
+	}
+
+	// CHAOS-4398: RankCohort runs HERE -- after the fact read, before
+	// Synthesize -- the same ordering slot attachCanonicalRows documents
+	// for itself (model_runtime.go:551): the server computes a number from
+	// facts it already has, the model only ever narrates a number it was
+	// GIVEN. graphContext.Cohort is nil for every non-cohort investigation
+	// (RankCohort no-ops on nil), so this line changes nothing for the
+	// single-subject path.
+	if graphContext.Cohort != nil {
+		var rankEvent CohortRankedEvent
+		graphContext.Cohort, rankEvent = RankCohort(graphContext.Cohort, facts.Facts, facts.Coverage)
+		if e.telemetry != nil {
+			e.telemetry.RecordCohortRanked(ctx, principal, rankEvent)
+		}
 	}
 
 	result, err := e.synthesizer.Synthesize(ctx, principal, SynthesisInput{

@@ -103,7 +103,14 @@ func createCHAOS3780Tables(t *testing.T, ctx context.Context, connection clickho
 	// replica risk devhealthschema exists to remove: a type corrected
 	// upstream would have been fixed in the declaration and in the parity
 	// guards while this file quietly kept testing the old shape.
-	for _, statement := range devhealthschema.DDL("repo_metrics_daily", "compounding_risk_daily", "capacity_forecasts", "investment_metrics_daily", "estimate_coverage_metrics_daily", "recommendations_daily") {
+	// CHAOS-4398: work_unit_investments/work_item_team_attributions/repos
+	// added so InvestmentProvider's NEW readTeamThemeMix call (issued
+	// alongside every legacy investment_metrics_daily read) has real
+	// tables to query -- left unseeded in every F4 scenario below, which
+	// exercises the zero-current-effort skip path (readTeamThemeMix emits
+	// no fact, never affecting these tests' own `len(result.Facts)`
+	// assertions).
+	for _, statement := range devhealthschema.DDL("repo_metrics_daily", "compounding_risk_daily", "capacity_forecasts", "investment_metrics_daily", "estimate_coverage_metrics_daily", "recommendations_daily", "work_unit_investments", "work_item_team_attributions", "repos") {
 		if err := connection.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}

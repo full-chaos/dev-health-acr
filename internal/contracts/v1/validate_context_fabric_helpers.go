@@ -442,6 +442,47 @@ func validContextFabricSubjectKind(value ContextFabricSubjectKind) bool {
 	}
 }
 
+// validContextFabricCohortDataCompleteness accepts the empty string as a
+// distinct, valid value: it means "RankCohort has not run for this member",
+// not an out-of-vocabulary write. See ContextFabricCohortMember's doc
+// comment.
+func validContextFabricCohortDataCompleteness(value ContextFabricCohortDataCompleteness) bool {
+	switch value {
+	case "", ContextFabricCohortDataComplete, ContextFabricCohortDataPartial, ContextFabricCohortDataDegraded:
+		return true
+	default:
+		return false
+	}
+}
+
+// contextFabricCohortRankingBasisLabels is the CLOSED vocabulary
+// ContextFabricCohortMember.RankingBasis entries must be drawn from --
+// mirrored here from internal/contextfabric/cohort_ranking.go's own
+// RankingSignal*/Driver* constants (this package cannot import that one,
+// which imports this one) rather than left to a bare length/count bound
+// that would let a stray value or model-authored prose through
+// undetected. A new signal family or driver label needs BOTH sides
+// updated in the same change, the same discipline every other closed
+// vocabulary in this file already applies.
+var contextFabricCohortRankingBasisLabels = map[string]struct{}{
+	"investment_mix":                              {},
+	"health.compounding_risk":                     {},
+	"operational_deficiencies.severity":           {},
+	"readiness.coverage_gap":                      {},
+	"workload.forecast_pressure":                  {},
+	"investment_mix.reactive_share_high":          {},
+	"investment_mix.deliberate_share_low":         {},
+	"investment_mix.mix_concentrated":             {},
+	"investment_mix.mix_shift_toward_operational": {},
+	"investment_mix.mix_shift_toward_feature":     {},
+	"investment_mix.mix_shift_other":              {},
+}
+
+func validContextFabricCohortRankingBasisLabel(value string) bool {
+	_, ok := contextFabricCohortRankingBasisLabels[value]
+	return ok
+}
+
 func validResolutionState(value ContextFabricResolutionState) bool {
 	switch value {
 	case ContextFabricResolutionCommitted, ContextFabricResolutionProposed, ContextFabricResolutionAmbiguous, ContextFabricResolutionUnresolved:

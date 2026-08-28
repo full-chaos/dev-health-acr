@@ -83,6 +83,14 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		}
 		omittedUnrepresentableCount += omitted
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		// CHAOS-4398 §0: the CANONICAL theme/subcategory read, a
+		// deliberately SEPARATE call from readTeamInvestment above -- see
+		// readTeamThemeMix's own doc comment for why this is a new
+		// producer join, not a reuse of the legacy investment_metrics_daily
+		// path.
+		if scanErr := p.readTeamThemeMix(ctx, orgID, teamSubjects, &facts, timeBound); scanErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query team theme mix", scanErr)
+		}
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
@@ -147,6 +155,165 @@ func (p *InvestmentProvider) readTeamInvestment(ctx context.Context, orgID strin
 		})
 	}
 	return len(rows), omittedUnrepresentableCount, nil
+}
+
+// canonicalInvestmentThemes is the fixed 5-theme taxonomy
+// (ops/src/dev_health_ops/investment_taxonomy.py's THEMES; AGENTS.md: "no
+// synonyms/overrides") in a stable iteration order, so readTeamThemeMix's
+// normalization is deterministic regardless of map iteration order.
+var canonicalInvestmentThemes = [...]string{
+	contextfabric.ThemeFeatureDelivery, contextfabric.ThemeOperational,
+	contextfabric.ThemeMaintenance, contextfabric.ThemeQuality, contextfabric.ThemeRisk,
+}
+
+// readTeamThemeMix reads the CANONICAL investment theme/subcategory
+// distribution (CHAOS-4398 §0: work_unit_investments via
+// readers.ReadTeamThemeMix, the CHAOS-2600 ownership-precedence majority
+// vote bridge) for the given team subjects -- NEVER investment_metrics_daily,
+// the deprecated legacy rule set readTeamInvestment above reads. Emits ONE
+// additional CanonicalFact per team, kept SEPARATE from readTeamInvestment's
+// own per-(area,stream) facts (a team can have zero, one, or several of
+// those, and mixing canonical theme fields into one of them arbitrarily
+// would make which fact carries them a matter of query result ordering) --
+// internal/contextfabric/cohort_ranking.go's investmentMixSignal finds this
+// fact by field PRESENCE (theme_feature_delivery), never by position, for
+// exactly this reason.
+//
+// Known risk for PR2/PR3 (codex round-1 review, not yet triggered by
+// anything PR1's synthesis path does): model_runtime.go's
+// lookupCanonicalFact matches a synthesis claim to a canonical fact by
+// (Kind, Subject) FIRST MATCH, not by field presence -- RankCohort's own
+// field-presence lookup above does not help a driver/claim that later
+// cites FactInvestment for a team once PR2/PR3 wire the model into
+// narrating investment-mix reasoning. Since readTeamInvestment's legacy
+// per-(area,stream) facts are appended to the fact list BEFORE this
+// function's canonical fact, attachCanonicalRows could attach the WRONG
+// (legacy) fact's Rows to such a claim. PR2/PR3 must give the canonical
+// theme fact a distinct identity attachCanonicalRows can select on (or
+// make lookupCanonicalFact field-aware) before any claim/driver cites
+// FactInvestment for a cohort answer.
+//
+// timeBound.neutral() bounds the CURRENT window read. When timeBound also
+// carries an explicit start (never inferred -- CHAOS-4040: a window this
+// producer invented on its own would be exactly the "commit under an
+// inferred window" the ticket forbids), a SECOND, explicit query reads the
+// prior comparable window [start-duration, start) for RankCohort's
+// mix-shift sub-signal. A team with no prior-window data gets NO
+// prior_theme_* fields at all -- omitted, never zero-filled -- and
+// RankCohort's mix-shift sub-signal degrades gracefully (it simply never
+// fires for that team), matching every other missing-signal case in this
+// package.
+//
+// A team with zero current-window weighted effort (the reader returned no
+// rows, or all its rows summed to a non-positive total -- effort_value is
+// never negative in practice, but this guards the divide regardless) gets
+// NO theme fields either: a fabricated 0.0 share across all five themes
+// would read as "we know this team's mix is exactly nothing" rather than
+// "we have no mix to report", which is the same degrade-not-fabricate
+// distinction CHAOS-3781 already draws for every other signal here.
+//
+// Attribution key (codex round-1 review): readers.ReadTeamThemeMix joins
+// work_item_team_attributions on work_item_id ALONE, without repo_id --
+// this is a DELIBERATE, verified match to ops's own reference
+// (PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE, api/queries/investment.py),
+// which this producer exists to port faithfully, not to redesign. It is
+// safe because every work_item_id this repo mints already embeds its
+// provider and repo ("ghpr:{owner}/{repo}#{n}", "gitlab:{group}/{project}!{n}",
+// providers/*/normalize.py) -- two DIFFERENT repos cannot legitimately
+// produce the same work_item_id string, so there is no real cross-repo
+// collision surface this join could introduce that the reference
+// implementation does not already share. If this is ever tightened, the
+// Python reference and this Go port must change together, or the two
+// stop agreeing on what "the same work item" means.
+func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) error {
+	ids, bySubject := subjectIndex(subjects, teamPrefix)
+	if len(ids) == 0 {
+		return nil
+	}
+	current, err := readers.ReadTeamThemeMix(ctx, p.facts.client, orgID, ids, timeBound.neutral())
+	if err != nil {
+		return err
+	}
+	var prior []readers.TeamThemeMixRow
+	if timeBound.active && timeBound.hasStart {
+		duration := timeBound.end.Sub(timeBound.start)
+		priorBound := factTimeBound{active: true, hasStart: true, start: timeBound.start.Add(-duration), end: timeBound.start}
+		prior, err = readers.ReadTeamThemeMix(ctx, p.facts.client, orgID, ids, priorBound.neutral())
+		if err != nil {
+			return err
+		}
+	}
+
+	type teamMix struct {
+		teamName      string
+		currentTheme  map[string]float64
+		currentBugfix float64
+		priorTheme    map[string]float64
+	}
+	byTeam := make(map[string]*teamMix, len(ids))
+	entry := func(teamID, teamName string) *teamMix {
+		m, ok := byTeam[teamID]
+		if !ok {
+			m = &teamMix{currentTheme: map[string]float64{}, priorTheme: map[string]float64{}}
+			byTeam[teamID] = m
+		}
+		if m.teamName == "" {
+			m.teamName = teamName
+		}
+		return m
+	}
+	for _, row := range current {
+		m := entry(row.TeamID, row.TeamName)
+		switch row.Kind {
+		case "theme":
+			m.currentTheme[row.Key] = row.WeightedEffort
+		case "subcategory":
+			if row.Key == readers.BugfixSubcategoryKey {
+				m.currentBugfix = row.WeightedEffort
+			}
+		}
+	}
+	for _, row := range prior {
+		if row.Kind != "theme" {
+			continue
+		}
+		entry(row.TeamID, row.TeamName).priorTheme[row.Key] = row.WeightedEffort
+	}
+
+	for teamID, m := range byTeam {
+		subject, ok := bySubject[teamID]
+		if !ok {
+			continue
+		}
+		currentTotal := 0.0
+		for _, theme := range canonicalInvestmentThemes {
+			currentTotal += m.currentTheme[theme]
+		}
+		if currentTotal <= 0 {
+			continue
+		}
+		fields := make(map[string]contextfabric.FactValue, 2*len(canonicalInvestmentThemes)+1)
+		for _, theme := range canonicalInvestmentThemes {
+			fields[contextfabric.FactFieldTheme(theme)] = contextfabric.NumberFactValue(m.currentTheme[theme] / currentTotal)
+		}
+		fields[contextfabric.FactFieldThemeQualityBugfix] = contextfabric.NumberFactValue(m.currentBugfix / currentTotal)
+
+		priorTotal := 0.0
+		for _, theme := range canonicalInvestmentThemes {
+			priorTotal += m.priorTheme[theme]
+		}
+		if priorTotal > 0 {
+			for _, theme := range canonicalInvestmentThemes {
+				fields[contextfabric.FactFieldPriorTheme(theme)] = contextfabric.NumberFactValue(m.priorTheme[theme] / priorTotal)
+			}
+		}
+
+		*facts = append(*facts, contextfabric.CanonicalFact{
+			Kind: contextfabric.FactInvestment, Subject: subject, Fields: fields,
+			EvidenceRefIDs: []string{evidenceRefID("team", teamID)},
+		})
+	}
+	return nil
 }
 
 // readProjectInvestment rolls FactInvestment up for a project through

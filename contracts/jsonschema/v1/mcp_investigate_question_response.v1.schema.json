@@ -1125,7 +1125,7 @@
           }
         },
         "RelativeWindowID": {
-          "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 \u00a75.1).",
+          "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 §5.1).",
           "type": "string",
           "enum": [
             "trailing_30d",
@@ -2553,7 +2553,7 @@
           }
         },
         "RelativeWindowID": {
-          "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 \u00a75.1).",
+          "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 §5.1).",
           "type": "string",
           "enum": [
             "trailing_30d",
@@ -4218,6 +4218,36 @@
               },
               "maxItems": 100,
               "uniqueItems": true
+            },
+            "ranking_computed": {
+              "type": "boolean"
+            },
+            "attention_rank": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "ranking_basis": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "maxItems": 16,
+              "uniqueItems": true
+            },
+            "data_completeness": {
+              "type": "string",
+              "enum": [
+                "complete",
+                "partial",
+                "degraded"
+              ]
             }
           },
           "required": [

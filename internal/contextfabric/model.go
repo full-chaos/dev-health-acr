@@ -253,6 +253,17 @@ type SubjectResolution = contractsv1.ContextFabricSubjectResolution
 type Cohort = contractsv1.ContextFabricCohort
 type CohortMember = contractsv1.ContextFabricCohortMember
 type CohortExclusion = contractsv1.ContextFabricCohortExclusion
+
+// CHAOS-4398: RankCohort's own additive contract types, same alias
+// convention as every sibling type in this file.
+type CohortDataCompleteness = contractsv1.ContextFabricCohortDataCompleteness
+
+const (
+	CohortDataComplete = contractsv1.ContextFabricCohortDataComplete
+	CohortDataPartial  = contractsv1.ContextFabricCohortDataPartial
+	CohortDataDegraded = contractsv1.ContextFabricCohortDataDegraded
+)
+
 type RelationshipPath = contractsv1.ContextFabricRelationshipPath
 type RelationshipEdge = contractsv1.ContextFabricRelationshipEdge
 type RelationshipType = contractsv1.ContextFabricRelationshipType
