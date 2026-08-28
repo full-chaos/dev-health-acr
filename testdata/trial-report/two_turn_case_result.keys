@@ -60,6 +60,7 @@ pair_retried
 pair_retry_first_arm_invalid_error_type
 pair_retry_first_arm_invalid_reason
 pair_retry_first_arm_invalid_stage
+positive_arm_never_attempted
 result_bytes
 reused
 rows_count

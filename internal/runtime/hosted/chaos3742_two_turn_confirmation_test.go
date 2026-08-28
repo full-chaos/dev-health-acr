@@ -3387,10 +3387,23 @@ func twoTurnInnermostErrorType(err error) string {
 // It is the same property the merged artifact depends on: the union of
 // these sets is the run's own statement of what it covered, and a reader
 // checks that union against the annex to prove nothing was dropped.
+//
+// PositiveArmNeverAttempted rows are excluded (CHAOS-4386 answer-rate
+// follow-up, codex review confirmation pass 2, P2, confirmed):
+// chaos4386PositiveArmNeverAttemptedRow's turn-1-error branch adds a row
+// for a case whose positive arm never even got a chance to run, solely so
+// chaos4386TwoTurnAnswerRate's own denominator scan can see it -- letting
+// that row ALSO satisfy "a row exists if and only if an arm ran for that
+// case" above would let this shard's coverage claim (and the merged
+// artifact's own union) report a case as covered when the shard never
+// actually reached it.
 func twoTurnCaseIndicesFromResults(results []twoTurnCaseResult) []int {
 	seen := make(map[int]struct{}, len(results))
 	indices := make([]int, 0, len(results))
 	for _, r := range results {
+		if r.PositiveArmNeverAttempted {
+			continue
+		}
 		if _, exists := seen[r.Index]; exists {
 			continue
 		}
@@ -4548,6 +4561,22 @@ type twoTurnCaseResult struct {
 	ClaimedFactsCount int    `json:"claimed_facts_count"`
 	RowsCount         int    `json:"rows_count"`
 	TerminalReason    string `json:"terminal_reason,omitempty"`
+	// PositiveArmNeverAttempted (CHAOS-4386 answer-rate follow-up, codex
+	// review confirmation pass 2, P2, confirmed) is true ONLY for the
+	// synthetic row chaos4386PositiveArmNeverAttemptedRow's turn-1-error
+	// branch produces -- a case whose positive arm never even got a
+	// chance to run, added SOLELY so chaos4386TwoTurnAnswerRate's
+	// denominator scan can see it (own doc comment). Explicit, rather
+	// than inferred from an incidentally-empty field (e.g. Turn1Status):
+	// twoTurnCaseIndicesFromResults' own doc comment states "a row exists
+	// if and only if an arm ran for that case" as a load-bearing
+	// invariant (CHAOS-4100's own sharding-coverage derivation,
+	// provenance.sharding.case_indices and the merged artifact's own
+	// coverage union depend on it) -- this row structurally violates that
+	// invariant (turn 1 itself failed, nothing ran), so
+	// twoTurnCaseIndicesFromResults excludes any row with this set,
+	// keeping that invariant true for every OTHER row unchanged.
+	PositiveArmNeverAttempted bool `json:"positive_arm_never_attempted,omitempty"`
 }
 
 // twoTurnCaseResultIsAnomalous (CHAOS-4135) reports whether res trips one of
@@ -7517,6 +7546,15 @@ func chaos4386PositiveArmNeverAttemptedRow(index int, member string, tc trialCas
 		// reporting 0 bytes is internally inconsistent, and the run-wide
 		// ResultByteSamples population never repairs a per-row value.
 		row.ResultBytes, row.EstTokens = chaos4386MeasureResult(*turn1)
+	} else {
+		// PositiveArmNeverAttempted (codex review confirmation pass 2, P2,
+		// confirmed): turn1 itself failed -- nothing ran for this case at
+		// all -- so this row must not count as coverage. See the field's
+		// own doc comment (twoTurnCaseResult) and twoTurnCaseIndicesFromResults'
+		// own exclusion. Only this branch sets it: the disclosure-absent
+		// branch (turn1 != nil) genuinely reached and ran turn 1, so it
+		// stays real coverage.
+		row.PositiveArmNeverAttempted = true
 	}
 	twoTurnStampOutcome(&row, tc, nil)
 	twoTurnStampArmFailure(&row, reason, err)

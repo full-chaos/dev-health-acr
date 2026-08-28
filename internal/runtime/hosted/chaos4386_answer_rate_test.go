@@ -167,6 +167,16 @@ func TestChaos4386PositiveArmNeverAttemptedRow(t *testing.T) {
 		if row.TerminalStatus != "" || row.ClaimedFactsCount != 0 {
 			t.Errorf("TerminalStatus/ClaimedFactsCount = %q/%d, want empty/0 -- no real result was ever produced to measure", row.TerminalStatus, row.ClaimedFactsCount)
 		}
+		// codex review confirmation pass 2 (P2, confirmed): this row must
+		// not silently count as coverage in
+		// twoTurnCaseIndicesFromResults' own derivation -- turn 1 itself
+		// failed, nothing ran.
+		if !row.PositiveArmNeverAttempted {
+			t.Error("PositiveArmNeverAttempted is false, want true for a turn-1-error row")
+		}
+		if got := twoTurnCaseIndicesFromResults([]twoTurnCaseResult{row}); len(got) != 0 {
+			t.Errorf("twoTurnCaseIndicesFromResults = %v, want empty -- a case whose positive arm never even ran must not read as covered", got)
+		}
 
 		// End-to-end: exactly the shape codex's own round-1 finding
 		// described -- one case answers, one case's positive arm never
@@ -212,6 +222,15 @@ func TestChaos4386PositiveArmNeverAttemptedRow(t *testing.T) {
 		}
 		if row.ResultBytes == 0 {
 			t.Fatal("fixture measured 0 bytes -- fixture cannot distinguish the bug from the fix")
+		}
+		// codex review confirmation pass 2 (P2, confirmed): unlike the
+		// turn-1-error row, THIS row genuinely reached and ran turn 1, so
+		// it must count as real coverage.
+		if row.PositiveArmNeverAttempted {
+			t.Error("PositiveArmNeverAttempted is true, want false -- turn 1 genuinely ran for this case")
+		}
+		if got := twoTurnCaseIndicesFromResults([]twoTurnCaseResult{row}); len(got) != 1 || got[0] != 43 {
+			t.Errorf("twoTurnCaseIndicesFromResults = %v, want [43] -- a case that genuinely reached turn 1 must count as covered", got)
 		}
 
 		results := []twoTurnCaseResult{row}

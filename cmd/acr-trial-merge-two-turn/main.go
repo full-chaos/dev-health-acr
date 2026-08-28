@@ -692,6 +692,17 @@ type twoTurnCaseResult struct {
 	ClaimedFactsCount int    `json:"claimed_facts_count"`
 	RowsCount         int    `json:"rows_count"`
 	TerminalReason    string `json:"terminal_reason,omitempty"`
+	// PositiveArmNeverAttempted (CHAOS-4386 answer-rate follow-up, codex
+	// review confirmation pass 2, schema v41) mirrors twoTurnCaseResult's
+	// identically-named field byte-for-byte -- see the producer's own doc
+	// comment. Purely additive passthrough (Results concatenates
+	// verbatim); this tool needs no equivalent exclusion of its own --
+	// mergeReports UNIONS each shard's own already-correct
+	// Provenance.Sharding.CaseIndices (see its own "CaseIndices UNIONS"
+	// comment below) rather than re-deriving coverage from raw Results,
+	// so the producer's own exclusion (twoTurnCaseIndicesFromResults) is
+	// the only place this invariant needs enforcing.
+	PositiveArmNeverAttempted bool `json:"positive_arm_never_attempted,omitempty"`
 }
 
 // twoTurnSubjectKindID mirrors chaos3742_two_turn_confirmation_test.go's
