@@ -388,6 +388,16 @@ type nTurnCaseResult struct {
 	// never got past window, never needed a candidate, or sent candidate
 	// before window was ever applied.
 	CandidateOnlyTurnAttempted bool `json:"candidate_only_turn_attempted"`
+	// ResultBytes/EstTokens (CHAOS-4386) mirror
+	// twoTurnCaseResult.ResultBytes/EstTokens exactly -- see that field's
+	// own doc comment (chaos3742_two_turn_confirmation_test.go) and
+	// chaos4386MeasureResult (chaos4386_result_bytes.go). Measured off the
+	// LAST turn this case reached (the loop variable runNTurnCase's own
+	// FinalStatus/RowsCount/WrongCommit/WindowUnsafeCommit already read),
+	// whether or not that turn was decisive. Zero when turn 1 itself
+	// errored (ArmInvalidReason set, no result ever produced).
+	ResultBytes int64 `json:"result_bytes"`
+	EstTokens   int64 `json:"est_tokens"`
 }
 
 // nTurnReport is this class's own top-level artifact -- a single-shard
@@ -413,6 +423,22 @@ type nTurnReport struct {
 	CarryHitCount                   int `json:"carry_hit_count"`
 	CandidateOnlyTurnAttemptedCount int `json:"candidate_only_turn_attempted_count"`
 	TurnsTakenSum                   int `json:"turns_taken_sum"`
+
+	// MaxSerializedBytesConfigured/MaxResultBytes/P50ResultBytes/
+	// P99ResultBytes/OverMaxSerializedBytesCount/OverLegacy16KCount
+	// (CHAOS-4386) mirror twoTurnReport's identically-named fields exactly
+	// -- see that struct's own doc comment (chaos3742_two_turn_confirmation_test.go)
+	// and chaos4386ResultByteStats (chaos4386_result_bytes.go). This class
+	// runs a small, explicit seed set with no merge/sharding step (this
+	// struct's own top-of-block comment), so these are computed once,
+	// directly from report.Results, with no separate merge-tool mirror to
+	// keep in lockstep.
+	MaxSerializedBytesConfigured int64 `json:"max_serialized_bytes_configured"`
+	MaxResultBytes               int64 `json:"max_result_bytes"`
+	P50ResultBytes               int64 `json:"p50_result_bytes"`
+	P99ResultBytes               int64 `json:"p99_result_bytes"`
+	OverMaxSerializedBytesCount  int   `json:"over_max_serialized_bytes_count"`
+	OverLegacy16KCount           int   `json:"over_legacy_16k_count"`
 
 	Results []nTurnCaseResult `json:"results"`
 }
@@ -607,6 +633,9 @@ func runNTurnCase(t *testing.T, ctx context.Context, investigator contextfabric.
 			}
 		}
 	}
+	// CHAOS-4386: measured off result, the last turn this case reached --
+	// see nTurnCaseResult.ResultBytes' own doc comment.
+	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(result)
 	return res
 }
 
@@ -848,6 +877,18 @@ func TestChaos4360NTurnConfirmationCarry(t *testing.T) {
 	if !nTurnReportExercisedCarryTransition(report) {
 		t.Fatalf("none of the %d selected cases ever sent a candidate-only turn (PriorCandidateReceipts without PriorWindowReceipts) -- every case converged or stalled inside window-only turns, so this run never exercised the carry-specific transition CHAOS-4360 exists to measure; pass a seed set that needs a subject_candidate redemption after window settles", len(report.Results))
 	}
+
+	// CHAOS-4386: result_bytes run-level distribution, derived from the
+	// rows this run actually produced, once, immediately before
+	// serialization -- see nTurnReport's own doc comment.
+	report.MaxSerializedBytesConfigured = int64(cfg.MaxSerializedBytes)
+	resultByteValues := make([]int64, len(report.Results))
+	for i, res := range report.Results {
+		resultByteValues[i] = res.ResultBytes
+	}
+	report.MaxResultBytes, report.P50ResultBytes, report.P99ResultBytes,
+		report.OverMaxSerializedBytesCount, report.OverLegacy16KCount =
+		chaos4386ResultByteStats(resultByteValues, report.MaxSerializedBytesConfigured)
 
 	raw, merr := json.MarshalIndent(report, "", "  ")
 	if merr != nil {

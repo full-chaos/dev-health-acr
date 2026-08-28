@@ -327,7 +327,17 @@ import (
 // reportSchemaVersion -- see that constant's own doc comment for why no
 // test can assert cross-package agreement between the two literals
 // directly (a pre-existing limitation of every prior bump, not new here).
-const expectedSchemaVersion = "39"
+// expectedSchemaVersion "40" (CHAOS-4386): twoTurnCaseResult gained
+// ResultBytes/EstTokens, and twoTurnReport gained
+// MaxSerializedBytesConfigured/MaxResultBytes/P50ResultBytes/
+// P99ResultBytes/OverMaxSerializedBytesCount/OverLegacy16KCount -- see the
+// producer's own reportSchemaVersion "40" doc comment
+// (chaos3742_two_turn_confirmation_test.go) for what each field means.
+// MaxResultBytes/P50/P99/both over-budget counts are RECOMPUTED in
+// mergeReports below from the merged Results, never summed -- the SAME
+// "never trust a per-shard aggregate" discipline TimingSummary already
+// follows, via this file's own mirror of chaos4386ResultByteStats.
+const expectedSchemaVersion = "40"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -656,6 +666,14 @@ type twoTurnCaseResult struct {
 	// InferredWindowAlreadyWidest (CHAOS-4336 follow-up, schema v35)
 	// mirrors twoTurnCaseResult's identically-named field byte-for-byte.
 	InferredWindowAlreadyWidest bool `json:"inferred_window_already_widest"`
+	// ResultBytes/EstTokens (CHAOS-4386, schema v40) mirror
+	// twoTurnCaseResult's identically-named fields byte-for-byte -- see the
+	// producer's own doc comment. Purely additive passthrough: Results
+	// concatenates verbatim across shards, so no merge arithmetic changes
+	// for this block itself (the report-level distribution fields ARE
+	// recomputed -- see mergeReports).
+	ResultBytes int64 `json:"result_bytes"`
+	EstTokens   int64 `json:"est_tokens"`
 }
 
 // twoTurnSubjectKindID mirrors chaos3742_two_turn_confirmation_test.go's
@@ -804,6 +822,62 @@ type twoTurnReport struct {
 	ConfirmedKindVectorCensusQueryCountSum         int            `json:"confirmed_kind_vector_census_query_count_sum,omitempty"`
 	ConfirmedKindVectorCensusRivalCountAboveTauSum int64          `json:"confirmed_kind_vector_census_rival_count_above_tau_sum,omitempty"`
 	ConfirmedKindVectorCensusDurationMSSum         int64          `json:"confirmed_kind_vector_census_duration_ms_sum,omitempty"`
+	// MaxSerializedBytesConfigured/MaxResultBytes/P50ResultBytes/
+	// P99ResultBytes/OverMaxSerializedBytesCount/OverLegacy16KCount
+	// (CHAOS-4386, schema v40) mirror twoTurnReport's identically-named
+	// fields -- see the producer's own doc comment. MaxSerializedBytesConfigured
+	// rides through from the first shard (every shard of one run shares one
+	// config by construction, same as ResponderModel); the rest are
+	// RECOMPUTED from the merged Results in mergeReports, never summed --
+	// see chaos4386ResultByteStats below.
+	MaxSerializedBytesConfigured int64 `json:"max_serialized_bytes_configured"`
+	MaxResultBytes               int64 `json:"max_result_bytes"`
+	P50ResultBytes               int64 `json:"p50_result_bytes"`
+	P99ResultBytes               int64 `json:"p99_result_bytes"`
+	OverMaxSerializedBytesCount  int   `json:"over_max_serialized_bytes_count"`
+	OverLegacy16KCount           int   `json:"over_legacy_16k_count"`
+}
+
+// chaos4386LegacyResponseByteCap mirrors
+// chaos4386_result_bytes_helpers_test.go's identically-named constant
+// byte-for-byte (CHAOS-4386) -- see that file's own doc comment for what
+// the retired legacy cap was and why it is compared separately from
+// MaxSerializedBytesConfigured.
+const chaos4386LegacyResponseByteCap = 16_000
+
+// chaos4386ResultByteStats mirrors chaos4386_result_bytes_helpers_test.go's
+// identically-named function byte-for-byte -- this tool cannot import that
+// package-internal test file (the same reason summarizeTwoTurnTiming is
+// duplicated here rather than shared), so this is a hand-maintained mirror
+// like everything else in this file.
+func chaos4386ResultByteStats(resultBytes []int64, configuredMax int64) (max, p50, p99 int64, overConfiguredMax, overLegacy16K int) {
+	values := make([]int64, 0, len(resultBytes))
+	for _, b := range resultBytes {
+		if b <= 0 {
+			continue
+		}
+		values = append(values, b)
+		if b > max {
+			max = b
+		}
+		if b > configuredMax {
+			overConfiguredMax++
+		}
+		if b > chaos4386LegacyResponseByteCap {
+			overLegacy16K++
+		}
+	}
+	if len(values) == 0 {
+		return 0, 0, 0, overConfiguredMax, overLegacy16K
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	p50 = values[len(values)/2]
+	p99Index := len(values) * 99 / 100
+	if p99Index >= len(values) {
+		p99Index = len(values) - 1
+	}
+	p99 = values[p99Index]
+	return max, p50, p99, overConfiguredMax, overLegacy16K
 }
 
 func main() {
@@ -1072,13 +1146,18 @@ func validateResultUniqueness(shards []twoTurnReport, paths []string) error {
 func mergeReports(shards []twoTurnReport) twoTurnReport {
 	first := shards[0]
 	merged := twoTurnReport{
-		ReportSchemaVersion:                 first.ReportSchemaVersion,
-		Provenance:                          first.Provenance,
-		BaseSHA:                             first.BaseSHA,
-		OracleAnnexPath:                     first.OracleAnnexPath,
-		OracleAnnexCorpusSHA:                first.OracleAnnexCorpusSHA,
-		OracleAnnexSignedOff:                first.OracleAnnexSignedOff,
-		AnnexSignoffStale:                   first.AnnexSignoffStale,
+		ReportSchemaVersion:  first.ReportSchemaVersion,
+		Provenance:           first.Provenance,
+		BaseSHA:              first.BaseSHA,
+		OracleAnnexPath:      first.OracleAnnexPath,
+		OracleAnnexCorpusSHA: first.OracleAnnexCorpusSHA,
+		OracleAnnexSignedOff: first.OracleAnnexSignedOff,
+		AnnexSignoffStale:    first.AnnexSignoffStale,
+		// MaxSerializedBytesConfigured (CHAOS-4386) rides through from the
+		// first shard, same as every other config-shaped provenance field
+		// in this constructor -- every shard of one run shares one config
+		// by construction.
+		MaxSerializedBytesConfigured:        first.MaxSerializedBytesConfigured,
 		OfferMissCount:                      map[string]int{},
 		ConfirmedWrongRedeemedCount:         map[string]int{},
 		MutationProbesTripped:               map[string]int{},
@@ -1164,6 +1243,16 @@ func mergeReports(shards []twoTurnReport) twoTurnReport {
 		merged.Timings = append(merged.Timings, s.Timings...)
 	}
 	merged.TimingSummary = summarizeTwoTurnTiming(merged.Timings)
+
+	// CHAOS-4386: recomputed from the MERGED Results, never trusted from
+	// any one shard -- same discipline as TimingSummary immediately above.
+	resultByteValues := make([]int64, len(merged.Results))
+	for i, res := range merged.Results {
+		resultByteValues[i] = res.ResultBytes
+	}
+	merged.MaxResultBytes, merged.P50ResultBytes, merged.P99ResultBytes,
+		merged.OverMaxSerializedBytesCount, merged.OverLegacy16KCount =
+		chaos4386ResultByteStats(resultByteValues, merged.MaxSerializedBytesConfigured)
 
 	merged.ApplicableMembers = make([]string, 0, len(applicableSeen))
 	for m := range applicableSeen {

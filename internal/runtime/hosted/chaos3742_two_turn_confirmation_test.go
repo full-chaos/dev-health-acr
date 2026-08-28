@@ -4520,6 +4520,20 @@ type twoTurnCaseResult struct {
 	// window_gated_silent=2/65 (cases 53/56, both confirmed all_time via
 	// a by-hand annex cross-check) needed a side lookup to resolve.
 	InferredWindowAlreadyWidest bool `json:"inferred_window_already_widest"`
+	// ResultBytes/EstTokens (CHAOS-4386, schema v40) are this row's own
+	// final InvestigationResult measured with api.MarshalContextFabricResponse
+	// -- the SAME encoder internal/api/context_fabric_routes.go's POST
+	// /investigations route uses to decide whether a response fits
+	// ACR_MAX_SERIALIZED_BYTES, never a second independent json.Marshal.
+	// EstTokens mirrors that route's own (bytes+3)/4 estimate. Populated on
+	// every row that reached a real Investigate() result (every arm's own
+	// success path); left at the zero value on an OfferMiss/ArmInvalid row,
+	// where no result was ever produced to measure -- see
+	// chaos4386ResultByteStats' own doc comment for why 0 is excluded from
+	// the run-level distribution rather than treated as a legitimately tiny
+	// result.
+	ResultBytes int64 `json:"result_bytes"`
+	EstTokens   int64 `json:"est_tokens"`
 }
 
 // twoTurnCaseResultIsAnomalous (CHAOS-4135) reports whether res trips one of
@@ -4637,7 +4651,29 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // annex's chris-approved signoff names an older corpus_sha8 than the
 // live one, per-run informational flag, cross-shard-consistency-checked
 // and first-shard-wins like OracleAnnexSignedOff, no merge arithmetic).
-const reportSchemaVersion = "39"
+//
+// "40" (CHAOS-4386, Run I finding 2026-08-27 22:23 PDT): this harness
+// calls investigator.Investigate() in-process and had never once
+// traversed the HTTP route's own limits.Claim.CompleteWithBudget gate
+// (ACR_MAX_SERIALIZED_BYTES) -- every prior run's only size signal was
+// the responder's raw per-model-call output_bytes, an upstream proxy for,
+// never the assembled InvestigationResult the route actually bounds.
+// twoTurnCaseResult gains ResultBytes/EstTokens (own doc comment); this
+// report gains MaxSerializedBytesConfigured (the ACR_MAX_SERIALIZED_BYTES
+// this run's own config.Load() resolved), MaxResultBytes/P50ResultBytes/
+// P99ResultBytes, and OverMaxSerializedBytesCount/OverLegacy16KCount --
+// see chaos4386ResultByteStats' own doc comment (chaos4386_result_bytes.go)
+// for exactly how the distribution and both over-budget counts are
+// computed, and for chaos4386LegacyResponseByteCap's own doc comment for
+// what the retired legacy cap was. Purely additive; the merge tool's own
+// mirror (cmd/acr-trial-merge-two-turn/main.go) gained the matching
+// fields and its own copy of chaos4386ResultByteStats in the same
+// change, same "an undeclared field is dropped on decode" reason every
+// prior bump needed it for -- MaxResultBytes/P50/P99/OverMaxSerializedBytesCount/
+// OverLegacy16KCount are RECOMPUTED there from the merged Results, never
+// summed, the same "never trust a per-shard aggregate" discipline
+// TimingSummary/AntiVacuityValid already follow.
+const reportSchemaVersion = "40"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -5720,6 +5756,26 @@ type twoTurnReport struct {
 	ConfirmedKindVectorCensusQueryCountSum         int   `json:"confirmed_kind_vector_census_query_count_sum,omitempty"`
 	ConfirmedKindVectorCensusRivalCountAboveTauSum int64 `json:"confirmed_kind_vector_census_rival_count_above_tau_sum,omitempty"`
 	ConfirmedKindVectorCensusDurationMSSum         int64 `json:"confirmed_kind_vector_census_duration_ms_sum,omitempty"`
+	// MaxSerializedBytesConfigured/MaxResultBytes/P50ResultBytes/
+	// P99ResultBytes/OverMaxSerializedBytesCount/OverLegacy16KCount
+	// (CHAOS-4386, schema v40) are this run's own result_bytes distribution
+	// -- see reportSchemaVersion's own "40" doc comment and
+	// chaos4386ResultByteStats (chaos4386_result_bytes.go) for exactly how
+	// they are derived from report.Results, once, immediately before
+	// serialization -- the SAME "derived from the rows this shard actually
+	// produced, not accumulated in the loop" discipline
+	// SynthesisStatusOverrideUncommittedCount/FactlessCommittedCount above
+	// already use. MaxSerializedBytesConfigured is this run's own
+	// cfg.MaxSerializedBytes (config.Load()'s resolved ACR_MAX_SERIALIZED_BYTES),
+	// not a hardcoded literal -- the threshold OverMaxSerializedBytesCount
+	// is measured against. OverLegacy16KCount is measured against the
+	// separate, retired chaos4386LegacyResponseByteCap constant.
+	MaxSerializedBytesConfigured int64 `json:"max_serialized_bytes_configured"`
+	MaxResultBytes               int64 `json:"max_result_bytes"`
+	P50ResultBytes               int64 `json:"p50_result_bytes"`
+	P99ResultBytes               int64 `json:"p99_result_bytes"`
+	OverMaxSerializedBytesCount  int   `json:"over_max_serialized_bytes_count"`
+	OverLegacy16KCount           int   `json:"over_legacy_16k_count"`
 }
 
 // foldConfirmedKindVectorCensus is the single aggregation point for the
@@ -7267,6 +7323,9 @@ func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator conte
 	// oracle-selected receipt need not be the SAME tier composeWindowExpandOption
 	// recommended).
 	res.Turn2WindowExpandAccepted = twoTurnWindowExpandAccepted(turn1, turn2.ConfirmedStructure)
+	// CHAOS-4386: measured off turn2, this arm's own final result -- see
+	// twoTurnCaseResult.ResultBytes' own doc comment.
+	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(turn2)
 	return res
 }
 
@@ -8068,6 +8127,9 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 			}
 		}
 	}
+	// CHAOS-4386: measured off result, this arm's own final (hinted) call --
+	// see twoTurnCaseResult.ResultBytes' own doc comment.
+	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(result)
 	return res
 }
 
@@ -8572,6 +8634,9 @@ func runTwoTurnConfirmedWrongArm(t *testing.T, ctx context.Context, investigator
 	res.WrongCommit = twoTurnCommittedWrong(turn2.SubjectResolution.Committed, tc)
 	twoTurnStampOutcome(&res, tc, turn2.SubjectResolution.Committed)
 	twoTurnStampDecision(&res, trace)
+	// CHAOS-4386: measured off turn2, this arm's own final result -- see
+	// twoTurnCaseResult.ResultBytes' own doc comment.
+	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(turn2)
 	return res
 }
 
@@ -8745,6 +8810,9 @@ func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Inves
 		if requireStale {
 			res.MutationTripped = res.MutationTripped && staleDisposition
 		}
+		// CHAOS-4386: measured off result, this probe's own final call -- see
+		// twoTurnCaseResult.ResultBytes' own doc comment.
+		res.ResultBytes, res.EstTokens = chaos4386MeasureResult(result)
 		return res
 	}
 
@@ -9820,6 +9888,21 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// CHAOS-4058: run-level timing aggregate, observational only -- see
 	// twoTurnArmTimingSummary's own doc comment.
 	report.TimingSummary = summarizeTwoTurnTiming(report.Timings)
+
+	// CHAOS-4386: result_bytes run-level distribution, derived from the
+	// rows this shard actually produced, once, immediately before
+	// serialization -- same discipline as TimingSummary immediately above.
+	// cfg.MaxSerializedBytes is this run's own resolved
+	// ACR_MAX_SERIALIZED_BYTES (config.Load() above), never a hardcoded
+	// literal.
+	report.MaxSerializedBytesConfigured = int64(cfg.MaxSerializedBytes)
+	resultByteValues := make([]int64, len(report.Results))
+	for i, res := range report.Results {
+		resultByteValues[i] = res.ResultBytes
+	}
+	report.MaxResultBytes, report.P50ResultBytes, report.P99ResultBytes,
+		report.OverMaxSerializedBytesCount, report.OverLegacy16KCount =
+		chaos4386ResultByteStats(resultByteValues, report.MaxSerializedBytesConfigured)
 
 	// CHAOS-4100: coverage recorded from the rows this shard actually
 	// produced, immediately before the artifact is serialized -- see

@@ -180,11 +180,13 @@ func TestFoldConfirmedKindVectorCensus_AccumulatesAcrossCalls(t *testing.T) {
 // literal (never the assertion's SHAPE) on every future bump, same
 // discipline reportSchemaVersion's own doc comment already documents.
 // CHAOS-4314's own rebase onto CHAOS-4313's second bump (#287, v32,
-// responder_effort) is exactly that next bump: v33.
+// responder_effort) is exactly that next bump: v33. CHAOS-4386's own bump to
+// v40 (result_bytes/est_tokens plus the run-level result-bytes distribution)
+// is the next one after that.
 func TestTwoTurnReport_SchemaVersionPin(t *testing.T) {
 	t.Parallel()
-	if reportSchemaVersion != "39" {
-		t.Errorf("reportSchemaVersion = %q, want %q (CHAOS-4348 corpus/annex sync bump, following CHAOS-4348's own v38: oracle_id_scheme_mismatch)", reportSchemaVersion, "39")
+	if reportSchemaVersion != "40" {
+		t.Errorf("reportSchemaVersion = %q, want %q (CHAOS-4386: result_bytes/est_tokens per row, plus the run-level result-bytes distribution)", reportSchemaVersion, "40")
 	}
 }
 

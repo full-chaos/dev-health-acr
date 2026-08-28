@@ -477,6 +477,21 @@ func marshalContextFabricResponse(payload any) (encoded []byte, measuredBytes in
 	return encoded, int64(len(encoded)), nil
 }
 
+// MarshalContextFabricResponse is marshalContextFabricResponse's exported
+// form (CHAOS-4386): the trial harness (internal/runtime/hosted) calls
+// investigator.Investigate() in-process and never traverses this route's
+// own limits.Claim.CompleteWithBudget gate, so every measured "did this
+// response fit" number the harness reports up to now was the responder's
+// raw model-completion output_bytes -- a smaller upstream proxy, never the
+// assembled InvestigationResult (Rows, evidence, drivers) this gate
+// actually bounds. Exporting this lets the harness measure a case's
+// per-result byte count with the EXACT SAME encoder this route uses,
+// instead of a second, independently-drifting json.Marshal call -- see
+// this ticket's own reuse-not-duplicate instruction.
+func MarshalContextFabricResponse(payload any) (encoded []byte, measuredBytes int64, err error) {
+	return marshalContextFabricResponse(payload)
+}
+
 // logContextFabricResponseBudgetExceeded is the CHAOS-4355 response-bound
 // follow-up's decision-basis telemetry (CANONICAL ARCHITECTURE's
 // diagnosis-in-artifacts rule): every time a Context Fabric response fails

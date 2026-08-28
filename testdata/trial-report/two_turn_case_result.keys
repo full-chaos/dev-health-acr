@@ -18,6 +18,7 @@ committed_subjects
 confirmed_kind_rescue_fired
 confirmed_kind_rescue_result_count
 confirmed_kind_rescue_truncated
+est_tokens
 evidence_round_entered
 evidence_round_reason
 expected_id
@@ -58,6 +59,7 @@ pair_retried
 pair_retry_first_arm_invalid_error_type
 pair_retry_first_arm_invalid_reason
 pair_retry_first_arm_invalid_stage
+result_bytes
 reused
 search_truncated
 shadow_kind_insensitivity_evaluated
