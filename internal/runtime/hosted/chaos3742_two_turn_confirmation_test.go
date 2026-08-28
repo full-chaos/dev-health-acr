@@ -9800,8 +9800,22 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			// terminal result here (codex review round 2, P1, confirmed --
 			// see chaos4386PositiveArmNeverAttemptedRow's own doc comment
 			// for the case-resolved-directly-on-turn-1 bug this closes).
-			report.Results = append(report.Results, chaos4386PositiveArmNeverAttemptedRow(
-				entry.Index, entry.Member, tc, &turn1, "turn 1 produced no structure/window disclosure -- positive arm never attempted", nil))
+			neverAttempted := chaos4386PositiveArmNeverAttemptedRow(
+				entry.Index, entry.Member, tc, &turn1, "turn 1 produced no structure/window disclosure -- positive arm never attempted", nil)
+			// twoTurnFoldSynthesisStatusOverride/twoTurnStampTurn1Facts
+			// (codex review confirmation pass 5, P2, confirmed): the
+			// direct append above used to bypass both, even though
+			// turn1SynthesisOverride/turn1Facts were already captured for
+			// THIS case above -- every row for a case shares one turn 1,
+			// the SAME sharing the real positive-arm success path already
+			// relies on (identical two calls, right after
+			// runTwoTurnPositiveArm returns, further down). Without this,
+			// the row lost its decision-basis fields, and
+			// SynthesisStatusOverrideUncommittedCount/OracleIDSchemeMismatchCount
+			// (both derived from these rows) could undercount.
+			twoTurnFoldSynthesisStatusOverride(&neverAttempted, turn1SynthesisOverride)
+			twoTurnStampTurn1Facts(&neverAttempted, turn1Facts)
+			report.Results = append(report.Results, neverAttempted)
 			continue
 		}
 

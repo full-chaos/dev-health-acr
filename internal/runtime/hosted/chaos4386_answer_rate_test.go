@@ -10,6 +10,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -341,5 +342,74 @@ func TestChaos4386RunTwoTurnPositiveArmOfferMissStampsTerminalFieldsFromTurn1(t 
 	}
 	if res.ResultBytes != wantBytes || res.EstTokens != wantTokens {
 		t.Errorf("ResultBytes/EstTokens = %d/%d, want %d/%d -- turn1's own real terminal result must be measured, not left at 0", res.ResultBytes, res.EstTokens, wantBytes, wantTokens)
+	}
+}
+
+// TestChaos4386NoDisclosureRowCarriesDecisionBasisFields is the codex
+// review confirmation pass 5 (P2, confirmed) regression: the main replay
+// loop's no-disclosure branch builds its synthetic row via
+// chaos4386PositiveArmNeverAttemptedRow and then ALSO folds
+// turn1SynthesisOverride/stamps turn1Facts onto it (mirroring the real
+// positive-arm success path's own identical two calls) -- this pins that
+// the row a caller reusing that exact sequence produces carries the
+// decision-basis fields, and that the report-level counters derived from
+// them (SynthesisStatusOverrideUncommittedCount/OracleIDSchemeMismatchCount)
+// count it. Before the fix, the loop appended
+// chaos4386PositiveArmNeverAttemptedRow's own return value directly,
+// bypassing both calls entirely.
+func TestChaos4386NoDisclosureRowCarriesDecisionBasisFields(t *testing.T) {
+	// ExpectKind="repository" + a canonical ID that does not start with
+	// "repository:" deterministically trips oracleIDSchemeMismatch's own
+	// prefix check (stable, unmigrated kinds) -- see that function's own
+	// doc comment.
+	tc := trialCase{Question: "fixture question, never real corpus text", ExpectKind: "repository", ExpectID: "wrong_scheme_no_prefix"}
+	turn1 := contractsv1.ContextFabricInvestigationResult{Status: contractsv1.ContextFabricInvestigationComplete}
+	// A non-nil (even if otherwise empty) trace is required:
+	// twoTurnCaptureTurn1Facts returns early on a nil trace, before ever
+	// reaching the OracleIDSchemeMismatch computation -- see that
+	// function's own doc comment. The real loop always passes a live,
+	// non-nil traceCapture for the whole run.
+	trace := &twoTurnTraceCapture{}
+	turn1Facts := twoTurnCaptureTurn1Facts(trace, turn1, tc)
+	if !turn1Facts.OracleIDSchemeMismatch {
+		t.Fatal("fixture turn1Facts.OracleIDSchemeMismatch = false, want true -- fixture does not reproduce the mismatch this test exists to exercise")
+	}
+	synthesisOverride := &contextfabric.SynthesisStatusOverrideOutcome{
+		From: "clarification_required", To: "no_match",
+		Reason: contextfabric.SynthesisStatusOverrideClarificationUnavailableUncommitted, CommittedCount: 0,
+	}
+
+	row := chaos4386PositiveArmNeverAttemptedRow(45, "expected_kind", tc, &turn1, "turn 1 produced no structure/window disclosure -- positive arm never attempted", nil)
+	// The exact sequence the fixed loop now runs, matching the real
+	// positive-arm success path's own identical two calls.
+	twoTurnFoldSynthesisStatusOverride(&row, synthesisOverride)
+	twoTurnStampTurn1Facts(&row, turn1Facts)
+
+	if !row.OracleIDSchemeMismatch {
+		t.Error("row.OracleIDSchemeMismatch = false, want true -- twoTurnStampTurn1Facts must have been applied")
+	}
+	if !row.SynthesisStatusOverrideFired || row.SynthesisStatusOverrideReason != string(contextfabric.SynthesisStatusOverrideClarificationUnavailableUncommitted) {
+		t.Errorf("SynthesisStatusOverrideFired/Reason = %v/%q, want true/%q -- twoTurnFoldSynthesisStatusOverride must have been applied", row.SynthesisStatusOverrideFired, row.SynthesisStatusOverrideReason, contextfabric.SynthesisStatusOverrideClarificationUnavailableUncommitted)
+	}
+
+	// The SAME report-level derivation TestChaos3742TwoTurnConfirmationReplay
+	// runs, once, immediately before serialization (a plain scan over
+	// report.Results) -- proving this row is actually counted, not merely
+	// carrying the right fields in isolation.
+	results := []twoTurnCaseResult{row}
+	var synthesisStatusOverrideUncommittedCount, oracleIDSchemeMismatchCount int
+	for _, r := range results {
+		if r.SynthesisStatusOverrideReason == string(contextfabric.SynthesisStatusOverrideClarificationUnavailableUncommitted) {
+			synthesisStatusOverrideUncommittedCount++
+		}
+		if r.OracleIDSchemeMismatch {
+			oracleIDSchemeMismatchCount++
+		}
+	}
+	if synthesisStatusOverrideUncommittedCount != 1 {
+		t.Errorf("SynthesisStatusOverrideUncommittedCount = %d, want 1", synthesisStatusOverrideUncommittedCount)
+	}
+	if oracleIDSchemeMismatchCount != 1 {
+		t.Errorf("OracleIDSchemeMismatchCount = %d, want 1", oracleIDSchemeMismatchCount)
 	}
 }
