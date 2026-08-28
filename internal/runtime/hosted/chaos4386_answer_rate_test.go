@@ -27,7 +27,19 @@ func TestChaos4386TerminalReason(t *testing.T) {
 			t.Errorf("chaos4386TerminalReason(complete) = %q, want empty", got)
 		}
 	})
-	t.Run("clarification_required with a reason classifies as clarification_reason_disclosed, never the raw text", func(t *testing.T) {
+	t.Run("clarification_required with SubjectResolution.ClarificationPrompt (the engine's own ordinary disclosure channel) classifies as clarification_reason_disclosed, never the raw text", func(t *testing.T) {
+		// codex review round 4/confirmation pass (P2, confirmed): this is
+		// the field the REAL ambiguous-candidate path populates
+		// (internal/contextfabric/unresolved.go's composeSubjectlessTerminal)
+		// -- Interpretation.ClarificationReason legitimately stays empty
+		// on this, the common, path.
+		result := chaos4386ResultWithStatus(contractsv1.ContextFabricInvestigationClarificationRequired)
+		result.SubjectResolution.ClarificationPrompt = "which project did you mean -- this raw text must never appear in the classification"
+		if got := chaos4386TerminalReason(result); got != "clarification_reason_disclosed" {
+			t.Errorf("chaos4386TerminalReason = %q, want %q (a closed class, not the raw text)", got, "clarification_reason_disclosed")
+		}
+	})
+	t.Run("clarification_required with Interpretation.ClarificationReason (the secondary, model-interpretation channel) classifies as clarification_reason_disclosed, never the raw text", func(t *testing.T) {
 		result := chaos4386ResultWithStatus(contractsv1.ContextFabricInvestigationClarificationRequired)
 		result.Interpretation.ClarificationReason = "ambiguous subject -- this raw text must never appear in the classification"
 		if got := chaos4386TerminalReason(result); got != "clarification_reason_disclosed" {

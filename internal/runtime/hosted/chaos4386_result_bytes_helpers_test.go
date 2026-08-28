@@ -244,9 +244,20 @@ func (m *chaos4386MeasuringInvestigator) snapshot() []int64 {
 // a fixed small enum -- the same risk, lower severity.
 //
 // There is no single unified "reason" field on
-// ContextFabricInvestigationResult: Interpretation.ClarificationReason is
-// the field the engine populates for clarification_required specifically;
-// every other non-complete status (partial/degraded/no_match) carries its
+// ContextFabricInvestigationResult. For clarification_required, the
+// engine's OWN disclosure channel is SubjectResolution.ClarificationPrompt
+// (internal/contextfabric/unresolved.go's composeSubjectlessTerminal:
+// "if status == InvestigationClarificationRequired && resolution.ClarificationPrompt
+// != \"\" { answer += \" \" + resolution.ClarificationPrompt }") -- the
+// ordinary ambiguous-candidate path populates THIS field, not
+// Interpretation.ClarificationReason (codex review round 4/confirmation
+// pass, P2, confirmed: that field belongs to the INTERPRETATION step and
+// can legitimately stay empty on a normal clarification_required result,
+// which made the original check misclassify the common case as
+// "undisclosed"). Interpretation.ClarificationReason is checked too, as a
+// secondary, independent channel, so a future/alternate path that
+// populates ONLY that field is still classified correctly. Every other
+// non-complete status (partial/degraded/no_match) carries its
 // explanation, when the engine gave one, in Coverage.DegradedReasons or,
 // failing that, Warnings.
 func chaos4386TerminalReason(result contractsv1.ContextFabricInvestigationResult) string {
@@ -254,7 +265,7 @@ func chaos4386TerminalReason(result contractsv1.ContextFabricInvestigationResult
 	case contractsv1.ContextFabricInvestigationComplete:
 		return ""
 	case contractsv1.ContextFabricInvestigationClarificationRequired:
-		if result.Interpretation.ClarificationReason != "" {
+		if result.SubjectResolution.ClarificationPrompt != "" || result.Interpretation.ClarificationReason != "" {
 			return "clarification_reason_disclosed"
 		}
 		return "undisclosed"
