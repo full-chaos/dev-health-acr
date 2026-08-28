@@ -128,45 +128,76 @@ func TestChaos4386TwoTurnAnswerRate(t *testing.T) {
 	})
 }
 
-// TestChaos4386PositiveArmNeverAttemptedRow is the codex review round 1
-// (P1, confirmed) regression for the two-turn side: an oracle-eligible
-// case whose positive arm never even got attempted (turn 1 errored, or
-// produced no disclosure) must still produce a row -- ExpectedID
-// populated, ArmInvalidReason set, TerminalStatus left at its zero value
-// (so it never satisfies the "complete" numerator check) -- or the case
-// would be entirely invisible to chaos4386TwoTurnAnswerRate's denominator.
+// TestChaos4386PositiveArmNeverAttemptedRow is the codex review rounds 1+2
+// regression for the two-turn side.
 func TestChaos4386PositiveArmNeverAttemptedRow(t *testing.T) {
 	tc := trialCase{Question: "fixture question, never real corpus text", ExpectKind: "project", ExpectID: "project.v2:fixture:chaos4386neverattempted"}
-	row := chaos4386PositiveArmNeverAttemptedRow(42, "expected_kind", tc, contractsv1.ContextFabricInvestigationClarificationRequired, "turn 1 investigate error: rate_limited", nil)
 
-	if row.Index != 42 || row.Member != "expected_kind" {
-		t.Errorf("Index/Member = %d/%q, want 42/%q", row.Index, row.Member, "expected_kind")
-	}
-	if row.Arm != string(twoTurnArmPositive) {
-		t.Errorf("Arm = %q, want %q", row.Arm, twoTurnArmPositive)
-	}
-	if row.ExpectedID != tc.ExpectID {
-		t.Errorf("ExpectedID = %q, want %q -- chaos4386TwoTurnAnswerRate's own denominator gate reads this field", row.ExpectedID, tc.ExpectID)
-	}
-	if row.ArmInvalidReason == "" {
-		t.Error("ArmInvalidReason is empty, want a reason recorded")
-	}
-	if row.TerminalStatus != "" {
-		t.Errorf("TerminalStatus = %q, want empty (the zero value -- no result was ever produced to measure)", row.TerminalStatus)
-	}
+	t.Run("turn1 error (nil result): terminal fields stay at the zero value", func(t *testing.T) {
+		// Round 1 (P1, confirmed): an oracle-eligible case whose positive
+		// arm never even got attempted must still produce a row -- or the
+		// case would be entirely invisible to
+		// chaos4386TwoTurnAnswerRate's denominator.
+		row := chaos4386PositiveArmNeverAttemptedRow(42, "expected_kind", tc, nil, "turn 1 investigate error: rate_limited", nil)
 
-	// End-to-end: exactly the shape codex's own finding described -- one
-	// case answers, one case's positive arm never even ran. The rate must
-	// read 0.5, never 1.0 (which is what scanning ONLY rows that actually
-	// reached a real Investigate() call would report).
-	results := []twoTurnCaseResult{
-		twoTurnAnswerRateRow("positive", "project.v2:answered", "complete", 1),
-		row,
-	}
-	got := chaos4386TwoTurnAnswerRate(results)
-	if want := 0.5; got != want {
-		t.Errorf("chaos4386TwoTurnAnswerRate = %v, want %v -- the never-attempted row must count as an unanswered denominator entry, not disappear", got, want)
-	}
+		if row.Index != 42 || row.Member != "expected_kind" {
+			t.Errorf("Index/Member = %d/%q, want 42/%q", row.Index, row.Member, "expected_kind")
+		}
+		if row.Arm != string(twoTurnArmPositive) {
+			t.Errorf("Arm = %q, want %q", row.Arm, twoTurnArmPositive)
+		}
+		if row.ExpectedID != tc.ExpectID {
+			t.Errorf("ExpectedID = %q, want %q -- chaos4386TwoTurnAnswerRate's own denominator gate reads this field", row.ExpectedID, tc.ExpectID)
+		}
+		if row.ArmInvalidReason == "" {
+			t.Error("ArmInvalidReason is empty, want a reason recorded")
+		}
+		if row.TerminalStatus != "" || row.ClaimedFactsCount != 0 {
+			t.Errorf("TerminalStatus/ClaimedFactsCount = %q/%d, want empty/0 -- no real result was ever produced to measure", row.TerminalStatus, row.ClaimedFactsCount)
+		}
+
+		// End-to-end: exactly the shape codex's own round-1 finding
+		// described -- one case answers, one case's positive arm never
+		// even ran. The rate must read 0.5, never 1.0 (which is what
+		// scanning ONLY rows that actually reached a real Investigate()
+		// call would report).
+		results := []twoTurnCaseResult{
+			twoTurnAnswerRateRow("positive", "project.v2:answered", "complete", 1),
+			row,
+		}
+		got := chaos4386TwoTurnAnswerRate(results)
+		if want := 0.5; got != want {
+			t.Errorf("chaos4386TwoTurnAnswerRate = %v, want %v -- the never-attempted row must count as an unanswered denominator entry, not disappear", got, want)
+		}
+	})
+
+	t.Run("disclosure absent (turn1 IS the real terminal result): a case resolved directly on turn 1 counts as answered", func(t *testing.T) {
+		// Round 2 (P1, confirmed): the disclosure-absent branch's turn1
+		// can ALREADY be a complete, fact-bearing answer (no confirmation
+		// needed, hence no disclosure) -- the original always-zero
+		// terminal fields silently miscounted that case as unanswered.
+		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: tc.ExpectID}
+		turn1 := contractsv1.ContextFabricInvestigationResult{
+			Status: contractsv1.ContextFabricInvestigationComplete,
+			ClaimedFacts: []contractsv1.ContextFabricClaimedFact{
+				{ClaimID: "c1", Kind: contractsv1.ContextFabricFactInvestment, Subject: subject},
+			},
+		}
+		row := chaos4386PositiveArmNeverAttemptedRow(43, "expected_kind", tc, &turn1, "turn 1 produced no structure/window disclosure -- positive arm never attempted", nil)
+
+		if row.TerminalStatus != "complete" || row.ClaimedFactsCount != 1 {
+			t.Errorf("TerminalStatus/ClaimedFactsCount = %q/%d, want %q/1 -- turn1 IS this row's real terminal result", row.TerminalStatus, row.ClaimedFactsCount, "complete")
+		}
+		if row.ArmInvalidReason == "" {
+			t.Error("ArmInvalidReason is empty, want a reason recorded (the positive arm still never literally ran)")
+		}
+
+		results := []twoTurnCaseResult{row}
+		got := chaos4386TwoTurnAnswerRate(results)
+		if want := 1.0; got != want {
+			t.Errorf("chaos4386TwoTurnAnswerRate = %v, want %v -- a case resolved directly on turn 1 must count as answered, not silently understate the rate", got, want)
+		}
+	})
 }
 
 // nTurnAnswerRateRow mirrors twoTurnAnswerRateRow's own shape for

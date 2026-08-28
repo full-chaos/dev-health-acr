@@ -746,7 +746,24 @@ func runNTurnCase(t *testing.T, ctx context.Context, investigator contextfabric.
 	// confirmed) for why a turn that errored must not contribute its
 	// zero-value return to this measurement.
 	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(lastGoodResult)
-	res.TerminalStatus, res.ClaimedFactsCount, _, res.TerminalReason = chaos4386TerminalFields(lastGoodResult)
+	// TerminalStatus/ClaimedFactsCount/TerminalReason (codex review round
+	// 2, P2, confirmed): stamped from lastGoodResult ONLY when the last
+	// ATTEMPTED turn also succeeded (res.ArmInvalidReason == "", set only
+	// by the loop's own turn-error break above -- the turn-1 error path
+	// returns earlier and never reaches here at all). When the last
+	// attempted turn failed, lastGoodResult is an EARLIER, merely
+	// intermediate turn -- stamping its status/facts/reason here would
+	// misreport an intermediate response as this case's terminal outcome
+	// while ArmInvalidReason simultaneously (and correctly) records the
+	// later failure. Left at the zero value in that case, matching
+	// ResultBytes/EstTokens' OWN "no valid terminal result" discipline
+	// one layer up (this measurement, unlike those two, is about not
+	// mislabeling an intermediate result as terminal, not about avoiding
+	// a fabricated zero-value result -- a different reason, same shape of
+	// fix).
+	if res.ArmInvalidReason == "" {
+		res.TerminalStatus, res.ClaimedFactsCount, _, res.TerminalReason = chaos4386TerminalFields(lastGoodResult)
+	}
 	return res
 }
 

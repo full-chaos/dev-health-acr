@@ -7483,14 +7483,6 @@ func twoTurnPositiveFalseNoMatch(expectID string, status contractsv1.ContextFabr
 	return expectID != "" && status == contractsv1.ContextFabricInvestigationNoMatch
 }
 
-// chaos4386TwoTurnAnswerRate computes twoTurnReport.AnswerRate over
-// results -- see that field's own doc comment for the exact denominator/
-// numerator definition. Pure function (same "derived from results, not
-// accumulated in the loop" pattern as summarizeTwoTurnTiming) so both the
-// producer and the merge tool's own mirror (cmd/acr-trial-merge-two-turn/main.go)
-// share one definition; the merge tool cannot import this file (same
-// reason it duplicates summarizeTwoTurnTiming/chaos4386ResultByteStats),
-// so this is hand-copied there too.
 // chaos4386PositiveArmNeverAttemptedRow builds the synthetic row the main
 // replay loop appends when the positive arm never even gets attempted for
 // an otherwise oracle-eligible case (turn 1 itself errored, or turn 1
@@ -7502,13 +7494,36 @@ func twoTurnPositiveFalseNoMatch(expectID string, status contractsv1.ContextFabr
 // helpers that function uses), so it reads identically to a row that arm
 // function would have produced had it ever been called. err may be nil
 // (the disclosure-absent case is not itself an error).
-func chaos4386PositiveArmNeverAttemptedRow(index int, member string, tc trialCase, turn1Status contractsv1.ContextFabricInvestigationStatus, reason string, err error) twoTurnCaseResult {
-	row := twoTurnCaseResult{Index: index, Member: member, Arm: string(twoTurnArmPositive), Turn1Status: string(turn1Status)}
+//
+// turn1 is nil for a genuine turn-1 FAILURE (no real result exists to
+// stamp anything from -- every terminal field stays at its zero value).
+// turn1 is non-nil for the disclosure-absent branch: codex review round 2
+// (P1, confirmed) found that branch's ORIGINAL always-zero terminal
+// fields silently miscounted a case that resolved DIRECTLY on turn 1 (no
+// confirmation needed, hence no disclosure) as unanswered -- turn 1 IS
+// this row's real terminal result in that branch (nothing else was ever
+// going to run), so its own TerminalStatus/ClaimedFactsCount/RowsCount/
+// TerminalReason are stamped from it via chaos4386TerminalFields, exactly
+// as a normal successful row would be.
+func chaos4386PositiveArmNeverAttemptedRow(index int, member string, tc trialCase, turn1 *contractsv1.ContextFabricInvestigationResult, reason string, err error) twoTurnCaseResult {
+	row := twoTurnCaseResult{Index: index, Member: member, Arm: string(twoTurnArmPositive)}
+	if turn1 != nil {
+		row.Turn1Status = string(turn1.Status)
+		row.TerminalStatus, row.ClaimedFactsCount, row.RowsCount, row.TerminalReason = chaos4386TerminalFields(*turn1)
+	}
 	twoTurnStampOutcome(&row, tc, nil)
 	twoTurnStampArmFailure(&row, reason, err)
 	return row
 }
 
+// chaos4386TwoTurnAnswerRate computes twoTurnReport.AnswerRate over
+// results -- see that field's own doc comment for the exact denominator/
+// numerator definition. Pure function (same "derived from results, not
+// accumulated in the loop" pattern as summarizeTwoTurnTiming) so both the
+// producer and the merge tool's own mirror (cmd/acr-trial-merge-two-turn/main.go)
+// share one definition; the merge tool cannot import this file (same
+// reason it duplicates summarizeTwoTurnTiming/chaos4386ResultByteStats),
+// so this is hand-copied there too.
 func chaos4386TwoTurnAnswerRate(results []twoTurnCaseResult) float64 {
 	answerable, answered := 0, 0
 	for _, res := range results {
@@ -9664,10 +9679,11 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if err != nil {
 			t.Logf("case %d: turn 1 error: %v", entry.Index, err)
 			report.Timings = append(report.Timings, caseTiming())
-			// CHAOS-4386 answer-rate follow-up: see
-			// chaos4386PositiveArmNeverAttemptedRow's own doc comment.
+			// CHAOS-4386 answer-rate follow-up: turn1 itself failed, so
+			// nil -- no real result exists to stamp terminal fields from.
+			// See chaos4386PositiveArmNeverAttemptedRow's own doc comment.
 			report.Results = append(report.Results, chaos4386PositiveArmNeverAttemptedRow(
-				entry.Index, entry.Member, tc, "", "turn 1 investigate error: "+contextFabricRejectionClass(err), err))
+				entry.Index, entry.Member, tc, nil, "turn 1 investigate error: "+contextFabricRejectionClass(err), err))
 			continue
 		}
 		report.CasesRun++
@@ -9724,11 +9740,12 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 		if !disclosurePresent {
 			report.StructureAndWindowDisclosureAbsentCount++
 			report.Timings = append(report.Timings, caseTiming())
-			// CHAOS-4386 answer-rate follow-up: same reasoning as the
-			// turn-1-error branch above -- see
-			// chaos4386PositiveArmNeverAttemptedRow's own doc comment.
+			// CHAOS-4386 answer-rate follow-up: turn1 IS this row's real
+			// terminal result here (codex review round 2, P1, confirmed --
+			// see chaos4386PositiveArmNeverAttemptedRow's own doc comment
+			// for the case-resolved-directly-on-turn-1 bug this closes).
 			report.Results = append(report.Results, chaos4386PositiveArmNeverAttemptedRow(
-				entry.Index, entry.Member, tc, turn1.Status, "turn 1 produced no structure/window disclosure -- positive arm never attempted", nil))
+				entry.Index, entry.Member, tc, &turn1, "turn 1 produced no structure/window disclosure -- positive arm never attempted", nil))
 			continue
 		}
 
