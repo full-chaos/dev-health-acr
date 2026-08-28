@@ -33,7 +33,7 @@ func realHostedCapabilities() contractsv1.Capabilities {
 		MinimumSidecarVersion:   "1.0.0",
 		SupportedSchemaVersions: contractsv1.AllSchemaVersions,
 		Limits: contractsv1.CapabilityLimits{
-			MaxItems: 30, MaxOutputTokens: 65536, MaxSerializedBytes: 262144, RequestsPerMinute: 60,
+			MaxItems: 30, MaxOutputTokens: 4000, MaxSerializedBytes: 262144, RequestsPerMinute: 60,
 		},
 	}
 }

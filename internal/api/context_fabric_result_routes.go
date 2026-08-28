@@ -124,6 +124,7 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation result could not be serialized", false, nil)
 			return
 		}
+		estimatedTokens := (measuredBytes + 3) / 4
 		if measuredBytes > maximumBytes {
 			// CHAOS-4355 response-bound follow-up -- see the matching
 			// branch in ContextFabricInvestigationHandler
@@ -134,22 +135,27 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			// outcome, not a server bug. This also confirms the retrieval
 			// route enforces the SAME bound the investigation route wrote
 			// under, so a result that returns once can also be re-read.
-			a.logContextFabricResponseBudgetExceeded(r, "bytes", measuredBytes, maximumBytes, items)
+			a.logContextFabricResponseBudgetExceeded(r, "bytes", measuredBytes, maximumBytes, estimatedTokens, items)
 			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation result exceeded service limits", false, map[string]any{
 				"measured_bytes": measuredBytes, "max_serialized_bytes": maximumBytes,
 			})
 			return
 		}
+		// CHAOS-4355 codex R1 P2: usage.Tokens is deliberately 0 -- see the
+		// matching comment in ContextFabricInvestigationHandler
+		// (context_fabric_routes.go) for why this route does not charge the
+		// shared RequestClassContext Tokens budget either. estimatedTokens
+		// is still measured and disclosed below for diagnostics.
 		usage := limits.ResourceUsage{
 			Items:  int64(items),
-			Tokens: (measuredBytes + 3) / 4,
+			Tokens: 0,
 			Bytes:  measuredBytes,
 		}
 		if err := CompleteUsage(r.Context(), usage); err != nil {
-			a.logContextFabricResponseBudgetExceeded(r, "quota", measuredBytes, maximumBytes, items)
+			a.logContextFabricResponseBudgetExceeded(r, "items", measuredBytes, maximumBytes, estimatedTokens, items)
 			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation result exceeded service limits", false, map[string]any{
-				"measured_bytes": usage.Bytes, "measured_tokens": usage.Tokens, "measured_items": usage.Items,
-				"max_output_tokens": a.config.MaxOutputTokens, "max_items": a.config.MaxItems,
+				"measured_bytes": usage.Bytes, "measured_items": usage.Items, "estimated_tokens": estimatedTokens,
+				"max_items": a.config.MaxItems,
 			})
 			return
 		}

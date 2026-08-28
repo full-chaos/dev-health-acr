@@ -27,7 +27,7 @@ The default listen address is `:8080`. Override it through `ACR_ADDR` or the `se
 | `ACR_MINIMUM_SIDECAR_VERSION` | `0.1.0` | Capabilities handshake floor |
 | `ACR_ENTITLEMENT_KEY` | `agent_context_runtime` | Fixed product entitlement key; other values are rejected |
 | `ACR_MAX_ITEMS` | `30` | Packet item limit advertised by capabilities |
-| `ACR_MAX_OUTPUT_TOKENS` | `65536` | Output token budget advertised by capabilities (raised from 4000, CHAOS-4355: sized for Rows-bearing Context Fabric results, see internal/config/config.go's defaultMaxOutputTokens doc comment) |
+| `ACR_MAX_OUTPUT_TOKENS` | `4000` | Output token budget advertised by capabilities |
 | `ACR_MAX_SERIALIZED_BYTES` | `262144` | Serialized packet byte limit |
 | `ACR_REQUESTS_PER_MINUTE` | `60` | Initial advertised request limit |
 | `ACR_REQUIRE_BACKING_STORES` | environment dependent | Defaults true in staging/production |

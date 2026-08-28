@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -20,21 +21,25 @@ import (
 // ClaimedFacts carry #308's (CHAOS-4363) Rows-shaped team_breakdown/
 // risk_breakdown tables -- each capped at
 // contractsv1.ContextFabricClaimedFactMaxRows (64) rows -- serialized far
-// past the OLD production default ACR_MAX_OUTPUT_TOKENS (4000, i.e. a
-// 16,000-byte token budget at the route's 4-bytes-per-token estimate)
-// long before it ever approached ACR_MAX_SERIALIZED_BYTES (262,144). The
-// synthesized ANSWER can be tiny (few drivers, zero findings) while the
-// canonical result the POST route serializes whole still carries every
-// ClaimedFact a driver closed to -- that was the defect: production sized
-// MaxOutputTokens for a text-only answer, before CHAOS-4347/CHAOS-4363
-// gave a claimed fact a renderable table.
+// past ACR_MAX_OUTPUT_TOKENS's default (4000, i.e. a 16,000-byte token
+// budget at the route's 4-bytes-per-token estimate) while using only 27%
+// of ACR_MAX_SERIALIZED_BYTES (262,144). The synthesized ANSWER can be
+// tiny (few drivers, zero findings) while the canonical result the route
+// serializes whole still carries every ClaimedFact a driver closed to --
+// that was the defect: production sized MaxOutputTokens for a text-only
+// answer, before CHAOS-4347/CHAOS-4363 gave a claimed fact a renderable
+// table, and the shared RequestClassContext Tokens budget the routes were
+// charging it against was ALSO tripping first and alone.
 //
-// internal/config/config.go's defaultMaxOutputTokens is now
-// defaultMaxSerializedBytes/4 (65536), so the Tokens estimate can never
-// bind tighter than the Bytes budget it approximates. This file both
-// proves the historical defect (the fixture below exceeds the OLD 4000
-// ceiling by more than 4x) and proves the fix (the SAME fixture now
-// succeeds against the current production defaults).
+// The fix (codex R1 corrected an initial "just raise the default"
+// attempt, see internal/config/config.go's defaultMaxOutputTokens doc
+// comment for why that default must stay 4000): both Context Fabric
+// response routes (context_fabric_routes.go, context_fabric_result_routes.go)
+// stop charging usage.Tokens against the shared budget entirely.
+// ACR_MAX_SERIALIZED_BYTES -- already correctly sized, already
+// configurable, unchanged by this ticket -- is the authoritative "does
+// this fit the wire" gate; the Tokens estimate is still measured and
+// disclosed for diagnostics, never enforced, on this path.
 
 // productionShapedBreakdownRow mirrors one row of investment.go's
 // readProjectInvestment team_breakdown table (10 fields: team_id,
@@ -84,32 +89,29 @@ func rowsBearingClaimedFact(claimID string, kind contractsv1.ContextFabricFactKi
 	}
 }
 
-// Constants mirroring internal/config's shipped production values
-// (internal/config/config.go), which are unexported there. Keep these in
-// sync with that file: legacyMaxOutputTokens/legacyMaxSerializedBytes are
-// what production served BEFORE this ticket (the values that made the
-// live pilot 413); fixedMaxOutputTokens/fixedMaxSerializedBytes/
-// productionMaxItems are what it serves now.
+// Constants mirroring internal/config's shipped production defaults
+// (internal/config/config.go), which are unexported there. This ticket
+// does not change any of them -- the fix is entirely in route logic (see
+// this file's package doc comment) -- so these stay equal to what
+// production has always served.
 const (
-	legacyMaxOutputTokens        = 4000
-	fixedMaxOutputTokens         = 65536
+	productionMaxOutputTokens    = 4000
 	productionMaxSerializedBytes = 262144
 	productionMaxItems           = 30
 )
 
 // newContextFabricTestAppWithProductionLimits is
-// newContextFabricTestApp, except the app config and its limits.Manager
-// resource budget are wired to the SAME production defaults
-// internal/config.Config ships today (fixedMaxOutputTokens/
-// productionMaxSerializedBytes/productionMaxItems) instead of the
-// generous test-harness ceiling newContextFabricTestApp otherwise gets
-// from NewApp's zero-value defaults. Route wiring is otherwise identical
-// to newContextFabricTestAppWithResultsAndLogs.
-func newContextFabricTestAppWithProductionLimits(t *testing.T, investigator contextfabric.Investigator) (*App, string) {
+// newContextFabricTestAppWithResults, except the app config and its
+// limits.Manager resource budget are wired to the SAME production
+// defaults internal/config.Config ships today instead of the generous
+// test-harness ceiling newContextFabricTestApp otherwise gets from
+// NewApp's zero-value defaults (16_000/1<<20/50). Route wiring is
+// otherwise identical to newContextFabricTestAppWithResultsAndLogs.
+func newContextFabricTestAppWithProductionLimits(t *testing.T, investigator contextfabric.Investigator, results contextfabric.InvestigationResultStore) (*App, string) {
 	t.Helper()
-	app, token, _ := newContextFabricTestAppWithResultsAndLogs(t, investigator, nil)
+	app, token, _ := newContextFabricTestAppWithResultsAndLogs(t, investigator, results)
 	app.config.MaxItems = productionMaxItems
-	app.config.MaxOutputTokens = fixedMaxOutputTokens
+	app.config.MaxOutputTokens = productionMaxOutputTokens
 	app.config.MaxSerializedBytes = productionMaxSerializedBytes
 	manager, err := limits.NewManager(limits.Options{
 		Now: app.now, PerOrgConcurrency: 4,
@@ -117,7 +119,7 @@ func newContextFabricTestAppWithProductionLimits(t *testing.T, investigator cont
 			Auth: limits.AuthPolicy{Window: 0, PerOrgLimit: 0, PerCredentialLimit: 0},
 			Context: limits.ContextPolicy{
 				Window: time.Minute, PerOrgLimit: 100, PerCredentialLimit: 100,
-				Resources: limits.ResourceBudget{MaxItems: productionMaxItems, MaxTokens: fixedMaxOutputTokens, MaxBytes: productionMaxSerializedBytes},
+				Resources: limits.ResourceBudget{MaxItems: productionMaxItems, MaxTokens: productionMaxOutputTokens, MaxBytes: productionMaxSerializedBytes},
 			},
 		},
 	})
@@ -133,8 +135,9 @@ func newContextFabricTestAppWithProductionLimits(t *testing.T, investigator cont
 // drivers, 0 findings) but whose ClaimedFacts carry the #308 (CHAOS-4363)
 // Rows-shaped team_breakdown tables -- 3 rollups (investment/workload/
 // readiness), each the full ContextFabricClaimedFactMaxRows (64) rows.
-func threeRollupProjectStatusResult() contractsv1.ContextFabricInvestigationResult {
+func threeRollupProjectStatusResult(resultID string) contractsv1.ContextFabricInvestigationResult {
 	result := validContextFabricInvestigationResult()
+	result.ResultID = resultID
 	project := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	result.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{
 		rowsBearingClaimedFact("claim_investment_rollup", contractsv1.ContextFabricFactInvestment, project),
@@ -165,47 +168,86 @@ func threeRollupProjectStatusResult() contractsv1.ContextFabricInvestigationResu
 	return result
 }
 
-// TestContextFabricInvestigationRouteRowsBearingResultNowFitsProductionResponseBudget
-// is the CHAOS-4355 response-bound test: red against the OLD production
-// default (4000 tokens), green against the current one (65536).
-//
-// Before this ticket the route returned 413 for this exact fixture: the
-// measured size (asserted below) exceeded ACR_MAX_OUTPUT_TOKENS (4000)
-// by more than 4x while using only 27% of ACR_MAX_SERIALIZED_BYTES --
-// the Tokens budget, sized for a text-only answer, was the sole and
-// spurious blocker. See internal/config/config.go's defaultMaxOutputTokens
-// doc comment for the fix and its justification.
-func TestContextFabricInvestigationRouteRowsBearingResultNowFitsProductionResponseBudget(t *testing.T) {
-	result := threeRollupProjectStatusResult()
+// twelveRollupResult is a deliberately adversarial fixture -- not a
+// realistic single-project answer -- sized to still exceed
+// ACR_MAX_SERIALIZED_BYTES (262144) even after this fix. It exists to
+// prove the bound still holds and still discloses its measurement, not to
+// re-litigate the live pilot shape above.
+func twelveRollupResult(resultID string) contractsv1.ContextFabricInvestigationResult {
+	result := validContextFabricInvestigationResult()
+	result.ResultID = resultID
+	project := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	kinds := []contractsv1.ContextFabricFactKind{
+		contractsv1.ContextFabricFactInvestment, contractsv1.ContextFabricFactWorkload, contractsv1.ContextFabricFactReadiness,
+	}
+	for i := 0; i < 12; i++ {
+		result.ClaimedFacts = append(result.ClaimedFacts, rowsBearingClaimedFact("claim_rollup_"+strconv.Itoa(i), kinds[i%len(kinds)], project))
+	}
+	return result
+}
 
-	encoded, err := json.Marshal(result)
+func marshaledSize(t *testing.T, v any) int64 {
+	t.Helper()
+	encoded, err := json.Marshal(v)
 	if err != nil {
 		t.Fatalf("fixture does not marshal: %v", err)
 	}
-	measuredBytes := int64(len(encoded))
-	measuredTokens := (measuredBytes + 3) / 4
-	t.Logf("measured encoded result: %d bytes (~%d estimated tokens); OLD ACR_MAX_OUTPUT_TOKENS=%d (~%d bytes), CURRENT ACR_MAX_OUTPUT_TOKENS=%d (~%d bytes), ACR_MAX_SERIALIZED_BYTES=%d",
-		measuredBytes, measuredTokens, legacyMaxOutputTokens, legacyMaxOutputTokens*4, fixedMaxOutputTokens, fixedMaxOutputTokens*4, productionMaxSerializedBytes)
+	return int64(len(encoded))
+}
 
-	if measuredTokens <= legacyMaxOutputTokens {
-		t.Fatalf("fixture measured %d estimated tokens, want > the OLD production ACR_MAX_OUTPUT_TOKENS (%d) -- fixture does not reproduce the live defect", measuredTokens, legacyMaxOutputTokens)
+func assertErrorDetailsDiscloseMeasurement(t *testing.T, body []byte, wantMinBytes int64) {
+	t.Helper()
+	var envelope contractsv1.ErrorEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	measuredDetail, ok := envelope.Error.Details["measured_bytes"]
+	if !ok {
+		t.Fatalf("error details = %#v, want a measured_bytes field -- a size-exceeded 413 must disclose what it measured, never a bare message", envelope.Error.Details)
+	}
+	measured, ok := measuredDetail.(float64)
+	if !ok || int64(measured) < wantMinBytes {
+		t.Fatalf("details.measured_bytes = %v, want a number >= %d", measuredDetail, wantMinBytes)
+	}
+	maxDetail, ok := envelope.Error.Details["max_serialized_bytes"]
+	if !ok {
+		t.Fatalf("error details = %#v, want a max_serialized_bytes field so the caller can see which ceiling it hit", envelope.Error.Details)
+	}
+	if max, ok := maxDetail.(float64); !ok || int64(max) != productionMaxSerializedBytes {
+		t.Fatalf("details.max_serialized_bytes = %v, want %d (the configured ceiling, not a hardcoded or stale value)", maxDetail, productionMaxSerializedBytes)
+	}
+}
+
+// TestContextFabricInvestigationRouteRowsBearingResultFitsProductionResponseBudget
+// is the CHAOS-4355 response-bound test for the POST /investigations
+// route: the live-pilot-shaped fixture exceeds the production Tokens
+// estimate by more than 4x (documenting why a Tokens-gated design fails
+// it) yet returns 200 today because these routes no longer charge
+// usage.Tokens against the shared budget -- ACR_MAX_SERIALIZED_BYTES,
+// comfortably clear here, is what actually governs.
+func TestContextFabricInvestigationRouteRowsBearingResultFitsProductionResponseBudget(t *testing.T) {
+	result := threeRollupProjectStatusResult("result_4355_post")
+	measuredBytes := marshaledSize(t, result)
+	estimatedTokens := (measuredBytes + 3) / 4
+	t.Logf("measured encoded result: %d bytes (~%d estimated tokens); ACR_MAX_OUTPUT_TOKENS=%d (~%d bytes, NOT enforced on this path), ACR_MAX_SERIALIZED_BYTES=%d",
+		measuredBytes, estimatedTokens, productionMaxOutputTokens, productionMaxOutputTokens*4, productionMaxSerializedBytes)
+
+	if estimatedTokens <= productionMaxOutputTokens {
+		t.Fatalf("fixture measured %d estimated tokens, want > ACR_MAX_OUTPUT_TOKENS (%d) -- fixture does not reproduce the live defect's shape", estimatedTokens, productionMaxOutputTokens)
 	}
 	if measuredBytes >= productionMaxSerializedBytes {
-		t.Fatalf("fixture measured %d bytes, want < ACR_MAX_SERIALIZED_BYTES (%d) -- this must isolate the Tokens-budget bound, not the Bytes one", measuredBytes, productionMaxSerializedBytes)
-	}
-	if measuredTokens > fixedMaxOutputTokens {
-		t.Fatalf("fixture measured %d estimated tokens, want <= the CURRENT production ACR_MAX_OUTPUT_TOKENS (%d) -- the fix does not cover this fixture", measuredTokens, fixedMaxOutputTokens)
+		t.Fatalf("fixture measured %d bytes, want < ACR_MAX_SERIALIZED_BYTES (%d) -- this must isolate the (no longer enforced) Tokens bound from the Bytes one", measuredBytes, productionMaxSerializedBytes)
 	}
 
 	app, token := newContextFabricTestAppWithProductionLimits(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
 		return result, nil
-	}))
+	}), nil)
 	response := httptest.NewRecorder()
 
 	app.Handler().ServeHTTP(response, investigationRequest(t, token))
 
 	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 -- a %d-byte/%d-token Rows-bearing result must fit the CURRENT production response budget; body=%s", response.Code, measuredBytes, measuredTokens, response.Body.String())
+		t.Fatalf("status = %d, want 200 -- a %d-byte/%d-token Rows-bearing result must fit the production response budget; body=%s", response.Code, measuredBytes, estimatedTokens, response.Body.String())
 	}
 	var got contractsv1.ContextFabricInvestigationResult
 	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
@@ -221,38 +263,67 @@ func TestContextFabricInvestigationRouteRowsBearingResultNowFitsProductionRespon
 	}
 }
 
+// TestContextFabricInvestigationResultRouteRowsBearingResultFitsProductionResponseBudget
+// is the GET-by-id sibling: a result that returns once from POST must also
+// be re-readable by GET /investigations/{result_id} under the SAME bound
+// (both routes read a.config.MaxSerializedBytes/MaxItems and neither
+// charges Tokens) -- see context_fabric_result_routes.go's doc comment on
+// ContextFabricInvestigationResultPath.
+func TestContextFabricInvestigationResultRouteRowsBearingResultFitsProductionResponseBudget(t *testing.T) {
+	result := threeRollupProjectStatusResult("result_4355_get")
+	store := memoryinvestigation.NewStore()
+	seeded := seedResult3355(t, store, callerOrgID, result)
+
+	app, token := newContextFabricTestAppWithProductionLimits(t, nil, store)
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, investigationResultRequest(t, token, seeded.ResultID))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 -- a stored Rows-bearing result must be re-readable under the same production budget the write path uses; body=%s", response.Code, response.Body.String())
+	}
+	var got contractsv1.ContextFabricInvestigationResult
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.ClaimedFacts) != 3 {
+		t.Fatalf("claimed facts = %d, want 3", len(got.ClaimedFacts))
+	}
+	for _, claim := range got.ClaimedFacts {
+		if len(claim.Rows) != contractsv1.ContextFabricClaimedFactMaxRows {
+			t.Fatalf("claim %q rows = %d, want %d", claim.ClaimID, len(claim.Rows), contractsv1.ContextFabricClaimedFactMaxRows)
+		}
+	}
+}
+
+// seedResult3355 is seedResult (context_fabric_result_routes_test.go) but
+// takes an already-built result rather than the shared
+// validContextFabricInvestigationResult() fixture, so this file's
+// Rows-bearing fixtures can be stored directly.
+func seedResult3355(t *testing.T, store *memoryinvestigation.Store, orgID string, result contractsv1.ContextFabricInvestigationResult) contractsv1.ContextFabricInvestigationResult {
+	t.Helper()
+	if err := store.Save(context.Background(), storage.Principal{OrgID: orgID}, result, contextfabric.SourceWatermarkSnapshot{}, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0); err != nil {
+		t.Fatalf("seed result: %v", err)
+	}
+	return result
+}
+
 // TestContextFabricInvestigationRouteStillOverBudgetDisclosesMeasurement
 // is the CHAOS-4355 telemetry requirement: a response that genuinely
-// cannot fit even the raised production budget must still fail as a
-// disclosed, diagnosable 413 -- the measured bytes/tokens and the
-// configured ceiling in the error response's details, never a bare
-// "exceeded service limits" with no numbers (team-lead brief: "never a
-// silent trim"). The fixture here (12 Rows-bearing rollups) is a
-// deliberately adversarial size, not a realistic single-project answer --
-// it exists to prove the bound still holds and still discloses, not to
-// re-litigate the live pilot shape covered above.
+// cannot fit even ACR_MAX_SERIALIZED_BYTES must still fail as a
+// disclosed, diagnosable 413 -- the measured bytes and the configured
+// ceiling in the error response's details, never a bare "exceeded service
+// limits" with no numbers (team-lead brief: "never a silent trim").
 func TestContextFabricInvestigationRouteStillOverBudgetDisclosesMeasurement(t *testing.T) {
-	result := validContextFabricInvestigationResult()
-	project := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
-	kinds := []contractsv1.ContextFabricFactKind{
-		contractsv1.ContextFabricFactInvestment, contractsv1.ContextFabricFactWorkload, contractsv1.ContextFabricFactReadiness,
-	}
-	for i := 0; i < 12; i++ {
-		result.ClaimedFacts = append(result.ClaimedFacts, rowsBearingClaimedFact("claim_rollup_"+strconv.Itoa(i), kinds[i%len(kinds)], project))
-	}
-
-	encoded, err := json.Marshal(result)
-	if err != nil {
-		t.Fatalf("fixture does not marshal: %v", err)
-	}
-	measuredBytes := int64(len(encoded))
+	result := twelveRollupResult("result_4355_post_over")
+	measuredBytes := marshaledSize(t, result)
 	if measuredBytes <= productionMaxSerializedBytes {
-		t.Fatalf("fixture measured %d bytes, want > ACR_MAX_SERIALIZED_BYTES (%d) -- fixture must still exceed the RAISED production bound", measuredBytes, productionMaxSerializedBytes)
+		t.Fatalf("fixture measured %d bytes, want > ACR_MAX_SERIALIZED_BYTES (%d)", measuredBytes, productionMaxSerializedBytes)
 	}
 
 	app, token := newContextFabricTestAppWithProductionLimits(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
 		return result, nil
-	}))
+	}), nil)
 	response := httptest.NewRecorder()
 
 	app.Handler().ServeHTTP(response, investigationRequest(t, token))
@@ -260,18 +331,27 @@ func TestContextFabricInvestigationRouteStillOverBudgetDisclosesMeasurement(t *t
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413 -- a %d-byte result must still trip ACR_MAX_SERIALIZED_BYTES (%d); body=%s", response.Code, measuredBytes, productionMaxSerializedBytes, response.Body.String())
 	}
-	var envelope contractsv1.ErrorEnvelope
-	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
-		t.Fatal(err)
+	assertErrorDetailsDiscloseMeasurement(t, response.Body.Bytes(), productionMaxSerializedBytes)
+}
+
+// TestContextFabricInvestigationResultRouteStillOverBudgetDisclosesMeasurement
+// is the GET-by-id sibling of the test above.
+func TestContextFabricInvestigationResultRouteStillOverBudgetDisclosesMeasurement(t *testing.T) {
+	result := twelveRollupResult("result_4355_get_over")
+	measuredBytes := marshaledSize(t, result)
+	if measuredBytes <= productionMaxSerializedBytes {
+		t.Fatalf("fixture measured %d bytes, want > ACR_MAX_SERIALIZED_BYTES (%d)", measuredBytes, productionMaxSerializedBytes)
 	}
-	measuredDetail, ok := envelope.Error.Details["measured_bytes"]
-	if !ok {
-		t.Fatalf("error details = %#v, want a measured_bytes field -- a size-exceeded 413 must disclose what it measured, never a bare message", envelope.Error.Details)
+	store := memoryinvestigation.NewStore()
+	seeded := seedResult3355(t, store, callerOrgID, result)
+
+	app, token := newContextFabricTestAppWithProductionLimits(t, nil, store)
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, investigationResultRequest(t, token, seeded.ResultID))
+
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 -- a %d-byte stored result must still trip ACR_MAX_SERIALIZED_BYTES (%d) on re-read; body=%s", response.Code, measuredBytes, productionMaxSerializedBytes, response.Body.String())
 	}
-	if measured, ok := measuredDetail.(float64); !ok || int64(measured) < productionMaxSerializedBytes {
-		t.Fatalf("details.measured_bytes = %v, want a number >= %d", measuredDetail, productionMaxSerializedBytes)
-	}
-	if _, ok := envelope.Error.Details["max_serialized_bytes"]; !ok {
-		t.Fatalf("error details = %#v, want a max_serialized_bytes field so the caller can see which ceiling it hit", envelope.Error.Details)
-	}
+	assertErrorDetailsDiscloseMeasurement(t, response.Body.Bytes(), productionMaxSerializedBytes)
 }

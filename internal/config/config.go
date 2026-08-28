@@ -23,29 +23,20 @@ const (
 	defaultIdleTimeout       = 60 * time.Second
 	defaultShutdownTimeout   = 10 * time.Second
 	defaultMaxItems          = 30
-	// defaultMaxOutputTokens (CHAOS-4355 response-bound follow-up: live
-	// pilot rev 18, req_9ea9eea3f36f7d37d85e5c5c6bd386cf) was 4000 -- sized
-	// for a text-only synthesized answer, before CHAOS-4347/CHAOS-4363 gave
-	// a ClaimedFact an optional renderable Rows table (up to
-	// contractsv1.ContextFabricClaimedFactMaxRows=64 rows). A project
-	// investigation whose ANSWER is small (few drivers, no findings) but
-	// whose ClaimedFacts close to Rows-bearing rollups (investment/
-	// workload/readiness team breakdowns) measured 70,800 bytes (~17,700
-	// estimated tokens at the route's 4-bytes-per-token approximation,
-	// internal/api/context_fabric_routes.go) for JUST 3 such rollups --
-	// already over 4x the old ceiling -- while using only 27% of
-	// defaultMaxSerializedBytes. The Tokens budget was tripping first and
-	// alone: a stale bound, not a deliberate one (contrast the *_serialized_bytes)
-	// -- see internal/api/context_fabric_response_bound_test.go.
-	//
-	// Resized to defaultMaxSerializedBytes/4 so the Tokens estimate (itself
-	// derived from encoded byte length, see CompleteUsage's
-	// usage.Tokens=(len(encoded)+3)/4) can never bind tighter than the
-	// Bytes budget it approximates -- the two stop disagreeing about
-	// whether the SAME response fits. An operator who wants a tighter
-	// per-response token quota for cost/rate-limiting reasons can still set
-	// ACR_MAX_OUTPUT_TOKENS below this.
-	defaultMaxOutputTokens    = 65536
+	// defaultMaxOutputTokens stays 4000: it is also the ceiling
+	// cmd/acr-api/server_build.go advertises as CapabilityLimits.MaxOutputTokens,
+	// and internal/contracts/v1's Context Packet (validate_request.go) and
+	// MCP (mcp_validate.go) wire validators independently cap a caller's
+	// requested max_output_tokens at 16000 -- raising this shared knob
+	// (CHAOS-4355 codex R1 P2) would advertise a capability those
+	// validators then reject. Sized for a text-only synthesized answer;
+	// see context_fabric_routes.go's separate handling for why Context
+	// Fabric responses do NOT gate on this value (CHAOS-4347/CHAOS-4363
+	// gave a ClaimedFact an optional Rows table that made a Tokens
+	// estimate derived from Bytes redundant with, and often tighter than,
+	// ACR_MAX_SERIALIZED_BYTES -- see
+	// internal/api/context_fabric_response_bound_test.go).
+	defaultMaxOutputTokens    = 4000
 	defaultMaxSerializedBytes = 262144
 	defaultRequestsPerMinute  = 60
 	// minAnswerReuseMaxAge and maxAnswerReuseMaxAge bound
@@ -364,14 +355,13 @@ func (c Config) Validate() error {
 	if c.MaxItems < 1 || c.MaxItems > 50 {
 		return errors.New("ACR_MAX_ITEMS must be between 1 and 50")
 	}
-	// Ceiling raised 16000 -> 262144 (CHAOS-4355 response-bound follow-up):
-	// 1048576 (the ACR_MAX_SERIALIZED_BYTES ceiling below) / 4, so an
-	// operator who raises MaxSerializedBytes to its own ceiling can also
-	// raise MaxOutputTokens to match, and the Tokens estimate never binds
-	// tighter than Bytes at any legal configuration. See
-	// defaultMaxOutputTokens's doc comment.
-	if c.MaxOutputTokens < 500 || c.MaxOutputTokens > 262144 {
-		return errors.New("ACR_MAX_OUTPUT_TOKENS must be between 500 and 262144")
+	// 16000 matches the Context Packet/MCP wire validators' own ceiling on
+	// a caller-requested max_output_tokens (internal/contracts/v1) -- see
+	// defaultMaxOutputTokens's doc comment for why this must stay aligned
+	// with those rather than the (separately raised) Context Fabric
+	// response path.
+	if c.MaxOutputTokens < 500 || c.MaxOutputTokens > 16000 {
+		return errors.New("ACR_MAX_OUTPUT_TOKENS must be between 500 and 16000")
 	}
 	if c.MaxSerializedBytes < 8192 || c.MaxSerializedBytes > 1048576 {
 		return errors.New("ACR_MAX_SERIALIZED_BYTES must be between 8192 and 1048576")

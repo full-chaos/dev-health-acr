@@ -186,7 +186,7 @@ func testRuntimeConfig(t *testing.T) config.Config {
 		DevHealthEntitlementURL: "https://ops.example.test", DevHealthEntitlementTokenFile: "token", EvidenceIDActiveKID: "current",
 		DeviceVerificationURL: "https://verify.example.test/device",
 		EvidenceIDKeys:        map[string][]byte{"current": []byte("01234567890123456789012345678901")},
-		MaxItems:              30, MaxOutputTokens: 65536, MaxSerializedBytes: 262144, RequestsPerMinute: 60,
+		MaxItems:              30, MaxOutputTokens: 4000, MaxSerializedBytes: 262144, RequestsPerMinute: 60,
 		RequestControls: config.RequestControlsConfig{
 			Auth: class, Context: class, Evidence: class, Snapshot: class, Episode: class,
 			AuthFailures: 20, AuthTrackedKeys: 128, PerOrgConcurrency: 8, MaxTrackedOrganizations: 128, MaxCredentialsPerOrg: 128,

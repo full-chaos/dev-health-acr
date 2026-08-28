@@ -50,13 +50,7 @@ config:
   # direct or pgbouncer; must not contradict a PgBouncer admin DSN.
   postgresConnectionKind: direct
   maxItems: 30
-  # CHAOS-4355 response-bound follow-up: raised 4000 -> 65536
-  # (maxSerializedBytes/4) so a Context Fabric investigation result
-  # carrying Rows-shaped ClaimedFacts (CHAOS-4347/CHAOS-4363, up to 64
-  # rows each) doesn't trip the Tokens usage budget tighter than the Bytes
-  # budget below it approximates -- see internal/config/config.go's
-  # defaultMaxOutputTokens doc comment.
-  maxOutputTokens: 65536
+  maxOutputTokens: 4000
   maxSerializedBytes: 262144
   requestsPerMinute: 60
   enableEpisodeWriteback: false
