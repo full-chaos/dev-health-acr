@@ -7,6 +7,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // teamPrefix is the CanonicalID prefix this package uses for team subjects,
@@ -87,47 +88,22 @@ func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: truncated}, nil
 }
 
-// readTeamWorkload is CHAOS-3780's original capacity_forecasts read,
-// unchanged in behavior, factored out so ReadFacts can branch by subject
-// kind the same way metrics.go/health.go already do.
+// readTeamWorkload is CHAOS-3780's original capacity_forecasts read. The
+// query itself (row_number() tiebreak over computed_at/forecast_id for the
+// F3 multi-scope-per-team shape) now lives in readers.ReadTeamWorkload --
+// see that function's doc comment for the full tiebreak reasoning. This
+// adapter keeps the CanonicalFact-building half, factored out so ReadFacts
+// can branch by subject kind the same way metrics.go/health.go already do.
 func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
 	ids, bySubject := subjectIndex(subjects, teamPrefix)
-	// row_number() OVER (PARTITION BY team_id, work_scope_id ORDER BY
-	// computed_at DESC) picks the single most recently computed forecast
-	// for EACH scope a team has been forecast under, never collapsing
-	// distinct scopes into one another. FINAL is defensive: capacity_forecasts
-	// is ReplacingMergeTree(computed_at) sorted on (org_id, forecast_id), so
-	// FINAL only collapses a re-emitted identical forecast_id, not distinct
-	// scopes -- the row_number() partition is what actually resolves F3.
-	//
-	// computed_at DESC alone is not a TOTAL order (Codex round-2 finding
-	// M1): two forecasts for the same scope could share a computed_at.
-	// Unlike the other providers in this package, capacity_forecasts DOES
-	// carry a real per-row unique id -- forecast_id -- so this provider uses
-	// that as the final tiebreaker instead of a value hash.
-	statement := withRowLimit(`SELECT team_id, ifNull(work_scope_id, ''), throughput_mean, throughput_stddev, toUInt8(isNotNull(p50_days)), toInt64(ifNull(p50_days, 0)), insufficient_history, high_variance, toInt64(backlog_size), toString(computed_at)
-FROM (
-	SELECT ifNull(team_id, '') AS team_id, work_scope_id, throughput_mean, throughput_stddev, p50_days, insufficient_history, high_variance, backlog_size, computed_at,
-		row_number() OVER (PARTITION BY team_id, work_scope_id ORDER BY computed_at DESC, forecast_id DESC) AS rn
-	FROM capacity_forecasts FINAL
-	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}` + timeBound.timestampPredicate("computed_at") + `
-)
-WHERE rn = 1`)
-	rowCount := 0
-	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		rowCount++
-		var teamID, workScopeID, computedAt string
-		var throughputMean, throughputStddev float64
-		var hasP50 uint8
-		var p50Days int64
-		var insufficientHistory, highVariance uint8
-		var backlogSize int64
-		if err := row.Scan(&teamID, &workScopeID, &throughputMean, &throughputStddev, &hasP50, &p50Days, &insufficientHistory, &highVariance, &backlogSize, &computedAt); err != nil {
-			return err
-		}
-		subject, ok := bySubject[teamID]
+	rows, err := readers.ReadTeamWorkload(ctx, p.facts.client, orgID, ids, timeBound.neutral())
+	if err != nil {
+		return 0, err
+	}
+	for _, r := range rows {
+		subject, ok := bySubject[r.TeamID]
 		if !ok {
-			return nil
+			continue
 		}
 		fields := map[string]contextfabric.FactValue{
 			// basis states, in the fact's own structure (not only in this
@@ -136,38 +112,25 @@ WHERE rn = 1`)
 			// a current/real-time load reading. A synthesizer must not
 			// present this value as today's workload.
 			"basis":                contextfabric.StringFactValue("capacity_forecast"),
-			"throughput_mean":      contextfabric.NumberFactValue(throughputMean),
-			"throughput_stddev":    contextfabric.NumberFactValue(throughputStddev),
-			"insufficient_history": contextfabric.BooleanFactValue(insufficientHistory != 0),
-			"high_variance":        contextfabric.BooleanFactValue(highVariance != 0),
-			"backlog_size":         contextfabric.IntegerFactValue(backlogSize),
-			"computed_at":          contextfabric.StringFactValue(computedAt),
+			"throughput_mean":      contextfabric.NumberFactValue(r.ThroughputMean),
+			"throughput_stddev":    contextfabric.NumberFactValue(r.ThroughputStddev),
+			"insufficient_history": contextfabric.BooleanFactValue(r.InsufficientHistory != 0),
+			"high_variance":        contextfabric.BooleanFactValue(r.HighVariance != 0),
+			"backlog_size":         contextfabric.IntegerFactValue(r.BacklogSize),
+			"computed_at":          contextfabric.StringFactValue(r.ComputedAt),
 		}
-		if workScopeID != "" {
-			fields["work_scope_id"] = contextfabric.StringFactValue(workScopeID)
+		if r.WorkScopeID != "" {
+			fields["work_scope_id"] = contextfabric.StringFactValue(r.WorkScopeID)
 		}
-		if hasP50 != 0 {
-			fields["forecast_p50_days"] = contextfabric.IntegerFactValue(p50Days)
+		if r.HasP50Days != 0 {
+			fields["forecast_p50_days"] = contextfabric.IntegerFactValue(r.P50Days)
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactWorkload, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("team", teamID)},
+			EvidenceRefIDs: []string{evidenceRefID("team", r.TeamID)},
 		})
-		return nil
-	}, timeBound.bindings()...)
-	return rowCount, scanErr
-}
-
-// workloadRollupRow is one (project, team, work_scope) triple's contribution
-// to a project's workload rollup, scanned off the team_project_ownership
-// join before Go-side grouping.
-type workloadRollupRow struct {
-	teamID, teamName, workScopeID, computedAt string
-	throughputMean, throughputStddev          float64
-	insufficientHistory, highVariance         bool
-	backlogSize                               int64
-	hasP50                                    bool
-	p50Days                                   int64
+	}
+	return len(rows), nil
 }
 
 // readProjectWorkload rolls FactWorkload up for a project through
@@ -175,52 +138,30 @@ type workloadRollupRow struct {
 // owning the project contributes its own latest per-scope forecast,
 // verbatim, into one renderable team_breakdown table -- Monte Carlo
 // throughput/percentile stats are never summed or averaged across teams
-// (see the package doc comment).
+// (see the package doc comment). The query itself now lives in
+// readers.ReadProjectWorkload; this adapter does the Go-side
+// grouping/breakdown-table construction the reader deliberately leaves to
+// its caller.
 func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, breakdownTruncated bool, err error) {
 	ids, bySubject := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
 		return 0, false, nil
 	}
-	ownershipPredicate := ownershipValidityPredicate(timeBound)
-	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), tpo.team_id, ifNull(t.name, ''), ifNull(cf.work_scope_id, ''), cf.throughput_mean, cf.throughput_stddev, toUInt8(isNotNull(cf.p50_days)), toInt64(ifNull(cf.p50_days, 0)), cf.insufficient_history, cf.high_variance, toInt64(cf.backlog_size), toString(cf.computed_at)
-FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
-INNER JOIN (
-	SELECT ifNull(team_id, '') AS team_id, work_scope_id, throughput_mean, throughput_stddev, p50_days, insufficient_history, high_variance, backlog_size, computed_at,
-		row_number() OVER (PARTITION BY team_id, work_scope_id ORDER BY computed_at DESC, forecast_id DESC) AS rn
-	FROM capacity_forecasts FINAL
-	WHERE org_id = {org_id:String}` + timeBound.timestampPredicate("computed_at") + `
-) AS cf ON cf.team_id = tpo.team_id AND cf.rn = 1
-LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
-ORDER BY p.id, tpo.team_id, cf.work_scope_id`)
-	byProject := make(map[string][]workloadRollupRow)
+	scanned, err := readers.ReadProjectWorkload(ctx, p.facts.client, orgID, ids, timeBound.neutral())
+	if err != nil {
+		return 0, false, err
+	}
+	rowCount = len(scanned)
+	byProject := make(map[string][]readers.WorkloadProjectRow)
 	var projectOrder []string
-	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		rowCount++
-		var projectSubjectKey, teamID, teamName, workScopeID, computedAt string
-		var throughputMean, throughputStddev float64
-		var hasP50 uint8
-		var p50Days int64
-		var insufficientHistory, highVariance uint8
-		var backlogSize int64
-		if err := row.Scan(&projectSubjectKey, &teamID, &teamName, &workScopeID, &throughputMean, &throughputStddev, &hasP50, &p50Days, &insufficientHistory, &highVariance, &backlogSize, &computedAt); err != nil {
-			return err
+	for _, r := range scanned {
+		if _, ok := bySubject[r.ProjectSubjectKey]; !ok {
+			continue
 		}
-		if _, ok := bySubject[projectSubjectKey]; !ok {
-			return nil
+		if _, seen := byProject[r.ProjectSubjectKey]; !seen {
+			projectOrder = append(projectOrder, r.ProjectSubjectKey)
 		}
-		if _, seen := byProject[projectSubjectKey]; !seen {
-			projectOrder = append(projectOrder, projectSubjectKey)
-		}
-		byProject[projectSubjectKey] = append(byProject[projectSubjectKey], workloadRollupRow{
-			teamID: teamID, teamName: teamName, workScopeID: workScopeID, computedAt: computedAt,
-			throughputMean: throughputMean, throughputStddev: throughputStddev,
-			insufficientHistory: insufficientHistory != 0, highVariance: highVariance != 0,
-			backlogSize: backlogSize, hasP50: hasP50 != 0, p50Days: p50Days,
-		})
-		return nil
-	}, timeBound.bindings()...)
-	if scanErr != nil {
-		return rowCount, false, scanErr
+		byProject[r.ProjectSubjectKey] = append(byProject[r.ProjectSubjectKey], r)
 	}
 	for _, projectKey := range projectOrder {
 		rows := byProject[projectKey]
@@ -231,29 +172,29 @@ ORDER BY p.id, tpo.team_id, cf.work_scope_id`)
 		evidenceRefIDs := make([]string, 0, len(rows)+1)
 		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("project", projectKey))
 		for _, r := range rows {
-			dedupeKey := r.teamID + "\x00" + r.workScopeID
+			dedupeKey := r.TeamID + "\x00" + r.WorkScopeID
 			if dedupeTeamRow(seenTeamScope, dedupeKey) {
 				continue
 			}
-			if !dedupeTeamRow(seenTeams, r.teamID) {
-				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("team", r.teamID))
+			if !dedupeTeamRow(seenTeams, r.TeamID) {
+				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("team", r.TeamID))
 			}
 			rowFields := map[string]contextfabric.FactValue{
 				"basis":                contextfabric.StringFactValue("capacity_forecast"),
-				"team_id":              contextfabric.StringFactValue(r.teamID),
-				"team_name":            stringOrNull(r.teamName),
-				"throughput_mean":      contextfabric.NumberFactValue(r.throughputMean),
-				"throughput_stddev":    contextfabric.NumberFactValue(r.throughputStddev),
-				"insufficient_history": contextfabric.BooleanFactValue(r.insufficientHistory),
-				"high_variance":        contextfabric.BooleanFactValue(r.highVariance),
-				"backlog_size":         contextfabric.IntegerFactValue(r.backlogSize),
-				"computed_at":          contextfabric.StringFactValue(r.computedAt),
+				"team_id":              contextfabric.StringFactValue(r.TeamID),
+				"team_name":            stringOrNull(r.TeamName),
+				"throughput_mean":      contextfabric.NumberFactValue(r.ThroughputMean),
+				"throughput_stddev":    contextfabric.NumberFactValue(r.ThroughputStddev),
+				"insufficient_history": contextfabric.BooleanFactValue(r.InsufficientHistory != 0),
+				"high_variance":        contextfabric.BooleanFactValue(r.HighVariance != 0),
+				"backlog_size":         contextfabric.IntegerFactValue(r.BacklogSize),
+				"computed_at":          contextfabric.StringFactValue(r.ComputedAt),
 			}
-			if r.workScopeID != "" {
-				rowFields["work_scope_id"] = contextfabric.StringFactValue(r.workScopeID)
+			if r.WorkScopeID != "" {
+				rowFields["work_scope_id"] = contextfabric.StringFactValue(r.WorkScopeID)
 			}
-			if r.hasP50 {
-				rowFields["forecast_p50_days"] = contextfabric.IntegerFactValue(r.p50Days)
+			if r.HasP50Days != 0 {
+				rowFields["forecast_p50_days"] = contextfabric.IntegerFactValue(r.P50Days)
 			}
 			teamRows = append(teamRows, contextfabric.FactValueRow{Fields: rowFields})
 		}

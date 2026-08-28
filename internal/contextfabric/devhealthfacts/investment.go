@@ -7,6 +7,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // InvestmentProvider implements contextfabric.FactProvider for FactInvestment
@@ -100,142 +101,93 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}, nil
 }
 
-// readTeamInvestment is CHAOS-3780's original investment_metrics_daily read,
-// unchanged in behavior, factored out so ReadFacts can branch by subject
-// kind the same way metrics.go/health.go already do.
+// readTeamInvestment is CHAOS-3780's original investment_metrics_daily read.
+// The query itself (row_number() tiebreak over day/computed_at/cityHash64
+// for the F4 intraday-rerun shape) now lives in
+// readers.ReadTeamInvestment -- see that function's doc comment for the
+// full tiebreak reasoning. This adapter keeps the CanonicalFact-building
+// half, factored out so ReadFacts can branch by subject kind the same way
+// metrics.go/health.go already do.
 func (p *InvestmentProvider) readTeamInvestment(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
 	ids, bySubject := subjectIndex(subjects, teamPrefix)
-	// row_number() OVER (PARTITION BY team_id, investment_area,
-	// project_stream ORDER BY day DESC, computed_at DESC) picks the single
-	// most recent already-computed row for each (team, area, stream)
-	// triple -- a selection, never an aggregation, of Ops' own published
-	// rows. computed_at breaks same-day reruns deterministically (F4).
-	//
-	// day/computed_at is still not a TOTAL order (Codex round-2 finding
-	// M1): investment_metrics_daily has no per-row unique id, so two rows
-	// could share both. cityHash64 of the value columns is the final
-	// tiebreaker -- arbitrary among an exact tie, but stable.
-	statement := withRowLimit(`SELECT team_id, investment_area, project_stream, toString(day), toInt64(delivery_units), toInt64(work_items_completed), toInt64(prs_merged), churn_loc, cycle_p50_hours
-FROM (
-	SELECT team_id, investment_area, project_stream, day, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours,
-		row_number() OVER (PARTITION BY team_id, investment_area, project_stream ORDER BY day DESC, computed_at DESC, cityHash64(tuple(delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours)) DESC) AS rn
-	FROM investment_metrics_daily
-	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
-)
-WHERE rn = 1`)
-	rowCount := 0
+	rows, err := readers.ReadTeamInvestment(ctx, p.facts.client, orgID, ids, timeBound.neutral())
+	if err != nil {
+		return 0, 0, err
+	}
 	omittedUnrepresentableCount := 0
-	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		rowCount++
-		var teamID, investmentArea, projectStream, day string
-		var deliveryUnits, workItemsCompleted, prsMerged int64
+	for _, r := range rows {
 		// churn_loc is UInt64 and is NOT wrapped with toInt64 in SQL
 		// (round-3 F2): the wrap turned a value above MaxInt64 negative,
 		// and FactValue accepts negatives, so it would have reached a
 		// public answer as a wrong number. Range-checked here instead.
-		var rawChurnLOC uint64
-		var cycleP50Hours float64
-		if err := row.Scan(&teamID, &investmentArea, &projectStream, &day, &deliveryUnits, &workItemsCompleted, &prsMerged, &rawChurnLOC, &cycleP50Hours); err != nil {
-			return err
-		}
-		churnLOC, representable := representableInt64(rawChurnLOC)
+		churnLOC, representable := representableInt64(r.ChurnLOC)
 		if !representable {
 			omittedUnrepresentableCount++
-			return nil
+			continue
 		}
-		subject, ok := bySubject[teamID]
+		subject, ok := bySubject[r.TeamID]
 		if !ok {
-			return nil
+			continue
 		}
 		fields := map[string]contextfabric.FactValue{
-			"investment_area":      stringOrNull(investmentArea),
-			"day":                  contextfabric.StringFactValue(day),
-			"delivery_units":       contextfabric.IntegerFactValue(deliveryUnits),
-			"work_items_completed": contextfabric.IntegerFactValue(workItemsCompleted),
-			"prs_merged":           contextfabric.IntegerFactValue(prsMerged),
+			"investment_area":      stringOrNull(r.InvestmentArea),
+			"day":                  contextfabric.StringFactValue(r.Day),
+			"delivery_units":       contextfabric.IntegerFactValue(r.DeliveryUnits),
+			"work_items_completed": contextfabric.IntegerFactValue(r.WorkItemsCompleted),
+			"prs_merged":           contextfabric.IntegerFactValue(r.PRsMerged),
 			"churn_loc":            contextfabric.IntegerFactValue(churnLOC),
-			"cycle_p50_hours":      contextfabric.NumberFactValue(cycleP50Hours),
+			"cycle_p50_hours":      contextfabric.NumberFactValue(r.CycleP50Hours),
 		}
-		if projectStream != "" {
-			fields["project_stream"] = contextfabric.StringFactValue(projectStream)
+		if r.ProjectStream != "" {
+			fields["project_stream"] = contextfabric.StringFactValue(r.ProjectStream)
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactInvestment, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("team", teamID)},
+			EvidenceRefIDs: []string{evidenceRefID("team", r.TeamID)},
 		})
-		return nil
-	}, timeBound.bindings()...)
-	return rowCount, omittedUnrepresentableCount, scanErr
-}
-
-// investmentRollupRow is one (project, team) pair's contribution to a
-// project's investment rollup, scanned off the team_project_ownership join
-// before Go-side grouping. Investment rows are never summed across teams
-// (see readProjectInvestment's doc comment) so this only needs to carry
-// enough to render one team_breakdown row.
-type investmentRollupRow struct {
-	teamID, teamName, investmentArea, projectStream, day string
-	deliveryUnits, workItemsCompleted, prsMerged         int64
-	churnLOC                                             int64
-	cycleP50Hours                                        float64
+	}
+	return len(rows), omittedUnrepresentableCount, nil
 }
 
 // readProjectInvestment rolls FactInvestment up for a project through
 // projects -> team_project_ownership -> investment_metrics_daily: every
 // team owning the project contributes its own latest (area, stream) rows,
-// verbatim, into one renderable team_breakdown table. See this file's
-// package-level doc comment for why counts are never summed across teams
-// here (unlike metrics.go's commit counts).
+// verbatim, into one renderable team_breakdown table. The query itself now
+// lives in readers.ReadProjectInvestment; this adapter does the Go-side
+// grouping/breakdown-table construction the reader deliberately leaves to
+// its caller. See this file's package-level doc comment for why counts are
+// never summed across teams here (unlike metrics.go's commit counts).
 func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount, omittedUnrepresentableCount int, breakdownTruncated bool, err error) {
 	ids, bySubject := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
 		return 0, 0, false, nil
 	}
-	ownershipPredicate := ownershipValidityPredicate(timeBound)
-	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), tpo.team_id, ifNull(t.name, ''), im.investment_area, im.project_stream, toString(im.day), toInt64(im.delivery_units), toInt64(im.work_items_completed), toInt64(im.prs_merged), im.churn_loc, im.cycle_p50_hours
-FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
-INNER JOIN (
-	SELECT team_id, investment_area, project_stream, day, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours,
-		row_number() OVER (PARTITION BY team_id, investment_area, project_stream ORDER BY day DESC, computed_at DESC, cityHash64(tuple(delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours)) DESC) AS rn
-	FROM investment_metrics_daily
-	WHERE org_id = {org_id:String}` + timeBound.dayPredicate("day") + `
-) AS im ON im.team_id = tpo.team_id AND im.rn = 1
-LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
-ORDER BY p.id, tpo.team_id, im.investment_area, im.project_stream`)
-	byProject := make(map[string][]investmentRollupRow)
+	scanned, err := readers.ReadProjectInvestment(ctx, p.facts.client, orgID, ids, timeBound.neutral())
+	if err != nil {
+		return 0, 0, false, err
+	}
+	rowCount = len(scanned)
+	byProject := make(map[string][]readers.InvestmentProjectRow)
 	var projectOrder []string
-	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		rowCount++
-		var projectSubjectKey, teamID, teamName, investmentArea, projectStream, day string
-		var deliveryUnits, workItemsCompleted, prsMerged int64
-		var rawChurnLOC uint64
-		var cycleP50Hours float64
-		if err := row.Scan(&projectSubjectKey, &teamID, &teamName, &investmentArea, &projectStream, &day, &deliveryUnits, &workItemsCompleted, &prsMerged, &rawChurnLOC, &cycleP50Hours); err != nil {
-			return err
+	for _, r := range scanned {
+		if _, ok := bySubject[r.ProjectSubjectKey]; !ok {
+			continue
 		}
-		if _, ok := bySubject[projectSubjectKey]; !ok {
-			return nil
-		}
-		churnLOC, representable := representableInt64(rawChurnLOC)
-		if !representable {
+		// churn_loc is UInt64 and is NOT wrapped with toInt64 in SQL
+		// (round-3 F2): the wrap turned a value above MaxInt64 negative,
+		// and FactValue accepts negatives, so it would have reached a
+		// public answer as a wrong number. Range-checked here instead.
+		if _, representable := representableInt64(r.ChurnLOC); !representable {
 			// Round-1 P2: counted, not silently dropped -- the team-level
 			// readTeamInvestment path already does this; the project rollup
 			// must not report complete coverage while omitting a source row.
 			omittedUnrepresentableCount++
-			return nil
+			continue
 		}
-		if _, seen := byProject[projectSubjectKey]; !seen {
-			projectOrder = append(projectOrder, projectSubjectKey)
+		if _, seen := byProject[r.ProjectSubjectKey]; !seen {
+			projectOrder = append(projectOrder, r.ProjectSubjectKey)
 		}
-		byProject[projectSubjectKey] = append(byProject[projectSubjectKey], investmentRollupRow{
-			teamID: teamID, teamName: teamName, investmentArea: investmentArea, projectStream: projectStream, day: day,
-			deliveryUnits: deliveryUnits, workItemsCompleted: workItemsCompleted, prsMerged: prsMerged,
-			churnLOC: churnLOC, cycleP50Hours: cycleP50Hours,
-		})
-		return nil
-	}, timeBound.bindings()...)
-	if scanErr != nil {
-		return rowCount, omittedUnrepresentableCount, false, scanErr
+		byProject[r.ProjectSubjectKey] = append(byProject[r.ProjectSubjectKey], r)
 	}
 	for _, projectKey := range projectOrder {
 		rows := byProject[projectKey]
@@ -246,26 +198,30 @@ ORDER BY p.id, tpo.team_id, im.investment_area, im.project_stream`)
 		evidenceRefIDs := make([]string, 0, len(rows)+1)
 		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("project", projectKey))
 		for _, r := range rows {
-			dedupeKey := r.teamID + "\x00" + r.investmentArea + "\x00" + r.projectStream
+			dedupeKey := r.TeamID + "\x00" + r.InvestmentArea + "\x00" + r.ProjectStream
 			if dedupeTeamRow(seenTeamAreaStream, dedupeKey) {
 				continue
 			}
-			if !dedupeTeamRow(seenTeams, r.teamID) {
-				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("team", r.teamID))
+			if !dedupeTeamRow(seenTeams, r.TeamID) {
+				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("team", r.TeamID))
 			}
+			// churnLOC's representability was already verified in the scan
+			// loop above (non-representable rows never reach byProject), so
+			// the conversion here cannot fail.
+			churnLOC, _ := representableInt64(r.ChurnLOC)
 			rowFields := map[string]contextfabric.FactValue{
-				"team_id":              contextfabric.StringFactValue(r.teamID),
-				"team_name":            stringOrNull(r.teamName),
-				"day":                  contextfabric.StringFactValue(r.day),
-				"delivery_units":       contextfabric.IntegerFactValue(r.deliveryUnits),
-				"work_items_completed": contextfabric.IntegerFactValue(r.workItemsCompleted),
-				"prs_merged":           contextfabric.IntegerFactValue(r.prsMerged),
-				"churn_loc":            contextfabric.IntegerFactValue(r.churnLOC),
-				"cycle_p50_hours":      contextfabric.NumberFactValue(r.cycleP50Hours),
-				"investment_area":      stringOrNull(r.investmentArea),
+				"team_id":              contextfabric.StringFactValue(r.TeamID),
+				"team_name":            stringOrNull(r.TeamName),
+				"day":                  contextfabric.StringFactValue(r.Day),
+				"delivery_units":       contextfabric.IntegerFactValue(r.DeliveryUnits),
+				"work_items_completed": contextfabric.IntegerFactValue(r.WorkItemsCompleted),
+				"prs_merged":           contextfabric.IntegerFactValue(r.PRsMerged),
+				"churn_loc":            contextfabric.IntegerFactValue(churnLOC),
+				"cycle_p50_hours":      contextfabric.NumberFactValue(r.CycleP50Hours),
+				"investment_area":      stringOrNull(r.InvestmentArea),
 			}
-			if r.projectStream != "" {
-				rowFields["project_stream"] = contextfabric.StringFactValue(r.projectStream)
+			if r.ProjectStream != "" {
+				rowFields["project_stream"] = contextfabric.StringFactValue(r.ProjectStream)
 			}
 			teamRows = append(teamRows, contextfabric.FactValueRow{Fields: rowFields})
 		}
