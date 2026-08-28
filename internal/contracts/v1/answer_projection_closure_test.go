@@ -246,7 +246,18 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// RankingBasis/DataCompleteness. Widening the projection is PR3's
 		// job (cohort-answer-plan.md item 8: needs an ask-dev pin bump,
 		// tracked as a PR1 follow-up), not this PR's.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 154},
+		// CHAOS-4398 PR3 (WIP): 154 -> 160 -- ProjectedCohortMember gained
+		// the mirrored per-member driver fields (signal, window,
+		// threshold_labels[], concentration_method), six new string
+		// leaves, the same reasoning as the CHAOS-4347 Rows bump above.
+		// CHAOS-4398 PR3: 160 -> 162 -- ProjectedCohortMember gained
+		// outcome/missing_signals[], the same two new leaves already
+		// bumped into the investigation_result surface below (246 ->
+		// 248) -- this surface's pin was missed in the same commit. Both
+		// leaves are already allowlisted in trustedBecauseClosed
+		// ("outcome" and "missing_signals" cases), so no new
+		// classification is needed here, only the pin.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 162},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -264,7 +275,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// CHAOS-4398: 240 -> 242 -- same two new string leaves as the
 		// answer_projection surface above (ContextFabricCohortMember is
 		// shared by both surfaces).
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 245},
+		// CHAOS-4398 PR3: 246 -> 248 -- ContextFabricCohortMember's new
+		// outcome/missing_signals[] leaves.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 248},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -375,7 +388,18 @@ func trustedBecauseClosed(path string) bool {
 		// "threshold_labels" is an ARRAY drawn from the SAME closed
 		// registry ranking_basis above already trusts -- never free-form
 		// model prose; see ContextFabricCohortMemberDriver.validate.
-		"signal", "window", "threshold_labels":
+		"signal", "window", "threshold_labels",
+		// CHAOS-4398 PR3: "concentration_method" is
+		// ContextFabricCohortMemberDriver.ConcentrationMethod, a closed
+		// vocabulary ("max_share" today, "hhi" once CHAOS-4414 lands)
+		// validated against its own registry before a result is stored --
+		// never free-form model prose; see
+		// validContextFabricCohortMemberDriverConcentrationMethod.
+		// "missing_signals" is an ARRAY drawn from the same closed
+		// family-name registry ranking_basis/threshold_labels already
+		// trust (contextFabricCohortMemberDriverWeights) -- never
+		// free-form model prose; see validContextFabricCohortMemberOutcome.
+		"concentration_method", "missing_signals":
 		return true
 	// Opaque identifiers and digests: frozen handles, never prose.
 	case "result_id", "request_id", "receipt_id", "driver_id", "claim_id",

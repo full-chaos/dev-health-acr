@@ -879,6 +879,13 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			// ReuseKey.CommitGateVersion for why this dimension's absence
 			// would be a safety hole rather than a staleness one.
 			CommitGateVersion: contextfabric.CommitGateVersion,
+			// CHAOS-4398 PR3 (R4 ruling): one more deployment-current
+			// version authority -- contextfabric's own cohort ranking
+			// formula (RankCohort's weights/thresholds/signal set). Wired
+			// unconditionally, same reasoning as its six siblings; see
+			// ReuseKey.RankingFormulaVersion for why RankCohort running
+			// after FindReusable makes fencing on it mandatory.
+			RankingFormulaVersion: contextfabric.RankingFormulaVersion,
 		},
 	})
 	if err != nil {

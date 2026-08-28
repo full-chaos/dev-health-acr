@@ -663,3 +663,67 @@ func TestDriverSelectionIsOrderIndependent(t *testing.T) {
 		t.Errorf("retained %v, want the two lowest driver IDs %v", want, ids[:2])
 	}
 }
+
+// TestProjectCohortCopiesRankingFieldsVerbatim is CHAOS-4398 PR3 (design
+// doc §4a): RankingComputed/AttentionRank/Score/RankingBasis/DataCompleteness
+// must reach the answer-projection surface, not just the canonical result --
+// before this, ContextFabricProjectedCohortMember carried only Subject/Rank/
+// InclusionReasons/EvidenceRefIDs, so a bounded consumer (API/MCP/Ask Dev)
+// could never see a computed ranking at all.
+func TestProjectCohortCopiesRankingFieldsVerbatim(t *testing.T) {
+	t.Parallel()
+	result := richResult()
+	score := 42.5
+	result.Cohort.Members[0].RankingComputed = true
+	result.Cohort.Members[0].AttentionRank = 1
+	result.Cohort.Members[0].Score = &score
+	result.Cohort.Members[0].RankingBasis = []string{"health.compounding_risk"}
+	result.Cohort.Members[0].DataCompleteness = contractsv1.ContextFabricCohortDataDegraded
+	// The second member deliberately stays unranked (RankingComputed
+	// false, every ranking field zero) -- proving the projection does not
+	// fabricate a ranking for a member RankCohort never touched.
+
+	projection := Project(result, DefaultBudget)
+	if projection.Cohort == nil || len(projection.Cohort.Members) != 2 {
+		t.Fatalf("Cohort = %#v, want 2 members", projection.Cohort)
+	}
+	ranked := projection.Cohort.Members[0]
+	if !ranked.RankingComputed || ranked.AttentionRank != 1 || ranked.Score == nil || *ranked.Score != score ||
+		len(ranked.RankingBasis) != 1 || ranked.RankingBasis[0] != "health.compounding_risk" ||
+		ranked.DataCompleteness != contractsv1.ContextFabricCohortDataDegraded {
+		t.Fatalf("ranked member = %#v, want ranking fields copied verbatim from the canonical member", ranked)
+	}
+	unranked := projection.Cohort.Members[1]
+	if unranked.RankingComputed || unranked.AttentionRank != 0 || unranked.Score != nil || len(unranked.RankingBasis) != 0 || unranked.DataCompleteness != "" {
+		t.Fatalf("unranked member = %#v, want every ranking field absent/zero", unranked)
+	}
+}
+
+// TestProjectDriverCopiesAffectedSubjects is CHAOS-4398 PR3 (design doc
+// §4a): a cohort-answer driver (unlike a single-subject answer's, where the
+// subject is implicit) must be tied back to which team(s) it explains.
+func TestProjectDriverCopiesAffectedSubjects(t *testing.T) {
+	t.Parallel()
+	result := richResult()
+	projection := Project(result, DefaultBudget)
+	if len(projection.PrincipalDrivers) == 0 {
+		t.Fatal("PrincipalDrivers is empty, want at least one retained driver")
+	}
+	for i, projected := range projection.PrincipalDrivers {
+		canonical := findCanonicalDriver(t, result.Drivers, projected.DriverID)
+		if !reflect.DeepEqual(projected.AffectedSubjects, canonical.AffectedSubjects) {
+			t.Errorf("driver[%d] (%s) AffectedSubjects = %#v, want %#v (copied verbatim)", i, projected.DriverID, projected.AffectedSubjects, canonical.AffectedSubjects)
+		}
+	}
+}
+
+func findCanonicalDriver(t *testing.T, drivers []contractsv1.ContextFabricDriverJudgment, id string) contractsv1.ContextFabricDriverJudgment {
+	t.Helper()
+	for _, d := range drivers {
+		if d.DriverID == id {
+			return d
+		}
+	}
+	t.Fatalf("no canonical driver with id %q", id)
+	return contractsv1.ContextFabricDriverJudgment{}
+}

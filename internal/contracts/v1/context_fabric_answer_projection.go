@@ -184,6 +184,18 @@ type ContextFabricProjectedCohort struct {
 	Rationale string                               `json:"rationale"`
 	Complete  bool                                 `json:"complete"`
 	Members   []ContextFabricProjectedCohortMember `json:"members"`
+	// RankingTable (CHAOS-4398 PR3, design doc §4a) is the Rows-panel
+	// rendering of the cohort's ranking: one row per surviving member, in
+	// AttentionRank order, columns for rank/score/data_completeness/window
+	// and the member's top drivers -- built from data ContextFabricCohortMember/
+	// ContextFabricCohortMemberDriver already carry, never re-derived or
+	// re-judged here. Reuses ContextFabricClaimedFactRow (the same row type
+	// ContextFabricProjectedFact.Rows already uses) rather than a bespoke
+	// struct, so a Rows-rendering consumer has ONE row shape to handle.
+	// Absent (nil) when RankCohort never ran for this cohort (RankingComputed
+	// false on every member) -- the same "not computed" distinction
+	// RankingComputed itself makes on the canonical member.
+	RankingTable []ContextFabricClaimedFactRow `json:"ranking_table,omitempty"`
 }
 
 // ContextFabricProjectedCohortMember keeps the canonical Rank so a consumer
@@ -193,6 +205,21 @@ type ContextFabricProjectedCohortMember struct {
 	Rank             int                     `json:"rank"`
 	InclusionReasons []string                `json:"inclusion_reasons"`
 	EvidenceRefIDs   []string                `json:"evidence_ref_ids,omitempty"`
+	// RankingComputed/AttentionRank/Score/RankingBasis/DataCompleteness/
+	// Outcome/MissingSignals (CHAOS-4398 PR3, design doc §4a/§8) mirror the
+	// SAME fields on the canonical ContextFabricCohortMember verbatim --
+	// copied, never recomputed or renarrated here. See that type's own doc
+	// comments for what each means; the presence/pairing invariants are
+	// identical (RankingComputed false implies every other field here is
+	// absent/zero too). Additive v1: a pre-PR1 projection simply omits all
+	// seven.
+	RankingComputed  bool                                `json:"ranking_computed,omitempty"`
+	AttentionRank    int                                 `json:"attention_rank,omitempty"`
+	Score            *float64                            `json:"score,omitempty"`
+	RankingBasis     []string                            `json:"ranking_basis,omitempty"`
+	DataCompleteness ContextFabricCohortDataCompleteness `json:"data_completeness,omitempty"`
+	Outcome          ContextFabricCohortMemberOutcome    `json:"outcome,omitempty"`
+	MissingSignals   []string                            `json:"missing_signals,omitempty"`
 }
 
 // ContextFabricProjectedDriver is one driver judgment, narrowed to what a
@@ -209,6 +236,13 @@ type ContextFabricProjectedDriver struct {
 	Confidence     float64                     `json:"confidence"`
 	EvidenceRefIDs []string                    `json:"evidence_ref_ids"`
 	ClaimedFactIDs []string                    `json:"claimed_fact_ids,omitempty"`
+	// AffectedSubjects (CHAOS-4398 PR3, design doc §4a) names which cohort
+	// member(s) this driver judgment is about -- copied verbatim from the
+	// canonical ContextFabricDriverJudgment.AffectedSubjects. Without this,
+	// a cohort-answer driver (unlike a single-subject answer's, where the
+	// subject is implicit) cannot be tied back to which team it explains.
+	// Additive v1: omitempty, absent for every pre-PR3 driver.
+	AffectedSubjects []ContextFabricSubjectRef `json:"affected_subjects,omitempty"`
 }
 
 // ContextFabricProjectedFact is a claimed fact a retained driver cites,

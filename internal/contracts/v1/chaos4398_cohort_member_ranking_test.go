@@ -13,6 +13,8 @@ func baseRankedCohortMember() ContextFabricCohortMember {
 		AttentionRank:    1,
 		RankingBasis:     []string{"health.compounding_risk"},
 		DataCompleteness: ContextFabricCohortDataDegraded,
+		Outcome:          ContextFabricCohortOutcomeProvisional,
+		MissingSignals:   []string{"investment_mix", "operational_deficiencies.severity", "readiness.coverage_gap", "workload.forecast_pressure"},
 	}
 }
 
@@ -33,9 +35,10 @@ func TestContextFabricCohortMember_ScoreRejectsNonFinite(t *testing.T) {
 	}
 }
 
-func nan() float64    { var zero float64; return zero / zero }
-func posInf() float64 { var zero float64; return 1 / zero }
-func negInf() float64 { var zero float64; return -1 / zero }
+func nan() float64                { var zero float64; return zero / zero }
+func posInf() float64             { var zero float64; return 1 / zero }
+func negInf() float64             { var zero float64; return -1 / zero }
+func floatPtr(v float64) *float64 { return &v }
 
 // TestContextFabricCohortMember_RankingBasisRejectsOutOfVocabulary proves
 // RankingBasis entries are checked against the closed vocabulary, not just
@@ -71,6 +74,8 @@ func TestContextFabricCohortMember_RankingBasisAcceptsEveryClosedLabel(t *testin
 	member := baseRankedCohortMember()
 	member.Score = &score
 	member.DataCompleteness = ContextFabricCohortDataComplete
+	member.Outcome = ContextFabricCohortOutcomeQualified // all 5 families present
+	member.MissingSignals = nil
 	member.RankingBasis = labels
 	// investment_mix claims ALL 4 threshold labels -- its own Value must
 	// equal the exact sum of their sub-weights (codex R3 finding 3):
@@ -85,7 +90,7 @@ func TestContextFabricCohortMember_RankingBasisAcceptsEveryClosedLabel(t *testin
 		{Signal: "investment_mix", Value: 1.0, Weight: 30, WeightContributed: 30, Window: ContextFabricCohortMemberDriverWindowCurrentVsPrior, ThresholdLabels: []string{
 			"investment_mix.reactive_share_high", "investment_mix.deliberate_share_low",
 			"investment_mix.mix_concentrated", "investment_mix.mix_shift_other",
-		}},
+		}, Concentration: floatPtr(0.6), ConcentrationMethod: "max_share"},
 		{Signal: "health.compounding_risk", Value: 0.4, Weight: 25, WeightContributed: 10, Window: ContextFabricCohortMemberDriverWindowCurrent},
 		{Signal: "operational_deficiencies.severity", Value: 0.5, Weight: 20, WeightContributed: 10, Window: ContextFabricCohortMemberDriverWindowCurrent},
 		{Signal: "readiness.coverage_gap", Value: 0.4, Weight: 15, WeightContributed: 6, Window: ContextFabricCohortMemberDriverWindowCurrent},
@@ -103,6 +108,8 @@ func TestContextFabricCohortMember_NilScoreValid(t *testing.T) {
 	member := baseRankedCohortMember()
 	member.Score = nil
 	member.RankingBasis = nil
+	member.Outcome = ContextFabricCohortOutcomeNotApplicable
+	member.MissingSignals = []string{"investment_mix", "health.compounding_risk", "operational_deficiencies.severity", "readiness.coverage_gap", "workload.forecast_pressure"}
 	if err := member.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil for a zero-signal (nil Score) member", err)
 	}
@@ -426,6 +433,7 @@ func investmentMixDriverForLabels(labels ...string) ContextFabricCohortMemberDri
 	return ContextFabricCohortMemberDriver{
 		Signal: "investment_mix", Value: value, Weight: 30, WeightContributed: 100 * value,
 		Window: ContextFabricCohortMemberDriverWindowCurrent, ThresholdLabels: labels,
+		Concentration: floatPtr(0.5), ConcentrationMethod: "max_share",
 	}
 }
 
@@ -508,5 +516,45 @@ func TestContextFabricCohortMember_DataCompletenessMustMatchDriverCount(t *testi
 	member.Drivers = []ContextFabricCohortMemberDriver{baseDriverForBasis()}
 	if err := member.Validate(); err == nil {
 		t.Fatal("Validate() = nil for data_completeness=complete with only 1 driver, want an error")
+	}
+}
+
+// ---------------------------------------------------------------------
+// PR3: Concentration/ConcentrationMethod
+// ---------------------------------------------------------------------
+
+// TestContextFabricCohortMemberDriver_InvestmentMixRequiresConcentration
+// proves an investment_mix driver missing Concentration is rejected --
+// investmentMixSignal always sets it whenever the family is available.
+func TestContextFabricCohortMemberDriver_InvestmentMixRequiresConcentration(t *testing.T) {
+	t.Parallel()
+	d := investmentMixDriverForLabels()
+	d.Concentration = nil
+	d.ConcentrationMethod = ""
+	if err := d.Validate(); err == nil {
+		t.Fatal("Validate() = nil for an investment_mix driver with no concentration, want an error")
+	}
+}
+
+// TestContextFabricCohortMemberDriver_ConcentrationRejectsUnrecognizedMethod
+// proves ConcentrationMethod is checked against a closed vocabulary.
+func TestContextFabricCohortMemberDriver_ConcentrationRejectsUnrecognizedMethod(t *testing.T) {
+	t.Parallel()
+	d := investmentMixDriverForLabels()
+	d.ConcentrationMethod = "hhi" // not yet a recognized value (CHAOS-4414, not shipped)
+	if err := d.Validate(); err == nil {
+		t.Fatal("Validate() = nil for an unrecognized concentration_method, want an error")
+	}
+}
+
+// TestContextFabricCohortMemberDriver_ConcentrationOnlyValidForInvestmentMix
+// proves a non-investment_mix driver cannot carry Concentration.
+func TestContextFabricCohortMemberDriver_ConcentrationOnlyValidForInvestmentMix(t *testing.T) {
+	t.Parallel()
+	d := baseDriverForBasis() // health.compounding_risk
+	d.Concentration = floatPtr(0.5)
+	d.ConcentrationMethod = "max_share"
+	if err := d.Validate(); err == nil {
+		t.Fatal("Validate() = nil for a non-investment_mix driver carrying concentration, want an error")
 	}
 }

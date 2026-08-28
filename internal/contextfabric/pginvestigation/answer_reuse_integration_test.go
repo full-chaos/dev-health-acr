@@ -94,6 +94,11 @@ var testReuseVersionAuthorities = contextfabric.ReuseVersionAuthorities{
 	// commit-gate fence. FindReusable fails CLOSED on an unset value, so
 	// leaving this blank would make every test in this file miss.
 	CommitGateVersion: contextfabric.CommitGateVersion,
+	// CHAOS-4398 PR3 (R4 ruling): same mirrored discipline, one more
+	// dimension -- the cohort ranking formula fence. FindReusable fails
+	// CLOSED on an unset value, so leaving this blank would make every
+	// test in this file miss.
+	RankingFormulaVersion: contextfabric.RankingFormulaVersion,
 }
 
 func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKey {
@@ -115,9 +120,12 @@ func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKe
 		// CHAOS-4085: same mirror, one more dimension (the commit-gate
 		// fence).
 		CommitGateVersion: testReuseVersionAuthorities.CommitGateVersion,
-		QuestionHash:      contextfabric.QuestionHash(result.Question),
-		ContractVersion:   result.Versions.ContractVersion,
-		ProjectionVersion: result.Versions.ProjectionVersion,
+		// CHAOS-4398 PR3 (R4 ruling): same mirror, one more dimension (the
+		// cohort ranking formula fence).
+		RankingFormulaVersion: testReuseVersionAuthorities.RankingFormulaVersion,
+		QuestionHash:          contextfabric.QuestionHash(result.Question),
+		ContractVersion:       result.Versions.ContractVersion,
+		ProjectionVersion:     result.Versions.ProjectionVersion,
 		// A single-member chain: the exact identity this result was
 		// stored under. Most tests in this file want the baseline "the
 		// key that was actually stored still matches" case; CHAOS-3786
@@ -1245,4 +1253,90 @@ func TestFindReusable_EmptyVersionAuthorityKeyFieldsMissWithoutQuerying(t *testi
 	_, ok, _, err = store.FindReusable(ctx, principal, missing)
 	require.NoError(t, err)
 	require.False(t, ok, "expected an empty model-output schema version in the key to miss")
+}
+
+// TestFindReusable_RankingFormulaVersionIsConjunctive is the CHAOS-4398 PR3
+// R4-ruling regression: RankCohort runs AFTER FindReusable (engine.go), so
+// a stored cohort answer computed under an OLD ranking formula version must
+// NOT be served as a reuse hit once the deployment's formula version has
+// moved on -- exactly the bug this dimension exists to close (a stale
+// cohort answer's Score/Outcome/RankingBasis silently reused under the NEW
+// formula's meaning). Mirrors QueryVersionIsConjunctive's own shape: same
+// key, only this ONE dimension diverges.
+func TestFindReusable_RankingFormulaVersionIsConjunctive(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-ranking-formula-version"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	// Saved under the deployment-current formula version (simulating a
+	// cohort answer computed by THIS binary's RankCohort).
+	result := reusableResult("result_reuse_ranking_formula01", principal.OrgID, "Which teams in this cohort are struggling most?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	// A later binary deploys a bumped formula version (a new weight, a new
+	// threshold, a new signal -- design doc §8's own v1 -> v2 change). The
+	// stored row -- computed under the OLD formula -- must miss.
+	bumped := reuseKeyFor(result)
+	bumped.RankingFormulaVersion = "cohort-ranking.v3"
+	_, ok, _, err := store.FindReusable(ctx, principal, bumped)
+	require.NoError(t, err)
+	require.False(t, ok, "expected a stale cohort answer computed under an old ranking formula version to miss after the formula version changed, not be silently reused under the new formula's semantics")
+
+	// The identical formula version still matches -- this dimension does
+	// not defeat reuse for an unrelated, unchanged deploy.
+	_, ok, _, err = store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.True(t, ok, "expected the identical ranking formula version to still match")
+}
+
+// TestFindReusable_PreMigrationNullRankingFormulaVersionColumnNeverMatches
+// is the CHAOS-4398 PR3 twin of
+// TestFindReusable_PreMigrationNullVersionAuthorityColumnsNeverMatch: a
+// pre-migration-0035 row holds NULL in ranking_formula_version, and NULL
+// never satisfies an equality predicate -- so a genuinely pre-PR3 stored
+// row (this binary never populated the column at all) is permanently
+// excluded from reuse on this dimension, no backfill required.
+func TestFindReusable_PreMigrationNullRankingFormulaVersionColumnNeverMatches(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-ranking-formula-pre-migration"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_rf_premigration01", principal.OrgID, "Is a pre-migration ranking-formula row unreusable?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	_, err := db.ExecContext(ctx, `
+UPDATE acr.context_fabric_investigation_results
+   SET ranking_formula_version = NULL
+ WHERE result_id = $1`, result.ResultID)
+	require.NoError(t, err)
+
+	_, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.False(t, ok, "expected a pre-0035-shaped row (NULL ranking_formula_version) to never match the conjunctive predicate")
+}
+
+// TestFindReusable_EmptyRankingFormulaVersionKeyFieldMissesWithoutQuerying
+// is the CHAOS-4398 PR3 twin of
+// TestFindReusable_EmptyVersionAuthorityKeyFieldsMissWithoutQuerying: a
+// composition that never wired RankingFormulaVersion must produce an
+// ordinary miss, never a lookup that silently ignores the dimension.
+func TestFindReusable_EmptyRankingFormulaVersionKeyFieldMissesWithoutQuerying(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-empty-ranking-formula-key"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_rf_emptykey01", principal.OrgID, "Does an empty ranking-formula key fail closed?")
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	missing := reuseKeyFor(result)
+	missing.RankingFormulaVersion = ""
+	_, ok, _, err := store.FindReusable(ctx, principal, missing)
+	require.NoError(t, err)
+	require.False(t, ok, "expected an empty ranking formula version in the key to miss")
 }

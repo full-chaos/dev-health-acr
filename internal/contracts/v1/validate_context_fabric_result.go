@@ -293,6 +293,22 @@ type contextFabricBounds struct {
 	// together, so the write path enforces the full correspondence +
 	// Sum(WeightContributed)==Score invariant.
 	cohortMemberDriversRequired bool
+	// cohortMemberOutcomeRequired (CHAOS-4398 PR3) is the SAME write-only
+	// split as cohortMemberDriversRequired above, for Outcome/
+	// MissingSignals -- PR1/PR2-era persisted rows never had them.
+	cohortMemberOutcomeRequired bool
+	// cohortMemberMissingSignals bounds MissingSignals -- 5 (one per
+	// signal family, never more), same one-value-for-both-bound-sets
+	// reasoning as cohortMemberDrivers.
+	cohortMemberMissingSignals int
+	// cohortMemberDriverConcentrationRequired (CHAOS-4398 PR3, codex R1)
+	// is the SAME write-only split as cohortMemberOutcomeRequired above:
+	// PR2 already shipped and persisted real investment_mix driver rows
+	// before Concentration/ConcentrationMethod existed, so a row read back
+	// via validateStored must tolerate an investment_mix driver with
+	// neither field. A freshly produced row (Validate(), write bounds) has
+	// no such excuse -- investmentMixSignal always sets both together.
+	cohortMemberDriverConcentrationRequired bool
 }
 
 // contextFabricRelationshipPathMaxNodes is the Go-enforced ceiling on path
@@ -304,32 +320,35 @@ const contextFabricRelationshipPathMaxNodes = 51
 
 // contextFabricWriteBounds matches the published JSON Schema exactly.
 var contextFabricWriteBounds = contextFabricBounds{
-	closedFindingKinds:                true,
-	rawTextLength:                     true,
-	cohortInclusionReasons:            32,
-	cohortInclusionReasonLength:       1000,
-	narrativeCount:                    ContextFabricLimitationsMaxCount,
-	narrativeLength:                   ContextFabricLimitationMaxLength,
-	coverageEntries:                   100,
-	matchedTerms:                      32,
-	matchedTermLength:                 512,
-	matchReasons:                      32,
-	matchReasonLength:                 1000,
-	pathEvidenceRefs:                  200,
-	pathWhyRelevantLength:             2000,
-	factParameterValueLength:          ContextFabricFactRequirementParameterValueMaxLength,
-	judgmentLength:                    ContextFabricDirectJudgmentMaxLength,
-	deterministicAnswerLength:         ContextFabricDeterministicAnswerMaxLength,
-	nestedEvidenceRefs:                ContextFabricNestedEvidenceRefIDsMaxCount,
-	interpretationTerms:               ContextFabricSubjectTermsMaxCount,
-	candidateEvidenceRefs:             100,
-	cohortExclusionReasonLength:       1000,
-	memberEvidenceRefs:                100,
-	cohortMemberRankingBasis:          16,
-	cohortMemberRankingBasisLength:    128,
-	cohortMemberDrivers:               5,
-	cohortMemberDriverThresholdLabels: 4,
-	cohortMemberDriversRequired:       true,
+	closedFindingKinds:                      true,
+	rawTextLength:                           true,
+	cohortInclusionReasons:                  32,
+	cohortInclusionReasonLength:             1000,
+	narrativeCount:                          ContextFabricLimitationsMaxCount,
+	narrativeLength:                         ContextFabricLimitationMaxLength,
+	coverageEntries:                         100,
+	matchedTerms:                            32,
+	matchedTermLength:                       512,
+	matchReasons:                            32,
+	matchReasonLength:                       1000,
+	pathEvidenceRefs:                        200,
+	pathWhyRelevantLength:                   2000,
+	factParameterValueLength:                ContextFabricFactRequirementParameterValueMaxLength,
+	judgmentLength:                          ContextFabricDirectJudgmentMaxLength,
+	deterministicAnswerLength:               ContextFabricDeterministicAnswerMaxLength,
+	nestedEvidenceRefs:                      ContextFabricNestedEvidenceRefIDsMaxCount,
+	interpretationTerms:                     ContextFabricSubjectTermsMaxCount,
+	candidateEvidenceRefs:                   100,
+	cohortExclusionReasonLength:             1000,
+	memberEvidenceRefs:                      100,
+	cohortMemberRankingBasis:                16,
+	cohortMemberRankingBasisLength:          128,
+	cohortMemberDrivers:                     5,
+	cohortMemberDriverThresholdLabels:       4,
+	cohortMemberDriversRequired:             true,
+	cohortMemberOutcomeRequired:             true,
+	cohortMemberMissingSignals:              5,
+	cohortMemberDriverConcentrationRequired: true,
 }
 
 // contextFabricLegacyBounds is what the Go validator alone used to accept.
@@ -361,6 +380,8 @@ var contextFabricLegacyBounds = contextFabricBounds{
 	cohortMemberDrivers:               5,
 	cohortMemberDriverThresholdLabels: 4,
 	cohortMemberDriversRequired:       false,
+	cohortMemberOutcomeRequired:       false,
+	cohortMemberMissingSignals:        5,
 }
 
 // Validate enforces the CURRENT contract bounds. This is the write path and
@@ -393,7 +414,7 @@ func (m ContextFabricCohortMember) validate(bounds contextFabricBounds) error {
 	// available signal families -- "nothing contributed", not a producer
 	// bug).
 	if !m.RankingComputed {
-		if m.Score != nil || m.AttentionRank != 0 || m.DataCompleteness != "" || len(m.RankingBasis) > 0 || len(m.Drivers) > 0 {
+		if m.Score != nil || m.AttentionRank != 0 || m.DataCompleteness != "" || len(m.RankingBasis) > 0 || len(m.Drivers) > 0 || m.Outcome != "" || len(m.MissingSignals) > 0 {
 			return fmt.Errorf("cohort member ranking fields set without ranking_computed")
 		}
 		return nil
@@ -414,13 +435,46 @@ func (m ContextFabricCohortMember) validate(bounds contextFabricBounds) error {
 	if !validContextFabricCohortDataCompleteness(m.DataCompleteness) || m.DataCompleteness == "" {
 		return fmt.Errorf("cohort member data completeness is not a recognized value")
 	}
-	// A nil Score is ONLY the §5b zero-signal-family shape: DataCompleteness
-	// must read degraded and RankingBasis must be empty together with it --
-	// a nil Score paired with any OTHER completeness value, or a non-empty
-	// basis, would claim signals contributed to a score that does not
-	// exist.
-	if m.Score == nil && (m.DataCompleteness != ContextFabricCohortDataDegraded || len(m.RankingBasis) > 0 || len(m.Drivers) > 0) {
-		return fmt.Errorf("cohort member nil score must be paired with degraded completeness, an empty ranking basis, and no drivers")
+	if m.Score == nil && (len(m.RankingBasis) > 0 || len(m.Drivers) > 0) {
+		return fmt.Errorf("cohort member nil score must be paired with an empty ranking basis and no drivers")
+	}
+	// Outcome/MissingSignals (CHAOS-4398 PR3, design doc §8) are REQUIRED
+	// whenever RankingComputed on the WRITE path -- a PR1/PR2-era
+	// persisted row (Outcome never existed yet) must stay readable on the
+	// legacy path, the SAME cohortMemberDriversRequired-style split
+	// Drivers already uses; gated on Outcome's own presence too, so a
+	// PR3-written row re-validated via the legacy path is still checked
+	// fully (it was written under the strict rule, so it always passes).
+	if bounds.cohortMemberOutcomeRequired || m.Outcome != "" {
+		if !validContextFabricCohortMemberOutcome(m.Outcome) || m.Outcome == "" {
+			return fmt.Errorf("cohort member outcome is not a recognized value")
+		}
+		// Score is present iff Outcome is qualified/provisional, nil iff
+		// insufficient_evidence/not_applicable -- Outcome is the field a
+		// consumer reads to know WHY a member has no Score, not
+		// DataCompleteness (a pure data-availability measure, independent
+		// of Outcome: a degraded-completeness member CAN still be
+		// qualified/provisional with a real Score, e.g. investment_mix +
+		// health alone clears the threshold with only 2 of 5 families).
+		scoredOutcome := m.Outcome == ContextFabricCohortOutcomeQualified || m.Outcome == ContextFabricCohortOutcomeProvisional
+		if (m.Score != nil) != scoredOutcome {
+			return fmt.Errorf("cohort member score presence does not match outcome")
+		}
+		// MissingSignals is empty iff Outcome is qualified (nothing
+		// missing); non-empty for every other Outcome (qualification
+		// requires ALL 5 families, so anything short of qualified has left
+		// at least one out).
+		if (len(m.MissingSignals) == 0) != (m.Outcome == ContextFabricCohortOutcomeQualified) {
+			return fmt.Errorf("cohort member missing_signals presence does not match outcome")
+		}
+	}
+	if len(m.MissingSignals) > bounds.cohortMemberMissingSignals || !uniqueTrimmedStrings(m.MissingSignals, bounds.cohortMemberRankingBasisLength) {
+		return fmt.Errorf("cohort member missing signals violate v1 bounds")
+	}
+	for _, entry := range m.MissingSignals {
+		if _, isFamily := contextFabricCohortMemberDriverWeights[entry]; !isFamily {
+			return fmt.Errorf("cohort member missing signal is not a recognized family name")
+		}
 	}
 	if len(m.RankingBasis) > bounds.cohortMemberRankingBasis || !uniqueTrimmedStrings(m.RankingBasis, bounds.cohortMemberRankingBasisLength) {
 		return fmt.Errorf("cohort member ranking basis violates v1 bounds")
@@ -630,6 +684,34 @@ func (d ContextFabricCohortMemberDriver) validate(bounds contextFabricBounds) er
 		if !validContextFabricCohortRankingBasisLabel(label) || !strings.HasPrefix(label, d.Signal+".") {
 			return fmt.Errorf("cohort member driver threshold label is not a recognized value for its signal")
 		}
+	}
+	// Concentration/ConcentrationMethod (CHAOS-4398 PR3) are present iff
+	// Signal is investment_mix -- every other family never computes a
+	// concentration measure. investmentMixSignal always sets both together
+	// whenever the family is available (cohort_ranking.go), so a driver
+	// entry (which only exists when its family WAS available) always
+	// carries both for investment_mix, never one without the other.
+	if d.Signal == investmentMixSignalName {
+		if d.Concentration == nil {
+			if bounds.cohortMemberDriverConcentrationRequired {
+				return fmt.Errorf("cohort member investment_mix driver is missing concentration")
+			}
+		} else {
+			if math.IsNaN(*d.Concentration) || math.IsInf(*d.Concentration, 0) || *d.Concentration < 0 || *d.Concentration > 1 {
+				return fmt.Errorf("cohort member driver concentration violates v1 bounds")
+			}
+			if !validContextFabricCohortMemberDriverConcentrationMethod(d.ConcentrationMethod) {
+				return fmt.Errorf("cohort member driver concentration_method is not a recognized value")
+			}
+		}
+		if d.Concentration == nil && d.ConcentrationMethod != "" {
+			return fmt.Errorf("cohort member driver concentration_method requires concentration")
+		}
+		if bounds.cohortMemberDriverConcentrationRequired && d.ConcentrationMethod == "" {
+			return fmt.Errorf("cohort member investment_mix driver is missing concentration_method")
+		}
+	} else if d.Concentration != nil || d.ConcentrationMethod != "" {
+		return fmt.Errorf("cohort member driver concentration is only valid for investment_mix")
 	}
 	return nil
 }

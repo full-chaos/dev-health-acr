@@ -570,6 +570,12 @@ type CohortRankedEvent struct {
 	// draw from) to the count of members whose Score actually drew from
 	// it this call.
 	SignalsAvailable map[string]int
+	// OutcomeCounts (CHAOS-4398 PR3, design doc §8) maps a
+	// ContextFabricCohortMemberOutcome value to the count of members that
+	// landed there this call -- operational visibility into how often a
+	// cohort answer actually clears the qualification threshold, distinct
+	// from DegradedMemberCount's data-availability-only measure.
+	OutcomeCounts map[string]int
 }
 
 // Engine coordinates one open-ended investigation. It deliberately composes

@@ -677,6 +677,13 @@
           "health.compounding_risk"
         ],
         "data_completeness": "degraded",
+        "outcome": "provisional",
+        "missing_signals": [
+          "investment_mix",
+          "operational_deficiencies.severity",
+          "readiness.coverage_gap",
+          "workload.forecast_pressure"
+        ],
         "drivers": [
           {
             "signal": "health.compounding_risk",

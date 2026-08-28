@@ -694,17 +694,19 @@ func TestContextFabricSourceStatePrunedIsAcceptedAndParityHolds(t *testing.T) {
 }
 
 // collectSourceStateEnums walks the schema for every enum that looks like the
-// source-state vocabulary (identified by a value only it carries), so the
-// parity assertion covers ALL copies of it -- SourceObservation defines it
-// once and Coverage inlines it again, and an edit to only one is exactly the
-// drift this guards.
+// source-state vocabulary (identified by two values only it carries together
+// -- "not_applicable" alone also appears in CohortMember.outcome, so pruned
+// is required too), so the parity assertion covers ALL copies of it --
+// SourceObservation defines it once and Coverage inlines it again, and an
+// edit to only one is exactly the drift this guards.
 func collectSourceStateEnums(node any) [][]string {
 	var found [][]string
 	switch typed := node.(type) {
 	case map[string]any:
 		if rawEnum, ok := typed["enum"].([]any); ok {
 			values := make([]string, 0, len(rawEnum))
-			isSourceState := false
+			hasNotApplicable := false
+			hasPruned := false
 			for _, item := range rawEnum {
 				value, ok := item.(string)
 				if !ok {
@@ -712,11 +714,14 @@ func collectSourceStateEnums(node any) [][]string {
 					break
 				}
 				if value == "not_applicable" {
-					isSourceState = true
+					hasNotApplicable = true
+				}
+				if value == "pruned" {
+					hasPruned = true
 				}
 				values = append(values, value)
 			}
-			if isSourceState && values != nil {
+			if hasNotApplicable && hasPruned && values != nil {
 				found = append(found, values)
 			}
 		}

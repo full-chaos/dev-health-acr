@@ -189,6 +189,13 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	if questionHash.Valid && versionAuthorities.CommitGateVersion != "" {
 		commitGateVersion = sql.NullString{String: versionAuthorities.CommitGateVersion, Valid: true}
 	}
+	// CHAOS-4398 PR3 (R4 ruling): same gate, one more version authority
+	// (contextfabric's own cohort ranking formula -- weights, thresholds,
+	// signal set).
+	var rankingFormulaVersion sql.NullString
+	if questionHash.Valid && versionAuthorities.RankingFormulaVersion != "" {
+		rankingFormulaVersion = sql.NullString{String: versionAuthorities.RankingFormulaVersion, Valid: true}
+	}
 	// CHAOS-3781: the axis key is supplied by Engine from the CLAMPED
 	// EFFECTIVE request context, matching exactly what FindReusable will
 	// key with. It is NOT re-derived from result.Interpretation here -- an
@@ -224,12 +231,12 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch, timeAxisKey,
 		embedRetrievalIdentity, retrievalPolicyVersion, interpretationPromptVersion, synthesisPromptVersion,
 		queryVersion, canonicalServiceVersion, modelOutputSchemaVersion, identityNormalizationVersion, graphEpochColumn,
-		windowInferenceVersion, commitGateVersion,
+		windowInferenceVersion, commitGateVersion, rankingFormulaVersion,
 	}
 	const insertResultSQL = `
 INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 ON CONFLICT (result_id) DO NOTHING`
 
 	// CHAOS-3927 P4 (design brief §2.1): claims is empty for the
@@ -735,6 +742,14 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	if strings.TrimSpace(key.CommitGateVersion) == "" {
 		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
 	}
+	// CHAOS-4398 PR3 (R4 ruling): same fail-closed convention, one MORE
+	// dimension. A composition that never wired RankingFormulaVersion must
+	// MISS rather than run a lookup that ignores it: ignoring it would
+	// serve a pre-formula-bump cohort row under the new formula's
+	// semantics, which is precisely the bypass this fence exists to close.
+	if strings.TrimSpace(key.RankingFormulaVersion) == "" {
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
+	}
 	// sol round-2 F4 (noted, not solved -- no telemetry vocabulary change):
 	// every "ordinary miss" this guard block produces -- a genuinely
 	// unconfigured dimension due to a composition bug, same as a normal
@@ -832,6 +847,15 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	// never passed through the new gate at all. Every pre-migration row
 	// holds NULL here and is permanently excluded -- no backfill, no purge.
 	// See ReuseKey.CommitGateVersion's own field doc comment.
+	//
+	// CHAOS-4398 PR3 (R4 ruling): ranking_formula_version = $19 is an
+	// EIGHTH conjunctive predicate, migration 0035, same NULL-never-matches
+	// shape. RankCohort runs AFTER this lookup (engine.go), so a hit would
+	// otherwise serve a stored cohort ranking table/Score/Outcome computed
+	// under an OLD formula version as if it were computed under the
+	// current one. Every pre-migration row holds NULL here and is
+	// permanently excluded. See ReuseKey.RankingFormulaVersion's own field
+	// doc comment.
 	row := s.db.QueryRowContext(ctx, `
 SELECT payload, source_watermarks
 FROM acr.context_fabric_investigation_results
@@ -852,6 +876,7 @@ WHERE org_id = $1
   AND graph_epoch = $16
   AND window_inference_version = $17
   AND commit_gate_version = $18
+  AND ranking_formula_version = $19
   AND source_watermarks IS NOT NULL
   AND invalidation_epoch IS NOT NULL
   AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -869,7 +894,7 @@ LIMIT 1`,
 		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds(), key.TimeAxisKey,
 		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
 		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion, key.GraphEpoch,
-		key.WindowInferenceVersion, key.CommitGateVersion)
+		key.WindowInferenceVersion, key.CommitGateVersion, key.RankingFormulaVersion)
 	var payload, sourceWatermarks []byte
 	switch err := row.Scan(&payload, &sourceWatermarks); {
 	case errors.Is(err, sql.ErrNoRows):
@@ -962,6 +987,7 @@ SELECT EXISTS (
       AND identity_normalization_version = $15
       AND window_inference_version = $16
       AND commit_gate_version = $17
+      AND ranking_formula_version = $18
       AND source_watermarks IS NOT NULL
       AND invalidation_epoch IS NOT NULL
       AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -972,7 +998,7 @@ SELECT EXISTS (
 		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds(), key.TimeAxisKey,
 		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
 		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion,
-		key.WindowInferenceVersion, key.CommitGateVersion,
+		key.WindowInferenceVersion, key.CommitGateVersion, key.RankingFormulaVersion,
 	).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("classify reuse miss: %w", sanitizeError(err))

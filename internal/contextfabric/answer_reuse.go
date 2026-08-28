@@ -391,7 +391,13 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		// synthesis, so without it a row saved under the old gate would be
 		// served with its old Committed list intact. See
 		// ReuseKey.CommitGateVersion's own field doc comment.
-		CommitGateVersion:        e.reuseVersionAuthorities.CommitGateVersion,
+		CommitGateVersion: e.reuseVersionAuthorities.CommitGateVersion,
+		// CHAOS-4398 PR3 (R4 ruling): a SIXTEENTH conjunctive dimension,
+		// same mirrored discipline -- see
+		// ReuseKey.RankingFormulaVersion's own field doc comment for why
+		// RankCohort running after this lookup makes fencing on it
+		// mandatory, not optional.
+		RankingFormulaVersion:    e.reuseVersionAuthorities.RankingFormulaVersion,
 		QueryVersion:             e.reuseVersionAuthorities.QueryVersion,
 		CanonicalServiceVersion:  e.reuseVersionAuthorities.CanonicalServiceVersion,
 		ModelOutputSchemaVersion: e.reuseVersionAuthorities.ModelOutputSchemaVersion,

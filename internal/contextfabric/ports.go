@@ -803,6 +803,39 @@ type ReuseKey struct {
 	// reuse-participating row for the org, including rows whose commits the
 	// new rules would have reached identically.
 	CommitGateVersion string
+	// RankingFormulaVersion (CHAOS-4398 PR3, R4 ruling) is a SIXTEENTH
+	// conjunctive dimension, same NULL-never-matches fail-closed shape as
+	// every sibling above. It binds reuse to
+	// contextfabric.RankingFormulaVersion -- the cohort ranking formula
+	// (cohort_ranking.go): the signal weights, the Score-nil threshold,
+	// and everything else RankCohort computes a member's Score/
+	// RankingBasis/Outcome/MissingSignals from.
+	//
+	// Why reuse MUST be fenced on it, rather than left to age out.
+	// RankCohort runs AFTER FindReusable in the request path (engine.go):
+	// a hit serves the stored InvestigationResult verbatim, ranking table
+	// and all, without RankCohort ever re-running. v2 of the formula
+	// (CHAOS-4398 PR3, design doc §8) changed what Score/Outcome even
+	// MEANS for the same signal weights -- a member the OLD formula
+	// scored now maps to insufficient_evidence/not_applicable with no
+	// Score at all, or vice versa. Without this dimension, a cohort
+	// question answered before a formula bump would keep being served
+	// from cache, under the OLD formula's semantics, for every repeat
+	// inside the staleness window -- exactly the class of bug
+	// WindowInferenceVersion and CommitGateVersion each closed for their
+	// own decision. Bump the constant whenever RankCohort's weights,
+	// thresholds, or signal set change.
+	//
+	// Applied UNCONDITIONALLY to every reuse-participating row, exactly
+	// like WindowInferenceVersion's own precedent -- NOT scoped to only
+	// cohort-shaped questions. A non-cohort row never exercises
+	// RankCohort at all, so this dimension is redundant for it; over-
+	// invalidating a non-cohort row on an unrelated formula bump is the
+	// same accepted, safe cost (never a wrong answer or a false hit) the
+	// precedent already establishes, and true per-row scoping would need
+	// a dynamic, per-Save value rather than one deployment-current
+	// constant.
+	RankingFormulaVersion string
 	// GraphEpoch (CHAOS-3898 §2.3) is this investigation's own
 	// ResolvedGraphBinding.Epoch -- a THIRTEENTH conjunctive dimension,
 	// structurally distinct from every version-string dimension above: a
@@ -894,6 +927,12 @@ type ReuseVersionAuthorities struct {
 	// for what it binds and why its absence is a safety hole rather than a
 	// staleness one.
 	CommitGateVersion string
+	// RankingFormulaVersion (CHAOS-4398 PR3, R4 ruling) is ONE MORE
+	// version constant, same shape again -- see
+	// ReuseKey.RankingFormulaVersion's own field doc comment for what it
+	// binds and why it is applied unconditionally to every reuse-
+	// participating row, not only cohort-shaped ones.
+	RankingFormulaVersion string
 }
 
 // AnswerReuseGate finds a stored InvestigationResult eligible for reuse
