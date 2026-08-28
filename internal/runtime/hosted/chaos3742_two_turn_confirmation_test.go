@@ -7510,6 +7510,13 @@ func chaos4386PositiveArmNeverAttemptedRow(index int, member string, tc trialCas
 	if turn1 != nil {
 		row.Turn1Status = string(turn1.Status)
 		row.TerminalStatus, row.ClaimedFactsCount, row.RowsCount, row.TerminalReason = chaos4386TerminalFields(*turn1)
+		// ResultBytes/EstTokens (codex review round 3, P2, confirmed):
+		// this row's own terminal fields above ARE real (turn1 IS the
+		// terminal result here), so its size must be measured too -- a
+		// row claiming a real "complete" status/claimed facts while
+		// reporting 0 bytes is internally inconsistent, and the run-wide
+		// ResultByteSamples population never repairs a per-row value.
+		row.ResultBytes, row.EstTokens = chaos4386MeasureResult(*turn1)
 	}
 	twoTurnStampOutcome(&row, tc, nil)
 	twoTurnStampArmFailure(&row, reason, err)

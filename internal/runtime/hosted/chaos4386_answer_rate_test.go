@@ -191,6 +191,16 @@ func TestChaos4386PositiveArmNeverAttemptedRow(t *testing.T) {
 		if row.ArmInvalidReason == "" {
 			t.Error("ArmInvalidReason is empty, want a reason recorded (the positive arm still never literally ran)")
 		}
+		// codex review round 3 (P2, confirmed): a row with real terminal
+		// data claiming 0 bytes is internally inconsistent -- turn1's own
+		// size must be measured too.
+		wantBytes, wantTokens := chaos4386MeasureResult(turn1)
+		if row.ResultBytes != wantBytes || row.EstTokens != wantTokens {
+			t.Errorf("ResultBytes/EstTokens = %d/%d, want %d/%d -- turn1's own real terminal result must be measured, not left at 0", row.ResultBytes, row.EstTokens, wantBytes, wantTokens)
+		}
+		if row.ResultBytes == 0 {
+			t.Fatal("fixture measured 0 bytes -- fixture cannot distinguish the bug from the fix")
+		}
 
 		results := []twoTurnCaseResult{row}
 		got := chaos4386TwoTurnAnswerRate(results)
