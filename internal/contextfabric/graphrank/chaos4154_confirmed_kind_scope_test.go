@@ -123,7 +123,7 @@ func TestResolveFromMergedCandidatesWithGateAndBasis_PopulationBasisInvariant(t 
 		lone := corroborationCandidate("ordinary", 0.80, contextfabric.MatchLexical)
 		bySubject := map[string]contextfabric.SubjectCandidate{SubjectKey(lone.Subject): lone}
 		ResolveFromMergedCandidatesWithGateAndBasis(bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
-			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-basis-1", "", false)
+			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-basis-1", "", false, false)
 		event, ok := lastDecisionEvent(tracer.events)
 		if !ok || event.Outcome != "committed" || event.PopulationBasis != "resolution_wide_untruncated" {
 			t.Fatalf("event = %+v, ok=%v, want PopulationBasis=resolution_wide_untruncated", event, ok)
@@ -137,7 +137,7 @@ func TestResolveFromMergedCandidatesWithGateAndBasis_PopulationBasisInvariant(t 
 		// proven-complete census -- confirmedKindScopedBasis=true is what
 		// tells the trace that, mirroring resolve.go's own call site.
 		ResolveFromMergedCandidatesWithGateAndBasis(bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
-			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-basis-2", "", true)
+			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-basis-2", "", true, false)
 		event, ok := lastDecisionEvent(tracer.events)
 		if !ok || event.Outcome != "committed" || event.PopulationBasis != "confirmed_kind_scoped_complete" {
 			t.Fatalf("event = %+v, ok=%v, want PopulationBasis=confirmed_kind_scoped_complete", event, ok)
@@ -148,7 +148,7 @@ func TestResolveFromMergedCandidatesWithGateAndBasis_PopulationBasisInvariant(t 
 		exact := corroborationCandidate("exact", 1, contextfabric.MatchExact)
 		bySubject := map[string]contextfabric.SubjectCandidate{SubjectKey(exact.Subject): exact}
 		ResolveFromMergedCandidatesWithGateAndBasis(bySubject, map[string]string{}, map[string]bool{}, 10, true, true, /* searchTruncated */
-			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-basis-3", "", false)
+			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-basis-3", "", false, false)
 		event, ok := lastDecisionEvent(tracer.events)
 		if !ok || event.Outcome != "committed" || event.CommitGate != "exact_index" || event.PopulationBasis != "none" {
 			t.Fatalf("event = %+v, ok=%v, want CommitGate=exact_index and PopulationBasis=none -- CHAOS-3810's own carve-out trusts string equality, not population completeness", event, ok)
@@ -377,6 +377,15 @@ func TestResolveSubjects_ConfirmedKindScope_UntruncatedResolutionUnchanged(t *te
 // confirmedKind==nil-gated SearchKind calls are exercised too -- proving
 // this ticket's mechanism adds ZERO calls on top of that already-existing
 // behavior, not merely that some other assertion happens to hold.
+//
+// CHAOS-4417 note: this fixture's shape -- a lone, high-confidence (0.9),
+// low-population-kind (project) candidate blocked ONLY by resolution-wide
+// searchTruncated -- IS exactly what CHAOS-4417's own pre-confirmation
+// pass (applyLowPopulationKindOffers, chaos4417_low_population_kind_scope.go)
+// now OFFERS (not commits, per the team-lead R4 ruling: a statistical
+// commit cannot soundly survive resolution-wide truncation without kind
+// authority this ticket does not have pre-confirmation). resolution.Committed
+// staying empty is therefore still correct and unaffected by CHAOS-4417.
 func TestResolveSubjects_ConfirmedKindScope_NilConfirmedKindNeverTriggers(t *testing.T) {
 	t.Parallel()
 	kind := contextfabric.SubjectProject
@@ -592,9 +601,9 @@ func TestResolveFromMergedCandidatesWithGateAndBasis_ConfirmedKindScopedBasisNev
 				bySubject[SubjectKey(candidate.Subject)] = candidate
 			}
 			without, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
-				nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, nil, "", "", false)
+				nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, nil, "", "", false, false)
 			with, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
-				nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, nil, "", "", true)
+				nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, nil, "", "", true, false)
 			if len(without.Committed) != len(with.Committed) {
 				t.Fatalf("confirmedKindScopedBasis changed the commit count: without=%v with=%v", without.Committed, with.Committed)
 			}
@@ -617,9 +626,9 @@ func TestResolveFromMergedCandidatesWithGateAndBasis_ConfirmedKindScopedBasisNev
 		identityTerms := identityMatchTerms{}
 		recordIdentityClaim(claimant, identity, identityTerms)
 		without, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
-			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, identityTerms, true, nil, "", "", false)
+			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, identityTerms, true, nil, "", "", false, false)
 		with, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
-			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, identityTerms, true, nil, "", "", true)
+			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, identityTerms, true, nil, "", "", true, false)
 		if len(without.Committed) != 1 || len(with.Committed) != 1 || without.Committed[0] != with.Committed[0] {
 			t.Fatalf("confirmedKindScopedBasis changed the identity_fast_path verdict: without=%v with=%v", without.Committed, with.Committed)
 		}
@@ -637,9 +646,9 @@ func TestResolveFromMergedCandidatesWithGateAndBasis_ConfirmedKindScopedBasisNev
 		recordIdentityClaim(repo, identity, identityTerms)
 		recordIdentityClaim(teamCollision, identity, identityTerms)
 		without, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
-			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, identityTerms, true, nil, "", "", false)
+			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, identityTerms, true, nil, "", "", false, false)
 		with, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
-			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, identityTerms, true, nil, "", "", true)
+			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), identity, identityTerms, true, nil, "", "", true, false)
 		if len(without.Committed) != 0 || len(with.Committed) != 0 {
 			t.Fatalf("confirmedKindScopedBasis let a known identity collision commit: without=%v with=%v", without.Committed, with.Committed)
 		}

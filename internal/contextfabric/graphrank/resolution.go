@@ -367,7 +367,7 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 	// parameter, from its one dedicated call site (resolve.go). Keeping this
 	// wrapper's signature byte-identical is deliberate: it is what lets those
 	// ~80 call sites stay untouched by this ticket.
-	resolution, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey, false)
+	resolution, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey, false, false)
 	return resolution
 }
 
@@ -398,7 +398,7 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 // (see below): a caller passing true is making an affirmative claim that
 // this population is complete, and that claim is what gets recorded, not a
 // new commit path.
-func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
+func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
 	bases := make(contextfabric.CommitBasisSet)
 	// digests (CHAOS-4087) records IN LOCKSTEP with bases above, at every
 	// SAME bases.Record call site -- see CommitDecisionDigest's own doc
@@ -1210,6 +1210,15 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 			// exhaustively-proven-complete confirmed-kind census -- see
 			// confirmedKindScopedBasis's own doc comment above.
 			populationBasis = "confirmed_kind_scoped_complete"
+		case lowPopulationKindScopedBasis:
+			// CHAOS-4417: this call's candidatesBySubject was the isolated,
+			// exhaustively-proven-complete PRE-CONFIRMATION kind-scoped
+			// census applyLowPopulationKindScopedRescue built (one of
+			// chaos4417LowPopulationScopedKinds) -- see that function's own
+			// doc comment. Distinct from confirmed_kind_scoped_complete:
+			// no receipt confirmed this kind, only this isolated
+			// population's own proven completeness backs the commit.
+			populationBasis = "low_population_kind_scoped_complete"
 		case !searchTruncated:
 			populationBasis = "resolution_wide_untruncated"
 		}

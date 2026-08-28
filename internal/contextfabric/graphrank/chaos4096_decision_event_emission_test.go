@@ -54,7 +54,7 @@ func TestChaos4096_MultiSubjectCommitEmitsOneDecisionEventPerSubject(t *testing.
 	resolution, bases, _ := ResolveFromMergedCandidatesWithGateAndBasis(
 		bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
 		nil, 0, false, 10, 20, true,
-		DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-multi", "", false)
+		DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-multi", "", false, false)
 
 	if len(resolution.Committed) != 2 {
 		t.Fatalf("both pre-committed hints must still commit, got %v", resolution.Committed)

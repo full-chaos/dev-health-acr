@@ -547,6 +547,19 @@ type discardableDecisionTracer struct {
 	// silently drop every one but the last when keep() replays it.
 	captured          []ResolutionTraceEvent
 	capturedRankedCut []ResolutionTraceEvent
+	// capturedCorroboration (CHAOS-4417, codex R1 P2, confirmed): a
+	// "corroboration" event (resolution.go) names ONE candidate that
+	// reached the wrapped call's own population -- exactly the signal a
+	// consumer like the two-turn harness's expected_subject_in_pool field
+	// (chaos3742_two_turn_confirmation_test.go) reads as proof a candidate
+	// reached the REAL, committable pool. Before this field existed,
+	// "corroboration" fell through to the unconditional pass-through
+	// below and reached the real tracer immediately even when the scoped
+	// resolution it describes was ultimately discarded (never merged into
+	// 'pool', never kept) -- corrupting that reachability signal for every
+	// candidate in a scoped-but-not-kept population. Held back and
+	// replayed on keep() exactly like ranked_cut/decision.
+	capturedCorroboration []ResolutionTraceEvent
 }
 
 // offersOnlyDecisionTracer (CHAOS-4234, codex round-1 finding 3) tags
@@ -580,6 +593,10 @@ func (d *discardableDecisionTracer) Trace(event ResolutionTraceEvent) {
 		// would read a discarded pass's ranks as the final ones.
 		d.capturedRankedCut = append(d.capturedRankedCut, event)
 		return
+	case "corroboration":
+		// CHAOS-4417: see capturedCorroboration's own doc comment above.
+		d.capturedCorroboration = append(d.capturedCorroboration, event)
+		return
 	}
 	if d.real != nil {
 		d.real.Trace(event)
@@ -589,10 +606,15 @@ func (d *discardableDecisionTracer) Trace(event ResolutionTraceEvent) {
 // keep forwards every held-back "decision" event (if any -- CHAOS-4096: one
 // per committed subject on a multi-subject commit, not just one) to the
 // real tracer -- call ONLY when the caller is retaining this call's
-// resolution.
+// resolution. corroboration events (CHAOS-4417) replay FIRST -- they
+// describe candidates BEFORE the decision made over them, mirroring
+// ranked_cut's own "before its decision" ordering.
 func (d *discardableDecisionTracer) keep() {
 	if d.real == nil {
 		return
+	}
+	for _, event := range d.capturedCorroboration {
+		d.real.Trace(event)
 	}
 	for _, event := range d.capturedRankedCut {
 		d.real.Trace(event)
@@ -621,7 +643,7 @@ type ResolutionTraceEvent struct {
 	// (CHAOS-4088), "kind_offer" (CHAOS-4012 v20), "kind_hint_search",
 	// "exact_name_search" (CHAOS-4348 -- see traceRetrievalSource,
 	// chaos4348_reachability.go; both reuse TermHash/Subject only, no new
-	// fields).
+	// fields), "low_population_kind_scope" (CHAOS-4417).
 	Stage string
 	// TermHash (search stage only): SHA-256 hex of the search term, never
 	// the term itself -- lets a reader correlate repeat events for the
@@ -1302,6 +1324,33 @@ type ResolutionTraceEvent struct {
 	// snapshot is never handed to the gate as a decision population).
 	ConfirmedKindScopeState          string
 	ConfirmedKindScopeCandidateCount int
+	// LowPopulationKindScopeKind/LowPopulationKindScopeState/
+	// LowPopulationKindScopeCandidateCount (stage ==
+	// "low_population_kind_scope" ONLY, CHAOS-4417): the PRE-CONFIRMATION
+	// analog of ConfirmedKindScope* above -- describes ONE
+	// buildConfirmedKindScopedSnapshot attempt for ONE member of
+	// chaos4417LowPopulationScopedKinds (chaos4417_low_population_kind_scope.go).
+	// Unlike the confirmed-kind case, this mechanism has no single kind to
+	// report on -- it tries up to three (repository/project/team), so
+	// EVERY attempt fires its own event and LowPopulationKindScopeKind
+	// (a closed-vocabulary contextfabric.SubjectKind value, never a term
+	// or label -- permitted under this type's own corpus-safety rule
+	// above, which allows ENUM values) disambiguates which one. State and
+	// CandidateCount share ConfirmedKindScopeState/
+	// ConfirmedKindScopeCandidateCount's exact vocabulary and meaning.
+	LowPopulationKindScopeKind           string
+	LowPopulationKindScopeState          string
+	LowPopulationKindScopeCandidateCount int
+	// LowPopulationKindScopeOutcome (stage == "low_population_kind_scope",
+	// empty LowPopulationKindScopeKind ONLY -- the rescue's own summary
+	// event, distinct from its per-kind events above): closed vocabulary,
+	// see the lowPopulationKindScopeOutcome* consts
+	// (chaos4417_low_population_kind_scope.go) for the full list and what
+	// each means. Fired exactly once per applyLowPopulationKindScopedRescue
+	// call, regardless of outcome -- codex R1 P2 (CHAOS-4417): a reader
+	// must always be able to tell why this rescue declined without
+	// reconstructing it from the (possibly discarded) union decision event.
+	LowPopulationKindScopeOutcome string
 	// AnchorOfferLabelsNormalizedCount (stage=="anchor_offer" ONLY,
 	// CHAOS-4210) is the number of THIS call's AnchorOptions (either the V1
 	// or V2 shape -- anchorOfferMaterial dispatches to exactly one) whose
@@ -2241,7 +2290,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if offersOnly && firstPassTracer != nil {
 		firstPassTracer = offersOnlyDecisionTracer{real: firstPassTracer}
 	}
-	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false)
+	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false)
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
@@ -2402,7 +2451,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				scopedPool, scopedObservationParentKey, scopedObservationBlocked, request.Options.MaxSubjectCandidates,
 				request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
 				unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, aliasIdentityComplete,
-				scopedDecisionTracer, request.RequestID, "", true,
+				scopedDecisionTracer, request.RequestID, "", true, false,
 			)
 			if len(scopedResolution.Committed) > 0 {
 				resolution = scopedResolution
@@ -2417,6 +2466,40 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				scopedDecisionTracer.keep()
 			}
 		}
+	}
+	// CHAOS-4417 (team-lead ruling, offer-only shape -- see
+	// chaos4417_low_population_kind_scope.go's own doc comment): the
+	// PRE-CONFIRMATION analog of the confirmedKind block just above, but
+	// this rescue NEVER commits -- it only produces OFFER candidates
+	// (unioned into kindOfferCandidates below, exactly like the CHAOS-4038
+	// coverage floor's own coverageCandidates). Committing a
+	// pre-confirmation, low-population-kind candidate requires
+	// kind-scoped candidate-pool narrowing, which request.ExpectedKinds is
+	// deliberately walled off from today without the CHAOS-3972
+	// kindInsensitivityProof precondition (ports.go) -- out of this
+	// ticket's scope; see the CHAOS-4417 follow-up ticket. Reached when NO
+	// receipt has confirmed a kind (confirmedKind == nil) and the
+	// resolution-wide search truncated with nothing committed -- exactly
+	// turn 1's shape for a repository/project/team question.
+	//
+	// Deliberately NOT guarded by `!offersOnly` (codex R4, confirmed):
+	// unlike the confirmedKind commit block above -- which the offers-only
+	// window-gate call already skips because that call's whole resolution
+	// is discarded, so reaching a commit nobody keeps would be pure waste
+	// -- this rescue never commits at all; its entire output is offer
+	// material (unioned into kindOfferCandidates below). offersOnly mode
+	// (chaos4234_offers_only.go) exists specifically to compute
+	// StructureOfferMaterial while discarding the rest of the resolution,
+	// which is exactly the artifact this rescue produces. Skipping it
+	// under offersOnly would silently withhold the low-population-kind
+	// offer from the one call whose entire purpose is building offers.
+	var lowPopulationOfferCandidates []contextfabric.SubjectCandidate
+	if confirmedKind == nil && searchTruncated && len(resolution.Committed) == 0 {
+		offered, offerErr := applyLowPopulationKindOffers(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, effectiveSearchLimit)
+		if offerErr != nil {
+			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, offerErr
+		}
+		lowPopulationOfferCandidates = offered
 	}
 	// CHAOS-3899 (design brief v5 §6 Slice A) runs the full evidence round
 	// for measurement, strictly AFTER resolution's own COMMIT-GATE decision
@@ -2462,7 +2545,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// the failure mode this vocabulary exists to prevent.
 				var censusBases contextfabric.CommitBasisSet
 				var censusDigests contextfabric.CommitDecisionDigestSet
-				resolution, censusBases, censusDigests = ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false)
+				resolution, censusBases, censusDigests = ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false)
 				commitBases.ResetTo(censusBases)
 				commitDigests.ResetTo(censusDigests)
 				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
@@ -2519,6 +2602,27 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// unionCandidatesForOffer's own doc comment (chaos3900_structure_
 	// offers.go) for why this union must dedupe by subject, not merely
 	// concatenate.
+	//
+	// CHAOS-4417: lowPopulationOfferCandidates (the pre-confirmation
+	// low-population-kind rescue's own exhaustively-proven-complete finds)
+	// join coverageCandidates here -- same bucket, same union, same
+	// "additive, offer-only, never touched candidatesBySubject/pool"
+	// contract CHAOS-4038's own coverage-floor finds already carry. Simple
+	// append, not a dedup-aware merge -- correction (codex R4): an
+	// earlier version of this comment claimed CHAOS-4038's own
+	// kindCoverageFloorKinds is disjoint from chaos4417LowPopulationScopedKinds;
+	// it is NOT (chaos4038_kind_coverage.go's own doc comment: floor kinds
+	// "include isAliasLookupScopedKind kinds (repository/project/team)"
+	// -- the SAME three kinds this rescue targets), so the SAME subject
+	// CAN legitimately appear in both this rescue's contribution and
+	// CHAOS-4038's own coverage-floor contribution within the same
+	// coverageCandidates slice. That is harmless for the OFFER contract
+	// itself: unionCandidatesForOffer below already dedupes coverageCandidates
+	// by SubjectKey (its own doc comment), so kindOfferCandidates never
+	// carries a duplicate regardless of append order. The ranked_cut
+	// trace loop immediately below is the one place that DID need its own
+	// dedup guard for this (fixed there, not here).
+	coverageCandidates = append(coverageCandidates, lowPopulationOfferCandidates...)
 	kindOfferCandidates := unionCandidatesForOffer(resolution.Candidates, coverageCandidates)
 	// CHAOS-4234: a coverage-floor find the final cut dropped still reaches
 	// the offer builders through the union above -- emit its own
@@ -2531,10 +2635,23 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		for _, candidate := range resolution.Candidates {
 			visible[SubjectKey(candidate.Subject)] = true
 		}
+		// alreadyTraced (codex R4, confirmed): CHAOS-4038's own
+		// coverage-floor contribution and CHAOS-4417's low-population-
+		// kind rescue contribution can both legitimately name the SAME
+		// subject in coverageCandidates (see the append site's own
+		// comment above -- their kind sets are NOT disjoint). Without
+		// this guard, that subject would emit two identical "ranked_cut"
+		// CoverageBypass=true events for one request_id, which reads as
+		// two distinct dropped candidates to anything counting these
+		// events -- exactly the corpus-safe telemetry AGENTS.md requires
+		// this package not to get wrong.
+		alreadyTraced := make(map[string]bool, len(coverageCandidates))
 		for _, candidate := range coverageCandidates {
-			if visible[SubjectKey(candidate.Subject)] {
+			key := SubjectKey(candidate.Subject)
+			if visible[key] || alreadyTraced[key] {
 				continue
 			}
+			alreadyTraced[key] = true
 			deps.ResolutionTracer.Trace(ResolutionTraceEvent{RequestID: request.RequestID, Stage: "ranked_cut", Subject: candidate.Subject, CoverageBypass: true})
 		}
 	}

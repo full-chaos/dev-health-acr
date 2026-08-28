@@ -267,6 +267,26 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"vector_census_rival_count_above_tau", event.ConfirmedKindVectorScopeRivalCountAboveTau,
 			"vector_census_snapshot_stable", event.ConfirmedKindVectorScopeSnapshotStable,
 			"vector_census_duration_ms", event.ConfirmedKindVectorScopeDurationMS)
+	case "low_population_kind_scope":
+		// CHAOS-4417: the operator-visible half of the PRE-CONFIRMATION
+		// kind-scoped rescue -- see chaos4417_low_population_kind_scope.go's
+		// own doc comment. One event per chaos4417LowPopulationScopedKinds
+		// member attempted this resolution; "kind" disambiguates which one
+		// (a closed-vocabulary contextfabric.SubjectKind value -- never a
+		// term or label), "state" is the SAME closed vocabulary
+		// ConfirmedKindScopeState carries (this mechanism reuses
+		// buildConfirmedKindScopedSnapshot), "candidate_count" is that
+		// attempt's own isolated snapshot size (0 whenever state !=
+		// "complete").
+		t.logger.DebugContext(ctx, "context fabric resolution trace: low population kind scope",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"kind", event.LowPopulationKindScopeKind,
+			"state", event.LowPopulationKindScopeState,
+			"candidate_count", event.LowPopulationKindScopeCandidateCount,
+			// outcome (codex R1 P2, CHAOS-4417): populated ONLY on the
+			// rescue's own summary event (empty "kind") -- see
+			// LowPopulationKindScopeOutcome's own doc comment.
+			"outcome", event.LowPopulationKindScopeOutcome)
 	case "identity_universe":
 		t.logger.DebugContext(ctx, "context fabric resolution trace: identity universe read",
 			"request_id", event.RequestID, "stage", event.Stage,
