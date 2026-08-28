@@ -7572,6 +7572,25 @@ func chaos4386PositiveArmNeverAttemptedRow(index int, member string, tc trialCas
 	return row
 }
 
+// chaos4386NoDisclosureRow builds the exact row the main replay loop's
+// disclosure-absent branch appends -- CHAOS-4386 red-on-parent audit
+// follow-up: extracted so this SAME production call path (not a
+// hand-copied re-composition of it) is what the regression test below
+// exercises. turn1 IS this row's real terminal result (see
+// chaos4386PositiveArmNeverAttemptedRow's own doc comment); synthesisOverride
+// and turn1Facts are the SAME two captures the real positive-arm success
+// path folds in right after runTwoTurnPositiveArm returns (codex review
+// confirmation pass 5, P2, confirmed -- the direct-append original bypassed
+// both, undercounting SynthesisStatusOverrideUncommittedCount/
+// OracleIDSchemeMismatchCount).
+func chaos4386NoDisclosureRow(index int, member string, tc trialCase, turn1 contractsv1.ContextFabricInvestigationResult, synthesisOverride *contextfabric.SynthesisStatusOverrideOutcome, turn1Facts twoTurnTurn1Facts) twoTurnCaseResult {
+	row := chaos4386PositiveArmNeverAttemptedRow(
+		index, member, tc, &turn1, "turn 1 produced no structure/window disclosure -- positive arm never attempted", nil)
+	twoTurnFoldSynthesisStatusOverride(&row, synthesisOverride)
+	twoTurnStampTurn1Facts(&row, turn1Facts)
+	return row
+}
+
 // chaos4386TwoTurnAnswerRate computes twoTurnReport.AnswerRate over
 // results -- see that field's own doc comment for the exact denominator/
 // numerator definition. Pure function (same "derived from results, not
@@ -9800,22 +9819,10 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 			// terminal result here (codex review round 2, P1, confirmed --
 			// see chaos4386PositiveArmNeverAttemptedRow's own doc comment
 			// for the case-resolved-directly-on-turn-1 bug this closes).
-			neverAttempted := chaos4386PositiveArmNeverAttemptedRow(
-				entry.Index, entry.Member, tc, &turn1, "turn 1 produced no structure/window disclosure -- positive arm never attempted", nil)
-			// twoTurnFoldSynthesisStatusOverride/twoTurnStampTurn1Facts
-			// (codex review confirmation pass 5, P2, confirmed): the
-			// direct append above used to bypass both, even though
-			// turn1SynthesisOverride/turn1Facts were already captured for
-			// THIS case above -- every row for a case shares one turn 1,
-			// the SAME sharing the real positive-arm success path already
-			// relies on (identical two calls, right after
-			// runTwoTurnPositiveArm returns, further down). Without this,
-			// the row lost its decision-basis fields, and
-			// SynthesisStatusOverrideUncommittedCount/OracleIDSchemeMismatchCount
-			// (both derived from these rows) could undercount.
-			twoTurnFoldSynthesisStatusOverride(&neverAttempted, turn1SynthesisOverride)
-			twoTurnStampTurn1Facts(&neverAttempted, turn1Facts)
-			report.Results = append(report.Results, neverAttempted)
+			// chaos4386NoDisclosureRow folds in turn1SynthesisOverride/
+			// turn1Facts (codex review confirmation pass 5, P2, confirmed)
+			// -- see its own doc comment.
+			report.Results = append(report.Results, chaos4386NoDisclosureRow(entry.Index, entry.Member, tc, turn1, turn1SynthesisOverride, turn1Facts))
 			continue
 		}
 

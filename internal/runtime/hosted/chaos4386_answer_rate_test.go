@@ -347,14 +347,15 @@ func TestChaos4386RunTwoTurnPositiveArmOfferMissStampsTerminalFieldsFromTurn1(t 
 
 // TestChaos4386NoDisclosureRowCarriesDecisionBasisFields is the codex
 // review confirmation pass 5 (P2, confirmed) regression: the main replay
-// loop's no-disclosure branch builds its synthetic row via
-// chaos4386PositiveArmNeverAttemptedRow and then ALSO folds
-// turn1SynthesisOverride/stamps turn1Facts onto it (mirroring the real
-// positive-arm success path's own identical two calls) -- this pins that
-// the row a caller reusing that exact sequence produces carries the
-// decision-basis fields, and that the report-level counters derived from
-// them (SynthesisStatusOverrideUncommittedCount/OracleIDSchemeMismatchCount)
-// count it. Before the fix, the loop appended
+// loop's no-disclosure branch builds its row via chaos4386NoDisclosureRow,
+// which folds turn1SynthesisOverride/stamps turn1Facts onto it (mirroring
+// the real positive-arm success path's own identical two calls). Calling
+// that SAME production helper here (CHAOS-4386 red-on-parent audit
+// follow-up: extracted so this test exercises the loop's own call path,
+// not a hand-copied re-composition of it) pins that the row it produces
+// carries the decision-basis fields, and that the report-level counters
+// derived from them (SynthesisStatusOverrideUncommittedCount/
+// OracleIDSchemeMismatchCount) count it. Before the fix, the loop appended
 // chaos4386PositiveArmNeverAttemptedRow's own return value directly,
 // bypassing both calls entirely.
 func TestChaos4386NoDisclosureRowCarriesDecisionBasisFields(t *testing.T) {
@@ -379,11 +380,8 @@ func TestChaos4386NoDisclosureRowCarriesDecisionBasisFields(t *testing.T) {
 		Reason: contextfabric.SynthesisStatusOverrideClarificationUnavailableUncommitted, CommittedCount: 0,
 	}
 
-	row := chaos4386PositiveArmNeverAttemptedRow(45, "expected_kind", tc, &turn1, "turn 1 produced no structure/window disclosure -- positive arm never attempted", nil)
-	// The exact sequence the fixed loop now runs, matching the real
-	// positive-arm success path's own identical two calls.
-	twoTurnFoldSynthesisStatusOverride(&row, synthesisOverride)
-	twoTurnStampTurn1Facts(&row, turn1Facts)
+	// chaos4386NoDisclosureRow is the exact function the main loop calls.
+	row := chaos4386NoDisclosureRow(45, "expected_kind", tc, turn1, synthesisOverride, turn1Facts)
 
 	if !row.OracleIDSchemeMismatch {
 		t.Error("row.OracleIDSchemeMismatch = false, want true -- twoTurnStampTurn1Facts must have been applied")
