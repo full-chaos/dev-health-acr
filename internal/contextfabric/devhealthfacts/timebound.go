@@ -1,11 +1,11 @@
 package devhealthfacts
 
 import (
-	"fmt"
 	"math"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // Historical time bounds (CHAOS-3781, TRD §19.8).
@@ -210,32 +210,29 @@ func unsupportedTimeResult(reason string) contextfabric.FactProviderResult {
 	return contextfabric.FactProviderResult{State: contextfabric.SourceNotApplicable, Reason: reason}
 }
 
+// neutral projects this bound onto the extracted readers.TimeBound
+// (CHAOS-4377): the predicate-building logic below is genuinely neutral
+// SQL-window handling that query-api will also need, so it now lives once
+// in github.com/full-chaos/dev-health-go/readers and this type delegates to
+// it rather than keeping a second copy that could drift. Everything ELSE
+// about factTimeBound (retentionState, effectiveGrain, resolveTimeBound,
+// refuseHistoricalFact -- all Fact/contextfabric-specific) stays here.
+func (b factTimeBound) neutral() readers.TimeBound {
+	return readers.TimeBound{Active: b.active, HasStart: b.hasStart, Start: b.start, End: b.end}
+}
+
 // dayPredicate bounds a DATE-grained column (the rollup tables' `day`).
 // The parameter is a timestamp, so it is narrowed with toDate to compare
 // against a Date column at that column's own grain -- which is exactly the
 // day-grain effect the answer's temporal label reports.
 func (b factTimeBound) dayPredicate(column string) string {
-	if !b.active {
-		return ""
-	}
-	predicate := fmt.Sprintf(" AND %s <= toDate({%s:DateTime64(6,'UTC')})", column, boundEndParam)
-	if b.hasStart {
-		predicate += fmt.Sprintf(" AND %s >= toDate({%s:DateTime64(6,'UTC')})", column, boundStartParam)
-	}
-	return predicate
+	return b.neutral().DayPredicate(column)
 }
 
 // timestampPredicate bounds a DateTime64 column (computed_at, created_at,
 // submitted_at, and the interval columns Tier B derives from).
 func (b factTimeBound) timestampPredicate(column string) string {
-	if !b.active {
-		return ""
-	}
-	predicate := fmt.Sprintf(" AND %s <= {%s:DateTime64(6,'UTC')}", column, boundEndParam)
-	if b.hasStart {
-		predicate += fmt.Sprintf(" AND %s >= {%s:DateTime64(6,'UTC')}", column, boundStartParam)
-	}
-	return predicate
+	return b.neutral().TimestampPredicate(column)
 }
 
 // existencePredicate bounds an entity's own START column -- "did this
@@ -249,10 +246,7 @@ func (b factTimeBound) timestampPredicate(column string) string {
 // PERIOD row -- there, a row outside the window genuinely describes a
 // different period and must be excluded.
 func (b factTimeBound) existencePredicate(column string) string {
-	if !b.active {
-		return ""
-	}
-	return fmt.Sprintf(" AND %s <= {%s:DateTime64(6,'UTC')}", column, boundEndParam)
+	return b.neutral().ExistencePredicate(column)
 }
 
 // asOfExpression renders the requested instant for use inside a derived
@@ -261,7 +255,7 @@ func (b factTimeBound) existencePredicate(column string) string {
 // question about a derived state is answered at the end of the range, the
 // same instant the temporal label reports as effective.
 func (b factTimeBound) asOfExpression() string {
-	return fmt.Sprintf("{%s:DateTime64(6,'UTC')}", boundEndParam)
+	return b.neutral().AsOfExpression()
 }
 
 // bindings returns the parameters the predicates above reference. Empty
@@ -322,6 +316,6 @@ type timeBinding struct {
 }
 
 const (
-	boundStartParam = "time_start"
-	boundEndParam   = "time_end"
+	boundStartParam = readers.BoundStartParam
+	boundEndParam   = readers.BoundEndParam
 )
