@@ -115,8 +115,15 @@ validate_namespace
 # Default 30500 is the previous hardcoded value, so an existing caller that
 # sets nothing gets byte-identical ports.
 NODEPORT_BASE="${ACR_TRIAL_NODEPORT_BASE:-30500}"
-[[ "$NODEPORT_BASE" =~ ^[0-9]+$ ]] \
-  || die "ACR_TRIAL_NODEPORT_BASE=$NODEPORT_BASE is not a plain integer"
+# Strict FIVE-digit decimal, checked BEFORE any arithmetic (codex review round
+# 3, matching deploy/local/shard.sh:47-50's own guard). `^[0-9]+$` alone let an
+# overlong value through to `(( ))`, where bash wraps at 64 bits: reproduced
+# live, ACR_TRIAL_NODEPORT_BASE=18446744073709582116 passed both range and
+# stride checks and rendered 30500-30503 -- silently colliding with the DEFAULT
+# lane while looking nothing like a legal base. A leading zero is rejected for
+# the same family of reason: bash arithmetic reads 030500 as octal.
+[[ "$NODEPORT_BASE" =~ ^[1-9][0-9]{4}$ ]] \
+  || die "ACR_TRIAL_NODEPORT_BASE=$NODEPORT_BASE is not a plain five-digit decimal (no leading zeros; longer values overflow bash arithmetic and would bypass the range check)"
 (( NODEPORT_BASE >= 30000 && NODEPORT_BASE <= 30990 )) \
   || die "ACR_TRIAL_NODEPORT_BASE=$NODEPORT_BASE is outside 30000-30990 (the derived quadruple must stay below shard.sh's 31000 floor)"
 # Codex review, CHAOS-4428: validating only the BASE let two lanes pick
