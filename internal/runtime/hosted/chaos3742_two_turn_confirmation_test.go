@@ -4659,11 +4659,14 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // the responder's raw per-model-call output_bytes, an upstream proxy for,
 // never the assembled InvestigationResult the route actually bounds.
 // twoTurnCaseResult gains ResultBytes/EstTokens (own doc comment); this
-// report gains MaxSerializedBytesConfigured (the ACR_MAX_SERIALIZED_BYTES
-// this run's own config.Load() resolved), MaxResultBytes/P50ResultBytes/
+// report gains MaxSerializedBytesConfigured (the EFFECTIVE
+// ACR_MAX_SERIALIZED_BYTES ceiling a request this run built would actually
+// be gated at -- chaos4386EffectiveMaxSerializedBytes(cfg.MaxSerializedBytes),
+// never the raw config value alone), MaxResultBytes/P50ResultBytes/
 // P99ResultBytes, and OverMaxSerializedBytesCount/OverLegacy16KCount --
-// see chaos4386ResultByteStats' own doc comment (chaos4386_result_bytes.go)
-// for exactly how the distribution and both over-budget counts are
+// see chaos4386ResultByteStats' own doc comment
+// (chaos4386_result_bytes_helpers_test.go) for exactly how the
+// distribution and both over-budget counts are
 // computed, and for chaos4386LegacyResponseByteCap's own doc comment for
 // what the retired legacy cap was. Purely additive; the merge tool's own
 // mirror (cmd/acr-trial-merge-two-turn/main.go) gained the matching
@@ -5760,16 +5763,23 @@ type twoTurnReport struct {
 	// P99ResultBytes/OverMaxSerializedBytesCount/OverLegacy16KCount
 	// (CHAOS-4386, schema v40) are this run's own result_bytes distribution
 	// -- see reportSchemaVersion's own "40" doc comment and
-	// chaos4386ResultByteStats (chaos4386_result_bytes.go) for exactly how
-	// they are derived from report.Results, once, immediately before
-	// serialization -- the SAME "derived from the rows this shard actually
-	// produced, not accumulated in the loop" discipline
+	// chaos4386ResultByteStats (chaos4386_result_bytes_helpers_test.go) for
+	// exactly how they are derived from report.Results, once, immediately
+	// before serialization -- the SAME "derived from the rows this shard
+	// actually produced, not accumulated in the loop" discipline
 	// SynthesisStatusOverrideUncommittedCount/FactlessCommittedCount above
-	// already use. MaxSerializedBytesConfigured is this run's own
-	// cfg.MaxSerializedBytes (config.Load()'s resolved ACR_MAX_SERIALIZED_BYTES),
-	// not a hardcoded literal -- the threshold OverMaxSerializedBytesCount
-	// is measured against. OverLegacy16KCount is measured against the
-	// separate, retired chaos4386LegacyResponseByteCap constant.
+	// already use. MaxSerializedBytesConfigured is the EFFECTIVE cap the
+	// HTTP route would actually apply to a request this harness built --
+	// chaos4386EffectiveMaxSerializedBytes(cfg.MaxSerializedBytes), never
+	// cfg.MaxSerializedBytes alone (codex review round 1, P2, confirmed:
+	// every request this file sends carries a fixed
+	// options.max_serialized_bytes=262144, and the route enforces
+	// min(config, request option) -- comparing against the raw config value
+	// on a deployment configured above 262144 would report a result as
+	// under budget even though the real route would still 413 it), the
+	// threshold OverMaxSerializedBytesCount is measured against.
+	// OverLegacy16KCount is measured against the separate, retired
+	// chaos4386LegacyResponseByteCap constant.
 	MaxSerializedBytesConfigured int64 `json:"max_serialized_bytes_configured"`
 	MaxResultBytes               int64 `json:"max_result_bytes"`
 	P50ResultBytes               int64 `json:"p50_result_bytes"`
@@ -9892,10 +9902,16 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	// CHAOS-4386: result_bytes run-level distribution, derived from the
 	// rows this shard actually produced, once, immediately before
 	// serialization -- same discipline as TimingSummary immediately above.
-	// cfg.MaxSerializedBytes is this run's own resolved
-	// ACR_MAX_SERIALIZED_BYTES (config.Load() above), never a hardcoded
-	// literal.
-	report.MaxSerializedBytesConfigured = int64(cfg.MaxSerializedBytes)
+	// MaxSerializedBytesConfigured is the EFFECTIVE cap the HTTP route
+	// would actually apply to a request this harness built -- codex review
+	// round 1 (P2, confirmed): every request this file sends carries a
+	// fixed options.max_serialized_bytes=262144 (twoTurnRequest), and the
+	// route enforces min(a.config.MaxSerializedBytes,
+	// request.Options.MaxSerializedBytes); comparing against
+	// cfg.MaxSerializedBytes alone would report a result as under budget
+	// on a deployment configured ABOVE 262144 even though the real route
+	// would still 413 it.
+	report.MaxSerializedBytesConfigured = chaos4386EffectiveMaxSerializedBytes(int64(cfg.MaxSerializedBytes))
 	resultByteValues := make([]int64, len(report.Results))
 	for i, res := range report.Results {
 		resultByteValues[i] = res.ResultBytes

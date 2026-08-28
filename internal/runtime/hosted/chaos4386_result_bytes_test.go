@@ -11,10 +11,14 @@ package hosted_test
 // "pure-logic tests: no live infra" section.
 
 import (
+	"context"
+	"errors"
 	"strconv"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // chaos4386SyntheticOversizedResultRow mirrors the shape a project rollup's
@@ -137,5 +141,96 @@ func TestChaos4386ResultByteStatsGreenBaseline(t *testing.T) {
 	maxZ, p50Z, p99Z, overZ, legacyZ := chaos4386ResultByteStats([]int64{0, -1}, 262144)
 	if maxZ != 0 || p50Z != 0 || p99Z != 0 || overZ != 0 || legacyZ != 0 {
 		t.Errorf("chaos4386ResultByteStats([]int64{0, -1}, ...) = (%d,%d,%d,%d,%d), want all zero -- absent results must not enter the distribution", maxZ, p50Z, p99Z, overZ, legacyZ)
+	}
+}
+
+// TestChaos4386EffectiveMaxSerializedBytes is the codex review round 1 (P2,
+// confirmed) regression: every request this harness builds (twoTurnRequest)
+// carries a fixed options.max_serialized_bytes=262144, and the HTTP route
+// enforces min(a.config.MaxSerializedBytes, request.Options.MaxSerializedBytes)
+// -- so on a deployment configured ABOVE 262144, the request's own literal,
+// not the raw server config, is what actually binds. Comparing a result's
+// bytes against cfg.MaxSerializedBytes alone (the pre-fix behavior) would
+// report a 300 KB result as under budget on such a deployment even though
+// the real route would still 413 it.
+func TestChaos4386EffectiveMaxSerializedBytes(t *testing.T) {
+	cases := []struct {
+		name       string
+		configured int64
+		want       int64
+	}{
+		{"configured below the request's own cap: configured binds", 100_000, 100_000},
+		{"configured equal to the request's own cap", 262144, 262144},
+		{"configured ABOVE the request's own cap: the request's literal binds, not the raw config", 1 << 20, 262144},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := chaos4386EffectiveMaxSerializedBytes(tc.configured); got != tc.want {
+				t.Errorf("chaos4386EffectiveMaxSerializedBytes(%d) = %d, want %d", tc.configured, got, tc.want)
+			}
+		})
+	}
+}
+
+// chaos4386ErrorAfterFirstCallInvestigator succeeds on its first call and
+// fails every call after -- built to reproduce the codex review round 1
+// (P2, confirmed) N-turn finding: a turn-2 (or later) Investigate() error
+// must not make runNTurnCase measure result_bytes off Investigate's
+// zero-value error return.
+type chaos4386ErrorAfterFirstCallInvestigator struct {
+	firstResult contractsv1.ContextFabricInvestigationResult
+	calls       int
+}
+
+func (f *chaos4386ErrorAfterFirstCallInvestigator) Investigate(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+	f.calls++
+	if f.calls == 1 {
+		return f.firstResult, nil
+	}
+	return contractsv1.ContextFabricInvestigationResult{}, errors.New("chaos4386 fixture: simulated turn error")
+}
+
+var _ contextfabric.Investigator = (*chaos4386ErrorAfterFirstCallInvestigator)(nil)
+
+// TestChaos4386NTurnMeasuresLastGoodResultNotZeroValueOnLaterTurnError is
+// the RED/GREEN proof for the finding above. Turn 1 succeeds and offers a
+// window receipt (so the loop attempts turn 2); turn 2 errors. Before the
+// fix, res.ResultBytes measured the zero-value ContextFabricInvestigationResult
+// Investigate's error return produced (a small, fake, nonzero count); after
+// the fix, it measures turn 1's own real result -- the last one that
+// actually reached the caller.
+func TestChaos4386NTurnMeasuresLastGoodResultNotZeroValueOnLaterTurnError(t *testing.T) {
+	subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project.v2:fixture:chaos4386"}
+	turn1 := contractsv1.ContextFabricInvestigationResult{
+		ResultID: "result_chaos4386_nturn_t1", Status: contractsv1.ContextFabricInvestigationClarificationRequired,
+		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
+			WindowOptions: []contractsv1.ContextFabricWindowOption{{ReceiptID: "winr_chaos4386_fixture", OptionID: "opt_90d", RelativeID: "trailing_90d"}},
+		},
+		ClaimedFacts: []contractsv1.ContextFabricClaimedFact{{
+			ClaimID: "claim_chaos4386_fixture", Kind: contractsv1.ContextFabricFactInvestment, Subject: subject, Field: "team_count",
+			Value: contractsv1.ContextFabricScalarValue{Integer: func() *int64 { v := int64(3); return &v }()},
+		}},
+	}
+	wantBytes, wantTokens := chaos4386MeasureResult(turn1)
+	if wantBytes == 0 {
+		t.Fatal("fixture turn1 measured 0 bytes -- fixture is not usable to distinguish from the zero-value error return")
+	}
+	zeroValueBytes, _ := chaos4386MeasureResult(contractsv1.ContextFabricInvestigationResult{})
+	if zeroValueBytes == wantBytes {
+		t.Fatal("zero-value result measures the same bytes as turn1 -- fixture cannot distinguish the bug from the fix")
+	}
+
+	investigator := &chaos4386ErrorAfterFirstCallInvestigator{firstResult: turn1}
+	tc := trialCase{Question: "fixture question, never real corpus text", ExpectKind: "project", ExpectID: subject.CanonicalID}
+	res := runNTurnCase(t, context.Background(), investigator, storage.Principal{OrgID: "org_chaos4386_fixture"}, 993, tc, subject.CanonicalID, 2, 0, nil)
+
+	if res.ArmInvalidReason == "" {
+		t.Fatal("ArmInvalidReason is empty, want the simulated turn-2 error to be recorded -- fixture did not reach the error path this test exists to exercise")
+	}
+	if res.ResultBytes != wantBytes {
+		t.Errorf("ResultBytes = %d, want %d (turn1's own measured bytes) -- a later turn's error must not contribute its zero-value return to this measurement", res.ResultBytes, wantBytes)
+	}
+	if res.EstTokens != wantTokens {
+		t.Errorf("EstTokens = %d, want %d", res.EstTokens, wantTokens)
 	}
 }

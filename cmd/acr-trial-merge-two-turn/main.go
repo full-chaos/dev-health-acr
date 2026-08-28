@@ -1076,6 +1076,20 @@ func validateShardSet(shards []twoTurnReport, paths []string) error {
 			return mismatchErr(paths[i], paths[0], "oracle_annex_signed_off", fmt.Sprint(s.OracleAnnexSignedOff), fmt.Sprint(first.OracleAnnexSignedOff))
 		case s.AnnexSignoffStale != first.AnnexSignoffStale:
 			return mismatchErr(paths[i], paths[0], "annex_signoff_stale", fmt.Sprint(s.AnnexSignoffStale), fmt.Sprint(first.AnnexSignoffStale))
+		// MaxSerializedBytesConfigured (CHAOS-4386, codex review round 1,
+		// P2, confirmed): mergeReports inherits this from shards[0] alone
+		// (see below), the SAME "launch-level, not shard-level" reasoning
+		// ResponderModel/DataPlane above already apply -- one effective
+		// serialized-bytes cap governs a whole run. Without this check,
+		// shards launched against servers with different
+		// ACR_MAX_SERIALIZED_BYTES values would silently merge under the
+		// FIRST shard's own cap, making every OTHER shard's
+		// over_max_serialized_bytes_count classification (recomputed
+		// against that inherited cap in mergeReports) wrong for rows it
+		// was never actually measured against, and input-order-dependent
+		// besides.
+		case s.MaxSerializedBytesConfigured != first.MaxSerializedBytesConfigured:
+			return mismatchErr(paths[i], paths[0], "max_serialized_bytes_configured", fmt.Sprint(s.MaxSerializedBytesConfigured), fmt.Sprint(first.MaxSerializedBytesConfigured))
 		}
 	}
 	return nil

@@ -391,11 +391,15 @@ type nTurnCaseResult struct {
 	// ResultBytes/EstTokens (CHAOS-4386) mirror
 	// twoTurnCaseResult.ResultBytes/EstTokens exactly -- see that field's
 	// own doc comment (chaos3742_two_turn_confirmation_test.go) and
-	// chaos4386MeasureResult (chaos4386_result_bytes.go). Measured off the
-	// LAST turn this case reached (the loop variable runNTurnCase's own
-	// FinalStatus/RowsCount/WrongCommit/WindowUnsafeCommit already read),
-	// whether or not that turn was decisive. Zero when turn 1 itself
-	// errored (ArmInvalidReason set, no result ever produced).
+	// chaos4386MeasureResult (chaos4386_result_bytes_helpers_test.go).
+	// Measured off runNTurnCase's own lastGoodResult -- the LAST turn that
+	// actually returned successfully, whether or not it was decisive --
+	// NOT off the loop's `result` variable directly: a turn that errors
+	// leaves `result` holding call's zero-value return (codex review round
+	// 1, P2, confirmed), and measuring that would report a fake, tiny
+	// result_bytes for a turn the HTTP route would have answered with an
+	// error envelope, never a 200. Zero when turn 1 itself errored
+	// (ArmInvalidReason set, no result ever produced at all).
 	ResultBytes int64 `json:"result_bytes"`
 	EstTokens   int64 `json:"est_tokens"`
 }
@@ -519,6 +523,16 @@ func runNTurnCase(t *testing.T, ctx context.Context, investigator contextfabric.
 	}
 	res.Turns = append(res.Turns, nTurnRecordTurn(1, result, trace))
 	res.TurnsTaken = 1
+	// lastGoodResult (CHAOS-4386, codex review round 1, P2, confirmed)
+	// tracks the last SUCCESSFUL Investigate() result, separate from
+	// `result` itself: a later turn's error still overwrites `result` with
+	// call's zero-value return, and measuring THAT would report a fake,
+	// tiny result_bytes for a case that never actually got an answer at
+	// that turn -- the HTTP route would have returned an error envelope,
+	// never a 200 with a near-empty body. Only ResultBytes/EstTokens read
+	// this; FinalStatus/Decisive/RowsCount/WrongCommit/WindowUnsafeCommit
+	// below are unchanged pre-existing behavior, out of this fix's scope.
+	lastGoodResult := result
 
 	appliedWindow := false
 	appliedCandidate := false
@@ -594,6 +608,7 @@ func runNTurnCase(t *testing.T, ctx context.Context, investigator contextfabric.
 			res.ArmInvalidReason = fmt.Sprintf("turn %d investigate error: %s", turnIndex, contextFabricRejectionClass(err))
 			break
 		}
+		lastGoodResult = result
 		rec := nTurnRecordTurn(turnIndex, result, trace)
 		rec.SentWindowReceipt = attachedWindow
 		rec.SentCandidateReceipt = attachedCandidate
@@ -633,9 +648,11 @@ func runNTurnCase(t *testing.T, ctx context.Context, investigator contextfabric.
 			}
 		}
 	}
-	// CHAOS-4386: measured off result, the last turn this case reached --
-	// see nTurnCaseResult.ResultBytes' own doc comment.
-	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(result)
+	// CHAOS-4386: measured off lastGoodResult, never `result` directly --
+	// see that variable's own doc comment (codex review round 1, P2,
+	// confirmed) for why a turn that errored must not contribute its
+	// zero-value return to this measurement.
+	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(lastGoodResult)
 	return res
 }
 
@@ -881,7 +898,12 @@ func TestChaos4360NTurnConfirmationCarry(t *testing.T) {
 	// CHAOS-4386: result_bytes run-level distribution, derived from the
 	// rows this run actually produced, once, immediately before
 	// serialization -- see nTurnReport's own doc comment.
-	report.MaxSerializedBytesConfigured = int64(cfg.MaxSerializedBytes)
+	// MaxSerializedBytesConfigured is the EFFECTIVE cap the HTTP route
+	// would actually apply -- see chaos3742's own identical comment
+	// (codex review round 1, P2, confirmed) for why cfg.MaxSerializedBytes
+	// alone is not the right threshold here either (runNTurnCase's calls
+	// go through the SAME twoTurnRequest, same fixed 262144 request option).
+	report.MaxSerializedBytesConfigured = chaos4386EffectiveMaxSerializedBytes(int64(cfg.MaxSerializedBytes))
 	resultByteValues := make([]int64, len(report.Results))
 	for i, res := range report.Results {
 		resultByteValues[i] = res.ResultBytes

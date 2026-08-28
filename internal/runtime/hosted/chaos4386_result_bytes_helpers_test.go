@@ -48,6 +48,32 @@ const chaos4386LegacyResponseByteCap = 16_000
 // read at all.
 const chaos4386DefaultMaxSerializedBytes = 262144
 
+// chaos4386RequestMaxSerializedBytes mirrors twoTurnRequest's own literal
+// options.max_serialized_bytes (262144) -- every request this harness
+// builds (two-turn and N-turn both call twoTurnRequest) asks for exactly
+// this ceiling. The HTTP route's effective cap is
+// min(a.config.MaxSerializedBytes, request.Options.MaxSerializedBytes)
+// (context_fabric_routes.go), so on a deployment configured ABOVE this
+// value the request's own literal -- not the server config alone -- is
+// what actually binds; see chaos4386EffectiveMaxSerializedBytes (codex
+// review round 1, P2, confirmed: comparing against cfg.MaxSerializedBytes
+// alone would report a result as under budget when the real route would
+// still 413 it).
+const chaos4386RequestMaxSerializedBytes = 262144
+
+// chaos4386EffectiveMaxSerializedBytes returns the SAME effective ceiling
+// the HTTP route would apply to a request this harness's own twoTurnRequest
+// built -- min(configured, chaos4386RequestMaxSerializedBytes) -- so
+// OverMaxSerializedBytesCount reflects whether the real route would have
+// rejected each result, not merely whether it exceeds the server's own
+// configured value in isolation.
+func chaos4386EffectiveMaxSerializedBytes(configured int64) int64 {
+	if configured < chaos4386RequestMaxSerializedBytes {
+		return configured
+	}
+	return chaos4386RequestMaxSerializedBytes
+}
+
 // chaos4386MeasureResult serializes result with the production route's own
 // encoder and returns (resultBytes, estTokens). A marshal error is not
 // expected for a well-formed contractsv1.ContextFabricInvestigationResult
@@ -66,11 +92,12 @@ func chaos4386MeasureResult(result contractsv1.ContextFabricInvestigationResult)
 
 // chaos4386ResultByteStats computes CHAOS-4386's run-level result_bytes
 // distribution: max, p50/p99 (rank-by-truncation, no interpolation --
-// summarizeTwoTurnTiming's own WallP50MS precedent), and the count of
-// rows whose measured bytes exceed configuredMax (the live
-// ACR_MAX_SERIALIZED_BYTES gate this run actually loaded via config.Load)
-// and chaos4386LegacyResponseByteCap (the retired 16,000-byte effective
-// cap, see that constant's own doc comment).
+// summarizeTwoTurnTiming's own WallP50MS precedent), and the count of rows
+// whose measured bytes exceed effectiveMax (the caller's own
+// chaos4386EffectiveMaxSerializedBytes(cfg.MaxSerializedBytes) -- the SAME
+// effective ceiling the HTTP route would apply, never the server's
+// configured value in isolation) and chaos4386LegacyResponseByteCap (the
+// retired 16,000-byte effective cap, see that constant's own doc comment).
 //
 // resultBytes<=0 entries (an OfferMiss/ArmInvalid row this harness never
 // even reached Investigate() far enough to produce a result for) are
@@ -78,7 +105,7 @@ func chaos4386MeasureResult(result contractsv1.ContextFabricInvestigationResult)
 // legitimately tiny result, and letting it into the distribution would
 // understate p50/max for no reason while never itself being "over
 // budget" either way.
-func chaos4386ResultByteStats(resultBytes []int64, configuredMax int64) (max, p50, p99 int64, overConfiguredMax, overLegacy16K int) {
+func chaos4386ResultByteStats(resultBytes []int64, effectiveMax int64) (max, p50, p99 int64, overConfiguredMax, overLegacy16K int) {
 	values := make([]int64, 0, len(resultBytes))
 	for _, b := range resultBytes {
 		if b <= 0 {
@@ -88,7 +115,7 @@ func chaos4386ResultByteStats(resultBytes []int64, configuredMax int64) (max, p5
 		if b > max {
 			max = b
 		}
-		if b > configuredMax {
+		if b > effectiveMax {
 			overConfiguredMax++
 		}
 		if b > chaos4386LegacyResponseByteCap {
