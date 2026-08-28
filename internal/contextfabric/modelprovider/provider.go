@@ -73,6 +73,7 @@ func runtimeConfig(instance *genkit.Genkit, cfg Config, model string, fallback c
 		Timeout:     cfg.Timeout,
 		MaxAttempts: cfg.MaxAttempts,
 		Fallback:    fallback,
+		Telemetry:   cfg.Telemetry,
 	}
 }
 

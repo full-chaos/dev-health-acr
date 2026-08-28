@@ -36,7 +36,7 @@ func TestNewContextFabricModelRuntime_keepsTheCleanFiveOhThreeWithoutACredential
 	})
 
 	// When
-	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup)
+	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup, nil)
 
 	// Then
 	if err != nil {
@@ -64,7 +64,7 @@ func TestNewContextFabricModelRuntime_buildsAUsableRuntimeWhenConfigured(t *test
 	lookup := envLookup(map[string]string{modelprovider.EnvAPIKey: "sk-test"})
 
 	// When
-	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup)
+	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup, nil)
 
 	// Then the returned interface must be genuinely non-nil, not a typed
 	// nil: RuntimeQuestionInterpreter only degrades on a nil interface, so a
@@ -88,7 +88,7 @@ func TestNewContextFabricModelRuntime_failsCompositionOnAModelOnlyPartialConfig(
 	lookup := envLookup(map[string]string{modelprovider.EnvModel: "gpt-5-mini"})
 
 	// When
-	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup)
+	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup, nil)
 
 	// Then startup fails loudly, naming the missing credential variable --
 	// not a silent nil runtime that 503s forever without ever telling the
@@ -112,7 +112,7 @@ func TestNewContextFabricModelRuntime_failsCompositionOnAMisconfiguredProvider(t
 	})
 
 	// When
-	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup)
+	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup, nil)
 
 	// Then startup fails loudly rather than degrading silently to 503 --
 	// the opposite of the unconfigured case above.

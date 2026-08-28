@@ -400,6 +400,22 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 	if classification == contextFabricClassUnclassified {
 		fields = append(fields, "failure_error_type", contextFabricInnermostErrorType(err))
 	}
+	// CHAOS-4355 follow-up: violated_bound was previously ONLY in the HTTP
+	// response body (writeContextFabricRejectionError below), never logged
+	// server-side -- the 2026-08-27 diagnosis session had to re-derive it
+	// from source instead of the live 422's own logs. Bound is always one
+	// of the fixed, ACR-owned registry names (never model output, per
+	// ModelBoundViolation's own doc comment), so it is exactly as safe to
+	// log as failure_classification above. claim_index is included only
+	// when the violated bound is claim-scoped (>= 0); omitted otherwise so
+	// a driver/finding/interpretation bound doesn't carry a meaningless -1.
+	var violation *contextfabric.ModelBoundViolation
+	if errors.As(err, &violation) {
+		fields = append(fields, "violated_bound", violation.Bound)
+		if violation.ClaimIndex >= 0 {
+			fields = append(fields, "claim_index", violation.ClaimIndex)
+		}
+	}
 	a.logger.Log(context.WithoutCancel(r.Context()), level, "context fabric investigation failed", fields...)
 }
 

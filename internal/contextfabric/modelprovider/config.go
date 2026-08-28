@@ -31,6 +31,7 @@ import (
 	"time"
 
 	acrconfig "github.com/full-chaos/dev-health-acr/internal/config"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
 // Default provider selection. These encode the CHAOS-3855 decision (the
@@ -144,6 +145,14 @@ type Config struct {
 	// AllowInsecureBaseURL permits a plaintext http:// BaseURL; see
 	// EnvAllowInsecureBaseURL.
 	AllowInsecureBaseURL bool
+	// Telemetry is OPTIONAL (nil-safe) -- CHAOS-4355 follow-up. It reaches
+	// genkitruntime.Config.Telemetry unchanged (see runtimeConfig), so the
+	// deployment-default AND every per-organization runtime
+	// modelruntimeresolver builds (NewModelProviderBuild copies this same
+	// field from its own defaults) report RecordModelRowsStripped through
+	// one caller-supplied sink, never a package-internal default. Not
+	// validated: an interface field has no bound to enforce.
+	Telemetry contextfabric.EngineTelemetry
 }
 
 // validate enforces the bounds this package owns. genkitruntime.New

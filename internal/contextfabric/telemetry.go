@@ -306,6 +306,14 @@ func (t SlogEngineTelemetry) RecordProjectedRowsCount(ctx context.Context, princ
 	t.logger.InfoContext(ctx, "context fabric projected rows count", args...)
 }
 
+// RecordModelRowsStripped implements EngineTelemetry (CHAOS-4355
+// follow-up). Content-safe: an org id and one closed, non-identifying
+// count -- never the stripped rows themselves.
+func (t SlogEngineTelemetry) RecordModelRowsStripped(ctx context.Context, principal storage.Principal, claims int) {
+	args := append([]any{"org_id", principal.OrgID, "cf_model_rows_stripped", claims}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric model-authored claimed fact rows stripped before validation", args...)
+}
+
 // RecordFactScopeExpansion implements EngineTelemetry (CHAOS-4099) -- the
 // ONE operator-visible record of whether a fact family could be reached from
 // the subjects an investigation resolved.

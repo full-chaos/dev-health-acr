@@ -106,7 +106,7 @@ func (f *fakeRuntime) SynthesizeAnswer(context.Context, storage.Principal, conte
 // behavior, bit for bit, including the nil case.
 func TestWrapWithOrgModelRuntimeResolver_passesThroughUnchanged_withNoOrgStore(t *testing.T) {
 	deploymentDefault := &fakeRuntime{name: "default"}
-	runtime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefault, nil, envLookup(nil))
+	runtime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefault, nil, envLookup(nil), nil)
 	if err != nil {
 		t.Fatalf("wrapWithOrgModelRuntimeResolver() = %v, want success", err)
 	}
@@ -117,7 +117,7 @@ func TestWrapWithOrgModelRuntimeResolver_passesThroughUnchanged_withNoOrgStore(t
 		t.Fatalf("evictor = %#v, want nil when no org store is configured", evictor)
 	}
 
-	nilRuntime, nilEvictor, err := wrapWithOrgModelRuntimeResolver(nil, nil, envLookup(nil))
+	nilRuntime, nilEvictor, err := wrapWithOrgModelRuntimeResolver(nil, nil, envLookup(nil), nil)
 	if err != nil {
 		t.Fatalf("wrapWithOrgModelRuntimeResolver() = %v, want success", err)
 	}
@@ -140,7 +140,7 @@ func TestWrapWithOrgModelRuntimeResolver_returnsAUsableEvictor_whenOrgStoreIsCon
 	if err != nil {
 		t.Fatalf("buildOrgModelConfigStore: %v", err)
 	}
-	_, evictor, err := wrapWithOrgModelRuntimeResolver(nil, orgConfigs, envLookup(nil))
+	_, evictor, err := wrapWithOrgModelRuntimeResolver(nil, orgConfigs, envLookup(nil), nil)
 	if err != nil {
 		t.Fatalf("wrapWithOrgModelRuntimeResolver() = %v, want success", err)
 	}
