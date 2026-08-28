@@ -73,9 +73,17 @@ func TestEngineRanksDiscoveredCohortBetweenFactReadAndSynthesis(t *testing.T) {
 				observedKinds[requirement.Kind] = true
 			}
 			return CanonicalFactBundle{
+				// investment_mix contributes EQUALLY (identical balanced
+				// themes, crossing no sub-label threshold) to both teams,
+				// pushing available weight to 25+30=55 -- clearing the
+				// 50-point qualification threshold (design doc §8) for
+				// BOTH without disturbing the health-severity-driven score
+				// difference the AttentionRank assertions below depend on.
 				Facts: []CanonicalFact{
 					{Kind: FactHealth, Subject: strugglingTeam, Fields: map[string]FactValue{"severity": StringFactValue("high")}},
 					{Kind: FactHealth, Subject: healthyTeam, Fields: map[string]FactValue{"severity": StringFactValue("low")}},
+					investmentFact("STRUGGLING", balancedThemes(), 0),
+					investmentFact("HEALTHY", balancedThemes(), 0),
 				},
 				Coverage: Coverage{
 					Sources:         []SourceObservation{{Source: "canonical_fact:health", State: SourceAvailable}},

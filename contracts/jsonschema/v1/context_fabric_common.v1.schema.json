@@ -2029,6 +2029,31 @@
             "$ref": "#/$defs/CohortMemberDriver"
           },
           "maxItems": 5
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "qualified",
+            "provisional",
+            "insufficient_evidence",
+            "not_applicable"
+          ]
+        },
+        "missing_signals": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "investment_mix",
+              "health.compounding_risk",
+              "operational_deficiencies.severity",
+              "readiness.coverage_gap",
+              "workload.forecast_pressure"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 5,
+          "uniqueItems": true
         }
       },
       "required": [
@@ -2094,6 +2119,105 @@
                 "maxItems": 2
               }
             }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "ranking_computed": {
+                "const": true
+              }
+            },
+            "required": [
+              "ranking_computed"
+            ]
+          },
+          "then": {
+            "required": [
+              "outcome"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "qualified",
+                  "provisional"
+                ]
+              }
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          "then": {
+            "required": [
+              "score"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "insufficient_evidence",
+                  "not_applicable"
+                ]
+              }
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "score"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "qualified"
+              }
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "missing_signals"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "enum": [
+                  "provisional",
+                  "insufficient_evidence",
+                  "not_applicable"
+                ]
+              }
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          "then": {
+            "required": [
+              "missing_signals"
+            ]
           }
         }
       ]

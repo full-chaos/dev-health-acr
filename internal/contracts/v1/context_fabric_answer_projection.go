@@ -205,18 +205,21 @@ type ContextFabricProjectedCohortMember struct {
 	Rank             int                     `json:"rank"`
 	InclusionReasons []string                `json:"inclusion_reasons"`
 	EvidenceRefIDs   []string                `json:"evidence_ref_ids,omitempty"`
-	// RankingComputed/AttentionRank/Score/RankingBasis/DataCompleteness
-	// (CHAOS-4398 PR3, design doc §4a) mirror the SAME fields on the
-	// canonical ContextFabricCohortMember verbatim -- copied, never
-	// recomputed or renarrated here. See that type's own doc comments for
-	// what each means; the presence/pairing invariants are identical
-	// (RankingComputed false implies every other field here is absent/zero
-	// too). Additive v1: a pre-PR1 projection simply omits all five.
+	// RankingComputed/AttentionRank/Score/RankingBasis/DataCompleteness/
+	// Outcome/MissingSignals (CHAOS-4398 PR3, design doc §4a/§8) mirror the
+	// SAME fields on the canonical ContextFabricCohortMember verbatim --
+	// copied, never recomputed or renarrated here. See that type's own doc
+	// comments for what each means; the presence/pairing invariants are
+	// identical (RankingComputed false implies every other field here is
+	// absent/zero too). Additive v1: a pre-PR1 projection simply omits all
+	// seven.
 	RankingComputed  bool                                `json:"ranking_computed,omitempty"`
 	AttentionRank    int                                 `json:"attention_rank,omitempty"`
 	Score            *float64                            `json:"score,omitempty"`
 	RankingBasis     []string                            `json:"ranking_basis,omitempty"`
 	DataCompleteness ContextFabricCohortDataCompleteness `json:"data_completeness,omitempty"`
+	Outcome          ContextFabricCohortMemberOutcome    `json:"outcome,omitempty"`
+	MissingSignals   []string                            `json:"missing_signals,omitempty"`
 }
 
 // ContextFabricProjectedDriver is one driver judgment, narrowed to what a

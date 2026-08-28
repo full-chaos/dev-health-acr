@@ -264,7 +264,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// CHAOS-4398: 240 -> 242 -- same two new string leaves as the
 		// answer_projection surface above (ContextFabricCohortMember is
 		// shared by both surfaces).
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 246},
+		// CHAOS-4398 PR3: 246 -> 248 -- ContextFabricCohortMember's new
+		// outcome/missing_signals[] leaves.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 248},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -382,7 +384,11 @@ func trustedBecauseClosed(path string) bool {
 		// validated against its own registry before a result is stored --
 		// never free-form model prose; see
 		// validContextFabricCohortMemberDriverConcentrationMethod.
-		"concentration_method":
+		// "missing_signals" is an ARRAY drawn from the same closed
+		// family-name registry ranking_basis/threshold_labels already
+		// trust (contextFabricCohortMemberDriverWeights) -- never
+		// free-form model prose; see validContextFabricCohortMemberOutcome.
+		"concentration_method", "missing_signals":
 		return true
 	// Opaque identifiers and digests: frozen handles, never prose.
 	case "result_id", "request_id", "receipt_id", "driver_id", "claim_id",

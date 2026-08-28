@@ -117,7 +117,13 @@ func TestRankCohort_NilAndEmptyAreNoOps(t *testing.T) {
 // the simplest possible case: ONE available signal family (health), so the
 // renormalization denominator is just that family's own weight and the
 // Score is exactly 100 * value.
-func TestRankCohort_SingleSignalExactScore(t *testing.T) {
+// TestRankCohort_SingleSignalIsInsufficientEvidence is design doc §8: a
+// single signal family can NEVER clear the 50-point qualification
+// threshold (the largest single weight, investment_mix, is only 30), so
+// Outcome is always insufficient_evidence and Score/RankingBasis/Drivers
+// stay empty -- DataCompleteness (a pure data-availability measure) still
+// reads degraded, independently of Outcome.
+func TestRankCohort_SingleSignalIsInsufficientEvidence(t *testing.T) {
 	t.Parallel()
 	cohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{rankTestMember("A")}}
 	facts := []CanonicalFact{healthFact("A", "elevated")} // value 0.5, weight 25 -- ONLY available signal
@@ -126,8 +132,14 @@ func TestRankCohort_SingleSignalExactScore(t *testing.T) {
 		t.Fatalf("members = %#v, want 1", got.Members)
 	}
 	member := got.Members[0]
-	if score := mustScore(t, member); score != 50 {
-		t.Fatalf("Score = %v, want 50 (100 * 0.5 / 1.0 renormalized over the one available signal)", score)
+	if member.Score != nil {
+		t.Fatalf("Score = %v, want nil (25 weight < 50 qualification threshold)", *member.Score)
+	}
+	if member.Outcome != CohortOutcomeInsufficientEvidence {
+		t.Fatalf("Outcome = %q, want insufficient_evidence", member.Outcome)
+	}
+	if !reflect.DeepEqual(member.MissingSignals, []string{RankingSignalInvestmentMix, RankingSignalDeficiencySeverity, RankingSignalReadinessGap, RankingSignalWorkloadPressure}) {
+		t.Fatalf("MissingSignals = %#v, want the other 4 families", member.MissingSignals)
 	}
 	if member.AttentionRank != 1 {
 		t.Fatalf("AttentionRank = %d, want 1", member.AttentionRank)
@@ -138,8 +150,11 @@ func TestRankCohort_SingleSignalExactScore(t *testing.T) {
 	if member.DataCompleteness != CohortDataDegraded {
 		t.Fatalf("DataCompleteness = %q, want degraded (1 of 5 families available)", member.DataCompleteness)
 	}
-	if !reflect.DeepEqual(member.RankingBasis, []string{RankingSignalHealthRisk}) {
-		t.Fatalf("RankingBasis = %#v, want [%q]", member.RankingBasis, RankingSignalHealthRisk)
+	if len(member.RankingBasis) != 0 {
+		t.Fatalf("RankingBasis = %#v, want empty (Score is nil)", member.RankingBasis)
+	}
+	if len(member.Drivers) != 0 {
+		t.Fatalf("Drivers = %#v, want empty (Score is nil)", member.Drivers)
 	}
 	if event.MemberCount != 1 || event.FormulaVersion != RankingFormulaVersion || event.DegradedMemberCount != 1 {
 		t.Fatalf("event = %#v", event)
@@ -167,6 +182,12 @@ func TestRankCohort_ZeroAvailableSignalsIsNilScoreDegradedEmptyBasis(t *testing.
 	if member.Score != nil {
 		t.Fatalf("Score = %v, want nil", *member.Score)
 	}
+	if member.Outcome != CohortOutcomeNotApplicable {
+		t.Fatalf("Outcome = %q, want not_applicable (zero applicable signals)", member.Outcome)
+	}
+	if len(member.MissingSignals) != 5 {
+		t.Fatalf("MissingSignals = %#v, want all 5 families", member.MissingSignals)
+	}
 	if member.AttentionRank != 1 {
 		t.Fatalf("AttentionRank = %d, want 1 (sole member, placed last among null-Score members trivially)", member.AttentionRank)
 	}
@@ -190,7 +211,10 @@ func TestRankCohort_NilScoreMembersRankLastTiedByPoolOrder(t *testing.T) {
 	cohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{
 		rankTestMember("NIL_FIRST"), rankTestMember("SCORED"), rankTestMember("NIL_SECOND"),
 	}}
-	facts := []CanonicalFact{healthFact("SCORED", "high")}
+	// investment_mix(30)+health(25)=55 clears the 50-point qualification
+	// threshold (design doc §8) -- a single family (max weight 30) never
+	// would.
+	facts := []CanonicalFact{healthFact("SCORED", "high"), investmentFact("SCORED", balancedThemes(), 0)}
 	coverage := deficiencyPrunedCoverage()
 	got, _ := RankCohort(cohort, facts, coverage)
 	byID := map[string]CohortMember{}
@@ -462,9 +486,16 @@ func TestRankCohort_MixShiftTieBreaksByTaxonomyOrder(t *testing.T) {
 // on which other members are in the cohort.
 func TestRankCohort_WorkloadMinMaxIsRelativeToTheCohort(t *testing.T) {
 	t.Parallel()
+	// Team A also carries investment_mix+health (30+25=55, plus workload's
+	// 10 = 65) so its OWN available weight clears the 50-point
+	// qualification threshold (design doc §8) in both scenarios --
+	// identical in both, so it cannot skew the min-max comparison itself;
+	// workload alone (weight 10) never would.
+	extraForA := []CanonicalFact{investmentFact("A", balancedThemes(), 0), healthFact("A", "elevated")}
+
 	// Team A is the clear LOW end of a wide spread -> low pressure.
 	wideCohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{rankTestMember("A"), rankTestMember("B"), rankTestMember("C")}}
-	wideFacts := []CanonicalFact{workloadFact("A", 10), workloadFact("B", 50), workloadFact("C", 90)}
+	wideFacts := append([]CanonicalFact{workloadFact("A", 10), workloadFact("B", 50), workloadFact("C", 90)}, extraForA...)
 	got, _ := RankCohort(wideCohort, wideFacts, Coverage{})
 	var scoreWide float64
 	for _, m := range got.Members {
@@ -475,7 +506,7 @@ func TestRankCohort_WorkloadMinMaxIsRelativeToTheCohort(t *testing.T) {
 
 	// Team A is near the MIDDLE of a narrow spread -> higher relative pressure.
 	narrowCohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{rankTestMember("A"), rankTestMember("B"), rankTestMember("C")}}
-	narrowFacts := []CanonicalFact{workloadFact("A", 10), workloadFact("B", 9), workloadFact("C", 11)}
+	narrowFacts := append([]CanonicalFact{workloadFact("A", 10), workloadFact("B", 9), workloadFact("C", 11)}, extraForA...)
 	got2, _ := RankCohort(narrowCohort, narrowFacts, Coverage{})
 	var scoreNarrow float64
 	for _, m := range got2.Members {
@@ -649,10 +680,12 @@ func TestRankCohort_DriversSumToScore(t *testing.T) {
 // and the driver set must agree on which signals actually contributed.
 func TestRankCohort_DriversMatchRankingBasisFamilies(t *testing.T) {
 	t.Parallel()
-	// Only health and deficiency available; investment/readiness/workload
-	// have no facts at all (deficiency's own available-zero exception
-	// still fires since availableCoverage marks it SourceAvailable).
-	facts := []CanonicalFact{healthFact("A", "high")}
+	// health + deficiency (available-zero exception, availableCoverage
+	// marks it SourceAvailable) + investment_mix available; readiness/
+	// workload have no facts at all. 25+20+30=75 clears the 50-point
+	// qualification threshold (design doc §8) -- health+deficiency alone
+	// (45) would not.
+	facts := []CanonicalFact{healthFact("A", "high"), investmentFact("A", balancedThemes(), 0)}
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{rankTestMember("A")}}
 	got, _ := RankCohort(cohort, facts, availableCoverage())
 	member := got.Members[0]
@@ -660,7 +693,7 @@ func TestRankCohort_DriversMatchRankingBasisFamilies(t *testing.T) {
 
 	basisFamilies := map[string]bool{}
 	for _, entry := range member.RankingBasis {
-		basisFamilies[entry] = true // only family-name entries exist here (no investment_mix, so no sub-labels either)
+		basisFamilies[entry] = true // only family-name entries exist here (balancedThemes crosses no sub-label threshold)
 	}
 	driverSignals := map[string]bool{}
 	for _, d := range member.Drivers {

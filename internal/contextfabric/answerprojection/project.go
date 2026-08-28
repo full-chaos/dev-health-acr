@@ -389,6 +389,13 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 	canonical := *result.Cohort
 	reasonsOmitted := 0
 	members := make([]contractsv1.ContextFabricProjectedCohortMember, 0, min(len(canonical.Members), bounds.MaxCohortMembers))
+	// retained mirrors members 1:1 (same order, same cut) but keeps the
+	// CANONICAL member -- including Drivers, which the projected member
+	// type does not carry -- so buildRankingTable below can read
+	// per-family driver evidence without re-deriving it. Built from
+	// retained, not canonical.Members, so RankingTable never rows a team
+	// the budget/evidence cut above already dropped from Members.
+	retained := make([]contractsv1.ContextFabricCohortMember, 0, min(len(canonical.Members), bounds.MaxCohortMembers))
 	for _, member := range canonical.Members {
 		if len(members) >= bounds.MaxCohortMembers {
 			break
@@ -407,22 +414,27 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 			Rank:             member.Rank,
 			InclusionReasons: reasons,
 			EvidenceRefIDs:   append([]string(nil), member.EvidenceRefIDs...),
-			// RankingComputed/AttentionRank/Score/RankingBasis/DataCompleteness
-			// (CHAOS-4398 PR3, design doc §4a) are copied verbatim -- see
-			// ContextFabricProjectedCohortMember's own doc comment.
+			// RankingComputed/AttentionRank/Score/RankingBasis/DataCompleteness/
+			// Outcome/MissingSignals (CHAOS-4398 PR3, design doc §4a/§8) are
+			// copied verbatim -- see ContextFabricProjectedCohortMember's own
+			// doc comment.
 			RankingComputed:  member.RankingComputed,
 			AttentionRank:    member.AttentionRank,
 			Score:            member.Score,
 			RankingBasis:     append([]string(nil), member.RankingBasis...),
 			DataCompleteness: member.DataCompleteness,
+			Outcome:          member.Outcome,
+			MissingSignals:   append([]string(nil), member.MissingSignals...),
 		})
+		retained = append(retained, member)
 	}
 	return &contractsv1.ContextFabricProjectedCohort{
-		Kind:      canonical.Kind,
-		Total:     len(canonical.Members),
-		Rationale: clamp.text(storedText(canonical.Rationale), contractsv1.ContextFabricProjectedCohortRationaleMaxLength),
-		Complete:  canonical.Complete,
-		Members:   members,
+		Kind:         canonical.Kind,
+		Total:        len(canonical.Members),
+		Rationale:    clamp.text(storedText(canonical.Rationale), contractsv1.ContextFabricProjectedCohortRationaleMaxLength),
+		Complete:     canonical.Complete,
+		Members:      members,
+		RankingTable: buildRankingTable(retained),
 	}, len(canonical.Members) - len(members), reasonsOmitted
 }
 

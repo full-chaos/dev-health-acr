@@ -455,6 +455,22 @@ func validContextFabricCohortDataCompleteness(value ContextFabricCohortDataCompl
 	}
 }
 
+// validContextFabricCohortMemberOutcome is CHAOS-4398 PR3's closed
+// vocabulary check for ContextFabricCohortMember.Outcome (design doc §8).
+// Unlike validContextFabricCohortDataCompleteness above, "" is NOT a valid
+// value here on the required path -- Outcome is a brand-new field with no
+// legacy shape to stay lenient for (see cohortMemberOutcomeRequired's own
+// doc comment); callers gate the required-vs-absent decision themselves.
+func validContextFabricCohortMemberOutcome(value ContextFabricCohortMemberOutcome) bool {
+	switch value {
+	case ContextFabricCohortOutcomeQualified, ContextFabricCohortOutcomeProvisional,
+		ContextFabricCohortOutcomeInsufficientEvidence, ContextFabricCohortOutcomeNotApplicable:
+		return true
+	default:
+		return false
+	}
+}
+
 // contextFabricCohortRankingBasisLabels is the CLOSED vocabulary
 // ContextFabricCohortMember.RankingBasis entries must be drawn from --
 // mirrored here from internal/contextfabric/cohort_ranking.go's own

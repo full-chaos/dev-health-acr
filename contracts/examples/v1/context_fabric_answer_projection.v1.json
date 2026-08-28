@@ -43,7 +43,14 @@
         "ranking_basis": [
           "health.compounding_risk"
         ],
-        "data_completeness": "degraded"
+        "data_completeness": "degraded",
+        "outcome": "provisional",
+        "missing_signals": [
+          "investment_mix",
+          "operational_deficiencies.severity",
+          "readiness.coverage_gap",
+          "workload.forecast_pressure"
+        ]
       },
       {
         "subject": {
@@ -58,6 +65,39 @@
         "evidence_ref_ids": [
           "evidence_team_platform_roster"
         ]
+      }
+    ],
+    "ranking_table": [
+      {
+        "fields": {
+          "attention_rank": {
+            "integer": 1
+          },
+          "driver_1_signal": {
+            "string": "health.compounding_risk"
+          },
+          "driver_1_value": {
+            "number": 0.42
+          },
+          "driver_1_weight_contributed": {
+            "number": 42
+          },
+          "outcome": {
+            "string": "provisional"
+          },
+          "score": {
+            "number": 42
+          },
+          "team_canonical_id": {
+            "string": "team:CHAOS"
+          },
+          "team_label": {
+            "string": "CHAOS"
+          },
+          "window": {
+            "string": "current"
+          }
+        }
       }
     ]
   },

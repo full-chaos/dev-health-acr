@@ -25,7 +25,15 @@ import (
 // the WORST across a member's multiple scope-partitioned facts, and
 // deficiency severity's "no fired rules" case is a defined available-zero
 // exception, never a blanket "missing".
-const RankingFormulaVersion = "cohort-ranking.v1"
+// v2 (CHAOS-4398 PR3, design doc §8): a member's Score is no longer set
+// whenever ANY signal weight is available -- it now requires available
+// weight >=50 of the 100-point total (Outcome qualified/provisional).
+// Below that (Outcome insufficient_evidence/not_applicable), Score/
+// RankingBasis/Drivers all stay empty, replacing the old "any nonzero
+// weight gets a real score" behavior. A real, counted formula change, not
+// a contract-only addition -- see cf-standing-rules.md's own mandate on
+// this constant.
+const RankingFormulaVersion = "cohort-ranking.v2"
 
 // Top-level signal-family names -- closed vocabulary. These are exactly the
 // values RankCohort can add to a member's RankingBasis, and exactly the keys
@@ -152,7 +160,7 @@ const FactFieldThemeQualityBugfix = "theme_quality_bugfix"
 // model call -- so it is deterministic and safe to call inline in
 // Engine.Investigate.
 func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Cohort, CohortRankedEvent) {
-	event := CohortRankedEvent{FormulaVersion: RankingFormulaVersion, SignalsAvailable: map[string]int{}}
+	event := CohortRankedEvent{FormulaVersion: RankingFormulaVersion, SignalsAvailable: map[string]int{}, OutcomeCounts: map[string]int{}}
 	if cohort == nil || len(cohort.Members) == 0 {
 		return cohort, event
 	}
@@ -178,16 +186,18 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 	workloadMin, workloadMax := minMax(rawWorkload)
 
 	type memberResult struct {
-		// score is nil exactly when ZERO signal families were available
-		// (design doc §5b): the weight denominator is empty, so a number
-		// cannot be honestly computed, and assigning 0 would render the
-		// least-observed team as the healthiest -- the opposite of what
-		// this formula exists to prevent.
-		score        *float64
-		basis        []string
-		completeness CohortDataCompleteness
-		contributed  []string
-		drivers      []CohortMemberDriver
+		// score is nil exactly when Outcome is insufficient_evidence or
+		// not_applicable (design doc §8): the weight denominator either
+		// does not clear the qualification threshold or is empty, so a
+		// number cannot be honestly computed, and assigning one would
+		// misrepresent an unqualified team as ranked.
+		score          *float64
+		basis          []string
+		completeness   CohortDataCompleteness
+		contributed    []string
+		drivers        []CohortMemberDriver
+		outcome        CohortMemberOutcome
+		missingSignals []string
 	}
 	results := make([]memberResult, len(cohort.Members))
 	degradedCount := 0
@@ -200,14 +210,15 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 			workloadValue = normalizeWorkloadMinMax(rawWorkload[key], workloadMin, workloadMax)
 		}
 
-		score, basis, completeness, contributed, drivers := scoreMember(memberFacts, coverage, workloadValue, hasWorkload)
-		results[i] = memberResult{score: score, basis: basis, completeness: completeness, contributed: contributed, drivers: drivers}
+		score, basis, completeness, contributed, drivers, outcome, missingSignals := scoreMember(memberFacts, coverage, workloadValue, hasWorkload)
+		results[i] = memberResult{score: score, basis: basis, completeness: completeness, contributed: contributed, drivers: drivers, outcome: outcome, missingSignals: missingSignals}
 		if completeness == CohortDataDegraded {
 			degradedCount++
 		}
 		for _, name := range contributed {
 			event.SignalsAvailable[name]++
 		}
+		event.OutcomeCounts[string(outcome)]++
 	}
 
 	// AttentionRank: score-sorted position over the ORIGINAL pool-order
@@ -243,6 +254,8 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 		cohort.Members[i].RankingBasis = results[i].basis
 		cohort.Members[i].DataCompleteness = results[i].completeness
 		cohort.Members[i].Drivers = results[i].drivers
+		cohort.Members[i].Outcome = results[i].outcome
+		cohort.Members[i].MissingSignals = results[i].missingSignals
 	}
 
 	event.MemberCount = len(cohort.Members)
@@ -254,10 +267,14 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 // from its own already-read facts, the shared investigation Coverage, and
 // its (already cohort-wide-normalized) workload signal. contributed is the
 // list of top-level family names this call actually used, for the
-// caller's telemetry histogram -- always a subset of (and in the same
-// order as) basis's family-name entries. score is nil iff zero families
-// were available (see memberResult's own doc comment above).
-func scoreMember(facts []CanonicalFact, coverage Coverage, workloadValue float64, workloadAvailable bool) (score *float64, basis []string, completeness CohortDataCompleteness, contributed []string, drivers []CohortMemberDriver) {
+// caller's telemetry histogram -- ALWAYS reflects true technical
+// availability, independent of Outcome (design doc §8's operational-
+// visibility requirement: how often is family X available at all, whether
+// or not the member ultimately qualified). score/basis/drivers are nil/
+// empty iff Outcome is insufficient_evidence or not_applicable (see
+// memberResult's own doc comment above and Outcome's design doc §8
+// thresholds).
+func scoreMember(facts []CanonicalFact, coverage Coverage, workloadValue float64, workloadAvailable bool) (score *float64, basis []string, completeness CohortDataCompleteness, contributed []string, drivers []CohortMemberDriver, outcome CohortMemberOutcome, missingSignals []string) {
 	mixValue, mixLabels, mixUsedPriorWindow, mixConcentration, mixConcentrationMethod, mixAvailable := investmentMixSignal(facts, coverage)
 	healthValue, healthAvailable := healthRiskSignal(facts, coverage)
 	deficiencyValue, deficiencyAvailable := deficiencySeveritySignal(facts, coverage)
@@ -286,21 +303,48 @@ func scoreMember(facts []CanonicalFact, coverage Coverage, workloadValue float64
 	availableCount := 0
 	for _, s := range signals {
 		if !s.available {
+			missingSignals = append(missingSignals, s.name)
 			continue
 		}
 		weightedSum += s.weight * s.value
 		availableWeight += s.weight
-		basis = append(basis, s.name)
 		contributed = append(contributed, s.name)
 		availableCount++
 	}
-	// Investment-mix driver labels ride AFTER the family name, only when
-	// the family itself was available (mixLabels is always nil when
-	// mixAvailable is false -- investmentMixSignal never fires a threshold
-	// off data it does not have).
-	basis = append(basis, mixLabels...)
 
-	if availableWeight > 0 {
+	// Outcome (design doc §8, replacing the contract doc §4.2 binary
+	// qualify/does-not-qualify): a DETERMINISTIC verdict over the SAME
+	// availableWeight/availableCount scoreMember already computes for the
+	// formula itself -- not applicable (zero signals at all), insufficient
+	// evidence (available weight below half the 100-point total, or fewer
+	// than 2 families -- the latter is subsumed by the weight check today
+	// since no single family's weight reaches 50, but is checked
+	// explicitly per the ratified rule rather than relying on that
+	// coincidence), provisional (50-99), or qualified (all 5, 100).
+	switch {
+	case availableWeight == 0:
+		outcome = CohortOutcomeNotApplicable
+	case availableWeight < 50 || availableCount < 2:
+		outcome = CohortOutcomeInsufficientEvidence
+	case availableWeight < 100:
+		outcome = CohortOutcomeProvisional
+	default:
+		outcome = CohortOutcomeQualified
+	}
+
+	// Score/RankingBasis/Drivers are populated ONLY for a qualified or
+	// provisional Outcome -- an insufficient_evidence or not_applicable
+	// member gets none of the three (mirrors the existing nil-Score
+	// null-vs-omit rule the write-path validator enforces), and instead
+	// states WHY via Outcome + MissingSignals.
+	if outcome == CohortOutcomeQualified || outcome == CohortOutcomeProvisional {
+		basis = append(basis, contributed...)
+		// Investment-mix driver labels ride AFTER the family name, only
+		// when the family itself was available (mixLabels is always nil
+		// when mixAvailable is false -- investmentMixSignal never fires a
+		// threshold off data it does not have).
+		basis = append(basis, mixLabels...)
+
 		value := 100 * weightedSum / availableWeight
 		score = &value
 		// Drivers (CHAOS-4398 PR2) is built AFTER availableWeight is known
@@ -340,7 +384,7 @@ func scoreMember(facts []CanonicalFact, coverage Coverage, workloadValue float64
 	default:
 		completeness = CohortDataPartial
 	}
-	return score, basis, completeness, contributed, drivers
+	return score, basis, completeness, contributed, drivers, outcome, missingSignals
 }
 
 // coverageState looks up the fact-read Coverage entry for kind, matching

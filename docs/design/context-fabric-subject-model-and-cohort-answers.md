@@ -634,3 +634,73 @@ for this shape to call as-is. See the ops-side deprecation note:
 - Chat-vs-Workbench structure-offer parity and the "cannot re-ask" chat
   defect — tracked separately (`.remember/context-fabric/drafts/subject-model-requirement.md`
   §2-3), not a subject-model or cohort-ranking concern.
+
+## 8. Outcome (CHAOS-4398 PR3) — replaces the binary §4.2 qualify/does-not-qualify
+
+Chris's Linear doc "Dev Health Ops Purpose and Contract" §4.2 ("Qualification
+for a team requiring attention") originally specified a **binary**
+qualify/does-not-qualify gate (≥2 dimensions sustained OR one critical rule,
+plus sample/window/attribution/denominator/coverage requirements). The
+contract review (`.remember/context-fabric/drafts/purpose-contract-review-2026-08-28.md`
+§4, adoption §5) and chris's ruling replace that binary with a **per-team
+outcome enum** carried on the contract itself, so a caller can distinguish
+"this team looked fine" from "this team was never actually assessed" —
+North Star §8's own framing (an answer must say what it knows AND the
+boundary of what it knows, not silently collapse the two into one signal).
+
+**`ContextFabricCohortMemberOutcome`** (`ContextFabricCohortMember.Outcome`,
+mirrored verbatim on `ContextFabricProjectedCohortMember.Outcome`): a closed
+4-value vocabulary, required whenever `RankingComputed` is true, absent
+otherwise (the same "ranking never ran" absence rule every other ranking
+field on this type already follows, §5b).
+
+| Outcome | Condition (deterministic, `RankCohort`) | `Score` | `MissingSignals` |
+|---|---|---|---|
+| `not_applicable` | `availableWeight == 0` (zero applicable signal families — §4.2's old "cannot be assessed" case, made explicit and named instead of silently excluded from the answer) | `nil` | all 5 families |
+| `insufficient_evidence` | `availableWeight < 50` OR `availableCount < 2` families | `nil` | every unavailable family |
+| `provisional` | `50 <= availableWeight < 100` | real | every unavailable family |
+| `qualified` | `availableWeight == 100` (all 5 families available) | real | empty |
+
+`availableWeight`/`availableCount` are the SAME per-`(member, family)`
+availability values §5's formula already computes (Σ weights of available
+families) — Outcome is a classification layered on top of that existing
+computation, not a second pass over the facts.
+
+**`MissingSignals []string`** (mirrored verbatim on the projected member)
+names which of the 5 closed family names
+(`investment_mix`/`health.compounding_risk`/`operational_deficiencies.severity`/
+`readiness.coverage_gap`/`workload.forecast_pressure` —
+`contextFabricCohortMemberDriverWeights`'s own key set) were unavailable for
+this member. Empty iff `Outcome == qualified`; the presence of this list —
+not narration — is what lets a Rows-panel or MCP consumer render "why does
+this team have no score" without inventing prose.
+
+**Distinct from `DataCompleteness`.** `DataCompleteness` (§5c) stays a pure
+data-availability measure: how many of the 5 families had rows at all,
+independent of whether the resulting `Score` cleared any threshold. A member
+CAN be `degraded` completeness (only 2 families available) and still be
+`qualified` or `provisional` if those 2 families' combined weight clears 50 —
+investment_mix (weight 30) + health (weight 25) = 55 clears `provisional`
+with only 2 of 5 families present. Outcome is the field a consumer reads to
+know **why** `Score` is null; `DataCompleteness` never answers that question
+on its own.
+
+**Contract test** (per the orchestrator's ruling, both canonical and
+projected member validators, `internal/contracts/v1`):
+`Outcome` present for every `RankingComputed` member; `Score` non-null **iff**
+`Outcome ∈ {qualified, provisional}`; `MissingSignals` non-empty **iff**
+`Outcome != qualified`.
+
+**Rows-panel rendering.** `ContextFabricProjectedCohort.RankingTable`
+(§4a) carries `outcome` as one of every ranked row's fields, alongside
+`score` (explicit `null` when absent — "never a bare score": a row never
+shows a number with no outcome context next to it, and never silently omits
+the score key either). A member with `Outcome ∈ {insufficient_evidence,
+not_applicable}` still gets a row — rank/score null, outcome and (via the
+canonical member) `MissingSignals` visible — so a cohort answer names every
+team it considered, not just the ones it could score.
+
+Reference: North Star §8 (per team-lead, CHAOS-4398 PR3 ruling); contract
+doc §4.2 (upload
+`e2522b60-devhealthopspurposeandcontract20260828T112058PDT.md`); review doc
+`.remember/context-fabric/drafts/purpose-contract-review-2026-08-28.md` §4/§5.

@@ -491,6 +491,31 @@
             "partial",
             "degraded"
           ]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "qualified",
+            "provisional",
+            "insufficient_evidence",
+            "not_applicable"
+          ]
+        },
+        "missing_signals": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "investment_mix",
+              "health.compounding_risk",
+              "operational_deficiencies.severity",
+              "readiness.coverage_gap",
+              "workload.forecast_pressure"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 5,
+          "uniqueItems": true
         }
       },
       "required": [

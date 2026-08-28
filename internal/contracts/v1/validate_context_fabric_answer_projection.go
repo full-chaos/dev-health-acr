@@ -2,6 +2,7 @@ package v1
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -194,7 +195,11 @@ func (c ContextFabricProjectedCohort) Validate() error {
 	}
 	seen := make(map[string]struct{}, len(c.Members))
 	lastRank := 0
+	rankedCount := 0
 	for _, member := range c.Members {
+		if member.RankingComputed {
+			rankedCount++
+		}
 		if err := member.Subject.Validate(); err != nil {
 			return fmt.Errorf("member subject: %w", err)
 		}
@@ -218,11 +223,75 @@ func (c ContextFabricProjectedCohort) Validate() error {
 		if !optionalEvidenceRefs(member.EvidenceRefIDs, ContextFabricProjectedEvidenceMaxCount) {
 			return fmt.Errorf("projected cohort member evidence references violate v1 bounds")
 		}
+		if err := member.validateRanking(); err != nil {
+			return err
+		}
 		key := subjectKey(member.Subject)
 		if _, exists := seen[key]; exists {
 			return fmt.Errorf("projected cohort members must be unique")
 		}
 		seen[key] = struct{}{}
+	}
+	// RankingTable (CHAOS-4398 PR3, design doc §4a/§8): absent (nil) iff no
+	// member here was ranked -- the same "not computed" distinction
+	// RankingComputed itself makes -- and one row per ranked member
+	// otherwise, never more (a row naming a team not in Members) or fewer
+	// (a ranked team silently missing its row).
+	if len(c.RankingTable) != rankedCount {
+		return fmt.Errorf("projected cohort ranking table row count must equal the ranked member count")
+	}
+	if err := validateClaimedFactRows(c.RankingTable); err != nil {
+		return fmt.Errorf("ranking table: %w", err)
+	}
+	return nil
+}
+
+// validateRanking checks the shape/pairing of the ranking fields
+// (CHAOS-4398 PR3, design doc §4a/§8) a projected cohort member mirrors
+// verbatim from its canonical ContextFabricCohortMember. It deliberately
+// stops at shape and pairing, not RankCohort's formula semantics -- see
+// this file's own package doc comment on what a projection re-checks.
+func (m ContextFabricProjectedCohortMember) validateRanking() error {
+	if !m.RankingComputed {
+		if m.AttentionRank != 0 || m.Score != nil || len(m.RankingBasis) > 0 ||
+			m.DataCompleteness != "" || m.Outcome != "" || len(m.MissingSignals) > 0 {
+			return fmt.Errorf("projected cohort member ranking fields must be empty when ranking_computed is false")
+		}
+		return nil
+	}
+	if m.AttentionRank < 1 {
+		return fmt.Errorf("projected cohort member attention rank violates v1 bounds")
+	}
+	if m.Score != nil && (math.IsNaN(*m.Score) || math.IsInf(*m.Score, 0) || *m.Score < 0 || *m.Score > 100) {
+		return fmt.Errorf("projected cohort member score violates v1 bounds")
+	}
+	if !validContextFabricCohortDataCompleteness(m.DataCompleteness) || m.DataCompleteness == "" {
+		return fmt.Errorf("projected cohort member data completeness is not a recognized value")
+	}
+	if len(m.RankingBasis) > 128 || !uniqueTrimmedStrings(m.RankingBasis, 128) {
+		return fmt.Errorf("projected cohort member ranking basis violates v1 bounds")
+	}
+	// Outcome/MissingSignals mirror the SAME presence-pairing invariant
+	// ContextFabricCohortMember.validate enforces on the canonical side --
+	// see that method's own comment for why Score/MissingSignals key off
+	// Outcome rather than DataCompleteness.
+	if !validContextFabricCohortMemberOutcome(m.Outcome) || m.Outcome == "" {
+		return fmt.Errorf("projected cohort member outcome is not a recognized value")
+	}
+	scoredOutcome := m.Outcome == ContextFabricCohortOutcomeQualified || m.Outcome == ContextFabricCohortOutcomeProvisional
+	if (m.Score != nil) != scoredOutcome {
+		return fmt.Errorf("projected cohort member score presence does not match outcome")
+	}
+	if (len(m.MissingSignals) == 0) != (m.Outcome == ContextFabricCohortOutcomeQualified) {
+		return fmt.Errorf("projected cohort member missing_signals presence does not match outcome")
+	}
+	if len(m.MissingSignals) > 5 || !uniqueTrimmedStrings(m.MissingSignals, 128) {
+		return fmt.Errorf("projected cohort member missing signals violate v1 bounds")
+	}
+	for _, entry := range m.MissingSignals {
+		if _, isFamily := contextFabricCohortMemberDriverWeights[entry]; !isFamily {
+			return fmt.Errorf("projected cohort member missing signal is not a recognized family name")
+		}
 	}
 	return nil
 }

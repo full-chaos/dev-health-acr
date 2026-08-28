@@ -273,6 +273,17 @@ const (
 	DriverWindowCurrentVsPrior = contractsv1.ContextFabricCohortMemberDriverWindowCurrentVsPrior
 )
 
+// CHAOS-4398 PR3: CohortMember.Outcome's own additive contract type
+// (design doc §8).
+type CohortMemberOutcome = contractsv1.ContextFabricCohortMemberOutcome
+
+const (
+	CohortOutcomeQualified            = contractsv1.ContextFabricCohortOutcomeQualified
+	CohortOutcomeProvisional          = contractsv1.ContextFabricCohortOutcomeProvisional
+	CohortOutcomeInsufficientEvidence = contractsv1.ContextFabricCohortOutcomeInsufficientEvidence
+	CohortOutcomeNotApplicable        = contractsv1.ContextFabricCohortOutcomeNotApplicable
+)
+
 type RelationshipPath = contractsv1.ContextFabricRelationshipPath
 type RelationshipEdge = contractsv1.ContextFabricRelationshipEdge
 type RelationshipType = contractsv1.ContextFabricRelationshipType

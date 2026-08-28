@@ -13,6 +13,8 @@ func baseRankedCohortMember() ContextFabricCohortMember {
 		AttentionRank:    1,
 		RankingBasis:     []string{"health.compounding_risk"},
 		DataCompleteness: ContextFabricCohortDataDegraded,
+		Outcome:          ContextFabricCohortOutcomeProvisional,
+		MissingSignals:   []string{"investment_mix", "operational_deficiencies.severity", "readiness.coverage_gap", "workload.forecast_pressure"},
 	}
 }
 
@@ -72,6 +74,8 @@ func TestContextFabricCohortMember_RankingBasisAcceptsEveryClosedLabel(t *testin
 	member := baseRankedCohortMember()
 	member.Score = &score
 	member.DataCompleteness = ContextFabricCohortDataComplete
+	member.Outcome = ContextFabricCohortOutcomeQualified // all 5 families present
+	member.MissingSignals = nil
 	member.RankingBasis = labels
 	// investment_mix claims ALL 4 threshold labels -- its own Value must
 	// equal the exact sum of their sub-weights (codex R3 finding 3):
@@ -104,6 +108,8 @@ func TestContextFabricCohortMember_NilScoreValid(t *testing.T) {
 	member := baseRankedCohortMember()
 	member.Score = nil
 	member.RankingBasis = nil
+	member.Outcome = ContextFabricCohortOutcomeNotApplicable
+	member.MissingSignals = []string{"investment_mix", "health.compounding_risk", "operational_deficiencies.severity", "readiness.coverage_gap", "workload.forecast_pressure"}
 	if err := member.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil for a zero-signal (nil Score) member", err)
 	}

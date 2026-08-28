@@ -1043,24 +1043,56 @@ type ContextFabricCohortMember struct {
 	// DataCompleteness states how many of the formula's signal families this
 	// member actually had rows for -- complete (all contributed), partial
 	// (at least one missing, renormalized over what's available), or
-	// degraded (two or fewer contributed). A team with zero rows in every
-	// family still gets a Score (renormalized) and DataCompleteness=degraded
-	// -- it is never silently dropped from the ranking table, which would
-	// misrepresent "which teams are struggling" by hiding the
-	// least-observed team. Present iff RankingComputed.
+	// degraded (two or fewer contributed). This is a DATA-AVAILABILITY
+	// measure only, independent of Outcome below: a member can be
+	// DataCompleteness=degraded (e.g. only investment_mix + health
+	// available) yet still Outcome=provisional with a real Score, because
+	// those two families' combined weight clears the qualification
+	// threshold. Present iff RankingComputed.
 	DataCompleteness ContextFabricCohortDataCompleteness `json:"data_completeness,omitempty"`
+	// Outcome (CHAOS-4398 PR3, design doc §8, replacing the binary
+	// qualify/does-not-qualify in the contract doc's own §4.2) is the
+	// per-member qualification verdict: "qualified" (all 5 families
+	// available), "provisional" (available family weight is 50-99 of the
+	// 100-point formula total), "insufficient_evidence" (available weight
+	// <50, or fewer than 2 families available), or "not_applicable" (ZERO
+	// applicable signals -- e.g. no WorkUnits and no health/deficiency/
+	// readiness/workload data at all). Score is present iff Outcome is
+	// qualified or provisional; nil iff Outcome is insufficient_evidence or
+	// not_applicable (validated below) -- Outcome is the field a consumer
+	// reads to know WHY a member has no Score, RankingBasis, or Drivers,
+	// not DataCompleteness. Required (non-empty) whenever RankingComputed.
+	Outcome ContextFabricCohortMemberOutcome `json:"outcome,omitempty"`
+	// MissingSignals names the RankingSignal* families that were NOT
+	// available for this member (the complement of RankingBasis's own
+	// family-name entries) -- empty exactly when Outcome is qualified,
+	// non-empty for every other Outcome. It exists so a consumer reading
+	// Outcome=insufficient_evidence (or not_applicable) can state WHICH
+	// signals are missing without re-deriving the complement itself.
+	MissingSignals []string `json:"missing_signals,omitempty"`
 	// Drivers (CHAOS-4398 PR2) is the evidence-bearing breakdown of Score:
 	// one entry per signal family RankCohort found available for this
 	// member (the exact same set as RankingBasis's family-name entries),
 	// each carrying the numbers a human -- or synthesis -- can retrace
 	// Score from, never narration prose. Sum(WeightContributed) across
 	// Drivers reconstructs Score bit-for-bit (validated below). Present
-	// iff RankingComputed; empty exactly when Score is nil (zero available
-	// families), mirroring RankingBasis's own null-vs-omit rule -- a
-	// family absent from this slice entirely means "unavailable for this
-	// member", never a zero-filled entry.
+	// iff RankingComputed; empty exactly when Score is nil (Outcome is
+	// insufficient_evidence or not_applicable), mirroring RankingBasis's
+	// own null-vs-omit rule -- a family absent from this slice entirely
+	// means "unavailable for this member", never a zero-filled entry.
 	Drivers []ContextFabricCohortMemberDriver `json:"drivers,omitempty"`
 }
+
+// ContextFabricCohortMemberOutcome is CHAOS-4398 PR3's closed vocabulary
+// for ContextFabricCohortMember.Outcome (design doc §8).
+type ContextFabricCohortMemberOutcome string
+
+const (
+	ContextFabricCohortOutcomeQualified            ContextFabricCohortMemberOutcome = "qualified"
+	ContextFabricCohortOutcomeProvisional          ContextFabricCohortMemberOutcome = "provisional"
+	ContextFabricCohortOutcomeInsufficientEvidence ContextFabricCohortMemberOutcome = "insufficient_evidence"
+	ContextFabricCohortOutcomeNotApplicable        ContextFabricCohortMemberOutcome = "not_applicable"
+)
 
 // ContextFabricCohortMemberDriver is CHAOS-4398 PR2's structured,
 // evidence-bearing record of ONE signal family's contribution to a cohort
