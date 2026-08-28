@@ -157,15 +157,24 @@ func (r flowScopeRow) toFactValueRow() contextfabric.FactValueRow {
 	return contextfabric.FactValueRow{Fields: fields}
 }
 
-// queryTeamScopeRows reads work_item_metrics_daily's latest row per (team_id,
-// work_scope_id), returning them keyed by team_id in first-seen (query
-// ORDER BY) scan order -- the same deterministic-ordering discipline
-// metrics.go's readProjectMetrics documents (ruling invariant 8).
+// queryTeamScopeRows reads work_item_metrics_daily's latest row per
+// (team_id, provider, work_scope_id) -- provider is part of this table's
+// own primary key (devhealthschema's EngineFull ORDER BY), and different
+// source providers CAN share a work_scope_id string (readiness.go's
+// identical row_number() partition documents this same collision risk for
+// estimate_coverage_metrics_daily) -- omitting it here would let one
+// provider's row silently overwrite another's under the same partition
+// (codex R2 P1, CHAOS-4364). Returned keyed by team_id in first-seen
+// (query ORDER BY) scan order -- the same deterministic-ordering
+// discipline metrics.go's readProjectMetrics documents (ruling invariant
+// 8).
 func (p *FlowProvider) queryTeamScopeRows(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byTeam map[string][]flowScopeRow, teamOrder []string, rowCount int, err error) {
 	// The hash tiebreak's ifNull(*, -1) sentinels are unambiguous while -1
 	// sits outside each column's real domain: item counts and durations are
 	// never negative in live data, mirroring metrics.go/health.go's
-	// identical domain-assumption tiebreaks.
+	// identical domain-assumption tiebreaks. The tuple covers every scanned
+	// value column (codex R2 P2) -- a partial tuple lets two rows that
+	// differ ONLY in an omitted column tie, picking an arbitrary one.
 	statement := withRowLimit(`SELECT toString(team_id), toString(work_scope_id), toString(day), toInt64(items_started), toInt64(items_completed), toInt64(wip_count_end_of_day),
 	toUInt8(isNotNull(wip_age_p50_hours)), toFloat64(ifNull(wip_age_p50_hours, 0)),
 	toUInt8(isNotNull(wip_age_p90_hours)), toFloat64(ifNull(wip_age_p90_hours, 0)),
@@ -176,7 +185,7 @@ func (p *FlowProvider) queryTeamScopeRows(ctx context.Context, orgID string, ids
 	toFloat64(bug_completed_ratio), toFloat64(story_points_completed)
 FROM (
 	SELECT team_id, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
-		row_number() OVER (PARTITION BY team_id, work_scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(cycle_time_p50_hours, -1), ifNull(lead_time_p50_hours, -1))) DESC) AS rn
+		row_number() OVER (PARTITION BY team_id, provider, work_scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(wip_age_p50_hours, -1), ifNull(wip_age_p90_hours, -1), ifNull(cycle_time_p50_hours, -1), ifNull(cycle_time_p90_hours, -1), ifNull(lead_time_p50_hours, -1), ifNull(lead_time_p90_hours, -1), bug_completed_ratio, story_points_completed)) DESC) AS rn
 	FROM work_item_metrics_daily
 	WHERE org_id = {org_id:String} AND toString(team_id) IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )
@@ -259,7 +268,68 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 // team subject directly.
 type projectFlowRow struct {
 	projectKey, teamID string
-	row                flowScopeRow
+	row                teamFlowAggregateRow
+}
+
+// teamFlowAggregateRow is one team's SUMMED/AVERAGED work_item_metrics_daily
+// aggregate across every (provider, work_scope_id) scope-row this package
+// found for it (codex R2 P1, CHAOS-4364): readProjectFlow previously picked
+// ONE arbitrary (provider, work_scope_id) row per team via row_number()
+// PARTITION BY team_id alone, silently discarding every other concurrent
+// scope for that team AND colliding across source providers -- work_scope_id
+// is not provider-qualified, and readiness.go's own doc comment documents
+// the exact same cross-provider work_scope_id collision this package must
+// also guard against. Additive counts (items_started/items_completed/
+// wip_count_end_of_day/story_points_completed) are SUMMED across the
+// team's own scopes/providers; percentile/rate fields (wip_age/cycle/lead
+// percentiles, bug_completed_ratio) are AVERAGED across them -- summing a
+// percentile has no meaning. This never averages ACROSS TEAMS (each team
+// keeps its own row in team_breakdown, per the package doc comment) --
+// only within one team's own multiple source rows.
+type teamFlowAggregateRow struct {
+	itemsStarted, itemsCompleted, wipCountEndOfDay int64
+	hasWipAgeP50                                   bool
+	wipAgeP50Hours                                 float64
+	hasWipAgeP90                                   bool
+	wipAgeP90Hours                                 float64
+	hasCycleP50                                    bool
+	cycleP50Hours                                  float64
+	hasCycleP90                                    bool
+	cycleP90Hours                                  float64
+	hasLeadP50                                     bool
+	leadP50Hours                                   float64
+	hasLeadP90                                     bool
+	leadP90Hours                                   float64
+	bugCompletedRatio, storyPointsCompleted        float64
+}
+
+func (r teamFlowAggregateRow) toFactValueRow() contextfabric.FactValueRow {
+	fields := map[string]contextfabric.FactValue{
+		"items_started":          contextfabric.IntegerFactValue(r.itemsStarted),
+		"items_completed":        contextfabric.IntegerFactValue(r.itemsCompleted),
+		"wip_count_end_of_day":   contextfabric.IntegerFactValue(r.wipCountEndOfDay),
+		"bug_completed_ratio":    contextfabric.NumberFactValue(r.bugCompletedRatio),
+		"story_points_completed": contextfabric.NumberFactValue(r.storyPointsCompleted),
+	}
+	if r.hasWipAgeP50 {
+		fields["wip_age_p50_hours"] = contextfabric.NumberFactValue(r.wipAgeP50Hours)
+	}
+	if r.hasWipAgeP90 {
+		fields["wip_age_p90_hours"] = contextfabric.NumberFactValue(r.wipAgeP90Hours)
+	}
+	if r.hasCycleP50 {
+		fields["cycle_time_p50_hours"] = contextfabric.NumberFactValue(r.cycleP50Hours)
+	}
+	if r.hasCycleP90 {
+		fields["cycle_time_p90_hours"] = contextfabric.NumberFactValue(r.cycleP90Hours)
+	}
+	if r.hasLeadP50 {
+		fields["lead_time_p50_hours"] = contextfabric.NumberFactValue(r.leadP50Hours)
+	}
+	if r.hasLeadP90 {
+		fields["lead_time_p90_hours"] = contextfabric.NumberFactValue(r.leadP90Hours)
+	}
+	return contextfabric.FactValueRow{Fields: fields}
 }
 
 func (p *FlowProvider) readProjectFlow(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
@@ -275,14 +345,14 @@ func (p *FlowProvider) readProjectFlow(ctx context.Context, orgID string, subjec
 	if timeBound.active {
 		ownershipPredicate = fmt.Sprintf(" AND valid_from <= {%s:DateTime64(6,'UTC')} AND (valid_to IS NULL OR valid_to > {%s:DateTime64(6,'UTC')})", boundEndParam, boundEndParam)
 	}
-	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), wm.team_id, toString(wm.work_scope_id), toString(wm.day), toInt64(wm.items_started), toInt64(wm.items_completed), toInt64(wm.wip_count_end_of_day),
-	toUInt8(isNotNull(wm.wip_age_p50_hours)), toFloat64(ifNull(wm.wip_age_p50_hours, 0)),
-	toUInt8(isNotNull(wm.wip_age_p90_hours)), toFloat64(ifNull(wm.wip_age_p90_hours, 0)),
-	toUInt8(isNotNull(wm.cycle_time_p50_hours)), toFloat64(ifNull(wm.cycle_time_p50_hours, 0)),
-	toUInt8(isNotNull(wm.cycle_time_p90_hours)), toFloat64(ifNull(wm.cycle_time_p90_hours, 0)),
-	toUInt8(isNotNull(wm.lead_time_p50_hours)), toFloat64(ifNull(wm.lead_time_p50_hours, 0)),
-	toUInt8(isNotNull(wm.lead_time_p90_hours)), toFloat64(ifNull(wm.lead_time_p90_hours, 0)),
-	toFloat64(wm.bug_completed_ratio), toFloat64(wm.story_points_completed)
+	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), agg.team_id, toInt64(agg.items_started), toInt64(agg.items_completed), toInt64(agg.wip_count_end_of_day),
+	toUInt8(isNotNull(agg.wip_age_p50_hours)), toFloat64(ifNull(agg.wip_age_p50_hours, 0)),
+	toUInt8(isNotNull(agg.wip_age_p90_hours)), toFloat64(ifNull(agg.wip_age_p90_hours, 0)),
+	toUInt8(isNotNull(agg.cycle_time_p50_hours)), toFloat64(ifNull(agg.cycle_time_p50_hours, 0)),
+	toUInt8(isNotNull(agg.cycle_time_p90_hours)), toFloat64(ifNull(agg.cycle_time_p90_hours, 0)),
+	toUInt8(isNotNull(agg.lead_time_p50_hours)), toFloat64(ifNull(agg.lead_time_p50_hours, 0)),
+	toUInt8(isNotNull(agg.lead_time_p90_hours)), toFloat64(ifNull(agg.lead_time_p90_hours, 0)),
+	toFloat64(agg.bug_completed_ratio), toFloat64(agg.story_points_completed)
 FROM (
 	SELECT id, provider, project_key
 	FROM (
@@ -300,21 +370,43 @@ INNER JOIN (
 	GROUP BY provider, project_key, team_id
 ) AS tpo ON tpo.provider = p.provider AND tpo.project_key = p.project_key
 INNER JOIN (
-	SELECT team_id, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
-		row_number() OVER (PARTITION BY team_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(work_scope_id, items_started, items_completed)) DESC) AS rn
-	FROM work_item_metrics_daily
-	WHERE org_id = {org_id:String}` + timeBound.dayPredicate("day") + `
-) AS wm ON wm.team_id = tpo.team_id AND wm.rn = 1
-ORDER BY p.id, wm.team_id`)
+	-- One row per (team_id, provider, work_scope_id) triple, latest day
+	-- first (same discipline queryTeamScopeRows uses), THEN aggregated to
+	-- one row per team_id: additive counts summed, percentiles/ratio
+	-- averaged. Never one arbitrary row per team (codex R2 P1) -- a team
+	-- tracking several concurrent scopes, or two providers sharing a
+	-- work_scope_id string, must contribute ALL of its rows, not just one.
+	SELECT team_id,
+		sum(items_started) AS items_started,
+		sum(items_completed) AS items_completed,
+		sum(wip_count_end_of_day) AS wip_count_end_of_day,
+		avg(wip_age_p50_hours) AS wip_age_p50_hours,
+		avg(wip_age_p90_hours) AS wip_age_p90_hours,
+		avg(cycle_time_p50_hours) AS cycle_time_p50_hours,
+		avg(cycle_time_p90_hours) AS cycle_time_p90_hours,
+		avg(lead_time_p50_hours) AS lead_time_p50_hours,
+		avg(lead_time_p90_hours) AS lead_time_p90_hours,
+		avg(bug_completed_ratio) AS bug_completed_ratio,
+		sum(story_points_completed) AS story_points_completed
+	FROM (
+		SELECT team_id, provider, work_scope_id, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
+			row_number() OVER (PARTITION BY team_id, provider, work_scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(wip_age_p50_hours, -1), ifNull(wip_age_p90_hours, -1), ifNull(cycle_time_p50_hours, -1), ifNull(cycle_time_p90_hours, -1), ifNull(lead_time_p50_hours, -1), ifNull(lead_time_p90_hours, -1), bug_completed_ratio, story_points_completed)) DESC) AS rn
+		FROM work_item_metrics_daily
+		WHERE org_id = {org_id:String}` + timeBound.dayPredicate("day") + `
+	)
+	WHERE rn = 1
+	GROUP BY team_id
+) AS agg ON agg.team_id = tpo.team_id
+ORDER BY p.id, agg.team_id`)
 	rowCount := 0
 	byProject := make(map[string][]projectFlowRow)
 	var projectOrder []string
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var projectSubjectKey, teamID string
-		var r flowScopeRow
+		var r teamFlowAggregateRow
 		var hasWipP50, hasWipP90, hasCycleP50, hasCycleP90, hasLeadP50, hasLeadP90 uint8
-		if err := row.Scan(&projectSubjectKey, &teamID, &r.workScopeID, &r.day, &r.itemsStarted, &r.itemsCompleted, &r.wipCountEndOfDay,
+		if err := row.Scan(&projectSubjectKey, &teamID, &r.itemsStarted, &r.itemsCompleted, &r.wipCountEndOfDay,
 			&hasWipP50, &r.wipAgeP50Hours, &hasWipP90, &r.wipAgeP90Hours,
 			&hasCycleP50, &r.cycleP50Hours, &hasCycleP90, &r.cycleP90Hours,
 			&hasLeadP50, &r.leadP50Hours, &hasLeadP90, &r.leadP90Hours,
@@ -398,7 +490,7 @@ func (p *FlowProvider) readRepositoryFlow(ctx context.Context, orgID string, sub
 	toUInt8(isNotNull(pr_first_review_p90_hours)), toFloat64(ifNull(pr_first_review_p90_hours, 0))
 FROM (
 	SELECT repo_id, day, prs_merged, prs_with_first_review, pr_pickup_time_p50_hours, pr_review_time_p50_hours, pr_first_review_p50_hours, pr_first_review_p90_hours,
-		row_number() OVER (PARTITION BY repo_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(prs_merged, prs_with_first_review, ifNull(pr_pickup_time_p50_hours, -1), ifNull(pr_review_time_p50_hours, -1))) DESC) AS rn
+		row_number() OVER (PARTITION BY repo_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(prs_merged, prs_with_first_review, ifNull(pr_pickup_time_p50_hours, -1), ifNull(pr_review_time_p50_hours, -1), ifNull(pr_first_review_p50_hours, -1), ifNull(pr_first_review_p90_hours, -1))) DESC) AS rn
 	FROM repo_metrics_daily
 	WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )

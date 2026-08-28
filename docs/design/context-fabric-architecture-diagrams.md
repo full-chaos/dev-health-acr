@@ -359,11 +359,15 @@ wired at `NewProviders`, `providers.go:14-37`; composed at
 **Updated 2026-08-27 (CHAOS-4364, `lane-4364-flow`):** two NEW v1-additive
 FactKinds, `flow` and `landscape` (`flow.go`, `landscape.go`), following
 CHAOS-4347's own "widen by a real table join, never a proxy" discipline.
-Both are also added to `statusCategoryFactKindComposition`'s `team` entry
-and are the FIRST entries for `project`
-(`chaos4347_status_category_composition.go`) — see that file for the
-sibling-lane merge note on CHAOS-4363's concurrent `investment` addition
-to the same `team` entry.
+Both are added to `statusCategoryFactKindComposition`'s `team` entry
+(`chaos4347_status_category_composition.go`) — hand-merged with CHAOS-4363's
+concurrent `investment` addition to the SAME entry, so `team` now composes
+`{health, workload, readiness, investment, flow, landscape}` (all six).
+`project`'s FIRST entry (codex R2 fix, CHAOS-4364) composes every kind of
+those six whose `Capability()` actually supports `SubjectProject` — which
+is all six, since CHAOS-4363 already widened health/workload/readiness/
+investment to answer for a project directly (see the CHAOS-4363 update
+below) by the time this ticket rebased onto it.
 
 **Updated 2026-08-26/27 (CHAOS-4347, `lane-4347-ch`, PR #300):** the
 `metrics`/`continuous_integration`/`deployments` rows below are widened by
@@ -503,7 +507,9 @@ it in that lane's queue).
 
 **Update (CHAOS-4363, 4347-A, routing slice):** `statusCategoryFactKindComposition`'s
 `SubjectTeam` entry now also composes `FactInvestment`, so the team leg of
-the paragraph above is `team→{health, workload, readiness, investment}`.
+the paragraph above was `team→{health, workload, readiness, investment}`
+at this ticket's own tip; CHAOS-4364 (rebased on top, see above) adds
+`flow`/`landscape` to the same entry and adds the first `project` entry.
 Repository's set is unchanged.
 
 **Update (CHAOS-4363, 4347-A, producer slice — completes this ticket):**

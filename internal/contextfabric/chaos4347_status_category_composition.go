@@ -42,10 +42,20 @@ import (
 //
 // CHAOS-4364 adds FactFlow and FactLandscape to SubjectTeam (bottlenecks
 // and landscape/area are on the SAME project-status list) and adds the
-// first SubjectProject entry -- project had no composition row before this
-// because nothing in the SubjectTeam set rolled up to project by a real
-// join until FactFlow/FactLandscape's own team_project_ownership rollups
-// did (see flow.go/landscape.go).
+// first SubjectProject entry -- project had no composition row before
+// CHAOS-4363/CHAOS-4364 because nothing in the SubjectTeam set rolled up
+// to project by a real join before those two tickets' own real-join
+// widenings (health.go/workload.go/readiness.go/investment.go for
+// CHAOS-4363; flow.go/landscape.go for CHAOS-4364).
+//
+// SubjectProject's set is every FactKind of the six SubjectTeam kinds
+// whose Capability().SupportedSubjectKinds actually advertises
+// SubjectProject (codex R2 P1, CHAOS-4364: an earlier hand-merge of this
+// map added only FactFlow/FactLandscape to SubjectProject, silently
+// excluding FactHealth/FactWorkload/FactReadiness/FactInvestment even
+// though all four already answer for a project directly) -- verified
+// against each provider's own Capability() in health.go/workload.go/
+// readiness.go/investment.go.
 //
 // CHAOS-4363 and CHAOS-4364 landed in parallel and both touched
 // SubjectTeam's entry; this is the hand-merged union both lanes' doc
@@ -54,7 +64,7 @@ import (
 var statusCategoryFactKindComposition = map[SubjectKind][]FactKind{
 	SubjectRepository: {FactMetrics, FactHealth, FactIdentity},
 	SubjectTeam:       {FactHealth, FactWorkload, FactReadiness, FactInvestment, FactFlow, FactLandscape},
-	SubjectProject:    {FactFlow, FactLandscape},
+	SubjectProject:    {FactHealth, FactWorkload, FactReadiness, FactInvestment, FactFlow, FactLandscape},
 }
 
 // CategoryFactCompositionEvent (CHAOS-4347) reports ONE status-category

@@ -193,6 +193,32 @@ func TestLiveSchemaParityAcrossEveryFactProvider(t *testing.T) {
 			}
 		})
 	}
+
+	// CHAOS-4364 codex R2 P2: the main loop above asserts ONE subject kind
+	// per FactKind (subjects is keyed by Kind alone), so FlowProvider's
+	// SECOND shape -- repo_metrics_daily's five new PR pickup/review-timing
+	// columns, read only for a repository subject -- was never actually
+	// scanned against production typing. FlowProvider/LandscapeProvider's
+	// PROJECT-subject branches have the same gap, but so does every other
+	// project-rollup provider in this package (metrics.go/health.go/
+	// workload.go/readiness.go/investment.go) predating this ticket --
+	// widening this test's structure to cover every provider's every
+	// supported subject kind is a real, separate follow-up, not silently
+	// expanded into this PR's own scope.
+	t.Run("flow_repository", func(t *testing.T) {
+		flowProvider := findProvider(t, providers, contextfabric.FactFlow)
+		result, err := flowProvider.ReadFacts(ctx, principal, contextfabric.FactQuery{
+			Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind:     contextfabric.FactFlow,
+			Subjects: []contextfabric.SubjectRef{repoSubject(repoID)},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() against production-typed schema: %v", err)
+		}
+		if result.State == contextfabric.SourceUnavailable {
+			t.Fatalf("provider degraded to unavailable against production typing: %s", result.Reason)
+		}
+	})
 }
 
 // TestLiveHistoricalReadsMatchProductionTyping runs the same parity check

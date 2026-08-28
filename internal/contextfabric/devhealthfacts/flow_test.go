@@ -33,9 +33,19 @@ func workItemMetricsDailyRow(teamID, workScopeID string, itemsStarted, itemsComp
 	}
 }
 
+// projectWorkItemMetricsRow shapes one readProjectFlow output row: (project
+// subject key, team_id, items_started, items_completed, wip_count_end_of_day,
+// has/value pairs..., bug_completed_ratio, story_points_completed) --
+// CHAOS-4364 codex R2 P1 fix, the project rollup now SQL-aggregates every
+// (provider, work_scope_id) row it finds for a team into one summed/
+// averaged row per team, so work_scope_id/day no longer appear in its
+// output the way they do in the per-scope team_breakdown shape
+// workItemMetricsDailyRow builds. workScopeID is still accepted (kept
+// realistic for callers that pass a distinguishing scope), just no longer
+// scanned back out.
 func projectWorkItemMetricsRow(provider, projectID, teamID, workScopeID string, itemsStarted, itemsCompleted int64) []any {
 	row := []any{provider + ":" + projectID, teamID}
-	row = append(row, workItemMetricsDailyRow("", workScopeID, itemsStarted, itemsCompleted, 5)[1:]...)
+	row = append(row, workItemMetricsDailyRow(teamID, workScopeID, itemsStarted, itemsCompleted, 5)[3:]...)
 	return row
 }
 

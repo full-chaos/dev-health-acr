@@ -58,12 +58,12 @@ func TestChaos4347_ComposeStatusCategoryRequirements(t *testing.T) {
 			},
 		},
 		{
-			name:         "project subject: status composes to flow+landscape (CHAOS-4364, first project entry)",
+			name:         "project subject: status composes to every kind whose Capability supports SubjectProject (CHAOS-4364 R2 fix)",
 			requirements: []FactRequirement{{Kind: FactStatus}},
 			subjects:     []SubjectRef{project},
-			wantKinds:    []FactKind{FactFlow, FactLandscape},
+			wantKinds:    []FactKind{FactFlow, FactHealth, FactInvestment, FactLandscape, FactReadiness, FactWorkload},
 			wantCompositions: []CategoryFactCompositionEvent{
-				{RequirementKind: FactStatus, SubjectKind: SubjectProject, ComposedKinds: []FactKind{FactFlow, FactLandscape}},
+				{RequirementKind: FactStatus, SubjectKind: SubjectProject, ComposedKinds: []FactKind{FactHealth, FactWorkload, FactReadiness, FactInvestment, FactFlow, FactLandscape}},
 			},
 		},
 		{

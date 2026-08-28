@@ -93,6 +93,10 @@ func TestChaos4099_RealProviderSubjectKindsStayUnwidened(t *testing.T) {
 // investment.go/readiness.go's own package doc comments. This is still not
 // the rejected Option A: every join is a genuine ownership traversal with a
 // disclosed rollup_basis, never an inlined proxy with no central policy.
+//
+// FactFlow and FactLandscape are ALSO excluded (CHAOS-4364, same reasoning):
+// flow.go/landscape.go both roll up to project via a real
+// team_project_ownership join.
 func TestChaos4099_NoCanonicalFactCapabilityAnswersForAProject(t *testing.T) {
 	t.Parallel()
 
@@ -102,6 +106,8 @@ func TestChaos4099_NoCanonicalFactCapabilityAnswersForAProject(t *testing.T) {
 		contextfabric.FactWorkload:   true,
 		contextfabric.FactInvestment: true,
 		contextfabric.FactReadiness:  true,
+		contextfabric.FactFlow:       true,
+		contextfabric.FactLandscape:  true,
 	}
 	for _, provider := range allProvidersForKindAudit() {
 		capability := provider.Capability()
@@ -132,5 +138,10 @@ func allProvidersForKindAudit() []contextfabric.FactProvider {
 		&BlockersProvider{}, &RequiredChildrenProvider{},
 		&IncidentsProvider{}, &DeploymentsProvider{},
 		&ContinuousIntegrationProvider{}, &SourceHealthProvider{},
+		// CHAOS-4364 (codex R2 P2): FlowProvider/LandscapeProvider were
+		// missing here, so TestChaos4099_NoCanonicalFactCapabilityAnswersForAProject
+		// never actually exercised either -- the exact silent-gap this
+		// list's own doc comment exists to prevent.
+		&FlowProvider{}, &LandscapeProvider{},
 	}
 }
