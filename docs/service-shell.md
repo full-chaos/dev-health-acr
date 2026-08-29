@@ -26,7 +26,7 @@ The default listen address is `:8080`. Override it through `ACR_ADDR` or the `se
 | `ACR_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown budget |
 | `ACR_MINIMUM_SIDECAR_VERSION` | `0.1.0` | Capabilities handshake floor |
 | `ACR_ENTITLEMENT_KEY` | `agent_context_runtime` | Fixed product entitlement key; other values are rejected |
-| `ACR_MAX_ITEMS` | `30` | Packet item limit advertised by capabilities |
+| `ACR_MAX_ITEMS` | `30` | Packet item limit advertised by capabilities. Also gates a Context Fabric investigation response's item count (`POST/GET .../context-fabric/investigations`, CHAOS-4523): the charged count is `SubjectResolution.Candidates + Drivers + RemainingWork + ReadinessGaps + Conflicts + ClaimedFacts + Cohort.Members` -- `Paths` (graph-evidence provenance for a driver/claim, uncorrelated with answer size) is measured and logged but NOT charged against this ceiling; it stays fully counted against `ACR_MAX_SERIALIZED_BYTES`, so nothing is dropped from the response body |
 | `ACR_MAX_OUTPUT_TOKENS` | `4000` | Output token budget advertised by capabilities |
 | `ACR_MAX_SERIALIZED_BYTES` | `262144` | Serialized packet byte limit |
 | `ACR_REQUESTS_PER_MINUTE` | `60` | Initial advertised request limit |
