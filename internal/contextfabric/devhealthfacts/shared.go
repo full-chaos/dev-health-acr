@@ -295,7 +295,7 @@ func evidenceRefID(entityType, id string) string {
 // independently hand-authored copies could.
 //
 // Selects p.provider, p.id (so a caller can rebuild the "<provider>:<id>"
-// project subject key) and tpo.team_id (one row per currently- or
+// project subject key) and p.team_id (one row per currently- or
 // as-of-owning team; a team owning the project through more than one
 // `source` row still yields one row per source and must be deduped by the
 // caller the same way readProjectMetrics dedupes by team_id).

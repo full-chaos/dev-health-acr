@@ -194,29 +194,21 @@ func (p *LandscapeProvider) readProjectLandscape(ctx context.Context, orgID stri
 	if timeBound.active {
 		ownershipPredicate = fmt.Sprintf(" AND valid_from <= {%s:DateTime64(6,'UTC')} AND (valid_to IS NULL OR valid_to > {%s:DateTime64(6,'UTC')})", boundEndParam, boundEndParam)
 	}
+	// CHAOS-4521b, self-found after codex R3: this reader carried its OWN
+	// inline copy of the ownership join and never called the shared helper,
+	// so it silently missed the move onto the project identity -- it would
+	// have gone to zero for Linear the moment CHAOS-4530 deployed, while
+	// health and investment kept working. That is the duplicated-SQL drift
+	// in its most literal form: one copy was updated and the other was not,
+	// and nothing failed.
 	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), il.team_id, il.map_name, toString(il.as_of_day), toInt64(count()), toInt64(sum(il.churn_loc_30d)), toInt64(sum(il.delivery_units_30d)), avg(il.cycle_p50_30d_hours), toInt64(max(il.wip_max_30d))
-FROM (
-	SELECT id, provider, project_key
-	FROM (
-		SELECT id, provider, ifNull(project_key, '') AS project_key,
-			count() OVER (PARTITION BY provider, project_key) AS key_resolution_count
-		FROM projects FINAL
-		WHERE org_id = {org_id:String}
-	)
-	WHERE project_key != '' AND key_resolution_count = 1 AND concat(provider, ':', id) IN {ids:Array(String)}
-) AS p
-INNER JOIN (
-	SELECT provider, project_key, team_id
-	FROM team_project_ownership FINAL
-	WHERE org_id = {org_id:String} AND project_key IS NOT NULL` + ownershipPredicate + `
-	GROUP BY provider, project_key, team_id
-) AS tpo ON tpo.provider = p.provider AND tpo.project_key = p.project_key
+FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
 INNER JOIN (
 	SELECT team_id, map_name, as_of_day, churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d,
 		max(as_of_day) OVER (PARTITION BY team_id) AS latest_day
 	FROM ic_landscape_rolling_30d FINAL
 	WHERE org_id = {org_id:String}` + timeBound.dayPredicate("as_of_day") + `
-) AS il ON il.team_id = tpo.team_id AND il.as_of_day = il.latest_day
+) AS il ON il.team_id = p.team_id AND il.as_of_day = il.latest_day
 GROUP BY p.id, p.provider, il.team_id, il.map_name, il.as_of_day
 ORDER BY p.id, il.team_id, il.map_name`)
 	rowCount := 0

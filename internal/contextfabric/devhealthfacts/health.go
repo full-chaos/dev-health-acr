@@ -289,12 +289,19 @@ func (p *HealthProvider) readProjectHealth(ctx context.Context, orgID string, su
 	// unspecified, which would make risk_breakdown/evidence ordering vary
 	// between identical reads. The outer ORDER BY makes both the bound and
 	// the ordering apply to the COMBINED result.
+	// CHAOS-4521b, self-found after codex R3: projectOwnershipJoinSQL now
+	// collapses to the RESOLVED grain and therefore exposes ONE alias, `p`,
+	// carrying team_id -- there is no `tpo` row left to reference. Reading
+	// `tpo.team_id` here produced invalid SQL, and neither the build nor
+	// the fake-client tests could see it, because a fake client returns
+	// canned rows regardless of the statement. Exactly the blind spot this
+	// whole ticket has been about.
 	statement := withRowLimit(`SELECT project_key, scope, scope_id, scope_name, severity, has_risk, risk, computed_at
 FROM (
-	SELECT concat(p.provider, ':', p.id) AS project_key, 'team' AS scope, tpo.team_id AS scope_id, ifNull(t.name, '') AS scope_name, toString(cr.severity) AS severity, toUInt8(isNotNull(cr.compounding_risk)) AS has_risk, toFloat64(ifNull(cr.compounding_risk, 0)) AS risk, toString(cr.computed_at) AS computed_at
+	SELECT concat(p.provider, ':', p.id) AS project_key, 'team' AS scope, p.team_id AS scope_id, ifNull(t.name, '') AS scope_name, toString(cr.severity) AS severity, toUInt8(isNotNull(cr.compounding_risk)) AS has_risk, toFloat64(ifNull(cr.compounding_risk, 0)) AS risk, toString(cr.computed_at) AS computed_at
 	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
-	INNER JOIN (` + compoundingRiskLatestSubquery("team", timeBound) + `) AS cr ON cr.scope_id = tpo.team_id AND cr.rn = 1
-	LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = tpo.team_id
+	INNER JOIN (` + compoundingRiskLatestSubquery("team", timeBound) + `) AS cr ON cr.scope_id = p.team_id AND cr.rn = 1
+	LEFT JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = p.team_id
 
 	UNION ALL
 
@@ -305,7 +312,7 @@ FROM (
 		FROM team_repo_ownership FINAL
 		WHERE org_id = {org_id:String} AND repo_id IS NOT NULL` + ownershipPredicate + `
 		GROUP BY team_id, repo_key, repo_full_name
-	) AS tro ON tro.team_id = tpo.team_id
+	) AS tro ON tro.team_id = p.team_id
 	INNER JOIN (` + compoundingRiskLatestSubquery("repo", timeBound) + `) AS cr ON cr.scope_id = tro.repo_key AND cr.rn = 1
 )
 ORDER BY project_key, scope, scope_id`)
