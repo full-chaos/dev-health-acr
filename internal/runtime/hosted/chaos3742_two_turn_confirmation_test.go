@@ -4178,17 +4178,22 @@ type twoTurnCaseResult struct {
 	// ExpectedID=="" is the normal, correct shape for that class, not a
 	// half-populated row.
 	CohortAnswerExpected bool `json:"cohort_answer_expected,omitempty"`
-	// CohortRankedMemberCount (CHAOS-4525 numerator follow-up) is how many
-	// members of the delivered cohort actually had a ranking pass run --
-	// see chaos4525CohortRankedMemberCount's own doc comment for why this
-	// counts RankingComputed members rather than len(Cohort.Members).
-	// Zero on every non-cohort row, which is why it is omitempty.
+	// CohortScoredMemberCount (CHAOS-4525 numerator follow-up; renamed from
+	// CohortRankedMemberCount after codex R4 P1) is how many members of the
+	// delivered cohort carry an actual EXPLANATION -- Outcome qualified or
+	// provisional, the only two outcomes for which RankCohort populates
+	// Score, RankingBasis and Drivers. See
+	// chaos4525CohortScoredMemberCount's own doc comment for why
+	// RankingComputed was the wrong predicate and how it false-greened this
+	// bar. Zero on every non-cohort row, which is why it is omitempty.
 	//
 	// It is the third condition of the cohort numerator. Without it,
 	// "answered" could be satisfied by a result that delivered a cohort
-	// object carrying only discovered, unscored members -- a list, not an
-	// answer to "which teams are struggling, and why".
-	CohortRankedMemberCount int `json:"cohort_ranked_member_count,omitempty"`
+	// object carrying only discovered or unexplained members -- a list, not
+	// an answer to "which teams are struggling, and why". The field NAME
+	// says "scored" rather than "ranked" precisely because that distinction
+	// is the whole point and the old name obscured it.
+	CohortScoredMemberCount int `json:"cohort_scored_member_count,omitempty"`
 	// CommitGate/TiedStatisticalTop/SearchTruncated mirror the
 	// decision-stage graphrank.ResolutionTraceEvent for this arm's own
 	// turn-2 call -- graphrank's closed gate vocabulary and the two
@@ -4818,20 +4823,34 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // separately at "42" for CHAOS-4386's own n-turn terminal fields. They
 // are different classes' artifacts and have never been one sequence.
 // "43" (CHAOS-4525 numerator follow-up, team-lead ruling 2026-08-29 after
-// lane-4522's first live cohort success): twoTurnCaseResult gains
-// CohortRankedMemberCount, and the answer-rate NUMERATOR becomes
+// lane-4522's first live cohort success): the answer-rate NUMERATOR becomes
 // class-shaped -- cohort rows admit partial/degraded alongside complete and
-// additionally require a ranked member; anchored rows keep the complete-only
-// gate. See chaos4525RowAnswered's own doc comment.
+// additionally require an explained member; anchored rows keep the
+// complete-only gate. See chaos4525RowAnswered's own doc comment.
 //
-// This is a SEPARATE bump from "42" rather than a widening of it because v42
-// already produced a real on-disk artifact -- this lane's own CHAOS-4525
-// baseline run, 20260829T141409Z-73901 -- whose rows carry no
-// cohort_ranked_member_count at all. Reusing "42" would make that artifact
-// and a post-change one indistinguishable while their rows mean different
-// things, which is the exact ambiguity every prior bump on this ladder
-// exists to prevent.
-const reportSchemaVersion = "43"
+// This was a SEPARATE bump from "42" rather than a widening of it because
+// v42 already produced a real on-disk artifact -- this lane's own CHAOS-4525
+// baseline run, 20260829T141409Z-73901 -- whose rows carry no cohort member
+// count at all. Reusing "42" would have made that artifact and a post-change
+// one indistinguishable while their rows mean different things, which is the
+// exact ambiguity every prior bump on this ladder exists to prevent.
+//
+// "44" (CHAOS-4525, codex review R4 P1, confirmed against source): v43's
+// member count keyed on ContextFabricCohortMember.RankingComputed, which
+// cohort_ranking.go:277 sets for EVERY member as soon as a ranking pass
+// runs -- including the insufficient_evidence and not_applicable members
+// that lines 403-419 deliberately leave with no Score, no RankingBasis and
+// no Drivers. A cohort nobody could explain therefore satisfied the v43 bar.
+// The field is renamed cohort_scored_member_count and now counts Outcome
+// qualified/provisional only. Renamed rather than redefined in place
+// precisely because the meaning changed: a v43 cohort_ranked_member_count
+// and a v44 cohort_scored_member_count are different measurements, and a
+// consumer must not be able to read one as the other.
+//
+// NOTE the two ladders are independent: nTurnReportSchemaVersion is
+// separately at "42" for CHAOS-4386's own n-turn terminal fields. They
+// are different classes' artifacts and have never been one sequence.
+const reportSchemaVersion = "44"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -7729,10 +7748,14 @@ func chaos4386NoDisclosureRow(index int, member string, tc trialCase, turn1 cont
 //
 // The third condition is what keeps the loosening honest. Admitting three
 // statuses without it would let a result that delivered a cohort object
-// full of merely-discovered, unscored members count as an answer --
+// full of merely-discovered or unexplained members count as an answer --
 // "we found three teams" scored the same as "here is why these three are
-// struggling". RankingComputed is the contract's own line between those
-// two, so the numerator uses it (chaos4525CohortRankedMemberCount).
+// struggling". The line between those two is Outcome qualified/provisional,
+// the only outcomes carrying a Score and Drivers at all
+// (chaos4525CohortScoredMemberCount). This is AGENTS.md check 8 as a
+// measurement: "Scores help prioritize; drivers explain -- never a bare
+// score" -- a bar that accepts a cohort with neither is the degenerate case
+// of that prohibition.
 //
 // clarification_required and no_match remain unanswered for BOTH classes:
 // they are the two statuses that deliver nothing at all.
@@ -7750,7 +7773,7 @@ func chaos4525RowAnswered(res twoTurnCaseResult) bool {
 		case string(contractsv1.ContextFabricInvestigationComplete),
 			string(contractsv1.ContextFabricInvestigationPartial),
 			string(contractsv1.ContextFabricInvestigationDegraded):
-			return res.CohortRankedMemberCount >= 1
+			return res.CohortScoredMemberCount >= 1
 		default:
 			return false
 		}

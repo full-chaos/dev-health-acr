@@ -187,8 +187,8 @@ func TestFoldConfirmedKindVectorCensus_AccumulatesAcrossCalls(t *testing.T) {
 // answer_rate) is the one after that.
 func TestTwoTurnReport_SchemaVersionPin(t *testing.T) {
 	t.Parallel()
-	if reportSchemaVersion != "43" {
-		t.Errorf("reportSchemaVersion = %q, want %q (CHAOS-4525 numerator follow-up: cohort_ranked_member_count per row, plus the class-shaped answer_rate numerator)", reportSchemaVersion, "43")
+	if reportSchemaVersion != "44" {
+		t.Errorf("reportSchemaVersion = %q, want %q (CHAOS-4525 R4: cohort_scored_member_count per row -- Outcome qualified/provisional, not RankingComputed)", reportSchemaVersion, "44")
 	}
 }
 

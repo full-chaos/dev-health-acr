@@ -845,10 +845,10 @@ func TestChaos4525CohortAnswerExpectedSurvivesDecode(t *testing.T) {
 	// at all and would pass even with the field undeclared.
 	const rawResults = `[
       {"index": 68, "member": "expected_kind", "arm": "positive",
-       "cohort_answer_expected": true, "cohort_ranked_member_count": 3,
+       "cohort_answer_expected": true, "cohort_scored_member_count": 3,
        "terminal_status": "complete", "claimed_facts_count": 2},
       {"index": 69, "member": "expected_kind", "arm": "positive",
-       "cohort_answer_expected": true, "cohort_ranked_member_count": 0,
+       "cohort_answer_expected": true, "cohort_scored_member_count": 0,
        "terminal_status": "degraded", "claimed_facts_count": 0}
     ]`
 
@@ -882,22 +882,22 @@ func TestChaos4525CohortAnswerExpectedSurvivesDecode(t *testing.T) {
 	}
 }
 
-// TestChaos4525CohortRankedMemberCountSurvivesDecode is the merge-mirror half
+// TestChaos4525CohortScoredMemberCountSurvivesDecode is the merge-mirror half
 // of the CHAOS-4525 NUMERATOR follow-up, and its failure mode is sharper than
 // its CohortAnswerExpected sibling above: a dropped BOOLEAN reads false, which
 // removes a row from the denominator and is at least visible as a smaller
 // denominator; a dropped COUNT reads 0, which is indistinguishable from a
-// genuinely unranked cohort and silently scores a real ranked answer as
+// cohort nobody explained and silently scores a real ranked answer as
 // UNANSWERED. That is the #329 live shape -- degraded, claims, 3 ranked teams
 // -- so the assertion is on the recomputed rate.
 //
-// RED-FIRST: retag CohortRankedMemberCount as `json:"-"` in main.go (a
+// RED-FIRST: retag CohortScoredMemberCount as `json:"-"` in main.go (a
 // mutation that still builds, unlike deleting the field) and the recomputed
 // rate reads 0 instead of 1.
-func TestChaos4525CohortRankedMemberCountSurvivesDecode(t *testing.T) {
+func TestChaos4525CohortScoredMemberCountSurvivesDecode(t *testing.T) {
 	const rawResults = `[
       {"index": 68, "member": "expected_kind", "arm": "positive",
-       "cohort_answer_expected": true, "cohort_ranked_member_count": 3,
+       "cohort_answer_expected": true, "cohort_scored_member_count": 3,
        "terminal_status": "degraded", "claimed_facts_count": 11}
     ]`
 
@@ -905,8 +905,8 @@ func TestChaos4525CohortRankedMemberCountSurvivesDecode(t *testing.T) {
 	if err := json.Unmarshal([]byte(rawResults), &results); err != nil {
 		t.Fatalf("unmarshal shard results: %v", err)
 	}
-	if len(results) != 1 || results[0].CohortRankedMemberCount != 3 {
-		t.Fatalf("cohort_ranked_member_count was dropped or mangled on decode: %+v", results)
+	if len(results) != 1 || results[0].CohortScoredMemberCount != 3 {
+		t.Fatalf("cohort_scored_member_count was dropped or mangled on decode: %+v", results)
 	}
 	if got, want := chaos4386TwoTurnAnswerRate(results), 1.0; got != want {
 		t.Errorf("recomputed AnswerRate = %v, want %v (the #329 live shape: degraded, 11 claims, 3 ranked teams)", got, want)

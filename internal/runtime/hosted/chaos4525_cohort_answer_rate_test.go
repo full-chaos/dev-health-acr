@@ -42,14 +42,14 @@ func TestChaos4525AnswerRateAdmitsCohortRows(t *testing.T) {
 	// answer. These denominator subtests set it to 1 wherever they mean
 	// "this row DID answer", so a denominator assertion is never silently
 	// satisfied by a numerator failure instead.
-	cohortRow := func(expectedID string, cohort bool, terminalStatus string, claimed, ranked int) twoTurnCaseResult {
+	cohortRow := func(expectedID string, cohort bool, terminalStatus string, claimed, scored int) twoTurnCaseResult {
 		return twoTurnCaseResult{
 			Arm:                     string(twoTurnArmPositive),
 			ExpectedID:              expectedID,
 			CohortAnswerExpected:    cohort,
 			TerminalStatus:          terminalStatus,
 			ClaimedFactsCount:       claimed,
-			CohortRankedMemberCount: ranked,
+			CohortScoredMemberCount: scored,
 		}
 	}
 
@@ -198,13 +198,13 @@ func TestChaos4525AnnexReadsCensusTerminalExpectation(t *testing.T) {
 func TestChaos4525CohortNumeratorAcceptsDegradedRankedAnswers(t *testing.T) {
 	t.Parallel()
 
-	row := func(terminal string, claimed, ranked int) twoTurnCaseResult {
+	row := func(terminal string, claimed, scored int) twoTurnCaseResult {
 		return twoTurnCaseResult{
 			Arm:                     string(twoTurnArmPositive),
 			CohortAnswerExpected:    true,
 			TerminalStatus:          terminal,
 			ClaimedFactsCount:       claimed,
-			CohortRankedMemberCount: ranked,
+			CohortScoredMemberCount: scored,
 		}
 	}
 
@@ -230,7 +230,7 @@ func TestChaos4525CohortNumeratorAcceptsDegradedRankedAnswers(t *testing.T) {
 		// line between the two.
 		for _, terminal := range []string{"complete", "partial", "degraded"} {
 			if got, want := chaos4386TwoTurnAnswerRate([]twoTurnCaseResult{row(terminal, 11, 0)}), 0.0; got != want {
-				t.Errorf("terminal=%q, ranked=0: answer rate = %v, want %v", terminal, got, want)
+				t.Errorf("terminal=%q, scored=0: answer rate = %v, want %v", terminal, got, want)
 			}
 		}
 	})
@@ -262,44 +262,133 @@ func TestChaos4525CohortNumeratorAcceptsDegradedRankedAnswers(t *testing.T) {
 	})
 }
 
-// TestChaos4525CohortRankedMemberCount pins the count itself against the
+// TestChaos4525CohortScoredMemberCount pins the count itself against the
 // contract's own RankingComputed disambiguator -- len(Members) is deliberately
 // NOT the count.
-func TestChaos4525CohortRankedMemberCount(t *testing.T) {
+func TestChaos4525CohortScoredMemberCount(t *testing.T) {
 	t.Parallel()
 
 	t.Run("nil cohort reads 0", func(t *testing.T) {
-		if got := chaos4525CohortRankedMemberCount(contractsv1.ContextFabricInvestigationResult{}); got != 0 {
+		if got := chaos4525CohortScoredMemberCount(contractsv1.ContextFabricInvestigationResult{}); got != 0 {
 			t.Errorf("count = %d, want 0", got)
 		}
 	})
 
-	t.Run("only RankingComputed members count", func(t *testing.T) {
+	t.Run("only scored (qualified/provisional) members count", func(t *testing.T) {
 		result := contractsv1.ContextFabricInvestigationResult{
 			Cohort: &contractsv1.ContextFabricCohort{
 				Kind: contractsv1.ContextFabricSubjectTeam,
 				Members: []contractsv1.ContextFabricCohortMember{
-					{Rank: 1, RankingComputed: true},
-					{Rank: 2, RankingComputed: true},
-					// Discovered but never scored -- an offers-only
-					// member. Present in Members, absent from the count.
-					{Rank: 3, RankingComputed: false},
+					{Rank: 1, RankingComputed: true, Outcome: contractsv1.ContextFabricCohortOutcomeQualified},
+					{Rank: 2, RankingComputed: true, Outcome: contractsv1.ContextFabricCohortOutcomeProvisional},
+					// RankingComputed is TRUE here too -- that is the whole
+					// R4 finding. Unexplained, so it must not count.
+					{Rank: 3, RankingComputed: true, Outcome: contractsv1.ContextFabricCohortOutcomeInsufficientEvidence},
 				},
 			},
 		}
-		if got, want := chaos4525CohortRankedMemberCount(result), 2; got != want {
-			t.Errorf("count = %d, want %d (len(Members)=3 is not the answer)", got, want)
+		if got, want := chaos4525CohortScoredMemberCount(result), 2; got != want {
+			t.Errorf("count = %d, want %d (len(Members)=3 is not the answer, and neither is RankingComputed)", got, want)
 		}
 	})
 
-	t.Run("a cohort delivered with zero ranked members reads 0, not len(Members)", func(t *testing.T) {
+	t.Run("a cohort delivered with no explained member reads 0, not len(Members)", func(t *testing.T) {
 		result := contractsv1.ContextFabricInvestigationResult{
 			Cohort: &contractsv1.ContextFabricCohort{
 				Members: []contractsv1.ContextFabricCohortMember{{Rank: 1}, {Rank: 2}, {Rank: 3}},
 			},
 		}
-		if got := chaos4525CohortRankedMemberCount(result); got != 0 {
-			t.Errorf("count = %d, want 0 -- ranking never ran for this cohort", got)
+		if got := chaos4525CohortScoredMemberCount(result); got != 0 {
+			t.Errorf("count = %d, want 0 -- nothing was scored for this cohort", got)
+		}
+	})
+}
+
+// TestChaos4525RunJShapeIsNotAnAnswer is the codex-R4 P1 regression, written
+// from Run J's own observed data rather than an invented shape.
+//
+// Run J (CHAOS-4450) recorded outcome_counts={"insufficient_evidence":2,
+// "provisional":1} for the live teams cohort. RankCohort sets
+// RankingComputed=true on all three of those members (cohort_ranking.go:277)
+// while giving the two insufficient_evidence ones no Score, no RankingBasis
+// and no Drivers (lines 403-419). The v43 bar counted RankingComputed, so a
+// cohort where NOTHING was explained satisfied it as long as synthesis
+// emitted any claimed fact on a partial or degraded result.
+//
+// AGENTS.md check 8 is the rule: "Scores help prioritize; drivers explain --
+// never a bare score." A bar that accepts a cohort with neither score nor
+// driver is the degenerate case of that prohibition.
+//
+// RED-FIRST at tip 0b9a3820: the first subtest passes (rate 1) because the
+// count keyed on RankingComputed; it must now read 0.
+func TestChaos4525RunJShapeIsNotAnAnswer(t *testing.T) {
+	t.Parallel()
+
+	member := func(outcome contractsv1.ContextFabricCohortMemberOutcome) contractsv1.ContextFabricCohortMember {
+		// RankingComputed is true on EVERY member here on purpose: that is
+		// what the production code does, and it is exactly why it cannot be
+		// the predicate.
+		return contractsv1.ContextFabricCohortMember{RankingComputed: true, Outcome: outcome}
+	}
+	resultWith := func(outcomes ...contractsv1.ContextFabricCohortMemberOutcome) contractsv1.ContextFabricInvestigationResult {
+		cohort := &contractsv1.ContextFabricCohort{Kind: contractsv1.ContextFabricSubjectTeam}
+		for _, o := range outcomes {
+			cohort.Members = append(cohort.Members, member(o))
+		}
+		return contractsv1.ContextFabricInvestigationResult{Cohort: cohort}
+	}
+	rowFrom := func(terminal string, claimed int, result contractsv1.ContextFabricInvestigationResult) twoTurnCaseResult {
+		return twoTurnCaseResult{
+			Arm: string(twoTurnArmPositive), CohortAnswerExpected: true,
+			TerminalStatus: terminal, ClaimedFactsCount: claimed,
+			CohortScoredMemberCount: chaos4525CohortScoredMemberCount(result),
+		}
+	}
+
+	t.Run("all members insufficient_evidence, one claimed fact, partial -> NOT answered", func(t *testing.T) {
+		res := resultWith(
+			contractsv1.ContextFabricCohortOutcomeInsufficientEvidence,
+			contractsv1.ContextFabricCohortOutcomeInsufficientEvidence,
+			contractsv1.ContextFabricCohortOutcomeInsufficientEvidence,
+		)
+		if got := chaos4525CohortScoredMemberCount(res); got != 0 {
+			t.Fatalf("scored member count = %d, want 0 (RankingComputed is true on all three; none carries a Score or a Driver)", got)
+		}
+		row := rowFrom("partial", 1, res)
+		if got, want := chaos4386TwoTurnAnswerRate([]twoTurnCaseResult{row}), 0.0; got != want {
+			t.Errorf("answer rate = %v, want %v -- a cohort nobody explained is not an answer", got, want)
+		}
+	})
+
+	t.Run("not_applicable members are equally unexplained", func(t *testing.T) {
+		res := resultWith(contractsv1.ContextFabricCohortOutcomeNotApplicable, contractsv1.ContextFabricCohortOutcomeNotApplicable)
+		if got := chaos4525CohortScoredMemberCount(res); got != 0 {
+			t.Errorf("scored member count = %d, want 0", got)
+		}
+	})
+
+	t.Run("Run J's exact mix counts its ONE provisional member and answers", func(t *testing.T) {
+		// The same run's third member WAS provisional, so it has a Score and
+		// Drivers. One explained member is a real, if thin, answer -- the bar
+		// must not become so strict that the honest degraded case fails it.
+		res := resultWith(
+			contractsv1.ContextFabricCohortOutcomeInsufficientEvidence,
+			contractsv1.ContextFabricCohortOutcomeInsufficientEvidence,
+			contractsv1.ContextFabricCohortOutcomeProvisional,
+		)
+		if got, want := chaos4525CohortScoredMemberCount(res), 1; got != want {
+			t.Fatalf("scored member count = %d, want %d", got, want)
+		}
+		row := rowFrom("degraded", 11, res)
+		if got, want := chaos4386TwoTurnAnswerRate([]twoTurnCaseResult{row}), 1.0; got != want {
+			t.Errorf("answer rate = %v, want %v (the #329 live shape: degraded, 11 claims, one explained member)", got, want)
+		}
+	})
+
+	t.Run("qualified members count", func(t *testing.T) {
+		res := resultWith(contractsv1.ContextFabricCohortOutcomeQualified, contractsv1.ContextFabricCohortOutcomeInsufficientEvidence)
+		if got, want := chaos4525CohortScoredMemberCount(res), 1; got != want {
+			t.Errorf("scored member count = %d, want %d", got, want)
 		}
 	})
 }

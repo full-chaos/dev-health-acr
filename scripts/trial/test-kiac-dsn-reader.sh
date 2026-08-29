@@ -261,8 +261,10 @@ check "ACR_TRIAL_PG_DATABASE selects an isolated database on the same instance" 
 # exactly the class of failure that must be loud.
 fake_psql() {
   local rows="$1"
+  rm -f "$tmp/psql-args.log"
   {
     printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' "printf '%s\\n' \"\$*\" >> \"$tmp/psql-args.log\""
     if [[ "$rows" == "ERROR" ]]; then
       printf '%s\n' 'exit 1'
     else
@@ -292,6 +294,14 @@ run_lifecycle_guard() {
 fake_psql 0
 check "an isolated database with NO lifecycle row is refused" \
   "REFUSED" "$(run_lifecycle_guard acr_seeds_probe)"
+
+# CHAOS-4525 / codex R4 P1: the guard must ask about THIS RUN'S ORG. The table
+# is org-keyed and the epoch resolver looks up by ACR_TEST_TRIAL_ORG, so a
+# database holding only another org's lifecycle row gives a positive GLOBAL
+# count -- a guard counting all rows passes, the resolver still finds nothing,
+# and the run falls back to the stale epoch-0 graph.
+check "the lifecycle query is scoped to ACR_TEST_TRIAL_ORG" "1" \
+  "$(grep -c "where org_id = " "$tmp/psql-args.log" 2>/dev/null || echo 0)"
 
 fake_psql 1
 check "an isolated database WITH a lifecycle row is allowed" \

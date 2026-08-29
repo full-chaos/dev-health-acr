@@ -202,7 +202,20 @@ for (( c=0; c<case_count; c++ )); do
 
   kind_positive="$(jq -r ".cases[$c].kind_positive // \"\"" "$spec")"
   anchor_positive="$(jq -r ".cases[$c].anchor_positive_key // \"\"" "$spec")"
-  [[ -z "$kind_positive" ]] || reject_unsafe "$kind_positive"
+
+  # EVERY case, including a no_match control with no anchor and no census
+  # (codex review R4 P2). Before this, a case with neither reached no
+  # kind-validating branch at all, so a missing kind_positive -- or any
+  # unknown but character-safe string -- was copied verbatim into the annex,
+  # propagated into the corpus by the sync tool, and reported as success. The
+  # vocabulary is contractsv1's own ContextFabricSubjectKind constants
+  # (internal/contracts/v1/context_fabric_types.go).
+  case "$kind_positive" in
+    organization|team|project|repository|work_item|pull_request|deployment|incident|document|decision|episode|metric|pull_request_review|ci_pipeline_run|work_item_ref) ;;
+    "") die "case $c ($klass/$band): kind_positive is empty -- every case must name the subject kind its oracle is about, including a no_match control (the control's claim is that no subject OF THAT KIND matches)" ;;
+    *) die "case $c ($klass/$band): kind_positive=\"$kind_positive\" is not a ContextFabricSubjectKind -- an unknown kind publishes into the annex, propagates into the corpus, and measures nothing" ;;
+  esac
+  reject_unsafe "$kind_positive"
 
   for id in ${anchor_ids+"${anchor_ids[@]}"}; do
     reject_unsafe "$id"
@@ -481,15 +494,40 @@ trap - INT TERM HUP
 # run, and the tool's own doc comment is explicit that it is never overwritten.
 tmp_audit="$corpus_tmp.sync-audit.json"
 canonical_audit="$corpus.sync-audit.json"
+# The temporary audit is removed ONLY after it has actually landed in the
+# canonical file (codex review R4 P2). The corpus and annex are already
+# installed by this point, so if the canonical audit is malformed or the merge
+# fails, this record is the ONLY trace of the correction that was just
+# published -- deleting it unconditionally (as the first version did, one line
+# after warning that it "remains" at that path) destroys exactly the evidence
+# the warning promises. On failure it stays, the message names the path, and
+# the EXIT trap is disarmed for it so nothing else removes it either.
 if [[ -f "$tmp_audit" ]]; then
+  audit_merged=0
   if [[ -f "$canonical_audit" ]]; then
-    jq -s '.[0] + .[1]' "$canonical_audit" "$tmp_audit" > "$canonical_audit.merged" \
-      && mv "$canonical_audit.merged" "$canonical_audit" \
-      || echo "seed-corpus-cases.sh: could not merge the sync audit -- the seeded run's audit record is at $tmp_audit" >&2
-  else
-    cp "$tmp_audit" "$canonical_audit" || echo "seed-corpus-cases.sh: could not install the sync audit from $tmp_audit" >&2
+    if jq -s '.[0] + .[1]' "$canonical_audit" "$tmp_audit" > "$canonical_audit.merged" 2>/dev/null \
+       && mv "$canonical_audit.merged" "$canonical_audit"; then
+      audit_merged=1
+    else
+      rm -f "$canonical_audit.merged"
+    fi
+  elif cp "$tmp_audit" "$canonical_audit"; then
+    audit_merged=1
   fi
-  rm -f "$tmp_audit"
+
+  if [[ "$audit_merged" == "1" ]]; then
+    rm -f "$tmp_audit"
+  else
+    preserved_audit="${corpus}.sync-audit.UNMERGED-$(date -u +%Y%m%dT%H%M%SZ).json"
+    # Moved out of the temp directory as well: the EXIT trap removes
+    # $corpus_tmp.sync-audit.json, so leaving it there would delete it a
+    # moment later and the warning would again name a path with nothing at it.
+    if mv "$tmp_audit" "$preserved_audit" 2>/dev/null; then
+      echo "seed-corpus-cases.sh: could not merge the sync audit into $canonical_audit -- the corpus and annex ARE installed, and this run's audit record is preserved at $preserved_audit; merge it by hand" >&2
+    else
+      echo "seed-corpus-cases.sh: could not merge the sync audit into $canonical_audit AND could not preserve it -- this run's audit record is at $tmp_audit and will be removed on exit; copy it NOW" >&2
+    fi
+  fi
 fi
 
 rm -f "$corpus_backup" "$annex_backup"

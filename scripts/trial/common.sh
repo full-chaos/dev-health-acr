@@ -584,6 +584,15 @@ trial_wire_graph_lifecycle_env() {
 # measured against the wrong graph. run-two-turn-parallel.sh never hits it
 # because its template database is cloned from a seeded one.
 #
+# Scoped to THIS RUN'S ORGANIZATION, not to "any lifecycle row" (codex review
+# R4 P1, confirmed): acr.context_fabric_graph_lifecycle is org-keyed -- org_id
+# is its first column -- and the epoch resolver looks the row up by
+# ACR_TEST_TRIAL_ORG. A database carrying only some OTHER org's lifecycle row
+# gives a positive global count, so a guard counting all rows passes, the
+# resolver then finds nothing for the trial org, and the run falls back to the
+# stale epoch-0 graph anyway. A guard that does not check its own stated
+# condition is worse than no guard, because it is believed.
+#
 # Deliberately scoped to the NON-DEFAULT database only. The standing `acr`
 # database is seeded by construction, and making every existing recipe depend
 # on psql being installed would be a regression for callers this cannot affect.
@@ -600,7 +609,7 @@ trial_require_graph_lifecycle_seeded() {
   local rows
   rows="$(PGPASSWORD="$ACR_TEST_TRIAL_PG_PASSWORD" PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-15}" \
     "$psql_bin" -h "$ACR_TEST_TRIAL_PG_HOST" -p "$ACR_TEST_TRIAL_PG_PORT" -U "$ACR_TEST_TRIAL_PG_USER" \
-    -d "$db" -tAc "select count(*) from acr.context_fabric_graph_lifecycle" 2>/dev/null)" || rows=""
+    -d "$db" -tAc "select count(*) from acr.context_fabric_graph_lifecycle where org_id = '$ACR_TEST_TRIAL_ORG'" 2>/dev/null)" || rows=""
   rows="$(printf '%s' "$rows" | tr -d '[:space:]')"
 
   if [[ ! "$rows" =~ ^[0-9]+$ ]]; then
@@ -612,7 +621,7 @@ trial_require_graph_lifecycle_seeded() {
     # family after they deadlocked inside command substitution, and this
     # message is emitted from a function callers do capture.
     printf '%s\n' \
-      "common.sh: database '$db' has NO graph-lifecycle row." \
+      "common.sh: database '$db' has NO graph-lifecycle row for org $ACR_TEST_TRIAL_ORG." \
       "" \
       "A freshly migrated database has an empty acr.context_fabric_graph_lifecycle," \
       "so the epoch resolver finds no serving epoch and the run would read the bare" \
@@ -634,7 +643,7 @@ trial_require_graph_lifecycle_seeded() {
       "them out is what keeps replicates independent." >&2
     exit 1
   fi
-  echo "common.sh: graph-lifecycle rows in '$db': $rows" >&2
+  echo "common.sh: graph-lifecycle rows in '$db' for org $ACR_TEST_TRIAL_ORG: $rows" >&2
 }
 
 trial_run_go_test() {

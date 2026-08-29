@@ -297,6 +297,44 @@ check "a successful install merges the sync audit into the canonical sibling" "2
 check "  ... appending, never overwriting the prior history" "entry" \
   "$(jq -r '.[0].prior // "MISSING"' "$tmp/corpus.json.sync-audit.json" 2>/dev/null || echo MISSING)"
 
+# 14. CHAOS-4525 / codex R4 P2: kind_positive must be validated on EVERY case,
+#     including a no_match control that has no anchor and no census -- such a
+#     case reached no kind-validating branch at all, so a missing or unknown
+#     value was copied into the annex, propagated into the corpus by the sync
+#     tool, and reported as success.
+nomatch_case() {
+  printf '%s' '[{"question":"q","question_class":"existence_probe","band":"no_match","absent_terms":["warehouse"],"kind_positive":'"$1"',"kind_negatives":[],"anchor_positive_key":null,"anchor_negatives":[],"window_positive_band":"all_time","window_negatives":[],"census":null,"authority":"derived","kind_basis":"x","anchor_basis":"x","baseline":{}}]'
+}
+fake_kubectl 0 0 team
+fixture "$(nomatch_case '""')"
+out="$(run_seed --dry-run)"
+check "a no_match control with an EMPTY kind_positive is refused" "exit=1" "$out"
+check "  ... and says every case must name its subject kind" "1" "$(grep -c 'kind_positive is empty' "$tmp/out.log" || true)"
+
+fixture "$(nomatch_case '"prjoect"')"
+out="$(run_seed --dry-run)"
+check "a no_match control with an UNKNOWN kind_positive is refused" "exit=1" "$out"
+check "  ... and names the closed subject-kind vocabulary" "1" "$(grep -c 'is not a ContextFabricSubjectKind' "$tmp/out.log" || true)"
+
+fixture "$(nomatch_case '"project"')"
+check "a no_match control with a valid kind_positive is accepted" "exit=0" "$(run_seed --dry-run)"
+
+# 15. CHAOS-4525 / codex R4 P2: a FAILED audit merge must not destroy the only
+#     record of a correction that IS already published. The corpus and annex
+#     are installed by that point, so the temporary is the sole trace.
+printf '%s\n' '[{"question":"fixture, never real corpus text","expect_kind":"team","expect_id":""}]' >"$tmp/corpus.orig.json"
+printf '%s\n' '{"cases":{"0":{"question_class":"cohort_assessment"}},"provenance":{"org_id":"org-1","corpus_sha8":"aaaaaaaa"}}' >"$tmp/annex.orig.json"
+fake_kubectl 1 0 team
+fixture "$(kind_case team)"
+printf '%s\n' 'this is not json' >"$tmp/corpus.json.sync-audit.json"
+rm -f "$tmp"/corpus.json.sync-audit.UNMERGED-*.json
+out="$(ACR_SEED_SYNC_CMD="$sync_stub" run_seed)"
+check "a malformed canonical audit does not lose the new record" "1" \
+  "$(ls "$tmp"/corpus.json.sync-audit.UNMERGED-*.json 2>/dev/null | wc -l | tr -d ' ')"
+check "  ... and the message names where it was preserved" "1" \
+  "$(grep -c 'audit record is preserved at' "$tmp/out.log" || true)"
+check "  ... and the corpus/annex ARE installed (the correction stands)" "MODIFIED" "$(originals_untouched)"
+
 if [[ "$failures" -gt 0 ]]; then
   echo "seed-corpus-cases checks FAILED ($failures)" >&2
   exit 1

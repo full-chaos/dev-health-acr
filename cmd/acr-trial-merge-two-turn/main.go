@@ -352,12 +352,12 @@ import (
 // doc comment. The row field is carried through this mirror verbatim (no
 // arithmetic) so the recompute below sees it; AnswerRate stays RECOMPUTED
 // from the merged Results, never trusted from any one shard.
-// expectedSchemaVersion "43" (CHAOS-4525 numerator follow-up): the mirror
-// gained CohortRankedMemberCount and its own copy of the class-shaped
-// numerator (chaos4525RowAnswered) -- see the producer's own
-// reportSchemaVersion "43" doc comment for why this is a second bump rather
-// than a widening of "42".
-const expectedSchemaVersion = "43"
+// expectedSchemaVersion "44" (CHAOS-4525, codex review R4 P1): the mirror's
+// member count is renamed cohort_scored_member_count and counts Outcome
+// qualified/provisional rather than RankingComputed -- see the producer's
+// own reportSchemaVersion "44" doc comment for why the old predicate
+// false-greened the bar, and why this is a rename rather than a redefinition.
+const expectedSchemaVersion = "44"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -550,14 +550,15 @@ type twoTurnCaseResult struct {
 	// denominator back to the pre-4525 anchored-only set while still
 	// labelling the result v42.
 	CohortAnswerExpected bool `json:"cohort_answer_expected,omitempty"`
-	// CohortRankedMemberCount (CHAOS-4525 numerator follow-up, schema v43)
-	// mirrors twoTurnCaseResult's identically-named field, declared here
-	// for the same "an undeclared field is dropped on decode" reason as
+	// CohortScoredMemberCount (CHAOS-4525 numerator follow-up, schema v44;
+	// renamed from CohortRankedMemberCount after codex R4 P1) mirrors
+	// twoTurnCaseResult's identically-named field, declared here for the
+	// same "an undeclared field is dropped on decode" reason as
 	// CohortAnswerExpected above -- and with a sharper failure mode: a
-	// dropped count reads 0, indistinguishable from a genuinely unranked
-	// cohort, so the merged artifact would score a real ranked answer as
-	// UNANSWERED while still labelling itself v43.
-	CohortRankedMemberCount int    `json:"cohort_ranked_member_count,omitempty"`
+	// dropped count reads 0, indistinguishable from a cohort nobody
+	// explained, so the merged artifact would score a real explained answer
+	// as UNANSWERED while still labelling itself v44.
+	CohortScoredMemberCount int    `json:"cohort_scored_member_count,omitempty"`
 	CommitGate              string `json:"commit_gate,omitempty"`
 	TiedStatisticalTop      bool   `json:"tied_statistical_top,omitempty"`
 	SearchTruncated         bool   `json:"search_truncated,omitempty"`
@@ -940,8 +941,9 @@ func chaos4386TwoTurnAnswerRate(results []twoTurnCaseResult) float64 {
 
 // chaos4525RowAnswered mirrors chaos3742_two_turn_confirmation_test.go's
 // identically-named function byte-for-byte -- see that function's own doc
-// comment for why the cohort class admits partial/degraded and requires a
-// ranked member, and why anchored rows keep the complete-only gate. Status
+// comment for why the cohort class admits partial/degraded and requires an
+// EXPLAINED (scored, driver-bearing) member, and why anchored rows keep the
+// complete-only gate. Status
 // values are the string literals of the contractsv1 constants the producer
 // names symbolically; this binary does not import that package, the same
 // hand-maintained-mirror limitation every other function in this file has.
@@ -952,7 +954,7 @@ func chaos4525RowAnswered(res twoTurnCaseResult) bool {
 	if res.CohortAnswerExpected {
 		switch res.TerminalStatus {
 		case "complete", "partial", "degraded":
-			return res.CohortRankedMemberCount >= 1
+			return res.CohortScoredMemberCount >= 1
 		default:
 			return false
 		}
