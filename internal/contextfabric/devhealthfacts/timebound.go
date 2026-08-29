@@ -90,15 +90,62 @@ const incidentSeverityOmittedReason = "devhealthfacts: incident severity is omit
 // the requested time (finding M6).
 const outOfRetentionReason = "devhealthfacts: no rows were retained at or before the requested time; this may predate the retained corpus rather than mean nothing happened"
 
-// retentionState classifies a bounded query's row count. On the CURRENT
-// axis it changes nothing -- zero rows has always meant an ordinary empty
-// read there, and only a historical question raises the retention
-// question at all.
+// emptyReadReason names a read that reached ClickHouse on the CURRENT axis
+// and matched no rows for the requested subjects (CHAOS-4521).
+//
+// A fixed literal, never interpolating a subject, an id, or a count --
+// this string reaches a public answer's Coverage.
+const emptyReadReason = "devhealthfacts: the source was reached and held no rows for the requested subjects"
+
+// retentionState classifies a query's row count into the source state its
+// result carries.
+//
+// CHAOS-4521 (Run J wall A). This used to report SourceAvailable for a
+// zero-row read whenever the axis was current, on the reasoning that "zero
+// rows has always meant an ordinary empty read there". That reasoning is
+// what made the live project-status failure undiagnosable: a committed
+// Linear project subject produced SIX capabilities reporting `available`
+// over an EMPTY canonical fact bundle, so the finished answer could not
+// distinguish "the sources answered and synthesis ignored them" from "the
+// sources returned nothing" -- and Coverage asserted the former.
+//
+// `available` is a claim that the source ANSWERED. A source that was
+// reached and held nothing has answered "nothing", which the closed
+// SourceState vocabulary already spells no_data, and which North Star
+// check 12 requires be kept distinct from a healthy read ("missing is not
+// healthy -- unknown/stale/sparse/not-applicable/zero are distinct").
+//
+// The two zero-row cases stay distinguishable by their REASON, not by
+// their state: a historical query's zero rows may predate the retained
+// corpus (outOfRetentionReason), while a current-axis zero is a plain
+// absence (emptyReadReason). Both are no_data, because in both the source
+// held nothing; only the explanation differs.
+//
+// no_data deliberately does NOT set Coverage.Partial (factStateDegrades
+// excludes it): "we looked and there is nothing" is a complete answer, not
+// a degraded one. What changes is that Coverage now SAYS so, with a
+// reason, instead of claiming the source contributed.
 func (b factTimeBound) retentionState(rowCount int) (contextfabric.SourceState, string) {
-	if !b.active || rowCount > 0 {
+	if rowCount > 0 {
 		return contextfabric.SourceAvailable, ""
 	}
-	return contextfabric.SourceNoData, outOfRetentionReason
+	if b.active {
+		return contextfabric.SourceNoData, outOfRetentionReason
+	}
+	return contextfabric.SourceNoData, emptyReadReason
+}
+
+// currentAxisReadState is retentionState for the Tier C providers
+// (identity, membership, status, work, blockers, required_children), which
+// refuse every historical axis outright via refuseHistoricalFact and so
+// never build a factTimeBound of their own.
+//
+// It DELEGATES to the zero-value bound rather than restating the rule, so
+// the Tier C and Tier A/B answers to "what state does a zero-row read
+// carry" cannot drift apart -- which is exactly how the CHAOS-4521 defect
+// survived in six providers that never called retentionState at all.
+func currentAxisReadState(rowCount int) (contextfabric.SourceState, string) {
+	return factTimeBound{}.retentionState(rowCount)
 }
 
 // unrepresentableValueReason names a fact omitted because a source column

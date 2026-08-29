@@ -610,7 +610,11 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// would have made every enabled policy fail closed to
 		// policy_unavailable exactly as stage 1 did (NewFactReadScopeResolver's
 		// own doc comment), so this line is the ENTIRE activation.
-		contextfabric.FactRegistryOptions{Now: request.options.Now, ScopeExpander: devhealthfacts.NewScopeExpander(clickhouse.queryClient)},
+		// CHAOS-4521: Logger is request.options.Logger, never left nil.
+		// A nil Logger falls back to slog.Default(), which ignores
+		// ACR_LOG_LEVEL and this runtime's configured handler -- the same
+		// reasoning already recorded above for falkorgraph.SlogTelemetry.
+		contextfabric.FactRegistryOptions{Now: request.options.Now, Logger: request.options.Logger, ScopeExpander: devhealthfacts.NewScopeExpander(clickhouse.queryClient)},
 	)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize canonical fact registry: %w", err)

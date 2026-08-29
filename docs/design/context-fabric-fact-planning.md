@@ -158,6 +158,70 @@ The contract's own "a non-available source requires a reason" rule applies to
 `pruned` too, which is what makes the empty-states rule hold for it
 mechanically rather than by convention.
 
+## A read that returned nothing is `no_data`, never `available` (CHAOS-4521)
+
+`pruned` and `unexpanded:<outcome>` cover the capabilities that never ran.
+The remaining case is the one that ran: a provider that queried ClickHouse
+and matched **no rows**.
+
+Until CHAOS-4521 that reported `available` with an empty reason whenever the
+question sat on the current time axis, on the reasoning that "zero rows has
+always meant an ordinary empty read there". Run J (CHAOS-4450) showed the
+cost. A project-status question committed a real Linear project subject; six
+capabilities reported `available`; the `CanonicalFactBundle` was empty;
+`SynthesisDraft.ValidateAgainst` therefore permitted no claims, and the
+answer said *"No canonical facts were observed"* beside a Coverage block
+asserting that six sources had contributed. Nothing in the finished result
+distinguished "the sources answered and synthesis ignored them" from "the
+sources returned nothing", so diagnosing it required a purpose-built rig.
+
+`available` is a claim that the source **answered**. A source that was
+reached and held nothing has answered *nothing*, which the closed
+`SourceState` vocabulary already spells `no_data`, and which North Star
+check 12 requires be kept distinct from a healthy read ("missing is not
+healthy -- unknown/stale/sparse/not-applicable/zero are distinct").
+
+- Both zero-row cases are `no_data`; they stay distinguishable by their
+  **reason**, not their state. A historical zero may predate the retained
+  corpus (`outOfRetentionReason`); a current-axis zero is a plain absence
+  (`emptyReadReason`).
+- `no_data` deliberately does **not** set `Coverage.Partial`
+  (`factStateDegrades` excludes it): "we looked and there is nothing" is a
+  complete answer, not a degraded one. What changed is that Coverage now
+  *says* so, with a reason, instead of claiming a contribution.
+- The rule is stated once, in `factTimeBound.retentionState`
+  (`devhealthfacts/timebound.go`). The six Tier C providers that refuse every
+  historical axis and so never build a bound reach it through
+  `currentAxisReadState`, which **delegates** rather than restating -- those
+  six are exactly where the original defect survived undetected, because they
+  never called `retentionState` at all.
+
+### The per-capability ledger
+
+The same ticket adds `FactCapabilityRegistry.recordFactRead`: one structured
+record per **planned** capability, whichever branch of the plan loop it took.
+
+| field | meaning |
+| --- | --- |
+| `kind` | the `FactKind` planned |
+| `outcome` | which branch minted the coverage entry -- `unconfigured` / `scope_gap` / `pruned` / `failed` / `completed` |
+| `state` | the `SourceState` the coverage entry carries, read back off the bundle so the two cannot drift |
+| `subjects` / `subject_kinds` | how many subjects, and their kinds only |
+| `facts` | how many facts the provider returned, captured **before** the bundle-wide cap trims them |
+| `truncated` | whether more existed than were kept |
+
+`outcome` is a separate axis from `state` on purpose: the state says what the
+answer claims, the outcome says which branch produced it, so a defect is
+attributable to a branch without re-reading source. Every field is a count, a
+boolean, or a value from a closed vocabulary this package owns -- no subject
+label, no canonical ID, no question text, and no provider reason string
+(reasons carry provider wording and are already published, clamped, on
+Coverage).
+
+The registry takes its logger from `FactRegistryOptions.Logger`; the hosted
+runtime passes its own configured logger, never `slog.Default()`, which
+ignores `ACR_LOG_LEVEL` and the configured handler.
+
 A **narrowed capability that then fails** carries both records. The narrowing
 note is attached on every path a narrowed read can take, not just the success
 path: the read failing and the planner having cut the subject list are

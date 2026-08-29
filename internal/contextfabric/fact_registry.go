@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -146,6 +147,15 @@ type FactRegistryOptions struct {
 	// which is a strict improvement on the silent false prune it replaces
 	// but reads no new facts. See FactScopeExpander.
 	ScopeExpander FactScopeExpander
+	// Logger (CHAOS-4521) receives one closed-vocabulary decision-basis
+	// record per PLANNED capability -- see FactCapabilityRegistry.recordFactRead.
+	//
+	// nil falls back to slog.Default(), which is correct for a test but
+	// WRONG in production: slog.Default() ignores ACR_LOG_LEVEL and the
+	// configured handler, so the hosted runtime passes its own
+	// request.options.Logger, the same reasoning open.go already records
+	// for falkorgraph.SlogTelemetry.
+	Logger *slog.Logger
 }
 
 type registeredFactProvider struct {
@@ -158,6 +168,7 @@ type FactCapabilityRegistry struct {
 	defaultTimeout time.Duration
 	now            func() time.Time
 	scopeResolver  *FactReadScopeResolver
+	logger         *slog.Logger
 }
 
 func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOptions) (*FactCapabilityRegistry, error) {
@@ -167,7 +178,11 @@ func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOpt
 	if options.Now == nil {
 		options.Now = time.Now
 	}
+	if options.Logger == nil {
+		options.Logger = slog.Default()
+	}
 	registry := &FactCapabilityRegistry{
+		logger:         options.Logger,
 		providers:      make(map[FactKind]registeredFactProvider, len(providers)),
 		defaultTimeout: options.DefaultTimeout,
 		now:            options.Now,
@@ -416,6 +431,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		registered, ok := r.providers[planned.Kind]
 		if !ok {
 			appendFactCoverage(&bundle, planned.Kind, SourceUnconfigured, nil, "", "canonical fact capability is not configured")
+			r.recordFactRead(ctx, principal, planned.Kind, factReadUnconfigured, SourceUnconfigured, planned.Subjects, 0, false)
 			continue
 		}
 		// len(Subjects)==0 distinguishes the two shapes a gap can take. With
@@ -432,7 +448,9 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			// what carries the gap into the answer's own coverage -- the
 			// answer-facing sentence is composed from the same decision by
 			// the engine (applyFactScopeDisclosure).
-			appendFactCoverage(&bundle, planned.Kind, factScopeGapSourceState(planned.ScopeGap.Outcome), nil, "", planned.Reason)
+			gapState := factScopeGapSourceState(planned.ScopeGap.Outcome)
+			appendFactCoverage(&bundle, planned.Kind, gapState, nil, "", planned.Reason)
+			r.recordFactRead(ctx, principal, planned.Kind, factReadScopeGap, gapState, planned.Subjects, 0, false)
 			continue
 		}
 		if planned.Pruned {
@@ -444,6 +462,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			// the answer. factStateDegrades(SourcePruned) is false for that
 			// reason.
 			appendFactCoverage(&bundle, planned.Kind, SourcePruned, nil, "", planned.Reason)
+			r.recordFactRead(ctx, principal, planned.Kind, factReadPruned, SourcePruned, planned.Subjects, 0, false)
 			continue
 		}
 		query, err := buildFactQuery(request, requirement, registered.capability, allowedSubjects, planned.Subjects)
@@ -473,6 +492,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			// record that subjects were dropped -- the unexplained absence
 			// the empty-states rule forbids.
 			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(planned, reason))
+			r.recordFactRead(ctx, principal, planned.Kind, factReadFailed, state, query.Subjects, 0, false)
 			continue
 		}
 		// Coverage source names must be unique
@@ -496,14 +516,117 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		if planned.ScopeGap != nil {
 			result.Truncated = true
 		}
+		// Captured BEFORE the merge: mergeFactProviderResult trims
+		// result.Facts against the bundle-wide cap, so reading the length
+		// afterwards would report the retained count as the returned count
+		// and hide exactly the truncation the same line reports.
+		factsReturned := len(result.Facts)
 		if err := mergeFactProviderResult(&bundle, registered.capability, query, result, allowedSubjects); err != nil {
 			// Same reasoning as buildFactQuery's error above: the resolved
 			// scope rides out with the error so its telemetry is not lost.
 			return bundle, fmt.Errorf("fact capability %s: %w", planned.Kind, err)
 		}
+		// The state read back off the bundle's own coverage entry, never
+		// result.State: mergeFactProviderResult can REWRITE the state
+		// (truncation, an omitted-row count), and a ledger reporting the
+		// pre-merge state would disagree with the coverage the same read
+		// produced.
+		r.recordFactRead(ctx, principal, planned.Kind, factReadCompleted, lastCoverageState(&bundle), query.Subjects, factsReturned, result.Truncated)
 	}
 	sortCanonicalFacts(bundle.Facts)
 	return bundle, nil
+}
+
+// factReadOutcome is the closed vocabulary of what a PLANNED capability did
+// on one investigation. It is deliberately a separate axis from SourceState:
+// the state says what the coverage entry claims, the outcome says which
+// branch of ReadFacts' plan loop minted it, so a defect is attributable to a
+// branch without re-reading source.
+type factReadOutcome string
+
+const (
+	// factReadUnconfigured: the plan named a kind no provider is registered for.
+	factReadUnconfigured factReadOutcome = "unconfigured"
+	// factReadScopeGap: CHAOS-4099 -- every target was unreachable, so no
+	// provider ran.
+	factReadScopeGap factReadOutcome = "scope_gap"
+	// factReadPruned: CHAOS-3783 -- no resolved subject kind fits the
+	// capability, so it could not have produced an admissible fact.
+	factReadPruned factReadOutcome = "pruned"
+	// factReadFailed: the provider ran and returned an error.
+	factReadFailed factReadOutcome = "failed"
+	// factReadCompleted: the provider ran and returned a result. Whether
+	// that result carried any facts is the "facts" field, NOT this one.
+	factReadCompleted factReadOutcome = "completed"
+)
+
+// recordFactRead emits one decision-basis record per PLANNED capability
+// (CHAOS-4521, the diagnosis-in-artifacts rule in acr/AGENTS.md).
+//
+// Run J wall A cost a full lane because this ledger did not exist. A
+// project-status question committed a real subject, six capabilities
+// reported `available`, and the answer carried zero claims -- and NOTHING in
+// the completed run said whether those six had returned rows the model then
+// ignored, or had returned nothing at all. Answering that required a
+// source-reading expedition and a hand-built rig; it is now one log line per
+// capability.
+//
+// Corpus-safe by construction: every field is a count, a boolean, or a value
+// from a closed vocabulary this package owns (FactKind, SourceState,
+// SubjectKind, factReadOutcome). No subject label, no canonical ID, no
+// question text, no provider reason string -- reasons can carry a provider's
+// own wording and are already carried, clamped, on the answer's Coverage.
+//
+// org_id and request_id match SlogEngineTelemetry's existing convention so
+// this line joins the rest of an investigation's stream on the same keys.
+func (r *FactCapabilityRegistry) recordFactRead(ctx context.Context, principal storage.Principal, kind FactKind, outcome factReadOutcome, state SourceState, subjects []SubjectRef, facts int, truncated bool) {
+	if r == nil || r.logger == nil {
+		return
+	}
+	attrs := []any{
+		"org_id", principal.OrgID,
+		"kind", string(kind),
+		"outcome", string(outcome),
+		"state", string(state),
+		"subjects", len(subjects),
+		"subject_kinds", strings.Join(distinctSubjectKinds(subjects), ","),
+		"facts", facts,
+		"truncated", truncated,
+	}
+	attrs = append(attrs, requestIDLogAttrs(ctx)...)
+	r.logger.InfoContext(ctx, "context fabric fact read", attrs...)
+}
+
+// distinctSubjectKinds reduces a subject list to its sorted, deduplicated
+// KINDS -- a closed vocabulary. The kinds are what make a zero-facts read
+// diagnosable ("the project rollups returned nothing"); the ids and labels
+// are corpus content and never leave this function.
+func distinctSubjectKinds(subjects []SubjectRef) []string {
+	if len(subjects) == 0 {
+		return nil
+	}
+	seen := make(map[SubjectKind]struct{}, len(subjects))
+	kinds := make([]string, 0, len(subjects))
+	for _, subject := range subjects {
+		if _, exists := seen[subject.Kind]; exists {
+			continue
+		}
+		seen[subject.Kind] = struct{}{}
+		kinds = append(kinds, string(subject.Kind))
+	}
+	sort.Strings(kinds)
+	return kinds
+}
+
+// lastCoverageState returns the state of the coverage entry
+// appendFactCoverage just appended, so recordFactRead reports the SAME state
+// the answer's Coverage carries rather than a second, independently derived
+// one that could drift from it.
+func lastCoverageState(bundle *CanonicalFactBundle) SourceState {
+	if bundle == nil || len(bundle.Coverage.Sources) == 0 {
+		return ""
+	}
+	return bundle.Coverage.Sources[len(bundle.Coverage.Sources)-1].State
 }
 
 func (r *FactCapabilityRegistry) readProvider(ctx context.Context, principal storage.Principal, registered registeredFactProvider, query FactQuery) (FactProviderResult, error) {

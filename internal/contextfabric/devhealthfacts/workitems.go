@@ -51,7 +51,8 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 			EvidenceRefIDs: []string{evidenceRefID("work-item", row.RepoID+":"+row.ID)},
 		})
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}, nil
+	state, emptyReason := currentAxisReadState(len(facts))
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}, nil
 }
 
 // WorkProvider implements contextfabric.FactProvider for FactWork -- minimal
@@ -94,7 +95,8 @@ func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principa
 			EvidenceRefIDs: []string{evidenceRefID("work-item", row.RepoID+":"+row.ID)},
 		})
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}, nil
+	state, emptyReason := currentAxisReadState(len(facts))
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}, nil
 }
 
 // ActualCompletionProvider implements contextfabric.FactProvider for
