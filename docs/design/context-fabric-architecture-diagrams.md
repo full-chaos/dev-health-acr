@@ -947,6 +947,61 @@ flowchart TB
     F --> G["result.Cohort = graphContext.Cohort<br/>(already ranked; synthesizer never sets it)"]
 ```
 
+**Updated 2026-08-29 (CHAOS-4522): the cohort → synthesis handoff has TWO
+closures, and both were half-wired.** The diagram above stops at
+"Synthesize", which hid the fact that `SynthesisDraft.ValidateAgainst`
+re-derives its OWN view of what the model was allowed to say, from
+`SynthesisInput` — and that view did not match what
+`synthesisInputFromDomain` actually SHOWS the model. Two symmetric gaps,
+both fatal to every discovered-cohort answer on real data (HTTP 422
+`synthesis_rejected`, 6 of 6 attempts, org `70d529e0`):
+
+```mermaid
+flowchart LR
+    IN["synthesisInputFromDomain<br/>SHOWS the model:<br/>Cohort (members + evidence_ref_ids),<br/>Resolution, Paths, DriverCandidates,<br/>modelFacingFacts(Facts)"] --> M["model drafts<br/>claims / drivers / findings"]
+    M --> V["SynthesisDraft.ValidateAgainst"]
+    V --> S["allowedSubjects = synthesisSubjects<br/>Committed + <b>Cohort.Members[].Subject</b><br/>+ Facts[].Subject + Paths[].Nodes"]
+    V --> E["allowedEvidence<br/>Paths + Graph + Facts + Candidates<br/>+ <b>Cohort.Members[].EvidenceRefIDs</b><br/>(ADDED, CHAOS-4522 — was missing)"]
+    V --> G2["groundClaim(Facts, claim)<br/>closes over <b>EVERY</b> fact sharing<br/>(Kind, Subject)<br/>(was: FIRST match only)"]
+    G2 --> R["attachCanonicalRows uses the fact<br/>that GROUNDED the claim"]
+    V -. rejects .-> T["rejection_reason<br/>(closed vocab, CHAOS-4522)<br/>+ fact_group_max"]
+```
+
+- **Grounding.** `ClaimedFact` addresses a fact by `(Kind, Subject, Field)`
+  only — `CanonicalFact` carries no identifier — and the lookup returned the
+  FIRST match. But a cohort's fact bundle holds MANY facts per
+  `(kind, subject)`: the live three-team answer carries 40 team-subject
+  facts, of which 17 are `readiness|team:CHAOS`, one row per work
+  scope/day. `cohort_ranking.go`'s `findFact` already documented that
+  ("readiness/workload/deficiency aggregate across every fact of their kind
+  … because those producers can legitimately emit several"); CHAOS-4398 gave
+  the RANKING that treatment and the validator never got it. The first of
+  those 17 carries no `estimate_coverage_ratio`, so every claim about the
+  readiness coverage gap — one of the four families the v2 formula is built
+  on — was rejected as "not canonically observed" while the value sat in the
+  next fact of the same group. `groundClaim` now closes over the group; the
+  guarantee is unchanged in strength (a claim is admitted iff some fact the
+  model was shown observed that field with exactly that value), only the
+  slice-order tiebreak is gone.
+- **Evidence.** `synthesisSubjects` has admitted `Cohort.Members[].Subject`
+  since CHAOS-4398, but `allowedEvidence` was never widened to match, so a
+  member's `EvidenceRefIDs` — shown to the model as part of the Cohort —
+  came back as "references unknown evidence". The live cohort ranks
+  `team:gh:ops-team`, whose only evidence ref is `acr:v1:team:gh:ops-team`
+  and for which no canonical fact exists, so nothing else in the closure
+  could ever supply it.
+- **Diagnosability.** Every `ValidateAgainst` rejection previously collapsed
+  into `outcome=invalid_output` / `failure_classification=synthesis_rejected`;
+  `violated_bound` names only the contracts/v1-bound subset, so both defects
+  above reached the operator unnamed. Each rejecting statement now carries a
+  closed-vocabulary `SynthesisRejectionReason`, emitted on the model
+  decision line (with `fact_group_max`, which separates "a multi-fact
+  grounding problem" from "the model claimed a field that does not exist"),
+  the route failure line, and the 422 body beside `violated_bound`. The
+  second defect above was found BY that telemetry, on the first replicate
+  after the first fix landed.
+
+
 **The theme-mix producer is a NEW acr fact read, not a reuse of the existing
 `FactInvestment`.** The pre-existing team read (`investment_metrics_daily`,
 `readTeamInvestment`) is fed by a **deprecated** legacy rule set

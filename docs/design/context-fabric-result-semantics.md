@@ -17,7 +17,7 @@ exists to prevent.
 | --- | --- | --- | --- |
 | **Canonical observation** | A value ACR read directly from an authoritative Dev Health fact provider (`internal/contextfabric/devhealthfacts`, `FactCapabilityRegistry`) and the model restated verbatim. | `ContextFabricClaimedFact` entries (`result.claimed_facts`), referenced by `driver.claimed_fact_ids` / `finding.claimed_fact_ids`. | **Deterministic, code-only, value-level.** `SynthesisDraft.ValidateAgainst` (`internal/contextfabric/model_runtime.go`) deep-equals every claimed `(kind, subject, field, value)` against the canonical fact bundle the synthesizer actually received. A mismatch, or a claim for a field/kind never observed, rejects the whole draft (`ErrModelOutput` + `ErrSynthesisRejected` -> HTTP 422 `synthesis_rejected`, CHAOS-3784). See §2. |
 | **Graph association** | A relationship the graph backend discovered between subjects (an edge, a path) -- evidence that two things are connected, not a measurement of either one. | `ContextFabricRelationshipPath` entries (`result.paths`), referenced by `driver.path_ids`. | **Structural only.** `ValidateAgainst` checks a cited `path_id` exists in the supplied graph context. It does not, and cannot, verify the association is semantically correct -- that is `internal/contextfabric/falkorgraph`'s and CHAOS-3754's responsibility, proved by their own test suites. |
-| **Source assertion** | A document, episode, or other free-text artifact says something, without ACR having independently measured it. | `evidence_ref_ids` pointing at a document/episode-backed `EvidenceRef` (resolved via the existing evidence boundary, not a Context Fabric-specific type). | **Structural only.** `ValidateAgainst` checks a cited evidence ref ID exists in the allow-set built from the supplied graph paths, candidates, and canonical facts. It does not verify the underlying document says what the model claims it says. |
+| **Source assertion** | A document, episode, or other free-text artifact says something, without ACR having independently measured it. | `evidence_ref_ids` pointing at a document/episode-backed `EvidenceRef` (resolved via the existing evidence boundary, not a Context Fabric-specific type). | **Structural only.** `ValidateAgainst` checks a cited evidence ref ID exists in the allow-set built from the supplied graph paths, candidates, canonical facts, and (CHAOS-4522) the cohort's own per-member `EvidenceRefIDs`. It does not verify the underlying document says what the model claims it says. |
 | **Inference** | The model's own reasoning connecting the above into a judgment, with no further external grounding possible. | Free-text prose: `direct_judgment`, `current_state`, `strongest_pressures`, `limitations`, `qualification`. | **Not independently checkable.** See §3. |
 
 `ContextFabricDriverJudgment`/`ContextFabricFinding` also carry
@@ -57,11 +57,56 @@ The fix, concretely:
    via `validateClaimedFactReferences`.
 3. Every `ClaimedFact` the model produces is checked, before a result is
    ever built, against the real `CanonicalFactBundle` the synthesizer
-   received: same `Kind` and `Subject` must have an actual `CanonicalFact`
-   entry, that fact's `Fields[claim.Field]` must exist, and its value must
-   deep-equal the claim's value exactly (`factValueEqualsScalar`). This is
-   struct equality, not text similarity -- no false positives from
-   rewording, no false negatives from a value that merely looks similar.
+   received: some `CanonicalFact` with the same `Kind` and `Subject` must
+   carry `Fields[claim.Field]`, and its value must deep-equal the claim's
+   value exactly (`factValueEqualsScalar`). This is struct equality, not
+   text similarity -- no false positives from rewording, no false negatives
+   from a value that merely looks similar.
+
+   **"Some", not "the first" (CHAOS-4522).** `groundClaim`
+   (`model_runtime.go`) closes over EVERY fact sharing the claim's
+   `(Kind, Subject)`. A `ClaimedFact` addresses a fact by
+   `(Kind, Subject, Field)` alone -- `CanonicalFact` carries no identifier
+   -- so when a producer legitimately emits several facts under one
+   `(kind, subject)`, no member of that group is addressable in preference
+   to another, and picking one by slice order is an accident, not a rule.
+   That accident was a live defect: a `discovered_cohort` answer carries
+   17 `readiness|team:CHAOS` facts (one per work scope/day), the first of
+   which observes no `estimate_coverage_ratio`, so every claim about the
+   readiness coverage gap was rejected as "not canonically observed" while
+   the value sat in the next fact of the group -- HTTP 422, 6 attempts of
+   6. `cohort_ranking.go`'s `findFact` already documented that
+   readiness/workload/deficiency producers "can legitimately emit
+   several"; the ranking closed over the group and this validator did not.
+   The guarantee is unchanged in strength either way: a claim is admitted
+   iff some canonical fact the model was actually shown observed that
+   field with exactly that value.
+
+   `attachCanonicalRows` resolves a claim's table through the SAME
+   `groundClaim` (via `claimSourceFact`), so a claim's scalar `Value` and
+   its rendered `Rows` always describe one observation rather than two
+   members of the group.
+
+   **Residual, disclosed rather than fixed:** two claims CAN now each be
+   grounded in a different member of one group (e.g.
+   `estimate_coverage_ratio` 0 and 1 for one team, from two work scopes)
+   and both are individually true, but a reader cannot tell them apart
+   because the claim carries no fact identity. Closing that needs
+   `CanonicalFact.id` + `ClaimedFact.fact_id` -- a contract widening plus
+   a prompt change -- tracked separately.
+
+   **The closure the model is shown must equal the closure it is judged
+   against (CHAOS-4522).** `synthesisSubjects` and the `allowedEvidence`
+   allow-set are rebuilt inside `ValidateAgainst` from `SynthesisInput`,
+   while `synthesisInputFromDomain` decides what the model actually sees.
+   When those two drift, ACR rejects the model for citing what ACR itself
+   supplied. That is not hypothetical: `Cohort.Members[].Subject` was
+   admitted by `synthesisSubjects` from CHAOS-4398 onward, but the same
+   members' `EvidenceRefIDs` -- serialized into the prompt as part of the
+   Cohort -- were absent from `allowedEvidence`, so a cohort member with
+   no canonical fact of its own could be cited only by an evidence ref
+   nothing in the allow-set could ever supply. Any future field added to
+   the model-facing payload must be added to both sides together.
 4. `DeterministicAnswer` is **server-composed**, not model-authored
    (`composeDeterministicAnswer` in `model_runtime.go`), from the
    already-validated `Status` + principal `Drivers` + `ClaimedFacts` only.

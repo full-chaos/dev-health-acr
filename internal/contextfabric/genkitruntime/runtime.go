@@ -722,9 +722,56 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		receipt                      contextfabric.ModelExecutionReceipt
 		primaryFailureClassification string
 		grounding                    synthesisGroundingCounts
+		// CHAOS-4522: rejectionReason names WHICH rule rejected a draft,
+		// from the closed contextfabric.SynthesisRejectionReason
+		// vocabulary. Empty on every non-rejection path (success,
+		// fallback, transport failure), so the decision line carries the
+		// field only when there is a rejection to name.
+		rejectionReason string
+		// factGroupSize is how many canonical facts shared the REJECTING
+		// claim's (Kind, Subject) -- the ambiguity groundClaim closed over
+		// for that one claim. Reported beside the reason because
+		// "claim_field_unobserved at fact_group_size=17" and the same
+		// reason at 1 are different defects: the first is a multi-fact
+		// grounding problem, the second is a model claiming a field that
+		// genuinely does not exist. Logged as fact_group_size, not _max:
+		// codex R1 finding 1 -- a maximum over the draft would describe a
+		// claim ValidateAgainst never reached.
+		factGroupSize int
+		// groundedBeyondFirst counts the admitted claims the widened
+		// CHAOS-4522 closure actually RESCUED -- each would have been
+		// rejected by the old first-match-wins lookup (codex R3 finding 2).
+		// factGroupSize alone cannot say that: a large group whose first
+		// member already matched needed no closure at all.
+		groundedBeyondFirst int
 	)
+	// setDiagnostics populates the two rejection fields from the error whose
+	// outcome the receipt reports -- and ONLY when that error really is a
+	// synthesis rejection (codex R2 finding 1). A transport or rate-limit
+	// failure is not a rejection: labelling one `rejection_reason=
+	// unclassified` would assert that a rule rejected the draft when no
+	// draft was ever judged. Leaving the fields absent says the true thing.
+	// setGroundingSignal records the grounding decision basis for a draft
+	// that was ACCEPTED -- on the primary path and on either fallback-success
+	// path (codex R3 finding 1: a fallback draft has claims and groups of its
+	// own, and clearing the signal there left `outcome=fallback` lines with
+	// grounding counts but no grounding basis, undiagnosable for a custom or
+	// non-logging fallback).
+	setGroundingSignal := func(draft contextfabric.SynthesisDraft) {
+		factGroupSize = contextfabric.MaxClaimFactGroupSize(input.Facts.Facts, draft.ClaimedFacts)
+		groundedBeyondFirst = contextfabric.ClaimsGroundedBeyondFirstGroupMember(input.Facts.Facts, draft.ClaimedFacts)
+	}
+	setDiagnostics := func(cause error) {
+		var rejection *contextfabric.SynthesisRejection
+		if !errors.As(cause, &rejection) {
+			rejectionReason, factGroupSize = "", 0
+			return
+		}
+		rejectionReason = string(contextfabric.SynthesisRejectionReasonOf(cause))
+		factGroupSize = contextfabric.SynthesisFactGroupSizeOf(cause)
+	}
 	defer func() {
-		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding)
+		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupSize, groundedBeyondFirst)
 	}()
 
 	started := r.now().UTC()
@@ -754,13 +801,21 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 				receipt.FallbackUsed = true
 				receipt.Outcome = "fallback"
 				grounding = groundingCountsFrom(draft)
+				setGroundingSignal(draft)
 				return draft, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
 			// See the matching comment in InterpretQuestion: both legs
 			// failed, so the receipt must reflect the fallback's own
 			// (final) outcome and the caller must see its classification,
 			// not the primary's.
+			//
+			// codex R2 finding 1: the primary failed in TRANSPORT here, so
+			// no draft of its own was ever judged -- but the fallback's
+			// failure may well be a synthesis rejection, and this branch
+			// previously populated no diagnostics at all, silently dropping
+			// the only rule name in play.
 			receipt.Outcome = fallbackReceipt.Outcome
+			setDiagnostics(fallbackErr)
 			return contextfabric.SynthesisDraft{}, receipt, fallbackErr
 		}
 		return contextfabric.SynthesisDraft{}, receipt, classifiedErr
@@ -788,18 +843,52 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	if err != nil {
 		receipt.Outcome = "invalid_output"
 		primaryFailureClassification = receipt.Outcome
+		// CHAOS-4522: the reason and the rejecting claim's fact-group size
+		// are carried BY the error, attached at the statement that
+		// rejected -- never re-derived here from the shape of the
+		// resulting draft, which is a consequence of the rejecting branch
+		// and not an observation of it (AGENTS.md verification rule 1:
+		// assert the mechanism, not the outcome). toDomain's own
+		// required-field rejection carries its reason the same way, so
+		// both legs above are covered by this one read.
+		//
+		// codex R1 finding 1: the group size must be the REJECTING claim's,
+		// not a maximum over the draft. ValidateAgainst short-circuits, so
+		// a scan of every claim can report a LATER claim's group -- one
+		// that was never evaluated -- which would make the documented
+		// "1 versus >1" reading wrong in exactly the case it diagnoses.
+		setDiagnostics(err)
 		if r.config.Fallback != nil {
 			fallback, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
 			if fallbackErr == nil {
 				receipt.FallbackUsed = true
 				receipt.Outcome = "fallback"
+				// codex R1 finding 2: the decision line's outcome and its
+				// rejection diagnostics must describe the SAME leg. The
+				// fallback succeeded, so this call did NOT end in a
+				// rejection and must not carry one -- the primary's
+				// failure is already reported by
+				// primaryFailureClassification, which exists for exactly
+				// that.
+				//
+				// codex R3 finding 1: the REJECTION reason is cleared, but
+				// the GROUNDING signal is then recomputed from the
+				// fallback's own draft rather than left at zero -- that
+				// draft has claims and fact groups of its own, and the
+				// line already reports its grounding counts.
+				rejectionReason = ""
+				setGroundingSignal(fallback)
 				grounding = groundingCountsFrom(fallback)
 				return fallback, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
 			// Both legs failed -- see the matching comment in
 			// InterpretQuestion's semantic-invalid-output branch (CHAOS-3770
-			// F4 residual).
+			// F4 residual). codex R1 finding 2: the receipt reports the
+			// FALLBACK's outcome and the caller receives the FALLBACK's
+			// error, so the diagnostics must describe that leg too, not the
+			// primary's stale ones.
 			receipt.Outcome = fallbackReceipt.Outcome
+			setDiagnostics(fallbackErr)
 			return contextfabric.SynthesisDraft{}, receipt, fallbackErr
 		}
 		// CHAOS-3784 F1: this is the production ModelRuntime's OWN
@@ -814,6 +903,12 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	receipt.OutputDigest = contextfabric.DigestModelValue(outputBytes)
 	receipt.Outcome = "success"
 	grounding = groundingCountsFrom(draft)
+	// codex R2 finding 4: grounding a claim against a LATER fact of its
+	// (Kind, Subject) group is an outcome-changing branch -- it turns what
+	// used to be a rejection into an answer -- so a SUCCESSFUL run must
+	// record that it fired, not only a failing one. Without this the
+	// closure was diagnosable only when it did not save the answer.
+	setGroundingSignal(draft)
 	return draft, receipt, nil
 }
 
@@ -974,9 +1069,50 @@ func decisionOrgIDHash(orgID string) string {
 // assertion. Unconditionally logged at slog.LevelInfo: no new config knob
 // gates it, only the configured Logger's own handler level (Config.Logger's
 // doc comment).
+// safeLogRequestID is DEFENCE IN DEPTH at the log sink. It is not the
+// guard that makes this value safe, and an earlier version of this comment
+// wrongly claimed it was.
+//
+// The correction, because the false version shipped: the request id reaching
+// here is NOT client-controlled. internal/api/app.go's request-id middleware
+// strips CR/LF, rejects every other control character
+// (isSafeRequestIDHeaderValue), bounds the length, and falls back to a
+// server-minted id when any of that fails; observability.parseRequestID
+// additionally enforces a strict `req_` + 32-hex format. The Context Fabric
+// route then OVERWRITES the decoded body's RequestID with that sanitized
+// context value (context_fabric_routes.go: `request.RequestID =
+// RequestID(r.Context())`) BEFORE Validate() runs -- which is why the v1
+// contract validating RequestID by length alone is not the hole it looks
+// like in isolation. That middleware comment records a live repro of
+// "evil\nFAKE_LOG_LINE=injected" already being replaced.
+//
+// So CodeQL's go/log-injection alert on the decision line is a FALSE
+// POSITIVE: the sanitizer exists and is thorough, it simply is not one
+// CodeQL models as a barrier. This function does not clear the alert either
+// (verified: still `state=open` on the tip that added it), so it is kept
+// only because a sink-side guard costs nothing and protects any future
+// caller that reaches this logger without passing through that middleware --
+// never as evidence that the value was dangerous.
+//
+// Replacement, not rejection: a request id is a correlation handle, and
+// dropping the field would destroy the correlation this telemetry exists
+// for.
+func safeLogRequestID(requestID string) string {
+	if len(requestID) > 256 {
+		requestID = requestID[:256]
+	}
+	sanitized := []rune(requestID)
+	for i, r := range sanitized {
+		if r < 0x20 || r > 0x7e {
+			sanitized[i] = '?'
+		}
+	}
+	return string(sanitized)
+}
+
 func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string) {
 	r.config.Logger.InfoContext(ctx, decisionEventMessage,
-		"request_id", requestID,
+		"request_id", safeLogRequestID(requestID),
 		"org_id_hash", decisionOrgIDHash(orgID),
 		"operation", string(receipt.Operation),
 		"outcome", receipt.Outcome,
@@ -1018,9 +1154,9 @@ func groundingCountsFrom(draft contextfabric.SynthesisDraft) synthesisGroundingC
 // counterpart (H7/H8). See logInterpretDecision's doc comment for the
 // corpus-safety and log-level-gating rationale, which applies identically
 // here.
-func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts) {
-	r.config.Logger.InfoContext(ctx, decisionEventMessage,
-		"request_id", requestID,
+func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupSize, groundedBeyondFirst int) {
+	fields := []any{
+		"request_id", safeLogRequestID(requestID),
 		"org_id_hash", decisionOrgIDHash(orgID),
 		"operation", string(receipt.Operation),
 		"outcome", receipt.Outcome,
@@ -1031,7 +1167,28 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 		"findings", grounding.Findings,
 		"claims", grounding.Claims,
 		"evidence_refs", grounding.EvidenceRefs,
-	)
+	}
+	// CHAOS-4522: appended, never unconditional, so a successful or
+	// transport-failed call's line stays byte-identical to its pre-4522
+	// shape and only a rejection carries the two new fields. Both values
+	// are closed/bounded -- a vocabulary member and a count -- so the
+	// corpus-safety guarantee in this function's doc comment is unchanged.
+	if rejectionReason != "" {
+		fields = append(fields, "rejection_reason", rejectionReason)
+	}
+	// Emitted independently of the reason (codex R2 finding 4): a SUCCESS
+	// carries a group size and no reason, a rejection normally carries both,
+	// and a non-claim rejection carries a reason and no group. Pairing them
+	// would have made the success case unreportable.
+	if factGroupSize > 0 {
+		fields = append(fields, "fact_group_size", factGroupSize)
+		// Emitted alongside the size on every accepted draft, INCLUDING
+		// zero (codex R3 finding 2): 0 means the widened closure changed
+		// nothing about this answer however large its groups were, and
+		// that is the distinguishing fact, not an absence worth hiding.
+		fields = append(fields, "grounded_beyond_first", groundedBeyondFirst)
+	}
+	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
 }
 
 func boundedJSON(value any, maximum int) ([]byte, error) {
@@ -1482,7 +1639,21 @@ func (o synthesisOutput) toDomain() (contextfabric.SynthesisDraft, error) {
 		// (Runtime.SynthesizeAnswer) needs it to diagnose whether any
 		// OTHER field also violates a bound (CHAOS-3784 F1), the same
 		// reason interpretationOutput.toDomain does this above.
-		return draft, errors.New("deterministic answer is required")
+		//
+		// CHAOS-4522: this is a VALIDATION failure, not a decode failure --
+		// the model's JSON decoded into synthesisOutput perfectly well, it
+		// just omitted a required field, and it is the very same rule
+		// SynthesisDraft.ValidateAgainst enforces one statement later. So
+		// it carries that rule's own reason rather than anything about
+		// decoding. Nothing in this path can actually fail to DECODE
+		// (genkit has already populated synthesisOutput by the time
+		// toDomain runs), which is why no "undecodable" reason exists in
+		// the vocabulary: a reason that no branch can ever emit is a claim
+		// the telemetry cannot back.
+		return draft, contextfabric.NewSynthesisRejection(
+			contextfabric.RejectionReasonDeterministicAnswerMissing,
+			errors.New("deterministic answer is required"),
+		)
 	}
 	return draft, nil
 }

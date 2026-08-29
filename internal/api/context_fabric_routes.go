@@ -428,6 +428,22 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 			fields = append(fields, "claim_index", violation.ClaimIndex)
 		}
 	}
+	// CHAOS-4522: violated_bound above covers only the SUBSET of synthesis
+	// rejections attributable to a contracts/v1 model-facing bound. Every
+	// business-rule and grounding rejection -- the majority, and the whole
+	// class this ticket was filed on -- carried no name at all, so a live
+	// 422 said "synthesis_rejected" and nothing more, and diagnosing it
+	// required re-running the server with instrumentation added after the
+	// fact. rejection_reason names the exact ValidateAgainst statement from
+	// a CLOSED vocabulary (contextfabric.SynthesisRejectionReason); it is
+	// as content-safe as failure_classification, since every value is a
+	// fixed identifier chosen at the rejecting statement, never model
+	// output. Emitted only for a rejection error, so an unrelated failure
+	// never carries a meaningless "unclassified".
+	var rejection *contextfabric.SynthesisRejection
+	if errors.As(err, &rejection) {
+		fields = append(fields, "rejection_reason", string(contextfabric.SynthesisRejectionReasonOf(err)))
+	}
 	a.logger.Log(context.WithoutCancel(r.Context()), level, "context fabric investigation failed", fields...)
 }
 
@@ -462,6 +478,22 @@ func (a *App) writeContextFabricRejectionError(w http.ResponseWriter, r *http.Re
 	if errors.As(err, &violation) {
 		details = map[string]any{"violated_bound": violation.Bound}
 	}
+	// CHAOS-4522: rejection_reason is deliberately NOT disclosed in the
+	// response body, only in the server-side failure log below (codex R2
+	// findings 2 and 3). Publishing it here would put a closed vocabulary
+	// on an externally visible surface while `details` stays an untyped map
+	// in the Go contract and an open object in the JSON Schema/OpenAPI --
+	// so a generated consumer could neither discover the vocabulary nor
+	// have parity checks detect drift in it. Doing that properly is a
+	// contract widening (Go type + schema + OpenAPI + MCP + fixtures +
+	// parity tests, and an ask-dev pin bump), which is a deliberate,
+	// separately-ratified change and not a side effect of a defect fix.
+	//
+	// Nothing is lost for the audience the field exists for: AGENTS.md's
+	// diagnosis-in-artifacts rule is satisfied by "a trace event, a report
+	// field, or a structured log field", and the operator diagnosing a 422
+	// has the log line, which carries the reason, the group size, and the
+	// request id that ties them to this response.
 	a.writeContextFabricFailure(w, r, err, classification, http.StatusUnprocessableEntity, code, message, true, details)
 }
 
