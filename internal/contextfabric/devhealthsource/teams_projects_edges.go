@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // TeamsProjectsRelationshipTypes lists every ContextFabricRelationshipType
@@ -734,25 +735,72 @@ func projectTeamsQuery(omissions *ambiguityLedger) func(context.Context, context
 	}
 }
 
-func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, omissions *ambiguityLedger) ([]candidate, bool, error) {
-	const rowKey = "concat(p.id, ':', o.team_id, ':', o.source_name)"
-	statement := `SELECT p.id, o.team_id, o.source_name, o.first_valid_from, o.latest_is_open, o.latest_valid_to, o.updated_at, p.key_resolution_count, o.provider, o.project_key
-FROM (
-  SELECT provider, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name,
-         min(valid_from) AS first_valid_from,
-         argMax(tuple(valid_to), (valid_from, valid_to IS NULL, ifNull(valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open,
-         ifNull(argMax(tuple(valid_to), (valid_from, valid_to IS NULL, ifNull(valid_to, toDateTime64(0, 3, 'UTC')))).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
-         max(updated_at) AS updated_at
-  FROM team_project_ownership FINAL
-  WHERE org_id = {org_id:String}
-  GROUP BY provider, project_key, team_id, source_name
-) AS o
+// projectTeamsRowKey is the pagination tiebreaker for queryProjectTeams,
+// shared by the keyset predicate and the ORDER BY so the two cannot drift.
+const projectTeamsRowKey = "concat(p.id, ':', o.team_id, ':', o.source_name)"
+
+// CHAOS-4542: joined on PROJECT IDENTITY, and grouped on the RESOLVED
+// projects.id.
+//
+// WHY the join moved. CHAOS-4530 makes ownership rows UUID-keyed on
+// team_project_ownership.project_id, nulls their project_key, and
+// leaves real Linear projects' projects.project_key nil by design. The
+// old `USING (provider, project_key)` plus `WHERE o.project_key != ”`
+// therefore matches NOTHING for Linear once that deploys: this producer
+// would emit zero OWNED_BY_TEAM edges and the graph would silently lose
+// team<->project for every Linear project. It already reaches no real
+// Linear project today, for the same reason.
+//
+// WHY the catalog form of the identity expansion, not the filtered one.
+// This is a CATALOG walker -- it paginates the whole org by cursor and
+// has no requested-subject list -- so ProjectIdentityJoinSQL's
+// `... IN {ids:Array(String)}` row source cannot be used here: with no
+// `ids` binding it fails with `Code: 456 Substitution 'ids' is not set`.
+// That is the mismatch a first attempt at this change hit, and it is
+// why v0.5.3 added ProjectIdentityCatalogSQL as the unfiltered sibling.
+//
+// WHY the GROUP BY moved with it, which is the dangerous half. The
+// THIRD note above explains that grouping on the source's own
+// project_id was avoided because two rows differing only in project_id
+// resolve to the SAME projects.id, duplicating a RelationshipID --
+// ContextFabricProjectionBatch.Validate() then rejects the whole batch,
+// a rejected batch never advances a checkpoint, and the organization's
+// projection WEDGES PERMANENTLY. Matching on identity makes that
+// collision reachable for real during the 4530 transition, when one
+// project can carry both a key-shaped and a UUID-shaped ownership row.
+//
+// Grouping on the resolved p.id closes it by construction: whatever id
+// space the source rows arrive in, they collapse into ONE group per
+// (project, team, source), because the group key IS the projected
+// identity. Strictly safer than the previous grouping, which held only
+// because (provider, project_key) happened to resolve 1:1. The collapse
+// the FIRST note describes -- 616 rows in, exactly 3 out -- is
+// preserved: same aggregation, keyed one join later.
+//
+// Pagination follows the aggregate. updated_at is now max(o.updated_at),
+// which a WHERE cannot reference, so the keyset condition is emitted as
+// HAVING through havingSincePredicate -- the same condition delegated,
+// not a second spelling of it.
+func projectTeamsStatement(cursor cursorState) string {
+	return `SELECT p.id, o.team_id, o.source_name,
+       min(o.valid_from) AS first_valid_from,
+       argMax(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open,
+       ifNull(argMax(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
+       max(o.updated_at) AS updated_at,
+       max(p.key_resolution_count) AS key_resolution_count, p.provider, max(p.project_key) AS project_key
+FROM ` + readers.ProjectIdentityCatalogSQL() + `
 INNER JOIN (
-  SELECT id, provider, project_key, count() OVER (PARTITION BY provider, project_key) AS key_resolution_count
-  FROM (SELECT id, provider, ifNull(project_key, '') AS project_key FROM projects FINAL WHERE org_id = {org_id:String})
-) AS p USING (provider, project_key)
+  SELECT provider, ` + readers.ProjectOwnershipJoinColumn + ` AS project_ref, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name, valid_from, valid_to, updated_at
+  FROM team_project_ownership FINAL
+  WHERE org_id = {org_id:String} AND ` + readers.ProjectOwnershipJoinColumn + ` IS NOT NULL
+) AS o ON o.provider = p.provider AND ` + readers.ProjectIdentityMatchSQL("o", "project_ref") + `
 INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id
-WHERE o.project_key != ''` + sincePredicate(cursor, "o.updated_at", rowKey) + orderBy("o.updated_at", rowKey)
+GROUP BY p.id, p.provider, o.team_id, o.source_name` + havingSincePredicate(cursor, "max(o.updated_at)", projectTeamsRowKey) + orderBy("max(o.updated_at)", projectTeamsRowKey)
+}
+
+func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, omissions *ambiguityLedger) ([]candidate, bool, error) {
+	const rowKey = projectTeamsRowKey
+	statement := projectTeamsStatement(cursor)
 	rows, truncated, err := fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var projectID, teamID, source, provider, projectKey string
 		var validFrom, latestValidTo, observedAt time.Time
