@@ -59,12 +59,18 @@ func clickHouseClientOptions(cfg config.Config, tlsConfig *tls.Config) runtimecl
 		// cross-repository starvation bug that query's own per-repository
 		// cap exists to fix) for as few as ~12 repositories with a full
 		// 90-day series each. See clickHouseMaxResultRowsWorstCase's own
-		// doc comment for the derivation; every OTHER provider in that
-		// package still bounds its own query with withRowLimit's
-		// maxFactRowsPerQuery (200), so this does not relax any other
-		// reader's own safety margin -- see this file's own blast-radius
-		// note in the PR this shipped under for the full accounting of
-		// every unbounded query in this client's reach.
+		// doc comment for the derivation. This is client-wide -- it is a
+		// ClickHouse session setting, so it applies to every read this
+		// client makes -- but readRepositoryMetrics is the ONLY query in
+		// its reach without a query-wide LIMIT of its own: every other
+		// devhealthfacts statement carries withRowLimit's
+		// maxFactRowsPerQuery (200), every shared readers.ReadXxx carries
+		// readers.WithRowLimit's DefaultRowLimit (also 200), the
+		// ScopeExpander's own statements carry LIMIT limitPlusOne, and
+		// contextpacket's catalog reads carry LIMIT 65/501/2. Each of
+		// those fires long before this ceiling, so raising it relaxes no
+		// other reader's safety margin. The PR this shipped under carries
+		// the full per-query accounting.
 		MaxResultRows: clickHouseMaxResultRowsHeadroomFactor * clickHouseMaxResultRowsWorstCase,
 	}
 }
