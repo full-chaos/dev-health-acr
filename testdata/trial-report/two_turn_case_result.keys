@@ -13,6 +13,7 @@ census_complete
 census_count
 census_ran
 claimed_facts_count
+cohort_answer_expected
 commit_gate
 committed_count
 committed_subjects

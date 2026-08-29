@@ -448,7 +448,33 @@ trial_wire_common_env() {
   # postgres:// DSN (see that script's trial_pg_dsn, same fix applied
   # there independently since it reads PG_HOST as a raw component, not
   # this composed string).
-  pg_dsn="postgres://${pg_user}:${pg_password}@$(bracket_host_if_ipv6 "$pg_host"):${pg_port}/acr?sslmode=disable"
+  # ACR_TRIAL_PG_DATABASE (CHAOS-4525): the database name inside the
+  # resolved instance, defaulting to the standing `acr` database every
+  # run used before this knob existed -- so an invocation that does not
+  # set it is byte-identical to the pre-4525 behavior.
+  #
+  # It exists because run-two-turn.sh (the SEQUENTIAL runner, the only one
+  # that honours ACR_TEST_TRIAL_SHARD_CASE_INDICES for an operator-chosen
+  # subset -- run-two-turn-parallel.sh derives its own layout from the
+  # annex and cannot be told "just these five") had no way to be pointed
+  # at an isolated database. That made a targeted subset run write to,
+  # and require the migration state of, the STANDING `acr` database. It
+  # bit immediately: on 2026-08-29 the standing `acr` database sat at
+  # migration 34 while the tip needed 35, so a subset run either failed or
+  # would have had to migrate shared state out from under three other
+  # lanes. run-two-turn-parallel.sh already solves this for itself by
+  # creating and dropping its own per-shard databases; this is the same
+  # isolation, made reachable from the sequential runner.
+  #
+  # Deliberately NOT part of the six-var all-or-none override block above:
+  # that block exists to prevent a HYBRID data plane (postgres on one
+  # stack, ClickHouse on another). A different database on the SAME
+  # resolved instance is not a hybrid -- it is the isolation the parallel
+  # runner already performs, and requiring five unrelated endpoint vars to
+  # be restated to reach it would push operators back onto the shared
+  # database, which is the failure this closes.
+  : "${ACR_TRIAL_PG_DATABASE:=acr}"
+  pg_dsn="postgres://${pg_user}:${pg_password}@$(bracket_host_if_ipv6 "$pg_host"):${pg_port}/${ACR_TRIAL_PG_DATABASE}?sslmode=disable"
   export ACR_TEST_TRIAL_POSTGRES_DSN="$pg_dsn"
   export ACR_TEST_TRIAL_CLICKHOUSE_DSN="$ch_dsn"
   # Raw components, not just the composed DSN above: run-two-turn-parallel.sh
@@ -498,7 +524,13 @@ trial_wire_common_env() {
   # CHAOS-4302: piped through printf, not a `<<<` here-string -- the same
   # small-here-string deadlock class the CHAOS-4155 fix above eliminated
   # from this function's `dsn --env` loop.
-  echo "common.sh: data_plane=$data_plane_label pg=${pg_host}:${pg_port} ch=$(printf '%s' "$ch_dsn" | sed -E 's#.*@##') falkor=$falkor_addr" >&2
+  # CHAOS-4525: pg_db is on this line for the same reason data_plane is --
+  # "which store did this run actually hit" must be readable from the run's
+  # own output, never reconstructed. A run against an isolated database and
+  # a run against the standing `acr` database are different measurements
+  # (different answer-reuse and structure-prior state), and before this the
+  # line reported only host:port, which is identical for both.
+  echo "common.sh: data_plane=$data_plane_label pg=${pg_host}:${pg_port}/${ACR_TRIAL_PG_DATABASE} ch=$(printf '%s' "$ch_dsn" | sed -E 's#.*@##') falkor=$falkor_addr" >&2
 }
 
 # trial_wire_graph_lifecycle_env (CHAOS-3916, local/trial slice) is

@@ -341,6 +341,19 @@ type twoTurnOracleAnnex struct {
 	// SignoffStale (CHAOS-4348, team-lead ruling 2026-08-27) mirrors the
 	// report's own AnnexSignoffStale -- see that field's doc comment.
 	SignoffStale bool `json:"signoff_stale"`
+	// CohortAnswerExpected (CHAOS-4525) is the set of corpus indices whose
+	// annex census oracle expects a delivered aggregate answer --
+	// oracles.census.terminal_expectation == "aggregate_assessment" --
+	// keyed by case index, absent for every case with no census block.
+	// This is the cohort half of "the oracle expects an answer": those
+	// cases carry no subject anchor, so they can never satisfy
+	// ExpectedID != "", yet an aggregate_assessment census is exactly the
+	// claim that the run OUGHT to have delivered a ranked cohort. Cases
+	// whose census expects witnessed_no_match or clarification_required
+	// are deliberately NOT in this set -- their correct terminal state is
+	// a refusal or a question, and counting them as unanswered would
+	// punish the engine for behaving correctly.
+	CohortAnswerExpected map[int]bool `json:"-"`
 }
 
 // --- adapting the CHRIS-SIGNED DP10 artifact (.remember/trial-results/oracle-annex-v1.json) ---
@@ -422,6 +435,29 @@ type signedOracleCase struct {
 			Positive  *string  `json:"positive"`
 			Negatives []string `json:"negatives"`
 		} `json:"handle"`
+		// Census (CHAOS-4525) is the annex's own cohort oracle, present
+		// ONLY on the cohort_assessment cases (a pointer, so "absent"
+		// and "present but zero" stay distinguishable). It was the one
+		// block of the signed artifact this adapter had never read: a
+		// discovered-cohort question has NO single subject anchor, so
+		// anchor.positive_key is null for every one of them, and
+		// chaos4386TwoTurnAnswerRate's own "oracle expects an answer"
+		// gate (ExpectedID != "") therefore excluded the entire class
+		// from the answer-rate denominator by construction -- including
+		// the North Star's own "which teams are struggling" bar
+		// question. TerminalExpectation is what distinguishes an
+		// ANSWERABLE cohort ("aggregate_assessment": the run is
+		// expected to return a ranked cohort) from a refusal
+		// ("witnessed_no_match", index 61) or a clarification
+		// ("clarification_required", index 63); see
+		// twoTurnOracleAnnex.CohortAnswerExpected.
+		Census *struct {
+			MustRun             bool   `json:"must_run"`
+			Kind                string `json:"kind"`
+			RowCountExpectation string `json:"row_count_expectation"`
+			TerminalExpectation string `json:"terminal_expectation"`
+			CommitExpectation   string `json:"commit_expectation"`
+		} `json:"census"`
 	} `json:"oracles"`
 	CommittableNegativeDesignations []struct {
 		Member      string `json:"member"` // kind | anchor | window | handle
@@ -512,8 +548,14 @@ func adaptSignedOracleAnnex(signed signedOracleAnnex) twoTurnOracleAnnex {
 		// signoff still names whatever corpus_sha8 it always did).
 		SignoffStale: signed.Provenance.Signoff.ApprovedCorpusSHA8 != "" &&
 			signed.Provenance.Signoff.ApprovedCorpusSHA8 != signed.Provenance.CorpusSHA8,
+		// CohortAnswerExpected (CHAOS-4525): built here, from the signed
+		// artifact alone, for the same reason every other oracle here is
+		// -- it is a claim the annex makes, never something derived from
+		// a run's own behavior. Only "aggregate_assessment" enters the
+		// set; see the field's own doc comment for why the other two
+		// terminal expectations must not.
+		CohortAnswerExpected: map[int]bool{},
 	}
-
 	indices := make([]int, 0, len(signed.Cases))
 	byIndex := map[int]string{}
 	for key := range signed.Cases {
@@ -528,6 +570,12 @@ func adaptSignedOracleAnnex(signed signedOracleAnnex) twoTurnOracleAnnex {
 
 	for _, index := range indices {
 		c := signed.Cases[byIndex[index]]
+		// CHAOS-4525: read here, in the SAME pass that already parsed and
+		// sorted the case keys, so the cohort oracle can never disagree
+		// with the per-member entries built from the same case.
+		if c.Oracles.Census != nil && c.Oracles.Census.TerminalExpectation == "aggregate_assessment" {
+			annex.CohortAnswerExpected[index] = true
+		}
 		committable := map[string]struct{ value, constructor string }{}
 		for _, d := range c.CommittableNegativeDesignations {
 			committable[d.Member] = struct{ value, constructor string }{d.Value, d.Constructor}
@@ -4117,6 +4165,19 @@ type twoTurnCaseResult struct {
 	// subject" is unreadable without the left-hand side.
 	ExpectedKind string `json:"expected_kind,omitempty"`
 	ExpectedID   string `json:"expected_id,omitempty"`
+	// CohortAnswerExpected (CHAOS-4525) mirrors
+	// twoTurnOracleAnnex.CohortAnswerExpected for THIS row's case index --
+	// see that field's doc comment. Stamped on every arm's row, the same
+	// unconditional discipline ExpectedKind/ExpectedID above use, so the
+	// merge tool can recompute the answer rate from the merged rows alone
+	// without re-reading the annex.
+	//
+	// It exists because ExpectedID cannot express "this question expects
+	// an answer" for a discovered cohort: the answer IS the cohort, and a
+	// cohort has no anchor. A row with CohortAnswerExpected=true and
+	// ExpectedID=="" is the normal, correct shape for that class, not a
+	// half-populated row.
+	CohortAnswerExpected bool `json:"cohort_answer_expected,omitempty"`
 	// CommitGate/TiedStatisticalTop/SearchTruncated mirror the
 	// decision-stage graphrank.ResolutionTraceEvent for this arm's own
 	// turn-2 call -- graphrank's closed gate vocabulary and the two
@@ -4730,7 +4791,22 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // verbatim, no arithmetic) and AnswerRate is RECOMPUTED there from the
 // merged Results, never trusted from any one shard, same discipline as
 // v40's own MaxResultBytes/etc.
-const reportSchemaVersion = "41"
+// "42" (CHAOS-4525, chris ratification 2026-08-29 06:46 PT "add seeds"):
+// twoTurnCaseResult gains CohortAnswerExpected (own doc comment) and
+// AnswerRate's denominator widens from ExpectedID != "" to
+// (ExpectedID != "" OR CohortAnswerExpected). A v41 artifact carries no
+// cohort_answer_expected field at all, so a v41-labeled row and a v42 row
+// whose case genuinely has no census oracle are indistinguishable on the
+// wire -- the same "cannot tell a legitimate zero from an absent field"
+// reason v40->v41 bumped for. The merge tool's own mirror gained the row
+// field (concatenated verbatim, no arithmetic) and its own copy of the
+// widened denominator in the SAME change; AnswerRate stays RECOMPUTED
+// there from the merged Results, never trusted from any one shard.
+//
+// NOTE the two ladders are independent: nTurnReportSchemaVersion is
+// separately at "42" for CHAOS-4386's own n-turn terminal fields. They
+// are different classes' artifacts and have never been one sequence.
+const reportSchemaVersion = "42"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -5867,7 +5943,12 @@ type twoTurnReport struct {
 	// question" the way this rate means to measure. "Oracle expects an
 	// answer" reads ExpectedID != "" on that same row (CHAOS-4086's own
 	// diagnosis block, populated on every arm) -- the SAME "a real
-	// expected answer" gate twoTurnPositiveFalseNoMatch already uses.
+	// expected answer" gate twoTurnPositiveFalseNoMatch already uses --
+	// OR, since CHAOS-4525 (schema v42), CohortAnswerExpected on that
+	// row: a discovered-cohort question's oracle carries no anchor
+	// because the answer IS the cohort, so ExpectedID alone silently
+	// excluded that entire class -- the North Star's own team-cohort bar
+	// question included. See CohortAnswerExpected's own doc comment.
 	// Recomputed at the merge step from the merged Results, never trusted
 	// from any one shard or summed -- see mergeReports.
 	AnswerRate float64 `json:"answer_rate"`
@@ -7602,7 +7683,15 @@ func chaos4386NoDisclosureRow(index int, member string, tc trialCase, turn1 cont
 func chaos4386TwoTurnAnswerRate(results []twoTurnCaseResult) float64 {
 	answerable, answered := 0, 0
 	for _, res := range results {
-		if res.Arm != string(twoTurnArmPositive) || res.ExpectedID == "" {
+		// CHAOS-4525: "the oracle expects an answer" has TWO shapes, not
+		// one. ExpectedID != "" covers every anchored subject question.
+		// CohortAnswerExpected covers the discovered-cohort class, whose
+		// oracle deliberately has no anchor (the answer is the ranked
+		// cohort itself) and which was therefore invisible to this rate
+		// -- the North Star's own team-cohort bar question included. The
+		// two are a union, never a replacement: an anchored case still
+		// qualifies on ExpectedID alone.
+		if res.Arm != string(twoTurnArmPositive) || (res.ExpectedID == "" && !res.CohortAnswerExpected) {
 			continue
 		}
 		answerable++
@@ -10143,6 +10232,21 @@ func TestChaos3742TwoTurnConfirmationReplay(t *testing.T) {
 	report.MaxResultBytes, report.P50ResultBytes, report.P99ResultBytes,
 		report.OverMaxSerializedBytesCount, report.OverLegacy16KCount =
 		chaos4386ResultByteStats(resultByteValues, report.MaxSerializedBytesConfigured)
+
+	// CHAOS-4525: stamp the cohort half of "the oracle expects an answer"
+	// onto every row, from the annex alone, in ONE pass immediately before
+	// the rate is computed. Deliberately here and not inside each arm's
+	// own builder: twoTurnStampOutcome has eleven call sites, and a value
+	// that must appear on every row is exactly the shape that silently
+	// goes missing when a twelfth arm is added -- the same reasoning
+	// SynthesisStatusOverrideUncommittedCount/FactlessCommittedCount above
+	// are derived here for. Stamped BEFORE chaos4386TwoTurnAnswerRate
+	// reads it (an unstamped row would silently shrink the denominator,
+	// which is the "a measurement that did not happen must fail loudly"
+	// failure this ordering exists to prevent).
+	for i := range report.Results {
+		report.Results[i].CohortAnswerExpected = annex.CohortAnswerExpected[report.Results[i].Index]
+	}
 
 	// CHAOS-4386 answer-rate follow-up: derived from the rows this shard
 	// actually produced, once, immediately before serialization -- see

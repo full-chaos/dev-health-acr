@@ -345,7 +345,14 @@ import (
 // reportSchemaVersion "41" doc comment. AnswerRate is RECOMPUTED in
 // mergeReports below from the merged Results, never summed or trusted
 // from any one shard, via this file's own mirror of chaos4386TwoTurnAnswerRate.
-const expectedSchemaVersion = "41"
+// expectedSchemaVersion "42" (CHAOS-4525, chris ratification 2026-08-29
+// 06:46 PT): twoTurnCaseResult gained CohortAnswerExpected and the
+// AnswerRate denominator widened to (ExpectedID != "" OR
+// CohortAnswerExpected) -- see the producer's own reportSchemaVersion "42"
+// doc comment. The row field is carried through this mirror verbatim (no
+// arithmetic) so the recompute below sees it; AnswerRate stays RECOMPUTED
+// from the merged Results, never trusted from any one shard.
+const expectedSchemaVersion = "42"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -527,12 +534,20 @@ type twoTurnCaseResult struct {
 	//
 	// See twoTurnCaseResult's own block for what each one means and why it
 	// is corpus-safe; the tags below are the contract.
-	CommittedSubjects  []twoTurnSubjectKindID `json:"committed_subjects,omitempty"`
-	ExpectedKind       string                 `json:"expected_kind,omitempty"`
-	ExpectedID         string                 `json:"expected_id,omitempty"`
-	CommitGate         string                 `json:"commit_gate,omitempty"`
-	TiedStatisticalTop bool                   `json:"tied_statistical_top,omitempty"`
-	SearchTruncated    bool                   `json:"search_truncated,omitempty"`
+	CommittedSubjects []twoTurnSubjectKindID `json:"committed_subjects,omitempty"`
+	ExpectedKind      string                 `json:"expected_kind,omitempty"`
+	ExpectedID        string                 `json:"expected_id,omitempty"`
+	// CohortAnswerExpected (CHAOS-4525, schema v42) mirrors
+	// twoTurnCaseResult's identically-named field. It MUST be declared
+	// here even though this tool never reads it for anything but the
+	// AnswerRate recompute: an undeclared field is dropped on decode, so
+	// omitting it would silently narrow the merged artifact's own
+	// denominator back to the pre-4525 anchored-only set while still
+	// labelling the result v42.
+	CohortAnswerExpected bool   `json:"cohort_answer_expected,omitempty"`
+	CommitGate           string `json:"commit_gate,omitempty"`
+	TiedStatisticalTop   bool   `json:"tied_statistical_top,omitempty"`
+	SearchTruncated      bool   `json:"search_truncated,omitempty"`
 	// CHAOS-4183 phase 2: omitempty DROPPED on all three -- mirroring
 	// twoTurnCaseResult's own fields byte-for-byte, see that struct's own
 	// doc comment for the motivating jq-misread incident.
@@ -892,7 +907,11 @@ type twoTurnReport struct {
 func chaos4386TwoTurnAnswerRate(results []twoTurnCaseResult) float64 {
 	answerable, answered := 0, 0
 	for _, res := range results {
-		if res.Arm != "positive" || res.ExpectedID == "" {
+		// CHAOS-4525 (schema v42): the union gate, mirroring the
+		// producer byte-for-byte -- ExpectedID for anchored subject
+		// questions, CohortAnswerExpected for the discovered-cohort
+		// class whose oracle deliberately has no anchor.
+		if res.Arm != "positive" || (res.ExpectedID == "" && !res.CohortAnswerExpected) {
 			continue
 		}
 		answerable++

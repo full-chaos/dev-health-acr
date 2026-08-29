@@ -224,6 +224,31 @@ check "override branch: IPv6 ACR_TRIAL_PG_HOST/CH_HOST/FALKOR_HOST all bracketed
   "[2001:db7::1]:5432 [2001:db8::1]:9000 [2001:db9::1]:6379" \
   "$(run_override_reader)"
 
+# 5b. CHAOS-4525: ACR_TRIAL_PG_DATABASE selects the database inside the
+# resolved instance. Two checks, because the default is the half that
+# matters most -- an unset knob must leave every existing recipe on the
+# standing `acr` database, byte-identical to the pre-4525 behavior.
+run_pg_database_reader() {
+  local db_env=("$@")
+  (cd "$script_dir/../.." && env "${db_env[@]}" \
+    ACR_TRIAL_DATA_PLANE=override \
+    ACR_TRIAL_PG_HOST=127.0.0.1 ACR_TRIAL_PG_PORT=5432 \
+    ACR_TRIAL_CH_HOST=127.0.0.1 ACR_TRIAL_CH_PORT=9000 \
+    ACR_TRIAL_FALKOR_HOST=127.0.0.1 ACR_TRIAL_FALKOR_PORT=6379 \
+    bash -c '
+      set -euo pipefail
+      source scripts/trial/common.sh
+      trial_wire_common_env
+      printf "%s" "$ACR_TEST_TRIAL_POSTGRES_DSN" | sed -E "s#.*@[^/]*/##; s#\?.*##"
+    ' 2>/dev/null) || echo "ERR $?"
+}
+check "pg database defaults to the standing acr database when the knob is unset" \
+  "acr" \
+  "$(run_pg_database_reader ACR_TRIAL_PG_DATABASE=)"
+check "ACR_TRIAL_PG_DATABASE selects an isolated database on the same instance" \
+  "acr_trial_seed_probe" \
+  "$(run_pg_database_reader ACR_TRIAL_PG_DATABASE=acr_trial_seed_probe)"
+
 # 6. Producer pin (CHAOS-4186 follow-up, real incident): the REAL
 # trial-data.sh (not the fake used above) must emit
 # ACR_CONTEXT_FABRIC_FALKOR_TLS=false and

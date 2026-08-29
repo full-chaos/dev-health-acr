@@ -825,3 +825,57 @@ func TestMirrorKeysMatchTheProducer(t *testing.T) {
 		t.Fatalf("merge-mirror twoTurnCaseResult JSON keys differ from the producer's checked-in list.\nmirror:   %v\nproducer: %v\nA key present in the producer and absent here is SILENTLY DROPPED on decode -- update this struct, do not regenerate the list.", got, strings.Fields(string(want)))
 	}
 }
+
+// TestChaos4525CohortAnswerExpectedSurvivesDecode is the merge-mirror half of
+// CHAOS-4525. The hazard this pins is specific and has bitten this file
+// before (trialProvenance.AnchorMembershipOffersEnabled): encoding/json
+// DROPS a field this mirror does not declare, silently. Because AnswerRate is
+// RECOMPUTED here from the merged Results rather than trusted from a shard, a
+// dropped cohort_answer_expected would not surface as a missing key -- it
+// would surface as a merged artifact that quietly reports the pre-4525,
+// anchored-only answer rate while still labelling itself v42.
+//
+// RED-FIRST: delete CohortAnswerExpected from twoTurnCaseResult in main.go and
+// this test fails on the recomputed rate (0 instead of 0.5), not on a decode
+// error -- which is exactly why the assertion is on the RATE and not merely on
+// the round-tripped field.
+func TestChaos4525CohortAnswerExpectedSurvivesDecode(t *testing.T) {
+	// Written as the raw JSON a producer shard actually emits, never as a
+	// Go struct literal: a struct literal round-trips through no json tag
+	// at all and would pass even with the field undeclared.
+	const rawResults = `[
+      {"index": 68, "member": "expected_kind", "arm": "positive",
+       "cohort_answer_expected": true, "terminal_status": "complete", "claimed_facts_count": 2},
+      {"index": 69, "member": "expected_kind", "arm": "positive",
+       "cohort_answer_expected": true, "terminal_status": "degraded", "claimed_facts_count": 0}
+    ]`
+
+	var results []twoTurnCaseResult
+	if err := json.Unmarshal([]byte(rawResults), &results); err != nil {
+		t.Fatalf("unmarshal shard results: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("decoded %d rows, want 2", len(results))
+	}
+	for i, res := range results {
+		if !res.CohortAnswerExpected {
+			t.Fatalf("row %d: cohort_answer_expected was dropped on decode -- the mirror does not declare the field", i)
+		}
+	}
+
+	if got, want := chaos4386TwoTurnAnswerRate(results), 0.5; got != want {
+		t.Errorf("recomputed AnswerRate = %v, want %v (both cohort rows eligible, one answered)", got, want)
+	}
+
+	// And the control half: the same two rows WITHOUT the cohort flag and
+	// without an expected id must stay out of the denominator entirely, so
+	// a passing assertion above cannot be explained by the gate having been
+	// removed rather than widened.
+	var controls []twoTurnCaseResult
+	if err := json.Unmarshal([]byte(strings.ReplaceAll(rawResults, `"cohort_answer_expected": true`, `"cohort_answer_expected": false`)), &controls); err != nil {
+		t.Fatalf("unmarshal control results: %v", err)
+	}
+	if got, want := chaos4386TwoTurnAnswerRate(controls), 0.0; got != want {
+		t.Errorf("recomputed AnswerRate for control rows = %v, want %v", got, want)
+	}
+}
