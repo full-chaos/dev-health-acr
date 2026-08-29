@@ -737,7 +737,7 @@ func projectTeamsQuery(omissions *ambiguityLedger) func(context.Context, context
 
 // projectTeamsRowKey is the pagination tiebreaker for queryProjectTeams,
 // shared by the keyset predicate and the ORDER BY so the two cannot drift.
-const projectTeamsRowKey = "concat(p.id, ':', o.team_id, ':', o.source_name)"
+const projectTeamsRowKey = "concat(o.project_id, ':', o.team_id, ':', o.source_name)"
 
 // CHAOS-4542: joined on PROJECT IDENTITY, and grouped on the RESOLVED
 // projects.id.
@@ -782,20 +782,59 @@ const projectTeamsRowKey = "concat(p.id, ':', o.team_id, ':', o.source_name)"
 // HAVING through havingSincePredicate -- the same condition delegated,
 // not a second spelling of it.
 func projectTeamsStatement(cursor cursorState) string {
-	return `SELECT p.id, o.team_id, o.source_name,
+	// TWO equality-joined arms, UNION ALL'd at ROW level, then aggregated
+	// on the RESOLVED projects.id.
+	//
+	//  A. o.project_id  = p.scope        -- covers both id spaces at once,
+	//     because p.scope carries the canonical id AND the project key as
+	//     separate rows: CHAOS-4530's UUID-keyed rows match the id row,
+	//     today's GitLab rows match the key row.
+	//  B. o.project_key = p.project_key  -- the ORIGINAL join, kept. An
+	//     ownership row may carry a project_id that correlates with nothing
+	//     while its project_key is the only column tying it to a project.
+	//     Dropping this arm loses those rows entirely -- which is exactly
+	//     what the "tied assertions resolve deterministically" fixture
+	//     caught: it seeds project_id 'ownership-row-open'/'-closed' against
+	//     project_key 'TIE-KEY', so arm A matches neither.
+	//
+	// The union is at ROW level, not after aggregation, because the
+	// aggregates (min(valid_from), the argMax window pair, max(updated_at))
+	// must see EVERY contributing row for a (project, team, source) at
+	// once -- aggregating per arm and merging afterwards would compute the
+	// validity window twice over two partial row sets and pick a winner
+	// from the wrong one.
+	//
+	// The outer GROUP BY on the resolved p.id is what makes the arms safe
+	// to union at all, and is the wedge guard: two ownership rows in
+	// DIFFERENT id spaces resolving to one project collapse into one group,
+	// so they cannot duplicate a RelationshipID. A duplicate rejects the
+	// batch, a rejected batch never advances a checkpoint, and the
+	// organization's projection wedges PERMANENTLY -- the hazard the THIRD
+	// note above records.
+	ownershipRows := func(match string) string {
+		return `
+		SELECT p.id AS project_id, p.provider AS provider, p.key_resolution_count AS key_resolution_count, p.project_key AS project_key,
+		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at
+		FROM ` + readers.ProjectIdentityCatalogSQL() + `
+		INNER JOIN (
+			SELECT provider, ` + readers.ProjectOwnershipJoinColumn + ` AS project_ref, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name, valid_from, valid_to, updated_at
+			FROM team_project_ownership FINAL
+			WHERE org_id = {org_id:String}
+		) AS o ON o.provider = p.provider AND ` + match + `
+		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id`
+	}
+	return `SELECT o.project_id, o.team_id, o.source_name,
        min(o.valid_from) AS first_valid_from,
        argMax(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open,
        ifNull(argMax(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
        max(o.updated_at) AS updated_at,
-       max(p.key_resolution_count) AS key_resolution_count, p.provider, max(p.project_key) AS project_key
-FROM ` + readers.ProjectIdentityCatalogSQL() + `
-INNER JOIN (
-  SELECT provider, ` + readers.ProjectOwnershipJoinColumn + ` AS project_ref, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name, valid_from, valid_to, updated_at
-  FROM team_project_ownership FINAL
-  WHERE org_id = {org_id:String} AND ` + readers.ProjectOwnershipJoinColumn + ` IS NOT NULL
-) AS o ON o.provider = p.provider AND ` + readers.ProjectIdentityMatchSQL("o", "project_ref") + `
-INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id
-GROUP BY p.id, p.provider, o.team_id, o.source_name` + havingSincePredicate(cursor, "max(o.updated_at)", projectTeamsRowKey) + orderBy("max(o.updated_at)", projectTeamsRowKey)
+       max(o.key_resolution_count) AS key_resolution_count, o.provider, max(o.project_key) AS project_key
+FROM (` + ownershipRows(readers.ProjectIdentityMatchSQL("o", "project_ref")) + `
+
+		UNION ALL
+` + ownershipRows("o.project_key = p.project_key AND p.project_key != '' AND p.key_resolution_count = 1") + `
+) AS o
+GROUP BY o.project_id, o.provider, o.team_id, o.source_name` + havingSincePredicate(cursor, "max(o.updated_at)", projectTeamsRowKey) + orderBy("max(o.updated_at)", projectTeamsRowKey)
 }
 
 func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, omissions *ambiguityLedger) ([]candidate, bool, error) {

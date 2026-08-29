@@ -53,7 +53,7 @@ func TestChaos4542_ProjectTeamsResolvesOnProjectIdentity(t *testing.T) {
 	//    project duplicate a RelationshipID -- the batch is then rejected,
 	//    a rejected batch never advances a checkpoint, and the org's
 	//    projection wedges PERMANENTLY.
-	if !strings.Contains(statement, "GROUP BY p.id, p.provider, o.team_id, o.source_name") {
+	if !strings.Contains(statement, "GROUP BY o.project_id, o.provider, o.team_id, o.source_name") {
 		t.Errorf("the producer does not group on the resolved projects.id; two id-space rows for one project would duplicate a RelationshipID and wedge the projection\n%s", statement)
 	}
 	if !strings.Contains(statement, "org_id = {org_id:String}") {
@@ -97,5 +97,16 @@ func TestChaos4542_TheProducerConsumesTheSharedIdentityHelpers(t *testing.T) {
 	}
 	if !strings.Contains(statement, readers.ProjectIdentityMatchSQL("o", "project_ref")) {
 		t.Errorf("the producer does not use readers.ProjectIdentityMatchSQL\n%s", statement)
+	}
+	// The key-to-key arm must be present too. Arm A alone loses an
+	// ownership row whose project_id correlates with nothing while its
+	// project_key is the only column tying it to a project -- caught live
+	// by the "tied assertions resolve deterministically" fixture, which
+	// seeds exactly that shape.
+	if !strings.Contains(statement, "o.project_key = p.project_key") {
+		t.Errorf("the producer dropped the key-to-key arm; ownership rows keyed only by project_key would vanish\n%s", statement)
+	}
+	if strings.Count(statement, "UNION ALL") < 3 {
+		t.Errorf("the two ownership arms are not unioned at row level (want the identity expansion's union plus the arm union)\n%s", statement)
 	}
 }
