@@ -1569,3 +1569,37 @@ func (e *Engine) windowConfirmationRequiredResult(
 	}
 	return result, nil
 }
+
+// factReadQuestion is the interpretation the canonical fact read receives:
+// the model's own interpretation, with the SERVER-canonicalized evidence
+// window written onto its TimeContext (codex R4 finding 2 / CHAOS-4464).
+//
+// The interpretation model never emits an evidence window --
+// interpretationOutput.toDomain (genkitruntime) populates none -- so
+// buildFactQuery's FactQuery.Time carried no bounds for any request whose
+// window authority came from a relative_id, a CHAOS-4360 carried window or
+// a redeemed window receipt. A provider handed no bounds has to fall back
+// to its own default, so the window an answer ADVERTISES
+// (EffectiveEvidenceWindow, composed from exactly this value) and the
+// window its evidence was actually read over could differ silently --
+// devhealthfacts' repository metrics series read its own trailing 90 days
+// under an answer claiming trailing_30d.
+//
+// effective is copied VERBATIM, never re-derived: relativeWindowBounds is
+// "the ONLY function in this codebase that may" turn a RelativeWindowID
+// into absolute bounds, and it has already run to produce this value. A nil
+// effective (no current axis, or a class carrying no window at all) writes
+// nothing -- a fact read with no canonical window keeps whatever axis bound
+// it already had, and no window is invented for it. The all_time sentinel
+// carries its RelativeID with no bounds, exactly as it does upstream, so a
+// provider can tell "all of history" apart from "no window given".
+func factReadQuestion(interpretation InterpretedQuestion, effective *contractsv1.ContextFabricEffectiveEvidenceWindow) InterpretedQuestion {
+	if effective == nil {
+		return interpretation
+	}
+	question := interpretation
+	question.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{
+		Start: effective.Start, End: effective.End, RelativeID: effective.RelativeID,
+	}
+	return question
+}

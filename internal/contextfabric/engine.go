@@ -1288,7 +1288,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 	}
 	factRequest := CanonicalFactRequest{
-		Question:     interpretation,
+		Question:     factReadQuestion(interpretation, effectiveWindow),
 		Subjects:     subjects,
 		Cohort:       graphContext.Cohort,
 		Requirements: mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements),

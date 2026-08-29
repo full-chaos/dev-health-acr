@@ -243,16 +243,27 @@ func (p *MetricsProvider) readRepositoryMetrics(ctx context.Context, orgID strin
 		for _, binding := range timeBound.bindings() {
 			extra = append(extra, readers.Binding{Name: binding.Name, Value: binding.Value})
 		}
+	case evidenceWindow != nil && evidenceWindow.RelativeID == contractsv1.ContextFabricRelativeWindowAllTime:
+		// codex R4 finding 2: the all_time sentinel, which carries no
+		// bounds BY DEFINITION (window.go's relativeWindowBounds returns
+		// ok=false for it), reaches here now that the engine threads its
+		// own canonical effective window into every fact read
+		// (contextfabric.factReadQuestion). All of history is no day
+		// predicate at all -- falling through to the 90-day default below
+		// would answer a question about all of history with one quarter of
+		// it. The read stays bounded by the per-repository
+		// MetricsSeriesPerRepositoryRowCap and the 64-row per-fact cap,
+		// never by a window nobody asked for.
+		dayPredicate = ""
 	case evidenceWindow != nil && evidenceWindow.Start != nil && evidenceWindow.End != nil:
-		// CHAOS-4418 (team-lead ruling): the CURRENT axis's own caller-
-		// requested evidence window, when the caller gave one EXPLICITLY
-		// (Start and End both present) -- read verbatim, never re-derived.
-		// A RelativeID-only window (no explicit Start/End) falls through
-		// to metricsSeriesDefaultWindow below instead: resolving a
-		// RelativeWindowID to absolute bounds is exclusively
-		// window.go's relativeWindowBounds' own job ("the ONLY function
-		// in this codebase that may" do so) -- this package must not
-		// duplicate that derivation.
+		// CHAOS-4418 (team-lead ruling): the CURRENT axis's own
+		// server-canonicalized evidence window, read verbatim, never
+		// re-derived -- resolving a RelativeWindowID to absolute bounds is
+		// exclusively window.go's relativeWindowBounds' own job ("the ONLY
+		// function in this codebase that may" do so), and it has already
+		// run by the time this value arrives. A RelativeID rides along
+		// with the bounds; the BOUNDS are what this query uses, so a
+		// second derivation against a different clock is impossible.
 		//
 		// toDate({...:DateTime64(6,'UTC')}), not a bare :Date parameter --
 		// mirrors readers.TimeBound.DayPredicate's own convention exactly
