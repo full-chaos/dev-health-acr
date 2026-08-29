@@ -868,7 +868,7 @@ func projectTeamsStatement(cursor cursorState) string {
        ifNull(argMax(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
        max(o.updated_at) AS updated_at, o.provider,
        max(o.identity_conflict) AS conflicting_identity,
-       max(o.ownership_ref) AS conflict_ref, max(o.ownership_key) AS conflict_key
+       groupUniqArray(concat(o.ownership_ref, '\0', o.ownership_key)) AS conflict_identities
 FROM (
 	SELECT project_id, provider, ownership_ref, ownership_key, team_id, source_name, valid_from, valid_to, updated_at,
 	       toUInt8(min(project_id) OVER (PARTITION BY provider, ownership_ref, ownership_key) != max(project_id) OVER (PARTITION BY provider, ownership_ref, ownership_key)) AS identity_conflict
@@ -888,8 +888,8 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 		var projectID, teamID, source, provider string
 		var validFrom, latestValidTo, observedAt time.Time
 		var latestIsOpen, conflictingIdentity uint8
-		var conflictRef, conflictKey string
-		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt, &provider, &conflictingIdentity, &conflictRef, &conflictKey); err != nil {
+		var conflictIdentities []string
+		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt, &provider, &conflictingIdentity, &conflictIdentities); err != nil {
 			return nil, err
 		}
 		observedAt, validFrom, latestValidTo = observedAt.UTC(), validFrom.UTC(), latestValidTo.UTC()
@@ -907,7 +907,17 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 			// resolved project -- and rowSortKey carries the resolved id, so
 			// keying on it counted a single disagreeing source row twice and
 			// reported double the suppressions that happened.
-			omissions.addConflict(provider, conflictRef+"\x00"+conflictKey)
+			//
+			// The full SET, not a representative. max() would have named one
+			// ownership row per group, and a group can hold several: two rows
+			// sharing a team, a source and a project_id but disagreeing via
+			// DIFFERENT keys both land here, and max() would have counted
+			// them as one. Over-reporting and under-reporting are the same
+			// defect wearing opposite signs, and this ticket has now shipped
+			// both.
+			for _, identity := range conflictIdentities {
+				omissions.addConflict(provider, identity)
+			}
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		// No ambiguity branch here on purpose. Ambiguity is a property of the

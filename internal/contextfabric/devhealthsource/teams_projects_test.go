@@ -377,7 +377,7 @@ func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug st
 // it -- the window function that decides ambiguity was never something this
 // fake could compute anyway.
 func projectTeamRow(projectID, teamID, source string, validFrom time.Time, latestIsOpen uint8, latestValidTo, updatedAt time.Time) []any {
-	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, "github", uint8(0), projectID, "KEY-" + projectID}
+	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, "github", uint8(0), []string{}}
 }
 
 // liveShapedEdgeClient replays the ground-truth org's real edge row shapes:
@@ -610,7 +610,7 @@ func TestEveryTeamsProjectsEdgeTypeIsDeclared(t *testing.T) {
 // its own test against the ledger's own statement.
 func omittedProjectTeamRow(projectID, teamID, source string, updatedAt time.Time) []any {
 	oversized := projectID + strings.Repeat("x", 256)
-	return []any{oversized, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, "github", uint8(0), oversized, ""}
+	return []any{oversized, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, "github", uint8(0), []string{}}
 }
 
 // TestOmissionTelemetryCountsDistinctKeysAcrossTheRun is codex round-2 F3.
@@ -1063,13 +1063,13 @@ func TestChaos4542_ConflictingIdentityEmitsNoEdge(t *testing.T) {
 	// conflict_ref / conflict_key are the OWNERSHIP row's own identity: the
 	// same pair on every flagged row for one disagreeing source row, which is
 	// what makes the ledger count sources rather than resolved edges.
-	conflicting := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), "own-ref-1", "OWN-KEY-1"}
+	conflicting := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), []string{"own-ref-1\x00OWN-KEY-1"}}
 	// The SAME ownership row, flagged once per resolved project -- which is
 	// exactly what the SQL emits: two rows, two different resolved ids, one
 	// disagreeing source row. Keying the ledger on the resolved edge counted
 	// this as TWO suppressions and told an operator that twice as much was
 	// dropped as actually was (codex R3).
-	conflictingB := []any{"proj-b", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), "own-ref-1", "OWN-KEY-1"}
+	conflictingB := []any{"proj-b", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), []string{"own-ref-1\x00OWN-KEY-1"}}
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM team_project_ownership FINAL", rows: [][]any{
 			conflicting,
@@ -1157,5 +1157,47 @@ func TestChaos4542_CensusDoesNotClaimFalseTruncation(t *testing.T) {
 	// The keys themselves must still all be counted.
 	if !strings.Contains(output, "omitted_ambiguous_project_keys=500") {
 		t.Errorf("want all 500 keys counted; got:\n%s", output)
+	}
+}
+
+// TestChaos4542_ConflictsCountEverySourceRowInAGroup is a residual I found
+// self-reviewing the arithmetic of the codex R3 fix, before it shipped.
+//
+// The R3 fix keyed conflicts on the ownership row rather than the resolved
+// edge, which stopped one disagreement being counted twice. Carrying that
+// identity as a single representative -- max(ownership_ref), max(ownership_key)
+// -- then introduced the OPPOSITE error: the outer grouping is
+// (project_id, provider, team_id, source_name), and a group can hold several
+// disagreeing ownership rows. Two rows sharing a team, a source and a
+// project_id but disagreeing via DIFFERENT keys both land in one group, and a
+// representative names one of them.
+//
+// Over-reporting and under-reporting are the same defect wearing opposite
+// signs, and this ticket has now shipped both. The set is what makes the
+// count independent of how the rows happen to group.
+func TestChaos4542_ConflictsCountEverySourceRowInAGroup(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
+	// ONE result row whose group holds TWO distinct disagreeing ownership
+	// identities -- what groupUniqArray returns for that shape.
+	twoInOneGroup := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1),
+		[]string{"own-ref-1\x00KEY-B", "own-ref-1\x00KEY-C"}}
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", rows: [][]any{twoInOneGroup}},
+	}}
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
+		Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
+	}); err != nil {
+		t.Fatalf("NextProjectionBatch: %v", err)
+	}
+	if output := logged.String(); !strings.Contains(output, "suppressed_conflicting_identities=2") {
+		t.Errorf("two disagreeing ownership rows collapsed into one group must still count as two -- a representative names one of them and understates what was dropped; got:\n%s", output)
 	}
 }
