@@ -87,10 +87,39 @@ validate_lane() {
 # Deterministic NodePort base per lane so two lanes never collide and a re-run
 # of the same lane always lands on the same ports. trial-data.sh requires a
 # multiple of 10 in 30000-30990, which gives 100 slots.
+# A hash over an unrestricted name into 100 slots is NOT unique -- lane-2 and
+# lane-11 collide (codex), and the second lane then fails deep inside Service
+# creation with a message about ports rather than about lanes. So the hash is
+# only a starting point: probe what is actually allocated on the cluster and
+# walk forward to the first free slot, skipping any base already held by
+# ANOTHER namespace. Deterministic for a given cluster state, and a lane that
+# already owns a base keeps it.
 lane_nodeport_base() {
-  local name="$1" digest
+  local name="$1" lane_ns="$1" digest start slot base owner existing
+  # An EXISTING lane keeps the base it already published. Without this, a lane
+  # whose hash slot differs from the base it was originally given (because the
+  # hash slot was taken at the time, or the base was passed explicitly) would be
+  # handed a different base on the next `up` -- and NodePorts on a live Service
+  # are not freely mutable, so the idempotent re-run would fail. Found by
+  # running the resolver against a lane that already owned 30500 while hashing
+  # to 30920.
+  existing="$(kubectl -n "$lane_ns" get svc trial-postgres -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || true)"
+  if [[ "$existing" =~ ^[0-9]+$ ]]; then
+    printf '%d' "$existing"
+    return 0
+  fi
   digest="$(printf '%s' "$name" | cksum | awk '{print $1}')"
-  printf '%d' $(( 30000 + (digest % 100) * 10 ))
+  start=$(( digest % 100 ))
+  for (( slot = 0; slot < 100; slot++ )); do
+    base=$(( 30000 + ((start + slot) % 100) * 10 ))
+    # Who, if anyone, already publishes this NodePort?
+    owner="$(kubectl get svc -A -o jsonpath="{range .items[?(@.spec.ports[0].nodePort==${base})]}{.metadata.namespace}{'\n'}{end}" 2>/dev/null | head -1)"
+    if [[ -z "$owner" || "$owner" == "$lane_ns" ]]; then
+      printf '%d' "$base"
+      return 0
+    fi
+  done
+  die "no free NodePort base in 30000-30990: all 100 lane slots are taken"
 }
 
 resolve_ops_wt() {
@@ -103,12 +132,22 @@ resolve_ops_wt() {
   fi
 }
 
+# Two image stores exist on this machine and they are unrelated (codex): the
+# Docker daemon, and Apple's `container` store that kiac.sh build-image writes
+# to and kiac load-image reads from. Querying only Docker reported "no image"
+# on a machine that had built one the kiac.sh way. Check both, Docker first
+# because the buildx -> save -> load bridge in the runbook starts there.
 resolve_ops_image() {
   [[ -n "${LANE_OPS_IMAGE:-}" ]] && return
   LANE_OPS_IMAGE="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
     | grep '^dev-health-ops-local:' | head -1 || true)"
+  if [[ -z "$LANE_OPS_IMAGE" ]] && command -v container >/dev/null 2>&1; then
+    LANE_OPS_IMAGE="$(container image list 2>/dev/null \
+      | awk '$1 == "dev-health-ops-local" {print $1 ":" $2; exit}' || true)"
+    [[ -n "$LANE_OPS_IMAGE" ]] && log "ops image resolved from the apple/container store"
+  fi
   [[ -n "$LANE_OPS_IMAGE" ]] \
-    || die "no dev-health-ops-local:* image found; build one (see docs/contribute/development/lane-isolation-kiac.md step 2) or set LANE_OPS_IMAGE"
+    || die "no dev-health-ops-local:* image in the Docker daemon or the apple/container store; build one (docs/contribute/development/lane-isolation-kiac.md step 2) or set LANE_OPS_IMAGE"
 }
 
 # kiac.sh defaults its kubeconfig to <its own repo>/.tmp/kiac/<cluster>/, so a
@@ -138,10 +177,19 @@ ensure_cluster() {
 ensure_datastores() {
   local lane="$1" base="$2" backups="$3"
   step "datastores in namespace '$lane' (NodePort base $base)"
-  if kubectl get ns "$lane" >/dev/null 2>&1 \
-     && kubectl -n "$lane" get deploy trial-postgres >/dev/null 2>&1; then
-    log "datastores already applied in '$lane'"
-  else
+  # Ownership marker, written before anything else and checked by `down`
+  # (codex): validate_lane accepts any legal namespace name, so `down
+  # acr-trial-data` would have deleted the STANDING trial data plane, PVCs and
+  # all. A name is not ownership. Only namespaces this script created carry
+  # this label, and `down` refuses anything without it.
+  kubectl create namespace "$lane" >/dev/null 2>&1 || true
+  kubectl label namespace "$lane" "app.kubernetes.io/managed-by=lane.sh" --overwrite >/dev/null
+  # Re-apply unconditionally rather than probing one deployment (codex): a
+  # `kubectl apply` interrupted after trial-postgres but before ClickHouse or
+  # FalkorDB left the old check permanently satisfied while two deployments
+  # were missing, so `wait` then failed forever. apply IS idempotent -- the
+  # cheap correct move is to always run it.
+  if true; then
     ACR_TRIAL_DATA_NAMESPACE="$lane" ACR_TRIAL_NODEPORT_BASE="$base" \
     ACR_TRIAL_DS_CPU_REQUEST="$DS_CPU_REQUEST" \
       "$SCRIPT_DIR/trial-data.sh" apply
@@ -506,7 +554,6 @@ cmd_up() {
     esac
   done
   validate_lane "$lane"
-  [[ -n "$base" ]] || base="$(lane_nodeport_base "$lane")"
   # Newest COMPLETE @backups set unless told otherwise. "Complete" means a
   # directory holding BOTH a postgres-all-*.sql.gz and a
   # clickhouse-default-*.zip -- checking only for the postgres dump picked the
@@ -534,11 +581,14 @@ cmd_up() {
     fi
     backups="$chosen"
   fi
-  log "lane=$lane cluster=$CLUSTER nodeport-base=$base backups=$backups"
+  log "lane=$lane cluster=$CLUSTER backups=$backups"
   resolve_ops_wt; resolve_ops_image
   log "ops image: $LANE_OPS_IMAGE"
   local started; started="$(date +%s)"
   ensure_cluster
+  # After ensure_cluster: picking a free base requires talking to the cluster.
+  [[ -n "$base" ]] || base="$(lane_nodeport_base "$lane")"
+  log "nodeport base: $base"
   ensure_datastores "$lane" "$base" "$backups"
   ensure_roles "$lane"
   ensure_ops_release "$lane"
@@ -553,14 +603,38 @@ cmd_up() {
 cmd_down() {
   local lane="${1:?lane name required}"
   validate_lane "$lane"
-  [[ "$lane" =~ ^(kube-system|default|kube-public|kube-node-lease)$ ]] && die "refusing to touch '$lane'"
   export KUBECONFIG="$(kubeconfig_path)"
+  # OWNERSHIP, not a name blocklist (codex). The old guard listed four system
+  # namespaces, so `down acr-trial-data` -- a perfectly legal name -- would have
+  # deleted the STANDING trial data plane and its PVCs. Refuse anything this
+  # script did not create and label.
+  local owner
+  owner="$(kubectl get ns "$lane" -o "jsonpath={.metadata.labels['app\.kubernetes\.io/managed-by']}" 2>/dev/null || true)"
+  if [[ -z "${owner}" ]]; then
+    if kubectl get ns "$lane" >/dev/null 2>&1; then
+      die "refusing to delete namespace '$lane': it carries no app.kubernetes.io/managed-by=lane.sh label, so lane.sh did not create it. Delete it by hand if you are certain."
+    fi
+    log "namespace '$lane' does not exist; nothing to tear down"
+    rm -f "/tmp/lane-${lane}-ops.yaml" "/tmp/lane-${lane}-acr.yaml"
+    return 0
+  fi
+  [[ "${owner}" == "lane.sh" ]] \
+    || die "refusing to delete namespace '$lane': managed-by is '${owner}', not lane.sh"
+
   step "tearing down lane '$lane'"
   helm uninstall "${lane}-acr" -n "$lane" >/dev/null 2>&1 || true
   helm uninstall "$lane" -n "$lane" >/dev/null 2>&1 || true
   # The namespace delete takes the PVCs with it -- this is a lane, not the
   # standing trial data plane, so its data is disposable by construction.
-  kubectl delete namespace "$lane" --wait=true >/dev/null 2>&1 || true
+  # Failures are NOT swallowed (codex): `|| true` reported a lane removed while
+  # every resource survived. Only a confirmed NotFound is benign.
+  local delete_err
+  delete_err="$(kubectl delete namespace "$lane" --wait=true 2>&1 >/dev/null)" || {
+    case "$delete_err" in
+    *NotFound* | *"not found"*) : ;;
+    *) die "failed to delete namespace '$lane': ${delete_err}" ;;
+    esac
+  }
   rm -f "/tmp/lane-${lane}-ops.yaml" "/tmp/lane-${lane}-acr.yaml"
   log "lane '$lane' removed (cluster '$CLUSTER' left running)"
 }
