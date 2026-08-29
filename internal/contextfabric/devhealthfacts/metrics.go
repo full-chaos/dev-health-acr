@@ -207,6 +207,11 @@ type repositoryMetricsDayRow struct {
 	medianPRCycleHours, changeFailureRate, codeOwnershipGini float64
 	hasMTTRHours                                             bool
 	mttrHours                                                float64
+	// totalDays is this repository's own distinct-day count within the
+	// window, computed by the query BEFORE its per-repository row cap --
+	// see the count() window in the statement below (codex R4 finding 3).
+	// Identical on every row of a given repository.
+	totalDays int64
 }
 
 // readRepositoryMetrics (CHAOS-4418 widening of CHAOS-3780's original
@@ -295,20 +300,31 @@ func (p *MetricsProvider) readRepositoryMetrics(ctx context.Context, orgID strin
 	// doc comment explains -- a query-wide cap and a per-group cap do not
 	// compose into "each group gets its fair share"; only dropping the
 	// query-wide cap for this one query does.
-	statement := `SELECT toString(repo_id), toString(day), toInt64(commits_count), toInt64(prs_merged), toFloat64(median_pr_cycle_hours), toFloat64(change_failure_rate), toUInt8(isNotNull(mttr_hours)), toFloat64(ifNull(mttr_hours, 0)), toInt64(bus_factor), toFloat64(code_ownership_gini)
+	statement := `SELECT toString(repo_id), toString(day), toInt64(commits_count), toInt64(prs_merged), toFloat64(median_pr_cycle_hours), toFloat64(change_failure_rate), toUInt8(isNotNull(mttr_hours)), toFloat64(ifNull(mttr_hours, 0)), toInt64(bus_factor), toFloat64(code_ownership_gini), toInt64(total_days)
 FROM (
-	-- CHAOS-4418: PARTITION BY (repo_id, day), NOT repo_id alone --
-	-- every distinct day survives its own row_number()/cityHash64
-	-- intraday-rerun dedup (the identical tiebreak reasoning
-	-- readers.ReadRepositoryMetrics' own repo_id-only partition already
-	-- uses, one level finer), instead of collapsing the whole repository
-	-- down to its single latest day the way that shared reader does.
+	-- codex R4 finding 3: the per-repository distinct-day count, computed
+	-- HERE -- after the rn = 1 intraday-rerun dedup (so it counts days,
+	-- not reruns) and outside the per-repository row cap below (so that
+	-- cap cannot saturate it). Go cannot compute this from the rows it
+	-- receives: the cap already fired server-side, so len(rows) is the cap
+	-- for any window wider than it, and day_count would ground a false
+	-- EXACT count for a 201-day-and-wider window.
 	SELECT repo_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini,
-		row_number() OVER (PARTITION BY repo_id, day ORDER BY computed_at DESC, cityHash64(tuple(commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, ifNull(mttr_hours, -1), bus_factor, code_ownership_gini)) DESC) AS rn
-	FROM repo_metrics_daily
-	WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}` + dayPredicate + `
+		count() OVER (PARTITION BY repo_id) AS total_days
+	FROM (
+		-- CHAOS-4418: PARTITION BY (repo_id, day), NOT repo_id alone --
+		-- every distinct day survives its own row_number()/cityHash64
+		-- intraday-rerun dedup (the identical tiebreak reasoning
+		-- readers.ReadRepositoryMetrics' own repo_id-only partition already
+		-- uses, one level finer), instead of collapsing the whole repository
+		-- down to its single latest day the way that shared reader does.
+		SELECT repo_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini,
+			row_number() OVER (PARTITION BY repo_id, day ORDER BY computed_at DESC, cityHash64(tuple(commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, ifNull(mttr_hours, -1), bus_factor, code_ownership_gini)) DESC) AS rn
+		FROM repo_metrics_daily
+		WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}` + dayPredicate + `
+	)
+	WHERE rn = 1
 )
-WHERE rn = 1
 ORDER BY repo_id, day DESC
 LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 	byRepo := make(map[string][]repositoryMetricsDayRow)
@@ -332,7 +348,7 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		var repoID string
 		var r repositoryMetricsDayRow
 		var hasMTTR uint8
-		if scanErr := row.Scan(&repoID, &r.day, &r.commitsCount, &r.prsMerged, &r.medianPRCycleHours, &r.changeFailureRate, &hasMTTR, &r.mttrHours, &r.busFactor, &r.codeOwnershipGini); scanErr != nil {
+		if scanErr := row.Scan(&repoID, &r.day, &r.commitsCount, &r.prsMerged, &r.medianPRCycleHours, &r.changeFailureRate, &hasMTTR, &r.mttrHours, &r.busFactor, &r.codeOwnershipGini, &r.totalDays); scanErr != nil {
 			return scanErr
 		}
 		r.hasMTTRHours = hasMTTR != 0
@@ -376,13 +392,15 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		dayRows, omitted = capFactValueRows(dayRows)
 		breakdownTruncated = breakdownTruncated || omitted > 0
 		fields := map[string]contextfabric.FactValue{
-			// day_count is the SERIES' own row count before any
-			// 64-row cap -- distinguishable from
-			// len(daily_metrics) so a truncated series is still
-			// diagnosable (CanonicalRows' own Truncated flag already
-			// reports the cap fired; this says how much was behind
-			// it).
-			"day_count":     contextfabric.IntegerFactValue(int64(len(days))),
+			// day_count is this repository's TRUE distinct-day count
+			// in the window -- the query's own total_days, computed
+			// before BOTH caps (codex R4 finding 3). Deliberately not
+			// len(days) (saturates at the per-repository SQL cap) and
+			// not len(daily_metrics) (the 64-row per-fact cap), so a
+			// truncated series stays diagnosable: CanonicalRows' own
+			// Truncated flag reports that a cap fired, this says how
+			// much was behind it.
+			"day_count":     contextfabric.IntegerFactValue(days[0].totalDays),
 			"daily_metrics": contextfabric.RowsFactValue(dayRows),
 		}
 		// codex R4 finding 1: the latest day's values, under the SAME

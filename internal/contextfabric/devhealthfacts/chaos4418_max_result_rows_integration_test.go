@@ -27,6 +27,12 @@ import (
 // sanitized ReadFacts error must NOT contain -- see the R3 red half.
 const clickHouseTooManyRowsOrBytes int32 = 396
 
+// MetricsSeriesPerRepositoryRowCapForTest names the production cap in a
+// const-expression context, so the R4 day-count scenario below derives its
+// seed width from the same constant the query uses rather than a literal
+// that could drift away from it.
+const MetricsSeriesPerRepositoryRowCapForTest = devhealthfacts.MetricsSeriesPerRepositoryRowCap
+
 // seedRepositoryMetricsDays inserts dayCount consecutive days for one
 // repository in ONE batch. Deliberately not a loop of single-row Exec
 // calls: the scenarios below seed up to 1,080 rows, and a round trip per
@@ -202,6 +208,54 @@ func TestCHAOS4418RepositoryMetricsAgainstRealClickHouse(t *testing.T) {
 				t.Fatalf("len(result.Facts) = %d, want exactly %d -- every requested repository must get its own fact", len(result.Facts), repoCount)
 			}
 		})
+	})
+
+	// R4_the_day_count_is_not_capped_by_the_per_repository_row_limit is
+	// codex R4 finding 3's EXECUTED proof, and the only place it can be
+	// executed: the defect lives in ClickHouse's own evaluation order --
+	// `LIMIT ... BY repo_id` runs server-side, before Go sees a single
+	// row -- so the fake client, which replays whatever rows a test hands
+	// it, cannot produce the saturation at all. A window wider than
+	// MetricsSeriesPerRepositoryRowCap is what makes len(rows) and the
+	// true distinct-day count diverge.
+	//
+	// 250 days: comfortably past the 200-row per-repository cap, so a
+	// day_count taken from the returned slice reports exactly 200 -- an
+	// EXACT count a model may ground a claim in, and wrong by 50 days.
+	t.Run("R4_the_day_count_is_not_capped_by_the_per_repository_row_limit", func(t *testing.T) {
+		const orgID = "org-4418-day-count"
+		const repoID = "55555555-5555-5555-5555-000000000001"
+		const dayCount = MetricsSeriesPerRepositoryRowCapForTest + 50
+		client, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
+			DSN: dsn, DialTimeout: 10 * time.Second, MaxResultRows: 2 * contractsv1.ContextFabricMaxCohortMembersLimit * devhealthfacts.MetricsSeriesPerRepositoryRowCap,
+		})
+		if err != nil {
+			t.Fatalf("open query client: %v", err)
+		}
+		t.Cleanup(func() { _ = client.Close() })
+		seedRepositoryMetricsDays(t, ctx, direct, orgID, repoID, start, dayCount)
+		provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+			Time: repositoryMetricsTimeContext(start, start.AddDate(0, 0, dayCount)),
+			Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject(repoID)},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() error = %v", err)
+		}
+		if len(result.Facts) != 1 {
+			t.Fatalf("len(result.Facts) = %d, want exactly 1", len(result.Facts))
+		}
+		if got := result.Facts[0].Fields["day_count"].Integer; got == nil || *got != int64(dayCount) {
+			t.Fatalf("day_count = %v, want the true %d distinct days -- the server-side per-repository cap returns only %d rows, so a count taken from them saturates and grounds a false exact count", got, dayCount, devhealthfacts.MetricsSeriesPerRepositoryRowCap)
+		}
+		// Truncation semantics unchanged by the day-count fix: the
+		// 64-row per-fact cap is still what Truncated reports on.
+		if !result.Truncated {
+			t.Fatalf("result.Truncated = false, want true -- %d days still exceeds the %d-row per-fact cap", dayCount, contextfabric.MaxFactValueRows)
+		}
+		if got := len(result.Facts[0].Fields["daily_metrics"].Rows); got != contextfabric.MaxFactValueRows {
+			t.Fatalf("daily_metrics rows = %d, want the unchanged %d-row per-fact cap", got, contextfabric.MaxFactValueRows)
+		}
 	})
 
 	// B_the_64_row_per_fact_boundary_keeps_the_newest_days is the day-count
