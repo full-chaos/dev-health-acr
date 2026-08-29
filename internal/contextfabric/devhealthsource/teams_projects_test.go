@@ -923,3 +923,55 @@ func TestProgressMemoIsDiscardedByAFromScratchRun(t *testing.T) {
 		t.Fatalf("a memo from before a reset must never move the post-reset cursor, got %+v ok=%v err=%v", progress, ok, err)
 	}
 }
+
+// TestChaos4542_AmbiguityTelemetryFiresOnASingleCall is the answer to "why
+// did the ledger not log", and the answer is a Go evaluation-order trap that
+// has been in this file since the telemetry was added.
+//
+//	defer logAmbiguousProjectKeys(ctx, s.logger, orgID, ledger.count())
+//
+// Deferred CALL arguments are evaluated where the `defer` statement runs, not
+// where the deferred call runs. So ledger.count() was read BEFORE any query
+// executed -- always 0 -- and logAmbiguousProjectKeys suppresses a zero. The
+// telemetry was permanently one call behind: a run that omitted keys reported
+// nothing, and the NEXT run reported the previous run's total.
+//
+// TestOmissionTelemetryCountsDistinctKeysAcrossTheRun did not catch this
+// because it calls NextProjectionBatch TWICE, and its comment reads that
+// second call as testing accumulation. It was testing accumulation, and it
+// was also the only reason a number ever appeared. One call is the case an
+// operator actually has.
+//
+// The two sibling telemetry defers pass the LEDGER POINTER rather than a
+// count, so they read their contents when the deferred call runs and were
+// never affected -- which is why only this one was silent.
+//
+// This matters more after CHAOS-4542 than before it: an ambiguous key is now
+// excluded inside the expansion and never reaches any scan, so this log line
+// is the ONLY record that an ownership edge was dropped. Silent here means
+// invisible everywhere.
+func TestChaos4542_AmbiguityTelemetryFiresOnASingleCall(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: ambiguousProjectKeysMarker, rows: [][]any{
+			{"github", "SHARED", uint64(2)},
+		}},
+	}}
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+
+	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
+		Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
+	}); err != nil {
+		t.Fatalf("NextProjectionBatch: %v", err)
+	}
+
+	if output := logged.String(); !strings.Contains(output, "omitted_ambiguous_project_keys=1") {
+		t.Fatalf("ONE call that omitted an ambiguous key must report it in that same call -- an operator does not get a second tick to find out an edge was dropped; got:\n%s", output)
+	}
+}

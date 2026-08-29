@@ -643,13 +643,13 @@ func (f *ownershipFixture) seedAmbiguousBlockThenValidEdge(t *testing.T, ctx con
 	// an omission path that still exists, which is the difference between a
 	// test and a decoration.
 	mustExec(t, ctx, f.direct, `INSERT INTO projects
-SELECT concat('P-AMBIG-A-', repeat('x', 256), toString(number)), ?, 'github', concat('BULK-', toString(number)), 'bulk a', 1, 'started', '', ?
+SELECT concat('P-AMBIG-A-', repeat('x', 232), toString(number)), ?, 'github', concat('BULK-', toString(number)), 'bulk a', 1, 'started', '', ?
 FROM numbers(150)`, f.orgID, early)
 	mustExec(t, ctx, f.direct, `INSERT INTO projects
-SELECT concat('P-AMBIG-B-', repeat('x', 256), toString(number)), ?, 'github', concat('BULK-', toString(number)), 'bulk b', 1, 'started', '', ?
+SELECT concat('P-AMBIG-B-', repeat('x', 232), toString(number)), ?, 'github', concat('BULK-', toString(number)), 'bulk b', 1, 'started', '', ?
 FROM numbers(150)`, f.orgID, early)
 	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership
-SELECT ?, 'github', 'TEAM-GITHUB', concat('P-AMBIG-A-', repeat('x', 256), toString(number)), concat('BULK-', toString(number)), 'native', ?, NULL, ?
+SELECT ?, 'github', 'TEAM-GITHUB', concat('P-AMBIG-A-', repeat('x', 232), toString(number)), concat('BULK-', toString(number)), 'native', ?, NULL, ?
 FROM numbers(150)`, f.orgID, block, block)
 
 	// Also early, so the page holding the ambiguous block cannot be rescued
@@ -937,7 +937,15 @@ func (f *ownershipFixture) seedOversizedAmbiguousBlock(t *testing.T, ctx context
 	block := ownershipLaterAssertion.Add(24 * time.Hour)
 	beyond := ownershipLaterAssertion.Add(48 * time.Hour)
 	// 5200 keys x 2 projects each = 10400 joined rows, past the 50-page x
-	// 200-row in-process bound. Omitted via an oversized natural key for the
+	// 200-row in-process bound (maxOmittedPageSkips 50 x 200), which is why
+	// the row count cannot be reduced -- the bound is what this test exists
+	// to cross.
+	//
+	// The padding is 232, the smallest that still overflows
+	// MaxNaturalKeyBytes: "project.v2:github:P-BOUND-A-" + pad + index
+	// crosses 256 at pad ~225 (measured, not assumed). 256 was arbitrary and
+	// made every one of these 10 400 rows a ~275-byte sort key for no
+	// benefit. Omitted via an oversized natural key for the
 	// same reason as seedAmbiguousBlockThenValidEdge above: after CHAOS-4542
 	// ambiguity no longer produces a scan-side omission, so driving this with
 	// ambiguous keys alone would leave the worker nothing to skip and this
@@ -945,11 +953,11 @@ func (f *ownershipFixture) seedOversizedAmbiguousBlock(t *testing.T, ctx context
 	const keys = 5200
 	for _, half := range []string{"A", "B"} {
 		mustExec(t, ctx, f.direct, `INSERT INTO projects
-SELECT concat('P-BOUND-`+half+`-', repeat('x', 256), toString(number)), ?, 'github', concat('BOUND-', toString(number)), 'bulk', 1, 'started', '', ?
+SELECT concat('P-BOUND-`+half+`-', repeat('x', 232), toString(number)), ?, 'github', concat('BOUND-', toString(number)), 'bulk', 1, 'started', '', ?
 FROM numbers(?)`, f.orgID, early, uint64(keys))
 	}
 	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership
-SELECT ?, 'github', 'TEAM-GITHUB', concat('P-BOUND-A-', repeat('x', 256), toString(number)), concat('BOUND-', toString(number)), 'native', ?, NULL, ?
+SELECT ?, 'github', 'TEAM-GITHUB', concat('P-BOUND-A-', repeat('x', 232), toString(number)), concat('BOUND-', toString(number)), 'native', ?, NULL, ?
 FROM numbers(?)`, f.orgID, block, block, uint64(keys))
 
 	mustExec(t, ctx, f.direct, `INSERT INTO projects VALUES (?, ?, 'github', 'PAST-BOUND-KEY', 'past bound', 1, 'started', '', ?)`,

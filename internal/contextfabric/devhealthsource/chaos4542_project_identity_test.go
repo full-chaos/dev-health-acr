@@ -103,7 +103,13 @@ func TestChaos4542_TheProducerConsumesTheSharedIdentityHelpers(t *testing.T) {
 	// project_key is the only column tying it to a project -- caught live
 	// by the "tied assertions resolve deterministically" fixture, which
 	// seeds exactly that shape.
-	if !strings.Contains(statement, "o.project_key = p.project_key") {
+	//
+	// RESPELLED by defect 6, not relaxed: the arm now matches the key SCOPE
+	// ROW (o.project_key = p.scope, scope_kind = 'key') rather than
+	// p.project_key, which every scope row carries. The assertion keeps its
+	// original job -- this arm has been dropped three separate times -- and
+	// tracks the spelling that is now load-bearing.
+	if !strings.Contains(statement, "o.project_key = p.scope") {
 		t.Errorf("the producer dropped the key-to-key arm; ownership rows keyed only by project_key would vanish\n%s", statement)
 	}
 	if strings.Count(statement, "UNION ALL") < 3 {
@@ -158,5 +164,35 @@ func TestChaos4542_AmbiguityLedgerStatementIsPortableTo248(t *testing.T) {
 	// projects make another tenant's key look ambiguous.
 	if strings.Count(ambiguousProjectKeysStatement, "org_id = {org_id:String}") != 2 {
 		t.Fatal("both the projects and ownership subqueries must be scoped to the organization")
+	}
+}
+
+// CHAOS-4542 defect 6, acr side. The graph producer's key arm must select the
+// KEY SCOPE ROW, never p.project_key -- a column every scope row carries,
+// which is how an id row satisfied a key-shaped guard and two projects
+// sharing a key both matched an ownership row that named neither.
+//
+// The scope arm must carry NO kind restriction: it compares project_id,
+// which is whichever id space that row uses, and today's GitLab rows hold a
+// project KEY there. Restricting it reads like tightening and drops them.
+func TestChaos4542_KeyArmSelectsTheKeyScopeRowAndTheScopeArmDoesNot(t *testing.T) {
+	t.Parallel()
+	statement := projectTeamsStatement(cursorState{})
+	if strings.Contains(statement, "o.project_key = p.project_key") {
+		t.Error("the key arm joins p.project_key, which EVERY scope row carries -- an id row with the same key matches, which is defect 6")
+	}
+	if !strings.Contains(statement, "o.project_key = p.scope") || !strings.Contains(statement, "WHERE p.scope_kind = 'key'") {
+		t.Error("the key arm must match the key scope row and name scope_kind = 'key'")
+	}
+	if strings.Contains(statement, "p.key_resolution_count") {
+		t.Error("key_resolution_count is TELEMETRY after v0.5.5; a consumer reading it as a guard reads a per-scope-row number as if it described a key")
+	}
+	// 24.8 rejects an ON that is not a plain column equality, so the kind
+	// restriction must sit in a WHERE -- 'key' is a literal.
+	for _, on := range strings.Split(statement, " ON ")[1:] {
+		clause := strings.SplitN(on, "\n", 2)[0]
+		if strings.Contains(clause, "scope_kind") {
+			t.Errorf("scope_kind appears in a JOIN ON (%q): 24.8 rejects a non-equality ON with Code: 403", clause)
+		}
 	}
 }

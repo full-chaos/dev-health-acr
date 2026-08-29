@@ -747,7 +747,13 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		s.forgetConsumed(checkpoint.OrgID)
 	}
 	ledger := s.ledgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
-	defer logAmbiguousProjectKeys(ctx, s.logger, checkpoint.OrgID, ledger.count())
+	// The closure is load-bearing. `defer logAmbiguousProjectKeys(..., ledger.count())`
+	// evaluates count() HERE, before any query runs -- always 0, and a zero
+	// is suppressed -- so the telemetry reported the PREVIOUS call's total
+	// and a single-call run said nothing at all. The two sibling defers
+	// below pass their ledger POINTER, so they read it when the deferred
+	// call runs; this one passed an int and did not.
+	defer func() { logAmbiguousProjectKeys(ctx, s.logger, checkpoint.OrgID, ledger.count()) }()
 	presence := s.presenceLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logPresenceTelemetry(ctx, s.logger, checkpoint.OrgID, presence)
 	teamAuth := s.teamAuthLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)

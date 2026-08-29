@@ -785,11 +785,21 @@ func projectTeamsStatement(cursor cursorState) string {
 	// TWO equality-joined arms, UNION ALL'd at ROW level, then aggregated
 	// on the RESOLVED projects.id.
 	//
-	//  A. o.project_id  = p.scope        -- covers both id spaces at once,
-	//     because p.scope carries the canonical id AND the project key as
-	//     separate rows: CHAOS-4530's UUID-keyed rows match the id row,
+	//  A. o.project_id  = p.scope        -- the SCOPE arm. It matches scope
+	//     rows of BOTH kinds deliberately and must NOT be given a
+	//     scope_kind restriction: project_id is not an id column, it is
+	//     whichever id space that row uses, and today's GitLab rows hold a
+	//     project KEY there. CHAOS-4530's UUID-keyed rows match the id row,
 	//     today's GitLab rows match the key row.
-	//  B. o.project_key = p.project_key  -- the ORIGINAL join, kept. An
+	//  B. o.project_key = p.scope        -- the KEY arm, and the ONLY arm
+	//     that names scope_kind. It matches the key SCOPE ROW rather than
+	//     p.project_key, a column EVERY scope row carries: joining that
+	//     column let an id row satisfy a key-shaped guard, and two projects
+	//     sharing a key both matched an ownership row naming neither
+	//     (CHAOS-4542 defect 6). An ambiguous key now has no scope row at
+	//     all -- readers v0.5.5 applies the filter inside the expansion --
+	//     so neither arm can resolve one, and no guard here can be
+	//     forgotten. This arm is otherwise the ORIGINAL join, kept. An
 	//     ownership row may carry a project_id that correlates with nothing
 	//     while its project_key is the only column tying it to a project.
 	//     Dropping this arm loses those rows entirely -- which is exactly
@@ -811,7 +821,10 @@ func projectTeamsStatement(cursor cursorState) string {
 	// batch, a rejected batch never advances a checkpoint, and the
 	// organization's projection wedges PERMANENTLY -- the hazard the THIRD
 	// note above records.
-	ownershipRows := func(match string) string {
+	// where carries any scope_kind restriction. It is a WHERE and not part
+	// of the ON because 24.8 rejects an ON that is not a plain column
+	// equality, and 'key' is a literal.
+	ownershipRows := func(match, where string) string {
 		return `
 		SELECT p.id AS project_id, p.provider AS provider,
 		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at
@@ -821,17 +834,17 @@ func projectTeamsStatement(cursor cursorState) string {
 			FROM team_project_ownership FINAL
 			WHERE org_id = {org_id:String}
 		) AS o ON o.provider = p.provider AND ` + match + `
-		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id`
+		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id` + where
 	}
 	return `SELECT o.project_id, o.team_id, o.source_name,
        min(o.valid_from) AS first_valid_from,
        argMax(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open,
        ifNull(argMax(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
        max(o.updated_at) AS updated_at, o.provider
-FROM (` + ownershipRows(readers.ProjectIdentityMatchSQL("o", "project_ref")) + `
+FROM (` + ownershipRows(readers.ProjectIdentityMatchSQL("o", "project_ref"), "") + `
 
 		UNION ALL
-` + ownershipRows("o.project_key = p.project_key AND p.project_key != '' AND p.key_resolution_count = 1") + `
+` + ownershipRows("o.project_key = p.scope", "\n\t\tWHERE p.scope_kind = 'key'") + `
 ) AS o
 GROUP BY o.project_id, o.provider, o.team_id, o.source_name` + havingSincePredicate(cursor, "max(o.updated_at)", projectTeamsRowKey) + orderBy("max(o.updated_at)", projectTeamsRowKey)
 }
