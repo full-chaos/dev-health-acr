@@ -458,6 +458,36 @@ func TestMetricsProviderScopedToOrgAndRequestedSubjects(t *testing.T) {
 	assertQueryScopedToOrgAndSubjects(t, client.queries[len(client.queries)-1].statement)
 }
 
+// TestMetricsProviderRepositorySeriesCapsPerRepositoryNotJustQueryWide is
+// Codex R1's own finding (confirmed): before this cap, requesting metrics
+// for MULTIPLE repositories at once let a handful of repositories with wide
+// day-ranges exhaust the shared, query-wide maxFactRowsPerQuery (200)
+// budget entirely, leaving whichever repositories sort later (repo_id,
+// day DESC) with NO canonical fact at all -- not a truncated series, a
+// MISSING one, exactly the gap this ticket exists to close, reintroduced
+// for a multi-repository caller. The fakeClient cannot simulate
+// ClickHouse's actual per-group LIMIT BY semantics (it replays canned rows
+// verbatim, not a real query planner), so this pins the STATEMENT TEXT
+// carries the per-repository sub-cap, mirroring this file's own
+// TestMetricsProviderTruncatesWhenRowCountReachesLimit precedent for the
+// shared cap.
+func TestMetricsProviderRepositorySeriesCapsPerRepositoryNotJustQueryWide(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: [][]any{metricsRow("repo-1")}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject("repo-1"), repoSubject("repo-2")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	statement := strings.ToUpper(client.queries[len(client.queries)-1].statement)
+	if !strings.Contains(statement, "LIMIT 100 BY REPO_ID") {
+		t.Fatalf("statement = %q, want a `LIMIT 100 BY repo_id` per-repository sub-cap ahead of the shared query-wide LIMIT", client.queries[len(client.queries)-1].statement)
+	}
+}
+
 // TestMetricsProviderRowForUnrequestedRepositoryNeverAppears is the F5
 // result-content guard: even though the fake client can return a row for
 // ANY repository (it doesn't execute the SQL's own org/id filters), the

@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -35,6 +36,31 @@ const repositoryPrefix = "repository:"
 // (an explicit as-of/range question) or an EXPLICIT current-axis
 // EvidenceWindow.Start/End uses that instead, unbounded by this constant.
 const metricsSeriesDefaultWindow = 90 * 24 * time.Hour
+
+// metricsSeriesPerRepositoryRowCap (Codex R1, confirmed) bounds how many
+// day-rows ANY SINGLE requested repository can contribute toward the
+// shared, query-wide maxFactRowsPerQuery (200) cap. Before this ticket,
+// readRepositoryMetrics returned exactly one row per repository
+// regardless of how many were requested together, so up to 200
+// repositories could share that budget safely. This rescue can now
+// return up to ~90 rows for ONE repository (the default window), so
+// without a per-repository sub-cap, a handful of repositories with wide
+// day-ranges could exhaust the entire 200-row budget -- rows ordered by
+// (repo_id, day DESC) means the SQL-level LIMIT would then silently drop
+// every row for whichever repositories sort later, leaving them with NO
+// canonical fact at all (not a truncated series -- a MISSING one, which
+// this ticket exists to eliminate, not reintroduce for a different
+// caller shape). `LIMIT n BY repo_id` (ClickHouse's per-group row cap)
+// guarantees every requested repository gets its own fair share up to
+// this bound before the shared cap can starve any of them; the shared
+// cap still applies afterward as the overall safety net for a
+// pathologically large repository list. 100 is comfortably above
+// metricsSeriesDefaultWindow's own 90 days, so the ordinary
+// current-axis case never hits this sub-cap at all -- it only engages
+// for a caller-supplied explicit window wider than ~100 days, which
+// capFactValueRows' own 64-row per-fact cap bounds further downstream
+// regardless.
+const metricsSeriesPerRepositoryRowCap = 100
 
 // MetricsProvider implements contextfabric.FactProvider for FactMetrics.
 //
@@ -247,7 +273,8 @@ FROM (
 	WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}` + dayPredicate + `
 )
 WHERE rn = 1
-ORDER BY repo_id, day DESC`)
+ORDER BY repo_id, day DESC
+LIMIT ` + strconv.Itoa(metricsSeriesPerRepositoryRowCap) + ` BY repo_id`)
 	byRepo := make(map[string][]repositoryMetricsDayRow)
 	var repoOrder []string
 	// readers.QueryOrgScopedNamed (CHAOS-4418), not p.facts.query -- this

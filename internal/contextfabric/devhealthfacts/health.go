@@ -156,9 +156,22 @@ func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids
 	// come from -- never a second, independent query that could stitch a
 	// fact together from a different rerun of the same day (the exact
 	// stitching risk this file's own package doc comment already warns
-	// about for per-field argMax). The tiebreak hash is unchanged: it
-	// already picks one full row, so every new column here is consistent
-	// with the row severity/compounding_risk were already read from.
+	// about for per-field argMax).
+	//
+	// Codex R1 (confirmed): the tiebreak hash MUST widen to cover the new
+	// columns too, not stay as-is. Two reruns can share the identical
+	// day/computed_at/severity/compounding_risk (an exact tie on the OLD
+	// hash's own 2-column tuple) while genuinely differing on
+	// churn_norm/complexity_norm/ownership_norm/review_norm/w_* -- the
+	// package's own doc comment already establishes that reruns carry
+	// "genuinely different values, not no-op repeats". Leaving the old
+	// 2-column hash would let row_number() pick EITHER tied row
+	// arbitrarily on different executions of the identical query, so
+	// risk_rules could flap between two different tied rows even though
+	// severity/compounding_risk themselves never change -- the exact
+	// "same tied inputs must always hash to the same value" property this
+	// tiebreak exists to guarantee, now violated for every column beyond
+	// the original two.
 	statement := withRowLimit(`SELECT scope_id, toString(severity), toUInt8(isNotNull(compounding_risk)), toFloat64(ifNull(compounding_risk, 0)), toString(computed_at),
 	toUInt8(isNotNull(churn_norm)), toFloat64(ifNull(churn_norm, 0)), toFloat64(w_churn),
 	toUInt8(isNotNull(complexity_norm)), toFloat64(ifNull(complexity_norm, 0)), toFloat64(w_complexity),
@@ -166,7 +179,7 @@ func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids
 	toUInt8(isNotNull(review_norm)), toFloat64(ifNull(review_norm, 0)), toFloat64(w_review)
 FROM (
 	SELECT scope_id, severity, compounding_risk, computed_at, churn_norm, complexity_norm, ownership_norm, review_norm, w_churn, w_complexity, w_ownership, w_review,
-		row_number() OVER (PARTITION BY scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
+		row_number() OVER (PARTITION BY scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1), ifNull(churn_norm, -1), ifNull(complexity_norm, -1), ifNull(ownership_norm, -1), ifNull(review_norm, -1), w_churn, w_complexity, w_ownership, w_review)) DESC) AS rn
 	FROM compounding_risk_daily
 	WHERE org_id = {org_id:String} AND scope = '` + scope + `' AND scope_id IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )
