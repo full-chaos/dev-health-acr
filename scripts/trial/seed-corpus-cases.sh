@@ -119,6 +119,17 @@ falkor_count() {
   printf '%s' "$value"
 }
 
+# falkor_kind returns the live subject_kind of one canonical id, or the empty
+# string when the node has none. Separate from falkor_count because the reply
+# is a label, not a number, so it cannot reuse that function's numeric guard.
+falkor_kind() {
+  local id="$1" out
+  out="$("$kubectl_bin" -n "$namespace" exec "$pod" -- redis-cli GRAPH.QUERY "$graph_key" \
+    "MATCH (n:Subject) WHERE n.canonical_id = '$id' RETURN n.subject_kind" 2>&1 < /dev/null)" \
+    || die "graph query failed while reading subject_kind for $id"
+  printf '%s\n' "$out" | sed -n '2p' | tr -d '[:space:]'
+}
+
 # reject_unsafe fails closed on any value that would need quoting inside a
 # Cypher single-quoted literal. Every real subject id and lexical term in
 # this corpus is [A-Za-z0-9 ._:%@/()+-]; anything else is a spec mistake,
@@ -161,8 +172,14 @@ case_count="$(jq -r '.cases | length' "$spec")"
 #      label/search_text/aliases CONTAINS scan runs in ~33ms; with an org_id
 #      conjunction FalkorDB picked a plan that did not return within seven
 #      minutes on a 36k-subject graph. This guard costs ~4ms, once.
-org_foreign="$(falkor_count "MATCH (n:Subject) WHERE n.org_id <> '$org_id' RETURN count(n)")"
-[[ "$org_foreign" == "0" ]] || die "graph key $graph_key holds $org_foreign subject(s) belonging to an organization other than $org_id -- refusing to certify oracle claims against a graph this spec does not own"
+# `n.org_id <> '<org>'` alone is FAIL-OPEN: in Cypher a comparison against a
+# missing property evaluates to null, not true, so a Subject with no org_id is
+# excluded from the count and the guard reports a clean graph. The later anchor
+# and census queries are unscoped, so exactly that malformed node could then
+# certify an oracle production's org-scoped reads can never retrieve. Missing
+# is not "belongs to this org" -- it is unknown, and unknown fails closed.
+org_foreign="$(falkor_count "MATCH (n:Subject) WHERE n.org_id IS NULL OR n.org_id <> '$org_id' RETURN count(n)")"
+[[ "$org_foreign" == "0" ]] || die "graph key $graph_key holds $org_foreign subject(s) with a missing org_id or belonging to an organization other than $org_id -- refusing to certify oracle claims against a graph this spec does not own"
 verification_fragments+=("$(jq -c -n --arg g "$graph_key" --arg o "$org_id" \
   '{"check": "graph_key_is_single_org", "value": ($g + " -> " + $o), "matches": 0}')")
 echo "seed-corpus-cases.sh: org purity proved -- 0 foreign-org subjects in $graph_key"
@@ -183,10 +200,28 @@ for (( c=0; c<case_count; c++ )); do
     [[ -n "$line" && "$line" != "null" ]] && anchor_ids+=("$line")
   done <<<"$(jq -r ".cases[$c] | [.anchor_positive_key] + (.anchor_negatives // []) | .[] | select(. != null)" "$spec")"
 
+  kind_positive="$(jq -r ".cases[$c].kind_positive // \"\"" "$spec")"
+  anchor_positive="$(jq -r ".cases[$c].anchor_positive_key // \"\"" "$spec")"
+  [[ -z "$kind_positive" ]] || reject_unsafe "$kind_positive"
+
   for id in ${anchor_ids+"${anchor_ids[@]}"}; do
     reject_unsafe "$id"
     n="$(falkor_count "MATCH (n:Subject) WHERE n.canonical_id = '$id' RETURN count(n)")"
     [[ "$n" == "1" ]] || die "case $c ($klass/$band): anchor id resolves to $n nodes, want exactly 1: $id"
+
+    # Existence is not agreement. A spec whose kind_positive disagrees with the
+    # anchor's ACTUAL subject_kind passes every check above, syncs cleanly, and
+    # publishes an impossible kind/anchor pair -- the write phase copies
+    # kind_positive verbatim. Only the POSITIVE anchor is constrained: an
+    # anchor NEGATIVE is often deliberately a near-miss and may legitimately be
+    # a different kind.
+    if [[ -n "$kind_positive" && "$id" == "$anchor_positive" ]]; then
+      k="$(falkor_kind "$id")"
+      [[ "$k" == "$kind_positive" ]] || die "case $c ($klass/$band): kind_positive=\"$kind_positive\" but the positive anchor's live subject_kind is \"$k\" -- publishing this would encode an impossible kind/anchor pair that still passes sync and the hash guard"
+      verification_fragments+=("$(jq -c -n --arg id "$id" --arg k "$k" --argjson c "$c" \
+        '{"spec_case": $c, "check": "anchor_kind_matches", "value": ($id + " -> " + $k), "matches": 1}')")
+      echo "  case $c ($klass/$band): positive anchor kind is $k"
+    fi
     verification_fragments+=("$(jq -c -n --arg id "$id" --arg n "$n" --argjson c "$c" \
       '{"spec_case": $c, "check": "anchor_id_resolves", "value": $id, "matches": ($n|tonumber)}')")
     echo "  case $c ($klass/$band): anchor id resolves x$n"
@@ -257,6 +292,10 @@ for (( c=0; c<case_count; c++ )); do
     [[ "$commit_expectation" == "never" ]] || die "case $c ($klass/$band): census.commit_expectation=\"$commit_expectation\", want \"never\" (every census case in the annex uses it; a cohort question commits no single subject)"
     must_run="$(jq -r ".cases[$c].census.must_run // \"\"" "$spec")"
     [[ "$must_run" == "true" ]] || die "case $c ($klass/$band): census.must_run=\"$must_run\", want boolean true"
+    # Same reasoning as the positive-anchor kind check: a census over a
+    # different kind than the case claims to be about is an impossible pair
+    # that publishes cleanly.
+    [[ -z "$kind_positive" || "$census_kind" == "$kind_positive" ]] || die "case $c ($klass/$band): census.kind=\"$census_kind\" disagrees with kind_positive=\"$kind_positive\""
     n="$(falkor_count "MATCH (n:Subject) WHERE n.subject_kind = '$census_kind' RETURN count(n)")"
     case "$expectation" in
       one_or_more)        [[ "$n" -ge 1 ]] || die "case $c: census expects one_or_more $census_kind, graph has $n" ;;
@@ -280,9 +319,17 @@ fi
 
 # ----------------------------------------------------------------- write
 base_index="$(jq -r 'length' "$corpus")"
-annex_max="$(jq -r '[.cases | keys[] | tonumber] | max' "$annex")"
-[[ "$base_index" -eq $((annex_max + 1)) ]] || \
-  die "corpus has $base_index cases but the annex's highest index is $annex_max -- refusing to append to a corpus/annex pair that is already out of step"
+# The key SET, not just its maximum. `max == length-1` still passes over an
+# interior gap (keys {0,2} against a 3-row corpus): the sync tool skips the
+# missing index and the harness builds measurements from annex entries only,
+# so that corpus case is silently never measured. Comparing the sorted key
+# list against 0..base_index-1 is the check that actually holds.
+annex_gaps="$(jq -r --argjson n "$base_index" \
+  '[range(0; $n)] - ([.cases | keys[] | tonumber]) | join(",")' "$annex")"
+annex_extra="$(jq -r --argjson n "$base_index" \
+  '([.cases | keys[] | tonumber]) - [range(0; $n)] | join(",")' "$annex")"
+[[ -z "$annex_gaps" ]] || die "the annex has no case at corpus index(es) $annex_gaps -- those corpus cases would be published unmeasured; refusing to append to a pair that is already out of step"
+[[ -z "$annex_extra" ]] || die "the annex has case(s) at index(es) $annex_extra with no corresponding corpus row -- refusing to append to a pair that is already out of step"
 
 # Corpus rows carry the question ONLY. expect_kind/expect_id are left empty
 # on purpose: cmd/acr-corpus-annex-sync fills them from the annex below,
@@ -295,7 +342,7 @@ annex_max="$(jq -r '[.cases | keys[] | tonumber] | max' "$annex")"
 # model-authored per run (cf-measurement-trials, 2026-08-23 10:35), so a
 # regenerated value would not be reproducible.
 corpus_tmp="$(mktemp)"; annex_tmp="$(mktemp)"
-trap 'rm -f "$corpus_tmp" "$annex_tmp"' EXIT
+trap 'rm -f "$corpus_tmp" "$annex_tmp" "$corpus_tmp.sync-audit.json"' EXIT
 
 jq --slurpfile spec "$spec" '
   . + ($spec[0].cases | map({question: .question, expect_kind: "", expect_id: ""}))
@@ -381,14 +428,38 @@ pinned="$(jq -r '.provenance.corpus_sha8' "$annex_tmp")"
 # the post-install re-check -- rolls BOTH files back before exiting.
 corpus_backup="$corpus.4525-rollback"
 annex_backup="$annex.4525-rollback"
+# rm first: `cp` inherits the SOURCE's mode when it creates the destination,
+# so a backup left behind by an earlier aborted run can be read-only and
+# defeat the next run's backup step -- turning a recoverable failure into a
+# refusal to start. Found by the guard suite itself.
+rm -f "$corpus_backup" "$annex_backup"
 cp "$corpus" "$corpus_backup" || die "could not back up the corpus before installing -- ORIGINALS LEFT UNTOUCHED"
 cp "$annex" "$annex_backup" || { rm -f "$corpus_backup"; die "could not back up the annex before installing -- ORIGINALS LEFT UNTOUCHED"; }
 
-rollback_and_die() {
+rollback_pair() {
   cp "$corpus_backup" "$corpus" 2>/dev/null || echo "seed-corpus-cases.sh: ROLLBACK OF THE CORPUS FAILED -- restore by hand from $corpus_backup" >&2
   cp "$annex_backup" "$annex" 2>/dev/null || echo "seed-corpus-cases.sh: ROLLBACK OF THE ANNEX FAILED -- restore by hand from $annex_backup" >&2
+}
+
+rollback_and_die() {
+  rollback_pair
+  rm -f "$corpus_backup" "$annex_backup"
   die "$1 -- rolled both files back to their pre-run contents"
 }
+
+# ARMED BEFORE THE FIRST COPY, disarmed only after the post-install check.
+# rollback_and_die covers ordinary command failure; it does NOT cover a SIGTERM
+# or SIGINT landing between the two copies, which leaves the corpus replaced
+# beside an annex still pinning the old hash -- precisely the state this block
+# claims to make recoverable, and one that makes every later trial refuse the
+# pair. A signal trap is the only thing that covers it.
+rollback_on_signal() {
+  echo "seed-corpus-cases.sh: interrupted mid-install -- rolling both files back" >&2
+  rollback_pair
+  rm -f "$corpus_backup" "$annex_backup"
+  exit 1
+}
+trap rollback_on_signal INT TERM HUP
 
 cp "$corpus_tmp" "$corpus" || rollback_and_die "installing the corpus failed"
 cp "$annex_tmp" "$annex" || rollback_and_die "installing the annex failed"
@@ -399,6 +470,28 @@ cp "$annex_tmp" "$annex" || rollback_and_die "installing the annex failed"
 installed_sha8="$(shasum -a 256 "$corpus" | cut -c1-8)"
 installed_pin="$(jq -r '.provenance.corpus_sha8' "$annex" 2>/dev/null || echo "")"
 [[ "$installed_sha8" == "$installed_pin" ]] || rollback_and_die "the INSTALLED pair does not agree (corpus sha8 $installed_sha8 vs annex pin $installed_pin)"
+
+# The install is complete and self-consistent: disarm.
+trap - INT TERM HUP
+
+# The sync tool writes its audit record beside the corpus it was HANDED, which
+# was the temporary -- so without this the canonical corpus's audit history
+# never records these corrections and a stray file is left behind. Merge rather
+# than overwrite: the canonical audit is an append-only ARRAY, one entry per
+# run, and the tool's own doc comment is explicit that it is never overwritten.
+tmp_audit="$corpus_tmp.sync-audit.json"
+canonical_audit="$corpus.sync-audit.json"
+if [[ -f "$tmp_audit" ]]; then
+  if [[ -f "$canonical_audit" ]]; then
+    jq -s '.[0] + .[1]' "$canonical_audit" "$tmp_audit" > "$canonical_audit.merged" \
+      && mv "$canonical_audit.merged" "$canonical_audit" \
+      || echo "seed-corpus-cases.sh: could not merge the sync audit -- the seeded run's audit record is at $tmp_audit" >&2
+  else
+    cp "$tmp_audit" "$canonical_audit" || echo "seed-corpus-cases.sh: could not install the sync audit from $tmp_audit" >&2
+  fi
+  rm -f "$tmp_audit"
+fi
+
 rm -f "$corpus_backup" "$annex_backup"
 
 added_last=$((base_index + case_count - 1))

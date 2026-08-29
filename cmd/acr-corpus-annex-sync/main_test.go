@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -471,5 +472,56 @@ func rewriteSignoffField(t *testing.T, annexPath, key, value string) {
 	}
 	if err := os.WriteFile(annexPath, body, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestRatifyCLIRejectsWhitespaceAttribution exercises the FLAG BOUNDARY, which
+// is where the trim lives -- ratifyCurrentCorpusSHA8 itself records what it is
+// handed, so a unit call cannot see this guard at all (codex review R3 P2).
+// "   " is neither unset nor empty, so a bare emptiness test accepts it and
+// advances the approved corpus hash with an effectively unattributed,
+// unexplained audit record.
+//
+// RED-FIRST: drop the two strings.TrimSpace assignments in main() and this
+// test's first two cases exit 0 instead of 2.
+func TestRatifyCLIRejectsWhitespaceAttribution(t *testing.T) {
+	for _, tc := range []struct {
+		name, by, note string
+		wantRefused    bool
+	}{
+		{"whitespace-only -ratified-by", "   ", "a real reason", true},
+		{"whitespace-only -ratify-note", "team-lead", " \t ", true},
+		{"both real", "team-lead", "a real reason", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			annexPath, corpusPath, liveSHA8 := writeRatifyFixture(t, "", "oldappr")
+			reRecordCorpusSHA8(t, annexPath, liveSHA8)
+
+			out, err := exec.Command("go", "run", ".", "-annex", annexPath, "-corpus", corpusPath,
+				"-ratify", "-ratified-by", tc.by, "-ratify-note", tc.note).CombinedOutput()
+			// `go run` reports a non-zero child exit as its own exit 1, so
+			// the assertion is on REFUSED-vs-ACCEPTED plus the message and
+			// the resulting file state -- never on the exact numeric code,
+			// which this indirection does not preserve.
+			refused := err != nil
+			var ee *exec.ExitError
+			if err != nil && !errors.As(err, &ee) {
+				t.Fatalf("run: %v (%s)", err, out)
+			}
+			if refused != tc.wantRefused {
+				t.Errorf("refused = %v, want %v (output: %s)", refused, tc.wantRefused, out)
+			}
+			approved, _ := readRatifiedSignoff(t, annexPath)
+			if tc.wantRefused {
+				if !strings.Contains(string(out), "-ratify requires both") {
+					t.Errorf("output = %s, want the both-flags-required message", out)
+				}
+				if approved != "oldappr" {
+					t.Errorf("a refused ratify still advanced the approval to %q", approved)
+				}
+			} else if approved != liveSHA8 {
+				t.Errorf("approved = %q, want %q", approved, liveSHA8)
+			}
+		})
 	}
 }

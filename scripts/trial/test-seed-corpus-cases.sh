@@ -53,17 +53,23 @@ check() {
 # single-org graph) so a check can drive the "this graph key belongs to
 # another organization" refusal without disturbing the per-case counts.
 fake_kubectl() {
-  local count="$1" foreign="${2:-0}"
+  local count="$1" foreign="${2:-0}" kind="${3:-team}"
   printf '%s\n' "$count" >"$tmp/fake-count.txt"
   printf '%s\n' "$foreign" >"$tmp/fake-foreign.txt"
+  printf '%s\n' "$kind" >"$tmp/fake-kind.txt"
   cat >"$tmp/fake-kubectl" <<FAKE
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$tmp/queries.log"
 for a in "\$@"; do
   if [[ "\$a" == "pods" ]]; then echo "pod/fake-falkordb-0"; exit 0; fi
 done
+if printf '%s' "\$*" | grep -q 'RETURN n.subject_kind'; then
+  echo "n.subject_kind"
+  cat "$tmp/fake-kind.txt"
+  exit 0
+fi
 echo "count(n)"
-if printf '%s' "\$*" | grep -q 'org_id <>'; then
+if printf '%s' "\$*" | grep -q 'org_id IS NULL OR n.org_id <>'; then
   cat "$tmp/fake-foreign.txt"
 else
   cat "$tmp/fake-count.txt"
@@ -220,6 +226,8 @@ while [[ $# -gt 0 ]]; do
 done
 sha8="$(shasum -a 256 "$k" | cut -c1-8)"
 jq --arg s "$sha8" '.provenance.corpus_sha8 = $s' "$a" >"$a.stub" && mv "$a.stub" "$a"
+# The real tool writes its audit record beside the corpus it was HANDED.
+printf '%s\n' '[{"stub":"audit"}]' >"$k.sync-audit.json"
 STUB
 chmod +x "$sync_stub"
 chmod 0444 "$tmp/annex.json"
@@ -227,6 +235,67 @@ out="$(ACR_SEED_SYNC_CMD="$sync_stub" run_seed)"
 chmod 0644 "$tmp/annex.json"
 check "a failed annex install rolls the corpus back" "untouched" "$(originals_untouched)"
 check "  ... and says both files were rolled back" "1" "$(grep -c 'rolled both files back' "$tmp/out.log" || true)"
+
+# 10. CHAOS-4525 / codex R3 P2: the purity guard must treat a MISSING org_id
+#     as foreign. In Cypher `n.org_id <> '<org>'` against a missing property
+#     evaluates to null, so such a node is excluded from the count and the
+#     guard reports a clean graph -- while the unscoped anchor/census queries
+#     can still use it to certify an oracle production cannot retrieve.
+rm -f "$tmp/queries.log"
+fake_kubectl 1 0
+fixture "$(census_case aggregate_assessment never true)"
+run_seed --dry-run >/dev/null
+check "the purity guard counts a MISSING org_id as foreign" "1" \
+  "$(grep -c "n.org_id IS NULL OR n.org_id <> 'org-1'" "$tmp/queries.log" 2>/dev/null || echo 0)"
+
+# 11. CHAOS-4525 / codex R3 P2: existence is not agreement. A kind_positive
+#     that disagrees with the anchor's live subject_kind publishes an
+#     impossible pair which still passes sync and the hash guard.
+kind_case() {
+  printf '%s' '[{"question":"q","question_class":"subject_status","band":"literal","kind_positive":"'"$1"'","kind_negatives":[],"anchor_positive_key":"team:CHAOS","anchor_negatives":[],"window_positive_band":"all_time","window_negatives":[],"census":null,"authority":"annotation","kind_basis":"x","anchor_basis":"x","baseline":{}}]'
+}
+fake_kubectl 1 0 team
+fixture "$(kind_case project)"
+out="$(run_seed --dry-run)"
+check "kind_positive disagreeing with the anchor's live subject_kind is refused" "exit=1" "$out"
+check "  ... and names both kinds" "1" "$(grep -c 'impossible kind/anchor pair' "$tmp/out.log" || true)"
+
+fixture "$(kind_case team)"
+check "kind_positive matching the live subject_kind is accepted" "exit=0" "$(run_seed --dry-run)"
+
+# 12. CHAOS-4525 / codex R3 P2: an INTERIOR annex gap passes a max-based
+#     check. The sync tool skips the missing index and the harness measures
+#     from annex entries only, so that corpus row is published unmeasured.
+cat >"$tmp/corpus.orig.json" <<'GAPC'
+[{"question":"a","expect_kind":"","expect_id":""},
+ {"question":"b","expect_kind":"","expect_id":""},
+ {"question":"c","expect_kind":"","expect_id":""}]
+GAPC
+printf '%s\n' '{"cases":{"0":{"question_class":"x"},"2":{"question_class":"x"}},"provenance":{"org_id":"org-1","corpus_sha8":"aaaaaaaa"}}' >"$tmp/annex.orig.json"
+fake_kubectl 1 0 team
+fixture "$(kind_case team)"
+out="$(run_seed)"
+check "an annex with an INTERIOR index gap is refused" "exit=1" "$out"
+check "  ... and names the missing index" "1" "$(grep -c 'has no case at corpus index(es) 1' "$tmp/out.log" || true)"
+check "  ... and leaves the originals untouched" "untouched" "$(originals_untouched)"
+
+# 13. CHAOS-4525 / codex R3 P2: the sync tool writes its audit beside the
+#     corpus it was handed -- the TEMPORARY. Without an explicit merge the
+#     canonical corpus's audit history never records these corrections and a
+#     stray file is left behind.
+# Check 12 replaced the base fixtures with its gapped pair; restore the
+# single-row pair so this check exercises a SUCCESSFUL install.
+printf '%s\n' '[{"question":"fixture, never real corpus text","expect_kind":"team","expect_id":""}]' >"$tmp/corpus.orig.json"
+printf '%s\n' '{"cases":{"0":{"question_class":"cohort_assessment"}},"provenance":{"org_id":"org-1","corpus_sha8":"aaaaaaaa"}}' >"$tmp/annex.orig.json"
+fake_kubectl 1 0 team
+fixture "$(kind_case team)"
+rm -f "$tmp/corpus.json.sync-audit.json"
+printf '%s\n' '[{"prior":"entry"}]' >"$tmp/corpus.json.sync-audit.json"
+out="$(ACR_SEED_SYNC_CMD="$sync_stub" run_seed)"
+check "a successful install merges the sync audit into the canonical sibling" "2" \
+  "$(jq -r 'length' "$tmp/corpus.json.sync-audit.json" 2>/dev/null || echo 0)"
+check "  ... appending, never overwriting the prior history" "entry" \
+  "$(jq -r '.[0].prior // "MISSING"' "$tmp/corpus.json.sync-audit.json" 2>/dev/null || echo MISSING)"
 
 if [[ "$failures" -gt 0 ]]; then
   echo "seed-corpus-cases checks FAILED ($failures)" >&2

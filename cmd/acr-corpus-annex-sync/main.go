@@ -99,6 +99,14 @@ func main() {
 			fmt.Fprintln(os.Stderr, "acr-corpus-annex-sync: -ratify and -check are mutually exclusive")
 			os.Exit(2)
 		}
+		// TrimSpace, not a bare emptiness test: "  " is neither unset nor
+		// empty, so an all-whitespace value would satisfy the check and
+		// advance the approved hash with an effectively unattributed,
+		// unexplained audit record -- the exact thing these two flags exist
+		// to prevent. Trimmed here AND recorded trimmed below, so the audit
+		// never carries padding either.
+		*ratifiedBy = strings.TrimSpace(*ratifiedBy)
+		*ratifyNote = strings.TrimSpace(*ratifyNote)
 		if *ratifiedBy == "" || *ratifyNote == "" {
 			fmt.Fprintln(os.Stderr, "acr-corpus-annex-sync: -ratify requires both -ratified-by and -ratify-note (an unattributed, unexplained approval is not an approval)")
 			os.Exit(2)
