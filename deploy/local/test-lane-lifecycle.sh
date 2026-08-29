@@ -94,6 +94,10 @@ EOF
 # nothing. Fixture rows are `<namespace> <nodePort> first|later`.
 cat >>"$tmp/bin/kubectl" <<'EOF'
   "get svc -A"*)
+    if [[ -n "${KFAKE_SVC_LIST_ERR:-}" ]]; then
+      printf '%s\n' "$KFAKE_SVC_LIST_ERR" >&2
+      exit 1
+    fi
     table="${KFAKE_SVC_TABLE:-/dev/null}"
     if [[ "$args" == *go-template* ]]; then
       awk '{print $1, $2}' "$table"
@@ -175,7 +179,7 @@ run_lane() {
 scenario() {
   unset KFAKE_CREATE_NS_RC KFAKE_SEED_MARKER KFAKE_NS_LABEL_OUT KFAKE_NS_LABEL_ERR \
         KFAKE_NS_LABEL_RC KFAKE_LANE_PG_NODEPORT KFAKE_SVC_TABLE KFAKE_NODE_IMAGES \
-        KFAKE_CLUSTER_EXISTS KFAKE_TRIALDATA_FAIL_ON LANE_SKIP_ACR
+        KFAKE_CLUSTER_EXISTS KFAKE_TRIALDATA_FAIL_ON LANE_SKIP_ACR KFAKE_SVC_LIST_ERR
   printf '\n%s\n' "$1"
 }
 
@@ -405,6 +409,34 @@ check_absent "no namespace delete is issued after a failed lookup" \
   "delete namespace" "$(events)"
 if (( LAST_RC != 0 )); then ok "down fails loudly on an unreachable API"
 else fail "down fails loudly on an unreachable API" "exit status was 0"; fi
+
+# ---------------------------------------------------------------------------
+# [R4-1] A Service listing that FAILS is not an empty cluster
+#
+# Same "failure reads as absence" class R2 fixed in `down`. The cluster-wide
+# Service query swallowed its own failure, so an unreachable API or an RBAC
+# denial produced an EMPTY taken-list and every one of the 100 slots read as
+# free. The resolver would then hand out the hash slot with no evidence that it
+# was free at all, and `trial-data.sh apply` would collide on ports later --
+# with a message about ports rather than about the API call that never answered.
+# ---------------------------------------------------------------------------
+scenario '[R4-1] a failed Service listing is fatal, not an empty cluster'
+export KFAKE_CLUSTER_EXISTS=1 KFAKE_NODE_IMAGES="$tmp/node-images-full" \
+       KFAKE_CREATE_NS_RC=0 KFAKE_TRIALDATA_FAIL_ON=apply \
+       KFAKE_SVC_LIST_ERR='Error from server (Forbidden): services is forbidden'
+run_lane up lanefake-apidown
+check_contains "a failed Service listing names itself" \
+  "could not list Services to allocate a NodePort base" "$LAST_OUT"
+check_contains "the failure carries the API error text" "Forbidden" "$LAST_OUT"
+check_absent "no NodePort base is handed out on unreadable cluster state" \
+  "nodeport base:" "$LAST_OUT"
+check_absent "the lane's datastores are never applied after the failure" \
+  "trial-data apply" "$(events)"
+# NOTE: an exit-status check belongs here in spirit and is deliberately absent.
+# This scenario stops the run with KFAKE_TRIALDATA_FAIL_ON=apply, so the run
+# exits non-zero whether or not the guard fires -- the assertion could not fail
+# and would read as coverage. The three checks above are the discriminating
+# ones: without the guard a base IS handed out and the datastores ARE applied.
 
 # ---------------------------------------------------------------------------
 if (( failures > 0 )); then

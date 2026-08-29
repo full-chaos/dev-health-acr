@@ -138,9 +138,20 @@ lane_nodeport_base() {
   # once, then reject a base if any of its four ports is taken. A lane's own
   # ports never block it, so a partially created lane can still re-run onto its
   # own range.
+  # A listing that FAILED is not an empty cluster (team-lead R4) -- the same
+  # "failure reads as absence" class R2 fixed in `down`. Swallowing this with
+  # `2>/dev/null … || true` meant an unreachable API or an RBAC denial produced
+  # an EMPTY taken-list, every one of the 100 slots read as free, and the
+  # resolver handed out its hash slot with no evidence that anything was free.
+  # The collision then surfaced much later, from `trial-data.sh apply`, as a
+  # message about ports rather than about the query that never answered. Only
+  # the awk filter may come back empty; the query itself must not fail quietly.
+  local svc_ports
   # shellcheck disable=SC2016  # $ns is a Go template variable, not a shell one
-  taken="$(kubectl get svc -A -o go-template='{{range .items}}{{$ns := .metadata.namespace}}{{range .spec.ports}}{{if .nodePort}}{{$ns}} {{.nodePort}}{{"\n"}}{{end}}{{end}}{{end}}' 2>/dev/null \
-    | awk -v self="$lane_ns" '$1 != self { print $2 }' || true)"
+  if ! svc_ports="$(kubectl get svc -A -o go-template='{{range .items}}{{$ns := .metadata.namespace}}{{range .spec.ports}}{{if .nodePort}}{{$ns}} {{.nodePort}}{{"\n"}}{{end}}{{end}}{{end}}' 2>&1)"; then
+    die "could not list Services to allocate a NodePort base for '$lane_ns': ${svc_ports}"
+  fi
+  taken="$(printf '%s\n' "$svc_ports" | awk -v self="$lane_ns" '$1 != self { print $2 }' || true)"
   digest="$(printf '%s' "$name" | cksum | awk '{print $1}')"
   start=$(( digest % 100 ))
   for (( slot = 0; slot < 100; slot++ )); do
