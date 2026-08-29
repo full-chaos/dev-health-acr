@@ -475,6 +475,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			// checks err, and discards the rest of the bundle -- see
 			// Investigate. Nothing consumes a bundle returned with an error
 			// for its facts.
+			r.recordFactRead(ctx, principal, planned.Kind, factReadRejected, "", planned.Subjects, 0, false)
 			return bundle, fmt.Errorf("fact capability %s: %w", planned.Kind, err)
 		}
 		result, err := r.readProvider(ctx, principal, registered, query)
@@ -483,6 +484,7 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 				// Same reasoning as the parameter rejection above: the
 				// resolved scope rides out with the error rather than being
 				// discarded.
+				r.recordFactRead(ctx, principal, planned.Kind, factReadCancelled, "", query.Subjects, 0, false)
 				return bundle, context.Canceled
 			}
 			state, reason := classifyFactReadError(err)
@@ -524,6 +526,14 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		if err := mergeFactProviderResult(&bundle, registered.capability, query, result, allowedSubjects); err != nil {
 			// Same reasoning as buildFactQuery's error above: the resolved
 			// scope rides out with the error so its telemetry is not lost.
+			//
+			// Codex round-2 P2: and so does the ledger record. This path
+			// aborts the whole investigation on an invalid provider result,
+			// which is exactly the failure an operator would be reading the
+			// ledger to attribute -- leaving it out made the
+			// one-record-per-planned-capability claim false on the runs that
+			// need it most.
+			r.recordFactRead(ctx, principal, planned.Kind, factReadRejected, "", query.Subjects, factsReturned, false)
 			return bundle, fmt.Errorf("fact capability %s: %w", planned.Kind, err)
 		}
 		// BOTH the state and the truncation flag are read back off the
@@ -569,6 +579,17 @@ const (
 	// factReadCompleted: the provider ran and returned a result. Whether
 	// that result carried any facts is the "facts" field, NOT this one.
 	factReadCompleted factReadOutcome = "completed"
+	// factReadRejected: the read never became an observation because the
+	// REQUEST or the RESULT was invalid -- an unbuildable query, or a
+	// provider result the merge refused (invalid state or version, a fact
+	// outside the investigation set, a fact whose own source state cannot
+	// carry facts). These paths abort the whole investigation, so no
+	// coverage entry is ever minted for them.
+	factReadRejected factReadOutcome = "rejected"
+	// factReadCancelled: the caller's context was cancelled mid-read.
+	// Distinct from failed, which is the provider returning an error of
+	// its own: nothing was wrong with the capability.
+	factReadCancelled factReadOutcome = "cancelled"
 )
 
 // recordFactRead emits one decision-basis record per PLANNED capability
@@ -590,6 +611,12 @@ const (
 //
 // org_id and request_id match SlogEngineTelemetry's existing convention so
 // this line joins the rest of an investigation's stream on the same keys.
+//
+// `state` is EMPTY on the rejected/cancelled outcomes, and that is the
+// honest value: those paths abort before any SourceObservation is minted,
+// so there is no coverage state to report and inventing one would be a
+// claim about an observation that does not exist. The outcome field
+// carries the information instead.
 func (r *FactCapabilityRegistry) recordFactRead(ctx context.Context, principal storage.Principal, kind FactKind, outcome factReadOutcome, state SourceState, subjects []SubjectRef, facts int, truncated bool) {
 	if r == nil || r.logger == nil {
 		return

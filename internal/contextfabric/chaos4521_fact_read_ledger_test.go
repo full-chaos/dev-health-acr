@@ -181,3 +181,69 @@ func TestChaos4521_TheLedgerReportsMergeInducedTruncation(t *testing.T) {
 		t.Errorf("facts = %v, want %d (the returned count, captured before the cap trims)", record["facts"], maxCanonicalFactsPerBundle+1)
 	}
 }
+
+// Codex round-2 P2 (CHAOS-4521). recordFactRead's contract is one record
+// per PLANNED capability, whichever branch of the plan loop it took. Three
+// branches return early from ReadFacts and minted no record at all: an
+// unbuildable query, a cancelled context, and -- the one codex named -- a
+// provider result mergeFactProviderResult rejects.
+//
+// That last is the failure an operator would most need attributed: it
+// aborts the whole investigation on an invalid provider result, and the
+// artifacts named neither the capability nor why. An inaccurate coverage
+// claim is worse than an admitted gap, and the doc comment claimed this
+// path was covered.
+func TestChaos4521_TheLedgerRecordsARejectedProviderResult(t *testing.T) {
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	// A fact for a subject OUTSIDE the investigation set: merge rejects the
+	// whole result and ReadFacts returns an error.
+	stranger := SubjectRef{Kind: SubjectProject, CanonicalID: "project_not_asked_for", Label: "Elsewhere"}
+	provider := &factProviderStub{
+		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "status-v2", SupportedSubjectKinds: []SubjectKind{SubjectProject}},
+		result: FactProviderResult{State: SourceAvailable, Version: "status-v2", Facts: []CanonicalFact{{
+			Kind: FactStatus, Subject: stranger,
+			Fields:      map[string]FactValue{"status": StringFactValue("in_progress")},
+			SourceState: SourceAvailable,
+		}}},
+	}
+
+	var sink bytes.Buffer
+	restore := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&sink, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(restore) })
+
+	registry, err := NewFactCapabilityRegistry([]FactProvider{provider}, FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+	}
+	if _, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, canonicalFactRequest(project, FactStatus)); err == nil {
+		t.Fatalf("precondition: expected the out-of-scope fact to be rejected")
+	}
+
+	var record map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(sink.String()), "\n") {
+		var candidate map[string]any
+		if err := json.Unmarshal([]byte(line), &candidate); err != nil {
+			continue
+		}
+		if candidate["msg"] == "context fabric fact read" {
+			record = candidate
+		}
+	}
+	if record == nil {
+		t.Fatalf("no fact-read record was emitted for a rejected provider result; the ledger claims one record per planned capability")
+	}
+	if record["kind"] != string(FactStatus) || record["outcome"] != "rejected" {
+		t.Errorf("record = %v, want kind=%q outcome=%q", record, FactStatus, "rejected")
+	}
+	// state is empty by design: the read aborted before any
+	// SourceObservation was minted, so there is no coverage state to name.
+	if record["state"] != "" {
+		t.Errorf("state = %v, want empty -- a rejected read mints no coverage observation", record["state"])
+	}
+	// Still corpus-safe on the failure path, where a naive implementation
+	// would be tempted to log the offending subject.
+	if strings.Contains(sink.String(), "project_not_asked_for") || strings.Contains(sink.String(), "Elsewhere") {
+		t.Errorf("the rejected-read record leaked subject content")
+	}
+}
