@@ -739,6 +739,21 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// claim ValidateAgainst never reached.
 		factGroupSize int
 	)
+	// setDiagnostics populates the two rejection fields from the error whose
+	// outcome the receipt reports -- and ONLY when that error really is a
+	// synthesis rejection (codex R2 finding 1). A transport or rate-limit
+	// failure is not a rejection: labelling one `rejection_reason=
+	// unclassified` would assert that a rule rejected the draft when no
+	// draft was ever judged. Leaving the fields absent says the true thing.
+	setDiagnostics := func(cause error) {
+		var rejection *contextfabric.SynthesisRejection
+		if !errors.As(cause, &rejection) {
+			rejectionReason, factGroupSize = "", 0
+			return
+		}
+		rejectionReason = string(contextfabric.SynthesisRejectionReasonOf(cause))
+		factGroupSize = contextfabric.SynthesisFactGroupSizeOf(cause)
+	}
 	defer func() {
 		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupSize)
 	}()
@@ -776,7 +791,14 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 			// failed, so the receipt must reflect the fallback's own
 			// (final) outcome and the caller must see its classification,
 			// not the primary's.
+			//
+			// codex R2 finding 1: the primary failed in TRANSPORT here, so
+			// no draft of its own was ever judged -- but the fallback's
+			// failure may well be a synthesis rejection, and this branch
+			// previously populated no diagnostics at all, silently dropping
+			// the only rule name in play.
 			receipt.Outcome = fallbackReceipt.Outcome
+			setDiagnostics(fallbackErr)
 			return contextfabric.SynthesisDraft{}, receipt, fallbackErr
 		}
 		return contextfabric.SynthesisDraft{}, receipt, classifiedErr
@@ -818,10 +840,6 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// a scan of every claim can report a LATER claim's group -- one
 		// that was never evaluated -- which would make the documented
 		// "1 versus >1" reading wrong in exactly the case it diagnoses.
-		setDiagnostics := func(cause error) {
-			rejectionReason = string(contextfabric.SynthesisRejectionReasonOf(cause))
-			factGroupSize = contextfabric.SynthesisFactGroupSizeOf(cause)
-		}
 		setDiagnostics(err)
 		if r.config.Fallback != nil {
 			fallback, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
@@ -861,6 +879,12 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	receipt.OutputDigest = contextfabric.DigestModelValue(outputBytes)
 	receipt.Outcome = "success"
 	grounding = groundingCountsFrom(draft)
+	// codex R2 finding 4: grounding a claim against a LATER fact of its
+	// (Kind, Subject) group is an outcome-changing branch -- it turns what
+	// used to be a rejection into an answer -- so a SUCCESSFUL run must
+	// record that it fired, not only a failing one. Without this the
+	// closure was diagnosable only when it did not save the answer.
+	factGroupSize = contextfabric.MaxClaimFactGroupSize(input.Facts.Facts, draft.ClaimedFacts)
 	return draft, receipt, nil
 }
 
@@ -1085,7 +1109,14 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 	// are closed/bounded -- a vocabulary member and a count -- so the
 	// corpus-safety guarantee in this function's doc comment is unchanged.
 	if rejectionReason != "" {
-		fields = append(fields, "rejection_reason", rejectionReason, "fact_group_size", factGroupSize)
+		fields = append(fields, "rejection_reason", rejectionReason)
+	}
+	// Emitted independently of the reason (codex R2 finding 4): a SUCCESS
+	// carries a group size and no reason, a rejection normally carries both,
+	// and a non-claim rejection carries a reason and no group. Pairing them
+	// would have made the success case unreportable.
+	if factGroupSize > 0 {
+		fields = append(fields, "fact_group_size", factGroupSize)
 	}
 	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
 }

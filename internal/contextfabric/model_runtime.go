@@ -661,10 +661,41 @@ func claimSourceFact(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, b
 }
 
 // canonicalFactGroupSize counts how many canonical facts share a claim's
-// (Kind, Subject) -- the ambiguity groundClaim now closes over. Reported as
-// telemetry (RecordClaimGroundingAmbiguity) rather than inferred, so a
-// future producer that starts emitting many facts per subject is visible in
-// the run's own artifacts instead of being discovered by a 422 months later.
+// (Kind, Subject) -- the ambiguity groundClaim closes over.
+//
+// Two callers, deliberately different in scope (codex R2 findings 1 and 4).
+// On a REJECTION it is called for the one rejecting claim only, because
+// ValidateAgainst short-circuits and a maximum would describe a claim that
+// was never evaluated. On SUCCESS every claim was evaluated by definition,
+// so MaxClaimFactGroupSize below takes the maximum across all of them --
+// there is no short-circuit to misrepresent, and without it the
+// outcome-changing "this claim grounded against a LATER fact of its group"
+// path would leave no trace in a successful run's own artifacts.
+// MaxClaimFactGroupSize is the SUCCESS-path counterpart to
+// SynthesisRejection.FactGroupSize (codex R2 finding 4): the largest
+// (Kind, Subject) group any admitted claim was grounded against. 1 means
+// every claim addressed an unambiguous fact; >1 means multi-fact grounding
+// actually fired and the answer depends on the CHAOS-4522 closure rather
+// than on a single-fact lookup that would have worked anyway.
+//
+// This is what makes the widened closure diagnosable from a SUCCESSFUL
+// run's own artifacts. Without it, the only trace of an outcome-changing
+// branch was on the rejection path -- so the case where the closure
+// silently rescued an answer was invisible, which is precisely the failure
+// mode AGENTS.md's decision-basis rule exists to prevent.
+//
+// Taking a maximum is sound HERE and not on the rejection path: a draft
+// that passed validation had every one of its claims evaluated.
+func MaxClaimFactGroupSize(facts []CanonicalFact, claims []ClaimedFact) int {
+	maximum := 0
+	for _, claim := range claims {
+		if size := canonicalFactGroupSize(facts, claim); size > maximum {
+			maximum = size
+		}
+	}
+	return maximum
+}
+
 func canonicalFactGroupSize(facts []CanonicalFact, claim ClaimedFact) int {
 	key := subjectKeyForModel(claim.Subject)
 	size := 0

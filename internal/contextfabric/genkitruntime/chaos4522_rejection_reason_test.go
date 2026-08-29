@@ -12,6 +12,23 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+// decisionLine extracts the synthesize decision-event line from a captured
+// JSON log.
+func decisionLine(t *testing.T, buf *bytes.Buffer) map[string]any {
+	t.Helper()
+	fields := map[string]any{}
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		candidate := map[string]any{}
+		if json.Unmarshal(line, &candidate) == nil && candidate["operation"] == string(contextfabric.ModelOperationSynthesize) {
+			fields = candidate
+		}
+	}
+	if len(fields) == 0 {
+		t.Fatalf("no synthesize decision line was emitted; log = %s", buf.String())
+	}
+	return fields
+}
+
 // captureDecisionLine runs SynthesizeAnswer with output and returns the
 // decision-event line's fields, so the two new CHAOS-4522 fields are
 // asserted where an operator actually reads them -- the emitted log -- not
@@ -173,30 +190,90 @@ func TestFallbackSuccessLineCarriesNoRejectionDiagnostics(t *testing.T) {
 	}
 }
 
-// TestSuccessfulDecisionLineCarriesNeitherNewField: a success must stay
-// byte-identical in shape to its pre-CHAOS-4522 line. A telemetry field
-// that appears on every call, carrying "unclassified" when nothing was
-// rejected, would drown the signal it exists to carry.
-func TestSuccessfulDecisionLineCarriesNeitherNewField(t *testing.T) {
+// TestSuccessfulDecisionLineRecordsGroundingAmbiguityWithoutAReason is
+// codex R2 finding 4. Grounding a claim against a LATER fact of its
+// (Kind, Subject) group is an outcome-changing branch -- it turns what used
+// to be a rejection into an answer -- so a SUCCESSFUL run must record that
+// it fired. Before this, the closure left a trace only when it FAILED to
+// save the answer, which is backwards.
+//
+// A success carries fact_group_size and NO rejection_reason: nothing
+// rejected it, and a reason field on a success would assert otherwise.
+func TestSuccessfulDecisionLineRecordsGroundingAmbiguityWithoutAReason(t *testing.T) {
+	t.Parallel()
+	input := validSynthesisInput()
+	// Two facts under one (kind, subject): the FIRST lacks the claimed
+	// field, so the claim can only be admitted by the widened closure.
+	sparse := input.Facts.Facts[0]
+	sparse.Fields = map[string]contextfabric.FactValue{"backlog_size": contextfabric.IntegerFactValue(24)}
+	input.Facts.Facts = append([]contextfabric.CanonicalFact{sparse}, input.Facts.Facts...)
+
+	output := validSynthesisOutput()
+	output.ClaimedFacts = []contextfabric.ClaimedFact{groundedReadinessClaim(input)}
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	runtime := mustRuntime(t, &generatorStub{synthesis: output}, Config{Logger: logger})
+	if _, _, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, input); err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v, want success via the widened grounding closure", err)
+	}
+	fields := decisionLine(t, &buf)
+	if _, present := fields["rejection_reason"]; present {
+		t.Fatalf("a successful line carries rejection_reason = %v, want the field absent", fields["rejection_reason"])
+	}
+	if got, ok := fields["fact_group_size"].(float64); !ok || int(got) != 2 {
+		t.Fatalf("fact_group_size = %v, want 2 -- a successful run must record that multi-fact grounding fired", fields["fact_group_size"])
+	}
+}
+
+// TestSingleFactSuccessCarriesNoAmbiguitySignal: when every claim addressed
+// an unambiguous fact the closure changed nothing, and the line must not
+// imply it did.
+func TestSingleFactSuccessCarriesNoAmbiguitySignal(t *testing.T) {
+	t.Parallel()
+	input := validSynthesisInput()
+	output := validSynthesisOutput()
+	output.ClaimedFacts = []contextfabric.ClaimedFact{groundedReadinessClaim(input)}
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	runtime := mustRuntime(t, &generatorStub{synthesis: output}, Config{Logger: logger})
+	if _, _, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, input); err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v, want success", err)
+	}
+	fields := decisionLine(t, &buf)
+	if got, ok := fields["fact_group_size"].(float64); !ok || int(got) != 1 {
+		t.Fatalf("fact_group_size = %v, want 1 (every claim addressed an unambiguous fact)", fields["fact_group_size"])
+	}
+	if _, present := fields["rejection_reason"]; present {
+		t.Fatalf("a successful line carries rejection_reason = %v, want it absent", fields["rejection_reason"])
+	}
+}
+
+// TestFallbackTransportFailureCarriesNoRejectionReason is codex R2 finding
+// 1: when the primary is synthesis-rejected but the FALLBACK fails in
+// transport, the call's final failure is not a rejection at all. Labelling
+// it `rejection_reason=unclassified` would assert that a rule rejected a
+// draft when no draft was ever judged on that leg; the field must be
+// absent.
+func TestFallbackTransportFailureCarriesNoRejectionReason(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	runtime := mustRuntime(t, &generatorStub{synthesis: validSynthesisOutput()}, Config{Logger: logger})
-	if _, _, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err != nil {
-		t.Fatalf("SynthesizeAnswer() error = %v, want success", err)
+	primary := validSynthesisOutput()
+	primary.Status = ""
+	fallbackReceipt := validReceipt(contextfabric.ModelOperationSynthesize)
+	fallbackReceipt.Outcome = "unavailable"
+	runtime := mustRuntime(t, &generatorStub{synthesis: primary}, Config{
+		Logger:   logger,
+		Fallback: erroringFallbackRuntime{err: errors.New("upstream transport failure"), receipt: fallbackReceipt},
+	})
+	if _, _, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err == nil {
+		t.Fatal("SynthesizeAnswer() = nil error, want both legs to fail")
 	}
-	fields := map[string]any{}
-	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
-		candidate := map[string]any{}
-		if json.Unmarshal(line, &candidate) == nil && candidate["operation"] == string(contextfabric.ModelOperationSynthesize) {
-			fields = candidate
-		}
-	}
-	if _, present := fields["rejection_reason"]; present {
-		t.Fatalf("a successful synthesize line carries rejection_reason = %v, want the field absent", fields["rejection_reason"])
-	}
-	if _, present := fields["fact_group_max"]; present {
-		t.Fatalf("a successful synthesize line carries fact_group_max = %v, want the field absent", fields["fact_group_max"])
+	fields := decisionLine(t, &buf)
+	if got, present := fields["rejection_reason"]; present {
+		t.Fatalf("rejection_reason = %v on a transport failure, want the field absent -- no draft was judged on the final leg", got)
 	}
 }
 
@@ -237,5 +314,20 @@ func TestBothLegsFailedLineDescribesTheFallbackLeg(t *testing.T) {
 	}
 	if got := fields["rejection_reason"]; got != string(contextfabric.RejectionReasonDeterministicAnswerMissing) {
 		t.Fatalf("rejection_reason = %v, want the FALLBACK leg's %q -- the receipt outcome and the caller's error both come from that leg", got, contextfabric.RejectionReasonDeterministicAnswerMissing)
+	}
+}
+
+// groundedReadinessClaim is a claim that validSynthesisInput's canonical
+// readiness fact actually grounds -- validSynthesisOutput carries no claims
+// of its own, so the group-size tests must supply one or there is no
+// grounding decision to report.
+func groundedReadinessClaim(input contextfabric.SynthesisInput) contextfabric.ClaimedFact {
+	releaseReady := false
+	return contextfabric.ClaimedFact{
+		ClaimID: "claim_readiness_grounded",
+		Kind:    contextfabric.FactReadiness,
+		Subject: input.Graph.Resolution.Committed[0],
+		Field:   "release_ready",
+		Value:   contextfabric.ScalarValue{Boolean: &releaseReady},
 	}
 }
