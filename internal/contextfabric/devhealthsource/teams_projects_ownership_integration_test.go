@@ -407,6 +407,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"team authorization is refreshed by an ownership-only change", "30000000-0000-4000-8000-00000000000a", subTeamAuthorizationRefreshedByOwnershipOnlyChange},
 		{"team authorization is refreshed by revoking the last open repository", "30000000-0000-4000-8000-00000000000c", subTeamAuthorizationRefreshedByRevokingLastOpenRepository},
 		{"team authorization ownership join is scoped to one organization", "30000000-0000-4000-8000-00000000000b", subTeamAuthorizationOwnershipJoinScopedToOneOrganization},
+		{"two id-space ownership rows for one project yield exactly one edge", "30000000-0000-4000-8000-00000000000d", subTwoIDSpaceRowsYieldExactlyOneEdge},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -912,4 +913,60 @@ FROM numbers(?)`, f.orgID, block, block, uint64(keys))
 		"PROJ-PAST-BOUND", f.orgID, early)
 	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, 'PAST-BOUND-KEY', 'native', ?, NULL, ?)`,
 		f.orgID, "PROJ-PAST-BOUND", beyond, beyond)
+}
+
+// subTwoIDSpaceRowsYieldExactlyOneEdge is the CHAOS-4542 wedge case, and the
+// reason the GROUP BY had to move to the RESOLVED projects.id rather than
+// stay on the source's own columns.
+//
+// During the CHAOS-4530 transition one project legitimately carries BOTH a
+// key-shaped ownership row (project_id holding the project KEY, the GitLab
+// shape and today's legacy rows) and a UUID-shaped one (project_id holding
+// projects.id, what 4530 writes). Both resolve, through different arms of
+// the identity match, to the SAME projects.id -- and therefore to the same
+// RelationshipID.
+//
+// What makes that catastrophic rather than merely untidy:
+// ContextFabricProjectionBatch.Validate() rejects a batch with duplicate
+// relationship IDs, a rejected batch never advances a checkpoint, and the
+// organization's team/project projection then WEDGES PERMANENTLY -- it
+// retries the same failing tick forever. This function's own THIRD note
+// records that hazard as the reason the source's project_id was originally
+// kept out of the GROUP BY.
+//
+// So: exactly ONE edge, and the batch must validate. Asserting only
+// "an edge exists" would pass with two, which is the failure.
+func subTwoIDSpaceRowsYieldExactlyOneEdge(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	const projectID = "PROJ-DUAL-SPACE"
+	const projectKey = "DUAL-KEY"
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, ?, 1, 'started', '', ?)`,
+		projectID, fixture.orgID, projectKey, projectID+" name", ownershipLaterAssertion)
+	// Key-shaped: project_id holds the project KEY (the legacy/GitLab shape).
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
+		fixture.orgID, projectKey, projectKey, ownershipFirstSeen, ownershipLaterAssertion)
+	// UUID-shaped: project_id holds projects.id (what CHAOS-4530 writes).
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
+		fixture.orgID, projectID, projectKey, ownershipFirstSeen, ownershipLaterAssertion)
+
+	batch := fixture.project(t, ctx)
+
+	// The batch validating at all is half the assertion: a duplicate
+	// RelationshipID is what wedges the projection.
+	assertUniqueRelationshipIDs(t, batch)
+
+	const wanted = "relationship:project_team:github:" + projectID + ":TEAM-GITHUB:native"
+	matches := 0
+	for _, relationship := range batch.Relationships {
+		if relationship.RelationshipID == wanted {
+			matches++
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("relationship %q appeared %d times, want exactly 1 -- two ownership rows in different id spaces resolved to one project and were not collapsed; a duplicate RelationshipID rejects the batch, and a rejected batch never advances a checkpoint", wanted, matches)
+	}
+	// The edge must also be the RESOLVED project, never the raw key the
+	// key-shaped row carried.
+	if hasRelationship(batch, "relationship:project_team:github:"+projectKey+":TEAM-GITHUB:native") {
+		t.Errorf("emitted an edge keyed on the raw project_key %q rather than the resolved projects.id", projectKey)
+	}
 }
