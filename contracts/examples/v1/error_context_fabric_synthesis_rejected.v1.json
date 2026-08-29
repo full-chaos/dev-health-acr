@@ -6,6 +6,10 @@
     "message": "Context Fabric's synthesized answer violated a v1 bound",
     "http_status": 422,
     "retryable": true,
-    "details": {}
+    "details": {
+      "violated_bound": "synthesis.claimed_fact.rows.model_authored",
+      "claim_index": 0,
+      "rejection_reason": "claim_rows_model_authored"
+    }
   }
 }

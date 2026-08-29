@@ -338,11 +338,11 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		switch _, outcome := groundClaim(input.Facts.Facts, claim); outcome {
 		case claimGrounded:
 		case claimNoCanonicalFact:
-			return rejectSynthesis(RejectionReasonClaimNoCanonicalFact, "claimed fact %s/%s has no canonical observation to ground it", claim.Kind, claim.Field)
+			return rejectSynthesisClaim(RejectionReasonClaimNoCanonicalFact, 0, "claimed fact %s/%s has no canonical observation to ground it", claim.Kind, claim.Field)
 		case claimFieldUnobserved:
-			return rejectSynthesis(RejectionReasonClaimFieldUnobserved, "claimed fact field %q was not canonically observed", claim.Field)
+			return rejectSynthesisClaim(RejectionReasonClaimFieldUnobserved, canonicalFactGroupSize(input.Facts.Facts, claim), "claimed fact field %q was not canonically observed", claim.Field)
 		default:
-			return rejectSynthesis(RejectionReasonClaimValueContradicts, "claimed fact %q contradicts the canonical value observed for %s.%s", claim.ClaimID, claim.Kind, claim.Field)
+			return rejectSynthesisClaim(RejectionReasonClaimValueContradicts, canonicalFactGroupSize(input.Facts.Facts, claim), "claimed fact %q contradicts the canonical value observed for %s.%s", claim.ClaimID, claim.Kind, claim.Field)
 		}
 	}
 	for _, driver := range d.Drivers {
@@ -658,25 +658,6 @@ func claimSourceFact(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, b
 		}
 	}
 	return CanonicalFact{}, false
-}
-
-// MaxCanonicalFactGroupSize reports the LARGEST number of canonical facts
-// sharing a (Kind, Subject) among the claims draft actually made
-// (CHAOS-4522 telemetry). 1 means every claim addressed an unambiguous
-// fact; >1 means groundClaim had to close over a group, which is the
-// condition the pre-CHAOS-4522 first-match-wins lookup silently mis-handled
-// and which no artifact previously reported. 0 means the draft made no
-// claims. Exported so the model-call boundary (genkitruntime) can put it on
-// its own decision-event line without reaching into this package's
-// internals.
-func MaxCanonicalFactGroupSize(facts []CanonicalFact, claims []ClaimedFact) int {
-	maximum := 0
-	for _, claim := range claims {
-		if size := canonicalFactGroupSize(facts, claim); size > maximum {
-			maximum = size
-		}
-	}
-	return maximum
 }
 
 // canonicalFactGroupSize counts how many canonical facts share a claim's

@@ -131,20 +131,71 @@ func TestRowsAreAttachedFromTheFactThatGroundedTheClaim(t *testing.T) {
 	}
 }
 
-// TestMaxCanonicalFactGroupSizeReportsTheAmbiguityClosedOver pins the
-// telemetry input: fact_group_max is what makes
-// "claim_field_unobserved at fact_group_max=17" (a multi-fact grounding
-// problem) distinguishable from "claim_field_unobserved at
-// fact_group_max=1" (a model claiming a field that genuinely does not
-// exist) -- two different defects that read identically before CHAOS-4522.
-func TestMaxCanonicalFactGroupSizeReportsTheAmbiguityClosedOver(t *testing.T) {
+// TestRejectionCarriesTheRejectingClaimsOwnFactGroupSize is codex R1
+// finding 1. The group size reported beside a rejection reason must be the
+// REJECTING claim's, never a maximum over the draft: ValidateAgainst
+// short-circuits at the first failing statement, so a scan of every claim
+// can report the group of a LATER claim that was never evaluated -- which
+// makes the documented "fact_group_size=1 means the model claimed a field
+// that does not exist / >1 means a multi-fact grounding problem" reading
+// wrong in exactly the case it exists to diagnose.
+//
+// The fixture below is that adversarial shape: claim ONE fails against a
+// group of size 1, while a later, never-evaluated claim sits on a group of
+// size 3.
+func TestRejectionCarriesTheRejectingClaimsOwnFactGroupSize(t *testing.T) {
 	t.Parallel()
 	input, draft := multiFactGroupFixture(t)
-	if got := MaxCanonicalFactGroupSize(input.Facts.Facts, draft.ClaimedFacts); got != 2 {
-		t.Fatalf("MaxCanonicalFactGroupSize() = %d, want 2", got)
+	subject := input.Graph.Resolution.Committed[0]
+
+	// A lone flow fact for this subject: group size 1.
+	input.Facts.Facts = append(input.Facts.Facts, CanonicalFact{
+		Kind: FactFlow, Subject: subject,
+		Fields:         map[string]FactValue{"items_completed": IntegerFactValue(3)},
+		EvidenceRefIDs: []string{"evidence_release_1234"}, SourceState: SourceAvailable,
+		Source: "ops", SourceVersion: "v1",
+	})
+	// A third readiness fact, taking that group to 3.
+	third := input.Facts.Facts[0]
+	third.Fields = map[string]FactValue{"backlog_size": IntegerFactValue(7)}
+	input.Facts.Facts = append(input.Facts.Facts, third)
+
+	draft.ClaimedFacts = []ClaimedFact{
+		// Rejects here: flow group size 1.
+		{ClaimID: "claim_flow_rejects_first", Kind: FactFlow, Subject: subject,
+			Field: "field_no_flow_fact_carries", Value: boolScalar(false)},
+		// Never evaluated: readiness group size 3.
+		{ClaimID: "claim_readiness_never_reached", Kind: FactReadiness, Subject: subject,
+			Field: "release_ready", Value: boolScalar(false)},
 	}
-	if got := MaxCanonicalFactGroupSize(input.Facts.Facts, nil); got != 0 {
-		t.Fatalf("MaxCanonicalFactGroupSize() with no claims = %d, want 0", got)
+	draft.Drivers[0].Category = "flow"
+	draft.Drivers[0].ClaimedFactIDs = []string{"claim_flow_rejects_first"}
+
+	err := draft.ValidateAgainst(input)
+	if err == nil {
+		t.Fatal("ValidateAgainst() = nil, want a rejection on the first claim")
+	}
+	if got := SynthesisRejectionReasonOf(err); got != RejectionReasonClaimFieldUnobserved {
+		t.Fatalf("rejection reason = %q, want %q", got, RejectionReasonClaimFieldUnobserved)
+	}
+	if got := SynthesisFactGroupSizeOf(err); got != 1 {
+		t.Fatalf("fact group size = %d, want 1 (the REJECTING claim's flow group) -- 3 would be the later readiness claim ValidateAgainst never reached", got)
+	}
+}
+
+// TestNonClaimRejectionsCarryNoFactGroupSize: a rule with no claim in play
+// has no group to measure, and must report 0 rather than a number borrowed
+// from somewhere else in the draft.
+func TestNonClaimRejectionsCarryNoFactGroupSize(t *testing.T) {
+	t.Parallel()
+	input, draft := multiFactGroupFixture(t)
+	draft.Status = "not_a_status"
+	err := draft.ValidateAgainst(input)
+	if got := SynthesisRejectionReasonOf(err); got != RejectionReasonStatusInvalid {
+		t.Fatalf("rejection reason = %q, want %q", got, RejectionReasonStatusInvalid)
+	}
+	if got := SynthesisFactGroupSizeOf(err); got != 0 {
+		t.Fatalf("fact group size = %d, want 0 for a rule with no claim in play", got)
 	}
 }
 

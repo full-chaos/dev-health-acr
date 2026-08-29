@@ -728,17 +728,19 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// fallback, transport failure), so the decision line carries the
 		// field only when there is a rejection to name.
 		rejectionReason string
-		// factGroupMax is the ambiguity groundClaim closed over -- see
-		// contextfabric.MaxCanonicalFactGroupSize. Reported on the same
-		// line as the reason because "claim_field_unobserved with
-		// fact_group_max=17" and "claim_field_unobserved with
-		// fact_group_max=1" are different defects: the first is a
-		// multi-fact grounding problem, the second is a model claiming a
-		// field that genuinely does not exist.
-		factGroupMax int
+		// factGroupSize is how many canonical facts shared the REJECTING
+		// claim's (Kind, Subject) -- the ambiguity groundClaim closed over
+		// for that one claim. Reported beside the reason because
+		// "claim_field_unobserved at fact_group_size=17" and the same
+		// reason at 1 are different defects: the first is a multi-fact
+		// grounding problem, the second is a model claiming a field that
+		// genuinely does not exist. Logged as fact_group_size, not _max:
+		// codex R1 finding 1 -- a maximum over the draft would describe a
+		// claim ValidateAgainst never reached.
+		factGroupSize int
 	)
 	defer func() {
-		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupMax)
+		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupSize)
 	}()
 
 	started := r.now().UTC()
@@ -802,27 +804,49 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	if err != nil {
 		receipt.Outcome = "invalid_output"
 		primaryFailureClassification = receipt.Outcome
-		// CHAOS-4522: the reason is carried BY the error, attached at the
-		// statement that rejected -- never re-derived here from the shape
-		// of the resulting draft, which is a consequence of the rejecting
-		// branch and not an observation of it (AGENTS.md verification rule
-		// 1: assert the mechanism, not the outcome). toDomain's own
+		// CHAOS-4522: the reason and the rejecting claim's fact-group size
+		// are carried BY the error, attached at the statement that
+		// rejected -- never re-derived here from the shape of the
+		// resulting draft, which is a consequence of the rejecting branch
+		// and not an observation of it (AGENTS.md verification rule 1:
+		// assert the mechanism, not the outcome). toDomain's own
 		// required-field rejection carries its reason the same way, so
 		// both legs above are covered by this one read.
-		rejectionReason = string(contextfabric.SynthesisRejectionReasonOf(err))
-		factGroupMax = contextfabric.MaxCanonicalFactGroupSize(input.Facts.Facts, draft.ClaimedFacts)
+		//
+		// codex R1 finding 1: the group size must be the REJECTING claim's,
+		// not a maximum over the draft. ValidateAgainst short-circuits, so
+		// a scan of every claim can report a LATER claim's group -- one
+		// that was never evaluated -- which would make the documented
+		// "1 versus >1" reading wrong in exactly the case it diagnoses.
+		setDiagnostics := func(cause error) {
+			rejectionReason = string(contextfabric.SynthesisRejectionReasonOf(cause))
+			factGroupSize = contextfabric.SynthesisFactGroupSizeOf(cause)
+		}
+		setDiagnostics(err)
 		if r.config.Fallback != nil {
 			fallback, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
 			if fallbackErr == nil {
 				receipt.FallbackUsed = true
 				receipt.Outcome = "fallback"
+				// codex R1 finding 2: the decision line's outcome and its
+				// rejection diagnostics must describe the SAME leg. The
+				// fallback succeeded, so this call did NOT end in a
+				// rejection and must not carry one -- the primary's
+				// failure is already reported by
+				// primaryFailureClassification, which exists for exactly
+				// that.
+				rejectionReason, factGroupSize = "", 0
 				grounding = groundingCountsFrom(fallback)
 				return fallback, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
 			// Both legs failed -- see the matching comment in
 			// InterpretQuestion's semantic-invalid-output branch (CHAOS-3770
-			// F4 residual).
+			// F4 residual). codex R1 finding 2: the receipt reports the
+			// FALLBACK's outcome and the caller receives the FALLBACK's
+			// error, so the diagnostics must describe that leg too, not the
+			// primary's stale ones.
 			receipt.Outcome = fallbackReceipt.Outcome
+			setDiagnostics(fallbackErr)
 			return contextfabric.SynthesisDraft{}, receipt, fallbackErr
 		}
 		// CHAOS-3784 F1: this is the production ModelRuntime's OWN
@@ -1041,7 +1065,7 @@ func groundingCountsFrom(draft contextfabric.SynthesisDraft) synthesisGroundingC
 // counterpart (H7/H8). See logInterpretDecision's doc comment for the
 // corpus-safety and log-level-gating rationale, which applies identically
 // here.
-func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupMax int) {
+func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupSize int) {
 	fields := []any{
 		"request_id", requestID,
 		"org_id_hash", decisionOrgIDHash(orgID),
@@ -1061,7 +1085,7 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 	// are closed/bounded -- a vocabulary member and a count -- so the
 	// corpus-safety guarantee in this function's doc comment is unchanged.
 	if rejectionReason != "" {
-		fields = append(fields, "rejection_reason", rejectionReason, "fact_group_max", factGroupMax)
+		fields = append(fields, "rejection_reason", rejectionReason, "fact_group_size", factGroupSize)
 	}
 	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
 }

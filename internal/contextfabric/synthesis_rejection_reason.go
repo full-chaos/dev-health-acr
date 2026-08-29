@@ -114,7 +114,19 @@ func ValidSynthesisRejectionReason(reason SynthesisRejectionReason) bool {
 // caller and every message-text assertion is unaffected.
 type SynthesisRejection struct {
 	Reason SynthesisRejectionReason
-	err    error
+	// FactGroupSize is how many canonical facts shared the REJECTING
+	// claim's (Kind, Subject) -- the ambiguity groundClaim closed over for
+	// that one claim (CHAOS-4522 codex R1 finding 1). It is set only by the
+	// claim-grounding rejections, where a group exists to measure, and is 0
+	// for every other rule.
+	//
+	// It is deliberately NOT a maximum over the whole draft. ValidateAgainst
+	// short-circuits at the first failing statement, so a scan of every
+	// claim can report the group size of a LATER claim that was never
+	// evaluated -- which would make the documented "1 versus >1" reading of
+	// this number wrong in exactly the case it exists to diagnose.
+	FactGroupSize int
+	err           error
 }
 
 func (e *SynthesisRejection) Error() string { return e.err.Error() }
@@ -135,6 +147,26 @@ func NewSynthesisRejection(reason SynthesisRejectionReason, err error) error {
 // carrying the closed-vocabulary reason for that exact statement.
 func rejectSynthesis(reason SynthesisRejectionReason, format string, args ...any) error {
 	return &SynthesisRejection{Reason: reason, err: fmt.Errorf(format, args...)}
+}
+
+// rejectSynthesisClaim is rejectSynthesis for the claim-grounding rules,
+// carrying the REJECTING claim's own (Kind, Subject) group size -- see
+// SynthesisRejection.FactGroupSize for why it must be that claim's and not
+// a maximum over the draft.
+func rejectSynthesisClaim(reason SynthesisRejectionReason, groupSize int, format string, args ...any) error {
+	return &SynthesisRejection{Reason: reason, FactGroupSize: groupSize, err: fmt.Errorf(format, args...)}
+}
+
+// SynthesisFactGroupSizeOf returns the rejecting claim's (Kind, Subject)
+// group size when err carries one, and 0 otherwise -- so the telemetry seam
+// never has to reach into the error type or re-derive the number from a
+// draft the rejection may not have reached.
+func SynthesisFactGroupSizeOf(err error) int {
+	var rejection *SynthesisRejection
+	if errors.As(err, &rejection) {
+		return rejection.FactGroupSize
+	}
+	return 0
 }
 
 // SynthesisRejectionReasonOf extracts the closed-vocabulary reason from

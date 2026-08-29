@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"testing"
 
@@ -94,34 +95,81 @@ func TestToDomainRejectionNamesItsOwnRuleNotADecodeFailure(t *testing.T) {
 	}
 }
 
-// TestDecisionLineCarriesTheFactGroupAmbiguity pins the second new field on
-// the same line. fact_group_max is what separates "claim_field_unobserved
-// at 17" (a multi-fact grounding problem) from "at 1" (the model claiming a
-// field that does not exist) -- indistinguishable before CHAOS-4522.
-func TestDecisionLineCarriesTheFactGroupAmbiguity(t *testing.T) {
+// TestDecisionLineCarriesTheRejectingClaimsFactGroupSize pins the second
+// new field on the emitted line, in codex R1 finding 1's adversarial shape:
+// the claim that REJECTS sits on a group of size 1 while a later,
+// never-evaluated claim sits on a group of size 3. A maximum over the draft
+// would log 3 and describe a claim ValidateAgainst never reached.
+func TestDecisionLineCarriesTheRejectingClaimsFactGroupSize(t *testing.T) {
 	t.Parallel()
 	input := validSynthesisInput()
 	subject := input.Graph.Resolution.Committed[0]
-	// Three facts under ONE (kind, subject), none carrying the claimed
-	// field -- so the rejection is genuine AND the group is 3 deep.
+	input.Facts.Facts = append(input.Facts.Facts, contextfabric.CanonicalFact{
+		Kind: contextfabric.FactFlow, Subject: subject,
+		Fields:         map[string]contextfabric.FactValue{"items_completed": contextfabric.IntegerFactValue(3)},
+		EvidenceRefIDs: []string{"evidence_release_1234"}, SourceState: contextfabric.SourceAvailable,
+		Source: "ops", SourceVersion: "v1",
+	})
 	for i := 0; i < 2; i++ {
 		extra := input.Facts.Facts[0]
 		extra.Fields = map[string]contextfabric.FactValue{"backlog_size": contextfabric.IntegerFactValue(int64(i))}
 		input.Facts.Facts = append(input.Facts.Facts, extra)
 	}
+
 	output := validSynthesisOutput()
-	output.ClaimedFacts = []contextfabric.ClaimedFact{{
-		ClaimID: "claim_readiness_group_1", Kind: contextfabric.FactReadiness, Subject: subject,
-		Field: "field_no_fact_in_the_group_carries", Value: contextfabric.ScalarValue{Boolean: new(bool)},
-	}}
+	output.ClaimedFacts = []contextfabric.ClaimedFact{
+		{ClaimID: "claim_flow_rejects_first", Kind: contextfabric.FactFlow, Subject: subject,
+			Field: "field_no_flow_fact_carries", Value: contextfabric.ScalarValue{Boolean: new(bool)}},
+		{ClaimID: "claim_readiness_never_reached", Kind: contextfabric.FactReadiness, Subject: subject,
+			Field: "release_ready", Value: contextfabric.ScalarValue{Boolean: new(bool)}},
+	}
 	output.Drivers = nil
 
 	fields := captureDecisionLine(t, output, input)
 	if got := fields["rejection_reason"]; got != string(contextfabric.RejectionReasonClaimFieldUnobserved) {
 		t.Fatalf("rejection_reason = %v, want %q", got, contextfabric.RejectionReasonClaimFieldUnobserved)
 	}
-	if got, ok := fields["fact_group_max"].(float64); !ok || int(got) != 3 {
-		t.Fatalf("fact_group_max = %v, want 3 (the claim's (kind, subject) group depth)", fields["fact_group_max"])
+	if got, ok := fields["fact_group_size"].(float64); !ok || int(got) != 1 {
+		t.Fatalf("fact_group_size = %v, want 1 (the REJECTING claim's group) -- 3 is the later claim that was never evaluated", fields["fact_group_size"])
+	}
+}
+
+// TestFallbackSuccessLineCarriesNoRejectionDiagnostics is codex R1 finding
+// 2: the decision line's outcome and its rejection diagnostics must
+// describe the SAME leg. When the primary rejects and a configured fallback
+// then SUCCEEDS, the call did not end in a rejection -- the line reports
+// outcome=fallback, and carrying the primary's reason beside it would pair
+// a success with a rejection that is not this call's result. The primary's
+// failure is still reported, by primary_failure_classification, which
+// exists for exactly that.
+func TestFallbackSuccessLineCarriesNoRejectionDiagnostics(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	rejecting := validSynthesisOutput()
+	rejecting.Status = ""
+	runtime := mustRuntime(t, &generatorStub{synthesis: rejecting}, Config{
+		Logger:   logger,
+		Fallback: fallbackRuntime{draft: validDraft()},
+	})
+	if _, _, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v, want the fallback to succeed", err)
+	}
+	fields := map[string]any{}
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		candidate := map[string]any{}
+		if json.Unmarshal(line, &candidate) == nil && candidate["operation"] == string(contextfabric.ModelOperationSynthesize) {
+			fields = candidate
+		}
+	}
+	if got := fields["outcome"]; got != "fallback" {
+		t.Fatalf("outcome = %v, want fallback", got)
+	}
+	if _, present := fields["rejection_reason"]; present {
+		t.Fatalf("a fallback-SUCCESS line carries rejection_reason = %v, want the field absent -- outcome and diagnostics must describe the same leg", fields["rejection_reason"])
+	}
+	if got := fields["primary_failure_classification"]; got != "invalid_output" {
+		t.Fatalf("primary_failure_classification = %v, want invalid_output (the primary's failure is still reported, just not as this call's rejection)", got)
 	}
 }
 
@@ -149,5 +197,45 @@ func TestSuccessfulDecisionLineCarriesNeitherNewField(t *testing.T) {
 	}
 	if _, present := fields["fact_group_max"]; present {
 		t.Fatalf("a successful synthesize line carries fact_group_max = %v, want the field absent", fields["fact_group_max"])
+	}
+}
+
+// TestBothLegsFailedLineDescribesTheFallbackLeg is codex R1 finding 2's
+// other half: when the primary rejects AND the configured fallback also
+// fails, the receipt reports the FALLBACK's outcome and the caller receives
+// the FALLBACK's error -- so the reason on the same line must describe that
+// leg too, never the primary's stale one.
+func TestBothLegsFailedLineDescribesTheFallbackLeg(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// Primary rejects on the STATUS rule; the fallback fails carrying a
+	// DIFFERENT, deterministic-answer rejection. The two are distinguishable
+	// on the wire, which is the whole point.
+	primary := validSynthesisOutput()
+	primary.Status = ""
+	fallbackReceipt := validReceipt(contextfabric.ModelOperationSynthesize)
+	fallbackReceipt.Outcome = "invalid_output"
+	fallbackErr := contextfabric.NewSynthesisRejection(
+		contextfabric.RejectionReasonDeterministicAnswerMissing,
+		errors.New("deterministic answer is required"),
+	)
+	runtime := mustRuntime(t, &generatorStub{synthesis: primary}, Config{
+		Logger:   logger,
+		Fallback: erroringFallbackRuntime{err: fallbackErr, receipt: fallbackReceipt},
+	})
+	if _, _, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput()); err == nil {
+		t.Fatal("SynthesizeAnswer() = nil error, want both legs to fail")
+	}
+	fields := map[string]any{}
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		candidate := map[string]any{}
+		if json.Unmarshal(line, &candidate) == nil && candidate["operation"] == string(contextfabric.ModelOperationSynthesize) {
+			fields = candidate
+		}
+	}
+	if got := fields["rejection_reason"]; got != string(contextfabric.RejectionReasonDeterministicAnswerMissing) {
+		t.Fatalf("rejection_reason = %v, want the FALLBACK leg's %q -- the receipt outcome and the caller's error both come from that leg", got, contextfabric.RejectionReasonDeterministicAnswerMissing)
 	}
 }
