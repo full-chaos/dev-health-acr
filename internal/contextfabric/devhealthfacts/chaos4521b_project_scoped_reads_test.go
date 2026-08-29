@@ -133,3 +133,56 @@ func TestChaos4521b_TheOwnershipExplanationDoesNotLeakIntoOtherSubjectKinds(t *t
 		t.Errorf("reason = %q: a mixed read whose repository half legitimately held no rows must not be given an ownership explanation", result.Reason)
 	}
 }
+
+// The `{org}:linear:CHAOS` pseudo-project after ops PR #2010, which is the
+// shape that actually ships: the row is REMOVED from `projects` but is
+// STILL written to `team_project_ownership` (provider=linear,
+// project_id='{org}:linear:CHAOS', project_key='CHAOS', team_id='CHAOS'),
+// because team_repo_ownership derivation looks it up there. GitLab rows are
+// untouched.
+//
+// So the ownership join meets an ownership row whose project no longer
+// exists. Three structural properties make that harmless, and this pins all
+// three -- the fake client cannot evaluate SQL, so the statement is the
+// only place they are visible.
+//
+// Measured against the live plane in exactly that shape (local real data,
+// org 70d529e0: `projects` filtered to exclude the pseudo row, all 615
+// pseudo ownership rows left in place). The identity join resolved exactly
+// two subjects -- the two GitLab projects, through the key arm -- and the
+// pseudo ownership row attributed to NOTHING. Separately: the number of
+// real projects whose project_key equals 'CHAOS' or '{org}:linear:CHAOS'
+// is ZERO, so the key arm cannot route the pseudo row onto a real project.
+func TestChaos4521b_ThePseudoProjectOwnershipRowAttributesToNothing(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM investment_metrics_daily", rows: nil}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+	if _, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+	}); err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	statement := client.queries[0].statement
+
+	// 1. The ownership edge is an INNER JOIN against `projects`. An
+	//    ownership row whose project row was deleted therefore produces no
+	//    output at all -- this is what makes the surviving pseudo row inert
+	//    rather than something needing a special case.
+	if !strings.Contains(statement, "FROM projects FINAL") || !strings.Contains(statement, "INNER JOIN") {
+		t.Errorf("ownership resolution is not an inner join against projects; a deleted project would not drop its ownership rows\n%s", statement)
+	}
+	// 2. Subject resolution must NOT pre-filter on a non-empty project_key.
+	//    That filter is what dropped every real Linear project before the
+	//    join could run (CHAOS-4530).
+	if strings.Contains(statement, "WHERE project_key != '' AND key_resolution_count = 1 AND concat(provider") {
+		t.Errorf("subject resolution still drops projects with a NULL project_key\n%s", statement)
+	}
+	// 3. The key arm stays guarded on BOTH a non-empty key and an
+	//    unambiguous one. Without the first, a NULL-key project ('' after
+	//    the coalesce) could match a stray empty identity; without the
+	//    second, one project's ownership could be attributed to another.
+	if !strings.Contains(statement, "p.project_key != ''") || !strings.Contains(statement, "p.key_resolution_count = 1") {
+		t.Errorf("the ownership key arm lost a guard\n%s", statement)
+	}
+}
