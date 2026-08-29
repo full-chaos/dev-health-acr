@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"testing"
@@ -17,6 +18,11 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+// clickHouseTooManyRowsOrBytes is ClickHouse's own TOO_MANY_ROWS_OR_BYTES
+// error code, thrown when a result exceeds max_result_rows under the
+// default result_overflow_mode of "throw".
+const clickHouseTooManyRowsOrBytes int32 = 396
 
 // seedRepositoryMetricsDays inserts dayCount consecutive days for one
 // repository in ONE batch. Deliberately not a loop of single-row Exec
@@ -137,16 +143,23 @@ func TestCHAOS4418RepositoryMetricsAgainstRealClickHouse(t *testing.T) {
 			if err == nil {
 				t.Fatalf("ReadFacts() error = nil, want an error: %d repositories x %d days = %d raw rows exceeds the driver's own default MaxResultRows=1000", repoCount, daysPerRepo, repoCount*daysPerRepo)
 			}
-			// Logged, not asserted on: whether ClickHouse's own
-			// exception code survives into the ReadFacts error is a
-			// question this test ANSWERS rather than presumes, and the
-			// answer belongs in the PR body from an observed CI run --
-			// asserting a guessed error string would be a claim without
-			// evidence, which is the failure mode this whole finding's
-			// red/green pair exists to avoid. The load-bearing claim
-			// here is that the read FAILS at the driver default and
-			// SUCCEEDS at the configured cap; that pair is asserted.
-			t.Logf("CHAOS-4418 R3 red half, verbatim ReadFacts error at MaxResultRows=1000: %v", err)
+			// Team-lead condition 3: the overflow error must surface
+			// ClickHouse's own exception code in the ReadFacts error, so
+			// an operator can tell "the row cap fired" apart from "the
+			// server is down". Asserted, not merely logged: gotestsum's
+			// JUnit report carries no system-out, so a t.Logf on a
+			// PASSING test is written nowhere anyone can read it -- a
+			// measurement with no readable artifact did not happen.
+			// Both failure paths below print what the error actually was,
+			// so a wrong expectation here reports the truth rather than
+			// hiding it.
+			var exception *clickhousedriver.Exception
+			if !errors.As(err, &exception) {
+				t.Fatalf("ReadFacts() error = %v (%T), want a *clickhouse.Exception to survive unwrapped into the returned error", err, err)
+			}
+			if exception.Code != clickHouseTooManyRowsOrBytes {
+				t.Fatalf("ClickHouse exception code = %d (%s: %s), want %d (TOO_MANY_ROWS_OR_BYTES)", exception.Code, exception.Name, exception.Message, clickHouseTooManyRowsOrBytes)
+			}
 		})
 
 		t.Run("green_at_the_configured_cap", func(t *testing.T) {
