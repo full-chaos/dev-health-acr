@@ -772,9 +772,18 @@ cmd_down() {
   # a stale kubeconfig or an RBAC denial would otherwise read as "absent", and
   # `down` would report the lane removed while every resource survived. Classify
   # explicitly: only a real NotFound is benign.
-  local owner lookup_err lookup_rc
-  lookup_err="$(kubectl get ns "$lane" -o "jsonpath={.metadata.labels['app\.kubernetes\.io/managed-by']}" 2>&1 >/dev/null)"
-  lookup_rc=$?
+  # The classification has to be REACHED to matter (codex R3). As a bare
+  # assignment, `lookup_err=$(kubectl …)` inherits kubectl's status under
+  # `set -e`, so the script exited on the very line that was supposed to
+  # tolerate the failure: `lookup_rc=$?` and everything below it were dead
+  # code, and `down` on a nonexistent lane died silently instead of no-opping.
+  # An `if` makes the failure a tested condition rather than a fatal one.
+  local owner lookup_err lookup_rc=0
+  if lookup_err="$(kubectl get ns "$lane" -o "jsonpath={.metadata.labels['app\.kubernetes\.io/managed-by']}" 2>&1 >/dev/null)"; then
+    lookup_rc=0
+  else
+    lookup_rc=$?
+  fi
   if (( lookup_rc != 0 )); then
     case "$lookup_err" in
     *NotFound* | *"not found"*)

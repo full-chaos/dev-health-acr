@@ -155,6 +155,7 @@ chmod +x "$tmp/bin/"* "$sandbox/kiac.sh" "$sandbox/trial-data.sh"
 # The exit status is captured but rarely asserted: most scenarios stop the run
 # deliberately once the interesting events are recorded.
 LAST_OUT=""
+LAST_RC=0
 run_lane() {
   : >"$tmp/events"
   set +e
@@ -167,6 +168,7 @@ run_lane() {
     LANE_OPS_IMAGE="dev-health-ops-local:test" \
     "${BASH:-bash}" "$sandbox/lane.sh" "$@" 2>&1
   )"
+  LAST_RC=$?
   set -e
 }
 
@@ -352,6 +354,37 @@ export KFAKE_CLUSTER_EXISTS=1 KFAKE_NODE_IMAGES="$tmp/node-images-full" \
 run_lane up lanefake-ports
 check_contains "the published base is reused even though the cluster is full" \
   "nodeport base: 30500" "$LAST_OUT"
+
+# ---------------------------------------------------------------------------
+# [R3-5] Capture namespace lookup failures without tripping errexit
+#
+# `lookup_err=$(kubectl …)` on its own line inherits kubectl's status under
+# `set -e`, so `down` on a nonexistent lane exited silently right there and the
+# NotFound-vs-other-error classification below it was unreachable. That
+# classification is the R2 rule that an unreachable API is NOT a removed
+# namespace, so both halves of it were dead code.
+# ---------------------------------------------------------------------------
+scenario '[R3-5] down on a nonexistent lane is a no-op, not a silent exit'
+export KFAKE_NS_LABEL_RC=1 \
+       KFAKE_NS_LABEL_ERR='Error from server (NotFound): namespaces "lanefake-gone" not found'
+run_lane down lanefake-gone
+check_contains "a NotFound lookup is reported as nothing to tear down" \
+  "does not exist; nothing to tear down" "$LAST_OUT"
+if (( LAST_RC == 0 )); then ok "down exits 0 on a nonexistent lane"
+else fail "down exits 0 on a nonexistent lane" "exit status was $LAST_RC"; fi
+
+scenario '[R3-5] down on an unreachable API is an error, not a removal'
+export KFAKE_NS_LABEL_RC=1 \
+       KFAKE_NS_LABEL_ERR='Error from server (Forbidden): namespaces "lanefake-denied" is forbidden'
+run_lane down lanefake-denied
+check_contains "a non-NotFound lookup failure names itself" \
+  "could not look up namespace" "$LAST_OUT"
+check_absent "a lane is never reported removed after a failed lookup" \
+  "removed" "$LAST_OUT"
+check_absent "no namespace delete is issued after a failed lookup" \
+  "delete namespace" "$(events)"
+if (( LAST_RC != 0 )); then ok "down fails loudly on an unreachable API"
+else fail "down fails loudly on an unreachable API" "exit status was 0"; fi
 
 # ---------------------------------------------------------------------------
 if (( failures > 0 )); then
