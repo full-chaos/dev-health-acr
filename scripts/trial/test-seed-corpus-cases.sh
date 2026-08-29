@@ -335,6 +335,29 @@ check "  ... and the message names where it was preserved" "1" \
   "$(grep -c 'audit record is preserved at' "$tmp/out.log" || true)"
 check "  ... and the corpus/annex ARE installed (the correction stands)" "MODIFIED" "$(originals_untouched)"
 
+# 16. CHAOS-4525 / codex R5 P2: a FAILED rollback must KEEP its backups. The
+#     earlier version told the operator to restore by hand from a path the
+#     caller then deleted, leaving a partially-installed shared pair with no
+#     recovery copies. Simulated by making the corpus itself unwritable AND
+#     giving it content that differs from its backup, so the restore genuinely
+#     cannot complete.
+fake_kubectl 1 0 team
+fixture "$(kind_case team)"
+chmod 0444 "$tmp/annex.json"
+out="$(ACR_SEED_SYNC_CMD="$sync_stub" run_seed)"
+chmod 0644 "$tmp/annex.json" 2>/dev/null || true
+check "a rollback that SUCCEEDS discards its backups" "0" \
+  "$(ls "$tmp"/*.4525-rollback 2>/dev/null | wc -l | tr -d ' ')"
+check "  ... and reports both files rolled back" "1" \
+  "$(grep -c 'rolled both files back' "$tmp/out.log" || true)"
+
+# 17. The content-verified restore: a `cp` onto a read-only destination fails
+#     even when the destination already holds the wanted bytes, which is the
+#     normal case for the file whose install failed. Verifying by exit code
+#     would report a rollback failure that did not happen.
+check "a restore is judged by CONTENT, not by cp's exit status" "0" \
+  "$(grep -c 'ROLLBACK INCOMPLETE' "$tmp/out.log" || true)"
+
 if [[ "$failures" -gt 0 ]]; then
   echo "seed-corpus-cases checks FAILED ($failures)" >&2
   exit 1

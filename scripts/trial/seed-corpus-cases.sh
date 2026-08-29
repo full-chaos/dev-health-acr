@@ -36,6 +36,29 @@
 #   3. Records what it proved, in the annex's own provenance, in the same
 #      shape provenance.chaos4348_id_regenerations already uses.
 #
+# KNOWN LIMITATION OF THESE PROOFS (codex review R5, accepted rather than
+# papered over -- an admitted gap beats an inaccurate coverage claim):
+#
+# The absence and census proofs below run RAW Cypher against the graph. They
+# are not production's retrieval path, and two classes of divergence are real:
+#
+#   1. Absence. `CONTAINS` is substring matching. Production resolution goes
+#      through full-text expansion (fulltextSearchNodesForResolution), which
+#      can expand a lexicon alias -- "issue" reaching "ticket"/"work item" --
+#      and surface a candidate for a term that has zero substring hits. A
+#      no_match oracle proved here can therefore be optimistic.
+#   2. Census. This counts every node of a kind. Production's cohort discovery
+#      applies temporal validity and drops nodes the caller is not authorized
+#      for, so a graph holding expired, future, or unauthorized members can
+#      satisfy `one_or_more` for a question the runtime correctly answers with
+#      no cohort.
+#
+# Both would need this producer to call the Go retrieval path rather than
+# query the graph directly, which is a different tool, not a bigger query.
+# Filed as CHAOS-4551. Until it lands, treat a no_match or census oracle
+# published here as PROVEN AGAINST THE GRAPH, not against production
+# retrieval -- and prefer discriminating terms with no plausible alias.
+#
 # CORPUS QUESTION TEXT: the spec file carries it and the spec file is NEVER
 # committed (standing rule: corpus question text never leaves local
 # artifacts; cases are referred to by index and band). This script prints
@@ -355,7 +378,14 @@ annex_extra="$(jq -r --argjson n "$base_index" \
 # model-authored per run (cf-measurement-trials, 2026-08-23 10:35), so a
 # regenerated value would not be reproducible.
 corpus_tmp="$(mktemp)"; annex_tmp="$(mktemp)"
-trap 'rm -f "$corpus_tmp" "$annex_tmp" "$corpus_tmp.sync-audit.json"' EXIT
+keep_tmp_audit=0
+cleanup_temporaries() {
+  rm -f "$corpus_tmp" "$annex_tmp"
+  # keep_tmp_audit is set only on the path where the audit could neither be
+  # merged nor moved aside, and the corpus/annex are already installed.
+  [[ "$keep_tmp_audit" == "1" ]] || rm -f "$corpus_tmp.sync-audit.json"
+}
+trap cleanup_temporaries EXIT
 
 jq --slurpfile spec "$spec" '
   . + ($spec[0].cases | map({question: .question, expect_kind: "", expect_id: ""}))
@@ -449,14 +479,52 @@ rm -f "$corpus_backup" "$annex_backup"
 cp "$corpus" "$corpus_backup" || die "could not back up the corpus before installing -- ORIGINALS LEFT UNTOUCHED"
 cp "$annex" "$annex_backup" || { rm -f "$corpus_backup"; die "could not back up the annex before installing -- ORIGINALS LEFT UNTOUCHED"; }
 
+# rollback_pair sets rollback_incomplete=1 if EITHER restore fails, and the
+# callers delete backups only when it is 0 (codex review R5 P2). The previous
+# version told the operator to "restore by hand from $corpus_backup" and then
+# the caller deleted that exact file a moment later -- so the message named a
+# path with nothing at it, and a partially-installed shared pair was left with
+# its only recovery copies gone. A rollback that failed is precisely when the
+# backups matter most.
+rollback_incomplete=0
+
+# restore_one verifies BY CONTENT, not by cp's exit status. A `cp` onto a
+# read-only destination fails even when the destination already holds exactly
+# the wanted bytes -- which is the common case here, since the file whose
+# INSTALL failed is by definition still its original. Trusting the exit code
+# alone reports a rollback failure that did not happen and, worse, would keep
+# a backup nobody needs while the real signal is lost in the noise. This is
+# the same rule AGENTS.md states for mutation testing: never verify a restore
+# with a command's return value when you can compare the content.
+restore_one() {
+  local backup="$1" target="$2" label="$3"
+  cp "$backup" "$target" 2>/dev/null
+  if cmp -s "$backup" "$target"; then
+    return 0
+  fi
+  rollback_incomplete=1
+  echo "seed-corpus-cases.sh: ROLLBACK OF THE $label FAILED -- its backup is KEPT at $backup; restore by hand" >&2
+  return 1
+}
+
 rollback_pair() {
-  cp "$corpus_backup" "$corpus" 2>/dev/null || echo "seed-corpus-cases.sh: ROLLBACK OF THE CORPUS FAILED -- restore by hand from $corpus_backup" >&2
-  cp "$annex_backup" "$annex" 2>/dev/null || echo "seed-corpus-cases.sh: ROLLBACK OF THE ANNEX FAILED -- restore by hand from $annex_backup" >&2
+  rollback_incomplete=0
+  restore_one "$corpus_backup" "$corpus" "CORPUS" || true
+  restore_one "$annex_backup" "$annex" "ANNEX" || true
+}
+
+# discard_backups removes the recovery copies ONLY when nothing still needs
+# them -- i.e. the rollback (or the install) completed.
+discard_backups() {
+  [[ "$rollback_incomplete" == "0" ]] && rm -f "$corpus_backup" "$annex_backup"
 }
 
 rollback_and_die() {
   rollback_pair
-  rm -f "$corpus_backup" "$annex_backup"
+  discard_backups
+  if [[ "$rollback_incomplete" == "1" ]]; then
+    die "$1 -- ROLLBACK INCOMPLETE, backups kept (see the lines above); the shared pair may be partially installed"
+  fi
   die "$1 -- rolled both files back to their pre-run contents"
 }
 
@@ -469,7 +537,7 @@ rollback_and_die() {
 rollback_on_signal() {
   echo "seed-corpus-cases.sh: interrupted mid-install -- rolling both files back" >&2
   rollback_pair
-  rm -f "$corpus_backup" "$annex_backup"
+  discard_backups
   exit 1
 }
 trap rollback_on_signal INT TERM HUP
@@ -525,12 +593,18 @@ if [[ -f "$tmp_audit" ]]; then
     if mv "$tmp_audit" "$preserved_audit" 2>/dev/null; then
       echo "seed-corpus-cases.sh: could not merge the sync audit into $canonical_audit -- the corpus and annex ARE installed, and this run's audit record is preserved at $preserved_audit; merge it by hand" >&2
     else
-      echo "seed-corpus-cases.sh: could not merge the sync audit into $canonical_audit AND could not preserve it -- this run's audit record is at $tmp_audit and will be removed on exit; copy it NOW" >&2
+      # The EXIT trap would delete $tmp_audit moments after this message, so
+      # "copy it NOW" was advice nobody non-interactive could act on (codex
+      # review R5 P2). Disarm the trap for that path instead: a stray file is
+      # strictly better than losing the only audit record of a correction
+      # that is ALREADY published.
+      keep_tmp_audit=1
+      echo "seed-corpus-cases.sh: could not merge the sync audit into $canonical_audit AND could not move it aside -- the corpus and annex ARE installed, and this run's only audit record is LEFT IN PLACE at $tmp_audit (not cleaned up on exit); merge it by hand" >&2
     fi
   fi
 fi
 
-rm -f "$corpus_backup" "$annex_backup"
+discard_backups
 
 added_last=$((base_index + case_count - 1))
 echo "seed-corpus-cases.sh: appended corpus + annex cases at indices ${base_index}..${added_last}"
