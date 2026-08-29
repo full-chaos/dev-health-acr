@@ -195,6 +195,52 @@ func twelveRollupResult(resultID string) contractsv1.ContextFabricInvestigationR
 	return result
 }
 
+// runJRepositoryStatusShapedResult reproduces the exact answer shape Run J
+// measured live against a plain "what is the status of this repository"
+// question (CHAOS-4450 handoff-2026-08-29.md §2 Wall C,
+// req_751c7014cab1c9d804277c469ed460fc / req_f84f6773...): 27
+// ContextFabricRelationshipPath entries (graph-evidence provenance for the
+// one driver), 10 SubjectResolution.Candidates, 1 Driver, and 3
+// Rows-bearing ClaimedFacts -- 41 items by the pre-CHAOS-4523 count (Run J
+// measured 42-43; the +1/+2 is answer-shape noise this fixture does not
+// need to reproduce exactly). CHAOS-4418 (#324) gave repository facts real
+// Rows tables; #324 did not grow Paths or Candidates -- those pre-date it
+// -- but it was the first question shape to combine Rows-bearing claims
+// with a graph-dense subject, which is what first pushed the pre-existing
+// Paths/Candidates total over ACR_MAX_ITEMS=30.
+func runJRepositoryStatusShapedResult(resultID string) contractsv1.ContextFabricInvestigationResult {
+	result := validContextFabricInvestigationResult()
+	result.ResultID = resultID
+	repo := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repo_dev_health_ops", Label: "full-chaos/dev-health-ops"}
+	result.SubjectResolution.Committed = []contractsv1.ContextFabricSubjectRef{repo}
+	for i := 0; i < 10; i++ {
+		result.SubjectResolution.Candidates = append(result.SubjectResolution.Candidates, contractsv1.ContextFabricSubjectCandidate{
+			ReceiptID: "receipt_" + strconv.Itoa(i), Subject: repo, State: contractsv1.ContextFabricResolutionProposed,
+			MatchReasons: []string{"name_match"}, Confidence: 0.6,
+		})
+	}
+	result.Drivers = []contractsv1.ContextFabricDriverJudgment{{
+		DriverID: "driver_repo_status", Standing: contractsv1.ContextFabricDriverPrincipal,
+		Category:         "status",
+		Title:            "Repository activity is nominal",
+		Summary:          "Recent activity matches the observed baseline.",
+		AffectedSubjects: []contractsv1.ContextFabricSubjectRef{repo}, EvidenceRefIDs: []string{"evidence_repo_1"},
+		ClaimedFactIDs: []string{"claim_repo_status_0"}, Derivation: contractsv1.ContextFabricDerivationCanonicalStructured,
+		EpistemicStatus: contractsv1.ContextFabricEpistemicObserved, Confidence: 0.8, Current: true,
+	}}
+	for i := 0; i < 3; i++ {
+		result.ClaimedFacts = append(result.ClaimedFacts, rowsBearingClaimedFact("claim_repo_status_"+strconv.Itoa(i), contractsv1.ContextFabricFactStatus, repo))
+	}
+	for i := 0; i < 27; i++ {
+		result.Paths = append(result.Paths, contractsv1.ContextFabricRelationshipPath{
+			PathID: "path_" + strconv.Itoa(i), Nodes: []contractsv1.ContextFabricSubjectRef{repo},
+			WhyRelevant: "supports driver_repo_status", EvidenceRefIDs: []string{"evidence_repo_1"},
+		})
+	}
+	result.EvidenceRefIDs = []string{"evidence_repo_1"}
+	return result
+}
+
 func marshaledSize(t *testing.T, v any) int64 {
 	t.Helper()
 	encoded, err := json.Marshal(v)
@@ -403,4 +449,110 @@ func TestContextFabricInvestigationResultRouteStillOverBudgetDisclosesMeasuremen
 		t.Fatalf("status = %d, want 413 -- a %d-byte stored result must still trip ACR_MAX_SERIALIZED_BYTES (%d) on re-read; body=%s", response.Code, measuredBytes, productionMaxSerializedBytes, response.Body.String())
 	}
 	assertErrorDetailsDiscloseMeasurement(t, response.Body.Bytes(), productionMaxSerializedBytes)
+}
+
+// TestContextFabricInvestigationRouteRunJRepositoryStatusShapeFitsDefaultItemBudget
+// is the CHAOS-4523 pinning test for CHAOS-4450 Run J Wall C: at the
+// shipped ACR_MAX_ITEMS=30 default, a plain repository-status answer 413'd
+// with "reason=items measured_items=42 max_items=30" even though its
+// bytes (41,662) and estimated tokens (10,416) were nowhere near their own
+// ceilings -- the fixture below reproduces that shape (41+ items by the
+// pre-fix, all-inclusive count) and FAILS this way before CHAOS-4523 (the
+// route charged contextFabricResultItems' full total, Paths included,
+// against ACR_MAX_ITEMS) and PASSES after it (contextFabricItemCounts.
+// budgeted excludes Paths -- see that method's doc comment for why: a
+// RelationshipPath is graph-evidence provenance nothing in the web client
+// renders today, not answer content the way a claimed fact or an offered
+// candidate is).
+func TestContextFabricInvestigationRouteRunJRepositoryStatusShapeFitsDefaultItemBudget(t *testing.T) {
+	result := runJRepositoryStatusShapedResult("result_4523_repo_status")
+	totalItems := contextFabricResultItems(result)
+	if totalItems <= productionMaxItems {
+		t.Fatalf("fixture measured %d total items, want > ACR_MAX_ITEMS (%d) -- fixture does not reproduce Run J's Wall C shape (42-43 measured_items)", totalItems, productionMaxItems)
+	}
+	measuredBytes := marshaledSize(t, result)
+	if measuredBytes >= productionMaxSerializedBytes {
+		t.Fatalf("fixture measured %d bytes, want < ACR_MAX_SERIALIZED_BYTES (%d) -- Run J's Wall C is an ITEMS wall, not a bytes wall", measuredBytes, productionMaxSerializedBytes)
+	}
+
+	app, token := newContextFabricTestAppWithProductionLimits(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		return result, nil
+	}), nil)
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, investigationRequest(t, token))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 at the shipped ACR_MAX_ITEMS=%d default (measured %d total items, %d of them Paths that no longer count against the budget) body=%s",
+			response.Code, productionMaxItems, totalItems, len(result.Paths), response.Body.String())
+	}
+	var got contractsv1.ContextFabricInvestigationResult
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Paths) != len(result.Paths) {
+		t.Fatalf("response carried %d paths, want all %d -- excluding Paths from the item BUDGET must not drop them from the wire payload", len(got.Paths), len(result.Paths))
+	}
+	if len(got.ClaimedFacts) != len(result.ClaimedFacts) {
+		t.Fatalf("response carried %d claimed facts, want all %d", len(got.ClaimedFacts), len(result.ClaimedFacts))
+	}
+}
+
+// TestContextFabricInvestigationRouteManyClaimedFactsStillTripsItemBudget
+// proves the item-count GATE still bites on genuine answer-content growth
+// after CHAOS-4523 -- Paths is excluded from the charged count, but a
+// result whose Candidates/Drivers/ClaimedFacts/CohortMembers alone exceed
+// ACR_MAX_ITEMS must still 413, exactly as
+// TestContextFabricInvestigationRouteCountsClaimedFactsTowardItemBudget
+// already pins at the test-harness's generous 50-item ceiling. This
+// repeats that property at the PRODUCTION 30-item default with the Run J
+// fixture's own Paths/Candidates already present, so a regression that
+// silently widened budgeted() back to total() would show up as a 200 here
+// while still passing the shape-fit test above by coincidence -- and a
+// regression that dropped items from the budget entirely would show up as
+// this test alone going red.
+func TestContextFabricInvestigationRouteManyClaimedFactsStillTripsItemBudget(t *testing.T) {
+	result := runJRepositoryStatusShapedResult("result_4523_repo_status_over")
+	repo := result.SubjectResolution.Committed[0]
+	// Lightweight, Rows-free claims (unlike rowsBearingClaimedFact's 64-row
+	// tables) so this fixture isolates the items bound: 30 more scalar
+	// claims add 30 items but only a few KB, keeping total bytes well
+	// under ACR_MAX_SERIALIZED_BYTES.
+	inProgress := "in_progress"
+	for i := 3; i < 33; i++ {
+		result.ClaimedFacts = append(result.ClaimedFacts, contractsv1.ContextFabricClaimedFact{
+			ClaimID: "claim_repo_status_" + strconv.Itoa(i), Kind: contractsv1.ContextFabricFactStatus, Subject: repo,
+			Field: "status", Value: contractsv1.ContextFabricScalarValue{String: &inProgress},
+		})
+	}
+	measuredBytes := marshaledSize(t, result)
+	if measuredBytes >= productionMaxSerializedBytes {
+		t.Fatalf("fixture measured %d bytes, want < ACR_MAX_SERIALIZED_BYTES (%d) -- this must isolate the items bound", measuredBytes, productionMaxSerializedBytes)
+	}
+
+	app, token := newContextFabricTestAppWithProductionLimits(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+		return result, nil
+	}), nil)
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, investigationRequest(t, token))
+
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 -- %d claimed facts plus 10 candidates and 1 driver (43 budgeted items) must still exceed ACR_MAX_ITEMS (%d) body=%s",
+			response.Code, len(result.ClaimedFacts), productionMaxItems, response.Body.String())
+	}
+	var envelope contractsv1.ErrorEnvelope
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	breakdown, ok := envelope.Error.Details["items_breakdown"].(map[string]any)
+	if !ok {
+		t.Fatalf("error details = %#v, want an items_breakdown field (CHAOS-4523 telemetry deliverable) so an items 413 is diagnosable without re-running", envelope.Error.Details)
+	}
+	if paths, ok := breakdown["paths"].(float64); !ok || int64(paths) != 27 {
+		t.Fatalf("items_breakdown.paths = %v, want 27", breakdown["paths"])
+	}
+	if claims, ok := breakdown["claimed_facts"].(float64); !ok || int64(claims) != int64(len(result.ClaimedFacts)) {
+		t.Fatalf("items_breakdown.claimed_facts = %v, want %d", breakdown["claimed_facts"], len(result.ClaimedFacts))
+	}
 }
