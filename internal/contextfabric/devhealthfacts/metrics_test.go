@@ -459,18 +459,25 @@ func TestMetricsProviderScopedToOrgAndRequestedSubjects(t *testing.T) {
 }
 
 // TestMetricsProviderRepositorySeriesCapsPerRepositoryNotJustQueryWide is
-// Codex R1's own finding (confirmed): before this cap, requesting metrics
-// for MULTIPLE repositories at once let a handful of repositories with wide
-// day-ranges exhaust the shared, query-wide maxFactRowsPerQuery (200)
-// budget entirely, leaving whichever repositories sort later (repo_id,
-// day DESC) with NO canonical fact at all -- not a truncated series, a
-// MISSING one, exactly the gap this ticket exists to close, reintroduced
-// for a multi-repository caller. The fakeClient cannot simulate
-// ClickHouse's actual per-group LIMIT BY semantics (it replays canned rows
-// verbatim, not a real query planner), so this pins the STATEMENT TEXT
-// carries the per-repository sub-cap, mirroring this file's own
-// TestMetricsProviderTruncatesWhenRowCountReachesLimit precedent for the
-// shared cap.
+// Codex R1's own finding (confirmed), sharpened by Codex R2 (confirmed the
+// R1 fix was still incomplete): a per-repository `LIMIT n BY repo_id`
+// ALONE does not stop cross-repository starvation if a shared, query-WIDE
+// LIMIT still follows it -- the query-wide LIMIT still truncates the
+// combined (repo_id, day DESC)-ordered stream afterward, so a handful of
+// repositories at or near the per-group cap can still exhaust the shared
+// budget and leave later-sorted repositories with NO canonical fact at
+// all (not a truncated series -- a MISSING one, exactly the gap this
+// ticket exists to close, reintroduced for a multi-repository caller).
+// The fix drops the shared query-wide LIMIT for this query entirely.
+//
+// The fakeClient cannot simulate ClickHouse's actual per-group LIMIT BY
+// semantics (it replays canned rows verbatim, not a real query planner),
+// so this pins the STATEMENT TEXT two ways: the per-repository sub-cap is
+// present, AND -- the R2 fix this test specifically exists to catch --
+// there is no SECOND, trailing bare `LIMIT <n>` after it (which is
+// exactly what an R1-shaped "add a per-group cap but keep the shared one
+// too" regression would reintroduce). A test that only checked the first
+// half would have passed on the R1-only fix Codex R2 found incomplete.
 func TestMetricsProviderRepositorySeriesCapsPerRepositoryNotJustQueryWide(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: [][]any{metricsRow("repo-1")}}}}
@@ -482,9 +489,13 @@ func TestMetricsProviderRepositorySeriesCapsPerRepositoryNotJustQueryWide(t *tes
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	statement := strings.ToUpper(client.queries[len(client.queries)-1].statement)
-	if !strings.Contains(statement, "LIMIT 100 BY REPO_ID") {
-		t.Fatalf("statement = %q, want a `LIMIT 100 BY repo_id` per-repository sub-cap ahead of the shared query-wide LIMIT", client.queries[len(client.queries)-1].statement)
+	rawStatement := client.queries[len(client.queries)-1].statement
+	statement := strings.ToUpper(rawStatement)
+	if !strings.Contains(statement, "LIMIT 200 BY REPO_ID") {
+		t.Fatalf("statement = %q, want a `LIMIT 200 BY repo_id` per-repository sub-cap", rawStatement)
+	}
+	if got := strings.Count(statement, "LIMIT"); got != 1 {
+		t.Fatalf("statement = %q, want exactly 1 LIMIT clause total (the per-repository `LIMIT 200 BY repo_id` only) -- a second, trailing bare LIMIT would still truncate the COMBINED multi-repository stream after the per-group cap already ran, reintroducing cross-repository starvation", rawStatement)
 	}
 }
 
@@ -524,9 +535,34 @@ func metricsRows(n int) [][]any {
 	return rows
 }
 
+// metricsRowsForOneRepoOverDays builds n distinct-day rows for the SAME
+// repository -- the shape that actually exercises truncation post-CHAOS-4418
+// (capFactValueRows' own 64-row per-FACT cap on one repository's own
+// daily_metrics series), unlike metricsRows above (n DIFFERENT repositories,
+// one row each -- the pre-CHAOS-4418 shape, now retained only for
+// TestMetricsProviderRepositorySeriesCapsPerRepositoryNotJustQueryWide's own
+// multi-repository scenario).
+func metricsRowsForOneRepoOverDays(repoID string, n int) [][]any {
+	rows := make([][]any, n)
+	for i := 0; i < n; i++ {
+		row := metricsRow(repoID)
+		row[1] = fmt.Sprintf("2026-%02d-%02d", 1+i/28, 1+i%28)
+		rows[i] = row
+	}
+	return rows
+}
+
+// TestMetricsProviderTruncatesWhenRowCountReachesLimit is CHAOS-4418's own
+// re-pin (Codex R2: the pre-CHAOS-4418 version of this test fed rows for
+// maxMetricsRowsPerQueryForTest DIFFERENT repositories while requesting
+// only ONE subject -- proving the OLD query-wide-LIMIT heuristic, which no
+// longer applies now that readRepositoryMetrics has no query-wide LIMIT at
+// all, Codex R2's own confirmed fix). Truncation now means ONE requested
+// repository's own daily_metrics series exceeding
+// ContextFabricClaimedFactMaxRows (64) -- capFactValueRows' own signal.
 func TestMetricsProviderTruncatesWhenRowCountReachesLimit(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: metricsRows(maxMetricsRowsPerQueryForTest)}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: metricsRowsForOneRepoOverDays("repo-1", 65)}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -536,16 +572,17 @@ func TestMetricsProviderTruncatesWhenRowCountReachesLimit(t *testing.T) {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
 	if !result.Truncated {
-		t.Fatalf("result.Truncated = false, want true when the row count reaches the limit")
+		t.Fatalf("result.Truncated = false, want true when one repository's own series (65 days) exceeds the 64-row per-fact cap")
 	}
-	if len(client.queries) == 0 || !strings.Contains(strings.ToUpper(client.queries[len(client.queries)-1].statement), "LIMIT") {
-		t.Fatalf("query statement = %#v, want a LIMIT clause", client.queries)
+	dailyMetrics := result.Facts[0].Fields["daily_metrics"].Rows
+	if len(dailyMetrics) != 64 {
+		t.Fatalf("daily_metrics = %d rows, want capped to 64", len(dailyMetrics))
 	}
 }
 
 func TestMetricsProviderNotTruncatedBelowLimit(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: metricsRows(maxMetricsRowsPerQueryForTest - 1)}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: metricsRowsForOneRepoOverDays("repo-1", 64)}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -555,6 +592,6 @@ func TestMetricsProviderNotTruncatedBelowLimit(t *testing.T) {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
 	if result.Truncated {
-		t.Fatalf("result.Truncated = true, want false when the row count is below the limit")
+		t.Fatalf("result.Truncated = true, want false when the series (64 days) is exactly at, not over, the cap")
 	}
 }

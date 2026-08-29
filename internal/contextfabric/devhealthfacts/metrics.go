@@ -37,30 +37,40 @@ const repositoryPrefix = "repository:"
 // EvidenceWindow.Start/End uses that instead, unbounded by this constant.
 const metricsSeriesDefaultWindow = 90 * 24 * time.Hour
 
-// metricsSeriesPerRepositoryRowCap (Codex R1, confirmed) bounds how many
-// day-rows ANY SINGLE requested repository can contribute toward the
-// shared, query-wide maxFactRowsPerQuery (200) cap. Before this ticket,
-// readRepositoryMetrics returned exactly one row per repository
-// regardless of how many were requested together, so up to 200
-// repositories could share that budget safely. This rescue can now
-// return up to ~90 rows for ONE repository (the default window), so
-// without a per-repository sub-cap, a handful of repositories with wide
-// day-ranges could exhaust the entire 200-row budget -- rows ordered by
-// (repo_id, day DESC) means the SQL-level LIMIT would then silently drop
-// every row for whichever repositories sort later, leaving them with NO
-// canonical fact at all (not a truncated series -- a MISSING one, which
-// this ticket exists to eliminate, not reintroduce for a different
-// caller shape). `LIMIT n BY repo_id` (ClickHouse's per-group row cap)
-// guarantees every requested repository gets its own fair share up to
-// this bound before the shared cap can starve any of them; the shared
-// cap still applies afterward as the overall safety net for a
-// pathologically large repository list. 100 is comfortably above
-// metricsSeriesDefaultWindow's own 90 days, so the ordinary
-// current-axis case never hits this sub-cap at all -- it only engages
-// for a caller-supplied explicit window wider than ~100 days, which
-// capFactValueRows' own 64-row per-fact cap bounds further downstream
-// regardless.
-const metricsSeriesPerRepositoryRowCap = 100
+// metricsSeriesPerRepositoryRowCap bounds how many day-rows ANY SINGLE
+// requested repository can return, via ClickHouse's `LIMIT n BY repo_id`
+// (a per-group cap, evaluated before any overall LIMIT).
+//
+// Codex R1 (confirmed), Codex R2 (confirmed the R1 fix was still
+// incomplete): before this ticket, readRepositoryMetrics returned exactly
+// one row per repository regardless of how many were requested together,
+// so up to maxFactRowsPerQuery (200) repositories could share that
+// budget safely via the package's ordinary withRowLimit convention. This
+// rescue can now return up to ~90 rows for ONE repository (the default
+// window), so simply keeping withRowLimit's shared, query-WIDE LIMIT
+// alongside a per-repository LIMIT BY does NOT fix cross-repository
+// starvation (R1's own attempt): the per-group cap only bounds each
+// repository's OWN contribution, but the trailing overall LIMIT still
+// truncates the COMBINED (repo_id, day DESC)-ordered stream afterward,
+// so a handful of repositories at or near the per-group cap can still
+// exhaust the shared budget and leave later-sorted repositories with NO
+// canonical fact at all. The fix is to drop the shared, query-wide
+// LIMIT for this query ENTIRELY (this SQL is deliberately NOT built with
+// withRowLimit, unlike every other statement in this package) and rely
+// solely on this per-repository cap -- every requested repository then
+// gets its own fair share, unconditionally, regardless of how many
+// repositories are requested together. The worst-case total row count
+// is len(ids) * this cap, which is acceptable: the number of repository
+// subjects in one investigation is already bounded well below that by
+// resolution's own candidate limits, long before this read ever runs.
+// 200 mirrors maxFactRowsPerQuery's own historical per-subject headroom
+// (this package's own convention, re-scoped from "per query" to "per
+// subject" here) -- comfortably above metricsSeriesDefaultWindow's 90
+// days, so the ordinary current-axis case never truncates a single
+// repository's own series at all; capFactValueRows' own 64-row per-fact
+// cap (with its own truncated flag) is what actually bounds and reports
+// on the final Rows table for a caller-supplied window wider than that.
+const metricsSeriesPerRepositoryRowCap = 200
 
 // MetricsProvider implements contextfabric.FactProvider for FactMetrics.
 //
@@ -155,11 +165,18 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	truncated := false
 
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
-		rowCount, breakdownTruncated, scanErr := p.readRepositoryMetrics(ctx, orgID, repoSubjects, &facts, timeBound, query.Time.EvidenceWindow)
+		// rowCount deliberately NOT compared against maxFactRowsPerQuery
+		// here (unlike every other branch in this file): readRepositoryMetrics'
+		// own statement has no query-wide LIMIT (metricsSeriesPerRepositoryRowCap's
+		// own doc comment explains why), so a large rowCount across many
+		// legitimately-wide repository series is expected and NOT evidence
+		// of dropped data -- breakdownTruncated (capFactValueRows' own
+		// per-fact signal) is the accurate truncation report here.
+		_, breakdownTruncated, scanErr := p.readRepositoryMetrics(ctx, orgID, repoSubjects, &facts, timeBound, query.Time.EvidenceWindow)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query repository metrics", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery || breakdownTruncated
+		truncated = truncated || breakdownTruncated
 	}
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
@@ -259,7 +276,15 @@ func (p *MetricsProvider) readRepositoryMetrics(ctx context.Context, orgID strin
 			{Name: "series_window_end", Value: now},
 		}
 	}
-	statement := withRowLimit(`SELECT toString(repo_id), toString(day), toInt64(commits_count), toInt64(prs_merged), toFloat64(median_pr_cycle_hours), toFloat64(change_failure_rate), toUInt8(isNotNull(mttr_hours)), toFloat64(ifNull(mttr_hours, 0)), toInt64(bus_factor), toFloat64(code_ownership_gini)
+	// Deliberately NOT withRowLimit (Codex R2, confirmed): that helper's
+	// shared, query-WIDE LIMIT would still truncate the combined
+	// (repo_id, day DESC)-ordered stream AFTER the per-repository `LIMIT
+	// ... BY repo_id` below already ran, reintroducing the exact
+	// cross-repository starvation metricsSeriesPerRepositoryRowCap's own
+	// doc comment explains -- a query-wide cap and a per-group cap do not
+	// compose into "each group gets its fair share"; only dropping the
+	// query-wide cap for this one query does.
+	statement := `SELECT toString(repo_id), toString(day), toInt64(commits_count), toInt64(prs_merged), toFloat64(median_pr_cycle_hours), toFloat64(change_failure_rate), toUInt8(isNotNull(mttr_hours)), toFloat64(ifNull(mttr_hours, 0)), toInt64(bus_factor), toFloat64(code_ownership_gini)
 FROM (
 	-- CHAOS-4418: PARTITION BY (repo_id, day), NOT repo_id alone --
 	-- every distinct day survives its own row_number()/cityHash64
@@ -274,7 +299,7 @@ FROM (
 )
 WHERE rn = 1
 ORDER BY repo_id, day DESC
-LIMIT ` + strconv.Itoa(metricsSeriesPerRepositoryRowCap) + ` BY repo_id`)
+LIMIT ` + strconv.Itoa(metricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 	byRepo := make(map[string][]repositoryMetricsDayRow)
 	var repoOrder []string
 	// readers.QueryOrgScopedNamed (CHAOS-4418), not p.facts.query -- this
