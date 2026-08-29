@@ -780,6 +780,14 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		return contextfabric.SynthesisDraft{}, receipt, classifiedErr
 	}
 	draft, err := output.toDomain()
+	// CHAOS-4522: recorded HERE, at the branch that actually happened,
+	// rather than inferred afterwards from the shape of a zero-valued
+	// draft -- "assert the mechanism, not the outcome" (AGENTS.md
+	// verification rule 1). A model response that never decoded into a
+	// SynthesisDraft is a different defect from one that decoded and
+	// failed a validation rule, and both previously read as a bare
+	// `invalid_output`.
+	undecodable := err != nil
 	if err == nil {
 		// CHAOS-4355 follow-up (tolerance): this is the production
 		// ModelRuntime's OWN ValidateAgainst call -- the actual live 422
@@ -802,14 +810,13 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	if err != nil {
 		receipt.Outcome = "invalid_output"
 		primaryFailureClassification = receipt.Outcome
-		// CHAOS-4522: a draft that never decoded is a DIFFERENT defect
-		// from one that decoded and failed a rule, and both previously
-		// read as a bare `invalid_output`. draft is the zero value on the
-		// toDomain() path, so MaxCanonicalFactGroupSize is 0 there --
-		// which is itself the distinguishing signal.
-		rejectionReason = string(contextfabric.SynthesisRejectionReasonOf(err))
-		if errors.Is(err, contextfabric.ErrModelOutput) && len(draft.ClaimedFacts) == 0 && draft.Status == "" {
-			rejectionReason = string(contextfabric.RejectionReasonOutputUndecodable)
+		// CHAOS-4522: see undecodable's own comment above for why this
+		// reads a flag set at the branch rather than re-deriving one.
+		// factGroupMax is 0 on the undecodable path (no claims exist to
+		// measure a group for), which is correct rather than incidental.
+		rejectionReason = string(contextfabric.RejectionReasonOutputUndecodable)
+		if !undecodable {
+			rejectionReason = string(contextfabric.SynthesisRejectionReasonOf(err))
 		}
 		factGroupMax = contextfabric.MaxCanonicalFactGroupSize(input.Facts.Facts, draft.ClaimedFacts)
 		if r.config.Fallback != nil {
