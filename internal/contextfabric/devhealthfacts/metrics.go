@@ -364,18 +364,32 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		// its freshest ones, on truncation.
 		dayRows, omitted = capFactValueRows(dayRows)
 		breakdownTruncated = breakdownTruncated || omitted > 0
+		fields := map[string]contextfabric.FactValue{
+			// day_count is the SERIES' own row count before any
+			// 64-row cap -- distinguishable from
+			// len(daily_metrics) so a truncated series is still
+			// diagnosable (CanonicalRows' own Truncated flag already
+			// reports the cap fired; this says how much was behind
+			// it).
+			"day_count":     contextfabric.IntegerFactValue(int64(len(days))),
+			"daily_metrics": contextfabric.RowsFactValue(dayRows),
+		}
+		// codex R4 finding 1: the latest day's values, under the SAME
+		// field names the pre-CHAOS-4418 reader emitted, as scalar
+		// siblings of the series. genkitruntime.modelFacingFacts
+		// (runtime.go) drops every Rows-shaped field before the fact set
+		// reaches synthesis, so a value living only inside daily_metrics
+		// is invisible to the model and cannot be grounded in -- which is
+		// what these scalars were for. dayRows[0] is the freshest day
+		// (the statement's own ORDER BY day DESC), so these speak for the
+		// same "latest day per repository" instant the reader this
+		// widened already did, and an unrecorded mttr_hours stays absent
+		// here exactly as it is absent from its own row.
+		for name, value := range dayRows[0].Fields {
+			fields[name] = value
+		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
-			Kind: contextfabric.FactMetrics, Subject: subject,
-			Fields: map[string]contextfabric.FactValue{
-				// day_count is the SERIES' own row count before any
-				// 64-row cap -- distinguishable from
-				// len(daily_metrics) so a truncated series is still
-				// diagnosable (CanonicalRows' own Truncated flag already
-				// reports the cap fired; this says how much was behind
-				// it).
-				"day_count":     contextfabric.IntegerFactValue(int64(len(days))),
-				"daily_metrics": contextfabric.RowsFactValue(dayRows),
-			},
+			Kind: contextfabric.FactMetrics, Subject: subject, Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID("repository", repoID)},
 		})
 	}
