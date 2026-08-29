@@ -331,3 +331,105 @@ func groundedReadinessClaim(input contextfabric.SynthesisInput) contextfabric.Cl
 		Value:   contextfabric.ScalarValue{Boolean: &releaseReady},
 	}
 }
+
+// TestSuccessDistinguishesARescuedClaimFromAMerelyLargeGroup is codex R3
+// finding 2, the sharpest of the review rounds. `fact_group_size` is pure
+// CARDINALITY: a claim sitting on a 17-fact group whose FIRST member
+// already carried the matching value would have been admitted by the
+// pre-CHAOS-4522 first-match-wins lookup too. Reporting "multi-fact
+// grounding rescued this answer" for it is a false statement about which
+// branch decided -- precisely what this telemetry exists to prevent.
+//
+// `grounded_beyond_first` is the honest signal: it counts only the claims
+// the widened closure actually rescued. Both cases below have the SAME
+// group size and must be distinguishable.
+func TestSuccessDistinguishesARescuedClaimFromAMerelyLargeGroup(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name                string
+		firstFactMatches    bool
+		wantBeyondFirst     int
+		wantGroupSizeAtomic int
+	}{
+		{"rescued by the closure: the first group member lacks the field", false, 1, 2},
+		{"not rescued: the first group member already matched", true, 0, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			input := validSynthesisInput()
+			extra := input.Facts.Facts[0]
+			if tc.firstFactMatches {
+				// A SECOND fact that does not carry the field -- same group
+				// size, but the first member still grounds the claim.
+				extra.Fields = map[string]contextfabric.FactValue{"backlog_size": contextfabric.IntegerFactValue(24)}
+				input.Facts.Facts = append(input.Facts.Facts, extra)
+			} else {
+				// The same fact placed FIRST, so only a later member grounds.
+				extra.Fields = map[string]contextfabric.FactValue{"backlog_size": contextfabric.IntegerFactValue(24)}
+				input.Facts.Facts = append([]contextfabric.CanonicalFact{extra}, input.Facts.Facts...)
+			}
+			output := validSynthesisOutput()
+			output.ClaimedFacts = []contextfabric.ClaimedFact{groundedReadinessClaim(input)}
+
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			runtime := mustRuntime(t, &generatorStub{synthesis: output}, Config{Logger: logger})
+			if _, _, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, input); err != nil {
+				t.Fatalf("SynthesizeAnswer() error = %v, want success", err)
+			}
+			fields := decisionLine(t, &buf)
+			if got, ok := fields["fact_group_size"].(float64); !ok || int(got) != tc.wantGroupSizeAtomic {
+				t.Fatalf("fact_group_size = %v, want %d", fields["fact_group_size"], tc.wantGroupSizeAtomic)
+			}
+			got, ok := fields["grounded_beyond_first"].(float64)
+			if !ok {
+				t.Fatalf("grounded_beyond_first = %v, want it present on every accepted draft (0 included)", fields["grounded_beyond_first"])
+			}
+			if int(got) != tc.wantBeyondFirst {
+				t.Fatalf("grounded_beyond_first = %d, want %d -- the two cases have identical group sizes, so only this field can tell them apart", int(got), tc.wantBeyondFirst)
+			}
+		})
+	}
+}
+
+// TestFallbackSuccessStillRecordsItsGroundingBasis is codex R3 finding 1:
+// a fallback draft has claims and fact groups of its own, and the line
+// already reports its grounding COUNTS -- clearing the grounding BASIS
+// there left `outcome=fallback` undiagnosable for a custom or non-logging
+// fallback, which is the only kind whose own logs are unavailable.
+func TestFallbackSuccessStillRecordsItsGroundingBasis(t *testing.T) {
+	t.Parallel()
+	input := validSynthesisInput()
+	sparse := input.Facts.Facts[0]
+	sparse.Fields = map[string]contextfabric.FactValue{"backlog_size": contextfabric.IntegerFactValue(24)}
+	input.Facts.Facts = append([]contextfabric.CanonicalFact{sparse}, input.Facts.Facts...)
+
+	fallbackDraft := validDraft()
+	fallbackDraft.ClaimedFacts = []contextfabric.ClaimedFact{groundedReadinessClaim(input)}
+
+	primary := validSynthesisOutput()
+	primary.Status = "" // primary rejects; fallback then succeeds
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	runtime := mustRuntime(t, &generatorStub{synthesis: primary}, Config{
+		Logger:   logger,
+		Fallback: fallbackRuntime{draft: fallbackDraft},
+	})
+	if _, _, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, input); err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v, want the fallback to succeed", err)
+	}
+	fields := decisionLine(t, &buf)
+	if got := fields["outcome"]; got != "fallback" {
+		t.Fatalf("outcome = %v, want fallback", got)
+	}
+	if _, present := fields["rejection_reason"]; present {
+		t.Fatalf("a fallback-success line carries rejection_reason = %v, want it absent", fields["rejection_reason"])
+	}
+	if got, ok := fields["fact_group_size"].(float64); !ok || int(got) != 2 {
+		t.Fatalf("fact_group_size = %v, want 2 from the FALLBACK's own draft", fields["fact_group_size"])
+	}
+	if got, ok := fields["grounded_beyond_first"].(float64); !ok || int(got) != 1 {
+		t.Fatalf("grounded_beyond_first = %v, want 1 -- the fallback's claim was rescued by the closure too", fields["grounded_beyond_first"])
+	}
+}

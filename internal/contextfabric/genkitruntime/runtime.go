@@ -738,6 +738,12 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// codex R1 finding 1 -- a maximum over the draft would describe a
 		// claim ValidateAgainst never reached.
 		factGroupSize int
+		// groundedBeyondFirst counts the admitted claims the widened
+		// CHAOS-4522 closure actually RESCUED -- each would have been
+		// rejected by the old first-match-wins lookup (codex R3 finding 2).
+		// factGroupSize alone cannot say that: a large group whose first
+		// member already matched needed no closure at all.
+		groundedBeyondFirst int
 	)
 	// setDiagnostics populates the two rejection fields from the error whose
 	// outcome the receipt reports -- and ONLY when that error really is a
@@ -745,6 +751,16 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	// failure is not a rejection: labelling one `rejection_reason=
 	// unclassified` would assert that a rule rejected the draft when no
 	// draft was ever judged. Leaving the fields absent says the true thing.
+	// setGroundingSignal records the grounding decision basis for a draft
+	// that was ACCEPTED -- on the primary path and on either fallback-success
+	// path (codex R3 finding 1: a fallback draft has claims and groups of its
+	// own, and clearing the signal there left `outcome=fallback` lines with
+	// grounding counts but no grounding basis, undiagnosable for a custom or
+	// non-logging fallback).
+	setGroundingSignal := func(draft contextfabric.SynthesisDraft) {
+		factGroupSize = contextfabric.MaxClaimFactGroupSize(input.Facts.Facts, draft.ClaimedFacts)
+		groundedBeyondFirst = contextfabric.ClaimsGroundedBeyondFirstGroupMember(input.Facts.Facts, draft.ClaimedFacts)
+	}
 	setDiagnostics := func(cause error) {
 		var rejection *contextfabric.SynthesisRejection
 		if !errors.As(cause, &rejection) {
@@ -755,7 +771,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		factGroupSize = contextfabric.SynthesisFactGroupSizeOf(cause)
 	}
 	defer func() {
-		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupSize)
+		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupSize, groundedBeyondFirst)
 	}()
 
 	started := r.now().UTC()
@@ -785,6 +801,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 				receipt.FallbackUsed = true
 				receipt.Outcome = "fallback"
 				grounding = groundingCountsFrom(draft)
+				setGroundingSignal(draft)
 				return draft, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
 			// See the matching comment in InterpretQuestion: both legs
@@ -853,7 +870,14 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 				// failure is already reported by
 				// primaryFailureClassification, which exists for exactly
 				// that.
-				rejectionReason, factGroupSize = "", 0
+				//
+				// codex R3 finding 1: the REJECTION reason is cleared, but
+				// the GROUNDING signal is then recomputed from the
+				// fallback's own draft rather than left at zero -- that
+				// draft has claims and fact groups of its own, and the
+				// line already reports its grounding counts.
+				rejectionReason = ""
+				setGroundingSignal(fallback)
 				grounding = groundingCountsFrom(fallback)
 				return fallback, mergeFallbackReceipt(receipt, fallbackReceipt), nil
 			}
@@ -884,7 +908,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	// used to be a rejection into an answer -- so a SUCCESSFUL run must
 	// record that it fired, not only a failing one. Without this the
 	// closure was diagnosable only when it did not save the answer.
-	factGroupSize = contextfabric.MaxClaimFactGroupSize(input.Facts.Facts, draft.ClaimedFacts)
+	setGroundingSignal(draft)
 	return draft, receipt, nil
 }
 
@@ -1089,7 +1113,7 @@ func groundingCountsFrom(draft contextfabric.SynthesisDraft) synthesisGroundingC
 // counterpart (H7/H8). See logInterpretDecision's doc comment for the
 // corpus-safety and log-level-gating rationale, which applies identically
 // here.
-func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupSize int) {
+func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupSize, groundedBeyondFirst int) {
 	fields := []any{
 		"request_id", requestID,
 		"org_id_hash", decisionOrgIDHash(orgID),
@@ -1117,6 +1141,11 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 	// would have made the success case unreportable.
 	if factGroupSize > 0 {
 		fields = append(fields, "fact_group_size", factGroupSize)
+		// Emitted alongside the size on every accepted draft, INCLUDING
+		// zero (codex R3 finding 2): 0 means the widened closure changed
+		// nothing about this answer however large its groups were, and
+		// that is the distinguishing fact, not an absence worth hiding.
+		fields = append(fields, "grounded_beyond_first", groundedBeyondFirst)
 	}
 	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
 }

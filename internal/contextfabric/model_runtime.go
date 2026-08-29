@@ -607,9 +607,26 @@ const (
 // the SAME fact that grounded the claim (never a different member of the
 // group), keeping a claim's scalar and its table describing one observation.
 func groundClaim(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, claimGroundingOutcome) {
+	fact, outcome, _ := groundClaimAt(facts, claim)
+	return fact, outcome
+}
+
+// groundClaimAt is groundClaim plus the ZERO-BASED position, within the
+// claim's own (Kind, Subject) group, of the fact that grounded it -- or -1
+// when nothing did (codex R3 finding 2).
+//
+// That position, not the group's size, is what says whether the CHAOS-4522
+// closure actually decided the outcome. A claim sitting on a 17-fact group
+// whose FIRST member already carried the matching value would have been
+// admitted by the old first-match-wins lookup too; reporting "multi-fact
+// grounding rescued this answer" for it would be a false claim about which
+// branch decided, which is exactly what this telemetry exists to prevent.
+// Only a match at position > 0 was impossible before.
+func groundClaimAt(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, claimGroundingOutcome, int) {
 	key := subjectKeyForModel(claim.Subject)
 	outcome := claimNoCanonicalFact
 	var fieldMatch CanonicalFact
+	position := 0
 	for _, fact := range facts {
 		if fact.Kind != claim.Kind || subjectKeyForModel(fact.Subject) != key {
 			continue
@@ -618,18 +635,18 @@ func groundClaim(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, claim
 			outcome = claimFieldUnobserved
 		}
 		observed, present := fact.Fields[claim.Field]
-		if !present {
-			continue
+		if present {
+			if outcome == claimFieldUnobserved {
+				outcome = claimValueContradicts
+				fieldMatch = fact
+			}
+			if factValueEqualsScalar(observed, claim.Value) {
+				return fact, claimGrounded, position
+			}
 		}
-		if outcome == claimFieldUnobserved {
-			outcome = claimValueContradicts
-			fieldMatch = fact
-		}
-		if factValueEqualsScalar(observed, claim.Value) {
-			return fact, claimGrounded
-		}
+		position++
 	}
-	return fieldMatch, outcome
+	return fieldMatch, outcome, -1
 }
 
 // claimSourceFact returns the canonical fact a claim's Rows must come from
@@ -671,21 +688,19 @@ func claimSourceFact(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, b
 // there is no short-circuit to misrepresent, and without it the
 // outcome-changing "this claim grounded against a LATER fact of its group"
 // path would leave no trace in a successful run's own artifacts.
-// MaxClaimFactGroupSize is the SUCCESS-path counterpart to
-// SynthesisRejection.FactGroupSize (codex R2 finding 4): the largest
-// (Kind, Subject) group any admitted claim was grounded against. 1 means
-// every claim addressed an unambiguous fact; >1 means multi-fact grounding
-// actually fired and the answer depends on the CHAOS-4522 closure rather
-// than on a single-fact lookup that would have worked anyway.
+// MaxClaimFactGroupSize is the largest (Kind, Subject) group any admitted
+// claim was grounded against -- pure CARDINALITY, context only.
 //
-// This is what makes the widened closure diagnosable from a SUCCESSFUL
-// run's own artifacts. Without it, the only trace of an outcome-changing
-// branch was on the rejection path -- so the case where the closure
-// silently rescued an answer was invisible, which is precisely the failure
-// mode AGENTS.md's decision-basis rule exists to prevent.
+// It deliberately does NOT mean "the CHAOS-4522 closure decided this
+// answer" (codex R3 finding 2). A claim on a 17-fact group whose FIRST
+// member already carried the matching value would have been admitted by the
+// old first-match-wins lookup too. ClaimsGroundedBeyondFirstGroupMember
+// below is the signal that actually names the deciding branch; this one
+// only says how much ambiguity was in play.
 //
-// Taking a maximum is sound HERE and not on the rejection path: a draft
-// that passed validation had every one of its claims evaluated.
+// Taking a maximum is sound on the SUCCESS path and not on the rejection
+// path: a draft that passed validation had every one of its claims
+// evaluated, so no claim here was skipped by a short-circuit.
 func MaxClaimFactGroupSize(facts []CanonicalFact, claims []ClaimedFact) int {
 	maximum := 0
 	for _, claim := range claims {
@@ -694,6 +709,23 @@ func MaxClaimFactGroupSize(facts []CanonicalFact, claims []ClaimedFact) int {
 		}
 	}
 	return maximum
+}
+
+// ClaimsGroundedBeyondFirstGroupMember counts the admitted claims that were
+// grounded against a fact OTHER than the first of their (Kind, Subject)
+// group (codex R3 finding 2). It is the honest "the widened closure decided
+// this outcome" signal: every one of these claims would have been REJECTED
+// by the pre-CHAOS-4522 first-match-wins lookup, and a count of 0 means the
+// closure changed nothing about this answer however large its fact groups
+// were.
+func ClaimsGroundedBeyondFirstGroupMember(facts []CanonicalFact, claims []ClaimedFact) int {
+	count := 0
+	for _, claim := range claims {
+		if _, outcome, position := groundClaimAt(facts, claim); outcome == claimGrounded && position > 0 {
+			count++
+		}
+	}
+	return count
 }
 
 func canonicalFactGroupSize(facts []CanonicalFact, claim ClaimedFact) int {
