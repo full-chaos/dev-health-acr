@@ -37,7 +37,7 @@ const repositoryPrefix = "repository:"
 // EvidenceWindow.Start/End uses that instead, unbounded by this constant.
 const metricsSeriesDefaultWindow = 90 * 24 * time.Hour
 
-// metricsSeriesPerRepositoryRowCap bounds how many day-rows ANY SINGLE
+// MetricsSeriesPerRepositoryRowCap bounds how many day-rows ANY SINGLE
 // requested repository can return, via ClickHouse's `LIMIT n BY repo_id`
 // (a per-group cap, evaluated before any overall LIMIT).
 //
@@ -70,7 +70,7 @@ const metricsSeriesDefaultWindow = 90 * 24 * time.Hour
 // repository's own series at all; capFactValueRows' own 64-row per-fact
 // cap (with its own truncated flag) is what actually bounds and reports
 // on the final Rows table for a caller-supplied window wider than that.
-const metricsSeriesPerRepositoryRowCap = 200
+const MetricsSeriesPerRepositoryRowCap = 200
 
 // MetricsProvider implements contextfabric.FactProvider for FactMetrics.
 //
@@ -167,7 +167,7 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
 		// rowCount deliberately NOT compared against maxFactRowsPerQuery
 		// here (unlike every other branch in this file): readRepositoryMetrics'
-		// own statement has no query-wide LIMIT (metricsSeriesPerRepositoryRowCap's
+		// own statement has no query-wide LIMIT (MetricsSeriesPerRepositoryRowCap's
 		// own doc comment explains why), so a large rowCount across many
 		// legitimately-wide repository series is expected and NOT evidence
 		// of dropped data -- breakdownTruncated (capFactValueRows' own
@@ -280,7 +280,7 @@ func (p *MetricsProvider) readRepositoryMetrics(ctx context.Context, orgID strin
 	// shared, query-WIDE LIMIT would still truncate the combined
 	// (repo_id, day DESC)-ordered stream AFTER the per-repository `LIMIT
 	// ... BY repo_id` below already ran, reintroducing the exact
-	// cross-repository starvation metricsSeriesPerRepositoryRowCap's own
+	// cross-repository starvation MetricsSeriesPerRepositoryRowCap's own
 	// doc comment explains -- a query-wide cap and a per-group cap do not
 	// compose into "each group gets its fair share"; only dropping the
 	// query-wide cap for this one query does.
@@ -299,7 +299,7 @@ FROM (
 )
 WHERE rn = 1
 ORDER BY repo_id, day DESC
-LIMIT ` + strconv.Itoa(metricsSeriesPerRepositoryRowCap) + ` BY repo_id`
+LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 	byRepo := make(map[string][]repositoryMetricsDayRow)
 	var repoOrder []string
 	// readers.QueryOrgScopedNamed (CHAOS-4418), not p.facts.query -- this
