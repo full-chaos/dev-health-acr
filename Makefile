@@ -143,8 +143,17 @@ codegraph-contract:
 # CHAOS-4100: offline checks for the trial launcher's shard layout. Starts
 # no container, touches no database, calls no model -- see the script's own
 # header for why the layout specifically is worth gating.
+# CHAOS-4525 added the seed-producer and the ACR_TRIAL_PG_DATABASE /
+# graph-lifecycle guards to this target. Both were unreachable from any gate
+# before: test-kiac-dsn-reader.sh existed but no Makefile target or workflow
+# ran it, so its guards could rot silently. All three suites are offline by
+# construction -- no container, no database, no model, no cluster (the one
+# live-cluster section in test-kiac-dsn-reader.sh skips itself when KUBECONFIG
+# is unset, and test-seed-corpus-cases.sh skips itself without jq).
 shard-plan:
 	bash scripts/trial/test-shard-plan.sh
+	bash scripts/trial/test-kiac-dsn-reader.sh
+	bash scripts/trial/test-seed-corpus-cases.sh
 
 canonical-receipts:
 	bash scripts/e2e/test-canonical-receipts.sh

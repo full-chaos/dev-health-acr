@@ -567,6 +567,74 @@ trial_wire_common_env() {
 # the standing stack's acr database.
 trial_wire_graph_lifecycle_env() {
   export ACR_TEST_TRIAL_GRAPH_LIFECYCLE_ENABLED=1
+  trial_require_graph_lifecycle_seeded
+}
+
+# trial_require_graph_lifecycle_seeded fails closed when ACR_TRIAL_PG_DATABASE
+# points at a database that carries no graph-lifecycle row (codex review P2,
+# PR #330, confirmed).
+#
+# The gap this closes: ACR_TRIAL_PG_DATABASE's advertised use is "a freshly
+# created and migrated database", and a freshly migrated database has an EMPTY
+# acr.context_fabric_graph_lifecycle. The epoch resolver then finds no serving
+# epoch and the run reads the bare legacy epoch-0 graph key -- which exists,
+# and holds stale data. That is the exact incident trial_wire_graph_lifecycle_env
+# was added for in the first place (CHAOS-4100 rerun #2, blocked twice), and it
+# does not announce itself: the run completes and produces a plausible artifact
+# measured against the wrong graph. run-two-turn-parallel.sh never hits it
+# because its template database is cloned from a seeded one.
+#
+# Deliberately scoped to the NON-DEFAULT database only. The standing `acr`
+# database is seeded by construction, and making every existing recipe depend
+# on psql being installed would be a regression for callers this cannot affect.
+trial_require_graph_lifecycle_seeded() {
+  local db="${ACR_TRIAL_PG_DATABASE:-acr}"
+  [[ "$db" == "acr" ]] && return 0
+
+  local psql_bin="${ACR_TRIAL_PSQL_BIN:-psql}"
+  if ! command -v "$psql_bin" >/dev/null 2>&1; then
+    echo "common.sh: ACR_TRIAL_PG_DATABASE=$db needs a graph-lifecycle check and '$psql_bin' is not on PATH. Install psql, or unset ACR_TRIAL_PG_DATABASE to use the standing database." >&2
+    exit 1
+  fi
+
+  local rows
+  rows="$(PGPASSWORD="$ACR_TEST_TRIAL_PG_PASSWORD" PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-15}" \
+    "$psql_bin" -h "$ACR_TEST_TRIAL_PG_HOST" -p "$ACR_TEST_TRIAL_PG_PORT" -U "$ACR_TEST_TRIAL_PG_USER" \
+    -d "$db" -tAc "select count(*) from acr.context_fabric_graph_lifecycle" 2>/dev/null)" || rows=""
+  rows="$(printf '%s' "$rows" | tr -d '[:space:]')"
+
+  if [[ ! "$rows" =~ ^[0-9]+$ ]]; then
+    echo "common.sh: could not read acr.context_fabric_graph_lifecycle from database '$db' -- refusing to run rather than silently measuring against the legacy epoch-0 graph. Check the database exists and is migrated." >&2
+    exit 1
+  fi
+  if [[ "$rows" -lt 1 ]]; then
+    # printf, never a heredoc: CHAOS-4302 banned heredocs in this script
+    # family after they deadlocked inside command substitution, and this
+    # message is emitted from a function callers do capture.
+    printf '%s\n' \
+      "common.sh: database '$db' has NO graph-lifecycle row." \
+      "" \
+      "A freshly migrated database has an empty acr.context_fabric_graph_lifecycle," \
+      "so the epoch resolver finds no serving epoch and the run would read the bare" \
+      "legacy epoch-0 graph key -- stale data, a plausible-looking artifact, and no" \
+      "error. Refusing to run." \
+      "" \
+      "Seed it from an already-seeded database first (data-only, read-only on the" \
+      "source): pg_dump -d <seeded-db> --data-only --no-owner --no-privileges" \
+      "  -t acr.context_fabric_graph_lifecycle" \
+      "  -t acr.context_fabric_projection_checkpoints" \
+      "  -t acr.context_fabric_graph_build_source_progress" \
+      "  -t acr.context_fabric_graph_epoch_retirements" \
+      "  -t acr.context_fabric_structure_priors" \
+      "  -t acr.context_fabric_structure_prior_pointer" \
+      "  -t acr.client_credentials" \
+      "  -t acr.workload_bindings | psql -d '$db' -v ON_ERROR_STOP=1" \
+      "" \
+      "Copy investigation results only if you WANT answer reuse across runs; leaving" \
+      "them out is what keeps replicates independent." >&2
+    exit 1
+  fi
+  echo "common.sh: graph-lifecycle rows in '$db': $rows" >&2
 }
 
 trial_run_go_test() {
