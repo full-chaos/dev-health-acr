@@ -108,6 +108,17 @@ var cohortSignalDisplayName = map[string]string{
 // silently reintroduce an ungrounded claim the way the fired_rules_count
 // case did.
 //
+// Grounding kind (codex R3, CHAOS-4448): every judgment this composer
+// emits is produced by the RankCohort ranking heuristic, so it is an
+// INFERENCE, never a canonical observation -- Derivation=rule_inferred
+// and EpistemicStatus=inferred are ONE decision, not two independent
+// fields. docs/design/context-fabric-result-semantics.md §1 exists to stop
+// exactly this blur (an inference presented as an observed measurement),
+// and genkitruntime/prompts.go instructs the model itself never to commit
+// it; a server-side composer is held to the same bar. A future narration
+// path deriving a judgment some OTHER way must set both fields to match
+// that derivation, never inherit this pair.
+//
 // Null-vs-zero citation eligibility (team-lead ruling): distinct from the
 // no-real-fact case above, a citation whose Value is an explicit
 // Value.Null ("no evaluation happened at all") would NOT be a legitimate
@@ -192,7 +203,7 @@ func narrateCohortDriverJudgments(cohort *Cohort, synthesisDriverCount int, synt
 				EvidenceRefIDs:   member.EvidenceRefIDs,
 				ClaimedFactIDs:   []string{claimID},
 				Derivation:       DerivationRuleInferred,
-				EpistemicStatus:  EpistemicObserved,
+				EpistemicStatus:  EpistemicInferred,
 				Confidence:       cohortDriverJudgmentConfidence(*member),
 				Current:          true,
 			})

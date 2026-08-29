@@ -343,3 +343,51 @@ func TestNarrateCohortDriverJudgments_MaxLengthSubjectLabelProducesAValidJudgmen
 		}
 	}
 }
+
+// cohortNarrationRequiredEpistemicStatus is the epistemic state
+// docs/design/context-fabric-result-semantics.md §1 prescribes for each
+// derivation kind: a rule-derived judgment is the model's own reasoning
+// over a heuristic, not something ACR read from a fact provider, so it is
+// an INFERENCE -- the one row of that table with no independent grounding
+// check behind it. Stamping such a judgment `observed` tells a consumer
+// filtering by grounding kind that a ranking heuristic's output is a
+// canonical measurement, which is precisely the blur that document exists
+// to prevent (and which genkitruntime/prompts.go:183 instructs the model
+// itself never to commit).
+var cohortNarrationRequiredEpistemicStatus = map[DerivationMethod]EpistemicStatus{
+	DerivationRuleInferred: EpistemicInferred,
+}
+
+// TestNarrateCohortDriverJudgments_EpistemicStatusMatchesDerivation is
+// codex R3 finding 1 (P1, CHAOS-4448). Every judgment this composer emits
+// is derived by the RankCohort ranking heuristic -- it correctly carries
+// Derivation=rule_inferred, but stamped EpistemicObserved it contradicted
+// the result-semantics doc's own four-way split. The assertion is the
+// PAIRING, not the literal value: a judgment's epistemic state must be the
+// one its own derivation prescribes, so a future narration path that emits
+// a differently-derived judgment cannot quietly inherit the wrong state.
+func TestNarrateCohortDriverJudgments_EpistemicStatusMatchesDerivation(t *testing.T) {
+	t.Parallel()
+	facts := []CanonicalFact{healthFact("A", "high"), investmentFact("A", balancedThemes(), 0)}
+	member := rankTestMember("A")
+	member.EvidenceRefIDs = []string{"evidence_team_a_roster"}
+	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
+	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
+
+	judgments, _, event := narrateCohortDriverJudgments(ranked, 0, 0, citations)
+	if event.Outcome != CohortDriverNarrationEmitted || len(judgments) == 0 {
+		t.Fatalf("expected at least one narrated judgment, got event=%+v judgments=%v", event, judgments)
+	}
+	for _, j := range judgments {
+		want, known := cohortNarrationRequiredEpistemicStatus[j.Derivation]
+		if !known {
+			t.Fatalf("judgment %q carries derivation %q, which this test has no prescribed epistemic state for -- a new narration derivation must state its own grounding kind, not inherit one", j.DriverID, j.Derivation)
+		}
+		if j.EpistemicStatus != want {
+			t.Errorf("judgment %q: EpistemicStatus = %q for derivation %q, want %q (docs/design/context-fabric-result-semantics.md §1)", j.DriverID, j.EpistemicStatus, j.Derivation, want)
+		}
+		if err := j.Validate(); err != nil {
+			t.Errorf("judgment %q .Validate() = %v, want nil -- the prescribed epistemic state must also be write-side valid", j.DriverID, err)
+		}
+	}
+}

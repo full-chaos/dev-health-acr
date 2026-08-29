@@ -136,7 +136,7 @@
         "claim_cohort_88cad88367c815eae568ce1f979c1471"
       ],
       "derivation": "rule_inferred",
-      "epistemic_status": "observed",
+      "epistemic_status": "inferred",
       "confidence": 0.95,
       "current": true
     },
@@ -160,7 +160,7 @@
         "claim_cohort_ff977441fb1cb96f9023dcff28d4a624"
       ],
       "derivation": "rule_inferred",
-      "epistemic_status": "observed",
+      "epistemic_status": "inferred",
       "confidence": 0.95,
       "current": true
     },
@@ -184,7 +184,7 @@
         "claim_cohort_fbf801c96f78b58f7f50eb3d6c2f57a2"
       ],
       "derivation": "rule_inferred",
-      "epistemic_status": "observed",
+      "epistemic_status": "inferred",
       "confidence": 0.95,
       "current": true
     }
