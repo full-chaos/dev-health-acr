@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check test test-race test-shuffle-random test-coverage crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
+.PHONY: fmt fmt-check test test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage crosscompile hosted-integration clients-real vet contract-write contract-test codegraph-contract shard-plan canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -28,6 +28,13 @@ GOTEST_TIMEOUT ?= 420s
 # package list; the default is the whole module so local `make test*`
 # invocations are unchanged.
 GOTEST_PKGS ?= ./...
+# CHAOS-4567: the timeout the isolated packages (scripts/ci/test-shard.sh
+# isolated -- today internal/contextfabric/devhealthschema) run under when
+# test-race-split runs them on their own. Mirrors ci.yml's race-devhealthschema
+# job, which has passed GOTEST_TIMEOUT=900s since CHAOS-3974; keep the two
+# in step. This is the ONLY budget that has to grow when the full-repo walk
+# gets more expensive -- GOTEST_TIMEOUT above must not move on its account.
+GOTEST_ISOLATED_TIMEOUT ?= 900s
 VERSION_PKG := github.com/full-chaos/dev-health-acr/internal/version
 
 # Pinned exact versions (not @latest) so the coverage/JUnit toolchain is
@@ -81,6 +88,26 @@ test:
 # test` stays the plain, dependency-free local gate.
 test-race:
 	go test -count=1 -race -shuffle=$(GOTEST_SHUFFLE_SEED) -timeout $(GOTEST_TIMEOUT) $(GOTEST_PKGS)
+
+# CHAOS-4567: the split ci.yml already runs (CHAOS-3974) -- the shared
+# packages under GOTEST_TIMEOUT, the isolated packages under their own,
+# larger budget -- as ONE target, so `make verify` locally and the Release
+# workflow's `make verify` exercise the same partition CI does. Before this,
+# release.yml ran `test-race` unsharded over ./... at 420s and
+# devhealthschema's full-repo walk timed it out on every main merge from
+# a4e2e5a3 (#327) on, which stopped image publication (GHCR :latest stuck
+# at 87bf4d06) while PR CI stayed green on its isolated shard.
+# scripts/ci/test-shard.sh is the single source for both sets: `1 1` is
+# every non-isolated package (one shard of one), `isolated` is the rest, so
+# scripts/ci/test-shard-closure.sh's proof that the two cover `go list
+# ./...` exactly once applies here unchanged.
+test-race-shared:
+	$(MAKE) test-race GOTEST_PKGS="$$(scripts/ci/test-shard.sh 1 1)"
+
+test-race-isolated:
+	$(MAKE) test-race GOTEST_PKGS="$$(scripts/ci/test-shard.sh isolated)" GOTEST_TIMEOUT=$(GOTEST_ISOLATED_TIMEOUT)
+
+test-race-split: test-race-shared test-race-isolated
 
 # Keep randomized order discovery out of the deterministic verification gate.
 test-shuffle-random:
@@ -187,7 +214,7 @@ build:
 	go build -o .tmp/acr-migrate ./cmd/acr-migrate
 	go build -ldflags "$(LOCAL_BUILD_LDFLAGS)" -o .tmp/acr-projector ./cmd/acr-projector
 
-verify: fmt-check vet test test-race crosscompile contract-test codegraph-contract shard-plan canonical-receipts fullstack-contract build
+verify: fmt-check vet test test-race-split crosscompile contract-test codegraph-contract shard-plan canonical-receipts fullstack-contract build
 
 container-contract:
 	bash scripts/container/test-contract.sh
