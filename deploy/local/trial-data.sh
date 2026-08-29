@@ -28,6 +28,14 @@
 #   ACR_TRIAL_CH_STORAGE       clickhouse data PVC size (default: 30Gi)
 #   ACR_TRIAL_CH_BACKUPS_STORAGE  clickhouse backups-staging PVC size (default: 5Gi)
 #   ACR_TRIAL_FALKOR_STORAGE   falkordb PVC size (default: 5Gi)
+#   ACR_TRIAL_NODEPORT_BASE    first of the four consecutive NodePorts
+#                              (default: 30500). Must be a MULTIPLE OF 10 in
+#                              30000-30990: the 10-port stride is what keeps
+#                              two lanes' four-port RANGES disjoint, not just
+#                              their base values. One base per lane namespace
+#                              -- NodePorts are cluster-scoped, so two data
+#                              planes on one cluster need different bases
+#                              (CHAOS-4428).
 #   ACR_TRIAL_CH_IMAGE         clickhouse image (default: the digest this
 #                              script pins, matching the compose stack's
 #                              currently-running clickhouse/clickhouse-server
@@ -54,19 +62,19 @@ FALKOR_STORAGE="${ACR_TRIAL_FALKOR_STORAGE:-5Gi}"
 # silently.
 CH_IMAGE="${ACR_TRIAL_CH_IMAGE:-clickhouse/clickhouse-server@sha256:f90a77560f72b10802106ee49e9870e41668cbc496e280c3911f6e3b216657f3}"
 
-# Fixed NodePorts, deliberately outside shard.sh's 31000-32766 budget
-# (i<=883 -> 31000+2i / 31001+2i) so a standing data-plane port can never
-# collide with a live per-shard pair.
-PG_NODEPORT=30500
-CH_HTTP_NODEPORT=30501
-CH_NATIVE_NODEPORT=30502
-FALKOR_NODEPORT=30503
+
 
 log() { printf '[trial-data.sh] %s\n' "$*" >&2; }
 die() { printf '[trial-data.sh] ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
-  sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  # Stop at `set -euo pipefail` rather than a hardcoded end line (codex
+  # review, CHAOS-4428): the previous `sed -n '2,38p'` silently truncated
+  # help mid-sentence the moment the header grew, dropping KUBECONFIG and
+  # part of ACR_TRIAL_CH_IMAGE. Anchored on the real end of the comment
+  # block, help can never fall out of sync with the header again.
+  sed -n '2,/^set -euo pipefail$/p' "${BASH_SOURCE[0]}" \
+    | sed '$d' | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -92,6 +100,44 @@ validate_namespace() {
     || die "ACR_TRIAL_DATA_NAMESPACE=$NAMESPACE is not a valid Kubernetes namespace name (lowercase alphanumeric and '-', must not start with '-') -- refusing, this is a shared cluster"
 }
 validate_namespace
+
+# NodePorts, deliberately outside shard.sh's 31000-32766 budget
+# (i<=883 -> 31000+2i / 31001+2i) so a standing data-plane port can never
+# collide with a live per-shard pair.
+#
+# CHAOS-4428: the four ports are now derived from ACR_TRIAL_NODEPORT_BASE
+# rather than hardcoded, because namespace-per-lane puts SEVERAL trial data
+# planes on ONE cluster and a NodePort is cluster-scoped, not
+# namespace-scoped -- two namespaces on the fixed 30500-30503 quadruple
+# collide at apply time. The base stays constrained to 30000-30996 so the
+# derived quadruple can never reach shard.sh's 31000 floor, which keeps the
+# original guarantee intact rather than trading it away for the new one.
+# Default 30500 is the previous hardcoded value, so an existing caller that
+# sets nothing gets byte-identical ports.
+NODEPORT_BASE="${ACR_TRIAL_NODEPORT_BASE:-30500}"
+# Strict FIVE-digit decimal, checked BEFORE any arithmetic (codex review round
+# 3, matching deploy/local/shard.sh:47-50's own guard). `^[0-9]+$` alone let an
+# overlong value through to `(( ))`, where bash wraps at 64 bits: reproduced
+# live, ACR_TRIAL_NODEPORT_BASE=18446744073709582116 passed both range and
+# stride checks and rendered 30500-30503 -- silently colliding with the DEFAULT
+# lane while looking nothing like a legal base. A leading zero is rejected for
+# the same family of reason: bash arithmetic reads 030500 as octal.
+[[ "$NODEPORT_BASE" =~ ^[1-9][0-9]{4}$ ]] \
+  || die "ACR_TRIAL_NODEPORT_BASE=$NODEPORT_BASE is not a plain five-digit decimal (no leading zeros; longer values overflow bash arithmetic and would bypass the range check)"
+(( NODEPORT_BASE >= 30000 && NODEPORT_BASE <= 30990 )) \
+  || die "ACR_TRIAL_NODEPORT_BASE=$NODEPORT_BASE is outside 30000-30990 (the derived quadruple must stay below shard.sh's 31000 floor)"
+# Codex review, CHAOS-4428: validating only the BASE let two lanes pick
+# different-but-adjacent bases (30500 and 30501), whose four-port ranges
+# still overlap at 30501-30503 -- the second `apply` then fails on
+# cluster-scoped NodePort allocation, which is exactly the collision this
+# variable exists to prevent. A 10-port stride makes the RANGES disjoint by
+# construction, not merely the bases, and still leaves 100 lane slots.
+(( NODEPORT_BASE % 10 == 0 )) \
+  || die "ACR_TRIAL_NODEPORT_BASE=$NODEPORT_BASE must be a multiple of 10 (bases are strided so two lanes' four-port ranges can never overlap)"
+PG_NODEPORT=$((NODEPORT_BASE))
+CH_HTTP_NODEPORT=$((NODEPORT_BASE + 1))
+CH_NATIVE_NODEPORT=$((NODEPORT_BASE + 2))
+FALKOR_NODEPORT=$((NODEPORT_BASE + 3))
 
 # validate_render_vars (codex xhigh review, fresh cycle round 1, P1): every
 # one of these is `sed`-interpolated straight into the YAML template with
@@ -160,12 +206,38 @@ cmd_wait() {
   log "trial data plane ready: postgres, clickhouse, falkordb rolled out in $NAMESPACE"
 }
 
+# live_nodeport reads a port off the DEPLOYED Service rather than trusting the
+# current shell's ACR_TRIAL_NODEPORT_BASE (codex review, CHAOS-4428).
+#
+# The two can disagree whenever a lane was applied with one base and `dsn` is
+# invoked later without it (or with a different one) -- and because every lane
+# shares the same default password, the DSN this command printed would then
+# CONNECT SUCCESSFULLY to a different lane's datastore instead of failing.
+# Silently reading another lane's data is the worst outcome available here, so
+# the deployed Service is the authority for ports exactly as the cluster Secret
+# is already the authority for the password (see the note further down).
+live_nodeport() {
+  local service="$1" port_name="$2" value
+  value="$(kubectl -n "$NAMESPACE" get "service/$service" \
+    -o jsonpath="{.spec.ports[?(@.name==\"$port_name\")].nodePort}" 2>/dev/null)" \
+    || die "could not read service/$service in namespace $NAMESPACE -- has 'apply' been run?"
+  [[ "$value" =~ ^[0-9]+$ ]] \
+    || die "service/$service has no numeric nodePort for port $port_name in namespace $NAMESPACE (got: ${value:-<empty>})"
+  printf '%s' "$value"
+}
+
 cmd_dsn() {
   require_kubeconfig
   validate_password
   local env_mode=0
   [[ "${1:-}" == "--env" ]] && env_mode=1
   local ip password
+  # Shadow the render-time defaults with what is actually deployed.
+  local PG_NODEPORT CH_HTTP_NODEPORT CH_NATIVE_NODEPORT FALKOR_NODEPORT
+  PG_NODEPORT="$(live_nodeport trial-postgres postgres)"
+  CH_HTTP_NODEPORT="$(live_nodeport trial-clickhouse http)"
+  CH_NATIVE_NODEPORT="$(live_nodeport trial-clickhouse native)"
+  FALKOR_NODEPORT="$(live_nodeport trial-falkordb redis)"
   ip="$(node_ip)"
   [[ -n "$ip" ]] || die "could not resolve a node InternalIP from KUBECONFIG"
   # Cluster secret is the credential source of truth (team-lead design
