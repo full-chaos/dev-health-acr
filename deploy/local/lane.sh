@@ -190,8 +190,15 @@ ensure_cluster() {
     || die "cluster '$CLUSTER' exists but no kubeconfig at $KUBECONFIG — it was created from another checkout; point LANE_KUBECONFIG at that file (or LANE_CLUSTER at a new name)"
 }
 
+# The ACR image is required only when the acr release is actually installed
+# (codex R3): LANE_SKIP_ACR=1 is the documented ops-only path, and an operator
+# taking it has no reason to have built that image -- demanding it made
+# `kiac.sh load-image` fail on an image the run would never use, before the
+# ops-only lane could start. ensure_acr_release reads the same flag.
 lane_required_images() {
-  printf '%s\n' "$LANE_OPS_IMAGE" "$WEB_IMAGE" "$ACR_IMAGE" \
+  printf '%s\n' "$LANE_OPS_IMAGE" "$WEB_IMAGE"
+  [[ "${LANE_SKIP_ACR:-0}" = "1" ]] || printf '%s\n' "$ACR_IMAGE"
+  printf '%s\n' \
     dev-health-go-worker:latest \
     dev-health-go-scheduler:latest \
     dev-health-go-reconciler:latest \

@@ -173,7 +173,7 @@ run_lane() {
 scenario() {
   unset KFAKE_CREATE_NS_RC KFAKE_SEED_MARKER KFAKE_NS_LABEL_OUT KFAKE_NS_LABEL_ERR \
         KFAKE_NS_LABEL_RC KFAKE_LANE_PG_NODEPORT KFAKE_SVC_TABLE KFAKE_NODE_IMAGES \
-        KFAKE_CLUSTER_EXISTS KFAKE_TRIALDATA_FAIL_ON
+        KFAKE_CLUSTER_EXISTS KFAKE_TRIALDATA_FAIL_ON LANE_SKIP_ACR
   printf '\n%s\n' "$1"
 }
 
@@ -273,6 +273,31 @@ export KFAKE_CLUSTER_EXISTS=1 KFAKE_CREATE_NS_RC=0 \
 run_lane up lanefake-full
 check_absent "no image is loaded when the nodes already hold every one" \
   "kiac.sh load-image" "$(events)"
+
+# ---------------------------------------------------------------------------
+# [R3-3] Skip the ACR image in ops-only mode
+#
+# LANE_SKIP_ACR=1 is the documented ops-only path, and an operator taking it has
+# no reason to have built the ACR image. The loader demanded it anyway, so
+# `kiac.sh load-image` failed on an image the run was never going to use, before
+# the ops-only lane could start.
+# ---------------------------------------------------------------------------
+scenario '[R3-3] ops-only mode does not require the ACR image'
+export KFAKE_CREATE_NS_RC=0 KFAKE_TRIALDATA_FAIL_ON=apply LANE_SKIP_ACR=1
+run_lane up lanefake-opsonly
+load_argv="$(grep -F 'kiac.sh load-image' "$tmp/events" || true)"
+check_contains "a fresh ops-only cluster still loads the ops image" \
+  "dev-health-ops-local:test" "$load_argv"
+check_absent "the ACR image is not loaded when ACR is disabled" \
+  "dev-health-acr" "$load_argv"
+
+# The other direction, so the fix cannot degrade into "never load ACR".
+scenario '[R3-3] the ACR image is still loaded when ACR is enabled'
+export KFAKE_CREATE_NS_RC=0 KFAKE_TRIALDATA_FAIL_ON=apply
+run_lane up lanefake-withacr
+load_argv="$(grep -F 'kiac.sh load-image' "$tmp/events" || true)"
+check_contains "the ACR image is loaded on the default path" \
+  "dev-health-acr:dev" "$load_argv"
 
 # ---------------------------------------------------------------------------
 if (( failures > 0 )); then
