@@ -813,7 +813,7 @@ func projectTeamsStatement(cursor cursorState) string {
 	// note above records.
 	ownershipRows := func(match string) string {
 		return `
-		SELECT p.id AS project_id, p.provider AS provider, p.key_resolution_count AS key_resolution_count, p.project_key AS project_key,
+		SELECT p.id AS project_id, p.provider AS provider,
 		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at
 		FROM ` + readers.ProjectIdentityCatalogSQL() + `
 		INNER JOIN (
@@ -827,8 +827,7 @@ func projectTeamsStatement(cursor cursorState) string {
        min(o.valid_from) AS first_valid_from,
        argMax(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open,
        ifNull(argMax(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
-       max(o.updated_at) AS updated_at,
-       max(o.key_resolution_count) AS key_resolution_count, o.provider, max(o.project_key) AS project_key
+       max(o.updated_at) AS updated_at, o.provider
 FROM (` + ownershipRows(readers.ProjectIdentityMatchSQL("o", "project_ref")) + `
 
 		UNION ALL
@@ -839,26 +838,33 @@ GROUP BY o.project_id, o.provider, o.team_id, o.source_name` + havingSincePredic
 
 func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, omissions *ambiguityLedger) ([]candidate, bool, error) {
 	const rowKey = projectTeamsRowKey
+	// Record ambiguity BEFORE reading the page. The rows this telemetry
+	// describes are precisely the ones the page will NOT contain, so there
+	// is nothing in the result set to infer them from.
+	if err := recordAmbiguousProjectKeys(ctx, client, orgID, omissions); err != nil {
+		return nil, false, err
+	}
 	statement := projectTeamsStatement(cursor)
 	rows, truncated, err := fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var projectID, teamID, source, provider, projectKey string
+		var projectID, teamID, source, provider string
 		var validFrom, latestValidTo, observedAt time.Time
 		var latestIsOpen uint8
-		var keyResolutionCount uint64
-		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt, &keyResolutionCount, &provider, &projectKey); err != nil {
+		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt, &provider); err != nil {
 			return nil, err
 		}
 		observedAt, validFrom, latestValidTo = observedAt.UTC(), validFrom.UTC(), latestValidTo.UTC()
 		rowSortKey := projectID + ":" + teamID + ":" + source
-		// An ambiguous project_key is omitted, not guessed and not fatal --
-		// see this function's ambiguity note. It still yields a PROGRESS
-		// candidate: the row was consumed and spent page budget, so the
-		// cursor must advance past it or a page of omissions stalls the walk
-		// forever (progressCandidate's doc comment).
-		if keyResolutionCount > 1 {
-			omissions.add(provider, projectKey)
-			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
-		}
+		// No ambiguity branch here on purpose. Ambiguity is a property of the
+		// KEY arm, and that arm now excludes an ambiguous key in SQL
+		// (ProjectIdentityJoinSQL emits a key scope row only for
+		// key_resolution_count = 1), so every row reaching this scan is a
+		// resolved match. The scan-side guard that used to live here read a
+		// PROJECT-level count off a per-scope row and discarded unambiguous
+		// id matches with it -- CHAOS-4542 class 4. Keeping it as a
+		// belt-and-braces check would be worse than useless: it can no
+		// longer fire, and a guard that cannot fire is a false claim that
+		// something is being guarded. recordAmbiguousProjectKeys carries the
+		// telemetry instead.
 		projectCanonicalID, projectOmitted, err := identity.Derive(identity.KindProject, []string{provider, projectID}, nil)
 		if err != nil {
 			return nil, err
@@ -889,6 +895,76 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 		return nil, false, err
 	}
 	return rows, truncated, nil
+}
+
+// ambiguousProjectKeysStatement lists the (provider, project_key) pairs that
+// name MORE THAN ONE project and that some ownership row actually references.
+//
+// This exists because the omission it reports is invisible everywhere else.
+// An ambiguous key is excluded inside ProjectIdentityJoinSQL -- the key scope
+// row is emitted only for key_resolution_count = 1 -- so a key-shaped
+// ownership row whose key resolves to two projects joins to nothing and never
+// reaches queryProjectTeams' scan at all. Correct (neither project may be
+// guessed) and quiet, and quiet is the half that is not acceptable: an
+// unrecorded omission is indistinguishable from an ownership that simply does
+// not exist, which is the shape of silence this wave keeps removing.
+//
+// The INNER JOIN to team_project_ownership is what makes this an omission
+// report rather than a data-quality census: an ambiguous key that no
+// ownership row references cost nobody an edge, and counting it would inflate
+// the signal toward alarm exactly as page-scoping once deflated it toward
+// health.
+//
+// Deliberately NOT a third copy of the identity join. It answers a different
+// question -- "which keys are ambiguous", not "which project does this row
+// mean" -- and reusing the join here would couple the telemetry to the very
+// resolution whose gaps it exists to report.
+//
+// Equality-only ON with no function call, because ClickHouse 24.8 (the CI
+// fixture pin) rejects anything else outright with Code: 403 while 26.7
+// accepts it -- CHAOS-4542 class 4, twice.
+const ambiguousProjectKeysStatement = `SELECT p.provider, p.project_key, count() AS project_count
+FROM (
+	SELECT provider, ifNull(project_key, '') AS project_key, id
+	FROM projects FINAL
+	WHERE org_id = {org_id:String}
+) AS p
+INNER JOIN (
+	SELECT DISTINCT provider, ifNull(project_key, '') AS project_key
+	FROM team_project_ownership FINAL
+	WHERE org_id = {org_id:String}
+) AS o ON o.provider = p.provider AND o.project_key = p.project_key
+WHERE p.project_key != ''
+GROUP BY p.provider, p.project_key
+HAVING count() > 1`
+
+// recordAmbiguousProjectKeys feeds the run-scoped ledger the keys whose
+// ownership edges the SQL dropped.
+//
+// Run per page rather than once per run: an incremental catch-up never starts
+// from an empty cursor, so first-page-only would report nothing for exactly
+// the runs that do most of the work. The ledger deduplicates on
+// (provider, project_key), so repeating the statement across pages cannot
+// double-count -- it costs one bounded aggregate per page and buys telemetry
+// that is otherwise unrecoverable.
+func recordAmbiguousProjectKeys(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, omissions *ambiguityLedger) error {
+	if omissions == nil {
+		return nil
+	}
+	rows, err := client.Query(ctx, ambiguousProjectKeysStatement, []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var provider, projectKey string
+		var projectCount uint64
+		if err := rows.Scan(&provider, &projectKey, &projectCount); err != nil {
+			return err
+		}
+		omissions.add(provider, projectKey)
+	}
+	return rows.Err()
 }
 
 // logAmbiguousProjectKeys surfaces omitted ownership edges as a bounded

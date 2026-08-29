@@ -57,8 +57,29 @@ type fakeClient struct {
 	tables []fakeTable
 }
 
+// ambiguousProjectKeysMarker identifies the ambiguity ledger's side query
+// (recordAmbiguousProjectKeys, teams_projects_edges.go). It needs its own
+// dispatch because that statement names team_project_ownership as well, so
+// the substring loop below would happily serve it the OWNERSHIP table's rows
+// and then scan a ten-column edge row into three destinations -- a panic that
+// reports itself as a scan-type bug rather than a fake-routing one.
+const ambiguousProjectKeysMarker = "AS project_count"
+
 func (c *fakeClient) Query(_ context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	requireOrgIDBinding(statement, bindings)
+	if strings.Contains(statement, ambiguousProjectKeysMarker) {
+		for _, table := range c.tables {
+			if table.match == ambiguousProjectKeysMarker {
+				if table.err != nil {
+					return nil, table.err
+				}
+				return &fakeScanner{rows: table.rows}, nil
+			}
+		}
+		// Unregistered means "this organization has no ambiguous keys",
+		// which is what every test that is not about ambiguity intends.
+		return &fakeScanner{}, nil
+	}
 	for _, table := range c.tables {
 		if strings.Contains(statement, table.match) {
 			if table.err != nil {

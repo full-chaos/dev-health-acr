@@ -136,3 +136,27 @@ func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
 		t.Fatalf("TeamsProjectsSourceVersion = %q, want %q -- changing this constant is a deliberate full-rebuild decision, so update this test with the reason in the constant's doc comment", TeamsProjectsSourceVersion, want)
 	}
 }
+
+// The ambiguity ledger's own statement must obey the same ON-shape rule as
+// the join it reports on: ClickHouse 24.8 (the CI fixture pin) rejects a
+// JOIN ... ON containing OR or a function call outright with Code: 403, while
+// 26.7 accepts it -- so this is a defect that passes locally and fails only in
+// CI, twice already on this ticket.
+func TestChaos4542_AmbiguityLedgerStatementIsPortableTo248(t *testing.T) {
+	t.Parallel()
+	on := ambiguousProjectKeysStatement[strings.Index(ambiguousProjectKeysStatement, ") AS o ON ")+len(") AS o ON "):]
+	on = on[:strings.Index(on, "\n")]
+	if strings.Contains(on, " OR ") || strings.Contains(on, "(") {
+		t.Fatalf("JOIN ON %q must be equality-only: 24.8 rejects OR and function calls with Code: 403", on)
+	}
+	// It must also stay an OMISSION report rather than a data-quality census:
+	// an ambiguous key no ownership row references cost nobody an edge.
+	if !strings.Contains(ambiguousProjectKeysStatement, "FROM team_project_ownership FINAL") {
+		t.Fatal("the ledger must join to team_project_ownership -- counting keys nothing references inflates the signal toward alarm")
+	}
+	// And it must be organization-scoped on BOTH sides, or one tenant's
+	// projects make another tenant's key look ambiguous.
+	if strings.Count(ambiguousProjectKeysStatement, "org_id = {org_id:String}") != 2 {
+		t.Fatal("both the projects and ownership subqueries must be scoped to the organization")
+	}
+}

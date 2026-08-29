@@ -366,14 +366,17 @@ func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug st
 	return []any{workItemID, teamID, source, confidence, repoID, repoSlug, computedAt}
 }
 
-// projectTeamRow mirrors queryProjectTeams' SELECT list exactly, trailing
-// key_resolution_count included -- the per-(provider, project_key) project
-// count the producer uses to omit an ambiguous key. A row here supplies 1
-// (unambiguous); the multi-resolution behaviour is tested against real SQL in
-// teams_projects_ownership_integration_test.go, since a canned-row fake
-// cannot exercise the window function that computes it.
+// projectTeamRow mirrors queryProjectTeams' SELECT list exactly.
+//
+// The trailing key_resolution_count and project_key are GONE as of
+// CHAOS-4542: ambiguity is a property of the key arm, that arm excludes an
+// ambiguous key in SQL, and so every row reaching the scan is already a
+// resolved match. Ambiguity telemetry comes from a separate statement
+// (ambiguousProjectKeysMarker), which is where a canned-row fake can exercise
+// it -- the window function that decides ambiguity was never something this
+// fake could compute anyway.
 func projectTeamRow(projectID, teamID, source string, validFrom time.Time, latestIsOpen uint8, latestValidTo, updatedAt time.Time) []any {
-	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, uint64(1), "github", "KEY-" + projectID}
+	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, "github"}
 }
 
 // liveShapedEdgeClient replays the ground-truth org's real edge row shapes:
@@ -590,10 +593,23 @@ func TestEveryTeamsProjectsEdgeTypeIsDeclared(t *testing.T) {
 	}
 }
 
-// ambiguousProjectTeamRow mirrors projectTeamRow but reports the key as
-// resolving to two projects, so the producer omits it.
-func ambiguousProjectTeamRow(projectID, teamID, source, provider, projectKey string, updatedAt time.Time) []any {
-	return []any{projectID, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, uint64(2), provider, projectKey}
+// omittedProjectTeamRow is a row the producer consumes and emits no
+// relationship for -- the "spent page budget, produced no payload" shape the
+// progress-memo machinery exists to handle.
+//
+// It used to be an AMBIGUOUS row, because a scan-side guard dropped those.
+// CHAOS-4542 removed that guard: ambiguity belongs to the key arm, which now
+// excludes an ambiguous key in SQL, so no ambiguous row ever reaches the scan
+// to be omitted. The remaining omission path is identity.Derive refusing a
+// natural key over MaxNaturalKeyBytes (256), which is what this builds.
+//
+// The distinction matters for what these tests then prove: they are about the
+// MEMO, not about ambiguity, and pinning them to an omission path that still
+// exists is what keeps them from passing vacuously. Ambiguity telemetry has
+// its own test against the ledger's own statement.
+func omittedProjectTeamRow(projectID, teamID, source string, updatedAt time.Time) []any {
+	oversized := projectID + strings.Repeat("x", 256)
+	return []any{oversized, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, "github"}
 }
 
 // TestOmissionTelemetryCountsDistinctKeysAcrossTheRun is codex round-2 F3.
@@ -603,14 +619,25 @@ func ambiguousProjectTeamRow(projectID, teamID, source, provider, projectKey str
 // health -- measurement failing toward fine.
 func TestOmissionTelemetryCountsDistinctKeysAcrossTheRun(t *testing.T) {
 	t.Parallel()
-	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
-	// Three omitted rows, but only TWO distinct (provider, project_key):
-	// keying on team/source would report 3, keying on the key reports 2.
+	// CHAOS-4542: the telemetry's SOURCE moved. An ambiguous key no longer
+	// reaches the scan at all -- ProjectIdentityJoinSQL emits a key scope row
+	// only for key_resolution_count = 1, so the ownership row joins to nothing
+	// and the page simply does not contain it. Reporting it therefore takes an
+	// explicit statement (recordAmbiguousProjectKeys), and this test is RED
+	// without one: with the side query absent the ledger stays empty,
+	// logAmbiguousProjectKeys suppresses a zero, and no line is written.
+	//
+	// What is being asserted is unchanged: DISTINCT (provider, project_key)
+	// accumulated across the run.
+	//
+	// Three ambiguous keys reported, but only TWO distinct (provider,
+	// project_key) -- the same key seen under two providers is two, the same
+	// key seen twice is one.
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM team_project_ownership FINAL", rows: [][]any{
-			ambiguousProjectTeamRow("p1", "team-a", "native", "github", "SHARED", at),
-			ambiguousProjectTeamRow("p2", "team-b", "manual", "github", "SHARED", at.Add(time.Minute)),
-			ambiguousProjectTeamRow("p3", "team-c", "native", "gitlab", "OTHER", at.Add(2*time.Minute)),
+		{match: ambiguousProjectKeysMarker, rows: [][]any{
+			{"github", "SHARED", uint64(2)},
+			{"gitlab", "OTHER", uint64(3)},
+			{"github", "SHARED", uint64(2)},
 		}},
 	}}
 
@@ -741,7 +768,7 @@ func TestConsumedProgressIsRefusedWhenItDoesNotMatchTheCheckpoint(t *testing.T) 
 	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM team_project_ownership FINAL", rows: [][]any{
-			ambiguousProjectTeamRow("p1", "team-a", "native", "github", "SHARED", at),
+			omittedProjectTeamRow("p1", "team-a", "native", at),
 		}},
 	}}
 	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
@@ -770,7 +797,7 @@ func TestConsumedProgressIsReportedOnceForItsOwnCheckpoint(t *testing.T) {
 	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM team_project_ownership FINAL", rows: [][]any{
-			ambiguousProjectTeamRow("p1", "team-a", "native", "github", "SHARED", at),
+			omittedProjectTeamRow("p1", "team-a", "native", at),
 		}},
 	}}
 	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
@@ -814,8 +841,7 @@ func TestProgressMemoDoesNotSurviveAPublishedBatch(t *testing.T) {
 	// no result, because there was never a memo to clear.
 	rows := make([][]any, 0, 260)
 	for i := 0; i < 250; i++ {
-		rows = append(rows, ambiguousProjectTeamRow(
-			fmt.Sprintf("p-omitted-%03d", i), "team-a", "native", "github", fmt.Sprintf("SHARED-%03d", i), at.Add(time.Duration(i)*time.Second)))
+		rows = append(rows, omittedProjectTeamRow(fmt.Sprintf("p-omitted-%03d", i), "team-a", fmt.Sprintf("SHARED-%03d", i), at.Add(time.Duration(i)*time.Second)))
 	}
 	rows = append(rows, projectTeamRow("p-published", "team-b", "native", at.Add(time.Hour), 1, time.Unix(0, 0).UTC(), at.Add(time.Hour)))
 	client := &fakeClient{tables: []fakeTable{
@@ -865,8 +891,7 @@ func TestProgressMemoIsDiscardedByAFromScratchRun(t *testing.T) {
 	// out loud rather than passing quietly.
 	ambiguous := make([][]any, 0, 200)
 	for i := 0; i < 200; i++ {
-		ambiguous = append(ambiguous, ambiguousProjectTeamRow(
-			fmt.Sprintf("p%03d", i), "team-a", "native", "github", fmt.Sprintf("KEY-%03d", i), at.Add(time.Duration(i)*time.Second)))
+		ambiguous = append(ambiguous, omittedProjectTeamRow(fmt.Sprintf("p%03d", i), "team-a", fmt.Sprintf("KEY-%03d", i), at.Add(time.Duration(i)*time.Second)))
 	}
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM team_project_ownership FINAL", rows: ambiguous},
