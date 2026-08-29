@@ -120,7 +120,22 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // stale v6 marker never revisits an already-committed team row (its own
 // `teams.updated_at` did not change), so only a full rebuild replaces the
 // wildcard with the real scope everywhere it was already projected.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v7"
+//
+// v8 (CHAOS-4542): queryProjectTeams (teams_projects_edges.go) now resolves
+// team<->project ownership on PROJECT IDENTITY -- project_id, with the
+// project_key match kept as a second arm -- instead of on project_key
+// alone. CHAOS-4530 nulls project_key on the UUID-keyed ownership rows and
+// leaves a real Linear project's projects.project_key nil by design, so the
+// old key-only join matches NOTHING for Linear the moment 4530 deploys.
+// Same deliberate-rebuild discipline as v2-v7, and for the sharpest reason
+// yet: the OLD edges are not merely stale, they are the only edges an
+// already-projected organization has, and incremental catch-up under a
+// stale v7 marker never revisits an already-committed ownership interval
+// (team_project_ownership.updated_at does not move just because this
+// producer's join did). Without this bump the fix would land, deploy, and
+// change nothing for every organization already projected -- the exact
+// silent no-op the v3 entry above exists to remember.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v8"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -286,29 +301,36 @@ func (s *TeamsProjectsSource) recordConsumed(fromCursor string) func(orgID, curs
 // reported each page's slice instead of the run's total. Understated
 // omission telemetry reads as health -- measurement failing toward fine.
 type ambiguityLedger struct {
-	mu   sync.Mutex
-	keys map[string]struct{}
+	mu        sync.Mutex
+	conflicts map[string]struct{}
 }
 
-func (l *ambiguityLedger) add(provider, projectKey string) {
+// addConflict records an ownership row whose project_id and project_key
+// resolve to DIFFERENT projects. Kept separate from the ambiguous-key set
+// because the two are different operator questions: an ambiguous key means
+// "this key names several projects", a conflicting identity means "this ROW
+// names two projects and disagrees with itself". Collapsing them into one
+// number would tell an operator that something was dropped without saying
+// which kind of wrong the data is.
+func (l *ambiguityLedger) addConflict(provider, rowKey string) {
 	if l == nil {
 		return
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.keys == nil {
-		l.keys = map[string]struct{}{}
+	if l.conflicts == nil {
+		l.conflicts = map[string]struct{}{}
 	}
-	l.keys[provider+"\x00"+projectKey] = struct{}{}
+	l.conflicts[provider+"\x00"+rowKey] = struct{}{}
 }
 
-func (l *ambiguityLedger) count() int {
+func (l *ambiguityLedger) conflictCount() int {
 	if l == nil {
 		return 0
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return len(l.keys)
+	return len(l.conflicts)
 }
 
 // ledgerFor returns this organization's ledger, starting a fresh one when the
@@ -732,7 +754,35 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		s.forgetConsumed(checkpoint.OrgID)
 	}
 	ledger := s.ledgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
-	defer logAmbiguousProjectKeys(ctx, s.logger, checkpoint.OrgID, ledger.count())
+	// The closure is load-bearing. `defer log(..., ledger.conflictCount())`
+	// evaluates the count HERE, before any query runs -- always 0, and a zero
+	// is suppressed -- so the telemetry would report the PREVIOUS call's
+	// total and a single-call run would say nothing at all. That was a real
+	// bug on the ambiguity line before it moved (CHAOS-4542 defect 7); the
+	// sibling defers below pass their ledger POINTER and read it when the
+	// deferred call runs, which is why only the one passing an int was silent.
+	defer func() { logConflictingIdentities(ctx, s.logger, checkpoint.OrgID, ledger.conflictCount()) }()
+	// A catalog FACT, not a reconstruction of which rows were dropped. The
+	// reconstructive census that used to live here was wrong in four
+	// consecutive review rounds, in both directions, and left with its own
+	// ticket: recovering per-row outcomes from aggregate SQL is the wrong
+	// shape for the job. What an operator gets here is "this organization has
+	// N ambiguous keys", which a plain query can actually establish.
+	//
+	// Once per call rather than once per page. It is still repeated across
+	// the calls of an oversized backfill -- noted on the follow-up ticket
+	// with the rest of the census work, not silently.
+	// Routed through the SAME boundary as every source-table read (codex
+	// R3). Returning this error raw skipped tableReadError and
+	// logTableReadFailure entirely, so a census failure reached the
+	// coordinator unclassified and with no ClickHouse code or class --
+	// inside the very change that added that classification because its
+	// absence had cost this lane two rounds. A read is a read: it does not
+	// get a private error path because it is telemetry.
+	if err := countAmbiguousProjectKeysInCatalog(ctx, s.client, s.logger, strings.TrimSpace(checkpoint.OrgID)); err != nil {
+		logTableReadFailure(ctx, s.logger, TeamsProjectsSourceName, checkpoint.OrgID, ambiguityCensusTable, err)
+		return contextfabric.ProjectionBatch{}, false, &tableReadError{table: ambiguityCensusTable, cause: err}
+	}
 	presence := s.presenceLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logPresenceTelemetry(ctx, s.logger, checkpoint.OrgID, presence)
 	teamAuth := s.teamAuthLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
@@ -742,6 +792,7 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		source:         TeamsProjectsSourceName,
 		version:        TeamsProjectsSourceVersion,
 		tables:         teamsProjectsTables(ledger, presence, teamAuth),
+		logger:         s.logger,
 		now:            s.now,
 		recordConsumed: s.recordConsumed(checkpoint.Cursor),
 		dropConsumed:   s.forgetConsumed,

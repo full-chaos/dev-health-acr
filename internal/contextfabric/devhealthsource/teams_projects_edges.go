@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // TeamsProjectsRelationshipTypes lists every ContextFabricRelationshipType
@@ -734,44 +735,215 @@ func projectTeamsQuery(omissions *ambiguityLedger) func(context.Context, context
 	}
 }
 
-func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, omissions *ambiguityLedger) ([]candidate, bool, error) {
-	const rowKey = "concat(p.id, ':', o.team_id, ':', o.source_name)"
-	statement := `SELECT p.id, o.team_id, o.source_name, o.first_valid_from, o.latest_is_open, o.latest_valid_to, o.updated_at, p.key_resolution_count, o.provider, o.project_key
+// projectTeamsRowKey is the pagination tiebreaker for queryProjectTeams,
+// shared by the keyset predicate and the ORDER BY so the two cannot drift.
+const projectTeamsRowKey = "concat(o.project_id, ':', o.team_id, ':', o.source_name)"
+
+// CHAOS-4542: joined on PROJECT IDENTITY, and grouped on the RESOLVED
+// projects.id.
+//
+// WHY the join moved. CHAOS-4530 makes ownership rows UUID-keyed on
+// team_project_ownership.project_id, nulls their project_key, and
+// leaves real Linear projects' projects.project_key nil by design. The
+// old `USING (provider, project_key)` plus `WHERE o.project_key != ”`
+// therefore matches NOTHING for Linear once that deploys: this producer
+// would emit zero OWNED_BY_TEAM edges and the graph would silently lose
+// team<->project for every Linear project. It already reaches no real
+// Linear project today, for the same reason.
+//
+// WHY the catalog form of the identity expansion, not the filtered one.
+// This is a CATALOG walker -- it paginates the whole org by cursor and
+// has no requested-subject list -- so ProjectIdentityJoinSQL's
+// `... IN {ids:Array(String)}` row source cannot be used here: with no
+// `ids` binding it fails with `Code: 456 Substitution 'ids' is not set`.
+// That is the mismatch a first attempt at this change hit, and it is
+// why v0.5.3 added ProjectIdentityCatalogSQL as the unfiltered sibling.
+//
+// WHY the GROUP BY moved with it, which is the dangerous half. The
+// THIRD note above explains that grouping on the source's own
+// project_id was avoided because two rows differing only in project_id
+// resolve to the SAME projects.id, duplicating a RelationshipID --
+// ContextFabricProjectionBatch.Validate() then rejects the whole batch,
+// a rejected batch never advances a checkpoint, and the organization's
+// projection WEDGES PERMANENTLY. Matching on identity makes that
+// collision reachable for real during the 4530 transition, when one
+// project can carry both a key-shaped and a UUID-shaped ownership row.
+//
+// Grouping on the resolved p.id closes it by construction: whatever id
+// space the source rows arrive in, they collapse into ONE group per
+// (project, team, source), because the group key IS the projected
+// identity. Strictly safer than the previous grouping, which held only
+// because (provider, project_key) happened to resolve 1:1. The collapse
+// the FIRST note describes -- 616 rows in, exactly 3 out -- is
+// preserved: same aggregation, keyed one join later.
+//
+// Pagination follows the aggregate. updated_at is now max(o.updated_at),
+// which a WHERE cannot reference, so the keyset condition is emitted as
+// HAVING through havingSincePredicate -- the same condition delegated,
+// not a second spelling of it.
+func projectTeamsStatement(cursor cursorState) string {
+	// TWO equality-joined arms, UNION ALL'd at ROW level, then aggregated
+	// on the RESOLVED projects.id.
+	//
+	//  A. o.project_id  = p.scope        -- the SCOPE arm. It matches scope
+	//     rows of BOTH kinds deliberately and must NOT be given a
+	//     scope_kind restriction: project_id is not an id column, it is
+	//     whichever id space that row uses, and today's GitLab rows hold a
+	//     project KEY there. CHAOS-4530's UUID-keyed rows match the id row,
+	//     today's GitLab rows match the key row.
+	//  B. o.project_key = p.scope        -- the KEY arm, and the ONLY arm
+	//     that names scope_kind. It matches the key SCOPE ROW rather than
+	//     p.project_key, a column EVERY scope row carries: joining that
+	//     column let an id row satisfy a key-shaped guard, and two projects
+	//     sharing a key both matched an ownership row naming neither
+	//     (CHAOS-4542 defect 6). An ambiguous key now has no scope row at
+	//     all -- readers v0.5.5 applies the filter inside the expansion --
+	//     so neither arm can resolve one, and no guard here can be
+	//     forgotten. This arm is otherwise the ORIGINAL join, kept. An
+	//     ownership row may carry a project_id that correlates with nothing
+	//     while its project_key is the only column tying it to a project.
+	//     Dropping this arm loses those rows entirely -- which is exactly
+	//     what the "tied assertions resolve deterministically" fixture
+	//     caught: it seeds project_id 'ownership-row-open'/'-closed' against
+	//     project_key 'TIE-KEY', so arm A matches neither.
+	//
+	// The union is at ROW level, not after aggregation, because the
+	// aggregates (min(valid_from), the argMax window pair, max(updated_at))
+	// must see EVERY contributing row for a (project, team, source) at
+	// once -- aggregating per arm and merging afterwards would compute the
+	// validity window twice over two partial row sets and pick a winner
+	// from the wrong one.
+	//
+	// The outer GROUP BY on the resolved p.id is what makes the arms safe
+	// to union at all, and is the wedge guard: two ownership rows in
+	// DIFFERENT id spaces resolving to one project collapse into one group,
+	// so they cannot duplicate a RelationshipID. A duplicate rejects the
+	// batch, a rejected batch never advances a checkpoint, and the
+	// organization's projection wedges PERMANENTLY -- the hazard the THIRD
+	// note above records.
+	// where carries any scope_kind restriction. It is a WHERE and not part
+	// of the ON because 24.8 rejects an ON that is not a plain column
+	// equality, and 'key' is a literal.
+	ownershipRows := func(match, where string) string {
+		return `
+		SELECT p.id AS project_id, p.provider AS provider,
+		       o.project_ref AS ownership_ref, o.project_key AS ownership_key,
+		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at
+		FROM ` + readers.ProjectIdentityCatalogSQL() + `
+		INNER JOIN (
+			SELECT provider, ` + readers.ProjectOwnershipJoinColumn + ` AS project_ref, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name, valid_from, valid_to, updated_at
+			FROM team_project_ownership FINAL
+			WHERE org_id = {org_id:String}
+		) AS o ON o.provider = p.provider AND ` + match + `
+		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id` + where
+	}
+	// FAIL CLOSED on conflicting identities (codex R2 P2-1).
+	//
+	// The two arms resolve INDEPENDENTLY, so one ownership row whose
+	// project_id resolves project A while its project_key resolves a
+	// DIFFERENT project B produces a row from each, and the outer grouping
+	// keeps both because it groups by the RESOLVED project. One of those
+	// two OWNED_BY_TEAM edges is fabricated -- an ownership the source
+	// never asserted -- and this table's project_id is documented as
+	// unreliable, so there is no basis for calling either the winner.
+	//
+	// Same principle as an ambiguous key: never pick between two
+	// disagreeing columns. min() = max() over the ownership row's own
+	// identity is "exactly one distinct resolved project", spelled without
+	// a DISTINCT aggregate (24.8 has no windowed uniqExact) and as a plain
+	// equality.
+	//
+	// The conflicting rows are NOT filtered out in SQL. They are marked and
+	// omitted in the scan, which is what lets them reach the ledger -- an
+	// unrecorded omission is indistinguishable from an ownership that does
+	// not exist, and a fabricated edge suppressed silently is exactly the
+	// kind of correction an operator needs to see.
+	//
+	// The outer alias is deliberately NOT identity_conflict: an alias that
+	// shadows the column it aggregates bound to itself on 24.8 once already
+	// in this file's history, and cost a live round to find.
+	return `SELECT o.project_id, o.team_id, o.source_name,
+       minIf(o.valid_from, o.identity_conflict = 0) AS first_valid_from,
+       argMaxIf(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC'))), o.identity_conflict = 0).1 IS NULL AS latest_is_open,
+       ifNull(argMaxIf(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC'))), o.identity_conflict = 0).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
+       max(o.updated_at) AS updated_at, o.provider,
+       toUInt8(countIf(o.identity_conflict = 0) = 0) AS edge_suppressed,
+       groupUniqArrayIf(concat(o.ownership_ref, '\0', o.ownership_key, '\0', o.team_id, '\0', o.source_name), o.identity_conflict = 1) AS conflict_identities
 FROM (
-  SELECT provider, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name,
-         min(valid_from) AS first_valid_from,
-         argMax(tuple(valid_to), (valid_from, valid_to IS NULL, ifNull(valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open,
-         ifNull(argMax(tuple(valid_to), (valid_from, valid_to IS NULL, ifNull(valid_to, toDateTime64(0, 3, 'UTC')))).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
-         max(updated_at) AS updated_at
-  FROM team_project_ownership FINAL
-  WHERE org_id = {org_id:String}
-  GROUP BY provider, project_key, team_id, source_name
+	SELECT project_id, provider, ownership_ref, ownership_key, team_id, source_name, valid_from, valid_to, updated_at,
+	       toUInt8(min(project_id) OVER (PARTITION BY provider, ownership_ref, ownership_key) != max(project_id) OVER (PARTITION BY provider, ownership_ref, ownership_key)) AS identity_conflict
+	FROM (` + ownershipRows(readers.ProjectIdentityMatchSQL("o", "project_ref"), "") + `
+
+		UNION ALL
+` + ownershipRows("o.project_key = p.scope", "\n\t\tWHERE p.scope_kind = 'key'") + `
+	)
 ) AS o
-INNER JOIN (
-  SELECT id, provider, project_key, count() OVER (PARTITION BY provider, project_key) AS key_resolution_count
-  FROM (SELECT id, provider, ifNull(project_key, '') AS project_key FROM projects FINAL WHERE org_id = {org_id:String})
-) AS p USING (provider, project_key)
-INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id
-WHERE o.project_key != ''` + sincePredicate(cursor, "o.updated_at", rowKey) + orderBy("o.updated_at", rowKey)
+GROUP BY o.project_id, o.provider, o.team_id, o.source_name` + havingSincePredicate(cursor, "max(o.updated_at)", projectTeamsRowKey) + orderBy("max(o.updated_at)", projectTeamsRowKey)
+}
+
+func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, omissions *ambiguityLedger) ([]candidate, bool, error) {
+	const rowKey = projectTeamsRowKey
+	statement := projectTeamsStatement(cursor)
 	rows, truncated, err := fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
-		var projectID, teamID, source, provider, projectKey string
+		var projectID, teamID, source, provider string
 		var validFrom, latestValidTo, observedAt time.Time
-		var latestIsOpen uint8
-		var keyResolutionCount uint64
-		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt, &keyResolutionCount, &provider, &projectKey); err != nil {
+		var latestIsOpen, edgeSuppressed uint8
+		var conflictIdentities []string
+		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt, &provider, &edgeSuppressed, &conflictIdentities); err != nil {
 			return nil, err
 		}
 		observedAt, validFrom, latestValidTo = observedAt.UTC(), validFrom.UTC(), latestValidTo.UTC()
 		rowSortKey := projectID + ":" + teamID + ":" + source
-		// An ambiguous project_key is omitted, not guessed and not fatal --
-		// see this function's ambiguity note. It still yields a PROGRESS
-		// candidate: the row was consumed and spent page budget, so the
-		// cursor must advance past it or a page of omissions stalls the walk
-		// forever (progressCandidate's doc comment).
-		if keyResolutionCount > 1 {
-			omissions.add(provider, projectKey)
+		// FAIL CLOSED: this ownership row's project_id and project_key
+		// resolve to DIFFERENT projects, so at most one of the two edges it
+		// produces is real and nothing here can say which. Emit neither, and
+		// record it -- a suppressed fabrication an operator never hears about
+		// is only half a fix. Still a PROGRESS candidate: the row was
+		// consumed and spent page budget, so the cursor must advance past it
+		// or a page of conflicts stalls the walk forever.
+		// Recording and suppressing are INDEPENDENT (team-lead review). A
+		// conflicting row is recorded even when a CLEAN row in the same group
+		// keeps the edge alive: "was an ownership dropped" is not the same
+		// question as "did this edge survive", and answering only the second
+		// hides the first.
+		{
+			// Keyed on the OWNERSHIP row, not the resolved edge (codex R3).
+			// One conflicting row produces two flagged result rows -- one per
+			// resolved project -- and rowSortKey carries the resolved id, so
+			// keying on it counted a single disagreeing source row twice and
+			// reported double the suppressions that happened.
+			//
+			// The full SET, not a representative. max() would have named one
+			// ownership row per group, and a group can hold several: two rows
+			// sharing a team, a source and a project_id but disagreeing via
+			// DIFFERENT keys both land here, and max() would have counted
+			// them as one. Over-reporting and under-reporting are the same
+			// defect wearing opposite signs, and this ticket has now shipped
+			// both.
+			for _, conflicted := range conflictIdentities {
+				omissions.addConflict(provider, conflicted)
+			}
+		}
+		// Suppressed only when NO clean row asserted this edge. The group is
+		// (project_id, provider, team_id, source_name), so a clean row can
+		// share it with a conflicting one; suppressing the GROUP would drop
+		// the clean row's legitimate edge -- a missing edge, the exact class
+		// this ticket exists to remove, reintroduced by the guard against
+		// fabricating one.
+		if edgeSuppressed == 1 {
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
+		// No ambiguity branch here on purpose. Ambiguity is a property of the
+		// KEY arm, and that arm now excludes an ambiguous key in SQL
+		// (ProjectIdentityJoinSQL emits a key scope row only for
+		// key_resolution_count = 1), so every row reaching this scan is a
+		// resolved match. The scan-side guard that used to live here read a
+		// PROJECT-level count off a per-scope row and discarded unambiguous
+		// id matches with it -- CHAOS-4542 class 4. Keeping it as a
+		// belt-and-braces check would be worse than useless: it can no
+		// longer fire, and a guard that cannot fire is a false claim that
+		// something is being guarded. recordAmbiguousProjectKeys carries the
+		// telemetry instead.
 		projectCanonicalID, projectOmitted, err := identity.Derive(identity.KindProject, []string{provider, projectID}, nil)
 		if err != nil {
 			return nil, err
@@ -804,20 +976,87 @@ WHERE o.project_key != ''` + sincePredicate(cursor, "o.updated_at", rowKey) + or
 	return rows, truncated, nil
 }
 
-// logAmbiguousProjectKeys surfaces omitted ownership edges as a bounded
-// signal, counting DISTINCT (provider, project_key) keys accumulated over the
-// whole source run rather than one page's slice keyed by something else. Without it, an omission is indistinguishable from an
-// ownership that simply does not exist, which is the shape of silence this
-// wave keeps removing. The message carries a fixed reason and a COUNT only --
-// never a project key, project id or team id, which are tenant data; the
-// organization is hashed the same way logOrphanedWorkItems hashes it.
-func logAmbiguousProjectKeys(ctx context.Context, logger *slog.Logger, orgID string, omitted int) {
-	if logger == nil || omitted == 0 {
-		return
+// ambiguousProjectKeysInCatalogStatement counts (provider, project_key)
+// pairs that name MORE THAN ONE project in this organization's catalog.
+//
+// It is a FACT ABOUT THE CATALOG, and the log field says so:
+// ambiguous_project_keys_in_catalog. It is deliberately NOT a claim about
+// dropped edges, and the difference is the whole reason this replaced what
+// was here before.
+//
+// What was here before tried to reconstruct, from aggregate SQL, which
+// individual ownership rows had been eliminated -- membership tests against
+// the scope catalog, per-ref attribution, a bound on the reconstruction. It
+// was wrong in four consecutive review rounds, in both directions: it
+// over-reported omissions that never happened, missed omissions that did,
+// double-counted one disagreement as two, and claimed truncation at exactly
+// its limit. Not bad arithmetic four times -- a component asked to recover
+// per-row facts from an aggregation that had already destroyed them.
+// CHAOS-4542's follow-up carries that work; this reports only what a plain
+// catalog query can actually know.
+//
+// No ownership join, no scope expansion, no reconstruction. An operator
+// reading this learns "this organization has N ambiguous keys", which is
+// true, useful, and checkable -- and learns nothing false about edges.
+const ambiguousProjectKeysInCatalogStatement = `SELECT count() AS ambiguous_keys
+FROM (
+	SELECT provider, project_key
+	FROM (
+		SELECT provider, ifNull(project_key, '') AS project_key
+		FROM projects FINAL
+		WHERE org_id = {org_id:String}
+	)
+	WHERE project_key != ''
+	GROUP BY provider, project_key
+	HAVING count() > 1
+	LIMIT {census_limit:UInt32}
+)`
+
+// ambiguousProjectKeysCensusLimit bounds the catalog count so a pathological
+// tenant cannot make this grow without limit. Reached means the number is a
+// floor; the log says so rather than presenting a capped value as a total.
+const ambiguousProjectKeysCensusLimit = 500
+
+// ambiguityCensusTable is this read's label in the bounded classification and
+// in its log line. It names the QUESTION the read answers rather than a
+// physical table: an operator debugging a held checkpoint needs to know which
+// read failed, and "projects" would not distinguish it from the producer's own.
+const ambiguityCensusTable = "ambiguous project key catalog count"
+
+// countAmbiguousProjectKeysInCatalog logs the catalog fact once per
+// NextProjectionBatch. It reports nothing when the catalog is clean: zero
+// ambiguous keys is the normal state and a line per batch saying so is noise,
+// not signal.
+func countAmbiguousProjectKeysInCatalog(ctx context.Context, client contextpacket.ClickHouseQueryClient, logger *slog.Logger, orgID string) error {
+	if client == nil || logger == nil {
+		return nil
 	}
-	logger.WarnContext(ctx, "devhealthsource omitted project ownership edges for ambiguous project keys",
+	rows, err := client.Query(ctx, ambiguousProjectKeysInCatalogStatement, []contextpacket.ClickHouseBinding{
+		{Name: "org_id", Value: orgID},
+		{Name: "census_limit", Value: uint32(ambiguousProjectKeysCensusLimit)},
+	})
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var ambiguous uint64
+	if rows.Next() {
+		if err := rows.Scan(&ambiguous); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if ambiguous == 0 {
+		return nil
+	}
+	logger.WarnContext(ctx, "devhealthsource organization catalog holds ambiguous project keys",
 		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
-		"reason", "project_key resolves to more than one project within its provider", "omitted_ambiguous_project_keys", omitted)
+		"reason", "a project_key naming more than one project cannot resolve an ownership row that carries only that key",
+		"ambiguous_project_keys_in_catalog", ambiguous,
+		"count_bounded_at", ambiguousProjectKeysCensusLimit)
+	return nil
 }
 
 // ownershipValidity states a project->team edge's window explicitly in both
@@ -832,4 +1071,25 @@ func ownershipValidity(validFrom time.Time, latestIsOpen uint8, latestValidTo ti
 	}
 	to := latestValidTo
 	return &from, &to
+}
+
+// logConflictingIdentities reports ownership rows suppressed because their
+// project_id and project_key resolve to different projects.
+//
+// Separate from logAmbiguousProjectKeys on purpose. Both are omissions, but
+// they answer different operator questions -- "this key names several
+// projects" versus "this ROW names two projects and disagrees with itself" --
+// and the second is a data-integrity signal about the writer, not about key
+// reuse. One combined number would say something was dropped without saying
+// which kind of wrong the data is.
+//
+// Fixed reason and a COUNT only, the same budget as its sibling: never a
+// project id, key, team id or row key, all of which are tenant data.
+func logConflictingIdentities(ctx context.Context, logger *slog.Logger, orgID string, suppressed int) {
+	if logger == nil || suppressed == 0 {
+		return
+	}
+	logger.WarnContext(ctx, "devhealthsource suppressed project ownership edges for conflicting identities",
+		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+		"reason", "ownership row's project_id and project_key resolve to different projects", "suppressed_conflicting_identities", suppressed)
 }

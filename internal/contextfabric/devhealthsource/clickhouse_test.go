@@ -57,8 +57,29 @@ type fakeClient struct {
 	tables []fakeTable
 }
 
+// ambiguousProjectKeysMarker identifies the catalog ambiguity count
+// (countAmbiguousProjectKeysInCatalog, teams_projects_edges.go). It keeps its
+// own dispatch because that statement names `projects`, which the substring
+// loop would otherwise serve from another table's canned rows and then scan
+// into the wrong destinations -- a panic that reports itself as a scan-type
+// bug rather than a fake-routing one.
+const ambiguousProjectKeysMarker = "AS ambiguous_keys"
+
 func (c *fakeClient) Query(_ context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	requireOrgIDBinding(statement, bindings)
+	if strings.Contains(statement, ambiguousProjectKeysMarker) {
+		for _, table := range c.tables {
+			if table.match == ambiguousProjectKeysMarker {
+				if table.err != nil {
+					return nil, table.err
+				}
+				return &fakeScanner{rows: table.rows}, nil
+			}
+		}
+		// Unregistered means "this organization has no ambiguous keys",
+		// which is what every test that is not about ambiguity intends.
+		return &fakeScanner{}, nil
+	}
 	for _, table := range c.tables {
 		if strings.Contains(statement, table.match) {
 			if table.err != nil {

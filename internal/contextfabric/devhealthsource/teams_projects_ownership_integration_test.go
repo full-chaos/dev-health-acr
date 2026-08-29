@@ -1,11 +1,14 @@
 package devhealthsource_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -397,7 +400,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 	}{
 		{"collapse does not merge across providers", "30000000-0000-4000-8000-000000000001", subOwnershipCollapseDoesNotMergeAcrossProviders},
 		{"window takes the latest assertion", "30000000-0000-4000-8000-000000000002", subOwnershipWindowTakesTheLatestAssertion},
-		{"ambiguous project key omits the edge", "30000000-0000-4000-8000-000000000003", subAmbiguousProjectKeyOmitsTheEdgeRatherThanGuessing},
+		{"ambiguous project key resolves an id and omits a key", "30000000-0000-4000-8000-000000000003", subAmbiguousProjectKeyResolvesAnIDAndOmitsAKey},
 		{"ambiguous rows do not stall pagination", "30000000-0000-4000-8000-000000000004", subAmbiguousRowsDoNotStallPagination},
 		{"tied assertions resolve deterministically", "30000000-0000-4000-8000-000000000005", subTiedOwnershipAssertionsResolveDeterministically},
 		{"ambiguity guard is scoped to one organization", "30000000-0000-4000-8000-000000000006", subAmbiguityGuardIsScopedToOneOrganization},
@@ -407,6 +410,8 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"team authorization is refreshed by an ownership-only change", "30000000-0000-4000-8000-00000000000a", subTeamAuthorizationRefreshedByOwnershipOnlyChange},
 		{"team authorization is refreshed by revoking the last open repository", "30000000-0000-4000-8000-00000000000c", subTeamAuthorizationRefreshedByRevokingLastOpenRepository},
 		{"team authorization ownership join is scoped to one organization", "30000000-0000-4000-8000-00000000000b", subTeamAuthorizationOwnershipJoinScopedToOneOrganization},
+		{"two id-space ownership rows for one project yield exactly one edge", "30000000-0000-4000-8000-00000000000d", subTwoIDSpaceRowsYieldExactlyOneEdge},
+		{"empty-key projects each keep their own edge", "30000000-0000-4000-8000-00000000000e", subEmptyKeyProjectsEachKeepTheirOwnEdge},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -515,34 +520,78 @@ func assertUniqueRelationshipIDs(t *testing.T, batch contextfabric.ProjectionBat
 	}
 }
 
-// TestAmbiguousProjectKeyOmitsTheEdgeRatherThanGuessing closes the failure
-// mode the F1 rewrite MOVED rather than removed.
+// subAmbiguousProjectKeyResolvesAnIDAndOmitsAKey is TWO cases that used to be
+// one, and separating them is the CHAOS-4542 premise correction.
 //
-// Grouping ownership on (provider, project_key) and resolving through
-// projects assumes (org, provider, project_key) names exactly one project.
-// That holds in live data today, but nothing in the schema enforces it, and
-// the failure is invisible where every other duplicate is loud: a key
-// resolving to two projects fans the join out to two rows with two DISTINCT
-// projects.id, so the RelationshipIDs differ and
-// ContextFabricProjectionBatch.Validate never trips. The result would be a
-// fabricated ownership edge to a project the source never asserted -- the
-// same class of silent invention as the cross-provider merge, one level down.
+// The old test asserted that an ownership row naming PROJ-AMBIG-A was omitted
+// because two projects share (github, AMBIG-KEY). That was right only while
+// project_id was read as a KEY. It is not a key: it is projects.id, which is
+// unique, so the row is not ambiguous at all and omitting it discarded an
+// ownership the source stated plainly. The ambiguity of some OTHER project's
+// key has nothing to do with a match that never consulted a key.
 //
-// The producer omits BOTH candidates rather than picking one, and does not
-// fail the batch: one ambiguous key must not take an organization's whole
-// projection down, and guessing between two projects is exactly the
-// "discoveries may not mint canonical truth" line.
-func subAmbiguousProjectKeyOmitsTheEdgeRatherThanGuessing(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+// So the id-shaped row is now a POSITIVE assertion. Ambiguity is a property
+// of the KEY arm alone, and the key-shaped row below is what carries it:
+//
+//   - id-shaped  (project_id = projects.id)      -> edge emitted
+//   - key-shaped (project_id = an ambiguous key) -> NO edge, and a ledger entry
+//
+// The second half must be omitted AND recorded. The omission is correct --
+// choosing between two equally-matching projects would mint canonical truth
+// from a coin flip -- and it is not fatal, because one ambiguous key must not
+// take an organization's whole projection down. But an unrecorded omission is
+// indistinguishable from an ownership that simply does not exist, and after
+// CHAOS-4542 the exclusion happens inside the join where nothing downstream
+// can see it. That is why the ledger has its own statement.
+func subAmbiguousProjectKeyResolvesAnIDAndOmitsAKey(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	logged := &bytes.Buffer{}
+	fixture.source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+
+	// KEY-shaped: project_id carries the ambiguous KEY, so the id arm matches
+	// nothing and the key arm excludes it. The baseline fixture already seeded
+	// PROJ-AMBIG-A and PROJ-AMBIG-B under (github, AMBIG-KEY).
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITLAB', 'AMBIG-KEY', 'AMBIG-KEY', 'native', ?, NULL, ?)`,
+		fixture.orgID, ownershipFirstSeen, ownershipLaterAssertion)
 
 	batch := fixture.project(t, ctx)
-	for _, projectID := range []string{"PROJ-AMBIG-A", "PROJ-AMBIG-B"} {
-		id := "relationship:project_team:github:" + projectID + ":TEAM-GITHUB:native"
-		if hasRelationship(batch, id) {
-			t.Errorf("emitted %q from an ambiguous project_key -- two projects share (github, AMBIG-KEY), so which one the source meant is unknowable and neither may be guessed", id)
+	assertUniqueRelationshipIDs(t, batch)
+
+	// The id-shaped row from the baseline fixture: unambiguous, so emitted.
+	const resolved = "relationship:project_team:github:PROJ-AMBIG-A:TEAM-GITHUB:native"
+	if !hasRelationship(batch, resolved) {
+		t.Errorf("%q missing -- the ownership row names projects.id, which is unique, so another project sharing its KEY cannot make it ambiguous", resolved)
+	}
+	// The key-shaped row: neither candidate may be guessed, and the raw key
+	// must never be minted as a project id of its own.
+	for _, forbidden := range []string{
+		"relationship:project_team:github:PROJ-AMBIG-A:TEAM-GITLAB:native",
+		"relationship:project_team:github:PROJ-AMBIG-B:TEAM-GITLAB:native",
+		"relationship:project_team:github:AMBIG-KEY:TEAM-GITLAB:native",
+	} {
+		if hasRelationship(batch, forbidden) {
+			t.Errorf("emitted %q from an ambiguous project_key -- two projects share (github, AMBIG-KEY), so which one the source meant is unknowable and neither may be guessed", forbidden)
 		}
 	}
-	// The unambiguous edges must survive: omission is per-key, never a
-	// whole-batch refusal.
+	// Omitted is only half; recorded is the other half -- but WHICH half is
+	// recorded changed, and honestly.
+	//
+	// This used to assert `omitted_ambiguous_project_keys`, a per-row claim
+	// reconstructed from aggregate SQL. That reconstruction was wrong in four
+	// consecutive review rounds in both directions and was removed rather
+	// than patched a fifth time (CHAOS-4566 carries it). What remains is a
+	// fact a plain query can actually establish: this organization's catalog
+	// holds an ambiguous key.
+	//
+	// So the honest state of this case is: the edge is correctly omitted, the
+	// CONDITION that omitted it is visible, and attributing the omission to
+	// this specific ownership row is not -- which is exactly what CHAOS-4566
+	// exists to restore. Asserting the catalog line rather than deleting the
+	// assertion keeps that gap documented by a test instead of by silence.
+	if output := logged.String(); !strings.Contains(output, "ambiguous_project_keys_in_catalog=") {
+		t.Errorf("nothing reported the ambiguity that omitted this edge -- the exclusion happens inside the join, so with no catalog signal either it is invisible to everyone downstream; got:\n%s", output)
+	}
+
+	// One ambiguous key must not suppress the rest.
 	for _, id := range []string{
 		"relationship:project_team:github:PROJ-GITHUB:TEAM-GITHUB:native",
 		"relationship:project_team:github:PROJ-OPEN:TEAM-GITHUB:native",
@@ -551,23 +600,8 @@ func subAmbiguousProjectKeyOmitsTheEdgeRatherThanGuessing(t *testing.T, ctx cont
 			t.Errorf("lost the unambiguous edge %q -- one ambiguous key must not suppress the rest", id)
 		}
 	}
-	assertUniqueRelationshipIDs(t, batch)
 }
 
-// TestAmbiguousRowsDoNotStallPagination is codex round-2 F1, and it is the
-// defect the ambiguity omission introduced.
-//
-// Omission happens AFTER the raw-row limit, in the scan, so an omitted row
-// consumes page budget while contributing no candidate. A page whose rows are
-// all omitted therefore produces an EMPTY candidate set, and pagedBatch
-// returns available=false without ever building a batch -- so the cursor never
-// advances past those rows. The next tick reads the same page, omits the same
-// rows, and stops again: the source reports "caught up" forever while valid
-// edges sitting beyond the ambiguous block are never reached.
-//
-// Cursor advancement has to be driven by RAW ROWS CONSUMED, not by candidates
-// emitted. This seeds a full page of ambiguous rows ahead of a valid edge and
-// asserts the walk both reaches the edge and terminates.
 func subAmbiguousRowsDoNotStallPagination(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 	fixture.seedAmbiguousBlockThenValidEdge(t, ctx)
 
@@ -614,16 +648,22 @@ func (f *ownershipFixture) seedAmbiguousBlockThenValidEdge(t *testing.T, ctx con
 	early := ownershipLaterAssertion.Add(1 * time.Hour)
 	block := ownershipLaterAssertion.Add(24 * time.Hour)
 	beyond := ownershipLaterAssertion.Add(48 * time.Hour)
-	// Each generated key resolves to TWO projects, so it is ambiguous and the
-	// join yields two rows per key -- comfortably past one page.
+	// CHAOS-4542: these rows are omitted by identity.Derive (a natural key
+	// past MaxNaturalKeyBytes), NOT by ambiguity any more. An ambiguous
+	// KEY-shaped row is now excluded inside the join, so it never reaches the
+	// scan, spends no page budget, and cannot produce the fully-omitted page
+	// this test needs. The keys stay ambiguous so the ledger still has
+	// something to report -- but the STALL this test exists for is driven by
+	// an omission path that still exists, which is the difference between a
+	// test and a decoration.
 	mustExec(t, ctx, f.direct, `INSERT INTO projects
-SELECT concat('P-AMBIG-A-', toString(number)), ?, 'github', concat('BULK-', toString(number)), 'bulk a', 1, 'started', '', ?
+SELECT concat('P-AMBIG-A-', repeat('x', 232), toString(number)), ?, 'github', concat('BULK-', toString(number)), 'bulk a', 1, 'started', '', ?
 FROM numbers(150)`, f.orgID, early)
 	mustExec(t, ctx, f.direct, `INSERT INTO projects
-SELECT concat('P-AMBIG-B-', toString(number)), ?, 'github', concat('BULK-', toString(number)), 'bulk b', 1, 'started', '', ?
+SELECT concat('P-AMBIG-B-', repeat('x', 232), toString(number)), ?, 'github', concat('BULK-', toString(number)), 'bulk b', 1, 'started', '', ?
 FROM numbers(150)`, f.orgID, early)
 	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership
-SELECT ?, 'github', 'TEAM-GITHUB', concat('P-AMBIG-A-', toString(number)), concat('BULK-', toString(number)), 'native', ?, NULL, ?
+SELECT ?, 'github', 'TEAM-GITHUB', concat('P-AMBIG-A-', repeat('x', 232), toString(number)), concat('BULK-', toString(number)), 'native', ?, NULL, ?
 FROM numbers(150)`, f.orgID, block, block)
 
 	// Also early, so the page holding the ambiguous block cannot be rescued
@@ -715,10 +755,24 @@ func subAmbiguityGuardIsScopedToOneOrganization(t *testing.T, ctx context.Contex
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, 'CROSS-ORG-KEY', 'native', ?, NULL, ?)`,
 		fixture.orgID, "PROJ-THIS-ORG", ownershipFirstSeen, at)
 
+	// CHAOS-4542: the row above is id-shaped, so it resolves without ever
+	// consulting a key and would survive a broken ambiguity window. This
+	// KEY-shaped row is the one with teeth: 'CROSS-ORG-KEY' names exactly ONE
+	// project WITHIN this organization, so the key arm must resolve it. If
+	// the window counted the other organization's project too, the count
+	// would be two, the key scope row would not be emitted at all, and this
+	// edge would vanish with no error anywhere.
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITLAB', 'CROSS-ORG-KEY', 'CROSS-ORG-KEY', 'native', ?, NULL, ?)`,
+		fixture.orgID, ownershipFirstSeen, at)
+
 	batch := fixture.project(t, ctx)
-	const wantEdge = "relationship:project_team:github:PROJ-THIS-ORG:TEAM-GITHUB:native"
-	if !hasRelationship(batch, wantEdge) {
-		t.Fatalf("%q was omitted -- the ambiguity window counted another organization's project, so a single unambiguous project looked like two", wantEdge)
+	for _, wantEdge := range []string{
+		"relationship:project_team:github:PROJ-THIS-ORG:TEAM-GITHUB:native",
+		"relationship:project_team:github:PROJ-THIS-ORG:TEAM-GITLAB:native",
+	} {
+		if !hasRelationship(batch, wantEdge) {
+			t.Errorf("%q was omitted -- the ambiguity window counted another organization's project, so a single unambiguous project looked like two", wantEdge)
+		}
 	}
 	// The other organization's rows must not leak into this projection at all.
 	for _, forbidden := range []string{
@@ -896,20 +950,137 @@ func (f *ownershipFixture) seedOversizedAmbiguousBlock(t *testing.T, ctx context
 	early := ownershipLaterAssertion.Add(1 * time.Hour)
 	block := ownershipLaterAssertion.Add(24 * time.Hour)
 	beyond := ownershipLaterAssertion.Add(48 * time.Hour)
-	// 5200 ambiguous keys x 2 projects each = 10400 joined rows, past the
-	// 50-page x 200-row in-process bound.
+	// 5200 keys x 2 projects each = 10400 joined rows, past the 50-page x
+	// 200-row in-process bound (maxOmittedPageSkips 50 x 200), which is why
+	// the row count cannot be reduced -- the bound is what this test exists
+	// to cross.
+	//
+	// The padding is 232, the smallest that still overflows
+	// MaxNaturalKeyBytes: "project.v2:github:P-BOUND-A-" + pad + index
+	// crosses 256 at pad ~225 (measured, not assumed). 256 was arbitrary and
+	// made every one of these 10 400 rows a ~275-byte sort key for no
+	// benefit. Omitted via an oversized natural key for the
+	// same reason as seedAmbiguousBlockThenValidEdge above: after CHAOS-4542
+	// ambiguity no longer produces a scan-side omission, so driving this with
+	// ambiguous keys alone would leave the worker nothing to skip and this
+	// test would converge for the wrong reason.
 	const keys = 5200
 	for _, half := range []string{"A", "B"} {
 		mustExec(t, ctx, f.direct, `INSERT INTO projects
-SELECT concat('P-BOUND-`+half+`-', toString(number)), ?, 'github', concat('BOUND-', toString(number)), 'bulk', 1, 'started', '', ?
+SELECT concat('P-BOUND-`+half+`-', repeat('x', 232), toString(number)), ?, 'github', concat('BOUND-', toString(number)), 'bulk', 1, 'started', '', ?
 FROM numbers(?)`, f.orgID, early, uint64(keys))
 	}
 	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership
-SELECT ?, 'github', 'TEAM-GITHUB', concat('P-BOUND-A-', toString(number)), concat('BOUND-', toString(number)), 'native', ?, NULL, ?
+SELECT ?, 'github', 'TEAM-GITHUB', concat('P-BOUND-A-', repeat('x', 232), toString(number)), concat('BOUND-', toString(number)), 'native', ?, NULL, ?
 FROM numbers(?)`, f.orgID, block, block, uint64(keys))
 
 	mustExec(t, ctx, f.direct, `INSERT INTO projects VALUES (?, ?, 'github', 'PAST-BOUND-KEY', 'past bound', 1, 'started', '', ?)`,
 		"PROJ-PAST-BOUND", f.orgID, early)
 	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, 'PAST-BOUND-KEY', 'native', ?, NULL, ?)`,
 		f.orgID, "PROJ-PAST-BOUND", beyond, beyond)
+}
+
+// subTwoIDSpaceRowsYieldExactlyOneEdge is the CHAOS-4542 wedge case, and the
+// reason the GROUP BY had to move to the RESOLVED projects.id rather than
+// stay on the source's own columns.
+//
+// During the CHAOS-4530 transition one project legitimately carries BOTH a
+// key-shaped ownership row (project_id holding the project KEY, the GitLab
+// shape and today's legacy rows) and a UUID-shaped one (project_id holding
+// projects.id, what 4530 writes). Both resolve, through different arms of
+// the identity match, to the SAME projects.id -- and therefore to the same
+// RelationshipID.
+//
+// What makes that catastrophic rather than merely untidy:
+// ContextFabricProjectionBatch.Validate() rejects a batch with duplicate
+// relationship IDs, a rejected batch never advances a checkpoint, and the
+// organization's team/project projection then WEDGES PERMANENTLY -- it
+// retries the same failing tick forever. This function's own THIRD note
+// records that hazard as the reason the source's project_id was originally
+// kept out of the GROUP BY.
+//
+// So: exactly ONE edge, and the batch must validate. Asserting only
+// "an edge exists" would pass with two, which is the failure.
+func subTwoIDSpaceRowsYieldExactlyOneEdge(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	const projectID = "PROJ-DUAL-SPACE"
+	const projectKey = "DUAL-KEY"
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, ?, 1, 'started', '', ?)`,
+		projectID, fixture.orgID, projectKey, projectID+" name", ownershipLaterAssertion)
+	// Key-shaped: project_id holds the project KEY (the legacy/GitLab shape).
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
+		fixture.orgID, projectKey, projectKey, ownershipFirstSeen, ownershipLaterAssertion)
+	// UUID-shaped: project_id holds projects.id (what CHAOS-4530 writes).
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
+		fixture.orgID, projectID, projectKey, ownershipFirstSeen, ownershipLaterAssertion)
+
+	batch := fixture.project(t, ctx)
+
+	// The batch validating at all is half the assertion: a duplicate
+	// RelationshipID is what wedges the projection.
+	assertUniqueRelationshipIDs(t, batch)
+
+	const wanted = "relationship:project_team:github:" + projectID + ":TEAM-GITHUB:native"
+	matches := 0
+	for _, relationship := range batch.Relationships {
+		if relationship.RelationshipID == wanted {
+			matches++
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("relationship %q appeared %d times, want exactly 1 -- two ownership rows in different id spaces resolved to one project and were not collapsed; a duplicate RelationshipID rejects the batch, and a rejected batch never advances a checkpoint", wanted, matches)
+	}
+	// The edge must also be the RESOLVED project, never the raw key the
+	// key-shaped row carried.
+	if hasRelationship(batch, "relationship:project_team:github:"+projectKey+":TEAM-GITHUB:native") {
+		t.Errorf("emitted an edge keyed on the raw project_key %q rather than the resolved projects.id", projectKey)
+	}
+}
+
+// subEmptyKeyProjectsEachKeepTheirOwnEdge is the shape every other fixture
+// in this file is missing, and the reason a chain of four defects reached
+// live data before anyone noticed (CHAOS-4542, P1-1).
+//
+// Every project seeded above is given a project_key. Real Linear projects
+// have NONE -- projects.project_key is nil by design, and CHAOS-4530 nulls
+// it on the ownership row too, leaving project_id carrying projects.id. So
+// the entire production shape this producer exists to serve appears in no
+// test here, and both the ambiguity guard and the identity join were free
+// to be wrong about it while thirteen subtests stayed green.
+//
+// What was wrong: the shared expansion computed key_resolution_count at
+// PROJECT grain and carried it on every scope row, so a UUID match -- which
+// is unambiguous by construction, projects.id being unique -- inherited
+// "how many empty-key projects does this org have". Two is already enough
+// to trip a `> 1` guard; the org this was measured against had seventeen.
+// Both edges below were omitted as ambiguous, and the omission logged a
+// project_key of "" for a match that never consulted a key at all.
+//
+// TWO projects, not one, is the whole point: with one, an empty-key
+// partition of size one passes the guard and the fixture proves nothing.
+func subEmptyKeyProjectsEachKeepTheirOwnEdge(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	const teamID = "TEAM-LINEAR"
+	projectIDs := []string{
+		"6241316a-85be-42ce-b243-8e41f2b18c8d",
+		"7c1f0b52-0d33-4a7e-9f21-1b6a5d0e4c77",
+	}
+	mustExec(t, ctx, fixture.direct, `INSERT INTO teams VALUES (?, ?, '', ?, ?, 'linear', ?, [], 1)`,
+		teamID, teamID+" name", ownershipLaterAssertion, fixture.orgID, teamID)
+	for _, projectID := range projectIDs {
+		// NULL project_key on BOTH rows: the real Linear shape after
+		// CHAOS-4530, not an empty string standing in for it.
+		mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'linear', NULL, ?, 1, 'started', '', ?)`,
+			projectID, fixture.orgID, projectID+" name", ownershipLaterAssertion)
+		mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'linear', ?, ?, NULL, 'native', ?, NULL, ?)`,
+			fixture.orgID, teamID, projectID, ownershipFirstSeen, ownershipLaterAssertion)
+	}
+
+	batch := fixture.project(t, ctx)
+	assertUniqueRelationshipIDs(t, batch)
+
+	for _, projectID := range projectIDs {
+		wanted := "relationship:project_team:linear:" + projectID + ":" + teamID + ":native"
+		if !hasRelationship(batch, wanted) {
+			t.Errorf("relationship %q missing -- a UUID match is unambiguous by construction, so no empty-key partition may suppress it; this is what CHAOS-4530 makes the ONLY shape Linear ownership has", wanted)
+		}
+	}
 }

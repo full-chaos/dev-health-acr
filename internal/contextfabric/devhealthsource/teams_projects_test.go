@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"log/slog"
 	"strings"
 	"testing"
@@ -366,14 +367,17 @@ func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug st
 	return []any{workItemID, teamID, source, confidence, repoID, repoSlug, computedAt}
 }
 
-// projectTeamRow mirrors queryProjectTeams' SELECT list exactly, trailing
-// key_resolution_count included -- the per-(provider, project_key) project
-// count the producer uses to omit an ambiguous key. A row here supplies 1
-// (unambiguous); the multi-resolution behaviour is tested against real SQL in
-// teams_projects_ownership_integration_test.go, since a canned-row fake
-// cannot exercise the window function that computes it.
+// projectTeamRow mirrors queryProjectTeams' SELECT list exactly.
+//
+// The trailing key_resolution_count and project_key are GONE as of
+// CHAOS-4542: ambiguity is a property of the key arm, that arm excludes an
+// ambiguous key in SQL, and so every row reaching the scan is already a
+// resolved match. Ambiguity telemetry comes from a separate statement
+// (ambiguousProjectKeysMarker), which is where a canned-row fake can exercise
+// it -- the window function that decides ambiguity was never something this
+// fake could compute anyway.
 func projectTeamRow(projectID, teamID, source string, validFrom time.Time, latestIsOpen uint8, latestValidTo, updatedAt time.Time) []any {
-	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, uint64(1), "github", "KEY-" + projectID}
+	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, "github", uint8(0), []string{}}
 }
 
 // liveShapedEdgeClient replays the ground-truth org's real edge row shapes:
@@ -590,60 +594,23 @@ func TestEveryTeamsProjectsEdgeTypeIsDeclared(t *testing.T) {
 	}
 }
 
-// ambiguousProjectTeamRow mirrors projectTeamRow but reports the key as
-// resolving to two projects, so the producer omits it.
-func ambiguousProjectTeamRow(projectID, teamID, source, provider, projectKey string, updatedAt time.Time) []any {
-	return []any{projectID, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, uint64(2), provider, projectKey}
-}
-
-// TestOmissionTelemetryCountsDistinctKeysAcrossTheRun is codex round-2 F3.
-// The count was keyed by team_id:source and scoped to one page, so several
-// distinct ambiguous keys collapsed into one number and a multi-page catch-up
-// reported a slice of the truth. Understated omission telemetry reads as
-// health -- measurement failing toward fine.
-func TestOmissionTelemetryCountsDistinctKeysAcrossTheRun(t *testing.T) {
-	t.Parallel()
-	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
-	// Three omitted rows, but only TWO distinct (provider, project_key):
-	// keying on team/source would report 3, keying on the key reports 2.
-	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM team_project_ownership FINAL", rows: [][]any{
-			ambiguousProjectTeamRow("p1", "team-a", "native", "github", "SHARED", at),
-			ambiguousProjectTeamRow("p2", "team-b", "manual", "github", "SHARED", at.Add(time.Minute)),
-			ambiguousProjectTeamRow("p3", "team-c", "native", "gitlab", "OTHER", at.Add(2*time.Minute)),
-		}},
-	}}
-
-	logged := &bytes.Buffer{}
-	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
-	if err != nil {
-		t.Fatalf("NewTeamsProjectsSource: %v", err)
-	}
-	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
-
-	// A non-empty cursor means "continuing a run", so the ledger must NOT
-	// reset between these two calls -- that is the accumulation half.
-	for call := 0; call < 2; call++ {
-		if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
-			OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
-		}); err != nil {
-			t.Fatalf("call %d: %v", call, err)
-		}
-	}
-
-	output := logged.String()
-	if !strings.Contains(output, "omitted_ambiguous_project_keys=2") {
-		t.Fatalf("want a run total of 2 DISTINCT (provider, project_key) keys; got:\n%s", output)
-	}
-	if strings.Contains(output, "omitted_ambiguous_project_keys=3") {
-		t.Fatalf("counted omitted ROWS rather than distinct ambiguity keys:\n%s", output)
-	}
-	// Nothing tenant-identifying may reach the log line.
-	for _, secret := range []string{"SHARED", "OTHER", "team-a", "team-b", "p1", liveOrgID} {
-		if strings.Contains(output, secret) {
-			t.Errorf("omission telemetry leaked tenant data %q:\n%s", secret, output)
-		}
-	}
+// omittedProjectTeamRow is a row the producer consumes and emits no
+// relationship for -- the "spent page budget, produced no payload" shape the
+// progress-memo machinery exists to handle.
+//
+// It used to be an AMBIGUOUS row, because a scan-side guard dropped those.
+// CHAOS-4542 removed that guard: ambiguity belongs to the key arm, which now
+// excludes an ambiguous key in SQL, so no ambiguous row ever reaches the scan
+// to be omitted. The remaining omission path is identity.Derive refusing a
+// natural key over MaxNaturalKeyBytes (256), which is what this builds.
+//
+// The distinction matters for what these tests then prove: they are about the
+// MEMO, not about ambiguity, and pinning them to an omission path that still
+// exists is what keeps them from passing vacuously. Ambiguity telemetry has
+// its own test against the ledger's own statement.
+func omittedProjectTeamRow(projectID, teamID, source string, updatedAt time.Time) []any {
+	oversized := projectID + strings.Repeat("x", 256)
+	return []any{oversized, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, "github", uint8(0), []string{}}
 }
 
 // TestTeamAuthorizationTelemetryCountsAdmittedVersusDeniedTeams (CHAOS-4390)
@@ -741,7 +708,7 @@ func TestConsumedProgressIsRefusedWhenItDoesNotMatchTheCheckpoint(t *testing.T) 
 	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM team_project_ownership FINAL", rows: [][]any{
-			ambiguousProjectTeamRow("p1", "team-a", "native", "github", "SHARED", at),
+			omittedProjectTeamRow("p1", "team-a", "native", at),
 		}},
 	}}
 	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
@@ -770,7 +737,7 @@ func TestConsumedProgressIsReportedOnceForItsOwnCheckpoint(t *testing.T) {
 	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM team_project_ownership FINAL", rows: [][]any{
-			ambiguousProjectTeamRow("p1", "team-a", "native", "github", "SHARED", at),
+			omittedProjectTeamRow("p1", "team-a", "native", at),
 		}},
 	}}
 	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
@@ -814,8 +781,7 @@ func TestProgressMemoDoesNotSurviveAPublishedBatch(t *testing.T) {
 	// no result, because there was never a memo to clear.
 	rows := make([][]any, 0, 260)
 	for i := 0; i < 250; i++ {
-		rows = append(rows, ambiguousProjectTeamRow(
-			fmt.Sprintf("p-omitted-%03d", i), "team-a", "native", "github", fmt.Sprintf("SHARED-%03d", i), at.Add(time.Duration(i)*time.Second)))
+		rows = append(rows, omittedProjectTeamRow(fmt.Sprintf("p-omitted-%03d", i), "team-a", fmt.Sprintf("SHARED-%03d", i), at.Add(time.Duration(i)*time.Second)))
 	}
 	rows = append(rows, projectTeamRow("p-published", "team-b", "native", at.Add(time.Hour), 1, time.Unix(0, 0).UTC(), at.Add(time.Hour)))
 	client := &fakeClient{tables: []fakeTable{
@@ -865,8 +831,7 @@ func TestProgressMemoIsDiscardedByAFromScratchRun(t *testing.T) {
 	// out loud rather than passing quietly.
 	ambiguous := make([][]any, 0, 200)
 	for i := 0; i < 200; i++ {
-		ambiguous = append(ambiguous, ambiguousProjectTeamRow(
-			fmt.Sprintf("p%03d", i), "team-a", "native", "github", fmt.Sprintf("KEY-%03d", i), at.Add(time.Duration(i)*time.Second)))
+		ambiguous = append(ambiguous, omittedProjectTeamRow(fmt.Sprintf("p%03d", i), "team-a", fmt.Sprintf("KEY-%03d", i), at.Add(time.Duration(i)*time.Second)))
 	}
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM team_project_ownership FINAL", rows: ambiguous},
@@ -896,5 +861,290 @@ func TestProgressMemoIsDiscardedByAFromScratchRun(t *testing.T) {
 	}
 	if progress, ok, err := source.ConsumedWithoutPublishing(context.Background(), fromScratch); err != nil || ok {
 		t.Fatalf("a memo from before a reset must never move the post-reset cursor, got %+v ok=%v err=%v", progress, ok, err)
+	}
+}
+
+// TestChaos4542_TableReadFailureLogsTheClickHouseCode closes a diagnosability
+// defect this ticket ran into head-first.
+//
+// tableReadError deliberately reports a CLOSED classification -- "context
+// fabric dependency unavailable: read <table>" -- and deliberately keeps the
+// cause inspectable through Unwrap rather than flattening driver text into a
+// message. Both halves are right, and together they left a gap: nothing ever
+// LOOKED at the preserved cause, so an operator (and this lane, for two
+// rounds) saw a failure with no code, no exception class, and no way to tell a
+// memory limit from a timeout from a syntax error.
+//
+// A wrapper that classifies correctly and reports nothing actionable is not
+// safe, it is silent -- the same "missing is not healthy" line this wave keeps
+// enforcing, applied to error handling.
+//
+// The log line is CLOSED too: ClickHouse's numeric code and exception class
+// name, plus the table label this package authored. Never the SQL, never a
+// bound literal, never a row value, never the driver's Message -- which is
+// where ClickHouse puts query text and data.
+func TestChaos4542_TableReadFailureLogsTheClickHouseCode(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", err: &clickhousedriver.Exception{
+			Code: 241, Name: "DB::Exception",
+			Message: "Memory limit (total) exceeded: would use 9.31 GiB, SELECT o.project_id, o.team_id FROM ... WHERE org_id = 'secret-org'",
+		}},
+	}}
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelError})))
+
+	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
+	}); err == nil {
+		t.Fatal("expected the read to fail")
+	}
+
+	output := logged.String()
+	for _, want := range []string{
+		"clickhouse_exception_code=241",
+		"DB::Exception",
+		"team_project_ownership",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("log is missing %q -- a dependency failure that names no code cannot be told apart from any other; got:\n%s", want, output)
+		}
+	}
+	// The driver's Message carries query text and bound literals. It must
+	// never reach a log line, which is the reason the wrapper bounds the
+	// message in the first place.
+	for _, forbidden := range []string{"SELECT", "secret-org", "Memory limit", "9.31 GiB"} {
+		if strings.Contains(output, forbidden) {
+			t.Errorf("log leaked driver text %q -- the code and class are the whole budget; got:\n%s", forbidden, output)
+		}
+	}
+}
+
+// TestChaos4542_ConflictingIdentityEmitsNoEdge is codex R2 P2-1: the
+// producer's no-fabrication contract.
+//
+// The two arms resolve INDEPENDENTLY. An ownership row whose project_id
+// resolves project A while its project_key resolves a DIFFERENT project B
+// produces a row from each, and the outer grouping keeps both because it
+// groups by the RESOLVED project. One of those two OWNED_BY_TEAM edges is an
+// ownership the source never asserted.
+//
+// There is no basis for calling either one the winner -- this table's
+// project_id is documented as unreliable, which is why the key arm exists at
+// all -- so the row fails closed, exactly as an ambiguous key does. Choosing
+// would be minting canonical truth from a coin flip.
+//
+// Suppressed is only half. The ledger entry is the other half: a fabrication
+// an operator never hears about was corrected invisibly, and the next person
+// to look at edge counts has no way to know why they moved.
+func TestChaos4542_ConflictingIdentityEmitsNoEdge(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
+	// conflicting_identity = 1 is what the statement's min()/max() window
+	// computes for such a row; the fake cannot run a window function, so the
+	// flag is supplied the way real SQL would deliver it.
+	// conflict_ref / conflict_key are the OWNERSHIP row's own identity: the
+	// same pair on every flagged row for one disagreeing source row, which is
+	// what makes the ledger count sources rather than resolved edges.
+	conflicting := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), []string{"own-ref-1\x00OWN-KEY-1"}}
+	// The SAME ownership row, flagged once per resolved project -- which is
+	// exactly what the SQL emits: two rows, two different resolved ids, one
+	// disagreeing source row. Keying the ledger on the resolved edge counted
+	// this as TWO suppressions and told an operator that twice as much was
+	// dropped as actually was (codex R3).
+	conflictingB := []any{"proj-b", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), []string{"own-ref-1\x00OWN-KEY-1"}}
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", rows: [][]any{
+			conflicting,
+			conflictingB,
+			projectTeamRow("proj-clean", "team-x", "native", at, 1, time.Unix(0, 0).UTC(), at),
+		}},
+	}}
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+
+	batch, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
+		Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
+	})
+	if err != nil {
+		t.Fatalf("NextProjectionBatch: %v", err)
+	}
+
+	for _, fabricated := range []string{
+		"relationship:project_team:github:proj-a:team-x:native",
+		"relationship:project_team:github:proj-b:team-x:native",
+	} {
+		if hasRelationshipID(batch, fabricated) {
+			t.Errorf("emitted %q for an ownership row whose project_id and project_key resolve to DIFFERENT projects -- at most one of the two is real and nothing here can say which", fabricated)
+		}
+	}
+	// One conflicting row must not suppress the rest.
+	if !hasRelationshipID(batch, "relationship:project_team:github:proj-clean:team-x:native") {
+		t.Error("lost an unrelated unambiguous edge -- failing closed is per row, never per batch")
+	}
+	output := logged.String()
+	if !strings.Contains(output, "suppressed_conflicting_identities=1") {
+		t.Errorf("want ONE suppression for ONE disagreeing ownership row; the ledger must count source identities, not the resolved edges a single row fans out to; got:\n%s", output)
+	}
+	if strings.Contains(output, "suppressed_conflicting_identities=2") {
+		t.Errorf("counted the resolved edges rather than the source row -- one disagreement reported as two, which overstates how much was dropped; got:\n%s", output)
+	}
+}
+
+func hasRelationshipID(batch contextfabric.ProjectionBatch, id string) bool {
+	for _, relationship := range batch.Relationships {
+		if relationship.RelationshipID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// TestChaos4542_ConflictsCountEverySourceRowInAGroup is a residual I found
+// self-reviewing the arithmetic of the codex R3 fix, before it shipped.
+//
+// The R3 fix keyed conflicts on the ownership row rather than the resolved
+// edge, which stopped one disagreement being counted twice. Carrying that
+// identity as a single representative -- max(ownership_ref), max(ownership_key)
+// -- then introduced the OPPOSITE error: the outer grouping is
+// (project_id, provider, team_id, source_name), and a group can hold several
+// disagreeing ownership rows. Two rows sharing a team, a source and a
+// project_id but disagreeing via DIFFERENT keys both land in one group, and a
+// representative names one of them.
+//
+// Over-reporting and under-reporting are the same defect wearing opposite
+// signs, and this ticket has now shipped both. The set is what makes the
+// count independent of how the rows happen to group.
+func TestChaos4542_ConflictsCountEverySourceRowInAGroup(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
+	// ONE result row whose group holds TWO distinct disagreeing ownership
+	// identities -- what groupUniqArray returns for that shape.
+	twoInOneGroup := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1),
+		[]string{"own-ref-1\x00KEY-B", "own-ref-1\x00KEY-C"}}
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", rows: [][]any{twoInOneGroup}},
+	}}
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
+		Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
+	}); err != nil {
+		t.Fatalf("NextProjectionBatch: %v", err)
+	}
+	if output := logged.String(); !strings.Contains(output, "suppressed_conflicting_identities=2") {
+		t.Errorf("two disagreeing ownership rows collapsed into one group must still count as two -- a representative names one of them and understates what was dropped; got:\n%s", output)
+	}
+}
+
+// TestChaos4542_CleanRowKeepsItsEdgeBesideAConflictingOne is the team-lead
+// review finding, and it is the class this whole ticket exists to remove: a
+// MISSING edge, reintroduced by the guard against fabricating one.
+//
+// The outer grouping is (project_id, provider, team_id, source_name), so a
+// CLEAN ownership row asserting (A, team, source) can share a group with a
+// conflicting row whose project_id also resolves A. Suppressing on a
+// group-level max() dropped the clean row's legitimate edge along with the
+// fabricated one -- the fix acquiring the very defect it was written against.
+//
+// Suppression has to be per row, expressed through per-row aggregates:
+// validity over clean rows only, the edge suppressed only when NO clean row
+// exists, and the conflict identities collected from conflicting rows only so
+// the ledger can never name the clean one.
+func TestChaos4542_CleanRowKeepsItsEdgeBesideAConflictingOne(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
+	// One result row for the shared group: a clean row exists (so
+	// edge_suppressed = 0), and the conflicting row's identity is still
+	// collected.
+	sharedGroup := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github",
+		uint8(0), []string{"own-ref-conflicting\x00KEY-B"}}
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", rows: [][]any{sharedGroup}},
+	}}
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	batch, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
+		Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
+	})
+	if err != nil {
+		t.Fatalf("NextProjectionBatch: %v", err)
+	}
+	if !hasRelationshipID(batch, "relationship:project_team:github:proj-a:team-x:native") {
+		t.Error("dropped an edge a CLEAN ownership row asserted, because a conflicting row shared its group -- failing closed is per row, and a group-level suppression turns the no-fabrication guard into a missing-edge bug")
+	}
+	// The conflicting row is still recorded, even though the edge survived:
+	// "was an ownership dropped" is a different question from "did this edge
+	// survive", and answering only the second hides the first.
+	if output := logged.String(); !strings.Contains(output, "suppressed_conflicting_identities=1") {
+		t.Errorf("the conflicting row went unrecorded because a clean row kept the edge alive; got:\n%s", output)
+	}
+}
+
+// TestChaos4542_ConflictTelemetryFiresOnTheCallThatSuppressed pins a Go trap
+// with a live test rather than a comment, because the comment version of this
+// lesson already failed once.
+//
+//	defer logConflictingIdentities(ctx, s.logger, orgID, ledger.conflictCount())
+//
+// Deferred call ARGUMENTS are evaluated where the `defer` statement runs, not
+// where the deferred call runs. Written that way, conflictCount() is read
+// BEFORE any query executes -- always 0, and a zero is suppressed -- so the
+// telemetry is permanently one call behind: the run that suppressed an edge
+// reports nothing, and the NEXT run reports the previous run's total.
+//
+// That was a real defect on the ambiguity line (CHAOS-4542 defect 7). It
+// survived because the test covering it made TWO NextProjectionBatch calls
+// and read the second as testing accumulation. It was -- and it was also the
+// only reason a number ever appeared. ONE call is the case an operator has,
+// and it is the case this test insists on.
+//
+// The ambiguity ledger has since been removed with the reconstructive census,
+// which would have retired that pin. The trap now lives here, so it stays
+// pinned by something that fails rather than something that explains.
+func TestChaos4542_ConflictTelemetryFiresOnTheCallThatSuppressed(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
+	suppressed := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github",
+		uint8(1), []string{"own-ref-1\x00KEY-B\x00team-x\x00native"}}
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", rows: [][]any{suppressed}},
+	}}
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+
+	// Exactly ONE call. A second would hide the defect this pins.
+	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
+		Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
+	}); err != nil {
+		t.Fatalf("NextProjectionBatch: %v", err)
+	}
+
+	if output := logged.String(); !strings.Contains(output, "suppressed_conflicting_identities=1") {
+		t.Fatalf("the call that suppressed an edge reported nothing -- an operator does not get a second tick to find out an ownership was dropped, and a deferred ledger.conflictCount() argument is read before any query runs; got:\n%s", output)
 	}
 }

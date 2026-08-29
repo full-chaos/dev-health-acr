@@ -77,6 +77,24 @@ func orderBy(timestampExpr, rowKeyExpr string) string {
 	return fmt.Sprintf(" ORDER BY %s ASC, toString(%s) ASC LIMIT {row_limit:UInt32}", timestampExpr, rowKeyExpr)
 }
 
+// havingSincePredicate is sincePredicate for a query whose pagination
+// timestamp is an AGGREGATE (CHAOS-4542): the identical keyset condition,
+// emitted as HAVING because a WHERE cannot reference an aggregate.
+//
+// It DELEGATES rather than restating the condition. The two spellings
+// drifting apart would mean a page boundary that skips or replays rows --
+// silently, and exactly the class sincePredicate's own doc comment was
+// written about. One definition, two placements.
+func havingSincePredicate(cursor cursorState, timestampExpr, rowKeyExpr string) string {
+	predicate := sincePredicate(cursor, timestampExpr, rowKeyExpr)
+	if predicate == "" {
+		return ""
+	}
+	// sincePredicate emits a leading " AND " to extend an existing WHERE;
+	// a HAVING clause opens the condition instead.
+	return " HAVING " + strings.TrimPrefix(predicate, " AND ")
+}
+
 func rowLimitBindings(orgID string, cursor cursorState, limit int) []contextpacket.ClickHouseBinding {
 	since := cursor.Since
 	if since.IsZero() {

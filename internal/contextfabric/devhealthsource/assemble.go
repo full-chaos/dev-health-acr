@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -55,6 +57,39 @@ type sourcePlan struct {
 	// dropConsumed invalidates any recorded progress for an organization,
 	// called whenever a call publishes a batch. Optional.
 	dropConsumed func(orgID string)
+
+	// logger receives the sanitized cause of a table read failure. Optional.
+	logger *slog.Logger
+}
+
+// logTableReadFailure names WHY a dependency read failed, in a closed form.
+//
+// tableReadError classifies correctly (a closed "dependency unavailable")
+// and preserves the cause through Unwrap rather than flattening driver text
+// into a message. Both are right. Together they left a gap: nothing ever
+// LOOKED at the preserved cause, so every ClickHouse failure -- a memory
+// limit, a timeout, a syntax error -- reached an operator as the same
+// sentence. A wrapper that classifies correctly and reports nothing
+// actionable is not safe, it is silent.
+//
+// The budget is deliberately tiny: ClickHouse's numeric code and its
+// exception CLASS name, plus the table label this package authored. Never
+// the driver's Message -- that is where ClickHouse puts query text, bound
+// literals and row values, and bounding it is why the wrapper exists. A
+// non-ClickHouse cause is reported by Go TYPE only, which is a compile-time
+// identifier rather than data.
+func logTableReadFailure(ctx context.Context, logger *slog.Logger, source, orgID, table string, cause error) {
+	if logger == nil || cause == nil {
+		return
+	}
+	attrs := []any{"source", source, "org_id", redactOrg(orgID), "table", table}
+	var exception *clickhousedriver.Exception
+	if errors.As(cause, &exception) {
+		attrs = append(attrs, "clickhouse_exception_code", exception.Code, "clickhouse_exception_name", exception.Name)
+	} else {
+		attrs = append(attrs, "cause_type", fmt.Sprintf("%T", cause))
+	}
+	logger.ErrorContext(ctx, "devhealthsource table read failed", attrs...)
 }
 
 func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
@@ -103,6 +138,7 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 	for _, table := range p.tables {
 		rows, truncated, err := table.query(ctx, p.client, orgID, cursorState{}, snapshotPerQueryCap)
 		if err != nil {
+			logTableReadFailure(ctx, p.logger, p.source, orgID, table.name, err)
 			return contextfabric.ProjectionBatch{}, false, &tableReadError{table: table.name, cause: err}
 		}
 		if truncated {
@@ -160,6 +196,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		for _, table := range p.tables {
 			rows, _, err := table.query(ctx, p.client, orgID, state, incrementalBatchCap)
 			if err != nil {
+				logTableReadFailure(ctx, p.logger, p.source, orgID, table.name, err)
 				return contextfabric.ProjectionBatch{}, false, &tableReadError{table: table.name, cause: err}
 			}
 			all = append(all, rows...)
