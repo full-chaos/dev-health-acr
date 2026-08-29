@@ -138,6 +138,7 @@ lane_nodeport_base() {
   # once, then reject a base if any of its four ports is taken. A lane's own
   # ports never block it, so a partially created lane can still re-run onto its
   # own range.
+  # shellcheck disable=SC2016  # $ns is a Go template variable, not a shell one
   taken="$(kubectl get svc -A -o go-template='{{range .items}}{{$ns := .metadata.namespace}}{{range .spec.ports}}{{if .nodePort}}{{$ns}} {{.nodePort}}{{"\n"}}{{end}}{{end}}{{end}}' 2>/dev/null \
     | awk -v self="$lane_ns" '$1 != self { print $2 }' || true)"
   digest="$(printf '%s' "$name" | cksum | awk '{print $1}')"
