@@ -8,9 +8,12 @@ import (
 	"strings"
 	"testing"
 
+	"time"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -203,6 +206,11 @@ func TestMetricsProviderAllThreeSubjectKindsInOneQuery(t *testing.T) {
 	}
 }
 
+// TestMetricsProviderHappyPath is CHAOS-4418's own pin: a repository
+// metrics fact now carries a real per-day series (Rows), not a flat
+// scalar snapshot of the latest day -- see readRepositoryMetrics' own doc
+// comment for why this can no longer go through readers.ReadRepositoryMetrics
+// (that shared reader collapses to exactly one row per repository).
 func TestMetricsProviderHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
@@ -220,11 +228,33 @@ func TestMetricsProviderHappyPath(t *testing.T) {
 		t.Fatalf("facts = %#v, want 1", result.Facts)
 	}
 	fact := result.Facts[0]
-	if fact.Fields["commits_count"].Integer == nil || *fact.Fields["commits_count"].Integer != 42 {
-		t.Fatalf("fields = %#v", fact.Fields)
+	if fact.Fields["day_count"].Integer == nil || *fact.Fields["day_count"].Integer != 1 {
+		t.Fatalf("day_count = %#v", fact.Fields["day_count"])
 	}
-	if fact.Fields["mttr_hours"].Number == nil || *fact.Fields["mttr_hours"].Number != 3.5 {
-		t.Fatalf("fields = %#v", fact.Fields)
+	dailyMetrics := fact.Fields["daily_metrics"].Rows
+	if len(dailyMetrics) != 1 {
+		t.Fatalf("daily_metrics = %#v, want 1 row", dailyMetrics)
+	}
+	row := dailyMetrics[0].Fields
+	if row["day"].String == nil || *row["day"].String != "2026-02-21" {
+		t.Fatalf("row day = %#v", row["day"])
+	}
+	if row["commits_count"].Integer == nil || *row["commits_count"].Integer != 42 {
+		t.Fatalf("row fields = %#v", row)
+	}
+	if row["mttr_hours"].Number == nil || *row["mttr_hours"].Number != 3.5 {
+		t.Fatalf("row fields = %#v", row)
+	}
+	// canonicalFieldRows (model_runtime.go) fails closed on more than one
+	// Rows-shaped field per fact -- this fact must carry exactly one.
+	rowsFieldCount := 0
+	for _, value := range fact.Fields {
+		if len(value.Rows) > 0 {
+			rowsFieldCount++
+		}
+	}
+	if rowsFieldCount != 1 {
+		t.Fatalf("rows-shaped field count = %d, want exactly 1 (fields = %#v)", rowsFieldCount, fact.Fields)
 	}
 }
 
@@ -242,8 +272,135 @@ func TestMetricsProviderNoMTTROmitsField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	if _, ok := result.Facts[0].Fields["mttr_hours"]; ok {
-		t.Fatalf("fields = %#v, want mttr_hours omitted", result.Facts[0].Fields)
+	dailyMetrics := result.Facts[0].Fields["daily_metrics"].Rows
+	if len(dailyMetrics) != 1 {
+		t.Fatalf("daily_metrics = %#v, want 1 row", dailyMetrics)
+	}
+	if _, ok := dailyMetrics[0].Fields["mttr_hours"]; ok {
+		t.Fatalf("row fields = %#v, want mttr_hours omitted", dailyMetrics[0].Fields)
+	}
+}
+
+// TestMetricsProviderMultipleDaysBuildOneSeries pins the actual CHAOS-4418
+// fix directly: multiple repo_metrics_daily rows for the SAME repository
+// (different days) must land as multiple rows inside ONE CanonicalFact's
+// daily_metrics series, not as multiple separate CanonicalFacts (the
+// parent-commit shape, which silently discarded every day but the first
+// one lookupCanonicalFact happened to find -- CHAOS-4355's own
+// lookupCanonicalFact takes the FIRST (kind, subject) match, so a second
+// same-subject fact was always unreachable dead data before this fix).
+func TestMetricsProviderMultipleDaysBuildOneSeries(t *testing.T) {
+	t.Parallel()
+	day1 := metricsRow("repo-1")
+	day2 := metricsRow("repo-1")
+	day2[1] = "2026-02-22"
+	day2[2] = int64(7)
+	// fakeClient replays rows verbatim in the order given (it is not a
+	// real SQL engine) -- day2 (the LATER day) first, day1 second,
+	// mirroring the real query's own `ORDER BY repo_id, day DESC`.
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: [][]any{day2, day1}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want exactly 1 CanonicalFact for repo-1 (not one per day)", result.Facts)
+	}
+	fact := result.Facts[0]
+	if fact.Fields["day_count"].Integer == nil || *fact.Fields["day_count"].Integer != 2 {
+		t.Fatalf("day_count = %#v, want 2", fact.Fields["day_count"])
+	}
+	dailyMetrics := fact.Fields["daily_metrics"].Rows
+	if len(dailyMetrics) != 2 {
+		t.Fatalf("daily_metrics = %#v, want 2 rows", dailyMetrics)
+	}
+	if dailyMetrics[0].Fields["day"].String == nil || *dailyMetrics[0].Fields["day"].String != "2026-02-22" {
+		t.Fatalf("dailyMetrics[0].day = %#v, want the MOST RECENT day first (day DESC) -- truncation on an oversized series must drop the oldest days, not the freshest", dailyMetrics[0].Fields["day"])
+	}
+	if dailyMetrics[1].Fields["commits_count"].Integer == nil || *dailyMetrics[1].Fields["commits_count"].Integer != 42 {
+		t.Fatalf("dailyMetrics[1].commits_count = %#v, want 42 (day1, the older/second row)", dailyMetrics[1].Fields["commits_count"])
+	}
+}
+
+// windowBinding returns the named ClickHouse binding's time.Time value from
+// the last captured query, failing the test if it is missing or the wrong
+// type.
+func windowBinding(t *testing.T, client *fakeClient, name string) time.Time {
+	t.Helper()
+	last := client.queries[len(client.queries)-1]
+	for _, binding := range last.bindings {
+		if binding.Name == name {
+			value, ok := binding.Value.(time.Time)
+			if !ok {
+				t.Fatalf("binding %q = %#v, want time.Time", name, binding.Value)
+			}
+			return value
+		}
+	}
+	t.Fatalf("no %q binding in query %q", name, last.statement)
+	return time.Time{}
+}
+
+// TestMetricsProviderSeriesUsesExplicitEvidenceWindow is CHAOS-4418's
+// team-lead-ruled correction: the per-day series must span the CALLER's
+// own requested evidence window when one is given explicitly (Start AND
+// End), never a devhealthfacts-invented number.
+func TestMetricsProviderSeriesUsesExplicitEvidenceWindow(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: [][]any{metricsRow("repo-1")}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC)
+	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{
+			Axis:           contextfabric.TemporalCurrent,
+			EvidenceWindow: &contractsv1.ContextFabricRequestedEvidenceWindow{Start: &start, End: &end},
+		},
+		Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if got := windowBinding(t, client, "series_window_start"); !got.Equal(start) {
+		t.Fatalf("series_window_start = %v, want the caller's own window Start %v, not a re-derived one", got, start)
+	}
+	if got := windowBinding(t, client, "series_window_end"); !got.Equal(end) {
+		t.Fatalf("series_window_end = %v, want the caller's own window End %v", got, end)
+	}
+}
+
+// TestMetricsProviderSeriesFallsBackToPlatformDefaultWindow pins the "no
+// window at all" case: no historical bound, no explicit current-axis
+// Start/End (a RelativeID alone does not count -- resolving one to
+// absolute bounds is exclusively window.go's job). The series must still
+// use the platform's own default evidence-window width (90 days,
+// window.go's windowDefaultPolicy = WindowDefaultPolicy90D), not an
+// independently-chosen number.
+func TestMetricsProviderSeriesFallsBackToPlatformDefaultWindow(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: [][]any{metricsRow("repo-1")}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+	before := time.Now().UTC()
+	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
+	})
+	after := time.Now().UTC()
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	end := windowBinding(t, client, "series_window_end")
+	if end.Before(before) || end.After(after) {
+		t.Fatalf("series_window_end = %v, want between %v and %v (now)", end, before, after)
+	}
+	start := windowBinding(t, client, "series_window_start")
+	width := end.Sub(start)
+	if width != 90*24*time.Hour {
+		t.Fatalf("series window width = %v, want exactly 90 days (the platform's own default evidence-window policy width, window.go's windowDefaultPolicy)", width)
 	}
 }
 

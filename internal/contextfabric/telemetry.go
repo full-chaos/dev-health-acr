@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"log/slog"
+	"sort"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
@@ -304,6 +305,26 @@ func (t SlogEngineTelemetry) RecordOfferPhrasing(ctx context.Context, principal 
 func (t SlogEngineTelemetry) RecordProjectedRowsCount(ctx context.Context, principal storage.Principal, count int, truncated bool) {
 	args := append([]any{"org_id", principal.OrgID, "rows_count", count, "truncated", truncated}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric projected rows count", args...)
+}
+
+// RecordProjectedRowsByFactKind implements EngineTelemetry (CHAOS-4418) --
+// see that method's doc comment for why a claimed-but-zero kind still gets
+// its own line. One record per kind (sorted for deterministic log order),
+// not one line with the whole map, so a reader filtering by
+// "rows_projected_by_fact_kind" AND fact_kind=metrics finds exactly the
+// producer they are diagnosing without parsing a nested value.
+// Content-safe: an org id, one closed FactKind vocabulary value, and one
+// non-identifying count.
+func (t SlogEngineTelemetry) RecordProjectedRowsByFactKind(ctx context.Context, principal storage.Principal, byKind map[FactKind]int) {
+	kinds := make([]string, 0, len(byKind))
+	for kind := range byKind {
+		kinds = append(kinds, string(kind))
+	}
+	sort.Strings(kinds)
+	for _, kind := range kinds {
+		args := append([]any{"org_id", principal.OrgID, "fact_kind", kind, "rows_projected_by_fact_kind", byKind[FactKind(kind)]}, requestIDLogAttrs(ctx)...)
+		t.logger.InfoContext(ctx, "context fabric projected rows count by fact kind", args...)
+	}
 }
 
 // RecordModelRowsStripped implements EngineTelemetry (CHAOS-4355

@@ -265,13 +265,18 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 			t.Fatalf("facts = %#v, want 1", result.Facts)
 		}
 		fact := result.Facts[0]
-		commits := fact.Fields["commits_count"].Integer
-		prs := fact.Fields["prs_merged"].Integer
-		if commits == nil || *commits != 99 || prs == nil || *prs != 42 {
-			t.Fatalf("fields = %#v, want the fresh row's whole combination (commits_count=99, prs_merged=42), not a stitched mix", fact.Fields)
+		dailyMetrics := fact.Fields["daily_metrics"].Rows
+		if len(dailyMetrics) != 1 {
+			t.Fatalf("daily_metrics = %#v, want exactly 1 row -- the same-day rerun must collapse to one, not two series entries", dailyMetrics)
 		}
-		if fact.Fields["mttr_hours"].Number == nil || *fact.Fields["mttr_hours"].Number != 3.5 {
-			t.Fatalf("fields = %#v, want the fresh row's mttr_hours=3.5", fact.Fields)
+		row := dailyMetrics[0].Fields
+		commits := row["commits_count"].Integer
+		prs := row["prs_merged"].Integer
+		if commits == nil || *commits != 99 || prs == nil || *prs != 42 {
+			t.Fatalf("fields = %#v, want the fresh row's whole combination (commits_count=99, prs_merged=42), not a stitched mix", row)
+		}
+		if row["mttr_hours"].Number == nil || *row["mttr_hours"].Number != 3.5 {
+			t.Fatalf("fields = %#v, want the fresh row's mttr_hours=3.5", row)
 		}
 	})
 
@@ -398,7 +403,8 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadFacts() error = %v", err)
 		}
-		if len(result.Facts) != 1 || result.Facts[0].Fields["commits_count"].Integer == nil || *result.Facts[0].Fields["commits_count"].Integer != 5 {
+		orgADailyMetrics := result.Facts[0].Fields["daily_metrics"].Rows
+		if len(result.Facts) != 1 || len(orgADailyMetrics) != 1 || orgADailyMetrics[0].Fields["commits_count"].Integer == nil || *orgADailyMetrics[0].Fields["commits_count"].Integer != 5 {
 			t.Fatalf("facts = %#v, want org-a's own row (commits_count=5), never org-b's colliding repo_id row", result.Facts)
 		}
 	})

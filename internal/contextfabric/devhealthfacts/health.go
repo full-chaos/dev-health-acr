@@ -115,6 +115,33 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 // an internal Go string literal (never caller-supplied), so it is safe to
 // inline into the statement the same way withRowLimit's maxFactRowsPerQuery
 // is.
+// riskRuleComponent names one compounding_risk_daily formula term, in the
+// table's own declared column order (CHAOS-4418: risk_rules Rows below
+// reports these as one row per component instead of leaving the formula's
+// own inputs invisible behind the single combined compounding_risk score).
+type riskRuleComponent struct {
+	signal, normColumn, weightColumn string
+}
+
+// riskRuleComponents mirrors compounding_risk_daily's own schema exactly
+// (churn_norm/complexity_norm/ownership_norm/review_norm paired with
+// w_churn/w_complexity/w_ownership/w_review) -- never a second,
+// independently maintained list of which signals make up the score.
+var riskRuleComponents = []riskRuleComponent{
+	{signal: "churn", normColumn: "churn_norm", weightColumn: "w_churn"},
+	{signal: "complexity", normColumn: "complexity_norm", weightColumn: "w_complexity"},
+	{signal: "ownership", normColumn: "ownership_norm", weightColumn: "w_ownership"},
+	{signal: "review", normColumn: "review_norm", weightColumn: "w_review"},
+}
+
+// riskRuleValue is one riskRuleComponents entry's scanned value for one
+// scope_id row.
+type riskRuleValue struct {
+	hasNorm bool
+	norm    float64
+	weight  float64
+}
+
 func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids []string, bySubject map[string]contextfabric.SubjectRef, evidenceEntityType string, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
 	// The hash tiebreak's ifNull(compounding_risk, -1) sentinel is only
 	// unambiguous while -1 is outside compounding_risk's real domain.
@@ -122,9 +149,23 @@ func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids
 	// [0.0000127, 0.58], never negative. There is no ClickHouse-level
 	// UInt/CHECK constraint enforcing this -- it is a domain assumption,
 	// not a type guarantee.
-	statement := withRowLimit(`SELECT scope_id, toString(severity), toUInt8(isNotNull(compounding_risk)), toFloat64(ifNull(compounding_risk, 0)), toString(computed_at)
+	//
+	// CHAOS-4418: widened to also select the formula's own 4 weighted
+	// components (churn/complexity/ownership/review) off the SAME
+	// row_number()-picked physical row compounding_risk/severity already
+	// come from -- never a second, independent query that could stitch a
+	// fact together from a different rerun of the same day (the exact
+	// stitching risk this file's own package doc comment already warns
+	// about for per-field argMax). The tiebreak hash is unchanged: it
+	// already picks one full row, so every new column here is consistent
+	// with the row severity/compounding_risk were already read from.
+	statement := withRowLimit(`SELECT scope_id, toString(severity), toUInt8(isNotNull(compounding_risk)), toFloat64(ifNull(compounding_risk, 0)), toString(computed_at),
+	toUInt8(isNotNull(churn_norm)), toFloat64(ifNull(churn_norm, 0)), toFloat64(w_churn),
+	toUInt8(isNotNull(complexity_norm)), toFloat64(ifNull(complexity_norm, 0)), toFloat64(w_complexity),
+	toUInt8(isNotNull(ownership_norm)), toFloat64(ifNull(ownership_norm, 0)), toFloat64(w_ownership),
+	toUInt8(isNotNull(review_norm)), toFloat64(ifNull(review_norm, 0)), toFloat64(w_review)
 FROM (
-	SELECT scope_id, severity, compounding_risk, computed_at,
+	SELECT scope_id, severity, compounding_risk, computed_at, churn_norm, complexity_norm, ownership_norm, review_norm, w_churn, w_complexity, w_ownership, w_review,
 		row_number() OVER (PARTITION BY scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
 	FROM compounding_risk_daily
 	WHERE org_id = {org_id:String} AND scope = '` + scope + `' AND scope_id IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
@@ -136,8 +177,17 @@ WHERE rn = 1`)
 		var scopeID, severity, computedAt string
 		var hasRisk uint8
 		var risk float64
-		if err := row.Scan(&scopeID, &severity, &hasRisk, &risk, &computedAt); err != nil {
+		values := make([]riskRuleValue, len(riskRuleComponents))
+		scanArgs := []any{&scopeID, &severity, &hasRisk, &risk, &computedAt}
+		hasNormFlags := make([]uint8, len(riskRuleComponents))
+		for i := range riskRuleComponents {
+			scanArgs = append(scanArgs, &hasNormFlags[i], &values[i].norm, &values[i].weight)
+		}
+		if err := row.Scan(scanArgs...); err != nil {
 			return err
+		}
+		for i := range values {
+			values[i].hasNorm = hasNormFlags[i] != 0
 		}
 		subject, ok := bySubject[scopeID]
 		if !ok {
@@ -150,6 +200,29 @@ WHERE rn = 1`)
 		if hasRisk != 0 {
 			fields["compounding_risk"] = contextfabric.NumberFactValue(risk)
 		}
+		ruleRows := make([]contextfabric.FactValueRow, 0, len(riskRuleComponents))
+		for i, component := range riskRuleComponents {
+			v := values[i]
+			rowFields := map[string]contextfabric.FactValue{
+				"signal": contextfabric.StringFactValue(component.signal),
+				"weight": contextfabric.NumberFactValue(v.weight),
+			}
+			// An unrecorded normalized signal is unknown, never zero
+			// (AGENTS.md North Star check 12) -- the row still names the
+			// signal and its configured weight, but norm_value/
+			// weighted_contribution stay explicitly null rather than a
+			// fabricated 0 that would understate the component's real,
+			// unrecorded contribution.
+			if v.hasNorm {
+				rowFields["norm_value"] = contextfabric.NumberFactValue(v.norm)
+				rowFields["weighted_contribution"] = contextfabric.NumberFactValue(v.weight * v.norm)
+			} else {
+				rowFields["norm_value"] = contextfabric.NullFactValue()
+				rowFields["weighted_contribution"] = contextfabric.NullFactValue()
+			}
+			ruleRows = append(ruleRows, contextfabric.FactValueRow{Fields: rowFields})
+		}
+		fields["risk_rules"] = contextfabric.RowsFactValue(ruleRows)
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactHealth, Subject: subject, Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID(evidenceEntityType, scopeID)},

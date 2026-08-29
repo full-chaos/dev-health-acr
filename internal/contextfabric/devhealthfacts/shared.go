@@ -34,7 +34,14 @@ import (
 // four changed ones. That over-invalidation is the safe direction: leaving
 // it unbumped would let an answer reuse gate serve a pre-deployment answer
 // that never actually ran the new project readers, silently.
-const QueryVersion = "devhealthfacts.clickhouse.v2"
+//
+// v2 -> v3 (CHAOS-4418): FactMetrics' repository read widens from a flat
+// scalar snapshot of the latest day to a real per-day series (Rows), and
+// FactHealth's repo/team read widens to add the risk_rules per-component
+// breakdown. Same over-invalidation rationale: a reuse candidate saved
+// under the old flat/no-breakdown shape must not be served as if it
+// carried the new Rows tables it never actually computed.
+const QueryVersion = "devhealthfacts.clickhouse.v3"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

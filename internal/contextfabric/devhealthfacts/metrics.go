@@ -2,15 +2,39 @@ package devhealthfacts
 
 import (
 	"context"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
 const repositoryPrefix = "repository:"
+
+// metricsSeriesDefaultWindow (CHAOS-4418, team-lead ruling) bounds the
+// repository per-day metrics series on the CURRENT axis when the caller's
+// own request.Question.TimeContext.EvidenceWindow carries no EXPLICIT
+// Start/End -- unlike a bounded historical query (factTimeBound.active),
+// the current axis otherwise has no bound at all, and an unbounded "every
+// day this repo has ever had a repo_metrics_daily row" read would pull the
+// entire retained history per repository.
+//
+// This is NOT a new, independently-chosen number: it is the SAME width
+// window.go's own windowDefaultPolicy (= WindowDefaultPolicy90D) already
+// ships as this platform's one default evidence-window policy, and
+// relativeWindowDurations[RelativeWindowTrailing90D] (window.go) is 90
+// days too -- both unexported to package contextfabric, so this constant
+// copies the WIDTH, never the derivation (relativeWindowBounds is
+// documented there as "the ONLY function in this codebase that may
+// [derive absolute bounds from a RelativeWindowID]" -- devhealthfacts
+// must not duplicate that logic, only match its width when the caller
+// gave no explicit bound at all). A caller with an ACTIVE historical bound
+// (an explicit as-of/range question) or an EXPLICIT current-axis
+// EvidenceWindow.Start/End uses that instead, unbounded by this constant.
+const metricsSeriesDefaultWindow = 90 * 24 * time.Hour
 
 // MetricsProvider implements contextfabric.FactProvider for FactMetrics.
 //
@@ -105,11 +129,11 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	truncated := false
 
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
-		rowCount, scanErr := p.readRepositoryMetrics(ctx, orgID, repoSubjects, &facts, timeBound)
+		rowCount, breakdownTruncated, scanErr := p.readRepositoryMetrics(ctx, orgID, repoSubjects, &facts, timeBound, query.Time.EvidenceWindow)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query repository metrics", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		truncated = truncated || rowCount >= maxFactRowsPerQuery || breakdownTruncated
 	}
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
@@ -132,44 +156,178 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}, nil
 }
 
-// readRepositoryMetrics is CHAOS-3780's original repo_metrics_daily read,
-// factored out so ReadFacts can branch by subject kind the same way
-// HealthProvider already does for repo+team. The SQL/scan half, including
-// the row_number()/cityHash64 tiebreak reasoning and the mttr_hours
-// sentinel-range note, now lives in readers.ReadRepositoryMetrics
-// (CHAOS-4377).
-func (p *MetricsProvider) readRepositoryMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
+// repositoryMetricsDayRow is one repo_metrics_daily row within the series
+// window, scanned before Go-side per-repository grouping.
+type repositoryMetricsDayRow struct {
+	day                                                      string
+	commitsCount, prsMerged, busFactor                       int64
+	medianPRCycleHours, changeFailureRate, codeOwnershipGini float64
+	hasMTTRHours                                             bool
+	mttrHours                                                float64
+}
+
+// readRepositoryMetrics (CHAOS-4418 widening of CHAOS-3780's original
+// single-row read) builds ONE CanonicalFact per repository subject carrying
+// a real per-day series, not a flat scalar snapshot.
+//
+// Deliberately NOT readers.ReadRepositoryMetrics (CHAOS-4377): that shared
+// reader's own row_number() PARTITION BY repo_id collapses to exactly ONE
+// (the latest) row per repository by construction -- there is no multi-day
+// result to reshape into a series without querying differently. This
+// function instead builds its own raw, parameterized statement directly
+// against repo_metrics_daily, the SAME pattern HealthProvider.readScope
+// already uses for compounding_risk_daily (raw SQL through
+// clickhouseFacts.query is an established provider-level pattern in this
+// package, not a acr/AGENTS.md "scattered SQL through handlers"
+// violation -- this is the provider's own read, not a route handler) --
+// mirroring readers.ReadRepositoryMetrics' own row_number()/cityHash64
+// intraday-rerun tiebreak, but PARTITION BY (repo_id, day) instead of
+// repo_id alone, so every distinct day survives instead of only the
+// latest.
+func (p *MetricsProvider) readRepositoryMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidenceWindow *contractsv1.ContextFabricRequestedEvidenceWindow) (rowCount int, breakdownTruncated bool, err error) {
 	ids, bySubject := subjectIndex(subjects, repositoryPrefix)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, false, nil
 	}
-	rows, err := readers.ReadRepositoryMetrics(ctx, p.facts.client, orgID, ids, timeBound.neutral())
-	if err != nil {
-		return 0, err
+	var dayPredicate string
+	var extra []readers.Binding
+	switch {
+	case timeBound.active:
+		// An explicit historical (as-of/range) axis question: the SAME
+		// bound every other Tier A provider in this package already
+		// applies, never widened or narrowed for this series specifically.
+		dayPredicate = timeBound.dayPredicate("day")
+		for _, binding := range timeBound.bindings() {
+			extra = append(extra, readers.Binding{Name: binding.Name, Value: binding.Value})
+		}
+	case evidenceWindow != nil && evidenceWindow.Start != nil && evidenceWindow.End != nil:
+		// CHAOS-4418 (team-lead ruling): the CURRENT axis's own caller-
+		// requested evidence window, when the caller gave one EXPLICITLY
+		// (Start and End both present) -- read verbatim, never re-derived.
+		// A RelativeID-only window (no explicit Start/End) falls through
+		// to metricsSeriesDefaultWindow below instead: resolving a
+		// RelativeWindowID to absolute bounds is exclusively
+		// window.go's relativeWindowBounds' own job ("the ONLY function
+		// in this codebase that may" do so) -- this package must not
+		// duplicate that derivation.
+		//
+		// toDate({...:DateTime64(6,'UTC')}), not a bare :Date parameter --
+		// mirrors readers.TimeBound.DayPredicate's own convention exactly
+		// (dev-health-go's timebound.go): the Go ClickHouse driver binds a
+		// time.Time value against a DateTime64 parameter natively, and the
+		// SQL-side toDate() narrows it to the day column's own grain.
+		dayPredicate = " AND day >= toDate({series_window_start:DateTime64(6,'UTC')}) AND day <= toDate({series_window_end:DateTime64(6,'UTC')})"
+		extra = []readers.Binding{
+			{Name: "series_window_start", Value: evidenceWindow.Start.UTC()},
+			{Name: "series_window_end", Value: evidenceWindow.End.UTC()},
+		}
+	default:
+		// No historical bound and no explicit current-axis window --
+		// metricsSeriesDefaultWindow's own doc comment explains why this
+		// matches the platform's own default evidence-window policy
+		// width, rather than a devhealthfacts-invented number.
+		now := time.Now().UTC()
+		dayPredicate = " AND day >= toDate({series_window_start:DateTime64(6,'UTC')}) AND day <= toDate({series_window_end:DateTime64(6,'UTC')})"
+		extra = []readers.Binding{
+			{Name: "series_window_start", Value: now.Add(-metricsSeriesDefaultWindow)},
+			{Name: "series_window_end", Value: now},
+		}
 	}
-	for _, r := range rows {
-		subject, ok := bySubject[r.RepoID]
-		if !ok {
-			continue
+	statement := withRowLimit(`SELECT toString(repo_id), toString(day), toInt64(commits_count), toInt64(prs_merged), toFloat64(median_pr_cycle_hours), toFloat64(change_failure_rate), toUInt8(isNotNull(mttr_hours)), toFloat64(ifNull(mttr_hours, 0)), toInt64(bus_factor), toFloat64(code_ownership_gini)
+FROM (
+	-- CHAOS-4418: PARTITION BY (repo_id, day), NOT repo_id alone --
+	-- every distinct day survives its own row_number()/cityHash64
+	-- intraday-rerun dedup (the identical tiebreak reasoning
+	-- readers.ReadRepositoryMetrics' own repo_id-only partition already
+	-- uses, one level finer), instead of collapsing the whole repository
+	-- down to its single latest day the way that shared reader does.
+	SELECT repo_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini,
+		row_number() OVER (PARTITION BY repo_id, day ORDER BY computed_at DESC, cityHash64(tuple(commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, ifNull(mttr_hours, -1), bus_factor, code_ownership_gini)) DESC) AS rn
+	FROM repo_metrics_daily
+	WHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)}` + dayPredicate + `
+)
+WHERE rn = 1
+ORDER BY repo_id, day DESC`)
+	byRepo := make(map[string][]repositoryMetricsDayRow)
+	var repoOrder []string
+	// readers.QueryOrgScopedNamed (CHAOS-4418), not p.facts.query -- this
+	// is genuinely raw SQL (not a readers.ReadXxx call), but it must still
+	// report through the SAME readers.Instrumentation hook
+	// NewInstrumentedProviders wires into ctx (instrumentation.go's own
+	// doc comment): p.facts.query has no instrumentation hook of its own
+	// (it is devhealthfacts's own acr-side mirror of this exact function,
+	// per QueryOrgScopedNamed's own doc comment, deliberately without the
+	// readers-package instrumentation piece), so using it here would
+	// silently drop this read out of the same slog/span/counter coverage
+	// readers.ReadRepositoryMetrics used to carry before this ticket
+	// replaced it. "ReadRepositoryMetricsSeries" names the reader for
+	// attribution -- a distinct name from "ReadRepositoryMetrics" because
+	// this is a genuinely different query shape (a series, not one
+	// collapsed row), never conflated with that reader's own metrics.
+	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadRepositoryMetricsSeries", statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		rowCount++
+		var repoID string
+		var r repositoryMetricsDayRow
+		var hasMTTR uint8
+		if scanErr := row.Scan(&repoID, &r.day, &r.commitsCount, &r.prsMerged, &r.medianPRCycleHours, &r.changeFailureRate, &hasMTTR, &r.mttrHours, &r.busFactor, &r.codeOwnershipGini); scanErr != nil {
+			return scanErr
 		}
-		fields := map[string]contextfabric.FactValue{
-			"day":                   contextfabric.StringFactValue(r.Day),
-			"commits_count":         contextfabric.IntegerFactValue(r.CommitsCount),
-			"prs_merged":            contextfabric.IntegerFactValue(r.PRsMerged),
-			"median_pr_cycle_hours": contextfabric.NumberFactValue(r.MedianPRCycleHours),
-			"change_failure_rate":   contextfabric.NumberFactValue(r.ChangeFailureRate),
-			"bus_factor":            contextfabric.IntegerFactValue(r.BusFactor),
-			"code_ownership_gini":   contextfabric.NumberFactValue(r.CodeOwnershipGini),
+		r.hasMTTRHours = hasMTTR != 0
+		if _, ok := bySubject[repoID]; !ok {
+			return nil
 		}
-		if r.HasMTTRHours {
-			fields["mttr_hours"] = contextfabric.NumberFactValue(r.MTTRHours)
+		if _, seen := byRepo[repoID]; !seen {
+			repoOrder = append(repoOrder, repoID)
 		}
+		byRepo[repoID] = append(byRepo[repoID], r)
+		return nil
+	}, extra...)
+	if scanErr != nil {
+		return rowCount, false, scanErr
+	}
+	for _, repoID := range repoOrder {
+		subject := bySubject[repoID]
+		days := byRepo[repoID]
+		dayRows := make([]contextfabric.FactValueRow, 0, len(days))
+		for _, d := range days {
+			rowFields := map[string]contextfabric.FactValue{
+				"day":                   contextfabric.StringFactValue(d.day),
+				"commits_count":         contextfabric.IntegerFactValue(d.commitsCount),
+				"prs_merged":            contextfabric.IntegerFactValue(d.prsMerged),
+				"median_pr_cycle_hours": contextfabric.NumberFactValue(d.medianPRCycleHours),
+				"change_failure_rate":   contextfabric.NumberFactValue(d.changeFailureRate),
+				"bus_factor":            contextfabric.IntegerFactValue(d.busFactor),
+				"code_ownership_gini":   contextfabric.NumberFactValue(d.codeOwnershipGini),
+			}
+			if d.hasMTTRHours {
+				rowFields["mttr_hours"] = contextfabric.NumberFactValue(d.mttrHours)
+			}
+			dayRows = append(dayRows, contextfabric.FactValueRow{Fields: rowFields})
+		}
+		var omitted int
+		// capFactValueRows keeps the FIRST maxFactValueRows entries and
+		// drops the rest -- the SQL's own `ORDER BY repo_id, day DESC`
+		// (not ascending) is what makes "first" mean "most recent" here,
+		// so a series wider than the cap loses its OLDEST days, never
+		// its freshest ones, on truncation.
+		dayRows, omitted = capFactValueRows(dayRows)
+		breakdownTruncated = breakdownTruncated || omitted > 0
 		*facts = append(*facts, contextfabric.CanonicalFact{
-			Kind: contextfabric.FactMetrics, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("repository", r.RepoID)},
+			Kind: contextfabric.FactMetrics, Subject: subject,
+			Fields: map[string]contextfabric.FactValue{
+				// day_count is the SERIES' own row count before any
+				// 64-row cap -- distinguishable from
+				// len(daily_metrics) so a truncated series is still
+				// diagnosable (CanonicalRows' own Truncated flag already
+				// reports the cap fired; this says how much was behind
+				// it).
+				"day_count":     contextfabric.IntegerFactValue(int64(len(days))),
+				"daily_metrics": contextfabric.RowsFactValue(dayRows),
+			},
+			EvidenceRefIDs: []string{evidenceRefID("repository", repoID)},
 		})
 	}
-	return len(rows), nil
+	return rowCount, breakdownTruncated, nil
 }
 
 // readTeamMetrics reads team_metrics_daily directly -- a genuinely

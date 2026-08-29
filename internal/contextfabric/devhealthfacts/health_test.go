@@ -20,8 +20,18 @@ func organizationSubject(id string) contextfabric.SubjectRef {
 	return contextfabric.SubjectRef{Kind: contextfabric.SubjectOrganization, CanonicalID: "organization:" + id, Label: id}
 }
 
+// healthRow shapes readScope's own widened SELECT (CHAOS-4418): scope_id,
+// severity, has_risk, compounding_risk, computed_at, then one
+// (has_norm, norm, weight) triple per riskRuleComponents entry in that
+// list's own order (churn, complexity, ownership, review).
 func healthRow(scopeID string) []any {
-	return []any{scopeID, "elevated", uint8(1), float64(0.62), "2026-02-21 00:00:00"}
+	return []any{
+		scopeID, "elevated", uint8(1), float64(0.62), "2026-02-21 00:00:00",
+		uint8(1), float64(0.3), float64(0.4), // churn
+		uint8(1), float64(0.2), float64(0.3), // complexity
+		uint8(1), float64(0.5), float64(0.2), // ownership
+		uint8(1), float64(0.1), float64(0.1), // review
+	}
 }
 
 func TestHealthProviderRepoScopeHappyPath(t *testing.T) {
@@ -44,6 +54,36 @@ func TestHealthProviderRepoScopeHappyPath(t *testing.T) {
 	}
 	if fact.Fields["compounding_risk"].Number == nil || *fact.Fields["compounding_risk"].Number != 0.62 {
 		t.Fatalf("fields = %#v", fact.Fields)
+	}
+	// CHAOS-4418: the formula's own 4 weighted components, not just the
+	// combined score.
+	riskRules := fact.Fields["risk_rules"].Rows
+	if len(riskRules) != 4 {
+		t.Fatalf("risk_rules = %#v, want 4 rows (churn/complexity/ownership/review)", riskRules)
+	}
+	churn := riskRules[0].Fields
+	if churn["signal"].String == nil || *churn["signal"].String != "churn" {
+		t.Fatalf("risk_rules[0].signal = %#v, want churn", churn["signal"])
+	}
+	if churn["norm_value"].Number == nil || *churn["norm_value"].Number != 0.3 {
+		t.Fatalf("risk_rules[0].norm_value = %#v, want 0.3", churn["norm_value"])
+	}
+	if churn["weight"].Number == nil || *churn["weight"].Number != 0.4 {
+		t.Fatalf("risk_rules[0].weight = %#v, want 0.4", churn["weight"])
+	}
+	if churn["weighted_contribution"].Number == nil || *churn["weighted_contribution"].Number != 0.3*0.4 {
+		t.Fatalf("risk_rules[0].weighted_contribution = %#v, want 0.12", churn["weighted_contribution"])
+	}
+	// canonicalFieldRows (model_runtime.go) fails closed on more than one
+	// Rows-shaped field per fact -- this fact must carry exactly one.
+	rowsFieldCount := 0
+	for _, value := range fact.Fields {
+		if len(value.Rows) > 0 {
+			rowsFieldCount++
+		}
+	}
+	if rowsFieldCount != 1 {
+		t.Fatalf("rows-shaped field count = %d, want exactly 1 (fields = %#v)", rowsFieldCount, fact.Fields)
 	}
 	if !strings.Contains(client.queries[len(client.queries)-1].statement, "scope = 'repo'") {
 		t.Fatalf("statement = %q, want scope='repo'", client.queries[len(client.queries)-1].statement)
@@ -85,6 +125,41 @@ func TestHealthProviderNoRiskScoreOmitsField(t *testing.T) {
 	}
 	if _, ok := result.Facts[0].Fields["compounding_risk"]; ok {
 		t.Fatalf("fields = %#v, want compounding_risk omitted", result.Facts[0].Fields)
+	}
+}
+
+// TestHealthProviderUnrecordedNormIsNullNotZero pins AGENTS.md North Star
+// check 12 (missing is not healthy -- unknown/zero are distinct) for the
+// per-rule breakdown: a component whose has_norm flag is false must report
+// norm_value/weighted_contribution as an explicit null, never a fabricated
+// 0 that would understate its real, unrecorded contribution to the score.
+func TestHealthProviderUnrecordedNormIsNullNotZero(t *testing.T) {
+	t.Parallel()
+	row := healthRow("repo-1")
+	row[5], row[6] = uint8(0), float64(0) // churn_norm unrecorded
+	client := &fakeClient{tables: []fakeTable{{match: "FROM compounding_risk_daily", rows: [][]any{row}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	churn := result.Facts[0].Fields["risk_rules"].Rows[0].Fields
+	if !churn["norm_value"].Null {
+		t.Fatalf("risk_rules[0].norm_value = %#v, want an explicit null, not a fabricated zero", churn["norm_value"])
+	}
+	if !churn["weighted_contribution"].Null {
+		t.Fatalf("risk_rules[0].weighted_contribution = %#v, want an explicit null", churn["weighted_contribution"])
+	}
+	// The signal name and its configured weight are still real, recorded
+	// facts even though this particular org/day never computed the norm.
+	if churn["signal"].String == nil || *churn["signal"].String != "churn" {
+		t.Fatalf("risk_rules[0].signal = %#v, want churn even when its norm is unrecorded", churn["signal"])
+	}
+	if churn["weight"].Number == nil || *churn["weight"].Number != 0.4 {
+		t.Fatalf("risk_rules[0].weight = %#v, want 0.4 even when the norm is unrecorded", churn["weight"])
 	}
 }
 
