@@ -193,7 +193,7 @@ func workloadProjectRollupRow(provider, projectID, teamID, teamName, workScopeID
 // survives verbatim in the renderable team_breakdown table.
 func TestWorkloadProviderProjectRollupBreaksDownByTeamNeverAverages(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: [][]any{
+	client := &fakeClient{tables: []fakeTable{{match: "FROM capacity_forecasts", rows: [][]any{
 		workloadProjectRollupRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, 120, 1),
 		workloadProjectRollupRow("linear", "proj-1", "team-2", "Team Two", "scope-b", 9.0, 2.1, 40, 0),
 	}}}}
@@ -229,7 +229,7 @@ func TestWorkloadProviderProjectRollupBreaksDownByTeamNeverAverages(t *testing.T
 
 func TestWorkloadProviderProjectRollupNoOwningTeamsHasNoFactEntry(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: nil}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM capacity_forecasts", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactWorkload)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},

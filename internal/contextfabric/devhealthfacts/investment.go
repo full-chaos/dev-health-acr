@@ -103,6 +103,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
+	// CHAOS-4521b: this source has no project dimension, so an all-project
+	// read that came back empty says something more specific than "no rows".
+	retentionReason = explainTeamScopedProjectAbsence(state, retentionReason, query.Subjects)
 	if omittedUnrepresentableCount > 0 && retentionReason == "" {
 		retentionReason = unrepresentableValueReason
 	}

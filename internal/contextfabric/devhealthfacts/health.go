@@ -107,6 +107,9 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
+	// CHAOS-4521b: this source has no project dimension, so an all-project
+	// read that came back empty says something more specific than "no rows".
+	retentionReason = explainTeamScopedProjectAbsence(state, retentionReason, query.Subjects)
 	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}, nil
 }
 

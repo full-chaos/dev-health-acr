@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // QueryVersion is this package's query_version-equivalent: every
@@ -289,33 +290,34 @@ func evidenceRefID(entityType, id string) string {
 // as-of-owning team; a team owning the project through more than one
 // `source` row still yields one row per source and must be deduped by the
 // caller the same way readProjectMetrics dedupes by team_id).
+// projectOwnershipJoinSQL DELEGATES to dev-health-go's
+// readers.ProjectOwnershipJoinSQL rather than restating it (CHAOS-4521b).
+//
+// It used to be a hand-maintained copy of the same join, and that copy is
+// exactly the drift this repo's own AGENTS.md warns about: the two versions
+// had to be changed together to move the join off project_key and onto the
+// project identity, and nothing would have failed if only one of them had
+// been. Now there is one definition and acr reads it.
+//
+// The signature is unchanged, so every caller here (health, landscape, and
+// flow's own inline copy) keeps passing acr's factTimeBound-derived
+// predicate string.
 func projectOwnershipJoinSQL(ownershipPredicate string) string {
-	return `(
-	SELECT id, provider, project_key
-	FROM (
-		SELECT id, provider, ifNull(project_key, '') AS project_key,
-			count() OVER (PARTITION BY provider, project_key) AS key_resolution_count
-		FROM projects FINAL
-		WHERE org_id = {org_id:String}
-	)
-	WHERE project_key != '' AND key_resolution_count = 1 AND concat(provider, ':', id) IN {ids:Array(String)}
-) AS p
-INNER JOIN (
-	SELECT provider, project_key, team_id
-	FROM team_project_ownership FINAL
-	WHERE org_id = {org_id:String} AND project_key IS NOT NULL` + ownershipPredicate + `
-	GROUP BY provider, project_key, team_id
-) AS tpo ON tpo.provider = p.provider AND tpo.project_key = p.project_key`
+	return readers.ProjectOwnershipJoinSQL(ownershipPredicate)
 }
 
-// ownershipValidityPredicate returns the valid_from/valid_to predicate a
-// slowly-changing ownership edge (team_project_ownership, team_repo_ownership
-// -- both carry the same valid_from/valid_to(DateTime64) shape) must satisfy
-// for the requested time context: "currently active" on the current axis,
-// "active AT THE END of the requested window" for a bounded historical
-// query -- the same convention timebound.go's asOfExpression documents for
-// every other derived-state read in this package. Mirrors metrics.go's
-// readProjectMetrics inline ownershipPredicate exactly.
+// projectIdentityJoinSQL and projectIdentityMatchSQL are the same
+// delegation for the project-subject resolution the WORK-SCOPE-keyed reads
+// use -- a project's own rows, with no ownership hop (CHAOS-4521b). See
+// readers.ProjectIdentityJoinSQL for why one resolution serves both.
+func projectIdentityJoinSQL() string {
+	return readers.ProjectIdentityJoinSQL()
+}
+
+func projectIdentityMatchSQL(alias, column string) string {
+	return readers.ProjectIdentityMatchSQL(alias, column)
+}
+
 func ownershipValidityPredicate(timeBound factTimeBound) string {
 	if timeBound.active {
 		return fmt.Sprintf(" AND valid_from <= {%s:DateTime64(6,'UTC')} AND (valid_to IS NULL OR valid_to > {%s:DateTime64(6,'UTC')})", boundEndParam, boundEndParam)
@@ -378,4 +380,37 @@ func stringOrNull(value string) contextfabric.FactValue {
 		return contextfabric.NullFactValue()
 	}
 	return contextfabric.StringFactValue(value)
+}
+
+// teamScopedProjectReason explains a zero-row project read on a source that
+// has no project dimension of its own (CHAOS-4521b).
+//
+// compounding_risk_daily (scope='repo'/'team'), investment_metrics_daily
+// (repo_id/team_id) and ic_landscape_rolling_30d (repo_id/identity_id/
+// team_id) carry no project column, so a project reaches them ONLY through
+// team ownership. When that ownership resolves nothing the read is empty --
+// and PR-A's generic "the source was reached and held no rows" is true but
+// unhelpful, because it reads as "this project has no health", when what
+// happened is that the question could not be routed to the project at all.
+//
+// A fixed literal, never interpolating a subject or a count.
+const teamScopedProjectReason = "devhealthfacts: this source is team-scoped and carries no project dimension; a project reaches it only through team ownership, which resolved no owning team"
+
+// explainTeamScopedProjectAbsence narrows an empty read's reason when every
+// requested subject was a project and the capability could only have
+// answered through the ownership hop.
+//
+// Deliberately conditioned on ALL subjects being projects: a mixed read
+// whose repository half legitimately held no rows must not be relabelled
+// with an ownership explanation that does not apply to it.
+func explainTeamScopedProjectAbsence(state contextfabric.SourceState, reason string, subjects []contextfabric.SubjectRef) string {
+	if state != contextfabric.SourceNoData || len(subjects) == 0 {
+		return reason
+	}
+	for _, subject := range subjects {
+		if subject.Kind != contextfabric.SubjectProject {
+			return reason
+		}
+	}
+	return teamScopedProjectReason
 }
