@@ -110,3 +110,74 @@ func TestChaos4521_EveryPlannedCapabilityEmitsAFactReadRecord(t *testing.T) {
 		t.Errorf("fact-read records leaked subject content")
 	}
 }
+
+// Codex round-1 P2 (CHAOS-4521). mergeFactProviderResult takes its
+// FactProviderResult BY VALUE and rewrites it when the bundle-wide cap
+// trims the result: it sets Truncated and then SourceTruncated. Those
+// mutations land on its own copy, so a ledger reporting the CALLER's
+// result.Truncated logged `state=truncated truncated=false` -- a record
+// contradicting itself on exactly the merge-induced truncation an operator
+// would be reading it to find.
+//
+// The provider here returns an honest, untruncated result; the REGISTRY's
+// own fan-out cap is what truncates it. That is the case the by-value copy
+// hid, and it is unreachable through a provider that self-reports
+// truncation.
+func TestChaos4521_TheLedgerReportsMergeInducedTruncation(t *testing.T) {
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	facts := make([]CanonicalFact, 0, maxCanonicalFactsPerBundle+1)
+	for index := 0; index <= maxCanonicalFactsPerBundle; index++ {
+		facts = append(facts, CanonicalFact{
+			Kind: FactStatus, Subject: project,
+			Fields:      map[string]FactValue{"status": StringFactValue("in_progress")},
+			SourceState: SourceAvailable,
+		})
+	}
+	provider := &factProviderStub{
+		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "status-v2", SupportedSubjectKinds: []SubjectKind{SubjectProject}},
+		// Truncated is FALSE: the provider believes it returned everything.
+		result: FactProviderResult{State: SourceAvailable, Version: "status-v2", Facts: facts},
+	}
+
+	var sink bytes.Buffer
+	restore := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&sink, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(restore) })
+
+	registry, err := NewFactCapabilityRegistry([]FactProvider{provider}, FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, canonicalFactRequest(project, FactStatus))
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(bundle.Facts) != maxCanonicalFactsPerBundle {
+		t.Fatalf("precondition: expected the bundle cap to trim to %d, got %d", maxCanonicalFactsPerBundle, len(bundle.Facts))
+	}
+
+	var record map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(sink.String()), "\n") {
+		var candidate map[string]any
+		if err := json.Unmarshal([]byte(line), &candidate); err != nil {
+			continue
+		}
+		if candidate["msg"] == "context fabric fact read" && candidate["kind"] == string(FactStatus) {
+			record = candidate
+		}
+	}
+	if record == nil {
+		t.Fatalf("no fact-read record was emitted")
+	}
+	if record["state"] != string(SourceTruncated) {
+		t.Fatalf("state = %v, want %q", record["state"], SourceTruncated)
+	}
+	if record["truncated"] != true {
+		t.Errorf("truncated = %v, want true -- the ledger must not report state=truncated beside truncated=false", record["truncated"])
+	}
+	// The count is what the PROVIDER returned, not what survived the cap:
+	// an operator reading facts=<cap> would never know rows were dropped.
+	if facts, ok := record["facts"].(float64); !ok || int(facts) != maxCanonicalFactsPerBundle+1 {
+		t.Errorf("facts = %v, want %d (the returned count, captured before the cap trims)", record["facts"], maxCanonicalFactsPerBundle+1)
+	}
+}

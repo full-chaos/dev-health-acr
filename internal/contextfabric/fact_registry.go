@@ -526,12 +526,23 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			// scope rides out with the error so its telemetry is not lost.
 			return bundle, fmt.Errorf("fact capability %s: %w", planned.Kind, err)
 		}
-		// The state read back off the bundle's own coverage entry, never
-		// result.State: mergeFactProviderResult can REWRITE the state
-		// (truncation, an omitted-row count), and a ledger reporting the
-		// pre-merge state would disagree with the coverage the same read
-		// produced.
-		r.recordFactRead(ctx, principal, planned.Kind, factReadCompleted, lastCoverageState(&bundle), query.Subjects, factsReturned, result.Truncated)
+		// BOTH the state and the truncation flag are read back off the
+		// bundle's own coverage entry, never off result (codex round-1 P2).
+		//
+		// mergeFactProviderResult takes result BY VALUE and can rewrite it
+		// -- the bundle-wide cap and a nonzero OmittedCount both set
+		// Truncated and then SourceTruncated -- so those mutations land on
+		// its copy and are invisible here. Reporting result.Truncated
+		// logged `state=truncated truncated=false`, a ledger contradicting
+		// itself on exactly the merge-induced truncation an operator would
+		// be reading it to find.
+		//
+		// Truncation is derived from the merged STATE rather than tracked
+		// separately because merge makes the two equivalent by
+		// construction: it sets SourceTruncated if and only if Truncated
+		// is set. One source, so the pair cannot drift.
+		mergedState := lastCoverageState(&bundle)
+		r.recordFactRead(ctx, principal, planned.Kind, factReadCompleted, mergedState, query.Subjects, factsReturned, mergedState == SourceTruncated)
 	}
 	sortCanonicalFacts(bundle.Facts)
 	return bundle, nil
