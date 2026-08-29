@@ -106,7 +106,7 @@ func TestAttachCanonicalRowsOnlyAttachesToTheClaimThatCitesTheMatchingFact(t *te
 		{ClaimID: "claim_repo", Kind: FactMetrics, Subject: repoSubject, Field: "commits_count", Value: ScalarValue{Integer: int64Ptr(4)}},
 		{ClaimID: "claim_project", Kind: FactMetrics, Subject: projectSubject, Field: "commits_count", Value: ScalarValue{Integer: int64Ptr(19)}},
 	}
-	got, count, truncated := attachCanonicalRows(claims, []CanonicalFact{scalarOnlyFact, rowsFact})
+	got, count, _, truncated := attachCanonicalRows(claims, []CanonicalFact{scalarOnlyFact, rowsFact})
 	if truncated {
 		t.Fatalf("truncated = true, want false")
 	}
@@ -176,7 +176,7 @@ func TestAttachCanonicalRowsReportsTruncatedOnAmbiguousDropEvenThoughNothingWasA
 	claims := []ClaimedFact{{
 		ClaimID: "claim_1", Kind: FactMetrics, Subject: subject, Field: "team_count", Value: ScalarValue{Integer: int64Ptr(2)},
 	}}
-	got, count, truncated := attachCanonicalRows(claims, []CanonicalFact{fact})
+	got, count, _, truncated := attachCanonicalRows(claims, []CanonicalFact{fact})
 	if !truncated {
 		t.Fatalf("truncated = false, want true -- the ambiguous-fields drop must be reported even though nothing was attached")
 	}
@@ -307,7 +307,7 @@ func TestAttachCanonicalRowsTruncatesAtBoundAndReportsTruncated(t *testing.T) {
 	claims := []ClaimedFact{{
 		ClaimID: "claim_1", Kind: FactMetrics, Subject: subject, Field: "team_count", Value: ScalarValue{Integer: int64Ptr(2)},
 	}}
-	got, count, truncated := attachCanonicalRows(claims, []CanonicalFact{fact})
+	got, count, _, truncated := attachCanonicalRows(claims, []CanonicalFact{fact})
 	if !truncated {
 		t.Fatalf("truncated = false, want true (source had %d rows, cap is %d)", len(rows), contractsv1.ContextFabricClaimedFactMaxRows)
 	}
@@ -316,6 +316,83 @@ func TestAttachCanonicalRowsTruncatesAtBoundAndReportsTruncated(t *testing.T) {
 	}
 	if len(got[0].Rows) != contractsv1.ContextFabricClaimedFactMaxRows {
 		t.Fatalf("len(Rows) = %d, want %d", len(got[0].Rows), contractsv1.ContextFabricClaimedFactMaxRows)
+	}
+}
+
+// TestAttachCanonicalRowsByKindIncludesClaimedButZeroKind is CHAOS-4418's
+// own pin: byKind must carry an entry for every FactKind a claim named,
+// including a kind whose canonical fact carried no Rows-shaped field at
+// all (attached zero rows) -- that kind must NOT be indistinguishable from
+// a kind nobody claimed this call. This is the exact "repository subject
+// commits, facts compose, rows_count=0" diagnostic gap this ticket exists
+// to close: before this fix, seeing rows_count=0 in the aggregate
+// telemetry could not tell a reader WHICH fact kind's producer was the
+// one still emitting scalar-only fields.
+func TestAttachCanonicalRowsByKindIncludesClaimedButZeroKind(t *testing.T) {
+	t.Parallel()
+	repoSubject := SubjectRef{Kind: SubjectRepository, CanonicalID: "repo_1", Label: "acr-core"}
+	// FactIdentity: scalar-only canonical fact (identity.go stays scalar,
+	// team-lead ruling) -- claimed, but attaches zero rows.
+	identityFact := CanonicalFact{
+		Kind: FactIdentity, Subject: repoSubject,
+		Fields:         map[string]FactValue{"provider": IntegerFactValue(1)},
+		EvidenceRefIDs: []string{"evidence_identity"}, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1",
+	}
+	// FactMetrics: a real Rows-shaped field -- claimed, attaches 2 rows.
+	metricsRows := []FactValueRow{
+		{Fields: map[string]FactValue{"day": StringFactValue("2026-08-01")}},
+		{Fields: map[string]FactValue{"day": StringFactValue("2026-08-02")}},
+	}
+	metricsFact := CanonicalFact{
+		Kind: FactMetrics, Subject: repoSubject,
+		Fields:         map[string]FactValue{"daily_metrics": RowsFactValue(metricsRows)},
+		EvidenceRefIDs: []string{"evidence_metrics"}, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1",
+	}
+	claims := []ClaimedFact{
+		{ClaimID: "claim_identity", Kind: FactIdentity, Subject: repoSubject, Field: "provider", Value: ScalarValue{Integer: int64Ptr(1)}},
+		{ClaimID: "claim_metrics", Kind: FactMetrics, Subject: repoSubject, Field: "day_count", Value: ScalarValue{Integer: int64Ptr(2)}},
+	}
+	_, count, byKind, truncated := attachCanonicalRows(claims, []CanonicalFact{identityFact, metricsFact})
+	if truncated {
+		t.Fatalf("truncated = true, want false")
+	}
+	if count != 2 {
+		t.Fatalf("count = %d, want 2", count)
+	}
+	got, ok := byKind[FactIdentity]
+	if !ok {
+		t.Fatalf("byKind = %#v, want FactIdentity present (claimed this call, even though it attaches zero rows)", byKind)
+	}
+	if got != 0 {
+		t.Fatalf("byKind[FactIdentity] = %d, want 0", got)
+	}
+	if byKind[FactMetrics] != 2 {
+		t.Fatalf("byKind[FactMetrics] = %d, want 2", byKind[FactMetrics])
+	}
+	if _, ok := byKind[FactHealth]; ok {
+		t.Fatalf("byKind = %#v, want FactHealth absent -- it was never claimed this call, a different fact from a claimed-but-zero kind", byKind)
+	}
+}
+
+// TestRuntimeAnswerSynthesizerRecordsProjectedRowsByFactKind pins the
+// caller side: RuntimeAnswerSynthesizer.Synthesize must actually call
+// RecordProjectedRowsByFactKind (not just attachCanonicalRows compute it)
+// on a successful claim-assembly call, with the same map attachCanonicalRows
+// returned.
+func TestRuntimeAnswerSynthesizerRecordsProjectedRowsByFactKind(t *testing.T) {
+	t.Parallel()
+	input, draft := closureFixture()
+	telemetry := &recordingTelemetry{}
+	synthesizer := RuntimeAnswerSynthesizer{
+		Runtime:   fakeModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationSynthesize)},
+		Sink:      &fakeReceiptSink{},
+		Telemetry: telemetry,
+	}
+	if _, err := synthesizer.Synthesize(context.Background(), storage.Principal{OrgID: "org_1"}, input); err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if len(telemetry.projectedRowsByFactKind) != 1 {
+		t.Fatalf("projectedRowsByFactKind = %#v, want exactly 1 record", telemetry.projectedRowsByFactKind)
 	}
 }
 

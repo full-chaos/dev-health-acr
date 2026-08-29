@@ -572,8 +572,24 @@ func lookupCanonicalFact(facts []CanonicalFact, kind FactKind, subject SubjectRe
 // by the caller (see RuntimeAnswerSynthesizer.Telemetry's own doc
 // comment for when that is), zero/false included, so a quiet run is as
 // visible as a busy one.
-func attachCanonicalRows(claims []ClaimedFact, facts []CanonicalFact) (result []ClaimedFact, rowsCount int, truncated bool) {
+//
+// byKind (CHAOS-4418) is the SAME rowsCount total, broken down per
+// FactKind the model actually claimed something about this call --
+// EVERY such kind gets an entry, including a kind that claimed but
+// attached zero rows (initialized before the loop below, never added
+// lazily only on a nonzero hit), mirroring RecordFactScopeExpansion's own
+// "every field is logged, including the zero-valued counts" rule
+// (telemetry.go): a kind's absence from this map must mean "the model
+// never claimed this kind at all" and never "it claimed it but happened
+// to attach zero rows that run" -- those are different facts, and a
+// reader diagnosing why a repository-subject's metrics/health Rows count
+// is/was 0 needs to tell them apart.
+func attachCanonicalRows(claims []ClaimedFact, facts []CanonicalFact) (result []ClaimedFact, rowsCount int, byKind map[FactKind]int, truncated bool) {
+	byKind = make(map[FactKind]int, len(claims))
 	for i := range claims {
+		if _, seen := byKind[claims[i].Kind]; !seen {
+			byKind[claims[i].Kind] = 0
+		}
 		canonical, ok := lookupCanonicalFact(facts, claims[i].Kind, claims[i].Subject)
 		if !ok {
 			continue
@@ -592,8 +608,9 @@ func attachCanonicalRows(claims []ClaimedFact, facts []CanonicalFact) (result []
 		}
 		claims[i].Rows = rows
 		rowsCount += len(rows)
+		byKind[claims[i].Kind] += len(rows)
 	}
-	return claims, rowsCount, truncated
+	return claims, rowsCount, byKind, truncated
 }
 
 // canonicalFieldRows returns the canonical fact's ONE Rows-shaped field,
@@ -806,9 +823,14 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	// point starts with Rows nil -- what follows copies rows verbatim from
 	// the canonical fact each claim cites, never from the model, closing
 	// the routing gap the CHAOS-4347 rejection above left open.
-	claimedFacts, rowsCount, rowsTruncated := attachCanonicalRows(cloneSlice(draft.ClaimedFacts), input.Facts.Facts)
+	claimedFacts, rowsCount, rowsByKind, rowsTruncated := attachCanonicalRows(cloneSlice(draft.ClaimedFacts), input.Facts.Facts)
 	if r.Telemetry != nil {
 		r.Telemetry.RecordProjectedRowsCount(ctx, principal, rowsCount, rowsTruncated)
+		// CHAOS-4418: the SAME total, broken down per FactKind -- see
+		// attachCanonicalRows' own doc comment for why a claimed-but-zero
+		// kind must still appear (never omitted alongside a kind never
+		// claimed at all).
+		r.Telemetry.RecordProjectedRowsByFactKind(ctx, principal, rowsByKind)
 	}
 	result := InvestigationResult{
 		Status: draft.Status,

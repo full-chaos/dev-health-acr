@@ -802,6 +802,20 @@ const (
 	ContextFabricSerializedBytesMax = 1 << 20
 )
 
+// ContextFabricMaxCohortMembersLimit (CHAOS-4418) is the upper bound
+// ContextFabricInvestigationOptions.Validate() enforces on MaxCohortMembers
+// -- exported (rather than left as validate_context_fabric_request.go's own
+// inline literal) so a caller elsewhere in this module that needs to
+// derive a capacity FROM this bound (e.g. internal/runtime/hosted's
+// ClickHouse client MaxResultRows, sized for the worst-case repository
+// count in one cohort-shaped fact request) references the SAME constant
+// the validator enforces, rather than a second, independently-chosen
+// number that could silently drift from it. A relation between two
+// literals is not checkable; a relation between two constants is (see
+// ContextFabricSerializedBytesMin/Max's own comment above, and
+// internal/sidecar's TestSidecarCeilingClearsTheServingBudget).
+const ContextFabricMaxCohortMembersLimit = 250
+
 type ContextFabricInvestigationOptions struct {
 	MaxSubjectCandidates int  `json:"max_subject_candidates"`
 	MaxCohortMembers     int  `json:"max_cohort_members"`

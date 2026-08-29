@@ -8,14 +8,22 @@ import (
 	"strings"
 	"testing"
 
+	"time"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+// metricsRow shapes one row of readRepositoryMetrics' own SELECT list. The
+// trailing value is total_days -- the per-repository distinct-day count the
+// query computes BEFORE its own `LIMIT ... BY repo_id` (codex R4 finding 3)
+// -- which is why it is 1 here and not len(rows): a single-row fixture is a
+// one-day series.
 func metricsRow(repoID string) []any {
-	return []any{repoID, "2026-02-21", int64(42), int64(7), float64(12.5), float64(0.1), uint8(1), float64(3.5), int64(4), float64(0.2)}
+	return []any{repoID, "2026-02-21", int64(42), int64(7), float64(12.5), float64(0.1), uint8(1), float64(3.5), int64(4), float64(0.2), int64(1)}
 }
 
 // projectSubject mints a CHAOS-3898 "project.v2:<provider>:<project_id>"
@@ -203,6 +211,11 @@ func TestMetricsProviderAllThreeSubjectKindsInOneQuery(t *testing.T) {
 	}
 }
 
+// TestMetricsProviderHappyPath is CHAOS-4418's own pin: a repository
+// metrics fact now carries a real per-day series (Rows), not a flat
+// scalar snapshot of the latest day -- see readRepositoryMetrics' own doc
+// comment for why this can no longer go through readers.ReadRepositoryMetrics
+// (that shared reader collapses to exactly one row per repository).
 func TestMetricsProviderHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
@@ -220,11 +233,33 @@ func TestMetricsProviderHappyPath(t *testing.T) {
 		t.Fatalf("facts = %#v, want 1", result.Facts)
 	}
 	fact := result.Facts[0]
-	if fact.Fields["commits_count"].Integer == nil || *fact.Fields["commits_count"].Integer != 42 {
-		t.Fatalf("fields = %#v", fact.Fields)
+	if fact.Fields["day_count"].Integer == nil || *fact.Fields["day_count"].Integer != 1 {
+		t.Fatalf("day_count = %#v", fact.Fields["day_count"])
 	}
-	if fact.Fields["mttr_hours"].Number == nil || *fact.Fields["mttr_hours"].Number != 3.5 {
-		t.Fatalf("fields = %#v", fact.Fields)
+	dailyMetrics := fact.Fields["daily_metrics"].Rows
+	if len(dailyMetrics) != 1 {
+		t.Fatalf("daily_metrics = %#v, want 1 row", dailyMetrics)
+	}
+	row := dailyMetrics[0].Fields
+	if row["day"].String == nil || *row["day"].String != "2026-02-21" {
+		t.Fatalf("row day = %#v", row["day"])
+	}
+	if row["commits_count"].Integer == nil || *row["commits_count"].Integer != 42 {
+		t.Fatalf("row fields = %#v", row)
+	}
+	if row["mttr_hours"].Number == nil || *row["mttr_hours"].Number != 3.5 {
+		t.Fatalf("row fields = %#v", row)
+	}
+	// canonicalFieldRows (model_runtime.go) fails closed on more than one
+	// Rows-shaped field per fact -- this fact must carry exactly one.
+	rowsFieldCount := 0
+	for _, value := range fact.Fields {
+		if len(value.Rows) > 0 {
+			rowsFieldCount++
+		}
+	}
+	if rowsFieldCount != 1 {
+		t.Fatalf("rows-shaped field count = %d, want exactly 1 (fields = %#v)", rowsFieldCount, fact.Fields)
 	}
 }
 
@@ -242,8 +277,138 @@ func TestMetricsProviderNoMTTROmitsField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	if _, ok := result.Facts[0].Fields["mttr_hours"]; ok {
-		t.Fatalf("fields = %#v, want mttr_hours omitted", result.Facts[0].Fields)
+	dailyMetrics := result.Facts[0].Fields["daily_metrics"].Rows
+	if len(dailyMetrics) != 1 {
+		t.Fatalf("daily_metrics = %#v, want 1 row", dailyMetrics)
+	}
+	if _, ok := dailyMetrics[0].Fields["mttr_hours"]; ok {
+		t.Fatalf("row fields = %#v, want mttr_hours omitted", dailyMetrics[0].Fields)
+	}
+}
+
+// TestMetricsProviderMultipleDaysBuildOneSeries pins the actual CHAOS-4418
+// fix directly: multiple repo_metrics_daily rows for the SAME repository
+// (different days) must land as multiple rows inside ONE CanonicalFact's
+// daily_metrics series, not as multiple separate CanonicalFacts (the
+// parent-commit shape, which silently discarded every day but the first
+// one lookupCanonicalFact happened to find -- CHAOS-4355's own
+// lookupCanonicalFact takes the FIRST (kind, subject) match, so a second
+// same-subject fact was always unreachable dead data before this fix).
+func TestMetricsProviderMultipleDaysBuildOneSeries(t *testing.T) {
+	t.Parallel()
+	day1 := metricsRow("repo-1")
+	day2 := metricsRow("repo-1")
+	day2[1] = "2026-02-22"
+	day2[2] = int64(7)
+	// total_days: the query's own per-repository distinct-day count, which
+	// a real server computes over BOTH rows (codex R4 finding 3).
+	day1[10], day2[10] = int64(2), int64(2)
+	// fakeClient replays rows verbatim in the order given (it is not a
+	// real SQL engine) -- day2 (the LATER day) first, day1 second,
+	// mirroring the real query's own `ORDER BY repo_id, day DESC`.
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: [][]any{day2, day1}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want exactly 1 CanonicalFact for repo-1 (not one per day)", result.Facts)
+	}
+	fact := result.Facts[0]
+	if fact.Fields["day_count"].Integer == nil || *fact.Fields["day_count"].Integer != 2 {
+		t.Fatalf("day_count = %#v, want 2", fact.Fields["day_count"])
+	}
+	dailyMetrics := fact.Fields["daily_metrics"].Rows
+	if len(dailyMetrics) != 2 {
+		t.Fatalf("daily_metrics = %#v, want 2 rows", dailyMetrics)
+	}
+	if dailyMetrics[0].Fields["day"].String == nil || *dailyMetrics[0].Fields["day"].String != "2026-02-22" {
+		t.Fatalf("dailyMetrics[0].day = %#v, want the MOST RECENT day first (day DESC) -- truncation on an oversized series must drop the oldest days, not the freshest", dailyMetrics[0].Fields["day"])
+	}
+	if dailyMetrics[1].Fields["commits_count"].Integer == nil || *dailyMetrics[1].Fields["commits_count"].Integer != 42 {
+		t.Fatalf("dailyMetrics[1].commits_count = %#v, want 42 (day1, the older/second row)", dailyMetrics[1].Fields["commits_count"])
+	}
+}
+
+// windowBinding returns the named ClickHouse binding's time.Time value from
+// the last captured query, failing the test if it is missing or the wrong
+// type.
+func windowBinding(t *testing.T, client *fakeClient, name string) time.Time {
+	t.Helper()
+	last := client.queries[len(client.queries)-1]
+	for _, binding := range last.bindings {
+		if binding.Name == name {
+			value, ok := binding.Value.(time.Time)
+			if !ok {
+				t.Fatalf("binding %q = %#v, want time.Time", name, binding.Value)
+			}
+			return value
+		}
+	}
+	t.Fatalf("no %q binding in query %q", name, last.statement)
+	return time.Time{}
+}
+
+// TestMetricsProviderSeriesUsesExplicitEvidenceWindow is CHAOS-4418's
+// team-lead-ruled correction: the per-day series must span the CALLER's
+// own requested evidence window when one is given explicitly (Start AND
+// End), never a devhealthfacts-invented number.
+func TestMetricsProviderSeriesUsesExplicitEvidenceWindow(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: [][]any{metricsRow("repo-1")}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 31, 0, 0, 0, 0, time.UTC)
+	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{
+			Axis:           contextfabric.TemporalCurrent,
+			EvidenceWindow: &contractsv1.ContextFabricRequestedEvidenceWindow{Start: &start, End: &end},
+		},
+		Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if got := windowBinding(t, client, "series_window_start"); !got.Equal(start) {
+		t.Fatalf("series_window_start = %v, want the caller's own window Start %v, not a re-derived one", got, start)
+	}
+	if got := windowBinding(t, client, "series_window_end"); !got.Equal(end) {
+		t.Fatalf("series_window_end = %v, want the caller's own window End %v", got, end)
+	}
+}
+
+// TestMetricsProviderSeriesFallsBackToPlatformDefaultWindow pins the "no
+// window at all" case: no historical bound, no explicit current-axis
+// Start/End (a RelativeID alone does not count -- resolving one to
+// absolute bounds is exclusively window.go's job). The series must still
+// use the platform's own default evidence-window width (90 days,
+// window.go's windowDefaultPolicy = WindowDefaultPolicy90D), not an
+// independently-chosen number.
+func TestMetricsProviderSeriesFallsBackToPlatformDefaultWindow(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: [][]any{metricsRow("repo-1")}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+	before := time.Now().UTC()
+	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject("repo-1")},
+	})
+	after := time.Now().UTC()
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	end := windowBinding(t, client, "series_window_end")
+	if end.Before(before) || end.After(after) {
+		t.Fatalf("series_window_end = %v, want between %v and %v (now)", end, before, after)
+	}
+	start := windowBinding(t, client, "series_window_start")
+	width := end.Sub(start)
+	if width != 90*24*time.Hour {
+		t.Fatalf("series window width = %v, want exactly 90 days (the platform's own default evidence-window policy width, window.go's windowDefaultPolicy)", width)
 	}
 }
 
@@ -301,6 +466,47 @@ func TestMetricsProviderScopedToOrgAndRequestedSubjects(t *testing.T) {
 	assertQueryScopedToOrgAndSubjects(t, client.queries[len(client.queries)-1].statement)
 }
 
+// TestMetricsProviderRepositorySeriesCapsPerRepositoryNotJustQueryWide is
+// Codex R1's own finding (confirmed), sharpened by Codex R2 (confirmed the
+// R1 fix was still incomplete): a per-repository `LIMIT n BY repo_id`
+// ALONE does not stop cross-repository starvation if a shared, query-WIDE
+// LIMIT still follows it -- the query-wide LIMIT still truncates the
+// combined (repo_id, day DESC)-ordered stream afterward, so a handful of
+// repositories at or near the per-group cap can still exhaust the shared
+// budget and leave later-sorted repositories with NO canonical fact at
+// all (not a truncated series -- a MISSING one, exactly the gap this
+// ticket exists to close, reintroduced for a multi-repository caller).
+// The fix drops the shared query-wide LIMIT for this query entirely.
+//
+// The fakeClient cannot simulate ClickHouse's actual per-group LIMIT BY
+// semantics (it replays canned rows verbatim, not a real query planner),
+// so this pins the STATEMENT TEXT two ways: the per-repository sub-cap is
+// present, AND -- the R2 fix this test specifically exists to catch --
+// there is no SECOND, trailing bare `LIMIT <n>` after it (which is
+// exactly what an R1-shaped "add a per-group cap but keep the shared one
+// too" regression would reintroduce). A test that only checked the first
+// half would have passed on the R1-only fix Codex R2 found incomplete.
+func TestMetricsProviderRepositorySeriesCapsPerRepositoryNotJustQueryWide(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: [][]any{metricsRow("repo-1")}}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
+	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject("repo-1"), repoSubject("repo-2")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	rawStatement := client.queries[len(client.queries)-1].statement
+	statement := strings.ToUpper(rawStatement)
+	if !strings.Contains(statement, "LIMIT 200 BY REPO_ID") {
+		t.Fatalf("statement = %q, want a `LIMIT 200 BY repo_id` per-repository sub-cap", rawStatement)
+	}
+	if got := strings.Count(statement, "LIMIT"); got != 1 {
+		t.Fatalf("statement = %q, want exactly 1 LIMIT clause total (the per-repository `LIMIT 200 BY repo_id` only) -- a second, trailing bare LIMIT would still truncate the COMBINED multi-repository stream after the per-group cap already ran, reintroducing cross-repository starvation", rawStatement)
+	}
+}
+
 // TestMetricsProviderRowForUnrequestedRepositoryNeverAppears is the F5
 // result-content guard: even though the fake client can return a row for
 // ANY repository (it doesn't execute the SQL's own org/id filters), the
@@ -337,9 +543,35 @@ func metricsRows(n int) [][]any {
 	return rows
 }
 
+// metricsRowsForOneRepoOverDays builds n distinct-day rows for the SAME
+// repository -- the shape that actually exercises truncation post-CHAOS-4418
+// (capFactValueRows' own 64-row per-FACT cap on one repository's own
+// daily_metrics series), unlike metricsRows above (n DIFFERENT repositories,
+// one row each -- the pre-CHAOS-4418 shape, now retained only for
+// TestMetricsProviderRepositorySeriesCapsPerRepositoryNotJustQueryWide's own
+// multi-repository scenario).
+func metricsRowsForOneRepoOverDays(repoID string, n int) [][]any {
+	rows := make([][]any, n)
+	for i := 0; i < n; i++ {
+		row := metricsRow(repoID)
+		row[1] = fmt.Sprintf("2026-%02d-%02d", 1+i/28, 1+i%28)
+		row[10] = int64(n)
+		rows[i] = row
+	}
+	return rows
+}
+
+// TestMetricsProviderTruncatesWhenRowCountReachesLimit is CHAOS-4418's own
+// re-pin (Codex R2: the pre-CHAOS-4418 version of this test fed rows for
+// maxMetricsRowsPerQueryForTest DIFFERENT repositories while requesting
+// only ONE subject -- proving the OLD query-wide-LIMIT heuristic, which no
+// longer applies now that readRepositoryMetrics has no query-wide LIMIT at
+// all, Codex R2's own confirmed fix). Truncation now means ONE requested
+// repository's own daily_metrics series exceeding
+// ContextFabricClaimedFactMaxRows (64) -- capFactValueRows' own signal.
 func TestMetricsProviderTruncatesWhenRowCountReachesLimit(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: metricsRows(maxMetricsRowsPerQueryForTest)}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: metricsRowsForOneRepoOverDays("repo-1", 65)}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -349,16 +581,17 @@ func TestMetricsProviderTruncatesWhenRowCountReachesLimit(t *testing.T) {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
 	if !result.Truncated {
-		t.Fatalf("result.Truncated = false, want true when the row count reaches the limit")
+		t.Fatalf("result.Truncated = false, want true when one repository's own series (65 days) exceeds the 64-row per-fact cap")
 	}
-	if len(client.queries) == 0 || !strings.Contains(strings.ToUpper(client.queries[len(client.queries)-1].statement), "LIMIT") {
-		t.Fatalf("query statement = %#v, want a LIMIT clause", client.queries)
+	dailyMetrics := result.Facts[0].Fields["daily_metrics"].Rows
+	if len(dailyMetrics) != 64 {
+		t.Fatalf("daily_metrics = %d rows, want capped to 64", len(dailyMetrics))
 	}
 }
 
 func TestMetricsProviderNotTruncatedBelowLimit(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: metricsRows(maxMetricsRowsPerQueryForTest - 1)}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM repo_metrics_daily", rows: metricsRowsForOneRepoOverDays("repo-1", 64)}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactMetrics)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -368,6 +601,6 @@ func TestMetricsProviderNotTruncatedBelowLimit(t *testing.T) {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
 	if result.Truncated {
-		t.Fatalf("result.Truncated = true, want false when the row count is below the limit")
+		t.Fatalf("result.Truncated = true, want false when the series (64 days) is exactly at, not over, the cap")
 	}
 }

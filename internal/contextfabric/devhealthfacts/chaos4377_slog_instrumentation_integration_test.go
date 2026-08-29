@@ -94,25 +94,31 @@ func TestCHAOS4377_InstrumentedProvidersEmitSlogRecordOnRealClickHouseRead(t *te
 		t.Fatalf("facts = %#v, want exactly 1 repository metrics fact", result.Facts)
 	}
 
+	// CHAOS-4418: readRepositoryMetrics no longer calls
+	// readers.ReadRepositoryMetrics (that shared reader collapses to one
+	// row per repository, which cannot carry a per-day series) -- it
+	// builds its own raw SQL through readers.QueryOrgScopedNamed instead,
+	// attributed as "ReadRepositoryMetricsSeries" (metrics.go's own doc
+	// comment). Same instrumentation coverage, new reader name.
 	records := handler.snapshot()
-	var sawReadRepositoryMetrics bool
+	var sawReadRepositoryMetricsSeries bool
 	for _, record := range records {
 		attrs := recordAttrs(record)
 		readerAttr, ok := attrs["reader"]
-		if !ok || readerAttr.String() != "ReadRepositoryMetrics" {
+		if !ok || readerAttr.String() != "ReadRepositoryMetricsSeries" {
 			continue
 		}
-		sawReadRepositoryMetrics = true
+		sawReadRepositoryMetricsSeries = true
 		orgScopedAttr, ok := attrs["org_scoped"]
 		if !ok || !orgScopedAttr.Bool() {
-			t.Fatalf("readers.query_org_scoped record for reader=ReadRepositoryMetrics has org_scoped = %v (present=%v), want true", orgScopedAttr, ok)
+			t.Fatalf("readers.query_org_scoped record for reader=ReadRepositoryMetricsSeries has org_scoped = %v (present=%v), want true", orgScopedAttr, ok)
 		}
 		if _, ok := attrs["error"]; ok {
-			t.Fatalf("readers.query_org_scoped record for reader=ReadRepositoryMetrics carries an error attr on a successful read: %#v", attrs["error"])
+			t.Fatalf("readers.query_org_scoped record for reader=ReadRepositoryMetricsSeries carries an error attr on a successful read: %#v", attrs["error"])
 		}
 	}
-	if !sawReadRepositoryMetrics {
-		t.Fatalf("no slog record emitted for reader=ReadRepositoryMetrics -- devhealthfacts.NewInstrumentedProviders wiring did not reach readers.QueryOrgScoped; records captured = %#v", records)
+	if !sawReadRepositoryMetricsSeries {
+		t.Fatalf("no slog record emitted for reader=ReadRepositoryMetricsSeries -- devhealthfacts.NewInstrumentedProviders wiring did not reach readers.QueryOrgScopedNamed; records captured = %#v", records)
 	}
 }
 
@@ -144,7 +150,8 @@ func TestCHAOS4377_NewInstrumentedProvidersNilInstrumentationMatchesNewProviders
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	if len(result.Facts) != 1 || result.Facts[0].Fields["commits_count"].Integer == nil || *result.Facts[0].Fields["commits_count"].Integer != 7 {
-		t.Fatalf("facts = %#v, want exactly 1 fact with commits_count=7", result.Facts)
+	dailyMetrics := result.Facts[0].Fields["daily_metrics"].Rows
+	if len(result.Facts) != 1 || len(dailyMetrics) != 1 || dailyMetrics[0].Fields["commits_count"].Integer == nil || *dailyMetrics[0].Fields["commits_count"].Integer != 7 {
+		t.Fatalf("facts = %#v, want exactly 1 fact with a 1-row daily_metrics series (commits_count=7)", result.Facts)
 	}
 }

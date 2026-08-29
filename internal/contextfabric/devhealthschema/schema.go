@@ -106,6 +106,25 @@ var ProductionColumns = map[string][]Column{
 		{Name: "scope_id", Type: "String"},
 		{Name: "compounding_risk", Type: "Nullable(Float64)"},
 		{Name: "severity", Type: "Enum8('unknown' = 0, 'low' = 1, 'elevated' = 2, 'high' = 3)"},
+		// CHAOS-4418: the formula's own 4 normalized components sit at
+		// production positions 7-10, immediately after severity -- health.go's
+		// readScope now reads these to build the risk_rules per-component
+		// breakdown.
+		{Name: "churn_norm", Type: "Nullable(Float64)"},
+		{Name: "complexity_norm", Type: "Nullable(Float64)"},
+		{Name: "ownership_norm", Type: "Nullable(Float64)"},
+		{Name: "review_norm", Type: "Nullable(Float64)"},
+		// positions 11-16 (rework_churn, complexity_delta, bus_factor,
+		// ownership_gini, single_owner_ratio, review_latency_p90h) are the
+		// RAW inputs behind the norms above -- unread, omitted per this
+		// package's scope rule.
+		{Name: "w_churn", Type: "Float64"},
+		{Name: "w_complexity", Type: "Float64"},
+		{Name: "w_ownership", Type: "Float64"},
+		{Name: "w_review", Type: "Float64"},
+		// positions 21-22 (threshold_elevated, threshold_high) bound the
+		// COMBINED compounding_risk score, not any one component -- unread,
+		// omitted per this package's scope rule.
 		{Name: "computed_at", Type: "DateTime"},
 	},
 	"deployments": {

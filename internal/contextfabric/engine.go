@@ -524,6 +524,18 @@ type EngineTelemetry interface {
 	// producer emitted a renderable table this call" stays distinguishable
 	// from "nobody is counting".
 	RecordProjectedRowsCount(ctx context.Context, principal storage.Principal, count int, truncated bool)
+	// RecordProjectedRowsByFactKind (CHAOS-4418) reports the SAME total
+	// RecordProjectedRowsCount reports, broken down per FactKind the
+	// model claimed something about this call -- diagnosing WHICH fact
+	// kind's producer did or did not carry a renderable table without
+	// re-reading source (this file's own CANONICAL ARCHITECTURE doctrine:
+	// a defect must be diagnosable from the run's own artifacts alone).
+	// byKind carries an entry for every kind claimed this call, INCLUDING
+	// a kind that claimed but attached zero rows -- attachCanonicalRows'
+	// own doc comment explains why that must not collapse into "kind
+	// absent" the same way RecordFactScopeExpansion's zero-valued counts
+	// must not collapse into "nobody counted".
+	RecordProjectedRowsByFactKind(ctx context.Context, principal storage.Principal, byKind map[FactKind]int)
 	// RecordModelRowsStripped (CHAOS-4355 follow-up, cf_model_rows_stripped)
 	// reports the count of ClaimedFacts entries whose model-authored Rows
 	// was cleared before draft.ValidateAgainst ran, so an operator can tell
@@ -1287,7 +1299,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 	}
 	factRequest := CanonicalFactRequest{
-		Question:     interpretation,
+		Question:     factReadQuestion(interpretation, effectiveWindow),
 		Subjects:     subjects,
 		Cohort:       graphContext.Cohort,
 		Requirements: mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements),

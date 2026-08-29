@@ -349,6 +349,10 @@ type recordingTelemetry struct {
 	// discipline: a test asserts the exact count/truncated pair, never
 	// merely that something fired.
 	projectedRowsCounts []projectedRowsCountRecord
+	// projectedRowsByFactKind (CHAOS-4418) mirrors the SAME
+	// list-not-count discipline: a test asserts the exact map recorded
+	// for a given call, never merely that something fired.
+	projectedRowsByFactKind []map[FactKind]int
 	// windowGateOfferDisclosures/windowExpandOfferRedemptions (CHAOS-4314)
 	// mirror the SAME list-not-count discipline as windowCanonicalizationOutcomes
 	// above.
@@ -507,6 +511,10 @@ func (r *recordingTelemetry) RecordOfferPhrasing(_ context.Context, _ storage.Pr
 
 func (r *recordingTelemetry) RecordProjectedRowsCount(_ context.Context, _ storage.Principal, count int, truncated bool) {
 	r.projectedRowsCounts = append(r.projectedRowsCounts, projectedRowsCountRecord{count: count, truncated: truncated})
+}
+
+func (r *recordingTelemetry) RecordProjectedRowsByFactKind(_ context.Context, _ storage.Principal, byKind map[FactKind]int) {
+	r.projectedRowsByFactKind = append(r.projectedRowsByFactKind, byKind)
 }
 
 func (r *recordingTelemetry) RecordModelRowsStripped(_ context.Context, _ storage.Principal, claims int) {
