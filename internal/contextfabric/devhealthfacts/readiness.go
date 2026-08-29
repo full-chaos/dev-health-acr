@@ -197,7 +197,7 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactReadiness, Subject: subject,
 			Fields: map[string]contextfabric.FactValue{
-				"rollup_basis":   contextfabric.StringFactValue("team_project_ownership_breakdown"),
+				"rollup_basis":   contextfabric.StringFactValue("project_work_scope_breakdown"),
 				"team_count":     contextfabric.IntegerFactValue(int64(len(seenTeams))),
 				"team_breakdown": contextfabric.RowsFactValue(teamRows),
 			},

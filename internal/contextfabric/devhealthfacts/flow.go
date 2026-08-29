@@ -448,7 +448,13 @@ ORDER BY p.id, wm.team_id`)
 		teamRows, omitted := capFactValueRows(teamRows)
 		totalOmitted += omitted
 		fields := map[string]contextfabric.FactValue{
-			"rollup_basis":    contextfabric.StringFactValue("team_project_ownership_sum"),
+			"rollup_basis": contextfabric.StringFactValue("project_work_scope_sum"),
+			// CHAOS-4521b, codex P2: renamed with the join. rollup_basis
+			// reaches canonical claimed facts and synthesis, so an answer
+			// could report an ownership derivation that no longer
+			// happens -- provenance describing a chain the read did not
+			// traverse. This path groups the project's OWN work-scope
+			// rows; no ownership edge is consulted.
 			"team_count":      contextfabric.IntegerFactValue(int64(len(seenTeams))),
 			"items_started":   contextfabric.IntegerFactValue(totalStarted),
 			"items_completed": contextfabric.IntegerFactValue(totalCompleted),

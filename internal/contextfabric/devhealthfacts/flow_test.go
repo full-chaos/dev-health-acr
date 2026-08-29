@@ -173,7 +173,7 @@ func TestFlowProviderProjectRollupSumsCountsDisclosesPerTeamBreakdown(t *testing
 		t.Fatalf("facts = %#v, want 1", result.Facts)
 	}
 	fact := result.Facts[0]
-	if fact.Fields["rollup_basis"].String == nil || *fact.Fields["rollup_basis"].String != "team_project_ownership_sum" {
+	if fact.Fields["rollup_basis"].String == nil || *fact.Fields["rollup_basis"].String != "project_work_scope_sum" {
 		t.Fatalf("rollup_basis = %#v", fact.Fields["rollup_basis"])
 	}
 	if fact.Fields["items_started"].Integer == nil || *fact.Fields["items_started"].Integer != 15 {

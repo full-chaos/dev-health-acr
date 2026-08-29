@@ -108,7 +108,10 @@ func TestCHAOS4363ProjectRollupsAgainstRealClickHouse(t *testing.T) {
 		seedTeam("team-wl-a", orgID, "Team Workload A")
 		seedOwnership(orgID, "linear", "team-wl-a", "WL1")
 		if err := direct.Exec(ctx, `INSERT INTO capacity_forecasts (forecast_id, computed_at, team_id, work_scope_id, backlog_size, throughput_mean, throughput_stddev, insufficient_history, high_variance, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			"forecast-1", ts(2026, 8, 12, 6, 0, 0), "team-wl-a", "scope-a", uint32(12), 3.2, 0.8, uint8(0), uint8(1), orgID); err != nil {
+			// CHAOS-4521b: work_scope_id IS the project's own identity now;
+			// the ownership row above is left in place to prove this read no
+			// longer depends on it.
+			"forecast-1", ts(2026, 8, 12, 6, 0, 0), "team-wl-a", "proj-wl", uint32(12), 3.2, 0.8, uint8(0), uint8(1), orgID); err != nil {
 			t.Fatalf("seed capacity_forecasts row: %v", err)
 		}
 		provider := findProvider(t, providers, contextfabric.FactWorkload)
@@ -137,7 +140,8 @@ func TestCHAOS4363ProjectRollupsAgainstRealClickHouse(t *testing.T) {
 		seedTeam("team-rd-a", orgID, "Team Readiness A")
 		seedOwnership(orgID, "linear", "team-rd-a", "RD1")
 		if err := direct.Exec(ctx, `INSERT INTO estimate_coverage_metrics_daily (day, provider, work_scope_id, team_id, estimated_count, unestimated_count, backlog_size, ratio, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-			date(2026, 8, 12), "linear", "scope-a", "team-rd-a", uint32(18), uint32(2), uint32(20), 0.9, ts(2026, 8, 12, 6, 0, 0), orgID); err != nil {
+			// CHAOS-4521b: as above -- the project's own work scope.
+			date(2026, 8, 12), "linear", "proj-rd", "team-rd-a", uint32(18), uint32(2), uint32(20), 0.9, ts(2026, 8, 12, 6, 0, 0), orgID); err != nil {
 			t.Fatalf("seed estimate_coverage row: %v", err)
 		}
 		provider := findProvider(t, providers, contextfabric.FactReadiness)

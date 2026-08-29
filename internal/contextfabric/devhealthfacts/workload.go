@@ -207,7 +207,7 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactWorkload, Subject: subject,
 			Fields: map[string]contextfabric.FactValue{
-				"rollup_basis":   contextfabric.StringFactValue("team_project_ownership_breakdown"),
+				"rollup_basis":   contextfabric.StringFactValue("project_work_scope_breakdown"),
 				"team_count":     contextfabric.IntegerFactValue(int64(len(seenTeams))),
 				"team_breakdown": contextfabric.RowsFactValue(teamRows),
 			},

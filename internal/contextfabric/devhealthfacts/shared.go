@@ -52,7 +52,16 @@ import (
 // empty-bundle coverage, silently skipping both the fix and its ledger.
 // Same over-invalidation rationale as v1->v2 and v2->v3 above: the safe
 // direction is to invalidate more than strictly changed.
-const QueryVersion = "devhealthfacts.clickhouse.v4"
+//
+// v4 -> v5 (CHAOS-4521b, codex P1): the project reads changed SHAPE, not
+// just their reported state. flow/readiness/workload now key on the
+// project's own work_scope_id instead of its owning team's rows, and the
+// ownership join underneath health/investment/landscape moved onto the
+// project identity. A candidate saved under v4 was computed from a
+// DIFFERENT row set -- empty, or another project's -- and answer reuse runs
+// before any fact provider, so without this bump the gate would keep
+// serving exactly the answers this change exists to replace.
+const QueryVersion = "devhealthfacts.clickhouse.v5"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -393,8 +402,16 @@ func stringOrNull(value string) contextfabric.FactValue {
 // unhelpful, because it reads as "this project has no health", when what
 // happened is that the question could not be routed to the project at all.
 //
+// It deliberately stops at the ROUTING and claims nothing about the
+// outcome (codex P2). An earlier wording ended "...which resolved no owning
+// team", which the read cannot know: SourceNoData is equally consistent
+// with ownership resolving teams whose metric rows were simply absent.
+// Asserting the stronger of two indistinguishable causes is the same
+// failure class as CHAOS-4521 itself -- a coverage field claiming more than
+// the read observed.
+//
 // A fixed literal, never interpolating a subject or a count.
-const teamScopedProjectReason = "devhealthfacts: this source is team-scoped and carries no project dimension; a project reaches it only through team ownership, which resolved no owning team"
+const teamScopedProjectReason = "devhealthfacts: this source is team-scoped and carries no project dimension; a project reaches it only through team ownership"
 
 // explainTeamScopedProjectAbsence narrows an empty read's reason when every
 // requested subject was a project and the capability could only have
@@ -403,8 +420,16 @@ const teamScopedProjectReason = "devhealthfacts: this source is team-scoped and 
 // Deliberately conditioned on ALL subjects being projects: a mixed read
 // whose repository half legitimately held no rows must not be relabelled
 // with an ownership explanation that does not apply to it.
-func explainTeamScopedProjectAbsence(state contextfabric.SourceState, reason string, subjects []contextfabric.SubjectRef) string {
+func explainTeamScopedProjectAbsence(bound factTimeBound, state contextfabric.SourceState, reason string, subjects []contextfabric.SubjectRef) string {
 	if state != contextfabric.SourceNoData || len(subjects) == 0 {
+		return reason
+	}
+	// A HISTORICAL empty read already has a more specific reason than this
+	// one: outOfRetentionReason says the window may predate the retained
+	// corpus, which is a statement about TIME, not routing (codex P2).
+	// Overwriting it would erase the distinction §19.8.3 exists to draw and
+	// replace a true reason with a less true one.
+	if bound.active {
 		return reason
 	}
 	for _, subject := range subjects {

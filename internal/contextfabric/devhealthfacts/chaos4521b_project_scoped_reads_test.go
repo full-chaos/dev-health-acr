@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
@@ -101,8 +102,16 @@ func TestChaos4521b_TeamScopedRollupsExplainAnEmptyProjectRead(t *testing.T) {
 			if result.State != contextfabric.SourceNoData {
 				t.Fatalf("state = %q, want %q", result.State, contextfabric.SourceNoData)
 			}
-			if !strings.Contains(result.Reason, "team-scoped") || !strings.Contains(result.Reason, "no owning team") {
+			if !strings.Contains(result.Reason, "team-scoped") || !strings.Contains(result.Reason, "only through team ownership") {
 				t.Errorf("reason = %q, want it to name the team-scoped routing, not a generic empty read", result.Reason)
+			}
+			// codex P2: it must name the ROUTING and stop there. no_data is
+			// equally consistent with ownership resolving teams whose metric
+			// rows were absent, so claiming an ownership OUTCOME would assert
+			// the stronger of two indistinguishable causes -- the same
+			// failure class as CHAOS-4521 itself.
+			if strings.Contains(result.Reason, "no owning team") || strings.Contains(result.Reason, "resolved no") {
+				t.Errorf("reason = %q asserts an ownership outcome the read never observed", result.Reason)
 			}
 			if !strings.Contains(client.queries[0].statement, "team_project_ownership") {
 				t.Errorf("%s has no project dimension; it must KEEP the ownership hop", testCase.name)
@@ -184,5 +193,33 @@ func TestChaos4521b_ThePseudoProjectOwnershipRowAttributesToNothing(t *testing.T
 	//    second, one project's ownership could be attributed to another.
 	if !strings.Contains(statement, "p.project_key != ''") || !strings.Contains(statement, "p.key_resolution_count = 1") {
 		t.Errorf("the ownership key arm lost a guard\n%s", statement)
+	}
+}
+
+// codex P2, the other half: a HISTORICAL empty read already carries a more
+// specific reason than the routing one -- outOfRetentionReason, which is a
+// statement about TIME rather than routing. Overwriting it would erase the
+// distinction §19.8.3 exists to draw and replace a true reason with a less
+// true one.
+func TestChaos4521b_TheRoutingReasonNeverOverwritesTheRetentionReason(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: "FROM compounding_risk_daily", rows: nil}}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
+	asOf := time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &asOf},
+		Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if result.State != contextfabric.SourceNoData {
+		t.Fatalf("state = %q, want %q", result.State, contextfabric.SourceNoData)
+	}
+	if !strings.Contains(result.Reason, "predate the retained corpus") {
+		t.Errorf("reason = %q, want the retention reason preserved on a historical read", result.Reason)
+	}
+	if strings.Contains(result.Reason, "team-scoped") {
+		t.Errorf("reason = %q: the routing reason overwrote a more specific temporal one", result.Reason)
 	}
 }

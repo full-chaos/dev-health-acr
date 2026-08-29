@@ -41,13 +41,24 @@ func TestFlowProviderProjectRollupSumsAcrossTeamOwnScopesAndProviders(t *testing
 		t.Fatalf("seed projects row: %v", err)
 	}
 	if err := direct.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		// Left in place deliberately: flow no longer consults ownership at
+		// all, so this row existing (and pointing at an irrelevant
+		// project_id) proves the read is independent of it.
 		orgID, "linear", "team-flow-a", "irrelevant", "FLOW1", "native", ts(2026, 1, 1, 0, 0, 0), nil, ts(2026, 1, 1, 0, 0, 0)); err != nil {
 		t.Fatalf("seed team_project_ownership: %v", err)
 	}
-	// Two rows for the SAME team: distinct providers, distinct
-	// work_scope_id -- exactly the collision readiness.go's own
-	// row_number() partition already guards against for
-	// estimate_coverage_metrics_daily.
+	// CHAOS-4521b: the work scopes are the PROJECT'S OWN identity, not an
+	// unrelated sprint id. The fixture previously seeded `sprint-5` and
+	// relied on the ownership hop to reach it -- which is precisely the
+	// defect this ticket removed: a project's flow was assembled from every
+	// work scope its owning team touched, other projects' rows included.
+	//
+	// What the case actually covers is unchanged and still worth covering:
+	// two rows for the SAME team under DIFFERENT providers, sharing one
+	// work_scope_id string, must BOTH count. That is also why
+	// ProjectIdentityMatchSQL deliberately does not match on provider --
+	// cross-provider equal ids are one project by design here, so a
+	// provider equality would drop the github row.
 	seedScope := func(provider, workScopeID string, itemsStarted, itemsCompleted uint32) {
 		t.Helper()
 		if err := direct.Exec(ctx, `INSERT INTO work_item_metrics_daily (day, provider, work_scope_id, team_id, items_started, items_completed, wip_count_end_of_day, cycle_time_p50_hours, lead_time_p50_hours, bug_completed_ratio, story_points_completed, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -55,8 +66,8 @@ func TestFlowProviderProjectRollupSumsAcrossTeamOwnScopesAndProviders(t *testing
 			t.Fatalf("seed work_item_metrics_daily(%s, %s): %v", provider, workScopeID, err)
 		}
 	}
-	seedScope("linear", "sprint-5", 10, 6)
-	seedScope("github", "sprint-5", 4, 3) // same work_scope_id string, DIFFERENT provider
+	seedScope("linear", "proj-flow", 10, 6)
+	seedScope("github", "proj-flow", 4, 3) // same work_scope_id string, DIFFERENT provider
 
 	provider := findProvider(t, providers, contextfabric.FactFlow)
 	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
