@@ -149,6 +149,14 @@ jobs:
           verify_build_cache="$(mktemp -d)"
           export GOMODCACHE="$verify_module_cache/mod" GOCACHE="$verify_build_cache/build"
           go mod download
+          # CHAOS-4567: `make verify` runs the race suite as test-race-split --
+          # the shared packages at GOTEST_TIMEOUT and the isolated ones
+          # (internal/contextfabric/devhealthschema, per
+          # scripts/ci/test-shard.sh) at GOTEST_ISOLATED_TIMEOUT -- the same
+          # partition ci.yml's race matrix + race-devhealthschema job use.
+          # The unsharded run this job used to do timed devhealthschema out
+          # at 420s on every main merge from a4e2e5a3 (#327) on and stopped
+          # image publication; do not collapse this back into one `go test`.
           make verify
           go mod verify
           go install golang.org/x/vuln/cmd/govulncheck@v1.5.0
