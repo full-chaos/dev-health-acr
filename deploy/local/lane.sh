@@ -383,10 +383,21 @@ ensure_datastores() {
     ch_db="$(sed -E 's/^clickhouse-(.+)-[0-9]{8}-[0-9]{6}\.zip$/\1/' <<<"$ch_base")"
     [[ -n "$ch_db" && "$ch_db" != "$ch_base" ]] \
       || die "could not parse a clickhouse database name out of $ch_base (expected clickhouse-<dbname>-<timestamp>.zip)"
+    # Drop AND recreate, and pin both statements to `--database system`. The
+    # lane's clickhouse database is `default`, which is also the database every
+    # clickhouse-client connects to when it is not told otherwise -- including
+    # trial-data.sh's own restore client on the very next line. Dropping it and
+    # walking away would replace this bug with a worse one: the restore could no
+    # longer connect at all. `system` always exists, so the drop cannot saw off
+    # the branch it is standing on, and the recreate puts `default` back before
+    # anything else needs it.
     log "clearing clickhouse database '$ch_db' in '$lane' so the backup can replay"
     kubectl -n "$lane" exec deploy/trial-clickhouse -- \
-      clickhouse-client -u ch --password "$PG_PASSWORD" \
+      clickhouse-client -u ch --password "$PG_PASSWORD" --database system \
       --query "DROP DATABASE IF EXISTS \`$ch_db\` SYNC"
+    kubectl -n "$lane" exec deploy/trial-clickhouse -- \
+      clickhouse-client -u ch --password "$PG_PASSWORD" --database system \
+      --query "CREATE DATABASE IF NOT EXISTS \`$ch_db\`"
     ACR_TRIAL_DATA_NAMESPACE="$lane" ACR_TRIAL_NODEPORT_BASE="$base" \
       "$SCRIPT_DIR/trial-data.sh" restore-clickhouse "$ch_zip"
     # Only now, with both restores returned successfully, is the lane seeded.

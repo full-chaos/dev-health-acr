@@ -217,6 +217,26 @@ check_contains "the clear names the database parsed from the backup zip" \
 check_contains "the clear runs inside the lane namespace only" \
   'kubectl -n lanefake-seed exec deploy/trial-clickhouse' "$(events)"
 
+# `default` is also the database every clickhouse-client falls back to, including
+# trial-data.sh's restore client one line later. Dropping it without pinning the
+# session elsewhere, and without putting it back, would replace this bug with a
+# worse one: the restore could not connect at all.
+create_at="$(event_line 'CREATE DATABASE IF NOT EXISTS')"
+if [[ -n "$create_at" && -n "$restore_at" && "$create_at" -lt "$restore_at" ]]; then
+  ok "the database is recreated before restore-clickhouse needs to connect to it"
+else
+  fail "the database is recreated before restore-clickhouse needs to connect to it" \
+    "recreate at line '${create_at:-none}', restore-clickhouse at line '${restore_at:-none}'"
+fi
+drop_stmts="$(grep -F -e 'DROP DATABASE IF EXISTS' -e 'CREATE DATABASE IF NOT EXISTS' "$tmp/events" || true)"
+if [[ -n "$drop_stmts" ]] \
+   && [[ "$(printf '%s\n' "$drop_stmts" | grep -c -- '--database system')" = "$(printf '%s\n' "$drop_stmts" | wc -l | tr -d ' ')" ]]; then
+  ok "both statements run against system, not the database being dropped"
+else
+  fail "both statements run against system, not the database being dropped" \
+    "not every clear statement passed --database system: $drop_stmts"
+fi
+
 # The ownership guard must stay UPSTREAM of the clear: a namespace lane.sh does
 # not own is refused before anything destructive is issued against it. This is
 # what keeps the clear from ever reaching the standing acr-trial-data plane.
