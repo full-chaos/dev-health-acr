@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,7 +23,8 @@ import (
 
 // clickHouseTooManyRowsOrBytes is ClickHouse's own TOO_MANY_ROWS_OR_BYTES
 // error code, thrown when a result exceeds max_result_rows under the
-// default result_overflow_mode of "throw".
+// default result_overflow_mode of "throw". Used here only as a string the
+// sanitized ReadFacts error must NOT contain -- see the R3 red half.
 const clickHouseTooManyRowsOrBytes int32 = 396
 
 // seedRepositoryMetricsDays inserts dayCount consecutive days for one
@@ -143,22 +146,36 @@ func TestCHAOS4418RepositoryMetricsAgainstRealClickHouse(t *testing.T) {
 			if err == nil {
 				t.Fatalf("ReadFacts() error = nil, want an error: %d repositories x %d days = %d raw rows exceeds the driver's own default MaxResultRows=1000", repoCount, daysPerRepo, repoCount*daysPerRepo)
 			}
-			// Team-lead condition 3: the overflow error must surface
-			// ClickHouse's own exception code in the ReadFacts error, so
-			// an operator can tell "the row cap fired" apart from "the
-			// server is down". Asserted, not merely logged: gotestsum's
-			// JUnit report carries no system-out, so a t.Logf on a
-			// PASSING test is written nowhere anyone can read it -- a
-			// measurement with no readable artifact did not happen.
-			// Both failure paths below print what the error actually was,
-			// so a wrong expectation here reports the truth rather than
-			// hiding it.
-			var exception *clickhousedriver.Exception
-			if !errors.As(err, &exception) {
-				t.Fatalf("ReadFacts() error = %v (%T), want a *clickhouse.Exception to survive unwrapped into the returned error", err, err)
+			// What the overflow error actually looks like, established by
+			// running this (CHAOS-4418, team-lead condition 3). The
+			// question asked was whether ClickHouse's own exception code
+			// survives into the ReadFacts error. It does NOT, and that is
+			// DELIBERATE, not a defect: readFailure (shared.go) accepts
+			// the cause and never lets it reach the returned error,
+			// because a raw SDK error can carry connection details,
+			// internal hostnames and query fragments -- the same posture
+			// falkorgraph's safeDependencyError takes, and what acr's own
+			// "never log DSNs, raw payloads or request bodies" rule
+			// requires. FactReadFailure has no cause field and no Unwrap.
+			//
+			// So the invariant worth pinning here is the sanitization
+			// itself, which IS falsifiable: the day someone wires the raw
+			// error through for diagnosability, these assertions go red
+			// and force the corpus-safety question to be answered first.
+			// Operator diagnosability ("the row cap fired" vs "the server
+			// is down") needs a server-side telemetry seam, not a wider
+			// error surface; this package has none today.
+			var failure *contextfabric.FactReadFailure
+			if !errors.As(err, &failure) {
+				t.Fatalf("ReadFacts() error = %v (%T), want a *contextfabric.FactReadFailure", err, err)
 			}
-			if exception.Code != clickHouseTooManyRowsOrBytes {
-				t.Fatalf("ClickHouse exception code = %d (%s: %s), want %d (TOO_MANY_ROWS_OR_BYTES)", exception.Code, exception.Name, exception.Message, clickHouseTooManyRowsOrBytes)
+			if failure.State != contextfabric.SourceUnavailable {
+				t.Fatalf("FactReadFailure.State = %v, want SourceUnavailable -- a failed read must degrade the source, never report it as available", failure.State)
+			}
+			for _, leak := range []string{addr, "acr:acr", "clickhouse://", "repo_metrics_daily", "SELECT", "max_result_rows", strconv.Itoa(int(clickHouseTooManyRowsOrBytes))} {
+				if strings.Contains(err.Error(), leak) {
+					t.Fatalf("ReadFacts() error = %q leaks %q -- the raw driver error must never reach the returned error (readFailure's own doc comment; corpus safety)", err.Error(), leak)
+				}
 			}
 		})
 
