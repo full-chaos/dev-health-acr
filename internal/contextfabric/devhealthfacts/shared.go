@@ -439,3 +439,18 @@ func explainTeamScopedProjectAbsence(bound factTimeBound, state contextfabric.So
 	}
 	return teamScopedProjectReason
 }
+
+// teamIDOrNull renders a project rollup row's team id, or NULL when the
+// source row carried no team at all (CHAOS-4521b).
+//
+// The distinction matters downstream: a null team_id reads as "this
+// measurement is not attributed to a team", while "" reads as a team whose
+// id is the empty string -- a team that does not exist. The same row is
+// also excluded from team_count and mints no team evidence ref, so the
+// three surfaces agree.
+func teamIDOrNull(hasTeam uint8, teamID string) contextfabric.FactValue {
+	if hasTeam == 0 {
+		return contextfabric.NullFactValue()
+	}
+	return contextfabric.StringFactValue(teamID)
+}

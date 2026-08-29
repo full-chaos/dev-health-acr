@@ -176,12 +176,19 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 			if dedupeTeamRow(seenTeamScope, dedupeKey) {
 				continue
 			}
-			if !dedupeTeamRow(seenTeams, r.TeamID) {
+			// CHAOS-4521b: an UNATTRIBUTED row (the source's team_id was
+			// NULL) is kept with its measurements -- that coverage is
+			// genuinely the project's -- but it is NOT a team. It must not
+			// be counted in team_count, and it must not mint an evidence
+			// ref, which would otherwise be the malformed `acr:v1:team:`
+			// with an empty id. Missing is not a team whose name is blank.
+			if r.HasTeam != 0 && !dedupeTeamRow(seenTeams, r.TeamID) {
 				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("team", r.TeamID))
 			}
 			rowFields := map[string]contextfabric.FactValue{
-				"basis":                contextfabric.StringFactValue("capacity_forecast"),
-				"team_id":              contextfabric.StringFactValue(r.TeamID),
+				"basis": contextfabric.StringFactValue("capacity_forecast"),
+				// null, not "": see readProjectReadiness.
+				"team_id":              teamIDOrNull(r.HasTeam, r.TeamID),
 				"team_name":            stringOrNull(r.TeamName),
 				"throughput_mean":      contextfabric.NumberFactValue(r.ThroughputMean),
 				"throughput_stddev":    contextfabric.NumberFactValue(r.ThroughputStddev),

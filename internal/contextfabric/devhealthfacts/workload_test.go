@@ -184,7 +184,9 @@ func TestWorkloadProviderRowForUnrequestedTeamNeverAppears(t *testing.T) {
 // throughput_stddev, hasP50, p50_days, insufficient_history, high_variance,
 // backlog_size, computed_at).
 func workloadProjectRollupRow(provider, projectID, teamID, teamName, workScopeID string, throughputMean, throughputStddev float64, backlogSize int64, highVariance uint8) []any {
-	return []any{provider + ":" + projectID, teamID, teamName, workScopeID, throughputMean, throughputStddev, uint8(0), int64(0), uint8(0), highVariance, backlogSize, "2026-07-27 04:00:00"}
+	// has_team = 1: an attributed row. CHAOS-4521b added the flag so an
+	// UNATTRIBUTED row (source team_id NULL) stays distinguishable.
+	return []any{provider + ":" + projectID, uint8(1), teamID, teamName, workScopeID, throughputMean, throughputStddev, uint8(0), int64(0), uint8(0), highVariance, backlogSize, "2026-07-27 04:00:00"}
 }
 
 // TestWorkloadProviderProjectRollupBreaksDownByTeamNeverAverages pins

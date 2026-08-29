@@ -245,3 +245,96 @@ func TestChaos4521b_TheRoutingReasonNeverOverwritesTheRetentionReason(t *testing
 		t.Errorf("reason = %q: the routing reason overwrote a more specific temporal one", result.Reason)
 	}
 }
+
+// CHAOS-4521b, codex on #331. `estimate_coverage_metrics_daily.team_id`
+// and `capacity_forecasts.team_id` are Nullable. Before the project reads
+// keyed on work_scope_id, the team came from the ownership join where it
+// could not be NULL, so the case was unreachable; reading the daily row
+// directly makes it reachable.
+//
+// An unattributed row must stay a row -- that coverage IS the project's,
+// and dropping it would lose real measurements -- while not being counted
+// or cited as a team. Three surfaces have to agree, and this pins all
+// three, because getting two right and one wrong is the likely failure:
+//
+//   - team_count excludes it;
+//   - no `acr:v1:team:` evidence ref is minted for it;
+//   - the row's own team_id renders NULL, not "".
+func TestChaos4521b_AnUnattributedRowIsKeptButNotCountedAsATeam(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		kind        contextfabric.FactKind
+		sourceTable string
+		rows        [][]any
+	}{
+		{
+			name:        "readiness",
+			kind:        contextfabric.FactReadiness,
+			sourceTable: "FROM estimate_coverage_metrics_daily",
+			rows: [][]any{
+				{"linear:proj-1", uint8(0), "", "", "scope-a", "linear", "2026-02-22", int64(3), int64(1), int64(4), uint8(1), float64(0.75)},
+				{"linear:proj-1", uint8(1), "team-1", "Team One", "scope-b", "linear", "2026-02-22", int64(18), int64(2), int64(20), uint8(1), float64(0.9)},
+			},
+		},
+		{
+			name:        "workload",
+			kind:        contextfabric.FactWorkload,
+			sourceTable: "FROM capacity_forecasts",
+			rows: [][]any{
+				{"linear:proj-1", uint8(0), "", "", "scope-a", float64(1.0), float64(0.1), uint8(0), int64(0), uint8(0), uint8(0), int64(4), "2026-07-27 04:00:00"},
+				{"linear:proj-1", uint8(1), "team-1", "Team One", "scope-b", float64(3.2), float64(0.8), uint8(0), int64(0), uint8(0), uint8(1), int64(120), "2026-07-27 04:00:00"},
+			},
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			client := &fakeClient{tables: []fakeTable{{match: testCase.sourceTable, rows: testCase.rows}}}
+			provider := findProvider(t, devhealthfacts.NewProviders(client), testCase.kind)
+			result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+				Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+				Kind: testCase.kind, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+			})
+			if err != nil {
+				t.Fatalf("ReadFacts: %v", err)
+			}
+			if len(result.Facts) != 1 {
+				t.Fatalf("facts = %d, want 1", len(result.Facts))
+			}
+			fact := result.Facts[0]
+
+			// team_count counts TEAMS. One row is attributed; the other is
+			// not a team at all.
+			if count := fact.Fields["team_count"].Integer; count == nil || *count != 1 {
+				t.Errorf("team_count = %v, want 1 -- an unattributed row is not a team", fact.Fields["team_count"])
+			}
+			// Both rows survive: the unattributed one carries real coverage.
+			rows := fact.Fields["team_breakdown"].Rows
+			if len(rows) != 2 {
+				t.Fatalf("team_breakdown = %d rows, want 2 -- an unattributed row must not be dropped", len(rows))
+			}
+			// ...and it renders team_id NULL rather than "".
+			var sawUnattributed bool
+			for _, row := range rows {
+				teamID := row.Fields["team_id"]
+				if teamID.Null {
+					sawUnattributed = true
+					continue
+				}
+				if teamID.String == nil || *teamID.String == "" {
+					t.Errorf("a row rendered team_id as an empty string; unattributed must be NULL, not a team whose id is blank")
+				}
+			}
+			if !sawUnattributed {
+				t.Errorf("no row rendered team_id as NULL; the unattributed row was reported as a team")
+			}
+			// No malformed `acr:v1:team:` citation for the missing team.
+			for _, ref := range fact.EvidenceRefIDs {
+				if strings.HasSuffix(ref, ":team:") || strings.HasSuffix(ref, "team:") && strings.Count(ref, ":") >= 3 && strings.HasSuffix(ref, ":") {
+					t.Errorf("evidence ref %q cites a team with an empty id", ref)
+				}
+			}
+		})
+	}
+}

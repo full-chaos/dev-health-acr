@@ -136,7 +136,8 @@ func TestReadinessProviderRowForUnrequestedTeamNeverAppears(t *testing.T) {
 // output: (project_key, team_id, team_name, work_scope_id, provider, day,
 // estimated_count, unestimated_count, backlog_size, hasRatio, ratio).
 func readinessProjectRollupRow(provider, projectID, teamID, teamName, workScopeID, sourceProvider string, estimated, unestimated, backlogSize int64, ratio float64) []any {
-	return []any{provider + ":" + projectID, teamID, teamName, workScopeID, sourceProvider, "2026-02-22", estimated, unestimated, backlogSize, uint8(1), ratio}
+	// has_team = 1 -- see workloadProjectRollupRow.
+	return []any{provider + ":" + projectID, uint8(1), teamID, teamName, workScopeID, sourceProvider, "2026-02-22", estimated, unestimated, backlogSize, uint8(1), ratio}
 }
 
 // TestReadinessProviderProjectRollupBreaksDownByTeamNeverSums pins
