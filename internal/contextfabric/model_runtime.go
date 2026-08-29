@@ -224,13 +224,13 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 	switch d.Status {
 	case InvestigationComplete, InvestigationPartial, InvestigationDegraded, InvestigationClarificationRequired, InvestigationNoMatch:
 	default:
-		return fmt.Errorf("synthesis draft status is invalid")
+		return rejectSynthesis(RejectionReasonStatusInvalid, "synthesis draft status is invalid")
 	}
 	if (d.Status == InvestigationComplete || d.Status == InvestigationPartial) && strings.TrimSpace(d.DirectJudgment) == "" {
-		return fmt.Errorf("answer-capable synthesis requires a direct judgment")
+		return rejectSynthesis(RejectionReasonDirectJudgmentMissing, "answer-capable synthesis requires a direct judgment")
 	}
 	if strings.TrimSpace(d.DeterministicAnswer) == "" {
-		return fmt.Errorf("deterministic answer is required")
+		return rejectSynthesis(RejectionReasonDeterministicAnswerMissing, "deterministic answer is required")
 	}
 	allowedSubjects := synthesisSubjects(input)
 	// canonicalLabels binds every subject the model can legally reference
@@ -259,6 +259,26 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 	for _, evidenceRefID := range input.Graph.EvidenceRefIDs {
 		allowedEvidence[evidenceRefID] = struct{}{}
 	}
+	// CHAOS-4522: the cohort's OWN per-member evidence. synthesisSubjects
+	// has admitted input.Graph.Cohort.Members[].Subject since CHAOS-4398,
+	// and synthesisInputFromDomain SHOWS the model the whole Cohort --
+	// including each member's EvidenceRefIDs -- but this closure was never
+	// widened to match, so a member's evidence ref was displayed to the
+	// model and then rejected as "unknown evidence" when the model cited
+	// it. On the live three-team discovered_cohort answer that is not
+	// hypothetical: the cohort ranks team:gh:ops-team, whose only evidence
+	// ref is acr:v1:team:gh:ops-team, and no canonical fact exists for that
+	// member, so nothing else in this closure could ever supply it. Every
+	// attempt at that answer died here. These refs are engine-minted from
+	// the cohort ACR itself built, exactly like the path/fact/candidate
+	// refs above -- admitting them widens nothing the model could forge.
+	if input.Graph.Cohort != nil {
+		for _, member := range input.Graph.Cohort.Members {
+			for _, evidenceRefID := range member.EvidenceRefIDs {
+				allowedEvidence[evidenceRefID] = struct{}{}
+			}
+		}
+	}
 	for _, fact := range input.Facts.Facts {
 		for _, evidenceRefID := range fact.EvidenceRefIDs {
 			allowedEvidence[evidenceRefID] = struct{}{}
@@ -271,7 +291,7 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 	}
 	for _, evidenceRefID := range d.EvidenceRefIDs {
 		if _, ok := allowedEvidence[evidenceRefID]; !ok {
-			return fmt.Errorf("synthesis references unknown evidence %q", evidenceRefID)
+			return rejectSynthesis(RejectionReasonEvidenceUnknown, "synthesis references unknown evidence %q", evidenceRefID)
 		}
 	}
 	// Value-level evidence closure (CHAOS-3755 must-do): structural
@@ -285,7 +305,7 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 	claimedByID := make(map[string]ClaimedFact, len(d.ClaimedFacts))
 	for _, claim := range d.ClaimedFacts {
 		if err := claim.Validate(); err != nil {
-			return fmt.Errorf("claimed_facts: %w", err)
+			return rejectSynthesis(RejectionReasonClaimInvalid, "claimed_facts: %w", err)
 		}
 		// CHAOS-4347 codex round-3, still true under CHAOS-4355: Rows
 		// (ContextFabricClaimedFact.Rows) is a producer-facing
@@ -303,54 +323,52 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		// CHAOS-4085's commit-affirmation gate already applies to
 		// everything else in this function.
 		if len(claim.Rows) > 0 {
-			return fmt.Errorf("claimed fact %q sets rows directly -- rows are attached from the cited canonical fact, never model-authored", claim.ClaimID)
+			return rejectSynthesis(RejectionReasonClaimRowsModelAuthored, "claimed fact %q sets rows directly -- rows are attached from the cited canonical fact, never model-authored", claim.ClaimID)
 		}
 		if _, exists := claimedByID[claim.ClaimID]; exists {
-			return fmt.Errorf("claimed fact IDs must be unique")
+			return rejectSynthesis(RejectionReasonClaimIDDuplicate, "claimed fact IDs must be unique")
 		}
 		claimedByID[claim.ClaimID] = claim
 		if _, ok := allowedSubjects[subjectKeyForModel(claim.Subject)]; !ok {
-			return fmt.Errorf("claimed fact references subject outside the investigation")
+			return rejectSynthesis(RejectionReasonClaimSubjectOutOfScope, "claimed fact references subject outside the investigation")
 		}
 		if err := requireBoundLabel("claimed fact", claim.Subject, canonicalLabels); err != nil {
-			return err
+			return rejectSynthesis(RejectionReasonClaimSubjectLabelMismatch, "%w", err)
 		}
-		canonical, ok := lookupCanonicalFact(input.Facts.Facts, claim.Kind, claim.Subject)
-		if !ok {
-			return fmt.Errorf("claimed fact %s/%s has no canonical observation to ground it", claim.Kind, claim.Field)
-		}
-		observed, present := canonical.Fields[claim.Field]
-		if !present {
-			return fmt.Errorf("claimed fact field %q was not canonically observed", claim.Field)
-		}
-		if !factValueEqualsScalar(observed, claim.Value) {
-			return fmt.Errorf("claimed fact %q contradicts the canonical value observed for %s.%s", claim.ClaimID, claim.Kind, claim.Field)
+		switch _, outcome := groundClaim(input.Facts.Facts, claim); outcome {
+		case claimGrounded:
+		case claimNoCanonicalFact:
+			return rejectSynthesisClaim(RejectionReasonClaimNoCanonicalFact, 0, "claimed fact %s/%s has no canonical observation to ground it", claim.Kind, claim.Field)
+		case claimFieldUnobserved:
+			return rejectSynthesisClaim(RejectionReasonClaimFieldUnobserved, canonicalFactGroupSize(input.Facts.Facts, claim), "claimed fact field %q was not canonically observed", claim.Field)
+		default:
+			return rejectSynthesisClaim(RejectionReasonClaimValueContradicts, canonicalFactGroupSize(input.Facts.Facts, claim), "claimed fact %q contradicts the canonical value observed for %s.%s", claim.ClaimID, claim.Kind, claim.Field)
 		}
 	}
 	for _, driver := range d.Drivers {
 		if err := driver.Validate(); err != nil {
-			return fmt.Errorf("driver: %w", err)
+			return rejectSynthesis(RejectionReasonDriverInvalid, "driver: %w", err)
 		}
 		for _, subject := range driver.AffectedSubjects {
 			if _, ok := allowedSubjects[subjectKeyForModel(subject)]; !ok {
-				return fmt.Errorf("driver references subject outside the investigation")
+				return rejectSynthesis(RejectionReasonDriverSubjectOutOfScope, "driver references subject outside the investigation")
 			}
 			if err := requireBoundLabel("driver", subject, canonicalLabels); err != nil {
-				return err
+				return rejectSynthesis(RejectionReasonDriverSubjectLabelMismatch, "%w", err)
 			}
 		}
 		for _, pathID := range driver.PathIDs {
 			if _, ok := allowedPaths[pathID]; !ok {
-				return fmt.Errorf("driver references unknown path %q", pathID)
+				return rejectSynthesis(RejectionReasonDriverPathUnknown, "driver references unknown path %q", pathID)
 			}
 		}
 		for _, evidenceRefID := range driver.EvidenceRefIDs {
 			if _, ok := allowedEvidence[evidenceRefID]; !ok {
-				return fmt.Errorf("driver references unknown evidence %q", evidenceRefID)
+				return rejectSynthesis(RejectionReasonDriverEvidenceUnknown, "driver references unknown evidence %q", evidenceRefID)
 			}
 		}
 		if err := requireGroundedClaims("driver", driver.Category, driver.AffectedSubjects, allowedSubjects, driver.ClaimedFactIDs, claimedByID); err != nil {
-			return err
+			return rejectSynthesis(RejectionReasonDriverClaimUngrounded, "%w", err)
 		}
 	}
 	// Fixed slice, NOT a map: a map's iteration order is randomized per
@@ -374,23 +392,23 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		name, findings := section.name, section.findings
 		for _, finding := range findings {
 			if err := finding.Validate(); err != nil {
-				return fmt.Errorf("%s: %w", name, err)
+				return rejectSynthesis(RejectionReasonFindingInvalid, "%s: %w", name, err)
 			}
 			for _, subject := range finding.Subjects {
 				if _, ok := allowedSubjects[subjectKeyForModel(subject)]; !ok {
-					return fmt.Errorf("%s references subject outside the investigation", name)
+					return rejectSynthesis(RejectionReasonFindingSubjectOutOfScope, "%s references subject outside the investigation", name)
 				}
 				if err := requireBoundLabel(name, subject, canonicalLabels); err != nil {
-					return err
+					return rejectSynthesis(RejectionReasonFindingSubjectLabelMismatch, "%w", err)
 				}
 			}
 			for _, evidenceRefID := range finding.EvidenceRefIDs {
 				if _, ok := allowedEvidence[evidenceRefID]; !ok {
-					return fmt.Errorf("%s references unknown evidence %q", name, evidenceRefID)
+					return rejectSynthesis(RejectionReasonFindingEvidenceUnknown, "%s references unknown evidence %q", name, evidenceRefID)
 				}
 			}
 			if err := requireGroundedClaims(name, finding.Kind, finding.Subjects, allowedSubjects, finding.ClaimedFactIDs, claimedByID); err != nil {
-				return err
+				return rejectSynthesis(RejectionReasonFindingClaimUngrounded, "%w", err)
 			}
 		}
 	}
@@ -538,14 +556,187 @@ func StripModelAuthoredClaimedFactRows(claims []ClaimedFact) (cleaned []ClaimedF
 	return cleaned, strippedCount
 }
 
-func lookupCanonicalFact(facts []CanonicalFact, kind FactKind, subject SubjectRef) (CanonicalFact, bool) {
-	key := subjectKeyForModel(subject)
+// claimGroundingOutcome names how far groundClaim got before it stopped --
+// the three distinct failure modes CHAOS-3755's value-level closure has
+// always had, now separated so each carries its OWN closed-vocabulary
+// rejection reason (CHAOS-4522) instead of three anonymous fmt.Errorf
+// returns.
+type claimGroundingOutcome int
+
+const (
+	// claimNoCanonicalFact: no canonical fact of this claim's Kind was
+	// observed for this claim's Subject at all.
+	claimNoCanonicalFact claimGroundingOutcome = iota
+	// claimFieldUnobserved: facts of that Kind/Subject exist, but NONE of
+	// them carries the claimed Field.
+	claimFieldUnobserved
+	// claimValueContradicts: some fact carries the Field, but no fact
+	// carries it with the claimed Value.
+	claimValueContradicts
+	// claimGrounded: a canonical fact of this Kind/Subject observed this
+	// Field with exactly this Value.
+	claimGrounded
+)
+
+// groundClaim is the value-level evidence closure CHAOS-3755 introduced,
+// widened by CHAOS-4522 to close over EVERY canonical fact sharing the
+// claim's (Kind, Subject) rather than only the FIRST one.
+//
+// The first-match-wins lookup this replaces silently assumed at most one
+// fact per (Kind, Subject). That assumption is FALSE, and the ranking layer
+// already says so in code: cohort_ranking.go's findFact documents that
+// "readiness/workload/deficiency aggregate across every fact of their kind
+// ... because those producers can legitimately emit several". A live
+// discovered_cohort answer for three teams carries 40 team-subject facts,
+// of which 17 are readiness|team:CHAOS -- one row per work scope/day. The
+// FIRST of those 17 happens not to carry estimate_coverage_ratio, so every
+// claim about the readiness coverage gap -- one of the four signals the v2
+// cohort ranking is built on -- was rejected as "not canonically observed"
+// while the value sat in fact #2 of the same group. That is the whole of
+// CHAOS-4522's deterministic 422.
+//
+// The grounding guarantee is UNCHANGED in strength: a claim is admitted iff
+// some canonical fact the model was actually shown observed that field with
+// exactly that value, by the same factValueEqualsScalar struct equality.
+// What is removed is the arbitrary tiebreak -- slice order was never a
+// semantic rule, and "the first fact of this kind" is not something a claim
+// can address, because ClaimedFact carries no fact identity to address it
+// with.
+//
+// The matched fact is returned so attachCanonicalRows can attach Rows from
+// the SAME fact that grounded the claim (never a different member of the
+// group), keeping a claim's scalar and its table describing one observation.
+func groundClaim(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, claimGroundingOutcome) {
+	fact, outcome, _ := groundClaimAt(facts, claim)
+	return fact, outcome
+}
+
+// groundClaimAt is groundClaim plus the ZERO-BASED position, within the
+// claim's own (Kind, Subject) group, of the fact that grounded it -- or -1
+// when nothing did (codex R3 finding 2).
+//
+// That position, not the group's size, is what says whether the CHAOS-4522
+// closure actually decided the outcome. A claim sitting on a 17-fact group
+// whose FIRST member already carried the matching value would have been
+// admitted by the old first-match-wins lookup too; reporting "multi-fact
+// grounding rescued this answer" for it would be a false claim about which
+// branch decided, which is exactly what this telemetry exists to prevent.
+// Only a match at position > 0 was impossible before.
+func groundClaimAt(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, claimGroundingOutcome, int) {
+	key := subjectKeyForModel(claim.Subject)
+	outcome := claimNoCanonicalFact
+	var fieldMatch CanonicalFact
+	position := 0
 	for _, fact := range facts {
-		if fact.Kind == kind && subjectKeyForModel(fact.Subject) == key {
+		if fact.Kind != claim.Kind || subjectKeyForModel(fact.Subject) != key {
+			continue
+		}
+		if outcome == claimNoCanonicalFact {
+			outcome = claimFieldUnobserved
+		}
+		observed, present := fact.Fields[claim.Field]
+		if present {
+			if outcome == claimFieldUnobserved {
+				outcome = claimValueContradicts
+				fieldMatch = fact
+			}
+			if factValueEqualsScalar(observed, claim.Value) {
+				return fact, claimGrounded, position
+			}
+		}
+		position++
+	}
+	return fieldMatch, outcome, -1
+}
+
+// claimSourceFact returns the canonical fact a claim's Rows must come from
+// (CHAOS-4522): the fact groundClaim actually admitted the claim against
+// when there is one, so a claim's scalar Value and its attached table
+// always describe the SAME observation rather than two different rows of
+// the same (Kind, Subject) group.
+//
+// The fallback -- the first fact of the group when no fact grounds the
+// claim's value -- is exactly the pre-CHAOS-4522 behavior, kept for two
+// reasons. In production it is unreachable: attachCanonicalRows only ever
+// runs on claims ValidateAgainst has already admitted, so groundClaim
+// returns claimGrounded for every one of them. And a helper whose row
+// attachment silently depends on a validation the caller may not have run
+// is exactly the hidden coupling this repo's "a measurement that did not
+// happen must FAIL, loudly" rule warns about -- so the ungrounded path
+// keeps its old, explicit behavior instead of quietly attaching nothing.
+func claimSourceFact(facts []CanonicalFact, claim ClaimedFact) (CanonicalFact, bool) {
+	if fact, outcome := groundClaim(facts, claim); outcome == claimGrounded {
+		return fact, true
+	}
+	key := subjectKeyForModel(claim.Subject)
+	for _, fact := range facts {
+		if fact.Kind == claim.Kind && subjectKeyForModel(fact.Subject) == key {
 			return fact, true
 		}
 	}
 	return CanonicalFact{}, false
+}
+
+// canonicalFactGroupSize counts how many canonical facts share a claim's
+// (Kind, Subject) -- the ambiguity groundClaim closes over.
+//
+// Two callers, deliberately different in scope (codex R2 findings 1 and 4).
+// On a REJECTION it is called for the one rejecting claim only, because
+// ValidateAgainst short-circuits and a maximum would describe a claim that
+// was never evaluated. On SUCCESS every claim was evaluated by definition,
+// so MaxClaimFactGroupSize below takes the maximum across all of them --
+// there is no short-circuit to misrepresent, and without it the
+// outcome-changing "this claim grounded against a LATER fact of its group"
+// path would leave no trace in a successful run's own artifacts.
+// MaxClaimFactGroupSize is the largest (Kind, Subject) group any admitted
+// claim was grounded against -- pure CARDINALITY, context only.
+//
+// It deliberately does NOT mean "the CHAOS-4522 closure decided this
+// answer" (codex R3 finding 2). A claim on a 17-fact group whose FIRST
+// member already carried the matching value would have been admitted by the
+// old first-match-wins lookup too. ClaimsGroundedBeyondFirstGroupMember
+// below is the signal that actually names the deciding branch; this one
+// only says how much ambiguity was in play.
+//
+// Taking a maximum is sound on the SUCCESS path and not on the rejection
+// path: a draft that passed validation had every one of its claims
+// evaluated, so no claim here was skipped by a short-circuit.
+func MaxClaimFactGroupSize(facts []CanonicalFact, claims []ClaimedFact) int {
+	maximum := 0
+	for _, claim := range claims {
+		if size := canonicalFactGroupSize(facts, claim); size > maximum {
+			maximum = size
+		}
+	}
+	return maximum
+}
+
+// ClaimsGroundedBeyondFirstGroupMember counts the admitted claims that were
+// grounded against a fact OTHER than the first of their (Kind, Subject)
+// group (codex R3 finding 2). It is the honest "the widened closure decided
+// this outcome" signal: every one of these claims would have been REJECTED
+// by the pre-CHAOS-4522 first-match-wins lookup, and a count of 0 means the
+// closure changed nothing about this answer however large its fact groups
+// were.
+func ClaimsGroundedBeyondFirstGroupMember(facts []CanonicalFact, claims []ClaimedFact) int {
+	count := 0
+	for _, claim := range claims {
+		if _, outcome, position := groundClaimAt(facts, claim); outcome == claimGrounded && position > 0 {
+			count++
+		}
+	}
+	return count
+}
+
+func canonicalFactGroupSize(facts []CanonicalFact, claim ClaimedFact) int {
+	key := subjectKeyForModel(claim.Subject)
+	size := 0
+	for _, fact := range facts {
+		if fact.Kind == claim.Kind && subjectKeyForModel(fact.Subject) == key {
+			size++
+		}
+	}
+	return size
 }
 
 // attachCanonicalRows is the ONLY place a ClaimedFact.Rows is ever set
@@ -590,7 +781,10 @@ func attachCanonicalRows(claims []ClaimedFact, facts []CanonicalFact) (result []
 		if _, seen := byKind[claims[i].Kind]; !seen {
 			byKind[claims[i].Kind] = 0
 		}
-		canonical, ok := lookupCanonicalFact(facts, claims[i].Kind, claims[i].Subject)
+		// CHAOS-4522: the SAME fact groundClaim admitted the claim
+		// against, never merely the first of its (Kind, Subject) group --
+		// a claim's scalar and its table must describe one observation.
+		canonical, ok := claimSourceFact(facts, claims[i])
 		if !ok {
 			continue
 		}

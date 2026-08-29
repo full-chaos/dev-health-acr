@@ -224,6 +224,97 @@ check "override branch: IPv6 ACR_TRIAL_PG_HOST/CH_HOST/FALKOR_HOST all bracketed
   "[2001:db7::1]:5432 [2001:db8::1]:9000 [2001:db9::1]:6379" \
   "$(run_override_reader)"
 
+# 5b. CHAOS-4525: ACR_TRIAL_PG_DATABASE selects the database inside the
+# resolved instance. Two checks, because the default is the half that
+# matters most -- an unset knob must leave every existing recipe on the
+# standing `acr` database, byte-identical to the pre-4525 behavior.
+run_pg_database_reader() {
+  local db_env=("$@")
+  (cd "$script_dir/../.." && env "${db_env[@]}" \
+    ACR_TRIAL_DATA_PLANE=override \
+    ACR_TRIAL_PG_HOST=127.0.0.1 ACR_TRIAL_PG_PORT=5432 \
+    ACR_TRIAL_CH_HOST=127.0.0.1 ACR_TRIAL_CH_PORT=9000 \
+    ACR_TRIAL_FALKOR_HOST=127.0.0.1 ACR_TRIAL_FALKOR_PORT=6379 \
+    bash -c '
+      set -euo pipefail
+      source scripts/trial/common.sh
+      trial_wire_common_env
+      printf "%s" "$ACR_TEST_TRIAL_POSTGRES_DSN" | sed -E "s#.*@[^/]*/##; s#\?.*##"
+    ' 2>/dev/null) || echo "ERR $?"
+}
+check "pg database defaults to the standing acr database when the knob is unset" \
+  "acr" \
+  "$(run_pg_database_reader ACR_TRIAL_PG_DATABASE=)"
+check "ACR_TRIAL_PG_DATABASE selects an isolated database on the same instance" \
+  "acr_trial_seed_probe" \
+  "$(run_pg_database_reader ACR_TRIAL_PG_DATABASE=acr_trial_seed_probe)"
+
+# 5c. CHAOS-4525 (codex review P2, PR #330): an isolated database must not be
+# allowed to run against the LEGACY EPOCH-0 graph in silence.
+#
+# ACR_TRIAL_PG_DATABASE's advertised use is "a freshly created and migrated
+# database", and a freshly migrated database has an EMPTY
+# acr.context_fabric_graph_lifecycle. The epoch resolver then finds no serving
+# epoch and the run reads the bare epoch-0 graph key -- which exists and holds
+# stale data, so the run COMPLETES and produces a plausible artifact measured
+# against the wrong graph. That is the CHAOS-4100 rerun-#2 incident, and it is
+# exactly the class of failure that must be loud.
+fake_psql() {
+  local rows="$1"
+  rm -f "$tmp/psql-args.log"
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' "printf '%s\\n' \"\$*\" >> \"$tmp/psql-args.log\""
+    if [[ "$rows" == "ERROR" ]]; then
+      printf '%s\n' 'exit 1'
+    else
+      printf '%s\n' "echo '$rows'"
+    fi
+  } >"$tmp/fake-psql"
+  chmod +x "$tmp/fake-psql"
+}
+
+run_lifecycle_guard() {
+  local db="$1"
+  (cd "$script_dir/../.." && env \
+    ACR_TRIAL_DATA_PLANE=override \
+    ACR_TRIAL_PG_HOST=127.0.0.1 ACR_TRIAL_PG_PORT=5432 \
+    ACR_TRIAL_CH_HOST=127.0.0.1 ACR_TRIAL_CH_PORT=9000 \
+    ACR_TRIAL_FALKOR_HOST=127.0.0.1 ACR_TRIAL_FALKOR_PORT=6379 \
+    ACR_TRIAL_PG_DATABASE="$db" ACR_TRIAL_PSQL_BIN="$tmp/fake-psql" \
+    bash -c '
+      set -euo pipefail
+      source scripts/trial/common.sh
+      trial_wire_common_env
+      trial_wire_graph_lifecycle_env
+      echo ALLOWED
+    ' 2>/dev/null) || echo "REFUSED"
+}
+
+fake_psql 0
+check "an isolated database with NO lifecycle row is refused" \
+  "REFUSED" "$(run_lifecycle_guard acr_seeds_probe)"
+
+# CHAOS-4525 / codex R4 P1: the guard must ask about THIS RUN'S ORG. The table
+# is org-keyed and the epoch resolver looks up by ACR_TEST_TRIAL_ORG, so a
+# database holding only another org's lifecycle row gives a positive GLOBAL
+# count -- a guard counting all rows passes, the resolver still finds nothing,
+# and the run falls back to the stale epoch-0 graph.
+check "the lifecycle query is scoped to ACR_TEST_TRIAL_ORG" "1" \
+  "$(grep -c "where org_id = " "$tmp/psql-args.log" 2>/dev/null || echo 0)"
+
+fake_psql 1
+check "an isolated database WITH a lifecycle row is allowed" \
+  "ALLOWED" "$(run_lifecycle_guard acr_seeds_probe | tail -1)"
+
+fake_psql ERROR
+check "an unreadable lifecycle table is refused, never assumed empty or fine" \
+  "REFUSED" "$(run_lifecycle_guard acr_seeds_probe)"
+
+fake_psql 0
+check "the standing acr database is exempt (no psql dependency for existing recipes)" \
+  "ALLOWED" "$(run_lifecycle_guard acr | tail -1)"
+
 # 6. Producer pin (CHAOS-4186 follow-up, real incident): the REAL
 # trial-data.sh (not the fake used above) must emit
 # ACR_CONTEXT_FABRIC_FALKOR_TLS=false and

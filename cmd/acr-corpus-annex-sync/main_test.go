@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -259,5 +262,266 @@ func TestSync_NoOpWhenAlreadyAgreeing(t *testing.T) {
 	}
 	if _, err := os.Stat(corpusPath + ".sync-audit.json"); err == nil {
 		t.Error("an audit file was written despite nothing changing")
+	}
+}
+
+// writeRatifyFixture writes a corpus/annex pair whose annex provenance
+// records `recordedSHA8` and whose signoff already approves `approvedSHA8`.
+// The corpus content is real JSON so its live sha8 is a genuine digest, never
+// a literal the test could accidentally agree with itself about.
+func writeRatifyFixture(t *testing.T, recordedSHA8, approvedSHA8 string) (annexPath, corpusPath, liveSHA8 string) {
+	t.Helper()
+	dir := t.TempDir()
+	corpusPath = filepath.Join(dir, "corpus.json")
+	corpusBody := []byte(`[{"question":"fixture, never real corpus text","expect_kind":"team","expect_id":""}]`)
+	if err := os.WriteFile(corpusPath, corpusBody, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(corpusBody)
+	liveSHA8 = hex.EncodeToString(sum[:])[:8]
+
+	annexPath = filepath.Join(dir, "annex.json")
+	annex := map[string]any{
+		"cases": map[string]any{"0": map[string]any{"question_class": "cohort_assessment"}},
+		"provenance": map[string]any{
+			"corpus_sha8": recordedSHA8,
+			"signoff": map[string]any{
+				"by": "chris", "status": "APPROVED", "approved_corpus_sha8": approvedSHA8,
+			},
+		},
+	}
+	body, err := json.MarshalIndent(annex, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(annexPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return annexPath, corpusPath, liveSHA8
+}
+
+func readRatifiedSignoff(t *testing.T, annexPath string) (approved string, chainLen int) {
+	t.Helper()
+	raw, err := os.ReadFile(annexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Cases      map[string]any `json:"cases"`
+		Provenance struct {
+			Signoff struct {
+				ApprovedCorpusSHA8 string           `json:"approved_corpus_sha8"`
+				Reratifications    []map[string]any `json:"reratifications"`
+			} `json:"signoff"`
+		} `json:"provenance"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Cases) != 1 {
+		t.Errorf("ratify touched the annex's cases (%d present, want 1) -- it must write only under provenance.signoff", len(doc.Cases))
+	}
+	return doc.Provenance.Signoff.ApprovedCorpusSHA8, len(doc.Provenance.Signoff.Reratifications)
+}
+
+// TestRatifyCurrentCorpusSHA8 pins the CHAOS-4525 -ratify path: the mechanical
+// alternative to hand-editing a signed artifact's approval (chris ruling
+// 2026-08-29 07:31 -- sha8 re-ratification is not a chris call for incremental
+// seed additions).
+func TestRatifyCurrentCorpusSHA8(t *testing.T) {
+	t.Run("advances the approval and appends to the chain", func(t *testing.T) {
+		annexPath, corpusPath, liveSHA8 := writeRatifyFixture(t, "", "oldappr")
+		// The annex must already record the live corpus's sha8 -- rewrite
+		// the fixture's recorded value to the digest just computed.
+		reRecordCorpusSHA8(t, annexPath, liveSHA8)
+
+		if err := ratifyCurrentCorpusSHA8(annexPath, corpusPath, "team-lead", "seeds added"); err != nil {
+			t.Fatalf("ratify: %v", err)
+		}
+		approved, chain := readRatifiedSignoff(t, annexPath)
+		if approved != liveSHA8 {
+			t.Errorf("approved_corpus_sha8 = %q, want %q", approved, liveSHA8)
+		}
+		if chain != 1 {
+			t.Errorf("reratifications length = %d, want 1", chain)
+		}
+	})
+
+	t.Run("REFUSES when the annex names a corpus the file on disk is not", func(t *testing.T) {
+		// The load-bearing guard: ratifying a sha8 no live corpus has is
+		// exactly how an approval ends up naming content nobody saw.
+		annexPath, corpusPath, _ := writeRatifyFixture(t, "deadbeef", "oldappr")
+		err := ratifyCurrentCorpusSHA8(annexPath, corpusPath, "team-lead", "seeds added")
+		if err == nil {
+			t.Fatal("ratify succeeded against a mismatched annex/corpus pair, want a refusal")
+		}
+		if !strings.Contains(err.Error(), "refusing to ratify") {
+			t.Errorf("error = %v, want a 'refusing to ratify' message", err)
+		}
+		if approved, chain := readRatifiedSignoff(t, annexPath); approved != "oldappr" || chain != 0 {
+			t.Errorf("a refused ratify still wrote: approved=%q chain=%d", approved, chain)
+		}
+	})
+
+	t.Run("REFUSES an annex with no operative signoff", func(t *testing.T) {
+		// -ratify advances the hash an EXISTING approval covers. Against an
+		// unsigned/DRAFT annex it used to create a signoff object carrying
+		// only approved_corpus_sha8 and report success, while
+		// requireAnnexSignedOff still refused the artifact at run time --
+		// a success message for a state every consumer rejects.
+		for _, tc := range []struct {
+			name, by, status string
+		}{
+			{"DRAFT status", "chris", "DRAFT"},
+			{"empty status", "chris", ""},
+			{"approved but unattributed", "", "APPROVED"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				annexPath, corpusPath, liveSHA8 := writeRatifyFixture(t, "", "oldappr")
+				reRecordCorpusSHA8(t, annexPath, liveSHA8)
+				rewriteSignoffField(t, annexPath, "by", tc.by)
+				rewriteSignoffField(t, annexPath, "status", tc.status)
+
+				err := ratifyCurrentCorpusSHA8(annexPath, corpusPath, "team-lead", "seeds added")
+				if err == nil {
+					t.Fatal("ratify succeeded against an annex with no operative signoff, want a refusal")
+				}
+				if !strings.Contains(err.Error(), "no operative signoff") {
+					t.Errorf("error = %v, want a 'no operative signoff' message", err)
+				}
+				if approved, chain := readRatifiedSignoff(t, annexPath); approved != "oldappr" || chain != 0 {
+					t.Errorf("a refused ratify still wrote: approved=%q chain=%d", approved, chain)
+				}
+			})
+		}
+	})
+
+	t.Run("is a no-op when the approval already names the live corpus", func(t *testing.T) {
+		annexPath, corpusPath, liveSHA8 := writeRatifyFixture(t, "", "")
+		reRecordCorpusSHA8(t, annexPath, liveSHA8)
+		reRecordApprovedSHA8(t, annexPath, liveSHA8)
+
+		if err := ratifyCurrentCorpusSHA8(annexPath, corpusPath, "team-lead", "again"); err != nil {
+			t.Fatalf("ratify: %v", err)
+		}
+		if _, chain := readRatifiedSignoff(t, annexPath); chain != 0 {
+			t.Errorf("reratifications length = %d, want 0 -- a no-op must not append a second identical record", chain)
+		}
+	})
+}
+
+func reRecordCorpusSHA8(t *testing.T, annexPath, sha8 string) {
+	t.Helper()
+	rewriteAnnexField(t, annexPath, "corpus_sha8", sha8)
+}
+
+func reRecordApprovedSHA8(t *testing.T, annexPath, sha8 string) {
+	t.Helper()
+	raw, err := os.ReadFile(annexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["provenance"].(map[string]any)["signoff"].(map[string]any)["approved_corpus_sha8"] = sha8
+	body, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(annexPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func rewriteAnnexField(t *testing.T, annexPath, key, value string) {
+	t.Helper()
+	raw, err := os.ReadFile(annexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["provenance"].(map[string]any)[key] = value
+	body, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(annexPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func rewriteSignoffField(t *testing.T, annexPath, key, value string) {
+	t.Helper()
+	raw, err := os.ReadFile(annexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["provenance"].(map[string]any)["signoff"].(map[string]any)[key] = value
+	body, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(annexPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRatifyCLIRejectsWhitespaceAttribution exercises the FLAG BOUNDARY, which
+// is where the trim lives -- ratifyCurrentCorpusSHA8 itself records what it is
+// handed, so a unit call cannot see this guard at all (codex review R3 P2).
+// "   " is neither unset nor empty, so a bare emptiness test accepts it and
+// advances the approved corpus hash with an effectively unattributed,
+// unexplained audit record.
+//
+// RED-FIRST: drop the two strings.TrimSpace assignments in main() and this
+// test's first two cases exit 0 instead of 2.
+func TestRatifyCLIRejectsWhitespaceAttribution(t *testing.T) {
+	for _, tc := range []struct {
+		name, by, note string
+		wantRefused    bool
+	}{
+		{"whitespace-only -ratified-by", "   ", "a real reason", true},
+		{"whitespace-only -ratify-note", "team-lead", " \t ", true},
+		{"both real", "team-lead", "a real reason", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			annexPath, corpusPath, liveSHA8 := writeRatifyFixture(t, "", "oldappr")
+			reRecordCorpusSHA8(t, annexPath, liveSHA8)
+
+			out, err := exec.Command("go", "run", ".", "-annex", annexPath, "-corpus", corpusPath,
+				"-ratify", "-ratified-by", tc.by, "-ratify-note", tc.note).CombinedOutput()
+			// `go run` reports a non-zero child exit as its own exit 1, so
+			// the assertion is on REFUSED-vs-ACCEPTED plus the message and
+			// the resulting file state -- never on the exact numeric code,
+			// which this indirection does not preserve.
+			refused := err != nil
+			var ee *exec.ExitError
+			if err != nil && !errors.As(err, &ee) {
+				t.Fatalf("run: %v (%s)", err, out)
+			}
+			if refused != tc.wantRefused {
+				t.Errorf("refused = %v, want %v (output: %s)", refused, tc.wantRefused, out)
+			}
+			approved, _ := readRatifiedSignoff(t, annexPath)
+			if tc.wantRefused {
+				if !strings.Contains(string(out), "-ratify requires both") {
+					t.Errorf("output = %s, want the both-flags-required message", out)
+				}
+				if approved != "oldappr" {
+					t.Errorf("a refused ratify still advanced the approval to %q", approved)
+				}
+			} else if approved != liveSHA8 {
+				t.Errorf("approved = %q, want %q", approved, liveSHA8)
+			}
+		})
 	}
 }

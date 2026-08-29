@@ -712,6 +712,9 @@ flowchart LR
   end
   subgraph SYNTH["Synthesis/terminal hop"]
     D1["false_no_match<br/>expectID!='' AND status==no_match"]
+    D2["answer_rate NUMERATOR (CHAOS-4525)<br/>anchored: complete AND claimed_facts&gt;=1<br/>cohort: (complete|partial|degraded)<br/>AND claimed_facts&gt;=1<br/>AND cohort_ranked_member_count&gt;=1"]
+    D3["answer_rate DENOMINATOR (CHAOS-4525)<br/>arm==positive AND<br/>(expected_id!='' OR cohort_answer_expected)<br/>cohort_answer_expected = annex<br/>census.terminal_expectation=='aggregate_assessment'"]
+    D3 --> D2
   end
   subgraph MISSING["No field exists for this hop"]
     E1["canonical_facts_count -- NOT a real field.<br/>No per-case field measures fact-planning/<br/>ReadFacts output count anywhere in the harness."]
@@ -744,6 +747,42 @@ original brief, does not exist in the harness as a field** — no
 field, projects fact-planning/`ReadFacts` output count. Flagged to
 team-lead as aspirational, not a stale-vs-current discrepancy, since no
 prior doc claimed it existed.
+
+**The answer-rate denominator is the sixth hop, and it was silently
+class-blind until CHAOS-4525.** `answer_rate` (CHAOS-4386) asks "of the
+questions whose oracle expects an answer, how many got one" — and it read
+"the oracle expects an answer" as `expected_id != ""`. That is a correct
+test for an ANCHORED subject question and a false negative for a
+discovered cohort: a cohort question's answer IS the ranked cohort, so its
+annex entry carries `anchor.positive_key: null` by construction and its
+corpus row's `expect_id` is empty. Every `cohort_assessment` case in ext65
+therefore sat outside the denominator no matter what it did — including
+the North Star's own team-cohort bar question, which CHAOS-4450 (Run J)
+found the corpus could not express in an answerable band at all. CHAOS-4525
+adds the seeds AND the second gate: `cohort_answer_expected`, read from the
+annex's own `oracles.census.terminal_expectation`, admitted only for
+`aggregate_assessment`. `witnessed_no_match` (index 61) and
+`clarification_required` (index 63) stay out on purpose — their correct
+terminal state is a refusal or a question, and counting them as unanswered
+would penalise correct behaviour. The two gates are a union: an anchored
+case still qualifies on `expected_id` alone.
+
+**The numerator is class-shaped too, for a measured reason.** It required
+`terminal_status == "complete"`, which is right for an anchored subject
+answer and wrong for a cohort: CHAOS-4522's first successful cohort answer
+against real data is delivered as **`degraded`, with claimed facts and three
+ranked teams** — a real answer, in the user's hands, that a complete-only
+numerator scores 0. `degraded` is the honest status there under North Star
+check 12, because some members genuinely have thin evidence; scoring it 0
+would penalise the contract for telling the truth about its own coverage and
+would make `answer_rate` read "still broken" for exactly the outcome the fix
+produces. So cohort rows admit `complete`/`partial`/`degraded` and add a
+condition anchored rows do not have: at least one **ranked** member
+(`ContextFabricCohortMember.RankingComputed`, never `len(Members)`). That
+third condition is what keeps the loosening honest — without it, a delivered
+cohort object full of merely-discovered, unscored members would score the
+same as a ranked, driver-backed answer. `clarification_required` and
+`no_match` remain unanswered for both classes.
 
 ---
 
@@ -913,6 +952,61 @@ flowchart TB
     F --> G["result.Cohort = graphContext.Cohort<br/>(already ranked; synthesizer never sets it)"]
 ```
 
+**Updated 2026-08-29 (CHAOS-4522): the cohort → synthesis handoff has TWO
+closures, and both were half-wired.** The diagram above stops at
+"Synthesize", which hid the fact that `SynthesisDraft.ValidateAgainst`
+re-derives its OWN view of what the model was allowed to say, from
+`SynthesisInput` — and that view did not match what
+`synthesisInputFromDomain` actually SHOWS the model. Two symmetric gaps,
+both fatal to every discovered-cohort answer on real data (HTTP 422
+`synthesis_rejected`, 6 of 6 attempts, org `70d529e0`):
+
+```mermaid
+flowchart LR
+    IN["synthesisInputFromDomain<br/>SHOWS the model:<br/>Cohort (members + evidence_ref_ids),<br/>Resolution, Paths, DriverCandidates,<br/>modelFacingFacts(Facts)"] --> M["model drafts<br/>claims / drivers / findings"]
+    M --> V["SynthesisDraft.ValidateAgainst"]
+    V --> S["allowedSubjects = synthesisSubjects<br/>Committed + <b>Cohort.Members[].Subject</b><br/>+ Facts[].Subject + Paths[].Nodes"]
+    V --> E["allowedEvidence<br/>Paths + Graph + Facts + Candidates<br/>+ <b>Cohort.Members[].EvidenceRefIDs</b><br/>(ADDED, CHAOS-4522 — was missing)"]
+    V --> G2["groundClaim(Facts, claim)<br/>closes over <b>EVERY</b> fact sharing<br/>(Kind, Subject)<br/>(was: FIRST match only)"]
+    G2 --> R["attachCanonicalRows uses the fact<br/>that GROUNDED the claim"]
+    V -. rejects .-> T["rejection_reason<br/>(closed vocab, CHAOS-4522)<br/>+ fact_group_max"]
+```
+
+- **Grounding.** `ClaimedFact` addresses a fact by `(Kind, Subject, Field)`
+  only — `CanonicalFact` carries no identifier — and the lookup returned the
+  FIRST match. But a cohort's fact bundle holds MANY facts per
+  `(kind, subject)`: the live three-team answer carries 40 team-subject
+  facts, of which 17 are `readiness|team:CHAOS`, one row per work
+  scope/day. `cohort_ranking.go`'s `findFact` already documented that
+  ("readiness/workload/deficiency aggregate across every fact of their kind
+  … because those producers can legitimately emit several"); CHAOS-4398 gave
+  the RANKING that treatment and the validator never got it. The first of
+  those 17 carries no `estimate_coverage_ratio`, so every claim about the
+  readiness coverage gap — one of the four families the v2 formula is built
+  on — was rejected as "not canonically observed" while the value sat in the
+  next fact of the same group. `groundClaim` now closes over the group; the
+  guarantee is unchanged in strength (a claim is admitted iff some fact the
+  model was shown observed that field with exactly that value), only the
+  slice-order tiebreak is gone.
+- **Evidence.** `synthesisSubjects` has admitted `Cohort.Members[].Subject`
+  since CHAOS-4398, but `allowedEvidence` was never widened to match, so a
+  member's `EvidenceRefIDs` — shown to the model as part of the Cohort —
+  came back as "references unknown evidence". The live cohort ranks
+  `team:gh:ops-team`, whose only evidence ref is `acr:v1:team:gh:ops-team`
+  and for which no canonical fact exists, so nothing else in the closure
+  could ever supply it.
+- **Diagnosability.** Every `ValidateAgainst` rejection previously collapsed
+  into `outcome=invalid_output` / `failure_classification=synthesis_rejected`;
+  `violated_bound` names only the contracts/v1-bound subset, so both defects
+  above reached the operator unnamed. Each rejecting statement now carries a
+  closed-vocabulary `SynthesisRejectionReason`, emitted on the model
+  decision line (with `fact_group_max`, which separates "a multi-fact
+  grounding problem" from "the model claimed a field that does not exist"),
+  the route failure line, and the 422 body beside `violated_bound`. The
+  second defect above was found BY that telemetry, on the first replicate
+  after the first fix landed.
+
+
 **The theme-mix producer is a NEW acr fact read, not a reuse of the existing
 `FactInvestment`.** The pre-existing team read (`investment_metrics_daily`,
 `readTeamInvestment`) is fed by a **deprecated** legacy rule set
@@ -982,6 +1076,18 @@ all UNCHANGED by PR2); the `RankingTable` Rows panel on
 (PR4) the harness cohort-question seeds + ask-dev contract pin bump (per
 the 20:50 08-27 standing rule: any acr PR widening the investigation
 contract lists an ask-dev pin bump as a follow-up).
+
+**Update (CHAOS-4525, 2026-08-29):** the harness cohort-question seeds are
+now built. Two answerable `cohort_assessment`/`team` cases and two
+answerable `subject_status`/`project` cases (plus a `no_match` control)
+were appended to the trial corpus and its oracle annex by
+`scripts/trial/seed-corpus-cases.sh`, which proves every oracle claim
+against the live read-only graph before writing and then hands
+`expect_kind`/`expect_id` to `cmd/acr-corpus-annex-sync`. Diagram 5's
+caption covers the measurement half — the answer-rate denominator had to
+widen in the same change, or the cohort seeds would have been rows no
+metric could see. Corpus question text is deliberately absent from this
+page and every other durable artifact; cases are named by index and band.
 
 ---
 
