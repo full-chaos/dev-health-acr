@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/testcontainers/testcontainers-go"
@@ -86,6 +87,26 @@ func newCHAOS3780IntegrationClient(t *testing.T, ctx context.Context) (query *ru
 		}
 	})
 	return query, direct
+}
+
+// repositoryMetricsTimeContext (CHAOS-4418) spans a fixed calendar range
+// explicitly instead of leaning on readRepositoryMetrics' own default
+// window. That default (metricsSeriesDefaultWindow, 90 days) trails the
+// REAL wall clock, while every fixture below seeds a fixed calendar day --
+// so a bare TemporalCurrent read returns zero rows the moment CI runs more
+// than 90 days after that anchor, and the test fails for the calendar
+// rather than for the behaviour it claims to pin. This is a calendar time
+// bomb introduced by CHAOS-4418 making this reader window-scoped at all
+// (before it, the reader took the latest day regardless of any window);
+// F2_metrics_truncates_one_repositorys_own_series_past_its_per_repository_cap
+// hit it on CI first. An explicit window is also the more faithful test of
+// each claim: the per-repository SQL cap, the intraday dedup, and the
+// org-scoping all fire independently of the window logic.
+func repositoryMetricsTimeContext(from, to time.Time) contextfabric.TimeContext {
+	return contextfabric.TimeContext{
+		Axis:           contextfabric.TemporalCurrent,
+		EvidenceWindow: &contractsv1.ContextFabricRequestedEvidenceWindow{Start: &from, End: &to},
+	}
 }
 
 // devhealthschema:not-a-production-replica the table names passed to devhealthschema.DDL below
@@ -255,7 +276,7 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		}
 		provider := findProvider(t, providers, contextfabric.FactMetrics)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: repositoryMetricsTimeContext(date(2026, 8, 1), date(2026, 8, 31)),
 			Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject(repoID)},
 		})
 		if err != nil {
@@ -397,7 +418,7 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		}
 		provider := findProvider(t, providers, contextfabric.FactMetrics)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgA}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: repositoryMetricsTimeContext(date(2026, 8, 1), date(2026, 8, 31)),
 			Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject(repoID)},
 		})
 		if err != nil {
@@ -434,7 +455,7 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		}
 		provider := findProvider(t, providers, contextfabric.FactMetrics)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: repositoryMetricsTimeContext(date(2026, 8, 1), date(2026, 8, 31)),
 			Kind: contextfabric.FactMetrics, Subjects: subjects,
 		})
 		if err != nil {
@@ -467,7 +488,7 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		}
 		provider := findProvider(t, providers, contextfabric.FactMetrics)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
-			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Time: repositoryMetricsTimeContext(start, start.AddDate(0, 0, dayCount)),
 			Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject(repoID)},
 		})
 		if err != nil {
