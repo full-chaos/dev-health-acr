@@ -75,11 +75,38 @@ func main() {
 	annexPath := flag.String("annex", "", "path to the oracle annex JSON file (required)")
 	corpusPath := flag.String("corpus", "", "path to the trial corpus JSON file (required)")
 	checkOnly := flag.Bool("check", false, "report disagreements and exit 1 without writing")
+	ratify := flag.Bool("ratify", false, "advance signoff.approved_corpus_sha8 to the annex's current provenance.corpus_sha8 (requires -ratified-by and -ratify-note); does not sync")
+	ratifiedBy := flag.String("ratified-by", "", "who ratified, recorded verbatim under signoff (required with -ratify)")
+	ratifyNote := flag.String("ratify-note", "", "why, recorded verbatim under signoff.reratifications (required with -ratify)")
 	flag.Parse()
 
 	if *annexPath == "" || *corpusPath == "" {
 		fmt.Fprintln(os.Stderr, "acr-corpus-annex-sync: -annex and -corpus are both required")
 		os.Exit(2)
+	}
+
+	// -ratify is a SEPARATE, deliberate act from a sync and never rides
+	// along with one (CHAOS-4525): the sync path's own
+	// stampApprovedCorpusSHA8IfAbsent exists precisely so a mechanical
+	// content correction can never make an old approval look like it
+	// covered content it never saw. Advancing the approval is a HUMAN
+	// decision, so it needs its own invocation, its own two mandatory
+	// justification flags, and no ability to change corpus content in the
+	// same run.
+	if *ratify {
+		if *checkOnly {
+			fmt.Fprintln(os.Stderr, "acr-corpus-annex-sync: -ratify and -check are mutually exclusive")
+			os.Exit(2)
+		}
+		if *ratifiedBy == "" || *ratifyNote == "" {
+			fmt.Fprintln(os.Stderr, "acr-corpus-annex-sync: -ratify requires both -ratified-by and -ratify-note (an unattributed, unexplained approval is not an approval)")
+			os.Exit(2)
+		}
+		if err := ratifyCurrentCorpusSHA8(*annexPath, *corpusPath, *ratifiedBy, *ratifyNote); err != nil {
+			fmt.Fprintf(os.Stderr, "acr-corpus-annex-sync: ratify: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	annexRaw, err := os.ReadFile(*annexPath)
@@ -370,5 +397,121 @@ func writeFileAtomically(path string, data []byte) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("rename temp file over %s: %w", path, err)
 	}
+	return nil
+}
+
+// ratifyCurrentCorpusSHA8 advances signoff.approved_corpus_sha8 to the
+// annex's own provenance.corpus_sha8 -- the mechanical path for what would
+// otherwise be a hand edit of a signed artifact (CHAOS-4525, chris ruling
+// 2026-08-29 07:31: sha8 re-ratification is not a chris call for incremental
+// seed additions).
+//
+// It is deliberately narrow and fail-closed:
+//
+//   - It REFUSES unless the annex's recorded provenance.corpus_sha8 actually
+//     matches the corpus file on disk. Ratifying a sha8 that no live corpus
+//     has is how an approval ends up naming content nobody ever saw, which is
+//     the whole failure this field exists to make visible.
+//   - It writes only under provenance.signoff, via a json.RawMessage
+//     round-trip, leaving every other byte of the annex (cases, the
+//     chaos4348/chaos4525 audit histories) untouched.
+//   - It appends to signoff.reratifications rather than replacing it, so the
+//     chain of what was approved when survives -- the array the annex already
+//     carries from the CHAOS-4348 re-ratification.
+//   - A no-op ratification (approved already equals current) exits 0 and says
+//     so, rather than appending a second identical record.
+func ratifyCurrentCorpusSHA8(annexPath, corpusPath, ratifiedBy, note string) error {
+	corpusBytes, err := os.ReadFile(corpusPath)
+	if err != nil {
+		return fmt.Errorf("read corpus: %w", err)
+	}
+	corpusSum := sha256.Sum256(corpusBytes)
+	liveSHA8 := hex.EncodeToString(corpusSum[:])[:8]
+
+	annexBytes, err := os.ReadFile(annexPath)
+	if err != nil {
+		return fmt.Errorf("read annex: %w", err)
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(annexBytes, &doc); err != nil {
+		return fmt.Errorf("parse annex: %w", err)
+	}
+	var provenance map[string]json.RawMessage
+	if err := json.Unmarshal(doc["provenance"], &provenance); err != nil {
+		return fmt.Errorf("parse annex provenance: %w", err)
+	}
+	var recordedSHA8 string
+	if err := json.Unmarshal(provenance["corpus_sha8"], &recordedSHA8); err != nil {
+		return fmt.Errorf("parse provenance.corpus_sha8: %w", err)
+	}
+	if recordedSHA8 != liveSHA8 {
+		return fmt.Errorf("refusing to ratify: annex provenance.corpus_sha8=%s but the corpus on disk hashes to %s -- run a sync first so the pair agrees", recordedSHA8, liveSHA8)
+	}
+
+	var signoff map[string]json.RawMessage
+	if raw, ok := provenance["signoff"]; ok {
+		if err := json.Unmarshal(raw, &signoff); err != nil {
+			return fmt.Errorf("parse signoff: %w", err)
+		}
+	} else {
+		signoff = map[string]json.RawMessage{}
+	}
+	var previous string
+	if raw, ok := signoff["approved_corpus_sha8"]; ok {
+		json.Unmarshal(raw, &previous)
+	}
+	if previous == liveSHA8 {
+		fmt.Printf("acr-corpus-annex-sync: signoff.approved_corpus_sha8 is already %s -- nothing to ratify\n", liveSHA8)
+		return nil
+	}
+
+	record := map[string]string{
+		"by":                ratifiedBy,
+		"at_utc":            time.Now().UTC().Format(time.RFC3339),
+		"from_corpus_sha8":  previous,
+		"to_corpus_sha8":    liveSHA8,
+		"reason":            note,
+		"ratified_via_tool": "cmd/acr-corpus-annex-sync -ratify",
+	}
+	var chain []json.RawMessage
+	if raw, ok := signoff["reratifications"]; ok {
+		if err := json.Unmarshal(raw, &chain); err != nil {
+			return fmt.Errorf("parse signoff.reratifications: %w", err)
+		}
+	}
+	recordJSON, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("marshal reratification record: %w", err)
+	}
+	chain = append(chain, recordJSON)
+	chainJSON, err := json.Marshal(chain)
+	if err != nil {
+		return fmt.Errorf("marshal reratification chain: %w", err)
+	}
+	approvedJSON, err := json.Marshal(liveSHA8)
+	if err != nil {
+		return fmt.Errorf("marshal approved_corpus_sha8: %w", err)
+	}
+	signoff["approved_corpus_sha8"] = approvedJSON
+	signoff["reratifications"] = chainJSON
+
+	signoffJSON, err := json.Marshal(signoff)
+	if err != nil {
+		return fmt.Errorf("marshal signoff: %w", err)
+	}
+	provenance["signoff"] = signoffJSON
+	provenanceJSON, err := json.Marshal(provenance)
+	if err != nil {
+		return fmt.Errorf("marshal provenance: %w", err)
+	}
+	doc["provenance"] = provenanceJSON
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal annex: %w", err)
+	}
+	if err := writeFileAtomically(annexPath, append(out, byte(10))); err != nil {
+		return fmt.Errorf("write annex: %w", err)
+	}
+	fmt.Printf("acr-corpus-annex-sync: ratified signoff.approved_corpus_sha8 %s -> %s (by %s)\n", previous, liveSHA8, ratifiedBy)
 	return nil
 }

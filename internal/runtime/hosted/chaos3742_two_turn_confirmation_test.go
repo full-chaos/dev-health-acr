@@ -4178,6 +4178,17 @@ type twoTurnCaseResult struct {
 	// ExpectedID=="" is the normal, correct shape for that class, not a
 	// half-populated row.
 	CohortAnswerExpected bool `json:"cohort_answer_expected,omitempty"`
+	// CohortRankedMemberCount (CHAOS-4525 numerator follow-up) is how many
+	// members of the delivered cohort actually had a ranking pass run --
+	// see chaos4525CohortRankedMemberCount's own doc comment for why this
+	// counts RankingComputed members rather than len(Cohort.Members).
+	// Zero on every non-cohort row, which is why it is omitempty.
+	//
+	// It is the third condition of the cohort numerator. Without it,
+	// "answered" could be satisfied by a result that delivered a cohort
+	// object carrying only discovered, unscored members -- a list, not an
+	// answer to "which teams are struggling, and why".
+	CohortRankedMemberCount int `json:"cohort_ranked_member_count,omitempty"`
 	// CommitGate/TiedStatisticalTop/SearchTruncated mirror the
 	// decision-stage graphrank.ResolutionTraceEvent for this arm's own
 	// turn-2 call -- graphrank's closed gate vocabulary and the two
@@ -4806,7 +4817,21 @@ func twoTurnRedactNonAnomalousTraceEvents(results []twoTurnCaseResult) {
 // NOTE the two ladders are independent: nTurnReportSchemaVersion is
 // separately at "42" for CHAOS-4386's own n-turn terminal fields. They
 // are different classes' artifacts and have never been one sequence.
-const reportSchemaVersion = "42"
+// "43" (CHAOS-4525 numerator follow-up, team-lead ruling 2026-08-29 after
+// lane-4522's first live cohort success): twoTurnCaseResult gains
+// CohortRankedMemberCount, and the answer-rate NUMERATOR becomes
+// class-shaped -- cohort rows admit partial/degraded alongside complete and
+// additionally require a ranked member; anchored rows keep the complete-only
+// gate. See chaos4525RowAnswered's own doc comment.
+//
+// This is a SEPARATE bump from "42" rather than a widening of it because v42
+// already produced a real on-disk artifact -- this lane's own CHAOS-4525
+// baseline run, 20260829T141409Z-73901 -- whose rows carry no
+// cohort_ranked_member_count at all. Reusing "42" would make that artifact
+// and a post-change one indistinguishable while their rows mean different
+// things, which is the exact ambiguity every prior bump on this ladder
+// exists to prevent.
+const reportSchemaVersion = "43"
 
 type twoTurnReport struct {
 	// ReportSchemaVersion (codex round-1 finding #2, follow-up PR: field
@@ -7445,7 +7470,7 @@ func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator conte
 		// this, an ordinary, oracle-eligible offer-miss row serialized
 		// with every terminal field at zero despite a real result
 		// existing to measure.
-		res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(turn1)
+		chaos4525StampTerminal(&res, turn1)
 		res.ResultBytes, res.EstTokens = chaos4386MeasureResult(turn1)
 		return res
 	}
@@ -7513,7 +7538,7 @@ func runTwoTurnPositiveArm(t *testing.T, ctx context.Context, investigator conte
 	// CHAOS-4386: measured off turn2, this arm's own final result -- see
 	// twoTurnCaseResult.ResultBytes' own doc comment.
 	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(turn2)
-	res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(turn2)
+	chaos4525StampTerminal(&res, turn2)
 	return res
 }
 
@@ -7630,7 +7655,7 @@ func chaos4386PositiveArmNeverAttemptedRow(index int, member string, tc trialCas
 	row := twoTurnCaseResult{Index: index, Member: member, Arm: string(twoTurnArmPositive)}
 	if turn1 != nil {
 		row.Turn1Status = string(turn1.Status)
-		row.TerminalStatus, row.ClaimedFactsCount, row.RowsCount, row.TerminalReason = chaos4386TerminalFields(*turn1)
+		chaos4525StampTerminal(&row, *turn1)
 		// ResultBytes/EstTokens (codex review round 3, P2, confirmed):
 		// this row's own terminal fields above ARE real (turn1 IS the
 		// terminal result here), so its size must be measured too -- a
@@ -7680,6 +7705,59 @@ func chaos4386NoDisclosureRow(index int, member string, tc trialCase, turn1 cont
 // share one definition; the merge tool cannot import this file (same
 // reason it duplicates summarizeTwoTurnTiming/chaos4386ResultByteStats),
 // so this is hand-copied there too.
+// chaos4525RowAnswered is the answer-rate NUMERATOR, which is class-shaped
+// for the same reason the denominator is.
+//
+// ANCHORED rows are unchanged: terminal_status=="complete" AND at least one
+// claimed fact. That is the pre-4525 gate, and nothing here loosens it.
+//
+// COHORT rows admit "partial" and "degraded" alongside "complete", and add a
+// third condition of their own: at least one RANKED cohort member.
+//
+// The reason is a live measurement, not a preference. CHAOS-4522's first
+// successful cohort answer against real data (org 70d529e0, PR #329) is
+// delivered as status=DEGRADED with 11 claimed facts and 3 ranked teams --
+// a real ranked cohort, with drivers, in the user's hands. A
+// complete-only numerator scores that 0, which would have made this rate a
+// FALSE Wall-B tracker: it would read "still broken" for exactly the
+// outcome the fix produces. And "degraded" is the honest status for a
+// cohort answer under North Star check 12 -- some members genuinely have
+// thin evidence (Run J observed outcome_counts insufficient_evidence=2,
+// provisional=1) and the contract is required to say so rather than round
+// up to complete. Penalising the engine for telling the truth about its own
+// coverage inverts the check.
+//
+// The third condition is what keeps the loosening honest. Admitting three
+// statuses without it would let a result that delivered a cohort object
+// full of merely-discovered, unscored members count as an answer --
+// "we found three teams" scored the same as "here is why these three are
+// struggling". RankingComputed is the contract's own line between those
+// two, so the numerator uses it (chaos4525CohortRankedMemberCount).
+//
+// clarification_required and no_match remain unanswered for BOTH classes:
+// they are the two statuses that deliver nothing at all.
+//
+// A row that is somehow both anchored and cohort-expected takes the COHORT
+// path -- the class of the question is what determines what an answer to it
+// looks like. No corpus case is both today; this is a defined precedence,
+// not a live branch.
+func chaos4525RowAnswered(res twoTurnCaseResult) bool {
+	if res.ClaimedFactsCount < 1 {
+		return false
+	}
+	if res.CohortAnswerExpected {
+		switch res.TerminalStatus {
+		case string(contractsv1.ContextFabricInvestigationComplete),
+			string(contractsv1.ContextFabricInvestigationPartial),
+			string(contractsv1.ContextFabricInvestigationDegraded):
+			return res.CohortRankedMemberCount >= 1
+		default:
+			return false
+		}
+	}
+	return res.TerminalStatus == string(contractsv1.ContextFabricInvestigationComplete)
+}
+
 func chaos4386TwoTurnAnswerRate(results []twoTurnCaseResult) float64 {
 	answerable, answered := 0, 0
 	for _, res := range results {
@@ -7695,7 +7773,7 @@ func chaos4386TwoTurnAnswerRate(results []twoTurnCaseResult) float64 {
 			continue
 		}
 		answerable++
-		if res.TerminalStatus == string(contractsv1.ContextFabricInvestigationComplete) && res.ClaimedFactsCount >= 1 {
+		if chaos4525RowAnswered(res) {
 			answered++
 		}
 	}
@@ -8419,7 +8497,7 @@ func runTwoTurnInferredTierArm(t *testing.T, ctx context.Context, investigator c
 	// CHAOS-4386: measured off result, this arm's own final (hinted) call --
 	// see twoTurnCaseResult.ResultBytes' own doc comment.
 	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(result)
-	res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(result)
+	chaos4525StampTerminal(&res, result)
 	return res
 }
 
@@ -8927,7 +9005,7 @@ func runTwoTurnConfirmedWrongArm(t *testing.T, ctx context.Context, investigator
 	// CHAOS-4386: measured off turn2, this arm's own final result -- see
 	// twoTurnCaseResult.ResultBytes' own doc comment.
 	res.ResultBytes, res.EstTokens = chaos4386MeasureResult(turn2)
-	res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(turn2)
+	chaos4525StampTerminal(&res, turn2)
 	return res
 }
 
@@ -9104,7 +9182,7 @@ func runTwoTurnMutationArm(ctx context.Context, investigator contextfabric.Inves
 		// CHAOS-4386: measured off result, this probe's own final call -- see
 		// twoTurnCaseResult.ResultBytes' own doc comment.
 		res.ResultBytes, res.EstTokens = chaos4386MeasureResult(result)
-		res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(result)
+		chaos4525StampTerminal(&res, result)
 		return res
 	}
 

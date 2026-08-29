@@ -14,6 +14,7 @@ census_count
 census_ran
 claimed_facts_count
 cohort_answer_expected
+cohort_ranked_member_count
 commit_gate
 committed_count
 committed_subjects

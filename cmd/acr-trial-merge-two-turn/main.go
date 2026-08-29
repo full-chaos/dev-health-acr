@@ -352,7 +352,12 @@ import (
 // doc comment. The row field is carried through this mirror verbatim (no
 // arithmetic) so the recompute below sees it; AnswerRate stays RECOMPUTED
 // from the merged Results, never trusted from any one shard.
-const expectedSchemaVersion = "42"
+// expectedSchemaVersion "43" (CHAOS-4525 numerator follow-up): the mirror
+// gained CohortRankedMemberCount and its own copy of the class-shaped
+// numerator (chaos4525RowAnswered) -- see the producer's own
+// reportSchemaVersion "43" doc comment for why this is a second bump rather
+// than a widening of "42".
+const expectedSchemaVersion = "43"
 
 // trialShardingProvenance mirrors the producer's identically-named type
 // (CHAOS-4100, schema v12): how a run was fanned out. Corpus-safe -- case
@@ -544,10 +549,18 @@ type twoTurnCaseResult struct {
 	// omitting it would silently narrow the merged artifact's own
 	// denominator back to the pre-4525 anchored-only set while still
 	// labelling the result v42.
-	CohortAnswerExpected bool   `json:"cohort_answer_expected,omitempty"`
-	CommitGate           string `json:"commit_gate,omitempty"`
-	TiedStatisticalTop   bool   `json:"tied_statistical_top,omitempty"`
-	SearchTruncated      bool   `json:"search_truncated,omitempty"`
+	CohortAnswerExpected bool `json:"cohort_answer_expected,omitempty"`
+	// CohortRankedMemberCount (CHAOS-4525 numerator follow-up, schema v43)
+	// mirrors twoTurnCaseResult's identically-named field, declared here
+	// for the same "an undeclared field is dropped on decode" reason as
+	// CohortAnswerExpected above -- and with a sharper failure mode: a
+	// dropped count reads 0, indistinguishable from a genuinely unranked
+	// cohort, so the merged artifact would score a real ranked answer as
+	// UNANSWERED while still labelling itself v43.
+	CohortRankedMemberCount int    `json:"cohort_ranked_member_count,omitempty"`
+	CommitGate              string `json:"commit_gate,omitempty"`
+	TiedStatisticalTop      bool   `json:"tied_statistical_top,omitempty"`
+	SearchTruncated         bool   `json:"search_truncated,omitempty"`
 	// CHAOS-4183 phase 2: omitempty DROPPED on all three -- mirroring
 	// twoTurnCaseResult's own fields byte-for-byte, see that struct's own
 	// doc comment for the motivating jq-misread incident.
@@ -915,7 +928,7 @@ func chaos4386TwoTurnAnswerRate(results []twoTurnCaseResult) float64 {
 			continue
 		}
 		answerable++
-		if res.TerminalStatus == "complete" && res.ClaimedFactsCount >= 1 {
+		if chaos4525RowAnswered(res) {
 			answered++
 		}
 	}
@@ -923,6 +936,28 @@ func chaos4386TwoTurnAnswerRate(results []twoTurnCaseResult) float64 {
 		return 0
 	}
 	return float64(answered) / float64(answerable)
+}
+
+// chaos4525RowAnswered mirrors chaos3742_two_turn_confirmation_test.go's
+// identically-named function byte-for-byte -- see that function's own doc
+// comment for why the cohort class admits partial/degraded and requires a
+// ranked member, and why anchored rows keep the complete-only gate. Status
+// values are the string literals of the contractsv1 constants the producer
+// names symbolically; this binary does not import that package, the same
+// hand-maintained-mirror limitation every other function in this file has.
+func chaos4525RowAnswered(res twoTurnCaseResult) bool {
+	if res.ClaimedFactsCount < 1 {
+		return false
+	}
+	if res.CohortAnswerExpected {
+		switch res.TerminalStatus {
+		case "complete", "partial", "degraded":
+			return res.CohortRankedMemberCount >= 1
+		default:
+			return false
+		}
+	}
+	return res.TerminalStatus == "complete"
 }
 
 // chaos4386LegacyResponseByteCap mirrors

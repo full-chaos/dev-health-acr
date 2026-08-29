@@ -3,6 +3,8 @@ package hosted_test
 import (
 	"encoding/json"
 	"testing"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // CHAOS-4525 -- the discovered-cohort class must be able to enter the
@@ -34,18 +36,25 @@ import (
 func TestChaos4525AnswerRateAdmitsCohortRows(t *testing.T) {
 	t.Parallel()
 
-	cohortRow := func(expectedID string, cohort bool, terminalStatus string, claimed int) twoTurnCaseResult {
+	// ranked is carried on every row because the CHAOS-4525 numerator
+	// requires a ranked member for the cohort class (chaos4525RowAnswered)
+	// -- a cohort row that claims facts but ranked nobody is a list, not an
+	// answer. These denominator subtests set it to 1 wherever they mean
+	// "this row DID answer", so a denominator assertion is never silently
+	// satisfied by a numerator failure instead.
+	cohortRow := func(expectedID string, cohort bool, terminalStatus string, claimed, ranked int) twoTurnCaseResult {
 		return twoTurnCaseResult{
-			Arm:                  string(twoTurnArmPositive),
-			ExpectedID:           expectedID,
-			CohortAnswerExpected: cohort,
-			TerminalStatus:       terminalStatus,
-			ClaimedFactsCount:    claimed,
+			Arm:                     string(twoTurnArmPositive),
+			ExpectedID:              expectedID,
+			CohortAnswerExpected:    cohort,
+			TerminalStatus:          terminalStatus,
+			ClaimedFactsCount:       claimed,
+			CohortRankedMemberCount: ranked,
 		}
 	}
 
 	t.Run("cohort row with no expected id is eligible and can be answered", func(t *testing.T) {
-		results := []twoTurnCaseResult{cohortRow("", true, "complete", 2)}
+		results := []twoTurnCaseResult{cohortRow("", true, "complete", 2, 3)}
 		if got, want := chaos4386TwoTurnAnswerRate(results), 1.0; got != want {
 			t.Errorf("answer rate = %v, want %v -- a cohort row whose oracle expects an aggregate answer must be in the denominator even with expected_id empty", got, want)
 		}
@@ -59,14 +68,14 @@ func TestChaos4525AnswerRateAdmitsCohortRows(t *testing.T) {
 		// failure was invisible to the rate; it must now read 0/1, not
 		// 0/0 -> 0 (a vacuous zero and a measured zero are different
 		// facts).
-		results := []twoTurnCaseResult{cohortRow("", true, "degraded", 0)}
+		results := []twoTurnCaseResult{cohortRow("", true, "degraded", 0, 0)}
 		if got, want := chaos4386TwoTurnAnswerRate(results), 0.0; got != want {
 			t.Errorf("answer rate = %v, want %v", got, want)
 		}
 		// The denominator itself is what changed, and a bare 0.0 cannot
 		// tell "1 eligible, 0 answered" from "0 eligible". Prove the
 		// eligibility directly by pairing it with an answered row.
-		paired := []twoTurnCaseResult{cohortRow("", true, "degraded", 0), cohortRow("", true, "complete", 1)}
+		paired := []twoTurnCaseResult{cohortRow("", true, "degraded", 0, 0), cohortRow("", true, "complete", 1, 2)}
 		if got, want := chaos4386TwoTurnAnswerRate(paired), 0.5; got != want {
 			t.Errorf("answer rate = %v, want %v -- both cohort rows must be in the denominator", got, want)
 		}
@@ -78,14 +87,14 @@ func TestChaos4525AnswerRateAdmitsCohortRows(t *testing.T) {
 		// clarification_required) must NOT be admitted -- their correct
 		// terminal state is not an answer, and counting them as
 		// unanswered would punish correct behavior.
-		results := []twoTurnCaseResult{cohortRow("", false, "complete", 1)}
+		results := []twoTurnCaseResult{cohortRow("", false, "complete", 1, 0)}
 		if got, want := chaos4386TwoTurnAnswerRate(results), 0.0; got != want {
 			t.Errorf("answer rate = %v, want %v (control row must stay out of the denominator)", got, want)
 		}
 	})
 
 	t.Run("anchored rows still qualify on expected id alone", func(t *testing.T) {
-		results := []twoTurnCaseResult{cohortRow("project.v2:linear:anchored", false, "complete", 1)}
+		results := []twoTurnCaseResult{cohortRow("project.v2:linear:anchored", false, "complete", 1, 0)}
 		if got, want := chaos4386TwoTurnAnswerRate(results), 1.0; got != want {
 			t.Errorf("answer rate = %v, want %v -- the gate is a union, never a replacement", got, want)
 		}
@@ -169,4 +178,128 @@ func TestChaos4525AnnexReadsCensusTerminalExpectation(t *testing.T) {
 			t.Errorf("CohortAnswerExpected[%d] = %v, want %v (%s)", tc.index, got, tc.want, tc.why)
 		}
 	}
+}
+
+// TestChaos4525CohortNumeratorAcceptsDegradedRankedAnswers is the NUMERATOR
+// half of CHAOS-4525, added after team-lead's 2026-08-29 review of PR #330.
+//
+// WHY: the denominator fix alone left the numerator carrying anchored-subject
+// semantics -- terminal_status == "complete". lane-4522's first live cohort
+// success against real data (org 70d529e0, PR #329) is delivered as
+// status=DEGRADED with 11 claimed facts and 3 ranked teams. A complete-only
+// numerator scores that 0, which would have made answer_rate a FALSE Wall-B
+// tracker: it would read "still broken" for exactly the outcome the fix
+// produces. "degraded" is also the honest status there under North Star check
+// 12 -- some cohort members genuinely have thin evidence -- so penalising it
+// inverts the check.
+//
+// RED-FIRST at tip 3307bc83 (the denominator-only commit): the first subtest
+// below fails with "answer rate = 0, want 1".
+func TestChaos4525CohortNumeratorAcceptsDegradedRankedAnswers(t *testing.T) {
+	t.Parallel()
+
+	row := func(terminal string, claimed, ranked int) twoTurnCaseResult {
+		return twoTurnCaseResult{
+			Arm:                     string(twoTurnArmPositive),
+			CohortAnswerExpected:    true,
+			TerminalStatus:          terminal,
+			ClaimedFactsCount:       claimed,
+			CohortRankedMemberCount: ranked,
+		}
+	}
+
+	t.Run("the #329 live shape counts as answered: degraded, 11 claims, 3 ranked teams", func(t *testing.T) {
+		if got, want := chaos4386TwoTurnAnswerRate([]twoTurnCaseResult{row("degraded", 11, 3)}), 1.0; got != want {
+			t.Errorf("answer rate = %v, want %v -- a delivered ranked cohort must count even when the contract honestly reports degraded coverage", got, want)
+		}
+	})
+
+	t.Run("partial and complete count too", func(t *testing.T) {
+		for _, terminal := range []string{"complete", "partial", "degraded"} {
+			if got, want := chaos4386TwoTurnAnswerRate([]twoTurnCaseResult{row(terminal, 1, 1)}), 1.0; got != want {
+				t.Errorf("terminal=%q: answer rate = %v, want %v", terminal, got, want)
+			}
+		}
+	})
+
+	t.Run("a cohort with NO ranked member is not an answer, whatever the status", func(t *testing.T) {
+		// The condition that keeps the loosening honest: a delivered
+		// cohort object carrying only discovered, unscored members is a
+		// list ("we found three teams"), never an answer to "which teams
+		// are struggling, and why". RankingComputed is the contract's own
+		// line between the two.
+		for _, terminal := range []string{"complete", "partial", "degraded"} {
+			if got, want := chaos4386TwoTurnAnswerRate([]twoTurnCaseResult{row(terminal, 11, 0)}), 0.0; got != want {
+				t.Errorf("terminal=%q, ranked=0: answer rate = %v, want %v", terminal, got, want)
+			}
+		}
+	})
+
+	t.Run("claims are still required, and the two non-delivering statuses still fail", func(t *testing.T) {
+		if got := chaos4386TwoTurnAnswerRate([]twoTurnCaseResult{row("degraded", 0, 3)}); got != 0 {
+			t.Errorf("answer rate = %v, want 0 (zero claimed facts is not an answer)", got)
+		}
+		for _, terminal := range []string{"clarification_required", "no_match"} {
+			if got := chaos4386TwoTurnAnswerRate([]twoTurnCaseResult{row(terminal, 11, 3)}); got != 0 {
+				t.Errorf("terminal=%q: answer rate = %v, want 0 -- these two deliver nothing", terminal, got)
+			}
+		}
+	})
+
+	t.Run("ANCHORED rows keep the complete-only gate, unchanged", func(t *testing.T) {
+		anchored := func(terminal string) twoTurnCaseResult {
+			return twoTurnCaseResult{
+				Arm: string(twoTurnArmPositive), ExpectedID: "project.v2:linear:anchored",
+				TerminalStatus: terminal, ClaimedFactsCount: 3,
+			}
+		}
+		if got := chaos4386TwoTurnAnswerRate([]twoTurnCaseResult{anchored("degraded")}); got != 0 {
+			t.Errorf("answer rate = %v, want 0 -- loosening the cohort class must not loosen the anchored class", got)
+		}
+		if got := chaos4386TwoTurnAnswerRate([]twoTurnCaseResult{anchored("complete")}); got != 1 {
+			t.Errorf("answer rate = %v, want 1", got)
+		}
+	})
+}
+
+// TestChaos4525CohortRankedMemberCount pins the count itself against the
+// contract's own RankingComputed disambiguator -- len(Members) is deliberately
+// NOT the count.
+func TestChaos4525CohortRankedMemberCount(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil cohort reads 0", func(t *testing.T) {
+		if got := chaos4525CohortRankedMemberCount(contractsv1.ContextFabricInvestigationResult{}); got != 0 {
+			t.Errorf("count = %d, want 0", got)
+		}
+	})
+
+	t.Run("only RankingComputed members count", func(t *testing.T) {
+		result := contractsv1.ContextFabricInvestigationResult{
+			Cohort: &contractsv1.ContextFabricCohort{
+				Kind: contractsv1.ContextFabricSubjectTeam,
+				Members: []contractsv1.ContextFabricCohortMember{
+					{Rank: 1, RankingComputed: true},
+					{Rank: 2, RankingComputed: true},
+					// Discovered but never scored -- an offers-only
+					// member. Present in Members, absent from the count.
+					{Rank: 3, RankingComputed: false},
+				},
+			},
+		}
+		if got, want := chaos4525CohortRankedMemberCount(result), 2; got != want {
+			t.Errorf("count = %d, want %d (len(Members)=3 is not the answer)", got, want)
+		}
+	})
+
+	t.Run("a cohort delivered with zero ranked members reads 0, not len(Members)", func(t *testing.T) {
+		result := contractsv1.ContextFabricInvestigationResult{
+			Cohort: &contractsv1.ContextFabricCohort{
+				Members: []contractsv1.ContextFabricCohortMember{{Rank: 1}, {Rank: 2}, {Rank: 3}},
+			},
+		}
+		if got := chaos4525CohortRankedMemberCount(result); got != 0 {
+			t.Errorf("count = %d, want 0 -- ranking never ran for this cohort", got)
+		}
+	})
 }

@@ -699,7 +699,7 @@ flowchart LR
   end
   subgraph SYNTH["Synthesis/terminal hop"]
     D1["false_no_match<br/>expectID!='' AND status==no_match"]
-    D2["answer_rate (CHAOS-4386)<br/>numerator: terminal_status==complete<br/>AND claimed_facts_count&gt;=1"]
+    D2["answer_rate NUMERATOR (CHAOS-4525)<br/>anchored: complete AND claimed_facts&gt;=1<br/>cohort: (complete|partial|degraded)<br/>AND claimed_facts&gt;=1<br/>AND cohort_ranked_member_count&gt;=1"]
     D3["answer_rate DENOMINATOR (CHAOS-4525)<br/>arm==positive AND<br/>(expected_id!='' OR cohort_answer_expected)<br/>cohort_answer_expected = annex<br/>census.terminal_expectation=='aggregate_assessment'"]
     D3 --> D2
   end
@@ -753,6 +753,23 @@ annex's own `oracles.census.terminal_expectation`, admitted only for
 terminal state is a refusal or a question, and counting them as unanswered
 would penalise correct behaviour. The two gates are a union: an anchored
 case still qualifies on `expected_id` alone.
+
+**The numerator is class-shaped too, for a measured reason.** It required
+`terminal_status == "complete"`, which is right for an anchored subject
+answer and wrong for a cohort: CHAOS-4522's first successful cohort answer
+against real data is delivered as **`degraded`, with claimed facts and three
+ranked teams** — a real answer, in the user's hands, that a complete-only
+numerator scores 0. `degraded` is the honest status there under North Star
+check 12, because some members genuinely have thin evidence; scoring it 0
+would penalise the contract for telling the truth about its own coverage and
+would make `answer_rate` read "still broken" for exactly the outcome the fix
+produces. So cohort rows admit `complete`/`partial`/`degraded` and add a
+condition anchored rows do not have: at least one **ranked** member
+(`ContextFabricCohortMember.RankingComputed`, never `len(Members)`). That
+third condition is what keeps the loosening honest — without it, a delivered
+cohort object full of merely-discovered, unscored members would score the
+same as a ranked, driver-backed answer. `clarification_required` and
+`no_match` remain unanswered for both classes.
 
 ---
 

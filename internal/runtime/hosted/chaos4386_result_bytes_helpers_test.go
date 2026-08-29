@@ -307,3 +307,52 @@ func chaos4386TerminalFields(result contractsv1.ContextFabricInvestigationResult
 	}
 	return string(result.Status), len(result.ClaimedFacts), rows, chaos4386TerminalReason(result)
 }
+
+// chaos4525CohortRankedMemberCount counts the members of result's delivered
+// cohort for which a ranking pass ACTUALLY RAN --
+// ContextFabricCohortMember.RankingComputed, the contract's own explicit
+// disambiguator (context_fabric_types.go): false is the zero value and means
+// ranking has not run for this cohort at all (an offers-only discovery, or a
+// request that never confirmed a window), with every other ranking field
+// absent alongside it.
+//
+// len(Cohort.Members) is deliberately NOT the count. A cohort can be
+// delivered with members that were merely DISCOVERED -- listed, never scored
+// -- and "we found three teams" is not "we ranked three teams". The
+// answer-rate numerator is a claim about a delivered ANSWER, so it must key
+// on the stronger of the two. Nil Cohort (every non-cohort question) reads 0,
+// which is correct and is why the field is omitempty on the row.
+//
+// Corpus-safe by construction: a count, never a subject label or handle.
+func chaos4525CohortRankedMemberCount(result contractsv1.ContextFabricInvestigationResult) int {
+	if result.Cohort == nil {
+		return 0
+	}
+	ranked := 0
+	for _, member := range result.Cohort.Members {
+		if member.RankingComputed {
+			ranked++
+		}
+	}
+	return ranked
+}
+
+// chaos4525StampTerminal writes EVERY terminal field of one row from one
+// result, in one place.
+//
+// It exists because the five fields must move together and there are six call
+// sites. Before CHAOS-4525 the four chaos4386TerminalFields values were
+// assigned by a bare multi-assignment repeated at each of those sites, which
+// is exactly the shape that silently loses a fifth field when one site is
+// missed -- and a missed site here does not fail loudly: it produces a row
+// with cohort_ranked_member_count=0, indistinguishable from a genuine
+// unranked cohort, which would then be scored as unanswered. Folding the
+// assignment into one function makes that class of miss structurally
+// impossible rather than merely unlikely.
+func chaos4525StampTerminal(res *twoTurnCaseResult, result contractsv1.ContextFabricInvestigationResult) {
+	if res == nil {
+		return
+	}
+	res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(result)
+	res.CohortRankedMemberCount = chaos4525CohortRankedMemberCount(result)
+}
