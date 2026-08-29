@@ -863,12 +863,12 @@ func projectTeamsStatement(cursor cursorState) string {
 	// shadows the column it aggregates bound to itself on 24.8 once already
 	// in this file's history, and cost a live round to find.
 	return `SELECT o.project_id, o.team_id, o.source_name,
-       min(o.valid_from) AS first_valid_from,
-       argMax(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open,
-       ifNull(argMax(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
+       minIf(o.valid_from, o.identity_conflict = 0) AS first_valid_from,
+       argMaxIf(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC'))), o.identity_conflict = 0).1 IS NULL AS latest_is_open,
+       ifNull(argMaxIf(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC'))), o.identity_conflict = 0).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
        max(o.updated_at) AS updated_at, o.provider,
-       max(o.identity_conflict) AS conflicting_identity,
-       groupUniqArray(concat(o.ownership_ref, '\0', o.ownership_key)) AS conflict_identities
+       toUInt8(countIf(o.identity_conflict = 0) = 0) AS edge_suppressed,
+       groupUniqArrayIf(concat(o.ownership_ref, '\0', o.ownership_key), o.identity_conflict = 1) AS conflict_identities
 FROM (
 	SELECT project_id, provider, ownership_ref, ownership_key, team_id, source_name, valid_from, valid_to, updated_at,
 	       toUInt8(min(project_id) OVER (PARTITION BY provider, ownership_ref, ownership_key) != max(project_id) OVER (PARTITION BY provider, ownership_ref, ownership_key)) AS identity_conflict
@@ -887,9 +887,9 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 	rows, truncated, err := fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var projectID, teamID, source, provider string
 		var validFrom, latestValidTo, observedAt time.Time
-		var latestIsOpen, conflictingIdentity uint8
+		var latestIsOpen, edgeSuppressed uint8
 		var conflictIdentities []string
-		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt, &provider, &conflictingIdentity, &conflictIdentities); err != nil {
+		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt, &provider, &edgeSuppressed, &conflictIdentities); err != nil {
 			return nil, err
 		}
 		observedAt, validFrom, latestValidTo = observedAt.UTC(), validFrom.UTC(), latestValidTo.UTC()
@@ -901,7 +901,12 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 		// is only half a fix. Still a PROGRESS candidate: the row was
 		// consumed and spent page budget, so the cursor must advance past it
 		// or a page of conflicts stalls the walk forever.
-		if conflictingIdentity == 1 {
+		// Recording and suppressing are INDEPENDENT (team-lead review). A
+		// conflicting row is recorded even when a CLEAN row in the same group
+		// keeps the edge alive: "was an ownership dropped" is not the same
+		// question as "did this edge survive", and answering only the second
+		// hides the first.
+		{
 			// Keyed on the OWNERSHIP row, not the resolved edge (codex R3).
 			// One conflicting row produces two flagged result rows -- one per
 			// resolved project -- and rowSortKey carries the resolved id, so
@@ -915,9 +920,17 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 			// them as one. Over-reporting and under-reporting are the same
 			// defect wearing opposite signs, and this ticket has now shipped
 			// both.
-			for _, identity := range conflictIdentities {
-				omissions.addConflict(provider, identity)
+			for _, conflicted := range conflictIdentities {
+				omissions.addConflict(provider, conflicted)
 			}
+		}
+		// Suppressed only when NO clean row asserted this edge. The group is
+		// (project_id, provider, team_id, source_name), so a clean row can
+		// share it with a conflicting one; suppressing the GROUP would drop
+		// the clean row's legitimate edge -- a missing edge, the exact class
+		// this ticket exists to remove, reintroduced by the guard against
+		// fabricating one.
+		if edgeSuppressed == 1 {
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		// No ambiguity branch here on purpose. Ambiguity is a property of the

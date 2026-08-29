@@ -1201,3 +1201,52 @@ func TestChaos4542_ConflictsCountEverySourceRowInAGroup(t *testing.T) {
 		t.Errorf("two disagreeing ownership rows collapsed into one group must still count as two -- a representative names one of them and understates what was dropped; got:\n%s", output)
 	}
 }
+
+// TestChaos4542_CleanRowKeepsItsEdgeBesideAConflictingOne is the team-lead
+// review finding, and it is the class this whole ticket exists to remove: a
+// MISSING edge, reintroduced by the guard against fabricating one.
+//
+// The outer grouping is (project_id, provider, team_id, source_name), so a
+// CLEAN ownership row asserting (A, team, source) can share a group with a
+// conflicting row whose project_id also resolves A. Suppressing on a
+// group-level max() dropped the clean row's legitimate edge along with the
+// fabricated one -- the fix acquiring the very defect it was written against.
+//
+// Suppression has to be per row, expressed through per-row aggregates:
+// validity over clean rows only, the edge suppressed only when NO clean row
+// exists, and the conflict identities collected from conflicting rows only so
+// the ledger can never name the clean one.
+func TestChaos4542_CleanRowKeepsItsEdgeBesideAConflictingOne(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
+	// One result row for the shared group: a clean row exists (so
+	// edge_suppressed = 0), and the conflicting row's identity is still
+	// collected.
+	sharedGroup := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github",
+		uint8(0), []string{"own-ref-conflicting\x00KEY-B"}}
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", rows: [][]any{sharedGroup}},
+	}}
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	batch, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
+		Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
+	})
+	if err != nil {
+		t.Fatalf("NextProjectionBatch: %v", err)
+	}
+	if !hasRelationshipID(batch, "relationship:project_team:github:proj-a:team-x:native") {
+		t.Error("dropped an edge a CLEAN ownership row asserted, because a conflicting row shared its group -- failing closed is per row, and a group-level suppression turns the no-fabrication guard into a missing-edge bug")
+	}
+	// The conflicting row is still recorded, even though the edge survived:
+	// "was an ownership dropped" is a different question from "did this edge
+	// survive", and answering only the second hides the first.
+	if output := logged.String(); !strings.Contains(output, "suppressed_conflicting_identities=1") {
+		t.Errorf("the conflicting row went unrecorded because a clean row kept the edge alive; got:\n%s", output)
+	}
+}
