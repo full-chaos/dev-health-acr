@@ -1500,7 +1500,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// be tracked independently of the driver budget, not assumed to always
 	// have headroom).
 	if graphContext.Cohort != nil {
-		narrated, mintedClaims, narrationEvent := narrateCohortDriverJudgments(graphContext.Cohort, len(result.Drivers), len(result.ClaimedFacts), cohortSignalCitations)
+		narrated, mintedClaims, narrationEvent := narrateCohortDriverJudgments(graphContext.Cohort, result.Drivers, len(result.ClaimedFacts), cohortSignalCitations)
 		// codex R1 (CHAOS-4398 PR3b), team-lead ruling: every narration-
 		// minted claim must pass the SAME grounding check a model-authored
 		// claim gets from SynthesisDraft.ValidateAgainst -- which this

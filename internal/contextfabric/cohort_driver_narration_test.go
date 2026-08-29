@@ -165,7 +165,7 @@ func TestNarrateCohortDriverJudgments_EmitsAValidJudgmentCitingTheDriver(t *test
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
 	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
 
-	judgments, mintedClaims, event := narrateCohortDriverJudgments(ranked, 0, 0, citations)
+	judgments, mintedClaims, event := narrateCohortDriverJudgments(ranked, nil, 0, citations)
 	if event.Outcome != CohortDriverNarrationEmitted {
 		t.Fatalf("event.Outcome = %q, want %q", event.Outcome, CohortDriverNarrationEmitted)
 	}
@@ -245,7 +245,7 @@ func TestNarrateCohortDriverJudgments_SkipsMembersWithoutEvidence(t *testing.T) 
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
 	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
 
-	judgments, _, event := narrateCohortDriverJudgments(ranked, 0, 0, citations)
+	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations)
 	if len(judgments) != 0 {
 		t.Fatalf("judgments = %+v, want empty (no evidence to cite)", judgments)
 	}
@@ -269,7 +269,7 @@ func TestNarrateCohortDriverJudgments_BudgetExhausted(t *testing.T) {
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
 	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
 
-	judgments, _, event := narrateCohortDriverJudgments(ranked, 50, 0, citations) // synthesis alone used the whole budget
+	judgments, _, event := narrateCohortDriverJudgments(ranked, make([]DriverJudgment, 50), 0, citations) // synthesis alone used the whole budget
 	if len(judgments) != 0 {
 		t.Fatalf("judgments = %+v, want empty", judgments)
 	}
@@ -286,7 +286,7 @@ func TestNarrateCohortDriverJudgments_NoDriversAtAll(t *testing.T) {
 	t.Parallel()
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{rankTestMember("A")}}
 	ranked, _, citations := RankCohort(cohort, nil, deficiencyPrunedCoverage()) // zero signals available at all
-	judgments, _, event := narrateCohortDriverJudgments(ranked, 0, 0, citations)
+	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations)
 	if len(judgments) != 0 {
 		t.Fatalf("judgments = %+v, want empty", judgments)
 	}
@@ -294,8 +294,8 @@ func TestNarrateCohortDriverJudgments_NoDriversAtAll(t *testing.T) {
 		t.Fatalf("event.Outcome = %q, want %q", event.Outcome, CohortDriverNarrationNoDrivers)
 	}
 
-	if judgments, _, event := narrateCohortDriverJudgments(nil, 0, 0, nil); len(judgments) != 0 || event.Outcome != CohortDriverNarrationNoDrivers {
-		t.Fatalf("narrateCohortDriverJudgments(nil, 0, 0, nil) = (%v, %+v), want (empty, no_drivers)", judgments, event)
+	if judgments, _, event := narrateCohortDriverJudgments(nil, nil, 0, nil); len(judgments) != 0 || event.Outcome != CohortDriverNarrationNoDrivers {
+		t.Fatalf("narrateCohortDriverJudgments(nil, nil, 0, nil) = (%v, %+v), want (empty, no_drivers)", judgments, event)
 	}
 }
 
@@ -333,7 +333,7 @@ func TestNarrateCohortDriverJudgments_MaxLengthSubjectLabelProducesAValidJudgmen
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
 	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
 
-	judgments, _, event := narrateCohortDriverJudgments(ranked, 0, 0, citations)
+	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations)
 	if event.Outcome != CohortDriverNarrationEmitted || len(judgments) == 0 {
 		t.Fatalf("expected at least one narrated judgment, got event=%+v judgments=%v", event, judgments)
 	}
@@ -374,7 +374,7 @@ func TestNarrateCohortDriverJudgments_EpistemicStatusMatchesDerivation(t *testin
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
 	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
 
-	judgments, _, event := narrateCohortDriverJudgments(ranked, 0, 0, citations)
+	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations)
 	if event.Outcome != CohortDriverNarrationEmitted || len(judgments) == 0 {
 		t.Fatalf("expected at least one narrated judgment, got event=%+v judgments=%v", event, judgments)
 	}
@@ -389,5 +389,106 @@ func TestNarrateCohortDriverJudgments_EpistemicStatusMatchesDerivation(t *testin
 		if err := j.Validate(); err != nil {
 			t.Errorf("judgment %q .Validate() = %v, want nil -- the prescribed epistemic state must also be write-side valid", j.DriverID, err)
 		}
+	}
+}
+
+// TestNarrateCohortDriverJudgments_DeconflictsAGeneratedIDAlreadyTakenBySynthesis
+// is codex R3 finding 2 (P2, CHAOS-4448). cohortDriverJudgmentID mints
+// "cohort-driver-<rank>-<position>" from the member's rank alone -- a
+// namespace the synthesis model is nowhere forbidden to use, and a draft
+// carrying a driver_id like "cohort-driver-01-1" is entirely legal. The
+// composer appended its colliding ID anyway, and validateDrivers, which
+// enforces DriverID uniqueness across the WHOLE result.Drivers array,
+// then rejected the ENTIRE investigation -- a model's harmless choice of
+// identifier destroying an otherwise-valid answer.
+//
+// The fix must never resolve the clash by dropping the narrated driver
+// (that would silently lose a judgment the cohort earned), so this asserts
+// BOTH drivers survive with distinct IDs and the combined array validates.
+func TestNarrateCohortDriverJudgments_DeconflictsAGeneratedIDAlreadyTakenBySynthesis(t *testing.T) {
+	t.Parallel()
+	facts := []CanonicalFact{healthFact("A", "high"), investmentFact("A", balancedThemes(), 0)}
+	member := rankTestMember("A")
+	member.EvidenceRefIDs = []string{"evidence_team_a_roster"}
+	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
+	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
+
+	// Exactly the ID this composer would generate for rank 1, position 1.
+	collidingID := cohortDriverJudgmentID(ranked.Members[0], 0)
+	synthesisDriver := DriverJudgment{
+		DriverID:         collidingID,
+		Standing:         DriverContributing,
+		Category:         string(contractsv1.ContextFabricDriverCategoryNarrative),
+		Title:            "a synthesis-authored driver that happens to use the cohort namespace",
+		Summary:          "legal model output: nothing in the synthesis contract reserves the cohort-driver- prefix.",
+		AffectedSubjects: []SubjectRef{ranked.Members[0].Subject},
+		EvidenceRefIDs:   []string{"evidence_team_a_roster"},
+		Derivation:       DerivationModelExtracted,
+		EpistemicStatus:  EpistemicInferred,
+		Confidence:       0.5,
+		Current:          true,
+	}
+
+	judgments, _, event := narrateCohortDriverJudgments(ranked, []DriverJudgment{synthesisDriver}, 0, citations)
+	if event.Outcome != CohortDriverNarrationEmitted || len(judgments) == 0 {
+		t.Fatalf("expected narrated judgments, got event=%+v judgments=%v", event, judgments)
+	}
+
+	all := append([]DriverJudgment{synthesisDriver}, judgments...)
+	seen := make(map[string]int, len(all))
+	for _, j := range all {
+		seen[j.DriverID]++
+		if err := j.Validate(); err != nil {
+			t.Errorf("driver %q .Validate() = %v, want nil", j.DriverID, err)
+		}
+		if got := len(j.DriverID); got < contractsv1.ContextFabricModelMintedIDMinLength || got > contractsv1.ContextFabricModelMintedIDMaxLength {
+			t.Errorf("driver id %q length = %d, outside the contract's [%d,%d]", j.DriverID, got, contractsv1.ContextFabricModelMintedIDMinLength, contractsv1.ContextFabricModelMintedIDMaxLength)
+		}
+	}
+	for id, count := range seen {
+		if count > 1 {
+			t.Errorf("driver id %q appears %d times across synthesis+narration -- validateDrivers rejects the whole result for a duplicate", id, count)
+		}
+	}
+	if len(seen) != len(all) {
+		t.Fatalf("got %d distinct driver ids across %d drivers -- every driver must survive with its own id, none dropped", len(seen), len(all))
+	}
+	// The synthesis driver keeps the ID it authored; narration is what moves.
+	if judgments[0].DriverID == collidingID {
+		t.Errorf("narrated driver kept the colliding id %q -- narration must yield, never the model's own driver", collidingID)
+	}
+}
+
+// TestDeconflictCohortDriverJudgmentID_IsDeterministicAndNeverDrops pins the
+// deconfliction itself: same inputs always produce the same id (replay- and
+// reuse-stable, the same property cohortDriverClaimID's hashed scheme
+// carries), and a taken set that already contains the hashed candidate is
+// resolved rather than looped on forever.
+func TestDeconflictCohortDriverJudgmentID_IsDeterministicAndNeverDrops(t *testing.T) {
+	t.Parallel()
+	base := "cohort-driver-01-1"
+
+	if got := deconflictCohortDriverJudgmentID(base, map[string]struct{}{}); got != base {
+		t.Errorf("deconflict with nothing taken = %q, want the base id %q unchanged", got, base)
+	}
+
+	taken := map[string]struct{}{base: {}}
+	first := deconflictCohortDriverJudgmentID(base, taken)
+	if first == base {
+		t.Fatalf("deconflict returned the taken base id %q", base)
+	}
+	if again := deconflictCohortDriverJudgmentID(base, taken); again != first {
+		t.Errorf("deconflict is not deterministic: %q then %q for identical inputs", first, again)
+	}
+
+	// Saturate: base and its first candidate both taken -- must still yield
+	// a fresh, distinct id rather than spinning or returning a duplicate.
+	taken[first] = struct{}{}
+	second := deconflictCohortDriverJudgmentID(base, taken)
+	if second == base || second == first {
+		t.Fatalf("deconflict returned an already-taken id %q (base=%q first=%q)", second, base, first)
+	}
+	if got := len(second); got > contractsv1.ContextFabricModelMintedIDMaxLength {
+		t.Errorf("deconflicted id %q length = %d, over the %d bound", second, got, contractsv1.ContextFabricModelMintedIDMaxLength)
 	}
 }

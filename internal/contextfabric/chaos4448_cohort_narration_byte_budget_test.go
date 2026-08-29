@@ -54,7 +54,7 @@ func TestCohortDriverNarration_250MemberCohortStaysWithinByteBudget(t *testing.T
 
 	// synthesisDriverCount=0: give narration the full driver budget, the
 	// worst case for how many members/drivers this PR can mint for.
-	judgments, mintedClaims, event := narrateCohortDriverJudgments(ranked, 0, 0, citations)
+	judgments, mintedClaims, event := narrateCohortDriverJudgments(ranked, nil, 0, citations)
 	if event.Outcome != CohortDriverNarrationEmitted {
 		t.Fatalf("event.Outcome = %q, want %q", event.Outcome, CohortDriverNarrationEmitted)
 	}

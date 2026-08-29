@@ -1,8 +1,11 @@
 package contextfabric
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -131,12 +134,12 @@ var cohortSignalDisplayName = map[string]string{
 // one: a FUTURE signal path that introduces a null citation must also add
 // the Standing=withheld routing this comment describes, not assume
 // narrateCohortDriverJudgments already handles it.
-func narrateCohortDriverJudgments(cohort *Cohort, synthesisDriverCount int, synthesisClaimedFactCount int, citations cohortMemberSignalCitations) ([]DriverJudgment, []ClaimedFact, CohortDriverNarrationEvent) {
+func narrateCohortDriverJudgments(cohort *Cohort, synthesisDrivers []DriverJudgment, synthesisClaimedFactCount int, citations cohortMemberSignalCitations) ([]DriverJudgment, []ClaimedFact, CohortDriverNarrationEvent) {
 	if cohort == nil || !cohortHasAnyRankedDriver(cohort) {
 		return nil, nil, CohortDriverNarrationEvent{Outcome: CohortDriverNarrationNoDrivers}
 	}
 	membersToNarrate, driversPerMember := cohortDriverNarrationBudget(
-		contractsv1.ContextFabricDriversMaxCount, synthesisDriverCount,
+		contractsv1.ContextFabricDriversMaxCount, len(synthesisDrivers),
 		contractsv1.ContextFabricClaimedFactsMaxCount, synthesisClaimedFactCount,
 	)
 	if membersToNarrate == 0 {
@@ -152,6 +155,15 @@ func narrateCohortDriverJudgments(cohort *Cohort, synthesisDriverCount int, synt
 	indexByCanonicalID := make(map[string]int, len(cohort.Members))
 	for i, member := range cohort.Members {
 		indexByCanonicalID[member.Subject.CanonicalID] = i
+	}
+
+	// takenDriverIDs starts as every DriverID synthesis already produced,
+	// then grows with each id this composer assigns -- validateDrivers
+	// enforces uniqueness across the COMBINED result.Drivers array, so a
+	// generated id must clear both sets, not just its own.
+	takenDriverIDs := make(map[string]struct{}, len(synthesisDrivers)+membersToNarrate*driversPerMember)
+	for _, driver := range synthesisDrivers {
+		takenDriverIDs[driver.DriverID] = struct{}{}
 	}
 
 	var judgments []DriverJudgment
@@ -193,8 +205,10 @@ func narrateCohortDriverJudgments(cohort *Cohort, synthesisDriverCount int, synt
 				standing = DriverPrincipal
 				principalAssigned = true
 			}
+			driverID := deconflictCohortDriverJudgmentID(cohortDriverJudgmentID(*member, position), takenDriverIDs)
+			takenDriverIDs[driverID] = struct{}{}
 			judgments = append(judgments, DriverJudgment{
-				DriverID:         cohortDriverJudgmentID(*member, position),
+				DriverID:         driverID,
 				Standing:         standing,
 				Category:         string(category),
 				Title:            cohortDriverJudgmentTitle(*member, *driver),
@@ -316,6 +330,42 @@ func topDriverIndicesByWeightContributed(drivers []CohortMemberDriver, count int
 // entries included).
 func cohortDriverJudgmentID(member CohortMember, index int) string {
 	return fmt.Sprintf("cohort-driver-%02d-%d", member.AttentionRank, index+1)
+}
+
+// deconflictCohortDriverJudgmentID returns base, or a deterministic
+// variant of it when base is already taken.
+//
+// Codex R3 (CHAOS-4448): cohortDriverJudgmentID derives its id from the
+// member's AttentionRank alone, and NOTHING forbids the synthesis model
+// from authoring a driver_id in the same shape -- "cohort-driver-01-1" is
+// a legal model output. validateDrivers enforces DriverID uniqueness
+// across the whole result.Drivers array, so appending a colliding id
+// rejected the ENTIRE investigation over a harmless naming coincidence.
+// Dropping the narrated driver instead would be worse: a judgment the
+// cohort earned would vanish because the model picked a string.
+//
+// The suffix is a sha256 digest of the base id, the same hashed,
+// replay-stable scheme cohortDriverClaimID uses -- two passes over
+// identical input always produce the same deconflicted id, so a stored
+// result and a fresh run still agree. The attempt counter is part of the
+// digest INPUT and also appended verbatim past the first candidate, which
+// makes every candidate distinct by construction: with a finite taken set
+// the loop is guaranteed to terminate rather than spin on an unlucky
+// digest, so this can never silently drop a driver.
+func deconflictCohortDriverJudgmentID(base string, taken map[string]struct{}) string {
+	if _, clash := taken[base]; !clash {
+		return base
+	}
+	for attempt := 0; ; attempt++ {
+		digest := sha256.Sum256([]byte(base + "\x00" + strconv.Itoa(attempt)))
+		candidate := base + "-" + hex.EncodeToString(digest[:])[:8]
+		if attempt > 0 {
+			candidate += "-" + strconv.Itoa(attempt)
+		}
+		if _, clash := taken[candidate]; !clash {
+			return candidate
+		}
+	}
 }
 
 // cohortDriverJudgmentTitle/-Summary are the narration prose -- every
