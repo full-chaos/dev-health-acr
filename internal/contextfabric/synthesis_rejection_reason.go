@@ -65,14 +65,6 @@ const (
 	RejectionReasonFindingSubjectLabelMismatch SynthesisRejectionReason = "finding_subject_label_mismatch"
 	RejectionReasonFindingEvidenceUnknown      SynthesisRejectionReason = "finding_evidence_unknown"
 	RejectionReasonFindingClaimUngrounded      SynthesisRejectionReason = "finding_claim_ungrounded"
-
-	// RejectionReasonOutputUndecodable covers a model response that never
-	// became a SynthesisDraft at all (genkitruntime's output.toDomain()).
-	// It shares the same telemetry field because a consumer diagnosing a
-	// 422 needs "the model's JSON did not decode" and "the draft failed
-	// rule X" to be distinguishable, and both previously read
-	// `invalid_output`.
-	RejectionReasonOutputUndecodable SynthesisRejectionReason = "output_undecodable"
 )
 
 // synthesisRejectionReasons is the enumeration behind
@@ -104,7 +96,6 @@ var synthesisRejectionReasons = map[SynthesisRejectionReason]struct{}{
 	RejectionReasonFindingSubjectLabelMismatch: {},
 	RejectionReasonFindingEvidenceUnknown:      {},
 	RejectionReasonFindingClaimUngrounded:      {},
-	RejectionReasonOutputUndecodable:           {},
 }
 
 // ValidSynthesisRejectionReason reports whether reason is a member of the
@@ -128,6 +119,16 @@ type SynthesisRejection struct {
 
 func (e *SynthesisRejection) Error() string { return e.err.Error() }
 func (e *SynthesisRejection) Unwrap() error { return e.err }
+
+// NewSynthesisRejection attaches a closed-vocabulary reason to an error
+// produced OUTSIDE this package -- genkitruntime's own
+// synthesisOutput.toDomain enforces one required-field rule before
+// ValidateAgainst ever runs, and that rejection must name its rule on the
+// same telemetry field as every rule inside ValidateAgainst, or the
+// vocabulary would silently exclude the one check that happens first.
+func NewSynthesisRejection(reason SynthesisRejectionReason, err error) error {
+	return &SynthesisRejection{Reason: reason, err: err}
+}
 
 // rejectSynthesis builds the error a ValidateAgainst statement returns:
 // the identical formatted message it produced before CHAOS-4522, now

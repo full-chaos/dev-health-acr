@@ -780,14 +780,6 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		return contextfabric.SynthesisDraft{}, receipt, classifiedErr
 	}
 	draft, err := output.toDomain()
-	// CHAOS-4522: recorded HERE, at the branch that actually happened,
-	// rather than inferred afterwards from the shape of a zero-valued
-	// draft -- "assert the mechanism, not the outcome" (AGENTS.md
-	// verification rule 1). A model response that never decoded into a
-	// SynthesisDraft is a different defect from one that decoded and
-	// failed a validation rule, and both previously read as a bare
-	// `invalid_output`.
-	undecodable := err != nil
 	if err == nil {
 		// CHAOS-4355 follow-up (tolerance): this is the production
 		// ModelRuntime's OWN ValidateAgainst call -- the actual live 422
@@ -810,14 +802,14 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	if err != nil {
 		receipt.Outcome = "invalid_output"
 		primaryFailureClassification = receipt.Outcome
-		// CHAOS-4522: see undecodable's own comment above for why this
-		// reads a flag set at the branch rather than re-deriving one.
-		// factGroupMax is 0 on the undecodable path (no claims exist to
-		// measure a group for), which is correct rather than incidental.
-		rejectionReason = string(contextfabric.RejectionReasonOutputUndecodable)
-		if !undecodable {
-			rejectionReason = string(contextfabric.SynthesisRejectionReasonOf(err))
-		}
+		// CHAOS-4522: the reason is carried BY the error, attached at the
+		// statement that rejected -- never re-derived here from the shape
+		// of the resulting draft, which is a consequence of the rejecting
+		// branch and not an observation of it (AGENTS.md verification rule
+		// 1: assert the mechanism, not the outcome). toDomain's own
+		// required-field rejection carries its reason the same way, so
+		// both legs above are covered by this one read.
+		rejectionReason = string(contextfabric.SynthesisRejectionReasonOf(err))
 		factGroupMax = contextfabric.MaxCanonicalFactGroupSize(input.Facts.Facts, draft.ClaimedFacts)
 		if r.config.Fallback != nil {
 			fallback, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
@@ -1522,7 +1514,21 @@ func (o synthesisOutput) toDomain() (contextfabric.SynthesisDraft, error) {
 		// (Runtime.SynthesizeAnswer) needs it to diagnose whether any
 		// OTHER field also violates a bound (CHAOS-3784 F1), the same
 		// reason interpretationOutput.toDomain does this above.
-		return draft, errors.New("deterministic answer is required")
+		//
+		// CHAOS-4522: this is a VALIDATION failure, not a decode failure --
+		// the model's JSON decoded into synthesisOutput perfectly well, it
+		// just omitted a required field, and it is the very same rule
+		// SynthesisDraft.ValidateAgainst enforces one statement later. So
+		// it carries that rule's own reason rather than anything about
+		// decoding. Nothing in this path can actually fail to DECODE
+		// (genkit has already populated synthesisOutput by the time
+		// toDomain runs), which is why no "undecodable" reason exists in
+		// the vocabulary: a reason that no branch can ever emit is a claim
+		// the telemetry cannot back.
+		return draft, contextfabric.NewSynthesisRejection(
+			contextfabric.RejectionReasonDeterministicAnswerMissing,
+			errors.New("deterministic answer is required"),
+		)
 	}
 	return draft, nil
 }
