@@ -28,6 +28,10 @@
 #   ACR_TRIAL_CH_STORAGE       clickhouse data PVC size (default: 30Gi)
 #   ACR_TRIAL_CH_BACKUPS_STORAGE  clickhouse backups-staging PVC size (default: 5Gi)
 #   ACR_TRIAL_FALKOR_STORAGE   falkordb PVC size (default: 5Gi)
+#   ACR_TRIAL_DS_CPU_REQUEST   CPU request for each datastore pod (default:
+#                              250m). This is the per-lane scheduling cost --
+#                              lower it to fit more lane namespaces on one node
+#                              (CHAOS-4428).
 #   ACR_TRIAL_NODEPORT_BASE    first of the four consecutive NodePorts
 #                              (default: 30500). Must be a MULTIPLE OF 10 in
 #                              30000-30990: the 10-port stride is what keeps
@@ -114,6 +118,17 @@ validate_namespace
 # original guarantee intact rather than trading it away for the new one.
 # Default 30500 is the previous hardcoded value, so an existing caller that
 # sets nothing gets byte-identical ports.
+# CHAOS-4428 phase 2: the datastore CPU REQUEST is what actually caps how many
+# lane namespaces fit on one node -- not their usage. Measured on a 4 vCPU kiac
+# node: two full lanes reserved 4850m of 5000m allocatable (97%) and a third
+# would not schedule ("Insufficient cpu"), while real usage across both was 21%.
+# 250m x 3 datastores x N lanes is most of that. Default unchanged so the
+# standing acr-trial-data plane keeps its current reservation; a lane passes
+# something smaller.
+DS_CPU_REQUEST="${ACR_TRIAL_DS_CPU_REQUEST:-250m}"
+[[ "$DS_CPU_REQUEST" =~ ^[0-9]+m?$ ]] \
+  || die "ACR_TRIAL_DS_CPU_REQUEST=$DS_CPU_REQUEST is not a plain CPU quantity (e.g. 250m or 1)"
+
 NODEPORT_BASE="${ACR_TRIAL_NODEPORT_BASE:-30500}"
 # Strict FIVE-digit decimal, checked BEFORE any arithmetic (codex review round
 # 3, matching deploy/local/shard.sh:47-50's own guard). `^[0-9]+$` alone let an
@@ -183,6 +198,7 @@ render() {
     -e "s|__CH_HTTP_NODEPORT__|$CH_HTTP_NODEPORT|g" \
     -e "s|__CH_NATIVE_NODEPORT__|$CH_NATIVE_NODEPORT|g" \
     -e "s|__FALKOR_NODEPORT__|$FALKOR_NODEPORT|g" \
+    -e "s|__DS_CPU_REQUEST__|$DS_CPU_REQUEST|g" \
     "$TEMPLATE"
 }
 
