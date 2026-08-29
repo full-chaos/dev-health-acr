@@ -1099,3 +1099,52 @@ func TestChaos4542_CleanRowKeepsItsEdgeBesideAConflictingOne(t *testing.T) {
 		t.Errorf("the conflicting row went unrecorded because a clean row kept the edge alive; got:\n%s", output)
 	}
 }
+
+// TestChaos4542_ConflictTelemetryFiresOnTheCallThatSuppressed pins a Go trap
+// with a live test rather than a comment, because the comment version of this
+// lesson already failed once.
+//
+//	defer logConflictingIdentities(ctx, s.logger, orgID, ledger.conflictCount())
+//
+// Deferred call ARGUMENTS are evaluated where the `defer` statement runs, not
+// where the deferred call runs. Written that way, conflictCount() is read
+// BEFORE any query executes -- always 0, and a zero is suppressed -- so the
+// telemetry is permanently one call behind: the run that suppressed an edge
+// reports nothing, and the NEXT run reports the previous run's total.
+//
+// That was a real defect on the ambiguity line (CHAOS-4542 defect 7). It
+// survived because the test covering it made TWO NextProjectionBatch calls
+// and read the second as testing accumulation. It was -- and it was also the
+// only reason a number ever appeared. ONE call is the case an operator has,
+// and it is the case this test insists on.
+//
+// The ambiguity ledger has since been removed with the reconstructive census,
+// which would have retired that pin. The trap now lives here, so it stays
+// pinned by something that fails rather than something that explains.
+func TestChaos4542_ConflictTelemetryFiresOnTheCallThatSuppressed(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
+	suppressed := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github",
+		uint8(1), []string{"own-ref-1\x00KEY-B\x00team-x\x00native"}}
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", rows: [][]any{suppressed}},
+	}}
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+
+	// Exactly ONE call. A second would hide the defect this pins.
+	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
+		Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
+	}); err != nil {
+		t.Fatalf("NextProjectionBatch: %v", err)
+	}
+
+	if output := logged.String(); !strings.Contains(output, "suppressed_conflicting_identities=1") {
+		t.Fatalf("the call that suppressed an edge reported nothing -- an operator does not get a second tick to find out an ownership was dropped, and a deferred ledger.conflictCount() argument is read before any query runs; got:\n%s", output)
+	}
+}
