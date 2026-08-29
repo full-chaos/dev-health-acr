@@ -302,6 +302,25 @@ ensure_datastores() {
     fi
     ACR_TRIAL_DATA_NAMESPACE="$lane" ACR_TRIAL_NODEPORT_BASE="$base" \
       "$SCRIPT_DIR/trial-data.sh" restore-postgres "$pg_dump"
+    # The same repair problem on the ClickHouse side (codex R3). `RESTORE
+    # DATABASE` refuses a table that already exists, so replaying the backup
+    # over a database left behind by an interrupted seed -- or by a --backups
+    # pointed at a different snapshot -- fails, and the lane is stranded on the
+    # NEW postgres snapshot with the OLD clickhouse data and no re-run that can
+    # fix it. Postgres is cleared above by dropping its databases and roles;
+    # clear the clickhouse target the same way, and let RESTORE recreate it.
+    # Namespace-scoped by construction: this line is reachable only past the
+    # ownership guard at the top of this function, so it can never touch the
+    # standing acr-trial-data plane.
+    local ch_base ch_db
+    ch_base="$(basename "$ch_zip")"
+    ch_db="$(sed -E 's/^clickhouse-(.+)-[0-9]{8}-[0-9]{6}\.zip$/\1/' <<<"$ch_base")"
+    [[ -n "$ch_db" && "$ch_db" != "$ch_base" ]] \
+      || die "could not parse a clickhouse database name out of $ch_base (expected clickhouse-<dbname>-<timestamp>.zip)"
+    log "clearing clickhouse database '$ch_db' in '$lane' so the backup can replay"
+    kubectl -n "$lane" exec deploy/trial-clickhouse -- \
+      clickhouse-client -u ch --password "$PG_PASSWORD" \
+      --query "DROP DATABASE IF EXISTS \`$ch_db\` SYNC"
     ACR_TRIAL_DATA_NAMESPACE="$lane" ACR_TRIAL_NODEPORT_BASE="$base" \
       "$SCRIPT_DIR/trial-data.sh" restore-clickhouse "$ch_zip"
     # Only now, with both restores returned successfully, is the lane seeded.
