@@ -67,35 +67,49 @@ const (
 	RejectionReasonFindingClaimUngrounded      SynthesisRejectionReason = "finding_claim_ungrounded"
 )
 
-// synthesisRejectionReasons is the enumeration behind
-// ValidSynthesisRejectionReason. Kept as one list so a value added above
-// without being added here fails the closed-vocabulary test rather than
-// silently escaping the guarantee.
-var synthesisRejectionReasons = map[SynthesisRejectionReason]struct{}{
-	RejectionReasonUnclassified:                {},
-	RejectionReasonStatusInvalid:               {},
-	RejectionReasonDirectJudgmentMissing:       {},
-	RejectionReasonDeterministicAnswerMissing:  {},
-	RejectionReasonEvidenceUnknown:             {},
-	RejectionReasonClaimInvalid:                {},
-	RejectionReasonClaimRowsModelAuthored:      {},
-	RejectionReasonClaimIDDuplicate:            {},
-	RejectionReasonClaimSubjectOutOfScope:      {},
-	RejectionReasonClaimSubjectLabelMismatch:   {},
-	RejectionReasonClaimNoCanonicalFact:        {},
-	RejectionReasonClaimFieldUnobserved:        {},
-	RejectionReasonClaimValueContradicts:       {},
-	RejectionReasonDriverInvalid:               {},
-	RejectionReasonDriverSubjectOutOfScope:     {},
-	RejectionReasonDriverSubjectLabelMismatch:  {},
-	RejectionReasonDriverPathUnknown:           {},
-	RejectionReasonDriverEvidenceUnknown:       {},
-	RejectionReasonDriverClaimUngrounded:       {},
-	RejectionReasonFindingInvalid:              {},
-	RejectionReasonFindingSubjectOutOfScope:    {},
-	RejectionReasonFindingSubjectLabelMismatch: {},
-	RejectionReasonFindingEvidenceUnknown:      {},
-	RejectionReasonFindingClaimUngrounded:      {},
+// canonicalSynthesisRejectionReasons maps each vocabulary member to
+// ITSELF, and is the single enumeration behind both
+// ValidSynthesisRejectionReason and SynthesisRejectionReasonOf. A value
+// added to the constants above without being added here fails the
+// closed-vocabulary test rather than silently escaping the guarantee.
+//
+// Mapping a member to itself looks redundant and is not. Every VALUE in
+// this table is a package constant, so a lookup RETURNS a compile-time
+// constant rather than the caller's own input -- which is what makes
+// "nothing derived from model output ever reaches a log field" a property
+// the compiler and CodeQL can both see, instead of one that merely holds
+// because a membership check happens to run first (CodeQL go/log-injection,
+// severity error, raised on the decision line's rejection_reason field).
+// Validating a tainted value and then logging the tainted value is a real
+// distinction from validating it and logging the matched constant: the
+// former is correct only as long as the check and the use stay in sync,
+// and this codebase has already been bitten by exactly that shape of
+// coupling.
+var canonicalSynthesisRejectionReasons = map[SynthesisRejectionReason]SynthesisRejectionReason{
+	RejectionReasonUnclassified:                RejectionReasonUnclassified,
+	RejectionReasonStatusInvalid:               RejectionReasonStatusInvalid,
+	RejectionReasonDirectJudgmentMissing:       RejectionReasonDirectJudgmentMissing,
+	RejectionReasonDeterministicAnswerMissing:  RejectionReasonDeterministicAnswerMissing,
+	RejectionReasonEvidenceUnknown:             RejectionReasonEvidenceUnknown,
+	RejectionReasonClaimInvalid:                RejectionReasonClaimInvalid,
+	RejectionReasonClaimRowsModelAuthored:      RejectionReasonClaimRowsModelAuthored,
+	RejectionReasonClaimIDDuplicate:            RejectionReasonClaimIDDuplicate,
+	RejectionReasonClaimSubjectOutOfScope:      RejectionReasonClaimSubjectOutOfScope,
+	RejectionReasonClaimSubjectLabelMismatch:   RejectionReasonClaimSubjectLabelMismatch,
+	RejectionReasonClaimNoCanonicalFact:        RejectionReasonClaimNoCanonicalFact,
+	RejectionReasonClaimFieldUnobserved:        RejectionReasonClaimFieldUnobserved,
+	RejectionReasonClaimValueContradicts:       RejectionReasonClaimValueContradicts,
+	RejectionReasonDriverInvalid:               RejectionReasonDriverInvalid,
+	RejectionReasonDriverSubjectOutOfScope:     RejectionReasonDriverSubjectOutOfScope,
+	RejectionReasonDriverSubjectLabelMismatch:  RejectionReasonDriverSubjectLabelMismatch,
+	RejectionReasonDriverPathUnknown:           RejectionReasonDriverPathUnknown,
+	RejectionReasonDriverEvidenceUnknown:       RejectionReasonDriverEvidenceUnknown,
+	RejectionReasonDriverClaimUngrounded:       RejectionReasonDriverClaimUngrounded,
+	RejectionReasonFindingInvalid:              RejectionReasonFindingInvalid,
+	RejectionReasonFindingSubjectOutOfScope:    RejectionReasonFindingSubjectOutOfScope,
+	RejectionReasonFindingSubjectLabelMismatch: RejectionReasonFindingSubjectLabelMismatch,
+	RejectionReasonFindingEvidenceUnknown:      RejectionReasonFindingEvidenceUnknown,
+	RejectionReasonFindingClaimUngrounded:      RejectionReasonFindingClaimUngrounded,
 }
 
 // ValidSynthesisRejectionReason reports whether reason is a member of the
@@ -104,7 +118,7 @@ var synthesisRejectionReasons = map[SynthesisRejectionReason]struct{}{
 // emitted verbatim -- the same fail-closed posture every other
 // closed-vocabulary field in this package applies at its own boundary.
 func ValidSynthesisRejectionReason(reason SynthesisRejectionReason) bool {
-	_, ok := synthesisRejectionReasons[reason]
+	_, ok := canonicalSynthesisRejectionReasons[reason]
 	return ok
 }
 
@@ -177,8 +191,13 @@ func SynthesisFactGroupSizeOf(err error) int {
 // answer where "" is not.
 func SynthesisRejectionReasonOf(err error) SynthesisRejectionReason {
 	var rejection *SynthesisRejection
-	if errors.As(err, &rejection) && ValidSynthesisRejectionReason(rejection.Reason) {
-		return rejection.Reason
+	if errors.As(err, &rejection) {
+		// Returns the TABLE's constant, never rejection.Reason itself --
+		// see canonicalSynthesisRejectionReasons for why that distinction
+		// is load-bearing rather than cosmetic.
+		if canonical, ok := canonicalSynthesisRejectionReasons[rejection.Reason]; ok {
+			return canonical
+		}
 	}
 	return RejectionReasonUnclassified
 }
