@@ -435,16 +435,13 @@ func TestFallbackSuccessStillRecordsItsGroundingBasis(t *testing.T) {
 	}
 }
 
-// TestRequestIDCannotForgeALogLine pins the log-injection fix CodeQL
-// surfaced (go/log-injection, severity error, taint traced from
-// internal/api/read_decode.go's body decode to the decision-event line).
-//
-// RequestID is client-supplied and the v1 contract validates it by LENGTH
-// ONLY -- stringLengthBetween(r.RequestID, 8, 256) constrains nothing about
-// its characters -- so before this fix a caller could put a newline in it
-// and forge entire log lines in the decision-event stream. Both decision
-// functions have always logged it, so the vector predates CHAOS-4522; it
-// surfaced here because this ticket changed the synthesize call site.
+// TestRequestIDCannotForgeALogLine pins safeLogRequestID's sink-side
+// behaviour. It does NOT demonstrate a live vulnerability -- see that
+// function's doc comment: the request id reaching the logger has already
+// been sanitized by internal/api's request-id middleware and overwritten
+// from the sanitized context value by the Context Fabric route, so no
+// caller can actually deliver the input this test constructs. The test
+// exists so the sink-side guard cannot be removed or weakened silently.
 func TestRequestIDCannotForgeALogLine(t *testing.T) {
 	t.Parallel()
 	input := validSynthesisInput()

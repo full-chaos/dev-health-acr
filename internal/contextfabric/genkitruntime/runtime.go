@@ -1069,34 +1069,34 @@ func decisionOrgIDHash(orgID string) string {
 // assertion. Unconditionally logged at slog.LevelInfo: no new config knob
 // gates it, only the configured Logger's own handler level (Config.Logger's
 // doc comment).
-// safeLogRequestID renders a client-supplied request id for a log field.
+// safeLogRequestID is DEFENCE IN DEPTH at the log sink. It is not the
+// guard that makes this value safe, and an earlier version of this comment
+// wrongly claimed it was.
 //
-// RequestID arrives in the HTTP request body and the v1 contract validates
-// it by LENGTH ONLY (stringLengthBetween(r.RequestID, 8, 256),
-// validate_context_fabric_request.go) -- nothing constrains its characters.
-// A caller can therefore put a newline in it and forge whole log lines in
-// the decision-event stream: the exact log-injection CodeQL's
-// go/log-injection flags on these two functions, with the taint traced from
-// internal/api/read_decode.go's body decode.
+// The correction, because the false version shipped: the request id reaching
+// here is NOT client-controlled. internal/api/app.go's request-id middleware
+// strips CR/LF, rejects every other control character
+// (isSafeRequestIDHeaderValue), bounds the length, and falls back to a
+// server-minted id when any of that fails; observability.parseRequestID
+// additionally enforces a strict `req_` + 32-hex format. The Context Fabric
+// route then OVERWRITES the decoded body's RequestID with that sanitized
+// context value (context_fabric_routes.go: `request.RequestID =
+// RequestID(r.Context())`) BEFORE Validate() runs -- which is why the v1
+// contract validating RequestID by length alone is not the hole it looks
+// like in isolation. That middleware comment records a live repro of
+// "evil\nFAKE_LOG_LINE=injected" already being replaced.
 //
-// This is a REAL vector, not a scanner artifact, and it predates CHAOS-4522
-// -- both decision-event functions have always logged this value. It
-// surfaced here because CHAOS-4522 changed the synthesize call site, so the
-// alert landed on a changed line.
-//
-// Sanitizing at the SINK is deliberate. Tightening the contract validator
-// to reject control characters would be the deeper fix, but it changes what
-// the API accepts (input that validates today would start failing) and that
-// is a ratified contract decision, not a side effect of a defect fix --
-// filed separately. Every OTHER field on these lines is a count, a bool, or
-// a closed vocabulary, so this is the only value on either line that needs
-// it.
+// So CodeQL's go/log-injection alert on the decision line is a FALSE
+// POSITIVE: the sanitizer exists and is thorough, it simply is not one
+// CodeQL models as a barrier. This function does not clear the alert either
+// (verified: still `state=open` on the tip that added it), so it is kept
+// only because a sink-side guard costs nothing and protects any future
+// caller that reaches this logger without passing through that middleware --
+// never as evidence that the value was dangerous.
 //
 // Replacement, not rejection: a request id is a correlation handle, and
-// dropping the line or the field would destroy the correlation this
-// telemetry exists for. Anything outside printable ASCII becomes '?', so
-// the id stays recognizable and can never introduce a line break, a
-// terminal escape, or a NUL.
+// dropping the field would destroy the correlation this telemetry exists
+// for.
 func safeLogRequestID(requestID string) string {
 	if len(requestID) > 256 {
 		requestID = requestID[:256]
