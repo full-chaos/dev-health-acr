@@ -722,9 +722,23 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		receipt                      contextfabric.ModelExecutionReceipt
 		primaryFailureClassification string
 		grounding                    synthesisGroundingCounts
+		// CHAOS-4522: rejectionReason names WHICH rule rejected a draft,
+		// from the closed contextfabric.SynthesisRejectionReason
+		// vocabulary. Empty on every non-rejection path (success,
+		// fallback, transport failure), so the decision line carries the
+		// field only when there is a rejection to name.
+		rejectionReason string
+		// factGroupMax is the ambiguity groundClaim closed over -- see
+		// contextfabric.MaxCanonicalFactGroupSize. Reported on the same
+		// line as the reason because "claim_field_unobserved with
+		// fact_group_max=17" and "claim_field_unobserved with
+		// fact_group_max=1" are different defects: the first is a
+		// multi-fact grounding problem, the second is a model claiming a
+		// field that genuinely does not exist.
+		factGroupMax int
 	)
 	defer func() {
-		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding)
+		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupMax)
 	}()
 
 	started := r.now().UTC()
@@ -788,6 +802,16 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	if err != nil {
 		receipt.Outcome = "invalid_output"
 		primaryFailureClassification = receipt.Outcome
+		// CHAOS-4522: a draft that never decoded is a DIFFERENT defect
+		// from one that decoded and failed a rule, and both previously
+		// read as a bare `invalid_output`. draft is the zero value on the
+		// toDomain() path, so MaxCanonicalFactGroupSize is 0 there --
+		// which is itself the distinguishing signal.
+		rejectionReason = string(contextfabric.SynthesisRejectionReasonOf(err))
+		if errors.Is(err, contextfabric.ErrModelOutput) && len(draft.ClaimedFacts) == 0 && draft.Status == "" {
+			rejectionReason = string(contextfabric.RejectionReasonOutputUndecodable)
+		}
+		factGroupMax = contextfabric.MaxCanonicalFactGroupSize(input.Facts.Facts, draft.ClaimedFacts)
 		if r.config.Fallback != nil {
 			fallback, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
 			if fallbackErr == nil {
@@ -1018,8 +1042,8 @@ func groundingCountsFrom(draft contextfabric.SynthesisDraft) synthesisGroundingC
 // counterpart (H7/H8). See logInterpretDecision's doc comment for the
 // corpus-safety and log-level-gating rationale, which applies identically
 // here.
-func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts) {
-	r.config.Logger.InfoContext(ctx, decisionEventMessage,
+func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupMax int) {
+	fields := []any{
 		"request_id", requestID,
 		"org_id_hash", decisionOrgIDHash(orgID),
 		"operation", string(receipt.Operation),
@@ -1031,7 +1055,16 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 		"findings", grounding.Findings,
 		"claims", grounding.Claims,
 		"evidence_refs", grounding.EvidenceRefs,
-	)
+	}
+	// CHAOS-4522: appended, never unconditional, so a successful or
+	// transport-failed call's line stays byte-identical to its pre-4522
+	// shape and only a rejection carries the two new fields. Both values
+	// are closed/bounded -- a vocabulary member and a count -- so the
+	// corpus-safety guarantee in this function's doc comment is unchanged.
+	if rejectionReason != "" {
+		fields = append(fields, "rejection_reason", rejectionReason, "fact_group_max", factGroupMax)
+	}
+	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
 }
 
 func boundedJSON(value any, maximum int) ([]byte, error) {

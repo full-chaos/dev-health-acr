@@ -416,6 +416,22 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 			fields = append(fields, "claim_index", violation.ClaimIndex)
 		}
 	}
+	// CHAOS-4522: violated_bound above covers only the SUBSET of synthesis
+	// rejections attributable to a contracts/v1 model-facing bound. Every
+	// business-rule and grounding rejection -- the majority, and the whole
+	// class this ticket was filed on -- carried no name at all, so a live
+	// 422 said "synthesis_rejected" and nothing more, and diagnosing it
+	// required re-running the server with instrumentation added after the
+	// fact. rejection_reason names the exact ValidateAgainst statement from
+	// a CLOSED vocabulary (contextfabric.SynthesisRejectionReason); it is
+	// as content-safe as failure_classification, since every value is a
+	// fixed identifier chosen at the rejecting statement, never model
+	// output. Emitted only for a rejection error, so an unrelated failure
+	// never carries a meaningless "unclassified".
+	var rejection *contextfabric.SynthesisRejection
+	if errors.As(err, &rejection) {
+		fields = append(fields, "rejection_reason", string(contextfabric.SynthesisRejectionReasonOf(err)))
+	}
 	a.logger.Log(context.WithoutCancel(r.Context()), level, "context fabric investigation failed", fields...)
 }
 
@@ -449,6 +465,17 @@ func (a *App) writeContextFabricRejectionError(w http.ResponseWriter, r *http.Re
 	var details map[string]any
 	if errors.As(err, &violation) {
 		details = map[string]any{"violated_bound": violation.Bound}
+	}
+	// CHAOS-4522: the closed-vocabulary reason travels to the caller too,
+	// beside violated_bound, so a consumer holding only the 422 body can
+	// still say WHICH rule rejected -- the same reason violated_bound is
+	// disclosed. Both may be present; neither implies the other.
+	var rejection *contextfabric.SynthesisRejection
+	if errors.As(err, &rejection) {
+		if details == nil {
+			details = map[string]any{}
+		}
+		details["rejection_reason"] = string(contextfabric.SynthesisRejectionReasonOf(err))
 	}
 	a.writeContextFabricFailure(w, r, err, classification, http.StatusUnprocessableEntity, code, message, true, details)
 }

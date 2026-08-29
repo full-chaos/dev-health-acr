@@ -204,15 +204,12 @@ func diagnoseSynthesisDraftBound(d SynthesisDraft, input SynthesisInput) (bound 
 		if err := requireBoundLabel("claimed fact", claim.Subject, canonicalLabels); err != nil {
 			return "", false
 		}
-		canonical, exists := lookupCanonicalFact(input.Facts.Facts, claim.Kind, claim.Subject)
-		if !exists {
-			return "", false
-		}
-		observed, present := canonical.Fields[claim.Field]
-		if !present {
-			return "", false
-		}
-		if !factValueEqualsScalar(observed, claim.Value) {
+		// Mirrors ValidateAgainst's CHAOS-4522 grounding closure: one
+		// groundClaim call standing where the three first-match-wins
+		// statements used to be. None of the three outcomes is a named
+		// bound, so every non-grounded outcome returns ("", false)
+		// exactly as all three predecessors did.
+		if _, outcome := groundClaim(input.Facts.Facts, claim); outcome != claimGrounded {
 			return "", false
 		}
 	}
