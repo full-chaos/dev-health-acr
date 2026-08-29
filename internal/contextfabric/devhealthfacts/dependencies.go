@@ -83,7 +83,8 @@ WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_w
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: QueryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	state, emptyReason := currentAxisReadState(len(facts))
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }
 
 // RequiredChildrenProvider implements contextfabric.FactProvider for
@@ -144,5 +145,6 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item required children", scanErr)
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: QueryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	state, emptyReason := currentAxisReadState(len(facts))
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
 }

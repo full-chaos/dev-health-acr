@@ -237,6 +237,15 @@ func TestProvidersFailClosedOnAMalformedHistoricalContext(t *testing.T) {
 
 // TestProvidersAllowCurrentTimeAxis is the over-blocking regression guard
 // for H6: axis=current must still reach ClickHouse normally.
+//
+// CHAOS-4521 narrowed what it asserts about the resulting STATE. The
+// invariant this guard exists for is "the current axis is not refused" --
+// the query reaches ClickHouse and the result is not one of the refusal
+// states resolveTimeBound mints (not_applicable). It never was "an empty
+// read reports available"; that was incidental, and pinning it here made
+// this guard fail for a change that strengthens exactly the honesty H6
+// was about. The zero-row state itself is pinned by
+// TestCurrentAxisWithNoRowsIsNoDataNotAvailable below.
 func TestProvidersAllowCurrentTimeAxis(t *testing.T) {
 	t.Parallel()
 	for _, tc := range timeAxisCases() {
@@ -252,8 +261,8 @@ func TestProvidersAllowCurrentTimeAxis(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadFacts() error = %v", err)
 			}
-			if result.State != contextfabric.SourceAvailable {
-				t.Fatalf("result.State = %q, want %q", result.State, contextfabric.SourceAvailable)
+			if result.State == contextfabric.SourceNotApplicable {
+				t.Fatalf("result.State = %q: the current axis must never be refused", result.State)
 			}
 			if len(client.queries) == 0 {
 				t.Fatalf("client.queries is empty, want a current-time query to reach ClickHouse")
@@ -328,11 +337,25 @@ func TestBoundedHistoricalQueryWithNoRowsReportsOutOfRetention(t *testing.T) {
 	}
 }
 
-// TestCurrentAxisWithNoRowsStaysAvailable is the over-blocking guard for
-// F8:zero rows on the CURRENT axis has always meant an ordinary empty read,
-// and retention is not the question there. Reporting no_data for it would
-// change long-standing behavior for every current-axis investigation.
-func TestCurrentAxisWithNoRowsStaysAvailable(t *testing.T) {
+// TestCurrentAxisWithNoRowsIsNoDataNotAvailable REPLACES
+// TestCurrentAxisWithNoRowsStaysAvailable, and reverses its verdict on
+// purpose (CHAOS-4521, Run J wall A).
+//
+// That test pinned "zero rows on the CURRENT axis stays available",
+// reasoning that retention is not the question there and that no_data
+// "would change long-standing behavior for every current-axis
+// investigation". The behavior change is the point: the long-standing
+// behavior made a live failure unreadable. A committed Linear project
+// subject produced SIX capabilities reporting `available` over an EMPTY
+// canonical fact bundle, so the finished answer asserted its sources had
+// contributed while claiming nothing -- see timebound.go's retentionState
+// doc comment for the executed evidence.
+//
+// What F8 actually needed survives, and is asserted here: the current axis
+// is still not refused (the query reaches ClickHouse), and a current-axis
+// zero is still DISTINGUISHABLE from a retention zero -- by its reason,
+// which must be the plain-absence reason and never the retention one.
+func TestCurrentAxisWithNoRowsIsNoDataNotAvailable(t *testing.T) {
 	t.Parallel()
 	for _, tc := range timeAxisCases() {
 		t.Run(tc.name, func(t *testing.T) {
@@ -344,8 +367,17 @@ func TestCurrentAxisWithNoRowsStaysAvailable(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadFacts() error = %v", err)
 			}
-			if result.State != contextfabric.SourceAvailable {
-				t.Fatalf("result.State = %q, want %q: an empty current-axis read is not a retention question", result.State, contextfabric.SourceAvailable)
+			if len(client.queries) == 0 {
+				t.Fatalf("client.queries is empty, want the current-axis read to still reach ClickHouse")
+			}
+			if result.State != contextfabric.SourceNoData {
+				t.Fatalf("result.State = %q, want %q: a source reached and holding nothing must not claim it answered", result.State, contextfabric.SourceNoData)
+			}
+			if strings.Contains(result.Reason, "predate the retained corpus") {
+				t.Fatalf("result.Reason = %q: an empty current-axis read is not a retention question", result.Reason)
+			}
+			if !strings.Contains(result.Reason, "held no rows for the requested subjects") {
+				t.Fatalf("result.Reason = %q, want it to name the plain absence", result.Reason)
 			}
 		})
 	}
