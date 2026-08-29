@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"log/slog"
 	"strings"
 	"testing"
@@ -973,5 +974,65 @@ func TestChaos4542_AmbiguityTelemetryFiresOnASingleCall(t *testing.T) {
 
 	if output := logged.String(); !strings.Contains(output, "omitted_ambiguous_project_keys=1") {
 		t.Fatalf("ONE call that omitted an ambiguous key must report it in that same call -- an operator does not get a second tick to find out an edge was dropped; got:\n%s", output)
+	}
+}
+
+// TestChaos4542_TableReadFailureLogsTheClickHouseCode closes a diagnosability
+// defect this ticket ran into head-first.
+//
+// tableReadError deliberately reports a CLOSED classification -- "context
+// fabric dependency unavailable: read <table>" -- and deliberately keeps the
+// cause inspectable through Unwrap rather than flattening driver text into a
+// message. Both halves are right, and together they left a gap: nothing ever
+// LOOKED at the preserved cause, so an operator (and this lane, for two
+// rounds) saw a failure with no code, no exception class, and no way to tell a
+// memory limit from a timeout from a syntax error.
+//
+// A wrapper that classifies correctly and reports nothing actionable is not
+// safe, it is silent -- the same "missing is not healthy" line this wave keeps
+// enforcing, applied to error handling.
+//
+// The log line is CLOSED too: ClickHouse's numeric code and exception class
+// name, plus the table label this package authored. Never the SQL, never a
+// bound literal, never a row value, never the driver's Message -- which is
+// where ClickHouse puts query text and data.
+func TestChaos4542_TableReadFailureLogsTheClickHouseCode(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", err: &clickhousedriver.Exception{
+			Code: 241, Name: "DB::Exception",
+			Message: "Memory limit (total) exceeded: would use 9.31 GiB, SELECT o.project_id, o.team_id FROM ... WHERE org_id = 'secret-org'",
+		}},
+	}}
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelError})))
+
+	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
+	}); err == nil {
+		t.Fatal("expected the read to fail")
+	}
+
+	output := logged.String()
+	for _, want := range []string{
+		"clickhouse_exception_code=241",
+		"DB::Exception",
+		"team_project_ownership",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("log is missing %q -- a dependency failure that names no code cannot be told apart from any other; got:\n%s", want, output)
+		}
+	}
+	// The driver's Message carries query text and bound literals. It must
+	// never reach a log line, which is the reason the wrapper bounds the
+	// message in the first place.
+	for _, forbidden := range []string{"SELECT", "secret-org", "Memory limit", "9.31 GiB"} {
+		if strings.Contains(output, forbidden) {
+			t.Errorf("log leaked driver text %q -- the code and class are the whole budget; got:\n%s", forbidden, output)
+		}
 	}
 }

@@ -208,6 +208,7 @@ func (s *ClickHouseProjectionSource) plan() sourcePlan {
 		version: ClickHouseSourceVersion,
 		tables:  entityTables,
 		now:     s.now,
+		logger:  s.logger,
 		seed: func(orgID string) []candidate {
 			// A fixed anchor, not the wall clock: the organization candidate
 			// must sort identically across replays of the same underlying

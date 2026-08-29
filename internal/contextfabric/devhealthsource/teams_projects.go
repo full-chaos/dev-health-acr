@@ -763,6 +763,7 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		source:         TeamsProjectsSourceName,
 		version:        TeamsProjectsSourceVersion,
 		tables:         teamsProjectsTables(ledger, presence, teamAuth),
+		logger:         s.logger,
 		now:            s.now,
 		recordConsumed: s.recordConsumed(checkpoint.Cursor),
 		dropConsumed:   s.forgetConsumed,
