@@ -300,6 +300,60 @@ check_contains "the ACR image is loaded on the default path" \
   "dev-health-acr:dev" "$load_argv"
 
 # ---------------------------------------------------------------------------
+# [R3-4] Check the whole candidate NodePort range
+#
+# trial-data.sh derives FOUR consecutive NodePorts from the base, but a slot was
+# declared free by comparing the base against each Service's FIRST port only. A
+# Service holding base+1..base+3 -- or publishing the base as a later port --
+# was invisible, so the resolver handed out an occupied range and
+# `trial-data.sh apply` died on a NodePort collision.
+#
+# The fixtures fill every slot's base port so the walk order cannot decide the
+# outcome: exactly one slot is left, and whether it is accepted is the property
+# under test rather than an artefact of where the hash started.
+# ---------------------------------------------------------------------------
+: >"$tmp/svc-all-but-one"
+for slot in $(seq 0 99); do
+  base=$(( 30000 + slot * 10 ))
+  [[ "$base" = "30260" ]] && continue
+  printf 'busy-%s %s first\n' "$slot" "$base" >>"$tmp/svc-all-but-one"
+done
+# The one open slot, occupied at base+2 by a LATER port of some other Service --
+# invisible to the superseded first-port-only query.
+cp "$tmp/svc-all-but-one" "$tmp/svc-later-port-collision"
+printf 'other-ns 30262 later\n' >>"$tmp/svc-later-port-collision"
+
+scenario '[R3-4] a slot whose base+2 is taken is not handed out'
+export KFAKE_CLUSTER_EXISTS=1 KFAKE_NODE_IMAGES="$tmp/node-images-full" \
+       KFAKE_SVC_TABLE="$tmp/svc-later-port-collision" \
+       KFAKE_CREATE_NS_RC=0 KFAKE_TRIALDATA_FAIL_ON=apply
+run_lane up lanefake-ports
+check_absent "the resolver does not select a base whose range is occupied" \
+  "nodeport base: 30260" "$LAST_OUT"
+check_contains "an exhausted range fails loudly instead of colliding later" \
+  "no free NodePort base" "$LAST_OUT"
+
+# Regression guard: a genuinely free slot is still selected. Fails if the range
+# check degrades into rejecting everything.
+scenario '[R3-4] a genuinely free slot is still selected'
+export KFAKE_CLUSTER_EXISTS=1 KFAKE_NODE_IMAGES="$tmp/node-images-full" \
+       KFAKE_SVC_TABLE="$tmp/svc-all-but-one" \
+       KFAKE_CREATE_NS_RC=0 KFAKE_TRIALDATA_FAIL_ON=apply
+run_lane up lanefake-ports
+check_contains "the one free slot is selected" "nodeport base: 30260" "$LAST_OUT"
+
+# The R1 rule this must not break: a lane that already published a base keeps
+# it, because a live Service's nodePort is not freely mutable and the idempotent
+# re-run would otherwise fail.
+scenario '[R3-4] an existing lane keeps the base it already published'
+export KFAKE_CLUSTER_EXISTS=1 KFAKE_NODE_IMAGES="$tmp/node-images-full" \
+       KFAKE_SVC_TABLE="$tmp/svc-later-port-collision" KFAKE_LANE_PG_NODEPORT=30500 \
+       KFAKE_CREATE_NS_RC=0 KFAKE_TRIALDATA_FAIL_ON=apply
+run_lane up lanefake-ports
+check_contains "the published base is reused even though the cluster is full" \
+  "nodeport base: 30500" "$LAST_OUT"
+
+# ---------------------------------------------------------------------------
 if (( failures > 0 )); then
   printf '\n%d check(s) FAILED\n' "$failures"
   exit 1

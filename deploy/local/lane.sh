@@ -109,8 +109,15 @@ validate_lane() {
 # walk forward to the first free slot, skipping any base already held by
 # ANOTHER namespace. Deterministic for a given cluster state, and a lane that
 # already owns a base keeps it.
+# A base owns FOUR consecutive NodePorts (trial-data.sh: base, +1, +2, +3), so
+# the slot is free only when none of the four is published anywhere.
+nodeport_range_is_free() {
+  local base="$1" taken="$2"
+  printf '%s\n' "$taken" | awk -v b="$base" '$1 ~ /^[0-9]+$/ && $1 >= b && $1 <= b + 3 { exit 1 }'
+}
+
 lane_nodeport_base() {
-  local name="$1" lane_ns="$1" digest start slot base owner existing
+  local name="$1" lane_ns="$1" digest start slot base taken existing
   # An EXISTING lane keeps the base it already published. Without this, a lane
   # whose hash slot differs from the base it was originally given (because the
   # hash slot was taken at the time, or the base was passed explicitly) would be
@@ -123,13 +130,21 @@ lane_nodeport_base() {
     printf '%d' "$existing"
     return 0
   fi
+  # EVERY nodePort of EVERY Service, not just each Service's first (codex R3).
+  # The old query compared the candidate base against .spec.ports[0].nodePort
+  # only, so a Service holding base+1..base+3, or publishing the base as a later
+  # port, was invisible -- the resolver handed out an occupied range and
+  # `trial-data.sh apply` died on a NodePort collision instead. Collect the lot
+  # once, then reject a base if any of its four ports is taken. A lane's own
+  # ports never block it, so a partially created lane can still re-run onto its
+  # own range.
+  taken="$(kubectl get svc -A -o go-template='{{range .items}}{{$ns := .metadata.namespace}}{{range .spec.ports}}{{if .nodePort}}{{$ns}} {{.nodePort}}{{"\n"}}{{end}}{{end}}{{end}}' 2>/dev/null \
+    | awk -v self="$lane_ns" '$1 != self { print $2 }' || true)"
   digest="$(printf '%s' "$name" | cksum | awk '{print $1}')"
   start=$(( digest % 100 ))
   for (( slot = 0; slot < 100; slot++ )); do
     base=$(( 30000 + ((start + slot) % 100) * 10 ))
-    # Who, if anyone, already publishes this NodePort?
-    owner="$(kubectl get svc -A -o jsonpath="{range .items[?(@.spec.ports[0].nodePort==${base})]}{.metadata.namespace}{'\n'}{end}" 2>/dev/null | head -1)"
-    if [[ -z "$owner" || "$owner" == "$lane_ns" ]]; then
+    if nodeport_range_is_free "$base" "$taken"; then
       printf '%d' "$base"
       return 0
     fi
