@@ -120,7 +120,22 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // stale v6 marker never revisits an already-committed team row (its own
 // `teams.updated_at` did not change), so only a full rebuild replaces the
 // wildcard with the real scope everywhere it was already projected.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v7"
+//
+// v8 (CHAOS-4542): queryProjectTeams (teams_projects_edges.go) now resolves
+// team<->project ownership on PROJECT IDENTITY -- project_id, with the
+// project_key match kept as a second arm -- instead of on project_key
+// alone. CHAOS-4530 nulls project_key on the UUID-keyed ownership rows and
+// leaves a real Linear project's projects.project_key nil by design, so the
+// old key-only join matches NOTHING for Linear the moment 4530 deploys.
+// Same deliberate-rebuild discipline as v2-v7, and for the sharpest reason
+// yet: the OLD edges are not merely stale, they are the only edges an
+// already-projected organization has, and incremental catch-up under a
+// stale v7 marker never revisits an already-committed ownership interval
+// (team_project_ownership.updated_at does not move just because this
+// producer's join did). Without this bump the fix would land, deploy, and
+// change nothing for every organization already projected -- the exact
+// silent no-op the v3 entry above exists to remember.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v8"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.

@@ -408,6 +408,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"team authorization is refreshed by revoking the last open repository", "30000000-0000-4000-8000-00000000000c", subTeamAuthorizationRefreshedByRevokingLastOpenRepository},
 		{"team authorization ownership join is scoped to one organization", "30000000-0000-4000-8000-00000000000b", subTeamAuthorizationOwnershipJoinScopedToOneOrganization},
 		{"two id-space ownership rows for one project yield exactly one edge", "30000000-0000-4000-8000-00000000000d", subTwoIDSpaceRowsYieldExactlyOneEdge},
+		{"empty-key projects each keep their own edge", "30000000-0000-4000-8000-00000000000e", subEmptyKeyProjectsEachKeepTheirOwnEdge},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -968,5 +969,54 @@ func subTwoIDSpaceRowsYieldExactlyOneEdge(t *testing.T, ctx context.Context, fix
 	// key-shaped row carried.
 	if hasRelationship(batch, "relationship:project_team:github:"+projectKey+":TEAM-GITHUB:native") {
 		t.Errorf("emitted an edge keyed on the raw project_key %q rather than the resolved projects.id", projectKey)
+	}
+}
+
+// subEmptyKeyProjectsEachKeepTheirOwnEdge is the shape every other fixture
+// in this file is missing, and the reason a chain of four defects reached
+// live data before anyone noticed (CHAOS-4542, P1-1).
+//
+// Every project seeded above is given a project_key. Real Linear projects
+// have NONE -- projects.project_key is nil by design, and CHAOS-4530 nulls
+// it on the ownership row too, leaving project_id carrying projects.id. So
+// the entire production shape this producer exists to serve appears in no
+// test here, and both the ambiguity guard and the identity join were free
+// to be wrong about it while thirteen subtests stayed green.
+//
+// What was wrong: the shared expansion computed key_resolution_count at
+// PROJECT grain and carried it on every scope row, so a UUID match -- which
+// is unambiguous by construction, projects.id being unique -- inherited
+// "how many empty-key projects does this org have". Two is already enough
+// to trip a `> 1` guard; the org this was measured against had seventeen.
+// Both edges below were omitted as ambiguous, and the omission logged a
+// project_key of "" for a match that never consulted a key at all.
+//
+// TWO projects, not one, is the whole point: with one, an empty-key
+// partition of size one passes the guard and the fixture proves nothing.
+func subEmptyKeyProjectsEachKeepTheirOwnEdge(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	const teamID = "TEAM-LINEAR"
+	projectIDs := []string{
+		"6241316a-85be-42ce-b243-8e41f2b18c8d",
+		"7c1f0b52-0d33-4a7e-9f21-1b6a5d0e4c77",
+	}
+	mustExec(t, ctx, fixture.direct, `INSERT INTO teams VALUES (?, ?, '', ?, ?, 'linear', ?, [], 1)`,
+		teamID, teamID+" name", ownershipLaterAssertion, fixture.orgID, teamID)
+	for _, projectID := range projectIDs {
+		// NULL project_key on BOTH rows: the real Linear shape after
+		// CHAOS-4530, not an empty string standing in for it.
+		mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'linear', NULL, ?, 1, 'started', '', ?)`,
+			projectID, fixture.orgID, projectID+" name", ownershipLaterAssertion)
+		mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'linear', ?, ?, NULL, 'native', ?, NULL, ?)`,
+			fixture.orgID, teamID, projectID, ownershipFirstSeen, ownershipLaterAssertion)
+	}
+
+	batch := fixture.project(t, ctx)
+	assertUniqueRelationshipIDs(t, batch)
+
+	for _, projectID := range projectIDs {
+		wanted := "relationship:project_team:linear:" + projectID + ":" + teamID + ":native"
+		if !hasRelationship(batch, wanted) {
+			t.Errorf("relationship %q missing -- a UUID match is unambiguous by construction, so no empty-key partition may suppress it; this is what CHAOS-4530 makes the ONLY shape Linear ownership has", wanted)
+		}
 	}
 }

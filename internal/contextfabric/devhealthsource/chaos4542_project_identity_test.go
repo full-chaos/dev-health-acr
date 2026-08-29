@@ -110,3 +110,29 @@ func TestChaos4542_TheProducerConsumesTheSharedIdentityHelpers(t *testing.T) {
 		t.Errorf("the two ownership arms are not unioned at row level (want the identity expansion's union plus the arm union)\n%s", statement)
 	}
 }
+
+// The checkpoint marker MUST move with the join (P1-2).
+//
+// projectionrun checkpoints are keyed (org_id, source) and compared per
+// source, and incremental catch-up under an unchanged marker never revisits
+// an already-committed ownership interval -- team_project_ownership's own
+// updated_at does not move just because this producer's join did. So for an
+// organization already projected under v7 the identity fix would deploy and
+// change nothing at all: the edges it holds are the OLD key-only edges,
+// which after CHAOS-4530 are the only edges it will ever have.
+//
+// Pinned as literals on purpose. Every other guard in this file reads the
+// producer's own output and would stay green with the marker left at v7 --
+// a silent no-op is exactly what this class of bug looks like, and the v3
+// entry in TeamsProjectsSourceVersion's doc comment records the last time
+// two identity changes shipped under a stale marker unnoticed.
+func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
+	t.Parallel()
+	const deployedBefore = "devhealthsource.teams_projects.v7"
+	if TeamsProjectsSourceVersion == deployedBefore {
+		t.Fatalf("TeamsProjectsSourceVersion = %q: unchanged from the value already in every projected organization's checkpoint row, so this fix is a no-op for all of them", TeamsProjectsSourceVersion)
+	}
+	if want := "devhealthsource.teams_projects.v8"; TeamsProjectsSourceVersion != want {
+		t.Fatalf("TeamsProjectsSourceVersion = %q, want %q -- changing this constant is a deliberate full-rebuild decision, so update this test with the reason in the constant's doc comment", TeamsProjectsSourceVersion, want)
+	}
+}
