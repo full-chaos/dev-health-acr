@@ -307,3 +307,67 @@ func chaos4386TerminalFields(result contractsv1.ContextFabricInvestigationResult
 	}
 	return string(result.Status), len(result.ClaimedFacts), rows, chaos4386TerminalReason(result)
 }
+
+// chaos4525CohortScoredMemberCount counts the members of result's delivered
+// cohort that actually carry an EXPLANATION -- Outcome qualified or
+// provisional, which is exactly and only when RankCohort populates Score,
+// RankingBasis and Drivers (cohort_ranking.go:419).
+//
+// This predicate was RankingComputed until codex review R4 (P1, confirmed
+// against source). That was wrong, and wrong in the direction that
+// false-greens a bar: cohort_ranking.go:277 sets RankingComputed = true for
+// EVERY member the moment a ranking pass runs, while lines 403-411 assign
+// Outcome not_applicable when availableWeight == 0 and insufficient_evidence
+// when availableWeight < 50 || availableCount < 2 -- and line 419 gives those
+// two members no Score, no RankingBasis and no Drivers at all. So
+// "RankingComputed" means "ranking executed", never "this member was
+// explained", and a cohort of entirely insufficient_evidence members would
+// have counted as a delivered answer.
+//
+// Not hypothetical: Run J (CHAOS-4450) observed exactly this shape on live
+// data -- outcome_counts={"insufficient_evidence":2,"provisional":1}, two of
+// three members carrying no score.
+//
+// AGENTS.md check 8 is the rule this now satisfies: "Scores help prioritize;
+// drivers explain -- never a bare score." A bar that accepts a cohort with
+// neither score nor driver is the degenerate case of that prohibition.
+//
+// len(Cohort.Members) is likewise not the count: a member can be DISCOVERED
+// and listed without ever being scored. Nil Cohort (every non-cohort
+// question) reads 0, which is why the field is omitempty.
+//
+// Corpus-safe by construction: a count, never a subject label or handle.
+func chaos4525CohortScoredMemberCount(result contractsv1.ContextFabricInvestigationResult) int {
+	if result.Cohort == nil {
+		return 0
+	}
+	scored := 0
+	for _, member := range result.Cohort.Members {
+		switch member.Outcome {
+		case contractsv1.ContextFabricCohortOutcomeQualified,
+			contractsv1.ContextFabricCohortOutcomeProvisional:
+			scored++
+		}
+	}
+	return scored
+}
+
+// chaos4525StampTerminal writes EVERY terminal field of one row from one
+// result, in one place.
+//
+// It exists because the five fields must move together and there are six call
+// sites. Before CHAOS-4525 the four chaos4386TerminalFields values were
+// assigned by a bare multi-assignment repeated at each of those sites, which
+// is exactly the shape that silently loses a fifth field when one site is
+// missed -- and a missed site here does not fail loudly: it produces a row
+// with cohort_scored_member_count=0, indistinguishable from a genuine
+// unranked cohort, which would then be scored as unanswered. Folding the
+// assignment into one function makes that class of miss structurally
+// impossible rather than merely unlikely.
+func chaos4525StampTerminal(res *twoTurnCaseResult, result contractsv1.ContextFabricInvestigationResult) {
+	if res == nil {
+		return
+	}
+	res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(result)
+	res.CohortScoredMemberCount = chaos4525CohortScoredMemberCount(result)
+}

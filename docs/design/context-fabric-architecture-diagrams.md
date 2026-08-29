@@ -707,6 +707,9 @@ flowchart LR
   end
   subgraph SYNTH["Synthesis/terminal hop"]
     D1["false_no_match<br/>expectID!='' AND status==no_match"]
+    D2["answer_rate NUMERATOR (CHAOS-4525)<br/>anchored: complete AND claimed_facts&gt;=1<br/>cohort: (complete|partial|degraded)<br/>AND claimed_facts&gt;=1<br/>AND cohort_ranked_member_count&gt;=1"]
+    D3["answer_rate DENOMINATOR (CHAOS-4525)<br/>arm==positive AND<br/>(expected_id!='' OR cohort_answer_expected)<br/>cohort_answer_expected = annex<br/>census.terminal_expectation=='aggregate_assessment'"]
+    D3 --> D2
   end
   subgraph MISSING["No field exists for this hop"]
     E1["canonical_facts_count -- NOT a real field.<br/>No per-case field measures fact-planning/<br/>ReadFacts output count anywhere in the harness."]
@@ -739,6 +742,42 @@ original brief, does not exist in the harness as a field** — no
 field, projects fact-planning/`ReadFacts` output count. Flagged to
 team-lead as aspirational, not a stale-vs-current discrepancy, since no
 prior doc claimed it existed.
+
+**The answer-rate denominator is the sixth hop, and it was silently
+class-blind until CHAOS-4525.** `answer_rate` (CHAOS-4386) asks "of the
+questions whose oracle expects an answer, how many got one" — and it read
+"the oracle expects an answer" as `expected_id != ""`. That is a correct
+test for an ANCHORED subject question and a false negative for a
+discovered cohort: a cohort question's answer IS the ranked cohort, so its
+annex entry carries `anchor.positive_key: null` by construction and its
+corpus row's `expect_id` is empty. Every `cohort_assessment` case in ext65
+therefore sat outside the denominator no matter what it did — including
+the North Star's own team-cohort bar question, which CHAOS-4450 (Run J)
+found the corpus could not express in an answerable band at all. CHAOS-4525
+adds the seeds AND the second gate: `cohort_answer_expected`, read from the
+annex's own `oracles.census.terminal_expectation`, admitted only for
+`aggregate_assessment`. `witnessed_no_match` (index 61) and
+`clarification_required` (index 63) stay out on purpose — their correct
+terminal state is a refusal or a question, and counting them as unanswered
+would penalise correct behaviour. The two gates are a union: an anchored
+case still qualifies on `expected_id` alone.
+
+**The numerator is class-shaped too, for a measured reason.** It required
+`terminal_status == "complete"`, which is right for an anchored subject
+answer and wrong for a cohort: CHAOS-4522's first successful cohort answer
+against real data is delivered as **`degraded`, with claimed facts and three
+ranked teams** — a real answer, in the user's hands, that a complete-only
+numerator scores 0. `degraded` is the honest status there under North Star
+check 12, because some members genuinely have thin evidence; scoring it 0
+would penalise the contract for telling the truth about its own coverage and
+would make `answer_rate` read "still broken" for exactly the outcome the fix
+produces. So cohort rows admit `complete`/`partial`/`degraded` and add a
+condition anchored rows do not have: at least one **ranked** member
+(`ContextFabricCohortMember.RankingComputed`, never `len(Members)`). That
+third condition is what keeps the loosening honest — without it, a delivered
+cohort object full of merely-discovered, unscored members would score the
+same as a ranked, driver-backed answer. `clarification_required` and
+`no_match` remain unanswered for both classes.
 
 ---
 
@@ -977,6 +1016,18 @@ all UNCHANGED by PR2); the `RankingTable` Rows panel on
 (PR4) the harness cohort-question seeds + ask-dev contract pin bump (per
 the 20:50 08-27 standing rule: any acr PR widening the investigation
 contract lists an ask-dev pin bump as a follow-up).
+
+**Update (CHAOS-4525, 2026-08-29):** the harness cohort-question seeds are
+now built. Two answerable `cohort_assessment`/`team` cases and two
+answerable `subject_status`/`project` cases (plus a `no_match` control)
+were appended to the trial corpus and its oracle annex by
+`scripts/trial/seed-corpus-cases.sh`, which proves every oracle claim
+against the live read-only graph before writing and then hands
+`expect_kind`/`expect_id` to `cmd/acr-corpus-annex-sync`. Diagram 5's
+caption covers the measurement half — the answer-rate denominator had to
+widen in the same change, or the cohort seeds would have been rows no
+metric could see. Corpus question text is deliberately absent from this
+page and every other durable artifact; cases are named by index and band.
 
 ---
 
