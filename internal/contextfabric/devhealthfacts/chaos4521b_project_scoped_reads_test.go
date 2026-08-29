@@ -174,12 +174,26 @@ func TestChaos4521b_ThePseudoProjectOwnershipRowAttributesToNothing(t *testing.T
 	}
 	statement := client.queries[0].statement
 
-	// 1. The ownership edge is an INNER JOIN against `projects`. An
-	//    ownership row whose project row was deleted therefore produces no
-	//    output at all -- this is what makes the surviving pseudo row inert
-	//    rather than something needing a special case.
-	if !strings.Contains(statement, "FROM projects FINAL") || !strings.Contains(statement, "INNER JOIN") {
-		t.Errorf("ownership resolution is not an inner join against projects; a deleted project would not drop its ownership rows\n%s", statement)
+	// 1. EVERY arm is an INNER JOIN against `projects`. An ownership row
+	//    whose project row was deleted therefore produces no output at all,
+	//    through any arm -- which is what makes the pseudo-project's
+	//    surviving ownership rows inert once CHAOS-4530's cleanup deletes
+	//    the `projects` row, with no special case in acr.
+	//
+	//    Deliberately NOT an id-shape predicate (team-lead ruling): the
+	//    `{org}:linear:<teamKey>` format is producer-owned, and guessing at
+	//    it here would couple acr to a shape it does not define. The
+	//    property that actually holds -- no projects row, no attribution --
+	//    is the one worth pinning, and it needs no knowledge of the format.
+	//
+	//    Counting arms rather than merely finding one join: a future arm
+	//    added as a LEFT JOIN, or one reading a different table, would
+	//    reintroduce the hazard silently.
+	if projectsReads := strings.Count(statement, "FROM projects FINAL"); projectsReads != strings.Count(statement, "UNION ALL")+1 {
+		t.Errorf("not every arm resolves through `projects`: %d reads for %d arms\n%s", projectsReads, strings.Count(statement, "UNION ALL")+1, statement)
+	}
+	if strings.Contains(statement, "LEFT JOIN (\n\tSELECT provider") {
+		t.Errorf("an ownership arm is a LEFT JOIN; a missing projects row would no longer drop it\n%s", statement)
 	}
 	// 2. Subject resolution must NOT pre-filter on a non-empty project_key.
 	//    That filter is what dropped every real Linear project before the
