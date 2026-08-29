@@ -184,7 +184,9 @@ func TestWorkloadProviderRowForUnrequestedTeamNeverAppears(t *testing.T) {
 // throughput_stddev, hasP50, p50_days, insufficient_history, high_variance,
 // backlog_size, computed_at).
 func workloadProjectRollupRow(provider, projectID, teamID, teamName, workScopeID string, throughputMean, throughputStddev float64, backlogSize int64, highVariance uint8) []any {
-	return []any{provider + ":" + projectID, teamID, teamName, workScopeID, throughputMean, throughputStddev, uint8(0), int64(0), uint8(0), highVariance, backlogSize, "2026-07-27 04:00:00"}
+	// has_team = 1: an attributed row. CHAOS-4521b added the flag so an
+	// UNATTRIBUTED row (source team_id NULL) stays distinguishable.
+	return []any{provider + ":" + projectID, uint8(1), teamID, teamName, workScopeID, throughputMean, throughputStddev, uint8(0), int64(0), uint8(0), highVariance, backlogSize, "2026-07-27 04:00:00"}
 }
 
 // TestWorkloadProviderProjectRollupBreaksDownByTeamNeverAverages pins
@@ -193,7 +195,7 @@ func workloadProjectRollupRow(provider, projectID, teamID, teamName, workScopeID
 // survives verbatim in the renderable team_breakdown table.
 func TestWorkloadProviderProjectRollupBreaksDownByTeamNeverAverages(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: [][]any{
+	client := &fakeClient{tables: []fakeTable{{match: "FROM capacity_forecasts", rows: [][]any{
 		workloadProjectRollupRow("linear", "proj-1", "team-1", "Team One", "scope-a", 3.2, 0.8, 120, 1),
 		workloadProjectRollupRow("linear", "proj-1", "team-2", "Team Two", "scope-b", 9.0, 2.1, 40, 0),
 	}}}}
@@ -229,7 +231,7 @@ func TestWorkloadProviderProjectRollupBreaksDownByTeamNeverAverages(t *testing.T
 
 func TestWorkloadProviderProjectRollupNoOwningTeamsHasNoFactEntry(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: nil}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM capacity_forecasts", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactWorkload)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},

@@ -136,7 +136,8 @@ func TestReadinessProviderRowForUnrequestedTeamNeverAppears(t *testing.T) {
 // output: (project_key, team_id, team_name, work_scope_id, provider, day,
 // estimated_count, unestimated_count, backlog_size, hasRatio, ratio).
 func readinessProjectRollupRow(provider, projectID, teamID, teamName, workScopeID, sourceProvider string, estimated, unestimated, backlogSize int64, ratio float64) []any {
-	return []any{provider + ":" + projectID, teamID, teamName, workScopeID, sourceProvider, "2026-02-22", estimated, unestimated, backlogSize, uint8(1), ratio}
+	// has_team = 1 -- see workloadProjectRollupRow.
+	return []any{provider + ":" + projectID, uint8(1), teamID, teamName, workScopeID, sourceProvider, "2026-02-22", estimated, unestimated, backlogSize, uint8(1), ratio}
 }
 
 // TestReadinessProviderProjectRollupBreaksDownByTeamNeverSums pins
@@ -145,7 +146,7 @@ func readinessProjectRollupRow(provider, projectID, teamID, teamName, workScopeI
 // per-scope coverage row survives verbatim in team_breakdown.
 func TestReadinessProviderProjectRollupBreaksDownByTeamNeverSums(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: [][]any{
+	client := &fakeClient{tables: []fakeTable{{match: "FROM estimate_coverage_metrics_daily", rows: [][]any{
 		readinessProjectRollupRow("linear", "proj-1", "team-1", "Team One", "scope-a", "linear", 18, 2, 20, 0.9),
 		readinessProjectRollupRow("linear", "proj-1", "team-2", "Team Two", "scope-b", "gitlab", 5, 15, 20, 0.25),
 	}}}}
@@ -181,7 +182,7 @@ func TestReadinessProviderProjectRollupBreaksDownByTeamNeverSums(t *testing.T) {
 
 func TestReadinessProviderProjectRollupNoOwningTeamsHasNoFactEntry(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: nil}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM estimate_coverage_metrics_daily", rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReadiness)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},

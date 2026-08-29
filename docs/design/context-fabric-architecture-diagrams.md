@@ -67,7 +67,12 @@ flowchart TD
   PLAN -->|"no supported subject, no scope gap"| PRUNE["pruned:subject_kind_unsupported<br/>proof of absence (CHAOS-3783)"]
   PLAN -->|"no supported subject, scope gap disclosed"| UNEXP["unexpanded:&lt;outcome&gt;<br/>CHAOS-4099 -- honest 'reachable but not read'<br/>NEVER SourcePruned"]
   PLAN -->|"some/all subjects supported"| READ["FactCapabilityRegistry.ReadFacts<br/>fan-out over devhealthfacts providers (ClickHouse)<br/>-- see diagram 4"]
-  READ --> ZERO{"rows matched?<br/>timebound.go retentionState<br/>CHAOS-4521"}
+  READ --> ROUTE{"project subject:<br/>does the source carry work_scope_id?<br/>CHAOS-4521b"}
+  ROUTE -->|"YES -- flow / readiness / workload<br/>work_scope_id IS work_items.project_id"| OWN["ProjectIdentityJoinSQL + MatchSQL<br/>match on (projects.id OR projects.project_key)<br/>NO team-ownership hop"]
+  ROUTE -->|"NO -- health / investment / landscape<br/>team/repo-scoped by construction"| HOP["ProjectOwnershipJoinSQL<br/>keyed on ProjectOwnershipJoinColumn (project_id)<br/>+ tpo.provider = p.provider<br/>empty ⇒ no_data + teamScopedProjectReason"]
+  OWN --> ZERO
+  HOP --> ZERO
+  ZERO{"rows matched?<br/>timebound.go retentionState<br/>CHAOS-4521"}
   ZERO -->|"rows > 0"| AVAIL["available<br/>(or truncated / stale)"]
   ZERO -->|"0 rows, current axis"| NODATA["<b>no_data</b> + emptyReadReason<br/>'reached and held no rows'<br/>-- NEVER available (check 12)"]
   ZERO -->|"0 rows, historical axis"| RETAIN["no_data + outOfRetentionReason<br/>'may predate the retained corpus'"]
@@ -76,7 +81,7 @@ flowchart TD
   AVAIL --> LEDGER
   NODATA --> LEDGER
   RETAIN --> LEDGER
-  LEDGER["recordFactRead ledger (CHAOS-4521)<br/>ONE record per PLANNED capability:<br/>kind · outcome (unconfigured / scope_gap / pruned / failed / completed)<br/>· state · subjects · subject_kinds · facts · truncated<br/>closed vocabulary + counts only, no labels/IDs"]
+  LEDGER["recordFactRead ledger (CHAOS-4521)<br/>ONE record per PLANNED capability:<br/>kind · outcome (unconfigured / scope_gap / pruned / failed / completed / rejected / cancelled)<br/>· state · subjects · subject_kinds · facts · truncated<br/>closed vocabulary + counts only, no labels/IDs"]
   LEDGER --> BUNDLE["CanonicalFactBundle + Coverage"]
   BUNDLE --> SYN["Synthesize (model call)<br/>RuntimeAnswerSynthesizer.Synthesize<br/>model_runtime.go:596<br/><b>CHAOS-4355 follow-up:</b> modelFacingFacts<br/>(genkitruntime/runtime.go) drops every<br/>Rows-shaped field from canonical_facts<br/>BEFORE this prompt is sent"]
   SYN --> ROWS["attachCanonicalRows (CHAOS-4355)<br/>model-authored Rows STRIPPED + tolerated<br/>(cf_model_rows_stripped), never rejected --<br/>engine copies Rows verbatim from the canonical fact<br/>each claim cites -- model_runtime.go"]

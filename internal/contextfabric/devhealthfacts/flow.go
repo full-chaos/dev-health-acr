@@ -2,7 +2,6 @@ package devhealthfacts
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -347,67 +346,51 @@ func (p *FlowProvider) readProjectFlow(ctx context.Context, orgID string, subjec
 	if len(ids) == 0 {
 		return 0, 0, nil
 	}
-	// Ownership predicate and project_key resolution mirror metrics.go's
-	// readProjectMetrics exactly -- see that function's doc comment for why
-	// the join is on (provider, project_key), never project_id, and why an
-	// ambiguous project_key is omitted rather than guessed.
-	ownershipPredicate := " AND valid_from <= now64(3) AND valid_to IS NULL"
-	if timeBound.active {
-		ownershipPredicate = fmt.Sprintf(" AND valid_from <= {%s:DateTime64(6,'UTC')} AND (valid_to IS NULL OR valid_to > {%s:DateTime64(6,'UTC')})", boundEndParam, boundEndParam)
-	}
-	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), agg.team_id, toInt64(agg.items_started), toInt64(agg.items_completed), toInt64(agg.wip_count_end_of_day),
-	toUInt8(isNotNull(agg.wip_age_p50_hours)), toFloat64(ifNull(agg.wip_age_p50_hours, 0)),
-	toUInt8(isNotNull(agg.wip_age_p90_hours)), toFloat64(ifNull(agg.wip_age_p90_hours, 0)),
-	toUInt8(isNotNull(agg.cycle_time_p50_hours)), toFloat64(ifNull(agg.cycle_time_p50_hours, 0)),
-	toUInt8(isNotNull(agg.cycle_time_p90_hours)), toFloat64(ifNull(agg.cycle_time_p90_hours, 0)),
-	toUInt8(isNotNull(agg.lead_time_p50_hours)), toFloat64(ifNull(agg.lead_time_p50_hours, 0)),
-	toUInt8(isNotNull(agg.lead_time_p90_hours)), toFloat64(ifNull(agg.lead_time_p90_hours, 0)),
-	toFloat64(agg.bug_completed_ratio), toFloat64(agg.story_points_completed)
-FROM (
-	SELECT id, provider, project_key
-	FROM (
-		SELECT id, provider, ifNull(project_key, '') AS project_key,
-			count() OVER (PARTITION BY provider, project_key) AS key_resolution_count
-		FROM projects FINAL
-		WHERE org_id = {org_id:String}
-	)
-	WHERE project_key != '' AND key_resolution_count = 1 AND concat(provider, ':', id) IN {ids:Array(String)}
-) AS p
-INNER JOIN (
-	SELECT provider, project_key, team_id
-	FROM team_project_ownership FINAL
-	WHERE org_id = {org_id:String} AND project_key IS NOT NULL` + ownershipPredicate + `
-	GROUP BY provider, project_key, team_id
-) AS tpo ON tpo.provider = p.provider AND tpo.project_key = p.project_key
+	// CHAOS-4521b: the project's OWN work_item_metrics_daily rows, matched
+	// on work_scope_id, with NO team-ownership hop.
+	//
+	// The ownership form was wrong twice over, both observed on live data
+	// (org 70d529e0, 2026-08-29). It could not reach a real project at all
+	// -- the join keyed on projects.project_key, which is NULL for every
+	// real Linear project (CHAOS-4530). And when it DID resolve, it
+	// aggregated by team_id across every work scope that team touched, so
+	// a project's flow was assembled from other projects' rows.
+	//
+	// work_scope_id IS work_items.project_id -- dev-health-ops' own oracle
+	// asserts it (github_work_item_derived_surfaces_oracle_test.go: "same
+	// work_scope_id (project_id)") -- so the project's rows were one hop
+	// away from where this query was looking.
+	//
+	// The team dimension SURVIVES, and still means what the fact's
+	// per-team breakdown says it means: the aggregation is now "within this
+	// project's work scopes, grouped by the team that produced each row".
+	// That is a narrower and honest team list, not a different concept.
+	// The aggregation moved into this SELECT with the GROUP BY: additive
+	// counts summed, percentiles and the ratio averaged -- byte-for-byte
+	// the same rule the old inner `agg` subquery applied, over the rows
+	// that now actually belong to this project.
+	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), wm.team_id, toInt64(sum(wm.items_started)), toInt64(sum(wm.items_completed)), toInt64(sum(wm.wip_count_end_of_day)),
+	toUInt8(isNotNull(avg(wm.wip_age_p50_hours))), toFloat64(ifNull(avg(wm.wip_age_p50_hours), 0)),
+	toUInt8(isNotNull(avg(wm.wip_age_p90_hours))), toFloat64(ifNull(avg(wm.wip_age_p90_hours), 0)),
+	toUInt8(isNotNull(avg(wm.cycle_time_p50_hours))), toFloat64(ifNull(avg(wm.cycle_time_p50_hours), 0)),
+	toUInt8(isNotNull(avg(wm.cycle_time_p90_hours))), toFloat64(ifNull(avg(wm.cycle_time_p90_hours), 0)),
+	toUInt8(isNotNull(avg(wm.lead_time_p50_hours))), toFloat64(ifNull(avg(wm.lead_time_p50_hours), 0)),
+	toUInt8(isNotNull(avg(wm.lead_time_p90_hours))), toFloat64(ifNull(avg(wm.lead_time_p90_hours), 0)),
+	toFloat64(avg(wm.bug_completed_ratio)), toFloat64(sum(wm.story_points_completed))
+FROM ` + projectIdentityJoinSQL() + `
 INNER JOIN (
 	-- One row per (team_id, provider, work_scope_id) triple, latest day
-	-- first (same discipline queryTeamScopeRows uses), THEN aggregated to
-	-- one row per team_id: additive counts summed, percentiles/ratio
-	-- averaged. Never one arbitrary row per team (codex R2 P1) -- a team
-	-- tracking several concurrent scopes, or two providers sharing a
-	-- work_scope_id string, must contribute ALL of its rows, not just one.
-	SELECT team_id,
-		sum(items_started) AS items_started,
-		sum(items_completed) AS items_completed,
-		sum(wip_count_end_of_day) AS wip_count_end_of_day,
-		avg(wip_age_p50_hours) AS wip_age_p50_hours,
-		avg(wip_age_p90_hours) AS wip_age_p90_hours,
-		avg(cycle_time_p50_hours) AS cycle_time_p50_hours,
-		avg(cycle_time_p90_hours) AS cycle_time_p90_hours,
-		avg(lead_time_p50_hours) AS lead_time_p50_hours,
-		avg(lead_time_p90_hours) AS lead_time_p90_hours,
-		avg(bug_completed_ratio) AS bug_completed_ratio,
-		sum(story_points_completed) AS story_points_completed
-	FROM (
-		SELECT team_id, provider, work_scope_id, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
-			row_number() OVER (PARTITION BY team_id, provider, work_scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(wip_age_p50_hours, -1), ifNull(wip_age_p90_hours, -1), ifNull(cycle_time_p50_hours, -1), ifNull(cycle_time_p90_hours, -1), ifNull(lead_time_p50_hours, -1), ifNull(lead_time_p90_hours, -1), bug_completed_ratio, story_points_completed)) DESC) AS rn
-		FROM work_item_metrics_daily
-		WHERE org_id = {org_id:String}` + timeBound.dayPredicate("day") + `
-	)
-	WHERE rn = 1
-	GROUP BY team_id
-) AS agg ON agg.team_id = tpo.team_id
-ORDER BY p.id, agg.team_id`)
+	-- first (same discipline queryTeamScopeRows uses). The aggregation to
+	-- one row per team happens OUTSIDE this subquery now, because which
+	-- rows belong to the answer depends on the project each is matched
+	-- against -- a fact this subquery cannot see.
+	SELECT team_id, provider, work_scope_id, items_started, items_completed, wip_count_end_of_day, wip_age_p50_hours, wip_age_p90_hours, cycle_time_p50_hours, cycle_time_p90_hours, lead_time_p50_hours, lead_time_p90_hours, bug_completed_ratio, story_points_completed,
+		row_number() OVER (PARTITION BY team_id, provider, work_scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, ifNull(wip_age_p50_hours, -1), ifNull(wip_age_p90_hours, -1), ifNull(cycle_time_p50_hours, -1), ifNull(cycle_time_p90_hours, -1), ifNull(lead_time_p50_hours, -1), ifNull(lead_time_p90_hours, -1), bug_completed_ratio, story_points_completed)) DESC) AS rn
+	FROM work_item_metrics_daily
+	WHERE org_id = {org_id:String}` + timeBound.dayPredicate("day") + `
+) AS wm ON ` + projectIdentityMatchSQL("wm", "work_scope_id") + ` AND wm.rn = 1
+GROUP BY p.provider, p.id, wm.team_id
+ORDER BY p.id, wm.team_id`)
 	rowCount := 0
 	byProject := make(map[string][]projectFlowRow)
 	var projectOrder []string
@@ -465,7 +448,13 @@ ORDER BY p.id, agg.team_id`)
 		teamRows, omitted := capFactValueRows(teamRows)
 		totalOmitted += omitted
 		fields := map[string]contextfabric.FactValue{
-			"rollup_basis":    contextfabric.StringFactValue("team_project_ownership_sum"),
+			"rollup_basis": contextfabric.StringFactValue("project_work_scope_sum"),
+			// CHAOS-4521b, codex P2: renamed with the join. rollup_basis
+			// reaches canonical claimed facts and synthesis, so an answer
+			// could report an ownership derivation that no longer
+			// happens -- provenance describing a chain the read did not
+			// traverse. This path groups the project's OWN work-scope
+			// rows; no ownership edge is consulted.
 			"team_count":      contextfabric.IntegerFactValue(int64(len(seenTeams))),
 			"items_started":   contextfabric.IntegerFactValue(totalStarted),
 			"items_completed": contextfabric.IntegerFactValue(totalCompleted),

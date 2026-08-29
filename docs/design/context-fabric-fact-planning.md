@@ -529,3 +529,96 @@ no registered fact producer at all (§1's "project cohort" row already
 documents `2 → 0` round-trips, "previously unanswerable," for the same
 underlying reason) -- that gap is tracked separately (CHAOS-4347's own
 project-producer phase), not closed here.
+
+
+## A project subject reads the project's own data (CHAOS-4521b)
+
+The zero-row honesty above told the truth about an empty project answer.
+This says why it was empty, and fixes the half acr owns.
+
+All six project fact rollups reached a project the same way: `projects` ->
+`team_project_ownership` -> a team-scoped daily table. That was wrong in two
+independent ways, both observed on live data (org `70d529e0`, 2026-08-29).
+
+**It could not reach a real project.** The join keys on
+`projects.project_key`, and every real Linear project carries `project_key`
+NULL; the only non-empty Linear key belongs to the
+`{org}:linear:<teamKey>` pseudo-project a team-key fallback writes. So the
+join matched that pseudo-row and nothing else. The producer half is
+CHAOS-4530 — and note the shape of that defect: a **team key** was being
+used as a project key, so a project fact resolved to "team CHAOS".
+
+**When it did resolve, it returned the wrong rows.** The readers joined the
+daily table on `team_id` alone and never constrained `work_scope_id`, while
+still selecting it. A "project" fact was therefore assembled from *every
+work scope its owning team touched* — other projects' rows included. This
+second defect is invisible to a fake-client row assertion, which is why the
+pinning tests assert the **statement**.
+
+### Which rollups can drop the team hop, and which cannot
+
+`work_scope_id` **is** `work_items.project_id` — dev-health-ops' own oracle
+asserts it (`github_work_item_derived_surfaces_oracle_test.go`: *"same
+work_scope_id (project_id)"*). Three source tables carry it; three do not.
+
+| rollup | source table | project dimension | team hop | after CHAOS-4521b |
+| --- | --- | --- | --- | --- |
+| flow | `work_item_metrics_daily` | **`work_scope_id`** | incidental | keyed on project identity |
+| readiness | `estimate_coverage_metrics_daily` | **`work_scope_id`** | incidental | keyed on project identity |
+| workload | `capacity_forecasts` | **`work_scope_id`** | incidental | keyed on project identity |
+| health | `compounding_risk_daily` | none (`scope` ∈ repo/team) | **load-bearing** | keeps the hop |
+| investment | `investment_metrics_daily` | none (`repo_id`, `team_id`) | **load-bearing** | keeps the hop |
+| landscape | `ic_landscape_rolling_30d` | none (`repo_id`, `identity_id`, `team_id`) | **load-bearing** | keeps the hop |
+
+Removing the hop from the bottom three would be a silent capability loss,
+not a fix: their data cannot answer for a project any other way. They now
+report `no_data` with a reason naming the routing
+(`teamScopedProjectReason`) rather than the generic empty-read text, because
+"this project has no health" and "this question could not be routed to the
+project" are different answers.
+
+### The two id spaces, and why both arms are load-bearing
+
+`ProjectIdentityJoinSQL` resolves each subject once against `projects` to
+`(id, project_key)`; `ProjectIdentityMatchSQL` matches a project-identity
+column against either.
+
+| provider | `projects.id` | the identity column holds | matched by |
+| --- | --- | --- | --- |
+| linear | `6241316a-…` (UUID) | `6241316a-…` | the **id** arm |
+| gitlab | `{org}:gitlab:77145099` | `full.chaos/dev-health-ops` | the **project_key** arm |
+
+The `project_key` arm keeps a `key_resolution_count = 1` guard so an
+ambiguous key cannot attribute one project's rows to another; the id arm
+needs none, `projects.id` being unique by construction.
+
+**The ownership join moved onto the same identity match** (behind the single
+constant `ProjectOwnershipJoinColumn`), because a `project_key` join could
+not survive either direction of CHAOS-4530: it reaches no real Linear
+project today, and once 4530 nulls `project_key` on the UUID-keyed rows it
+would match nothing at all, taking health/investment/landscape to zero on
+deploy. Both arms stay for the same reason in reverse — the id arm picks up
+the UUID rows the moment they land, the key arm keeps today's GitLab rows.
+
+`provider` is matched on the **ownership** edge and not on the work-scope
+tables. Cross-provider equal ids are one project by design here (Linear
+imports GitHub), so requiring provider equality on a work-scope read would
+drop legitimate rows — and `capacity_forecasts` has no `provider` column at
+all. The ownership edge is different: it decides which **teams** a project
+inherits, and "equal ids are one project" is a statement about project
+identity, not a licence to merge two providers' ownership catalogs.
+
+`team_id` stays in every `row_number()` partition. An earlier revision
+dropped it from the readiness and workload partitions, which makes
+`row_number()` keep one team's row per work scope and silently drop every
+other contributing team. The org this was measured against has a single
+team, so the defect was invisible in the data; the statement assertions pin
+it instead.
+
+### One definition, not two
+
+acr's `devhealthfacts/shared.go` used to carry its own copy of
+`projectOwnershipJoinSQL`. It now delegates to `readers`. The copies had to
+be moved off `project_key` together and nothing would have failed if only
+one of them had been — the drift this repo's AGENTS.md warns about, in its
+most literal form.

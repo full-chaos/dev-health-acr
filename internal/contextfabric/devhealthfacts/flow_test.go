@@ -156,7 +156,7 @@ func TestFlowProviderTeamMultipleScopesNeverStitched(t *testing.T) {
 func TestFlowProviderProjectRollupSumsCountsDisclosesPerTeamBreakdown(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM team_project_ownership", rows: [][]any{
+		{match: "FROM work_item_metrics_daily", rows: [][]any{
 			projectWorkItemMetricsRow("linear", "proj-1", "team-1", "scope-a", 10, 6),
 			projectWorkItemMetricsRow("linear", "proj-1", "team-2", "scope-b", 5, 2),
 		}},
@@ -173,7 +173,7 @@ func TestFlowProviderProjectRollupSumsCountsDisclosesPerTeamBreakdown(t *testing
 		t.Fatalf("facts = %#v, want 1", result.Facts)
 	}
 	fact := result.Facts[0]
-	if fact.Fields["rollup_basis"].String == nil || *fact.Fields["rollup_basis"].String != "team_project_ownership_sum" {
+	if fact.Fields["rollup_basis"].String == nil || *fact.Fields["rollup_basis"].String != "project_work_scope_sum" {
 		t.Fatalf("rollup_basis = %#v", fact.Fields["rollup_basis"])
 	}
 	if fact.Fields["items_started"].Integer == nil || *fact.Fields["items_started"].Integer != 15 {
@@ -254,7 +254,7 @@ func TestFlowProviderProjectRollupCapsNestedRowsAtValidateBound(t *testing.T) {
 	for i := 0; i < 70; i++ {
 		rows = append(rows, projectWorkItemMetricsRow("linear", "proj-1", fmt.Sprintf("team-%02d", i), "scope-a", 1, 1))
 	}
-	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: rows}}}
+	client := &fakeClient{tables: []fakeTable{{match: "FROM work_item_metrics_daily", rows: rows}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactFlow)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
