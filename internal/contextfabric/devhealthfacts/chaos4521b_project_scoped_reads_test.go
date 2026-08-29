@@ -52,6 +52,21 @@ func TestChaos4521b_ProjectFlowKeysOnTheProjectsOwnWorkScope(t *testing.T) {
 	if !strings.Contains(statement, "org_id = {org_id:String}") {
 		t.Errorf("project flow lost its org scoping\n%s", statement)
 	}
+	// The project_key arm must be guarded on a NON-EMPTY key. Every real
+	// Linear project carries project_key NULL, which the resolution
+	// coalesces to ''; without this guard such a project would match any
+	// daily row whose work_scope_id is also '' -- and, more to the point,
+	// the guard is what keeps a NULL-key project from colliding with the
+	// `{org}:linear:CHAOS` pseudo-project row that CHAOS-4530 may or may
+	// not remove. This assertion makes the change correct either way.
+	if !strings.Contains(statement, "p.project_key != ''") {
+		t.Errorf("the project_key arm is not guarded on a non-empty key\n%s", statement)
+	}
+	// The ambiguity guard travels with it: a key resolving to two projects
+	// must not attribute one project's rows to the other.
+	if !strings.Contains(statement, "p.key_resolution_count = 1") {
+		t.Errorf("the project_key arm dropped its ambiguity guard\n%s", statement)
+	}
 }
 
 // The three rollups whose source tables carry no project dimension keep the
