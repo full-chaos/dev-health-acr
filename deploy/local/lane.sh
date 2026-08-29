@@ -24,6 +24,8 @@
 #   LANE_OPS_CHART        path to the ops chart   (default: $LANE_OPS_WT/deploy/helm/dev-health)
 #   LANE_ACR_CHART        path to the acr chart   (default: this repo's deploy/helm/acr)
 #   LANE_OPS_WT           ops worktree root, used to find the chart and scripts
+#   LANE_OPS_CHART        ops chart path override (default:
+#                         $LANE_OPS_WT/deploy/helm/dev-health)
 #   LANE_OPS_IMAGE        side-loaded ops image ref (default: newest dev-health-ops-local:*)
 #   LANE_WEB_IMAGE        web image ref           (default: ghcr.io/full-chaos/dev-health-web:0.1.0)
 #   LANE_ACR_IMAGE        acr image ref           (default: dev-health-acr:dev)
@@ -71,6 +73,10 @@ MONO_ROOT="${LANE_MONO_ROOT:-$(find_mono_root || true)}"
 CLUSTER="${LANE_CLUSTER:-dev-full}"
 OPS_WT="${LANE_OPS_WT:-}"
 ACR_CHART="${LANE_ACR_CHART:-$REPO_ROOT/deploy/helm/acr}"
+# Documented in the header, so it has to actually work (codex R2): the ops chart
+# path was hardcoded under LANE_OPS_WT and silently ignored this override.
+# Resolved after resolve_ops_wt, since the default depends on it.
+OPS_CHART="${LANE_OPS_CHART:-}"
 WEB_IMAGE="${LANE_WEB_IMAGE:-ghcr.io/full-chaos/dev-health-web:0.1.0}"
 ACR_IMAGE="${LANE_ACR_IMAGE:-dev-health-acr:dev}"
 ORG_ID="${LANE_ORG_ID:-70d529e0-3c06-4597-8480-794fd02328b6}"
@@ -177,10 +183,34 @@ ensure_cluster() {
     ACR_KIAC_CPUS="${LANE_CPUS:-4}" ACR_KIAC_CP_MEMORY="${LANE_MEMORY:-24G}" \
     ACR_KIAC_KUBECONFIG="$KUBECONFIG_PATH" \
     ACR_KIAC_ALLOW_VERSION_DRIFT=1 "$SCRIPT_DIR/kiac.sh" up
+    CLUSTER_WAS_CREATED=1
   fi
   export KUBECONFIG="$KUBECONFIG_PATH"
   [[ -f "$KUBECONFIG" ]] \
     || die "cluster '$CLUSTER' exists but no kubeconfig at $KUBECONFIG — it was created from another checkout; point LANE_KUBECONFIG at that file (or LANE_CLUSTER at a new name)"
+}
+
+# A cluster created just now has an EMPTY containerd, and every workload here
+# renders imagePullPolicy: Never -- host images reach kiac nodes only through
+# `kiac.sh load-image` (codex R2). Without this a fresh-cluster `up` dies with
+# ErrImageNeverPull. Reusing an existing cluster skips it: the images are
+# already there, and re-loading several GB on every run would be wasteful.
+load_lane_images() {
+  [[ "${CLUSTER_WAS_CREATED:-0}" = "1" ]] || return 0
+  step "loading images into the new cluster '$CLUSTER'"
+  local images=(
+    "$LANE_OPS_IMAGE" "$WEB_IMAGE" "$ACR_IMAGE"
+    dev-health-go-worker:latest
+    dev-health-go-scheduler:latest
+    dev-health-go-reconciler:latest
+    dev-health-go-stream-ingest:latest
+    dev-health-go-stream-external:latest
+    dev-health-go-stream-pagerduty:latest
+    dev-health-go-worker-migrate:latest
+  )
+  ACR_KIAC_CLUSTER_NAME="$CLUSTER" ACR_KIAC_KUBECONFIG="$KUBECONFIG_PATH" \
+  ACR_KIAC_ALLOW_VERSION_DRIFT=1 "$SCRIPT_DIR/kiac.sh" load-image "${images[@]}" \
+    || die "could not load images into '$CLUSTER'; every workload here uses imagePullPolicy: Never, so the lane cannot start without them"
 }
 
 ensure_datastores() {
@@ -191,8 +221,23 @@ ensure_datastores() {
   # acr-trial-data` would have deleted the STANDING trial data plane, PVCs and
   # all. A name is not ownership. Only namespaces this script created carry
   # this label, and `down` refuses anything without it.
-  kubectl create namespace "$lane" >/dev/null 2>&1 || true
-  kubectl label namespace "$lane" "app.kubernetes.io/managed-by=lane.sh" --overwrite >/dev/null
+  # Label ONLY a namespace we actually created (codex R2). The first version
+  # did `create || true` then labelled unconditionally, which meant
+  # `up acr-trial-data` would stamp the STANDING plane as lane.sh-owned and a
+  # later `down` would pass its ownership check and delete it with its PVCs.
+  # That is worse than the bug the label was added to fix, because it looks
+  # safe. An existing namespace must ALREADY carry the label or we refuse.
+  local ns_owner
+  if kubectl create namespace "$lane" >/dev/null 2>&1; then
+    kubectl label namespace "$lane" "app.kubernetes.io/managed-by=lane.sh" --overwrite >/dev/null
+    log "created namespace '$lane' and marked it lane.sh-owned"
+  else
+    kubectl get namespace "$lane" >/dev/null 2>&1 \
+      || die "namespace '$lane' could not be created and does not exist -- check the cluster connection"
+    ns_owner="$(kubectl get ns "$lane" -o "jsonpath={.metadata.labels['app\.kubernetes\.io/managed-by']}" 2>/dev/null || true)"
+    [[ "$ns_owner" == "lane.sh" ]] \
+      || die "namespace '$lane' already exists and is not lane.sh-owned (managed-by='${ns_owner:-<unset>}'). Refusing to adopt it: see MIGRATING AN EXISTING LANE in this script's header if it really is a disposable lane."
+  fi
   # Re-apply unconditionally rather than probing one deployment (codex): a
   # `kubectl apply` interrupted after trial-postgres but before ClickHouse or
   # FalkorDB left the old check permanently satisfied while two deployments
@@ -237,6 +282,24 @@ ensure_datastores() {
     ch_zip="$(ls "$backups"/clickhouse-default-*.zip 2>/dev/null | head -1)"
     [[ -f "$pg_dump" ]] || die "no postgres-all-*.sql.gz in $backups"
     [[ -f "$ch_zip"  ]] || die "no clickhouse-default-*.zip in $backups"
+    # Replaying a pg_dumpall onto a server that already holds a previous
+    # attempt's roles fails immediately: the archive opens with unconditional
+    # CREATE ROLE and restore-postgres runs with ON_ERROR_STOP=1 (codex R2).
+    # So an interrupted restore, or a --backups pointed at a different snapshot,
+    # could never be repaired by re-running -- exactly the case the seed marker
+    # is meant to handle. Drop the roles the dump will recreate first; they are
+    # lane-local and the dump is about to redefine them anyway.
+    if kubectl -n "$lane" exec deploy/trial-postgres -- \
+         psql -U postgres -d postgres -Atc "SELECT 1 FROM pg_roles WHERE rolname='devhealth'" 2>/dev/null | grep -q 1; then
+      log "previous restore state found — dropping lane-local roles so the dump can replay"
+      kubectl -n "$lane" exec deploy/trial-postgres -- psql -U postgres -d postgres -q \
+        -c "DROP DATABASE IF EXISTS devhealth;" \
+        -c "DROP DATABASE IF EXISTS acr;" \
+        -c "DROP ROLE IF EXISTS devhealth_domain;" \
+        -c "DROP ROLE IF EXISTS devhealth_queue;" \
+        -c "DROP ROLE IF EXISTS devhealth_coordinator;" \
+        -c "DROP ROLE IF EXISTS devhealth;" >/dev/null 2>&1 || true
+    fi
     ACR_TRIAL_DATA_NAMESPACE="$lane" ACR_TRIAL_NODEPORT_BASE="$base" \
       "$SCRIPT_DIR/trial-data.sh" restore-postgres "$pg_dump"
     ACR_TRIAL_DATA_NAMESPACE="$lane" ACR_TRIAL_NODEPORT_BASE="$base" \
@@ -353,8 +416,8 @@ YAML
 # readiness on domain_postgres, --wait times out, and Helm records the release
 # FAILED and leaves it that way even after the pods recover (CHAOS-4428).
 ensure_ops_release() {
-  local lane="$1" chart="$OPS_WT/deploy/helm/dev-health"
-  [[ -d "$chart" ]] || die "ops chart not found at $chart"
+  local lane="$1" chart="${OPS_CHART:-$OPS_WT/deploy/helm/dev-health}"
+  [[ -d "$chart" ]] || die "ops chart not found at $chart (set LANE_OPS_CHART to override)"
   step "ops release '$lane' (workers at 0)"
   render_ops_values "$lane" 0 > "/tmp/lane-${lane}-ops.yaml"
   helm upgrade --install "$lane" "$chart" -n "$lane" -f "/tmp/lane-${lane}-ops.yaml" \
@@ -409,7 +472,10 @@ ensure_acr_release() {
   # a quoted key reaches the provider as an invalid credential (CHAOS-4428).
   local key=""
   if [[ -f "$MONO_ROOT/ops/.env" ]]; then
-    key="$(grep -m1 '^OPENAI_API_KEY=' "$MONO_ROOT/ops/.env" | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
+    # `|| true` on the pipeline, not just the assignment: with pipefail a
+    # no-match grep makes the whole pipeline non-zero and set -e kills the
+    # script here, so the warning branch below was unreachable (codex R2).
+    key="$(grep -m1 '^OPENAI_API_KEY=' "$MONO_ROOT/ops/.env" 2>/dev/null | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" || true)"
   fi
   if [[ -n "$key" ]]; then
     kubectl -n "$lane" create secret generic acr-model \
@@ -595,6 +661,7 @@ cmd_up() {
   log "ops image: $LANE_OPS_IMAGE"
   local started; started="$(date +%s)"
   ensure_cluster
+  load_lane_images
   # After ensure_cluster: picking a free base requires talking to the cluster.
   [[ -n "$base" ]] || base="$(lane_nodeport_base "$lane")"
   log "nodeport base: $base"
@@ -617,15 +684,26 @@ cmd_down() {
   # namespaces, so `down acr-trial-data` -- a perfectly legal name -- would have
   # deleted the STANDING trial data plane and its PVCs. Refuse anything this
   # script did not create and label.
-  local owner
+  # A failed lookup is NOT a missing namespace (codex R2). An unreachable API,
+  # a stale kubeconfig or an RBAC denial would otherwise read as "absent", and
+  # `down` would report the lane removed while every resource survived. Classify
+  # explicitly: only a real NotFound is benign.
+  local owner lookup_err lookup_rc
+  lookup_err="$(kubectl get ns "$lane" -o "jsonpath={.metadata.labels['app\.kubernetes\.io/managed-by']}" 2>&1 >/dev/null)"
+  lookup_rc=$?
+  if (( lookup_rc != 0 )); then
+    case "$lookup_err" in
+    *NotFound* | *"not found"*)
+      log "namespace '$lane' does not exist; nothing to tear down"
+      rm -f "/tmp/lane-${lane}-ops.yaml" "/tmp/lane-${lane}-acr.yaml"
+      return 0
+      ;;
+    *) die "could not look up namespace '$lane' (not a NotFound): ${lookup_err}" ;;
+    esac
+  fi
   owner="$(kubectl get ns "$lane" -o "jsonpath={.metadata.labels['app\.kubernetes\.io/managed-by']}" 2>/dev/null || true)"
   if [[ -z "${owner}" ]]; then
-    if kubectl get ns "$lane" >/dev/null 2>&1; then
-      die "refusing to delete namespace '$lane': it carries no app.kubernetes.io/managed-by=lane.sh label, so lane.sh did not create it. Delete it by hand if you are certain."
-    fi
-    log "namespace '$lane' does not exist; nothing to tear down"
-    rm -f "/tmp/lane-${lane}-ops.yaml" "/tmp/lane-${lane}-acr.yaml"
-    return 0
+    die "refusing to delete namespace '$lane': it carries no app.kubernetes.io/managed-by=lane.sh label, so lane.sh did not create it. Delete it by hand if you are certain."
   fi
   [[ "${owner}" == "lane.sh" ]] \
     || die "refusing to delete namespace '$lane': managed-by is '${owner}', not lane.sh"
