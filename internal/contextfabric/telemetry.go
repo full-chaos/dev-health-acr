@@ -429,6 +429,10 @@ func (t SlogEngineTelemetry) RecordCohortDriverNarration(ctx context.Context, pr
 		"facts_minted", event.FactsMinted,
 		"members_narrated", event.MembersNarrated,
 		"members_skipped_no_evidence", event.MembersSkippedNoEvidence,
+		// Closed-enum keys and counts only -- the reason a selected driver
+		// was eliminated, never the signal's value or the member it
+		// belonged to (codex R3, CHAOS-4448).
+		"drivers_skipped", event.DriversSkipped,
 	}, requestIDLogAttrs(ctx)...)...)
 }
 

@@ -492,3 +492,88 @@ func TestDeconflictCohortDriverJudgmentID_IsDeterministicAndNeverDrops(t *testin
 		t.Errorf("deconflicted id %q length = %d, over the %d bound", second, got, contractsv1.ContextFabricModelMintedIDMaxLength)
 	}
 }
+
+// TestNarrateCohortDriverJudgments_CountsDriversSkippedForMissingCitation
+// is codex R3 finding 3 (P2, CHAOS-4448). The available-zero deficiency
+// driver legitimately ranks (its zero Value counts toward Score) but can
+// never be cited -- OperationalDeficienciesProvider emits a row only for a
+// rule that actually fired, so "zero fired rules" is zero rows and there
+// is no real field anywhere to name. The composer therefore eliminates it
+// with `citation == nil`, which is correct and stays correct.
+//
+// What was missing is the record of that elimination. Root AGENTS.md
+// requires every decision branch that changes an outcome -- a candidate
+// elimination among them -- to emit closed-vocabulary telemetry naming
+// what decided and why, in the same change that adds the branch, so a
+// defect is diagnosable from the run's own artifacts alone. Without this
+// dimension, a driver selected into the top-3 and then dropped is
+// indistinguishable, in the emitted event, from one never selected: the
+// operator sees JudgmentsEmitted=2 and no reason it was not 3.
+func TestNarrateCohortDriverJudgments_CountsDriversSkippedForMissingCitation(t *testing.T) {
+	t.Parallel()
+	// availableCoverage + facts for health/investment ONLY: deficiency is
+	// available-zero, so it ranks into the top-3 and is then eliminated
+	// for want of a citation.
+	facts := []CanonicalFact{healthFact("A", "high"), investmentFact("A", balancedThemes(), 0)}
+	member := rankTestMember("A")
+	member.EvidenceRefIDs = []string{"evidence_team_a_roster"}
+	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
+	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
+
+	// Guard the premise: this scenario must actually rank the uncitable
+	// deficiency driver, otherwise the test would pass without exercising
+	// the branch at all.
+	ranksDeficiency := false
+	for _, d := range ranked.Members[0].Drivers {
+		if d.Signal == RankingSignalDeficiencySeverity {
+			ranksDeficiency = true
+		}
+	}
+	if !ranksDeficiency {
+		t.Fatal("premise broken: the scenario no longer ranks the available-zero deficiency driver, so no citation-skip branch is exercised")
+	}
+
+	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+
+	if got := event.DriversSkipped[string(CohortDriverSkipNoCitation)]; got != 1 {
+		t.Errorf("event.DriversSkipped[%q] = %d, want 1 -- the eliminated zero-fired deficiency driver must be counted with its reason", CohortDriverSkipNoCitation, got)
+	}
+	// The behaviour itself is unchanged: it still ranks and is still never
+	// cited or narrated.
+	for _, j := range judgments {
+		if j.Category == string(contractsv1.ContextFabricDriverCategoryDeficiency) {
+			t.Errorf("narrated the available-zero deficiency driver %+v -- 'ranks but never cites' must be unchanged", j)
+		}
+	}
+	if event.JudgmentsEmitted != len(judgments) || event.MembersNarrated != 1 {
+		t.Errorf("event = %+v, want JudgmentsEmitted=%d MembersNarrated=1", event, len(judgments))
+	}
+}
+
+// TestNarrateCohortDriverJudgments_SkipCountsAreAbsentWhenNothingIsSkipped
+// keeps the dimension honest in the other direction: a fully citable
+// member must report no skips at all, so a non-zero count always means a
+// real elimination happened rather than being a permanent fixture of the
+// event.
+func TestNarrateCohortDriverJudgments_SkipCountsAreAbsentWhenNothingIsSkipped(t *testing.T) {
+	t.Parallel()
+	facts := []CanonicalFact{
+		investmentFact("A", balancedThemes(), 0),
+		healthFact("A", "elevated"),
+		deficiencyFact("A", "critical"),
+		readinessFact("A", 0.6),
+		workloadFact("A", 20),
+	}
+	member := rankTestMember("A")
+	member.EvidenceRefIDs = []string{"evidence_team_a_roster"}
+	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
+	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
+
+	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+	if len(judgments) == 0 {
+		t.Fatal("expected narrated judgments for a fully-citable member")
+	}
+	for reason, count := range event.DriversSkipped {
+		t.Errorf("event.DriversSkipped[%q] = %d, want no skip entries at all when every selected driver was citable", reason, count)
+	}
+}

@@ -170,6 +170,7 @@ func narrateCohortDriverJudgments(cohort *Cohort, synthesisDrivers []DriverJudgm
 	var mintedClaims []ClaimedFact
 	narratedMembers := 0
 	skippedNoEvidence := 0
+	driversSkipped := map[string]int{}
 	principalAssigned := false
 	for _, memberCopy := range selected {
 		if len(memberCopy.EvidenceRefIDs) == 0 {
@@ -184,11 +185,18 @@ func narrateCohortDriverJudgments(cohort *Cohort, synthesisDrivers []DriverJudgm
 			driver := &member.Drivers[driverIndex]
 			category, hasCategory := cohortSignalDriverCategory[driver.Signal]
 			if !hasCategory {
-				continue // defensively unreachable: every RankCohort signal has a category entry above
+				// defensively unreachable: every RankCohort signal has a category entry above
+				driversSkipped[string(CohortDriverSkipUnknownSignal)]++
+				continue
 			}
 			citation := citations[member.Subject.CanonicalID][driver.Signal]
 			if citation == nil {
-				continue // no citation to mint from -- never narrate without one (producer-bug case, scoreMember's own comment)
+				// no citation to mint from -- never narrate without one
+				// (the deficiency available-zero case, and scoreMember's
+				// own producer-bug case). Behaviour unchanged; the
+				// elimination is now on the record.
+				driversSkipped[string(CohortDriverSkipNoCitation)]++
+				continue
 			}
 			claimID := cohortDriverClaimID(member.Subject, driver.Signal, driver.Window)
 			driver.SourceClaimedFactIDs = []string{claimID}
@@ -233,6 +241,7 @@ func narrateCohortDriverJudgments(cohort *Cohort, synthesisDrivers []DriverJudgm
 		FactsMinted:              len(mintedClaims),
 		MembersNarrated:          narratedMembers,
 		MembersSkippedNoEvidence: skippedNoEvidence,
+		DriversSkipped:           driversSkipped,
 	}
 }
 
@@ -291,7 +300,38 @@ type CohortDriverNarrationEvent struct {
 	FactsMinted              int
 	MembersNarrated          int
 	MembersSkippedNoEvidence int
+	// DriversSkipped (codex R3, CHAOS-4448) counts drivers this composer
+	// SELECTED into a member's top-3 and then eliminated, keyed by the
+	// closed CohortDriverSkipReason that eliminated each -- root AGENTS.md's
+	// decision-basis requirement: a candidate elimination must be
+	// diagnosable from the run's own artifacts, never by re-reading source.
+	// Without it, a member whose zero-fired deficiency driver ranked and was
+	// dropped emits an event identical to one where that driver never
+	// ranked at all. Counts keyed by a closed enum, the same content-safe
+	// shape CohortRankedEvent.OutcomeCounts already uses -- no team name,
+	// no signal value. Absent entries mean no elimination of that kind
+	// happened, so a non-zero count always names a real one.
+	DriversSkipped map[string]int
 }
+
+// CohortDriverSkipReason is the closed vocabulary naming WHY a selected
+// cohort driver was eliminated before narration.
+type CohortDriverSkipReason string
+
+const (
+	// CohortDriverSkipNoCitation is the available-zero case: the driver
+	// ranks legitimately (its zero Value counts toward Score) but no real
+	// CanonicalFact field exists to cite, so it can never be narrated or
+	// minted. deficiencySeveritySignal is the one signal that reaches it
+	// today -- "ranks but never cites", enforced, not merely documented.
+	CohortDriverSkipNoCitation CohortDriverSkipReason = "no_citation"
+	// CohortDriverSkipUnknownSignal means a ranked driver carried a Signal
+	// with no cohortSignalDriverCategory entry. Defensively unreachable
+	// (every RankCohort signal has one), and counted precisely so that if
+	// it ever does fire -- a new signal family added to ranking but not to
+	// narration -- the run says so instead of quietly narrating less.
+	CohortDriverSkipUnknownSignal CohortDriverSkipReason = "unknown_signal"
+)
 
 // topDriverIndicesByWeightContributed returns the INDICES (into drivers,
 // the member's own original slice) of up to `count` drivers, ordered by
