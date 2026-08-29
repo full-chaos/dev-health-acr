@@ -2,7 +2,7 @@ module github.com/full-chaos/dev-health-acr
 
 go 1.25.0
 
-require github.com/full-chaos/dev-health-go v0.4.1-0.20260829152539-916719393b3a
+require github.com/full-chaos/dev-health-go v0.5.1-0.20260829154409-b408e417e022
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.47.0
