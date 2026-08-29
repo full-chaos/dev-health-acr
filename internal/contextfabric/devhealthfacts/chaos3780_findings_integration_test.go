@@ -409,15 +409,26 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("F2_metrics_truncates_at_the_real_limit_plus_one", func(t *testing.T) {
+	// F2_metrics_no_cross_repository_starvation_beyond_the_old_query_wide_cap
+	// is CHAOS-4418's own re-pin of this real-ClickHouse test (codex R1/R2:
+	// this scenario -- 201 DIFFERENT repositories, one row each -- used to
+	// be exactly where the OLD query-wide maxFactRowsPerQuery (200) cap
+	// fired, truncating the 201st repository's data away even though every
+	// repository individually had a real, tiny answer to give. That WAS
+	// the starvation bug this ticket exists to fix, not a correct
+	// behavior to keep pinned: readRepositoryMetrics no longer has a
+	// query-wide LIMIT at all (a per-repository `LIMIT n BY repo_id`
+	// instead), so all 201 repositories must now come back with their own
+	// real 1-row fact, untruncated.
+	t.Run("F2_metrics_no_cross_repository_starvation_beyond_the_old_query_wide_cap", func(t *testing.T) {
 		const orgID = "org-f2-trunc"
-		const rowCount = 201 // maxFactRowsPerQuery (200) + 1
-		subjects := make([]contextfabric.SubjectRef, 0, rowCount)
-		for i := 0; i < rowCount; i++ {
+		const repoCount = 201 // formerly maxFactRowsPerQuery (200) + 1
+		subjects := make([]contextfabric.SubjectRef, 0, repoCount)
+		for i := 0; i < repoCount; i++ {
 			repoID := "44444444-4444-4444-4444-" + padHex(i)
 			if err := direct.Exec(ctx, `INSERT INTO repo_metrics_daily (repo_id, org_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 				repoID, orgID, date(2026, 8, 12), uint32(1), uint32(1), 1.0, 0.0, nil, uint32(1), 0.1, ts(2026, 8, 12, 10, 0, 0)); err != nil {
-				t.Fatalf("seed truncation row %d: %v", i, err)
+				t.Fatalf("seed repository %d: %v", i, err)
 			}
 			subjects = append(subjects, repoSubject(repoID))
 		}
@@ -429,11 +440,53 @@ func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadFacts() error = %v", err)
 		}
-		if !result.Truncated {
-			t.Fatalf("result.Truncated = false, want true: %d distinct repositories requested, only 200 may be returned", rowCount)
+		if result.Truncated {
+			t.Fatalf("result.Truncated = true, want false: %d distinct repositories each with their own 1-row series must not starve each other out of a shared budget that no longer exists", repoCount)
 		}
-		if len(result.Facts) > 200 {
-			t.Fatalf("len(result.Facts) = %d, want <= 200", len(result.Facts))
+		if len(result.Facts) != repoCount {
+			t.Fatalf("len(result.Facts) = %d, want exactly %d -- every requested repository must get its own fact, none silently dropped", len(result.Facts), repoCount)
+		}
+	})
+
+	// F2_metrics_truncates_one_repositorys_own_series_past_its_per_repository_cap
+	// pins the REAL truncation shape post-CHAOS-4418: metricsSeriesPerRepositoryRowCap
+	// (200, metrics.go) bounds ONE repository's own day series via `LIMIT
+	// 200 BY repo_id`, independent of how many other repositories are
+	// requested alongside it.
+	t.Run("F2_metrics_truncates_one_repositorys_own_series_past_its_per_repository_cap", func(t *testing.T) {
+		const orgID = "org-f2-trunc-one-repo"
+		const repoID = "55555555-4444-4444-4444-000000000001"
+		const dayCount = 201 // metricsSeriesPerRepositoryRowCap (200) + 1
+		start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+		for i := 0; i < dayCount; i++ {
+			day := start.AddDate(0, 0, i)
+			if err := direct.Exec(ctx, `INSERT INTO repo_metrics_daily (repo_id, org_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+				repoID, orgID, day, uint32(1), uint32(1), 1.0, 0.0, nil, uint32(1), 0.1, day.Add(10*time.Hour)); err != nil {
+				t.Fatalf("seed day %d: %v", i, err)
+			}
+		}
+		provider := findProvider(t, providers, contextfabric.FactMetrics)
+		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+			Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Kind: contextfabric.FactMetrics, Subjects: []contextfabric.SubjectRef{repoSubject(repoID)},
+		})
+		if err != nil {
+			t.Fatalf("ReadFacts() error = %v", err)
+		}
+		if !result.Truncated {
+			t.Fatalf("result.Truncated = false, want true: %d real days for ONE repository exceeds its own per-repository cap", dayCount)
+		}
+		if len(result.Facts) != 1 {
+			t.Fatalf("len(result.Facts) = %d, want exactly 1", len(result.Facts))
+		}
+		// capFactValueRows' own 64-row per-fact cap is stricter than the
+		// 200-row SQL cap, so the RENDERED table is 64 rows either way --
+		// this test's own point is that the SQL cap does not itself
+		// silently drop the whole fact or error the query, which the
+		// production MaxResultRows driver setting (codex R3) is what
+		// actually protects against for a wide multi-repository request.
+		if got := len(result.Facts[0].Fields["daily_metrics"].Rows); got != 64 {
+			t.Fatalf("daily_metrics rows = %d, want 64 (capFactValueRows' own cap)", got)
 		}
 	})
 
