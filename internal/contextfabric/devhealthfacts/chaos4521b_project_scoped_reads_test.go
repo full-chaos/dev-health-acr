@@ -42,8 +42,16 @@ func TestChaos4521b_ProjectFlowKeysOnTheProjectsOwnWorkScope(t *testing.T) {
 	if strings.Contains(statement, "team_project_ownership") {
 		t.Errorf("project flow still joins team_project_ownership; work_item_metrics_daily carries the project id\n%s", statement)
 	}
-	if !strings.Contains(statement, "work_scope_id = p.id") || !strings.Contains(statement, "work_scope_id = p.project_key") {
-		t.Errorf("project flow does not match work_scope_id against the project identity (id or key)\n%s", statement)
+	// CHAOS-4521b re-plan: the identity alternatives moved OUT of the ON
+	// clause and INTO rows, because ClickHouse 24.8 -- the version acr's
+	// own fixtures pin -- rejects a JOIN ON containing OR (Code: 403). The
+	// join is a plain equality against p.scope; the two identity values are
+	// the two unioned scope rows.
+	if !strings.Contains(statement, "work_scope_id = p.scope") {
+		t.Errorf("project flow does not match work_scope_id against the resolved identity scope\n%s", statement)
+	}
+	if !strings.Contains(statement, "id AS scope") || !strings.Contains(statement, "project_key AS scope") {
+		t.Errorf("the identity resolution does not expand BOTH the canonical id and the project key into scope rows\n%s", statement)
 	}
 	// The aggregation must be per (project, team), not per team alone --
 	// defect 2. Grouping by team only is what pulled in other projects.
@@ -60,13 +68,13 @@ func TestChaos4521b_ProjectFlowKeysOnTheProjectsOwnWorkScope(t *testing.T) {
 	// the guard is what keeps a NULL-key project from colliding with the
 	// `{org}:linear:CHAOS` pseudo-project row that CHAOS-4530 may or may
 	// not remove. This assertion makes the change correct either way.
-	if !strings.Contains(statement, "p.project_key != ''") {
-		t.Errorf("the project_key arm is not guarded on a non-empty key\n%s", statement)
+	if !strings.Contains(statement, "project_key != ''") {
+		t.Errorf("the project_key scope row is not guarded on a non-empty key\n%s", statement)
 	}
 	// The ambiguity guard travels with it: a key resolving to two projects
 	// must not attribute one project's rows to the other.
-	if !strings.Contains(statement, "p.key_resolution_count = 1") {
-		t.Errorf("the project_key arm dropped its ambiguity guard\n%s", statement)
+	if !strings.Contains(statement, "key_resolution_count = 1") {
+		t.Errorf("the project_key scope row dropped its ambiguity guard\n%s", statement)
 	}
 }
 
@@ -205,7 +213,7 @@ func TestChaos4521b_ThePseudoProjectOwnershipRowAttributesToNothing(t *testing.T
 	//    unambiguous one. Without the first, a NULL-key project ('' after
 	//    the coalesce) could match a stray empty identity; without the
 	//    second, one project's ownership could be attributed to another.
-	if !strings.Contains(statement, "p.project_key != ''") || !strings.Contains(statement, "p.key_resolution_count = 1") {
+	if !strings.Contains(statement, "project_key != ''") || !strings.Contains(statement, "key_resolution_count = 1") {
 		t.Errorf("the ownership key arm lost a guard\n%s", statement)
 	}
 }
