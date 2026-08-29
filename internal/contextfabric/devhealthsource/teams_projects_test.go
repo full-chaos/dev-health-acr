@@ -377,7 +377,7 @@ func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug st
 // it -- the window function that decides ambiguity was never something this
 // fake could compute anyway.
 func projectTeamRow(projectID, teamID, source string, validFrom time.Time, latestIsOpen uint8, latestValidTo, updatedAt time.Time) []any {
-	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, "github"}
+	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, "github", uint8(0)}
 }
 
 // liveShapedEdgeClient replays the ground-truth org's real edge row shapes:
@@ -610,7 +610,7 @@ func TestEveryTeamsProjectsEdgeTypeIsDeclared(t *testing.T) {
 // its own test against the ledger's own statement.
 func omittedProjectTeamRow(projectID, teamID, source string, updatedAt time.Time) []any {
 	oversized := projectID + strings.Repeat("x", 256)
-	return []any{oversized, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, "github"}
+	return []any{oversized, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, "github", uint8(0)}
 }
 
 // TestOmissionTelemetryCountsDistinctKeysAcrossTheRun is codex round-2 F3.
@@ -1035,4 +1035,70 @@ func TestChaos4542_TableReadFailureLogsTheClickHouseCode(t *testing.T) {
 			t.Errorf("log leaked driver text %q -- the code and class are the whole budget; got:\n%s", forbidden, output)
 		}
 	}
+}
+
+// TestChaos4542_ConflictingIdentityEmitsNoEdge is codex R2 P2-1: the
+// producer's no-fabrication contract.
+//
+// The two arms resolve INDEPENDENTLY. An ownership row whose project_id
+// resolves project A while its project_key resolves a DIFFERENT project B
+// produces a row from each, and the outer grouping keeps both because it
+// groups by the RESOLVED project. One of those two OWNED_BY_TEAM edges is an
+// ownership the source never asserted.
+//
+// There is no basis for calling either one the winner -- this table's
+// project_id is documented as unreliable, which is why the key arm exists at
+// all -- so the row fails closed, exactly as an ambiguous key does. Choosing
+// would be minting canonical truth from a coin flip.
+//
+// Suppressed is only half. The ledger entry is the other half: a fabrication
+// an operator never hears about was corrected invisibly, and the next person
+// to look at edge counts has no way to know why they moved.
+func TestChaos4542_ConflictingIdentityEmitsNoEdge(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
+	// conflicting_identity = 1 is what the statement's min()/max() window
+	// computes for such a row; the fake cannot run a window function, so the
+	// flag is supplied the way real SQL would deliver it.
+	conflicting := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1)}
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM team_project_ownership FINAL", rows: [][]any{
+			conflicting,
+			projectTeamRow("proj-clean", "team-x", "native", at, 1, time.Unix(0, 0).UTC(), at),
+		}},
+	}}
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+
+	batch, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
+		Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
+	})
+	if err != nil {
+		t.Fatalf("NextProjectionBatch: %v", err)
+	}
+
+	if hasRelationshipID(batch, "relationship:project_team:github:proj-a:team-x:native") {
+		t.Error("emitted an edge for an ownership row whose project_id and project_key resolve to DIFFERENT projects -- at most one of the two is real and nothing here can say which")
+	}
+	// One conflicting row must not suppress the rest.
+	if !hasRelationshipID(batch, "relationship:project_team:github:proj-clean:team-x:native") {
+		t.Error("lost an unrelated unambiguous edge -- failing closed is per row, never per batch")
+	}
+	if output := logged.String(); !strings.Contains(output, "suppressed_conflicting_identities=1") {
+		t.Errorf("no telemetry for a suppressed fabrication -- edge counts moved and nothing said why; got:\n%s", output)
+	}
+}
+
+func hasRelationshipID(batch contextfabric.ProjectionBatch, id string) bool {
+	for _, relationship := range batch.Relationships {
+		if relationship.RelationshipID == id {
+			return true
+		}
+	}
+	return false
 }

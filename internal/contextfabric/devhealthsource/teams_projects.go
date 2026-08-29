@@ -301,8 +301,9 @@ func (s *TeamsProjectsSource) recordConsumed(fromCursor string) func(orgID, curs
 // reported each page's slice instead of the run's total. Understated
 // omission telemetry reads as health -- measurement failing toward fine.
 type ambiguityLedger struct {
-	mu   sync.Mutex
-	keys map[string]struct{}
+	mu        sync.Mutex
+	keys      map[string]struct{}
+	conflicts map[string]struct{}
 }
 
 func (l *ambiguityLedger) add(provider, projectKey string) {
@@ -315,6 +316,34 @@ func (l *ambiguityLedger) add(provider, projectKey string) {
 		l.keys = map[string]struct{}{}
 	}
 	l.keys[provider+"\x00"+projectKey] = struct{}{}
+}
+
+// addConflict records an ownership row whose project_id and project_key
+// resolve to DIFFERENT projects. Kept separate from the ambiguous-key set
+// because the two are different operator questions: an ambiguous key means
+// "this key names several projects", a conflicting identity means "this ROW
+// names two projects and disagrees with itself". Collapsing them into one
+// number would tell an operator that something was dropped without saying
+// which kind of wrong the data is.
+func (l *ambiguityLedger) addConflict(provider, rowKey string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.conflicts == nil {
+		l.conflicts = map[string]struct{}{}
+	}
+	l.conflicts[provider+"\x00"+rowKey] = struct{}{}
+}
+
+func (l *ambiguityLedger) conflictCount() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.conflicts)
 }
 
 func (l *ambiguityLedger) count() int {
@@ -754,6 +783,15 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	// below pass their ledger POINTER, so they read it when the deferred
 	// call runs; this one passed an int and did not.
 	defer func() { logAmbiguousProjectKeys(ctx, s.logger, checkpoint.OrgID, ledger.count()) }()
+	defer func() { logConflictingIdentities(ctx, s.logger, checkpoint.OrgID, ledger.conflictCount()) }()
+	// Once per call, not once per page: the census is organization-scoped and
+	// returns identical rows every page, and the paging loop can iterate many
+	// times over fully-omitted pages. It runs BEFORE the read because the rows
+	// it describes are precisely the ones no page will contain -- there is
+	// nothing in a result set to infer them from.
+	if err := recordAmbiguousProjectKeys(ctx, s.client, s.logger, strings.TrimSpace(checkpoint.OrgID), ledger); err != nil {
+		return contextfabric.ProjectionBatch{}, false, err
+	}
 	presence := s.presenceLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logPresenceTelemetry(ctx, s.logger, checkpoint.OrgID, presence)
 	teamAuth := s.teamAuthLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)

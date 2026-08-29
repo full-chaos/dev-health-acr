@@ -162,8 +162,13 @@ func TestChaos4542_AmbiguityLedgerStatementIsPortableTo248(t *testing.T) {
 	}
 	// And it must be organization-scoped on BOTH sides, or one tenant's
 	// projects make another tenant's key look ambiguous.
-	if strings.Count(ambiguousProjectKeysStatement, "org_id = {org_id:String}") != 2 {
-		t.Fatal("both the projects and ownership subqueries must be scoped to the organization")
+	if got := strings.Count(ambiguousProjectKeysStatement, "org_id = {org_id:String}"); got < 3 {
+		t.Fatalf("org scoping appears %d times, want at least 3 (projects, ownership, and the embedded scope catalog): one tenant's projects must never make another tenant's key look ambiguous, and the membership test must not consult another tenant's scopes either", got)
+	}
+	// The bound must be explicit. An unbounded census holds one row per
+	// ambiguous key in memory for a tenant that may have thousands.
+	if !strings.Contains(ambiguousProjectKeysStatement, "LIMIT {census_limit:UInt32}") {
+		t.Error("the census must carry an explicit LIMIT")
 	}
 }
 
@@ -194,5 +199,29 @@ func TestChaos4542_KeyArmSelectsTheKeyScopeRowAndTheScopeArmDoesNot(t *testing.T
 		if strings.Contains(clause, "scope_kind") {
 			t.Errorf("scope_kind appears in a JOIN ON (%q): 24.8 rejects a non-equality ON with Code: 403", clause)
 		}
+	}
+}
+
+// The census must not claim an omission that did not happen (codex R2 P2-2).
+//
+// An ownership row whose project_id resolves through the SCOPE arm gets its
+// edge. Its key being ambiguous cost nothing, so reporting it is a FALSE
+// omission claim -- and a false claim is worse than a silent one: it is
+// decision-basis telemetry asserting a defect that did not occur, which sends
+// an operator looking for a dropped edge that is sitting right there.
+//
+// The membership test is what encodes that. It asks only "did anything
+// resolve this ref", never "which project does this row mean", so the census
+// stays decoupled from the resolution whose gaps it reports -- a third copy of
+// the identity join would couple them and drift.
+func TestChaos4542_CensusCountsOnlyRowsThatActuallyFailedToResolve(t *testing.T) {
+	t.Parallel()
+	if !strings.Contains(ambiguousProjectKeysStatement, readers.ProjectOwnershipJoinColumn+" NOT IN (SELECT p.scope FROM ") {
+		t.Fatal("the census counts every ownership row referencing an ambiguous key, including rows that resolved by project_id and kept their edge -- that is a false omission claim")
+	}
+	// It must be a MEMBERSHIP test over the scope catalog, not a second
+	// spelling of it: one definition of "what resolves" or the two drift.
+	if !strings.Contains(ambiguousProjectKeysStatement, readers.ProjectIdentityCatalogSQL()) {
+		t.Error("the membership test must read the shared scope catalog rather than restating which refs resolve")
 	}
 }
