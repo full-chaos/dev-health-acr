@@ -231,13 +231,32 @@ func runJRepositoryStatusShapedResult(resultID string) contractsv1.ContextFabric
 	for i := 0; i < 3; i++ {
 		result.ClaimedFacts = append(result.ClaimedFacts, rowsBearingClaimedFact("claim_repo_status_"+strconv.Itoa(i), contractsv1.ContextFabricFactStatus, repo))
 	}
+	// CHAOS-4523 codex P2 finding: ContextFabricRelationshipPath.Validate
+	// requires an 8-256 char PathID, at least 2 UNIQUE nodes, and exactly
+	// len(nodes)-1 continuous, individually-valid edges -- a single-node,
+	// short-ID path (the pre-fix fixture) can never be a production
+	// InvestigationResult, so a regression test built on one proves
+	// nothing about what production can actually emit. Each path here
+	// pairs the repository with a distinct evidence subject and one
+	// RELATED_TO edge between them.
 	for i := 0; i < 27; i++ {
+		evidenceSubject := contractsv1.ContextFabricSubjectRef{
+			Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: "pr_repo_status_" + strconv.Itoa(i), Label: "pull request " + strconv.Itoa(i),
+		}
 		result.Paths = append(result.Paths, contractsv1.ContextFabricRelationshipPath{
-			PathID: "path_" + strconv.Itoa(i), Nodes: []contractsv1.ContextFabricSubjectRef{repo},
+			PathID: "path_repo_status_" + strconv.Itoa(i), Nodes: []contractsv1.ContextFabricSubjectRef{repo, evidenceSubject},
+			Edges: []contractsv1.ContextFabricRelationshipEdge{{
+				Type: contractsv1.ContextFabricRelationshipRelatedTo, From: repo, To: evidenceSubject,
+				Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
+				EvidenceRefIDs: []string{"evidence_repo_1"},
+			}},
 			WhyRelevant: "supports driver_repo_status", EvidenceRefIDs: []string{"evidence_repo_1"},
 		})
 	}
 	result.EvidenceRefIDs = []string{"evidence_repo_1"}
+	if err := result.Validate(); err != nil {
+		panic("runJRepositoryStatusShapedResult built an invalid fixture: " + err.Error())
+	}
 	return result
 }
 
