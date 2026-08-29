@@ -180,6 +180,37 @@ func TestFindReusable_HappyPathRoundTrip(t *testing.T) {
 	require.Equal(t, result.ResultID, found.ResultID)
 }
 
+// TestFindReusable_CohortMintedClaimedFactsSurviveAReuseHit is CHAOS-4398
+// PR3b's own confirmation requirement (team-lead ruling): a stored result
+// carrying RankCohort-minted ClaimedFacts (the ranking-time provenance
+// citations, cohort driver SourceClaimedFactIDs' own field) must come back
+// from a reuse hit with those SAME claims intact -- a reuse hit serves the
+// stored payload verbatim, so a driver's SourceClaimedFactIDs must still
+// resolve against the SAME claims the served copy carries, byte for byte,
+// never a re-derived or dropped set.
+func TestFindReusable_CohortMintedClaimedFactsSurviveAReuseHit(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-cohort-claims"}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result_reuse_cohort_claims01", principal.OrgID, "Which team is struggling most?")
+	mintedValue := "high"
+	result.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{{
+		ClaimID: "claim_cohort_team:CHAOS_health.compounding_risk_current_cohort-ranking.v2",
+		Kind:    contractsv1.ContextFabricFactHealth,
+		Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:CHAOS", Label: "CHAOS"},
+		Field:   "severity", Value: contractsv1.ContextFabricScalarValue{String: &mintedValue},
+	}}
+	saveWithReuseSnapshot(t, ctx, store, principal, result)
+
+	found, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.True(t, ok, "expected a reusable candidate")
+	require.Equal(t, result.ClaimedFacts, found.ClaimedFacts, "a reuse hit must serve the SAME cohort-minted claims the stored result carried -- a driver's SourceClaimedFactIDs must still resolve")
+}
+
 // TestFindReusable_RejectsAnExistingRowWhosePayloadCarriesPriorSubjectReceiptDispositions
 // is a codex CHAOS-3813 round-1 finding (Medium, fixed): reuseKeyColumns'
 // write-side guard (store.go) stops FUTURE saves from populating reuse

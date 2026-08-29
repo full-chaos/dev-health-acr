@@ -115,6 +115,78 @@
       "confidence": 0.96,
       "qualification": "This judgment is limited to currently visible project and acceptance evidence.",
       "current": true
+    },
+    {
+      "driver_id": "cohort-driver-01-1",
+      "standing": "principal",
+      "category": "operational_deficiency",
+      "title": "CHAOS: operational deficiencies",
+      "summary": "operational deficiencies (weight 20, value 1.00) contributed 20.0 points to CHAOS's a 43.5 attention score.",
+      "affected_subjects": [
+        {
+          "kind": "team",
+          "canonical_id": "team:CHAOS",
+          "label": "CHAOS"
+        }
+      ],
+      "evidence_ref_ids": [
+        "evidence_team_chaos_roster"
+      ],
+      "claimed_fact_ids": [
+        "claim_cohort_88cad88367c815eae568ce1f979c1471"
+      ],
+      "derivation": "rule_inferred",
+      "epistemic_status": "inferred",
+      "confidence": 0.95,
+      "current": true
+    },
+    {
+      "driver_id": "cohort-driver-01-2",
+      "standing": "contributing",
+      "category": "health",
+      "title": "CHAOS: health risk",
+      "summary": "health risk (weight 25, value 0.50) contributed 12.5 points to CHAOS's a 43.5 attention score.",
+      "affected_subjects": [
+        {
+          "kind": "team",
+          "canonical_id": "team:CHAOS",
+          "label": "CHAOS"
+        }
+      ],
+      "evidence_ref_ids": [
+        "evidence_team_chaos_roster"
+      ],
+      "claimed_fact_ids": [
+        "claim_cohort_ff977441fb1cb96f9023dcff28d4a624"
+      ],
+      "derivation": "rule_inferred",
+      "epistemic_status": "inferred",
+      "confidence": 0.95,
+      "current": true
+    },
+    {
+      "driver_id": "cohort-driver-01-3",
+      "standing": "contributing",
+      "category": "readiness",
+      "title": "CHAOS: readiness gap",
+      "summary": "readiness gap (weight 15, value 0.40) contributed 6.0 points to CHAOS's a 43.5 attention score.",
+      "affected_subjects": [
+        {
+          "kind": "team",
+          "canonical_id": "team:CHAOS",
+          "label": "CHAOS"
+        }
+      ],
+      "evidence_ref_ids": [
+        "evidence_team_chaos_roster"
+      ],
+      "claimed_fact_ids": [
+        "claim_cohort_fbf801c96f78b58f7f50eb3d6c2f57a2"
+      ],
+      "derivation": "rule_inferred",
+      "epistemic_status": "inferred",
+      "confidence": 0.95,
+      "current": true
     }
   ],
   "remaining_work": [
@@ -595,6 +667,45 @@
           }
         }
       ]
+    },
+    {
+      "claim_id": "claim_cohort_88cad88367c815eae568ce1f979c1471",
+      "kind": "operational_deficiencies",
+      "subject": {
+        "kind": "team",
+        "canonical_id": "team:CHAOS",
+        "label": "CHAOS"
+      },
+      "field": "severity",
+      "value": {
+        "string": "critical"
+      }
+    },
+    {
+      "claim_id": "claim_cohort_ff977441fb1cb96f9023dcff28d4a624",
+      "kind": "health",
+      "subject": {
+        "kind": "team",
+        "canonical_id": "team:CHAOS",
+        "label": "CHAOS"
+      },
+      "field": "severity",
+      "value": {
+        "string": "elevated"
+      }
+    },
+    {
+      "claim_id": "claim_cohort_fbf801c96f78b58f7f50eb3d6c2f57a2",
+      "kind": "readiness",
+      "subject": {
+        "kind": "team",
+        "canonical_id": "team:CHAOS",
+        "label": "CHAOS"
+      },
+      "field": "estimate_coverage_ratio",
+      "value": {
+        "number": 0.6
+      }
     }
   ],
   "coverage": {
@@ -613,8 +724,9 @@
       },
       {
         "source": "canonical_fact:workload",
-        "state": "pruned",
-        "reason": "pruned:subject_kind_unsupported: no resolved subject has a kind this capability supports"
+        "state": "available",
+        "observed_at": "2026-08-11T16:00:02Z",
+        "watermark": "workload-wm-9"
       }
     ],
     "partial": false,
@@ -672,24 +784,61 @@
         ],
         "ranking_computed": true,
         "attention_rank": 1,
-        "score": 42.0,
+        "score": 43.5,
         "ranking_basis": [
-          "health.compounding_risk"
-        ],
-        "data_completeness": "degraded",
-        "outcome": "provisional",
-        "missing_signals": [
           "investment_mix",
+          "health.compounding_risk",
           "operational_deficiencies.severity",
           "readiness.coverage_gap",
           "workload.forecast_pressure"
         ],
+        "data_completeness": "complete",
+        "outcome": "qualified",
         "drivers": [
           {
+            "signal": "investment_mix",
+            "value": 0,
+            "weight": 30,
+            "weight_contributed": 0,
+            "window": "current",
+            "concentration": 0.2,
+            "concentration_method": "max_share"
+          },
+          {
             "signal": "health.compounding_risk",
-            "value": 0.42,
+            "value": 0.5,
             "weight": 25,
-            "weight_contributed": 42.0,
+            "weight_contributed": 12.5,
+            "window": "current",
+            "source_claimed_fact_ids": [
+              "claim_cohort_ff977441fb1cb96f9023dcff28d4a624"
+            ]
+          },
+          {
+            "signal": "operational_deficiencies.severity",
+            "value": 1,
+            "weight": 20,
+            "weight_contributed": 20,
+            "window": "current",
+            "source_claimed_fact_ids": [
+              "claim_cohort_88cad88367c815eae568ce1f979c1471"
+            ]
+          },
+          {
+            "signal": "readiness.coverage_gap",
+            "value": 0.4,
+            "weight": 15,
+            "weight_contributed": 6,
+            "window": "current",
+            "source_claimed_fact_ids": [
+              "claim_cohort_fbf801c96f78b58f7f50eb3d6c2f57a2"
+            ]
+          },
+          {
+            "signal": "workload.forecast_pressure",
+            "value": 0.5,
+            "weight": 10,
+            "weight_contributed": 5,
             "window": "current"
           }
         ]

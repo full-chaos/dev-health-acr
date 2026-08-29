@@ -3320,6 +3320,16 @@
               ],
               "type": "string"
             },
+            "source_claimed_fact_ids": {
+              "items": {
+                "maxLength": 256,
+                "minLength": 8,
+                "type": "string"
+              },
+              "maxItems": 250,
+              "type": "array",
+              "uniqueItems": true
+            },
             "threshold_labels": {
               "items": {
                 "enum": [

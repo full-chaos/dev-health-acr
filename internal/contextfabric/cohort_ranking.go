@@ -1,6 +1,9 @@
 package contextfabric
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"math"
 	"sort"
 )
@@ -159,10 +162,27 @@ const FactFieldThemeQualityBugfix = "theme_quality_bugfix"
 // Purely a function of cohort, facts, and coverage -- no clock, no I/O, no
 // model call -- so it is deterministic and safe to call inline in
 // Engine.Investigate.
-func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Cohort, CohortRankedEvent) {
+// cohortMemberSignalCitations carries every signalCitation RankCohort
+// computed but did NOT mint into a ClaimedFact -- keyed [member subject
+// CanonicalID][signal family name]. Team-lead ruling (CHAOS-4398 PR3b):
+// "minting follows citation, not ranking" -- a ClaimedFact is minted ONLY
+// for a driver a narrated ContextFabricDriverJudgment actually cites
+// (narrateCohortDriverJudgments, post-synthesis), never for every available
+// signal regardless of whether anything ever narrates it (that unconditional
+// version measured ~708 KB worst-case for a 250-member fully-qualified
+// cohort, ~2.8x the 256 KB default budget, from provenance alone). RankCohort
+// itself never mints; it only hands this map forward so the caller
+// (engine.go) can thread it to narrateCohortDriverJudgments after synthesis.
+type cohortMemberSignalCitations map[string]map[string]*signalCitation
+
+// RankCohort's third return value is cohortMemberSignalCitations -- see
+// that type's own doc comment for why RankCohort computes but does not
+// mint citations, and engine.go's own call site comment for how it
+// threads this map to narrateCohortDriverJudgments after synthesis.
+func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Cohort, CohortRankedEvent, cohortMemberSignalCitations) {
 	event := CohortRankedEvent{FormulaVersion: RankingFormulaVersion, SignalsAvailable: map[string]int{}, OutcomeCounts: map[string]int{}}
 	if cohort == nil || len(cohort.Members) == 0 {
-		return cohort, event
+		return cohort, event, nil
 	}
 
 	bySubject := make(map[string][]CanonicalFact, len(cohort.Members))
@@ -176,11 +196,13 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 	// any per-member score is computed.
 	rawWorkload := make(map[string]float64, len(cohort.Members))
 	haveWorkload := make(map[string]bool, len(cohort.Members))
+	workloadCitation := make(map[string]*signalCitation, len(cohort.Members))
 	for _, member := range cohort.Members {
 		key := canonicalFactSubjectKey(member.Subject)
-		if days, ok := workloadWorstDays(bySubject[key], coverage); ok {
+		if days, ok, citation := workloadWorstDays(bySubject[key], coverage); ok {
 			rawWorkload[key] = days
 			haveWorkload[key] = true
+			workloadCitation[key] = citation
 		}
 	}
 	workloadMin, workloadMax := minMax(rawWorkload)
@@ -198,6 +220,9 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 		drivers        []CohortMemberDriver
 		outcome        CohortMemberOutcome
 		missingSignals []string
+		// citations is length-for-length and order-for-order with drivers
+		// (scoreMember's own invariant) -- see mintCohortDriverClaims.
+		citations []*signalCitation
 	}
 	results := make([]memberResult, len(cohort.Members))
 	degradedCount := 0
@@ -210,8 +235,8 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 			workloadValue = normalizeWorkloadMinMax(rawWorkload[key], workloadMin, workloadMax)
 		}
 
-		score, basis, completeness, contributed, drivers, outcome, missingSignals := scoreMember(memberFacts, coverage, workloadValue, hasWorkload)
-		results[i] = memberResult{score: score, basis: basis, completeness: completeness, contributed: contributed, drivers: drivers, outcome: outcome, missingSignals: missingSignals}
+		score, basis, completeness, contributed, drivers, outcome, missingSignals, citations := scoreMember(memberFacts, coverage, workloadValue, hasWorkload, workloadCitation[key])
+		results[i] = memberResult{score: score, basis: basis, completeness: completeness, contributed: contributed, drivers: drivers, outcome: outcome, missingSignals: missingSignals, citations: citations}
 		if completeness == CohortDataDegraded {
 			degradedCount++
 		}
@@ -247,6 +272,7 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 		attentionRank[memberIndex] = rank + 1
 	}
 
+	citationsByMember := make(cohortMemberSignalCitations, len(cohort.Members))
 	for i := range cohort.Members {
 		cohort.Members[i].RankingComputed = true
 		cohort.Members[i].Score = results[i].score
@@ -256,11 +282,59 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 		cohort.Members[i].Drivers = results[i].drivers
 		cohort.Members[i].Outcome = results[i].outcome
 		cohort.Members[i].MissingSignals = results[i].missingSignals
+		// Citations are collected but NOT minted here -- see
+		// cohortMemberSignalCitations' own doc comment. A nil citation
+		// (the producer-bug case scoreMember's own comment documents) is
+		// skipped entirely: that ONE driver simply has no citation to
+		// resolve later, which narrateCohortDriverJudgments treats as
+		// "cannot narrate this driver", never a fabricated one.
+		bySignal := make(map[string]*signalCitation, len(results[i].drivers))
+		for j, driver := range results[i].drivers {
+			if j < len(results[i].citations) && results[i].citations[j] != nil {
+				bySignal[driver.Signal] = results[i].citations[j]
+			}
+		}
+		if len(bySignal) > 0 {
+			citationsByMember[cohort.Members[i].Subject.CanonicalID] = bySignal
+		}
 	}
 
 	event.MemberCount = len(cohort.Members)
 	event.DegradedMemberCount = degradedCount
-	return cohort, event
+	return cohort, event, citationsByMember
+}
+
+// cohortDriverClaimID mints a deterministic, unique-per-ranking-pass
+// ClaimID for one (member, signal family) pair, over (member subject,
+// signal family, window, RankingFormulaVersion) -- NOT random, and not
+// derived from anything time- or process-specific: two RankCohort calls
+// over identical facts/coverage for the same member always mint the SAME
+// ClaimID for the SAME signal, so a replay or an answer-reuse hit that
+// serves a stored result verbatim reproduces the exact citation a fresh
+// ranking pass would also mint (see
+// TestRankCohort_MintedClaimIDsAreDeterministicAcrossRepeatedRuns). Window
+// and RankingFormulaVersion are both part of the hashed tuple (not just
+// subject+signal) because either one changing legitimately changes what
+// this claim MEANS for the same member+signal (a current-vs-prior
+// mix-shift citation is a different claim than a current-only one; a
+// formula revision can change which raw field a signal even reads) -- the
+// ReuseKey.RankingFormulaVersion dimension already fences REUSE on a
+// formula bump; this fences the CLAIM ID itself on the same dimension, so
+// two differently-versioned rankings of the same member/signal never
+// collide on one ID.
+//
+// Codex R1 (CHAOS-4398 PR3b) caught the earlier concatenation-based ID
+// ("claim_cohort_" + CanonicalID + "_" + signal + "_" + window + "_" +
+// RankingFormulaVersion) exceeding ContextFabricModelMintedIDMaxLength
+// (256) for a legal-but-long CanonicalID: SubjectRef.CanonicalID alone may
+// be up to 256 characters, so the concatenation could reach ~330+ and
+// reject an otherwise-valid cohort at result.Validate(). Hashing the same
+// tuple keeps the ID fully deterministic and replay-stable (same input,
+// same digest, every time) while bounding its length regardless of how
+// long a legal CanonicalID gets.
+func cohortDriverClaimID(subject SubjectRef, signal string, window CohortMemberDriverWindow) string {
+	digest := sha256.Sum256([]byte(subject.CanonicalID + "\x00" + signal + "\x00" + string(window) + "\x00" + RankingFormulaVersion))
+	return "claim_cohort_" + hex.EncodeToString(digest[:])[:32]
 }
 
 // scoreMember computes ONE member's Score/RankingBasis/DataCompleteness
@@ -274,11 +348,11 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 // empty iff Outcome is insufficient_evidence or not_applicable (see
 // memberResult's own doc comment above and Outcome's design doc §8
 // thresholds).
-func scoreMember(facts []CanonicalFact, coverage Coverage, workloadValue float64, workloadAvailable bool) (score *float64, basis []string, completeness CohortDataCompleteness, contributed []string, drivers []CohortMemberDriver, outcome CohortMemberOutcome, missingSignals []string) {
-	mixValue, mixLabels, mixUsedPriorWindow, mixConcentration, mixConcentrationMethod, mixAvailable := investmentMixSignal(facts, coverage)
-	healthValue, healthAvailable := healthRiskSignal(facts, coverage)
-	deficiencyValue, deficiencyAvailable := deficiencySeveritySignal(facts, coverage)
-	readinessValue, readinessAvailable := readinessGapSignal(facts, coverage)
+func scoreMember(facts []CanonicalFact, coverage Coverage, workloadValue float64, workloadAvailable bool, workloadCitation *signalCitation) (score *float64, basis []string, completeness CohortDataCompleteness, contributed []string, drivers []CohortMemberDriver, outcome CohortMemberOutcome, missingSignals []string, citations []*signalCitation) {
+	mixValue, mixLabels, mixUsedPriorWindow, mixConcentration, mixConcentrationMethod, mixAvailable, mixCitation := investmentMixSignal(facts, coverage)
+	healthValue, healthAvailable, healthCitation := healthRiskSignal(facts, coverage)
+	deficiencyValue, deficiencyAvailable, deficiencyCitation := deficiencySeveritySignal(facts, coverage)
+	readinessValue, readinessAvailable, readinessCitation := readinessGapSignal(facts, coverage)
 
 	type signal struct {
 		name                string
@@ -290,13 +364,18 @@ func scoreMember(facts []CanonicalFact, coverage Coverage, workloadValue float64
 		concentration       float64
 		concentrationMethod string
 		hasConcentration    bool
+		// citation (CHAOS-4398 PR3b) is the raw canonical field this
+		// signal's value was actually read from -- see signalCitation's
+		// own doc comment. Always non-nil when available is true (every
+		// signal function's own contract).
+		citation *signalCitation
 	}
 	signals := [...]signal{
-		{RankingSignalInvestmentMix, weightInvestmentMix, mixValue, mixAvailable, mixLabels, mixUsedPriorWindow, mixConcentration, mixConcentrationMethod, mixAvailable},
-		{RankingSignalHealthRisk, weightHealthRisk, healthValue, healthAvailable, nil, false, 0, "", false},
-		{RankingSignalDeficiencySeverity, weightDeficiencySeverity, deficiencyValue, deficiencyAvailable, nil, false, 0, "", false},
-		{RankingSignalReadinessGap, weightReadinessGap, readinessValue, readinessAvailable, nil, false, 0, "", false},
-		{RankingSignalWorkloadPressure, weightWorkloadPressure, workloadValue, workloadAvailable, nil, false, 0, "", false},
+		{RankingSignalInvestmentMix, weightInvestmentMix, mixValue, mixAvailable, mixLabels, mixUsedPriorWindow, mixConcentration, mixConcentrationMethod, mixAvailable, mixCitation},
+		{RankingSignalHealthRisk, weightHealthRisk, healthValue, healthAvailable, nil, false, 0, "", false, healthCitation},
+		{RankingSignalDeficiencySeverity, weightDeficiencySeverity, deficiencyValue, deficiencyAvailable, nil, false, 0, "", false, deficiencyCitation},
+		{RankingSignalReadinessGap, weightReadinessGap, readinessValue, readinessAvailable, nil, false, 0, "", false, readinessCitation},
+		{RankingSignalWorkloadPressure, weightWorkloadPressure, workloadValue, workloadAvailable, nil, false, 0, "", false, workloadCitation},
 	}
 
 	var weightedSum, availableWeight float64
@@ -374,6 +453,19 @@ func scoreMember(facts []CanonicalFact, coverage Coverage, workloadValue float64
 				driverEntry.ConcentrationMethod = s.concentrationMethod
 			}
 			drivers = append(drivers, driverEntry)
+			// citations is built in LOCKSTEP with drivers (same loop, same
+			// filter, same order, same length always) -- RankCohort mints
+			// one ClaimID per non-nil entry and assigns it back to
+			// drivers[same index] by position, so the two slices must
+			// never diverge in length or order. Every available signal's
+			// citation is non-nil by every signal function's own contract
+			// (see signalCitation's own doc comment); a nil entry here
+			// would be a producer bug -- RankCohort's own assembly step
+			// leaves that ONE driver's SourceClaimedFactIDs empty rather
+			// than fabricate a citation, which the write-path validator
+			// then correctly flags as a real defect instead of silently
+			// producing an invalid claim.
+			citations = append(citations, s.citation)
 		}
 	}
 	switch {
@@ -384,7 +476,7 @@ func scoreMember(facts []CanonicalFact, coverage Coverage, workloadValue float64
 	default:
 		completeness = CohortDataPartial
 	}
-	return score, basis, completeness, contributed, drivers, outcome, missingSignals
+	return score, basis, completeness, contributed, drivers, outcome, missingSignals, citations
 }
 
 // coverageState looks up the fact-read Coverage entry for kind, matching
@@ -480,14 +572,96 @@ func themeShares(fact CanonicalFact, prefix func(string) string) (map[string]flo
 	return shares, true
 }
 
-func maxShare(shares map[string]float64) float64 {
-	max := 0.0
-	for _, v := range shares {
-		if v > max {
-			max = v
+// maxShare returns the largest theme share AND which canonical theme
+// achieves it -- iterated in the FIXED canonicalThemes order (not map
+// iteration) so a tie between two themes resolves deterministically to
+// whichever comes first in the taxonomy, the same tie-break discipline the
+// mix-shift direction label already uses. theme is "" only when shares is
+// empty (never reached in production: investmentMixSignal only calls this
+// after themeShares has already confirmed at least one theme is present).
+func maxShare(shares map[string]float64) (share float64, theme string) {
+	for _, candidate := range canonicalThemes {
+		value, ok := shares[candidate]
+		if !ok || value <= share {
+			continue
+		}
+		share = value
+		theme = candidate
+	}
+	return share, theme
+}
+
+// signalCitation names ONE canonical fact field a signal function actually
+// read to compute its business value. RankCohort turns each available
+// signal's citation into a persisted ContextFabricClaimedFact (Subject is
+// the member's own Subject, attached by the caller, which is the only
+// piece a signal function itself never has) and records the minted
+// ClaimID on the driver's own SourceClaimedFactIDs -- CHAOS-4398 PR3b's
+// R4-style ruling: "the narration cites, it never mints". This type and
+// every signal function's citation return value below ARE the one-time
+// mint, done here in the ranker itself, never re-derived or re-minted
+// downstream (the narrator only resolves a driver to the IDs recorded
+// here).
+type signalCitation struct {
+	kind  FactKind
+	field string
+	value FactValue
+}
+
+// citeFactField builds a signalCitation for one already-read field on
+// fact -- the common shape every signal function but
+// deficiencySeveritySignal's available-zero exception uses (that one has
+// no fact row to cite at all; see its own doc comment).
+func citeFactField(kind FactKind, fact CanonicalFact, field string) *signalCitation {
+	value, ok := fact.Fields[field]
+	if !ok {
+		return nil
+	}
+	return &signalCitation{kind: kind, field: field, value: value}
+}
+
+// validateMintedClaimsGrounded is the structural half of codex R1's
+// finding (CHAOS-4398 PR3b, team-lead ruling): every narration-minted
+// ClaimedFact must pass the SAME grounding check a model-authored claim
+// gets from SynthesisDraft.ValidateAgainst BEFORE it is appended to
+// result.ClaimedFacts -- narration runs entirely AFTER ValidateAgainst has
+// already run (see narrateCohortDriverJudgments' own doc comment on
+// ordering), so nothing else ever checks these claims against the real
+// canonical fact bundle.
+//
+// citeFactField already makes this hold BY CONSTRUCTION for every citation
+// it builds (it reads fact.Fields[field] directly, so the value can never
+// diverge from a real fact). This function is the defense-in-depth
+// backstop, not a belt assumed redundant with that suspenders: it
+// re-derives, from `facts` (the SAME canonical fact bundle RankCohort
+// itself read), whether each minted claim's (Kind, Subject, Field, Value)
+// tuple actually matches a real CanonicalFact -- so a FUTURE signal
+// function that builds a signalCitation some way OTHER than citeFactField
+// (the way the deficiency available-zero case's now-removed
+// "fired_rules_count" citation once did) fails HERE, loudly, instead of
+// silently shipping a fabricated claim.
+func validateMintedClaimsGrounded(claims []ClaimedFact, facts []CanonicalFact) error {
+	for _, claim := range claims {
+		grounded := false
+		for _, fact := range facts {
+			if fact.Kind != claim.Kind {
+				continue
+			}
+			if fact.Subject.Kind != claim.Subject.Kind || fact.Subject.CanonicalID != claim.Subject.CanonicalID {
+				continue
+			}
+			value, ok := fact.Fields[claim.Field]
+			if ok && factValueEqualsScalar(value, claim.Value) {
+				grounded = true
+				break
+			}
+		}
+		if !grounded {
+			return fmt.Errorf("minted claim %q (kind=%s field=%q subject=%q) does not match any canonical fact this ranking pass read",
+				claim.ClaimID, claim.Kind, claim.Field, claim.Subject.CanonicalID)
 		}
 	}
-	return max
+	return nil
 }
 
 // investmentMixSignal is the term-1 sub-formula (design doc §5). value is
@@ -499,9 +673,15 @@ func maxShare(shares map[string]float64) float64 {
 // legitimately come back empty even when the current window has data) and
 // its absence does not make the whole signal unavailable -- it just means
 // that one sub-weight never fires.
-func investmentMixSignal(facts []CanonicalFact, coverage Coverage) (value float64, driverLabels []string, usedPriorWindow bool, concentration float64, concentrationMethod string, available bool) {
+//
+// citation (CHAOS-4398 PR3b) cites the SAME fact's max-share theme field
+// (whichever canonical theme achieves concentration) -- concentration is
+// already a real number this driver exposes on its own Concentration
+// field, so citing the exact canonical field it came from adds a
+// provenance pointer without inventing any new number.
+func investmentMixSignal(facts []CanonicalFact, coverage Coverage) (value float64, driverLabels []string, usedPriorWindow bool, concentration float64, concentrationMethod string, available bool, citation *signalCitation) {
 	if !familyBatchAdmits(coverage, FactInvestment) {
-		return 0, nil, false, 0, "", false
+		return 0, nil, false, 0, "", false, nil
 	}
 	// A team subject can carry MULTIPLE FactInvestment facts -- one per
 	// legacy (investment_area, project_stream) pair from readTeamInvestment
@@ -523,11 +703,11 @@ func investmentMixSignal(facts []CanonicalFact, coverage Coverage) (value float6
 		}
 	}
 	if !found {
-		return 0, nil, false, 0, "", false
+		return 0, nil, false, 0, "", false, nil
 	}
 	current, ok := themeShares(fact, FactFieldTheme)
 	if !ok {
-		return 0, nil, false, 0, "", false
+		return 0, nil, false, 0, "", false, nil
 	}
 	bugfixShare, _ := numberField(fact, FactFieldThemeQualityBugfix)
 
@@ -540,8 +720,28 @@ func investmentMixSignal(facts []CanonicalFact, coverage Coverage) (value float6
 	// "max_share" baked into the field name) so CHAOS-4414's HHI
 	// concentration measure can later replace this computation without a
 	// contract-breaking rename.
-	concentration = maxShare(current)
+	var concentrationTheme string
+	concentration, concentrationTheme = maxShare(current)
 	concentrationMethod = ConcentrationMethodMaxShare
+	// citation (CHAOS-4398 PR3b): cite the max-share theme's own field --
+	// the exact canonical value Concentration already reports. Every real
+	// theme distribution sums to ~1.0, so concentrationTheme is
+	// empty only in a defensively-unreachable all-zero-shares producer bug;
+	// falling back to the FIRST present canonical theme field (fixed
+	// taxonomy order, same determinism discipline as maxShare/mix-shift)
+	// keeps SourceClaimedFactIDs non-empty for this family whenever it is
+	// available, which the write-path validator requires unconditionally.
+	if concentrationTheme == "" {
+		for _, candidate := range canonicalThemes {
+			if _, ok := current[candidate]; ok {
+				concentrationTheme = candidate
+				break
+			}
+		}
+	}
+	if concentrationTheme != "" {
+		citation = citeFactField(FactInvestment, fact, FactFieldTheme(concentrationTheme))
+	}
 
 	if reactiveShare > reactiveShareThreshold {
 		value += subWeightReactiveShare
@@ -589,7 +789,7 @@ func investmentMixSignal(facts []CanonicalFact, coverage Coverage) (value float6
 			}
 		}
 	}
-	return value, driverLabels, usedPriorWindow, concentration, concentrationMethod, true
+	return value, driverLabels, usedPriorWindow, concentration, concentrationMethod, true, citation
 }
 
 // healthRiskSignal reads FactHealth's severity band (compounding_risk_daily's
@@ -598,27 +798,30 @@ func investmentMixSignal(facts []CanonicalFact, coverage Coverage) (value float6
 // assumption the way an unbounded risk score would. "unknown" (or a
 // missing severity) is treated as unavailable, not as a low-risk 0: an
 // unclassified severity is a data gap, not a favorable observation.
-func healthRiskSignal(facts []CanonicalFact, coverage Coverage) (value float64, available bool) {
+func healthRiskSignal(facts []CanonicalFact, coverage Coverage) (value float64, available bool, citation *signalCitation) {
 	if !familyBatchAdmits(coverage, FactHealth) {
-		return 0, false
+		return 0, false, nil
 	}
 	fact, ok := findFact(facts, FactHealth)
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	severity, ok := stringField(fact, "severity")
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
+	// citation (CHAOS-4398 PR3b): the raw "severity" field this value maps
+	// from -- see signalCitation's own doc comment.
+	citation = citeFactField(FactHealth, fact, "severity")
 	switch severity {
 	case "low":
-		return 0.0, true
+		return 0.0, true, citation
 	case "elevated":
-		return 0.5, true
+		return 0.5, true, citation
 	case "high":
-		return 1.0, true
+		return 1.0, true, citation
 	default: // "unknown" or any unrecognized value
-		return 0, false
+		return 0, false, nil
 	}
 }
 
@@ -642,9 +845,10 @@ func healthRiskSignal(facts []CanonicalFact, coverage Coverage) (value float64, 
 // convention) -- a Truncated batch cannot promise there were truly zero
 // fired rules (one could exist past the truncation cap), so it does NOT
 // get the zero exception.
-func deficiencySeveritySignal(facts []CanonicalFact, coverage Coverage) (value float64, available bool) {
+func deficiencySeveritySignal(facts []CanonicalFact, coverage Coverage) (value float64, available bool, citation *signalCitation) {
 	max := 0.0
 	found := false
+	var maxFact CanonicalFact
 	for _, fact := range facts {
 		if fact.Kind != FactOperationalDeficiencies {
 			continue
@@ -662,22 +866,57 @@ func deficiencySeveritySignal(facts []CanonicalFact, coverage Coverage) (value f
 		default:
 			continue
 		}
-		found = true
-		if v > max {
+		if !found || v > max {
 			max = v
+			maxFact = fact
 		}
+		found = true
 	}
 	if found {
 		if !familyBatchAdmits(coverage, FactOperationalDeficiencies) {
-			return 0, false
+			return 0, false, nil
 		}
-		return max, true
+		// citation (CHAOS-4398 PR3b): the fired rule whose severity
+		// actually produced max -- the same "worst case governs" fact this
+		// value already came from.
+		return max, true, citeFactField(FactOperationalDeficiencies, maxFact, "severity")
 	}
 	state, foundState := coverageState(coverage, FactOperationalDeficiencies)
 	if !foundState || state == SourceAvailable {
-		return 0, true
+		// The available-zero exception (this function's own doc comment):
+		// a successful read with NO fired-rule row. This IS a real,
+		// observed value for RANKING (0 -- "no risk"): the ranker actually
+		// read the batch and found nothing fired, so Value/Weight above
+		// still score it as a genuine zero, never as missing.
+		//
+		// It is NOT citable, though (codex R1, CHAOS-4398 PR3b, team-lead
+		// ruling superseding this function's earlier "fired_rules_count"
+		// citation): OperationalDeficienciesProvider (devhealthfacts/
+		// deficiencies.go) only ever emits a CanonicalFact for a row Ops
+		// already marked fired=1 -- zero fired rules means ZERO rows, not
+		// one row with a count field set to zero. There is no real
+		// CanonicalFact of this Kind for this subject at all when found is
+		// false, so there is no field on any actual record this citation
+		// could name -- "fired_rules_count" was a field invented by this
+		// function, present on no real fact, which is exactly the
+		// fabrication codex flagged: a claim minted from it could never
+		// ground against the canonical fact bundle the way every other
+		// citation here (built through citeFactField, reading a REAL
+		// fact.Fields entry) provably does.
+		//
+		// So this branch returns a nil citation: available=true (the
+		// value counts for scoring) but citation=nil (nothing to mint
+		// from). narrateCohortDriverJudgments already skips any driver
+		// whose citation is nil ("no citation to mint from -- never
+		// narrate without one") -- this available-zero driver still
+		// contributes its Value/Weight/WeightContributed to the member's
+		// Score and RankingBasis, it just never becomes a narrated
+		// ContextFabricDriverJudgment or a minted ClaimedFact. Consistent
+		// with "minting follows citation, not ranking": a real ranking
+		// signal that has no real fact to cite stays ranking-only.
+		return 0, true, nil
 	}
-	return 0, false
+	return 0, false, nil
 }
 
 // readinessGapSignal aggregates the WORST (lowest estimate_coverage_ratio)
@@ -686,12 +925,13 @@ func deficiencySeveritySignal(facts []CanonicalFact, coverage Coverage) (value f
 // doc's own "worst case governs" philosophy (matching deficiency severity's
 // MAX-across-fired-rules choice) picks the least-covered scope to drive the
 // gap, never an average or an arbitrary first row.
-func readinessGapSignal(facts []CanonicalFact, coverage Coverage) (value float64, available bool) {
+func readinessGapSignal(facts []CanonicalFact, coverage Coverage) (value float64, available bool, citation *signalCitation) {
 	if !familyBatchAdmits(coverage, FactReadiness) {
-		return 0, false
+		return 0, false, nil
 	}
 	minRatio := math.Inf(1)
 	found := false
+	var minFact CanonicalFact
 	for _, fact := range facts {
 		if fact.Kind != FactReadiness {
 			continue
@@ -700,13 +940,14 @@ func readinessGapSignal(facts []CanonicalFact, coverage Coverage) (value float64
 		if !ok {
 			continue
 		}
-		found = true
-		if ratio < minRatio {
+		if !found || ratio < minRatio {
 			minRatio = ratio
+			minFact = fact
 		}
+		found = true
 	}
 	if !found {
-		return 0, false
+		return 0, false, nil
 	}
 	gap := 1 - minRatio
 	if gap < 0 {
@@ -715,37 +956,44 @@ func readinessGapSignal(facts []CanonicalFact, coverage Coverage) (value float64
 	if gap > 1 {
 		gap = 1
 	}
-	return gap, true
+	// citation (CHAOS-4398 PR3b): the least-covered scope's own raw ratio --
+	// the same "worst case governs" row this gap already derives from.
+	return gap, true, citeFactField(FactReadiness, minFact, "estimate_coverage_ratio")
 }
 
 // workloadWorstDays aggregates the WORST (longest) forecast_p50_days
 // across every FactWorkload fact for this member -- workload partitions by
 // work scope, so a team can carry several; the longest forecast drives the
 // pressure (design doc §5's own "worst case governs" philosophy).
-func workloadWorstDays(facts []CanonicalFact, coverage Coverage) (float64, bool) {
+func workloadWorstDays(facts []CanonicalFact, coverage Coverage) (days float64, available bool, citation *signalCitation) {
 	if !familyBatchAdmits(coverage, FactWorkload) {
-		return 0, false
+		return 0, false, nil
 	}
 	maxDays := 0.0
 	found := false
+	var maxFact CanonicalFact
 	for _, fact := range facts {
 		if fact.Kind != FactWorkload {
 			continue
 		}
-		days, ok := integerField(fact, "forecast_p50_days")
+		value, ok := integerField(fact, "forecast_p50_days")
 		if !ok {
 			continue
 		}
-		found = true
-		value := float64(days)
-		if value > maxDays {
-			maxDays = value
+		floatValue := float64(value)
+		if !found || floatValue > maxDays {
+			maxDays = floatValue
+			maxFact = fact
 		}
+		found = true
 	}
 	if !found {
-		return 0, false
+		return 0, false, nil
 	}
-	return maxDays, true
+	// citation (CHAOS-4398 PR3b): the longest-forecast scope's own raw
+	// day count -- the same "worst case governs" row this value already
+	// derives from.
+	return maxDays, true, citeFactField(FactWorkload, maxFact, "forecast_p50_days")
 }
 
 // minMax computes the population min and max over values' own float64s.

@@ -2284,6 +2284,16 @@
           "enum": [
             "max_share"
           ]
+        },
+        "source_claimed_fact_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 256
+          },
+          "maxItems": 250,
+          "uniqueItems": true
         }
       },
       "required": [

@@ -515,6 +515,85 @@ var contextFabricCohortMemberDriverWeights = map[string]float64{
 	"workload.forecast_pressure":        10,
 }
 
+// contextFabricCohortMemberDriverRequiredFactKind (CHAOS-4398 PR3b, R4-style
+// ruling) is the CLOSED signal-family -> FactKind map every driver's
+// SourceClaimedFactIDs must resolve at least one entry against -- the
+// SAME table ContextFabricDriverCategoryRequiresClaimedFact uses for
+// synthesis-authored ContextFabricDriverJudgment.ClaimedFactIDs (its own
+// "investment"/"health"/"deficiency"/"readiness"/"workload" categories),
+// keyed here by the RankingCohort signal-family STRING (this package
+// cannot import internal/contextfabric's RankingSignal* constants, same
+// cross-package mirroring discipline as contextFabricCohortMemberDriverWeights
+// above) rather than by ContextFabricDriverCategory, since a cohort member
+// driver has no Category field of its own. RankCohort mints the citation
+// itself at ranking time (see ContextFabricCohortMemberDriver.
+// SourceClaimedFactIDs' own doc comment) -- this map is what
+// validateCohortDriverClaimedFacts checks the mint against.
+var contextFabricCohortMemberDriverRequiredFactKind = map[string]ContextFabricFactKind{
+	"investment_mix":                    ContextFabricFactInvestment,
+	"health.compounding_risk":           ContextFabricFactHealth,
+	"operational_deficiencies.severity": ContextFabricFactOperationalDeficiencies,
+	"readiness.coverage_gap":            ContextFabricFactReadiness,
+	"workload.forecast_pressure":        ContextFabricFactWorkload,
+}
+
+// validateCohortDriverClaimedFacts is the cohort-member-driver twin of
+// validateClaimedFactReferences: every ContextFabricCohortMemberDriver's
+// SourceClaimedFactIDs must resolve (in claimed, built from
+// r.ClaimedFacts) and at least one resolved entry must carry the FactKind
+// contextFabricCohortMemberDriverRequiredFactKind names for that driver's
+// Signal. Called once per result, after Drivers is shape-validated
+// (ContextFabricCohortMemberDriver.validate checks bounds/uniqueness only
+// -- it has no access to r.ClaimedFacts). There is deliberately no blanket
+// "required" bound gating this the way per-driver shape checks are gated
+// (team-lead ruling, CHAOS-4398 PR3b: "required-if-cited, not blanket-
+// required" -- a driver RankCohort ranked but narrateCohortDriverJudgments
+// never cited legitimately keeps SourceClaimedFactIDs empty forever, not
+// just on legacy rows): an empty SourceClaimedFactIDs is always a no-op
+// here, and the check only ever engages once a driver actually carries an
+// ID to resolve.
+func validateCohortDriverClaimedFacts(cohort *ContextFabricCohort, claimed map[string]ContextFabricClaimedFact) error {
+	for _, member := range cohort.Members {
+		memberKey := subjectKey(member.Subject)
+		for _, driver := range member.Drivers {
+			if len(driver.SourceClaimedFactIDs) == 0 {
+				continue
+			}
+			requiredKind, hasRequirement := contextFabricCohortMemberDriverRequiredFactKind[driver.Signal]
+			matchedKind := false
+			for _, id := range driver.SourceClaimedFactIDs {
+				fact, ok := claimed[id]
+				if !ok {
+					return fmt.Errorf("cohort member driver references unknown claimed fact %q", id)
+				}
+				// Codex R1 (CHAOS-4398 PR3b): this is the ONLY grounding
+				// check a cohort-member-driver claim ever passes through
+				// (narrateCohortDriverJudgments mints AFTER
+				// SynthesisDraft.ValidateAgainst has already run, so that
+				// per-subject grounding check never sees these claims --
+				// see narrateCohortDriverJudgments' own doc comment).
+				// Without this subject check, a driver could cite a
+				// claim minted for a DIFFERENT cohort member and still
+				// pass as long as some OTHER referenced ID happened to
+				// carry the required Kind -- defeating the field's own
+				// "this member's own evidence" guarantee. Every
+				// referenced claim must belong to THIS member, not just
+				// one of them.
+				if subjectKey(fact.Subject) != memberKey {
+					return fmt.Errorf("cohort member driver references claimed fact %q belonging to a different subject", id)
+				}
+				if hasRequirement && fact.Kind == requiredKind {
+					matchedKind = true
+				}
+			}
+			if hasRequirement && !matchedKind {
+				return fmt.Errorf("cohort member driver signal %q requires a claimed fact of kind %q", driver.Signal, requiredKind)
+			}
+		}
+	}
+	return nil
+}
+
 // contextFabricInvestmentMixSubWeights is CHAOS-4398 PR2 R4's CLOSED
 // threshold-label -> sub-weight map, mirrored from
 // internal/contextfabric/cohort_ranking.go's subWeight* constants (same

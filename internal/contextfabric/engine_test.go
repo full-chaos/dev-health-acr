@@ -363,6 +363,9 @@ type recordingTelemetry struct {
 	modelRowsStripped []int
 	// cohortRanked (CHAOS-4398) mirrors the SAME list-not-count discipline.
 	cohortRanked []CohortRankedEvent
+	// cohortDriverNarrations (CHAOS-4398 PR3b) mirrors the SAME
+	// list-not-count discipline.
+	cohortDriverNarrations []CohortDriverNarrationEvent
 }
 
 // windowCarryRecord (CHAOS-4360) mirrors priorSubjectReceiptSkipReasonRecord's
@@ -512,6 +515,10 @@ func (r *recordingTelemetry) RecordModelRowsStripped(_ context.Context, _ storag
 
 func (r *recordingTelemetry) RecordCohortRanked(_ context.Context, _ storage.Principal, event CohortRankedEvent) {
 	r.cohortRanked = append(r.cohortRanked, event)
+}
+
+func (r *recordingTelemetry) RecordCohortDriverNarration(_ context.Context, _ storage.Principal, event CohortDriverNarrationEvent) {
+	r.cohortDriverNarrations = append(r.cohortDriverNarrations, event)
 }
 
 func mustEngineForPriorReceiptTest(t *testing.T, graph GraphReader, store InvestigationResultStore, telemetry EngineTelemetry) *Engine {

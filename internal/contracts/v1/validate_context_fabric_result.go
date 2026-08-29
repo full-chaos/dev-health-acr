@@ -713,6 +713,22 @@ func (d ContextFabricCohortMemberDriver) validate(bounds contextFabricBounds) er
 	} else if d.Concentration != nil || d.ConcentrationMethod != "" {
 		return fmt.Errorf("cohort member driver concentration is only valid for investment_mix")
 	}
+	// SourceClaimedFactIDs (CHAOS-4398 PR3b): shape-only here (bounds +
+	// uniqueness). NEVER required unconditionally -- team-lead ruling:
+	// "minting follows citation, not ranking", so a driver RankCohort
+	// ranked but narrateCohortDriverJudgments never cited legitimately has
+	// no SourceClaimedFactIDs at all (empty is a normal, valid shape, not
+	// a legacy-only allowance). Present-if-cited is enforced the OTHER
+	// direction instead: whenever a judgment resolves ClaimedFactIDs to a
+	// driver's SourceClaimedFactIDs, validateCohortDriverClaimedFacts
+	// (validate_context_fabric_helpers.go, called once from
+	// validateAgainstSchemaVersion after the claimed-facts map is built)
+	// requires that id to resolve to a ClaimedFact of the matching
+	// FactKind -- the cross-reference half this per-driver method has no
+	// access to (it needs r.ClaimedFacts).
+	if len(d.SourceClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount || !uniqueTrimmedStrings(d.SourceClaimedFactIDs, ContextFabricIdentifierRefMaxLength) {
+		return fmt.Errorf("cohort member driver source_claimed_fact_ids violates v1 bounds")
+	}
 	return nil
 }
 
@@ -1239,6 +1255,11 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	}
 	if err := validateDrivers(r.Drivers, claimed, bounds); err != nil {
 		return err
+	}
+	if r.Cohort != nil {
+		if err := validateCohortDriverClaimedFacts(r.Cohort, claimed); err != nil {
+			return err
+		}
 	}
 	if err := validateFindings("remaining_work", r.RemainingWork, claimed, bounds); err != nil {
 		return err

@@ -554,6 +554,17 @@ type EngineTelemetry interface {
 	// per RankCohort call that actually ran (cohort != nil, members > 0);
 	// never called for an offers-only cohort that never reaches ranking.
 	RecordCohortRanked(ctx context.Context, principal storage.Principal, event CohortRankedEvent)
+	// RecordCohortDriverNarration (CHAOS-4398 PR3b) reports the outcome of
+	// ONE narrateCohortDriverJudgments call: the closed
+	// CohortDriverNarrationOutcome (emitted/budget_exhausted/no_drivers)
+	// plus counts -- team-lead's standing order that this new judgment-
+	// emission branch carry the same decision-basis-in-the-same-change
+	// telemetry every other outcome-affecting branch in this codebase
+	// does (root AGENTS.md). Called once per Investigate call that reaches
+	// this composer (graphContext.Cohort != nil), independent of whether
+	// anything was actually emitted -- budget_exhausted and no_drivers are
+	// themselves the diagnosable event, not a silent no-op.
+	RecordCohortDriverNarration(ctx context.Context, principal storage.Principal, event CohortDriverNarrationEvent)
 }
 
 // CohortRankedEvent is RecordCohortRanked's content-safe payload: counts and
@@ -1313,9 +1324,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// GIVEN. graphContext.Cohort is nil for every non-cohort investigation
 	// (RankCohort no-ops on nil), so this line changes nothing for the
 	// single-subject path.
+	// cohortSignalCitations (CHAOS-4398 PR3b) are RankCohort's own computed-
+	// but-not-yet-minted citations -- see cohortMemberSignalCitations' own
+	// doc comment for the team-lead ruling this implements ("minting
+	// follows citation, not ranking"): RankCohort hands these forward;
+	// narrateCohortDriverJudgments (post-synthesis, below) is what actually
+	// mints a ClaimedFact, and only for a driver it decides to narrate.
+	var cohortSignalCitations cohortMemberSignalCitations
 	if graphContext.Cohort != nil {
 		var rankEvent CohortRankedEvent
-		graphContext.Cohort, rankEvent = RankCohort(graphContext.Cohort, facts.Facts, facts.Coverage)
+		graphContext.Cohort, rankEvent, cohortSignalCitations = RankCohort(graphContext.Cohort, facts.Facts, facts.Coverage)
 		if e.telemetry != nil {
 			e.telemetry.RecordCohortRanked(ctx, principal, rankEvent)
 		}
@@ -1467,6 +1485,47 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// so the disclosure, its Coverage.Partial flag and the answer are one
 	// object throughout.
 	applyFactScopeDisclosure(&result, facts.Scope)
+	// CHAOS-4398 PR3b: §5a narrated cohort driver judgments. Placed HERE --
+	// AFTER synthesis (synthesisDriverCount = len(result.Drivers) and
+	// synthesisClaimedFactCount = len(result.ClaimedFacts) are the ACTUAL
+	// counts the model produced, not a guess) and BEFORE the
+	// commit-affirmation gate, Validate and Save, same ordering discipline
+	// as every other post-synthesis composer on this path. Appended to
+	// result.Drivers (never replacing what synthesis already produced) --
+	// narrateCohortDriverJudgments' own budget math already bounds the
+	// combined total at BOTH ContextFabricDriversMaxCount and
+	// ContextFabricClaimedFactsMaxCount (codex R1: a synthesis draft can
+	// legitimately carry up to 250 claims on its own, and narration mints
+	// one more claim per narrated driver, so the claimed-facts budget must
+	// be tracked independently of the driver budget, not assumed to always
+	// have headroom).
+	if graphContext.Cohort != nil {
+		narrated, mintedClaims, narrationEvent := narrateCohortDriverJudgments(graphContext.Cohort, result.Drivers, len(result.ClaimedFacts), cohortSignalCitations)
+		// codex R1 (CHAOS-4398 PR3b), team-lead ruling: every narration-
+		// minted claim must pass the SAME grounding check a model-authored
+		// claim gets from SynthesisDraft.ValidateAgainst -- which this
+		// composer's claims never reach, since narration runs entirely
+		// AFTER that validation already completed. validateMintedClaimsGrounded
+		// re-derives each claim's (Kind, Subject, Field, Value) against
+		// facts.Facts (the SAME canonical fact bundle RankCohort itself
+		// read) BEFORE anything is appended -- fail closed, never serve a
+		// claim that cannot be traced back to a real canonical fact.
+		if err := validateMintedClaimsGrounded(mintedClaims, facts.Facts); err != nil {
+			return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
+		}
+		result.Drivers = append(result.Drivers, narrated...)
+		// CHAOS-4398 PR3b: append the claims THIS composer minted (only for
+		// a driver it actually narrated) AFTER the model's own
+		// draft.ClaimedFacts (Synthesize's own composer already set
+		// result.ClaimedFacts from those) -- append, never overwrite, so
+		// neither side's claims are ever lost. Every narrated driver's
+		// SourceClaimedFactIDs already names its own entry here by
+		// construction (narrateCohortDriverJudgments set both together).
+		result.ClaimedFacts = append(result.ClaimedFacts, mintedClaims...)
+		if e.telemetry != nil {
+			e.telemetry.RecordCohortDriverNarration(ctx, principal, narrationEvent)
+		}
+	}
 	// CHAOS-4085: the post-synthesis commit-affirmation gate. Placed HERE
 	// deliberately -- after every composer that touches Limitations or
 	// Coverage has run (retrieval degradation, temporal disclosures), and

@@ -143,6 +143,20 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 					return b.finishWithTruncation()
 				}
 			}
+			// AffectedSubjects (CHAOS-4398 PR3, wired PR3b): which cohort
+			// member(s) this driver judgment ties back to -- kind/canonical_id
+			// are closed-vocabulary/opaque-id (inline-escaped, same
+			// discipline the Cohort member rows below already use); Label is
+			// source-derived text (untrusted-marked).
+			if len(driver.AffectedSubjects) > 0 {
+				subjects := make([]string, len(driver.AffectedSubjects))
+				for i, subject := range driver.AffectedSubjects {
+					subjects[i] = fmt.Sprintf("%s `%s` (%s)", safeInline(string(subject.Kind)), safeInline(subject.CanonicalID), untrustedInline(subject.Label))
+				}
+				if !b.writeLine("- Affected: " + strings.Join(subjects, ", ")) {
+					return b.finishWithTruncation()
+				}
+			}
 		}
 	}
 
@@ -163,6 +177,26 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 			}
 			for _, reason := range member.InclusionReasons {
 				if !b.writeLine("   - " + untrustedInline(reason)) {
+					return b.finishWithTruncation()
+				}
+			}
+		}
+		// RankingTable (CHAOS-4398 PR3, wired PR3b): the Rows-panel view,
+		// one line per RankingComputed member in AttentionRank order.
+		// Every field value is untrusted-marked regardless of its scalar
+		// variant -- the SAME conservative "generic scalar-bag, mark the
+		// whole leaf" treatment key_facts[].rows[].fields{}.string already
+		// gets (this row type is the identical
+		// ContextFabricClaimedFactRow shape). Field names themselves are
+		// fixed Go string literals (rankingTableFieldOrder), never wire
+		// data, so they render bare.
+		if len(projection.Cohort.RankingTable) > 0 {
+			b.writeLine("")
+			if !b.writeLine(fmt.Sprintf("## Rows (%s)", untrustedDataHeader)) {
+				return b.finishWithTruncation()
+			}
+			for _, row := range projection.Cohort.RankingTable {
+				if !b.writeLine(rankingTableRowLine(row)) {
 					return b.finishWithTruncation()
 				}
 			}
@@ -440,6 +474,35 @@ func scalarValueText(value contractsv1.ContextFabricScalarValue) string {
 	default:
 		return "unknown"
 	}
+}
+
+// rankingTableFieldOrder is the FIXED, deterministic key order
+// rankingTableRowLine reads a Rows-panel row in -- ContextFabricClaimedFactRow.Fields
+// is a map (Go iteration order is random), and answerprojection's own
+// buildRankingTable (ranking_table.go) always writes exactly this key set
+// (rankingTableTopDrivers=2, so only driver_1_*/driver_2_* ever appear;
+// *_threshold_label is present only when that driver claimed one).
+// Rendering in a fixed order, not map order, keeps this view byte-stable
+// across identical inputs.
+var rankingTableFieldOrder = []string{
+	"team_canonical_id", "team_label", "attention_rank", "outcome", "score", "window",
+	"driver_1_signal", "driver_1_value", "driver_1_weight_contributed", "driver_1_threshold_label",
+	"driver_2_signal", "driver_2_value", "driver_2_weight_contributed", "driver_2_threshold_label",
+}
+
+// rankingTableRowLine renders one Rows-panel row as a single compact line.
+// See the "## Rows" call site's own comment for why every field is
+// untrusted-marked regardless of its scalar variant.
+func rankingTableRowLine(row contractsv1.ContextFabricClaimedFactRow) string {
+	parts := make([]string, 0, len(rankingTableFieldOrder))
+	for _, key := range rankingTableFieldOrder {
+		value, ok := row.Fields[key]
+		if !ok {
+			continue
+		}
+		parts = append(parts, safeInline(key)+"="+untrustedInline(scalarValueText(value)))
+	}
+	return "- " + strings.Join(parts, " ")
 }
 
 // temporalLines renders CHAOS-3781's temporal label as header lines, or

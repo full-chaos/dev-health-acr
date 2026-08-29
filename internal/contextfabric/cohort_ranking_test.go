@@ -2,7 +2,12 @@ package contextfabric
 
 import (
 	"reflect"
+	"sort"
+	"strings"
 	"testing"
+	"time"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 func rankTestSubject(id string) SubjectRef {
@@ -95,7 +100,7 @@ func mustScore(t *testing.T, member CohortMember) float64 {
 
 func TestRankCohort_NilAndEmptyAreNoOps(t *testing.T) {
 	t.Parallel()
-	got, event := RankCohort(nil, nil, Coverage{})
+	got, event, _ := RankCohort(nil, nil, Coverage{})
 	if got != nil {
 		t.Fatalf("RankCohort(nil, ...) = %v, want nil", got)
 	}
@@ -104,7 +109,7 @@ func TestRankCohort_NilAndEmptyAreNoOps(t *testing.T) {
 	}
 
 	empty := &Cohort{Kind: SubjectTeam, Members: nil}
-	got, event = RankCohort(empty, []CanonicalFact{healthFact("A", "high")}, Coverage{})
+	got, event, _ = RankCohort(empty, []CanonicalFact{healthFact("A", "high")}, Coverage{})
 	if got != empty {
 		t.Fatalf("RankCohort(empty, ...) did not return the same cohort pointer")
 	}
@@ -127,7 +132,7 @@ func TestRankCohort_SingleSignalIsInsufficientEvidence(t *testing.T) {
 	t.Parallel()
 	cohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{rankTestMember("A")}}
 	facts := []CanonicalFact{healthFact("A", "elevated")} // value 0.5, weight 25 -- ONLY available signal
-	got, event := RankCohort(cohort, facts, deficiencyPrunedCoverage())
+	got, event, _ := RankCohort(cohort, facts, deficiencyPrunedCoverage())
 	if len(got.Members) != 1 {
 		t.Fatalf("members = %#v, want 1", got.Members)
 	}
@@ -174,7 +179,7 @@ func TestRankCohort_SingleSignalIsInsufficientEvidence(t *testing.T) {
 func TestRankCohort_ZeroAvailableSignalsIsNilScoreDegradedEmptyBasis(t *testing.T) {
 	t.Parallel()
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "matched by kind census", Members: []CohortMember{rankTestMember("A")}}
-	got, _ := RankCohort(cohort, nil, deficiencyPrunedCoverage())
+	got, _, _ := RankCohort(cohort, nil, deficiencyPrunedCoverage())
 	member := got.Members[0]
 	if !member.RankingComputed {
 		t.Fatal("RankingComputed = false, want true (ranking ran, it just found nothing)")
@@ -216,7 +221,7 @@ func TestRankCohort_NilScoreMembersRankLastTiedByPoolOrder(t *testing.T) {
 	// would.
 	facts := []CanonicalFact{healthFact("SCORED", "high"), investmentFact("SCORED", balancedThemes(), 0)}
 	coverage := deficiencyPrunedCoverage()
-	got, _ := RankCohort(cohort, facts, coverage)
+	got, _, _ := RankCohort(cohort, facts, coverage)
 	byID := map[string]CohortMember{}
 	for _, m := range got.Members {
 		byID[m.Subject.CanonicalID] = m
@@ -283,7 +288,7 @@ func TestRankCohort_DeterministicOrderAcrossThreeMembers(t *testing.T) {
 		readinessFact("HEALTHY", 0.95),
 		workloadFact("HEALTHY", 5),
 	}
-	got, event := RankCohort(cohort, facts, availableCoverage())
+	got, event, _ := RankCohort(cohort, facts, availableCoverage())
 
 	// Pool order (array order) must be UNCHANGED.
 	var poolOrder []string
@@ -336,7 +341,7 @@ func TestRankCohort_TiesKeepPoolOrderInAttentionRank(t *testing.T) {
 	facts := []CanonicalFact{
 		healthFact("FIRST", "elevated"), healthFact("SECOND", "elevated"), healthFact("THIRD", "elevated"),
 	}
-	got, _ := RankCohort(cohort, facts, Coverage{})
+	got, _, _ := RankCohort(cohort, facts, Coverage{})
 	for i, member := range got.Members {
 		if member.AttentionRank != i+1 {
 			t.Fatalf("member %d (%q) AttentionRank = %d, want %d (tied scores keep pool order)", i, member.Subject.CanonicalID, member.AttentionRank, i+1)
@@ -392,7 +397,7 @@ func TestRankCohort_InvestmentMixThresholdLabels(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			value, labels, _, _, _, available := investmentMixSignal([]CanonicalFact{investmentFact("A", tc.themes, tc.bugfix)}, Coverage{})
+			value, labels, _, _, _, available, _ := investmentMixSignal([]CanonicalFact{investmentFact("A", tc.themes, tc.bugfix)}, Coverage{})
 			if !available {
 				t.Fatalf("investmentMixSignal() available = false, want true")
 			}
@@ -415,7 +420,7 @@ func TestRankCohort_MixShiftDirectionLabels(t *testing.T) {
 	priorTowardOperational := map[string]float64{
 		ThemeFeatureDelivery: 0.4, ThemeOperational: 0.1, ThemeMaintenance: 0.2, ThemeQuality: 0.2, ThemeRisk: 0.1,
 	}
-	_, labels, _, _, _, available := investmentMixSignal([]CanonicalFact{investmentFactWithPrior("A", current, priorTowardOperational, 0)}, Coverage{})
+	_, labels, _, _, _, available, _ := investmentMixSignal([]CanonicalFact{investmentFactWithPrior("A", current, priorTowardOperational, 0)}, Coverage{})
 	if !available {
 		t.Fatal("investmentMixSignal() available = false")
 	}
@@ -429,7 +434,7 @@ func TestRankCohort_MixShiftDirectionLabels(t *testing.T) {
 	priorFeatureLow := map[string]float64{
 		ThemeFeatureDelivery: 0.1, ThemeOperational: 0.3, ThemeMaintenance: 0.3, ThemeQuality: 0.2, ThemeRisk: 0.1,
 	}
-	_, labels, _, _, _, available = investmentMixSignal([]CanonicalFact{investmentFactWithPrior("B", currentTowardFeature, priorFeatureLow, 0)}, Coverage{})
+	_, labels, _, _, _, available, _ = investmentMixSignal([]CanonicalFact{investmentFactWithPrior("B", currentTowardFeature, priorFeatureLow, 0)}, Coverage{})
 	if !available {
 		t.Fatal("investmentMixSignal() available = false")
 	}
@@ -445,7 +450,7 @@ func TestRankCohort_MixShiftDirectionLabels(t *testing.T) {
 	priorQualityLow := map[string]float64{
 		ThemeFeatureDelivery: 0.2, ThemeOperational: 0.3, ThemeMaintenance: 0.4, ThemeQuality: 0.1, ThemeRisk: 0.0,
 	}
-	_, labels, _, _, _, available = investmentMixSignal([]CanonicalFact{investmentFactWithPrior("C", currentTowardQuality, priorQualityLow, 0)}, Coverage{})
+	_, labels, _, _, _, available, _ = investmentMixSignal([]CanonicalFact{investmentFactWithPrior("C", currentTowardQuality, priorQualityLow, 0)}, Coverage{})
 	if !available {
 		t.Fatal("investmentMixSignal() available = false")
 	}
@@ -468,7 +473,7 @@ func TestRankCohort_MixShiftTieBreaksByTaxonomyOrder(t *testing.T) {
 	prior := map[string]float64{
 		ThemeFeatureDelivery: 0.1, ThemeOperational: 0.1, ThemeMaintenance: 0.5, ThemeQuality: 0.1, ThemeRisk: 0.2,
 	}
-	_, labels, _, _, _, available := investmentMixSignal([]CanonicalFact{investmentFactWithPrior("A", current, prior, 0)}, Coverage{})
+	_, labels, _, _, _, available, _ := investmentMixSignal([]CanonicalFact{investmentFactWithPrior("A", current, prior, 0)}, Coverage{})
 	if !available {
 		t.Fatal("investmentMixSignal() available = false")
 	}
@@ -496,7 +501,7 @@ func TestRankCohort_WorkloadMinMaxIsRelativeToTheCohort(t *testing.T) {
 	// Team A is the clear LOW end of a wide spread -> low pressure.
 	wideCohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{rankTestMember("A"), rankTestMember("B"), rankTestMember("C")}}
 	wideFacts := append([]CanonicalFact{workloadFact("A", 10), workloadFact("B", 50), workloadFact("C", 90)}, extraForA...)
-	got, _ := RankCohort(wideCohort, wideFacts, Coverage{})
+	got, _, _ := RankCohort(wideCohort, wideFacts, Coverage{})
 	var scoreWide float64
 	for _, m := range got.Members {
 		if m.Subject.CanonicalID == "team:A" {
@@ -507,7 +512,7 @@ func TestRankCohort_WorkloadMinMaxIsRelativeToTheCohort(t *testing.T) {
 	// Team A is near the MIDDLE of a narrow spread -> higher relative pressure.
 	narrowCohort := &Cohort{Kind: SubjectTeam, Members: []CohortMember{rankTestMember("A"), rankTestMember("B"), rankTestMember("C")}}
 	narrowFacts := append([]CanonicalFact{workloadFact("A", 10), workloadFact("B", 9), workloadFact("C", 11)}, extraForA...)
-	got2, _ := RankCohort(narrowCohort, narrowFacts, Coverage{})
+	got2, _, _ := RankCohort(narrowCohort, narrowFacts, Coverage{})
 	var scoreNarrow float64
 	for _, m := range got2.Members {
 		if m.Subject.CanonicalID == "team:A" {
@@ -537,7 +542,7 @@ func TestNormalizeWorkloadMinMax(t *testing.T) {
 // the WORST one.
 func TestDeficiencySeveritySignal_TakesMaxAcrossFiredRules(t *testing.T) {
 	t.Parallel()
-	value, available := deficiencySeveritySignal([]CanonicalFact{
+	value, available, _ := deficiencySeveritySignal([]CanonicalFact{
 		deficiencyFact("A", "warning"),
 		deficiencyFact("A", "critical"),
 	}, availableCoverage())
@@ -551,7 +556,7 @@ func TestDeficiencySeveritySignal_TakesMaxAcrossFiredRules(t *testing.T) {
 // not as missing -- the design doc's own available-zero exception.
 func TestDeficiencySeveritySignal_AvailableZeroException(t *testing.T) {
 	t.Parallel()
-	value, available := deficiencySeveritySignal(nil, availableCoverage())
+	value, available, _ := deficiencySeveritySignal(nil, availableCoverage())
 	if !available || value != 0 {
 		t.Fatalf("value = %v, available = %v, want (0, true) -- SourceAvailable batch, zero fired rules", value, available)
 	}
@@ -564,7 +569,7 @@ func TestDeficiencySeveritySignal_AvailableZeroException(t *testing.T) {
 // gets the available-zero exception, not a hard missing.
 func TestDeficiencySeveritySignal_NoCoverageEntryDefaultsToAvailable(t *testing.T) {
 	t.Parallel()
-	if _, available := deficiencySeveritySignal(nil, Coverage{}); !available {
+	if _, available, _ := deficiencySeveritySignal(nil, Coverage{}); !available {
 		t.Fatal("deficiencySeveritySignal(nil, Coverage{}) available = false, want true (no coverage entry defaults permissive)")
 	}
 }
@@ -575,7 +580,7 @@ func TestDeficiencySeveritySignal_NoCoverageEntryDefaultsToAvailable(t *testing.
 func TestDeficiencySeveritySignal_TruncatedBatchWithZeroRowsIsMissing(t *testing.T) {
 	t.Parallel()
 	coverage := Coverage{Sources: []SourceObservation{{Source: "canonical_fact:operational_deficiencies", State: SourceTruncated}}}
-	if _, available := deficiencySeveritySignal(nil, coverage); available {
+	if _, available, _ := deficiencySeveritySignal(nil, coverage); available {
 		t.Fatal("deficiencySeveritySignal(nil, truncated) available = true, want false")
 	}
 }
@@ -585,10 +590,10 @@ func TestDeficiencySeveritySignal_TruncatedBatchWithZeroRowsIsMissing(t *testing
 // a favorable low-risk 0.
 func TestHealthRiskSignal_UnknownSeverityIsUnavailable(t *testing.T) {
 	t.Parallel()
-	if _, available := healthRiskSignal([]CanonicalFact{healthFact("A", "unknown")}, Coverage{}); available {
+	if _, available, _ := healthRiskSignal([]CanonicalFact{healthFact("A", "unknown")}, Coverage{}); available {
 		t.Fatal("healthRiskSignal() available = true for severity=unknown, want false")
 	}
-	if value, available := healthRiskSignal([]CanonicalFact{healthFact("A", "high")}, Coverage{}); !available || value != 1.0 {
+	if value, available, _ := healthRiskSignal([]CanonicalFact{healthFact("A", "high")}, Coverage{}); !available || value != 1.0 {
 		t.Fatalf("value = %v, available = %v, want (1.0, true)", value, available)
 	}
 }
@@ -599,7 +604,7 @@ func TestHealthRiskSignal_UnknownSeverityIsUnavailable(t *testing.T) {
 func TestHealthRiskSignal_PrunedBatchIsUnavailableEvenWithARow(t *testing.T) {
 	t.Parallel()
 	coverage := Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: SourcePruned}}}
-	if _, available := healthRiskSignal([]CanonicalFact{healthFact("A", "high")}, coverage); available {
+	if _, available, _ := healthRiskSignal([]CanonicalFact{healthFact("A", "high")}, coverage); available {
 		t.Fatal("healthRiskSignal() available = true against a pruned batch, want false")
 	}
 }
@@ -610,7 +615,7 @@ func TestHealthRiskSignal_PrunedBatchIsUnavailableEvenWithARow(t *testing.T) {
 // first row.
 func TestReadinessGapSignal_AggregatesWorstAcrossScopes(t *testing.T) {
 	t.Parallel()
-	value, available := readinessGapSignal([]CanonicalFact{
+	value, available, _ := readinessGapSignal([]CanonicalFact{
 		readinessFact("A", 0.9),
 		readinessFact("A", 0.2),
 	}, Coverage{})
@@ -628,7 +633,7 @@ func TestReadinessGapSignal_AggregatesWorstAcrossScopes(t *testing.T) {
 // the WORST (longest) forecast, never an average or the first row.
 func TestWorkloadWorstDays_AggregatesMaxAcrossScopes(t *testing.T) {
 	t.Parallel()
-	days, ok := workloadWorstDays([]CanonicalFact{
+	days, ok, _ := workloadWorstDays([]CanonicalFact{
 		workloadFact("A", 5),
 		workloadFact("A", 40),
 	}, Coverage{})
@@ -656,7 +661,7 @@ func TestRankCohort_DriversSumToScore(t *testing.T) {
 		workloadFact("A", 20),
 	}
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{rankTestMember("A")}}
-	got, _ := RankCohort(cohort, facts, availableCoverage())
+	got, _, _ := RankCohort(cohort, facts, availableCoverage())
 	member := got.Members[0]
 	score := mustScore(t, member)
 	if len(member.Drivers) != 5 {
@@ -687,7 +692,7 @@ func TestRankCohort_DriversMatchRankingBasisFamilies(t *testing.T) {
 	// (45) would not.
 	facts := []CanonicalFact{healthFact("A", "high"), investmentFact("A", balancedThemes(), 0)}
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{rankTestMember("A")}}
-	got, _ := RankCohort(cohort, facts, availableCoverage())
+	got, _, _ := RankCohort(cohort, facts, availableCoverage())
 	member := got.Members[0]
 	mustScore(t, member)
 
@@ -724,7 +729,7 @@ func TestRankCohort_DriverWindowReflectsPriorComparison(t *testing.T) {
 		prior := balancedThemes()
 		facts := []CanonicalFact{investmentFactWithPrior("A", current, prior, 0)}
 		cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{rankTestMember("A")}}
-		got, _ := RankCohort(cohort, facts, availableCoverage())
+		got, _, _ := RankCohort(cohort, facts, availableCoverage())
 		member := got.Members[0]
 		mustScore(t, member)
 		var mixDriver *CohortMemberDriver
@@ -744,7 +749,7 @@ func TestRankCohort_DriverWindowReflectsPriorComparison(t *testing.T) {
 		t.Parallel()
 		facts := []CanonicalFact{investmentFact("A", balancedThemes(), 0)}
 		cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{rankTestMember("A")}}
-		got, _ := RankCohort(cohort, facts, availableCoverage())
+		got, _, _ := RankCohort(cohort, facts, availableCoverage())
 		member := got.Members[0]
 		mustScore(t, member)
 		var mixDriver *CohortMemberDriver
@@ -774,7 +779,7 @@ func TestRankCohort_ThresholdLabelsMirrorMixDriverLabels(t *testing.T) {
 	themes := map[string]float64{ThemeFeatureDelivery: 0.02, ThemeOperational: 0.9, ThemeMaintenance: 0.03, ThemeQuality: 0.03, ThemeRisk: 0.02}
 	facts := []CanonicalFact{investmentFact("A", themes, 0)}
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{rankTestMember("A")}}
-	got, _ := RankCohort(cohort, facts, availableCoverage())
+	got, _, _ := RankCohort(cohort, facts, availableCoverage())
 	member := got.Members[0]
 	mustScore(t, member)
 	var mixDriver *CohortMemberDriver
@@ -803,7 +808,7 @@ func TestRankCohort_ThresholdLabelsMirrorMixDriverLabels(t *testing.T) {
 func TestRankCohort_ZeroAvailableSignalsHasNoDrivers(t *testing.T) {
 	t.Parallel()
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "matched by kind census", Members: []CohortMember{rankTestMember("A")}}
-	got, _ := RankCohort(cohort, nil, deficiencyPrunedCoverage())
+	got, _, _ := RankCohort(cohort, nil, deficiencyPrunedCoverage())
 	member := got.Members[0]
 	if member.Score != nil {
 		t.Fatalf("Score = %v, want nil", *member.Score)
@@ -813,5 +818,362 @@ func TestRankCohort_ZeroAvailableSignalsHasNoDrivers(t *testing.T) {
 	}
 	if err := got.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil", err)
+	}
+}
+
+// ---------------------------------------------------------------------
+// CHAOS-4398 PR3b (team-lead ruling): "minting follows citation, not
+// ranking" -- RankCohort computes but never mints a ClaimedFact;
+// narrateCohortDriverJudgments (post-synthesis) mints one ONLY for a
+// driver it actually narrates. See cohortMemberSignalCitations' own doc
+// comment for the byte-budget reasoning.
+// ---------------------------------------------------------------------
+
+// TestRankCohort_ComputesCitationsButNeverMintsOrSetsProvenance is the
+// central PR3b proof at the RankCohort layer: for a single-signal member
+// (health.compounding_risk, severity=high), RankCohort must (a) compute a
+// citation in its returned cohortMemberSignalCitations map whose
+// Kind/Field/Value cite the REAL canonical row this driver's Value was
+// computed from -- not a re-derived or normalized number -- and (b) leave
+// the driver's own SourceClaimedFactIDs EMPTY: minting is
+// narrateCohortDriverJudgments' job now, never RankCohort's.
+func TestRankCohort_ComputesCitationsButNeverMintsOrSetsProvenance(t *testing.T) {
+	t.Parallel()
+	// health(25) + investment_mix(30) = 55 clears the 50-point
+	// qualification threshold (design doc §8) with 2 families -- a single
+	// family alone (health=25) would land in insufficient_evidence, where
+	// Drivers stays empty regardless of what was read (see
+	// TestRankCohort_SingleSignalIsInsufficientEvidence).
+	facts := []CanonicalFact{healthFact("A", "high"), investmentFact("A", balancedThemes(), 0)}
+	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{rankTestMember("A")}}
+	got, _, citations := RankCohort(cohort, facts, availableCoverage())
+	member := got.Members[0]
+	var driver *CohortMemberDriver
+	for i, d := range member.Drivers {
+		if d.Signal == RankingSignalHealthRisk {
+			driver = &member.Drivers[i]
+		}
+	}
+	if driver == nil {
+		t.Fatalf("no health driver found among %+v", member.Drivers)
+	}
+	if len(driver.SourceClaimedFactIDs) != 0 {
+		t.Fatalf("SourceClaimedFactIDs = %v, want EMPTY -- RankCohort must never mint or set provenance itself", driver.SourceClaimedFactIDs)
+	}
+	citation := citations[member.Subject.CanonicalID][RankingSignalHealthRisk]
+	if citation == nil {
+		t.Fatalf("no citation computed for (subject=%s, signal=%s)", member.Subject.CanonicalID, RankingSignalHealthRisk)
+	}
+	if citation.kind != FactHealth {
+		t.Fatalf("citation.kind = %q, want %q", citation.kind, FactHealth)
+	}
+	if citation.field != "severity" {
+		t.Fatalf("citation.field = %q, want %q (the RAW field this driver's Value was computed from, not a re-derived name)", citation.field, "severity")
+	}
+	if citation.value.String == nil || *citation.value.String != "high" {
+		t.Fatalf("citation.value = %+v, want the raw string \"high\" -- the actual canonical severity, not driver.Value's mapped 1.0", citation.value)
+	}
+}
+
+// TestRankCohort_DeficiencyAvailableZeroRanksButNeverCites is the
+// available-zero exception's own provenance proof, updated for codex R1
+// (CHAOS-4398 PR3b, team-lead ruling superseding the earlier
+// "fired_rules_count" citation): OperationalDeficienciesProvider only ever
+// emits a CanonicalFact for an actually-fired rule, so zero fired rules
+// means ZERO rows -- there is no real fact and no real field anywhere
+// this case could cite. The driver still RANKS (Value=0 counts for Score,
+// exactly like every other family) but its citation must be nil -- never a
+// field invented for a fact that does not exist. narrateCohortDriverJudgments
+// already skips any driver with a nil citation, so this driver can never
+// be narrated or become a minted ClaimedFact; it stays ranking-only.
+func TestRankCohort_DeficiencyAvailableZeroRanksButNeverCites(t *testing.T) {
+	t.Parallel()
+	// health(25) + investment_mix(30) = 55 clears the qualification
+	// threshold -- deficiency itself has NO facts at all (the
+	// available-zero case), availableCoverage() marks its batch
+	// SourceAvailable.
+	facts := []CanonicalFact{healthFact("A", "high"), investmentFact("A", balancedThemes(), 0)}
+	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{rankTestMember("A")}}
+	got, _, citations := RankCohort(cohort, facts, availableCoverage())
+	member := got.Members[0]
+	var deficiencyDriver *CohortMemberDriver
+	for i, d := range member.Drivers {
+		if d.Signal == RankingSignalDeficiencySeverity {
+			deficiencyDriver = &member.Drivers[i]
+		}
+	}
+	if deficiencyDriver == nil {
+		t.Fatalf("no deficiency driver found among %+v -- the available-zero exception should still produce one", member.Drivers)
+	}
+	if deficiencyDriver.Value != 0 {
+		t.Fatalf("deficiency driver Value = %v, want 0 -- the available-zero case still ranks as a real zero", deficiencyDriver.Value)
+	}
+	if len(deficiencyDriver.SourceClaimedFactIDs) != 0 {
+		t.Fatalf("deficiency driver SourceClaimedFactIDs = %v, want EMPTY -- RankCohort never mints", deficiencyDriver.SourceClaimedFactIDs)
+	}
+	if citation := citations[member.Subject.CanonicalID][RankingSignalDeficiencySeverity]; citation != nil {
+		t.Fatalf("citation = %+v, want nil -- no real CanonicalFact exists to cite when zero rules fired", citation)
+	}
+}
+
+// TestNarrateCohortDriverJudgments_NeverNarratesTheDeficiencyAvailableZeroDriver
+// is the narration-side half of the same proof: even when this driver is
+// the top-weighted (would otherwise be Standing=principal), the absence of
+// a citation must make it uncitable, never silently fabricated.
+func TestNarrateCohortDriverJudgments_NeverNarratesTheDeficiencyAvailableZeroDriver(t *testing.T) {
+	t.Parallel()
+	facts := []CanonicalFact{healthFact("A", "high"), investmentFact("A", balancedThemes(), 0)}
+	member := rankTestMember("A")
+	member.EvidenceRefIDs = []string{"evidence_team_a_roster"}
+	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
+	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
+
+	judgments, minted, _ := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+	for _, j := range judgments {
+		if j.Category == "operational_deficiency" {
+			t.Fatalf("narrated a judgment for the available-zero deficiency driver: %+v", j)
+		}
+	}
+	for _, c := range minted {
+		if c.Kind == FactOperationalDeficiencies {
+			t.Fatalf("minted a claim for the available-zero deficiency driver: %+v", c)
+		}
+	}
+}
+
+// TestRankCohort_ResultLevelClaimedFactsSatisfyTheWritePathValidator is the
+// full end-to-end proof this ruling exists for: running the REAL pipeline
+// (RankCohort, then narrateCohortDriverJudgments over its citations) and
+// assembling a real InvestigationResult from both outputs must pass the
+// FULL write-path Validate(), including the cross-reference check
+// (validateCohortDriverClaimedFacts) that a bare Cohort.Validate() cannot
+// exercise (it has no ClaimedFacts to check against).
+func TestRankCohort_ResultLevelClaimedFactsSatisfyTheWritePathValidator(t *testing.T) {
+	t.Parallel()
+	facts := []CanonicalFact{
+		investmentFact("A", balancedThemes(), 0),
+		healthFact("A", "elevated"),
+		deficiencyFact("A", "critical"),
+		readinessFact("A", 0.6),
+		workloadFact("A", 20),
+	}
+	member := rankTestMember("A")
+	member.EvidenceRefIDs = []string{"evidence_team_a_roster"}
+	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
+	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
+	narratedJudgments, mintedClaims, _ := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+
+	result := InvestigationResult{
+		SchemaVersion: InvestigationResultSchemaV1,
+		ResultID:      "result_pr3b_claims01", RequestID: "request_pr3b_claims01",
+		GeneratedAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC), Status: InvestigationComplete,
+		Question: "Which team is struggling most?",
+		Interpretation: InterpretedQuestion{
+			Shape: ShapeDiscoveredCohort, RequestedJudgment: "attention_ranking",
+			TimeContext:      TimeContext{Axis: TemporalCurrent},
+			FactRequirements: []FactRequirement{{Kind: FactHealth}},
+		},
+		SubjectResolution:   SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		DirectJudgment:      "Team A is the sole ranked member.",
+		DeterministicAnswer: "Team A is the sole ranked member.",
+		StrongestPressures:  []string{}, Drivers: narratedJudgments,
+		RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
+		Paths: []RelationshipPath{}, Conflicts: []Finding{},
+		Limitations: []string{}, EvidenceRefIDs: []string{},
+		ClaimedFacts: mintedClaims,
+		Coverage:     Coverage{Sources: []SourceObservation{}},
+		Versions: VersionSet{
+			ServiceVersion: "test", ContractVersion: InvestigationResultSchemaV1, Backend: "test",
+			ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1", ModelIdentity: "test/model-v1",
+		},
+		Warnings: []string{},
+		Cohort:   ranked,
+	}
+	if len(mintedClaims) == 0 {
+		t.Fatal("mintedClaims = empty, want at least one narrated citation to have minted")
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("result.Validate() = %v, want nil -- the real RankCohort+narration pipeline's output must satisfy the full write-path validator, including cross-reference", err)
+	}
+}
+
+// TestRankCohort_MintedClaimIDsAreDeterministicAcrossRepeatedRuns is
+// team-lead's own confirmation requirement for the PR body: two full
+// RankCohort+narrateCohortDriverJudgments passes over IDENTICAL
+// facts/coverage for the same member must mint the IDENTICAL ClaimIDs --
+// never a random or process-specific component -- so a replay or an
+// answer-reuse hit reproduces the exact citation a fresh pass would also
+// mint.
+func TestRankCohort_MintedClaimIDsAreDeterministicAcrossRepeatedRuns(t *testing.T) {
+	t.Parallel()
+	facts := []CanonicalFact{
+		investmentFact("A", balancedThemes(), 0),
+		healthFact("A", "elevated"),
+		deficiencyFact("A", "critical"),
+		readinessFact("A", 0.6),
+		workloadFact("A", 20),
+	}
+	newCohort := func() *Cohort {
+		member := rankTestMember("A")
+		member.EvidenceRefIDs = []string{"evidence_team_a_roster"}
+		return &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
+	}
+	runOnce := func() (driverIDs, claimIDs []string) {
+		ranked, _, citations := RankCohort(newCohort(), facts, availableCoverage())
+		_, minted, _ := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+		for _, d := range ranked.Members[0].Drivers {
+			driverIDs = append(driverIDs, d.SourceClaimedFactIDs...)
+		}
+		for _, c := range minted {
+			claimIDs = append(claimIDs, c.ClaimID)
+		}
+		sort.Strings(driverIDs)
+		sort.Strings(claimIDs)
+		return driverIDs, claimIDs
+	}
+
+	firstDriverIDs, firstClaimIDs := runOnce()
+	secondDriverIDs, secondClaimIDs := runOnce()
+
+	if len(firstDriverIDs) == 0 {
+		t.Fatal("firstDriverIDs = empty, want at least one narrated driver to have minted provenance")
+	}
+	if !reflect.DeepEqual(firstDriverIDs, secondDriverIDs) {
+		t.Fatalf("run 1 driver ClaimIDs = %v, run 2 = %v -- must be identical for identical input", firstDriverIDs, secondDriverIDs)
+	}
+	if !reflect.DeepEqual(firstClaimIDs, secondClaimIDs) {
+		t.Fatalf("run 1 minted claim IDs = %v, run 2 = %v -- must be identical for identical input", firstClaimIDs, secondClaimIDs)
+	}
+}
+
+// TestCohortDriverClaimID_StaysWithinContractBoundsForMaxLengthCanonicalID
+// is codex R1's finding (CHAOS-4398 PR3b): the earlier concatenation-based
+// ClaimID ("claim_cohort_" + CanonicalID + "_" + signal + "_" + window +
+// "_" + RankingFormulaVersion) could exceed
+// ContextFabricModelMintedIDMaxLength (256) for a legal-but-long
+// CanonicalID (up to ContextFabricSubjectRefCanonicalIDMaxLength=256
+// itself), rejecting an otherwise-valid cohort at result.Validate(). A
+// hashed ID must stay well within bounds regardless of CanonicalID length.
+func TestCohortDriverClaimID_StaysWithinContractBoundsForMaxLengthCanonicalID(t *testing.T) {
+	t.Parallel()
+	longCanonicalID := "team:" + strings.Repeat("x", contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength-len("team:"))
+	if len(longCanonicalID) != contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength {
+		t.Fatalf("test setup: longCanonicalID length = %d, want exactly %d", len(longCanonicalID), contractsv1.ContextFabricSubjectRefCanonicalIDMaxLength)
+	}
+	subject := SubjectRef{Kind: SubjectTeam, CanonicalID: longCanonicalID, Label: "Long"}
+
+	id := cohortDriverClaimID(subject, RankingSignalHealthRisk, DriverWindowCurrent)
+
+	if len(id) < contractsv1.ContextFabricModelMintedIDMinLength || len(id) > contractsv1.ContextFabricModelMintedIDMaxLength {
+		t.Fatalf("cohortDriverClaimID length = %d, want within [%d,%d] even for a max-length CanonicalID",
+			len(id), contractsv1.ContextFabricModelMintedIDMinLength, contractsv1.ContextFabricModelMintedIDMaxLength)
+	}
+
+	// Determinism must survive the hash: same input, same ID, every time.
+	if again := cohortDriverClaimID(subject, RankingSignalHealthRisk, DriverWindowCurrent); again != id {
+		t.Fatalf("cohortDriverClaimID(%v) = %q, then %q on a repeat call -- must be deterministic", subject, id, again)
+	}
+}
+
+// ---------------------------------------------------------------------
+// validateMintedClaimsGrounded -- codex R1's structural fix (CHAOS-4398
+// PR3b, team-lead ruling): every narration-minted claim must re-verify
+// against the real canonical fact bundle before it is ever appended, the
+// same grounding guarantee SynthesisDraft.ValidateAgainst gives a
+// model-authored claim (which narration's own claims never reach).
+// ---------------------------------------------------------------------
+
+func groundingTestSubject() SubjectRef {
+	return SubjectRef{Kind: SubjectTeam, CanonicalID: "team:CHAOS", Label: "CHAOS"}
+}
+
+// TestValidateMintedClaimsGrounded_RejectsAFieldAbsentFromTheSourceFact is
+// the red-first proof for the exact bug codex caught: a claim citing a
+// field name that exists on NO real CanonicalFact (the now-removed
+// "fired_rules_count" invention) must be rejected, even when the claim's
+// Kind and Subject both correctly match a real fact.
+func TestValidateMintedClaimsGrounded_RejectsAFieldAbsentFromTheSourceFact(t *testing.T) {
+	t.Parallel()
+	facts := []CanonicalFact{deficiencyFact("CHAOS", "critical")} // real fact has "severity", not "fired_rules_count"
+	claims := []ClaimedFact{{
+		ClaimID: "claim_cohort_test01", Kind: FactOperationalDeficiencies, Subject: groundingTestSubject(),
+		Field: "fired_rules_count", Value: ScalarValue{Number: func() *float64 { v := 0.0; return &v }()},
+	}}
+	if err := validateMintedClaimsGrounded(claims, facts); err == nil {
+		t.Fatal("validateMintedClaimsGrounded returned nil for a claim citing a field absent from every real fact, want an error")
+	}
+}
+
+// TestValidateMintedClaimsGrounded_RejectsAValueMismatch proves resolving
+// the right Kind/Subject/Field is not sufficient: the VALUE must match too
+// -- a claim asserting a different value than what was actually read is
+// still ungrounded.
+func TestValidateMintedClaimsGrounded_RejectsAValueMismatch(t *testing.T) {
+	t.Parallel()
+	facts := []CanonicalFact{deficiencyFact("CHAOS", "critical")} // severity="critical"
+	claims := []ClaimedFact{{
+		ClaimID: "claim_cohort_test02", Kind: FactOperationalDeficiencies, Subject: groundingTestSubject(),
+		Field: "severity", Value: ScalarValue{String: func() *string { v := "warning"; return &v }()}, // wrong value
+	}}
+	if err := validateMintedClaimsGrounded(claims, facts); err == nil {
+		t.Fatal("validateMintedClaimsGrounded returned nil for a claim whose Value does not match the real fact's field, want an error")
+	}
+}
+
+// TestValidateMintedClaimsGrounded_RejectsAClaimForTheWrongSubject proves
+// a real (Kind, Field, Value) match for a DIFFERENT subject's fact does
+// not ground a claim about this subject.
+func TestValidateMintedClaimsGrounded_RejectsAClaimForTheWrongSubject(t *testing.T) {
+	t.Parallel()
+	facts := []CanonicalFact{deficiencyFact("PLATFORM", "critical")} // a different team
+	claims := []ClaimedFact{{
+		ClaimID: "claim_cohort_test03", Kind: FactOperationalDeficiencies, Subject: groundingTestSubject(), // team:CHAOS
+		Field: "severity", Value: ScalarValue{String: func() *string { v := "critical"; return &v }()},
+	}}
+	if err := validateMintedClaimsGrounded(claims, facts); err == nil {
+		t.Fatal("validateMintedClaimsGrounded returned nil for a claim about a subject with no matching fact, want an error")
+	}
+}
+
+// TestValidateMintedClaimsGrounded_AcceptsARealGroundedClaim is the
+// red-first pair's positive case: a claim whose (Kind, Subject, Field,
+// Value) all match a real CanonicalFact passes cleanly.
+func TestValidateMintedClaimsGrounded_AcceptsARealGroundedClaim(t *testing.T) {
+	t.Parallel()
+	facts := []CanonicalFact{deficiencyFact("CHAOS", "critical")}
+	claims := []ClaimedFact{{
+		ClaimID: "claim_cohort_test04", Kind: FactOperationalDeficiencies, Subject: groundingTestSubject(),
+		Field: "severity", Value: ScalarValue{String: func() *string { v := "critical"; return &v }()},
+	}}
+	if err := validateMintedClaimsGrounded(claims, facts); err != nil {
+		t.Fatalf("validateMintedClaimsGrounded(%v) = %v, want nil for a claim that genuinely matches a real fact", claims, err)
+	}
+}
+
+// TestNarrateCohortDriverJudgments_EveryMintedClaimIsGrounded is the
+// end-to-end proof: running the real pipeline (RankCohort, then
+// narrateCohortDriverJudgments) over a realistic multi-family scenario
+// must produce ONLY claims validateMintedClaimsGrounded accepts against
+// the SAME facts RankCohort itself read.
+func TestNarrateCohortDriverJudgments_EveryMintedClaimIsGrounded(t *testing.T) {
+	t.Parallel()
+	facts := []CanonicalFact{
+		investmentFact("A", balancedThemes(), 0),
+		healthFact("A", "elevated"),
+		deficiencyFact("A", "critical"),
+		readinessFact("A", 0.6),
+		workloadFact("A", 20),
+	}
+	member := rankTestMember("A")
+	member.EvidenceRefIDs = []string{"evidence_team_a_roster"}
+	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
+	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
+
+	_, minted, _ := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+	if len(minted) == 0 {
+		t.Fatal("expected at least one minted claim from a realistic multi-family scenario")
+	}
+	if err := validateMintedClaimsGrounded(minted, facts); err != nil {
+		t.Fatalf("validateMintedClaimsGrounded rejected a real pipeline's own minted claims: %v", err)
 	}
 }

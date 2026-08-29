@@ -1,6 +1,9 @@
 package v1
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func baseRankedCohortMember() ContextFabricCohortMember {
 	score := 42.0
@@ -90,11 +93,11 @@ func TestContextFabricCohortMember_RankingBasisAcceptsEveryClosedLabel(t *testin
 		{Signal: "investment_mix", Value: 1.0, Weight: 30, WeightContributed: 30, Window: ContextFabricCohortMemberDriverWindowCurrentVsPrior, ThresholdLabels: []string{
 			"investment_mix.reactive_share_high", "investment_mix.deliberate_share_low",
 			"investment_mix.mix_concentrated", "investment_mix.mix_shift_other",
-		}, Concentration: floatPtr(0.6), ConcentrationMethod: "max_share"},
-		{Signal: "health.compounding_risk", Value: 0.4, Weight: 25, WeightContributed: 10, Window: ContextFabricCohortMemberDriverWindowCurrent},
-		{Signal: "operational_deficiencies.severity", Value: 0.5, Weight: 20, WeightContributed: 10, Window: ContextFabricCohortMemberDriverWindowCurrent},
-		{Signal: "readiness.coverage_gap", Value: 0.4, Weight: 15, WeightContributed: 6, Window: ContextFabricCohortMemberDriverWindowCurrent},
-		{Signal: "workload.forecast_pressure", Value: 0.4, Weight: 10, WeightContributed: 4, Window: ContextFabricCohortMemberDriverWindowCurrent},
+		}, Concentration: floatPtr(0.6), ConcentrationMethod: "max_share", SourceClaimedFactIDs: []string{"claim_test_investment_mix"}},
+		{Signal: "health.compounding_risk", Value: 0.4, Weight: 25, WeightContributed: 10, Window: ContextFabricCohortMemberDriverWindowCurrent, SourceClaimedFactIDs: []string{"claim_test_health"}},
+		{Signal: "operational_deficiencies.severity", Value: 0.5, Weight: 20, WeightContributed: 10, Window: ContextFabricCohortMemberDriverWindowCurrent, SourceClaimedFactIDs: []string{"claim_test_deficiency"}},
+		{Signal: "readiness.coverage_gap", Value: 0.4, Weight: 15, WeightContributed: 6, Window: ContextFabricCohortMemberDriverWindowCurrent, SourceClaimedFactIDs: []string{"claim_test_readiness"}},
+		{Signal: "workload.forecast_pressure", Value: 0.4, Weight: 10, WeightContributed: 4, Window: ContextFabricCohortMemberDriverWindowCurrent, SourceClaimedFactIDs: []string{"claim_test_workload"}},
 	}
 	if err := member.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil for the full closed vocabulary", err)
@@ -139,6 +142,14 @@ func baseDriverForBasis() ContextFabricCohortMemberDriver {
 	return ContextFabricCohortMemberDriver{
 		Signal: "health.compounding_risk", Value: 0.42, Weight: 25, WeightContributed: 42.0,
 		Window: ContextFabricCohortMemberDriverWindowCurrent,
+		// SourceClaimedFactIDs (CHAOS-4398 PR3b): a placeholder citation --
+		// this file only exercises ContextFabricCohortMember.Validate() and
+		// ContextFabricCohortMemberDriver.Validate() in isolation, neither
+		// of which has access to a result's ClaimedFacts to cross-reference
+		// against (see validateCohortDriverClaimedFacts, tested separately
+		// against a full ContextFabricInvestigationResult), so any
+		// non-empty ID satisfies this file's shape-only check.
+		SourceClaimedFactIDs: []string{"claim_test_health_default"},
 	}
 }
 
@@ -434,6 +445,9 @@ func investmentMixDriverForLabels(labels ...string) ContextFabricCohortMemberDri
 		Signal: "investment_mix", Value: value, Weight: 30, WeightContributed: 100 * value,
 		Window: ContextFabricCohortMemberDriverWindowCurrent, ThresholdLabels: labels,
 		Concentration: floatPtr(0.5), ConcentrationMethod: "max_share",
+		// SourceClaimedFactIDs (CHAOS-4398 PR3b): placeholder citation, same
+		// reasoning as baseDriverForBasis' own comment.
+		SourceClaimedFactIDs: []string{"claim_test_investment_mix_default"},
 	}
 }
 
@@ -558,3 +572,134 @@ func TestContextFabricCohortMemberDriver_ConcentrationOnlyValidForInvestmentMix(
 		t.Fatal("Validate() = nil for a non-investment_mix driver carrying concentration, want an error")
 	}
 }
+
+// ---------------------------------------------------------------------
+// CHAOS-4398 PR3b (R4-style ruling): SourceClaimedFactIDs -- shape-only on
+// the driver itself (bounds/uniqueness, above); cross-reference against
+// result.ClaimedFacts needs the FULL ContextFabricInvestigationResult
+// (validateCohortDriverClaimedFacts, only reachable there -- a bare
+// ContextFabricCohortMember.Validate() has no ClaimedFacts to check
+// against).
+// ---------------------------------------------------------------------
+
+// baseCohortResultWithClaims builds a minimal, otherwise-valid
+// ContextFabricInvestigationResult carrying ONE cohort member with driver
+// and claims -- the fixture every test in this section starts from,
+// varying only driver/claims to prove the cross-reference check.
+func baseCohortResultWithClaims(driver ContextFabricCohortMemberDriver, claims []ContextFabricClaimedFact) ContextFabricInvestigationResult {
+	score := 42.0
+	return ContextFabricInvestigationResult{
+		SchemaVersion: ContextFabricInvestigationResultSchema,
+		ResultID:      "result_pr3b_xref01", RequestID: "request_pr3b_xref01",
+		GeneratedAt: time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC), Status: ContextFabricInvestigationComplete,
+		Question: "Which team is struggling most?",
+		Interpretation: ContextFabricInterpretedQuestion{
+			Shape: ContextFabricShapeDiscoveredCohort, RequestedJudgment: "attention_ranking",
+			TimeContext:      ContextFabricTimeContext{Axis: ContextFabricTemporalCurrent},
+			FactRequirements: []ContextFabricFactRequirement{{Kind: ContextFabricFactHealth}},
+		},
+		SubjectResolution:   ContextFabricSubjectResolution{Candidates: []ContextFabricSubjectCandidate{}, Committed: []ContextFabricSubjectRef{}},
+		DirectJudgment:      "Team CHAOS is the sole ranked member.",
+		DeterministicAnswer: "Team CHAOS is the sole ranked member.",
+		StrongestPressures:  []string{}, Drivers: []ContextFabricDriverJudgment{},
+		RemainingWork: []ContextFabricFinding{}, ReadinessGaps: []ContextFabricFinding{},
+		Paths: []ContextFabricRelationshipPath{}, Conflicts: []ContextFabricFinding{},
+		Limitations: []string{}, EvidenceRefIDs: []string{},
+		ClaimedFacts: claims,
+		Coverage:     ContextFabricCoverage{Sources: []ContextFabricSourceObservation{}},
+		Versions: ContextFabricVersionSet{
+			ServiceVersion: "test", ContractVersion: ContextFabricInvestigationResultSchema, Backend: "test",
+			ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1", ModelIdentity: "test/model-v1",
+		},
+		Warnings: []string{},
+		Cohort: &ContextFabricCohort{
+			Kind: ContextFabricSubjectTeam, Rationale: "matched by kind census",
+			Members: []ContextFabricCohortMember{{
+				Subject:          ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team:CHAOS", Label: "Fullchaos"},
+				Rank:             1,
+				InclusionReasons: []string{"matched"},
+				RankingComputed:  true,
+				Score:            &score,
+				AttentionRank:    1,
+				RankingBasis:     []string{"health.compounding_risk"},
+				DataCompleteness: ContextFabricCohortDataDegraded,
+				Outcome:          ContextFabricCohortOutcomeProvisional,
+				MissingSignals:   []string{"investment_mix", "operational_deficiencies.severity", "readiness.coverage_gap", "workload.forecast_pressure"},
+				Drivers:          []ContextFabricCohortMemberDriver{driver},
+			}},
+		},
+	}
+}
+
+// TestContextFabricCohortMemberDriver_SourceClaimedFactIDsMustResolve
+// proves a driver citing an ID with NO matching entry in result.ClaimedFacts
+// is rejected -- a dangling reference is exactly the "citation without a
+// backing claim" gap this ruling closes.
+func TestContextFabricCohortMemberDriver_SourceClaimedFactIDsMustResolve(t *testing.T) {
+	t.Parallel()
+	driver := baseDriverForBasis() // cites "claim_test_health_default", never in ClaimedFacts here
+	result := baseCohortResultWithClaims(driver, nil)
+	if err := result.Validate(); err == nil {
+		t.Fatal("Validate() = nil for a driver citing an ID with no matching claim, want an error")
+	}
+}
+
+// TestContextFabricCohortMemberDriver_SourceClaimedFactIDsMustMatchFactKind
+// proves a driver citing a REAL claim of the WRONG FactKind is still
+// rejected -- resolving is necessary but not sufficient; the resolved
+// claim must be the FactKind
+// contextFabricCohortMemberDriverRequiredFactKind names for that signal
+// (health.compounding_risk requires kind="health", not "readiness").
+func TestContextFabricCohortMemberDriver_SourceClaimedFactIDsMustMatchFactKind(t *testing.T) {
+	t.Parallel()
+	driver := baseDriverForBasis() // signal: health.compounding_risk, cites "claim_test_health_default"
+	wrongKindClaim := ContextFabricClaimedFact{
+		ClaimID: "claim_test_health_default", Kind: ContextFabricFactReadiness, // wrong kind: should be "health"
+		Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team:CHAOS", Label: "Fullchaos"},
+		Field:   "severity", Value: ContextFabricScalarValue{String: strPtr("high")},
+	}
+	result := baseCohortResultWithClaims(driver, []ContextFabricClaimedFact{wrongKindClaim})
+	if err := result.Validate(); err == nil {
+		t.Fatal("Validate() = nil for a driver citing a claim of the wrong FactKind, want an error")
+	}
+}
+
+// TestContextFabricCohortMemberDriver_SourceClaimedFactIDsResolvesCleanly
+// proves the positive case: a driver citing a REAL claim of the MATCHING
+// FactKind passes -- the red-first pair to the two rejection tests above.
+func TestContextFabricCohortMemberDriver_SourceClaimedFactIDsResolvesCleanly(t *testing.T) {
+	t.Parallel()
+	driver := baseDriverForBasis() // signal: health.compounding_risk, cites "claim_test_health_default"
+	correctClaim := ContextFabricClaimedFact{
+		ClaimID: "claim_test_health_default", Kind: ContextFabricFactHealth,
+		Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team:CHAOS", Label: "Fullchaos"},
+		Field:   "severity", Value: ContextFabricScalarValue{String: strPtr("high")},
+	}
+	result := baseCohortResultWithClaims(driver, []ContextFabricClaimedFact{correctClaim})
+	if err := result.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil for a driver citing a claim of the matching FactKind", err)
+	}
+}
+
+// TestContextFabricCohortMemberDriver_SourceClaimedFactIDsMustBelongToTheSameMember
+// is codex R1's finding (CHAOS-4398 PR3b): resolving and matching FactKind
+// are NOT sufficient -- a driver citing a REAL, right-Kind claim minted
+// for a DIFFERENT cohort member's subject must still be rejected. Without
+// this, a driver citing a mix of {foreign-member health claim, anything
+// else} would pass as long as ONE referenced ID happened to carry the
+// required Kind, defeating "this member's own evidence."
+func TestContextFabricCohortMemberDriver_SourceClaimedFactIDsMustBelongToTheSameMember(t *testing.T) {
+	t.Parallel()
+	driver := baseDriverForBasis() // signal: health.compounding_risk, cites "claim_test_health_default"
+	foreignMemberClaim := ContextFabricClaimedFact{
+		ClaimID: "claim_test_health_default", Kind: ContextFabricFactHealth, // right Kind
+		Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team:PLATFORM", Label: "Platform"}, // wrong subject -- not team:CHAOS
+		Field:   "severity", Value: ContextFabricScalarValue{String: strPtr("high")},
+	}
+	result := baseCohortResultWithClaims(driver, []ContextFabricClaimedFact{foreignMemberClaim})
+	if err := result.Validate(); err == nil {
+		t.Fatal("Validate() = nil for a driver citing another member's claimed fact, want an error")
+	}
+}
+
+func strPtr(s string) *string { return &s }
