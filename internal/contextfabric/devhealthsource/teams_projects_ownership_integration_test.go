@@ -572,9 +572,23 @@ func subAmbiguousProjectKeyResolvesAnIDAndOmitsAKey(t *testing.T, ctx context.Co
 			t.Errorf("emitted %q from an ambiguous project_key -- two projects share (github, AMBIG-KEY), so which one the source meant is unknowable and neither may be guessed", forbidden)
 		}
 	}
-	// Omitted is only half. Recorded is the other half.
-	if output := logged.String(); !strings.Contains(output, "omitted_ambiguous_project_keys=") {
-		t.Errorf("no ambiguity telemetry for an omitted key -- the exclusion now happens inside the join, so an unrecorded omission is invisible to everyone downstream; got:\n%s", output)
+	// Omitted is only half; recorded is the other half -- but WHICH half is
+	// recorded changed, and honestly.
+	//
+	// This used to assert `omitted_ambiguous_project_keys`, a per-row claim
+	// reconstructed from aggregate SQL. That reconstruction was wrong in four
+	// consecutive review rounds in both directions and was removed rather
+	// than patched a fifth time (CHAOS-4566 carries it). What remains is a
+	// fact a plain query can actually establish: this organization's catalog
+	// holds an ambiguous key.
+	//
+	// So the honest state of this case is: the edge is correctly omitted, the
+	// CONDITION that omitted it is visible, and attributing the omission to
+	// this specific ownership row is not -- which is exactly what CHAOS-4566
+	// exists to restore. Asserting the catalog line rather than deleting the
+	// assertion keeps that gap documented by a test instead of by silence.
+	if output := logged.String(); !strings.Contains(output, "ambiguous_project_keys_in_catalog=") {
+		t.Errorf("nothing reported the ambiguity that omitted this edge -- the exclusion happens inside the join, so with no catalog signal either it is invisible to everyone downstream; got:\n%s", output)
 	}
 
 	// One ambiguous key must not suppress the rest.
