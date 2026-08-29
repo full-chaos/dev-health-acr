@@ -112,15 +112,10 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 		// cannot ship unmarked, carved out today because nothing produces
 		// this shape into a rendered answer yet.
 		"structured.key_facts[].rows[].fields{}.string": "not (yet) rendered by this plain-text markdown view; no producer routes a Rows-bearing fact into a driver's cited claims yet, and the claim's own field/value pair already renders with the untrusted marking",
-		// CHAOS-4398 PR3: RankingTable and AffectedSubjects are new
-		// Rows-panel/driver-tie-back fields (design doc §4a) with no
-		// rendering wired into this plain-text markdown view yet -- same
-		// "declared now so a future rendering cannot ship unmarked,
-		// carved out today because nothing renders this shape yet" shape
-		// as key_facts[].rows[].fields{}.string and window_expand_options
-		// above.
-		"structured.cohort.ranking_table[].fields{}.string":        "not (yet) rendered by this plain-text markdown view; the Rows panel has no renderer wired in yet",
-		"structured.principal_drivers[].affected_subjects[].label": "not (yet) rendered by this plain-text markdown view; driver-to-cohort-member tie-back has no renderer wired in yet",
+		// CHAOS-4398 PR3b: RankingTable and AffectedSubjects are now
+		// rendered (the "## Rows" block and the drivers' own "Affected:"
+		// line) -- the carve-out that stood here through PR3 is gone; both
+		// paths are asserted like every other rendered field below.
 	}
 	for _, declared := range planted {
 		sentinel := sentinels[declared]
@@ -352,9 +347,12 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 			// CHAOS-4398 PR3: a non-empty entry so the reflection walk
 			// below can reach and plant "cohort.ranking_table[].fields{}.string" --
 			// same "empty slice is silently unresolvable" reasoning as
-			// KeyFacts[0].Rows below.
+			// KeyFacts[0].Rows below. CHAOS-4398 PR3b: key is "team_label",
+			// a REAL rankingTableFieldOrder key (render_answer.go) -- now
+			// that this row actually renders, an arbitrary key the renderer
+			// never looks up would silently fail to reach the rendering.
 			RankingTable: []contractsv1.ContextFabricClaimedFactRow{{
-				Fields: map[string]contractsv1.ContextFabricScalarValue{"team_name": {String: &rankingRowTeamName}},
+				Fields: map[string]contractsv1.ContextFabricScalarValue{"team_label": {String: &rankingRowTeamName}},
 			}},
 		},
 		PrincipalDrivers: []contractsv1.ContextFabricProjectedDriver{{

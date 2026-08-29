@@ -413,6 +413,25 @@ func (t SlogEngineTelemetry) RecordCohortRanked(ctx context.Context, principal s
 	}, requestIDLogAttrs(ctx)...)...)
 }
 
+// RecordCohortDriverNarration implements EngineTelemetry (CHAOS-4398 PR3b,
+// team-lead's standing order for this emission). Content-safe: a closed
+// outcome enum and counts only, same discipline as RecordCohortRanked
+// immediately above -- never a team name or narration prose. Info level
+// for every outcome, including budget_exhausted/no_drivers: neither is a
+// degradation of the answer (the Rows table/Score/RankingBasis already
+// carry the ranking regardless of whether narration ran), it is an
+// ordinary, expected shape an operator may still want to see the rate of.
+func (t SlogEngineTelemetry) RecordCohortDriverNarration(ctx context.Context, principal storage.Principal, event CohortDriverNarrationEvent) {
+	t.logger.InfoContext(ctx, "context fabric cohort driver narration", append([]any{
+		"org_id", principal.OrgID,
+		"outcome", string(event.Outcome),
+		"judgments_emitted", event.JudgmentsEmitted,
+		"facts_minted", event.FactsMinted,
+		"members_narrated", event.MembersNarrated,
+		"members_skipped_no_evidence", event.MembersSkippedNoEvidence,
+	}, requestIDLogAttrs(ctx)...)...)
+}
+
 // RecordCategoryFactComposition implements EngineTelemetry (CHAOS-4347) --
 // the operator-visible record of a status-category requirement being
 // expanded into a composed fact-kind set. Content-safe: two closed enums

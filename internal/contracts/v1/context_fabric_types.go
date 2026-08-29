@@ -1146,6 +1146,30 @@ type ContextFabricCohortMemberDriver struct {
 	// name or shape. Absent for every other signal.
 	Concentration       *float64 `json:"concentration,omitempty"`
 	ConcentrationMethod string   `json:"concentration_method,omitempty"`
+	// SourceClaimedFactIDs (CHAOS-4398 PR3b, R4-style ruling) is the
+	// PROVENANCE this driver's own [0,1] Value was computed FROM: one or
+	// more ClaimedFactIDs resolving to a ContextFabricClaimedFact of the
+	// matching FactKind (ContextFabricDriverCategoryRequiresClaimedFact's
+	// table) IN THIS SAME RESULT's ClaimedFacts. RankCohort mints these
+	// claims itself at ranking time -- one per (member, signal family) it
+	// actually reads a raw canonical value from, citing the REAL value the
+	// ranker read (e.g. the raw compounding_risk score, the raw severity
+	// string, the raw estimate_coverage_ratio) -- the model never invents
+	// or is asked to invent them, and the narrator (§5a) never mints them
+	// either: it only RESOLVES a driver to the IDs already recorded here.
+	// This is "citation, not minting" at the narration layer -- see
+	// ContextFabricDriverJudgment.ClaimedFactIDs' own requirement for why
+	// EvidenceRefIDs/PathIDs closure is not sufficient for these
+	// categories. Required (non-empty) whenever this driver's family was
+	// available (WeightContributed's own availability, mirroring
+	// Concentration's presence rule) -- one canonical value was always
+	// read to compute the driver, so a claim always exists to cite.
+	// investment_mix is the one family that can carry MORE than one ID: its
+	// [0,1] Value is a composite of up to 4 sub-signal booleans
+	// (reactive_share/deliberate_share/mix_concentrated/mix_shift, §5 Term
+	// 1 sub-formula), each read from its own theme_distribution row, so a
+	// single driver can cite multiple source claims.
+	SourceClaimedFactIDs []string `json:"source_claimed_fact_ids,omitempty"`
 }
 
 // ContextFabricCohortMemberDriverWindow is CHAOS-4398 PR2's closed

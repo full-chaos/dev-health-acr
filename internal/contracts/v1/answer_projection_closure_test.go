@@ -277,7 +277,12 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// shared by both surfaces).
 		// CHAOS-4398 PR3: 246 -> 248 -- ContextFabricCohortMember's new
 		// outcome/missing_signals[] leaves.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 248},
+		// CHAOS-4398 PR3b: 248 -> 249 -- ContextFabricCohortMemberDriver's
+		// new source_claimed_fact_ids[] leaf (provenance citations RankCohort
+		// mints, not model prose) -- answer_projection is unaffected, since
+		// ProjectedCohortMember has no projected Drivers field to mirror it
+		// onto.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 249},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -406,6 +411,12 @@ func trustedBecauseClosed(path string) bool {
 		"finding_id", "path_id", "canonical_id", "turn_id", "schema_version",
 		"evidence_ref_ids", "claimed_fact_ids", "path_ids", "content_digest",
 		"snapshot_hash", "watermark",
+		// CHAOS-4398 PR3b: source_claimed_fact_ids is
+		// ContextFabricCohortMemberDriver's own provenance citation array --
+		// opaque ClaimIDs RankCohort mints/resolves at ranking time, same
+		// standing as claimed_fact_ids/evidence_ref_ids above, never
+		// free-form model prose.
+		"source_claimed_fact_ids",
 		// CHAOS-3900 P1.E: matched_term_hash is a SHA-256 digest of a
 		// normalized term (ContextFabricAnchorOption's own doc comment) --
 		// a fixed-length, service-minted hash, never model or source prose.
