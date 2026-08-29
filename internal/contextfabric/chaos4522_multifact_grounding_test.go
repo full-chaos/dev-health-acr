@@ -270,3 +270,62 @@ func TestClassifySynthesisRejectionPreservesTheReasonThroughItsWrapping(t *testi
 		t.Fatalf("rejection reason through ClassifySynthesisRejection = %q, want %q", got, RejectionReasonClaimFieldUnobserved)
 	}
 }
+
+// TestCohortMemberEvidenceIsInsideTheEvidenceClosure is CHAOS-4522's SECOND
+// defect, the exact symmetric twin of the first and the one that kept the
+// live answer at 422 even after the grounding closure was widened.
+//
+// synthesisSubjects has admitted input.Graph.Cohort.Members[].Subject since
+// CHAOS-4398, and genkitruntime's synthesisInputFromDomain SHOWS the model
+// the whole Cohort -- each member's EvidenceRefIDs included. The evidence
+// closure in ValidateAgainst was never widened to match. So the engine
+// displayed a member's evidence ref to the model and then rejected the
+// answer as "references unknown evidence" when the model cited it. On the
+// live three-team answer the cohort ranks team:gh:ops-team, whose only
+// evidence ref is acr:v1:team:gh:ops-team, and no canonical fact exists for
+// that member -- nothing else in the closure could ever have supplied it,
+// so EVERY attempt at that answer died here, with rejection_reason
+// evidence_unknown on all four post-fix replicates.
+func TestCohortMemberEvidenceIsInsideTheEvidenceClosure(t *testing.T) {
+	t.Parallel()
+	input, draft := multiFactGroupFixture(t)
+	member := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:gh:ops-team", Label: "Ops Team"}
+	// A cohort member with NO canonical fact of its own -- the live shape:
+	// the member is ranked, but nothing else in the closure names it.
+	input.Graph.Cohort = &Cohort{
+		Kind: SubjectTeam,
+		Members: []CohortMember{{
+			Subject: member, Rank: 1, InclusionReasons: []string{"ranked by the cohort formula"},
+			EvidenceRefIDs: []string{"acr:v1:team:gh:ops-team"},
+		}},
+	}
+	draft.EvidenceRefIDs = append(draft.EvidenceRefIDs, "acr:v1:team:gh:ops-team")
+	if err := draft.ValidateAgainst(input); err != nil {
+		t.Fatalf("ValidateAgainst() error = %v, want an evidence ref the engine's OWN cohort supplied to be citable", err)
+	}
+}
+
+// TestEvidenceClosureStillRejectsARefNothingSupplied proves the widening did
+// not turn the evidence closure into a rubber stamp: a ref no path, fact,
+// candidate, graph context OR cohort member ever carried is still fatal.
+func TestEvidenceClosureStillRejectsARefNothingSupplied(t *testing.T) {
+	t.Parallel()
+	input, draft := multiFactGroupFixture(t)
+	input.Graph.Cohort = &Cohort{
+		Kind: SubjectTeam,
+		Members: []CohortMember{{
+			Subject:          SubjectRef{Kind: SubjectTeam, CanonicalID: "team:gh:ops-team", Label: "Ops Team"},
+			Rank:             1,
+			InclusionReasons: []string{"ranked by the cohort formula"},
+			EvidenceRefIDs:   []string{"acr:v1:team:gh:ops-team"},
+		}},
+	}
+	draft.EvidenceRefIDs = append(draft.EvidenceRefIDs, "acr:v1:team:gh:invented-by-the-model")
+	err := draft.ValidateAgainst(input)
+	if err == nil || !strings.Contains(err.Error(), "unknown evidence") {
+		t.Fatalf("ValidateAgainst() error = %v, want an unknown-evidence rejection", err)
+	}
+	if got := SynthesisRejectionReasonOf(err); got != RejectionReasonEvidenceUnknown {
+		t.Fatalf("rejection reason = %q, want %q", got, RejectionReasonEvidenceUnknown)
+	}
+}

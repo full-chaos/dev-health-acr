@@ -162,6 +162,26 @@ func diagnoseSynthesisDraftBound(d SynthesisDraft, input SynthesisInput) (bound 
 	for _, evidenceRefID := range input.Graph.EvidenceRefIDs {
 		allowedEvidence[evidenceRefID] = struct{}{}
 	}
+	// CHAOS-4522: the cohort's OWN per-member evidence. synthesisSubjects
+	// has admitted input.Graph.Cohort.Members[].Subject since CHAOS-4398,
+	// and synthesisInputFromDomain SHOWS the model the whole Cohort --
+	// including each member's EvidenceRefIDs -- but this closure was never
+	// widened to match, so a member's evidence ref was displayed to the
+	// model and then rejected as "unknown evidence" when the model cited
+	// it. On the live three-team discovered_cohort answer that is not
+	// hypothetical: the cohort ranks team:gh:ops-team, whose only evidence
+	// ref is acr:v1:team:gh:ops-team, and no canonical fact exists for that
+	// member, so nothing else in this closure could ever supply it. Every
+	// attempt at that answer died here. These refs are engine-minted from
+	// the cohort ACR itself built, exactly like the path/fact/candidate
+	// refs above -- admitting them widens nothing the model could forge.
+	if input.Graph.Cohort != nil {
+		for _, member := range input.Graph.Cohort.Members {
+			for _, evidenceRefID := range member.EvidenceRefIDs {
+				allowedEvidence[evidenceRefID] = struct{}{}
+			}
+		}
+	}
 	for _, fact := range input.Facts.Facts {
 		for _, evidenceRefID := range fact.EvidenceRefIDs {
 			allowedEvidence[evidenceRefID] = struct{}{}
