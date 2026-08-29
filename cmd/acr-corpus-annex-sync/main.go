@@ -37,6 +37,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -456,6 +457,29 @@ func ratifyCurrentCorpusSHA8(annexPath, corpusPath, ratifiedBy, note string) err
 	} else {
 		signoff = map[string]json.RawMessage{}
 	}
+
+	// An OPERATIVE signoff must already exist (codex review R2 P2). This
+	// flag advances the hash an existing approval covers; it is not a way to
+	// approve an artifact. Without this check, running -ratify against an
+	// unsigned or DRAFT annex creates a signoff object carrying only
+	// approved_corpus_sha8, prints "ratified", and exits 0 -- while
+	// requireAnnexSignedOff (which reads Signoff.Status == "APPROVED" and a
+	// non-empty Signoff.By) still refuses the artifact at run time. A
+	// success message for a state every consumer rejects is worse than an
+	// error.
+	var existing struct {
+		By     string `json:"by"`
+		Status string `json:"status"`
+	}
+	if raw, ok := provenance["signoff"]; ok {
+		if err := json.Unmarshal(raw, &existing); err != nil {
+			return fmt.Errorf("parse signoff status: %w", err)
+		}
+	}
+	if existing.Status != "APPROVED" || strings.TrimSpace(existing.By) == "" {
+		return fmt.Errorf("refusing to ratify: the annex has no operative signoff (status=%q by=%q, want status \"APPROVED\" with a non-empty by). -ratify advances the corpus hash an EXISTING approval covers; it cannot create one, and an annex the harness would refuse must not report a successful ratification", existing.Status, existing.By)
+	}
+
 	var previous string
 	if raw, ok := signoff["approved_corpus_sha8"]; ok {
 		json.Unmarshal(raw, &previous)

@@ -143,16 +143,24 @@ codegraph-contract:
 # CHAOS-4100: offline checks for the trial launcher's shard layout. Starts
 # no container, touches no database, calls no model -- see the script's own
 # header for why the layout specifically is worth gating.
-# CHAOS-4525 added the seed-producer and the ACR_TRIAL_PG_DATABASE /
-# graph-lifecycle guards to this target. Both were unreachable from any gate
-# before: test-kiac-dsn-reader.sh existed but no Makefile target or workflow
-# ran it, so its guards could rot silently. All three suites are offline by
-# construction -- no container, no database, no model, no cluster (the one
-# live-cluster section in test-kiac-dsn-reader.sh skips itself when KUBECONFIG
-# is unset, and test-seed-corpus-cases.sh skips itself without jq).
+# CHAOS-4525 added test-seed-corpus-cases.sh here. It is offline by
+# construction -- no container, no database, no model, no cluster (the live
+# graph is stubbed through ACR_TRIAL_SEED_FALKOR_BIN) -- and skips itself when
+# jq is absent.
+#
+# test-kiac-dsn-reader.sh is DELIBERATELY NOT in this target, despite covering
+# guards CHAOS-4525 added (codex review R2 P1, reproduced): it sources
+# scripts/trial/common.sh, which hard-exits at SOURCE time unless a sibling
+# dev-health checkout with ops/.env exists. The contracts job and release
+# `make verify` run in a standalone checkout that has neither, so putting it
+# here turned a required check red -- confirmed by cloning this branch to a
+# bare directory and running the target ("kiac-dsn-reader checks FAILED (10)"),
+# and by the contracts job itself. Making it self-contained means stubbing
+# common.sh's entire root resolution, which is larger than this ticket should
+# carry, so the underlying gap (no target or workflow runs that suite) stays
+# open and is filed rather than papered over.
 shard-plan:
 	bash scripts/trial/test-shard-plan.sh
-	bash scripts/trial/test-kiac-dsn-reader.sh
 	bash scripts/trial/test-seed-corpus-cases.sh
 
 canonical-receipts:

@@ -238,6 +238,25 @@ for (( c=0; c<case_count; c++ )); do
   if [[ -n "$census_kind" ]]; then
     expectation="$(jq -r ".cases[$c].census.row_count_expectation" "$spec")"
     reject_unsafe "$census_kind"
+
+    # The census block is hand-authored in the spec, and only ONE of its
+    # values decides whether the case is measurable at all: the harness
+    # admits a cohort case into the answer-rate denominator on the exact
+    # string "aggregate_assessment" (adaptSignedOracleAnnex, CHAOS-4525).
+    # A misspelling is therefore silent and total -- the case is written,
+    # the script reports success, and the row never enters the denominator.
+    # Validate the whole closed vocabulary here, where it can still be
+    # refused, rather than discovering it in a run that quietly measures
+    # nothing.
+    terminal_expectation="$(jq -r ".cases[$c].census.terminal_expectation // \"\"" "$spec")"
+    case "$terminal_expectation" in
+      aggregate_assessment|witnessed_no_match|clarification_required) ;;
+      *) die "case $c ($klass/$band): census.terminal_expectation=\"$terminal_expectation\" is not in the closed vocabulary (aggregate_assessment|witnessed_no_match|clarification_required). aggregate_assessment is the ONLY value that puts a cohort case in the answer-rate denominator, so a typo here is silently unmeasurable." ;;
+    esac
+    commit_expectation="$(jq -r ".cases[$c].census.commit_expectation // \"\"" "$spec")"
+    [[ "$commit_expectation" == "never" ]] || die "case $c ($klass/$band): census.commit_expectation=\"$commit_expectation\", want \"never\" (every census case in the annex uses it; a cohort question commits no single subject)"
+    must_run="$(jq -r ".cases[$c].census.must_run // \"\"" "$spec")"
+    [[ "$must_run" == "true" ]] || die "case $c ($klass/$band): census.must_run=\"$must_run\", want boolean true"
     n="$(falkor_count "MATCH (n:Subject) WHERE n.subject_kind = '$census_kind' RETURN count(n)")"
     case "$expectation" in
       one_or_more)        [[ "$n" -ge 1 ]] || die "case $c: census expects one_or_more $census_kind, graph has $n" ;;
@@ -353,9 +372,34 @@ new_sha8="$(shasum -a 256 "$corpus_tmp" | cut -c1-8)"
 pinned="$(jq -r '.provenance.corpus_sha8' "$annex_tmp")"
 [[ "$new_sha8" == "$pinned" ]] || die "post-sync hash guard would FAIL: corpus sha8 $new_sha8 != annex pin $pinned -- ORIGINALS LEFT UNTOUCHED"
 
-# Only now, with the pair proven internally consistent, do the originals move.
-cp "$corpus_tmp" "$corpus"
-cp "$annex_tmp" "$annex"
+# Only now, with the pair proven internally consistent, do the originals move
+# -- and they move RECOVERABLY (codex review R2 P2). Two `cp`s are not atomic
+# together: an interrupt or an I/O failure between them leaves the corpus
+# replaced while the annex still pins the old hash, which is precisely the
+# inconsistent shared-artifact state the temporary validation exists to
+# prevent. Backups are taken first, and any failure of either copy -- or of
+# the post-install re-check -- rolls BOTH files back before exiting.
+corpus_backup="$corpus.4525-rollback"
+annex_backup="$annex.4525-rollback"
+cp "$corpus" "$corpus_backup" || die "could not back up the corpus before installing -- ORIGINALS LEFT UNTOUCHED"
+cp "$annex" "$annex_backup" || { rm -f "$corpus_backup"; die "could not back up the annex before installing -- ORIGINALS LEFT UNTOUCHED"; }
+
+rollback_and_die() {
+  cp "$corpus_backup" "$corpus" 2>/dev/null || echo "seed-corpus-cases.sh: ROLLBACK OF THE CORPUS FAILED -- restore by hand from $corpus_backup" >&2
+  cp "$annex_backup" "$annex" 2>/dev/null || echo "seed-corpus-cases.sh: ROLLBACK OF THE ANNEX FAILED -- restore by hand from $annex_backup" >&2
+  die "$1 -- rolled both files back to their pre-run contents"
+}
+
+cp "$corpus_tmp" "$corpus" || rollback_and_die "installing the corpus failed"
+cp "$annex_tmp" "$annex" || rollback_and_die "installing the annex failed"
+
+# Re-prove the guard against what is ACTUALLY ON DISK, not against the
+# temporaries that were validated a moment ago: this is the only check that
+# covers the installation step itself.
+installed_sha8="$(shasum -a 256 "$corpus" | cut -c1-8)"
+installed_pin="$(jq -r '.provenance.corpus_sha8' "$annex" 2>/dev/null || echo "")"
+[[ "$installed_sha8" == "$installed_pin" ]] || rollback_and_die "the INSTALLED pair does not agree (corpus sha8 $installed_sha8 vs annex pin $installed_pin)"
+rm -f "$corpus_backup" "$annex_backup"
 
 added_last=$((base_index + case_count - 1))
 echo "seed-corpus-cases.sh: appended corpus + annex cases at indices ${base_index}..${added_last}"

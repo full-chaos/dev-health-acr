@@ -166,6 +166,68 @@ check "a graph key holding foreign-org subjects is refused" "exit=1" "$out"
 check "  ... and names the count and both ids" "1" "$(grep -c 'belonging to an organization other than org-1' "$tmp/out.log" || true)"
 check "  ... and leaves the originals untouched" "untouched" "$(originals_untouched)"
 
+# 8. CHAOS-4525 / codex R2 P2: the census block is hand-authored, and exactly
+#    one of its values decides whether the case is measurable -- the harness
+#    admits a cohort case into the answer-rate denominator on the exact string
+#    "aggregate_assessment". A typo is silent AND total: the case is written,
+#    the script reports success, and the row never enters the denominator.
+census_case() {
+  printf '%s' '[{"question":"q","question_class":"cohort_assessment","band":"paraphrase","kind_positive":"team","kind_negatives":[],"anchor_positive_key":null,"anchor_negatives":[],"window_positive_band":"all_time","window_negatives":[],"census":{"must_run":'"$3"',"kind":"team","row_count_expectation":"one_or_more","terminal_expectation":"'"$1"'","commit_expectation":"'"$2"'"},"authority":"annotation","kind_basis":"x","anchor_basis":"x","baseline":{}}]'
+}
+
+fake_kubectl 3 0
+fixture "$(census_case aggregate_assessmnt never true)"
+out="$(run_seed --dry-run)"
+check "a MISSPELLED census terminal_expectation is refused" "exit=1" "$out"
+check "  ... and names the closed vocabulary" "1" "$(grep -c 'closed vocabulary' "$tmp/out.log" || true)"
+
+fixture "$(census_case '' never true)"
+check "a MISSING census terminal_expectation is refused" "exit=1" "$(run_seed --dry-run)"
+
+fixture "$(census_case aggregate_assessment always true)"
+check "a census commit_expectation other than never is refused" "exit=1" "$(run_seed --dry-run)"
+
+fixture "$(census_case aggregate_assessment never false)"
+check "a census must_run of false is refused" "exit=1" "$(run_seed --dry-run)"
+
+for te in aggregate_assessment witnessed_no_match clarification_required; do
+  fixture "$(census_case "$te" never true)"
+  check "the closed vocabulary value $te is accepted" "exit=0" "$(run_seed --dry-run)"
+done
+
+# 9. CHAOS-4525 / codex R2 P2: installation is two `cp`s and is therefore not
+#    atomic. A failure of the SECOND one must not leave the corpus replaced
+#    beside an annex still pinning the old hash -- the exact inconsistent
+#    state the temporary validation exists to prevent. Simulated by making the
+#    annex read-only so its copy fails after the corpus copy has succeeded.
+fake_kubectl 3 0
+fixture "$(census_case aggregate_assessment never true)"
+# A minimal stand-in for cmd/acr-corpus-annex-sync: it does the one thing the
+# hash guard downstream depends on -- repin the annex to the corpus it was
+# handed -- so the run actually REACHES the installation step this check is
+# about. A no-op stub aborts at the guard instead and would make this check
+# vacuously pass.
+sync_stub="$tmp/repin-sync"
+cat >"$sync_stub" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -annex) a="$2"; shift 2 ;;
+    -corpus) k="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+sha8="$(shasum -a 256 "$k" | cut -c1-8)"
+jq --arg s "$sha8" '.provenance.corpus_sha8 = $s' "$a" >"$a.stub" && mv "$a.stub" "$a"
+STUB
+chmod +x "$sync_stub"
+chmod 0444 "$tmp/annex.json"
+out="$(ACR_SEED_SYNC_CMD="$sync_stub" run_seed)"
+chmod 0644 "$tmp/annex.json"
+check "a failed annex install rolls the corpus back" "untouched" "$(originals_untouched)"
+check "  ... and says both files were rolled back" "1" "$(grep -c 'rolled both files back' "$tmp/out.log" || true)"
+
 if [[ "$failures" -gt 0 ]]; then
   echo "seed-corpus-cases checks FAILED ($failures)" >&2
   exit 1

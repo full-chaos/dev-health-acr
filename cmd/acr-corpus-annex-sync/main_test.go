@@ -362,6 +362,39 @@ func TestRatifyCurrentCorpusSHA8(t *testing.T) {
 		}
 	})
 
+	t.Run("REFUSES an annex with no operative signoff", func(t *testing.T) {
+		// -ratify advances the hash an EXISTING approval covers. Against an
+		// unsigned/DRAFT annex it used to create a signoff object carrying
+		// only approved_corpus_sha8 and report success, while
+		// requireAnnexSignedOff still refused the artifact at run time --
+		// a success message for a state every consumer rejects.
+		for _, tc := range []struct {
+			name, by, status string
+		}{
+			{"DRAFT status", "chris", "DRAFT"},
+			{"empty status", "chris", ""},
+			{"approved but unattributed", "", "APPROVED"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				annexPath, corpusPath, liveSHA8 := writeRatifyFixture(t, "", "oldappr")
+				reRecordCorpusSHA8(t, annexPath, liveSHA8)
+				rewriteSignoffField(t, annexPath, "by", tc.by)
+				rewriteSignoffField(t, annexPath, "status", tc.status)
+
+				err := ratifyCurrentCorpusSHA8(annexPath, corpusPath, "team-lead", "seeds added")
+				if err == nil {
+					t.Fatal("ratify succeeded against an annex with no operative signoff, want a refusal")
+				}
+				if !strings.Contains(err.Error(), "no operative signoff") {
+					t.Errorf("error = %v, want a 'no operative signoff' message", err)
+				}
+				if approved, chain := readRatifiedSignoff(t, annexPath); approved != "oldappr" || chain != 0 {
+					t.Errorf("a refused ratify still wrote: approved=%q chain=%d", approved, chain)
+				}
+			})
+		}
+	})
+
 	t.Run("is a no-op when the approval already names the live corpus", func(t *testing.T) {
 		annexPath, corpusPath, liveSHA8 := writeRatifyFixture(t, "", "")
 		reRecordCorpusSHA8(t, annexPath, liveSHA8)
@@ -412,6 +445,26 @@ func rewriteAnnexField(t *testing.T, annexPath, key, value string) {
 		t.Fatal(err)
 	}
 	doc["provenance"].(map[string]any)[key] = value
+	body, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(annexPath, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func rewriteSignoffField(t *testing.T, annexPath, key, value string) {
+	t.Helper()
+	raw, err := os.ReadFile(annexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["provenance"].(map[string]any)["signoff"].(map[string]any)[key] = value
 	body, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		t.Fatal(err)
