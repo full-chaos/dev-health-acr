@@ -174,7 +174,7 @@ func TestHealthProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	if len(result.Facts) != 0 || result.State != contextfabric.SourceAvailable {
+	if len(result.Facts) != 0 || result.State != contextfabric.SourceNoData {
 		t.Fatalf("result = %+v", result)
 	}
 }
@@ -300,7 +300,7 @@ func TestHealthProviderProjectRollupNoOwningTeamsHasNoFactEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	if len(result.Facts) != 0 || result.State != contextfabric.SourceAvailable {
+	if len(result.Facts) != 0 || result.State != contextfabric.SourceNoData {
 		t.Fatalf("result = %+v", result)
 	}
 }

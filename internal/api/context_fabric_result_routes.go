@@ -118,7 +118,7 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			payload = projection
 		}
 		maximumBytes := int64(a.config.MaxSerializedBytes)
-		items := contextFabricResultItems(result)
+		itemCounts := contextFabricResultItemCounts(result)
 		encoded, measuredBytes, sizeErr := marshalContextFabricResponse(payload)
 		if sizeErr != nil {
 			writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation result could not be serialized", false, nil)
@@ -135,7 +135,7 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			// outcome, not a server bug. This also confirms the retrieval
 			// route enforces the SAME bound the investigation route wrote
 			// under, so a result that returns once can also be re-read.
-			a.logContextFabricResponseBudgetExceeded(r, "bytes", measuredBytes, maximumBytes, estimatedTokens, items)
+			a.logContextFabricResponseBudgetExceeded(r, "bytes", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
 			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation result exceeded service limits", false, map[string]any{
 				"measured_bytes": measuredBytes, "max_serialized_bytes": maximumBytes,
 			})
@@ -147,20 +147,24 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 		// RequestClassContext's shared budget -- see the matching comment
 		// in ContextFabricInvestigationHandler (context_fabric_routes.go)
 		// for the full rationale and limits.Claim.CompleteWithBudget's doc
-		// comment for the mechanism.
+		// comment for the mechanism, and its CHAOS-4523 codex P2 addendum
+		// for why usage.Items carries the truthful total (Paths included)
+		// while override.MaxItems is widened by itemCounts.Paths instead
+		// of shrinking the recorded count.
 		usage := limits.ResourceUsage{
-			Items:  int64(items),
+			Items:  int64(itemCounts.total()),
 			Tokens: estimatedTokens,
 			Bytes:  measuredBytes,
 		}
 		override := limits.ResourceBudget{
-			MaxItems: int64(a.config.MaxItems), MaxTokens: 0, MaxBytes: int64(a.config.MaxSerializedBytes),
+			MaxItems: int64(a.config.MaxItems) + int64(itemCounts.Paths), MaxTokens: 0, MaxBytes: int64(a.config.MaxSerializedBytes),
 		}
 		if err := CompleteUsageWithBudget(r.Context(), usage, override); err != nil {
-			a.logContextFabricResponseBudgetExceeded(r, "items", measuredBytes, maximumBytes, estimatedTokens, items)
+			a.logContextFabricResponseBudgetExceeded(r, "items", measuredBytes, maximumBytes, estimatedTokens, itemCounts)
 			writeError(w, r, http.StatusRequestEntityTooLarge, "invalid_request", "Context Fabric investigation result exceeded service limits", false, map[string]any{
 				"measured_bytes": usage.Bytes, "measured_items": usage.Items, "estimated_tokens": estimatedTokens,
-				"max_items": a.config.MaxItems,
+				"max_items":       a.config.MaxItems,
+				"items_breakdown": itemCounts,
 			})
 			return
 		}

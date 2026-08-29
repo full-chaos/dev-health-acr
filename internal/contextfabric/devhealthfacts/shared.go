@@ -41,7 +41,17 @@ import (
 // breakdown. Same over-invalidation rationale: a reuse candidate saved
 // under the old flat/no-breakdown shape must not be served as if it
 // carried the new Rows tables it never actually computed.
-const QueryVersion = "devhealthfacts.clickhouse.v3"
+//
+// v3 -> v4 (CHAOS-4521, codex round-1 P2): a read that reached ClickHouse
+// and matched no rows now reports `no_data` with a reason instead of
+// `available` with none. That changes what EVERY provider in this package
+// reports, not what any one of them computes -- and the answer reuse gate
+// runs BEFORE ReadFacts, so without this bump a candidate saved
+// pre-deployment would keep being served with its old `available`-over-an-
+// empty-bundle coverage, silently skipping both the fix and its ledger.
+// Same over-invalidation rationale as v1->v2 and v2->v3 above: the safe
+// direction is to invalidate more than strictly changed.
+const QueryVersion = "devhealthfacts.clickhouse.v4"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

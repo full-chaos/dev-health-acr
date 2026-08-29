@@ -88,8 +88,13 @@ func TestIdentityProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	if len(result.Facts) != 0 {
 		t.Fatalf("facts = %#v, want none", result.Facts)
 	}
-	if result.State != contextfabric.SourceAvailable {
-		t.Fatalf("state = %q, want available (zero rows is not an error)", result.State)
+	// CHAOS-4521: zero rows is still not an ERROR -- it is no_data, the
+	// state that says the source was reached and held nothing. The
+	// distinction this test guards (absence must not be a failure) is
+	// unchanged; what changed is that absence no longer masquerades as a
+	// contributing source.
+	if result.State != contextfabric.SourceNoData {
+		t.Fatalf("state = %q, want no_data (zero rows is not an error, but it is not a contribution either)", result.State)
 	}
 }
 

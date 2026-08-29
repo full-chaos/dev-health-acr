@@ -91,7 +91,8 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 		truncated = truncated || len(rows) >= maxFactRowsPerQuery
 	}
 
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: QueryVersion, Truncated: truncated}, nil
+	state, emptyReason := currentAxisReadState(len(facts))
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: truncated}, nil
 }
 
 // MembershipProvider implements contextfabric.FactProvider for
@@ -173,5 +174,6 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		truncated = truncated || len(rows) >= maxFactRowsPerQuery
 	}
 
-	return contextfabric.FactProviderResult{Facts: facts, State: contextfabric.SourceAvailable, Version: QueryVersion, Truncated: truncated}, nil
+	state, emptyReason := currentAxisReadState(len(facts))
+	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: truncated}, nil
 }
