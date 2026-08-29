@@ -29,6 +29,15 @@
 #   LANE_ACR_IMAGE        acr image ref           (default: dev-health-acr:dev)
 #   LANE_ORG_ID           org allow-listed for the projector (default: the @backups dev org)
 #   LANE_SKIP_ACR=1       bring up ops only (faster; no model key needed)
+# MIGRATING AN EXISTING LANE (one-time):
+#   Namespaces created before `up` started labelling will be REFUSED by `down`,
+#   which is the guard working as intended -- it cannot tell them from a
+#   namespace lane.sh never made. Adopt one deliberately:
+#     kubectl label namespace <lane> app.kubernetes.io/managed-by=lane.sh
+#   Only do that for a namespace you are certain is a disposable lane. Never
+#   label the standing acr-trial-data plane: `down` would then delete it and its
+#   PVCs, which is exactly what the guard exists to prevent.
+#
 #   LANE_DS_CPU_REQUEST   CPU request per datastore pod (default: 50m, vs the
 #                         standing trial plane's 250m) -- this plus the ops
 #                         tier is what caps lanes-per-node
