@@ -789,8 +789,16 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	// times over fully-omitted pages. It runs BEFORE the read because the rows
 	// it describes are precisely the ones no page will contain -- there is
 	// nothing in a result set to infer them from.
+	// Routed through the SAME boundary as every source-table read (codex
+	// R3). Returning this error raw skipped tableReadError and
+	// logTableReadFailure entirely, so a census failure reached the
+	// coordinator unclassified and with no ClickHouse code or class --
+	// inside the very change that added that classification because its
+	// absence had cost this lane two rounds. A read is a read: it does not
+	// get a private error path because it is telemetry.
 	if err := recordAmbiguousProjectKeys(ctx, s.client, s.logger, strings.TrimSpace(checkpoint.OrgID), ledger); err != nil {
-		return contextfabric.ProjectionBatch{}, false, err
+		logTableReadFailure(ctx, s.logger, TeamsProjectsSourceName, checkpoint.OrgID, ambiguityCensusTable, err)
+		return contextfabric.ProjectionBatch{}, false, &tableReadError{table: ambiguityCensusTable, cause: err}
 	}
 	presence := s.presenceLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logPresenceTelemetry(ctx, s.logger, checkpoint.OrgID, presence)

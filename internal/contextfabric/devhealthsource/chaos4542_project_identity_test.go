@@ -216,8 +216,16 @@ func TestChaos4542_KeyArmSelectsTheKeyScopeRowAndTheScopeArmDoesNot(t *testing.T
 // the identity join would couple them and drift.
 func TestChaos4542_CensusCountsOnlyRowsThatActuallyFailedToResolve(t *testing.T) {
 	t.Parallel()
-	if !strings.Contains(ambiguousProjectKeysStatement, readers.ProjectOwnershipJoinColumn+" NOT IN (SELECT p.scope FROM ") {
+	if !strings.Contains(ambiguousProjectKeysStatement, "(provider, "+readers.ProjectOwnershipJoinColumn+") NOT IN (SELECT p.provider, p.scope FROM ") {
 		t.Fatal("the census counts every ownership row referencing an ambiguous key, including rows that resolved by project_id and kept their edge -- that is a false omission claim")
+	}
+	// The tuple, not just the ref: an uncorrelated membership test calls a
+	// ref resolved because it matches a scope under ANOTHER provider, while
+	// the edge join requires provider equality and drops the row. The edge
+	// disappears and the census says nothing -- a missed omission, which is
+	// the failure this census exists to remove.
+	if strings.Contains(ambiguousProjectKeysStatement, readers.ProjectOwnershipJoinColumn+" NOT IN (SELECT p.scope") {
+		t.Error("the membership test is not correlated by provider")
 	}
 	// It must be a MEMBERSHIP test over the scope catalog, not a second
 	// spelling of it: one definition of "what resolves" or the two drift.

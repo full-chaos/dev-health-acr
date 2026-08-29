@@ -867,7 +867,8 @@ func projectTeamsStatement(cursor cursorState) string {
        argMax(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))).1 IS NULL AS latest_is_open,
        ifNull(argMax(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC')))).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
        max(o.updated_at) AS updated_at, o.provider,
-       max(o.identity_conflict) AS conflicting_identity
+       max(o.identity_conflict) AS conflicting_identity,
+       max(o.ownership_ref) AS conflict_ref, max(o.ownership_key) AS conflict_key
 FROM (
 	SELECT project_id, provider, ownership_ref, ownership_key, team_id, source_name, valid_from, valid_to, updated_at,
 	       toUInt8(min(project_id) OVER (PARTITION BY provider, ownership_ref, ownership_key) != max(project_id) OVER (PARTITION BY provider, ownership_ref, ownership_key)) AS identity_conflict
@@ -887,7 +888,8 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 		var projectID, teamID, source, provider string
 		var validFrom, latestValidTo, observedAt time.Time
 		var latestIsOpen, conflictingIdentity uint8
-		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt, &provider, &conflictingIdentity); err != nil {
+		var conflictRef, conflictKey string
+		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt, &provider, &conflictingIdentity, &conflictRef, &conflictKey); err != nil {
 			return nil, err
 		}
 		observedAt, validFrom, latestValidTo = observedAt.UTC(), validFrom.UTC(), latestValidTo.UTC()
@@ -900,7 +902,12 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 		// consumed and spent page budget, so the cursor must advance past it
 		// or a page of conflicts stalls the walk forever.
 		if conflictingIdentity == 1 {
-			omissions.addConflict(provider, rowSortKey)
+			// Keyed on the OWNERSHIP row, not the resolved edge (codex R3).
+			// One conflicting row produces two flagged result rows -- one per
+			// resolved project -- and rowSortKey carries the resolved id, so
+			// keying on it counted a single disagreeing source row twice and
+			// reported double the suppressions that happened.
+			omissions.addConflict(provider, conflictRef+"\x00"+conflictKey)
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		// No ambiguity branch here on purpose. Ambiguity is a property of the
@@ -973,6 +980,12 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 // project does this row mean", so the census stays decoupled from the
 // resolution whose gaps it reports.
 //
+// The tuple is load-bearing (codex R3). An uncorrelated `ref NOT IN scopes`
+// treats a ref that matches a scope under a DIFFERENT provider as resolved,
+// while the production edge join requires o.provider = p.provider and drops
+// it. The row loses its edge and the census stays silent about it -- a
+// missed omission, which is the failure this census exists to remove.
+//
 // LIMIT is explicit and its truncation is reported (codex R2 P2-3). An
 // earlier comment here called this "one bounded aggregate" -- it was not
 // bounded, it returned one row per ambiguous key with no cap. An organization
@@ -997,12 +1010,19 @@ INNER JOIN (
 	SELECT DISTINCT provider, ifNull(project_key, '') AS project_key
 	FROM team_project_ownership FINAL
 	WHERE org_id = {org_id:String}
-	  AND ` + readers.ProjectOwnershipJoinColumn + ` NOT IN (SELECT p.scope FROM ` + readers.ProjectIdentityCatalogSQL() + `)
+	  AND (provider, ` + readers.ProjectOwnershipJoinColumn + `) NOT IN (SELECT p.provider, p.scope FROM ` + readers.ProjectIdentityCatalogSQL() + `)
 ) AS o ON o.provider = p.provider AND o.project_key = p.project_key
 WHERE p.project_key != ''
 GROUP BY p.provider, p.project_key
 HAVING count() > 1
 LIMIT {census_limit:UInt32}`
+
+// ambiguityCensusTable is this read's label in the bounded classification
+// and in its log line. It names the QUESTION the read answers rather than a
+// physical table, because the census spans two of them -- an operator
+// debugging a held checkpoint needs to know which read failed, and "projects"
+// would not distinguish it from the producer's own.
+const ambiguityCensusTable = "ambiguous project key census"
 
 // ambiguousProjectKeysCensusLimit bounds the census. Reached means the report
 // is a floor, not a total, and the log says so rather than presenting a capped
@@ -1023,9 +1043,14 @@ func recordAmbiguousProjectKeys(ctx context.Context, client contextpacket.ClickH
 	if omissions == nil || client == nil {
 		return nil
 	}
+	// limit+1, then trim (codex R3). Asking for exactly the limit cannot
+	// distinguish "there are exactly 500" from "there are more than 500", so
+	// a full page would have claimed truncation that did not happen -- a
+	// false telemetry claim, the same class as the census over-reporting
+	// above.
 	rows, err := client.Query(ctx, ambiguousProjectKeysStatement, []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
-		{Name: "census_limit", Value: uint32(ambiguousProjectKeysCensusLimit)},
+		{Name: "census_limit", Value: uint32(ambiguousProjectKeysCensusLimit) + 1},
 	})
 	if err != nil {
 		return err
@@ -1038,13 +1063,17 @@ func recordAmbiguousProjectKeys(ctx context.Context, client contextpacket.ClickH
 		if err := rows.Scan(&provider, &projectKey, &projectCount); err != nil {
 			return err
 		}
-		omissions.add(provider, projectKey)
 		seen++
+		if seen > ambiguousProjectKeysCensusLimit {
+			// The extra row proves truncation; it is not part of the report.
+			continue
+		}
+		omissions.add(provider, projectKey)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if seen >= ambiguousProjectKeysCensusLimit && logger != nil {
+	if seen > ambiguousProjectKeysCensusLimit && logger != nil {
 		logger.WarnContext(ctx, "devhealthsource ambiguity census hit its bound",
 			"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
 			"reason", "more ambiguous project keys than the census reports", "census_limit", ambiguousProjectKeysCensusLimit, "census_truncated", true)

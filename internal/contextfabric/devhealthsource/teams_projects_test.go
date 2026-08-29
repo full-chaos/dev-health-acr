@@ -377,7 +377,7 @@ func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug st
 // it -- the window function that decides ambiguity was never something this
 // fake could compute anyway.
 func projectTeamRow(projectID, teamID, source string, validFrom time.Time, latestIsOpen uint8, latestValidTo, updatedAt time.Time) []any {
-	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, "github", uint8(0)}
+	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, "github", uint8(0), projectID, "KEY-" + projectID}
 }
 
 // liveShapedEdgeClient replays the ground-truth org's real edge row shapes:
@@ -610,7 +610,7 @@ func TestEveryTeamsProjectsEdgeTypeIsDeclared(t *testing.T) {
 // its own test against the ledger's own statement.
 func omittedProjectTeamRow(projectID, teamID, source string, updatedAt time.Time) []any {
 	oversized := projectID + strings.Repeat("x", 256)
-	return []any{oversized, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, "github", uint8(0)}
+	return []any{oversized, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, "github", uint8(0), oversized, ""}
 }
 
 // TestOmissionTelemetryCountsDistinctKeysAcrossTheRun is codex round-2 F3.
@@ -1060,10 +1060,20 @@ func TestChaos4542_ConflictingIdentityEmitsNoEdge(t *testing.T) {
 	// conflicting_identity = 1 is what the statement's min()/max() window
 	// computes for such a row; the fake cannot run a window function, so the
 	// flag is supplied the way real SQL would deliver it.
-	conflicting := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1)}
+	// conflict_ref / conflict_key are the OWNERSHIP row's own identity: the
+	// same pair on every flagged row for one disagreeing source row, which is
+	// what makes the ledger count sources rather than resolved edges.
+	conflicting := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), "own-ref-1", "OWN-KEY-1"}
+	// The SAME ownership row, flagged once per resolved project -- which is
+	// exactly what the SQL emits: two rows, two different resolved ids, one
+	// disagreeing source row. Keying the ledger on the resolved edge counted
+	// this as TWO suppressions and told an operator that twice as much was
+	// dropped as actually was (codex R3).
+	conflictingB := []any{"proj-b", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), "own-ref-1", "OWN-KEY-1"}
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM team_project_ownership FINAL", rows: [][]any{
 			conflicting,
+			conflictingB,
 			projectTeamRow("proj-clean", "team-x", "native", at, 1, time.Unix(0, 0).UTC(), at),
 		}},
 	}}
@@ -1082,15 +1092,24 @@ func TestChaos4542_ConflictingIdentityEmitsNoEdge(t *testing.T) {
 		t.Fatalf("NextProjectionBatch: %v", err)
 	}
 
-	if hasRelationshipID(batch, "relationship:project_team:github:proj-a:team-x:native") {
-		t.Error("emitted an edge for an ownership row whose project_id and project_key resolve to DIFFERENT projects -- at most one of the two is real and nothing here can say which")
+	for _, fabricated := range []string{
+		"relationship:project_team:github:proj-a:team-x:native",
+		"relationship:project_team:github:proj-b:team-x:native",
+	} {
+		if hasRelationshipID(batch, fabricated) {
+			t.Errorf("emitted %q for an ownership row whose project_id and project_key resolve to DIFFERENT projects -- at most one of the two is real and nothing here can say which", fabricated)
+		}
 	}
 	// One conflicting row must not suppress the rest.
 	if !hasRelationshipID(batch, "relationship:project_team:github:proj-clean:team-x:native") {
 		t.Error("lost an unrelated unambiguous edge -- failing closed is per row, never per batch")
 	}
-	if output := logged.String(); !strings.Contains(output, "suppressed_conflicting_identities=1") {
-		t.Errorf("no telemetry for a suppressed fabrication -- edge counts moved and nothing said why; got:\n%s", output)
+	output := logged.String()
+	if !strings.Contains(output, "suppressed_conflicting_identities=1") {
+		t.Errorf("want ONE suppression for ONE disagreeing ownership row; the ledger must count source identities, not the resolved edges a single row fans out to; got:\n%s", output)
+	}
+	if strings.Contains(output, "suppressed_conflicting_identities=2") {
+		t.Errorf("counted the resolved edges rather than the source row -- one disagreement reported as two, which overstates how much was dropped; got:\n%s", output)
 	}
 }
 
@@ -1101,4 +1120,42 @@ func hasRelationshipID(batch contextfabric.ProjectionBatch, id string) bool {
 		}
 	}
 	return false
+}
+
+// TestChaos4542_CensusDoesNotClaimFalseTruncation is codex R3's P3.
+//
+// A census that asks for exactly its limit cannot tell "there are exactly N"
+// from "there are more than N", so a full page claimed truncation that had
+// not happened. Small, and the same class as every other finding in this
+// chain: telemetry asserting something the data does not say. It is also the
+// mirror of the bug above -- one over-reported omissions, this over-reports
+// incompleteness -- and an operator who learns the truncation flag lies stops
+// trusting the count beside it.
+func TestChaos4542_CensusDoesNotClaimFalseTruncation(t *testing.T) {
+	t.Parallel()
+	exactly := make([][]any, 0, 500)
+	for i := 0; i < 500; i++ {
+		exactly = append(exactly, []any{"github", fmt.Sprintf("KEY-%03d", i), uint64(2)})
+	}
+	client := &fakeClient{tables: []fakeTable{{match: ambiguousProjectKeysMarker, rows: exactly}}}
+	logged := &bytes.Buffer{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
+		Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
+	}); err != nil {
+		t.Fatalf("NextProjectionBatch: %v", err)
+	}
+	output := logged.String()
+	if strings.Contains(output, "census_truncated=true") {
+		t.Errorf("claimed truncation for exactly the limit -- every key was reported, so nothing was cut; got:\n%s", output)
+	}
+	// The keys themselves must still all be counted.
+	if !strings.Contains(output, "omitted_ambiguous_project_keys=500") {
+		t.Errorf("want all 500 keys counted; got:\n%s", output)
+	}
 }
