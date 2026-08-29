@@ -227,6 +227,54 @@ check_absent "no DROP DATABASE reaches a namespace lane.sh does not own" \
   "DROP DATABASE" "$(events)"
 
 # ---------------------------------------------------------------------------
+# [R3-2] Load missing images when reusing a cluster
+#
+# "The cluster already exists" was read as "a previous successful `up` populated
+# it". A cluster created any other way -- by kiac.sh directly, by another lane
+# that failed before its load, by a `kiac load image` that only covered some of
+# them -- has an incomplete containerd, and every workload here renders
+# imagePullPolicy: Never, so Helm fails with ErrImageNeverPull. Reconcile
+# against what the nodes actually hold instead of assuming.
+# ---------------------------------------------------------------------------
+scenario '[R3-2] load missing images when reusing a cluster'
+cat >"$tmp/node-images-partial" <<'EOF'
+docker.io/library/dev-health-ops-local:test
+ghcr.io/full-chaos/dev-health-web:0.1.0
+docker.io/library/dev-health-acr:dev
+docker.io/library/dev-health-go-worker:latest
+docker.io/library/dev-health-go-scheduler:latest
+EOF
+cat >>"$tmp/node-images-partial" <<'EOF'
+docker.io/library/dev-health-go-stream-ingest:latest
+docker.io/library/dev-health-go-stream-external:latest
+docker.io/library/dev-health-go-stream-pagerduty:latest
+docker.io/library/dev-health-go-worker-migrate:latest
+EOF
+export KFAKE_CLUSTER_EXISTS=1 KFAKE_CREATE_NS_RC=0 \
+       KFAKE_NODE_IMAGES="$tmp/node-images-partial" KFAKE_TRIALDATA_FAIL_ON=apply
+run_lane up lanefake-reuse
+load_argv="$(grep -F 'kiac.sh load-image' "$tmp/events" || true)"
+check_contains "a reused cluster still gets the image it is missing" \
+  "dev-health-go-reconciler:latest" "$load_argv"
+check_absent "images the nodes already hold are not re-loaded" \
+  "dev-health-ops-local:test" "$load_argv"
+check_absent "a registry-qualified node image counts as present" \
+  "dev-health-web" "$load_argv"
+
+# Regression guard on the other half of the same trade: the common case -- a
+# reused cluster a prior `up` did populate -- must still skip the load rather
+# than push several GB through the bridge on every run. This fails if the
+# reconciliation degrades into "always load everything".
+scenario '[R3-2] a fully populated reused cluster loads nothing'
+cat "$tmp/node-images-partial" >"$tmp/node-images-full"
+printf 'docker.io/library/dev-health-go-reconciler:latest\n' >>"$tmp/node-images-full"
+export KFAKE_CLUSTER_EXISTS=1 KFAKE_CREATE_NS_RC=0 \
+       KFAKE_NODE_IMAGES="$tmp/node-images-full" KFAKE_TRIALDATA_FAIL_ON=apply
+run_lane up lanefake-full
+check_absent "no image is loaded when the nodes already hold every one" \
+  "kiac.sh load-image" "$(events)"
+
+# ---------------------------------------------------------------------------
 if (( failures > 0 )); then
   printf '\n%d check(s) FAILED\n' "$failures"
   exit 1

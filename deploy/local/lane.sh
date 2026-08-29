@@ -190,26 +190,69 @@ ensure_cluster() {
     || die "cluster '$CLUSTER' exists but no kubeconfig at $KUBECONFIG — it was created from another checkout; point LANE_KUBECONFIG at that file (or LANE_CLUSTER at a new name)"
 }
 
-# A cluster created just now has an EMPTY containerd, and every workload here
-# renders imagePullPolicy: Never -- host images reach kiac nodes only through
-# `kiac.sh load-image` (codex R2). Without this a fresh-cluster `up` dies with
-# ErrImageNeverPull. Reusing an existing cluster skips it: the images are
-# already there, and re-loading several GB on every run would be wasteful.
-load_lane_images() {
-  [[ "${CLUSTER_WAS_CREATED:-0}" = "1" ]] || return 0
-  step "loading images into the new cluster '$CLUSTER'"
-  local images=(
-    "$LANE_OPS_IMAGE" "$WEB_IMAGE" "$ACR_IMAGE"
-    dev-health-go-worker:latest
-    dev-health-go-scheduler:latest
-    dev-health-go-reconciler:latest
-    dev-health-go-stream-ingest:latest
-    dev-health-go-stream-external:latest
-    dev-health-go-stream-pagerduty:latest
+lane_required_images() {
+  printf '%s\n' "$LANE_OPS_IMAGE" "$WEB_IMAGE" "$ACR_IMAGE" \
+    dev-health-go-worker:latest \
+    dev-health-go-scheduler:latest \
+    dev-health-go-reconciler:latest \
+    dev-health-go-stream-ingest:latest \
+    dev-health-go-stream-external:latest \
+    dev-health-go-stream-pagerduty:latest \
     dev-health-go-worker-migrate:latest
-  )
+}
+
+# What containerd on the lane's nodes actually holds. kubelet publishes it on
+# the Node, which is the only view of the node image store reachable from here.
+# It is a CAPPED list (kubelet's --node-status-max-images, 50 by default) and it
+# omits nothing we care about at that size -- but if it ever did, the error is
+# in the safe direction: an image reported missing that is really present costs
+# one redundant load-image, whereas the opposite costs ErrImageNeverPull.
+node_image_names() {
+  kubectl get nodes -o go-template='{{range .items}}{{range .status.images}}{{range .names}}{{.}}{{"\n"}}{{end}}{{end}}{{end}}' 2>/dev/null || true
+}
+
+# containerd normalizes a bare `name:tag` to `docker.io/library/name:tag`, so
+# match the full reference OR the part after the last slash.
+image_is_loaded() {
+  local want="$1" have="$2"
+  printf '%s\n' "$have" | awk -v want="$want" '
+    $0 == want { found = 1; next }
+    { n = $0; sub(/^.*\//, "", n); if (n == want) found = 1 }
+    END { exit !found }'
+}
+
+# Every workload here renders imagePullPolicy: Never, so host images reach kiac
+# nodes only through `kiac.sh load-image` (codex R2). A cluster this run created
+# has an EMPTY containerd, so everything goes in. A REUSED cluster was not
+# necessarily populated by a successful prior `up` (codex R3) -- it may have
+# been made by kiac.sh directly, or by a lane that died before its load, or
+# loaded only in part -- and returning early on that assumption is how a reused
+# cluster dies with ErrImageNeverPull. Reconcile against what the nodes really
+# hold and load only what is missing, so the common case still skips re-pushing
+# several GB through the bridge.
+load_lane_images() {
+  local required=() missing=() img have
+  while IFS= read -r img; do
+    [[ -n "$img" ]] && required+=("$img")
+  done < <(lane_required_images)
+
+  if [[ "${CLUSTER_WAS_CREATED:-0}" = "1" ]]; then
+    missing=("${required[@]}")
+    step "loading images into the new cluster '$CLUSTER'"
+  else
+    have="$(node_image_names)"
+    for img in "${required[@]}"; do
+      image_is_loaded "$img" "$have" || missing+=("$img")
+    done
+    if (( ${#missing[@]} == 0 )); then
+      log "every lane image is already on the '$CLUSTER' nodes — nothing to load"
+      return 0
+    fi
+    step "loading ${#missing[@]} image(s) missing from the reused cluster '$CLUSTER'"
+  fi
+
   ACR_KIAC_CLUSTER_NAME="$CLUSTER" ACR_KIAC_KUBECONFIG="$KUBECONFIG_PATH" \
-  ACR_KIAC_ALLOW_VERSION_DRIFT=1 "$SCRIPT_DIR/kiac.sh" load-image "${images[@]}" \
+  ACR_KIAC_ALLOW_VERSION_DRIFT=1 "$SCRIPT_DIR/kiac.sh" load-image "${missing[@]}" \
     || die "could not load images into '$CLUSTER'; every workload here uses imagePullPolicy: Never, so the lane cannot start without them"
 }
 
