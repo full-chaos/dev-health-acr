@@ -868,7 +868,7 @@ func projectTeamsStatement(cursor cursorState) string {
        ifNull(argMaxIf(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC'))), o.identity_conflict = 0).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
        max(o.updated_at) AS updated_at, o.provider,
        toUInt8(countIf(o.identity_conflict = 0) = 0) AS edge_suppressed,
-       groupUniqArrayIf(concat(o.ownership_ref, '\0', o.ownership_key), o.identity_conflict = 1) AS conflict_identities
+       groupUniqArrayIf(concat(o.ownership_ref, '\0', o.ownership_key, '\0', o.team_id, '\0', o.source_name), o.identity_conflict = 1) AS conflict_identities
 FROM (
 	SELECT project_id, provider, ownership_ref, ownership_key, team_id, source_name, valid_from, valid_to, updated_at,
 	       toUInt8(min(project_id) OVER (PARTITION BY provider, ownership_ref, ownership_key) != max(project_id) OVER (PARTITION BY provider, ownership_ref, ownership_key)) AS identity_conflict
@@ -976,148 +976,87 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 	return rows, truncated, nil
 }
 
-// ambiguousProjectKeysStatement lists the (provider, project_key) pairs that
-// name MORE THAN ONE project and that some ownership row actually references.
+// ambiguousProjectKeysInCatalogStatement counts (provider, project_key)
+// pairs that name MORE THAN ONE project in this organization's catalog.
 //
-// This exists because the omission it reports is invisible everywhere else.
-// An ambiguous key is excluded inside ProjectIdentityJoinSQL -- the key scope
-// row is emitted only for key_resolution_count = 1 -- so a key-shaped
-// ownership row whose key resolves to two projects joins to nothing and never
-// reaches queryProjectTeams' scan at all. Correct (neither project may be
-// guessed) and quiet, and quiet is the half that is not acceptable: an
-// unrecorded omission is indistinguishable from an ownership that simply does
-// not exist, which is the shape of silence this wave keeps removing.
+// It is a FACT ABOUT THE CATALOG, and the log field says so:
+// ambiguous_project_keys_in_catalog. It is deliberately NOT a claim about
+// dropped edges, and the difference is the whole reason this replaced what
+// was here before.
 //
-// The INNER JOIN to team_project_ownership is what makes this an omission
-// report rather than a data-quality census: an ambiguous key that no
-// ownership row references cost nobody an edge, and counting it would inflate
-// the signal toward alarm exactly as page-scoping once deflated it toward
-// health.
+// What was here before tried to reconstruct, from aggregate SQL, which
+// individual ownership rows had been eliminated -- membership tests against
+// the scope catalog, per-ref attribution, a bound on the reconstruction. It
+// was wrong in four consecutive review rounds, in both directions: it
+// over-reported omissions that never happened, missed omissions that did,
+// double-counted one disagreement as two, and claimed truncation at exactly
+// its limit. Not bad arithmetic four times -- a component asked to recover
+// per-row facts from an aggregation that had already destroyed them.
+// CHAOS-4542's follow-up carries that work; this reports only what a plain
+// catalog query can actually know.
 //
-// The NOT IN is the same rule one level down (codex R2 P2-2). An ownership
-// row whose project_id resolves through the SCOPE arm gets its edge, so its
-// key being ambiguous cost nothing -- reporting it would be a FALSE omission
-// claim, which is worse than a silent one: decision-basis telemetry asserting
-// a defect that did not happen. It is a scope-row MEMBERSHIP test, not the
-// resolution join: it asks "did anything resolve this ref", never "which
-// project does this row mean", so the census stays decoupled from the
-// resolution whose gaps it reports.
-//
-// The tuple is load-bearing (codex R3). An uncorrelated `ref NOT IN scopes`
-// treats a ref that matches a scope under a DIFFERENT provider as resolved,
-// while the production edge join requires o.provider = p.provider and drops
-// it. The row loses its edge and the census stays silent about it -- a
-// missed omission, which is the failure this census exists to remove.
-//
-// LIMIT is explicit and its truncation is reported (codex R2 P2-3). An
-// earlier comment here called this "one bounded aggregate" -- it was not
-// bounded, it returned one row per ambiguous key with no cap. An organization
-// with thousands of duplicated keys would have held all of them in memory,
-// and silently, which is the failure mode this whole ticket is about.
-//
-// Deliberately NOT a third copy of the identity join. It answers a different
-// question -- "which keys are ambiguous", not "which project does this row
-// mean" -- and reusing the join here would couple the telemetry to the very
-// resolution whose gaps it exists to report.
-//
-// Equality-only ON with no function call, because ClickHouse 24.8 (the CI
-// fixture pin) rejects anything else outright with Code: 403 while 26.7
-// accepts it -- CHAOS-4542 class 4, twice.
-var ambiguousProjectKeysStatement = `SELECT p.provider, p.project_key, count() AS project_count
+// No ownership join, no scope expansion, no reconstruction. An operator
+// reading this learns "this organization has N ambiguous keys", which is
+// true, useful, and checkable -- and learns nothing false about edges.
+const ambiguousProjectKeysInCatalogStatement = `SELECT count() AS ambiguous_keys
 FROM (
-	SELECT provider, ifNull(project_key, '') AS project_key, id
-	FROM projects FINAL
-	WHERE org_id = {org_id:String}
-) AS p
-INNER JOIN (
-	SELECT DISTINCT provider, ifNull(project_key, '') AS project_key
-	FROM team_project_ownership FINAL
-	WHERE org_id = {org_id:String}
-	  AND (provider, ` + readers.ProjectOwnershipJoinColumn + `) NOT IN (SELECT p.provider, p.scope FROM ` + readers.ProjectIdentityCatalogSQL() + `)
-) AS o ON o.provider = p.provider AND o.project_key = p.project_key
-WHERE p.project_key != ''
-GROUP BY p.provider, p.project_key
-HAVING count() > 1
-LIMIT {census_limit:UInt32}`
+	SELECT provider, project_key
+	FROM (
+		SELECT provider, ifNull(project_key, '') AS project_key
+		FROM projects FINAL
+		WHERE org_id = {org_id:String}
+	)
+	WHERE project_key != ''
+	GROUP BY provider, project_key
+	HAVING count() > 1
+	LIMIT {census_limit:UInt32}
+)`
 
-// ambiguityCensusTable is this read's label in the bounded classification
-// and in its log line. It names the QUESTION the read answers rather than a
-// physical table, because the census spans two of them -- an operator
-// debugging a held checkpoint needs to know which read failed, and "projects"
-// would not distinguish it from the producer's own.
-const ambiguityCensusTable = "ambiguous project key census"
-
-// ambiguousProjectKeysCensusLimit bounds the census. Reached means the report
-// is a floor, not a total, and the log says so rather than presenting a capped
-// number as if it were complete -- an understated omission count reads as
-// health, which is the measurement failure this producer has already had once.
+// ambiguousProjectKeysCensusLimit bounds the catalog count so a pathological
+// tenant cannot make this grow without limit. Reached means the number is a
+// floor; the log says so rather than presenting a capped value as a total.
 const ambiguousProjectKeysCensusLimit = 500
 
-// recordAmbiguousProjectKeys feeds the run-scoped ledger the keys whose
-// ownership edges the SQL dropped.
-//
-// Called ONCE per NextProjectionBatch, not once per page (codex R2 P2-3). It
-// is organization-scoped and returns identical rows on every page, so running
-// it per page was pure repetition -- and the paging loop can iterate many
-// times on fully-omitted pages, so a large tenant paid for it repeatedly. The
-// ledger accumulates across a run and deduplicates, so one call per batch
-// loses nothing.
-func recordAmbiguousProjectKeys(ctx context.Context, client contextpacket.ClickHouseQueryClient, logger *slog.Logger, orgID string, omissions *ambiguityLedger) error {
-	if omissions == nil || client == nil {
+// ambiguityCensusTable is this read's label in the bounded classification and
+// in its log line. It names the QUESTION the read answers rather than a
+// physical table: an operator debugging a held checkpoint needs to know which
+// read failed, and "projects" would not distinguish it from the producer's own.
+const ambiguityCensusTable = "ambiguous project key catalog count"
+
+// countAmbiguousProjectKeysInCatalog logs the catalog fact once per
+// NextProjectionBatch. It reports nothing when the catalog is clean: zero
+// ambiguous keys is the normal state and a line per batch saying so is noise,
+// not signal.
+func countAmbiguousProjectKeysInCatalog(ctx context.Context, client contextpacket.ClickHouseQueryClient, logger *slog.Logger, orgID string) error {
+	if client == nil || logger == nil {
 		return nil
 	}
-	// limit+1, then trim (codex R3). Asking for exactly the limit cannot
-	// distinguish "there are exactly 500" from "there are more than 500", so
-	// a full page would have claimed truncation that did not happen -- a
-	// false telemetry claim, the same class as the census over-reporting
-	// above.
-	rows, err := client.Query(ctx, ambiguousProjectKeysStatement, []contextpacket.ClickHouseBinding{
+	rows, err := client.Query(ctx, ambiguousProjectKeysInCatalogStatement, []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
-		{Name: "census_limit", Value: uint32(ambiguousProjectKeysCensusLimit) + 1},
+		{Name: "census_limit", Value: uint32(ambiguousProjectKeysCensusLimit)},
 	})
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	seen := 0
-	for rows.Next() {
-		var provider, projectKey string
-		var projectCount uint64
-		if err := rows.Scan(&provider, &projectKey, &projectCount); err != nil {
+	var ambiguous uint64
+	if rows.Next() {
+		if err := rows.Scan(&ambiguous); err != nil {
 			return err
 		}
-		seen++
-		if seen > ambiguousProjectKeysCensusLimit {
-			// The extra row proves truncation; it is not part of the report.
-			continue
-		}
-		omissions.add(provider, projectKey)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if seen > ambiguousProjectKeysCensusLimit && logger != nil {
-		logger.WarnContext(ctx, "devhealthsource ambiguity census hit its bound",
-			"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
-			"reason", "more ambiguous project keys than the census reports", "census_limit", ambiguousProjectKeysCensusLimit, "census_truncated", true)
+	if ambiguous == 0 {
+		return nil
 	}
-	return nil
-}
-
-// logAmbiguousProjectKeys surfaces omitted ownership edges as a bounded
-// signal, counting DISTINCT (provider, project_key) keys accumulated over the
-// whole source run rather than one page's slice keyed by something else. Without it, an omission is indistinguishable from an
-// ownership that simply does not exist, which is the shape of silence this
-// wave keeps removing. The message carries a fixed reason and a COUNT only --
-// never a project key, project id or team id, which are tenant data; the
-// organization is hashed the same way logOrphanedWorkItems hashes it.
-func logAmbiguousProjectKeys(ctx context.Context, logger *slog.Logger, orgID string, omitted int) {
-	if logger == nil || omitted == 0 {
-		return
-	}
-	logger.WarnContext(ctx, "devhealthsource omitted project ownership edges for ambiguous project keys",
+	logger.WarnContext(ctx, "devhealthsource organization catalog holds ambiguous project keys",
 		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
-		"reason", "project_key resolves to more than one project within its provider", "omitted_ambiguous_project_keys", omitted)
+		"reason", "a project_key naming more than one project cannot resolve an ownership row that carries only that key",
+		"ambiguous_project_keys_in_catalog", ambiguous,
+		"count_bounded_at", ambiguousProjectKeysCensusLimit)
+	return nil
 }
 
 // ownershipValidity states a project->team edge's window explicitly in both

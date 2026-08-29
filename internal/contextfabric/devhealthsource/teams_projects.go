@@ -302,20 +302,7 @@ func (s *TeamsProjectsSource) recordConsumed(fromCursor string) func(orgID, curs
 // omission telemetry reads as health -- measurement failing toward fine.
 type ambiguityLedger struct {
 	mu        sync.Mutex
-	keys      map[string]struct{}
 	conflicts map[string]struct{}
-}
-
-func (l *ambiguityLedger) add(provider, projectKey string) {
-	if l == nil {
-		return
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.keys == nil {
-		l.keys = map[string]struct{}{}
-	}
-	l.keys[provider+"\x00"+projectKey] = struct{}{}
 }
 
 // addConflict records an ownership row whose project_id and project_key
@@ -344,15 +331,6 @@ func (l *ambiguityLedger) conflictCount() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.conflicts)
-}
-
-func (l *ambiguityLedger) count() int {
-	if l == nil {
-		return 0
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.keys)
 }
 
 // ledgerFor returns this organization's ledger, starting a fresh one when the
@@ -776,19 +754,24 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		s.forgetConsumed(checkpoint.OrgID)
 	}
 	ledger := s.ledgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
-	// The closure is load-bearing. `defer logAmbiguousProjectKeys(..., ledger.count())`
-	// evaluates count() HERE, before any query runs -- always 0, and a zero
-	// is suppressed -- so the telemetry reported the PREVIOUS call's total
-	// and a single-call run said nothing at all. The two sibling defers
-	// below pass their ledger POINTER, so they read it when the deferred
-	// call runs; this one passed an int and did not.
-	defer func() { logAmbiguousProjectKeys(ctx, s.logger, checkpoint.OrgID, ledger.count()) }()
+	// The closure is load-bearing. `defer log(..., ledger.conflictCount())`
+	// evaluates the count HERE, before any query runs -- always 0, and a zero
+	// is suppressed -- so the telemetry would report the PREVIOUS call's
+	// total and a single-call run would say nothing at all. That was a real
+	// bug on the ambiguity line before it moved (CHAOS-4542 defect 7); the
+	// sibling defers below pass their ledger POINTER and read it when the
+	// deferred call runs, which is why only the one passing an int was silent.
 	defer func() { logConflictingIdentities(ctx, s.logger, checkpoint.OrgID, ledger.conflictCount()) }()
-	// Once per call, not once per page: the census is organization-scoped and
-	// returns identical rows every page, and the paging loop can iterate many
-	// times over fully-omitted pages. It runs BEFORE the read because the rows
-	// it describes are precisely the ones no page will contain -- there is
-	// nothing in a result set to infer them from.
+	// A catalog FACT, not a reconstruction of which rows were dropped. The
+	// reconstructive census that used to live here was wrong in four
+	// consecutive review rounds, in both directions, and left with its own
+	// ticket: recovering per-row outcomes from aggregate SQL is the wrong
+	// shape for the job. What an operator gets here is "this organization has
+	// N ambiguous keys", which a plain query can actually establish.
+	//
+	// Once per call rather than once per page. It is still repeated across
+	// the calls of an oversized backfill -- noted on the follow-up ticket
+	// with the rest of the census work, not silently.
 	// Routed through the SAME boundary as every source-table read (codex
 	// R3). Returning this error raw skipped tableReadError and
 	// logTableReadFailure entirely, so a census failure reached the
@@ -796,7 +779,7 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	// inside the very change that added that classification because its
 	// absence had cost this lane two rounds. A read is a read: it does not
 	// get a private error path because it is telemetry.
-	if err := recordAmbiguousProjectKeys(ctx, s.client, s.logger, strings.TrimSpace(checkpoint.OrgID), ledger); err != nil {
+	if err := countAmbiguousProjectKeysInCatalog(ctx, s.client, s.logger, strings.TrimSpace(checkpoint.OrgID)); err != nil {
 		logTableReadFailure(ctx, s.logger, TeamsProjectsSourceName, checkpoint.OrgID, ambiguityCensusTable, err)
 		return contextfabric.ProjectionBatch{}, false, &tableReadError{table: ambiguityCensusTable, cause: err}
 	}

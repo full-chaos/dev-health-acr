@@ -143,35 +143,6 @@ func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
 	}
 }
 
-// The ambiguity ledger's own statement must obey the same ON-shape rule as
-// the join it reports on: ClickHouse 24.8 (the CI fixture pin) rejects a
-// JOIN ... ON containing OR or a function call outright with Code: 403, while
-// 26.7 accepts it -- so this is a defect that passes locally and fails only in
-// CI, twice already on this ticket.
-func TestChaos4542_AmbiguityLedgerStatementIsPortableTo248(t *testing.T) {
-	t.Parallel()
-	on := ambiguousProjectKeysStatement[strings.Index(ambiguousProjectKeysStatement, ") AS o ON ")+len(") AS o ON "):]
-	on = on[:strings.Index(on, "\n")]
-	if strings.Contains(on, " OR ") || strings.Contains(on, "(") {
-		t.Fatalf("JOIN ON %q must be equality-only: 24.8 rejects OR and function calls with Code: 403", on)
-	}
-	// It must also stay an OMISSION report rather than a data-quality census:
-	// an ambiguous key no ownership row references cost nobody an edge.
-	if !strings.Contains(ambiguousProjectKeysStatement, "FROM team_project_ownership FINAL") {
-		t.Fatal("the ledger must join to team_project_ownership -- counting keys nothing references inflates the signal toward alarm")
-	}
-	// And it must be organization-scoped on BOTH sides, or one tenant's
-	// projects make another tenant's key look ambiguous.
-	if got := strings.Count(ambiguousProjectKeysStatement, "org_id = {org_id:String}"); got < 3 {
-		t.Fatalf("org scoping appears %d times, want at least 3 (projects, ownership, and the embedded scope catalog): one tenant's projects must never make another tenant's key look ambiguous, and the membership test must not consult another tenant's scopes either", got)
-	}
-	// The bound must be explicit. An unbounded census holds one row per
-	// ambiguous key in memory for a tenant that may have thousands.
-	if !strings.Contains(ambiguousProjectKeysStatement, "LIMIT {census_limit:UInt32}") {
-		t.Error("the census must carry an explicit LIMIT")
-	}
-}
-
 // CHAOS-4542 defect 6, acr side. The graph producer's key arm must select the
 // KEY SCOPE ROW, never p.project_key -- a column every scope row carries,
 // which is how an id row satisfied a key-shaped guard and two projects
@@ -202,34 +173,69 @@ func TestChaos4542_KeyArmSelectsTheKeyScopeRowAndTheScopeArmDoesNot(t *testing.T
 	}
 }
 
-// The census must not claim an omission that did not happen (codex R2 P2-2).
+// The catalog ambiguity count is a FACT ABOUT THE CATALOG, and both halves of
+// that matter.
 //
-// An ownership row whose project_id resolves through the SCOPE arm gets its
-// edge. Its key being ambiguous cost nothing, so reporting it is a FALSE
-// omission claim -- and a false claim is worse than a silent one: it is
-// decision-basis telemetry asserting a defect that did not occur, which sends
-// an operator looking for a dropped edge that is sitting right there.
+// What it replaced tried to reconstruct which ownership rows had been
+// eliminated, from aggregate SQL, and was wrong in four consecutive review
+// rounds in both directions -- over-reporting omissions that never happened,
+// missing ones that did, doubling a single disagreement, and claiming
+// truncation at exactly its limit. That work left with its own ticket. This
+// reports only what a plain catalog query can establish.
 //
-// The membership test is what encodes that. It asks only "did anything
-// resolve this ref", never "which project does this row mean", so the census
-// stays decoupled from the resolution whose gaps it reports -- a third copy of
-// the identity join would couple them and drift.
-func TestChaos4542_CensusCountsOnlyRowsThatActuallyFailedToResolve(t *testing.T) {
+// So the statement must NOT reach for the ownership table or the scope
+// expansion: the moment it does, it is making claims about edges again.
+func TestChaos4542_CatalogCountMakesNoClaimAboutDroppedEdges(t *testing.T) {
 	t.Parallel()
-	if !strings.Contains(ambiguousProjectKeysStatement, "(provider, "+readers.ProjectOwnershipJoinColumn+") NOT IN (SELECT p.provider, p.scope FROM ") {
-		t.Fatal("the census counts every ownership row referencing an ambiguous key, including rows that resolved by project_id and kept their edge -- that is a false omission claim")
+	statement := ambiguousProjectKeysInCatalogStatement
+	for _, forbidden := range []string{"team_project_ownership", "p.scope", "scope_kind", "NOT IN"} {
+		if strings.Contains(statement, forbidden) {
+			t.Errorf("the catalog count references %q -- that makes it a claim about which edges were dropped, which is the reconstruction this replaced", forbidden)
+		}
 	}
-	// The tuple, not just the ref: an uncorrelated membership test calls a
-	// ref resolved because it matches a scope under ANOTHER provider, while
-	// the edge join requires provider equality and drops the row. The edge
-	// disappears and the census says nothing -- a missed omission, which is
-	// the failure this census exists to remove.
-	if strings.Contains(ambiguousProjectKeysStatement, readers.ProjectOwnershipJoinColumn+" NOT IN (SELECT p.scope") {
-		t.Error("the membership test is not correlated by provider")
+	// Org-scoped and bounded: one tenant's projects must never be counted
+	// into another's, and a pathological catalog must not grow this without
+	// limit.
+	if !strings.Contains(statement, "org_id = {org_id:String}") {
+		t.Error("the catalog count must be scoped to the organization")
 	}
-	// It must be a MEMBERSHIP test over the scope catalog, not a second
-	// spelling of it: one definition of "what resolves" or the two drift.
-	if !strings.Contains(ambiguousProjectKeysStatement, readers.ProjectIdentityCatalogSQL()) {
-		t.Error("the membership test must read the shared scope catalog rather than restating which refs resolve")
+	if !strings.Contains(statement, "LIMIT {census_limit:UInt32}") {
+		t.Error("the catalog count must be bounded")
+	}
+	// It counts KEYS naming several projects, not projects and not rows.
+	if !strings.Contains(statement, "GROUP BY provider, project_key") || !strings.Contains(statement, "HAVING count() > 1") {
+		t.Error("the catalog count must group by (provider, project_key) and keep only keys naming more than one project")
+	}
+	if !strings.Contains(statement, "project_key != ''") {
+		t.Error("an empty key names nothing and is never ambiguous; counting it is how a project-level number became a per-match one (defect 8)")
+	}
+}
+
+// The conflict ledger key must carry the FULL suppressed row identity.
+//
+// Three iterations of the same counting bug landed on this one number: keyed
+// on the resolved edge it double-counted one disagreement; carried as a
+// representative it collapsed several disagreeing rows into one; keyed on
+// (provider, ref, key) alone it collapsed the same triple across different
+// teams, sources and validity windows. Each fix was correct about the
+// dimension it addressed and silent about the next one.
+//
+// The lesson is not "add another field". It is that a count of SUPPRESSED
+// ROWS must be keyed on everything that makes a row distinct, and that the
+// grouping this number is computed inside erases exactly those dimensions --
+// which is why the identity is assembled in SQL, before the aggregation, and
+// asserted here rather than trusted.
+func TestChaos4542_ConflictIdentityCarriesEveryRowDimension(t *testing.T) {
+	t.Parallel()
+	statement := projectTeamsStatement(cursorState{})
+	for _, dimension := range []string{"o.ownership_ref", "o.ownership_key", "o.team_id", "o.source_name"} {
+		if !strings.Contains(statement, dimension+", '\\0'") && !strings.Contains(statement, "'\\0', "+dimension) {
+			t.Errorf("the conflict identity omits %s -- two suppressed rows differing only in that dimension collapse to one, understating what was dropped", dimension)
+		}
+	}
+	// Collected from conflicting rows ONLY: a clean row sharing the group
+	// must never be named as the offender.
+	if !strings.Contains(statement, "groupUniqArrayIf(") || !strings.Contains(statement, ", o.identity_conflict = 1)") {
+		t.Error("conflict identities must be collected only from rows flagged as conflicting")
 	}
 }

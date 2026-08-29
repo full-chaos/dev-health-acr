@@ -613,67 +613,6 @@ func omittedProjectTeamRow(projectID, teamID, source string, updatedAt time.Time
 	return []any{oversized, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, "github", uint8(0), []string{}}
 }
 
-// TestOmissionTelemetryCountsDistinctKeysAcrossTheRun is codex round-2 F3.
-// The count was keyed by team_id:source and scoped to one page, so several
-// distinct ambiguous keys collapsed into one number and a multi-page catch-up
-// reported a slice of the truth. Understated omission telemetry reads as
-// health -- measurement failing toward fine.
-func TestOmissionTelemetryCountsDistinctKeysAcrossTheRun(t *testing.T) {
-	t.Parallel()
-	// CHAOS-4542: the telemetry's SOURCE moved. An ambiguous key no longer
-	// reaches the scan at all -- ProjectIdentityJoinSQL emits a key scope row
-	// only for key_resolution_count = 1, so the ownership row joins to nothing
-	// and the page simply does not contain it. Reporting it therefore takes an
-	// explicit statement (recordAmbiguousProjectKeys), and this test is RED
-	// without one: with the side query absent the ledger stays empty,
-	// logAmbiguousProjectKeys suppresses a zero, and no line is written.
-	//
-	// What is being asserted is unchanged: DISTINCT (provider, project_key)
-	// accumulated across the run.
-	//
-	// Three ambiguous keys reported, but only TWO distinct (provider,
-	// project_key) -- the same key seen under two providers is two, the same
-	// key seen twice is one.
-	client := &fakeClient{tables: []fakeTable{
-		{match: ambiguousProjectKeysMarker, rows: [][]any{
-			{"github", "SHARED", uint64(2)},
-			{"gitlab", "OTHER", uint64(3)},
-			{"github", "SHARED", uint64(2)},
-		}},
-	}}
-
-	logged := &bytes.Buffer{}
-	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
-	if err != nil {
-		t.Fatalf("NewTeamsProjectsSource: %v", err)
-	}
-	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
-
-	// A non-empty cursor means "continuing a run", so the ledger must NOT
-	// reset between these two calls -- that is the accumulation half.
-	for call := 0; call < 2; call++ {
-		if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
-			OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
-		}); err != nil {
-			t.Fatalf("call %d: %v", call, err)
-		}
-	}
-
-	output := logged.String()
-	if !strings.Contains(output, "omitted_ambiguous_project_keys=2") {
-		t.Fatalf("want a run total of 2 DISTINCT (provider, project_key) keys; got:\n%s", output)
-	}
-	if strings.Contains(output, "omitted_ambiguous_project_keys=3") {
-		t.Fatalf("counted omitted ROWS rather than distinct ambiguity keys:\n%s", output)
-	}
-	// Nothing tenant-identifying may reach the log line.
-	for _, secret := range []string{"SHARED", "OTHER", "team-a", "team-b", "p1", liveOrgID} {
-		if strings.Contains(output, secret) {
-			t.Errorf("omission telemetry leaked tenant data %q:\n%s", secret, output)
-		}
-	}
-}
-
 // TestTeamAuthorizationTelemetryCountsAdmittedVersusDeniedTeams (CHAOS-4390)
 // proves the team-authorization telemetry line: a team whose
 // team_repo_ownership join produced at least one repository must be counted
@@ -925,58 +864,6 @@ func TestProgressMemoIsDiscardedByAFromScratchRun(t *testing.T) {
 	}
 }
 
-// TestChaos4542_AmbiguityTelemetryFiresOnASingleCall is the answer to "why
-// did the ledger not log", and the answer is a Go evaluation-order trap that
-// has been in this file since the telemetry was added.
-//
-//	defer logAmbiguousProjectKeys(ctx, s.logger, orgID, ledger.count())
-//
-// Deferred CALL arguments are evaluated where the `defer` statement runs, not
-// where the deferred call runs. So ledger.count() was read BEFORE any query
-// executed -- always 0 -- and logAmbiguousProjectKeys suppresses a zero. The
-// telemetry was permanently one call behind: a run that omitted keys reported
-// nothing, and the NEXT run reported the previous run's total.
-//
-// TestOmissionTelemetryCountsDistinctKeysAcrossTheRun did not catch this
-// because it calls NextProjectionBatch TWICE, and its comment reads that
-// second call as testing accumulation. It was testing accumulation, and it
-// was also the only reason a number ever appeared. One call is the case an
-// operator actually has.
-//
-// The two sibling telemetry defers pass the LEDGER POINTER rather than a
-// count, so they read their contents when the deferred call runs and were
-// never affected -- which is why only this one was silent.
-//
-// This matters more after CHAOS-4542 than before it: an ambiguous key is now
-// excluded inside the expansion and never reaches any scan, so this log line
-// is the ONLY record that an ownership edge was dropped. Silent here means
-// invisible everywhere.
-func TestChaos4542_AmbiguityTelemetryFiresOnASingleCall(t *testing.T) {
-	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{
-		{match: ambiguousProjectKeysMarker, rows: [][]any{
-			{"github", "SHARED", uint64(2)},
-		}},
-	}}
-	logged := &bytes.Buffer{}
-	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
-	if err != nil {
-		t.Fatalf("NewTeamsProjectsSource: %v", err)
-	}
-	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
-
-	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
-		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
-		Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
-	}); err != nil {
-		t.Fatalf("NextProjectionBatch: %v", err)
-	}
-
-	if output := logged.String(); !strings.Contains(output, "omitted_ambiguous_project_keys=1") {
-		t.Fatalf("ONE call that omitted an ambiguous key must report it in that same call -- an operator does not get a second tick to find out an edge was dropped; got:\n%s", output)
-	}
-}
-
 // TestChaos4542_TableReadFailureLogsTheClickHouseCode closes a diagnosability
 // defect this ticket ran into head-first.
 //
@@ -1120,44 +1007,6 @@ func hasRelationshipID(batch contextfabric.ProjectionBatch, id string) bool {
 		}
 	}
 	return false
-}
-
-// TestChaos4542_CensusDoesNotClaimFalseTruncation is codex R3's P3.
-//
-// A census that asks for exactly its limit cannot tell "there are exactly N"
-// from "there are more than N", so a full page claimed truncation that had
-// not happened. Small, and the same class as every other finding in this
-// chain: telemetry asserting something the data does not say. It is also the
-// mirror of the bug above -- one over-reported omissions, this over-reports
-// incompleteness -- and an operator who learns the truncation flag lies stops
-// trusting the count beside it.
-func TestChaos4542_CensusDoesNotClaimFalseTruncation(t *testing.T) {
-	t.Parallel()
-	exactly := make([][]any, 0, 500)
-	for i := 0; i < 500; i++ {
-		exactly = append(exactly, []any{"github", fmt.Sprintf("KEY-%03d", i), uint64(2)})
-	}
-	client := &fakeClient{tables: []fakeTable{{match: ambiguousProjectKeysMarker, rows: exactly}}}
-	logged := &bytes.Buffer{}
-	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
-	if err != nil {
-		t.Fatalf("NewTeamsProjectsSource: %v", err)
-	}
-	source.WithLogger(slog.New(slog.NewTextHandler(logged, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
-		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
-		Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
-	}); err != nil {
-		t.Fatalf("NextProjectionBatch: %v", err)
-	}
-	output := logged.String()
-	if strings.Contains(output, "census_truncated=true") {
-		t.Errorf("claimed truncation for exactly the limit -- every key was reported, so nothing was cut; got:\n%s", output)
-	}
-	// The keys themselves must still all be counted.
-	if !strings.Contains(output, "omitted_ambiguous_project_keys=500") {
-		t.Errorf("want all 500 keys counted; got:\n%s", output)
-	}
 }
 
 // TestChaos4542_ConflictsCountEverySourceRowInAGroup is a residual I found

@@ -57,13 +57,13 @@ type fakeClient struct {
 	tables []fakeTable
 }
 
-// ambiguousProjectKeysMarker identifies the ambiguity ledger's side query
-// (recordAmbiguousProjectKeys, teams_projects_edges.go). It needs its own
-// dispatch because that statement names team_project_ownership as well, so
-// the substring loop below would happily serve it the OWNERSHIP table's rows
-// and then scan a ten-column edge row into three destinations -- a panic that
-// reports itself as a scan-type bug rather than a fake-routing one.
-const ambiguousProjectKeysMarker = "AS project_count"
+// ambiguousProjectKeysMarker identifies the catalog ambiguity count
+// (countAmbiguousProjectKeysInCatalog, teams_projects_edges.go). It keeps its
+// own dispatch because that statement names `projects`, which the substring
+// loop would otherwise serve from another table's canned rows and then scan
+// into the wrong destinations -- a panic that reports itself as a scan-type
+// bug rather than a fake-routing one.
+const ambiguousProjectKeysMarker = "AS ambiguous_keys"
 
 func (c *fakeClient) Query(_ context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	requireOrgIDBinding(statement, bindings)
