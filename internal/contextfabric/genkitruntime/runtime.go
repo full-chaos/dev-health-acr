@@ -1069,9 +1069,50 @@ func decisionOrgIDHash(orgID string) string {
 // assertion. Unconditionally logged at slog.LevelInfo: no new config knob
 // gates it, only the configured Logger's own handler level (Config.Logger's
 // doc comment).
+// safeLogRequestID renders a client-supplied request id for a log field.
+//
+// RequestID arrives in the HTTP request body and the v1 contract validates
+// it by LENGTH ONLY (stringLengthBetween(r.RequestID, 8, 256),
+// validate_context_fabric_request.go) -- nothing constrains its characters.
+// A caller can therefore put a newline in it and forge whole log lines in
+// the decision-event stream: the exact log-injection CodeQL's
+// go/log-injection flags on these two functions, with the taint traced from
+// internal/api/read_decode.go's body decode.
+//
+// This is a REAL vector, not a scanner artifact, and it predates CHAOS-4522
+// -- both decision-event functions have always logged this value. It
+// surfaced here because CHAOS-4522 changed the synthesize call site, so the
+// alert landed on a changed line.
+//
+// Sanitizing at the SINK is deliberate. Tightening the contract validator
+// to reject control characters would be the deeper fix, but it changes what
+// the API accepts (input that validates today would start failing) and that
+// is a ratified contract decision, not a side effect of a defect fix --
+// filed separately. Every OTHER field on these lines is a count, a bool, or
+// a closed vocabulary, so this is the only value on either line that needs
+// it.
+//
+// Replacement, not rejection: a request id is a correlation handle, and
+// dropping the line or the field would destroy the correlation this
+// telemetry exists for. Anything outside printable ASCII becomes '?', so
+// the id stays recognizable and can never introduce a line break, a
+// terminal escape, or a NUL.
+func safeLogRequestID(requestID string) string {
+	if len(requestID) > 256 {
+		requestID = requestID[:256]
+	}
+	sanitized := []rune(requestID)
+	for i, r := range sanitized {
+		if r < 0x20 || r > 0x7e {
+			sanitized[i] = '?'
+		}
+	}
+	return string(sanitized)
+}
+
 func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string) {
 	r.config.Logger.InfoContext(ctx, decisionEventMessage,
-		"request_id", requestID,
+		"request_id", safeLogRequestID(requestID),
 		"org_id_hash", decisionOrgIDHash(orgID),
 		"operation", string(receipt.Operation),
 		"outcome", receipt.Outcome,
@@ -1115,7 +1156,7 @@ func groundingCountsFrom(draft contextfabric.SynthesisDraft) synthesisGroundingC
 // here.
 func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupSize, groundedBeyondFirst int) {
 	fields := []any{
-		"request_id", requestID,
+		"request_id", safeLogRequestID(requestID),
 		"org_id_hash", decisionOrgIDHash(orgID),
 		"operation", string(receipt.Operation),
 		"outcome", receipt.Outcome,

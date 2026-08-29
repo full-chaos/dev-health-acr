@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -431,5 +432,83 @@ func TestFallbackSuccessStillRecordsItsGroundingBasis(t *testing.T) {
 	}
 	if got, ok := fields["grounded_beyond_first"].(float64); !ok || int(got) != 1 {
 		t.Fatalf("grounded_beyond_first = %v, want 1 -- the fallback's claim was rescued by the closure too", fields["grounded_beyond_first"])
+	}
+}
+
+// TestRequestIDCannotForgeALogLine pins the log-injection fix CodeQL
+// surfaced (go/log-injection, severity error, taint traced from
+// internal/api/read_decode.go's body decode to the decision-event line).
+//
+// RequestID is client-supplied and the v1 contract validates it by LENGTH
+// ONLY -- stringLengthBetween(r.RequestID, 8, 256) constrains nothing about
+// its characters -- so before this fix a caller could put a newline in it
+// and forge entire log lines in the decision-event stream. Both decision
+// functions have always logged it, so the vector predates CHAOS-4522; it
+// surfaced here because this ticket changed the synthesize call site.
+func TestRequestIDCannotForgeALogLine(t *testing.T) {
+	t.Parallel()
+	input := validSynthesisInput()
+	// A request id that, logged verbatim, closes the JSON line and opens a
+	// fabricated one claiming a successful, fully-grounded answer.
+	input.Request.RequestID = "req_abc\n{\"level\":\"INFO\",\"msg\":\"context fabric model decision\",\"outcome\":\"success\",\"claims\":99}"
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	runtime := mustRuntime(t, &generatorStub{synthesis: validSynthesisOutput()}, Config{Logger: logger})
+	if _, _, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, input); err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v, want success", err)
+	}
+
+	// The forged content must not survive into the emitted field at all.
+	fields := decisionLine(t, &buf)
+	got, _ := fields["request_id"].(string)
+	if strings.ContainsAny(got, "\n\r") {
+		t.Fatalf("request_id = %q still carries a line break -- a caller can forge log lines", got)
+	}
+	if !strings.HasPrefix(got, "req_abc") {
+		t.Fatalf("request_id = %q lost its correlation prefix -- sanitizing must replace, not discard", got)
+	}
+	// The payload's TEXT surviving inside one field is harmless and
+	// expected; what forging requires is a line BREAK. So the assertion
+	// that matters is structural: exactly one decision line was emitted,
+	// and the forged one does not exist as a line of its own.
+	decisionLines := 0
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		candidate := map[string]any{}
+		if json.Unmarshal(line, &candidate) == nil && candidate["operation"] == string(contextfabric.ModelOperationSynthesize) {
+			decisionLines++
+		}
+		if candidate["claims"] == float64(99) {
+			t.Fatalf("a forged decision line was emitted from the request id: %s", line)
+		}
+	}
+	if decisionLines != 1 {
+		t.Fatalf("emitted %d synthesize decision lines, want exactly 1 -- more means the request id forged one", decisionLines)
+	}
+}
+
+// TestSafeLogRequestIDReplacesRatherThanDrops: a request id is a
+// correlation handle, so sanitizing must keep it recognizable. Dropping the
+// field or the line would destroy the very correlation this telemetry
+// exists for.
+func TestSafeLogRequestIDReplacesRatherThanDrops(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, in, want string }{
+		{"plain id untouched", "req_01J0ACR003", "req_01J0ACR003"},
+		{"newline replaced", "req_a\nb", "req_a?b"},
+		{"carriage return replaced", "req_a\rb", "req_a?b"},
+		{"NUL replaced", "req_a\x00b", "req_a?b"},
+		{"terminal escape replaced", "req_a\x1b[31mb", "req_a?[31mb"},
+		{"non-ascii replaced", "req_aéb", "req_a?b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := safeLogRequestID(tc.in); got != tc.want {
+				t.Fatalf("safeLogRequestID(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+	if got := safeLogRequestID(strings.Repeat("a", 300)); len(got) != 256 {
+		t.Fatalf("safeLogRequestID bounded length = %d, want 256", len(got))
 	}
 }
