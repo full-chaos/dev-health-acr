@@ -24,3 +24,16 @@
 # pattern does NOT match. .probe-tmp/ is throwaway runner scripts/logs.
 .trial-exchange*/
 .probe-tmp/
+
+# codex-review SKILL scratch files (.claude/skills/codex-review/SKILL.md):
+# a lane's per-worktree `git/info/exclude` keeps these out of `git status`
+# during review, but that file is per-clone, not committed -- this repo-wide
+# .gitignore entry is the backstop so a squash-merge can't accidentally
+# carry one in again (codex-gate-r2.log/.md landed on main via #335's squash).
+prompt.md
+.codex-review-context.md
+LEDGER.md
+codex-gate.md
+codex-gate.log
+codex-gate-*.md
+codex-gate-*.log
