@@ -72,17 +72,54 @@ func TestTrendRefusesRowsFromDifferentScopes(t *testing.T) {
 
 // TestTrendStillDrawsASingleScopeSeries is the control. Without it the fix
 // above would be satisfied by a rule that refuses every trend.
+//
+// One scope, one measure (the claim's own Field), and every other column
+// constant -- the shape a genuine time series has.
 func TestTrendStillDrawsASingleScopeSeries(t *testing.T) {
 	t.Parallel()
-	rows := liveFlowRows()
-	// Same two rows, now genuinely the same scope observed twice.
-	rows[1].Fields["work_scope_id"] = renderScalarString("full.chaos/chaos-ops")
+	rows := []ClaimedFactRow{
+		{Fields: map[string]ScalarValue{
+			"day": renderScalarString("2026-07-20"), "provider": renderScalarString("gitlab"),
+			"work_scope_id": renderScalarString("full.chaos/chaos-ops"), "items_completed": renderScalarNumber(0),
+		}},
+		{Fields: map[string]ScalarValue{
+			"day": renderScalarString("2026-08-30"), "provider": renderScalarString("gitlab"),
+			"work_scope_id": renderScalarString("full.chaos/chaos-ops"), "items_completed": renderScalarNumber(3),
+		}},
+	}
 	shapes, _ := SelectRenderShapes(trendFixture(rows))
 	if len(shapes) != 1 {
 		t.Fatalf("a legitimate single-scope trend was refused; got %d shapes", len(shapes))
 	}
 	if shapes[0].SelectedBy != contractsv1.ContextFabricRenderRuleDatedFactTrend {
 		t.Fatalf("selected_by = %s, want dated_fact_trend", shapes[0].SelectedBy)
+	}
+	// Exactly ONE series, and it is the claim's own Field. A trend states
+	// one measure over time; several measures is a comparison, which is a
+	// different claim with its own designed rule (filed separately).
+	if len(shapes[0].Series) != 1 || shapes[0].Series[0].Key != "items_completed" {
+		t.Fatalf("series = %+v, want exactly the claim's own Field", shapes[0].Series)
+	}
+}
+
+// TestTrendRefusesASecondMeasure pins the narrowing the field-driven rule
+// deliberately accepts: a table carrying a measure the claim does NOT name
+// is a breakdown or a comparison, and this rule declines rather than
+// guessing which of the two columns the answer is about.
+func TestTrendRefusesASecondMeasure(t *testing.T) {
+	t.Parallel()
+	rows := []ClaimedFactRow{
+		{Fields: map[string]ScalarValue{
+			"day":             renderScalarString("2026-07-20"),
+			"items_completed": renderScalarNumber(0), "items_started": renderScalarNumber(4),
+		}},
+		{Fields: map[string]ScalarValue{
+			"day":             renderScalarString("2026-08-30"),
+			"items_completed": renderScalarNumber(3), "items_started": renderScalarNumber(9),
+		}},
+	}
+	if shapes, _ := SelectRenderShapes(trendFixture(rows)); len(shapes) != 0 {
+		t.Fatalf("a trend was drawn for a table carrying a measure the claim does not name: %+v", shapes[0].Series)
 	}
 }
 
@@ -92,6 +129,11 @@ func TestTrendIgnoresAConstantDimensionColumn(t *testing.T) {
 	t.Parallel()
 	rows := liveFlowRows()
 	rows[1].Fields["work_scope_id"] = renderScalarString("full.chaos/chaos-ops")
+	// The live rows carry a second measure (wip_count_end_of_day) that the
+	// claim does not name, so drop it to isolate what this test is about.
+	delete(rows[0].Fields, "wip_count_end_of_day")
+	delete(rows[1].Fields, "wip_count_end_of_day")
+	rows[1].Fields["items_completed"] = renderScalarNumber(3)
 	// `provider` is identical on both rows already; add another constant.
 	rows[0].Fields["team_name"] = renderScalarString("fullchaos")
 	rows[1].Fields["team_name"] = renderScalarString("fullchaos")
@@ -167,7 +209,7 @@ func TestTrendRefusesAnIdentifierPresentOnOnlySomeRows(t *testing.T) {
 // plot at all, so "no dated rows" is the honest reason -- reporting a scope
 // split for a table that could never have been a trend sends a reader after
 // the wrong producer.
-func TestTrendReportsNoDatedRowsWhenThereIsNothingToPlot(t *testing.T) {
+func TestTrendReportsFieldNotPlottableWhenTheClaimsFieldIsNotAColumn(t *testing.T) {
 	t.Parallel()
 	rows := []ClaimedFactRow{
 		{Fields: map[string]ScalarValue{
@@ -179,10 +221,10 @@ func TestTrendReportsNoDatedRowsWhenThereIsNothingToPlot(t *testing.T) {
 	}
 	_, event := SelectRenderShapes(trendFixture(rows))
 	if skipRecorded(event, contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipMixedScopeRows) {
-		t.Errorf("blamed a scope split for a table with no numeric column; skipped=%+v", event.Skipped)
+		t.Errorf("blamed a scope split for a table whose measure is absent; skipped=%+v", event.Skipped)
 	}
-	if !skipRecorded(event, contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipNoDatedRows) {
-		t.Errorf("no reason recorded at all; skipped=%+v", event.Skipped)
+	if !skipRecorded(event, contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipFieldNotPlottable) {
+		t.Errorf("the reason does not name the actual problem; skipped=%+v", event.Skipped)
 	}
 }
 

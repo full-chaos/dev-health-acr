@@ -63,13 +63,6 @@ type RenderShapeSelectionEvent struct {
 	// projection budget exists to prevent, one layer up. Zero on every
 	// selection that lost nothing.
 	MembersTruncated int
-	// SeriesTruncated counts numeric columns a trend could not carry. A
-	// shape holds at most 8 series, so a wide row table yields a PARTIAL
-	// trend. Same reason MembersTruncated exists: reporting a healthy
-	// 8-series shape for a 9-column fact lets a consumer read a partial
-	// trend as a complete one (codex round 2, P3). Zero on every
-	// selection that lost nothing.
-	SeriesTruncated int
 }
 
 // RenderShapeSkip records one rule that did not produce a shape.
@@ -108,6 +101,10 @@ const (
 	// RenderShapeSkipMixedScopeRows -- the row table's rows are not
 	// observations of the same thing (CHAOS-4616). See rowsShareOneScope.
 	RenderShapeSkipMixedScopeRows RenderShapeSkipReason = "mixed_scope_rows"
+	// RenderShapeSkipFieldNotPlottable -- the claim's own Field names no
+	// numeric column in its row table, so there is nothing this rule is
+	// entitled to plot. See datedFactTrendShape.
+	RenderShapeSkipFieldNotPlottable RenderShapeSkipReason = "field_not_plottable"
 )
 
 // cohortIntentShapes are the interpreted shapes a cohort chart is an answer
@@ -159,8 +156,7 @@ func SelectRenderShapes(result InvestigationResult) ([]contractsv1.ContextFabric
 		}
 	}
 
-	trends, seriesTruncated, mixedScope := datedFactTrendShapes(result.ClaimedFacts)
-	event.SeriesTruncated = seriesTruncated
+	trends, mixedScope, notPlottable := datedFactTrendShapes(result.ClaimedFacts)
 	// A refused mixed-scope fact is reported whether or not some OTHER fact
 	// produced a trend. Recording the reason only when the rule produced
 	// nothing at all made a refusal invisible the moment any trend
@@ -170,7 +166,10 @@ func SelectRenderShapes(result InvestigationResult) ([]contractsv1.ContextFabric
 	if mixedScope {
 		event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipMixedScopeRows)
 	}
-	if len(trends) == 0 && !mixedScope {
+	if notPlottable {
+		event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipFieldNotPlottable)
+	}
+	if len(trends) == 0 && !mixedScope && !notPlottable {
 		event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipNoDatedRows)
 	}
 	for _, trend := range trends {
@@ -440,90 +439,87 @@ func humanizeRenderTerm(term string) string {
 // producer emitting a cross-scope table and a producer emitting no dated
 // rows at all are different problems, and a reader diagnosing a missing
 // chart must be able to tell them apart from the run's own artifacts.
-func datedFactTrendShapes(facts []ClaimedFact) (shapes []contractsv1.ContextFabricRenderShape, truncatedTotal int, mixedScope bool) {
+func datedFactTrendShapes(facts []ClaimedFact) (shapes []contractsv1.ContextFabricRenderShape, mixedScope bool, notPlottable bool) {
 	for _, fact := range facts {
-		shape, truncated, ok, mixed := datedFactTrendShape(fact)
+		shape, ok, mixed, unplottable := datedFactTrendShape(fact)
 		if mixed {
 			mixedScope = true
+		}
+		if unplottable {
+			notPlottable = true
 		}
 		if !ok {
 			continue
 		}
-		truncatedTotal += truncated
 		shapes = append(shapes, shape)
 	}
-	return shapes, truncatedTotal, mixedScope
+	return shapes, mixedScope, notPlottable
 }
 
-func datedFactTrendShape(fact ClaimedFact) (shape contractsv1.ContextFabricRenderShape, truncated int, ok bool, mixedScope bool) {
+func datedFactTrendShape(fact ClaimedFact) (shape contractsv1.ContextFabricRenderShape, ok bool, mixedScope bool, notPlottable bool) {
 	rows := fact.Rows
 	if len(rows) < 2 || len(rows) > contractsv1.ContextFabricRenderPointsMaxCount {
-		return contractsv1.ContextFabricRenderShape{}, 0, false, false
+		return contractsv1.ContextFabricRenderShape{}, false, false, false
 	}
 	columns := renderRowColumns(rows)
 	dateColumn, ordering, found := dateAxisColumn(rows, columns)
 	if !found {
-		return contractsv1.ContextFabricRenderShape{}, 0, false, false
+		return contractsv1.ContextFabricRenderShape{}, false, false, false
 	}
-	// Scope is checked only once this table has SOMETHING to plot. A dated
-	// table with no plottable column could never have been a trend, so
-	// blaming a scope split for it would send a reader after the wrong
-	// producer (codex P2, EXECUTED) -- "no dated rows" is the honest reason.
-	plottable := false
-	for _, column := range columns {
-		if column != dateColumn && plottableRenderColumn(rows, column) {
-			plottable = true
-			break
-		}
+	// THE measure is the claim's own Field, and nothing else.
+	//
+	// Three attempts at inferring which columns are measures all turned out
+	// to be heuristics: skipping numeric columns (a numeric team_id became a
+	// series), then an id-NAME test (a column named `year` walked straight
+	// through it). The information simply is not in the row table — a bag of
+	// rows carries no statement of what it IS — so this rule stops guessing
+	// and reads the producer's OWN assertion instead. `ClaimedFact.Field`
+	// names the measure the claim is about; that column is plotted and no
+	// other.
+	//
+	// Every remaining non-date column must then be CONSTANT. A varying one
+	// means the rows are split by that dimension — a breakdown, not a series
+	// — whatever its name or type, with no heuristic left to fool.
+	//
+	// This narrows the rule deliberately: a table carrying two measures now
+	// draws nothing rather than one line per measure. Several measures over
+	// time is a legitimate view, but it is a DIFFERENT claim (a comparison)
+	// and deserves its own designed rule and its own name rather than being
+	// inferred here — the same argument that ruled out one-series-per-scope.
+	measure := fact.Field
+	if measure == dateColumn || !numericRenderColumn(rows, measure) {
+		return contractsv1.ContextFabricRenderShape{}, false, false, true
 	}
-	if !plottable {
-		return contractsv1.ContextFabricRenderShape{}, 0, false, false
+	if !rowsShareOneScope(rows, dateColumn, measure) {
+		return contractsv1.ContextFabricRenderShape{}, false, true, false
 	}
-	if !rowsShareOneScope(rows, dateColumn, columns) {
-		return contractsv1.ContextFabricRenderShape{}, 0, false, true
-	}
-	var series []contractsv1.ContextFabricRenderSeries
-	for _, column := range columns {
-		if column == dateColumn || !plottableRenderColumn(rows, column) {
+	points := make([]contractsv1.ContextFabricRenderPoint, 0, len(ordering))
+	for _, index := range ordering {
+		value, numeric := renderNumericCell(rows[index].Fields[measure])
+		if !numeric {
 			continue
 		}
-		if len(series) >= contractsv1.ContextFabricRenderSeriesMaxCount {
-			// Counted, not silently skipped: a shape reporting 8 healthy
-			// series for a 9-column fact reads as a complete trend.
-			truncated++
-			continue
-		}
-		points := make([]contractsv1.ContextFabricRenderPoint, 0, len(ordering))
-		for _, index := range ordering {
-			value, numeric := renderNumericCell(rows[index].Fields[column])
-			if !numeric {
-				continue
-			}
-			label, _ := renderStringCell(rows[index].Fields[dateColumn])
-			rowIndex := index
-			points = append(points, contractsv1.ContextFabricRenderPoint{
-				Label: label,
-				Value: value,
-				Source: contractsv1.ContextFabricRenderPointSource{
-					Kind:     contractsv1.ContextFabricRenderSourceClaimedFactRow,
-					ClaimID:  fact.ClaimID,
-					RowIndex: &rowIndex,
-					Field:    column,
-				},
-			})
-		}
-		if len(points) < 2 {
-			continue
-		}
-		series = append(series, contractsv1.ContextFabricRenderSeries{
-			Key:    column,
-			Label:  humanizeRenderTerm(column),
-			Points: points,
+		label, _ := renderStringCell(rows[index].Fields[dateColumn])
+		rowIndex := index
+		points = append(points, contractsv1.ContextFabricRenderPoint{
+			Label: label,
+			Value: value,
+			Source: contractsv1.ContextFabricRenderPointSource{
+				Kind:     contractsv1.ContextFabricRenderSourceClaimedFactRow,
+				ClaimID:  fact.ClaimID,
+				RowIndex: &rowIndex,
+				Field:    measure,
+			},
 		})
 	}
-	if len(series) == 0 {
-		return contractsv1.ContextFabricRenderShape{}, 0, false, false
+	if len(points) < 2 {
+		return contractsv1.ContextFabricRenderShape{}, false, false, false
 	}
+	series := []contractsv1.ContextFabricRenderSeries{{
+		Key:    measure,
+		Label:  humanizeRenderTerm(measure),
+		Points: points,
+	}}
 	return contractsv1.ContextFabricRenderShape{
 		Kind:         contractsv1.ContextFabricRenderKindSeries,
 		Presentation: contractsv1.ContextFabricRenderPresentationLine,
@@ -531,9 +527,9 @@ func datedFactTrendShape(fact ClaimedFact) (shape contractsv1.ContextFabricRende
 		Title:        clampRenderLabel(humanizeRenderTerm(fact.Field) + " over time — " + fact.Subject.Label),
 		AxisKind:     contractsv1.ContextFabricRenderAxisTime,
 		AxisLabel:    clampRenderLabel(dateColumn),
-		ValueLabel:   clampRenderLabel(humanizeRenderTerm(fact.Field)),
+		ValueLabel:   clampRenderLabel(humanizeRenderTerm(measure)),
 		Series:       series,
-	}, truncated, true, false
+	}, true, false, false
 }
 
 // rowsShareOneScope reports whether every row describes the SAME subject
@@ -565,9 +561,9 @@ func datedFactTrendShape(fact ClaimedFact) (shape contractsv1.ContextFabricRende
 // — which needs its own selection rule and its own name rather than being
 // smuggled in under `dated_fact_trend`. Widening to a per-scope shape is
 // tracked separately; refusing is the honest minimum.
-func rowsShareOneScope(rows []ClaimedFactRow, dateColumn string, columns []string) bool {
-	for _, column := range columns {
-		if column == dateColumn || plottableRenderColumn(rows, column) {
+func rowsShareOneScope(rows []ClaimedFactRow, dateColumn, measure string) bool {
+	for _, column := range renderRowColumns(rows) {
+		if column == dateColumn || column == measure {
 			continue
 		}
 		var first string
@@ -609,33 +605,6 @@ func scopeCellKey(value ScalarValue) string {
 	default:
 		return "absent"
 	}
-}
-
-// identifierColumn reports whether a column NAMES something rather than
-// measures it.
-//
-// An identifier is a dimension whatever its type. Before this, the scope
-// check skipped every numeric column, so a numeric `team_id` of 101 and 202
-// was treated as a plottable series: the rule drew "team id over time"
-// beside the real measure, which is nonsense on its own AND hid the scope
-// split this rule exists to refuse (codex P1, EXECUTED).
-//
-// Name-based, and deliberately the SAME notion the CHAOS-4355 axis chooser
-// already uses (`ordinalAxisPreferenceScore` in the web/ask-dev
-// `fact-rows.ts` deprioritises `id`/`*_id` for exactly this reason), so the
-// two ends agree about what an identifier looks like. A name test is
-// admittedly a heuristic; the alternative -- inferring "this integer is an
-// id" from its values -- is a worse one, and a producer that needs a
-// genuinely numeric MEASURE simply must not name it `*_id`.
-func identifierColumn(column string) bool {
-	lower := strings.ToLower(column)
-	return lower == "id" || strings.HasSuffix(lower, "_id")
-}
-
-// plottableRenderColumn is a column a trend may draw as a series: numeric on
-// every row AND not an identifier.
-func plottableRenderColumn(rows []ClaimedFactRow, column string) bool {
-	return !identifierColumn(column) && numericRenderColumn(rows, column)
 }
 
 // renderRowColumns is first-seen column order across the row set, so shape

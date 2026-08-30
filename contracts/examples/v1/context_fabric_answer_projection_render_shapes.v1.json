@@ -217,9 +217,9 @@
         "canonical_id": "project_ask_dev",
         "label": "Ask Dev"
       },
-      "field": "release_ready",
+      "field": "coverage_ratio",
       "value": {
-        "boolean": false
+        "number": 0.6
       },
       "rows": [
         {
@@ -229,9 +229,6 @@
             },
             "day": {
               "string": "2026-08-03"
-            },
-            "open_requirements": {
-              "number": 9
             }
           }
         },
@@ -242,9 +239,6 @@
             },
             "day": {
               "string": "2026-08-18"
-            },
-            "open_requirements": {
-              "number": 7
             }
           }
         },
@@ -255,9 +249,6 @@
             },
             "day": {
               "string": "2026-08-30"
-            },
-            "open_requirements": {
-              "number": 4
             }
           }
         }
@@ -399,10 +390,10 @@
       "kind": "series",
       "presentation": "line",
       "selected_by": "dated_fact_trend",
-      "title": "Release ready over time — Ask Dev",
+      "title": "Coverage ratio over time — Ask Dev",
       "axis_kind": "time",
       "axis_label": "day",
-      "value_label": "Release ready",
+      "value_label": "Coverage ratio",
       "series": [
         {
           "key": "coverage_ratio",
@@ -436,42 +427,6 @@
                 "claim_id": "claim_readiness_ask_dev",
                 "row_index": 2,
                 "field": "coverage_ratio"
-              }
-            }
-          ]
-        },
-        {
-          "key": "open_requirements",
-          "label": "Open requirements",
-          "points": [
-            {
-              "label": "2026-08-03",
-              "value": 9,
-              "source": {
-                "kind": "claimed_fact_row",
-                "claim_id": "claim_readiness_ask_dev",
-                "row_index": 0,
-                "field": "open_requirements"
-              }
-            },
-            {
-              "label": "2026-08-18",
-              "value": 7,
-              "source": {
-                "kind": "claimed_fact_row",
-                "claim_id": "claim_readiness_ask_dev",
-                "row_index": 1,
-                "field": "open_requirements"
-              }
-            },
-            {
-              "label": "2026-08-30",
-              "value": 4,
-              "source": {
-                "kind": "claimed_fact_row",
-                "claim_id": "claim_readiness_ask_dev",
-                "row_index": 2,
-                "field": "open_requirements"
               }
             }
           ]
