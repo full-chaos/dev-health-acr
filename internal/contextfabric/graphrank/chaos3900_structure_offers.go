@@ -1066,6 +1066,21 @@ func VerifyAnchorClaimantMembership(ctx context.Context, principal storage.Princ
 //     absent block or a silently dropped Missing row is forbidden either
 //     way.
 //
+// SCOPE of case 3's ruling (CHAOS-4579/CHAOS-4531, 2026-08-30): it governs
+// questions that HAVE a subject axis, and it is unchanged for every one of
+// them. It never reached a question with no subject to anchor at all:
+// "missing-and-helpful" presupposes something is missing, and on a
+// discovered_cohort question ("what teams are struggling") an anchor is
+// not missing, it is inapplicable. This function still cannot see the
+// question class -- it decides from the candidate pool alone, exactly as
+// before -- so the class decision is made ONCE at the composition boundary
+// instead, by gateSubjectAxisOffers
+// (internal/contextfabric/chaos4579_cohort_structure_gate.go), which
+// removes this Missing row and its options together for axis-less shapes
+// and leaves this function's output byte-identical for every other shape.
+// Do not re-implement a class check here; CHAOS-4452's question-family
+// stage is where both decisions eventually merge.
+//
 // CHAOS-4042 (sol-max ruling) v2 case: if ambiguousAnchorTermClaimants
 // finds any term with 2+ AUTHORIZED claimants, EVERY claimant of every
 // such term (that is not itself mixed-visibility, see below) is offered
@@ -1395,10 +1410,21 @@ type handleOfferDiagnostics struct {
 //
 // Mirrors anchorOfferMaterial's own three-case discipline for the
 // zero-candidates case: subject_handle is Missing whenever this function
-// runs (P1.C' does not yet implement §1.3's class-conditional gate, the
-// same known, accepted scope gap kindOfferMaterial already carries), with
-// HandleOptions holding however many grammar-valid values were found --
-// possibly zero, never an absent block.
+// runs, with HandleOptions holding however many grammar-valid values were
+// found -- possibly zero, never an absent block.
+//
+// §1.3's class-conditional gate (CHAOS-4531, the P1.C' gap this comment
+// used to record as open; CHAOS-4579 is the same defect reached through
+// the turn-1 window gate) is now IMPLEMENTED -- but deliberately not
+// here. This function keeps deciding from the pool alone; the class
+// decision is made once, at the composition boundary, by
+// gateSubjectAxisOffers
+// (internal/contextfabric/chaos4579_cohort_structure_gate.go), which
+// drops this Missing row and its HandleOptions together on shapes with no
+// subject axis. kindOfferMaterial's own scope gap is unrelated and stays
+// open: expected_kind remains applicable to a cohort question (which KIND
+// of thing the cohort is drawn from is still a real narrowing), so it is
+// not part of this gate.
 //
 // handleOfferMaterial additionally takes explicitHandles
 // (contextfabric.InvestigationRequest.SubjectHandles, CHAOS-3972 P3) and

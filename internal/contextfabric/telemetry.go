@@ -234,6 +234,14 @@ func (t SlogEngineTelemetry) RecordGatedOfferResolution(ctx context.Context, pri
 	t.logger.InfoContext(ctx, "context fabric gated offer resolution", args...)
 }
 
+// RecordCohortStructureGate (CHAOS-4579/CHAOS-4531). outcome and shape are
+// both closed enums -- content-safe by construction, never question text,
+// a subject identifier, or an offer label.
+func (t SlogEngineTelemetry) RecordCohortStructureGate(ctx context.Context, principal storage.Principal, outcome CohortStructureGateOutcome, shape InvestigationShape) {
+	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "shape", string(shape)}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric cohort structure gate", args...)
+}
+
 // RecordWindowGateOfferDisclosure (CHAOS-4314) logs at Info: offered is the
 // window_gated_offered/window_gated_silent split's own producer signal.
 func (t SlogEngineTelemetry) RecordWindowGateOfferDisclosure(ctx context.Context, principal storage.Principal, offered bool) {

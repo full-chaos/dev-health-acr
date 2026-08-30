@@ -417,6 +417,20 @@ type EngineTelemetry interface {
 	// composed offers beside the window offer -- closed vocabulary
 	// GatedOfferResolutionOutcome (chaos4234_offers_only.go).
 	RecordGatedOfferResolution(ctx context.Context, principal storage.Principal, outcome GatedOfferResolutionOutcome)
+	// RecordCohortStructureGate (CHAOS-4579/CHAOS-4531) reports, once per
+	// composed StructureNeeds disclosure, which side of §1.3's
+	// class-conditional gate that disclosure landed on: the question had
+	// no subject axis and the subject_anchor/subject_handle rows were
+	// removed ("applied"), had no subject axis but carried nothing to
+	// remove ("no_op"), or has a subject axis and passed through under the
+	// standing zero-candidates ruling ("subject_bearing"). Both outcomes
+	// AND the denominator are reported, so "cohort clarification vs
+	// subject clarification" is a countable split in the run's own
+	// artifacts rather than an inference from a missing log line -- see
+	// gateSubjectAxisOffers (chaos4579_cohort_structure_gate.go). Both
+	// arguments are closed enums; neither carries question text, a subject
+	// identifier, or an offer label.
+	RecordCohortStructureGate(ctx context.Context, principal storage.Principal, outcome CohortStructureGateOutcome, shape InvestigationShape)
 	// RecordWindowGateOfferDisclosure (CHAOS-4314) reports, once per
 	// window-gated terminal (both windowConfirmationRequiredResult call
 	// sites -- explicit-unconfirmed gate 1 and class-default gate 2), whether

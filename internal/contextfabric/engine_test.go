@@ -329,6 +329,7 @@ type recordingTelemetry struct {
 	// (CHAOS-3900 P1.F) mirror the SAME list-not-count discipline.
 	structureNeedsDisclosed []contractsv1.ContextFabricStructureNeedKind
 	gatedOfferResolutions   []GatedOfferResolutionOutcome
+	cohortStructureGates    []cohortStructureGateRecord
 	structureOfferCounts    []structureOfferCountRecord
 	structureReceipts       []structureReceiptRecord
 	// structureExplicit (CHAOS-3972 P3) mirrors structureReceipts' own
@@ -475,6 +476,20 @@ func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ 
 
 func (r *recordingTelemetry) RecordGatedOfferResolution(_ context.Context, _ storage.Principal, outcome GatedOfferResolutionOutcome) {
 	r.gatedOfferResolutions = append(r.gatedOfferResolutions, outcome)
+}
+
+// cohortStructureGateRecord (CHAOS-4579/CHAOS-4531) keeps BOTH arguments
+// RecordCohortStructureGate reports -- a test asserting only the outcome
+// could not tell "applied on a discovered_cohort question" from "applied
+// on some other shape", which is the whole decision this event exists to
+// make auditable.
+type cohortStructureGateRecord struct {
+	outcome CohortStructureGateOutcome
+	shape   InvestigationShape
+}
+
+func (r *recordingTelemetry) RecordCohortStructureGate(_ context.Context, _ storage.Principal, outcome CohortStructureGateOutcome, shape InvestigationShape) {
+	r.cohortStructureGates = append(r.cohortStructureGates, cohortStructureGateRecord{outcome, shape})
 }
 
 func (r *recordingTelemetry) RecordWindowGateOfferDisclosure(_ context.Context, _ storage.Principal, offered bool) {

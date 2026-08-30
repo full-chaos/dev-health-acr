@@ -210,6 +210,16 @@ func (e *Engine) terminalResult(
 	carriedStructureEntry *contractsv1.ContextFabricConfirmedStructureEntry,
 ) (InvestigationResult, error) {
 	status, limitation := resolveTerminalStatus(request, &resolution)
+	// CHAOS-4579/CHAOS-4531 (§1.3 class-conditional gate): applied HERE,
+	// at the top, before ANY reader of structureMaterial below -- both the
+	// schemaVersion dispatch (AnchorOptionsRequireV2) and composeStructureNeeds
+	// must see the same, already-gated material, or a discovered_cohort
+	// result could be promoted to the v2 semantic major by anchor options
+	// that were then removed from its own disclosure. See
+	// gateSubjectAxisOffers' own doc comment (chaos4579_cohort_structure_gate.go)
+	// for why the Missing rows and their option lists are one decision.
+	structureMaterial, cohortGateOutcome := gateSubjectAxisOffers(structureMaterial, interpretation.Shape)
+	recordCohortStructureGate(ctx, e.telemetry, principal, cohortGateOutcome, interpretation.Shape)
 	// CHAOS-3888: telemetry-only -- classifies WHY this investigation
 	// reached its own subjectless terminal path, never changes status,
 	// limitation, or any other field of the result below. See
