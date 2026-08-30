@@ -140,6 +140,15 @@ func (p ContextFabricAnswerProjection) Validate() error {
 			return fmt.Errorf("prior_subject_receipt_dispositions[%d]: %w", i, err)
 		}
 	}
+	// CHAOS-4415: the SAME resolve-and-compare rule the canonical result
+	// runs, against the PROJECTED document's own numbers. A shape that
+	// survived into the projection must still be checkable by whoever
+	// received it -- see renderShapeSourcesFromProjection for what the
+	// projection can and cannot resolve, and answerprojection's own
+	// shape-dropping for why an unresolvable shape never gets here.
+	if err := validateRenderShapes(p.RenderShapes, renderShapeSourcesFromProjection(p)); err != nil {
+		return fmt.Errorf("render shapes: %w", err)
+	}
 	return nil
 }
 
@@ -447,7 +456,7 @@ func (p ContextFabricAnswerProjection) validateReceipts() error {
 // answers; one that dropped content without saying so is the silent
 // truncation this contract exists to prevent.
 func (b ContextFabricProjectionBudget) Validate() error {
-	counts := []int{b.DriversOmitted, b.WithheldDriversOmitted, b.CohortMembersOmitted, b.FactsOmitted, b.CandidatesOmitted, b.EvidenceRefsOmitted, b.LimitationsOmitted, b.WarningsOmitted, b.CoverageOmitted, b.ReasonsOmitted, b.ValuesClamped}
+	counts := []int{b.DriversOmitted, b.WithheldDriversOmitted, b.CohortMembersOmitted, b.FactsOmitted, b.CandidatesOmitted, b.EvidenceRefsOmitted, b.LimitationsOmitted, b.WarningsOmitted, b.CoverageOmitted, b.ReasonsOmitted, b.ValuesClamped, b.RenderShapesOmitted}
 	dropped := b.FullResultOmitted
 	for _, count := range counts {
 		if count < 0 {

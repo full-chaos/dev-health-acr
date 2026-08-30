@@ -536,6 +536,20 @@ type EngineTelemetry interface {
 	// absent" the same way RecordFactScopeExpansion's zero-valued counts
 	// must not collapse into "nobody counted".
 	RecordProjectedRowsByFactKind(ctx context.Context, principal storage.Principal, byKind map[FactKind]int)
+	// RecordRenderShapeSelection (CHAOS-4415) reports which conditional
+	// render shapes the deterministic selection rules chose for THIS
+	// answer, and -- equally important -- which eligible rule produced
+	// nothing and why. Fires once per investigation that reaches shape
+	// selection, INCLUDING when nothing was selected: "this answer
+	// warranted no chart" and "nobody evaluated the rules" are different
+	// states, and the first is the common, correct one. Declared on THIS
+	// interface rather than an optional side interface for the same
+	// reason RecordProjectedRowsCount is: a chart is an outcome-affecting
+	// decision, and a branch whose telemetry can go missing by omission
+	// is the CHAOS-4089 failure mode itself. Content-safe by
+	// construction: RenderShapeSelectionEvent carries only closed
+	// vocabulary values and counts, never a label, subject or number.
+	RecordRenderShapeSelection(ctx context.Context, principal storage.Principal, event RenderShapeSelectionEvent)
 	// RecordModelRowsStripped (CHAOS-4355 follow-up, cf_model_rows_stripped)
 	// reports the count of ClaimedFacts entries whose model-authored Rows
 	// was cleared before draft.ValidateAgainst ran, so an operator can tell
@@ -1597,6 +1611,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			})
 		}
 		result.SubjectResolution.CommitDecisionDigests = digests
+	}
+	// CHAOS-4415: conditional render shapes. Placed HERE -- on the FINAL
+	// result, after every composer including the commit-affirmation gate,
+	// and immediately BEFORE Validate -- so a shape can never describe
+	// content a later stage removed, and so every number it plots is
+	// resolved against the same document the caller receives. Selection is
+	// deterministic (internal/contextfabric/render_shapes.go); the model
+	// has no draft field for a shape and therefore cannot author one.
+	renderShapes, renderShapeEvent := SelectRenderShapes(result)
+	result.RenderShapes = renderShapes
+	if e.telemetry != nil {
+		e.telemetry.RecordRenderShapeSelection(ctx, principal, renderShapeEvent)
 	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))

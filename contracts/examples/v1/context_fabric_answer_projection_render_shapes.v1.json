@@ -1,10 +1,10 @@
 {
   "schema_version": "context_fabric_answer_projection.v1",
-  "result_id": "result_12345678",
-  "request_id": "request_12345678",
+  "result_id": "res_render_shapes_0001",
+  "request_id": "req_render_shapes_0001",
   "generated_at": "2026-08-11T16:00:03Z",
   "status": "complete",
-  "question": "Most of the work is closed, so why is Ask Dev still not ready to ship?",
+  "question": "Which teams are struggling right now, and why?",
   "reused": false,
   "direct_judgment": "Ask Dev is not release-ready even though most tracked implementation work is closed.",
   "current_state": "Implementation completion and release readiness diverge because required product acceptance remains open.",
@@ -224,21 +224,40 @@
       "rows": [
         {
           "fields": {
-            "requirement": {
-              "string": "Release acceptance review"
+            "coverage_ratio": {
+              "number": 0.41
             },
-            "status": {
-              "string": "open"
+            "day": {
+              "string": "2026-08-03"
+            },
+            "open_requirements": {
+              "number": 9
             }
           }
         },
         {
           "fields": {
-            "requirement": {
-              "string": "Production readiness checklist"
+            "coverage_ratio": {
+              "number": 0.52
             },
-            "status": {
-              "string": "complete"
+            "day": {
+              "string": "2026-08-18"
+            },
+            "open_requirements": {
+              "number": 7
+            }
+          }
+        },
+        {
+          "fields": {
+            "coverage_ratio": {
+              "number": 0.6
+            },
+            "day": {
+              "string": "2026-08-30"
+            },
+            "open_requirements": {
+              "number": 4
             }
           }
         }
@@ -297,7 +316,7 @@
   ],
   "subject_receipts": [
     {
-      "result_id": "result_12345678",
+      "result_id": "res_render_shapes_0001",
       "receipt_id": "receipt_12345678"
     }
   ],
@@ -314,7 +333,7 @@
     "model_identity": "openai-compatible/gpt-5-nano"
   },
   "projection_budget": {
-    "truncated": false,
+    "truncated": true,
     "drivers_omitted": 0,
     "withheld_drivers_omitted": 0,
     "cohort_members_omitted": 0,
@@ -326,7 +345,7 @@
     "coverage_omitted": 0,
     "reasons_omitted": 0,
     "values_clamped": 0,
-    "render_shapes_omitted": 0,
+    "render_shapes_omitted": 1,
     "full_result_omitted": false
   },
   "confirmed_structure": [
@@ -346,6 +365,118 @@
       "prior_result_id": "result_prior_ask_dev1",
       "provenance": "clarification_confirmed",
       "disposition": "applied"
+    }
+  ],
+  "render_shapes": [
+    {
+      "shape_id": "rs_1",
+      "kind": "series",
+      "presentation": "bars",
+      "selected_by": "cohort_attention_score",
+      "title": "Attention score by team",
+      "axis_kind": "category",
+      "axis_label": "team",
+      "value_label": "attention score",
+      "series": [
+        {
+          "key": "attention_score",
+          "label": "Attention score",
+          "points": [
+            {
+              "label": "CHAOS",
+              "value": 43.5,
+              "source": {
+                "kind": "cohort_member_score",
+                "subject_canonical_id": "team:CHAOS"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "shape_id": "rs_3",
+      "kind": "series",
+      "presentation": "line",
+      "selected_by": "dated_fact_trend",
+      "title": "Release ready over time — Ask Dev",
+      "axis_kind": "time",
+      "axis_label": "day",
+      "value_label": "Release ready",
+      "series": [
+        {
+          "key": "coverage_ratio",
+          "label": "Coverage ratio",
+          "points": [
+            {
+              "label": "2026-08-03",
+              "value": 0.41,
+              "source": {
+                "kind": "claimed_fact_row",
+                "claim_id": "claim_readiness_ask_dev",
+                "row_index": 0,
+                "field": "coverage_ratio"
+              }
+            },
+            {
+              "label": "2026-08-18",
+              "value": 0.52,
+              "source": {
+                "kind": "claimed_fact_row",
+                "claim_id": "claim_readiness_ask_dev",
+                "row_index": 1,
+                "field": "coverage_ratio"
+              }
+            },
+            {
+              "label": "2026-08-30",
+              "value": 0.6,
+              "source": {
+                "kind": "claimed_fact_row",
+                "claim_id": "claim_readiness_ask_dev",
+                "row_index": 2,
+                "field": "coverage_ratio"
+              }
+            }
+          ]
+        },
+        {
+          "key": "open_requirements",
+          "label": "Open requirements",
+          "points": [
+            {
+              "label": "2026-08-03",
+              "value": 9,
+              "source": {
+                "kind": "claimed_fact_row",
+                "claim_id": "claim_readiness_ask_dev",
+                "row_index": 0,
+                "field": "open_requirements"
+              }
+            },
+            {
+              "label": "2026-08-18",
+              "value": 7,
+              "source": {
+                "kind": "claimed_fact_row",
+                "claim_id": "claim_readiness_ask_dev",
+                "row_index": 1,
+                "field": "open_requirements"
+              }
+            },
+            {
+              "label": "2026-08-30",
+              "value": 4,
+              "source": {
+                "kind": "claimed_fact_row",
+                "claim_id": "claim_readiness_ask_dev",
+                "row_index": 2,
+                "field": "open_requirements"
+              }
+            }
+          ]
+        }
+      ]
     }
   ]
 }

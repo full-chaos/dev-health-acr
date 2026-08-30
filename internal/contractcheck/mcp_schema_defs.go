@@ -96,6 +96,15 @@ var contextFabricCommonDefsRewrites = map[string]string{
 	"#/$defs/WindowExpandOption": "#/$defs/context_fabric_common.v1/$defs/WindowExpandOption",
 	// CHAOS-4347: ClaimedFact.rows' own new common $defs entry.
 	"#/$defs/ClaimedFactRow": "#/$defs/context_fabric_common.v1/$defs/ClaimedFactRow",
+	// CHAOS-4415: render_shapes' own eight new common $defs entries.
+	"#/$defs/RenderShape":        "#/$defs/context_fabric_common.v1/$defs/RenderShape",
+	"#/$defs/RenderSeries":       "#/$defs/context_fabric_common.v1/$defs/RenderSeries",
+	"#/$defs/RenderPoint":        "#/$defs/context_fabric_common.v1/$defs/RenderPoint",
+	"#/$defs/RenderPointSource":  "#/$defs/context_fabric_common.v1/$defs/RenderPointSource",
+	"#/$defs/RenderKind":         "#/$defs/context_fabric_common.v1/$defs/RenderKind",
+	"#/$defs/RenderPresentation": "#/$defs/context_fabric_common.v1/$defs/RenderPresentation",
+	"#/$defs/RenderAxisKind":     "#/$defs/context_fabric_common.v1/$defs/RenderAxisKind",
+	"#/$defs/RenderShapeRule":    "#/$defs/context_fabric_common.v1/$defs/RenderShapeRule",
 }
 
 // contextFabricResultDefsRewrites relocates the cross-file pointers
@@ -120,6 +129,8 @@ var contextFabricResultDefsRewrites = map[string]string{
 	"context_fabric_common.v1.schema.json#/$defs/StructureNeeds":              "#/$defs/context_fabric_common.v1/$defs/StructureNeeds",
 	"context_fabric_common.v1.schema.json#/$defs/ConfirmedStructureEntry":     "#/$defs/context_fabric_common.v1/$defs/ConfirmedStructureEntry",
 	"context_fabric_common.v1.schema.json#/$defs/StructureOfferSnapshotEntry": "#/$defs/context_fabric_common.v1/$defs/StructureOfferSnapshotEntry",
+	// CHAOS-4415: render_shapes' own cross-file pointer into common.v1.
+	"context_fabric_common.v1.schema.json#/$defs/RenderShape": "#/$defs/context_fabric_common.v1/$defs/RenderShape",
 }
 
 // contextFabricProjectionDefsRewrites relocates
@@ -176,6 +187,18 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	"#/$defs/WindowExpandOption": "#/$defs/context_fabric_answer_projection.v1/$defs/WindowExpandOption",
 	// CHAOS-4347: ProjectedFact.rows' own new projection-local $defs entry.
 	"#/$defs/ProjectedFactRow": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedFactRow",
+	// CHAOS-4415: render_shapes' own eight new projection-local $defs
+	// entries -- the projection embeds the SAME shapes common.v1 declares
+	// (see answer_projection_closure_test.go's pinned reused-shapes set),
+	// rewritten to this file's own local root.
+	"#/$defs/RenderShape":        "#/$defs/context_fabric_answer_projection.v1/$defs/RenderShape",
+	"#/$defs/RenderSeries":       "#/$defs/context_fabric_answer_projection.v1/$defs/RenderSeries",
+	"#/$defs/RenderPoint":        "#/$defs/context_fabric_answer_projection.v1/$defs/RenderPoint",
+	"#/$defs/RenderPointSource":  "#/$defs/context_fabric_answer_projection.v1/$defs/RenderPointSource",
+	"#/$defs/RenderKind":         "#/$defs/context_fabric_answer_projection.v1/$defs/RenderKind",
+	"#/$defs/RenderPresentation": "#/$defs/context_fabric_answer_projection.v1/$defs/RenderPresentation",
+	"#/$defs/RenderAxisKind":     "#/$defs/context_fabric_answer_projection.v1/$defs/RenderAxisKind",
+	"#/$defs/RenderShapeRule":    "#/$defs/context_fabric_answer_projection.v1/$defs/RenderShapeRule",
 }
 
 var mcpResponseDefsSyncs = []mcpResponseDefsSync{

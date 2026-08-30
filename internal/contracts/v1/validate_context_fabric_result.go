@@ -1347,6 +1347,14 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 			return fmt.Errorf("structure_offer_snapshot[%d]: %w", i, err)
 		}
 	}
+	// CHAOS-4415: every number a render shape plots must resolve, inside
+	// THIS document, to the cohort score / driver weight / claimed-fact
+	// row cell the point itself names -- see validateRenderShapes for why
+	// exact equality is the load-bearing part.
+	if err := validateRenderShapes(r.RenderShapes, renderShapeSourcesFromResult(r)); err != nil {
+		return fmt.Errorf("render shapes: %w", err)
+	}
+
 	return nil
 }
 

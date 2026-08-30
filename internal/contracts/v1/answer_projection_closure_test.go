@@ -257,7 +257,14 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// leaves are already allowlisted in trustedBecauseClosed
 		// ("outcome" and "missing_signals" cases), so no new
 		// classification is needed here, only the pin.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 162},
+		// CHAOS-4415: 162 -> 178 -- render_shapes contributed sixteen new
+		// string leaves (shape_id, kind, presentation, selected_by, title,
+		// axis_kind, axis_label, value_label, series[].key, series[].label,
+		// points[].label, and the point source's kind/subject_canonical_id/
+		// signal/claim_id/field). The canonical result surface gains the
+		// SAME sixteen (249 -> 265): the projection carries the shape
+		// verbatim rather than a narrowed copy.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 178},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -282,7 +289,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// mints, not model prose) -- answer_projection is unaffected, since
 		// ProjectedCohortMember has no projected Drivers field to mirror it
 		// onto.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 249},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 265},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -404,7 +411,19 @@ func trustedBecauseClosed(path string) bool {
 		// family-name registry ranking_basis/threshold_labels already
 		// trust (contextFabricCohortMemberDriverWeights) -- never
 		// free-form model prose; see validContextFabricCohortMemberOutcome.
-		"concentration_method", "missing_signals":
+		"concentration_method", "missing_signals",
+		// CHAOS-4415: a render shape's non-display leaves.
+		// "presentation" (ContextFabricRenderPresentation),
+		// "selected_by" (ContextFabricRenderShapeRule) and "axis_kind"
+		// (ContextFabricRenderAxisKind) are closed vocabularies
+		// validated against their own registries before a result is
+		// stored -- never model prose; the shape's "kind" and its point
+		// sources' "kind" are already covered by the "kind" case at the
+		// top of this list, and "signal" by the CHAOS-4398 PR2 case
+		// above. The shape's DISPLAY text (title/axis_label/value_label/
+		// series[].label/points[].label) is deliberately NOT here: it
+		// carries canonical subject labels and is declared untrusted.
+		"presentation", "selected_by", "axis_kind":
 		return true
 	// Opaque identifiers and digests: frozen handles, never prose.
 	case "result_id", "request_id", "receipt_id", "driver_id", "claim_id",
@@ -417,6 +436,12 @@ func trustedBecauseClosed(path string) bool {
 		// standing as claimed_fact_ids/evidence_ref_ids above, never
 		// free-form model prose.
 		"source_claimed_fact_ids",
+		// CHAOS-4415: "shape_id" is a service-minted opaque handle for one
+		// render shape within one answer, and "subject_canonical_id" is
+		// the SAME opaque canonical id "canonical_id" above already
+		// trusts -- named differently only because a render point source
+		// addresses a subject rather than carrying one.
+		"shape_id", "subject_canonical_id",
 		// CHAOS-3900 P1.E: matched_term_hash is a SHA-256 digest of a
 		// normalized term (ContextFabricAnchorOption's own doc comment) --
 		// a fixed-length, service-minted hash, never model or source prose.

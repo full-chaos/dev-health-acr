@@ -201,6 +201,30 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	// just shaped as a table instead of one scalar -- same reasoning,
 	// same leaf-name treatment as value.string just above.
 	"structured.key_facts[].rows[].fields{}.string",
+	// CHAOS-4415: a render shape's DISPLAY text. Title/axis_label/
+	// value_label/series[].label/points[].label are built from canonical
+	// subject labels and producer column names, so they are entity display
+	// text by the same standard every other "label" leaf in this list gets
+	// -- source-system-derived, not a closed vocabulary. series[].key and
+	// points[].source.field are producer-issued column names rather than
+	// model prose, but are classified conservatively alongside them for
+	// the same reason claimed_facts[].field is: a consumer that escapes
+	// them loses nothing, and a consumer that trusts a name it turns out
+	// a source system chose loses the guarantee.
+	//
+	// Every OTHER render-shape leaf is closed by construction and
+	// allowlisted in trustedBecauseClosed instead: shape_id (a
+	// service-minted opaque handle), kind/presentation/selected_by/
+	// axis_kind/source.kind (closed vocabularies), and
+	// source.signal/claim_id/subject_canonical_id (a closed signal
+	// registry and two opaque identifiers).
+	"structured.render_shapes[].title",
+	"structured.render_shapes[].axis_label",
+	"structured.render_shapes[].value_label",
+	"structured.render_shapes[].series[].key",
+	"structured.render_shapes[].series[].label",
+	"structured.render_shapes[].series[].points[].label",
+	"structured.render_shapes[].series[].points[].source.field",
 	"structured.coverage_summary[].reason",
 	"structured.limitations[]",
 	"structured.warnings[]",
@@ -263,6 +287,30 @@ var MCPInvestigationResultUntrustedFields = []string{
 	// CHAOS-4347: same reasoning as claimed_facts[].value.string above --
 	// Rows carries the same producer-sourced fact data, table-shaped.
 	"structured.claimed_facts[].rows[].fields{}.string",
+	// CHAOS-4415: a render shape's DISPLAY text. Title/axis_label/
+	// value_label/series[].label/points[].label are built from canonical
+	// subject labels and producer column names, so they are entity display
+	// text by the same standard every other "label" leaf in this list gets
+	// -- source-system-derived, not a closed vocabulary. series[].key and
+	// points[].source.field are producer-issued column names rather than
+	// model prose, but are classified conservatively alongside them for
+	// the same reason claimed_facts[].field is: a consumer that escapes
+	// them loses nothing, and a consumer that trusts a name it turns out
+	// a source system chose loses the guarantee.
+	//
+	// Every OTHER render-shape leaf is closed by construction and
+	// allowlisted in trustedBecauseClosed instead: shape_id (a
+	// service-minted opaque handle), kind/presentation/selected_by/
+	// axis_kind/source.kind (closed vocabularies), and
+	// source.signal/claim_id/subject_canonical_id (a closed signal
+	// registry and two opaque identifiers).
+	"structured.render_shapes[].title",
+	"structured.render_shapes[].axis_label",
+	"structured.render_shapes[].value_label",
+	"structured.render_shapes[].series[].key",
+	"structured.render_shapes[].series[].label",
+	"structured.render_shapes[].series[].points[].label",
+	"structured.render_shapes[].series[].points[].source.field",
 	"structured.coverage.degraded_reasons[]",
 	"structured.limitations[]",
 	"structured.warnings[]",

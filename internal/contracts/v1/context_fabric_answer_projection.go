@@ -155,6 +155,19 @@ type ContextFabricAnswerProjection struct {
 	// drop this field exists to close, even though the canonical result
 	// carried the disclosure correctly).
 	PriorSubjectReceiptDispositions []ContextFabricPriorSubjectReceiptEntry `json:"prior_subject_receipt_dispositions,omitempty"`
+	// RenderShapes (CHAOS-4415 slice 1) mirrors the canonical result's
+	// own field verbatim -- the SAME ContextFabricRenderShape type, not a
+	// narrowed copy, for the same reason Temporal is the canonical label
+	// here: a shape is already minimal, and a second variant would only
+	// create a second place for the selection vocabulary to drift.
+	//
+	// A shape whose point sources the projection no longer carries (its
+	// cohort member or claimed fact was cut by the budget) is DROPPED and
+	// counted in ProjectionBudget.RenderShapesOmitted. Shipping it would
+	// be a chart the reader cannot check against anything in the document
+	// it arrived in, which is precisely what this contract exists to
+	// prevent.
+	RenderShapes []ContextFabricRenderShape `json:"render_shapes,omitempty"`
 }
 
 // ContextFabricProjectedClarification carries the ambiguity a caller must
@@ -324,9 +337,15 @@ type ContextFabricProjectionBudget struct {
 	// these into the member and candidate counters made the projection
 	// claim members were dropped when they were not -- a wrong statement
 	// on the wire, not merely an imprecise one (codex round-7 F4).
-	ReasonsOmitted    int  `json:"reasons_omitted"`
-	ValuesClamped     int  `json:"values_clamped"`
-	FullResultOmitted bool `json:"full_result_omitted"`
+	ReasonsOmitted int `json:"reasons_omitted"`
+	ValuesClamped  int `json:"values_clamped"`
+	// RenderShapesOmitted (CHAOS-4415) counts render shapes the
+	// projection dropped because a number they plot is no longer present
+	// in the projected document -- the citing shape is dropped, never one
+	// of its points, the same "drop the citing item, never its
+	// references" rule projectDrivers already follows for evidence.
+	RenderShapesOmitted int  `json:"render_shapes_omitted"`
+	FullResultOmitted   bool `json:"full_result_omitted"`
 }
 
 // Projection field-length bounds.

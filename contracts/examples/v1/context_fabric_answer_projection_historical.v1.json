@@ -121,6 +121,7 @@
     "coverage_omitted": 0,
     "reasons_omitted": 0,
     "values_clamped": 0,
+    "render_shapes_omitted": 0,
     "full_result_omitted": false
   }
 }

@@ -704,3 +704,135 @@ Reference: North Star §8 (per team-lead, CHAOS-4398 PR3 ruling); contract
 doc §4.2 (upload
 `e2522b60-devhealthopspurposeandcontract20260828T112058PDT.md`); review doc
 `.remember/context-fabric/drafts/purpose-contract-review-2026-08-28.md` §4/§5.
+
+## 10. Conditional render shapes (CHAOS-4415 slice 1)
+
+North Star check 10 — "rich views are conditional on intent, never default"
+— had no consumer. §4a's `RankingTable` gave a cohort answer a table; a
+chart was left to whoever read the answer. On 2026-08-29 19:59 PDT chris
+reported the consequence: the teams answer rendered the ranked-teams table,
+driver cards, and coverage/limitations lists, and **no chart at all**,
+although the same answer carried a per-team attention score (46.7), a
+per-driver contribution breakdown (readiness 20.0 / operational 13.3 /
+workload 13.3) and dated readiness/workload records (2026-08-03, 08-18,
+08-30).
+
+The fix moves the DECISION into the service. `ContextFabricRenderShape`
+(`internal/contracts/v1/context_fabric_render_shapes.go`) is an optional,
+additive v1 field on both `ContextFabricInvestigationResult.RenderShapes`
+and `ContextFabricAnswerProjection.RenderShapes`.
+
+### 10.1 The kind vocabulary is closed now, produced incrementally
+
+`ContextFabricRenderKind` declares all eight members in this slice —
+`series`, `table`, `quadrant`, `treemap`, `sunburst`, `sankey`, `burndown`,
+`forecast` — so a consumer can switch exhaustively and a later producer
+never widens the wire underneath it. Only `series` has a producer here; the
+other seven are filed as CHAOS-4415 sub-issues.
+
+**Why bars are a `series` presentation, not their own kind.** A bar chart, a
+stacked bar chart and a line chart are the same data — an ordered set of
+`(label, value)` points, optionally grouped into several series — drawn
+three ways. A `bar` kind would put a PRESENTATION choice into the vocabulary
+that describes DATA, and force every consumer to implement three identical
+payload readers. So `Kind` names the data shape and `Presentation`
+(`bars` / `stacked_bars` / `line`) names the encoding: a consumer switches
+once on `Kind` to learn how to READ the payload and once on `Presentation`
+to learn how to DRAW it. The other six kinds are separate because each needs
+a payload `series` cannot carry — x/y pairs, a hierarchy, flows, scope
+against time, a distribution.
+
+### 10.2 The selection rules
+
+Deterministic, total, and evaluated on the FINAL result — after synthesis,
+after §5a narration, after the commit-affirmation gate, immediately before
+`Validate`. There is no fallback branch: a question no rule fires for gets
+no shape, which is the common case.
+
+| Rule (`selected_by`) | Fires when | Produces |
+|---|---|---|
+| `cohort_attention_score` | `interpretation.shape ∈ {explicit_cohort, discovered_cohort}` AND ≥1 member has `ranking_computed` with a non-null `score` | `series` / `bars`, one point per ranked member in `attention_rank` order, value = that member's `score` |
+| `cohort_driver_contribution` | the rule above fired AND ≥1 ranked member carries drivers AND the distinct signal count fits one stack | `series` / `stacked_bars`, one series per driver family, value = that member's `weight_contributed` for it |
+| `dated_fact_trend` | a claimed fact's `rows` carry a date column present on EVERY row, all in the same shape, all distinct, ≥2 of them, plus ≥1 fully-numeric column | `series` / `line` over a time axis, one series per numeric column, points in chronological order |
+| — anything else — | | no shape |
+
+Two negatives are as load-bearing as the positives:
+
+- **Cohort DATA is not cohort INTENT.** §4's canonical example carries a
+  ranked team cohort under a `single_subject` interpretation. Charting it
+  would answer a question nobody asked (check 1), so the cohort rules read
+  `interpretation.shape`, never the presence of `cohort`. `open` is excluded
+  for the same reason: an unshaped question has not asked for a ranking.
+- **An unranked member is not plotted.** "Insufficient evidence" and "scored
+  zero" are different states (§8, check 12), and a zero-height bar says the
+  second. A member without a score gets no point; a driver family a member
+  does not carry gets no segment — never a zero.
+
+The stacked breakdown is skipped WHOLE (with reason `too_many_signals`)
+rather than truncated when more families exist than a stack can carry: a
+stacked bar claims its parts sum to the score, and a stack missing segments
+claims something false.
+
+### 10.3 A chart is a claimed fact
+
+Every point carries a `ContextFabricRenderPointSource` naming where in the
+SAME document its number came from — `cohort_member_score`,
+`cohort_driver_weight_contributed`, or `claimed_fact_row`
+(`claim_id` + `row_index` + `field`). `validateRenderShapes` resolves each
+source and requires **exact** float equality, on both the canonical result
+and the projection.
+
+Exact equality is the load-bearing part. A builder that copies always
+passes; a builder that rounds, rescales, aggregates, interpolates or invents
+always fails. There is no tolerance to argue about because there is no
+legitimate arithmetic for a shape to do — a derived number belongs in a
+canonical fact first, where it gets provenance and coverage of its own.
+
+This is §5a's grounding rule and CHAOS-4347/4355's Rows discipline (rows are
+attached server-side from the cited canonical fact, never model-authored),
+carried into chart space. A model cannot author a shape at all: there is no
+`SynthesisDraft` field for one, and selection runs after
+`SynthesisDraft.ValidateAgainst` has already completed.
+
+### 10.4 Fact → shape → renderer
+
+```mermaid
+flowchart LR
+    F1["CanonicalFact<br/>(devhealthfacts)"] --> C1["ClaimedFact.rows<br/>attachCanonicalRows"]
+    F1 --> RK["RankCohort<br/>Score · Driver.WeightContributed"]
+    C1 --> SEL["SelectRenderShapes"]
+    RK --> SEL
+    INT["InterpretedQuestion.shape"] --> SEL
+    SEL --> SH["render_shapes[]<br/>point.value + point.source"]
+    SH --> V["validateRenderShapes<br/>resolve + exact equality"]
+    V --> RES["InvestigationResult.render_shapes"]
+    RES --> AD["ask-dev renderer<br/>manifest → component → SVG"]
+    RES --> PR["answerprojection.Project<br/>whole-shape carry or declared drop"]
+```
+
+### 10.5 Telemetry
+
+`EngineTelemetry.RecordRenderShapeSelection` fires once per investigation
+that reaches selection — **including when nothing was selected**. A summary
+line always carries `render_shapes_selected`, so `0` is a positive statement
+that the rules ran and chose nothing rather than the absence of a log line,
+which is indistinguishable from the selector never having run. One line per
+selected shape carries `render_shape_kind` / `render_shape_presentation` /
+`render_shape_rule` / `render_shape_series` / `render_shape_points`; one
+line per declining rule carries `render_shape_skip_reason` from the closed
+set `not_cohort_intent` · `no_ranked_member` · `no_drivers` ·
+`too_many_signals` · `no_dated_rows` · `shape_budget`. Content-safe by
+construction: closed vocabulary and counts, never a label, subject or
+plotted number.
+
+### 10.6 What the projection can and cannot carry
+
+`ContextFabricProjectedCohortMember` carries no `drivers` array (§4a
+narrowed it deliberately); only each member's top-2 driver weights survive,
+as `ranking_table` cells. A stacked contribution shape citing every family
+therefore usually cannot resolve inside the projection, and is dropped WHOLE
+and counted in `projection_budget.render_shapes_omitted`. That is the
+correct outcome, not a gap to paper over: the projection may not carry a
+chart its own reader cannot check. ask-dev is unaffected — it consumes the
+canonical `context_fabric_investigation_result.v1`. Widening the projected
+member so the MCP surface can carry the breakdown too is a filed follow-up.

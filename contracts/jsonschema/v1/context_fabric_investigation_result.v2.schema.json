@@ -181,6 +181,14 @@
         "$ref": "context_fabric_common.v1.schema.json#/$defs/StructureOfferSnapshotEntry"
       },
       "maxItems": 80
+    },
+    "render_shapes": {
+      "description": "CHAOS-4415: the OPTIONAL renderable shapes this answer warrants, chosen by deterministic rules from the interpreted intent and this result's own cohort and claimed facts. Absent on every answer no rule fired for.",
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/RenderShape"
+      }
     }
   },
   "required": [

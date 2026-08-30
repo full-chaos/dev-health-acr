@@ -441,6 +441,14 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 		"EffectiveEvidenceWindow", "HandleOption", "KindOption",
 		"PriorSubjectReceiptDisposition", "PriorSubjectReceiptDispositionEntry",
 		"RelativeWindowID",
+		// CHAOS-4415: the eight render-shape shapes join the intersection
+		// deliberately -- both documents gained render_shapes, and the
+		// projection carries the SAME shape the canonical result does
+		// rather than a narrowed copy (a shape is already minimal, and a
+		// second variant would create a second place for the selection
+		// vocabulary to drift).
+		"RenderAxisKind", "RenderKind", "RenderPoint", "RenderPointSource",
+		"RenderPresentation", "RenderSeries", "RenderShape", "RenderShapeRule",
 		"RequestedEvidenceWindow", "ScalarValue", "StructureDisposition", "StructureNeedKind",
 		"StructureNeeds", "StructureOfferSource", "StructureProvenance", "StructureSource",
 		"SubjectKind", "SubjectRef", "TemporalLabel", "TimeContext", "VersionSet",

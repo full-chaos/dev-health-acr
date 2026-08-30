@@ -164,7 +164,26 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// classification, which would have absorbed it silently -- the
 		// measurement showed it sliding from proved into the residual
 		// bucket the moment the vocabulary closed.
-		"common#$defs.Finding.properties.kind.maxLength":                     ContextFabricFindingKindMaxLength,
+		"common#$defs.Finding.properties.kind.maxLength": ContextFabricFindingKindMaxLength,
+		// CHAOS-4415: render-shape bounds. Mapped rather than probed --
+		// a render shape is only reachable through a document whose
+		// points must also RESOLVE against that same document's cohort
+		// and claimed facts, so a generic probe cannot build a control
+		// that isolates a length or count bound (it would be rejected by
+		// the resolution rule first, scoring "unreachable" rather than a
+		// proof). Each value is the named constant validateRenderShapes
+		// itself enforces.
+		"common#$defs.RenderShape.properties.series.minItems":                1,
+		"common#$defs.RenderShape.properties.series.maxItems":                ContextFabricRenderSeriesMaxCount,
+		"common#$defs.RenderSeries.properties.points.minItems":               1,
+		"common#$defs.RenderSeries.properties.points.maxItems":               ContextFabricRenderPointsMaxCount,
+		"common#$defs.RenderSeries.properties.key.minLength":                 1,
+		"common#$defs.RenderSeries.properties.key.maxLength":                 ContextFabricRenderLabelMaxLength,
+		"common#$defs.RenderPointSource.properties.signal.minLength":         1,
+		"common#$defs.RenderPointSource.properties.signal.maxLength":         ContextFabricRenderLabelMaxLength,
+		"common#$defs.RenderPointSource.properties.field.minLength":          1,
+		"common#$defs.RenderPointSource.properties.field.maxLength":          ContextFabricRenderSourceFieldMaxLength,
+		"common#$defs.RenderPointSource.properties.row_index.minimum":        0,
 		"common#$defs.SubjectCandidate.properties.evidence_ref_ids.maxItems": contextFabricWriteBounds.candidateEvidenceRefs,
 		"common#$defs.CohortExclusion.properties.reason.maxLength":           contextFabricWriteBounds.cohortExclusionReasonLength,
 		// Disproved as "schema-only" by boundProbes below: the validator

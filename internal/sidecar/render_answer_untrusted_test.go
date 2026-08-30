@@ -77,8 +77,24 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 	// Fields the renderer deliberately does not show. Named, so a field
 	// silently vanishing from the rendering cannot pass as "not rendered".
 	notRendered := map[string]string{
-		"structured.question": "the caller already holds the question it asked; echoing it adds nothing to a bounded answer",
-		"structured.clarification.candidates[].match_reasons[]": "the candidate line carries the subject and receipt an agent needs to choose; match reasoning is inspection detail, available through the full result",
+		// CHAOS-4415: render shapes are a STRUCTURAL rendering capability.
+		// Ask Dev (full-chaos/ask-dev) reads Structured directly and draws
+		// the chart; this plain-text markdown view has no chart to draw and
+		// does not (yet) render the shape's labels at all. The numbers
+		// themselves are not lost to a reader of this view -- every one is
+		// a copy of a cohort score, driver weight or claimed-fact row cell
+		// this rendering already shows. Both label sets keep the untrusted
+		// declaration so a future markdown rendering cannot ship them
+		// unmarked, the same standing window_expand_options[].label has.
+		"structured.render_shapes[].title":                          "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and draws the shape",
+		"structured.render_shapes[].axis_label":                     "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and draws the shape",
+		"structured.render_shapes[].value_label":                    "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and draws the shape",
+		"structured.render_shapes[].series[].key":                   "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and draws the shape",
+		"structured.render_shapes[].series[].label":                 "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and draws the shape",
+		"structured.render_shapes[].series[].points[].label":        "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and draws the shape",
+		"structured.render_shapes[].series[].points[].source.field": "not rendered by this plain-text markdown view; a point source is provenance a structural consumer resolves, never display text",
+		"structured.question":                                       "the caller already holds the question it asked; echoing it adds nothing to a bounded answer",
+		"structured.clarification.candidates[].match_reasons[]":     "the candidate line carries the subject and receipt an agent needs to choose; match reasoning is inspection detail, available through the full result",
 		// CHAOS-4118 (team-lead ruling 2026-08-22): windowConfirmationRequiredResult
 		// composes StructureNeeds.WindowOptions and WindowClarification.Options
 		// in lockstep from the SAME offer set. Rendering both would show every
@@ -383,6 +399,29 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 			// warns about, just via aliasing instead of derivation.
 			Rows: []contractsv1.ContextFabricClaimedFactRow{{
 				Fields: map[string]contractsv1.ContextFabricScalarValue{"team_name": {String: &rowTeamName}},
+			}},
+		}},
+		// CHAOS-4415: a non-empty render shape so the reflection walk below
+		// can reach and plant every declared render_shapes leaf -- same
+		// "an empty slice is silently unresolvable" reasoning as
+		// Cohort.RankingTable and KeyFacts[0].Rows above. Its point
+		// resolves against Cohort.Members[0] so the fixture stays a
+		// document ContextFabricAnswerProjection.Validate would accept.
+		RenderShapes: []contractsv1.ContextFabricRenderShape{{
+			ShapeID: "rs_1", Kind: contractsv1.ContextFabricRenderKindSeries,
+			Presentation: contractsv1.ContextFabricRenderPresentationBars,
+			SelectedBy:   contractsv1.ContextFabricRenderRuleCohortAttentionScore,
+			Title:        "a title", AxisKind: contractsv1.ContextFabricRenderAxisCategory,
+			AxisLabel: "an axis label", ValueLabel: "a value label",
+			Series: []contractsv1.ContextFabricRenderSeries{{
+				Key: "attention_score", Label: "a series label",
+				Points: []contractsv1.ContextFabricRenderPoint{{
+					Label: "a point label", Value: 0,
+					Source: contractsv1.ContextFabricRenderPointSource{
+						Kind:               contractsv1.ContextFabricRenderSourceCohortMemberScore,
+						SubjectCanonicalID: "team_x",
+					},
+				}},
 			}},
 		}},
 		CoverageSummary: []contractsv1.ContextFabricProjectedCoverage{{

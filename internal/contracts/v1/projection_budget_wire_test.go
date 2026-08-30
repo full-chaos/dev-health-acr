@@ -28,16 +28,24 @@ import (
 // to today. It is a fixture, not an assertion about what the numbers SHOULD
 // be -- every counter is zero precisely so the only thing under test is
 // which KEYS reach the wire.
-const projectionBudgetGolden = `{"truncated":false,"drivers_omitted":0,"withheld_drivers_omitted":0,"cohort_members_omitted":0,"facts_omitted":0,"candidates_omitted":0,"evidence_refs_omitted":0,"limitations_omitted":0,"warnings_omitted":0,"coverage_omitted":0,"reasons_omitted":0,"values_clamped":0,"full_result_omitted":false}`
+const projectionBudgetGolden = `{"truncated":false,"drivers_omitted":0,"withheld_drivers_omitted":0,"cohort_members_omitted":0,"facts_omitted":0,"candidates_omitted":0,"evidence_refs_omitted":0,"limitations_omitted":0,"warnings_omitted":0,"coverage_omitted":0,"reasons_omitted":0,"values_clamped":0,"render_shapes_omitted":0,"full_result_omitted":false}`
 
-// optionalBudgetCounters are the five the schema does not require. They are
+// optionalBudgetCounters are the ones the schema does not require. They are
 // listed here so the test fails by NAME if one stops being emitted.
+//
+// render_shapes_omitted (CHAOS-4415) joined them deliberately: it follows
+// the same rule reasons_omitted and values_clamped already do -- a counter
+// added after the contract shipped is optional in the schema (so a document
+// written before it existed still validates) and NON-omitempty in Go (so
+// zero and absent never become the same statement for anything this service
+// writes).
 var optionalBudgetCounters = []string{
 	"limitations_omitted",
 	"warnings_omitted",
 	"coverage_omitted",
 	"reasons_omitted",
 	"values_clamped",
+	"render_shapes_omitted",
 }
 
 func TestProjectionBudgetWirePayloadIsPinned(t *testing.T) {
