@@ -60,6 +60,9 @@ func (b ContextFabricProjectionBatch) Validate() error {
 	if err := validateEpisodeProjections(b.Episodes); err != nil {
 		return err
 	}
+	if err := validateProjectionRelationshipTombstoneCollision(b.Relationships, b.Tombstones); err != nil {
+		return err
+	}
 	if err := validateProjectionTombstones(b.Tombstones); err != nil {
 		return err
 	}

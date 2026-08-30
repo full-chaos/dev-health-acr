@@ -193,10 +193,17 @@ func TestChaos4565_AnEdgeThatStillResolvesIsNeverRetracted(t *testing.T) {
 // falkorgraph applies tombstones AFTER relationships (projection.go), so a
 // batch holding both for one relationship_id writes the edge and then deletes
 // it -- a self-inflicted version of the exact defect this ticket removes.
-// The producer is safe by construction, because edge_suppressed is a GROUP
-// property and the relationship id IS the group key, so a group with one
-// asserting row is never suppressed. This pins that construction rather than
-// the reasoning about it: a group that holds a clean row beside a conflicting
+// No single GROUP does both: edge_suppressed is a group property and a group
+// with one asserting row is never suppressed. That is what this pins.
+//
+// It is NOT a proof about the whole batch, and the difference cost a review
+// round. Extending it to the batch needs distinct groups to get distinct ids,
+// and projectTeamRelationshipID is a colon concatenation over id spaces that
+// contain colons, so two groups CAN collide (CHAOS-4635). The batch-level
+// property is enforced where it belongs instead --
+// contracts/v1's validateProjectionRelationshipTombstoneCollision, which
+// rejects the pair outright. Read this test as "the producer does not build
+// the pair on purpose", never as "the pair cannot occur". a group that holds a clean row beside a conflicting
 // one keeps its edge and is not retracted, in the same batch as a genuinely
 // suppressed group that is.
 func TestChaos4565_NoBatchAssertsAndRetractsTheSameEdge(t *testing.T) {

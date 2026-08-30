@@ -207,6 +207,59 @@ func validateEpisodeProjections(values []ContextFabricEpisodeProjection) error {
 
 // validateProjectionTombstones rejects a batch that tombstones the same
 // subject (by kind + canonical ID) more than once.
+// relationshipDeletingTombstoneKinds are the tombstone kinds falkorgraph's
+// applyTombstone routes to a relationship DELETE keyed on relationship_id.
+// Every other kind deletes a NODE, in a different key space, where an equal
+// string means nothing.
+//
+// Compared case-insensitively, because applyTombstone lower-cases before it
+// switches -- a guard that disagreed with the code it guards about which
+// kinds matter would be worse than none.
+var relationshipDeletingTombstoneKinds = map[string]struct{}{"relationship": {}, "edge": {}}
+
+// validateProjectionRelationshipTombstoneCollision rejects a batch that
+// ASSERTS a relationship and TOMBSTONES that same relationship id.
+//
+// CHAOS-4565. validateProjectionRelationships and validateProjectionTombstones
+// each enforce uniqueness within their OWN slice and neither looks at the
+// other, so a cross-kind collision passed cleanly. falkorgraph applies
+// relationships BEFORE tombstones, so such a batch wrote the edge and
+// immediately deleted it -- a valid, still-asserted ownership silently
+// removed from the graph, with every count, log and receipt reporting
+// success.
+//
+// A producer is not supposed to be able to build one: devhealthsource's
+// ownership producer decides per GROUP, and a group either asserts or
+// retracts. That argument is only as good as the id, and OWNED_BY_TEAM ids
+// are a colon concatenation over id spaces that themselves contain colons, so
+// two different groups can land on one id (CHAOS-4635 carries the root fix).
+// This is the seam where "should not happen" becomes "cannot happen
+// silently".
+//
+// It rejects rather than dropping the tombstone, and that is deliberate. A
+// rejected batch holds the checkpoint, which is loud and recoverable;
+// silently preferring one of the two would be this defect again with the
+// pipeline agreeing that everything is fine. A wedge is a bad outcome -- it
+// is simply not the worst one available here.
+func validateProjectionRelationshipTombstoneCollision(relationships []ContextFabricRelationshipProjection, tombstones []ContextFabricProjectionTombstone) error {
+	if len(relationships) == 0 || len(tombstones) == 0 {
+		return nil
+	}
+	asserted := make(map[string]struct{}, len(relationships))
+	for _, relationship := range relationships {
+		asserted[relationship.RelationshipID] = struct{}{}
+	}
+	for _, tombstone := range tombstones {
+		if _, deletesEdge := relationshipDeletingTombstoneKinds[strings.ToLower(strings.TrimSpace(tombstone.Kind))]; !deletesEdge {
+			continue
+		}
+		if _, collides := asserted[tombstone.CanonicalID]; collides {
+			return fmt.Errorf("tombstones: relationship tombstone %q retracts a relationship the same batch asserts; tombstones are applied after relationships, so this would write the edge and immediately delete it", tombstone.CanonicalID)
+		}
+	}
+	return nil
+}
+
 func validateProjectionTombstones(values []ContextFabricProjectionTombstone) error {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {

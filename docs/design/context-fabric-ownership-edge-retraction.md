@@ -88,12 +88,32 @@ Three properties carry the design, and each is load-bearing.
 
 ### 2.1 One group decides once
 
-`edge_suppressed` is a GROUP property and the relationship id IS the group key
-(`provider`, resolved `project_id`, `team_id`, `source_name`). A group with one
-asserting row is not suppressed, so **a batch can never assert and retract the
-same edge**. That is not a coincidence to be defended by a comment: falkorgraph
-applies tombstones AFTER relationships, so a batch holding both for one id
-would write the edge and immediately delete it.
+`edge_suppressed` is a GROUP property, and the relationship id is DERIVED FROM
+the group key (`provider`, resolved `project_id`, `team_id`, `source_name`). A
+group with one asserting row is not suppressed, so no single group both asserts
+and retracts. That matters because falkorgraph applies tombstones AFTER
+relationships: a batch holding both for one id would write the edge and
+immediately delete it.
+
+**And that argument is weaker than it first reads — say the quiet part.** It
+holds per group. Turning it into "a batch can never assert and retract the same
+edge" needs one more premise: that DISTINCT GROUPS GET DISTINCT IDS. They do
+not. `projectTeamRelationshipID` is a colon concatenation over id spaces that
+themselves contain colons (`projects.id` is routinely
+`{org}:gitlab:71133891`, team ids are routinely `gl:full.chaos`), so two
+different groups can land on one id — and then one group's tombstone deletes
+the other group's live edge.
+
+An earlier draft of this note asserted the batch-level invariant without
+checking that the encoding carried it. It was found on this change's own
+certification review. Two things came out of it: the root fix, making the ids
+injective via `identity.DeriveRelationship` (CHAOS-4635 — it must land before
+any v9 rebuild, while the id change is still free), and a contract-level guard
+shipped here, `validateProjectionRelationshipTombstoneCollision`, which rejects
+a batch that asserts and tombstones one relationship id. The guard does not
+make the collision impossible; it makes it LOUD, so the failure is a held
+checkpoint rather than an ownership edge that quietly disappears while every
+counter reports success.
 
 Generalising the old `identity_conflict` flag to `unassertable` is what lets
 ONE mechanism cover BOTH suppression paths. Fixing only the conflicting-identity
