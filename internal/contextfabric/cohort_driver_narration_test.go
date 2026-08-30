@@ -577,3 +577,114 @@ func TestNarrateCohortDriverJudgments_SkipCountsAreAbsentWhenNothingIsSkipped(t 
 		t.Errorf("event.DriversSkipped[%q] = %d, want no skip entries at all when every selected driver was citable", reason, count)
 	}
 }
+
+// ---------------------------------------------------------------------
+// CHAOS-4580: teams-answer wordiness -- grammar template and answer
+// narrative recomposition.
+// ---------------------------------------------------------------------
+
+// TestCohortDriverJudgmentSummary_NoStrayArticleOrDoubleNoun pins the exact
+// grammar chris quoted (CHAOS-4580, CHAOS-4533's narrator half). The prior
+// template read "...contributed 20.0 points to Fullchaos's a 46.7
+// attention score." -- a stray article baked into scoreText plus
+// "points"/"score" swapped against the rest of the sentence. Both the
+// scored and unranked (nil Score) shapes are pinned so neither can
+// regress independently.
+func TestCohortDriverJudgmentSummary_NoStrayArticleOrDoubleNoun(t *testing.T) {
+	t.Parallel()
+	member := CohortMember{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team:CHAOS", Label: "Fullchaos"}}
+	driver := CohortMemberDriver{Signal: RankingSignalReadinessGap, Weight: 15, Value: 1.00, WeightContributed: 20.0}
+
+	t.Run("scored member", func(t *testing.T) {
+		score := 46.7
+		scored := member
+		scored.Score = &score
+		got := cohortDriverJudgmentSummary(scored, driver)
+		want := "readiness gap (weight 15, value 1.00) contributed 20.0 of Fullchaos's 46.7 attention points."
+		if got != want {
+			t.Fatalf("cohortDriverJudgmentSummary() = %q, want %q", got, want)
+		}
+		if strings.Contains(got, "'s a ") {
+			t.Fatalf("cohortDriverJudgmentSummary() = %q, still contains the stray possessive-article bug", got)
+		}
+	})
+
+	t.Run("unranked member (nil Score)", func(t *testing.T) {
+		got := cohortDriverJudgmentSummary(member, driver)
+		want := "readiness gap (weight 15, value 1.00) contributed 20.0 of Fullchaos's unranked attention points."
+		if got != want {
+			t.Fatalf("cohortDriverJudgmentSummary() = %q, want %q", got, want)
+		}
+	})
+}
+
+// TestPrincipalDriverSummaries proves the CHAOS-4580 helper returns only
+// DriverPrincipal-standing judgments' Summary text (numbers already
+// inline, never the short Title), sorted by DriverID the same way
+// principalDriverTitles (model_runtime.go) already does, and empty for no
+// principal drivers.
+func TestPrincipalDriverSummaries(t *testing.T) {
+	t.Parallel()
+	drivers := []DriverJudgment{
+		{DriverID: "b", Standing: DriverPrincipal, Title: "short b", Summary: "summary b."},
+		{DriverID: "a", Standing: DriverPrincipal, Title: "short a", Summary: "summary a."},
+		{DriverID: "c", Standing: DriverContributing, Title: "short c", Summary: "summary c."},
+	}
+	got := principalDriverSummaries(drivers)
+	want := []string{"summary a.", "summary b."}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("principalDriverSummaries() = %v, want %v (sorted by DriverID, contributing/symptom excluded)", got, want)
+	}
+	if got := principalDriverSummaries(nil); len(got) != 0 {
+		t.Fatalf("principalDriverSummaries(nil) = %v, want empty", got)
+	}
+	if got := principalDriverSummaries([]DriverJudgment{{DriverID: "x", Standing: DriverContributing, Summary: "x."}}); len(got) != 0 {
+		t.Fatalf("principalDriverSummaries() with no principal driver = %v, want empty", got)
+	}
+}
+
+// TestRecomposeCohortAnswerNarrative proves the CHAOS-4580 rewrite: ONE
+// narrative in DeterministicAnswer (status sentence + principal driver
+// SUMMARIES, numbers inline, never a raw key=value facts list), and
+// DirectJudgment reduced to the bare status sentence (never empty --
+// ContextFabricInvestigationResult.Validate() requires a non-empty
+// DirectJudgment for an answer-capable status) so the principal-driver
+// clause is never rendered twice.
+func TestRecomposeCohortAnswerNarrative(t *testing.T) {
+	t.Parallel()
+	drivers := []DriverJudgment{
+		{DriverID: "cohort-driver-01-1", Standing: DriverPrincipal, Title: "Fullchaos: readiness gap",
+			Summary: "readiness gap (weight 15, value 1.00) contributed 20.0 of Fullchaos's 46.7 attention points."},
+		{DriverID: "cohort-driver-01-2", Standing: DriverContributing, Title: "Fullchaos: operational deficiencies",
+			Summary: "operational deficiencies (weight 20, value 1.00) contributed 26.7 of Fullchaos's 46.7 attention points."},
+	}
+	directJudgment, deterministicAnswer := recomposeCohortAnswerNarrative(InvestigationPartial, drivers, SubjectResolution{})
+
+	wantDirectJudgment := "This investigation is partial: some canonical or graph coverage was unavailable."
+	if directJudgment != wantDirectJudgment {
+		t.Fatalf("directJudgment = %q, want %q (status sentence alone -- the principal-driver clause belongs only in DeterministicAnswer now)", directJudgment, wantDirectJudgment)
+	}
+	if !strings.HasPrefix(deterministicAnswer, "This investigation is partial: some canonical or graph coverage was unavailable.") {
+		t.Fatalf("deterministicAnswer = %q, want it to open with the status sentence", deterministicAnswer)
+	}
+	if !strings.Contains(deterministicAnswer, "readiness gap (weight 15, value 1.00) contributed 20.0 of Fullchaos's 46.7 attention points.") {
+		t.Fatalf("deterministicAnswer = %q, want the principal driver's own numbered sentence inline", deterministicAnswer)
+	}
+	if strings.Contains(deterministicAnswer, "Canonical facts:") {
+		t.Fatalf("deterministicAnswer = %q, must never restate the raw key=value facts list -- that lives in CurrentState only", deterministicAnswer)
+	}
+	if strings.Contains(deterministicAnswer, "operational deficiencies") {
+		t.Fatalf("deterministicAnswer = %q, must only narrate PRINCIPAL drivers, not contributing ones", deterministicAnswer)
+	}
+
+	t.Run("no principal driver -- status sentence alone in both fields, no dangling clause", func(t *testing.T) {
+		directJudgment, deterministicAnswer := recomposeCohortAnswerNarrative(InvestigationPartial, nil, SubjectResolution{})
+		if directJudgment != wantDirectJudgment {
+			t.Fatalf("directJudgment = %q, want %q", directJudgment, wantDirectJudgment)
+		}
+		want := "This investigation is partial: some canonical or graph coverage was unavailable."
+		if deterministicAnswer != want {
+			t.Fatalf("deterministicAnswer = %q, want %q", deterministicAnswer, want)
+		}
+	})
+}

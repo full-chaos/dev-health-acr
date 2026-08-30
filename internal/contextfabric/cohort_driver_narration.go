@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -312,6 +313,15 @@ type CohortDriverNarrationEvent struct {
 	// no signal value. Absent entries mean no elimination of that kind
 	// happened, so a non-zero count always names a real one.
 	DriversSkipped map[string]int
+	// AnswerNarrativeRecomposed (CHAOS-4580) is true when the engine
+	// replaced the pre-narration DirectJudgment/DeterministicAnswer with
+	// recomposeCohortAnswerNarrative's output for THIS investigation --
+	// i.e. at least one narrated judgment was emitted (see the engine
+	// call site's guard). Recorded on the SAME event as every other
+	// narration decision-basis field, per root AGENTS.md's same-change
+	// telemetry requirement for a branch that changes the answer's own
+	// wording.
+	AnswerNarrativeRecomposed bool
 }
 
 // CohortDriverSkipReason is the closed vocabulary naming WHY a selected
@@ -433,13 +443,23 @@ func cohortDriverJudgmentTitle(member CohortMember, driver CohortMemberDriver) s
 	)
 }
 
+// cohortDriverJudgmentSummary's template (CHAOS-4580, CHAOS-4533's narrator
+// half): "<signal> (weight W, value V) contributed C of <label>'s S
+// attention points." A prior version read "...contributed C points to
+// <label>'s a S attention score.", which duplicated the possessive ("'s a")
+// into a stray article and inverted "points"/"score" against the rest of
+// the sentence -- fixed here rather than patched per-clause so the same
+// grammar bug cannot recur in only one of the two spots that named a
+// score. scoreText carries no possessive/article of its own; the sentence
+// supplies exactly one "'s" and one noun ("attention points"), whether or
+// not the member has a score.
 func cohortDriverJudgmentSummary(member CohortMember, driver CohortMemberDriver) string {
-	scoreText := "an unranked"
+	scoreText := "unranked"
 	if member.Score != nil {
-		scoreText = fmt.Sprintf("a %.1f", *member.Score)
+		scoreText = fmt.Sprintf("%.1f", *member.Score)
 	}
 	return fmt.Sprintf(
-		"%s (weight %.0f, value %.2f) contributed %.1f points to %s's %s attention score.",
+		"%s (weight %.0f, value %.2f) contributed %.1f of %s's %s attention points.",
 		cohortSignalDisplayName[driver.Signal], driver.Weight, driver.Value, driver.WeightContributed, member.Subject.Label, scoreText,
 	)
 }
@@ -549,4 +569,72 @@ func selectMembersForDriverNarration(members []CohortMember, count int) []Cohort
 		}
 	}
 	return selected
+}
+
+// recomposeCohortAnswerNarrative rewrites DirectJudgment and
+// DeterministicAnswer for a cohort answer, once narrateCohortDriverJudgments
+// has appended its per-member judgments to drivers (CHAOS-4580).
+//
+// Before this, both fields were composed ONCE at synthesis time -- before
+// cohort narration existed -- by composeDirectJudgmentFrom/
+// composeDeterministicAnswerFrom (model_runtime.go), which never see the
+// narrated judgments. DeterministicAnswer went on to append the FULL
+// canonical-facts key=value list a second time ("Canonical facts: ..."),
+// byte-identical to the list CurrentState (composeCurrentState) already
+// states once under "Current observed values: ..." -- and DirectJudgment
+// restated the SAME status+principal-driver opening sentence
+// DeterministicAnswer itself opens with, so a reader saw it twice.
+//
+// The rewrite: DeterministicAnswer becomes the one narrative -- the status
+// sentence plus every PRINCIPAL driver's own narrated Summary (numbers
+// already inline: "readiness gap (weight 15, value 1.00) contributed 20.0
+// of Fullchaos's 46.7 attention points."), never the raw facts list, which
+// stays exactly where CurrentState already states it. DirectJudgment is
+// reduced to the status sentence ALONE, dropping its own principal-driver
+// restatement -- ContextFabricInvestigationResult.Validate() requires a
+// non-empty DirectJudgment for an answer-capable (complete/partial)
+// status, so it cannot be cleared outright the way CurrentState's own
+// "no canonical facts" fallback can; the status sentence is the one
+// content every investigation composes regardless of drivers, so it is
+// the only clause that can be shared between the two fields without
+// restating this ticket's actual complaint (the SAME principal-driver
+// clause, twice).
+//
+// Only ever called when the cohort produced at least one narrated
+// principal driver (see the engine call site's guard) -- a non-cohort
+// (single-subject) investigation never reaches this function, so its
+// DirectJudgment/DeterministicAnswer composition is completely untouched.
+func recomposeCohortAnswerNarrative(status InvestigationStatus, drivers []DriverJudgment, resolution SubjectResolution) (directJudgment, deterministicAnswer string) {
+	sentence := statusSentence(status, resolution)
+	directJudgment = truncateAtSentenceBoundary(sentence, directJudgmentMaxLength)
+
+	var b strings.Builder
+	b.WriteString(sentence)
+	if summaries := principalDriverSummaries(drivers); len(summaries) > 0 {
+		b.WriteString(" Principal driver(s): ")
+		b.WriteString(strings.Join(summaries, " "))
+	}
+	deterministicAnswer = truncateAtSentenceBoundary(strings.TrimSpace(b.String()), deterministicAnswerMaxLength)
+	return directJudgment, deterministicAnswer
+}
+
+// principalDriverSummaries mirrors principalDriverTitles (model_runtime.go)
+// but returns each principal driver's full narrated Summary sentence --
+// numbers already inline -- rather than its short Title, per CHAOS-4580's
+// "principal drivers as sentences with the numbers inline" requirement.
+func principalDriverSummaries(drivers []DriverJudgment) []string {
+	filtered := make([]DriverJudgment, 0, len(drivers))
+	for _, driver := range drivers {
+		if driver.Standing == DriverPrincipal {
+			filtered = append(filtered, driver)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool { return filtered[i].DriverID < filtered[j].DriverID })
+	summaries := make([]string, 0, len(filtered))
+	for _, driver := range filtered {
+		if summary := strings.TrimSpace(driver.Summary); summary != "" {
+			summaries = append(summaries, summary)
+		}
+	}
+	return summaries
 }

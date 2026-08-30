@@ -454,6 +454,11 @@ func (t SlogEngineTelemetry) RecordCohortDriverNarration(ctx context.Context, pr
 		// was eliminated, never the signal's value or the member it
 		// belonged to (codex R3, CHAOS-4448).
 		"drivers_skipped", event.DriversSkipped,
+		// answer_narrative_recomposed (CHAOS-4580): a bool, content-safe by
+		// construction -- records whether the engine replaced the
+		// pre-narration DirectJudgment/DeterministicAnswer for this
+		// investigation, never the prose itself.
+		"answer_narrative_recomposed", event.AnswerNarrativeRecomposed,
 	}, requestIDLogAttrs(ctx)...)...)
 }
 
