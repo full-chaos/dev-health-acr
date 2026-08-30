@@ -64,6 +64,23 @@ an environment file or command line. Compose routes the local API through its
 TLS fixture; the `http://localhost` readiness probe is container-internal and
 is not a production endpoint.
 
+`make verify`'s `go test ./...` also starts real, ephemeral ClickHouse
+containers via `testcontainers-go` for
+`internal/contextfabric/devhealthfacts`/`devhealthsource`'s own integration
+tests, with no environment gate; `cmd/acr-api`'s hosted fixture runs the
+same way but only under `make hosted-integration`
+(`ACR_HOSTED_INTEGRATION=1`), CI's own separate job. The image tag and the
+minimum accepted `SELECT version()` floor are one constant,
+`internal/chfixture` (CHAOS-4549, ruled 2026-08-29 "26"): CI runs against
+the same major.minor line as prod (26.7+; prod floats on `latest`,
+CHAOS-4519) instead of an old engine two majors behind. The portability
+contract that old floor used to enforce as a side effect — every
+`JOIN ... ON` clause is a plain column-equality conjunction, never `OR`, a
+function-predicate, or a bare literal — is enforced statically instead, by
+`internal/chfixture.JoinONViolations` and
+`TestChaos4549AllJoinOnClausesArePortable` in both `devhealthfacts` and
+`devhealthsource`.
+
 ## Hosted deployment configuration
 
 ### TLS, origins, and web assertions
