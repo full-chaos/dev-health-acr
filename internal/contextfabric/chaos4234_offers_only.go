@@ -149,6 +149,25 @@ func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Princ
 		return StructureOfferMaterial{}, true
 	}
 	resolved = e.consultPriorStructureOffers(ctx, principal, priorEntries, resolved)
+	// CHAOS-4579/CHAOS-4531 (§1.3 class-conditional gate): applied AFTER
+	// the prior-offer consultation (a prior-sourced anchor offer is exactly
+	// as inapplicable to an axis-less question as an engine-sourced one)
+	// and BEFORE the WouldDisclose check below, so the Empty/Composed
+	// outcome describes what this pass will ACTUALLY disclose. A cohort
+	// question whose only material was anchor/handle therefore records
+	// GatedOfferResolutionEmpty -- accurate, and the cohort gate's own
+	// "applied" event beside it says why, which is what keeps the two
+	// distinguishable in the artifacts alone.
+	//
+	// This is the call site chris's 2026-08-29 turn 1 actually took: the
+	// class-default window gate composes the disclosure that asked "Which
+	// repository, project, or team?" and "Which specific item?" on a
+	// plural teams question. interpretation is non-nil by construction on
+	// gate 2 (it is this function's own parameter); gate 1 fires before
+	// Interpret and never reaches here at all -- and never builds anchor
+	// or handle material either, so it needs no gate.
+	resolved, cohortGateOutcome := GateSubjectAxisOffers(resolved, interpretation.Shape)
+	recordCohortStructureGate(ctx, e.telemetry, principal, cohortGateOutcome, interpretation.Shape)
 	if !StructureNeedsWouldDisclose(resolved) {
 		record(GatedOfferResolutionEmpty)
 		return StructureOfferMaterial{}, false

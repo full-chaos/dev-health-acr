@@ -172,3 +172,66 @@ func TestChaos4085_RetractionTelemetryLeaksNoIdentityAndStaysAtWarn(t *testing.T
 		t.Fatalf("level = %v, want WARN -- see RecordCommitAffirmationRetraction's own doc comment for why", got)
 	}
 }
+
+// TestChaos4579_ProductionTelemetryEmitsTheCohortStructureGate is this
+// file's own rule applied to CHAOS-4579's new event: "If you add a field to
+// a telemetry or trace event, add its assertion here too. A test that reads
+// the field off the struct proves nothing about whether anyone will ever
+// see it."
+//
+// codex round 2 (P3) caught that the gate's tests inspected only the
+// in-memory recordingTelemetry double. Confirmed by mutation before this
+// test was written: deleting `shape` from the sink's slog arguments left
+// the ENTIRE contextfabric package green, while production could no longer
+// tell an `applied` on a discovered_cohort question from an `applied` on
+// anything else -- which is the whole point of the event.
+//
+// `shape` is the load-bearing half here. `outcome` alone cannot answer the
+// question the gate exists to make countable ("cohort clarification vs
+// subject clarification"), because subject_bearing is emitted for three
+// different shapes.
+func TestChaos4579_ProductionTelemetryEmitsTheCohortStructureGate(t *testing.T) {
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		telemetry := NewSlogEngineTelemetry(logger)
+		telemetry.RecordCohortStructureGate(context.Background(), storage.Principal{OrgID: "org_sink_test"}, CohortStructureGateApplied, ShapeDiscoveredCohort)
+		telemetry.RecordCohortStructureGate(context.Background(), storage.Principal{OrgID: "org_sink_test"}, CohortStructureGateSubjectBearing, ShapeSingleSubject)
+	})
+
+	if len(records) != 2 {
+		t.Fatalf("two gate decisions must produce exactly two log records, got %d", len(records))
+	}
+	for i, want := range []map[string]any{
+		{"org_id": "org_sink_test", "outcome": string(CohortStructureGateApplied), "shape": string(ShapeDiscoveredCohort)},
+		{"org_id": "org_sink_test", "outcome": string(CohortStructureGateSubjectBearing), "shape": string(ShapeSingleSubject)},
+	} {
+		for key, value := range want {
+			got, ok := records[i][key]
+			if !ok || got != value {
+				t.Fatalf("record[%d][%q] = %v (present=%v), want %v -- an operator greps for this key; without `shape` the two sides of the class decision are indistinguishable in production", i, key, got, ok, value)
+			}
+		}
+	}
+}
+
+// The content-safety line every method on this sink holds, applied to the
+// gate: both arguments are closed enums, so the record must carry NOTHING
+// else that could name a question, a subject, or an offer. An allow-list,
+// matching this file's own oracle discipline -- a denylist only catches the
+// leaks someone thought of.
+func TestChaos4579_CohortStructureGateTelemetryLeaksNoContent(t *testing.T) {
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordCohortStructureGate(context.Background(), storage.Principal{OrgID: "org_sink_test"}, CohortStructureGateApplied, ShapeDiscoveredCohort)
+	})
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1", len(records))
+	}
+	allowed := map[string]bool{"time": true, "level": true, "msg": true, "org_id": true, "outcome": true, "shape": true, "request_id": true}
+	for key := range records[0] {
+		if !allowed[key] {
+			t.Fatalf("cohort structure gate record carries unexpected key %q -- this event is closed enums and an org id only, never question text, a subject identifier, or an offer label", key)
+		}
+	}
+	if records[0]["level"] != "INFO" {
+		t.Fatalf("level = %v, want INFO: a class decision is a normal, designed outcome, not a fault", records[0]["level"])
+	}
+}

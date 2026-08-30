@@ -417,6 +417,45 @@ type EngineTelemetry interface {
 	// composed offers beside the window offer -- closed vocabulary
 	// GatedOfferResolutionOutcome (chaos4234_offers_only.go).
 	RecordGatedOfferResolution(ctx context.Context, principal storage.Principal, outcome GatedOfferResolutionOutcome)
+	// RecordCohortStructureGate (CHAOS-4579/CHAOS-4531) reports which side
+	// of §1.3's class-conditional gate one StructureOfferMaterial landed
+	// on: the question had no subject axis and the subject_anchor/
+	// subject_handle rows were removed ("applied"), had no subject axis but
+	// carried nothing to remove ("no_op"), or has a subject axis and passed
+	// through under the standing zero-candidates ruling
+	// ("subject_bearing"). Both outcomes AND the denominator are reported,
+	// so "cohort vs subject clarification" is a countable split in the
+	// run's own artifacts rather than an inference from a missing log line
+	// -- see GateSubjectAxisOffers (chaos4579_cohort_structure_gate.go).
+	// Both arguments are closed enums; neither carries question text, a
+	// subject identifier, or an offer label.
+	//
+	// DENOMINATOR, stated exactly (codex round 1, findings 2 and 3 -- an
+	// earlier version of this comment claimed "once per composed
+	// StructureNeeds disclosure", which was wrong in BOTH directions):
+	// this fires once per GateSubjectAxisOffers call, i.e. once per request
+	// that reached a candidate-pool offer decision. That is deliberately
+	// NOT the same set as "requests whose result carries StructureNeeds",
+	// and the two differ in both directions:
+	//
+	//   - A gate-1 (explicit-unconfirmed) window terminal composes a
+	//     window-only StructureNeeds and emits NO event. That gate fires
+	//     before Interpret runs, so there is no model-set shape to report
+	//     -- only windowConfirmationRequiredResult's own synthesized
+	//     ShapeOpen placeholder, and reporting that as if it were the
+	//     question's class would be a fabricated reading. It also builds no
+	//     anchor or handle material, so there is no decision to record.
+	//   - A request whose material is empty (a never-projected org, say)
+	//     emits an event and then composes no StructureNeeds at all,
+	//     because composeStructureNeeds returns nil for empty material.
+	//     Suppressing the event there would ALSO suppress the "applied"
+	//     event for a cohort request whose anchor/handle rows were its only
+	//     material -- exactly the case this ticket exists to make visible.
+	//
+	// So: to count clarification disclosures, read
+	// cf_structure_needs_disclosed. To count class-gate decisions, read
+	// this. Neither is the other's denominator.
+	RecordCohortStructureGate(ctx context.Context, principal storage.Principal, outcome CohortStructureGateOutcome, shape InvestigationShape)
 	// RecordWindowGateOfferDisclosure (CHAOS-4314) reports, once per
 	// window-gated terminal (both windowConfirmationRequiredResult call
 	// sites -- explicit-unconfirmed gate 1 and class-default gate 2), whether
