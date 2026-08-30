@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -21,7 +22,7 @@ import (
 func f64(v float64) *float64 { return &v }
 
 func canonicalWithScoreShape(score float64) contractsv1.ContextFabricInvestigationResult {
-	return contractsv1.ContextFabricInvestigationResult{
+	result := contractsv1.ContextFabricInvestigationResult{
 		SchemaVersion:  contractsv1.ContextFabricInvestigationResultSchema,
 		ResultID:       "res_render_shapes_test",
 		RequestID:      "req_render_shapes_test",
@@ -67,6 +68,8 @@ func canonicalWithScoreShape(score float64) contractsv1.ContextFabricInvestigati
 			}},
 		}},
 	}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+	return result
 }
 
 // TestProjectionCarriesAShapeItsOwnDocumentCanCheck is the control.

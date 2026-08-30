@@ -142,7 +142,7 @@ func investigationRequest(t *testing.T, token string) *http.Request {
 
 func validContextFabricInvestigationResult() contractsv1.ContextFabricInvestigationResult {
 	project := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
-	return contractsv1.ContextFabricInvestigationResult{
+	result := contractsv1.ContextFabricInvestigationResult{
 		SchemaVersion: contractsv1.ContextFabricInvestigationResultSchema,
 		ResultID:      "result_route_test01", RequestID: "request_12345678", GeneratedAt: time.Now().UTC(),
 		Status: contractsv1.ContextFabricInvestigationComplete, Question: "why is Ask Dev not ready to ship?",
@@ -164,6 +164,8 @@ func validContextFabricInvestigationResult() contractsv1.ContextFabricInvestigat
 		},
 		DeterministicAnswer: "Ask Dev is on track based on available context.", Warnings: []string{},
 	}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+	return result
 }
 
 func TestContextFabricInvestigationRouteSucceeds(t *testing.T) {

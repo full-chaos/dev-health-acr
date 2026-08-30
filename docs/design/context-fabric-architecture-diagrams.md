@@ -1198,6 +1198,94 @@ here.
 
 ---
 
+## 9 — Answer completeness promotion (CHAOS-4413)
+
+**What it answers.** "Did this answer stop early, and why — and how much of
+an answer is actually here?"
+
+Before CHAOS-4413, `terminal_status`/`terminal_reason`/`claimed_facts_count`/
+`rows_count` existed only inside `cmd/acr-trial-merge-two-turn`'s
+`twoTurnCaseResult` row (CHAOS-4386, PR #315) — a corpus-report shape no
+consumer of the real answer ever sees. `coverage` was already public.
+North Star check 11 ("the answer contract is richer than the prose") had no
+literal field for the other four; ask-dev and any other bounded consumer had
+no way to render "missing/stale/partial/unavailable" without reading a trial
+report that does not exist in production.
+
+```mermaid
+flowchart TD
+    subgraph exits["every independent Investigate() exit — five, not one"]
+        E1["engine.go — the decisive/synthesized path"]
+        E2["unresolved.go — terminalResult (subjectless terminal)"]
+        E3["structure.go — structureVetoResult"]
+        E4["window.go — windowVetoResult"]
+        E5["window.go — windowConfirmationRequiredResult"]
+    end
+
+    subgraph stamp["ComputeAnswerCompleteness — internal/contextfabric/completeness.go"]
+        CAC["ComputeAnswerCompleteness(result)<br/>pure, reads Status/ClaimedFacts/Coverage/Limitations/Warnings"]
+    end
+    E1 -->|"immediately before Validate,<br/>AFTER SelectRenderShapes"| CAC
+    E2 -->|"immediately before its own Validate"| CAC
+    E3 -->|"immediately before its own Validate"| CAC
+    E4 -->|"immediately before its own Validate"| CAC
+    E5 -->|"immediately before its own Validate"| CAC
+
+    CAC --> TS["terminal_status ← Status<br/>(verbatim, self-contained)"]
+    CAC --> TR{"status == complete?"}
+    TR -->|yes| TREMPTY["terminal_reason: absent"]
+    TR -->|no| TRWHICH{"which channel disclosed why?"}
+    TRWHICH -->|"SubjectResolution.ClarificationPrompt<br/>or Interpretation.ClarificationReason"| RC["clarification_reason_disclosed"]
+    TRWHICH -->|"Coverage.DegradedReasons non-empty"| RD["degraded_reason_disclosed"]
+    TRWHICH -->|"Limitations non-empty"| RL["limitation_disclosed"]
+    TRWHICH -->|"Warnings non-empty"| RW["warning_disclosed"]
+    TRWHICH -->|"none of the above"| RU["undisclosed"]
+    CAC --> CFC["claimed_facts_count ← len(ClaimedFacts)"]
+    CAC --> RWC["rows_count ← Σ len(fact.Rows)"]
+
+    TS --> OUT["result.completeness<br/>REQUIRED field, exact-equality validated"]
+    TREMPTY --> OUT
+    RC --> OUT
+    RD --> OUT
+    RL --> OUT
+    RW --> OUT
+    RU --> OUT
+    CFC --> OUT
+    RWC --> OUT
+
+    OUT --> PROJ["answerprojection.Project<br/>copied verbatim — NOT re-derived from<br/>the projection's own budget-clamped key_facts"]
+    OUT --> HARNESS["cmd/acr-trial-merge-two-turn's chaos4525StampTerminal<br/>now reads result.completeness — no longer a side channel"]
+    OUT --> ASKDEV["ask-dev renders result.completeness<br/>(pin bump required before this is consumed)"]
+
+    classDef fixed fill:#123d1c,stroke:#3fa45b,color:#e8ffe8
+    classDef gate fill:#3d2a12,stroke:#c08a3e,color:#fff3e0
+    class OUT,PROJ,HARNESS,ASKDEV fixed
+    class TR,TRWHICH gate
+```
+
+**The two things this diagram is making non-obvious-but-true.**
+
+1. **There is no single funnel.** Unlike a naive reading of `engine.go`
+   alone, `Investigate()` has FIVE independent result-construction-and-
+   validate exit points (the decisive path plus four veto/terminal paths in
+   `unresolved.go`/`structure.go`/`window.go`), each with its OWN `Validate`
+   call. `Completeness`, like every other required field, has to be stamped
+   at each one — a promotion that only patched the decisive path would 500
+   on every clarification/no-match/veto answer the moment the field became
+   required.
+2. **`claimed_facts_count`/`rows_count` are the UN-CLAMPED totals, always.**
+   The projection copies them verbatim from the canonical result rather than
+   counting its own `key_facts` — a budget-clamped projection's array length
+   answers "how much of the answer did THIS bounded read keep", never "how
+   much did the investigation actually produce". A consumer that wants the
+   full total reads `completeness`, not `len(key_facts)`.
+
+**Update rule.** A new `Investigate()` exit path (a sixth veto/terminal
+shape) must stamp `Completeness` before its own `Validate`, in the same PR,
+and add its box to this diagram.
+
+---
+
 ## Sources
 
 - Live code via `codegraph_explore` / `rg` on `dev-health-acr`: `engine.go`
@@ -1209,6 +1297,10 @@ here.
   `internal/contextfabric/devhealthfacts/*.go`,
   `internal/contextfabric/render_shapes.go`,
   `internal/contracts/v1/validate_context_fabric_render_shapes.go`,
+  `internal/contextfabric/completeness.go`,
+  `internal/contracts/v1/context_fabric_completeness.go`,
+  `internal/contextfabric/unresolved.go`, `internal/contextfabric/structure.go`,
+  `internal/contextfabric/window.go`,
   `internal/contextfabric/devhealthsource/teams_projects.go`,
   `internal/contextfabric/devhealthsource/teams_projects_edges.go`,
   `internal/contextfabric/devhealthsource/clickhouse.go`,

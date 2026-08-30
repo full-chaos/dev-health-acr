@@ -123,5 +123,11 @@
     "values_clamped": 0,
     "render_shapes_omitted": 0,
     "full_result_omitted": false
+  },
+  "completeness": {
+    "terminal_status": "partial",
+    "terminal_reason": "degraded_reason_disclosed",
+    "claimed_facts_count": 1,
+    "rows_count": 0
   }
 }

@@ -265,27 +265,15 @@ func (m *chaos4386MeasuringInvestigator) snapshot() []int64 {
 // explanation, while DegradedReasons/Warnings both stay empty on that
 // path; without checking it, the common no_match case classified as
 // "undisclosed" despite a real, disclosed reason.
+// CHAOS-4413: this function used to hold its own copy of the disclosure
+// classification. That copy is now production logic
+// (internal/contextfabric.ComputeAnswerCompleteness, called by the engine
+// on every result before Validate) and this wrapper only delegates to it,
+// so the harness's OWN pinning tests (chaos4386_answer_rate_test.go) keep
+// exercising the real implementation rather than a second copy that could
+// silently drift from it.
 func chaos4386TerminalReason(result contractsv1.ContextFabricInvestigationResult) string {
-	switch result.Status {
-	case contractsv1.ContextFabricInvestigationComplete:
-		return ""
-	case contractsv1.ContextFabricInvestigationClarificationRequired:
-		if result.SubjectResolution.ClarificationPrompt != "" || result.Interpretation.ClarificationReason != "" {
-			return "clarification_reason_disclosed"
-		}
-		return "undisclosed"
-	default:
-		if len(result.Coverage.DegradedReasons) > 0 {
-			return "degraded_reason_disclosed"
-		}
-		if len(result.Limitations) > 0 {
-			return "limitation_disclosed"
-		}
-		if len(result.Warnings) > 0 {
-			return "warning_disclosed"
-		}
-		return "undisclosed"
-	}
+	return string(contextfabric.ComputeAnswerCompleteness(result).TerminalReason)
 }
 
 // chaos4386TerminalFields returns the per-case terminal-answer fields:
@@ -301,11 +289,8 @@ func chaos4386TerminalReason(result contractsv1.ContextFabricInvestigationResult
 // rather than an import so this shared helper has no dependency on the
 // N-turn file); terminalReason is chaos4386TerminalReason's own value.
 func chaos4386TerminalFields(result contractsv1.ContextFabricInvestigationResult) (terminalStatus string, claimedFactsCount, rowsCount int, terminalReason string) {
-	rows := 0
-	for _, fact := range result.ClaimedFacts {
-		rows += len(fact.Rows)
-	}
-	return string(result.Status), len(result.ClaimedFacts), rows, chaos4386TerminalReason(result)
+	c := contextfabric.ComputeAnswerCompleteness(result)
+	return string(c.TerminalStatus), c.ClaimedFactsCount, c.RowsCount, string(c.TerminalReason)
 }
 
 // chaos4525CohortScoredMemberCount counts the members of result's delivered
@@ -368,6 +353,15 @@ func chaos4525StampTerminal(res *twoTurnCaseResult, result contractsv1.ContextFa
 	if res == nil {
 		return
 	}
+	// CHAOS-4413: a result that actually came from the engine (as opposed
+	// to a fixture literal built directly by a fake Investigator in some of
+	// this package's other tests) already carries these values, stamped,
+	// on result.Completeness -- chaos4386TerminalFields now delegates to
+	// the exact same production function (contextfabric.
+	// ComputeAnswerCompleteness) that computed them, so calling it here
+	// reads the promoted contract's own derivation rather than a
+	// side-channel copy, and stays correct for both engine-produced and
+	// fixture-literal results.
 	res.TerminalStatus, res.ClaimedFactsCount, res.RowsCount, res.TerminalReason = chaos4386TerminalFields(result)
 	res.CohortScoredMemberCount = chaos4525CohortScoredMemberCount(result)
 }

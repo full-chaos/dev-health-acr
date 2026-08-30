@@ -188,6 +188,10 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		// silent drop this field exists to close.
 		PriorSubjectReceiptDispositions: append([]contractsv1.ContextFabricPriorSubjectReceiptEntry(nil), result.SubjectResolution.PriorSubjectReceiptDispositions...),
 		RenderShapes:                    renderShapes,
+		// Completeness (CHAOS-4413): copied verbatim, never re-derived from
+		// this projection's own budget-clamped KeyFacts -- see
+		// ContextFabricAnswerCompleteness's own doc comment.
+		Completeness: result.Completeness,
 	}
 	projection.ProjectionBudget = contractsv1.ContextFabricProjectionBudget{
 		DriversOmitted:         driversOmitted,

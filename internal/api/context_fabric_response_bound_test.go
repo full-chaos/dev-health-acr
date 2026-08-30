@@ -174,6 +174,7 @@ func threeRollupProjectStatusResult(resultID string) contractsv1.ContextFabricIn
 		},
 	}
 	result.EvidenceRefIDs = []string{"evidence_1", "evidence_2"}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 	return result
 }
 
@@ -192,6 +193,7 @@ func twelveRollupResult(resultID string) contractsv1.ContextFabricInvestigationR
 	for i := 0; i < 12; i++ {
 		result.ClaimedFacts = append(result.ClaimedFacts, rowsBearingClaimedFact("claim_rollup_"+strconv.Itoa(i), kinds[i%len(kinds)], project))
 	}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 	return result
 }
 
@@ -254,6 +256,7 @@ func runJRepositoryStatusShapedResult(resultID string) contractsv1.ContextFabric
 		})
 	}
 	result.EvidenceRefIDs = []string{"evidence_repo_1"}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		panic("runJRepositoryStatusShapedResult built an invalid fixture: " + err.Error())
 	}

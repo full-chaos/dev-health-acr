@@ -168,6 +168,14 @@ type ContextFabricAnswerProjection struct {
 	// it arrived in, which is precisely what this contract exists to
 	// prevent.
 	RenderShapes []ContextFabricRenderShape `json:"render_shapes,omitempty"`
+	// Completeness (CHAOS-4413) mirrors the canonical result's field
+	// verbatim -- ClaimedFactsCount/RowsCount are the UN-CLAMPED totals from
+	// the canonical result, deliberately not recomputed from this
+	// projection's own budget-clamped KeyFacts: a consumer counting KeyFacts
+	// would learn how much of the answer THIS bounded read kept, never how
+	// much the investigation actually produced. See
+	// ContextFabricAnswerCompleteness's own doc comment.
+	Completeness ContextFabricAnswerCompleteness `json:"completeness"`
 }
 
 // ContextFabricProjectedClarification carries the ambiguity a caller must

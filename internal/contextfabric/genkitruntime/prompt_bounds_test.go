@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -1487,7 +1488,7 @@ func claimWithValueLength(length int) contractsv1.ContextFabricClaimedFact {
 // enforces.
 func baseResult() contractsv1.ContextFabricInvestigationResult {
 	project := boundsSubject(0)
-	return contractsv1.ContextFabricInvestigationResult{
+	result := contractsv1.ContextFabricInvestigationResult{
 		SchemaVersion: contractsv1.ContextFabricInvestigationResultSchema,
 		ResultID:      "result_12345678",
 		RequestID:     "request_12345678",
@@ -1520,6 +1521,8 @@ func baseResult() contractsv1.ContextFabricInvestigationResult {
 		DeterministicAnswer: "Ask Dev is not release-ready because required work remains.",
 		Warnings:            []string{},
 	}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+	return result
 }
 
 func resultWithStrongestPressures(count int) contractsv1.ContextFabricInvestigationResult {
@@ -1633,6 +1636,7 @@ func resultWithClaimedFacts(count int) contractsv1.ContextFabricInvestigationRes
 		claims = append(claims, claimN(i))
 	}
 	result.ClaimedFacts = claims
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 	return result
 }
 

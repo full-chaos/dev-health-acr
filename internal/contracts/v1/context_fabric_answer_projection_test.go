@@ -193,6 +193,7 @@ func validAnswerProjection() ContextFabricAnswerProjection {
 			SynthesisVersion: "synthesis-v1", CanonicalServiceVersion: "ops-v1",
 		},
 		ProjectionBudget: ContextFabricProjectionBudget{},
+		Completeness:     ContextFabricAnswerCompleteness{TerminalStatus: ContextFabricInvestigationComplete, ClaimedFactsCount: 1},
 	}
 }
 
@@ -435,8 +436,14 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 	// CHAOS-4314: WindowExpandOption joins the intersection deliberately --
 	// StructureNeeds gained window_expand_options, the SAME "copied verbatim
 	// from common.v1" reasoning as CandidateOption above.
+	//
+	// CHAOS-4413: AnswerCompleteness joins the intersection deliberately --
+	// both documents gained completeness, and the projection carries the
+	// SAME shape the canonical result does (copied verbatim), not a
+	// narrowed one -- there is no per-item budget to clamp on four scalar
+	// fields.
 	expected := []string{
-		"AcceptedGrammar", "AnchorOption", "BoundSubjectReceipt", "CandidateOption",
+		"AcceptedGrammar", "AnchorOption", "AnswerCompleteness", "BoundSubjectReceipt", "CandidateOption",
 		"ConfirmedStructureEntry",
 		"EffectiveEvidenceWindow", "HandleOption", "KindOption",
 		"PriorSubjectReceiptDisposition", "PriorSubjectReceiptDispositionEntry",

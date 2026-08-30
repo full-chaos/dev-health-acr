@@ -992,6 +992,7 @@ func TestRankCohort_ResultLevelClaimedFactsSatisfyTheWritePathValidator(t *testi
 	if len(mintedClaims) == 0 {
 		t.Fatal("mintedClaims = empty, want at least one narrated citation to have minted")
 	}
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		t.Fatalf("result.Validate() = %v, want nil -- the real RankCohort+narration pipeline's output must satisfy the full write-path validator, including cross-reference", err)
 	}

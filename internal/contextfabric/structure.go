@@ -1305,6 +1305,10 @@ func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Prin
 	if len(echoEntries) > 0 {
 		result.ConfirmedStructure = echoEntries
 	}
+	// CHAOS-4413: this structure-veto path is its own independent exit
+	// from Investigate, so it stamps completeness itself, immediately
+	// before its own Validate -- same placement rule as everywhere else.
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}

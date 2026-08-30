@@ -330,6 +330,7 @@ func closureResult() ContextFabricInvestigationResult {
 		},
 		DeterministicAnswer: "Ask Dev is amber because work remains open.",
 		Warnings:            []string{"partial coverage"},
+		Completeness:        ContextFabricAnswerCompleteness{TerminalStatus: ContextFabricInvestigationComplete, ClaimedFactsCount: 1},
 	}
 }
 
@@ -385,6 +386,10 @@ func closureProjection() ContextFabricAnswerProjection {
 			SynthesisVersion: "synthesis-v1", CanonicalServiceVersion: "ops-v1",
 		},
 		ProjectionBudget: ContextFabricProjectionBudget{},
+		Completeness: ContextFabricAnswerCompleteness{
+			TerminalStatus: ContextFabricInvestigationClarificationRequired,
+			TerminalReason: ContextFabricTerminalReasonClarificationDisclosed,
+		},
 	}
 }
 

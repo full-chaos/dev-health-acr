@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -26,7 +27,7 @@ func richResult() contractsv1.ContextFabricInvestigationResult {
 	teamA := subject(contractsv1.ContextFabricSubjectTeam, "team_a", "Team A")
 	teamB := subject(contractsv1.ContextFabricSubjectTeam, "team_b", "Team B")
 
-	return contractsv1.ContextFabricInvestigationResult{
+	result := contractsv1.ContextFabricInvestigationResult{
 		SchemaVersion: contractsv1.ContextFabricInvestigationResultSchema,
 		ResultID:      "result_12345678",
 		RequestID:     "request_12345678",
@@ -98,6 +99,8 @@ func richResult() contractsv1.ContextFabricInvestigationResult {
 		DeterministicAnswer: "Ask Dev is not release-ready because required work remains.",
 		Warnings:            []string{},
 	}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+	return result
 }
 
 func driver(id string, standing contractsv1.ContextFabricDriverStanding, category, title string, claims []string, subjects ...contractsv1.ContextFabricSubjectRef) contractsv1.ContextFabricDriverJudgment {
@@ -376,6 +379,7 @@ func TestClarificationAppearsOnlyWhenTheEngineAskedForIt(t *testing.T) {
 	ambiguous := richResult()
 	ambiguous.Status = contractsv1.ContextFabricInvestigationClarificationRequired
 	ambiguous.SubjectResolution.ClarificationPrompt = "Which team did you mean?"
+	ambiguous.Completeness = contextfabric.ComputeAnswerCompleteness(ambiguous)
 	projection := Project(ambiguous, Budget{})
 	if projection.Clarification == nil {
 		t.Fatalf("clarification_required answer carried no clarification block")

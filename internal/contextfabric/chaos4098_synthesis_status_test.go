@@ -131,6 +131,7 @@ func TestChaos4098_TheOverrideIsWhatMakesTheResultValid(t *testing.T) {
 	if outcome := applySynthesisStatusOverride(&result); outcome == nil {
 		t.Fatal("the override must fire on this shape")
 	}
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		t.Fatalf("the post-override object must validate: %v", err)
 	}
@@ -212,6 +213,7 @@ func TestChaos4098_AWhitespaceOnlyPromptIsAbsent(t *testing.T) {
 	// override did its whole job and only the independent trimming rule
 	// stands between this shape and a valid result.
 	result.SubjectResolution.ClarificationPrompt = ""
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		t.Fatalf("post-override validation: %v", err)
 	}
@@ -336,6 +338,7 @@ func TestChaos4103_UncommittedOverrideGetsADistinctReason(t *testing.T) {
 	if result.Status != InvestigationNoMatch {
 		t.Fatalf("status = %q, want no_match -- CHAOS-4103 keeps serving, it never reintroduces the 500", result.Status)
 	}
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		t.Fatalf("the served result must still validate: %v", err)
 	}
@@ -368,6 +371,7 @@ func TestChaos4098_OverrideIsIdempotent(t *testing.T) {
 	if len(result.Limitations) != len(first.Limitations) || result.LimitationsDisplaced != first.LimitationsDisplaced {
 		t.Fatal("a second application changed the disclosure or the displacement count")
 	}
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		t.Fatalf("post-idempotency validation: %v", err)
 	}
@@ -548,6 +552,7 @@ func TestChaos4098_OverrideOnAFullLimitationListStaysValid(t *testing.T) {
 	if !hasLimitation(result.Limitations, synthesisClarificationUnavailableLimitation) {
 		t.Fatal("the disclosure must survive displacement -- it is never the entry dropped")
 	}
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		t.Fatalf("a displaced clarification override must still validate: %v", err)
 	}
@@ -571,6 +576,7 @@ func TestChaos4098_RetractionOnAFullLimitationListStaysValid(t *testing.T) {
 	if result.LimitationsDisplaced == 0 {
 		t.Fatal("fixture precondition: a full list must force a displacement")
 	}
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		t.Fatalf("a displaced retraction must still validate: %v", err)
 	}

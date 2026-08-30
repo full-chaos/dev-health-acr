@@ -189,6 +189,9 @@
       "items": {
         "$ref": "context_fabric_common.v1.schema.json#/$defs/RenderShape"
       }
+    },
+    "completeness": {
+      "$ref": "context_fabric_common.v1.schema.json#/$defs/AnswerCompleteness"
     }
   },
   "required": [
@@ -215,7 +218,8 @@
     "versions",
     "deterministic_answer",
     "warnings",
-    "reused"
+    "reused",
+    "completeness"
   ],
   "allOf": [
     {

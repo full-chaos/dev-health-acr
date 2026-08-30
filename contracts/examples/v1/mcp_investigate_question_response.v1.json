@@ -102,6 +102,11 @@
    "reasons_omitted": 0,
    "values_clamped": 0,
    "full_result_omitted": false
+  },
+  "completeness": {
+   "terminal_status": "complete",
+   "claimed_facts_count": 1,
+   "rows_count": 0
   }
  },
  "rendered_markdown": {

@@ -1678,6 +1678,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if e.telemetry != nil {
 		e.telemetry.RecordRenderShapeSelection(ctx, principal, renderShapeEvent)
 	}
+	// CHAOS-4413: answer completeness/terminal fields. Placed HERE, after
+	// RenderShapes and immediately BEFORE Validate, for the identical
+	// reason RenderShapes is placed here -- Status/ClaimedFacts/Coverage/
+	// Limitations/Warnings are all final at this point and nothing further
+	// can change them out from under the stamped disclosure.
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}

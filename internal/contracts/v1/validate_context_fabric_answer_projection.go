@@ -149,6 +149,9 @@ func (p ContextFabricAnswerProjection) Validate() error {
 	if err := validateRenderShapes(p.RenderShapes, renderShapeSourcesFromProjection(p)); err != nil {
 		return fmt.Errorf("render shapes: %w", err)
 	}
+	if err := p.validateCompleteness(); err != nil {
+		return fmt.Errorf("completeness: %w", err)
+	}
 	return nil
 }
 
@@ -421,6 +424,34 @@ func (p ContextFabricAnswerProjection) validateCoverage() error {
 			return fmt.Errorf("answer projection coverage sources must be unique")
 		}
 		seen[entry.Source] = struct{}{}
+	}
+	return nil
+}
+
+// validateCompleteness (CHAOS-4413) checks the projected completeness block
+// is well-formed and internally consistent with the projection's own
+// status -- it deliberately does NOT re-derive terminal_reason from
+// Coverage/Limitations/Warnings the way the canonical result's validator
+// does (this file's own doc comment: a projection is derived from an
+// already-validated result, so re-deriving canonical semantics here would
+// duplicate the authority). claimed_facts_count/rows_count are the
+// UN-CLAMPED canonical totals (see the field's own doc comment) so, unlike
+// coverage_summary/key_facts above, they are NOT cross-checked against any
+// projected array length here -- only bounded to be non-negative.
+func (p ContextFabricAnswerProjection) validateCompleteness() error {
+	c := p.Completeness
+	if c.TerminalStatus != p.Status {
+		return fmt.Errorf("terminal_status %q must equal status %q", c.TerminalStatus, p.Status)
+	}
+	if p.Status == ContextFabricInvestigationComplete {
+		if c.TerminalReason != "" {
+			return fmt.Errorf("terminal_reason must be empty for a complete result, got %q", c.TerminalReason)
+		}
+	} else if !ValidContextFabricTerminalReason(c.TerminalReason) {
+		return fmt.Errorf("terminal_reason %q is not a recognized closed value", c.TerminalReason)
+	}
+	if c.ClaimedFactsCount < 0 || c.RowsCount < 0 {
+		return fmt.Errorf("completeness counts must not be negative")
 	}
 	return nil
 }

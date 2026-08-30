@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -72,6 +73,7 @@ func TestProjectionIsClosedOverAMinimalResult(t *testing.T) {
 	result.Coverage.Sources = []contractsv1.ContextFabricSourceObservation{}
 	result.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{}
 	result.SubjectResolution.Candidates = []contractsv1.ContextFabricSubjectCandidate{}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		t.Fatalf("minimal fixture is not a valid canonical result: %v", err)
 	}
@@ -206,6 +208,7 @@ func canonicalMaximumResult(t *testing.T) contractsv1.ContextFabricInvestigation
 	result.Conflicts = []contractsv1.ContextFabricFinding{}
 	result.Paths = []contractsv1.ContextFabricRelationshipPath{}
 	result.EvidenceRefIDs = []string{"evidence_max_1000"}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 	return result
 }
 
@@ -301,6 +304,7 @@ func legacyStoredResult(t *testing.T) contractsv1.ContextFabricInvestigationResu
 	result.Cohort.Members[0].InclusionReasons = filled(50, func(i int) string { return pad("legacy-reason", i, 1024) })
 	result.DirectJudgment = strings.Repeat("j", 8000)
 	result.CurrentState = strings.Repeat("c", 8000)
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 	return result
 }
 

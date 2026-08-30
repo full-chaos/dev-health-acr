@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contractcheck"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
@@ -44,7 +45,7 @@ func parityResult() contractsv1.ContextFabricInvestigationResult {
 	withheld := parityDriver("driver_withheld_01", contractsv1.ContextFabricDriverWithheld, "narrative", "Withheld", nil)
 	withheld.Qualification = "Evidence was too thin to stand behind."
 
-	return contractsv1.ContextFabricInvestigationResult{
+	result := contractsv1.ContextFabricInvestigationResult{
 		SchemaVersion: contractsv1.ContextFabricInvestigationResultSchema,
 		ResultID:      "result_parity_0001", RequestID: "request_parity_001",
 		GeneratedAt: time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC),
@@ -109,6 +110,8 @@ func parityResult() contractsv1.ContextFabricInvestigationResult {
 		DeterministicAnswer: "Two teams need attention because blockers and stalled reviews concentrate there.",
 		Warnings:            []string{},
 	}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+	return result
 }
 
 // answerFixtureBootstrap serves the answer endpoints from an httptest
@@ -821,6 +824,7 @@ func canonicalMaximumInvestigationResult(t *testing.T) contractsv1.ContextFabric
 	result.Coverage = contractsv1.ContextFabricCoverage{
 		Sources: sources, Partial: true, DegradedReasons: maximalStrings(100, "degraded", 2000),
 	}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 	return result
 }
 
@@ -862,6 +866,7 @@ func TestMatchReasonsAreReachableThroughTheFullResult(t *testing.T) {
 	result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
 	result.SubjectResolution.ClarificationPrompt = "Which team did you mean?"
 	result.SubjectResolution.Candidates[0].MatchReasons = []string{canonicalReason}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 	wantReceiptID := result.SubjectResolution.Candidates[0].ReceiptID
 	boot := answerFixtureBootstrap(t, result, nil)
 

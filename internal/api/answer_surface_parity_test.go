@@ -349,7 +349,7 @@ func parityInvestigationResult() contractsv1.ContextFabricInvestigationResult {
 	withheld := build("driver_withheld_01", contractsv1.ContextFabricDriverWithheld, "narrative", "Withheld", nil)
 	withheld.Qualification = "Evidence was too thin to stand behind."
 
-	return contractsv1.ContextFabricInvestigationResult{
+	result := contractsv1.ContextFabricInvestigationResult{
 		SchemaVersion: contractsv1.ContextFabricInvestigationResultSchema,
 		ResultID:      "result_parity_0001", RequestID: "request_parity_001",
 		GeneratedAt: time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC),
@@ -412,6 +412,8 @@ func parityInvestigationResult() contractsv1.ContextFabricInvestigationResult {
 		DeterministicAnswer: "Two teams need attention because blockers and stalled reviews concentrate there.",
 		Warnings:            []string{},
 	}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+	return result
 }
 
 // legacyResultStore serves a stored result WITHOUT re-validating it against

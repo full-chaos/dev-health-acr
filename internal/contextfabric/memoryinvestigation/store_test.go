@@ -60,6 +60,7 @@ func TestStore_getDefensiveCopyDoesNotLeakStoredState(t *testing.T) {
 		},
 		Warnings: []string{},
 	}
+	original.Completeness = contextfabric.ComputeAnswerCompleteness(original)
 	if err := store.Save(ctx, principal, original, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -99,7 +100,7 @@ func TestStore_saveRespectsContextCancellation(t *testing.T) {
 // receipt-sourced ConfirmedStructure entry for member.
 func resultWithConfirmedStructure(resultID string, member contextfabric.StructureNeedKind, priorResultID, receiptID string) contextfabric.InvestigationResult {
 	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project-" + resultID, Label: "Project " + resultID}
-	return contextfabric.InvestigationResult{
+	result := contextfabric.InvestigationResult{
 		SchemaVersion: contextfabric.InvestigationResultSchemaV1,
 		ResultID:      resultID,
 		RequestID:     "request-" + resultID,
@@ -137,6 +138,8 @@ func resultWithConfirmedStructure(resultID string, member contextfabric.Structur
 			},
 		},
 	}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+	return result
 }
 
 // TestStore_structureSupersessionClaims mirrors pginvestigation's own

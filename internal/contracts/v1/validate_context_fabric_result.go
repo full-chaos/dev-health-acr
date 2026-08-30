@@ -309,6 +309,12 @@ type contextFabricBounds struct {
 	// neither field. A freshly produced row (Validate(), write bounds) has
 	// no such excuse -- investmentMixSignal always sets both together.
 	cohortMemberDriverConcentrationRequired bool
+	// completenessRequired (CHAOS-4413) is the SAME write-only split as
+	// cohortMemberOutcomeRequired above: Completeness is a brand-new field,
+	// so every row persisted before this PR carries its zero value. A
+	// freshly produced row (Validate(), write bounds) has no such excuse --
+	// the engine always stamps it before Validate runs.
+	completenessRequired bool
 }
 
 // contextFabricRelationshipPathMaxNodes is the Go-enforced ceiling on path
@@ -349,6 +355,7 @@ var contextFabricWriteBounds = contextFabricBounds{
 	cohortMemberOutcomeRequired:             true,
 	cohortMemberMissingSignals:              5,
 	cohortMemberDriverConcentrationRequired: true,
+	completenessRequired:                    true,
 }
 
 // contextFabricLegacyBounds is what the Go validator alone used to accept.
@@ -951,6 +958,50 @@ func (c ContextFabricCoverage) validate(bounds contextFabricBounds) error {
 	return nil
 }
 
+// validateCompleteness (CHAOS-4413) requires exact equality between the
+// completeness block and the document it describes -- the same discipline
+// CHAOS-4415's render-shape point sources use: a terminal_status that
+// disagreed with status, or a claimed_facts_count that disagreed with
+// len(claimed_facts), would let a consumer reading ONLY the completeness
+// block draw a different picture than the document it is supposedly
+// summarizing.
+//
+// bounds.completenessRequired is FALSE on stored reads (contextFabricLegacyBounds):
+// every row persisted before this field existed carries its exact zero
+// value, and results are immutable, so that specific shape is excused on
+// read -- see completenessRequired's own doc comment. Any other shape,
+// on any path, is enforced in full: a NEW row cannot legally reach a
+// half-stamped completeness block (the engine always computes and stamps
+// the whole thing together, in one assignment, before Validate runs), so a
+// non-zero-but-wrong value reads as corruption, not a legacy gap.
+func (r ContextFabricInvestigationResult) validateCompleteness(bounds contextFabricBounds) error {
+	c := r.Completeness
+	if !bounds.completenessRequired && c == (ContextFabricAnswerCompleteness{}) {
+		return nil
+	}
+	if c.TerminalStatus != r.Status {
+		return fmt.Errorf("terminal_status %q must equal status %q", c.TerminalStatus, r.Status)
+	}
+	if r.Status == ContextFabricInvestigationComplete {
+		if c.TerminalReason != "" {
+			return fmt.Errorf("terminal_reason must be empty for a complete result, got %q", c.TerminalReason)
+		}
+	} else if !ValidContextFabricTerminalReason(c.TerminalReason) {
+		return fmt.Errorf("terminal_reason %q is not a recognized closed value", c.TerminalReason)
+	}
+	if c.ClaimedFactsCount != len(r.ClaimedFacts) {
+		return fmt.Errorf("claimed_facts_count %d must equal len(claimed_facts) %d", c.ClaimedFactsCount, len(r.ClaimedFacts))
+	}
+	rows := 0
+	for _, fact := range r.ClaimedFacts {
+		rows += len(fact.Rows)
+	}
+	if c.RowsCount != rows {
+		return fmt.Errorf("rows_count %d must equal the summed claimed-fact row counts %d", c.RowsCount, rows)
+	}
+	return nil
+}
+
 func (v ContextFabricVersionSet) Validate() error {
 	values := []string{v.ServiceVersion, v.ContractVersion, v.Backend, v.ProjectionVersion, v.QueryVersion, v.InterpretationVersion, v.SynthesisVersion, v.CanonicalServiceVersion}
 	for _, value := range values {
@@ -1275,6 +1326,9 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	}
 	if err := r.Coverage.validate(bounds); err != nil {
 		return fmt.Errorf("coverage: %w", err)
+	}
+	if err := r.validateCompleteness(bounds); err != nil {
+		return fmt.Errorf("completeness: %w", err)
 	}
 	if err := r.Versions.Validate(); err != nil {
 		return fmt.Errorf("versions: %w", err)

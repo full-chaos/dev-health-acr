@@ -173,19 +173,30 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// the resolution rule first, scoring "unreachable" rather than a
 		// proof). Each value is the named constant validateRenderShapes
 		// itself enforces.
-		"common#$defs.RenderShape.properties.series.minItems":                1,
-		"common#$defs.RenderShape.properties.series.maxItems":                ContextFabricRenderSeriesMaxCount,
-		"common#$defs.RenderSeries.properties.points.minItems":               1,
-		"common#$defs.RenderSeries.properties.points.maxItems":               ContextFabricRenderPointsMaxCount,
-		"common#$defs.RenderSeries.properties.key.minLength":                 1,
-		"common#$defs.RenderSeries.properties.key.maxLength":                 ContextFabricRenderLabelMaxLength,
-		"common#$defs.RenderPointSource.properties.signal.minLength":         1,
-		"common#$defs.RenderPointSource.properties.signal.maxLength":         ContextFabricRenderLabelMaxLength,
-		"common#$defs.RenderPointSource.properties.field.minLength":          1,
-		"common#$defs.RenderPointSource.properties.field.maxLength":          ContextFabricRenderSourceFieldMaxLength,
-		"common#$defs.RenderPointSource.properties.row_index.minimum":        0,
-		"common#$defs.SubjectCandidate.properties.evidence_ref_ids.maxItems": contextFabricWriteBounds.candidateEvidenceRefs,
-		"common#$defs.CohortExclusion.properties.reason.maxLength":           contextFabricWriteBounds.cohortExclusionReasonLength,
+		"common#$defs.RenderShape.properties.series.minItems":         1,
+		"common#$defs.RenderShape.properties.series.maxItems":         ContextFabricRenderSeriesMaxCount,
+		"common#$defs.RenderSeries.properties.points.minItems":        1,
+		"common#$defs.RenderSeries.properties.points.maxItems":        ContextFabricRenderPointsMaxCount,
+		"common#$defs.RenderSeries.properties.key.minLength":          1,
+		"common#$defs.RenderSeries.properties.key.maxLength":          ContextFabricRenderLabelMaxLength,
+		"common#$defs.RenderPointSource.properties.signal.minLength":  1,
+		"common#$defs.RenderPointSource.properties.signal.maxLength":  ContextFabricRenderLabelMaxLength,
+		"common#$defs.RenderPointSource.properties.field.minLength":   1,
+		"common#$defs.RenderPointSource.properties.field.maxLength":   ContextFabricRenderSourceFieldMaxLength,
+		"common#$defs.RenderPointSource.properties.row_index.minimum": 0,
+		// CHAOS-4413: claimed_facts_count/rows_count are not standalone
+		// floor checks the generic probe can isolate -- validateCompleteness
+		// enforces EXACT equality against len(claimed_facts) and the
+		// summed row counts on the canonical result (never merely "not
+		// negative"), and the projection's own validateCompleteness checks
+		// non-negativity only because it cannot re-derive the unclamped
+		// totals from its own budget-clamped key_facts. Mapped
+		// declaratively, the same reasoning as the render-shape bounds
+		// immediately above.
+		"common#$defs.AnswerCompleteness.properties.claimed_facts_count.minimum": 0,
+		"common#$defs.AnswerCompleteness.properties.rows_count.minimum":          0,
+		"common#$defs.SubjectCandidate.properties.evidence_ref_ids.maxItems":     contextFabricWriteBounds.candidateEvidenceRefs,
+		"common#$defs.CohortExclusion.properties.reason.maxLength":               contextFabricWriteBounds.cohortExclusionReasonLength,
 		// Disproved as "schema-only" by boundProbes below: the validator
 		// rejects a value one past each of these, so they are compared
 		// numerically rather than excused (codex round-6 F1).

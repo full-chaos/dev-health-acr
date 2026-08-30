@@ -1580,6 +1580,7 @@ func TestChaos4099_AnEnabledPolicyReachesTheProviderAndDisclosesTheProxy(t *test
 	if !result.Coverage.Partial {
 		t.Fatal("Coverage.Partial = false on a proxy-derived answer")
 	}
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		t.Fatalf("the disclosed result must be servable: %v", err)
 	}
@@ -1698,6 +1699,7 @@ func TestChaos4099_ATeamPolicyExpandsWithAPerTargetBasisAndDisclosesBoth(t *test
 	if !result.Coverage.Partial {
 		t.Fatal("Coverage.Partial = false on a proxy-derived answer")
 	}
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		t.Fatalf("the disclosed result must be servable: %v", err)
 	}
@@ -1853,6 +1855,7 @@ func TestChaos4101_TeamSubjectAdmitsRealFactsAcrossAllThreeCapabilities(t *testi
 	if !result.Coverage.Partial {
 		t.Fatal("Coverage.Partial = false -- an activity-proxy-derived team answer must disclose its own caveat")
 	}
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		t.Fatalf("the disclosed result must be servable: %v", err)
 	}
@@ -2076,6 +2079,7 @@ func TestChaos4099_BothDisclosuresCanFireOnOneAnswer(t *testing.T) {
 	if len(result.Limitations) != 2 {
 		t.Fatalf("limitations = %v, want both disclosures -- they say opposite things and neither implies the other", result.Limitations)
 	}
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		t.Fatalf("two disclosures must still validate: %v", err)
 	}
@@ -2648,6 +2652,7 @@ func TestChaos4099_AllAuthorizationDroppedIsMatchedUnauthorizedNotAttemptedEmpty
 	if !result.Coverage.Partial {
 		t.Fatal("Coverage.Partial = false over a matched_unauthorized gap")
 	}
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		t.Fatalf("the disclosed result must be servable: %v", err)
 	}

@@ -1499,6 +1499,19 @@ type ContextFabricInvestigationResult struct {
 	// full design. Additive optional v1 field: a consumer that ignores it
 	// reads a byte-identical answer to the pre-4415 one.
 	RenderShapes []ContextFabricRenderShape `json:"render_shapes,omitempty"`
+	// Completeness (CHAOS-4413) promotes the CHAOS-4386 answer-rate
+	// terminal-state measurement into the public contract -- always
+	// present, on every status, so "why did this answer stop here" and
+	// "how much of an answer is here" are literal contract fields rather
+	// than telemetry a consumer never sees. See
+	// ContextFabricAnswerCompleteness's own doc comment. Stamped by
+	// internal/contextfabric.ComputeAnswerCompleteness on the FINAL result,
+	// after every composer including the commit-affirmation gate and
+	// render-shape selection, immediately before Validate -- the same
+	// placement CHAOS-4415's RenderShapes uses and for the same reason: no
+	// later stage can change Status/ClaimedFacts/Coverage/Limitations/
+	// Warnings out from under it.
+	Completeness ContextFabricAnswerCompleteness `json:"completeness"`
 }
 
 // ContextFabricScalarValue is the only free-form value admitted by the public

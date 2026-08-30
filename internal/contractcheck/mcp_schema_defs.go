@@ -131,6 +131,8 @@ var contextFabricResultDefsRewrites = map[string]string{
 	"context_fabric_common.v1.schema.json#/$defs/StructureOfferSnapshotEntry": "#/$defs/context_fabric_common.v1/$defs/StructureOfferSnapshotEntry",
 	// CHAOS-4415: render_shapes' own cross-file pointer into common.v1.
 	"context_fabric_common.v1.schema.json#/$defs/RenderShape": "#/$defs/context_fabric_common.v1/$defs/RenderShape",
+	// CHAOS-4413: completeness' own cross-file pointer into common.v1.
+	"context_fabric_common.v1.schema.json#/$defs/AnswerCompleteness": "#/$defs/context_fabric_common.v1/$defs/AnswerCompleteness",
 }
 
 // contextFabricProjectionDefsRewrites relocates
@@ -199,6 +201,8 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	"#/$defs/RenderPresentation": "#/$defs/context_fabric_answer_projection.v1/$defs/RenderPresentation",
 	"#/$defs/RenderAxisKind":     "#/$defs/context_fabric_answer_projection.v1/$defs/RenderAxisKind",
 	"#/$defs/RenderShapeRule":    "#/$defs/context_fabric_answer_projection.v1/$defs/RenderShapeRule",
+	// CHAOS-4413: completeness' own new projection-local $defs entry.
+	"#/$defs/AnswerCompleteness": "#/$defs/context_fabric_answer_projection.v1/$defs/AnswerCompleteness",
 }
 
 var mcpResponseDefsSyncs = []mcpResponseDefsSync{

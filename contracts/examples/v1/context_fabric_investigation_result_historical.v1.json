@@ -620,5 +620,11 @@
     },
     "grain": "day",
     "coverage_complete": false
+  },
+  "completeness": {
+    "terminal_status": "partial",
+    "terminal_reason": "degraded_reason_disclosed",
+    "claimed_facts_count": 1,
+    "rows_count": 0
   }
 }
