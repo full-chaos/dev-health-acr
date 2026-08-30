@@ -80,9 +80,15 @@ func TestNoTrendIsSelectedForTheLiveMisleadingRows(t *testing.T) {
 
 // TestNoTrendIsSelectedEvenForAPerfectlyShapedTable is the sharper half. A
 // single-scope, single-measure, properly dated table is exactly what a trend
-// SHOULD have been, and it still selects nothing — because the rule is
-// withdrawn, not merely narrowed. A future producer re-enabling it must
-// delete this test deliberately.
+// SHOULD have been, and it still selects nothing — the rule is withdrawn,
+// not merely narrowed.
+//
+// What this does NOT prove, so nobody reads more into it than it says: it
+// pins UNANNOTATED legacy rows, not universal absence. A future producer
+// gated on something new — a declared row-table shape (CHAOS-4627), a new
+// fact kind — could legitimately select `dated_fact_trend` with this test
+// still green, because its fixture carries no such declaration. That is the
+// intended way back, and this test is not the thing standing in its way.
 func TestNoTrendIsSelectedEvenForAPerfectlyShapedTable(t *testing.T) {
 	t.Parallel()
 	rows := []ClaimedFactRow{

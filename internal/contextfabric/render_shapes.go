@@ -90,15 +90,6 @@ const (
 	// truncated: a stacked bar claims its parts sum to the score, and a
 	// stack missing segments claims something false.
 	RenderShapeSkipTooManySignals RenderShapeSkipReason = "too_many_signals"
-	// RenderShapeSkipNoDatedRows -- no claimed fact carries a row table
-	// with a usable date axis and a numeric column.
-	RenderShapeSkipNoDatedRows RenderShapeSkipReason = "no_dated_rows"
-	// RenderShapeSkipShapeBudget -- a rule that would have fired but the
-	// per-answer shape cap was already reached.
-	RenderShapeSkipShapeBudget RenderShapeSkipReason = "shape_budget"
-	// RenderShapeSkipMixedScopeRows -- the row table's rows are not
-	// observations of the same thing (CHAOS-4616). See rowsShareOneScope.
-	RenderShapeSkipMixedScopeRows RenderShapeSkipReason = "mixed_scope_rows"
 	// RenderShapeSkipTrendRuleWithdrawn -- the dated_fact_trend rule has no
 	// producer (CHAOS-4616). Recorded on every selection rather than
 	// silently omitted, so a reader can tell "this build does not select

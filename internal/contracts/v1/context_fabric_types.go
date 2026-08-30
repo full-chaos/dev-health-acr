@@ -1486,9 +1486,11 @@ type ContextFabricInvestigationResult struct {
 	// projects.
 	StructureOfferSnapshot []ContextFabricStructureOfferSnapshotEntry `json:"structure_offer_snapshot,omitempty"`
 	// RenderShapes (CHAOS-4415 slice 1) is the OPTIONAL set of renderable
-	// shapes this answer warrants -- a per-team attention-score bar
-	// chart, a stacked per-driver contribution breakdown, a dated trend
-	// line. Absent (nil) on every answer no deterministic selection rule
+	// shapes this answer warrants -- today a per-team attention-score bar
+	// chart and a stacked per-driver contribution breakdown. (A dated
+	// trend line was also produced at first and was WITHDRAWN by
+	// CHAOS-4616; the kind and rule remain in the vocabulary with no
+	// producer.) Absent (nil) on every answer no deterministic selection rule
 	// fired for, which is the common case and the point: North Star check
 	// 10 makes rich views conditional on intent, never default.
 	//

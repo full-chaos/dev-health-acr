@@ -753,7 +753,7 @@ no shape, which is the common case.
 |---|---|---|
 | `cohort_attention_score` | `interpretation.shape ∈ {explicit_cohort, discovered_cohort}` AND ≥1 member has `ranking_computed` with a non-null `score` | `series` / `bars`, one point per ranked member in `attention_rank` order, value = that member's `score` |
 | `cohort_driver_contribution` | the rule above fired AND ≥1 ranked member carries drivers AND the distinct signal count fits one stack | `series` / `stacked_bars`, one series per driver family, value = that member's `weight_contributed` for it |
-| `dated_fact_trend` | a claimed fact's `rows` carry a date column present on EVERY row, all in the same shape, all distinct, ≥2 of them, plus ≥1 fully-numeric column | `series` / `line` over a time axis, one series per numeric column, points in chronological order |
+| `dated_fact_trend` | **never — WITHDRAWN, no producer (§10.3c)** | — |
 | — anything else — | | no shape |
 
 Two negatives are as load-bearing as the positives:
@@ -938,13 +938,24 @@ that the rules ran and chose nothing rather than the absence of a log line,
 which is indistinguishable from the selector never having run. One line per
 selected shape carries `render_shape_kind` / `render_shape_presentation` /
 `render_shape_rule` / `render_shape_series` / `render_shape_points`, and the
-summary line carries `render_shape_members_truncated` /
-`render_shape_series_truncated`; one
-line per declining rule carries `render_shape_skip_reason` from the closed
-set `not_cohort_intent` · `no_ranked_member` · `no_drivers` ·
-`too_many_signals` · `no_dated_rows` · `shape_budget`. Content-safe by
-construction: closed vocabulary and counts, never a label, subject or
-plotted number.
+summary line carries `render_shape_members_truncated`; one line per declining
+rule carries `render_shape_skip_reason` from the closed set
+`not_cohort_intent` · `no_ranked_member` · `no_drivers` ·
+`too_many_signals` · `trend_rule_withdrawn`. Content-safe by construction:
+closed vocabulary and counts, never a label, subject or plotted number.
+
+`trend_rule_withdrawn` is emitted on EVERY selection, because §10.3c withdrew
+the rule rather than narrowing it: an operator must be able to tell "this
+build does not select trends" from "the rule ran and found nothing". The
+`no_dated_rows`, `shape_budget` and `mixed_scope_rows` reasons that the trend
+rule used to produce are GONE from the vocabulary rather than kept as
+unreachable values — a reason no input can produce is a reason an operator
+will eventually chase.
+
+`render_shape_series_truncated` is likewise gone. It disclosed a trend
+carrying more numeric columns than one shape could hold; with no trend
+produced it could never move, and a counter that can never move implies a
+loss that cannot happen.
 
 ### 10.6 What the projection can and cannot carry
 
