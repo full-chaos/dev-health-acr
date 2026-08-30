@@ -162,6 +162,29 @@ reach)`. The window partition is the ownership row's own identity and the arms
 are unioned BEFORE it, so "every project this row can reach" is not a second
 query — it is exactly the rows already present.
 
+**The bound on that claim, stated because an earlier draft of this note
+over-promised it.** A `max` over a MUTABLE SET only detects changes that RAISE
+the max, and the keyset filter is strict. So a projects-side write brings the
+affected groups back over the cursor **when it raises the partition's
+maximum** — which covers project creation and every project UPDATE, since
+`projects` is `ReplacingMergeTree(updated_at)` and an update that loses on
+`updated_at` does not win `FINAL` either. It does NOT cover an INSERT whose
+`updated_at` sits below the partition's existing maximum: a backfill, a
+replayed sync, or a partition already dominated by a future-dated row.
+
+Note where that actually bites, because it is not this producer. The
+projection cursor is SHARED by every table in this source, and `queryProjects`
+(`teams_projects.go`, ordered on `projects.updated_at`) is what admits a
+future-dated timestamp into it — unchanged by this work. This producer now
+shares the cursor's fate rather than being immune to projects-side changes
+altogether, which is strictly more coverage than before, not less. The bound is
+pinned in BOTH directions by
+`TestOwnershipProducerAgainstRealClickHouse`'s "retraction only follows
+max-raising project writes", so this paragraph cannot quietly drift from the
+behaviour. Widening it needs a durable record of key-partition membership,
+which is not derivable from current state; that is tracked with the
+membership-LEAVING case in §6.
+
 `projectIdentityWithWatermarkSQL` carries `projects.updated_at` alongside
 `readers.ProjectIdentityCatalogSQL`'s expansion. The library expansion is
 wrapped in a `SELECT *` subquery before being joined, because its SQL ends
@@ -253,3 +276,9 @@ after this deploy, and that path is rebuild-free.
   Closing it properly needs a watermark over every project that has EVER shared
   a key, which is not derivable from current state, so it is a separate piece of
   work and not a patch to this one.
+- **It does not detect a projects-side change that fails to RAISE the key
+  partition's maximum `updated_at`** — see §2.3's bound. Same root cause as the
+  bullet above: the cursor is a max over a mutable set, so it sees membership
+  and value changes only when they push the maximum up. Membership LEAVING and
+  membership JOINING BELOW THE MAX are the two faces of it, and they are
+  tracked together as one follow-up rather than as two symptoms.
