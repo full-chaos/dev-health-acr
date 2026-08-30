@@ -103,6 +103,18 @@ func TestJoinONViolations(t *testing.T) {
 			wantBad:   nil,
 		},
 		{
+			// codex R3: chaos4099_scope_expander.go's projectRepositoriesAsOf
+			// carries this exact shape in a real ON clause.
+			name:      "codex R3: a bound parameter {name:Type} operand is portable",
+			statement: "SELECT 1 FROM a INNER JOIN b ON a.id = b.id AND r.org_id = {org_id:String}",
+			wantBad:   nil,
+		},
+		{
+			name:      "codex R3: a bound parameter with a nested/parameterized type is portable",
+			statement: "SELECT 1 FROM a INNER JOIN b ON a.id = b.id AND iv.observed_at = {as_of:Nullable(DateTime64(3, 'UTC'))}",
+			wantBad:   nil,
+		},
+		{
 			name:      "OR-arm is rejected",
 			statement: "SELECT 1 FROM a INNER JOIN b ON a.id = b.id OR a.org_id = b.org_id",
 			wantBad:   []string{"a.id = b.id OR a.org_id = b.org_id"},

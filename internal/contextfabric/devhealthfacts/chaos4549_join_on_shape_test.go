@@ -37,10 +37,14 @@ package devhealthfacts_test
 //     declared subject kind (readers.ReadWorkItemRepository, a distinct
 //     JOIN from the repository-subject baseline);
 //   - sweepScopeExpander, which drives chaos4099_scope_expander.go's
-//     ScopeExpander through all six FactScopePolicy values against the
-//     SAME fakeClient -- a completely separate production JOIN ON surface
-//     from the FactProvider sweep above, and (codex review finding)
-//     unswept before this change.
+//     ScopeExpander through all six FactScopePolicy values (each on its
+//     own seeded fakeClient, isolated from the FactProvider sweep above --
+//     a completely separate production JOIN ON surface, and codex review
+//     finding: unswept before this change), PLUS a second pass on the
+//     three project-origin policies under a historical (ValidTime) axis,
+//     which routes to a distinct pair of queries
+//     (projectRepositoriesAsOf/historicalDropCount) the TemporalCurrent
+//     axis never reaches (codex R3 finding).
 //
 // RULE: internal/chfixture.JoinONViolations requires every ON clause to be
 // a top-level AND-conjunction of conjuncts, each EXACTLY "<operand> =
@@ -56,6 +60,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -179,6 +184,14 @@ func TestChaos4549AllJoinOnClausesArePortable(t *testing.T) {
 	if !anyStatementContains(allQueries, "r.repo_id = p.repo_id AND r.number = p.number AND r.org_id = p.org_id") {
 		t.Fatal("no captured statement carries pullRequestReviewsForRepositories' own ON clause -- sweepScopeExpander's second-hop review policies never reached their own query")
 	}
+	// codex R3: the historical (ValidTime/Range) axis routes project-origin
+	// policies to projectRepositoriesAsOf/historicalDropCount instead of
+	// the current-axis query above -- a completely different JOIN ON
+	// shape that a TemporalCurrent-only sweep never reaches. "ever_matched"
+	// is unique to historicalDropCount's own statement.
+	if !anyStatementContains(allQueries, "ever_matched") {
+		t.Fatal("no captured statement carries historicalDropCount's own aggregate -- sweepScopeExpander's historical-axis sweep never reached it")
+	}
 	totalClauses, totalConjuncts := 0, 0
 	for _, query := range allQueries {
 		violations, clauses, conjuncts := chfixture.JoinONViolations(query.statement)
@@ -268,7 +281,48 @@ func sweepScopeExpander(ctx context.Context, orgID string) []capturedQuery {
 			Limit:           20,
 		})
 	}
-	return client.queries
+
+	// codex R3: every project-origin policy above routed only
+	// TemporalCurrent through projectRepositories, which only reaches its
+	// CURRENT-column query. A ValidTime/Range axis routes the SAME
+	// policies to projectRepositoriesAsOf instead -- a completely
+	// different JOIN ON shape -- which ALSO unconditionally calls
+	// historicalDropCount right after, regardless of how many candidates
+	// come back. This runs on its OWN unseeded fakeClient, not the one
+	// above: projectRepositoriesAsOf's UNION ALL also reads
+	// "FROM work_items AS w FINAL" (one of its two arms), the SAME match
+	// string the first-hop seed above targets, but scans a DIFFERENT
+	// column count (4, not 3) -- sharing the seeded client panics on that
+	// Scan mismatch instead of failing cleanly. An empty client still
+	// issues and captures both statements (zero rows, no Scan calls); the
+	// second-hop pull-request/review queries are axis-invariant SQL
+	// already captured above, so this only needs to reach
+	// projectRepositoriesAsOf/historicalDropCount themselves, not a
+	// second hop again.
+	historicalClient := &fakeClient{}
+	historicalExpander := devhealthfacts.NewScopeExpander(historicalClient)
+	asOf := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
+	historicalPolicies := []struct {
+		policy  contextfabric.FactScopePolicy
+		target  contextfabric.SubjectKind
+		require contextfabric.FactKind
+	}{
+		{contextfabric.FactScopePolicyProjectWorkItemRepository, contextfabric.SubjectRepository, contextfabric.FactMetrics},
+		{contextfabric.FactScopePolicyProjectWorkItemPullRequest, contextfabric.SubjectPullRequest, contextfabric.FactPullRequests},
+		{contextfabric.FactScopePolicyProjectWorkItemPullRequestReview, contractsv1.ContextFabricSubjectPullRequestReview, contextfabric.FactReviews},
+	}
+	for _, p := range historicalPolicies {
+		_, _ = historicalExpander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
+			Principal:       principal,
+			RequirementKind: p.require,
+			Origins:         []contextfabric.SubjectRef{project},
+			Policy:          p.policy,
+			TargetKind:      p.target,
+			TimeContext:     contextfabric.TimeContext{Axis: contextfabric.TemporalValidTime, AsOf: &asOf},
+			Limit:           20,
+		})
+	}
+	return append(client.queries, historicalClient.queries...)
 }
 
 // readFactsForJoinShapeCheck issues one ReadFacts call purely to capture

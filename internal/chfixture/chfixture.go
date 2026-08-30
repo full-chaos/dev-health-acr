@@ -454,6 +454,8 @@ func (p *operandParser) baseOperand() bool {
 	switch c := p.s[p.pos]; {
 	case c == '\'':
 		return p.stringLiteral()
+	case c == '{':
+		return p.boundParameter()
 	case c == '-' || (c >= '0' && c <= '9'):
 		return p.numberLiteral()
 	case isIdentStart(c):
@@ -461,6 +463,37 @@ func (p *operandParser) baseOperand() bool {
 	default:
 		return false
 	}
+}
+
+// boundParameter consumes a ClickHouse named-parameter placeholder, e.g.
+// "{org_id:String}" or "{as_of:Nullable(DateTime64(3, 'UTC'))}" (codex
+// review finding: chaos4099_scope_expander.go's projectRepositoriesAsOf
+// carries "r.org_id = {org_id:String}" in a real ON clause). This does not
+// parse the type expression itself -- ClickHouse type syntax nests
+// parens/commas/string literals arbitrarily deep (Nullable(...),
+// Array(...), a quoted timezone) with no bound relevant to the portability
+// question this guard asks -- it only finds the MATCHING closing brace by
+// tracking "{"/"}" depth, which is sufficient because a placeholder's type
+// expression is never itself brace-delimited.
+func (p *operandParser) boundParameter() bool {
+	if p.pos >= len(p.s) || p.s[p.pos] != '{' {
+		return false
+	}
+	depth := 0
+	for p.pos < len(p.s) {
+		switch p.s[p.pos] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				p.pos++
+				return true
+			}
+		}
+		p.pos++
+	}
+	return false // unterminated -- no matching "}"
 }
 
 // identOrCall consumes an identifier, then either a ".<identifier>"
