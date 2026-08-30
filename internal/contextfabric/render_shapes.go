@@ -62,6 +62,13 @@ type RenderShapeSelectionEvent struct {
 	// projection budget exists to prevent, one layer up. Zero on every
 	// selection that lost nothing.
 	MembersTruncated int
+	// SeriesTruncated counts numeric columns a trend could not carry. A
+	// shape holds at most 8 series, so a wide row table yields a PARTIAL
+	// trend. Same reason MembersTruncated exists: reporting a healthy
+	// 8-series shape for a 9-column fact lets a consumer read a partial
+	// trend as a complete one (codex round 2, P3). Zero on every
+	// selection that lost nothing.
+	SeriesTruncated int
 }
 
 // RenderShapeSkip records one rule that did not produce a shape.
@@ -148,7 +155,8 @@ func SelectRenderShapes(result InvestigationResult) ([]contractsv1.ContextFabric
 		}
 	}
 
-	trends := datedFactTrendShapes(result.ClaimedFacts)
+	trends, seriesTruncated := datedFactTrendShapes(result.ClaimedFacts)
+	event.SeriesTruncated = seriesTruncated
 	if len(trends) == 0 {
 		event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipNoDatedRows)
 	}
@@ -413,27 +421,29 @@ func humanizeRenderTerm(term string) string {
 //
 // A fact that fails any clause simply gets no trend -- it keeps its row
 // table, which was already renderable.
-func datedFactTrendShapes(facts []ClaimedFact) []contractsv1.ContextFabricRenderShape {
+func datedFactTrendShapes(facts []ClaimedFact) ([]contractsv1.ContextFabricRenderShape, int) {
 	var shapes []contractsv1.ContextFabricRenderShape
+	truncatedTotal := 0
 	for _, fact := range facts {
-		shape, ok := datedFactTrendShape(fact)
+		shape, truncated, ok := datedFactTrendShape(fact)
 		if !ok {
 			continue
 		}
+		truncatedTotal += truncated
 		shapes = append(shapes, shape)
 	}
-	return shapes
+	return shapes, truncatedTotal
 }
 
-func datedFactTrendShape(fact ClaimedFact) (contractsv1.ContextFabricRenderShape, bool) {
+func datedFactTrendShape(fact ClaimedFact) (shape contractsv1.ContextFabricRenderShape, truncated int, ok bool) {
 	rows := fact.Rows
 	if len(rows) < 2 || len(rows) > contractsv1.ContextFabricRenderPointsMaxCount {
-		return contractsv1.ContextFabricRenderShape{}, false
+		return contractsv1.ContextFabricRenderShape{}, 0, false
 	}
 	columns := renderRowColumns(rows)
-	dateColumn, ordering, ok := dateAxisColumn(rows, columns)
-	if !ok {
-		return contractsv1.ContextFabricRenderShape{}, false
+	dateColumn, ordering, found := dateAxisColumn(rows, columns)
+	if !found {
+		return contractsv1.ContextFabricRenderShape{}, 0, false
 	}
 	var series []contractsv1.ContextFabricRenderSeries
 	for _, column := range columns {
@@ -441,12 +451,15 @@ func datedFactTrendShape(fact ClaimedFact) (contractsv1.ContextFabricRenderShape
 			continue
 		}
 		if len(series) >= contractsv1.ContextFabricRenderSeriesMaxCount {
-			break
+			// Counted, not silently skipped: a shape reporting 8 healthy
+			// series for a 9-column fact reads as a complete trend.
+			truncated++
+			continue
 		}
 		points := make([]contractsv1.ContextFabricRenderPoint, 0, len(ordering))
 		for _, index := range ordering {
-			value, ok := renderNumericCell(rows[index].Fields[column])
-			if !ok {
+			value, numeric := renderNumericCell(rows[index].Fields[column])
+			if !numeric {
 				continue
 			}
 			label, _ := renderStringCell(rows[index].Fields[dateColumn])
@@ -472,7 +485,7 @@ func datedFactTrendShape(fact ClaimedFact) (contractsv1.ContextFabricRenderShape
 		})
 	}
 	if len(series) == 0 {
-		return contractsv1.ContextFabricRenderShape{}, false
+		return contractsv1.ContextFabricRenderShape{}, 0, false
 	}
 	return contractsv1.ContextFabricRenderShape{
 		Kind:         contractsv1.ContextFabricRenderKindSeries,
@@ -483,7 +496,7 @@ func datedFactTrendShape(fact ClaimedFact) (contractsv1.ContextFabricRenderShape
 		AxisLabel:    clampRenderLabel(dateColumn),
 		ValueLabel:   clampRenderLabel(humanizeRenderTerm(fact.Field)),
 		Series:       series,
-	}, true
+	}, truncated, true
 }
 
 // renderRowColumns is first-seen column order across the row set, so shape

@@ -816,11 +816,17 @@ one moment. A raw-string check called them distinct, and a time axis —
 positioned by elapsed time — then stacked two different values on one x
 position.
 
-**A truncated cohort chart says so.** A cohort may carry 250 members and a
-series 64 points, so a large cohort's chart shows only the top of the
-ranking. The loss is counted on the selection event and logged as
-`render_shape_members_truncated`. A chart of the top 64 that says nothing
-reads as a chart of the whole cohort.
+**A truncated chart says so — in BOTH directions.** A cohort may carry 250
+members and a series 64 points, so a large cohort's chart shows only the top
+of the ranking; and a shape holds at most 8 series, so a row table with 9
+numeric columns yields a partial trend. Both losses are counted on the
+selection event and logged (`render_shape_members_truncated`,
+`render_shape_series_truncated`). A chart of the top 64 that says nothing
+reads as a chart of the whole cohort, and an 8-series shape reported as
+healthy reads as a complete trend. The second was found only because the
+first had already been fixed and the same question was asked again of the
+sibling path — closing one silent truncation and leaving its twin open is how
+the class survives.
 
 **Label disambiguation runs AFTER clamping.** Two genuinely distinct member
 labels sharing their first 256 characters each looked unique, were clamped
@@ -877,7 +883,9 @@ line always carries `render_shapes_selected`, so `0` is a positive statement
 that the rules ran and chose nothing rather than the absence of a log line,
 which is indistinguishable from the selector never having run. One line per
 selected shape carries `render_shape_kind` / `render_shape_presentation` /
-`render_shape_rule` / `render_shape_series` / `render_shape_points`; one
+`render_shape_rule` / `render_shape_series` / `render_shape_points`, and the
+summary line carries `render_shape_members_truncated` /
+`render_shape_series_truncated`; one
 line per declining rule carries `render_shape_skip_reason` from the closed
 set `not_cohort_intent` · `no_ranked_member` · `no_drivers` ·
 `too_many_signals` · `no_dated_rows` · `shape_budget`. Content-safe by
