@@ -1350,6 +1350,10 @@ func TestDecisionEventNeverCarriesCorpusText(t *testing.T) {
 		"request_id": true, "org_id_hash": true, "operation": true, "outcome": true,
 		"attempts": true, "fallback_used": true, "primary_failure_classification": true,
 		"axis_source": true,
+		// CHAOS-4622: the applied INTERPRET decoding config, logged as the
+		// fixed named constant (never request/response content) -- see
+		// logInterpretDecision's own doc comment.
+		"decoding_seed": true,
 	}
 	synthesizeFields := map[string]bool{
 		"request_id": true, "org_id_hash": true, "operation": true, "outcome": true,

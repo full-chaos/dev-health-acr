@@ -400,6 +400,68 @@ type generationRequest struct {
 	Model  string
 	System string
 	Prompt string
+	// Config (CHAOS-4622) is an OPTIONAL provider decoding config, forwarded
+	// verbatim to genkit's ai.WithConfig. Only InterpretQuestion sets this
+	// (to interpretDecodingConfig, below) -- Synthesize/Phrase never set it,
+	// and sdkGenerator.Synthesize/Phrase never read it, so this field is a
+	// no-op for every call site except Interpret.
+	Config any
+}
+
+// chaos4622InterpretSeed is the exact decoding parameter
+// interpretDecodingConfig pins on the INTERPRET call, named individually
+// (not just inlined in the map) so logInterpretDecision can report exactly
+// what was applied without re-inspecting the request payload.
+const chaos4622InterpretSeed = 4622
+
+// interpretDecodingConfig (CHAOS-4622) pins the INTERPRET call to
+// deterministic-as-possible decoding: a fixed seed, and ONLY a fixed seed.
+//
+// Before this, sdkGenerator.Interpret called genkit.GenerateData with NO
+// ai.WithConfig at all, so InterpretedQuestion (incl. .Shape) sampled
+// unseeded and flipped across replicates of the byte-identical question --
+// 6 replicates of one CHAOS-4622 corpus question produced 3 different
+// missing-field bundles, only 1/6 matching the correct interpretation.
+//
+// Temperature is deliberately NOT set here, even though the ticket asked
+// for "temperature 0 (or the runtime's nearest supported)": the deployed
+// model family rejects it outright. EXECUTED repro against the real
+// provider (org 70d529e0, kiac rig, this runtime's own configured model)
+// with `{"temperature": 0}` in this exact map: every call failed
+// `POST https://api.openai.com/v1/chat/completions: 400 Bad Request`
+// (body sanitized by ACR's own redaction, but the 400 plus the model
+// family is the same "temperature is fixed, only default supported"
+// constraint OpenAI's reasoning-model line (o1/o3/gpt-5-class) documents)
+// -- classified ErrModelUnavailable and surfaced to callers as
+// dependency_unavailable, i.e. temperature:0 would have made EVERY
+// interpretation fail, not just made it deterministic. `{"seed": 4622}`
+// alone, same model, same question: 200, interpretation returned. Seed is
+// this model family's actual supported determinism lever, so it is the
+// "nearest supported" the ticket asks for.
+//
+// Scope: decision-stability only. This does not change WHICH
+// interpretation is correct for an ambiguous/grouped-cohort question --
+// that is CHAOS-4452's territory (question-family/investigation-planning
+// stage). It only makes the SAME input more likely to reliably produce the
+// SAME interpretation, so a still-wrong interpretation for a hard question
+// can stabilize rather than flip; that is this ticket's honest limit, not
+// a regression.
+//
+// Shaped as a map[string]any (JSON field name "seed") rather than the
+// openai-go SDK's own openai.ChatCompletionNewParams type, so
+// genkitruntime does not import that package directly -- compat_oai's
+// ModelGenerator.WithConfig round-trips a map[string]any through
+// base.MapToStruct[openai.ChatCompletionNewParams] (JSON marshal/
+// unmarshal), landing on the exact same Seed field. compat_oai is the
+// only Genkit plugin ACR runs (internal/contextfabric/modelprovider wires
+// it exclusively); a future non-OpenAI-compatible plugin that does not
+// recognize "seed" at all would silently ignore this whole map (still no
+// worse than today), never fail closed.
+//
+// Deliberately NOT applied to Synthesize/Phrase in this change -- see the
+// CHAOS-4622 handoff for a per-call-site recommendation on those.
+var interpretDecodingConfig = map[string]any{
+	"seed": chaos4622InterpretSeed,
 }
 
 type sdkGenerator struct {
@@ -412,6 +474,7 @@ func (g sdkGenerator) Interpret(ctx context.Context, request generationRequest) 
 		ai.WithSystem(request.System),
 		ai.WithPrompt("%s", request.Prompt),
 		ai.WithCustomConstrainedOutput(),
+		ai.WithConfig(request.Config),
 	)
 	if err != nil {
 		return interpretationOutput{}, contextfabric.ModelUsage{}, err
@@ -596,6 +659,7 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 		var err error
 		output, usage, err = r.generator.Interpret(callCtx, generationRequest{
 			Model: r.config.ModelRef, System: interpretationSystemPrompt, Prompt: string(encoded),
+			Config: interpretDecodingConfig,
 		})
 		return err
 	})
@@ -1120,6 +1184,17 @@ func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID str
 		"fallback_used", receipt.FallbackUsed,
 		"primary_failure_classification", primaryFailureClassification,
 		"axis_source", axisSource,
+		// CHAOS-4622: the exact decoding config interpretDecodingConfig
+		// applies to this call, logged as a concrete value (not the request
+		// payload) so replay can prove determinism was actually requested
+		// without re-inspecting the receipt. This function only ever logs
+		// the interpret operation, so this is unconditional, unlike
+		// logSynthesizeDecision's appended-only fields. No temperature
+		// field: this model family rejects a non-default temperature
+		// outright (see interpretDecodingConfig's doc comment for the
+		// executed repro), so seed is the only decoding parameter this
+		// change actually applies.
+		"decoding_seed", chaos4622InterpretSeed,
 	)
 }
 
