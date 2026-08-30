@@ -119,43 +119,62 @@ func majorMinor(version string) (major, minor int, ok bool) {
 // plus how many ON clauses and conjuncts it examined, so a caller can log
 // real coverage instead of a guard that silently checked nothing.
 //
-// ON DETECTION (team-lead's 2026-08-29 R1 finding): a bare
-// `strings.Split(statement, " ON ")` requires a literal space before "ON"
-// and silently misses "JOIN t\nON a = b" (ON at the start of a line, a
-// common multi-line-builder shape); this instead scans for the
-// case-insensitive, word-bounded token "ON" anywhere in the statement.
+// JOIN/ON DETECTION (codex R4 review): a bare "ON" search matches ANYWHERE
+// in the statement, including inside a string literal ("SELECT if(flag,
+// 'ON', 'OFF') ..." would register a phantom clause) and with no JOIN
+// anywhere nearby (a JOIN using USING(...) instead of ON has no condition
+// at all, and must not silently grab a later, unrelated ON belonging to a
+// different clause). This instead anchors on the word "JOIN" first; for
+// each JOIN, it looks for the very next "ON" at that SAME paren depth,
+// but only if no clause-terminator (another JOIN, WHERE, ...) or a
+// closing paren appears first -- a JOIN with no ON contributes nothing to
+// check. Both searches skip single-quoted string-literal content
+// (quoteProfile), so a literal 'ON' or a literal containing a keyword
+// word never counts as structure.
 //
-// CONDITION BOUNDARY (the other half of the same finding): the condition
+// CONDITION BOUNDARY (team-lead's 2026-08-29 R1 finding): the condition
 // used to end at the first newline, so a multi-line ON ("ON a = b\n  AND
 // has(x, y)" or "...\n  OR c = d") was checked only on its first line --
 // the violating second line was never seen, which is exactly the shape
-// that made the "0 violations" sweep partly an artifact of this bug
-// rather than proof. The condition now runs from just after "ON" to the
-// next top-level (same paren depth as the ON token) clause-boundary
-// keyword -- WHERE/PREWHERE/GROUP BY/ORDER BY/HAVING/LIMIT/SETTINGS/
-// UNION/WINDOW/QUALIFY, another JOIN (with or without an
-// INNER/LEFT/RIGHT/FULL/CROSS/ANY/ALL/ASOF/SEMI/ANTI/ARRAY qualifier) --
-// or a closing paren that drops below that depth, or end of statement;
-// SQL line comments (`-- ...`) are stripped first (their prose containing
-// the plain words "ON"/"AND"/"WHERE" would otherwise register as phantom
-// structure), and the extracted span has its whitespace (including
-// embedded newlines) collapsed before the top-level-AND split, so a
-// conjunct spanning multiple source lines still matches " AND " and a
-// bare newline never hides an OR/predicate on a later line.
+// that made an earlier "0 violations" sweep partly an artifact of this
+// bug rather than proof. The condition now runs from just after "ON" to
+// the next top-level (same paren depth as the ON token) clause-boundary
+// keyword -- see clauseTerminators -- or a closing paren that drops below
+// that depth, or end of statement; SQL line comments (`-- ...`) are
+// stripped first (their prose containing the plain words
+// "ON"/"AND"/"WHERE" would otherwise register as phantom structure), and
+// the extracted span has its whitespace (including embedded newlines)
+// collapsed before the top-level-AND split, so a conjunct spanning
+// multiple source lines still matches " AND " and a bare newline never
+// hides an OR/predicate on a later line.
 func JoinONViolations(statement string) (violations []string, clauses, conjuncts int) {
 	statement = stripLineComments(statement)
 	upper := strings.ToUpper(statement)
 	depths := depthProfile(statement)
+	quoted := quoteProfile(statement)
 
 	pos := 0
 	for {
-		onStart, ok := nextWord(upper, pos, "ON")
+		joinStart, ok := nextWord(upper, quoted, pos, "JOIN")
 		if !ok {
 			break
 		}
-		depth := depths[onStart]
-		conditionStart := onStart + len("ON")
-		conditionEnd := clauseEnd(upper, depths, conditionStart, depth)
+		depth := depths[joinStart]
+		searchFrom := joinStart + len("JOIN")
+
+		onPos := firstWordAtDepth(upper, quoted, depths, searchFrom, depth, "ON")
+		boundary := clauseEnd(upper, quoted, depths, searchFrom, depth, clauseTerminators)
+		if onPos < 0 || onPos >= boundary {
+			// No ON before the next clause/JOIN/depth-drop -- e.g. a
+			// USING(...) join, or a JOIN with an unconditional ON-less
+			// target. Nothing to check for THIS join; keep scanning from
+			// right after its own "JOIN" token.
+			pos = searchFrom
+			continue
+		}
+
+		conditionStart := onPos + len("ON")
+		conditionEnd := clauseEnd(upper, quoted, depths, conditionStart, depth, clauseTerminators)
 		condition := strings.Join(strings.Fields(statement[conditionStart:conditionEnd]), " ")
 		pos = conditionEnd
 		if condition == "" {
@@ -172,37 +191,36 @@ func JoinONViolations(statement string) (violations []string, clauses, conjuncts
 	return violations, clauses, conjuncts
 }
 
-// clauseTerminators are the keywords that end a JOIN ON condition. Listing
-// the join-type QUALIFIERS (INNER, LEFT, ...) rather than "JOIN" itself
-// as the boundary matters: stopping at "JOIN" would leave the qualifier
-// word ("LEFT ", "INNER ") trailing in the extracted condition text,
-// corrupting its last conjunct. Bare "JOIN" is still listed for an
-// unqualified join. "GROUP"/"ORDER" (not "GROUP BY"/"ORDER BY") are
-// enough: "BY" always follows immediately and the boundary is the clause
-// start, not the exact phrase.
-// ANY/ALL/ARRAY are listed as their two-word "... JOIN" phrase, not the
-// bare qualifier (team-lead's non-blocking review note on this file): all
-// three are also common ClickHouse function/aggregate names
-// (any(x), all(x), array(x)), and nextWord's word-boundary check treats
-// "(" as a valid boundary -- a bare "ANY" terminator would truncate a
-// condition at a legitimate any(...)/all(...)/array(...) call, not just
-// an ANY JOIN/ALL JOIN/ARRAY JOIN qualifier. The other qualifiers
-// (INNER/LEFT/RIGHT/FULL/CROSS/ASOF/SEMI/ANTI) are not common function
-// names in this codebase's SQL, so the bare word stays cheap and correct
-// for them; UNION ALL is still caught by the bare "UNION" entry above.
+// clauseTerminators are the keywords that end a JOIN ON condition (and,
+// reused, mark where a JOIN's search for its own ON gives up). Every
+// join-type qualifier (INNER, LEFT, RIGHT, FULL, CROSS, ANY, ALL, ASOF,
+// SEMI, ANTI, ARRAY) is listed as its two-word "... JOIN" phrase, never
+// the bare qualifier alone (codex R4 review, generalizing team-lead's
+// ANY/ALL/ARRAY finding to the rest: LEFT and RIGHT are ClickHouse string
+// functions, left(s, n)/right(s, n), and a bare "LEFT"/"RIGHT" terminator
+// truncates a condition at a legitimate left(...)/right(...) call in an
+// operand -- INNER/FULL/CROSS/ASOF/SEMI/ANTI are lower-risk but treated
+// the same way for consistency, not because a collision was found for
+// each). Bare "JOIN" is still listed as the fallback for an unqualified
+// join. "GROUP"/"ORDER" (not "GROUP BY"/"ORDER BY") are enough: "BY"
+// always follows immediately and the boundary is the clause start, not
+// the exact phrase. "UNION ALL" is still caught by the bare "UNION"
+// entry (ALL alone is never searched for).
 var clauseTerminators = []string{
 	"WHERE", "PREWHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "SETTINGS",
 	"UNION", "WINDOW", "QUALIFY",
-	"INNER", "LEFT", "RIGHT", "FULL", "CROSS", "ASOF", "SEMI", "ANTI",
-	"ANY JOIN", "ALL JOIN", "ARRAY JOIN",
+	"INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN", "CROSS JOIN",
+	"ANY JOIN", "ALL JOIN", "ASOF JOIN", "SEMI JOIN", "ANTI JOIN", "ARRAY JOIN",
 	"JOIN",
 }
 
-// clauseEnd finds where a JOIN ON condition starting at `from` (at paren
-// depth `depth`) ends: the earliest of the next clauseTerminators keyword
-// at that SAME depth, the position where depth first drops below `depth`
-// (a closing paren belonging to an enclosing scope), or end of string.
-func clauseEnd(upper string, depths []int, from, depth int) int {
+// clauseEnd finds where a span starting at `from` (at paren depth `depth`)
+// ends: the earliest of the next word in `terminators` at that SAME
+// depth, the position where depth first drops below `depth` (a closing
+// paren belonging to an enclosing scope), or end of string. Used both to
+// bound a found ON condition and, reused with the same terminator set, to
+// find how far a JOIN's search for its own ON may look before giving up.
+func clauseEnd(upper string, quoted []bool, depths []int, from, depth int, terminators []string) int {
 	end := len(upper)
 	// depths[i] is the depth IN EFFECT WHILE processing character i -- so
 	// the ')' that closes us from `depth` down to `depth-1` is itself
@@ -216,8 +234,8 @@ func clauseEnd(upper string, depths []int, from, depth int) int {
 			break
 		}
 	}
-	for _, word := range clauseTerminators {
-		if pos := firstWordAtDepth(upper, depths, from, depth, word); pos >= 0 && pos < end {
+	for _, word := range terminators {
+		if pos := firstWordAtDepth(upper, quoted, depths, from, depth, word); pos >= 0 && pos < end {
 			end = pos
 		}
 	}
@@ -264,12 +282,41 @@ func isWordChar(b byte) bool {
 	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
+// quoteProfile returns, for every byte offset in s (including one past
+// the end), whether that offset falls strictly inside a single-quoted SQL
+// string literal (codex R4 review: a literal like 'ON' or a value
+// containing "WHERE" must never be mistaken for query structure). A
+// doubled quote (”) is treated as an escaped quote, matching
+// operandParser.stringLiteral, not the closing delimiter.
+func quoteProfile(s string) []bool {
+	quoted := make([]bool, len(s)+1)
+	inString := false
+	for i := 0; i < len(s); i++ {
+		quoted[i] = inString
+		if s[i] != '\'' {
+			continue
+		}
+		if inString && i+1 < len(s) && s[i+1] == '\'' {
+			quoted[i+1] = true
+			i++
+			continue
+		}
+		inString = !inString
+	}
+	quoted[len(s)] = inString
+	return quoted
+}
+
 // nextWord finds the next case-insensitive, word-bounded occurrence of
-// word in upper (which must already be uppercased) at or after from.
+// word in upper (which must already be uppercased) at or after from,
+// skipping any match that starts inside a string literal (quoted).
 // Word-bounded rejects a substring match that is really part of a longer
 // identifier on either side.
-func nextWord(upper string, from int, word string) (int, bool) {
+func nextWord(upper string, quoted []bool, from int, word string) (int, bool) {
 	for i := from; i+len(word) <= len(upper); i++ {
+		if quoted[i] {
+			continue
+		}
 		if upper[i:i+len(word)] != word {
 			continue
 		}
@@ -288,10 +335,10 @@ func nextWord(upper string, from int, word string) (int, bool) {
 // given paren depth, re-searching past any depth mismatch (a keyword
 // appearing deeper than `depth` -- inside a nested subquery expression --
 // does not count as this clause's boundary).
-func firstWordAtDepth(upper string, depths []int, from, depth int, word string) int {
+func firstWordAtDepth(upper string, quoted []bool, depths []int, from, depth int, word string) int {
 	pos := from
 	for {
-		idx, ok := nextWord(upper, pos, word)
+		idx, ok := nextWord(upper, quoted, pos, word)
 		if !ok {
 			return -1
 		}

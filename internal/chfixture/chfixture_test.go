@@ -48,6 +48,11 @@ func TestJoinONViolations(t *testing.T) {
 		name      string
 		statement string
 		wantBad   []string
+		// wantZeroClauses marks a case that legitimately finds NO JOIN ON
+		// clause at all (no JOIN in the statement, or a JOIN with no ON of
+		// its own) -- the default "clauses == 0 is a guard bug" check
+		// below is skipped for these.
+		wantZeroClauses bool
 	}{
 		{
 			name:      "plain equality is portable",
@@ -115,6 +120,31 @@ func TestJoinONViolations(t *testing.T) {
 			wantBad:   nil,
 		},
 		{
+			// codex R4: a bare "LEFT" terminator (pre-fix) truncates the
+			// condition right at left(...), producing an empty/partial
+			// condition that silently never sees the OR after it.
+			name:      "codex R4: left(...)/right(...) as an operand's function call is portable, and an OR after it is still detected",
+			statement: "SELECT 1 FROM a INNER JOIN b ON left(a.key, 3) = b.key OR a.org_id = b.org_id",
+			wantBad:   []string{"left(a.key, 3) = b.key OR a.org_id = b.org_id"},
+		},
+		{
+			// codex R4: a literal 'ON' must never be mistaken for the JOIN
+			// keyword -- this statement has no JOIN at all.
+			name:            "codex R4: a string literal spelling ON is not a phantom clause",
+			statement:       "SELECT if(flag, 'ON', 'OFF') FROM a",
+			wantBad:         nil,
+			wantZeroClauses: true,
+		},
+		{
+			// codex R4: a JOIN using USING(...) has no ON condition of its
+			// own; the guard must not walk past it to grab an unrelated ON
+			// belonging to a different clause deeper in the statement.
+			name:            "codex R4: a JOIN ... USING(...) with no ON contributes no clause",
+			statement:       "SELECT 1 FROM a JOIN b USING (id) WHERE a.flag = if(a.on_call, 'ON', 'OFF')",
+			wantBad:         nil,
+			wantZeroClauses: true,
+		},
+		{
 			name:      "OR-arm is rejected",
 			statement: "SELECT 1 FROM a INNER JOIN b ON a.id = b.id OR a.org_id = b.org_id",
 			wantBad:   []string{"a.id = b.id OR a.org_id = b.org_id"},
@@ -176,7 +206,11 @@ GROUP BY a.id`,
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			violations, clauses, conjuncts := chfixture.JoinONViolations(tc.statement)
-			if clauses == 0 || conjuncts == 0 {
+			if tc.wantZeroClauses {
+				if clauses != 0 || conjuncts != 0 {
+					t.Fatalf("clauses/conjuncts = %d/%d, want 0/0 -- this statement has no ON clause to check", clauses, conjuncts)
+				}
+			} else if clauses == 0 || conjuncts == 0 {
 				t.Fatalf("checked 0 clauses/conjuncts (%d/%d) -- the guard examined nothing", clauses, conjuncts)
 			}
 			if len(violations) != len(tc.wantBad) {
