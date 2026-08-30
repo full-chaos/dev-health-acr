@@ -794,10 +794,13 @@ carried into chart space. A model cannot author a shape at all: there is no
 `SynthesisDraft` field for one, and selection runs after
 `SynthesisDraft.ValidateAgainst` has already completed.
 
-### 10.3a Four properties the first adversarial review bought
+### 10.3a Properties the first adversarial review bought
 
 Each of these was a real defect found by review and closed with a red test.
-They are recorded because each one is the *same* mistake in a different
+Some concern the trend rule that §10.3c later withdrew; those are marked
+*historical* and kept deliberately, because a returning trend producer must
+not reintroduce them. They are recorded because each one is the *same*
+mistake in a different
 place: a number quietly stopping being the number it claims to be.
 
 **An integer past 2^53 is refused, not cast.** `Point.Value` is a float64 —
@@ -810,23 +813,23 @@ compare rule defeated by a silent cast. Such a point is now refused
 selector, projection. A chart that cannot carry a number faithfully must not
 carry it at all; the fact keeps its table.
 
-**Trend dates are distinct by INSTANT, not by spelling.**
-`2026-08-03T00:00:00Z` and `2026-08-02T17:00:00-07:00` are two spellings of
-one moment. A raw-string check called them distinct, and a time axis —
-positioned by elapsed time — then stacked two different values on one x
-position.
+**A truncated chart says so.** A cohort may carry 250 members and a series
+64 points, so a large cohort's chart shows only the top of the ranking. The
+loss is counted on the selection event and logged as
+`render_shape_members_truncated`; a chart of the top 64 that says nothing
+reads as a chart of the whole cohort.
 
-**A truncated chart says so — in BOTH directions.** A cohort may carry 250
-members and a series 64 points, so a large cohort's chart shows only the top
-of the ranking; and a shape holds at most 8 series, so a row table with 9
-numeric columns yields a partial trend. Both losses are counted on the
-selection event and logged (`render_shape_members_truncated`,
-`render_shape_series_truncated`). A chart of the top 64 that says nothing
-reads as a chart of the whole cohort, and an 8-series shape reported as
-healthy reads as a complete trend. The second was found only because the
-first had already been fixed and the same question was asked again of the
-sibling path — closing one silent truncation and leaving its twin open is how
-the class survives.
+*(Historical, no longer live: the same question was asked of the trend rule's
+sibling path — a row table with 9 numeric columns yielded a partial trend —
+and produced a `render_shape_series_truncated` counter. Both the rule and the
+counter are gone with the withdrawal in §10.3c. The lesson survives the code:
+closing one silent truncation and leaving its twin open is how the class
+survives, which is why the cohort counter above still exists.)*
+
+*(Also historical: trend dates were compared by spelling rather than by
+instant, so `2026-08-03T00:00:00Z` and `2026-08-02T17:00:00-07:00` — one
+moment — stacked two values on one x position. Recorded because it is the
+kind of defect a returning trend producer must not reintroduce.)*
 
 **Label disambiguation runs AFTER clamping.** Two genuinely distinct member
 labels sharing their first 256 characters each looked unique, were clamped
@@ -837,6 +840,32 @@ away and would reintroduce the collision it was meant to fix; the full
 identity of every point is still on the wire in its own `source`. The clamp
 also cuts on rune boundaries — a byte cut can split a multi-byte character
 and produce a label nobody chose.
+
+### 10.3b Historical: a trend did not require cohort intent
+
+*Superseded by the withdrawal in §10.3c — kept because a returning trend
+producer will face the same question, and this is the answer that was
+adjudicated.*
+
+Review challenged rule 3 for firing on row shape alone: should a
+`single_subject` answer that happens to carry dated rows get a chart it was
+not asked for? Two things settled it at the time.
+
+The rule was the ruling. §Scope item 2 of CHAOS-4415 and chris's 2026-08-29
+report both state it as "facts with dated records → time series", naming the
+absent readiness/workload trend as part of the reported defect.
+
+And the premise did not hold: a trend was not an additional, unasked chart.
+It rendered inside the fact's own rows panel and REPLACED the client-side
+heuristic chart CHAOS-4355 already drew for those same rows, and it only ever
+fired on a CLAIMED fact the answer's own drivers cite. So the rule changed
+how evidence the answer already relies on is drawn, not whether an unrelated
+chart appears.
+
+That reasoning is unaffected by the withdrawal — the trend was withdrawn
+because a row table cannot say which of its columns are measures, not because
+it fired on the wrong questions. The cohort rules, where the risk of
+answering an unasked question is real, do gate on `interpretation.shape`.
 
 ### 10.3c WITHDRAWN: `dated_fact_trend` has no producer (CHAOS-4616)
 
@@ -891,27 +920,6 @@ reader's screen; what disappears is the service's claim about what the rows
 mean. The declared-shape contract that would let the rule return is tracked
 as its own design ticket, and it blocks the burndown and forecast producers
 for exactly the same reason.
-
-### 10.3b Adjudicated: a trend does not require cohort intent
-
-Review challenged rule 3 for firing on row shape alone: should a
-`single_subject` answer that happens to carry dated rows get a chart it was
-not asked for? Two things settle it.
-
-The rule is the ruling. §Scope item 2 of CHAOS-4415 and chris's 2026-08-29
-report both state it as "facts with dated records → time series", naming the
-absent readiness/workload trend as part of the reported defect.
-
-And the premise does not hold: a trend is not an additional, unasked chart.
-It renders inside the fact's own rows panel and REPLACES the client-side
-heuristic chart CHAOS-4355 already drew for those same rows — one fact's
-numbers are never shown twice under two different selection rules. It also
-only ever fires on a CLAIMED fact, one the answer's own drivers cite, never
-on arbitrary context. So the rule changes how evidence the answer already
-relies on is drawn, not whether an unrelated chart appears.
-
-The cohort rules, where the risk of answering an unasked question is real,
-do gate on `interpretation.shape`.
 
 ### 10.4 Fact → shape → renderer
 

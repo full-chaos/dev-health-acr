@@ -404,33 +404,3 @@ func humanizeRenderTerm(term string) string {
 	}
 	return strings.ToUpper(spaced[:1]) + spaced[1:]
 }
-
-// renderNumericCell unwraps a row cell to a plottable number.
-//
-// An integer past 2^53 is NOT plottable and is refused here rather than
-// cast: beyond that bound a float64 cannot distinguish adjacent integers, so
-// a point built from one would claim a value that differs from the row it
-// cites -- and contractsv1's resolver refuses it, which would turn a valid
-// answer into a rejected one at the last gate. Refusing here means the
-// column simply is not chartable and the fact keeps its table.
-func renderNumericCell(value ScalarValue) (float64, bool) {
-	switch {
-	case value.Number != nil:
-		return *value.Number, true
-	case value.Integer != nil:
-		if *value.Integer > contractsv1.ContextFabricRenderPointExactIntegerBound ||
-			*value.Integer < -contractsv1.ContextFabricRenderPointExactIntegerBound {
-			return 0, false
-		}
-		return float64(*value.Integer), true
-	default:
-		return 0, false
-	}
-}
-
-func renderStringCell(value ScalarValue) (string, bool) {
-	if value.String == nil {
-		return "", false
-	}
-	return *value.String, true
-}

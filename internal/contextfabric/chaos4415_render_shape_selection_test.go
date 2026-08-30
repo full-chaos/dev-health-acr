@@ -106,9 +106,14 @@ func shapeByRule(shapes []contractsv1.ContextFabricRenderShape, rule contractsv1
 	return nil
 }
 
-// TestCohortAnswerSelectsScoreBarsContributionStackAndTrend is the direct
-// red-first proof of the reported defect: all three shapes chris named must
+// TestCohortAnswerSelectsScoreBarsAndContributionStack is the direct
+// red-first proof of the reported defect: the cohort shapes chris named must
 // be selected for the answer he asked about.
+//
+// He named three. Two are asserted here; the third, a dated trend, was
+// WITHDRAWN by CHAOS-4616 because a row table cannot say which of its
+// columns are measures, so any trend drawn from one was a claim resting on a
+// guess. That capability returns through CHAOS-4627, not through this test.
 func TestCohortAnswerSelectsScoreBarsAndContributionStack(t *testing.T) {
 	t.Parallel()
 	shapes, event := SelectRenderShapes(chrisTeamsAnswer())
