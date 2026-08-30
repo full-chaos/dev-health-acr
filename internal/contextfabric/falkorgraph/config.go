@@ -411,6 +411,18 @@ type GraphTelemetry interface {
 	// hidden by authorization was indistinguishable from one that never
 	// existed at all.
 	RecordEdgesFilteredByReason(ctx context.Context, orgID string, authz, temporalWindow, selfLoop int)
+	// RecordCohortDeniedByAuthorization (CHAOS-4577) reports ONE DiscoverContext
+	// call whose entire discovered cohort was dropped by AuthorizedAttributes --
+	// distinct from RecordCohortMembersAuthzDropped's ordinary, expected
+	// "nothing is wrong" narrowing posture. This fires only when authorization
+	// denied EVERY candidate member (count is the same number
+	// RecordCohortMembersAuthzDropped already saw for that call), which is the
+	// shape a whole org's team_repo_ownership being empty produces: every Team
+	// node carries the CHAOS-4390 fail-closed sentinel, no repository-scoped
+	// principal can ever match it, and the terminal outcome is `no_match` --
+	// indistinguishable, from the caller's side, from "there really are no
+	// such teams" unless this signal exists.
+	RecordCohortDeniedByAuthorization(ctx context.Context, orgID string, count int)
 }
 
 // VectorFenceResult is CHAOS-3890's reason enum for the AC-3778-7 read
@@ -472,6 +484,7 @@ func (NoopTelemetry) RecordLexiconExpansion(context.Context, string, bool, int, 
 func (NoopTelemetry) RecordSubjectCandidatesAuthzDropped(context.Context, string, int)     {}
 func (NoopTelemetry) RecordCohortMembersAuthzDropped(context.Context, string, int)         {}
 func (NoopTelemetry) RecordEdgesFilteredByReason(context.Context, string, int, int, int)   {}
+func (NoopTelemetry) RecordCohortDeniedByAuthorization(context.Context, string, int)       {}
 
 // SlogTelemetry is the production GraphTelemetry: structured operational logs
 // through log/slog, the repository's standard.
@@ -640,6 +653,17 @@ func (t SlogTelemetry) RecordCohortMembersAuthzDropped(_ context.Context, orgID 
 func (t SlogTelemetry) RecordEdgesFilteredByReason(_ context.Context, orgID string, authz, temporalWindow, selfLoop int) {
 	t.logger().Info("context_fabric: relationship edges filtered",
 		"org_id", orgID, "authz", authz, "temporal_window", temporalWindow, "self_loop", selfLoop)
+}
+
+// RecordCohortDeniedByAuthorization logs at WARN, unlike every other
+// authz-drop signal above: those narrow an otherwise-nonempty result, which
+// is ordinary; this one means the call's ENTIRE cohort came back empty
+// because of authorization, which is the CHAOS-4577 "answer indistinguishable
+// from no such teams" failure mode -- an operator should be able to find this
+// without already suspecting it.
+func (t SlogTelemetry) RecordCohortDeniedByAuthorization(_ context.Context, orgID string, count int) {
+	t.logger().Warn("context_fabric: entire discovered cohort denied by authorization",
+		"org_id", orgID, "count", count)
 }
 
 func (c Config) validate() error {

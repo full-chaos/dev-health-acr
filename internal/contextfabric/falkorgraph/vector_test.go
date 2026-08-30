@@ -1163,6 +1163,12 @@ type recordingTelemetry struct {
 	edgesFilteredTemporalWindow   int
 	edgesFilteredSelfLoop         int
 
+	// cohortDeniedByAuthorization counts every RecordCohortDeniedByAuthorization
+	// call's count argument (CHAOS-4577) -- distinct from
+	// cohortMembersAuthzDropped, which fires on every authz-narrowed cohort;
+	// this only fires when the WHOLE cohort was denied.
+	cohortDeniedByAuthorization int
+
 	// embedFailureEscalations records every
 	// RecordVectorProjectionEmbedFailuresEscalated call verbatim
 	// (CHAOS-4259) -- a slice, so a test can assert exactly when escalation
@@ -1245,6 +1251,9 @@ func (r *recordingTelemetry) RecordEdgesFilteredByReason(_ context.Context, _ st
 	r.edgesFilteredAuthz += authz
 	r.edgesFilteredTemporalWindow += temporalWindow
 	r.edgesFilteredSelfLoop += selfLoop
+}
+func (r *recordingTelemetry) RecordCohortDeniedByAuthorization(_ context.Context, _ string, count int) {
+	r.cohortDeniedByAuthorization += count
 }
 
 func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {

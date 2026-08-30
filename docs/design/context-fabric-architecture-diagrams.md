@@ -408,6 +408,19 @@ plane currently holds zero `team_repo_ownership` rows for the org above (an
 upstream ingestion gap, not a producer defect -- see this ticket's CH
 readback evidence).
 
+**Update (2026-08-30, CHAOS-4577):** that zero-row gap also starves
+`queryTeams`' authorization join above -- with no CURRENT `team_repo_ownership`
+row, every Team node is stamped with CHAOS-4390's fail-closed sentinel
+(`acr-context-fabric:no-team-repository-ownership`) instead of real owned
+repositories, so a repository-scoped principal (Ask Dev's only kind) is
+denied every team and the North Star teams question always terminates
+`no_match`. `deploy/local/trial-data.sh seed-team-repo-ownership` now seeds
+CURRENT rows for the documented local trial org (`deploy/local/README.md`
+traps #10) so a graph rebuilt on this plane authorizes teams as prod does;
+run it once after `restore-clickhouse`, before `acr-projector rebuild`. Prod
+itself is unaffected (real `team_repo_ownership` rows exist there since
+2026-08-29 14:00Z) -- this closes the trial/kiac-only exposure.
+
 **Stale doc comment found (report only, no Go edit per this lane's scope):**
 `internal/contextfabric/devhealthsource/teams_projects.go:54` and
 `internal/contextfabric/devhealthsource/clickhouse.go:29` both assert,

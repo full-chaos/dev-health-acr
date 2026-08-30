@@ -327,7 +327,7 @@ func TestDiscoveredCohortExcludesInternalBookkeepingSubjects(t *testing.T) {
 		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
 	}
 	discovery.Request.Options.MaxCohortMembers = 10
-	cohort, _ := DiscoveredCohort(principal, discovery, []CandidateNode{impostorRoot, genuineTeam}, isReserved)
+	cohort, _, _ := DiscoveredCohort(principal, discovery, []CandidateNode{impostorRoot, genuineTeam}, isReserved)
 	if cohort == nil {
 		t.Fatal("cohort = nil, want the genuine team still discovered")
 	}
@@ -357,12 +357,48 @@ func TestDiscoveredCohortReportsAuthzDroppedCount(t *testing.T) {
 		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
 	}
 	discovery.Request.Options.MaxCohortMembers = 10
-	cohort, authzDropped := DiscoveredCohort(principal, discovery, []CandidateNode{authorized, foreign}, noInternalSubjects)
+	cohort, authzDropped, kindScopedAuthzDropped := DiscoveredCohort(principal, discovery, []CandidateNode{authorized, foreign}, noInternalSubjects)
 	if cohort == nil || len(cohort.Members) != 1 || cohort.Members[0].Subject.CanonicalID != "team_platform" {
 		t.Fatalf("cohort = %#v, want only the authorized team discovered", cohort)
 	}
 	if authzDropped != 1 {
 		t.Fatalf("authzDropped = %d, want exactly 1 (the authorized member must not inflate it)", authzDropped)
+	}
+	if kindScopedAuthzDropped != 1 {
+		t.Fatalf("kindScopedAuthzDropped = %d, want exactly 1 (both nodes are teams, so it must equal authzDropped here)", kindScopedAuthzDropped)
+	}
+}
+
+// TestDiscoveredCohortKindScopedAuthzDroppedExcludesOtherKinds is CHAOS-4577
+// (codex round-1 P2): the exact-name arm's pool mixes repository/project/team
+// nodes in one fetch (chaos4348ExactNameCandidates' exactNameKinds), so the
+// unscoped authzDropped counts a denied node of ANY kind. A caller asking
+// "how many candidates for the cohort I actually asked about were denied"
+// must see only kind-matching denials -- an unrelated denied repository node
+// must not inflate kindScopedAuthzDropped for a teams question.
+func TestDiscoveredCohortKindScopedAuthzDroppedExcludesOtherKinds(t *testing.T) {
+	t.Parallel()
+	principal := storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
+	deniedRepo := candidateNode(contextfabric.SubjectRepository, "repo_private", "Private Repo", 0.9, []string{"other/private"})
+	authorizedTeam := candidateNode(contextfabric.SubjectTeam, "team_platform", "Platform", 0.9, []string{"full-chaos/dev-health-acr"})
+	discovery := contextfabric.GraphDiscoveryRequest{
+		Request: testRequest(),
+		Interpretation: contextfabric.InterpretedQuestion{
+			Shape: contextfabric.ShapeDiscoveredCohort, RequestedJudgment: "teams_under_pressure",
+			TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactHealth}},
+		},
+		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+	}
+	discovery.Request.Options.MaxCohortMembers = 10
+	cohort, authzDropped, kindScopedAuthzDropped := DiscoveredCohort(principal, discovery, []CandidateNode{deniedRepo, authorizedTeam}, noInternalSubjects)
+	if cohort == nil || len(cohort.Members) != 1 || cohort.Members[0].Subject.CanonicalID != "team_platform" {
+		t.Fatalf("cohort = %#v, want the authorized team discovered despite the denied repository", cohort)
+	}
+	if authzDropped != 1 {
+		t.Fatalf("authzDropped = %d, want exactly 1 (the denied repository)", authzDropped)
+	}
+	if kindScopedAuthzDropped != 0 {
+		t.Fatalf("kindScopedAuthzDropped = %d, want exactly 0 -- the only denial was a repository, not a team, so it must not count toward a teams-cohort denial signal", kindScopedAuthzDropped)
 	}
 }
 
