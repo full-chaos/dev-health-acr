@@ -412,6 +412,9 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"team authorization ownership join is scoped to one organization", "30000000-0000-4000-8000-00000000000b", subTeamAuthorizationOwnershipJoinScopedToOneOrganization},
 		{"two id-space ownership rows for one project yield exactly one edge", "30000000-0000-4000-8000-00000000000d", subTwoIDSpaceRowsYieldExactlyOneEdge},
 		{"empty-key projects each keep their own edge", "30000000-0000-4000-8000-00000000000e", subEmptyKeyProjectsEachKeepTheirOwnEdge},
+		{"a projected edge is retracted when its key becomes ambiguous", "30000000-0000-4000-8000-00000000000f", subRetractsAnEdgeWhoseKeyBecomesAmbiguous},
+		{"a projected edge is retracted when its identity starts conflicting", "30000000-0000-4000-8000-000000000010", subRetractsAnEdgeWhoseIdentityStartsConflicting},
+		{"retraction is idempotent across a re-run", "30000000-0000-4000-8000-000000000011", subRetractionIsIdempotentAcrossAReRun},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -1082,5 +1085,222 @@ func subEmptyKeyProjectsEachKeepTheirOwnEdge(t *testing.T, ctx context.Context, 
 		if !hasRelationship(batch, wanted) {
 			t.Errorf("relationship %q missing -- a UUID match is unambiguous by construction, so no empty-key partition may suppress it; this is what CHAOS-4530 makes the ONLY shape Linear ownership has", wanted)
 		}
+	}
+}
+
+// CHAOS-4565 -- RETRACTION, and the only place it can honestly be proved.
+//
+// The fake client returns canned rows without executing the statement, so it
+// can observe the SCAN's decision to retract (chaos4565_edge_retraction_test.go)
+// but nothing about the two halves that actually make retraction reachable:
+//
+//   - an AMBIGUOUS key produces no result row at all on the parent commit,
+//     because ProjectIdentityJoinSQL drops the key scope row upstream. The
+//     retraction arm is what makes the row visible, and it is pure SQL.
+//   - the CURSOR. Ambiguity arrives because a NEW project starts sharing an
+//     existing key -- a write to `projects`, not to team_project_ownership.
+//     The parent commit's watermark, max(o.updated_at), never moves for that
+//     write, so the group stays behind the checkpoint and no incremental tick
+//     ever re-reads it. A retraction emitted by unreachable code is not a fix.
+//
+// So each case below projects, MUTATES ONLY THE DATA, and projects again FROM
+// THE FIRST TICK'S OWN NEXT CURSOR -- never from scratch, never with the
+// checkpoint reset. That is the ticket's acceptance verbatim, and taking the
+// second tick from a fresh cursor would prove the rebuild path instead, which
+// already worked.
+
+// hasTombstone reports whether the batch retracts this relationship id.
+func hasTombstone(batch contextfabric.ProjectionBatch, canonicalID string) bool {
+	for _, tombstone := range batch.Tombstones {
+		if strings.EqualFold(tombstone.Kind, "relationship") && tombstone.CanonicalID == canonicalID {
+			return true
+		}
+	}
+	return false
+}
+
+// drainUntil pages from `cursor` until `found` is satisfied, and returns the
+// cursor standing AFTER the batch that satisfied it.
+//
+// TERMINATION RULE (this file's header): the loop bound is derived from the
+// fixture's size, not from the signal, and the caller asserts on `ok` -- so a
+// walk that never finds the edge fails rather than passing quietly.
+func drainUntil(t *testing.T, ctx context.Context, fixture *ownershipFixture, cursor string, found func(contextfabric.ProjectionBatch) bool) (string, bool) {
+	t.Helper()
+	for page := 0; page < 40; page++ {
+		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
+			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
+		})
+		if err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		if !available {
+			return cursor, false
+		}
+		if batch.NextCursor == cursor {
+			t.Fatalf("page %d: cursor did not advance", page)
+		}
+		cursor = batch.NextCursor
+		assertUniqueRelationshipIDs(t, batch)
+		if found(batch) {
+			return cursor, true
+		}
+	}
+	return cursor, false
+}
+
+// subRetractsAnEdgeWhoseKeyBecomesAmbiguous is CHAOS-4565's first acceptance
+// line, and the OLDER of the two suppression paths -- live since v7, and
+// invisible only because every intervening source-version bump happened to
+// rebuild.
+func subRetractsAnEdgeWhoseKeyBecomesAmbiguous(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	at := ownershipLaterAssertion.Add(72 * time.Hour)
+	// GitLab-shaped: the key is in project_id AND project_key, and while it
+	// names exactly one project both arms resolve it.
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'retract me', 1, 'started', '', ?)`,
+		"PROJ-RETRACT-KEY", fixture.orgID, "RETRACT-KEY", at)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
+		fixture.orgID, "RETRACT-KEY", "RETRACT-KEY", ownershipFirstSeen, at)
+	// The CONTROL rides the same ticks: an ordinary project whose ownership
+	// is untouched by any of this. Retracting everything is the cheapest way
+	// to pass the assertions below, and this is what refuses it.
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'keep me', 1, 'started', '', ?)`,
+		"PROJ-KEEP", fixture.orgID, "KEEP-KEY", at)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
+		fixture.orgID, "PROJ-KEEP", "KEEP-KEY", ownershipFirstSeen, at)
+
+	const edge = "relationship:project_team:github:PROJ-RETRACT-KEY:TEAM-GITHUB:native"
+	const control = "relationship:project_team:github:PROJ-KEEP:TEAM-GITHUB:native"
+
+	cursor, ok := drainUntil(t, ctx, fixture, "", func(b contextfabric.ProjectionBatch) bool { return hasRelationship(b, edge) })
+	if !ok {
+		t.Fatalf("%q was never projected, so there is no edge for the retraction to remove and every assertion below would pass vacuously", edge)
+	}
+
+	// THE ONLY MUTATION: a second project starts answering to the same key.
+	// team_project_ownership is not touched at all -- that is the point.
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'the collision', 1, 'started', '', ?)`,
+		"PROJ-RETRACT-OTHER", fixture.orgID, "RETRACT-KEY", at.Add(time.Hour))
+
+	cursor, ok = drainUntil(t, ctx, fixture, cursor, func(b contextfabric.ProjectionBatch) bool { return hasTombstone(b, edge) })
+	if !ok {
+		t.Fatalf("no incremental tick retracted %q after its key became ambiguous. Either the ambiguous row is still invisible to the producer, or the group never crossed the checkpoint because the watermark ignores the projects side -- both leave the stale edge live until a full rebuild, which is the CHAOS-4565 defect", edge)
+	}
+
+	// Nothing may RE-ASSERT it afterwards, and the control must be intact.
+	// A retraction followed by the next tick putting the edge back is not a
+	// retraction, it is a flap.
+	controlSeen := false
+	for page := 0; page < 40; page++ {
+		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
+			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
+		})
+		if err != nil {
+			t.Fatalf("drain page %d: %v", page, err)
+		}
+		if !available {
+			break
+		}
+		cursor = batch.NextCursor
+		if hasRelationship(batch, edge) {
+			t.Fatalf("%q was re-asserted after being retracted; the ambiguity is still there, so nothing may put the edge back", edge)
+		}
+		if hasRelationship(batch, control) {
+			controlSeen = true
+		}
+	}
+	// The control may have been asserted on either side of the retraction, so
+	// re-read it from scratch rather than depending on which tick carried it.
+	if !controlSeen {
+		if _, found := drainUntil(t, ctx, fixture, "", func(b contextfabric.ProjectionBatch) bool { return hasRelationship(b, control) }); !found {
+			t.Fatalf("%q is gone: an unrelated, unambiguous ownership lost its edge, so the retraction is not scoped to the row that became unsubstantiable", control)
+		}
+	}
+}
+
+// subRetractsAnEdgeWhoseIdentityStartsConflicting is the second acceptance
+// line. Same shape, different cause: the ownership row is untouched and
+// another project's KEY changes underneath it, so the row's project_id and
+// project_key now name different projects and neither can be called the
+// winner.
+func subRetractsAnEdgeWhoseIdentityStartsConflicting(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	at := ownershipLaterAssertion.Add(72 * time.Hour)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', '', 'the id side', 1, 'started', '', ?)`,
+		"PROJ-CONFLICT-A", fixture.orgID, at)
+	// project_key names nothing yet, so only the id arm resolves and the edge
+	// is clean.
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
+		fixture.orgID, "PROJ-CONFLICT-A", "CONFLICT-KEY", ownershipFirstSeen, at)
+
+	const edge = "relationship:project_team:github:PROJ-CONFLICT-A:TEAM-GITHUB:native"
+	cursor, ok := drainUntil(t, ctx, fixture, "", func(b contextfabric.ProjectionBatch) bool { return hasRelationship(b, edge) })
+	if !ok {
+		t.Fatalf("%q was never projected; there is no edge for the retraction to remove", edge)
+	}
+
+	// THE ONLY MUTATION: a DIFFERENT project starts answering to the key this
+	// ownership row carries. The row itself is untouched.
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'the key side', 1, 'started', '', ?)`,
+		"PROJ-CONFLICT-B", fixture.orgID, "CONFLICT-KEY", at.Add(time.Hour))
+
+	if _, ok = drainUntil(t, ctx, fixture, cursor, func(b contextfabric.ProjectionBatch) bool { return hasTombstone(b, edge) }); !ok {
+		t.Fatalf("no incremental tick retracted %q after its project_id and project_key started naming different projects; the edge the producer will no longer assert is still in the graph", edge)
+	}
+}
+
+// subRetractionIsIdempotentAcrossAReRun pins the property that lets the
+// retraction be emitted UNCONDITIONALLY.
+//
+// This producer is backend-neutral: it cannot ask the graph whether the edge
+// is there, so it never knows whether a retraction is "necessary". What makes
+// that safe is that re-running the same pass produces the same batch -- same
+// batch id, same tombstone -- and applyTombstone's DELETE matches zero rows
+// the second time. Without this, unconditional emission would be a source of
+// churn rather than of healing.
+func subRetractionIsIdempotentAcrossAReRun(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	at := ownershipLaterAssertion.Add(72 * time.Hour)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'one', 1, 'started', '', ?)`,
+		"PROJ-IDEMPOTENT-A", fixture.orgID, "IDEMPOTENT-KEY", at)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'two', 1, 'started', '', ?)`,
+		"PROJ-IDEMPOTENT-B", fixture.orgID, "IDEMPOTENT-KEY", at)
+	// Already ambiguous when this row arrives: the NEVER-PROJECTED ordering.
+	// The retraction must still be emitted (the producer cannot know it is
+	// unnecessary) and must still be a no-op.
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
+		fixture.orgID, "IDEMPOTENT-KEY", "IDEMPOTENT-KEY", ownershipFirstSeen, at)
+
+	const edge = "relationship:project_team:github:PROJ-IDEMPOTENT-A:TEAM-GITHUB:native"
+
+	project := func() contextfabric.ProjectionBatch {
+		t.Helper()
+		cursor := ""
+		for page := 0; page < 40; page++ {
+			batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
+				OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
+			})
+			if err != nil {
+				t.Fatalf("page %d: %v", page, err)
+			}
+			if !available {
+				break
+			}
+			cursor = batch.NextCursor
+			if hasTombstone(batch, edge) {
+				return batch
+			}
+		}
+		t.Fatalf("%q was never retracted: an ownership row whose key was ALREADY ambiguous when it arrived must still emit the retraction, because the producer cannot know whether the edge was projected by an earlier deployment", edge)
+		return contextfabric.ProjectionBatch{}
+	}
+
+	first, second := project(), project()
+	if first.BatchID != second.BatchID {
+		t.Errorf("re-running the same pass produced a different batch id (%q vs %q); ApplyProjectionBatch's replay idempotency is keyed on it", first.BatchID, second.BatchID)
+	}
+	if first.Cursor != second.Cursor || first.NextCursor != second.NextCursor {
+		t.Errorf("re-running the same pass moved the cursor (%q..%q vs %q..%q)", first.Cursor, first.NextCursor, second.Cursor, second.NextCursor)
+	}
+	if hasRelationship(first, edge) || hasRelationship(second, edge) {
+		t.Errorf("%q was asserted in the same batch that retracts it; tombstones apply after relationships, so the edge would be written and immediately deleted", edge)
 	}
 }

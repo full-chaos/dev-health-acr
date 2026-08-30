@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -739,6 +740,111 @@ func projectTeamsQuery(omissions *ambiguityLedger) func(context.Context, context
 // shared by the keyset predicate and the ORDER BY so the two cannot drift.
 const projectTeamsRowKey = "concat(o.project_id, ':', o.team_id, ':', o.source_name)"
 
+// projectTeamsWatermark is queryProjectTeams' pagination timestamp, shared
+// by the SELECT list, the keyset HAVING and the ORDER BY so the three
+// cannot drift -- the same one-definition discipline projectTeamsRowKey
+// carries for the tiebreaker.
+//
+// It aggregates row_watermark, not the raw ownership updated_at
+// (CHAOS-4565): this producer reads team_project_ownership AND projects,
+// and a cursor covering only one of its inputs cannot see a change in the
+// other. See the RETRACTION ARM note in projectTeamsStatement.
+const projectTeamsWatermark = "max(o.row_watermark)"
+
+// projectTeamRelationshipID is the ONE definition of an OWNED_BY_TEAM
+// project<->team edge's identity, used by the assertion and by the
+// retraction tombstone that removes it.
+//
+// It is a function and not two string concatenations on purpose. A
+// tombstone whose canonical id does not match the projected edge's
+// relationship id BYTE FOR BYTE deletes nothing, reports success, and the
+// stale edge survives -- a silent no-op that every count, log and receipt
+// in this pipeline would report as a successful retraction. The two
+// spellings drifting apart is the single failure mode that turns this
+// whole change into decoration, so they are not allowed to be two
+// spellings.
+func projectTeamRelationshipID(provider, projectID, teamID, source string) string {
+	return "relationship:project_team:" + provider + ":" + projectID + ":" + teamID + ":" + source
+}
+
+// projectIdentityWithWatermarkSQL is readers.ProjectIdentityCatalogSQL
+// carrying each project's own updated_at (CHAOS-4565).
+//
+// The catalog expansion answers "which identity values does this project
+// answer to". It deliberately does not carry a timestamp, because its other
+// callers resolve a requested subject list and have no cursor. This
+// producer does have one, and its watermark has to cover BOTH tables it
+// reads -- see the RETRACTION ARM note in projectTeamsStatement for why a
+// projects-only edit that never touches team_project_ownership must still
+// move this producer's cursor.
+//
+// The library's expansion is wrapped in `SELECT *` before being joined
+// rather than joined directly: its SQL ends `) AS p`, and this function's
+// own result is also aliased `p` (ProjectIdentityMatchSQL hard-codes
+// `= p.scope`, so the outer alias is not free to change). Enclosing the
+// library's alias inside a subquery keeps the two `p`s in separate scopes
+// instead of relying on shadowing resolution -- this file has already lost
+// a live round to an alias that bound to itself on ClickHouse 24.8.
+// `SELECT *` also means a future column added to the expansion arrives
+// here on its own.
+//
+// `projects FINAL` is ReplacingMergeTree(updated_at) ordered by
+// (org_id, provider, id), so this join is 1:1 and cannot fan the catalog
+// out; the ON is two plain column equalities, which 24.8 accepts.
+// projectTeamsOwnershipArm builds ONE arm of queryProjectTeams' row-level
+// union: ownership rows resolved to a project by `match`, narrowed by
+// `where`, tagged with the retraction_only literal '0' or '1'.
+//
+// A package-level function and not the closure it used to be (CHAOS-4565),
+// for a testability reason worth stating. The invariant that matters here is
+// per arm -- an arm that can ASSERT an edge must not resolve through
+// p.project_key, which every scope row carries (CHAOS-4542 defect 6), while
+// the retraction arm must. A test cannot check that by splitting the
+// assembled statement on "UNION ALL": the identity expansion contains one of
+// its own inside every arm, so the split yields six fragments and any guard
+// written over them is asserting about the wrong strings. Building arms
+// through a named function lets the test hold a real arm.
+//
+// `where` carries any scope_kind or ambiguity restriction. It is a WHERE and
+// not part of the ON because 24.8 rejects an ON that is not a plain column
+// equality.
+func projectTeamsOwnershipArm(match, where, retractionOnly string) string {
+	return `
+		SELECT p.id AS project_id, p.provider AS provider,
+		       o.project_ref AS ownership_ref, o.project_key AS ownership_key,
+		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at,
+		       p.project_updated_at AS project_updated_at, toUInt8(` + retractionOnly + `) AS retraction_only
+		FROM ` + projectIdentityWithWatermarkSQL() + `
+		INNER JOIN (
+			SELECT provider, ` + readers.ProjectOwnershipJoinColumn + ` AS project_ref, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name, valid_from, valid_to, updated_at
+			FROM team_project_ownership FINAL
+			WHERE org_id = {org_id:String}
+		) AS o ON o.provider = p.provider AND ` + match + `
+		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id` + where
+}
+
+// projectTeamsArms is the ordered arm list projectTeamsStatement unions, and
+// the seam a test reads to check which arms may assert.
+func projectTeamsArms() []string {
+	return []string{
+		projectTeamsOwnershipArm(readers.ProjectIdentityMatchSQL("o", "project_ref"), "", "0"),
+		projectTeamsOwnershipArm("o.project_key = p.scope", "\n\t\tWHERE p.scope_kind = 'key'", "0"),
+		projectTeamsOwnershipArm("o.project_key = p.project_key", "\n\t\tWHERE p.key_resolution_count > 1 AND p.scope_kind = 'id' AND o.project_key != ''", "1"),
+	}
+}
+
+func projectIdentityWithWatermarkSQL() string {
+	return `(
+	SELECT pi.*, w.project_updated_at AS project_updated_at
+	FROM (SELECT * FROM ` + readers.ProjectIdentityCatalogSQL() + `) AS pi
+	INNER JOIN (
+		SELECT provider, id, updated_at AS project_updated_at
+		FROM projects FINAL
+		WHERE org_id = {org_id:String}
+	) AS w ON w.provider = pi.provider AND w.id = pi.id
+) AS p`
+}
+
 // CHAOS-4542: joined on PROJECT IDENTITY, and grouped on the RESOLVED
 // projects.id.
 //
@@ -824,19 +930,10 @@ func projectTeamsStatement(cursor cursorState) string {
 	// where carries any scope_kind restriction. It is a WHERE and not part
 	// of the ON because 24.8 rejects an ON that is not a plain column
 	// equality, and 'key' is a literal.
-	ownershipRows := func(match, where string) string {
-		return `
-		SELECT p.id AS project_id, p.provider AS provider,
-		       o.project_ref AS ownership_ref, o.project_key AS ownership_key,
-		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at
-		FROM ` + readers.ProjectIdentityCatalogSQL() + `
-		INNER JOIN (
-			SELECT provider, ` + readers.ProjectOwnershipJoinColumn + ` AS project_ref, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name, valid_from, valid_to, updated_at
-			FROM team_project_ownership FINAL
-			WHERE org_id = {org_id:String}
-		) AS o ON o.provider = p.provider AND ` + match + `
-		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id` + where
-	}
+	//
+	// retractionOnly is the literal '0' or '1' (CHAOS-4565). A retraction
+	// arm's rows exist ONLY so a group can be SEEN and retracted; they can
+	// never assert an edge -- see the RETRACTION ARM note below.
 	// FAIL CLOSED on conflicting identities (codex R2 P2-1).
 	//
 	// The two arms resolve INDEPENDENTLY, so one ownership row whose
@@ -859,26 +956,117 @@ func projectTeamsStatement(cursor cursorState) string {
 	// not exist, and a fabricated edge suppressed silently is exactly the
 	// kind of correction an operator needs to see.
 	//
-	// The outer alias is deliberately NOT identity_conflict: an alias that
-	// shadows the column it aggregates bound to itself on 24.8 once already
-	// in this file's history, and cost a live round to find.
+	// The inner flag is named `unassertable`, and the outer one
+	// `edge_suppressed`: an alias that shadows the column it aggregates
+	// bound to itself on 24.8 once already in this file's history, and cost
+	// a live round to find, so no two layers here share a name. The same
+	// rule is why the window layer emits `row_watermark` rather than
+	// re-aliasing `updated_at` over an expression that reads it.
+	//
+	// `unassertable` is not `identity_conflict` renamed for taste
+	// (CHAOS-4565). It answers a strictly wider question -- "can this row
+	// assert its edge" -- of which a conflicting identity is now only one
+	// of two NOs, the other being "this row is a retraction row and never
+	// could". Keeping the old name would have made every
+	// `...If(..., = 0)` in the aggregate read as a conflict test while
+	// actually gating on something broader, which is the kind of quiet
+	// mismatch this file has paid for before. conflict_identities and
+	// conflicting_identity_present spell the conflict half out explicitly
+	// where the ledger and the retraction reason still need exactly it.
+	// THE RETRACTION ARM (CHAOS-4565), arm C, and why the other two could
+	// not carry it.
+	//
+	// Suppression is a decision NOT TO ASSERT. It is not a retraction, and
+	// incremental graph application does not delete an absent relationship
+	// (internal/contextfabric/AGENTS.md: deletion semantics need an
+	// explicit complete-enumeration proof, which an incremental page is
+	// not). So an OWNED_BY_TEAM edge projected BEFORE its ownership row
+	// became suppressed stays live forever, and only a full rebuild clears
+	// it. The graph cannot tell "we never asserted this" from "we can no
+	// longer substantiate it".
+	//
+	// The two suppression paths are NOT symmetric, which is the whole
+	// reason this arm exists:
+	//
+	//   - CONFLICTING IDENTITY is decided in the SCAN. Both arms produce a
+	//     row, the group sees them, and edge_suppressed already reports it.
+	//     A group that reaches the scan can be retracted from the scan.
+	//   - An AMBIGUOUS KEY is decided UPSTREAM, in SQL:
+	//     ProjectIdentityJoinSQL emits no key scope row at all for
+	//     key_resolution_count > 1. Arm B therefore matches nothing, arm A
+	//     matches nothing for a key-only ownership row, and the row
+	//     produces NO RESULT ROW. There is nothing for the scan to see, so
+	//     a scan-side retraction alone would silently fix only half the
+	//     defect -- and the ambiguity half is the OLDER one, live since v7.
+	//
+	// Arm C makes the invisible half visible WITHOUT re-admitting it as an
+	// assertion: it resolves an ownership key across the AMBIGUOUS key
+	// partition (key_resolution_count > 1), one row per project sharing
+	// that key, flagged retraction_only = 1. Those projects are exactly the
+	// candidates the edge could have been projected to while the key was
+	// still unambiguous, so tombstoning every one of them retracts the real
+	// edge and no-ops on the rest -- the same unconditional, idempotent
+	// healing shape queryWorkItemDependencies' ref-form tombstones use
+	// (tables.go), and for the same reason: no cross-row bookkeeping is
+	// needed to know WHETHER a retraction is necessary.
+	//
+	//   scope_kind = 'id' is not a filter on WHICH projects match, it is a
+	//   de-duplicator: an ambiguous key has no key scope row by
+	//   construction, so 'id' is the only row each such project has, and
+	//   naming it keeps one row per project if that ever changes.
+	//   o.project_key != '' is defence in depth -- the empty-key partition
+	//   already has key_resolution_count = 0, so it cannot reach > 1 -- but
+	//   an empty key matching every keyless project is precisely the defect
+	//   class this file has shipped before, so it is spelled out.
+	//
+	// This arm must never be given the power to assert. unassertable below
+	// is forced to 1 for every retraction_only row, so a retraction arm can
+	// only ever SUPPRESS a group into existence, never keep one alive.
+	//
+	// WHY THE WATERMARK GREW A PROJECTS SIDE, and why the arm is dead code
+	// without it. This producer's keyset cursor was max(o.updated_at) over
+	// team_project_ownership ALONE. But ambiguity usually arrives because a
+	// NEW project starts sharing an existing key -- that writes `projects`,
+	// not team_project_ownership, so the ownership row's own updated_at
+	// never moves, the group stays BEHIND the checkpoint, and no
+	// incremental tick ever re-reads it. The retraction would be emitted by
+	// code that is never reached. The same applies to a conflicting
+	// identity that arrives because some OTHER project's project_key
+	// changed to collide with this row's.
+	//
+	// So the row watermark is greatest(the ownership row's own updated_at,
+	// the newest updated_at among every project this ownership row's
+	// identity values can reach). The window partition is the ownership
+	// row's own identity -- and arms A/B/C are unioned BEFORE it -- so
+	// "every project this row can reach" is not a second query, it is
+	// exactly the rows already present. A projects-side edit therefore
+	// pushes the affected groups past the cursor on the very next tick,
+	// with no rebuild and no checkpoint reset.
+	//
+	// retraction_only is IN the partition key. Without it, arm C's extra
+	// resolved projects would land inside arm A/B's own min()/max()
+	// comparison and be read as an identity conflict, so an ownership row
+	// with a perfectly good project_id would be suppressed the moment its
+	// UNUSED project_key became ambiguous -- turning a retraction feature
+	// into an edge-deletion bug. Splitting the partition keeps arm A/B's
+	// conflict test byte-identical to what it was.
+	const identityPartition = " OVER (PARTITION BY provider, ownership_ref, ownership_key, retraction_only)"
 	return `SELECT o.project_id, o.team_id, o.source_name,
-       minIf(o.valid_from, o.identity_conflict = 0) AS first_valid_from,
-       argMaxIf(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC'))), o.identity_conflict = 0).1 IS NULL AS latest_is_open,
-       ifNull(argMaxIf(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC'))), o.identity_conflict = 0).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
-       max(o.updated_at) AS updated_at, o.provider,
-       toUInt8(countIf(o.identity_conflict = 0) = 0) AS edge_suppressed,
-       groupUniqArrayIf(concat(o.ownership_ref, '\0', o.ownership_key, '\0', o.team_id, '\0', o.source_name), o.identity_conflict = 1) AS conflict_identities
+       minIf(o.valid_from, o.unassertable = 0) AS first_valid_from,
+       argMaxIf(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC'))), o.unassertable = 0).1 IS NULL AS latest_is_open,
+       ifNull(argMaxIf(tuple(o.valid_to), (o.valid_from, o.valid_to IS NULL, ifNull(o.valid_to, toDateTime64(0, 3, 'UTC'))), o.unassertable = 0).1, toDateTime64(0, 3, 'UTC')) AS latest_valid_to,
+       ` + projectTeamsWatermark + ` AS observed_at, o.provider,
+       toUInt8(countIf(o.unassertable = 0) = 0) AS edge_suppressed,
+       groupUniqArrayIf(concat(o.ownership_ref, '\0', o.ownership_key, '\0', o.team_id, '\0', o.source_name), o.unassertable = 1 AND o.retraction_only = 0) AS conflict_identities,
+       toUInt8(countIf(o.unassertable = 1 AND o.retraction_only = 0) > 0) AS conflicting_identity_present
 FROM (
-	SELECT project_id, provider, ownership_ref, ownership_key, team_id, source_name, valid_from, valid_to, updated_at,
-	       toUInt8(min(project_id) OVER (PARTITION BY provider, ownership_ref, ownership_key) != max(project_id) OVER (PARTITION BY provider, ownership_ref, ownership_key)) AS identity_conflict
-	FROM (` + ownershipRows(readers.ProjectIdentityMatchSQL("o", "project_ref"), "") + `
-
-		UNION ALL
-` + ownershipRows("o.project_key = p.scope", "\n\t\tWHERE p.scope_kind = 'key'") + `
+	SELECT project_id, provider, ownership_ref, ownership_key, team_id, source_name, valid_from, valid_to, retraction_only,
+	       greatest(updated_at, max(project_updated_at)` + identityPartition + `) AS row_watermark,
+	       toUInt8(retraction_only = 1 OR min(project_id)` + identityPartition + ` != max(project_id)` + identityPartition + `) AS unassertable
+	FROM (` + strings.Join(projectTeamsArms(), "\n\n\t\tUNION ALL\n") + `
 	)
 ) AS o
-GROUP BY o.project_id, o.provider, o.team_id, o.source_name` + havingSincePredicate(cursor, "max(o.updated_at)", projectTeamsRowKey) + orderBy("max(o.updated_at)", projectTeamsRowKey)
+GROUP BY o.project_id, o.provider, o.team_id, o.source_name` + havingSincePredicate(cursor, projectTeamsWatermark, projectTeamsRowKey) + orderBy(projectTeamsWatermark, projectTeamsRowKey)
 }
 
 func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, omissions *ambiguityLedger) ([]candidate, bool, error) {
@@ -887,9 +1075,9 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 	rows, truncated, err := fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var projectID, teamID, source, provider string
 		var validFrom, latestValidTo, observedAt time.Time
-		var latestIsOpen, edgeSuppressed uint8
+		var latestIsOpen, edgeSuppressed, conflictingIdentityPresent uint8
 		var conflictIdentities []string
-		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt, &provider, &edgeSuppressed, &conflictIdentities); err != nil {
+		if err := r.Scan(&projectID, &teamID, &source, &validFrom, &latestIsOpen, &latestValidTo, &observedAt, &provider, &edgeSuppressed, &conflictIdentities, &conflictingIdentityPresent); err != nil {
 			return nil, err
 		}
 		observedAt, validFrom, latestValidTo = observedAt.UTC(), validFrom.UTC(), latestValidTo.UTC()
@@ -930,8 +1118,49 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 		// the clean row's legitimate edge -- a missing edge, the exact class
 		// this ticket exists to remove, reintroduced by the guard against
 		// fabricating one.
+		// RETRACTION (CHAOS-4565). This group has no row that can assert
+		// the edge -- every contributing ownership row is either an
+		// identity conflict or an ambiguous-key retraction row. Emitting a
+		// bare progress candidate here, which is what this branch used to
+		// do, leaves an edge projected on an EARLIER tick live forever:
+		// incremental application never deletes an absent relationship, so
+		// omission and retraction are indistinguishable to the graph.
+		//
+		// A relationship tombstone is the retraction, and it is idempotent
+		// by construction -- applyTombstone's DELETE matches zero rows
+		// against a relationship_id that was never projected, so the
+		// never-projected case and the re-run case are the same no-op and
+		// need no bookkeeping to tell apart. It is also ordering-safe in
+		// both directions: a tombstone arriving before the edge was ever
+		// projected deletes nothing and the group never asserts, so no edge
+		// appears afterwards either.
+		//
+		// It CANNOT delete an edge this same batch asserts. The tombstone's
+		// canonical id is projectTeamRelationshipID over exactly the GROUP
+		// KEY (provider, project_id, team_id, source_name), and a group
+		// emits an edge or a tombstone, never both -- edge_suppressed is
+		// false the moment ONE asserting row shares the group. That matters
+		// because falkorgraph applies tombstones AFTER relationships, so a
+		// batch holding both for one id would delete the edge it had just
+		// written.
+		//
+		// Still a PROGRESS candidate in the pagination sense: a tombstone
+		// candidate carries the row's (observedAt, sortKey), so the cursor
+		// advances past this group exactly as it did before.
 		if edgeSuppressed == 1 {
-			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+			reason := retractionReasonAmbiguousKey
+			if conflictingIdentityPresent == 1 {
+				reason = retractionReasonConflictingIdentity
+			}
+			omissions.addRetraction(reason)
+			tombstone := contractsv1.ContextFabricProjectionTombstone{
+				Kind:          "relationship",
+				CanonicalID:   projectTeamRelationshipID(provider, projectID, teamID, source),
+				Reason:        retractionTombstoneReason(reason),
+				EffectiveAt:   observedAt,
+				SourceVersion: TeamsProjectsSourceVersion,
+			}
+			return []candidate{{observedAt: observedAt, sortKey: rowSortKey, tombstone: &tombstone}}, nil
 		}
 		// No ambiguity branch here on purpose. Ambiguity is a property of the
 		// KEY arm, and that arm now excludes an ambiguous key in SQL
@@ -952,7 +1181,7 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 		}
 		relationship := contractsv1.ContextFabricRelationshipProjection{
-			RelationshipID: "relationship:project_team:" + provider + ":" + projectID + ":" + teamID + ":" + source,
+			RelationshipID: projectTeamRelationshipID(provider, projectID, teamID, source),
 			Type:           contractsv1.ContextFabricRelationshipOwnedByTeam,
 			From:           contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: projectCanonicalID, Label: projectID},
 			To:             contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: teamCanonicalID(teamID), Label: teamID},
@@ -1071,6 +1300,83 @@ func ownershipValidity(validFrom time.Time, latestIsOpen uint8, latestValidTo ti
 	}
 	to := latestValidTo
 	return &from, &to
+}
+
+// retractionReason is the CLOSED vocabulary of why an OWNED_BY_TEAM edge
+// was retracted (CHAOS-4565). Closed because it is log-field and
+// operator-facing: an open string would let a future branch invent a
+// synonym for a cause that already has a name, and a reason vocabulary an
+// operator cannot enumerate is not a vocabulary.
+//
+// The two members are the two -- and today the only two -- ways
+// queryProjectTeams decides it cannot substantiate an ownership:
+// a project_key naming more than one project, and a single ownership row
+// whose project_id and project_key resolve to different projects.
+type retractionReason string
+
+const (
+	retractionReasonAmbiguousKey        retractionReason = "ambiguous_key"
+	retractionReasonConflictingIdentity retractionReason = "conflicting_identity"
+)
+
+// retractionTombstoneReason is the human sentence carried on the tombstone
+// itself, one per closed reason.
+//
+// It is a switch over the enum with no default that guesses: a reason this
+// function does not know is a programming error, and saying so in the
+// tombstone is better than shipping an empty Reason -- which
+// ContextFabricProjectionTombstone.Validate() rejects, wedging the batch
+// on a string bug rather than a data one.
+func retractionTombstoneReason(reason retractionReason) string {
+	switch reason {
+	case retractionReasonAmbiguousKey:
+		return "ownership suppressed: project_key names more than one project, so this ownership can no longer be substantiated"
+	case retractionReasonConflictingIdentity:
+		return "ownership suppressed: the ownership row's project_id and project_key resolve to different projects"
+	}
+	return "ownership suppressed: unrecognised retraction reason " + string(reason)
+}
+
+// logRetractions reports OWNED_BY_TEAM edges WITHDRAWN from the graph by a
+// tombstone this run.
+//
+// A separate line from logConflictingIdentities, and the distinction is the
+// point of CHAOS-4565: that line says an ownership was NOT ASSERTED, this
+// one says an ownership that HAD been asserted was TAKEN BACK. Before this
+// change only the first could happen -- suppression left an already-projected
+// edge live until a full rebuild -- so an operator reading the suppression
+// count had no way to learn whether the graph still carried the edge. Folding
+// the retraction into that count would restore exactly the ambiguity it
+// exists to remove.
+//
+// TOMBSTONES EMITTED, NOT EDGES CONFIRMED DELETED, and the field names say
+// so. A retraction is emitted UNCONDITIONALLY for every suppressed group,
+// because this producer is backend-neutral and cannot ask the graph whether
+// the edge is there -- the same unconditional shape, and the same reason, as
+// queryWorkItemDependencies' ref-form healing. A tombstone for an edge that
+// was never projected is a silent no-op, so this number is an upper bound on
+// what was removed. Naming it "retracted_edges" would be a claim this
+// producer cannot support, and an inaccurate count reads as coverage.
+//
+// Counts under the closed retractionReason vocabulary and a hashed org id
+// only: never a project id, key, team id or row key, the same budget as its
+// siblings. Silent when nothing was retracted -- zero retractions is the
+// normal state and a per-run line saying so is noise.
+func logRetractions(ctx context.Context, logger *slog.Logger, orgID string, ledger *ambiguityLedger) {
+	if logger == nil {
+		return
+	}
+	ambiguous := ledger.retractionCount(retractionReasonAmbiguousKey)
+	conflicting := ledger.retractionCount(retractionReasonConflictingIdentity)
+	if ambiguous == 0 && conflicting == 0 {
+		return
+	}
+	logger.WarnContext(ctx, "devhealthsource tombstoned project ownership edges",
+		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+		"reason", "an ownership can no longer be substantiated, so any OWNED_BY_TEAM edge a previous projection left behind is retracted rather than merely not re-asserted",
+		"counts", "tombstones emitted; a tombstone for an edge that was never projected is a no-op, so these are an upper bound on edges removed",
+		"ownership_edge_tombstones_"+string(retractionReasonAmbiguousKey), ambiguous,
+		"ownership_edge_tombstones_"+string(retractionReasonConflictingIdentity), conflicting)
 }
 
 // logConflictingIdentities reports ownership rows suppressed because their

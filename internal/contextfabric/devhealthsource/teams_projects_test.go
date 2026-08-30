@@ -377,7 +377,7 @@ func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug st
 // it -- the window function that decides ambiguity was never something this
 // fake could compute anyway.
 func projectTeamRow(projectID, teamID, source string, validFrom time.Time, latestIsOpen uint8, latestValidTo, updatedAt time.Time) []any {
-	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, "github", uint8(0), []string{}}
+	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, "github", uint8(0), []string{}, uint8(0)}
 }
 
 // liveShapedEdgeClient replays the ground-truth org's real edge row shapes:
@@ -610,7 +610,7 @@ func TestEveryTeamsProjectsEdgeTypeIsDeclared(t *testing.T) {
 // its own test against the ledger's own statement.
 func omittedProjectTeamRow(projectID, teamID, source string, updatedAt time.Time) []any {
 	oversized := projectID + strings.Repeat("x", 256)
-	return []any{oversized, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, "github", uint8(0), []string{}}
+	return []any{oversized, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, "github", uint8(0), []string{}, uint8(0)}
 }
 
 // TestTeamAuthorizationTelemetryCountsAdmittedVersusDeniedTeams (CHAOS-4390)
@@ -950,13 +950,13 @@ func TestChaos4542_ConflictingIdentityEmitsNoEdge(t *testing.T) {
 	// conflict_ref / conflict_key are the OWNERSHIP row's own identity: the
 	// same pair on every flagged row for one disagreeing source row, which is
 	// what makes the ledger count sources rather than resolved edges.
-	conflicting := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), []string{"own-ref-1\x00OWN-KEY-1"}}
+	conflicting := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), []string{"own-ref-1\x00OWN-KEY-1"}, uint8(1)}
 	// The SAME ownership row, flagged once per resolved project -- which is
 	// exactly what the SQL emits: two rows, two different resolved ids, one
 	// disagreeing source row. Keying the ledger on the resolved edge counted
 	// this as TWO suppressions and told an operator that twice as much was
 	// dropped as actually was (codex R3).
-	conflictingB := []any{"proj-b", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), []string{"own-ref-1\x00OWN-KEY-1"}}
+	conflictingB := []any{"proj-b", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), []string{"own-ref-1\x00OWN-KEY-1"}, uint8(1)}
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM team_project_ownership FINAL", rows: [][]any{
 			conflicting,
@@ -1030,7 +1030,7 @@ func TestChaos4542_ConflictsCountEverySourceRowInAGroup(t *testing.T) {
 	// ONE result row whose group holds TWO distinct disagreeing ownership
 	// identities -- what groupUniqArray returns for that shape.
 	twoInOneGroup := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1),
-		[]string{"own-ref-1\x00KEY-B", "own-ref-1\x00KEY-C"}}
+		[]string{"own-ref-1\x00KEY-B", "own-ref-1\x00KEY-C"}, uint8(1)}
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM team_project_ownership FINAL", rows: [][]any{twoInOneGroup}},
 	}}
@@ -1072,7 +1072,7 @@ func TestChaos4542_CleanRowKeepsItsEdgeBesideAConflictingOne(t *testing.T) {
 	// edge_suppressed = 0), and the conflicting row's identity is still
 	// collected.
 	sharedGroup := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github",
-		uint8(0), []string{"own-ref-conflicting\x00KEY-B"}}
+		uint8(0), []string{"own-ref-conflicting\x00KEY-B"}, uint8(1)}
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM team_project_ownership FINAL", rows: [][]any{sharedGroup}},
 	}}
@@ -1125,7 +1125,7 @@ func TestChaos4542_ConflictTelemetryFiresOnTheCallThatSuppressed(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
 	suppressed := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github",
-		uint8(1), []string{"own-ref-1\x00KEY-B\x00team-x\x00native"}}
+		uint8(1), []string{"own-ref-1\x00KEY-B\x00team-x\x00native"}, uint8(1)}
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM team_project_ownership FINAL", rows: [][]any{suppressed}},
 	}}
