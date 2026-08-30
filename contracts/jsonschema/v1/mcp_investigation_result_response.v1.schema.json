@@ -66,193 +66,226 @@
             "maxLength": 256
           },
           "minItems": 1,
-          "maxItems": 64,
-          "uniqueItems": true
+          "maxItems": 96,
+          "uniqueItems": true,
+          "description": "Every path in the structured payload that carries model- or source-derived text. CHAOS-4415 raised the cap from 64 to 96: render_shapes added seven display-text paths to each surface, and the declaration is a fixed, contract-owned list, so the cap exists to bound a wire array, never to ration what may be declared untrusted. Raising it admits documents the old bound rejected and rejects none it accepted."
         }
       }
     }
   },
   "$defs": {
     "context_fabric_investigation_result.v1": {
-      "title": "ACR Context Fabric Investigation Result v1",
-      "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "complete",
+                  "partial"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "direct_judgment": {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              }
+            }
+          }
+        }
+      ],
       "properties": {
+        "claimed_facts": {
+          "items": {
+            "$ref": "#/$defs/context_fabric_common.v1/$defs/ClaimedFact"
+          },
+          "maxItems": 250,
+          "type": "array"
+        },
+        "cohort": {
+          "$ref": "#/$defs/context_fabric_common.v1/$defs/Cohort"
+        },
+        "confirmed_structure": {
+          "items": {
+            "$ref": "#/$defs/context_fabric_common.v1/$defs/ConfirmedStructureEntry"
+          },
+          "maxItems": 4,
+          "type": "array"
+        },
+        "conflicts": {
+          "items": {
+            "$ref": "#/$defs/context_fabric_common.v1/$defs/Finding"
+          },
+          "maxItems": 250,
+          "type": "array"
+        },
+        "coverage": {
+          "$ref": "#/$defs/context_fabric_common.v1/$defs/Coverage"
+        },
+        "current_state": {
+          "maxLength": 4000,
+          "type": "string"
+        },
+        "deterministic_answer": {
+          "maxLength": 12000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "direct_judgment": {
+          "maxLength": 4000,
+          "type": "string"
+        },
+        "drivers": {
+          "items": {
+            "$ref": "#/$defs/context_fabric_common.v1/$defs/DriverJudgment"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "effective_evidence_window": {
+          "$ref": "#/$defs/context_fabric_common.v1/$defs/EffectiveEvidenceWindow"
+        },
+        "evidence_ref_ids": {
+          "items": {
+            "maxLength": 256,
+            "minLength": 8,
+            "pattern": "^[^|]*$",
+            "type": "string"
+          },
+          "maxItems": 500,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "generated_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "interpretation": {
+          "$ref": "#/$defs/context_fabric_common.v1/$defs/InterpretedQuestion"
+        },
+        "limitations": {
+          "items": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "type": "array"
+        },
+        "limitations_displaced": {
+          "description": "Model-authored limitations the engine dropped to fit a service-authored disclosure inside the limitations cap (CHAOS-3746; the disclosure may be retrieval degradation, a historical-axis statement, a commit retraction, or a clarification override). Absent or zero when nothing was displaced. It cannot be inferred from limitations itself: a displaced list and a list that had room are the same length and both end with the disclosure.",
+          "maximum": 100,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "paths": {
+          "items": {
+            "$ref": "#/$defs/context_fabric_common.v1/$defs/RelationshipPath"
+          },
+          "maxItems": 250,
+          "type": "array"
+        },
+        "question": {
+          "maxLength": 8000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "readiness_gaps": {
+          "items": {
+            "$ref": "#/$defs/context_fabric_common.v1/$defs/Finding"
+          },
+          "maxItems": 250,
+          "type": "array"
+        },
+        "remaining_work": {
+          "items": {
+            "$ref": "#/$defs/context_fabric_common.v1/$defs/Finding"
+          },
+          "maxItems": 250,
+          "type": "array"
+        },
+        "render_shapes": {
+          "description": "CHAOS-4415: the OPTIONAL renderable shapes this answer warrants, chosen by deterministic rules from the interpreted intent and this result's own cohort and claimed facts. Absent on every answer no rule fired for.",
+          "items": {
+            "$ref": "#/$defs/context_fabric_common.v1/$defs/RenderShape"
+          },
+          "maxItems": 8,
+          "type": "array"
+        },
+        "request_id": {
+          "maxLength": 256,
+          "minLength": 8,
+          "type": "string"
+        },
+        "result_id": {
+          "maxLength": 256,
+          "minLength": 8,
+          "type": "string"
+        },
+        "reused": {
+          "description": "CHAOS-3782: true when this result was served from the immutable result store rather than a fresh investigation. When true, result_id and generated_at name the reused result's own identifier and generation time, not this request's.",
+          "type": "boolean"
+        },
         "schema_version": {
           "const": "context_fabric_investigation_result.v1"
         },
-        "result_id": {
-          "type": "string",
-          "minLength": 8,
-          "maxLength": 256
-        },
-        "request_id": {
-          "type": "string",
-          "minLength": 8,
-          "maxLength": 256
-        },
-        "generated_at": {
-          "type": "string",
-          "format": "date-time"
-        },
         "status": {
-          "type": "string",
           "enum": [
             "complete",
             "partial",
             "degraded",
             "clarification_required",
             "no_match"
-          ]
-        },
-        "question": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 8000
-        },
-        "interpretation": {
-          "$ref": "#/$defs/context_fabric_common.v1/$defs/InterpretedQuestion"
-        },
-        "subject_resolution": {
-          "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectResolution"
-        },
-        "cohort": {
-          "$ref": "#/$defs/context_fabric_common.v1/$defs/Cohort"
-        },
-        "direct_judgment": {
-          "type": "string",
-          "maxLength": 4000
-        },
-        "current_state": {
-          "type": "string",
-          "maxLength": 4000
+          ],
+          "type": "string"
         },
         "strongest_pressures": {
-          "type": "array",
           "items": {
-            "type": "string",
+            "maxLength": 2000,
             "minLength": 1,
-            "maxLength": 2000
+            "type": "string"
           },
-          "maxItems": 50
-        },
-        "drivers": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/context_fabric_common.v1/$defs/DriverJudgment"
-          },
-          "maxItems": 50
-        },
-        "remaining_work": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/context_fabric_common.v1/$defs/Finding"
-          },
-          "maxItems": 250
-        },
-        "readiness_gaps": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/context_fabric_common.v1/$defs/Finding"
-          },
-          "maxItems": 250
-        },
-        "paths": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/context_fabric_common.v1/$defs/RelationshipPath"
-          },
-          "maxItems": 250
-        },
-        "conflicts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/context_fabric_common.v1/$defs/Finding"
-          },
-          "maxItems": 250
-        },
-        "limitations": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 2000
-          },
-          "maxItems": 100
-        },
-        "limitations_displaced": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 100,
-          "description": "Model-authored limitations the engine dropped to fit a service-authored disclosure inside the limitations cap (CHAOS-3746; the disclosure may be retrieval degradation, a historical-axis statement, a commit retraction, or a clarification override). Absent or zero when nothing was displaced. It cannot be inferred from limitations itself: a displaced list and a list that had room are the same length and both end with the disclosure."
-        },
-        "evidence_ref_ids": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 8,
-            "maxLength": 256,
-            "pattern": "^[^|]*$"
-          },
-          "maxItems": 500,
-          "uniqueItems": true
-        },
-        "claimed_facts": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/context_fabric_common.v1/$defs/ClaimedFact"
-          },
-          "maxItems": 250
-        },
-        "coverage": {
-          "$ref": "#/$defs/context_fabric_common.v1/$defs/Coverage"
-        },
-        "versions": {
-          "$ref": "#/$defs/context_fabric_common.v1/$defs/VersionSet"
-        },
-        "deterministic_answer": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 12000
-        },
-        "warnings": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 2000
-          },
-          "maxItems": 100
-        },
-        "reused": {
-          "type": "boolean",
-          "description": "CHAOS-3782: true when this result was served from the immutable result store rather than a fresh investigation. When true, result_id and generated_at name the reused result's own identifier and generation time, not this request's."
-        },
-        "temporal": {
-          "$ref": "context_fabric_common.v1.schema.json#/$defs/TemporalLabel"
-        },
-        "effective_evidence_window": {
-          "$ref": "#/$defs/context_fabric_common.v1/$defs/EffectiveEvidenceWindow"
-        },
-        "window_clarification": {
-          "$ref": "#/$defs/context_fabric_common.v1/$defs/WindowClarification"
+          "maxItems": 50,
+          "type": "array"
         },
         "structure_needs": {
           "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureNeeds"
         },
-        "confirmed_structure": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/context_fabric_common.v1/$defs/ConfirmedStructureEntry"
-          },
-          "maxItems": 4
-        },
         "structure_offer_snapshot": {
-          "type": "array",
           "items": {
             "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureOfferSnapshotEntry"
           },
-          "maxItems": 80
+          "maxItems": 80,
+          "type": "array"
+        },
+        "subject_resolution": {
+          "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectResolution"
+        },
+        "temporal": {
+          "$ref": "context_fabric_common.v1.schema.json#/$defs/TemporalLabel"
+        },
+        "versions": {
+          "$ref": "#/$defs/context_fabric_common.v1/$defs/VersionSet"
+        },
+        "warnings": {
+          "items": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "type": "array"
+        },
+        "window_clarification": {
+          "$ref": "#/$defs/context_fabric_common.v1/$defs/WindowClarification"
         }
       },
       "required": [
@@ -281,32 +314,8 @@
         "warnings",
         "reused"
       ],
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "status": {
-                "enum": [
-                  "complete",
-                  "partial"
-                ]
-              }
-            },
-            "required": [
-              "status"
-            ]
-          },
-          "then": {
-            "properties": {
-              "direct_judgment": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 4000
-              }
-            }
-          }
-        }
-      ]
+      "title": "ACR Context Fabric Investigation Result v1",
+      "type": "object"
     },
     "context_fabric_common.v1": {
       "$defs": {
@@ -3017,12 +3026,204 @@
           "type": "object"
         },
         "RelativeWindowID": {
-          "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 §5.1).",
+          "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 \u00a75.1).",
           "enum": [
             "trailing_30d",
             "trailing_90d",
             "trailing_365d",
             "all_time"
+          ],
+          "type": "string"
+        },
+        "RenderAxisKind": {
+          "description": "CHAOS-4415: whether a point label is a category name or an ISO-8601 date/date-time. A time axis is positioned by elapsed time, never by index.",
+          "enum": [
+            "category",
+            "time"
+          ],
+          "type": "string"
+        },
+        "RenderKind": {
+          "description": "CHAOS-4415: the CLOSED vocabulary of renderable answer shapes. Every member is defined now so a consumer can switch exhaustively; only \"series\" has a producer in slice 1.",
+          "enum": [
+            "series",
+            "table",
+            "quadrant",
+            "treemap",
+            "sunburst",
+            "sankey",
+            "burndown",
+            "forecast"
+          ],
+          "type": "string"
+        },
+        "RenderPoint": {
+          "additionalProperties": false,
+          "description": "CHAOS-4415: one plotted number and its provenance.",
+          "properties": {
+            "label": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "source": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/RenderPointSource"
+            },
+            "value": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "label",
+            "value",
+            "source"
+          ],
+          "type": "object"
+        },
+        "RenderPointSource": {
+          "additionalProperties": false,
+          "description": "CHAOS-4415: where in THIS SAME document a plotted number came from. Validation resolves it and requires exact equality, so a chart number can never be authored, re-derived, rounded or aggregated.",
+          "properties": {
+            "claim_id": {
+              "maxLength": 256,
+              "minLength": 8,
+              "type": "string"
+            },
+            "field": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "cohort_member_score",
+                "cohort_driver_weight_contributed",
+                "claimed_fact_row"
+              ],
+              "type": "string"
+            },
+            "row_index": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "signal": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "subject_canonical_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        "RenderPresentation": {
+          "description": "CHAOS-4415: the visual encoding of a \"series\" shape. Kind names the DATA shape, presentation names the drawing -- a bar chart and a line chart carry identical payloads, so bars are not their own kind.",
+          "enum": [
+            "bars",
+            "stacked_bars",
+            "line"
+          ],
+          "type": "string"
+        },
+        "RenderSeries": {
+          "additionalProperties": false,
+          "description": "CHAOS-4415: one named line/bar family within a shape. A series with no point for a label has a genuine gap there -- never a zero.",
+          "properties": {
+            "key": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "label": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "points": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/RenderPoint"
+              },
+              "maxItems": 64,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "key",
+            "label",
+            "points"
+          ],
+          "type": "object"
+        },
+        "RenderShape": {
+          "additionalProperties": false,
+          "description": "CHAOS-4415: ONE renderable shape an answer carries, selected by a deterministic rule from the interpreted intent and the facts the answer already holds. Conditional on intent, never default.",
+          "properties": {
+            "axis_kind": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/RenderAxisKind"
+            },
+            "axis_label": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/RenderKind"
+            },
+            "presentation": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/RenderPresentation"
+            },
+            "selected_by": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/RenderShapeRule"
+            },
+            "series": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/RenderSeries"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            "shape_id": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "value_label": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "shape_id",
+            "kind",
+            "selected_by",
+            "title",
+            "axis_kind",
+            "axis_label",
+            "value_label",
+            "series"
+          ],
+          "type": "object"
+        },
+        "RenderShapeRule": {
+          "description": "CHAOS-4415: the CLOSED vocabulary of deterministic selection rules. Exactly one rule produced any given shape; a shape with no rule would be the default-charting this contract forbids.",
+          "enum": [
+            "cohort_attention_score",
+            "cohort_driver_contribution",
+            "dated_fact_trend"
           ],
           "type": "string"
         },

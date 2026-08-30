@@ -3901,6 +3901,198 @@
       "required": [
         "fields"
       ]
+    },
+    "RenderKind": {
+      "description": "CHAOS-4415: the CLOSED vocabulary of renderable answer shapes. Every member is defined now so a consumer can switch exhaustively; only \"series\" has a producer in slice 1.",
+      "type": "string",
+      "enum": [
+        "series",
+        "table",
+        "quadrant",
+        "treemap",
+        "sunburst",
+        "sankey",
+        "burndown",
+        "forecast"
+      ]
+    },
+    "RenderPresentation": {
+      "description": "CHAOS-4415: the visual encoding of a \"series\" shape. Kind names the DATA shape, presentation names the drawing -- a bar chart and a line chart carry identical payloads, so bars are not their own kind.",
+      "type": "string",
+      "enum": [
+        "bars",
+        "stacked_bars",
+        "line"
+      ]
+    },
+    "RenderAxisKind": {
+      "description": "CHAOS-4415: whether a point label is a category name or an ISO-8601 date/date-time. A time axis is positioned by elapsed time, never by index.",
+      "type": "string",
+      "enum": [
+        "category",
+        "time"
+      ]
+    },
+    "RenderShapeRule": {
+      "description": "CHAOS-4415: the CLOSED vocabulary of deterministic selection rules. Exactly one rule produced any given shape; a shape with no rule would be the default-charting this contract forbids.",
+      "type": "string",
+      "enum": [
+        "cohort_attention_score",
+        "cohort_driver_contribution",
+        "dated_fact_trend"
+      ]
+    },
+    "RenderPointSource": {
+      "description": "CHAOS-4415: where in THIS SAME document a plotted number came from. Validation resolves it and requires exact equality, so a chart number can never be authored, re-derived, rounded or aggregated.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cohort_member_score",
+            "cohort_driver_weight_contributed",
+            "claimed_fact_row"
+          ]
+        },
+        "subject_canonical_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "signal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "claim_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256
+        },
+        "row_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "RenderPoint": {
+      "description": "CHAOS-4415: one plotted number and its provenance.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "value": {
+          "type": "number"
+        },
+        "source": {
+          "$ref": "#/$defs/RenderPointSource"
+        }
+      },
+      "required": [
+        "label",
+        "value",
+        "source"
+      ]
+    },
+    "RenderSeries": {
+      "description": "CHAOS-4415: one named line/bar family within a shape. A series with no point for a label has a genuine gap there -- never a zero.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "points": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/RenderPoint"
+          }
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "points"
+      ]
+    },
+    "RenderShape": {
+      "description": "CHAOS-4415: ONE renderable shape an answer carries, selected by a deterministic rule from the interpreted intent and the facts the answer already holds. Conditional on intent, never default.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "shape_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "kind": {
+          "$ref": "#/$defs/RenderKind"
+        },
+        "presentation": {
+          "$ref": "#/$defs/RenderPresentation"
+        },
+        "selected_by": {
+          "$ref": "#/$defs/RenderShapeRule"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "axis_kind": {
+          "$ref": "#/$defs/RenderAxisKind"
+        },
+        "axis_label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "value_label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "series": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/RenderSeries"
+          }
+        }
+      },
+      "required": [
+        "shape_id",
+        "kind",
+        "selected_by",
+        "title",
+        "axis_kind",
+        "axis_label",
+        "value_label",
+        "series"
+      ]
     }
   }
 }

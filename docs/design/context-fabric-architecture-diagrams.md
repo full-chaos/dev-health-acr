@@ -1107,6 +1107,97 @@ page and every other durable artifact; cases are named by index and band.
 
 ---
 
+## 8 — Conditional render shapes (CHAOS-4415 slice 1)
+
+**What it answers.** "Why did this answer get a chart and that one not?" —
+and, harder, "how do I know the chart is telling the truth?"
+
+Before CHAOS-4415 the answer surface carried tables only
+(`ClaimedFact.rows`, `ProjectedCohort.ranking_table`) and every consumer
+decided for itself whether to draw a chart from them. Two consumers reading
+one answer could legitimately draw different pictures, or none — which is
+what chris reported on 2026-08-29 19:59 PDT: the teams answer showed the
+ranked-teams table and nothing else, though it carried a per-team attention
+score, a per-driver contribution breakdown, and dated readiness records.
+
+Selection now lives in the service, and a chart is a claimed fact.
+
+```mermaid
+flowchart TD
+    subgraph engine["engine.Investigate — AFTER synthesis, commit affirmation, and every composer"]
+        RES["final InvestigationResult<br/>interpretation.shape · cohort · claimed_facts"]
+        SEL["SelectRenderShapes<br/>internal/contextfabric/render_shapes.go"]
+        RES --> SEL
+    end
+
+    subgraph rules["deterministic rules — no fallback branch, no 'looks chartable'"]
+        R1{"shape ∈ explicit_cohort,<br/>discovered_cohort<br/>AND a member has a score?"}
+        R2{"rule 1 fired AND<br/>ranked members carry drivers?"}
+        R3{"a claimed fact's rows carry a<br/>same-shaped, distinct date column<br/>+ a numeric column?"}
+    end
+    SEL --> R1 --> R2
+    SEL --> R3
+
+    S1["series / bars<br/>cohort_attention_score<br/>value ← CohortMember.Score"]
+    S2["series / stacked_bars<br/>cohort_driver_contribution<br/>value ← Driver.WeightContributed"]
+    S3["series / line<br/>dated_fact_trend<br/>value ← ClaimedFact.Rows[i][col]"]
+    R1 -->|yes| S1
+    R2 -->|yes| S2
+    R3 -->|yes| S3
+    R1 -->|no| SKIP["no shape · skip reason recorded<br/>RecordRenderShapeSelection"]
+    R2 -->|no| SKIP
+    R3 -->|no| SKIP
+
+    subgraph guard["the guard that makes a chart checkable"]
+        VAL["validateRenderShapes<br/>resolve every point.source in THIS document<br/>and require EXACT float equality"]
+    end
+    S1 --> VAL
+    S2 --> VAL
+    S3 --> VAL
+    VAL -->|any mismatch| REJ["result rejected<br/>'a chart number is never re-derived'"]
+    VAL -->|all resolve| OUT["result.render_shapes"]
+
+    OUT --> PROJ["answerprojection.Project<br/>carry WHOLE or drop WHOLE<br/>+ render_shapes_omitted"]
+    OUT --> ASKDEV["ask-dev renders the canonical result"]
+
+    classDef fixed fill:#123d1c,stroke:#3fa45b,color:#e8ffe8
+    classDef gate fill:#3d2a12,stroke:#c08a3e,color:#fff3e0
+    classDef bad fill:#4a1414,stroke:#c0392b,color:#ffecec
+    class S1,S2,S3,OUT,PROJ,ASKDEV fixed
+    class R1,R2,R3,VAL gate
+    class REJ,SKIP bad
+```
+
+**The three things this diagram is making non-obvious-but-true.**
+
+1. **Selection is downstream of everything.** `SelectRenderShapes` runs on
+   the FINAL result, after the commit-affirmation gate, immediately before
+   `Validate`. A model has no draft field for a shape, so it cannot author
+   one; and a shape can never describe content a later composer removed.
+2. **The arrow from a shape to a value is always a COPY.** Each point
+   carries a `render_point_source` — `cohort_member_score`,
+   `cohort_driver_weight_contributed`, or `claimed_fact_row` — and
+   validation resolves it and compares exactly. There is no tolerance,
+   because there is no legitimate arithmetic for a shape to do: a derived
+   number belongs in a canonical fact, where it gets provenance and coverage
+   of its own.
+3. **The projection drops rather than degrades.** A projected cohort member
+   carries no `drivers` array (CHAOS-4398 PR3 narrowed it deliberately;
+   only each member's top-2 driver weights survive as ranking-table cells),
+   so the stacked contribution shape usually cannot resolve there. It is
+   dropped WHOLE and counted in `projection_budget.render_shapes_omitted` —
+   never trimmed to the segments that happen to fit, because a stacked bar
+   claims its parts sum to the score, and a stack missing segments claims
+   something false. ask-dev is unaffected: it reads the canonical result.
+
+**Update rule.** A new render kind's producer updates this diagram in the
+same PR. The seven kinds declared but unproduced in slice 1 (`table`,
+`quadrant`, `treemap`, `sunburst`, `sankey`, `burndown`, `forecast`) each
+have a CHAOS-4415 sub-issue; each adds one rule node and one shape node
+here.
+
+---
+
 ## Sources
 
 - Live code via `codegraph_explore` / `rg` on `dev-health-acr`: `engine.go`
@@ -1116,6 +1207,8 @@ page and every other durable artifact; cases are named by index and band.
   `fact_planner.go`, `fact_registry.go`, `fact_scope.go`,
   `internal/contracts/v1/context_fabric_types.go`,
   `internal/contextfabric/devhealthfacts/*.go`,
+  `internal/contextfabric/render_shapes.go`,
+  `internal/contracts/v1/validate_context_fabric_render_shapes.go`,
   `internal/contextfabric/devhealthsource/teams_projects.go`,
   `internal/contextfabric/devhealthsource/teams_projects_edges.go`,
   `internal/contextfabric/devhealthsource/clickhouse.go`,

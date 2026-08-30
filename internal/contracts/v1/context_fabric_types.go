@@ -1485,6 +1485,20 @@ type ContextFabricInvestigationResult struct {
 	// ContextFabricAnswerProjection; ConfirmedStructure above is what
 	// projects.
 	StructureOfferSnapshot []ContextFabricStructureOfferSnapshotEntry `json:"structure_offer_snapshot,omitempty"`
+	// RenderShapes (CHAOS-4415 slice 1) is the OPTIONAL set of renderable
+	// shapes this answer warrants -- a per-team attention-score bar
+	// chart, a stacked per-driver contribution breakdown, a dated trend
+	// line. Absent (nil) on every answer no deterministic selection rule
+	// fired for, which is the common case and the point: North Star check
+	// 10 makes rich views conditional on intent, never default.
+	//
+	// Built by internal/contextfabric.SelectRenderShapes AFTER synthesis
+	// validation, from this result's OWN cohort and claimed facts, and
+	// every number in it is checked back against them by
+	// validateRenderShapes. See context_fabric_render_shapes.go for the
+	// full design. Additive optional v1 field: a consumer that ignores it
+	// reads a byte-identical answer to the pre-4415 one.
+	RenderShapes []ContextFabricRenderShape `json:"render_shapes,omitempty"`
 }
 
 // ContextFabricScalarValue is the only free-form value admitted by the public

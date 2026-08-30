@@ -367,7 +367,8 @@ type recordingTelemetry struct {
 	// list-not-count discipline.
 	modelRowsStripped []int
 	// cohortRanked (CHAOS-4398) mirrors the SAME list-not-count discipline.
-	cohortRanked []CohortRankedEvent
+	renderShapeSelections []RenderShapeSelectionEvent
+	cohortRanked          []CohortRankedEvent
 	// cohortDriverNarrations (CHAOS-4398 PR3b) mirrors the SAME
 	// list-not-count discipline.
 	cohortDriverNarrations []CohortDriverNarrationEvent
@@ -534,6 +535,10 @@ func (r *recordingTelemetry) RecordProjectedRowsByFactKind(_ context.Context, _ 
 
 func (r *recordingTelemetry) RecordModelRowsStripped(_ context.Context, _ storage.Principal, claims int) {
 	r.modelRowsStripped = append(r.modelRowsStripped, claims)
+}
+
+func (r *recordingTelemetry) RecordRenderShapeSelection(_ context.Context, _ storage.Principal, event RenderShapeSelectionEvent) {
+	r.renderShapeSelections = append(r.renderShapeSelections, event)
 }
 
 func (r *recordingTelemetry) RecordCohortRanked(_ context.Context, _ storage.Principal, event CohortRankedEvent) {

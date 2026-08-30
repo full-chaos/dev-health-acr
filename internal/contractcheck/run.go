@@ -55,16 +55,18 @@ var exampleSchemaPairs = map[string]string{
 	// A historical-axis result (CHAOS-3781): carries the temporal label,
 	// and shows a fact source that cannot answer for a past time degrading
 	// in coverage while the rest of the answer survives (AC-3781-2/5).
-	"context_fabric_investigation_result_historical.v1.json": "context_fabric_investigation_result.v1.schema.json",
-	"context_fabric_answer_projection.v1.json":               "context_fabric_answer_projection.v1.schema.json",
+	"context_fabric_investigation_result_historical.v1.json":    "context_fabric_investigation_result.v1.schema.json",
+	"context_fabric_investigation_result_render_shapes.v1.json": "context_fabric_investigation_result.v1.schema.json",
+	"context_fabric_answer_projection.v1.json":                  "context_fabric_answer_projection.v1.schema.json",
 	// The historical-axis projection (CHAOS-3746): the only published
 	// example carrying a temporal label, so the only one that validates
 	// the label against the projection SCHEMA rather than only against
 	// the Go validator.
-	"context_fabric_answer_projection_historical.v1.json":   "context_fabric_answer_projection.v1.schema.json",
-	"context_fabric_projection_batch.v1.json":               "context_fabric_projection_batch.v1.schema.json",
-	"context_fabric_org_model_config.v1.json":               "context_fabric_org_model_config.v1.schema.json",
-	"context_fabric_org_model_config_write_request.v1.json": "context_fabric_org_model_config_write_request.v1.schema.json",
+	"context_fabric_answer_projection_historical.v1.json":    "context_fabric_answer_projection.v1.schema.json",
+	"context_fabric_answer_projection_render_shapes.v1.json": "context_fabric_answer_projection.v1.schema.json",
+	"context_fabric_projection_batch.v1.json":                "context_fabric_projection_batch.v1.schema.json",
+	"context_fabric_org_model_config.v1.json":                "context_fabric_org_model_config.v1.schema.json",
+	"context_fabric_org_model_config_write_request.v1.json":  "context_fabric_org_model_config_write_request.v1.schema.json",
 	// CHAOS-4042: the anchor membership-verify semantic major. Wire fields
 	// are identical to v1's investigation result; only structure_needs'
 	// anchor_options meaning differs (membership, not unique-claimant) --

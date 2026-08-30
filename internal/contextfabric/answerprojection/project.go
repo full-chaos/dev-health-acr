@@ -136,6 +136,10 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	limitationsOmitted += result.LimitationsDisplaced
 	warnings, warningsOmitted := boundedNarrative(result.Warnings, clamp)
 	coverage, coverageOmitted := projectCoverage(result, clamp)
+	// CHAOS-4415: shapes are carried after the cohort and the facts they
+	// cite have been cut, never before -- a shape is admitted only when
+	// this projection still lets its reader check every number it plots.
+	renderShapes, renderShapesOmitted := projectRenderShapes(result, cohort, facts)
 	evidence := index.ids()
 	evidenceOmitted := countUnindexedEvidence(result, index)
 
@@ -183,6 +187,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		// would leave the default answer surface reproducing the exact
 		// silent drop this field exists to close.
 		PriorSubjectReceiptDispositions: append([]contractsv1.ContextFabricPriorSubjectReceiptEntry(nil), result.SubjectResolution.PriorSubjectReceiptDispositions...),
+		RenderShapes:                    renderShapes,
 	}
 	projection.ProjectionBudget = contractsv1.ContextFabricProjectionBudget{
 		DriversOmitted:         driversOmitted,
@@ -196,6 +201,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		LimitationsOmitted:     limitationsOmitted,
 		WarningsOmitted:        warningsOmitted,
 		CoverageOmitted:        coverageOmitted,
+		RenderShapesOmitted:    renderShapesOmitted,
 	}
 	projection.ProjectionBudget.Truncated = declaresDrop(projection.ProjectionBudget)
 	if projection.CommittedSubjects == nil {
@@ -232,7 +238,8 @@ func declaresDrop(budget contractsv1.ContextFabricProjectionBudget) bool {
 		budget.WarningsOmitted > 0 ||
 		budget.CoverageOmitted > 0 ||
 		budget.ReasonsOmitted > 0 ||
-		budget.ValuesClamped > 0
+		budget.ValuesClamped > 0 ||
+		budget.RenderShapesOmitted > 0
 }
 
 // projectDrivers selects the drivers that survive the budget and the
