@@ -180,10 +180,21 @@ func JoinONViolations(statement string) (violations []string, clauses, conjuncts
 // unqualified join. "GROUP"/"ORDER" (not "GROUP BY"/"ORDER BY") are
 // enough: "BY" always follows immediately and the boundary is the clause
 // start, not the exact phrase.
+// ANY/ALL/ARRAY are listed as their two-word "... JOIN" phrase, not the
+// bare qualifier (team-lead's non-blocking review note on this file): all
+// three are also common ClickHouse function/aggregate names
+// (any(x), all(x), array(x)), and nextWord's word-boundary check treats
+// "(" as a valid boundary -- a bare "ANY" terminator would truncate a
+// condition at a legitimate any(...)/all(...)/array(...) call, not just
+// an ANY JOIN/ALL JOIN/ARRAY JOIN qualifier. The other qualifiers
+// (INNER/LEFT/RIGHT/FULL/CROSS/ASOF/SEMI/ANTI) are not common function
+// names in this codebase's SQL, so the bare word stays cheap and correct
+// for them; UNION ALL is still caught by the bare "UNION" entry above.
 var clauseTerminators = []string{
 	"WHERE", "PREWHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "SETTINGS",
 	"UNION", "WINDOW", "QUALIFY",
-	"INNER", "LEFT", "RIGHT", "FULL", "CROSS", "ANY", "ALL", "ASOF", "SEMI", "ANTI", "ARRAY",
+	"INNER", "LEFT", "RIGHT", "FULL", "CROSS", "ASOF", "SEMI", "ANTI",
+	"ANY JOIN", "ALL JOIN", "ARRAY JOIN",
 	"JOIN",
 }
 

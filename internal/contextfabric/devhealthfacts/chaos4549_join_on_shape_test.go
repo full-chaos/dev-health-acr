@@ -54,6 +54,7 @@ package devhealthfacts_test
 // earlier, stricter draft.
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
@@ -150,17 +151,36 @@ func TestChaos4549AllJoinOnClausesArePortable(t *testing.T) {
 
 	// chaos4099_scope_expander.go's ScopeExpander is a SEPARATE production
 	// SQL surface from the FactProvider sweep above -- its own JOIN ON
-	// queries were entirely unswept until this codex review finding.
-	// Sharing the SAME fakeClient/orgID means its captured statements land
-	// in client.queries exactly like the providers' do, checked by the
-	// same loop below.
-	sweepScopeExpander(ctx, client, principal, orgID)
+	// queries were entirely unswept until this codex review finding. It
+	// runs on its own isolated, seeded fakeClient (sweepScopeExpander's
+	// doc comment explains why) and its captured statements are merged in
+	// here, checked by the same loop below.
+	allQueries := append([]capturedQuery{}, client.queries...)
+	allQueries = append(allQueries, sweepScopeExpander(ctx, orgID)...)
 
-	if len(client.queries) == 0 {
+	if len(allQueries) == 0 {
 		t.Fatal("no statements captured -- the fake client is not wired to the providers")
 	}
+	// codex review finding, made self-checking: the second-hop
+	// pull-request-review policy's distinct JOIN --
+	// pullRequestReviewsForRepositories' own hand-written
+	// "r.repo_id = p.repo_id AND r.number = p.number AND r.org_id =
+	// p.org_id" ON clause, aliases unique to that function -- is the
+	// exact query that went unreached before sweepScopeExpander seeded a
+	// first-hop candidate. A plain "git_pull_request_reviews" substring
+	// is NOT specific enough: ReviewsProvider's own baseline (FactReviews
+	// -> readers.ReadPullRequestReviews, a different, vendored query)
+	// already reads that table regardless of ScopeExpander, so that
+	// weaker assertion would falsely pass even against the pre-fix
+	// sweepScopeExpander (caught while writing this test's own red-first
+	// proof). Assert the SPECIFIC join instead, so a future regression
+	// that silently stops reaching the second hop again fails loudly
+	// here instead of reading as "0 violations".
+	if !anyStatementContains(allQueries, "r.repo_id = p.repo_id AND r.number = p.number AND r.org_id = p.org_id") {
+		t.Fatal("no captured statement carries pullRequestReviewsForRepositories' own ON clause -- sweepScopeExpander's second-hop review policies never reached their own query")
+	}
 	totalClauses, totalConjuncts := 0, 0
-	for _, query := range client.queries {
+	for _, query := range allQueries {
 		violations, clauses, conjuncts := chfixture.JoinONViolations(query.statement)
 		totalClauses += clauses
 		totalConjuncts += conjuncts
@@ -176,18 +196,52 @@ func TestChaos4549AllJoinOnClausesArePortable(t *testing.T) {
 	if totalClauses == 0 {
 		t.Fatal("0 JOIN ON clauses found across all captured statements -- the ON/AND parser is not matching anything, not proof of portability")
 	}
-	t.Logf("CHAOS-4549: checked %d JOIN ON clauses (%d conjuncts) across %d captured statements (devhealthfacts)", totalClauses, totalConjuncts, len(client.queries))
+	t.Logf("CHAOS-4549: checked %d JOIN ON clauses (%d conjuncts) across %d captured statements (devhealthfacts)", totalClauses, totalConjuncts, len(allQueries))
 }
 
 // sweepScopeExpander exercises every contextfabric.FactScopePolicy
 // chaos4099_scope_expander.go implements, each a distinct production JOIN
 // ON query ScopeExpander composes -- entirely separate from the
 // FactProvider surface the rest of this test sweeps (codex review
-// finding). Errors are not this test's concern, same as
-// readFactsForJoinShapeCheck: only which SQL text reached the client
+// finding). It uses its OWN isolated fakeClient rather than sharing the
+// providers' one, for two reasons: (1) seeding rows a second-hop policy
+// needs (below) into a client shared with 20+ other provider calls risks
+// a match-string collision silently feeding an unrelated producer's query
+// the wrong column shape, and (2) codex review finding -- an EMPTY fake
+// client makes every first-hop repository lookup return zero rows, so
+// ExpandFactScope exits before the second-hop pull-request/review
+// policies ever issue THEIR queries at all; this claimed to sweep six
+// policies while only ever reaching the first hop of two of them. Seeding
+// one authorized repository candidate for both the project-origin
+// (work_items) and team-origin (work_item_team_attributions) first-hop
+// queries lets every policy's real query -- including the distinct
+// pullRequestsForRepositories/pullRequestReviewsForRepositories joins --
+// actually run and get captured. Errors are not this test's concern, same
+// as readFactsForJoinShapeCheck: only which SQL text reached the client
 // matters here.
-func sweepScopeExpander(ctx context.Context, client *fakeClient, principal storage.Principal, orgID string) {
+func sweepScopeExpander(ctx context.Context, orgID string) []capturedQuery {
+	const (
+		scopeRepoID   = "11111111-1111-1111-1111-111111111111"
+		scopeRepoSlug = "example-org/scope-repo"
+	)
+	client := &fakeClient{tables: []fakeTable{
+		// projectRepositories' first hop (chaos4099_scope_expander.go).
+		// Column order: toString(w.repo_id), ifNull(r.repo, ''), min(p.id).
+		{match: "FROM work_items AS w FINAL", rows: [][]any{
+			{scopeRepoID, scopeRepoSlug, "proj-4549-scope"},
+		}},
+		// teamRepositories' first hop. Column order: toString(w.repo_id),
+		// ifNull(r.repo, ''), argMin(source), min(a.team_id).
+		{match: "FROM work_item_team_attributions AS a FINAL", rows: [][]any{
+			{scopeRepoID, scopeRepoSlug, "native_team", "CHAOS"},
+		}},
+	}}
 	expander := devhealthfacts.NewScopeExpander(client)
+	// RepositoryScopes: ["*"] authorizes every repository (matches
+	// chaos4109_axis_rejection_test.go's own request shape) -- without it
+	// the seeded candidate above is dropped as unauthorized and the
+	// second hop still never fires.
+	principal := storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}
 	project := projectSubject("github", "proj-4549-scope")
 	team := teamSubject("CHAOS")
 	policies := []struct {
@@ -214,6 +268,7 @@ func sweepScopeExpander(ctx context.Context, client *fakeClient, principal stora
 			Limit:           20,
 		})
 	}
+	return client.queries
 }
 
 // readFactsForJoinShapeCheck issues one ReadFacts call purely to capture
@@ -227,4 +282,13 @@ func readFactsForJoinShapeCheck(ctx context.Context, provider contextfabric.Fact
 		Kind:     kind,
 		Subjects: []contextfabric.SubjectRef{subject},
 	})
+}
+
+func anyStatementContains(queries []capturedQuery, substring string) bool {
+	for _, query := range queries {
+		if strings.Contains(query.statement, substring) {
+			return true
+		}
+	}
+	return false
 }

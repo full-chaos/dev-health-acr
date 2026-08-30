@@ -95,6 +95,14 @@ func TestJoinONViolations(t *testing.T) {
 			wantBad:   nil,
 		},
 		{
+			// team-lead's own non-blocking review note: a bare "ANY"/"ALL"
+			// terminator would truncate this condition right before
+			// any(...), leaving "a.x = " dangling with no right operand.
+			name:      "team-lead review: any(...)/all(...) as an operand's function call is portable, not a clause terminator",
+			statement: "SELECT 1 FROM a INNER JOIN b ON a.x = any(b.arr) AND a.y = all(b.arr2)",
+			wantBad:   nil,
+		},
+		{
 			name:      "OR-arm is rejected",
 			statement: "SELECT 1 FROM a INNER JOIN b ON a.id = b.id OR a.org_id = b.org_id",
 			wantBad:   []string{"a.id = b.id OR a.org_id = b.org_id"},
