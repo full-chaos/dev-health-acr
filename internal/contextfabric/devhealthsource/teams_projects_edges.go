@@ -1164,6 +1164,35 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 		// the clean row's legitimate edge -- a missing edge, the exact class
 		// this ticket exists to remove, reintroduced by the guard against
 		// fabricating one.
+		// REPRESENTABILITY FIRST, and the ordering is load-bearing
+		// (CHAOS-4565). This check used to sit below the suppression branch,
+		// where it only ever guarded the assertion. Now that a suppressed
+		// group EMITS something, it has to guard both -- and it is the same
+		// question for both: a project this producer cannot represent was
+		// never projected, so there is no edge to retract, and a retraction
+		// is not merely useless but actively dangerous.
+		//
+		// The danger is specific. Both the relationship id and the tombstone's
+		// canonical id embed the raw project id, and the v1 contract bounds
+		// both at 256 characters. An oversized id therefore fails
+		// ContextFabricProjectionTombstone.Validate(), which rejects the WHOLE
+		// batch, and a rejected batch never advances a checkpoint -- the
+		// organization's projection wedges PERMANENTLY. That is not
+		// theoretical: leaving this check below the suppression branch broke
+		// two long-standing subtests
+		// ("ambiguous rows do not stall pagination", "omitted rows beyond the
+		// skip bound still converge") with
+		// `tombstones: projection tombstone violates v1 bounds`, on the very
+		// run that proved the retraction works. Emitting a progress candidate
+		// here keeps the row consuming page budget exactly as it did before,
+		// so the walk still advances past it.
+		projectCanonicalID, projectOmitted, err := identity.Derive(identity.KindProject, []string{provider, projectID}, nil)
+		if err != nil {
+			return nil, err
+		}
+		if projectOmitted {
+			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
+		}
 		// RETRACTION (CHAOS-4565). This group has no row that can assert
 		// the edge -- every contributing ownership row is either an
 		// identity conflict or an ambiguous-key retraction row. Emitting a
@@ -1219,13 +1248,6 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 		// longer fire, and a guard that cannot fire is a false claim that
 		// something is being guarded. recordAmbiguousProjectKeys carries the
 		// telemetry instead.
-		projectCanonicalID, projectOmitted, err := identity.Derive(identity.KindProject, []string{provider, projectID}, nil)
-		if err != nil {
-			return nil, err
-		}
-		if projectOmitted {
-			return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
-		}
 		relationship := contractsv1.ContextFabricRelationshipProjection{
 			RelationshipID: projectTeamRelationshipID(provider, projectID, teamID, source),
 			Type:           contractsv1.ContextFabricRelationshipOwnedByTeam,
