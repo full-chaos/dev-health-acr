@@ -203,6 +203,7 @@ func TestFindReusable_CohortMintedClaimedFactsSurviveAReuseHit(t *testing.T) {
 		Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:CHAOS", Label: "CHAOS"},
 		Field:   "severity", Value: contractsv1.ContextFabricScalarValue{String: &mintedValue},
 	}}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 	saveWithReuseSnapshot(t, ctx, store, principal, result)
 
 	found, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
