@@ -1,6 +1,10 @@
 package devhealthsource
 
-import "time"
+import (
+	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+)
 
 // EntityTableNamesForTest exposes entityTables' table names (tables.go) to
 // devhealthsource_test -- CHAOS-3789 codex round-1 F2: the schema-parity
@@ -64,4 +68,40 @@ func ProjectAuthorizationScopeForTest(projectID string) error {
 // rewritten.
 func EdgeValidityForTest(fromValidFrom, fromValidTo, toValidFrom, toValidTo *time.Time) (*time.Time, *time.Time) {
 	return edgeValidity(fromValidFrom, fromValidTo, toValidFrom, toValidTo)
+}
+
+// ProjectTeamRelationshipIDForTest exposes the OWNED_BY_TEAM project<->team
+// edge id to devhealthsource_test, derived exactly the way the producer
+// derives it (CHAOS-4635).
+//
+// It takes the RAW source values a fixture actually seeds -- provider,
+// projects.id, teams.id, the attribution source -- and runs them through the
+// same identity.Derive + projectTeamRelationshipID pair queryProjectTeams
+// uses, so a test expectation cannot become a second spelling of the
+// encoding. That mattered immediately: the ids these tests used to hard-code
+// were a raw colon join, and after the digest change every literal would have
+// had to be re-copied by hand from a failing test's output -- which is how a
+// fixture stops describing the producer and starts describing whatever it
+// last printed.
+//
+// It is also why the conversion could not be mechanical. A literal like
+// `relationship:project_team:github:70d529e0-...:gitlab:71133891:gl:full.chaos:native`
+// cannot be split back into its components without already knowing where the
+// boundaries are -- the exact ambiguity CHAOS-4635 exists to remove. Every
+// call site was therefore rewritten from the fixture's OWN seeded values.
+//
+// Fails loudly rather than returning a wrong expectation: a project id this
+// producer cannot represent yields no edge at all, so a test asserting on one
+// is asserting about something that never existed.
+func ProjectTeamRelationshipIDForTest(t interface{ Fatalf(string, ...any) }, provider, projectID, teamID, source string) string {
+	projectCanonicalID, omitted, err := identity.Derive(identity.KindProject, []string{provider, projectID}, nil)
+	if err != nil {
+		t.Fatalf("derive project canonical id for (%q, %q): %v", provider, projectID, err)
+		return ""
+	}
+	if omitted {
+		t.Fatalf("project (%q, %q) is not representable, so the producer emits no edge for it -- this expectation is about an edge that cannot exist", provider, projectID)
+		return ""
+	}
+	return projectTeamRelationshipID(projectCanonicalID, teamID, source)
 }

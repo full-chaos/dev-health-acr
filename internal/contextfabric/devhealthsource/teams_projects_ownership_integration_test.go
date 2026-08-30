@@ -54,7 +54,7 @@ func subOwnershipCollapseDoesNotMergeAcrossProviders(t *testing.T, ctx context.C
 		{"github", "PROJ-GITHUB", "TEAM-GITLAB"},
 		{"gitlab", "PROJ-GITLAB", "TEAM-GITHUB"},
 	} {
-		id := "relationship:project_team:" + forbidden.provider + ":" + forbidden.project + ":" + forbidden.team + ":native"
+		id := devhealthsource.ProjectTeamRelationshipIDForTest(t, forbidden.provider, forbidden.project, forbidden.team, "native")
 		if hasRelationship(batch, id) {
 			t.Errorf("fabricated a cross-provider ownership edge %q -- the two providers' assertions were merged on a shared project_key", id)
 		}
@@ -63,7 +63,7 @@ func subOwnershipCollapseDoesNotMergeAcrossProviders(t *testing.T, ctx context.C
 		{"github", "PROJ-GITHUB", "TEAM-GITHUB"},
 		{"gitlab", "PROJ-GITLAB", "TEAM-GITLAB"},
 	} {
-		id := "relationship:project_team:" + wanted.provider + ":" + wanted.project + ":" + wanted.team + ":native"
+		id := devhealthsource.ProjectTeamRelationshipIDForTest(t, wanted.provider, wanted.project, wanted.team, "native")
 		if !hasRelationship(batch, id) {
 			t.Errorf("lost the genuine same-provider ownership edge %q while scoping by provider", id)
 		}
@@ -88,7 +88,7 @@ func subOwnershipWindowTakesTheLatestAssertion(t *testing.T, ctx context.Context
 
 	batch := fixture.project(t, ctx)
 
-	closedLate := relationshipByID(t, batch, "relationship:project_team:github:PROJ-CLOSED:TEAM-GITHUB:native")
+	closedLate := relationshipByID(t, batch, devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-CLOSED", "TEAM-GITHUB", "native"))
 	if closedLate.ValidTo == nil {
 		t.Fatal("PROJ-CLOSED: the latest assertion closed the ownership, so the edge must carry an end")
 	}
@@ -97,7 +97,7 @@ func subOwnershipWindowTakesTheLatestAssertion(t *testing.T, ctx context.Context
 			closedLate.ValidTo, ownershipLatestClose, ownershipStaleFarFutureClose)
 	}
 
-	stillOpen := relationshipByID(t, batch, "relationship:project_team:github:PROJ-OPEN:TEAM-GITHUB:native")
+	stillOpen := relationshipByID(t, batch, devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-OPEN", "TEAM-GITHUB", "native"))
 	if stillOpen.ValidTo != nil {
 		t.Errorf("PROJ-OPEN: ValidTo = %v, want nil -- the latest assertion left the window open, and a NULL valid_to must not be skipped in favour of an older closed row", stillOpen.ValidTo)
 	}
@@ -577,16 +577,16 @@ func subAmbiguousProjectKeyResolvesAnIDAndOmitsAKey(t *testing.T, ctx context.Co
 	assertUniqueRelationshipIDs(t, batch)
 
 	// The id-shaped row from the baseline fixture: unambiguous, so emitted.
-	const resolved = "relationship:project_team:github:PROJ-AMBIG-A:TEAM-GITHUB:native"
+	resolved := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-AMBIG-A", "TEAM-GITHUB", "native")
 	if !hasRelationship(batch, resolved) {
 		t.Errorf("%q missing -- the ownership row names projects.id, which is unique, so another project sharing its KEY cannot make it ambiguous", resolved)
 	}
 	// The key-shaped row: neither candidate may be guessed, and the raw key
 	// must never be minted as a project id of its own.
 	for _, forbidden := range []string{
-		"relationship:project_team:github:PROJ-AMBIG-A:TEAM-GITLAB:native",
-		"relationship:project_team:github:PROJ-AMBIG-B:TEAM-GITLAB:native",
-		"relationship:project_team:github:AMBIG-KEY:TEAM-GITLAB:native",
+		devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-AMBIG-A", "TEAM-GITLAB", "native"),
+		devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-AMBIG-B", "TEAM-GITLAB", "native"),
+		devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "AMBIG-KEY", "TEAM-GITLAB", "native"),
 	} {
 		if hasRelationship(batch, forbidden) {
 			t.Errorf("emitted %q from an ambiguous project_key -- two projects share (github, AMBIG-KEY), so which one the source meant is unknowable and neither may be guessed", forbidden)
@@ -613,8 +613,8 @@ func subAmbiguousProjectKeyResolvesAnIDAndOmitsAKey(t *testing.T, ctx context.Co
 
 	// One ambiguous key must not suppress the rest.
 	for _, id := range []string{
-		"relationship:project_team:github:PROJ-GITHUB:TEAM-GITHUB:native",
-		"relationship:project_team:github:PROJ-OPEN:TEAM-GITHUB:native",
+		devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-GITHUB", "TEAM-GITHUB", "native"),
+		devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-OPEN", "TEAM-GITHUB", "native"),
 	} {
 		if !hasRelationship(batch, id) {
 			t.Errorf("lost the unambiguous edge %q -- one ambiguous key must not suppress the rest", id)
@@ -625,7 +625,7 @@ func subAmbiguousProjectKeyResolvesAnIDAndOmitsAKey(t *testing.T, ctx context.Co
 func subAmbiguousRowsDoNotStallPagination(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 	fixture.seedAmbiguousBlockThenValidEdge(t, ctx)
 
-	const wantEdge = "relationship:project_team:github:PROJ-BEYOND:TEAM-GITHUB:native"
+	wantEdge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-BEYOND", "TEAM-GITHUB", "native")
 	cursor := ""
 	found := false
 	for page := 0; page < 40; page++ {
@@ -732,7 +732,7 @@ func subTiedOwnershipAssertionsResolveDeterministically(t *testing.T, ctx contex
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', 'ownership-row-open', 'TIE-KEY', 'native', ?, NULL, ?)`,
 		fixture.orgID, ownershipFirstSeen, at)
 
-	const tieEdge = "relationship:project_team:github:PROJ-TIE:TEAM-GITHUB:native"
+	tieEdge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-TIE", "TEAM-GITHUB", "native")
 	for run := 0; run < 8; run++ {
 		edge := relationshipByID(t, fixture.project(t, ctx), tieEdge)
 		if edge.ValidTo != nil {
@@ -787,8 +787,8 @@ func subAmbiguityGuardIsScopedToOneOrganization(t *testing.T, ctx context.Contex
 
 	batch := fixture.project(t, ctx)
 	for _, wantEdge := range []string{
-		"relationship:project_team:github:PROJ-THIS-ORG:TEAM-GITHUB:native",
-		"relationship:project_team:github:PROJ-THIS-ORG:TEAM-GITLAB:native",
+		devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-THIS-ORG", "TEAM-GITHUB", "native"),
+		devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-THIS-ORG", "TEAM-GITLAB", "native"),
 	} {
 		if !hasRelationship(batch, wantEdge) {
 			t.Errorf("%q was omitted -- the ambiguity window counted another organization's project, so a single unambiguous project looked like two", wantEdge)
@@ -796,8 +796,8 @@ func subAmbiguityGuardIsScopedToOneOrganization(t *testing.T, ctx context.Contex
 	}
 	// The other organization's rows must not leak into this projection at all.
 	for _, forbidden := range []string{
-		"relationship:project_team:github:PROJ-OTHER-ORG:TEAM-OTHER-ORG:native",
-		"relationship:project_team:github:PROJ-OTHER-ORG:TEAM-GITHUB:native",
+		devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-OTHER-ORG", "TEAM-OTHER-ORG", "native"),
+		devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-OTHER-ORG", "TEAM-GITHUB", "native"),
 	} {
 		if hasRelationship(batch, forbidden) {
 			t.Errorf("projected %q -- another organization's ownership crossed the tenant boundary", forbidden)
@@ -877,10 +877,10 @@ func subOmittedRowsBeyondTheSkipBoundStillConverge(t *testing.T, ctx context.Con
 	// the source is exhausted by construction rather than because a signal
 	// said so -- and every tick after exhaustion is a cheap no-op.
 	const (
-		wantEdge   = "relationship:project_team:github:PROJ-PAST-BOUND:TEAM-GITHUB:native"
 		totalTicks = 120
 		quietTail  = 10
 	)
+	wantEdge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-PAST-BOUND", "TEAM-GITHUB", "native")
 	published := 0
 	quiet := 0
 	var previous cursorPosition
@@ -1039,7 +1039,7 @@ func subTwoIDSpaceRowsYieldExactlyOneEdge(t *testing.T, ctx context.Context, fix
 	// RelationshipID is what wedges the projection.
 	assertUniqueRelationshipIDs(t, batch)
 
-	const wanted = "relationship:project_team:github:" + projectID + ":TEAM-GITHUB:native"
+	wanted := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", projectID, "TEAM-GITHUB", "native")
 	matches := 0
 	for _, relationship := range batch.Relationships {
 		if relationship.RelationshipID == wanted {
@@ -1051,7 +1051,7 @@ func subTwoIDSpaceRowsYieldExactlyOneEdge(t *testing.T, ctx context.Context, fix
 	}
 	// The edge must also be the RESOLVED project, never the raw key the
 	// key-shaped row carried.
-	if hasRelationship(batch, "relationship:project_team:github:"+projectKey+":TEAM-GITHUB:native") {
+	if hasRelationship(batch, devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", projectKey, "TEAM-GITHUB", "native")) {
 		t.Errorf("emitted an edge keyed on the raw project_key %q rather than the resolved projects.id", projectKey)
 	}
 }
@@ -1098,7 +1098,7 @@ func subEmptyKeyProjectsEachKeepTheirOwnEdge(t *testing.T, ctx context.Context, 
 	assertUniqueRelationshipIDs(t, batch)
 
 	for _, projectID := range projectIDs {
-		wanted := "relationship:project_team:linear:" + projectID + ":" + teamID + ":native"
+		wanted := devhealthsource.ProjectTeamRelationshipIDForTest(t, "linear", projectID, teamID, "native")
 		if !hasRelationship(batch, wanted) {
 			t.Errorf("relationship %q missing -- a UUID match is unambiguous by construction, so no empty-key partition may suppress it; this is what CHAOS-4530 makes the ONLY shape Linear ownership has", wanted)
 		}
@@ -1186,8 +1186,8 @@ func subRetractsAnEdgeWhoseKeyBecomesAmbiguous(t *testing.T, ctx context.Context
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, "PROJ-KEEP", "KEEP-KEY", ownershipFirstSeen, at)
 
-	const edge = "relationship:project_team:github:PROJ-RETRACT-KEY:TEAM-GITHUB:native"
-	const control = "relationship:project_team:github:PROJ-KEEP:TEAM-GITHUB:native"
+	edge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-RETRACT-KEY", "TEAM-GITHUB", "native")
+	control := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-KEEP", "TEAM-GITHUB", "native")
 
 	cursor, ok := drainUntil(t, ctx, fixture, "", func(b contextfabric.ProjectionBatch) bool { return hasRelationship(b, edge) })
 	if !ok {
@@ -1249,7 +1249,7 @@ func subRetractsAnEdgeWhoseIdentityStartsConflicting(t *testing.T, ctx context.C
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, "PROJ-CONFLICT-A", "CONFLICT-KEY", ownershipFirstSeen, at)
 
-	const edge = "relationship:project_team:github:PROJ-CONFLICT-A:TEAM-GITHUB:native"
+	edge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-CONFLICT-A", "TEAM-GITHUB", "native")
 	cursor, ok := drainUntil(t, ctx, fixture, "", func(b contextfabric.ProjectionBatch) bool { return hasRelationship(b, edge) })
 	if !ok {
 		t.Fatalf("%q was never projected; there is no edge for the retraction to remove", edge)
@@ -1286,7 +1286,7 @@ func subRetractionIsIdempotentAcrossAReRun(t *testing.T, ctx context.Context, fi
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, "IDEMPOTENT-KEY", "IDEMPOTENT-KEY", ownershipFirstSeen, at)
 
-	const edge = "relationship:project_team:github:PROJ-IDEMPOTENT-A:TEAM-GITHUB:native"
+	edge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-IDEMPOTENT-A", "TEAM-GITHUB", "native")
 
 	project := func() contextfabric.ProjectionBatch {
 		t.Helper()
@@ -1367,7 +1367,7 @@ func subRetractionOnlyFollowsMaxRaisingProjectWrites(t *testing.T, ctx context.C
 	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, ?, 'native', ?, NULL, ?)`,
 		fixture.orgID, "WM-KEY", "WM-KEY", ownershipFirstSeen, at)
 
-	const edge = "relationship:project_team:github:ZZZ-WATERMARK:TEAM-GITHUB:native"
+	edge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "ZZZ-WATERMARK", "TEAM-GITHUB", "native")
 	cursor, ok := drainUntil(t, ctx, fixture, "", func(b contextfabric.ProjectionBatch) bool { return hasRelationship(b, edge) })
 	if !ok {
 		t.Fatalf("%q was never projected -- with no edge in place both halves below would pass vacuously", edge)

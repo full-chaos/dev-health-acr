@@ -51,6 +51,15 @@ type RelationshipFamily string
 const (
 	RelationshipFamilyWorkItemDependency RelationshipFamily = "work_item_dependency"
 	RelationshipFamilyWorkItemHierarchy  RelationshipFamily = "work_item_hierarchy"
+	// RelationshipFamilyProjectTeam is devhealthsource's project<->team
+	// OWNED_BY_TEAM ownership edge (CHAOS-4635). Its pre-v2 id was a raw
+	// colon join of provider, project id, team id and attribution source --
+	// over id spaces that CONTAIN colons (`{org}:gitlab:71133891`,
+	// `gl:full.chaos`), so two different ownership facts could land on one
+	// id. That is the same defect §1.5 named for work_item_dependency, on a
+	// third producer, which is why it joins this scheme rather than getting
+	// a fourth hand-rolled encoding.
+	RelationshipFamilyProjectTeam RelationshipFamily = "project_team"
 )
 
 // DeriveRelationship computes the `relationship.v2:<family>:

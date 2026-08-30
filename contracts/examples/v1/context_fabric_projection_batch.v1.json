@@ -320,7 +320,7 @@
           "string": "native"
         }
       },
-      "relationship_id": "relationship:project_team:github:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos:native",
+      "relationship_id": "relationship.v2:project_team:02e9edd19d8a937a30f72b830f67b000",
       "source_version": "devhealthsource.teams_projects.v9",
       "to": {
         "canonical_id": "team:gl:full.chaos",

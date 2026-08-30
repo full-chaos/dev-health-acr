@@ -763,8 +763,46 @@ const projectTeamsWatermark = "max(o.row_watermark)"
 // spellings drifting apart is the single failure mode that turns this
 // whole change into decoration, so they are not allowed to be two
 // spellings.
-func projectTeamRelationshipID(provider, projectID, teamID, source string) string {
-	return "relationship:project_team:" + provider + ":" + projectID + ":" + teamID + ":" + source
+//
+// CHAOS-4635: a DIGEST over the endpoints' own canonical ids, not a raw
+// colon join of the source values. The previous form was
+// `"relationship:project_team:" + provider + ":" + projectID + ":" + teamID
+// + ":" + source`, and the delimiter was not a delimiter -- `projects.id` is
+// routinely `{org}:gitlab:71133891` and team ids are routinely
+// `gl:full.chaos`, so two different ownership facts could produce one id:
+//
+//	project "project:team" + team "source"      -> ...:github:project:team:source:native
+//	project "project"      + team "team:source" -> ...:github:project:team:source:native
+//
+// Two ASSERTIONS colliding are rejected as a duplicate RelationshipID, and a
+// rejected batch never advances a checkpoint -- the organization's projection
+// wedges PERMANENTLY. An assertion colliding with a TOMBSTONE used to pass
+// validation outright (they are checked in separate passes) and, because
+// falkorgraph applies tombstones after relationships, silently deleted a
+// valid, still-asserted edge. CHAOS-4565's contract guard turned the second
+// case into the first -- loud instead of silent -- and this removes the cause
+// underneath both.
+//
+// identity.DeriveRelationship, not a fourth hand-rolled encoding: it is the
+// scheme queryWorkItemDependencies and queryWorkItemHierarchy already use for
+// exactly this defect (CHAOS-3898 §1.5), and it is injective because
+// JoinSegments ESCAPES ':' inside each component before joining, so no value
+// can introduce a separator the reader would honour.
+//
+// `provider` leaves the argument list but not the identity: it is already
+// inside projectCanonicalID, which identity.Derive builds from
+// (provider, projectID). Taking the CANONICAL id rather than the raw one also
+// makes the assert/retract agreement structural -- both call sites now pass
+// the same already-derived value, so they cannot disagree about how a project
+// is named.
+//
+// `source` is the row's own discriminator and is deliberately IN the digest:
+// two ownership assertions for one project and team from different sources
+// are different assertions, the same reason a work_item_dependency's
+// relationship_type distinguishes "blocks" from "relates_to" between one
+// endpoint pair.
+func projectTeamRelationshipID(projectCanonicalID, teamID, source string) string {
+	return identity.DeriveRelationship(identity.RelationshipFamilyProjectTeam, projectCanonicalID, teamCanonicalID(teamID), source)
 }
 
 // projectIdentityWithWatermarkSQL is readers.ProjectIdentityCatalogSQL
@@ -1230,7 +1268,7 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 			omissions.addRetraction(reason)
 			tombstone := contractsv1.ContextFabricProjectionTombstone{
 				Kind:          "relationship",
-				CanonicalID:   projectTeamRelationshipID(provider, projectID, teamID, source),
+				CanonicalID:   projectTeamRelationshipID(projectCanonicalID, teamID, source),
 				Reason:        retractionTombstoneReason(reason),
 				EffectiveAt:   observedAt,
 				SourceVersion: TeamsProjectsSourceVersion,
@@ -1249,7 +1287,7 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 		// something is being guarded. recordAmbiguousProjectKeys carries the
 		// telemetry instead.
 		relationship := contractsv1.ContextFabricRelationshipProjection{
-			RelationshipID: projectTeamRelationshipID(provider, projectID, teamID, source),
+			RelationshipID: projectTeamRelationshipID(projectCanonicalID, teamID, source),
 			Type:           contractsv1.ContextFabricRelationshipOwnedByTeam,
 			From:           contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: projectCanonicalID, Label: projectID},
 			To:             contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: teamCanonicalID(teamID), Label: teamID},

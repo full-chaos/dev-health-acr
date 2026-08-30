@@ -21,7 +21,40 @@ var goldenRelationshipPrefixes = []string{
 	"relationship:work_item_project:",
 	"relationship:pull_request_project:",
 	"relationship:work_item_team:",
+	// CHAOS-4635: project<->team ownership ids moved to the injective
+	// relationship.v2 digest scheme, so the golden selector follows the
+	// family rather than the old raw-join prefix.
+	"relationship.v2:project_team:",
+}
+
+// retiredRelationshipPrefixes are id prefixes this fixture USED to carry and
+// no producer emits any more (CHAOS-4635 moved project<->team ownership ids to
+// the injective relationship.v2 digest).
+//
+// The writer sweeps these as well as the live ones, and that is not
+// housekeeping. The sweep above keeps every entry the CURRENT selector does
+// not recognise, on the assumption that an unrecognised entry belongs to some
+// other producer. When a producer CHANGES its id scheme that assumption
+// inverts: the old entry stops matching, survives the regeneration, and the
+// fixture ends up documenting an id nothing emits -- silently, because the
+// comparison only ever looks at entries the selector DOES match. That is
+// exactly what happened on the first regeneration of this change.
+//
+// A retired prefix is deliberately not added to goldenRelationshipPrefixes:
+// that list doubles as a coverage assertion ("the generated set must contain
+// one of each"), and a prefix no producer emits would fail it. The two lists
+// answer different questions -- what must be present, and what must be swept.
+var retiredRelationshipPrefixes = []string{
 	"relationship:project_team:",
+}
+
+func hasRetiredGoldenPrefix(relationshipID string) bool {
+	for _, prefix := range retiredRelationshipPrefixes {
+		if strings.HasPrefix(relationshipID, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestGoldenProjectionBatchMatchesProducerOutput is codex round-1 F3, and it
@@ -138,7 +171,7 @@ func writeGoldenRelationships(t *testing.T, produced []contractsv1.ContextFabric
 		if err := json.Unmarshal(entry, &identified); err != nil {
 			t.Fatalf("decode golden relationship: %v", err)
 		}
-		if !hasGoldenPrefix(identified.RelationshipID) {
+		if !hasGoldenPrefix(identified.RelationshipID) && !hasRetiredGoldenPrefix(identified.RelationshipID) {
 			kept = append(kept, entry)
 		}
 	}
