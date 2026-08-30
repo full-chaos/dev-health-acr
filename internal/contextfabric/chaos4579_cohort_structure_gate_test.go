@@ -4,8 +4,10 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // CHAOS-4579 / CHAOS-4531 -- §1.3's class-conditional gate.
@@ -53,7 +55,7 @@ func TestGateSubjectAxisOffers_DiscoveredCohortDropsAnchorAndHandleRows(t *testi
 	material.AnchorOptions = []AnchorOption{{Kind: SubjectTeam, CanonicalID: "team:fullchaos", Label: "Fullchaos"}}
 	material.HandleOptions = []HandleOption{{Kind: SubjectTeam, PatternID: "team_slug", Value: "fullchaos"}}
 
-	gated, outcome := gateSubjectAxisOffers(material, ShapeDiscoveredCohort)
+	gated, outcome := GateSubjectAxisOffers(material, ShapeDiscoveredCohort)
 
 	wantMissing := []StructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind}
 	if !reflect.DeepEqual(gated.Missing, wantMissing) {
@@ -84,7 +86,7 @@ func TestGateSubjectAxisOffers_SubjectBearingShapeKeepsEmptyOfferedRows(t *testi
 	t.Parallel()
 	material := chaos4579CohortMaterial() // zero anchor/handle options, rows still disclosed
 
-	gated, outcome := gateSubjectAxisOffers(material, ShapeSingleSubject)
+	gated, outcome := GateSubjectAxisOffers(material, ShapeSingleSubject)
 
 	if !reflect.DeepEqual(gated, material) {
 		t.Fatalf("gated = %#v, want the material byte-identical: a single_subject question genuinely IS missing an anchor, and the empty options list is the ruled 'missing-and-helpful, nothing offerable' disclosure", gated)
@@ -106,7 +108,7 @@ func TestGateSubjectAxisOffers_ExplicitCohortKeepsTheSubjectAxis(t *testing.T) {
 	t.Parallel()
 	material := chaos4579CohortMaterial()
 
-	gated, outcome := gateSubjectAxisOffers(material, ShapeExplicitCohort)
+	gated, outcome := GateSubjectAxisOffers(material, ShapeExplicitCohort)
 
 	if !reflect.DeepEqual(gated, material) {
 		t.Fatalf("gated = %#v, want unchanged for explicit_cohort", gated)
@@ -124,7 +126,7 @@ func TestGateSubjectAxisOffers_OpenShapeKeepsTheSubjectAxis(t *testing.T) {
 	t.Parallel()
 	material := chaos4579CohortMaterial()
 
-	gated, outcome := gateSubjectAxisOffers(material, ShapeOpen)
+	gated, outcome := GateSubjectAxisOffers(material, ShapeOpen)
 
 	if !reflect.DeepEqual(gated, material) {
 		t.Fatalf("gated = %#v, want unchanged for the open shape", gated)
@@ -146,7 +148,7 @@ func TestGateSubjectAxisOffers_MatchedButNothingToRemoveReportsNoOp(t *testing.T
 		KindOptions: []KindOption{{Kind: SubjectTeam, Label: "a team", OfferSource: contractsv1.ContextFabricStructureOfferEngine}},
 	}
 
-	gated, outcome := gateSubjectAxisOffers(material, ShapeDiscoveredCohort)
+	gated, outcome := GateSubjectAxisOffers(material, ShapeDiscoveredCohort)
 
 	if !reflect.DeepEqual(gated.Missing, material.Missing) {
 		t.Fatalf("Missing = %#v, want %#v unchanged", gated.Missing, material.Missing)
@@ -168,7 +170,7 @@ func TestGateSubjectAxisOffers_DiscoveredCohortClearsTheV2Promotion(t *testing.T
 	material.AnchorOptions = []AnchorOption{{Kind: SubjectTeam, CanonicalID: "team:fullchaos", Label: "Fullchaos"}}
 	material.AnchorOptionsRequireV2 = true
 
-	gated, _ := gateSubjectAxisOffers(material, ShapeDiscoveredCohort)
+	gated, _ := GateSubjectAxisOffers(material, ShapeDiscoveredCohort)
 
 	if gated.AnchorOptionsRequireV2 {
 		t.Fatal("AnchorOptionsRequireV2 stayed true with zero anchor options: schemaVersion would promote to v2 on a result carrying no v2-bearing option")
@@ -184,7 +186,7 @@ func TestGateSubjectAxisOffers_NeverMutatesItsInput(t *testing.T) {
 	before := chaos4579CohortMaterial()
 	before.AnchorOptions = []AnchorOption{{Kind: SubjectTeam, CanonicalID: "team:fullchaos", Label: "Fullchaos"}}
 
-	if _, _ = gateSubjectAxisOffers(material, ShapeDiscoveredCohort); !reflect.DeepEqual(material, before) {
+	if _, _ = GateSubjectAxisOffers(material, ShapeDiscoveredCohort); !reflect.DeepEqual(material, before) {
 		t.Fatalf("input material mutated to %#v, want %#v", material, before)
 	}
 }
@@ -311,5 +313,127 @@ func TestCHAOS4579_ClassDefaultGate_CohortWithOnlySubjectAxisMaterialDegradesToW
 	}
 	if want := []GatedOfferResolutionOutcome{GatedOfferResolutionEmpty}; !reflect.DeepEqual(telemetry.gatedOfferResolutions, want) {
 		t.Fatalf("gatedOfferResolutions = %#v, want %#v", telemetry.gatedOfferResolutions, want)
+	}
+}
+
+// buildTerminalGateEngine wires the SUBJECTLESS-TERMINAL path (regime B: an
+// already-confirmed window, so the class-default window gate never fires),
+// with telemetry, at a chosen interpreted shape. This is the SECOND
+// production call site -- codex round 1, finding 4: without a test here,
+// deleting the gate call in unresolved.go's terminalResult leaves every
+// gate-2 test above green while anchor/handle rows and the v2 dispatch come
+// straight back on this path. Proven by mutation before this test was
+// written: with that call removed, the gate-2 suite passed unchanged.
+func buildTerminalGateEngine(t *testing.T, shape InvestigationShape, material StructureOfferMaterial, telemetry EngineTelemetry) *Engine {
+	t.Helper()
+	interpretation := bootstrapInterpretation()
+	interpretation.Shape = shape
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: RuntimeQuestionInterpreter{Runtime: fakeModelRuntime{interpreted: interpretation, draft: SynthesisDraft{}, receipt: acceptanceReceipt()}},
+		Graph:       &acceptanceGraphReader{resolution: ambiguousResolution("Which one?"), context: emptyGraphContext(), material: material},
+		Facts: factReaderFunc(func(_ context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
+			t.Fatalf("ReadFacts called with %#v -- a terminal result never reads canonical facts", request)
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			t.Fatal("Synthesize called -- a terminal result is composed without a model call")
+			return InvestigationResult{}, nil
+		}),
+		Telemetry: telemetry,
+	}, EngineOptions{
+		ServiceVersion: "chaos4579-terminal-test",
+		Now:            func() time.Time { return time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC) },
+		NewResultID:    func() string { return "result_chaos4579_term1" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	return engine
+}
+
+func TestCHAOS4579_SubjectlessTerminal_CohortQuestionDropsAnchorAndHandleRows(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	engine := buildTerminalGateEngine(t, ShapeDiscoveredCohort, chaos4579CohortMaterial(), telemetry)
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.StructureNeeds == nil {
+		t.Fatal("StructureNeeds is nil, want the kind disclosure to survive")
+	}
+	wantMissing := []StructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind}
+	if !reflect.DeepEqual(result.StructureNeeds.Missing, wantMissing) {
+		t.Fatalf("StructureNeeds.Missing = %#v, want %#v -- the subjectless terminal is the SECOND call site and must gate identically to the window-gated one", result.StructureNeeds.Missing, wantMissing)
+	}
+	if len(result.StructureNeeds.AnchorOptions) != 0 || len(result.StructureNeeds.HandleOptions) != 0 {
+		t.Fatalf("AnchorOptions/HandleOptions = %#v/%#v, want both empty", result.StructureNeeds.AnchorOptions, result.StructureNeeds.HandleOptions)
+	}
+	wantGates := []cohortStructureGateRecord{{CohortStructureGateApplied, ShapeDiscoveredCohort}}
+	if !reflect.DeepEqual(telemetry.cohortStructureGates, wantGates) {
+		t.Fatalf("cohortStructureGates = %#v, want %#v", telemetry.cohortStructureGates, wantGates)
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("result fails Validate(): %v", err)
+	}
+}
+
+// The terminal path's own v2 dispatch: schemaVersion is read from
+// AnchorOptionsRequireV2 in this same function, so a gate that cleared the
+// options but not the flag would mint a v2 result carrying no v2-bearing
+// option. Asserted HERE, on the call site that owns that dispatch.
+func TestCHAOS4579_SubjectlessTerminal_CohortQuestionIsNotPromotedToV2(t *testing.T) {
+	t.Parallel()
+	material := chaos4579CohortMaterial()
+	// A wire-valid anchor option, deliberately: under the mutation that
+	// removes this call site's gate, this option reaches the wire and the
+	// result promotes to v2 -- which is exactly what this test must observe,
+	// rather than tripping over a malformed fixture first.
+	material.AnchorOptions = []AnchorOption{{
+		Kind: SubjectTeam, CanonicalID: "team:fullchaos", Label: "Fullchaos",
+		MatchedTermHash: "0123456789abcdef01234567",
+		OfferSource:     contractsv1.ContextFabricStructureOfferEngine,
+	}}
+	material.AnchorOptionsRequireV2 = true
+	engine := buildTerminalGateEngine(t, ShapeDiscoveredCohort, material, &recordingTelemetry{})
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.SchemaVersion != InvestigationResultSchemaV1 {
+		t.Fatalf("SchemaVersion = %q, want v1: every anchor option was removed, so nothing on this result needs v2 membership-verify semantics", result.SchemaVersion)
+	}
+	if result.Versions.ContractVersion != InvestigationResultSchemaV1 {
+		t.Fatalf("Versions.ContractVersion = %q, want v1 to match SchemaVersion", result.Versions.ContractVersion)
+	}
+}
+
+// The control on the SECOND call site: a subject-bearing shape still gets
+// both rows with empty options, per the standing ruling.
+func TestCHAOS4579_SubjectlessTerminal_SingleSubjectStillAsksForAnchorAndHandle(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	engine := buildTerminalGateEngine(t, ShapeSingleSubject, chaos4579CohortMaterial(), telemetry)
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.StructureNeeds == nil {
+		t.Fatal("StructureNeeds is nil")
+	}
+	wantMissing := []StructureNeedKind{
+		contractsv1.ContextFabricStructureNeedExpectedKind,
+		contractsv1.ContextFabricStructureNeedSubjectAnchor,
+		contractsv1.ContextFabricStructureNeedSubjectHandle,
+	}
+	if !reflect.DeepEqual(result.StructureNeeds.Missing, wantMissing) {
+		t.Fatalf("StructureNeeds.Missing = %#v, want %#v -- unchanged on the terminal path too", result.StructureNeeds.Missing, wantMissing)
+	}
+	wantGates := []cohortStructureGateRecord{{CohortStructureGateSubjectBearing, ShapeSingleSubject}}
+	if !reflect.DeepEqual(telemetry.cohortStructureGates, wantGates) {
+		t.Fatalf("cohortStructureGates = %#v, want %#v", telemetry.cohortStructureGates, wantGates)
 	}
 }

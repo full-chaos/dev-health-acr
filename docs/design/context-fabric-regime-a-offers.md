@@ -42,7 +42,7 @@ flowchart TD
     RS -- "error" --> WO
     RS -- "resolution, bases, digests" --> X[DISCARDED]
     RS -- "StructureOfferMaterial" --> P[consultPriorStructureOffers]
-    P --> CG["gateSubjectAxisOffers<br/>§1.3 class gate, CHAOS-4579/4531<br/>shape=discovered_cohort: drop subject_anchor/subject_handle<br/>rows AND their options; every other shape passes through"]
+    P --> CG["GateSubjectAxisOffers<br/>§1.3 class gate, CHAOS-4579/4531<br/>shape=discovered_cohort: drop subject_anchor/subject_handle<br/>rows AND their options; every other shape passes through"]
     CG --> C["composeGatedStructureNeeds<br/>Missing = [window, +kind/handle/candidate]<br/>WindowOptions + KindOptions + HandleOptions + CandidateOptions<br/>receipts minted by composeStructureNeeds"]
     WO --> R
     C --> R[windowConfirmationRequiredResult<br/>status clarification_required<br/>SubjectResolution EMPTY<br/>persisted with StructureNeeds]
@@ -120,6 +120,31 @@ Three properties the implementation depends on:
 Gate 1 (explicit-unconfirmed) needs no gate: it fires before `Interpret`
 and never builds anchor or handle material at all.
 
+**Telemetry denominator, stated exactly.** `RecordCohortStructureGate` fires once per
+`GateSubjectAxisOffers` call — once per request that reached a candidate-pool offer decision.
+That is deliberately *not* the same set as "requests whose result carries `structure_needs`",
+and the two differ in both directions:
+
+- A **gate-1** window terminal composes a window-only `structure_needs` and emits **no** event.
+  It fires before `Interpret`, so there is no model-set shape to report — only
+  `windowConfirmationRequiredResult`'s synthesized `ShapeOpen` placeholder, and reporting that as
+  the question's class would be a fabricated reading.
+- A request whose material is **empty** (a never-projected org) emits an event and then composes
+  no `structure_needs` at all. Suppressing the event there would also suppress the `applied`
+  event for a cohort request whose anchor/handle rows were its only material — exactly the case
+  this ticket exists to make visible.
+
+To count clarification disclosures read `cf_structure_needs_disclosed`; to count class-gate
+decisions read this. Neither is the other's denominator.
+
+**The replay harness reads through the same gate.** The CHAOS-3884 frozen-interpretation replay
+harness computes `wired_structure_needs_would_disclose` from `ResolveSubjects`' raw
+`StructureOfferMaterial`. `GateSubjectAxisOffers` is therefore **exported**, for the same reason
+`StructureNeedsWouldDisclose` is: the harness calls the one function production calls, rather
+than a second copy of its condition. Without that hop a `discovered_cohort` case whose only
+material was anchor/handle rows would be reported as disclosing while production discloses
+nothing — a false replay report.
+
 CHAOS-4452's question-family investigation-planning stage is the structural
 home for this decision — a family would carry, per class, the whole set of
 axes that are even applicable, and every offer builder would consult it
@@ -141,7 +166,7 @@ discard is the load-bearing safety layer; the ctx mark
 | Where | Field | Meaning |
 | --- | --- | --- |
 | `EngineTelemetry.RecordGatedOfferResolution` | `composed` / `empty` / `failed` / `disabled` / `refused` / `not_projected` | once per class-default gated request; `not_projected` (codex round-2 finding #2) distinguishes a never-projected org from a genuinely empty pool, same as `subjectlessTerminalReasons`' `graph_not_projected` does for the decisive path |
-| `EngineTelemetry.RecordCohortStructureGate` | `applied` / `no_op` / `subject_bearing` + the `shape` it fired for | once per composed `StructureNeeds`, at both call sites; `applied` = the anchor/handle rows were removed, `no_op` = axis-less shape with nothing to remove, `subject_bearing` = the shape has a subject axis and the material passed through. Both outcomes AND the denominator are reported, so "cohort vs subject clarification" is a countable split rather than an inference from a missing log line |
+| `EngineTelemetry.RecordCohortStructureGate` | `applied` / `no_op` / `subject_bearing` + the `shape` it fired for | once per `GateSubjectAxisOffers` call, at both call sites; `applied` = the anchor/handle rows were removed, `no_op` = axis-less shape with nothing to remove, `subject_bearing` = the shape has a subject axis and the material passed through. Both outcomes AND the denominator are reported, so "cohort vs subject clarification" is a countable split rather than an inference from a missing log line. **Not** one per composed `StructureNeeds` — see the denominator note below |
 | `kind_offer` trace event | `OfferedUnderWindowGate` | this resolution ran in offers-only mode |
 | `ranked_cut` trace stage (`resolution.go`) | `Subject`, `Rank`, `Survived` | one event per candidate, in rank order, before the `MaxSubjectCandidates` cut; `Rank==1` opens a batch, readers keep the last batch |
 | `ranked_cut` companion (`resolve.go`) | `CoverageBypass=true`, `Rank 0` | a coverage-floor find the cut dropped but `unionCandidatesForOffer` still hands to the offer builders |

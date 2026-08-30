@@ -108,7 +108,7 @@ const (
 	CohortStructureGateSubjectBearing CohortStructureGateOutcome = "subject_bearing"
 )
 
-// gateSubjectAxisOffers applies the §1.3 class-conditional gate to one
+// GateSubjectAxisOffers applies the §1.3 class-conditional gate to one
 // StructureOfferMaterial and reports which side of the class decision it
 // took.
 //
@@ -129,7 +129,20 @@ const (
 // The returned material is a copy on the gated path; the input is never
 // mutated, so a caller holding the pre-gate material for telemetry still
 // reads the pre-gate truth.
-func gateSubjectAxisOffers(material StructureOfferMaterial, shape InvestigationShape) (StructureOfferMaterial, CohortStructureGateOutcome) {
+//
+// EXPORTED for exactly the reason StructureNeedsWouldDisclose is exported
+// (see its own doc comment, structure.go): the CHAOS-3884 replay harness
+// (internal/runtime/hosted) reads ResolveSubjects' StructureOfferMaterial
+// directly and asks whether production would disclose it, without running
+// the rest of Investigate. codex round 1, finding 1: after this gate
+// landed, that harness was asking the question against UNGATED material,
+// so a discovered_cohort case whose only material was anchor/handle rows
+// would be reported as disclosing while production discloses nothing --
+// a false replay report, and precisely the "two hand-written copies of
+// the same gate silently drift" defect StructureNeedsWouldDisclose was
+// exported to close. The harness now calls THIS function, so the two
+// cannot diverge.
+func GateSubjectAxisOffers(material StructureOfferMaterial, shape InvestigationShape) (StructureOfferMaterial, CohortStructureGateOutcome) {
 	if !subjectAxisAbsent(shape) {
 		return material, CohortStructureGateSubjectBearing
 	}

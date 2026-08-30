@@ -236,7 +236,10 @@ func (t SlogEngineTelemetry) RecordGatedOfferResolution(ctx context.Context, pri
 
 // RecordCohortStructureGate (CHAOS-4579/CHAOS-4531). outcome and shape are
 // both closed enums -- content-safe by construction, never question text,
-// a subject identifier, or an offer label.
+// a subject identifier, or an offer label. One event per
+// GateSubjectAxisOffers call, which is NOT one per composed StructureNeeds
+// -- see the interface method's own doc comment (engine.go) for the exact
+// denominator and the two directions it differs in.
 func (t SlogEngineTelemetry) RecordCohortStructureGate(ctx context.Context, principal storage.Principal, outcome CohortStructureGateOutcome, shape InvestigationShape) {
 	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "shape", string(shape)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric cohort structure gate", args...)

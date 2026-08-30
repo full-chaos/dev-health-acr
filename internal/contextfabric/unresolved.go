@@ -218,7 +218,7 @@ func (e *Engine) terminalResult(
 	// that were then removed from its own disclosure. See
 	// gateSubjectAxisOffers' own doc comment (chaos4579_cohort_structure_gate.go)
 	// for why the Missing rows and their option lists are one decision.
-	structureMaterial, cohortGateOutcome := gateSubjectAxisOffers(structureMaterial, interpretation.Shape)
+	structureMaterial, cohortGateOutcome := GateSubjectAxisOffers(structureMaterial, interpretation.Shape)
 	recordCohortStructureGate(ctx, e.telemetry, principal, cohortGateOutcome, interpretation.Shape)
 	// CHAOS-3888: telemetry-only -- classifies WHY this investigation
 	// reached its own subjectless terminal path, never changes status,

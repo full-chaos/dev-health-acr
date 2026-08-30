@@ -201,6 +201,12 @@ type replayCaseOutcome struct {
 	// TestStructureNeedsWouldDisclose_MatchesComposeStructureNeeds,
 	// structure_test.go, internal/contextfabric, which exhaustively checks
 	// every closed-vocabulary member).
+	// CHAOS-4579: production now interposes §1.3's class-conditional gate
+	// between ResolveSubjects' material and that disclosure decision, so
+	// this field applies contextfabric.GateSubjectAxisOffers -- again the
+	// SAME function production calls, never a second copy of its condition --
+	// before asking. Without that hop, a discovered_cohort case would be
+	// reported as disclosing rows production removes.
 	// Baseline has no equivalent field, by the same "wired-arm-only"
 	// reasoning WiredSearchTruncated's own doc comment gives: baseline is
 	// the pre-CHAOS-3884 counterfactual, never what production discloses.
@@ -920,7 +926,23 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 		// stalled-gate/aggregation logic itself (factored out and
 		// unit-tested there).
 		if wiredErr == nil {
-			outcome.WiredStructureNeedsWouldDisclose = contextfabric.StructureNeedsWouldDisclose(wiredOfferMaterial)
+			// CHAOS-4579 (codex round 1, finding 1): production does NOT ask
+			// StructureNeedsWouldDisclose against ResolveSubjects' raw
+			// material any more -- both composeStructureNeeds call sites
+			// first apply §1.3's class-conditional gate
+			// (contextfabric.GateSubjectAxisOffers), which removes the
+			// subject_anchor/subject_handle rows on a shape with no subject
+			// axis. Asking the raw material here would report a
+			// discovered_cohort case whose ONLY material was those two rows
+			// as disclosing, while production discloses nothing -- a false
+			// replay report, and exactly the "two copies of one gate silently
+			// drift" defect this field's own doc comment says
+			// StructureNeedsWouldDisclose was exported to close. Same
+			// discipline, one hop earlier: call the SAME gate production
+			// calls, on the frozen interpretation this case replays, then ask
+			// the SAME disclosure function.
+			gatedOfferMaterial, _ := contextfabric.GateSubjectAxisOffers(wiredOfferMaterial, interpreted.Shape)
+			outcome.WiredStructureNeedsWouldDisclose = contextfabric.StructureNeedsWouldDisclose(gatedOfferMaterial)
 		}
 		tallyReplayStructureNeedsCoverage(&report, wiredErr, outcome.Wired.CommittedCount, outcome.WiredStructureNeedsWouldDisclose)
 		report.Outcomes = append(report.Outcomes, outcome)

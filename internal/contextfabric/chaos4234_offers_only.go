@@ -166,7 +166,7 @@ func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Princ
 	// gate 2 (it is this function's own parameter); gate 1 fires before
 	// Interpret and never reaches here at all -- and never builds anchor
 	// or handle material either, so it needs no gate.
-	resolved, cohortGateOutcome := gateSubjectAxisOffers(resolved, interpretation.Shape)
+	resolved, cohortGateOutcome := GateSubjectAxisOffers(resolved, interpretation.Shape)
 	recordCohortStructureGate(ctx, e.telemetry, principal, cohortGateOutcome, interpretation.Shape)
 	if !StructureNeedsWouldDisclose(resolved) {
 		record(GatedOfferResolutionEmpty)

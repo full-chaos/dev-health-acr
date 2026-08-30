@@ -57,7 +57,7 @@ flowchart TD
   CARRY -->|"miss: no reference / unloadable /<br/>stale_graph_epoch / no_confirmed_window /<br/>depth_exceeded"| WGATE{"class-default window gate<br/>WindowCanonicalizationGatedClassDefault<br/>CHAOS-4040/4234"}
   WGATE -->|"regime A: inferred_default"| GATED["gatedOfferMaterial<br/>chaos4234_offers_only.go"]
   GATED --> OFFRES["graph.ResolveSubjects(WithOffersOnlyResolution)<br/>same pool mechanism as regime B,<br/>commit-bearing output DISCARDED"]
-  OFFRES --> CLSGATE{"gateSubjectAxisOffers<br/>§1.3 class gate, CHAOS-4579/4531<br/>chaos4579_cohort_structure_gate.go"}
+  OFFRES --> CLSGATE{"GateSubjectAxisOffers<br/>§1.3 class gate, CHAOS-4579/4531<br/>chaos4579_cohort_structure_gate.go"}
   CLSGATE -->|"shape=discovered_cohort:<br/>no subject axis -> drop subject_anchor/subject_handle<br/>rows AND their options together"| WOFFER
   CLSGATE -->|"single_subject / explicit_cohort / open:<br/>subject axis present -> pass through,<br/>standing zero-candidates ruling unchanged"| WOFFER
   WOFFER["windowConfirmationRequiredResult<br/>status=clarification_required, SubjectResolution EMPTY<br/>kind/handle/candidate offers minted BESIDE window offer"]
