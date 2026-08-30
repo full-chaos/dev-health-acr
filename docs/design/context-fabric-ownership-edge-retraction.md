@@ -65,7 +65,7 @@ flowchart TD
 
     TPO --> A["arm A — scope arm<br/>o.project_ref = p.scope<br/>retraction_only = 0"]
     TPO --> B["arm B — key arm<br/>o.project_key = p.scope<br/>WHERE p.scope_kind = 'key'<br/>retraction_only = 0"]
-    TPO --> C["arm C — RETRACTION arm<br/>o.project_key = p.project_key<br/>WHERE p.key_resolution_count > 1<br/>retraction_only = 1"]
+    TPO --> C["arm C — RETRACTION arm<br/>o.project_key = p.project_key<br/>WHERE p.key_project_count > 1<br/>retraction_only = 1"]
     PRJ --> A
     PRJ --> B
     PRJ --> C
@@ -108,6 +108,29 @@ ownership row produces **no result row at all** and the scan has nothing to
 retract. Arm C resolves the key across the AMBIGUOUS key partition — one row
 per project sharing that key — flagged `retraction_only = 1` so `unassertable`
 is forced true and it can never assert.
+
+**How arm C knows a key is ambiguous, and the trap in the obvious answer.**
+Not `key_resolution_count`. The expansion emits two scope rows per project, and
+the ID row hard-codes `toUInt64(1) AS key_resolution_count` (readers v0.5.5,
+deliberately: `projects.id` is unique, so an id match is unambiguous by
+construction, and emitting the project-level number there had already made a
+consumer discard every unambiguous Linear id match). The KEY row carries the
+real count but is emitted only when it equals 1. So for an ambiguous key **no
+row anywhere in the expansion carries a count above 1**, and
+`p.key_resolution_count > 1` matches nothing, always. That is not hypothetical
+— it is what the first version of this arm did, and it made the entire
+ambiguity half of the fix dead code that every unit test still passed. Only
+executing the integration subtests against a real ClickHouse caught it.
+
+Ambiguity is therefore re-derived from the expansion's OWN output rather than a
+second read of `projects`: count the projects that answer to each
+`(provider, project_key)`, one layer out (`ambiguousProjectIdentitySQL`). The
+`scope_kind = 'id'` filter there is a de-duplicator, not a narrowing — the
+expansion collapses a project whose id equals its `project_key` into one row
+labelled `'key'`, but that collapse requires the KEY branch to have emitted,
+which requires the key to name exactly one project. Every member of a genuinely
+ambiguous partition is therefore labelled `'id'`, so filtering on it cannot
+undercount an ambiguity into invisibility.
 
 Those projects are exactly the candidates the edge could have been projected to
 while the key was still unambiguous, so tombstoning every one of them retracts
