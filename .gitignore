@@ -37,3 +37,10 @@ codex-gate.md
 codex-gate.log
 codex-gate-*.md
 codex-gate-*.log
+
+# Go build cache written INTO the worktree by a sandboxed tool run (a
+# read-only codex review redirects GOCACHE here rather than to the user
+# cache). 284 MB / 2700+ files, host-specific and never source. Ignored
+# because `git add -A` swept it into a commit once and only an adversarial
+# review caught it.
+.gocache/

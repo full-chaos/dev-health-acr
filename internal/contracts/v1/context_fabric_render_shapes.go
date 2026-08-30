@@ -19,6 +19,11 @@ package v1
 // So the SELECTION moves to the service, and a chart becomes a claimed
 // fact like any other:
 //
+// STATUS (CHAOS-4616): of the three rules this file's vocabulary declares,
+// two have producers -- the cohort attention-score bars and the per-driver
+// contribution stack, both proven on live data. `dated_fact_trend` is
+// WITHDRAWN; see ContextFabricRenderRuleDatedFactTrend's own comment.
+//
 //  1. Kind is a CLOSED vocabulary, fixed in full here and now
 //     (ContextFabricRenderKind) so a consumer can exhaustively switch on it
 //     and a later producer never widens the wire under it. Only "series" has
@@ -139,9 +144,18 @@ const (
 	// drivers. Produces the stacked per-driver contribution breakdown --
 	// check 8's "scores help prioritize; drivers explain", drawn.
 	ContextFabricRenderRuleCohortDriverContribution ContextFabricRenderShapeRule = "cohort_driver_contribution"
-	// ContextFabricRenderRuleDatedFactTrend fires when a claimed fact's
-	// rows carry a same-shaped date column with at least two distinct
-	// dates plus at least one numeric column. Produces the trend line.
+	// ContextFabricRenderRuleDatedFactTrend is WITHDRAWN (CHAOS-4616): no
+	// producer selects it. It stays in the vocabulary so a document from a
+	// server that DID produce one still validates, and so the returning
+	// producer needs no contract change.
+	//
+	// It was withdrawn because deciding which columns of a row table are
+	// measures and which are dimensions cannot be done from the table
+	// alone -- three successive inferences were each defeated in review,
+	// and the last shipped rule drew a line across two different work
+	// scopes measured once each as though one had changed over time. The
+	// information exists at the producer and is not on the wire; carrying
+	// it is CHAOS-4627.
 	ContextFabricRenderRuleDatedFactTrend ContextFabricRenderShapeRule = "dated_fact_trend"
 )
 

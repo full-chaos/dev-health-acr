@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -62,13 +61,6 @@ type RenderShapeSelectionEvent struct {
 	// projection budget exists to prevent, one layer up. Zero on every
 	// selection that lost nothing.
 	MembersTruncated int
-	// SeriesTruncated counts numeric columns a trend could not carry. A
-	// shape holds at most 8 series, so a wide row table yields a PARTIAL
-	// trend. Same reason MembersTruncated exists: reporting a healthy
-	// 8-series shape for a 9-column fact lets a consumer read a partial
-	// trend as a complete one (codex round 2, P3). Zero on every
-	// selection that lost nothing.
-	SeriesTruncated int
 }
 
 // RenderShapeSkip records one rule that did not produce a shape.
@@ -98,12 +90,11 @@ const (
 	// truncated: a stacked bar claims its parts sum to the score, and a
 	// stack missing segments claims something false.
 	RenderShapeSkipTooManySignals RenderShapeSkipReason = "too_many_signals"
-	// RenderShapeSkipNoDatedRows -- no claimed fact carries a row table
-	// with a usable date axis and a numeric column.
-	RenderShapeSkipNoDatedRows RenderShapeSkipReason = "no_dated_rows"
-	// RenderShapeSkipShapeBudget -- a rule that would have fired but the
-	// per-answer shape cap was already reached.
-	RenderShapeSkipShapeBudget RenderShapeSkipReason = "shape_budget"
+	// RenderShapeSkipTrendRuleWithdrawn -- the dated_fact_trend rule has no
+	// producer (CHAOS-4616). Recorded on every selection rather than
+	// silently omitted, so a reader can tell "this build does not select
+	// trends" from "the rule ran and found nothing".
+	RenderShapeSkipTrendRuleWithdrawn RenderShapeSkipReason = "trend_rule_withdrawn"
 )
 
 // cohortIntentShapes are the interpreted shapes a cohort chart is an answer
@@ -155,18 +146,30 @@ func SelectRenderShapes(result InvestigationResult) ([]contractsv1.ContextFabric
 		}
 	}
 
-	trends, seriesTruncated := datedFactTrendShapes(result.ClaimedFacts)
-	event.SeriesTruncated = seriesTruncated
-	if len(trends) == 0 {
-		event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipNoDatedRows)
-	}
-	for _, trend := range trends {
-		if len(shapes) >= contractsv1.ContextFabricRenderShapesMaxCount {
-			event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipShapeBudget)
-			break
-		}
-		shapes = append(shapes, trend)
-	}
+	// CHAOS-4616: the dated_fact_trend rule is WITHDRAWN. Its vocabulary
+	// stays (see RenderShapeSkipTrendRuleWithdrawn and the
+	// ContextFabricRenderRuleDatedFactTrend constant) so a future producer
+	// needs no contract change, but nothing selects it today.
+	//
+	// Why it was withdrawn rather than fixed: deciding which columns of a
+	// row table are MEASURES and which are DIMENSIONS cannot be done from
+	// the table alone, and three successive attempts to infer it were each
+	// defeated in review -- skipping numeric columns (a numeric team_id
+	// became a plotted series), an id-NAME test (a column called `year`
+	// walked straight through), and finally reading the claim's own Field
+	// (correct for one measure, but it silently narrowed every
+	// multi-measure table to nothing). The information EXISTS at the
+	// producer -- devhealthfacts/flow.go names its table `scope_breakdown`
+	// in as many words -- it is simply not carried on the wire. Until a row
+	// table declares its own shape, any trend this rule drew would be a
+	// server-asserted claim resting on a guess, and a chart is a claimed
+	// fact.
+	//
+	// This removes a SERVER assertion only. Consumers still render row
+	// tables with their own generic visualization, presented as a view of
+	// the rows rather than as a trend the service vouches for -- nothing
+	// disappears from a reader's screen.
+	event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipTrendRuleWithdrawn)
 
 	if len(shapes) == 0 {
 		return nil, event
@@ -400,236 +403,4 @@ func humanizeRenderTerm(term string) string {
 		return spaced
 	}
 	return strings.ToUpper(spaced[:1]) + spaced[1:]
-}
-
-// datedFactTrendShapes is rule 3: a claimed fact whose row table carries a
-// real date axis becomes a trend line.
-//
-// The rule is intentionally strict, and every clause exists because its
-// absence would produce a chart that claims more than the data says:
-//
-//   - EVERY row must carry the date column, all in the SAME shape (all
-//     date-only or all with a time component). A time axis is POSITIONED by
-//     elapsed time; a row missing its date would silently degrade the whole
-//     chart to index spacing, and mixing a bare date with a zoned timestamp
-//     makes one elapsed-time scale ill-defined.
-//   - The dates must be DISTINCT. A repeated date is two values at one axis
-//     position, which is a table, not a series.
-//   - At least two distinct dates. One point is not a trend.
-//   - A numeric column plots; a column with any non-numeric present value
-//     does not.
-//
-// A fact that fails any clause simply gets no trend -- it keeps its row
-// table, which was already renderable.
-func datedFactTrendShapes(facts []ClaimedFact) ([]contractsv1.ContextFabricRenderShape, int) {
-	var shapes []contractsv1.ContextFabricRenderShape
-	truncatedTotal := 0
-	for _, fact := range facts {
-		shape, truncated, ok := datedFactTrendShape(fact)
-		if !ok {
-			continue
-		}
-		truncatedTotal += truncated
-		shapes = append(shapes, shape)
-	}
-	return shapes, truncatedTotal
-}
-
-func datedFactTrendShape(fact ClaimedFact) (shape contractsv1.ContextFabricRenderShape, truncated int, ok bool) {
-	rows := fact.Rows
-	if len(rows) < 2 || len(rows) > contractsv1.ContextFabricRenderPointsMaxCount {
-		return contractsv1.ContextFabricRenderShape{}, 0, false
-	}
-	columns := renderRowColumns(rows)
-	dateColumn, ordering, found := dateAxisColumn(rows, columns)
-	if !found {
-		return contractsv1.ContextFabricRenderShape{}, 0, false
-	}
-	var series []contractsv1.ContextFabricRenderSeries
-	for _, column := range columns {
-		if column == dateColumn || !numericRenderColumn(rows, column) {
-			continue
-		}
-		if len(series) >= contractsv1.ContextFabricRenderSeriesMaxCount {
-			// Counted, not silently skipped: a shape reporting 8 healthy
-			// series for a 9-column fact reads as a complete trend.
-			truncated++
-			continue
-		}
-		points := make([]contractsv1.ContextFabricRenderPoint, 0, len(ordering))
-		for _, index := range ordering {
-			value, numeric := renderNumericCell(rows[index].Fields[column])
-			if !numeric {
-				continue
-			}
-			label, _ := renderStringCell(rows[index].Fields[dateColumn])
-			rowIndex := index
-			points = append(points, contractsv1.ContextFabricRenderPoint{
-				Label: label,
-				Value: value,
-				Source: contractsv1.ContextFabricRenderPointSource{
-					Kind:     contractsv1.ContextFabricRenderSourceClaimedFactRow,
-					ClaimID:  fact.ClaimID,
-					RowIndex: &rowIndex,
-					Field:    column,
-				},
-			})
-		}
-		if len(points) < 2 {
-			continue
-		}
-		series = append(series, contractsv1.ContextFabricRenderSeries{
-			Key:    column,
-			Label:  humanizeRenderTerm(column),
-			Points: points,
-		})
-	}
-	if len(series) == 0 {
-		return contractsv1.ContextFabricRenderShape{}, 0, false
-	}
-	return contractsv1.ContextFabricRenderShape{
-		Kind:         contractsv1.ContextFabricRenderKindSeries,
-		Presentation: contractsv1.ContextFabricRenderPresentationLine,
-		SelectedBy:   contractsv1.ContextFabricRenderRuleDatedFactTrend,
-		Title:        clampRenderLabel(humanizeRenderTerm(fact.Field) + " over time — " + fact.Subject.Label),
-		AxisKind:     contractsv1.ContextFabricRenderAxisTime,
-		AxisLabel:    clampRenderLabel(dateColumn),
-		ValueLabel:   clampRenderLabel(humanizeRenderTerm(fact.Field)),
-		Series:       series,
-	}, truncated, true
-}
-
-// renderRowColumns is first-seen column order across the row set, so shape
-// construction is deterministic even though Go map iteration is not.
-func renderRowColumns(rows []ClaimedFactRow) []string {
-	seen := map[string]struct{}{}
-	var order []string
-	for _, row := range rows {
-		keys := make([]string, 0, len(row.Fields))
-		for key := range row.Fields {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			if _, exists := seen[key]; exists {
-				continue
-			}
-			seen[key] = struct{}{}
-			order = append(order, key)
-		}
-	}
-	return order
-}
-
-// dateAxisColumn returns the first column (in deterministic column order)
-// that satisfies every date-axis clause, plus the row indices sorted by
-// that column's parsed instant.
-func dateAxisColumn(rows []ClaimedFactRow, columns []string) (string, []int, bool) {
-	for _, column := range columns {
-		instants := make([]time.Time, len(rows))
-		// Distinctness is by INSTANT, not by spelling. "2026-08-03T00:00:00Z"
-		// and "2026-08-02T17:00:00-07:00" are two spellings of one moment: a
-		// raw-string check calls them distinct, and the axis -- which is
-		// positioned by elapsed time -- then stacks two different values on
-		// one x position (codex round 1, P2). Comparing the parsed instant is
-		// the same question the renderer will ask.
-		distinct := map[int64]struct{}{}
-		var withTime, withoutTime bool
-		usable := true
-		for i, row := range rows {
-			raw, ok := renderStringCell(row.Fields[column])
-			if !ok {
-				usable = false
-				break
-			}
-			instant, hasTime, ok := parseRenderDate(raw)
-			if !ok {
-				usable = false
-				break
-			}
-			if hasTime {
-				withTime = true
-			} else {
-				withoutTime = true
-			}
-			if _, repeated := distinct[instant.UnixNano()]; repeated {
-				usable = false
-				break
-			}
-			distinct[instant.UnixNano()] = struct{}{}
-			instants[i] = instant
-		}
-		if !usable || (withTime && withoutTime) || len(distinct) < 2 {
-			continue
-		}
-		ordering := make([]int, len(rows))
-		for i := range ordering {
-			ordering[i] = i
-		}
-		sort.SliceStable(ordering, func(a, b int) bool {
-			return instants[ordering[a]].Before(instants[ordering[b]])
-		})
-		return column, ordering, true
-	}
-	return "", nil, false
-}
-
-// parseRenderDate accepts the ISO-8601 forms every producer in this
-// codebase emits for a day column, and REJECTS anything Go's own parser
-// would silently normalize. It reports whether the value carried a time
-// component so a mixed-shape column can be refused.
-func parseRenderDate(raw string) (time.Time, bool, bool) {
-	for _, layout := range []string{"2006-01-02T15:04:05Z07:00", "2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02T15:04", "2006-01-02 15:04"} {
-		if instant, err := time.Parse(layout, raw); err == nil {
-			return instant, true, true
-		}
-	}
-	if instant, err := time.Parse("2006-01-02", raw); err == nil {
-		return instant, false, true
-	}
-	return time.Time{}, false, false
-}
-
-// numericRenderColumn is true when the column is present on every row with
-// a numeric value. "Present on every row" is stricter than the row table's
-// own rules on purpose: a trend line with a hole in it would have to either
-// break the line or bridge the gap, and both are claims about data that is
-// not there.
-func numericRenderColumn(rows []ClaimedFactRow, column string) bool {
-	for _, row := range rows {
-		if _, ok := renderNumericCell(row.Fields[column]); !ok {
-			return false
-		}
-	}
-	return true
-}
-
-// renderNumericCell unwraps a row cell to a plottable number.
-//
-// An integer past 2^53 is NOT plottable and is refused here rather than
-// cast: beyond that bound a float64 cannot distinguish adjacent integers, so
-// a point built from one would claim a value that differs from the row it
-// cites -- and contractsv1's resolver refuses it, which would turn a valid
-// answer into a rejected one at the last gate. Refusing here means the
-// column simply is not chartable and the fact keeps its table.
-func renderNumericCell(value ScalarValue) (float64, bool) {
-	switch {
-	case value.Number != nil:
-		return *value.Number, true
-	case value.Integer != nil:
-		if *value.Integer > contractsv1.ContextFabricRenderPointExactIntegerBound ||
-			*value.Integer < -contractsv1.ContextFabricRenderPointExactIntegerBound {
-			return 0, false
-		}
-		return float64(*value.Integer), true
-	default:
-		return 0, false
-	}
-}
-
-func renderStringCell(value ScalarValue) (string, bool) {
-	if value.String == nil {
-		return "", false
-	}
-	return *value.String, true
 }
