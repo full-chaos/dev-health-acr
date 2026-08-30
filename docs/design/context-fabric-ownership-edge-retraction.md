@@ -212,3 +212,21 @@ after this deploy, and that path is rebuild-free.
 - It does not change `BELONGS_TO_PROJECT`, `queryWorkItemTeams`, or the team
   authorization scope. Only the project↔team ownership producer suppresses, so
   only it needs to retract.
+- **It does not close the REVERSE direction: re-asserting an edge after the
+  ambiguity is resolved.** Say key `K` becomes ambiguous because project `Q`
+  starts sharing it, the edge to `P` is retracted, and the cursor advances past
+  that group. If `Q` is later re-keyed away, `K` is unambiguous again and `P`'s
+  edge should come back — but `Q` has left the key partition, so the group's
+  watermark falls back to values already behind the checkpoint and nothing
+  re-reads it until the ownership row itself is written.
+
+  This is stated plainly rather than glossed, but note what it is and is not.
+  It is not a regression: on the parent commit a `projects`-side write moved
+  this producer's cursor for NO group at all, so re-assertion after healing was
+  equally unreachable, and the edge was simply left stale instead. What changes
+  is the shape of the wrong answer — from "a stale edge is present" to "a
+  correct edge is absent until the next ownership write" — which is the safer
+  of the two, because the graph no longer makes a claim it cannot substantiate.
+  Closing it properly needs a watermark over every project that has EVER shared
+  a key, which is not derivable from current state, so it is a separate piece of
+  work and not a patch to this one.
