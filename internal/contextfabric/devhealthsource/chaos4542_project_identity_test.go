@@ -207,8 +207,32 @@ func TestChaos4542_KeyArmSelectsTheKeyScopeRowAndTheScopeArmDoesNot(t *testing.T
 			}
 		case strings.Contains(arm, "toUInt8(1) AS retraction_only"):
 			retraction++
+			// SHAPE ONLY -- and read the warning before trusting it.
+			//
+			// This half of the guard cannot tell a SATISFIABLE ambiguity
+			// predicate from an unsatisfiable one, and the difference is not
+			// academic: the first version of this arm gated on
+			// `p.key_resolution_count > 1`, which the pinned expansion makes
+			// permanently false (the id scope row hard-codes 1, the key scope
+			// row exists only when the count IS 1). The arm returned no rows,
+			// the whole ambiguity half of CHAOS-4565 was dead code, and a
+			// string-matching pin exactly like this one stayed GREEN over it.
+			// Codex round 1 named that: "it explicitly pins the impossible
+			// C-arm predicate, so it stays green while the real integration
+			// test is red."
+			//
+			// So what this asserts is that the retraction arm is WIRED the way
+			// the design says. Whether it MATCHES ANYTHING is proved only by
+			// TestOwnershipProducerAgainstRealClickHouse's "a projected edge is
+			// retracted when its key becomes ambiguous" subtest, against a real
+			// server. Do not read a green here as coverage of that.
 			if !strings.Contains(arm, "o.project_key = p.project_key") || !strings.Contains(arm, "p.key_project_count > 1") {
 				t.Errorf("arm %d is the retraction arm but does not fan an ownership key across the ambiguous key partition -- then an ambiguous key produces no row at all and nothing can be retracted, which is the CHAOS-4565 defect unfixed", i)
+			}
+			// The unsatisfiable predicate itself, banned by name so it cannot
+			// come back as an "obvious simplification".
+			if strings.Contains(arm, "p.key_resolution_count") {
+				t.Errorf("arm %d gates ambiguity on key_resolution_count, which the pinned expansion makes permanently false for an ambiguous key (id rows hard-code 1; key rows exist only at 1) -- the arm would match nothing and every test but the real-ClickHouse one would stay green", i)
 			}
 		default:
 			t.Errorf("arm %d declares no retraction_only literal, so nothing here can tell whether it may assert", i)
