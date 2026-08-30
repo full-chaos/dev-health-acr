@@ -838,71 +838,59 @@ identity of every point is still on the wire in its own `source`. The clamp
 also cuts on rune boundaries — a byte cut can split a multi-byte character
 and produce a label nobody chose.
 
-### 10.3c A trend plots observations of ONE thing (CHAOS-4616)
+### 10.3c WITHDRAWN: `dated_fact_trend` has no producer (CHAOS-4616)
 
-Found by inspecting a live chart on the kiac rig, not by any test — every
-fixture and the golden example used a single-scope row table, so nothing in
-the suite could have caught it.
+Rule 3 shipped in slice 1 and was withdrawn the same day. The history is the
+point, because the code is now an absence.
 
-The live `flow` fact for team `fullchaos` carried two rows:
+On the live rig the rule drew a line across the `flow` fact for team
+`fullchaos`:
 
 | day | work_scope_id | wip_count_end_of_day |
 |---|---|---|
 | 2026-07-20 | `full.chaos/chaos-ops` | 0 |
 | 2026-08-30 | `full.chaos/dev-health-ops` | 1 |
 
-Two different work scopes, measured **once each**, six weeks apart. Rule 3
-keyed only on "a same-shaped distinct date column plus numeric columns", so
-it drew a line rising 0 → 1 across them — which reads as one scope changing
-over time. Every plotted number was copied faithfully and the chart still
-said something the data does not: the same defect class §10.3 exists to
-prevent, arrived at through the **axis** instead of through a value.
+Two different work scopes, measured **once each**, six weeks apart, drawn as
+one scope rising 0 → 1 over time. Every plotted number was copied faithfully,
+the resolve-and-compare guard passed, and the chart still said something the
+data does not — §10.3's defect class reached through the **axis** instead of
+through a value.
 
-Rule 3 now also requires that every row share one scope identity. The scope
-identity is every column that is neither the date axis nor a plotted numeric
-series; a column that never varies is provenance (a constant `provider`, a
-team name) and is ignored, so it cannot block a legitimate trend. A varying
-one means the rows are split by that dimension, and the fact keeps its table
-instead. The skip reason is its own value, `mixed_scope_rows`, not the
-generic `no_dated_rows`: a producer emitting a cross-scope table and a
-producer emitting no dated rows are different problems, and a reader
-diagnosing a missing chart must be able to tell them apart from the run's own
-artifacts.
+**Three attempts to fix it were each defeated in review**, and the pattern is
+what settled it:
 
-**The measure is the claim's own `Field`, and nothing else.** Three attempts
-at inferring which columns are measures were all heuristics, and each was
-defeated in review: skipping numeric columns let a numeric `team_id` become a
-plotted series; an `id`/`*_id` NAME test let a column called `year` walk
-straight through. The information is not in the row table — a bag of rows
-carries no statement of what it *is* — so the rule stops guessing and reads
-the producer's own assertion instead. `ClaimedFact.Field` names the measure
-the claim is about; that column is plotted and no other. Every remaining
-non-date column must then be constant, whatever its name or type, with no
-heuristic left to fool.
+1. skip numeric columns when checking scope — a numeric `team_id` (101, 202)
+   became a plotted series;
+2. an `id` / `*_id` **name** test — a column called `year` walked straight
+   through;
+3. read the claim's own `Field` as the measure — correct for one measure, but
+   it silently narrowed every multi-measure table to nothing.
 
-This **narrows** the rule, deliberately. A table carrying a second measure
-now draws nothing rather than one line per measure — several measures over
-time is a legitimate view, but it is a different claim (a comparison) and
-deserves its own designed rule and its own name rather than being inferred
-here. That is the same argument that ruled out one-series-per-scope below,
-applied to columns instead of rows.
+Deciding which columns of a row table are MEASURES and which are DIMENSIONS
+cannot be done from the table alone. The information exists at the producer —
+`devhealthfacts/flow.go` builds that table under a field it names
+`scope_breakdown`, and its doc comment says the values "ride in a disclosed
+per-team Rows breakdown" — it is simply **not carried on the wire**. Until a
+row table declares its own shape, any trend this rule drew would be a
+server-asserted claim resting on a guess, and §10.3's whole point is that a
+chart is a claimed fact.
 
-Skip reasons stay specific: `field_not_plottable` when the claim's `Field`
-names no numeric column in its rows, `mixed_scope_rows` when a non-measure
-column varies, `no_dated_rows` when there is no usable date axis at all. A
-producer emitting a cross-scope table, one emitting a table whose measure is
-absent, and one emitting no dated rows are three different problems, and a
-reader diagnosing a missing chart must be able to tell them apart from the
-run's own artifacts. A mixed-scope refusal is recorded whether or not some
-other fact produced a trend.
+`ContextFabricRenderKindSeries` with presentation `line` and the
+`dated_fact_trend` rule value both remain in the closed vocabulary, with no
+producer — the same standing as the six other declared-but-unproduced kinds,
+so a future producer needs no contract change. Every selection records the
+skip reason `trend_rule_withdrawn`, so a reader can tell "this build does not
+select trends" from "the rule ran and found nothing".
 
-**Why refuse rather than salvage.** Two alternatives were considered and are
-worse. Selecting the largest scope's rows silently drops the others — the
-silent-truncation class this design has already had to close twice
-(§10.3a). And one series per scope is a *different claim*: a comparison
-between scopes, not a trend, which needs its own selection rule and its own
-name rather than being smuggled in under `dated_fact_trend`. Refusing is the
-honest minimum; a per-scope shape can be added deliberately later.
+**What this does NOT remove.** This withdraws a *server assertion* only.
+Consumers still render a claimed fact's row table with their own generic
+visualization (ask-dev's CHAOS-4355 chart), presented as a view of the rows
+rather than as a trend the service vouches for. Nothing disappears from a
+reader's screen; what disappears is the service's claim about what the rows
+mean. The declared-shape contract that would let the rule return is tracked
+as its own design ticket, and it blocks the burndown and forecast producers
+for exactly the same reason.
 
 ### 10.3b Adjudicated: a trend does not require cohort intent
 

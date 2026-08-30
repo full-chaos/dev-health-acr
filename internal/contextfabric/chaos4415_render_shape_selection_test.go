@@ -109,11 +109,14 @@ func shapeByRule(shapes []contractsv1.ContextFabricRenderShape, rule contractsv1
 // TestCohortAnswerSelectsScoreBarsContributionStackAndTrend is the direct
 // red-first proof of the reported defect: all three shapes chris named must
 // be selected for the answer he asked about.
-func TestCohortAnswerSelectsScoreBarsContributionStackAndTrend(t *testing.T) {
+func TestCohortAnswerSelectsScoreBarsAndContributionStack(t *testing.T) {
 	t.Parallel()
 	shapes, event := SelectRenderShapes(chrisTeamsAnswer())
-	if len(shapes) != 3 {
-		t.Fatalf("SelectRenderShapes() selected %d shapes, want the score bars, the driver contribution stack and the dated trend; skipped=%+v", len(shapes), event.Skipped)
+	// Two, not three: the dated trend was WITHDRAWN by CHAOS-4616 -- see
+	// chaos4616_trend_scope_test.go for why the rule could not be made
+	// honest from the row table alone.
+	if len(shapes) != 2 {
+		t.Fatalf("SelectRenderShapes() selected %d shapes, want the score bars and the driver contribution stack; skipped=%+v", len(shapes), event.Skipped)
 	}
 
 	score := shapeByRule(shapes, contractsv1.ContextFabricRenderRuleCohortAttentionScore)
@@ -153,22 +156,8 @@ func TestCohortAnswerSelectsScoreBarsContributionStackAndTrend(t *testing.T) {
 		t.Errorf("contribution segments sum to %v, want the 20.0+13.3+13.3 the member's own drivers carry", total)
 	}
 
-	trend := shapeByRule(shapes, contractsv1.ContextFabricRenderRuleDatedFactTrend)
-	if trend == nil {
-		t.Fatal("no trend shape was selected although the claimed fact carries three dated records")
-	}
-	if trend.Presentation != contractsv1.ContextFabricRenderPresentationLine || trend.AxisKind != contractsv1.ContextFabricRenderAxisTime {
-		t.Errorf("trend shape = %s/%s, want a line over a time axis", trend.Presentation, trend.AxisKind)
-	}
-	labels := []string{}
-	for _, point := range trend.Series[0].Points {
-		labels = append(labels, point.Label)
-	}
-	if len(labels) != 3 || labels[0] != "2026-08-03" || labels[2] != "2026-08-30" {
-		t.Errorf("trend points = %v, want the three dated records in chronological order", labels)
-	}
-	if len(event.Selected) != 3 {
-		t.Errorf("telemetry recorded %d selections for 3 shapes", len(event.Selected))
+	if len(event.Selected) != 2 {
+		t.Errorf("telemetry recorded %d selections for 2 shapes", len(event.Selected))
 	}
 }
 
@@ -197,10 +186,8 @@ func TestSingleSubjectAnswerCarryingCohortDataSelectsNoCohortShape(t *testing.T)
 	result := chrisTeamsAnswer()
 	result.Interpretation.Shape = contractsv1.ContextFabricShapeSingleSubject
 	shapes, event := SelectRenderShapes(result)
-	for _, shape := range shapes {
-		if shape.SelectedBy != contractsv1.ContextFabricRenderRuleDatedFactTrend {
-			t.Errorf("a single-subject question got a %s shape; rich views are conditional on intent, never on the data happening to allow one", shape.SelectedBy)
-		}
+	if len(shapes) != 0 {
+		t.Errorf("a single-subject question got %d shapes; rich views are conditional on intent, never on the data happening to allow one", len(shapes))
 	}
 	if !skipRecorded(event, contractsv1.ContextFabricRenderRuleCohortAttentionScore, RenderShapeSkipNotCohortIntent) {
 		t.Errorf("the cohort rule declined silently; skipped=%+v", event.Skipped)
@@ -220,7 +207,7 @@ func TestAnswerWithNoChartableContentSelectsNothing(t *testing.T) {
 		t.Fatalf("SelectRenderShapes() drew %d shapes for an answer with nothing to plot", len(shapes))
 	}
 	if len(event.Skipped) != 3 {
-		t.Fatalf("every rule must record why it declined; skipped=%+v", event.Skipped)
+		t.Fatalf("every rule must record why it declined (including the withdrawn trend rule); skipped=%+v", event.Skipped)
 	}
 }
 
@@ -243,52 +230,6 @@ func TestUnrankedCohortMemberIsNotPlottedAsZero(t *testing.T) {
 	for _, point := range score.Series[0].Points {
 		if point.Label == "no-data" {
 			t.Fatal("an unranked member was plotted; a zero-height bar claims it was measured and scored zero")
-		}
-	}
-}
-
-// TestTrendRuleRefusesAnUnusableDateAxis observes each clause of the
-// date-axis rule failing. Every one of these row sets would produce a chart
-// that claims more than the data says.
-func TestTrendRuleRefusesAnUnusableDateAxis(t *testing.T) {
-	t.Parallel()
-	for name, rows := range map[string][]ClaimedFactRow{
-		"a repeated date is two values at one position": {
-			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-03"), "v": renderScalarNumber(1)}},
-			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-03"), "v": renderScalarNumber(2)}},
-		},
-		"a missing date degrades the axis to index spacing": {
-			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-03"), "v": renderScalarNumber(1)}},
-			{Fields: map[string]ScalarValue{"v": renderScalarNumber(2)}},
-		},
-		"mixed date and timestamp shapes make one elapsed scale ill-defined": {
-			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-03"), "v": renderScalarNumber(1)}},
-			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-18T09:00:00Z"), "v": renderScalarNumber(2)}},
-		},
-		"a value that is not a real calendar date": {
-			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-02-30"), "v": renderScalarNumber(1)}},
-			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-03-01"), "v": renderScalarNumber(2)}},
-		},
-		"no numeric column to plot": {
-			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-03"), "v": renderScalarString("a")}},
-			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-18"), "v": renderScalarString("b")}},
-		},
-		"a hole in the series would have to be bridged or broken": {
-			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-03"), "v": renderScalarNumber(1)}},
-			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-18")}},
-			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-30"), "v": renderScalarNumber(3)}},
-		},
-	} {
-		result := InvestigationResult{
-			Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
-			ClaimedFacts: []ClaimedFact{{
-				ClaimID: "claim_x", Kind: "metrics",
-				Subject: SubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:x", Label: "x"},
-				Field:   "v", Rows: rows,
-			}},
-		}
-		if shapes, _ := SelectRenderShapes(result); len(shapes) != 0 {
-			t.Errorf("%s: a trend was drawn anyway (%d shapes)", name, len(shapes))
 		}
 	}
 }
@@ -359,27 +300,6 @@ func skipRecorded(event RenderShapeSelectionEvent, rule contractsv1.ContextFabri
 		}
 	}
 	return false
-}
-
-// codex round 1, P2: two spellings of the SAME instant pass the raw-string
-// distinctness check and then land on one x position.
-func TestRedTrendRejectsTwoSpellingsOfOneInstant(t *testing.T) {
-	result := InvestigationResult{
-		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
-		ClaimedFacts: []ClaimedFact{{
-			ClaimID: "claim_x", Kind: "metrics",
-			Subject: SubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:x", Label: "x"},
-			Field:   "v",
-			Rows: []ClaimedFactRow{
-				{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-03T00:00:00Z"), "v": renderScalarNumber(1)}},
-				{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-02T17:00:00-07:00"), "v": renderScalarNumber(2)}},
-				{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-05T00:00:00Z"), "v": renderScalarNumber(3)}},
-			},
-		}},
-	}
-	if shapes, _ := SelectRenderShapes(result); len(shapes) != 0 {
-		t.Fatalf("a trend was drawn with two points at one instant: %+v", shapes[0].Series[0].Points)
-	}
 }
 
 // codex round 1, P2: two distinct labels sharing their first 256 bytes

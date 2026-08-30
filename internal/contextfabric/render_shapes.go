@@ -3,9 +3,7 @@ package contextfabric
 import (
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
-	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -101,10 +99,11 @@ const (
 	// RenderShapeSkipMixedScopeRows -- the row table's rows are not
 	// observations of the same thing (CHAOS-4616). See rowsShareOneScope.
 	RenderShapeSkipMixedScopeRows RenderShapeSkipReason = "mixed_scope_rows"
-	// RenderShapeSkipFieldNotPlottable -- the claim's own Field names no
-	// numeric column in its row table, so there is nothing this rule is
-	// entitled to plot. See datedFactTrendShape.
-	RenderShapeSkipFieldNotPlottable RenderShapeSkipReason = "field_not_plottable"
+	// RenderShapeSkipTrendRuleWithdrawn -- the dated_fact_trend rule has no
+	// producer (CHAOS-4616). Recorded on every selection rather than
+	// silently omitted, so a reader can tell "this build does not select
+	// trends" from "the rule ran and found nothing".
+	RenderShapeSkipTrendRuleWithdrawn RenderShapeSkipReason = "trend_rule_withdrawn"
 )
 
 // cohortIntentShapes are the interpreted shapes a cohort chart is an answer
@@ -156,29 +155,30 @@ func SelectRenderShapes(result InvestigationResult) ([]contractsv1.ContextFabric
 		}
 	}
 
-	trends, mixedScope, notPlottable := datedFactTrendShapes(result.ClaimedFacts)
-	// A refused mixed-scope fact is reported whether or not some OTHER fact
-	// produced a trend. Recording the reason only when the rule produced
-	// nothing at all made a refusal invisible the moment any trend
-	// succeeded (codex P2, EXECUTED) -- and a silent refusal is exactly the
-	// undiagnosable-from-artifacts failure this file's telemetry exists to
-	// prevent.
-	if mixedScope {
-		event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipMixedScopeRows)
-	}
-	if notPlottable {
-		event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipFieldNotPlottable)
-	}
-	if len(trends) == 0 && !mixedScope && !notPlottable {
-		event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipNoDatedRows)
-	}
-	for _, trend := range trends {
-		if len(shapes) >= contractsv1.ContextFabricRenderShapesMaxCount {
-			event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipShapeBudget)
-			break
-		}
-		shapes = append(shapes, trend)
-	}
+	// CHAOS-4616: the dated_fact_trend rule is WITHDRAWN. Its vocabulary
+	// stays (see RenderShapeSkipTrendRuleWithdrawn and the
+	// ContextFabricRenderRuleDatedFactTrend constant) so a future producer
+	// needs no contract change, but nothing selects it today.
+	//
+	// Why it was withdrawn rather than fixed: deciding which columns of a
+	// row table are MEASURES and which are DIMENSIONS cannot be done from
+	// the table alone, and three successive attempts to infer it were each
+	// defeated in review -- skipping numeric columns (a numeric team_id
+	// became a plotted series), an id-NAME test (a column called `year`
+	// walked straight through), and finally reading the claim's own Field
+	// (correct for one measure, but it silently narrowed every
+	// multi-measure table to nothing). The information EXISTS at the
+	// producer -- devhealthfacts/flow.go names its table `scope_breakdown`
+	// in as many words -- it is simply not carried on the wire. Until a row
+	// table declares its own shape, any trend this rule drew would be a
+	// server-asserted claim resting on a guess, and a chart is a claimed
+	// fact.
+	//
+	// This removes a SERVER assertion only. Consumers still render row
+	// tables with their own generic visualization, presented as a view of
+	// the rows rather than as a trend the service vouches for -- nothing
+	// disappears from a reader's screen.
+	event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipTrendRuleWithdrawn)
 
 	if len(shapes) == 0 {
 		return nil, event
@@ -412,304 +412,6 @@ func humanizeRenderTerm(term string) string {
 		return spaced
 	}
 	return strings.ToUpper(spaced[:1]) + spaced[1:]
-}
-
-// datedFactTrendShapes is rule 3: a claimed fact whose row table carries a
-// real date axis becomes a trend line.
-//
-// The rule is intentionally strict, and every clause exists because its
-// absence would produce a chart that claims more than the data says:
-//
-//   - EVERY row must carry the date column, all in the SAME shape (all
-//     date-only or all with a time component). A time axis is POSITIONED by
-//     elapsed time; a row missing its date would silently degrade the whole
-//     chart to index spacing, and mixing a bare date with a zoned timestamp
-//     makes one elapsed-time scale ill-defined.
-//   - The dates must be DISTINCT. A repeated date is two values at one axis
-//     position, which is a table, not a series.
-//   - At least two distinct dates. One point is not a trend.
-//   - A numeric column plots; a column with any non-numeric present value
-//     does not.
-//
-// A fact that fails any clause simply gets no trend -- it keeps its row
-// table, which was already renderable.
-// datedFactTrendShapes also reports whether ANY fact was refused
-// specifically because its rows span more than one scope, so the skip reason
-// names that rather than collapsing into the generic "no dated rows" -- a
-// producer emitting a cross-scope table and a producer emitting no dated
-// rows at all are different problems, and a reader diagnosing a missing
-// chart must be able to tell them apart from the run's own artifacts.
-func datedFactTrendShapes(facts []ClaimedFact) (shapes []contractsv1.ContextFabricRenderShape, mixedScope bool, notPlottable bool) {
-	for _, fact := range facts {
-		shape, ok, mixed, unplottable := datedFactTrendShape(fact)
-		if mixed {
-			mixedScope = true
-		}
-		if unplottable {
-			notPlottable = true
-		}
-		if !ok {
-			continue
-		}
-		shapes = append(shapes, shape)
-	}
-	return shapes, mixedScope, notPlottable
-}
-
-func datedFactTrendShape(fact ClaimedFact) (shape contractsv1.ContextFabricRenderShape, ok bool, mixedScope bool, notPlottable bool) {
-	rows := fact.Rows
-	if len(rows) < 2 || len(rows) > contractsv1.ContextFabricRenderPointsMaxCount {
-		return contractsv1.ContextFabricRenderShape{}, false, false, false
-	}
-	columns := renderRowColumns(rows)
-	dateColumn, ordering, found := dateAxisColumn(rows, columns)
-	if !found {
-		return contractsv1.ContextFabricRenderShape{}, false, false, false
-	}
-	// THE measure is the claim's own Field, and nothing else.
-	//
-	// Three attempts at inferring which columns are measures all turned out
-	// to be heuristics: skipping numeric columns (a numeric team_id became a
-	// series), then an id-NAME test (a column named `year` walked straight
-	// through it). The information simply is not in the row table — a bag of
-	// rows carries no statement of what it IS — so this rule stops guessing
-	// and reads the producer's OWN assertion instead. `ClaimedFact.Field`
-	// names the measure the claim is about; that column is plotted and no
-	// other.
-	//
-	// Every remaining non-date column must then be CONSTANT. A varying one
-	// means the rows are split by that dimension — a breakdown, not a series
-	// — whatever its name or type, with no heuristic left to fool.
-	//
-	// This narrows the rule deliberately: a table carrying two measures now
-	// draws nothing rather than one line per measure. Several measures over
-	// time is a legitimate view, but it is a DIFFERENT claim (a comparison)
-	// and deserves its own designed rule and its own name rather than being
-	// inferred here — the same argument that ruled out one-series-per-scope.
-	measure := fact.Field
-	if measure == dateColumn || !numericRenderColumn(rows, measure) {
-		return contractsv1.ContextFabricRenderShape{}, false, false, true
-	}
-	if !rowsShareOneScope(rows, dateColumn, measure) {
-		return contractsv1.ContextFabricRenderShape{}, false, true, false
-	}
-	points := make([]contractsv1.ContextFabricRenderPoint, 0, len(ordering))
-	for _, index := range ordering {
-		value, numeric := renderNumericCell(rows[index].Fields[measure])
-		if !numeric {
-			continue
-		}
-		label, _ := renderStringCell(rows[index].Fields[dateColumn])
-		rowIndex := index
-		points = append(points, contractsv1.ContextFabricRenderPoint{
-			Label: label,
-			Value: value,
-			Source: contractsv1.ContextFabricRenderPointSource{
-				Kind:     contractsv1.ContextFabricRenderSourceClaimedFactRow,
-				ClaimID:  fact.ClaimID,
-				RowIndex: &rowIndex,
-				Field:    measure,
-			},
-		})
-	}
-	if len(points) < 2 {
-		return contractsv1.ContextFabricRenderShape{}, false, false, false
-	}
-	series := []contractsv1.ContextFabricRenderSeries{{
-		Key:    measure,
-		Label:  humanizeRenderTerm(measure),
-		Points: points,
-	}}
-	return contractsv1.ContextFabricRenderShape{
-		Kind:         contractsv1.ContextFabricRenderKindSeries,
-		Presentation: contractsv1.ContextFabricRenderPresentationLine,
-		SelectedBy:   contractsv1.ContextFabricRenderRuleDatedFactTrend,
-		Title:        clampRenderLabel(humanizeRenderTerm(fact.Field) + " over time — " + fact.Subject.Label),
-		AxisKind:     contractsv1.ContextFabricRenderAxisTime,
-		AxisLabel:    clampRenderLabel(dateColumn),
-		ValueLabel:   clampRenderLabel(humanizeRenderTerm(measure)),
-		Series:       series,
-	}, true, false, false
-}
-
-// rowsShareOneScope reports whether every row describes the SAME subject
-// scope, so that plotting them against time is a trend rather than a
-// comparison of different things.
-//
-// CHAOS-4616 (Urgent), found by inspecting a live chart: a `flow` fact for
-// team `fullchaos` carried two rows, day 2026-07-20 with
-// work_scope_id=full.chaos/chaos-ops and day 2026-08-30 with
-// work_scope_id=full.chaos/dev-health-ops — two different scopes measured
-// ONCE EACH. The rule keyed only on "a distinct same-shaped date column plus
-// numeric columns" and drew wip_count_end_of_day rising 0 -> 1 across them,
-// which reads as one scope changing over time. Every number was copied
-// faithfully and the chart still said something the data does not: the same
-// defect class this contract exists to prevent, arrived at through the axis
-// instead of through a value.
-//
-// The scope identity is every column that is NEITHER the date axis NOR a
-// plotted numeric series — a string, boolean or null cell that varies across
-// rows means the rows are split by that dimension. A column that never
-// varies is provenance (a constant `provider`, a team name) and is ignored,
-// so it cannot block a legitimate trend.
-//
-// This REFUSES a mixed-scope table rather than picking the largest scope's
-// rows or emitting a series per scope. Both alternatives were considered and
-// are worse here: selecting one scope silently drops the others (the
-// silent-truncation class this file already had to fix twice), and a series
-// per scope is a different claim — a comparison between scopes, not a trend
-// — which needs its own selection rule and its own name rather than being
-// smuggled in under `dated_fact_trend`. Widening to a per-scope shape is
-// tracked separately; refusing is the honest minimum.
-func rowsShareOneScope(rows []ClaimedFactRow, dateColumn, measure string) bool {
-	for _, column := range renderRowColumns(rows) {
-		if column == dateColumn || column == measure {
-			continue
-		}
-		var first string
-		for i, row := range rows {
-			value := scopeCellKey(row.Fields[column])
-			if i == 0 {
-				first = value
-				continue
-			}
-			if value != first {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-// scopeCellKey renders a dimension cell as a comparable string. An ABSENT
-// cell and a present one are deliberately different keys: a row that omits
-// the dimension is not known to share it. Numbers are keyed too, because an
-// identifier column is a dimension whatever its type -- keying only strings
-// let a numeric id present on one row and absent on another compare equal as
-// "absent" (codex P1, second half).
-func scopeCellKey(value ScalarValue) string {
-	switch {
-	case value.String != nil:
-		return "s:" + *value.String
-	case value.Boolean != nil:
-		if *value.Boolean {
-			return "b:true"
-		}
-		return "b:false"
-	case value.Integer != nil:
-		return "i:" + strconv.FormatInt(*value.Integer, 10)
-	case value.Number != nil:
-		return "n:" + strconv.FormatFloat(*value.Number, 'g', -1, 64)
-	case value.Null:
-		return "null"
-	default:
-		return "absent"
-	}
-}
-
-// renderRowColumns is first-seen column order across the row set, so shape
-// construction is deterministic even though Go map iteration is not.
-func renderRowColumns(rows []ClaimedFactRow) []string {
-	seen := map[string]struct{}{}
-	var order []string
-	for _, row := range rows {
-		keys := make([]string, 0, len(row.Fields))
-		for key := range row.Fields {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			if _, exists := seen[key]; exists {
-				continue
-			}
-			seen[key] = struct{}{}
-			order = append(order, key)
-		}
-	}
-	return order
-}
-
-// dateAxisColumn returns the first column (in deterministic column order)
-// that satisfies every date-axis clause, plus the row indices sorted by
-// that column's parsed instant.
-func dateAxisColumn(rows []ClaimedFactRow, columns []string) (string, []int, bool) {
-	for _, column := range columns {
-		instants := make([]time.Time, len(rows))
-		// Distinctness is by INSTANT, not by spelling. "2026-08-03T00:00:00Z"
-		// and "2026-08-02T17:00:00-07:00" are two spellings of one moment: a
-		// raw-string check calls them distinct, and the axis -- which is
-		// positioned by elapsed time -- then stacks two different values on
-		// one x position (codex round 1, P2). Comparing the parsed instant is
-		// the same question the renderer will ask.
-		distinct := map[int64]struct{}{}
-		var withTime, withoutTime bool
-		usable := true
-		for i, row := range rows {
-			raw, ok := renderStringCell(row.Fields[column])
-			if !ok {
-				usable = false
-				break
-			}
-			instant, hasTime, ok := parseRenderDate(raw)
-			if !ok {
-				usable = false
-				break
-			}
-			if hasTime {
-				withTime = true
-			} else {
-				withoutTime = true
-			}
-			if _, repeated := distinct[instant.UnixNano()]; repeated {
-				usable = false
-				break
-			}
-			distinct[instant.UnixNano()] = struct{}{}
-			instants[i] = instant
-		}
-		if !usable || (withTime && withoutTime) || len(distinct) < 2 {
-			continue
-		}
-		ordering := make([]int, len(rows))
-		for i := range ordering {
-			ordering[i] = i
-		}
-		sort.SliceStable(ordering, func(a, b int) bool {
-			return instants[ordering[a]].Before(instants[ordering[b]])
-		})
-		return column, ordering, true
-	}
-	return "", nil, false
-}
-
-// parseRenderDate accepts the ISO-8601 forms every producer in this
-// codebase emits for a day column, and REJECTS anything Go's own parser
-// would silently normalize. It reports whether the value carried a time
-// component so a mixed-shape column can be refused.
-func parseRenderDate(raw string) (time.Time, bool, bool) {
-	for _, layout := range []string{"2006-01-02T15:04:05Z07:00", "2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02T15:04", "2006-01-02 15:04"} {
-		if instant, err := time.Parse(layout, raw); err == nil {
-			return instant, true, true
-		}
-	}
-	if instant, err := time.Parse("2006-01-02", raw); err == nil {
-		return instant, false, true
-	}
-	return time.Time{}, false, false
-}
-
-// numericRenderColumn is true when the column is present on every row with
-// a numeric value. "Present on every row" is stricter than the row table's
-// own rules on purpose: a trend line with a hole in it would have to either
-// break the line or bridge the gap, and both are claims about data that is
-// not there.
-func numericRenderColumn(rows []ClaimedFactRow, column string) bool {
-	for _, row := range rows {
-		if _, ok := renderNumericCell(row.Fields[column]); !ok {
-			return false
-		}
-	}
-	return true
 }
 
 // renderNumericCell unwraps a row cell to a plottable number.

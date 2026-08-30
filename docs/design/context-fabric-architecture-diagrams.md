@@ -1133,14 +1133,14 @@ flowchart TD
     subgraph rules["deterministic rules — no fallback branch, no 'looks chartable'"]
         R1{"shape ∈ explicit_cohort,<br/>discovered_cohort<br/>AND a member has a score?"}
         R2{"rule 1 fired AND<br/>ranked members carry drivers?"}
-        R3{"a claimed fact's rows carry a<br/>same-shaped, distinct date column<br/>+ a numeric column,<br/>ALL rows one scope?"}
+        R3{"dated_fact_trend<br/>WITHDRAWN — no producer<br/>(CHAOS-4616)"}
     end
     SEL --> R1 --> R2
     SEL --> R3
 
     S1["series / bars<br/>cohort_attention_score<br/>value ← CohortMember.Score"]
     S2["series / stacked_bars<br/>cohort_driver_contribution<br/>value ← Driver.WeightContributed"]
-    S3["series / line<br/>dated_fact_trend<br/>value ← ClaimedFact.Rows[i][col]"]
+    S3["(no shape)<br/>a row table cannot say which<br/>columns are measures"]
     R1 -->|yes| S1
     R2 -->|yes| S2
     R3 -->|yes| S3
@@ -1163,7 +1163,8 @@ flowchart TD
     classDef fixed fill:#123d1c,stroke:#3fa45b,color:#e8ffe8
     classDef gate fill:#3d2a12,stroke:#c08a3e,color:#fff3e0
     classDef bad fill:#4a1414,stroke:#c0392b,color:#ffecec
-    class S1,S2,S3,OUT,PROJ,ASKDEV fixed
+    class S1,S2,OUT,PROJ,ASKDEV fixed
+    class S3 bad
     class R1,R2,R3,VAL gate
     class REJ,SKIP bad
 ```
