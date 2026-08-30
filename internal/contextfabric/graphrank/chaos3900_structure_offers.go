@@ -401,13 +401,13 @@ func candidateOfferMaterial(candidates []contextfabric.SubjectCandidate, committ
 		})
 	}
 	return contextfabric.StructureOfferMaterial{
-		Missing:          []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectCandidate},
-		CandidateOptions: options,
-	}, candidateOfferDiagnostics{
-		CandidateOfferCount:   len(options),
-		OfferKind:             "candidate",
-		LabelsNormalizedCount: normalizedCount,
-	}
+			Missing:          []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectCandidate},
+			CandidateOptions: options,
+		}, candidateOfferDiagnostics{
+			CandidateOfferCount:   len(options),
+			OfferKind:             "candidate",
+			LabelsNormalizedCount: normalizedCount,
+		}
 }
 
 // candidateOfferLabelMaxRunes mirrors ContextFabricCandidateOption's own
