@@ -1133,7 +1133,7 @@ flowchart TD
     subgraph rules["deterministic rules — no fallback branch, no 'looks chartable'"]
         R1{"shape ∈ explicit_cohort,<br/>discovered_cohort<br/>AND a member has a score?"}
         R2{"rule 1 fired AND<br/>ranked members carry drivers?"}
-        R3{"a claimed fact's rows carry a<br/>same-shaped, distinct date column<br/>+ a numeric column?"}
+        R3{"a claimed fact's rows carry a<br/>same-shaped, distinct date column<br/>+ a numeric column,<br/>ALL rows one scope?"}
     end
     SEL --> R1 --> R2
     SEL --> R3

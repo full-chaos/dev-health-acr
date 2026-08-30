@@ -104,6 +104,9 @@ const (
 	// RenderShapeSkipShapeBudget -- a rule that would have fired but the
 	// per-answer shape cap was already reached.
 	RenderShapeSkipShapeBudget RenderShapeSkipReason = "shape_budget"
+	// RenderShapeSkipMixedScopeRows -- the row table's rows are not
+	// observations of the same thing (CHAOS-4616). See rowsShareOneScope.
+	RenderShapeSkipMixedScopeRows RenderShapeSkipReason = "mixed_scope_rows"
 )
 
 // cohortIntentShapes are the interpreted shapes a cohort chart is an answer
@@ -155,10 +158,14 @@ func SelectRenderShapes(result InvestigationResult) ([]contractsv1.ContextFabric
 		}
 	}
 
-	trends, seriesTruncated := datedFactTrendShapes(result.ClaimedFacts)
+	trends, seriesTruncated, mixedScope := datedFactTrendShapes(result.ClaimedFacts)
 	event.SeriesTruncated = seriesTruncated
 	if len(trends) == 0 {
-		event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipNoDatedRows)
+		reason := RenderShapeSkipNoDatedRows
+		if mixedScope {
+			reason = RenderShapeSkipMixedScopeRows
+		}
+		event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, reason)
 	}
 	for _, trend := range trends {
 		if len(shapes) >= contractsv1.ContextFabricRenderShapesMaxCount {
@@ -421,29 +428,39 @@ func humanizeRenderTerm(term string) string {
 //
 // A fact that fails any clause simply gets no trend -- it keeps its row
 // table, which was already renderable.
-func datedFactTrendShapes(facts []ClaimedFact) ([]contractsv1.ContextFabricRenderShape, int) {
-	var shapes []contractsv1.ContextFabricRenderShape
-	truncatedTotal := 0
+// datedFactTrendShapes also reports whether ANY fact was refused
+// specifically because its rows span more than one scope, so the skip reason
+// names that rather than collapsing into the generic "no dated rows" -- a
+// producer emitting a cross-scope table and a producer emitting no dated
+// rows at all are different problems, and a reader diagnosing a missing
+// chart must be able to tell them apart from the run's own artifacts.
+func datedFactTrendShapes(facts []ClaimedFact) (shapes []contractsv1.ContextFabricRenderShape, truncatedTotal int, mixedScope bool) {
 	for _, fact := range facts {
-		shape, truncated, ok := datedFactTrendShape(fact)
+		shape, truncated, ok, mixed := datedFactTrendShape(fact)
+		if mixed {
+			mixedScope = true
+		}
 		if !ok {
 			continue
 		}
 		truncatedTotal += truncated
 		shapes = append(shapes, shape)
 	}
-	return shapes, truncatedTotal
+	return shapes, truncatedTotal, mixedScope
 }
 
-func datedFactTrendShape(fact ClaimedFact) (shape contractsv1.ContextFabricRenderShape, truncated int, ok bool) {
+func datedFactTrendShape(fact ClaimedFact) (shape contractsv1.ContextFabricRenderShape, truncated int, ok bool, mixedScope bool) {
 	rows := fact.Rows
 	if len(rows) < 2 || len(rows) > contractsv1.ContextFabricRenderPointsMaxCount {
-		return contractsv1.ContextFabricRenderShape{}, 0, false
+		return contractsv1.ContextFabricRenderShape{}, 0, false, false
 	}
 	columns := renderRowColumns(rows)
 	dateColumn, ordering, found := dateAxisColumn(rows, columns)
 	if !found {
-		return contractsv1.ContextFabricRenderShape{}, 0, false
+		return contractsv1.ContextFabricRenderShape{}, 0, false, false
+	}
+	if !rowsShareOneScope(rows, dateColumn, columns) {
+		return contractsv1.ContextFabricRenderShape{}, 0, false, true
 	}
 	var series []contractsv1.ContextFabricRenderSeries
 	for _, column := range columns {
@@ -485,7 +502,7 @@ func datedFactTrendShape(fact ClaimedFact) (shape contractsv1.ContextFabricRende
 		})
 	}
 	if len(series) == 0 {
-		return contractsv1.ContextFabricRenderShape{}, 0, false
+		return contractsv1.ContextFabricRenderShape{}, 0, false, false
 	}
 	return contractsv1.ContextFabricRenderShape{
 		Kind:         contractsv1.ContextFabricRenderKindSeries,
@@ -496,7 +513,75 @@ func datedFactTrendShape(fact ClaimedFact) (shape contractsv1.ContextFabricRende
 		AxisLabel:    clampRenderLabel(dateColumn),
 		ValueLabel:   clampRenderLabel(humanizeRenderTerm(fact.Field)),
 		Series:       series,
-	}, truncated, true
+	}, truncated, true, false
+}
+
+// rowsShareOneScope reports whether every row describes the SAME subject
+// scope, so that plotting them against time is a trend rather than a
+// comparison of different things.
+//
+// CHAOS-4616 (Urgent), found by inspecting a live chart: a `flow` fact for
+// team `fullchaos` carried two rows, day 2026-07-20 with
+// work_scope_id=full.chaos/chaos-ops and day 2026-08-30 with
+// work_scope_id=full.chaos/dev-health-ops — two different scopes measured
+// ONCE EACH. The rule keyed only on "a distinct same-shaped date column plus
+// numeric columns" and drew wip_count_end_of_day rising 0 -> 1 across them,
+// which reads as one scope changing over time. Every number was copied
+// faithfully and the chart still said something the data does not: the same
+// defect class this contract exists to prevent, arrived at through the axis
+// instead of through a value.
+//
+// The scope identity is every column that is NEITHER the date axis NOR a
+// plotted numeric series — a string, boolean or null cell that varies across
+// rows means the rows are split by that dimension. A column that never
+// varies is provenance (a constant `provider`, a team name) and is ignored,
+// so it cannot block a legitimate trend.
+//
+// This REFUSES a mixed-scope table rather than picking the largest scope's
+// rows or emitting a series per scope. Both alternatives were considered and
+// are worse here: selecting one scope silently drops the others (the
+// silent-truncation class this file already had to fix twice), and a series
+// per scope is a different claim — a comparison between scopes, not a trend
+// — which needs its own selection rule and its own name rather than being
+// smuggled in under `dated_fact_trend`. Widening to a per-scope shape is
+// tracked separately; refusing is the honest minimum.
+func rowsShareOneScope(rows []ClaimedFactRow, dateColumn string, columns []string) bool {
+	for _, column := range columns {
+		if column == dateColumn || numericRenderColumn(rows, column) {
+			continue
+		}
+		var first string
+		for i, row := range rows {
+			value := scopeCellKey(row.Fields[column])
+			if i == 0 {
+				first = value
+				continue
+			}
+			if value != first {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// scopeCellKey renders a dimension cell as a comparable string. An ABSENT
+// cell and a present one are deliberately different keys: a row that omits
+// the dimension is not known to share it.
+func scopeCellKey(value ScalarValue) string {
+	switch {
+	case value.String != nil:
+		return "s:" + *value.String
+	case value.Boolean != nil:
+		if *value.Boolean {
+			return "b:true"
+		}
+		return "b:false"
+	case value.Null:
+		return "null"
+	default:
+		return "absent"
+	}
 }
 
 // renderRowColumns is first-seen column order across the row set, so shape

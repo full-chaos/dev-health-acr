@@ -838,6 +838,45 @@ identity of every point is still on the wire in its own `source`. The clamp
 also cuts on rune boundaries — a byte cut can split a multi-byte character
 and produce a label nobody chose.
 
+### 10.3c A trend plots observations of ONE thing (CHAOS-4616)
+
+Found by inspecting a live chart on the kiac rig, not by any test — every
+fixture and the golden example used a single-scope row table, so nothing in
+the suite could have caught it.
+
+The live `flow` fact for team `fullchaos` carried two rows:
+
+| day | work_scope_id | wip_count_end_of_day |
+|---|---|---|
+| 2026-07-20 | `full.chaos/chaos-ops` | 0 |
+| 2026-08-30 | `full.chaos/dev-health-ops` | 1 |
+
+Two different work scopes, measured **once each**, six weeks apart. Rule 3
+keyed only on "a same-shaped distinct date column plus numeric columns", so
+it drew a line rising 0 → 1 across them — which reads as one scope changing
+over time. Every plotted number was copied faithfully and the chart still
+said something the data does not: the same defect class §10.3 exists to
+prevent, arrived at through the **axis** instead of through a value.
+
+Rule 3 now also requires that every row share one scope identity. The scope
+identity is every column that is neither the date axis nor a plotted numeric
+series; a column that never varies is provenance (a constant `provider`, a
+team name) and is ignored, so it cannot block a legitimate trend. A varying
+one means the rows are split by that dimension, and the fact keeps its table
+instead. The skip reason is its own value, `mixed_scope_rows`, not the
+generic `no_dated_rows`: a producer emitting a cross-scope table and a
+producer emitting no dated rows are different problems, and a reader
+diagnosing a missing chart must be able to tell them apart from the run's own
+artifacts.
+
+**Why refuse rather than salvage.** Two alternatives were considered and are
+worse. Selecting the largest scope's rows silently drops the others — the
+silent-truncation class this design has already had to close twice
+(§10.3a). And one series per scope is a *different claim*: a comparison
+between scopes, not a trend, which needs its own selection rule and its own
+name rather than being smuggled in under `dated_fact_trend`. Refusing is the
+honest minimum; a per-scope shape can be added deliberately later.
+
 ### 10.3b Adjudicated: a trend does not require cohort intent
 
 Review challenged rule 3 for firing on row shape alone: should a
