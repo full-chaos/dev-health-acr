@@ -207,7 +207,7 @@ func TestChaos4542_KeyArmSelectsTheKeyScopeRowAndTheScopeArmDoesNot(t *testing.T
 			}
 		case strings.Contains(arm, "toUInt8(1) AS retraction_only"):
 			retraction++
-			if !strings.Contains(arm, "o.project_key = p.project_key") || !strings.Contains(arm, "p.key_resolution_count > 1") {
+			if !strings.Contains(arm, "o.project_key = p.project_key") || !strings.Contains(arm, "p.key_project_count > 1") {
 				t.Errorf("arm %d is the retraction arm but does not fan an ownership key across the ambiguous key partition -- then an ambiguous key produces no row at all and nothing can be retracted, which is the CHAOS-4565 defect unfixed", i)
 			}
 		default:

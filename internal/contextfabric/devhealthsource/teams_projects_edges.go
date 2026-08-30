@@ -808,13 +808,13 @@ func projectTeamRelationshipID(provider, projectID, teamID, source string) strin
 // `where` carries any scope_kind or ambiguity restriction. It is a WHERE and
 // not part of the ON because 24.8 rejects an ON that is not a plain column
 // equality.
-func projectTeamsOwnershipArm(match, where, retractionOnly string) string {
+func projectTeamsOwnershipArm(projects, match, where, retractionOnly string) string {
 	return `
 		SELECT p.id AS project_id, p.provider AS provider,
 		       o.project_ref AS ownership_ref, o.project_key AS ownership_key,
 		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at,
 		       p.project_updated_at AS project_updated_at, toUInt8(` + retractionOnly + `) AS retraction_only
-		FROM ` + projectIdentityWithWatermarkSQL() + `
+		FROM ` + projects + `
 		INNER JOIN (
 			SELECT provider, ` + readers.ProjectOwnershipJoinColumn + ` AS project_ref, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name, valid_from, valid_to, updated_at
 			FROM team_project_ownership FINAL
@@ -826,11 +826,55 @@ func projectTeamsOwnershipArm(match, where, retractionOnly string) string {
 // projectTeamsArms is the ordered arm list projectTeamsStatement unions, and
 // the seam a test reads to check which arms may assert.
 func projectTeamsArms() []string {
+	resolved := projectIdentityWithWatermarkSQL()
 	return []string{
-		projectTeamsOwnershipArm(readers.ProjectIdentityMatchSQL("o", "project_ref"), "", "0"),
-		projectTeamsOwnershipArm("o.project_key = p.scope", "\n\t\tWHERE p.scope_kind = 'key'", "0"),
-		projectTeamsOwnershipArm("o.project_key = p.project_key", "\n\t\tWHERE p.key_resolution_count > 1 AND p.scope_kind = 'id' AND o.project_key != ''", "1"),
+		projectTeamsOwnershipArm(resolved, readers.ProjectIdentityMatchSQL("o", "project_ref"), "", "0"),
+		projectTeamsOwnershipArm(resolved, "o.project_key = p.scope", "\n\t\tWHERE p.scope_kind = 'key'", "0"),
+		projectTeamsOwnershipArm(ambiguousProjectIdentitySQL(), "o.project_key = p.project_key", "\n\t\tWHERE p.key_project_count > 1 AND o.project_key != ''", "1"),
 	}
+}
+
+// ambiguousProjectIdentitySQL is the retraction arm's project source: every
+// project reachable through a project_key that names MORE THAN ONE project.
+//
+// WHY IT CANNOT REUSE key_resolution_count, which is the obvious instinct and
+// silently produces nothing. The identity expansion emits TWO scope rows per
+// project, and the ID row hard-codes `toUInt64(1) AS key_resolution_count`
+// (readers v0.5.5, deliberately -- projects.id is unique, so an id match is
+// unambiguous by construction, and emitting the project-level number there had
+// already caused a consumer to discard every unambiguous Linear id match).
+// The KEY row carries the real count but is emitted only for
+// key_resolution_count = 1. So for an AMBIGUOUS key there is no row anywhere
+// in the expansion carrying a count above 1: `p.key_resolution_count > 1`
+// matches zero rows, always. That is not a hypothetical -- it is what the
+// first version of this arm did, and the ambiguity retraction subtests caught
+// it against a real ClickHouse while the conflicting-identity one passed.
+//
+// So ambiguity is re-derived, from the expansion's OWN output rather than a
+// second read of `projects`: count the projects that answer to each
+// (provider, project_key). That is the same statement the expansion's guard
+// makes -- "a project_key naming more than one project cannot resolve an
+// ownership row that carries only that key" -- computed one layer out.
+//
+// scope_kind = 'id' is a DE-DUPLICATOR, not a narrowing, and the reasoning is
+// worth keeping because it is not obvious: the expansion's GROUP BY collapses
+// a project whose id EQUALS its project_key into a single row labelled 'key'
+// (max('id','key') = 'key'), which would drop it from this count. That can
+// only happen when the KEY branch emitted, which requires
+// key_resolution_count = 1, which means that key names exactly one project.
+// So every member of a genuinely ambiguous partition is labelled 'id', and
+// filtering on it cannot undercount an ambiguity into invisibility.
+//
+// The WHERE is in the same SELECT as the window on purpose: ClickHouse
+// evaluates WHERE before window functions, so the count runs over the filtered
+// rows, which is what makes the de-duplication above hold.
+func ambiguousProjectIdentitySQL() string {
+	return `(
+	SELECT pa.provider AS provider, pa.id AS id, pa.project_key AS project_key, pa.project_updated_at AS project_updated_at,
+	       count() OVER (PARTITION BY pa.provider, pa.project_key) AS key_project_count
+	FROM (SELECT * FROM ` + projectIdentityWithWatermarkSQL() + `) AS pa
+	WHERE pa.scope_kind = 'id' AND pa.project_key != ''
+) AS p`
 }
 
 func projectIdentityWithWatermarkSQL() string {
