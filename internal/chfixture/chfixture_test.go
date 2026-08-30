@@ -122,10 +122,13 @@ func TestJoinONViolations(t *testing.T) {
 		{
 			// codex R4: a bare "LEFT" terminator (pre-fix) truncates the
 			// condition right at left(...), producing an empty/partial
-			// condition that silently never sees the OR after it.
+			// condition that silently never sees the OR after it. The
+			// reported violation text is UPPERCASE (codex R5: everything
+			// downstream reads the single normalized -- uppercased outside
+			// literals -- text; violation strings are no exception).
 			name:      "codex R4: left(...)/right(...) as an operand's function call is portable, and an OR after it is still detected",
 			statement: "SELECT 1 FROM a INNER JOIN b ON left(a.key, 3) = b.key OR a.org_id = b.org_id",
-			wantBad:   []string{"left(a.key, 3) = b.key OR a.org_id = b.org_id"},
+			wantBad:   []string{"LEFT(A.KEY, 3) = B.KEY OR A.ORG_ID = B.ORG_ID"},
 		},
 		{
 			// codex R4: a literal 'ON' must never be mistaken for the JOIN
@@ -144,25 +147,78 @@ func TestJoinONViolations(t *testing.T) {
 			wantBad:         nil,
 			wantZeroClauses: true,
 		},
+		// codex R5: four scans (comment strip, ')' boundary, AND split,
+		// qualifier-phrase match) each had their own case/quote/whitespace
+		// blind spot, found and patched one at a time -- the fix is the
+		// single normalize() pass every one of these four cases exercises
+		// a different corner of. Confirmed against acca848b (pre-fix) via
+		// a throwaway probe: all four produced wrong output (case 0:
+		// clauses=1 not 2, truncated mid-literal; case 1: a garbled
+		// violation merging both joins' text; case 2: clauses=1/conjuncts=1,
+		// the whole thing reported as one false-positive violation; case 3:
+		// "LEFT" leaking into a garbled cross-join violation).
+		{
+			name:      "codex R5: a -- inside a string literal is not a comment, and a later JOIN's OR is still detected",
+			statement: "SELECT 1 FROM a INNER JOIN b ON a.tag = '--not a comment' LEFT JOIN c ON c.id = a.id OR c.id = b.id",
+			wantBad:   []string{"C.ID = A.ID OR C.ID = B.ID"},
+		},
+		{
+			name:      "codex R5: a ) inside a string literal is not the structural close paren, and a later JOIN's OR is still detected",
+			statement: "SELECT 1 FROM a INNER JOIN b ON a.tag = 'x)' LEFT JOIN c ON c.id = a.id OR c.id = b.id",
+			wantBad:   []string{"C.ID = A.ID OR C.ID = B.ID"},
+		},
+		{
+			name:      "codex R5: lowercase 'and' splits a conjunction just like AND, not a false violation",
+			statement: "SELECT 1 FROM a INNER JOIN b ON a.id = b.id and a.org_id = b.org_id",
+			wantBad:   nil,
+		},
+		{
+			name:      "codex R5: a qualifier phrase split across a newline (LEFT\\nJOIN) still terminates the previous condition and is still found as its own join",
+			statement: "SELECT 1 FROM a INNER JOIN b ON a.id = b.id\nLEFT\nJOIN c ON c.id = a.id OR c.id = b.id",
+			wantBad:   []string{"C.ID = A.ID OR C.ID = B.ID"},
+		},
+		{
+			// team-lead's re-review of acca848b: a '(' inside a string
+			// literal used to count as real nesting (depthProfile was not
+			// quote-aware), which desyncs depth for the REST of the
+			// statement and can swallow a later, unrelated JOIN's own ON
+			// clause into this one -- silently skipping it rather than
+			// checking it separately. A statement with only one JOIN
+			// can't exhibit this (nothing after it to wrongly absorb);
+			// this needs a SECOND join whose own real violation would
+			// otherwise vanish into the first join's garbled, absorbed
+			// "condition". Confirmed against the pre-fix code: it
+			// reported clauses=1 (not 2) and a single mangled violation
+			// spanning both joins, instead of cleanly attributing the OR
+			// to the second join alone. The literal '(' itself stays
+			// lowercase in the reported text (codex R5: literal CONTENTS
+			// are copied through normalize() unchanged, only the
+			// surrounding structure is uppercased).
+			name:      "team-lead review: a literal containing a paren character does not desynchronize JOIN/ON depth tracking for a LATER join",
+			statement: "SELECT 1 FROM a INNER JOIN b ON a.k = concat('(', b.k) LEFT JOIN c ON c.id = a.id OR c.id = b.id",
+			wantBad:   []string{"C.ID = A.ID OR C.ID = B.ID"},
+		},
 		{
 			name:      "OR-arm is rejected",
 			statement: "SELECT 1 FROM a INNER JOIN b ON a.id = b.id OR a.org_id = b.org_id",
-			wantBad:   []string{"a.id = b.id OR a.org_id = b.org_id"},
+			wantBad:   []string{"A.ID = B.ID OR A.ORG_ID = B.ORG_ID"},
 		},
 		{
 			name:      "a bare boolean-function conjunct with no = is rejected",
 			statement: "SELECT 1 FROM a INNER JOIN b ON a.id = b.id AND has(b.arr, a.x)",
-			wantBad:   []string{"has(b.arr, a.x)"},
+			wantBad:   []string{"HAS(B.ARR, A.X)"},
 		},
 		{
 			name:      "<> is rejected",
 			statement: "SELECT 1 FROM a INNER JOIN b ON a.id = b.id AND a.kind <> b.kind",
-			wantBad:   []string{"a.kind <> b.kind"},
+			wantBad:   []string{"A.KIND <> B.KIND"},
 		},
 		{
+			// the quoted literals 'x'/'y' stay lowercase -- only structure
+			// outside literals is uppercased.
 			name:      "IN is rejected",
 			statement: "SELECT 1 FROM a INNER JOIN b ON a.id = b.id AND a.kind IN ('x', 'y')",
-			wantBad:   []string{"a.kind IN ('x', 'y')"},
+			wantBad:   []string{"A.KIND IN ('x', 'y')"},
 		},
 		{
 			name: "a -- comment whose prose contains the words ON and AND never contributes a phantom clause",
@@ -180,7 +236,7 @@ INNER JOIN b ON a.id = b.id`,
 			name: "a1: multi-line ON with OR on the second line is rejected",
 			statement: `SELECT 1 FROM a INNER JOIN b ON a.id = b.id
 	OR a.org_id = b.org_id`,
-			wantBad: []string{"a.id = b.id OR a.org_id = b.org_id"},
+			wantBad: []string{"A.ID = B.ID OR A.ORG_ID = B.ORG_ID"},
 		},
 		{
 			name: "a2: a conjunct split across multiple source lines by AND is still portable",
@@ -191,7 +247,7 @@ INNER JOIN b ON a.id = b.id`,
 		{
 			name:      "b1: ON at the start of a line (no leading space) still finds the OR on it",
 			statement: "SELECT 1 FROM a INNER JOIN b\nON a.id = b.id OR a.org_id = b.org_id",
-			wantBad:   []string{"a.id = b.id OR a.org_id = b.org_id"},
+			wantBad:   []string{"A.ID = B.ID OR A.ORG_ID = B.ORG_ID"},
 		},
 		{
 			name: "a JOIN ON condition correctly stops at a following clause, never absorbing WHERE/GROUP BY/a second JOIN",

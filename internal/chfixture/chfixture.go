@@ -119,18 +119,32 @@ func majorMinor(version string) (major, minor int, ok bool) {
 // plus how many ON clauses and conjuncts it examined, so a caller can log
 // real coverage instead of a guard that silently checked nothing.
 //
-// JOIN/ON DETECTION (codex R4 review): a bare "ON" search matches ANYWHERE
-// in the statement, including inside a string literal ("SELECT if(flag,
-// 'ON', 'OFF') ..." would register a phantom clause) and with no JOIN
-// anywhere nearby (a JOIN using USING(...) instead of ON has no condition
-// at all, and must not silently grab a later, unrelated ON belonging to a
-// different clause). This instead anchors on the word "JOIN" first; for
-// each JOIN, it looks for the very next "ON" at that SAME paren depth,
-// but only if no clause-terminator (another JOIN, WHERE, ...) or a
-// closing paren appears first -- a JOIN with no ON contributes nothing to
-// check. Both searches skip single-quoted string-literal content
-// (quoteProfile), so a literal 'ON' or a literal containing a keyword
-// word never counts as structure.
+// NORMALIZE ONCE, READ EVERYWHERE (codex R5 review): four separate scans
+// -- the old stripLineComments, clauseEnd's ')' check, splitTopLevelAnd's
+// " AND " match, and the qualifier-phrase terminator match -- each had
+// their OWN case/quote/whitespace blind spot, found and patched one at a
+// time (R4's quote-unaware ON search, team-lead's quote-unaware
+// depthProfile, R5's quote-unaware comment strip, case-sensitive AND
+// split, and whitespace-sensitive "LEFT JOIN" phrase match). Patching
+// scans individually does not converge: every scan that reads raw bytes
+// is a fresh chance to reintroduce the same class of bug. So there is now
+// exactly ONE normalization pass (normalize, below), and every step from
+// here on -- JOIN/ON search, terminators, the ")" boundary, the AND
+// split, the "=" split, the operand parser -- reads ONLY its output (the
+// normalized text plus the quoted/depth masks computed from THAT text),
+// never the raw statement and never its own ad-hoc case or whitespace
+// handling.
+//
+// JOIN/ON DETECTION (codex R4 review): a bare "ON" search used to match
+// ANYWHERE in the statement, including inside a string literal ("SELECT
+// if(flag, 'ON', 'OFF') ..." registered a phantom clause) and with no
+// JOIN anywhere nearby (a JOIN using USING(...) instead of ON has no
+// condition at all, and must not silently grab a later, unrelated ON
+// belonging to a different clause). Detection anchors on the word "JOIN"
+// first; for each JOIN, it looks for the very next "ON" at that SAME
+// paren depth, but only if no clause-terminator (another JOIN, WHERE,
+// ...) or a closing paren appears first -- a JOIN with no ON contributes
+// nothing to check.
 //
 // CONDITION BOUNDARY (team-lead's 2026-08-29 R1 finding): the condition
 // used to end at the first newline, so a multi-line ON ("ON a = b\n  AND
@@ -140,30 +154,21 @@ func majorMinor(version string) (major, minor int, ok bool) {
 // bug rather than proof. The condition now runs from just after "ON" to
 // the next top-level (same paren depth as the ON token) clause-boundary
 // keyword -- see clauseTerminators -- or a closing paren that drops below
-// that depth, or end of statement; SQL line comments (`-- ...`) are
-// stripped first (their prose containing the plain words
-// "ON"/"AND"/"WHERE" would otherwise register as phantom structure), and
-// the extracted span has its whitespace (including embedded newlines)
-// collapsed before the top-level-AND split, so a conjunct spanning
-// multiple source lines still matches " AND " and a bare newline never
-// hides an OR/predicate on a later line.
+// that depth, or end of statement.
 func JoinONViolations(statement string) (violations []string, clauses, conjuncts int) {
-	statement = stripLineComments(statement)
-	upper := strings.ToUpper(statement)
-	depths := depthProfile(statement)
-	quoted := quoteProfile(statement)
+	normalized, quoted, depths := normalize(statement)
 
 	pos := 0
 	for {
-		joinStart, ok := nextWord(upper, quoted, pos, "JOIN")
+		joinStart, ok := nextWord(normalized, quoted, pos, "JOIN")
 		if !ok {
 			break
 		}
 		depth := depths[joinStart]
 		searchFrom := joinStart + len("JOIN")
 
-		onPos := firstWordAtDepth(upper, quoted, depths, searchFrom, depth, "ON")
-		boundary := clauseEnd(upper, quoted, depths, searchFrom, depth, clauseTerminators)
+		onPos := firstWordAtDepth(normalized, quoted, depths, searchFrom, depth, "ON")
+		boundary := clauseEnd(normalized, quoted, depths, searchFrom, depth, clauseTerminators)
 		if onPos < 0 || onPos >= boundary {
 			// No ON before the next clause/JOIN/depth-drop -- e.g. a
 			// USING(...) join, or a JOIN with an unconditional ON-less
@@ -174,8 +179,8 @@ func JoinONViolations(statement string) (violations []string, clauses, conjuncts
 		}
 
 		conditionStart := onPos + len("ON")
-		conditionEnd := clauseEnd(upper, quoted, depths, conditionStart, depth, clauseTerminators)
-		condition := strings.Join(strings.Fields(statement[conditionStart:conditionEnd]), " ")
+		conditionEnd := clauseEnd(normalized, quoted, depths, conditionStart, depth, clauseTerminators)
+		condition := strings.TrimSpace(normalized[conditionStart:conditionEnd])
 		pos = conditionEnd
 		if condition == "" {
 			continue
@@ -189,6 +194,74 @@ func JoinONViolations(statement string) (violations []string, clauses, conjuncts
 		}
 	}
 	return violations, clauses, conjuncts
+}
+
+// normalize is the single preprocessing pass every other function in this
+// file reads from -- see the doc comment on JoinONViolations above for
+// why. It strips `--` line comments and collapses every run of
+// whitespace to one space and uppercases every byte, ALL of it OUTSIDE
+// single-quoted string literals; literal contents (case, internal
+// whitespace, a `--` inside the literal) are copied through completely
+// unchanged, both because their value never matters to this guard and
+// because rewriting them would desync the quoted/depth masks computed
+// from the SAME normalized text from what those bytes actually are.
+// quoted and depths are then computed once, from the normalized text, and
+// threaded through every downstream call -- nothing downstream calls
+// quoteProfile or depthProfile again, or re-derives case/whitespace
+// handling of its own.
+func normalize(statement string) (normalized string, quoted []bool, depths []int) {
+	var b strings.Builder
+	b.Grow(len(statement))
+	inString := false
+	lastWasSpace := false
+	for i := 0; i < len(statement); i++ {
+		c := statement[i]
+		if inString {
+			b.WriteByte(c)
+			if c == '\'' {
+				if i+1 < len(statement) && statement[i+1] == '\'' {
+					b.WriteByte(statement[i+1])
+					i++
+					continue
+				}
+				inString = false
+			}
+			continue
+		}
+		switch {
+		case c == '\'':
+			inString = true
+			b.WriteByte(c)
+			lastWasSpace = false
+		case c == '-' && i+1 < len(statement) && statement[i+1] == '-':
+			// Line comment (quote-aware: only reached when NOT inString) --
+			// skip to end of line or end of statement, then collapse the
+			// whole comment (and the newline that ends it, if any) into the
+			// same single space whitespace-collapsing already produces.
+			for i < len(statement) && statement[i] != '\n' {
+				i++
+			}
+			if !lastWasSpace {
+				b.WriteByte(' ')
+				lastWasSpace = true
+			}
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r':
+			if !lastWasSpace {
+				b.WriteByte(' ')
+				lastWasSpace = true
+			}
+		default:
+			if c >= 'a' && c <= 'z' {
+				c -= 'a' - 'A'
+			}
+			b.WriteByte(c)
+			lastWasSpace = false
+		}
+	}
+	normalized = b.String()
+	quoted = quoteProfile(normalized)
+	depths = depthProfile(normalized, quoted)
+	return normalized, quoted, depths
 }
 
 // clauseTerminators are the keywords that end a JOIN ON condition (and,
@@ -229,7 +302,13 @@ func clauseEnd(upper string, quoted []bool, depths []int, from, depth int, termi
 	// from the condition -- end = i, not i+1, or a trailing ')' leaks
 	// into the extracted text.
 	for i := from; i < len(upper); i++ {
-		if upper[i] == ')' && depths[i] == depth {
+		// !quoted[i] matters even though depthProfile already ignores
+		// parens inside literals when COUNTING depth: a ')' byte sitting
+		// inside a literal never changes depth (it stays at whatever it
+		// already was for the whole literal), so it can coincidentally
+		// equal `depth` and get mistaken for the REAL closing paren of an
+		// enclosing scope without this check (codex R5 review).
+		if !quoted[i] && upper[i] == ')' && depths[i] == depth {
 			end = i
 			break
 		}
@@ -242,27 +321,24 @@ func clauseEnd(upper string, quoted []bool, depths []int, from, depth int, termi
 	return end
 }
 
-// stripLineComments removes every `-- ...` SQL line comment (to end of
-// line), so their prose can never be mistaken for query structure.
-func stripLineComments(statement string) string {
-	lines := strings.Split(statement, "\n")
-	for i, line := range lines {
-		if idx := strings.Index(line, "--"); idx >= 0 {
-			lines[i] = line[:idx]
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
 // depthProfile returns, for every byte offset in s (including one past
 // the end), the paren nesting depth IN EFFECT at that offset -- i.e. the
 // depth BEFORE that byte is processed, so depthProfile(s)[i] is the depth
 // a keyword starting at i is found at.
-func depthProfile(s string) []int {
+func depthProfile(s string, quoted []bool) []int {
 	depths := make([]int, len(s)+1)
 	depth := 0
 	for i := 0; i < len(s); i++ {
 		depths[i] = depth
+		if quoted[i] {
+			// A '(' or ')' inside a string literal (e.g. a value like
+			// "concat('(', b.k)") is not real nesting -- counting it
+			// shifts every depth after it, which can make a JOIN and its
+			// own ON no longer agree on depth and silently skip the
+			// clause (team-lead's review, same failure class as R4's
+			// quote-unaware word scans).
+			continue
+		}
 		switch s[i] {
 		case '(':
 			depth++
