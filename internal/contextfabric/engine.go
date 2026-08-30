@@ -915,6 +915,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// receipts don't (DP11, above) -- bypass is the v1 answer for both.
 	if len(structureCanon.Confirmed) == 0 && len(request.PriorSubjectReceipts) == 0 {
 		if reused, ok := e.tryReuse(ctx, principal, request, clampedRequestTime, windowCanon.KeyComponent, windowCanon.KeyEncoding, binding); ok {
+			// CHAOS-4413 (codex xhigh round-1 P1, confirmed): a reuse hit
+			// can serve a row persisted before Completeness existed --
+			// ValidateStored's legacy exemption lets it stay in storage,
+			// but this is the SERVING path, not storage, and every other
+			// exit stamps a fresh, correct value here. ComputeAnswerCompleteness
+			// is a pure function of fields the row already carries, so
+			// recomputing is a backfill, never an invention: unaffected
+			// (and no-op) for a row that already has it, and it is what
+			// makes an old row's projection/re-serve pass the SAME
+			// required-field validation a brand-new answer must pass,
+			// instead of 500ing the moment a bounded consumer projects it.
+			reused.Completeness = ComputeAnswerCompleteness(reused)
 			return reused, nil
 		}
 	}

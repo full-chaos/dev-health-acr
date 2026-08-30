@@ -497,6 +497,32 @@
         },
         "AnswerCompleteness": {
           "additionalProperties": false,
+          "allOf": [
+            {
+              "else": {
+                "required": [
+                  "terminal_reason"
+                ]
+              },
+              "if": {
+                "properties": {
+                  "terminal_status": {
+                    "const": "complete"
+                  }
+                },
+                "required": [
+                  "terminal_status"
+                ]
+              },
+              "then": {
+                "not": {
+                  "required": [
+                    "terminal_reason"
+                  ]
+                }
+              }
+            }
+          ],
           "description": "CHAOS-4413: promotes the answer-rate/terminal-state measurement (formerly harness-only telemetry, CHAOS-4386) into the public contract. terminal_status/terminal_reason answer WHY the answer stopped where it did; claimed_facts_count/rows_count answer HOW MUCH of an answer is here -- the un-clamped totals, independent of any bounded consumer's own projection budget.",
           "properties": {
             "claimed_facts_count": {

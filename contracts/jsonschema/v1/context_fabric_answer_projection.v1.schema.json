@@ -2257,6 +2257,32 @@
         "terminal_status",
         "claimed_facts_count",
         "rows_count"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "terminal_status": {
+                "const": "complete"
+              }
+            },
+            "required": [
+              "terminal_status"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "terminal_reason"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "terminal_reason"
+            ]
+          }
+        }
       ]
     }
   }

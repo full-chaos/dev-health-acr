@@ -974,6 +974,37 @@ func (c ContextFabricCoverage) validate(bounds contextFabricBounds) error {
 // half-stamped completeness block (the engine always computes and stamps
 // the whole thing together, in one assignment, before Validate runs), so a
 // non-zero-but-wrong value reads as corruption, not a legacy gap.
+// expectedTerminalReason mirrors internal/contextfabric.answerTerminalReason
+// byte-for-byte (that function's own doc comment explains the channel
+// precedence and why each clause exists) -- kept as a literal duplicate,
+// not a shared helper, because contracts/v1 cannot import contextfabric
+// (contextfabric already imports this package). Any future change to one
+// must be mirrored in the other, or this validator and the engine's own
+// stamping would silently drift apart -- which is exactly the class of bug
+// this function exists to catch on the OTHER three completeness fields.
+func expectedTerminalReason(r ContextFabricInvestigationResult) ContextFabricTerminalReason {
+	switch r.Status {
+	case ContextFabricInvestigationComplete:
+		return ""
+	case ContextFabricInvestigationClarificationRequired:
+		if r.SubjectResolution.ClarificationPrompt != "" || r.Interpretation.ClarificationReason != "" {
+			return ContextFabricTerminalReasonClarificationDisclosed
+		}
+		return ContextFabricTerminalReasonUndisclosed
+	default:
+		if len(r.Coverage.DegradedReasons) > 0 {
+			return ContextFabricTerminalReasonDegradedDisclosed
+		}
+		if len(r.Limitations) > 0 {
+			return ContextFabricTerminalReasonLimitationDisclosed
+		}
+		if len(r.Warnings) > 0 {
+			return ContextFabricTerminalReasonWarningDisclosed
+		}
+		return ContextFabricTerminalReasonUndisclosed
+	}
+}
+
 func (r ContextFabricInvestigationResult) validateCompleteness(bounds contextFabricBounds) error {
 	c := r.Completeness
 	if !bounds.completenessRequired && c == (ContextFabricAnswerCompleteness{}) {
@@ -982,12 +1013,18 @@ func (r ContextFabricInvestigationResult) validateCompleteness(bounds contextFab
 	if c.TerminalStatus != r.Status {
 		return fmt.Errorf("terminal_status %q must equal status %q", c.TerminalStatus, r.Status)
 	}
-	if r.Status == ContextFabricInvestigationComplete {
-		if c.TerminalReason != "" {
-			return fmt.Errorf("terminal_reason must be empty for a complete result, got %q", c.TerminalReason)
-		}
-	} else if !ValidContextFabricTerminalReason(c.TerminalReason) {
-		return fmt.Errorf("terminal_reason %q is not a recognized closed value", c.TerminalReason)
+	// CHAOS-4413 (codex xhigh round-1 P2, confirmed): membership in the
+	// closed vocabulary alone let a document claim ANY disclosed reason
+	// regardless of which channel the document itself actually populated
+	// -- status=partial with Coverage.DegradedReasons set would validate
+	// under terminal_reason="warning_disclosed", telling a consumer the
+	// wrong story. This re-derives the SAME precedence
+	// internal/contextfabric.ComputeAnswerCompleteness uses (it cannot be
+	// called from here -- contextfabric imports this package, not the
+	// reverse) and requires an exact match, the same discipline every
+	// other completeness field already gets.
+	if want := expectedTerminalReason(r); c.TerminalReason != want {
+		return fmt.Errorf("terminal_reason %q does not match the document's own disclosure (want %q)", c.TerminalReason, want)
 	}
 	if c.ClaimedFactsCount != len(r.ClaimedFacts) {
 		return fmt.Errorf("claimed_facts_count %d must equal len(claimed_facts) %d", c.ClaimedFactsCount, len(r.ClaimedFacts))
