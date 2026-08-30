@@ -5,12 +5,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -73,7 +73,7 @@ func newClickHouseFixture(t *testing.T, ctx context.Context) *clickHouseFixture 
 	readPassword := randomFixtureSecret(t)
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image: "clickhouse/clickhouse-server:24.8", ExposedPorts: []string{"9440/tcp"},
+			Image: chfixture.Image, ExposedPorts: []string{"9440/tcp"},
 			Env: map[string]string{"CLICKHOUSE_USER": "default", "CLICKHOUSE_PASSWORD": adminPassword, "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT": "1"},
 			Files: []testcontainers.ContainerFile{
 				{HostFilePath: certPath, ContainerFilePath: "/etc/clickhouse-server/server.crt", FileMode: 0o644},
@@ -135,8 +135,20 @@ func newClickHouseFixture(t *testing.T, ctx context.Context) *clickHouseFixture 
 	if err := connection.QueryRow(ctx, "SELECT version()").Scan(&serverVersion); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(serverVersion, "24.8.") {
-		t.Fatalf("ClickHouse version = %q, want 24.8.x", serverVersion)
+	// CHAOS-4549 (chris, RULED 2026-08-29 "26"): the fixture must run AT
+	// LEAST what prod runs, not an exact old pin -- prod floats on a
+	// `latest`-style tag (CHAOS-4519), so pinning CI to an exact prod patch
+	// would drift stale the moment prod advances. Testing two majors behind
+	// prod is what let CHAOS-4521b's OR-arm JOIN ON ship: valid on prod's
+	// 26.7 analyzer, rejected by CI's old 24.8 pin, caught only when the
+	// pinned fixture ran it. Raising the floor removes that accidental
+	// portability gate; the portability contract itself (every JOIN ON is a
+	// plain column equality; alternatives are UNION ALL arms, never OR)
+	// survives as a STANDING RULE enforced statically, not by an old
+	// engine -- see TestChaos4549AllJoinOnClausesArePortable in
+	// devhealthfacts and devhealthsource.
+	if !chfixture.AtLeastVersionFloor(serverVersion) {
+		t.Fatalf("ClickHouse version = %q, want >= %s (chfixture.VersionFloor)", serverVersion, chfixture.VersionFloor)
 	}
 	dsn := (&url.URL{
 		Scheme: "clickhouse", User: url.UserPassword("acr_readonly", readPassword),
