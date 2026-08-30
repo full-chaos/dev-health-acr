@@ -6,6 +6,11 @@ not do. See `.remember/chaos3898-design-brief.md` v4.1 §1.5 for the full
 verified-defect writeup this implements; this note is the "what we actually
 built and why" companion, not a restatement of the defect analysis.
 
+Sibling note: [`context-fabric-ownership-edge-retraction.md`](context-fabric-ownership-edge-retraction.md)
+(CHAOS-4565) applies the same unconditional-idempotent tombstone shape to a
+DIFFERENT trigger -- an ownership the producer can no longer substantiate, rather
+than a reference that finally resolved.
+
 ## 0. The two closures
 
 1. **Relationship identity versioned by canonical endpoint identities.**

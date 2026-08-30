@@ -135,7 +135,26 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // producer's join did). Without this bump the fix would land, deploy, and
 // change nothing for every organization already projected -- the exact
 // silent no-op the v3 entry above exists to remember.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v8"
+// v8 -> v9 (CHAOS-4565), and this one is a MIGRATION, not a shape change.
+//
+// The retraction machinery below fixes the FUTURE: from v9 on, an ownership
+// row that becomes suppressed has its OWNED_BY_TEAM edge tombstoned on the
+// next incremental tick, with no rebuild and no checkpoint reset. It cannot
+// fix the PAST, and the reason is worth stating precisely because it is the
+// same trap the v8 entry above records. An edge that went stale BEFORE this
+// deploy went stale without moving its own group's watermark past the
+// organization's checkpoint -- that is exactly why it was never retracted --
+// so an incremental catch-up under a v8 marker would never revisit it. The
+// already-live stale edges are unreachable to the very mechanism that
+// removes them.
+//
+// The bump is the only thing that clears them, and it is a one-time cost
+// paid once per organization, exactly as v7 -> v8 paid it. Note what this
+// does NOT mean: the rebuild is not how retraction works, it is how the
+// backlog is drained. CHAOS-4565's acceptance -- "no rebuild is required,
+// and no checkpoint is reset" -- is about the steady state after this
+// deploy, and that path is rebuild-free.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v9"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -301,8 +320,9 @@ func (s *TeamsProjectsSource) recordConsumed(fromCursor string) func(orgID, curs
 // reported each page's slice instead of the run's total. Understated
 // omission telemetry reads as health -- measurement failing toward fine.
 type ambiguityLedger struct {
-	mu        sync.Mutex
-	conflicts map[string]struct{}
+	mu          sync.Mutex
+	conflicts   map[string]struct{}
+	retractions map[retractionReason]int
 }
 
 // addConflict records an ownership row whose project_id and project_key
@@ -331,6 +351,42 @@ func (l *ambiguityLedger) conflictCount() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.conflicts)
+}
+
+// addRetraction counts one OWNED_BY_TEAM edge RETRACTED by a tombstone
+// (CHAOS-4565), under the closed reason vocabulary retractionReason
+// declares. Kept on this ledger, and therefore on the same run-scoped
+// lifetime, because a retraction is the OUTCOME of the suppression this
+// ledger already counts: an operator reading "N conflicting identities
+// suppressed" needs "and M edges were withdrawn as a result" beside it, not
+// in a differently-scoped counter they have to align by hand.
+//
+// A COUNT PER REASON, never a set of ids. addConflict de-duplicates because
+// its question is "how many DISTINCT ownership rows disagree"; this one
+// counts EVENTS, because its question is "how much of the graph did this
+// tick remove", and two retractions of the same edge across two ticks are
+// two removals, not one. Both are org-hashed at the log boundary and carry
+// no project id, key, team id or row key.
+func (l *ambiguityLedger) addRetraction(reason retractionReason) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.retractions == nil {
+		l.retractions = map[retractionReason]int{}
+	}
+	l.retractions[reason]++
+}
+
+// retractionCount reports the retractions recorded for one reason.
+func (l *ambiguityLedger) retractionCount(reason retractionReason) int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.retractions[reason]
 }
 
 // ledgerFor returns this organization's ledger, starting a fresh one when the
@@ -762,6 +818,10 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	// sibling defers below pass their ledger POINTER and read it when the
 	// deferred call runs, which is why only the one passing an int was silent.
 	defer func() { logConflictingIdentities(ctx, s.logger, checkpoint.OrgID, ledger.conflictCount()) }()
+	// Passes the ledger POINTER, read when the deferred call runs -- the
+	// shape the comment above says is the safe one, not the int the
+	// conflict line has to keep in a closure.
+	defer logRetractions(ctx, s.logger, checkpoint.OrgID, ledger)
 	// A catalog FACT, not a reconstruction of which rows were dropped. The
 	// reconstructive census that used to live here was wrong in four
 	// consecutive review rounds, in both directions, and left with its own

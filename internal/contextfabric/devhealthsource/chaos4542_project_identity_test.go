@@ -70,20 +70,24 @@ func TestChaos4542_KeysetPaginationFollowsTheAggregateIntoHaving(t *testing.T) {
 	statement := projectTeamsStatement(cursor)
 
 	if !strings.Contains(statement, " HAVING ") {
-		t.Fatalf("the keyset condition is not emitted as HAVING; a WHERE cannot reference max(o.updated_at)\n%s", statement)
+		t.Fatalf("the keyset condition is not emitted as HAVING; a WHERE cannot reference "+projectTeamsWatermark+"\n%s", statement)
 	}
-	if strings.Contains(statement, "WHERE (max(o.updated_at)") {
+	if strings.Contains(statement, "WHERE ("+projectTeamsWatermark) {
 		t.Errorf("the keyset condition is still in a WHERE over an aggregate\n%s", statement)
 	}
 	// Delegation, not duplication: the HAVING body must be exactly
 	// sincePredicate's condition with its leading " AND " removed.
-	want := strings.TrimPrefix(sincePredicate(cursor, "max(o.updated_at)", projectTeamsRowKey), " AND ")
+	// CHAOS-4565: the aggregate is projectTeamsWatermark -- max(o.row_watermark),
+	// which folds the projects side into the cursor -- not max(o.updated_at).
+	// Read from the production constant, so the pin follows the producer
+	// rather than becoming a second spelling of its own.
+	want := strings.TrimPrefix(sincePredicate(cursor, projectTeamsWatermark, projectTeamsRowKey), " AND ")
 	if !strings.Contains(statement, "HAVING "+want) {
 		t.Errorf("the HAVING body is not sincePredicate's condition; the two spellings have drifted\nwant: %s\n%s", want, statement)
 	}
 	// ORDER BY must use the same aggregate the predicate does, or the page
 	// boundary and the sort disagree.
-	if !strings.Contains(statement, "ORDER BY max(o.updated_at) ASC") {
+	if !strings.Contains(statement, "ORDER BY "+projectTeamsWatermark+" ASC") {
 		t.Errorf("ORDER BY does not follow the same aggregate as the keyset predicate\n%s", statement)
 	}
 }
@@ -112,8 +116,11 @@ func TestChaos4542_TheProducerConsumesTheSharedIdentityHelpers(t *testing.T) {
 	if !strings.Contains(statement, "o.project_key = p.scope") {
 		t.Errorf("the producer dropped the key-to-key arm; ownership rows keyed only by project_key would vanish\n%s", statement)
 	}
-	if strings.Count(statement, "UNION ALL") < 3 {
-		t.Errorf("the two ownership arms are not unioned at row level (want the identity expansion's union plus the arm union)\n%s", statement)
+	// Three arms now (CHAOS-4565 added the retraction arm), unioned at ROW
+	// level: two arm-level UNION ALLs, plus one inside each arm's own copy of
+	// the identity expansion.
+	if want := 2 + len(projectTeamsArms()); strings.Count(statement, "UNION ALL") != want {
+		t.Errorf("UNION ALL count = %d, want %d (one per arm from the identity expansion, plus one between each pair of arms)\n%s", strings.Count(statement, "UNION ALL"), want, statement)
 	}
 }
 
@@ -138,7 +145,16 @@ func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
 	if TeamsProjectsSourceVersion == deployedBefore {
 		t.Fatalf("TeamsProjectsSourceVersion = %q: unchanged from the value already in every projected organization's checkpoint row, so this fix is a no-op for all of them", TeamsProjectsSourceVersion)
 	}
-	if want := "devhealthsource.teams_projects.v8"; TeamsProjectsSourceVersion != want {
+	// v8 -> v9 is CHAOS-4565's edge retraction, and it is the SAME class of
+	// deliberate decision this pin exists to force someone to make. The
+	// retraction mechanism only reaches an edge whose group crosses the
+	// checkpoint, and an edge that went stale BEFORE the deploy went stale
+	// without moving its group's watermark -- which is precisely why nothing
+	// retracted it. Those already-live stale edges are unreachable to the
+	// mechanism that removes them, so the backlog is drained by one rebuild
+	// and everything after it is rebuild-free. See the constant's own doc
+	// comment.
+	if want := "devhealthsource.teams_projects.v9"; TeamsProjectsSourceVersion != want {
 		t.Fatalf("TeamsProjectsSourceVersion = %q, want %q -- changing this constant is a deliberate full-rebuild decision, so update this test with the reason in the constant's doc comment", TeamsProjectsSourceVersion, want)
 	}
 }
@@ -151,17 +167,82 @@ func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
 // The scope arm must carry NO kind restriction: it compares project_id,
 // which is whichever id space that row uses, and today's GitLab rows hold a
 // project KEY there. Restricting it reads like tightening and drops them.
+// CHAOS-4565 narrowed this guard, and the narrowing is itself the assertion.
+// It used to forbid `o.project_key = p.project_key` and `p.key_resolution_count`
+// ANYWHERE in the statement. The retraction arm uses both, deliberately: it
+// fans an ownership key out across every project an AMBIGUOUS key names, which
+// is exactly the join defect 6 was about -- and exactly what a retraction
+// needs, because those projects are the candidates the now-unsubstantiable
+// edge could have been projected to.
+//
+// What defect 6 was actually about is FABRICATION: an arm that can ASSERT an
+// edge must not resolve through a column every scope row carries. So the ban
+// now applies per arm, to the arms that can assert (retraction_only = 0), and
+// a second half pins that the arm allowed to use it can never assert. Widening
+// the ban back to the whole statement would fail on a correct implementation;
+// dropping it would let the fabrication back into the key arm. Per-arm is the
+// only spelling that says what is true.
 func TestChaos4542_KeyArmSelectsTheKeyScopeRowAndTheScopeArmDoesNot(t *testing.T) {
 	t.Parallel()
 	statement := projectTeamsStatement(cursorState{})
-	if strings.Contains(statement, "o.project_key = p.project_key") {
-		t.Error("the key arm joins p.project_key, which EVERY scope row carries -- an id row with the same key matches, which is defect 6")
+	arms := projectTeamsArms()
+	if len(arms) != 3 {
+		t.Fatalf("expected three arms (scope, key, retraction), got %d", len(arms))
+	}
+	for i, arm := range arms {
+		if !strings.Contains(statement, arm) {
+			t.Fatalf("arm %d is not in the assembled statement -- this test would be asserting about SQL the producer does not run", i)
+		}
+	}
+	asserting, retraction := 0, 0
+	for i, arm := range arms {
+		switch {
+		case strings.Contains(arm, "toUInt8(0) AS retraction_only"):
+			asserting++
+			if strings.Contains(arm, "o.project_key = p.project_key") {
+				t.Errorf("arm %d can ASSERT and joins p.project_key, which EVERY scope row carries -- an id row with the same key matches, which is defect 6", i)
+			}
+			if strings.Contains(arm, "p.key_resolution_count") {
+				t.Errorf("arm %d can ASSERT and gates on key_resolution_count, a per-scope-row number read as if it described a key (TELEMETRY after v0.5.5)", i)
+			}
+		case strings.Contains(arm, "toUInt8(1) AS retraction_only"):
+			retraction++
+			// SHAPE ONLY -- and read the warning before trusting it.
+			//
+			// This half of the guard cannot tell a SATISFIABLE ambiguity
+			// predicate from an unsatisfiable one, and the difference is not
+			// academic: the first version of this arm gated on
+			// `p.key_resolution_count > 1`, which the pinned expansion makes
+			// permanently false (the id scope row hard-codes 1, the key scope
+			// row exists only when the count IS 1). The arm returned no rows,
+			// the whole ambiguity half of CHAOS-4565 was dead code, and a
+			// string-matching pin exactly like this one stayed GREEN over it.
+			// Codex round 1 named that: "it explicitly pins the impossible
+			// C-arm predicate, so it stays green while the real integration
+			// test is red."
+			//
+			// So what this asserts is that the retraction arm is WIRED the way
+			// the design says. Whether it MATCHES ANYTHING is proved only by
+			// TestOwnershipProducerAgainstRealClickHouse's "a projected edge is
+			// retracted when its key becomes ambiguous" subtest, against a real
+			// server. Do not read a green here as coverage of that.
+			if !strings.Contains(arm, "o.project_key = p.project_key") || !strings.Contains(arm, "p.key_project_count > 1") {
+				t.Errorf("arm %d is the retraction arm but does not fan an ownership key across the ambiguous key partition -- then an ambiguous key produces no row at all and nothing can be retracted, which is the CHAOS-4565 defect unfixed", i)
+			}
+			// The unsatisfiable predicate itself, banned by name so it cannot
+			// come back as an "obvious simplification".
+			if strings.Contains(arm, "p.key_resolution_count") {
+				t.Errorf("arm %d gates ambiguity on key_resolution_count, which the pinned expansion makes permanently false for an ambiguous key (id rows hard-code 1; key rows exist only at 1) -- the arm would match nothing and every test but the real-ClickHouse one would stay green", i)
+			}
+		default:
+			t.Errorf("arm %d declares no retraction_only literal, so nothing here can tell whether it may assert", i)
+		}
+	}
+	if asserting != 2 || retraction != 1 {
+		t.Fatalf("want exactly two asserting arms and one retraction arm, got %d and %d", asserting, retraction)
 	}
 	if !strings.Contains(statement, "o.project_key = p.scope") || !strings.Contains(statement, "WHERE p.scope_kind = 'key'") {
 		t.Error("the key arm must match the key scope row and name scope_kind = 'key'")
-	}
-	if strings.Contains(statement, "p.key_resolution_count") {
-		t.Error("key_resolution_count is TELEMETRY after v0.5.5; a consumer reading it as a guard reads a per-scope-row number as if it described a key")
 	}
 	// 24.8 rejects an ON that is not a plain column equality, so the kind
 	// restriction must sit in a WHERE -- 'key' is a literal.
@@ -235,7 +316,14 @@ func TestChaos4542_ConflictIdentityCarriesEveryRowDimension(t *testing.T) {
 	}
 	// Collected from conflicting rows ONLY: a clean row sharing the group
 	// must never be named as the offender.
-	if !strings.Contains(statement, "groupUniqArrayIf(") || !strings.Contains(statement, ", o.identity_conflict = 1)") {
-		t.Error("conflict identities must be collected only from rows flagged as conflicting")
+	//
+	// CHAOS-4565: `AND o.retraction_only = 0` is load-bearing, not tidiness.
+	// The unassertable flag is now true for a retraction row too, so
+	// collecting on it alone would report every project sharing an ambiguous
+	// key as a CONFLICTING IDENTITY -- a different kind of wrong from the one
+	// that actually happened, reported in the count an operator uses to
+	// decide whether the writer is broken.
+	if !strings.Contains(statement, "groupUniqArrayIf(") || !strings.Contains(statement, ", o.unassertable = 1 AND o.retraction_only = 0)") {
+		t.Error("conflict identities must be collected only from rows flagged as conflicting, and never from retraction rows")
 	}
 }
