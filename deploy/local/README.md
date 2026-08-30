@@ -124,6 +124,10 @@ export KUBECONFIG="$(deploy/local/kiac.sh kubeconfig)"
 deploy/local/trial-data.sh apply && deploy/local/trial-data.sh wait
 deploy/local/trial-data.sh restore-postgres backups/postgres-all-<ts>.sql.gz
 deploy/local/trial-data.sh restore-clickhouse backups/clickhouse-*-<ts>.zip
+deploy/local/trial-data.sh seed-team-repo-ownership  # CHAOS-4577: run once after
+                                       # restore-clickhouse -- the ORIGINAL seed dump has
+                                       # zero team_repo_ownership rows, which trips the
+                                       # CHAOS-4390 sentinel for every team; see traps
 deploy/local/trial-data.sh dsn        # prints the ACR_TEST_TRIAL_* DSN recipe
 deploy/local/trial-data.sh dsn --env  # same, as raw KEY=value lines (scripting; the consumer
                                        # never evals this -- see common.sh's kiac branch)
@@ -142,6 +146,7 @@ deploy/local/trial-data.sh wipe       # namespace `acr-trial-data` ONLY -- ignor
 | FalkorDB endpoint | NodePort 30503; no auth |
 | Persistence | PVCs for postgres/clickhouse/falkordb data (`ACR_TRIAL_PG_STORAGE`/`ACR_TRIAL_CH_STORAGE`/`ACR_TRIAL_FALKOR_STORAGE`, defaults 20Gi/30Gi/5Gi) -- survives `apply`/pod restarts; only `wipe` destroys it |
 | Images | postgres:18-alpine (same digest as `shard.yaml`), falkordb (same digest), clickhouse pinned to the digest resolved from the live compose container at build time (`ACR_TRIAL_CH_IMAGE` override) -- parity with whatever the compose baseline was measured under, not an arbitrary tag |
+| Seeded tables (post `restore-clickhouse` + `seed-team-repo-ownership`) | `team_project_ownership`, `teams`, `projects`, `work_items`, … from the restored dump; `team_repo_ownership` from `seed-team-repo-ownership` (CHAOS-4577 -- absent from the ORIGINAL dump itself, see traps) |
 
 **Launcher coverage**: every trial script (`run-two-turn.sh`, the sharded
 `run-two-turn-parallel.sh`, replay/W0/D2B/generative/frontier -- everything
@@ -371,6 +376,19 @@ six-var escape hatch can point a store at an IPv6 endpoint.
    drop the last (possibly-partial) case from the comparison, or use
    `ACR_TEST_TRIAL_INDICES` (exact corpus indices) instead of `LIMIT` when
    you need every selected case to be complete.
+10. **The ORIGINAL seed dump carries zero `team_repo_ownership` rows for
+    every org (CHAOS-4577)** -- it is a 2026-08-14 snapshot, taken before
+    `teams_projects.go`'s CHAOS-4390 producer ever wrote a real ownership
+    row. `queryTeams` stamps every Team node's
+    `authorization_repositories` with the fail-closed sentinel
+    (`acr-context-fabric:no-team-repository-ownership`) whenever a team has
+    no CURRENT `team_repo_ownership` row, which denies every
+    repository-scoped principal (Ask Dev's only kind) -- a graph rebuilt on
+    this plane always answers the teams question `no_match`, silently
+    indistinguishable from "no such teams". Run `trial-data.sh
+    seed-team-repo-ownership` once after `restore-clickhouse` (before any
+    `acr-projector rebuild --org`) to fix this for the documented local
+    trial org; it does not generalize to a different org's data.
 
 ## Resizing the control-plane VM (CHAOS-4186)
 
@@ -415,6 +433,10 @@ export KUBECONFIG="$(deploy/local/kiac.sh kubeconfig)"        # kiac.sh up only 
 deploy/local/trial-data.sh apply && deploy/local/trial-data.sh wait
 deploy/local/trial-data.sh restore-postgres backups/postgres-all-<ORIGINAL Aug-17 ts>.sql.gz
 deploy/local/trial-data.sh restore-clickhouse backups/clickhouse-*-<ORIGINAL Aug-17 ts>.zip
+deploy/local/trial-data.sh seed-team-repo-ownership          # CHAOS-4577: the ORIGINAL dump
+                                                               # has zero team_repo_ownership rows;
+                                                               # without this, the rebuild below
+                                                               # sentinels every team (traps #10)
 # apply acr DB migrations up to the ratified schema version (NOT the dump's
 # own version -- the dump predates several migrations)
 procs --json 'acr-projector'                                  # MUST be empty before the next step -- see

@@ -783,9 +783,21 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// GraphTelemetry.RecordEdgesFilteredByReason/
 	// RecordCohortMembersAuthzDropped's own doc comments), not
 	// degradation, so none of them touches partial/degradedReasons below.
+	//
+	// CHAOS-4577 is the one exception: when authorization denied EVERY
+	// candidate cohort member (cohort == nil AND cohortAuthzDropped > 0 --
+	// as opposed to cohort == nil with cohortAuthzDropped == 0, which means
+	// the census genuinely found no matching subject at all), the caller
+	// cannot tell that apart from "there are no such teams" without a
+	// signal in the answer itself. See the cohortWhollyDeniedByAuthz block
+	// below Coverage.
+	cohortWhollyDeniedByAuthz := cohort == nil && cohortAuthzDropped > 0
 	if a.config.Telemetry != nil {
 		if edgeFilters.Authz > 0 || edgeFilters.TemporalWindow > 0 || admission.DroppedSelfLoopCount > 0 {
 			a.config.Telemetry.RecordEdgesFilteredByReason(ctx, principal.OrgID, edgeFilters.Authz, edgeFilters.TemporalWindow, admission.DroppedSelfLoopCount)
+		}
+		if cohortWhollyDeniedByAuthz {
+			a.config.Telemetry.RecordCohortDeniedByAuthorization(ctx, principal.OrgID, cohortAuthzDropped)
 		}
 		if cohortAuthzDropped > 0 {
 			a.config.Telemetry.RecordCohortMembersAuthzDropped(ctx, principal.OrgID, cohortAuthzDropped)
@@ -833,13 +845,23 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		unbounded = countUnboundedValidity(cohortNodes, orderedResolved)
 	}
 
-	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortWhollyDeniedByAuthz
 	var degradedReasons []string
 	if failedLookups > 0 {
 		degradedReasons = append(degradedReasons, fmt.Sprintf("endpoint_lookup_failed:%d", failedLookups))
 	}
 	if exactNameTruncated {
 		degradedReasons = append(degradedReasons, "exact_name_candidates_truncated")
+	}
+	if cohortWhollyDeniedByAuthz {
+		// CHAOS-4577: the discovered_cohort request found candidate members,
+		// but AuthorizedAttributes denied every one of them (the shape an
+		// org's team_repo_ownership being empty produces via the CHAOS-4390
+		// sentinel) -- the resulting empty Cohort must not read the same as
+		// "no such teams exist". degradedReasons is the same free-text
+		// vocabulary endpoint_lookup_failed/unknown_relationship_type
+		// already use above; no new wire field.
+		degradedReasons = append(degradedReasons, fmt.Sprintf("cohort_denied_by_authorization:%d", cohortAuthzDropped))
 	}
 	if admission.DroppedUnknownRelationshipTypeCount > 0 {
 		degradedReasons = append(degradedReasons, fmt.Sprintf("unknown_relationship_type:%d", admission.DroppedUnknownRelationshipTypeCount))

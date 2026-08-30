@@ -112,6 +112,7 @@ func (f *fakeIdentityTelemetry) RecordSubjectCandidatesAuthzDropped(context.Cont
 func (f *fakeIdentityTelemetry) RecordCohortMembersAuthzDropped(context.Context, string, int)     {}
 func (f *fakeIdentityTelemetry) RecordEdgesFilteredByReason(context.Context, string, int, int, int) {
 }
+func (f *fakeIdentityTelemetry) RecordCohortDeniedByAuthorization(context.Context, string, int) {}
 
 // TestLiveAliasIdentityFastPathCommitsAUniqueClaimant is CHAOS-3884 Option
 // C's live end-to-end proof: a repository entity projected into a real

@@ -12,6 +12,12 @@
 #   deploy/local/trial-data.sh dsn
 #   deploy/local/trial-data.sh restore-postgres <dump.sql.gz>
 #   deploy/local/trial-data.sh restore-clickhouse <zip1> [zip2 ...]
+#   deploy/local/trial-data.sh seed-team-repo-ownership [org_id]
+#                              # CHAOS-4577: inserts CURRENT team_repo_ownership
+#                              # rows (the ORIGINAL seed dump has none) so the
+#                              # CHAOS-4390 sentinel does not deny every team;
+#                              # run once after restore-clickhouse; org_id
+#                              # defaults to the documented local trial org
 #   deploy/local/trial-data.sh wipe     # deletes the rendered resources
 #                              (never namespace-wide); also deletes the
 #                              namespace ITSELF only when it is the
@@ -399,6 +405,30 @@ cmd_restore_clickhouse() {
   log "clickhouse restore complete: $# database(s)"
 }
 
+cmd_seed_team_repo_ownership() {
+  require_kubeconfig
+  validate_password
+  # CHAOS-4577: the ORIGINAL seed dump (dev-health/backups/, 2026-08-14
+  # snapshot) carries zero team_repo_ownership rows for every org, which
+  # trips teams_projects.go's noTeamOwnershipSentinel for every team on this
+  # plane -- a repository-scoped Ask Dev principal then matches nothing and
+  # the teams question always terminates no_match. This inserts the known,
+  # real ownership rows for org_id (default: the documented local trial org,
+  # AGENTS.md's 70d529e0) so a graph rebuilt on this plane authorizes teams
+  # like prod does. Does not generalize past that one org's fixture data --
+  # see templates/team-repo-ownership-seed.sql's own header.
+  local org_id="${1:-70d529e0-3c06-4597-8480-794fd02328b6}"
+  [[ "$org_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+    || die "seed-team-repo-ownership: org_id must be a plain UUID (got: $org_id)"
+  local pod
+  pod="$(kubectl -n "$NAMESPACE" get pod -l app.kubernetes.io/component=clickhouse -o jsonpath='{.items[0].metadata.name}')"
+  [[ -n "$pod" ]] || die "no clickhouse pod found in $NAMESPACE"
+  log "seeding team_repo_ownership for org $org_id in $pod (CHAOS-4577)"
+  sed "s|__ORG_ID__|$org_id|g" "$SCRIPT_DIR/templates/team-repo-ownership-seed.sql" \
+    | kubectl -n "$NAMESPACE" exec -i "$pod" -- clickhouse-client -u ch --password "$PG_PASSWORD" --database default --multiquery
+  log "team_repo_ownership seeded for org $org_id (9 rows, 3 teams)"
+}
+
 cmd_wipe() {
   require_kubeconfig
   # PRIMITIVE, narrowed further (team-lead design ruling, CHAOS-4186 fresh
@@ -431,6 +461,7 @@ case "$cmd" in
   dsn) cmd_dsn "$@" ;;
   restore-postgres) cmd_restore_postgres "$@" ;;
   restore-clickhouse) cmd_restore_clickhouse "$@" ;;
+  seed-team-repo-ownership) cmd_seed_team_repo_ownership "$@" ;;
   wipe) cmd_wipe "$@" ;;
   -h|--help|help) usage ;;
   *) die "unknown command: $cmd (try --help)" ;;
