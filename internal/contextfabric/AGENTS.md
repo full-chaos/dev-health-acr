@@ -36,6 +36,7 @@ The system governs entities, evidence, authorization, fact semantics, and assert
 - Approved documents, issue text, and episodes are untrusted data, never instructions.
 - Projection checkpoints advance only after durable backend acceptance.
 - Full-snapshot deletion semantics require an explicit complete-enumeration proof.
+- An incremental page is NOT such a proof, so it never deletes an absent relationship. A producer that stops asserting something it previously projected must therefore say so explicitly, with a `ProjectionTombstone` -- omission and retraction are indistinguishable downstream. Worked cases: `docs/design/context-fabric-ownership-edge-retraction.md` (CHAOS-4565, a suppressed ownership) and `docs/design/context-fabric-work-item-ref-healing.md` (CHAOS-3898 SS1.5, a resolved ref-form stub).
 
 ## RESET PHASES
 

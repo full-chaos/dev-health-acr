@@ -974,7 +974,9 @@ func projectTeamsStatement(cursor cursorState) string {
 	// conflicting_identity_present spell the conflict half out explicitly
 	// where the ledger and the retraction reason still need exactly it.
 	// THE RETRACTION ARM (CHAOS-4565), arm C, and why the other two could
-	// not carry it.
+	// not carry it. Full design note, with the rejected alternatives and the
+	// mermaid of the whole path:
+	// docs/design/context-fabric-ownership-edge-retraction.md
 	//
 	// Suppression is a decision NOT TO ASSERT. It is not a retraction, and
 	// incremental graph application does not delete an absent relationship
