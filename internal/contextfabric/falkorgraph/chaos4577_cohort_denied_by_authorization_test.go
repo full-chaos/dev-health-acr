@@ -131,3 +131,62 @@ func TestDiscoverContextCohortNarrowedByAuthorizationIsNotPartial(t *testing.T) 
 		t.Fatalf("cohortMembersAuthzDropped telemetry = %d, want exactly 1", telemetry.cohortMembersAuthzDropped)
 	}
 }
+
+// TestDiscoverContextDoesNotSignalCohortDeniedWhenOnlyAWrongKindNodeIsDenied
+// is CHAOS-4577 codex round-1 P2, reproduced then fixed. The exact-name arm
+// fetches repository/project/team nodes in ONE call
+// (chaos4348ExactNameCandidates' exactNameKinds); a "which teams are
+// struggling" cohort request whose only denied candidate is a REPOSITORY
+// (not a team) must NOT report cohort_denied_by_authorization -- there were
+// zero teams in the pool at all, denied or not, so this is the genuine
+// "no such teams" case, not an authorization denial of the cohort this
+// question actually asked about.
+func TestDiscoverContextDoesNotSignalCohortDeniedWhenOnlyAWrongKindNodeIsDenied(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "$kinds"):
+			// No team node in the pool at all -- only a repository the
+			// principal is not scoped to. Before the fix, DiscoveredCohort's
+			// authzDropped counted this denial regardless of kind, so this
+			// case wrongly reported cohort_denied_by_authorization:1 for a
+			// teams question that had no team candidate, denied or not.
+			deniedRepo := fakeSubjectNodeRow("repository", "repo_private", "Private Repo")
+			deniedRepo["n"].(*node).Properties["authorization_repositories"] = []string{"other/private"}
+			return []row{deniedRepo}, nil
+		default:
+			t.Fatalf("unexpected query for a subjectless cohort request with no committed origin: %s", cypher)
+			return nil, nil
+		}
+	}}
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
+	request := cohortDiscoveryRequest(contextfabric.ShapeDiscoveredCohort)
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort != nil {
+		t.Fatalf("Cohort = %#v, want nil -- there were no team candidates at all", result.Cohort)
+	}
+	if result.Coverage.Partial {
+		t.Fatal("Coverage.Partial = true, want false: the only denial was a repository, not a team -- this is a genuine empty census, not a cohort denial")
+	}
+	for _, reason := range result.Coverage.DegradedReasons {
+		if strings.HasPrefix(reason, "cohort_denied_by_authorization") {
+			t.Fatalf("Coverage.DegradedReasons = %v, must not contain a cohort_denied_by_authorization reason -- no team was ever denied", result.Coverage.DegradedReasons)
+		}
+	}
+	if telemetry.cohortDeniedByAuthorization != 0 {
+		t.Fatalf("cohortDeniedByAuthorization telemetry = %d, want 0 -- the denied node was a repository, not a team", telemetry.cohortDeniedByAuthorization)
+	}
+	// The pre-existing CHAOS-3888 unscoped counter still fires -- it is
+	// deliberately unscoped by kind (graphrank.DiscoveredCohort's own doc
+	// comment), unlike the new CHAOS-4577 signal.
+	if telemetry.cohortMembersAuthzDropped != 1 {
+		t.Fatalf("cohortMembersAuthzDropped telemetry = %d, want exactly 1 (the denied repository, counted by the unscoped CHAOS-3888 signal)", telemetry.cohortMembersAuthzDropped)
+	}
+}

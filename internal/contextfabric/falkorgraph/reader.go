@@ -763,7 +763,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			cohortNodes = append(cohortNodes, n)
 		}
 	}
-	cohort, cohortAuthzDropped := graphrank.DiscoveredCohort(principal, request, cohortNodes, isInternalSubject)
+	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped := graphrank.DiscoveredCohort(principal, request, cohortNodes, isInternalSubject)
 	if cohort != nil && exactNameTruncated {
 		// Codex round-2 finding (P2): DiscoveredCohort computes Complete
 		// purely from len(members) vs. MaxCohortMembers, with no way to
@@ -785,19 +785,25 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// degradation, so none of them touches partial/degradedReasons below.
 	//
 	// CHAOS-4577 is the one exception: when authorization denied EVERY
-	// candidate cohort member (cohort == nil AND cohortAuthzDropped > 0 --
-	// as opposed to cohort == nil with cohortAuthzDropped == 0, which means
-	// the census genuinely found no matching subject at all), the caller
-	// cannot tell that apart from "there are no such teams" without a
-	// signal in the answer itself. See the cohortWhollyDeniedByAuthz block
-	// below Coverage.
-	cohortWhollyDeniedByAuthz := cohort == nil && cohortAuthzDropped > 0
+	// candidate cohort member OF THE REQUESTED KIND (cohort == nil AND
+	// cohortKindScopedAuthzDropped > 0 -- as opposed to cohort == nil with
+	// cohortKindScopedAuthzDropped == 0, which means the census genuinely
+	// found no matching subject of that kind at all), the caller cannot
+	// tell that apart from "there are no such teams" without a signal in
+	// the answer itself. Deliberately keyed on cohortKindScopedAuthzDropped,
+	// NOT the unscoped cohortAuthzDropped: the exact-name arm's pool mixes
+	// repository/project/team nodes, so an unrelated repository node denied
+	// for its own reasons must never manufacture a false
+	// cohort_denied_by_authorization signal for a teams question that had
+	// no denied team at all (codex round-1 P2). See
+	// graphrank.DiscoveredCohort's own doc comment for the distinction.
+	cohortWhollyDeniedByAuthz := cohort == nil && cohortKindScopedAuthzDropped > 0
 	if a.config.Telemetry != nil {
 		if edgeFilters.Authz > 0 || edgeFilters.TemporalWindow > 0 || admission.DroppedSelfLoopCount > 0 {
 			a.config.Telemetry.RecordEdgesFilteredByReason(ctx, principal.OrgID, edgeFilters.Authz, edgeFilters.TemporalWindow, admission.DroppedSelfLoopCount)
 		}
 		if cohortWhollyDeniedByAuthz {
-			a.config.Telemetry.RecordCohortDeniedByAuthorization(ctx, principal.OrgID, cohortAuthzDropped)
+			a.config.Telemetry.RecordCohortDeniedByAuthorization(ctx, principal.OrgID, cohortKindScopedAuthzDropped)
 		}
 		if cohortAuthzDropped > 0 {
 			a.config.Telemetry.RecordCohortMembersAuthzDropped(ctx, principal.OrgID, cohortAuthzDropped)
@@ -860,8 +866,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// sentinel) -- the resulting empty Cohort must not read the same as
 		// "no such teams exist". degradedReasons is the same free-text
 		// vocabulary endpoint_lookup_failed/unknown_relationship_type
-		// already use above; no new wire field.
-		degradedReasons = append(degradedReasons, fmt.Sprintf("cohort_denied_by_authorization:%d", cohortAuthzDropped))
+		// already use above; no new wire field. Count is the KIND-SCOPED
+		// denial count (only candidates matching this cohort's requested
+		// kind), not the unscoped cohortAuthzDropped -- see
+		// graphrank.DiscoveredCohort's doc comment.
+		degradedReasons = append(degradedReasons, fmt.Sprintf("cohort_denied_by_authorization:%d", cohortKindScopedAuthzDropped))
 	}
 	if admission.DroppedUnknownRelationshipTypeCount > 0 {
 		degradedReasons = append(degradedReasons, fmt.Sprintf("unknown_relationship_type:%d", admission.DroppedUnknownRelationshipTypeCount))

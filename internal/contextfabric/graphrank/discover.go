@@ -244,29 +244,51 @@ func SortEdgesByRelevance(edges []CandidateEdge) []CandidateEdge {
 // change to stay shared. Ported from
 // zepgraph.(*Adapter).discoveredCohort.
 //
-// Returns (cohort, authzDropped): authzDropped (CHAOS-3888) counts every
-// node this call excluded specifically because AuthorizedAttributes denied
-// it -- distinct from (and counted independently of) the unauthorized-node,
-// wrong-kind, or internal-bookkeeping exclusions the loop below also makes,
-// none of which is an authorization event. Mirrors AdmitEdgesResult's own
+// Returns (cohort, authzDropped, kindScopedAuthzDropped): authzDropped
+// (CHAOS-3888) counts every node this call excluded specifically because
+// AuthorizedAttributes denied it -- distinct from (and counted independently
+// of) the unauthorized-node, wrong-kind, or internal-bookkeeping exclusions
+// the loop below also makes, none of which is an authorization event. This
+// span is deliberately UNSCOPED by subject kind: the exact-name arm's source
+// pool mixes repository/project/team nodes in one fetch
+// (chaos4348ExactNameCandidates' exactNameKinds), so authzDropped is an
+// aggregate "how much did authorization narrow this call's whole candidate
+// pool" signal, unchanged since CHAOS-3888. Mirrors AdmitEdgesResult's own
 // "return the dropped count as a plain value, let the I/O-boundary caller
 // decide what to do with it" convention -- this function stays pure, no
 // telemetry call of its own.
-func DiscoveredCohort(principal storage.Principal, discovery contextfabric.GraphDiscoveryRequest, nodes []CandidateNode, isInternal func(contextfabric.SubjectRef) bool) (*contextfabric.Cohort, int) {
+//
+// kindScopedAuthzDropped (CHAOS-4577) counts the STRICT SUBSET of those same
+// denials whose subject actually matches this call's requested cohort kind
+// (and is not internal) -- i.e. it answers "how many of the things that
+// were actually candidates for THIS cohort got denied", not "how much did
+// authorization narrow the whole multi-kind exact-name pool". A caller that
+// wants to know whether the whole cohort was denied by authorization (as
+// opposed to a sibling-kind node being denied for an unrelated reason, or
+// there genuinely being no matching subject at all) must use this value, not
+// authzDropped -- codex round-1 P2, reproduced: a "which teams" cohort with
+// zero teams but one unauthorized repository node previously reported
+// authzDropped=1 even though no team was ever denied.
+func DiscoveredCohort(principal storage.Principal, discovery contextfabric.GraphDiscoveryRequest, nodes []CandidateNode, isInternal func(contextfabric.SubjectRef) bool) (*contextfabric.Cohort, int, int) {
 	if discovery.Interpretation.Shape != contextfabric.ShapeDiscoveredCohort && discovery.Interpretation.Shape != contextfabric.ShapeExplicitCohort {
-		return nil, 0
+		return nil, 0, 0
 	}
 	kind := interpretedCohortKind(discovery.Interpretation)
 	members := make([]contextfabric.CohortMember, 0)
 	seen := make(map[string]struct{})
 	authzDropped := 0
+	kindScopedAuthzDropped := 0
 	for _, node := range nodes {
+		subject, subjectOK := NodeSubject(node)
+		kindMatches := subjectOK && subject.Kind == kind && !isInternal(subject)
 		if !AuthorizedAttributes(principal, discovery.Request.RequestedScope, node.Attributes) {
 			authzDropped++
+			if kindMatches {
+				kindScopedAuthzDropped++
+			}
 			continue
 		}
-		subject, ok := NodeSubject(node)
-		if !ok || subject.Kind != kind || isInternal(subject) {
+		if !kindMatches {
 			continue
 		}
 		key := SubjectKey(subject)
@@ -284,13 +306,13 @@ func DiscoveredCohort(principal storage.Principal, discovery contextfabric.Graph
 		}
 	}
 	if len(members) == 0 {
-		return nil, authzDropped
+		return nil, authzDropped, kindScopedAuthzDropped
 	}
 	return &contextfabric.Cohort{
 		Kind: kind, Members: members, Exclusions: []contextfabric.CohortExclusion{},
 		Rationale: "Subjects were discovered from the authorized Context Fabric graph using the user's open-ended cohort question.",
 		Complete:  len(members) < discovery.Request.Options.MaxCohortMembers, Truncated: len(members) >= discovery.Request.Options.MaxCohortMembers,
-	}, authzDropped
+	}, authzDropped, kindScopedAuthzDropped
 }
 
 func interpretedCohortKind(interpreted contextfabric.InterpretedQuestion) contextfabric.SubjectKind {
