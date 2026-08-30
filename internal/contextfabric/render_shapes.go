@@ -54,6 +54,14 @@ type RenderShapeSelectionEvent struct {
 	Shape    contractsv1.ContextFabricInvestigationShape
 	Selected []RenderShapeSelection
 	Skipped  []RenderShapeSkip
+	// MembersTruncated counts ranked cohort members the charts could not
+	// carry. A cohort is bounded at 250 members and a series at 64 points,
+	// so a large cohort's chart genuinely shows only the top of the
+	// ranking. Silently drawing the top 64 and saying nothing would make a
+	// partial ranking read as the whole one -- the same failure the
+	// projection budget exists to prevent, one layer up. Zero on every
+	// selection that lost nothing.
+	MembersTruncated int
 }
 
 // RenderShapeSkip records one rule that did not produce a shape.
@@ -123,6 +131,14 @@ func SelectRenderShapes(result InvestigationResult) ([]contractsv1.ContextFabric
 		event.skip(contractsv1.ContextFabricRenderRuleCohortAttentionScore, RenderShapeSkipNoRankedMember)
 		event.skip(contractsv1.ContextFabricRenderRuleCohortDriverContribution, RenderShapeSkipNoRankedMember)
 	default:
+		// A series is capped at 64 points and a cohort at 250 members, so a
+		// large cohort's chart shows only the top of the ranking. The loss
+		// is COUNTED, never silent: a chart of the top 64 that says nothing
+		// reads as a chart of the whole cohort.
+		if len(ranked) > contractsv1.ContextFabricRenderPointsMaxCount {
+			event.MembersTruncated = len(ranked) - contractsv1.ContextFabricRenderPointsMaxCount
+			ranked = ranked[:contractsv1.ContextFabricRenderPointsMaxCount]
+		}
 		labels := disambiguatedMemberLabels(ranked)
 		shapes = append(shapes, cohortAttentionScoreShape(result.Cohort.Kind, ranked, labels))
 		if contribution, reason := cohortDriverContributionShape(result.Cohort.Kind, ranked, labels); contribution != nil {
@@ -194,9 +210,6 @@ func rankedCohortMembers(cohort *Cohort) []CohortMember {
 		}
 		return ranked[i].Subject.CanonicalID < ranked[j].Subject.CanonicalID
 	})
-	if len(ranked) > contractsv1.ContextFabricRenderPointsMaxCount {
-		ranked = ranked[:contractsv1.ContextFabricRenderPointsMaxCount]
-	}
 	return ranked
 }
 
@@ -207,17 +220,33 @@ func rankedCohortMembers(cohort *Cohort) []CohortMember {
 // The canonical id is already on the wire in the same shape's point source,
 // so this discloses nothing new.
 func disambiguatedMemberLabels(members []CohortMember) map[string]string {
-	counts := make(map[string]int, len(members))
-	for _, member := range members {
-		counts[member.Subject.Label]++
-	}
 	labels := make(map[string]string, len(members))
+	// Disambiguation runs AFTER clamping, on the string that actually
+	// reaches the axis. Doing it before was a real defect (codex round 1,
+	// P2): two DISTINCT labels sharing their first 256 bytes each looked
+	// unique, were clamped to the same value, and collided -- which the
+	// contract validator then rejected, turning an otherwise valid
+	// investigation into a failed one.
+	//
+	// The suffix is an ordinal, not the canonical id: a canonical id can
+	// itself be long enough to be clamped away, so appending one would
+	// reintroduce the collision it was meant to fix. The full identity of
+	// every point is still on the wire in its own source.
+	used := make(map[string]struct{}, len(members))
 	for _, member := range members {
-		label := member.Subject.Label
-		if counts[label] > 1 {
-			label = fmt.Sprintf("%s (%s)", label, member.Subject.CanonicalID)
+		label := clampRenderLabel(member.Subject.Label)
+		if _, taken := used[label]; taken {
+			for ordinal := 2; ; ordinal++ {
+				suffix := fmt.Sprintf(" (%d)", ordinal)
+				candidate := clampRenderLabel(label, len(suffix)) + suffix
+				if _, exists := used[candidate]; !exists {
+					label = candidate
+					break
+				}
+			}
 		}
-		labels[member.Subject.CanonicalID] = clampRenderLabel(label)
+		used[label] = struct{}{}
+		labels[member.Subject.CanonicalID] = label
 	}
 	return labels
 }
@@ -225,11 +254,25 @@ func disambiguatedMemberLabels(members []CohortMember) map[string]string {
 // clampRenderLabel keeps a label inside the contract bound. Labels are
 // identity, not prose, so a clamp here is a display concern only -- no
 // number and no judgment can be lost to it.
-func clampRenderLabel(label string) string {
-	if len(label) <= contractsv1.ContextFabricRenderLabelMaxLength {
+// clampRenderLabel keeps a label inside the contract bound, leaving room for
+// an optional suffix the caller will append. It cuts on RUNE boundaries: a
+// byte slice can split a multi-byte character and produce invalid UTF-8,
+// which a JSON encoder then mangles into a replacement character -- a label
+// nobody chose. Labels are identity, not prose, so a clamp is a display
+// concern only: no number and no judgment can be lost to it.
+func clampRenderLabel(label string, reserve ...int) string {
+	limit := contractsv1.ContextFabricRenderLabelMaxLength
+	for _, r := range reserve {
+		limit -= r
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	runes := []rune(label)
+	if len(runes) <= limit {
 		return label
 	}
-	return label[:contractsv1.ContextFabricRenderLabelMaxLength]
+	return string(runes[:limit])
 }
 
 // cohortAttentionScoreShape is rule 1: the per-member attention score, one
@@ -471,7 +514,13 @@ func renderRowColumns(rows []ClaimedFactRow) []string {
 func dateAxisColumn(rows []ClaimedFactRow, columns []string) (string, []int, bool) {
 	for _, column := range columns {
 		instants := make([]time.Time, len(rows))
-		distinct := map[string]struct{}{}
+		// Distinctness is by INSTANT, not by spelling. "2026-08-03T00:00:00Z"
+		// and "2026-08-02T17:00:00-07:00" are two spellings of one moment: a
+		// raw-string check calls them distinct, and the axis -- which is
+		// positioned by elapsed time -- then stacks two different values on
+		// one x position (codex round 1, P2). Comparing the parsed instant is
+		// the same question the renderer will ask.
+		distinct := map[int64]struct{}{}
 		var withTime, withoutTime bool
 		usable := true
 		for i, row := range rows {
@@ -490,11 +539,11 @@ func dateAxisColumn(rows []ClaimedFactRow, columns []string) (string, []int, boo
 			} else {
 				withoutTime = true
 			}
-			if _, repeated := distinct[raw]; repeated {
+			if _, repeated := distinct[instant.UnixNano()]; repeated {
 				usable = false
 				break
 			}
-			distinct[raw] = struct{}{}
+			distinct[instant.UnixNano()] = struct{}{}
 			instants[i] = instant
 		}
 		if !usable || (withTime && withoutTime) || len(distinct) < 2 {
@@ -542,11 +591,23 @@ func numericRenderColumn(rows []ClaimedFactRow, column string) bool {
 	return true
 }
 
+// renderNumericCell unwraps a row cell to a plottable number.
+//
+// An integer past 2^53 is NOT plottable and is refused here rather than
+// cast: beyond that bound a float64 cannot distinguish adjacent integers, so
+// a point built from one would claim a value that differs from the row it
+// cites -- and contractsv1's resolver refuses it, which would turn a valid
+// answer into a rejected one at the last gate. Refusing here means the
+// column simply is not chartable and the fact keeps its table.
 func renderNumericCell(value ScalarValue) (float64, bool) {
 	switch {
 	case value.Number != nil:
 		return *value.Number, true
 	case value.Integer != nil:
+		if *value.Integer > contractsv1.ContextFabricRenderPointExactIntegerBound ||
+			*value.Integer < -contractsv1.ContextFabricRenderPointExactIntegerBound {
+			return 0, false
+		}
 		return float64(*value.Integer), true
 	default:
 		return 0, false

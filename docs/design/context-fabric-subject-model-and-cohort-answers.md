@@ -794,6 +794,65 @@ carried into chart space. A model cannot author a shape at all: there is no
 `SynthesisDraft` field for one, and selection runs after
 `SynthesisDraft.ValidateAgainst` has already completed.
 
+### 10.3a Four properties the first adversarial review bought
+
+Each of these was a real defect found by review and closed with a red test.
+They are recorded because each one is the *same* mistake in a different
+place: a number quietly stopping being the number it claims to be.
+
+**An integer past 2^53 is refused, not cast.** `Point.Value` is a float64 —
+a chart axis is continuous, and JSON has one number type — and beyond 2^53
+consecutive integers are indistinguishable in that type: `9007199254740993`
+and `9007199254740992` are the same float64. A row carrying the first and a
+chart claiming the second compared **equal**, which is the resolve-and-
+compare rule defeated by a silent cast. Such a point is now refused
+(`ContextFabricRenderPointExactIntegerBound`) on all three paths — resolver,
+selector, projection. A chart that cannot carry a number faithfully must not
+carry it at all; the fact keeps its table.
+
+**Trend dates are distinct by INSTANT, not by spelling.**
+`2026-08-03T00:00:00Z` and `2026-08-02T17:00:00-07:00` are two spellings of
+one moment. A raw-string check called them distinct, and a time axis —
+positioned by elapsed time — then stacked two different values on one x
+position.
+
+**A truncated cohort chart says so.** A cohort may carry 250 members and a
+series 64 points, so a large cohort's chart shows only the top of the
+ranking. The loss is counted on the selection event and logged as
+`render_shape_members_truncated`. A chart of the top 64 that says nothing
+reads as a chart of the whole cohort.
+
+**Label disambiguation runs AFTER clamping.** Two genuinely distinct member
+labels sharing their first 256 characters each looked unique, were clamped
+to the same string, collided as axis positions, and made the whole otherwise
+valid result fail its own validator. The suffix is an ordinal rather than the
+canonical id, because a canonical id can itself be long enough to be clamped
+away and would reintroduce the collision it was meant to fix; the full
+identity of every point is still on the wire in its own `source`. The clamp
+also cuts on rune boundaries — a byte cut can split a multi-byte character
+and produce a label nobody chose.
+
+### 10.3b Adjudicated: a trend does not require cohort intent
+
+Review challenged rule 3 for firing on row shape alone: should a
+`single_subject` answer that happens to carry dated rows get a chart it was
+not asked for? Two things settle it.
+
+The rule is the ruling. §Scope item 2 of CHAOS-4415 and chris's 2026-08-29
+report both state it as "facts with dated records → time series", naming the
+absent readiness/workload trend as part of the reported defect.
+
+And the premise does not hold: a trend is not an additional, unasked chart.
+It renders inside the fact's own rows panel and REPLACES the client-side
+heuristic chart CHAOS-4355 already drew for those same rows — one fact's
+numbers are never shown twice under two different selection rules. It also
+only ever fires on a CLAIMED fact, one the answer's own drivers cite, never
+on arbitrary context. So the rule changes how evidence the answer already
+relies on is drawn, not whether an unrelated chart appears.
+
+The cohort rules, where the risk of answering an unasked question is real,
+do gate on `interpretation.shape`.
+
 ### 10.4 Fact → shape → renderer
 
 ```mermaid

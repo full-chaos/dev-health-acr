@@ -128,6 +128,14 @@ func (s projectedRenderSources) carries(source contractsv1.ContextFabricRenderPo
 			case cell.Number != nil:
 				return *cell.Number == value
 			case cell.Integer != nil:
+				// Bounded exactly as contractsv1's own resolver bounds it:
+				// past 2^53 a float64 cannot tell adjacent integers apart,
+				// so an equal comparison there would admit a shape
+				// ContextFabricAnswerProjection.Validate then rejects.
+				if *cell.Integer > contractsv1.ContextFabricRenderPointExactIntegerBound ||
+					*cell.Integer < -contractsv1.ContextFabricRenderPointExactIntegerBound {
+					return false
+				}
 				return float64(*cell.Integer) == value
 			default:
 				return false

@@ -1,8 +1,14 @@
 package contextfabric
 
 import (
+	"encoding/json"
 	"math"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -37,6 +43,23 @@ func renderScalarString(value string) ScalarValue {
 // available signal families, plus a dated readiness fact.
 func chrisTeamsAnswer() InvestigationResult {
 	return InvestigationResult{
+		// Enough of a real answer to pass the FULL result validator, not
+		// only the render-shape rule: codex round 1 P3 caught this fixture
+		// asserting against a document the contract would have rejected,
+		// which proves nothing about a real answer.
+		SchemaVersion:  contractsv1.ContextFabricInvestigationResultSchema,
+		ResultID:       "res_chaos4415_fixture",
+		RequestID:      "req_chaos4415_fixture",
+		GeneratedAt:    time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
+		Status:         contractsv1.ContextFabricInvestigationPartial,
+		Question:       "Which teams are struggling right now, and why?",
+		DirectJudgment: "ops-team needs attention first.",
+		Versions: contractsv1.ContextFabricVersionSet{
+			ServiceVersion: "acr-v1", ContractVersion: contractsv1.ContextFabricInvestigationResultSchema,
+			Backend: "graph", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+			InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+			CanonicalServiceVersion: "ops-v1",
+		},
 		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeDiscoveredCohort},
 		Cohort: &Cohort{
 			Kind: contractsv1.ContextFabricSubjectTeam,
@@ -45,7 +68,14 @@ func chrisTeamsAnswer() InvestigationResult {
 				Rank:            1,
 				RankingComputed: true,
 				AttentionRank:   1,
-				Score:           renderFloat(46.7),
+				// 46.6, not the 46.7 chris's screenshot showed: the
+				// contract requires a member's drivers to SUM to its score
+				// (validate_context_fabric_result.go, "cohort member
+				// drivers do not sum to score"), and 20.0+13.3+13.3 is
+				// 46.6. A fixture carrying 46.7 beside those drivers is a
+				// document the real validator rejects, so it could not
+				// prove anything about a real answer (codex round 1, P3).
+				Score: renderFloat(46.6),
 				Drivers: []contractsv1.ContextFabricCohortMemberDriver{
 					{Signal: "readiness.coverage_gap", Value: 1, Weight: 20, WeightContributed: 20},
 					{Signal: "operational_deficiencies.severity", Value: 0.665, Weight: 20, WeightContributed: 13.3},
@@ -93,8 +123,8 @@ func TestCohortAnswerSelectsScoreBarsContributionStackAndTrend(t *testing.T) {
 	if score.Presentation != contractsv1.ContextFabricRenderPresentationBars || score.AxisKind != contractsv1.ContextFabricRenderAxisCategory {
 		t.Errorf("attention score shape = %s/%s, want bars over a category axis", score.Presentation, score.AxisKind)
 	}
-	if got := score.Series[0].Points[0].Value; got != 46.7 {
-		t.Errorf("plotted score = %v, want the member's own 46.7 verbatim", got)
+	if got := score.Series[0].Points[0].Value; got != 46.6 {
+		t.Errorf("plotted score = %v, want the member's own 46.6 verbatim", got)
 	}
 
 	contribution := shapeByRule(shapes, contractsv1.ContextFabricRenderRuleCohortDriverContribution)
@@ -155,6 +185,7 @@ func TestSelectedShapesValidateAgainstTheirOwnAnswer(t *testing.T) {
 	if err := contractsv1.ValidateRenderShapesForResult(result); err != nil {
 		t.Fatalf("shapes the selector built do not resolve against the answer they came from: %v", err)
 	}
+
 }
 
 // TestSingleSubjectAnswerCarryingCohortDataSelectsNoCohortShape is the
@@ -286,6 +317,41 @@ func TestSelectionIsDeterministic(t *testing.T) {
 	}
 }
 
+// TestSelectorReproducesTheGoldenExample proves the selector's output on a
+// document the WHOLE contract accepts, not only on a hand-built fixture.
+//
+// codex round 1 P3 was right that a fixture the real validator would reject
+// proves nothing about a real answer. The published golden example is that
+// real answer: it is emitted by this very selector, carries a complete and
+// internally consistent cohort, and `Validate()` is run over it in
+// internal/contracts/v1. Re-running selection on it here closes the loop
+// from this side — the selector must reproduce, byte for byte, the shapes
+// the committed document carries, so a change to a rule that quietly alters
+// a shipped answer fails here.
+func TestSelectorReproducesTheGoldenExample(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "contracts", "examples", "v1", "context_fabric_investigation_result_render_shapes.v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result InvestigationResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("the published example is not a valid result: %v", err)
+	}
+	published := result.RenderShapes
+	if len(published) == 0 {
+		t.Fatal("the published example carries no render shapes")
+	}
+	result.RenderShapes = nil
+	reselected, _ := SelectRenderShapes(result)
+	if !reflect.DeepEqual(reselected, published) {
+		t.Fatalf("re-running selection on the published example produced different shapes.\n got: %+v\nwant: %+v", reselected, published)
+	}
+}
+
 func skipRecorded(event RenderShapeSelectionEvent, rule contractsv1.ContextFabricRenderShapeRule, reason RenderShapeSkipReason) bool {
 	for _, skip := range event.Skipped {
 		if skip.Rule == rule && skip.Reason == reason {
@@ -293,4 +359,66 @@ func skipRecorded(event RenderShapeSelectionEvent, rule contractsv1.ContextFabri
 		}
 	}
 	return false
+}
+
+// codex round 1, P2: two spellings of the SAME instant pass the raw-string
+// distinctness check and then land on one x position.
+func TestRedTrendRejectsTwoSpellingsOfOneInstant(t *testing.T) {
+	result := InvestigationResult{
+		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
+		ClaimedFacts: []ClaimedFact{{
+			ClaimID: "claim_x", Kind: "metrics",
+			Subject: SubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:x", Label: "x"},
+			Field:   "v",
+			Rows: []ClaimedFactRow{
+				{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-03T00:00:00Z"), "v": renderScalarNumber(1)}},
+				{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-02T17:00:00-07:00"), "v": renderScalarNumber(2)}},
+				{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-05T00:00:00Z"), "v": renderScalarNumber(3)}},
+			},
+		}},
+	}
+	if shapes, _ := SelectRenderShapes(result); len(shapes) != 0 {
+		t.Fatalf("a trend was drawn with two points at one instant: %+v", shapes[0].Series[0].Points)
+	}
+}
+
+// codex round 1, P2: two distinct labels sharing their first 256 bytes
+// collapse into one axis position after clamping, and the whole result is
+// then rejected by its own validator.
+func TestRedLongMemberLabelsDoNotCollideAfterClamping(t *testing.T) {
+	prefix := strings.Repeat("a", 300)
+	result := chrisTeamsAnswer()
+	result.Cohort.Members[0].Subject.Label = prefix + "one"
+	second := result.Cohort.Members[0]
+	second.Subject = SubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:gh:second", Label: prefix + "two"}
+	second.AttentionRank = 2
+	second.Rank = 2
+	result.Cohort.Members = append(result.Cohort.Members, second)
+	shapes, _ := SelectRenderShapes(result)
+	result.RenderShapes = shapes
+	if err := contractsv1.ValidateRenderShapesForResult(result); err != nil {
+		t.Fatalf("two distinct long labels produced an invalid shape: %v", err)
+	}
+}
+
+// codex round 1, P2: a cohort may carry 250 ranked members but a series is
+// capped at 64 points, and the drop was silent.
+func TestRedTruncatedCohortMembersAreReported(t *testing.T) {
+	result := chrisTeamsAnswer()
+	base := result.Cohort.Members[0]
+	for i := 0; i < 80; i++ {
+		member := base
+		member.Subject = SubjectRef{
+			Kind:        contractsv1.ContextFabricSubjectTeam,
+			CanonicalID: "team:gh:filler-" + string(rune('a'+i%26)) + string(rune('a'+i/26)),
+			Label:       "filler-" + string(rune('a'+i%26)) + string(rune('a'+i/26)),
+		}
+		member.AttentionRank = i + 2
+		member.Rank = i + 2
+		result.Cohort.Members = append(result.Cohort.Members, member)
+	}
+	_, event := SelectRenderShapes(result)
+	if event.MembersTruncated == 0 {
+		t.Fatal("ranked members were dropped from the chart with no count recorded; a silent drop is undiagnosable from the run's own artifacts")
+	}
 }

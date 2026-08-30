@@ -292,3 +292,45 @@ func TestRenderShapeGoldenExampleTamperIsRejected(t *testing.T) {
 		t.Fatal("Validate() accepted the published example with one plotted number altered")
 	}
 }
+
+// CHAOS-4415 codex round 1, P1: an int64 beyond 2^53 cannot round-trip
+// through float64, so a chart could claim a DIFFERENT number than the row it
+// cites while validating clean. 9007199254740993 and 9007199254740992 are
+// the classic adjacent pair: both become the same float64.
+func TestRenderShapeRejectsALossyIntegerSource(t *testing.T) {
+	t.Parallel()
+	huge := int64(9007199254740993)
+	result := ContextFabricInvestigationResult{
+		ClaimedFacts: []ContextFabricClaimedFact{{
+			ClaimID: "claim_big_counts",
+			Kind:    "metrics",
+			Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team:x", Label: "x"},
+			Field:   "commits",
+			Rows: []ContextFabricClaimedFactRow{
+				{Fields: map[string]ContextFabricScalarValue{"commits": {Integer: &huge}}},
+			},
+		}},
+	}
+	shape := ContextFabricRenderShape{
+		ShapeID: "rs_1", Kind: ContextFabricRenderKindSeries,
+		Presentation: ContextFabricRenderPresentationLine,
+		SelectedBy:   ContextFabricRenderRuleDatedFactTrend,
+		Title:        "commits", AxisKind: ContextFabricRenderAxisTime,
+		AxisLabel: "day", ValueLabel: "commits",
+		Series: []ContextFabricRenderSeries{{
+			Key: "commits", Label: "Commits",
+			Points: []ContextFabricRenderPoint{{
+				// 9007199254740992 -- one LESS than the row carries, and
+				// indistinguishable from it once either becomes a float64.
+				Label: "2026-08-03", Value: 9007199254740992,
+				Source: ContextFabricRenderPointSource{
+					Kind: ContextFabricRenderSourceClaimedFactRow, ClaimID: "claim_big_counts",
+					RowIndex: intPtr(0), Field: "commits",
+				},
+			}},
+		}},
+	}
+	if err := validateRenderShapes([]ContextFabricRenderShape{shape}, renderShapeSourcesFromResult(result)); err == nil {
+		t.Fatal("validateRenderShapes() accepted a chart number that differs from the integer it cites; the comparison was made after a lossy float64 cast")
+	}
+}

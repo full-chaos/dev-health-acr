@@ -99,14 +99,7 @@ func (s renderShapeSources) resolve(source ContextFabricRenderPointSource) (floa
 		if !ok {
 			return 0, fmt.Errorf("render point cites field %q of claim %q row %d, which the row does not carry", source.Field, source.ClaimID, index)
 		}
-		switch {
-		case cell.Number != nil:
-			return *cell.Number, nil
-		case cell.Integer != nil:
-			return float64(*cell.Integer), nil
-		default:
-			return 0, fmt.Errorf("render point cites field %q of claim %q row %d, which is not a number", source.Field, source.ClaimID, index)
-		}
+		return renderCellValue(cell, source, index)
 	default:
 		return 0, fmt.Errorf("render point source kind is not a member of the closed vocabulary")
 	}
@@ -208,6 +201,23 @@ func validateRenderShapes(shapes []ContextFabricRenderShape, sources renderShape
 		}
 	}
 	return nil
+}
+
+// renderCellValue unwraps a row cell to the number a point may plot, or
+// refuses it. See ContextFabricRenderPointExactIntegerBound for why a large
+// integer is a refusal rather than a cast.
+func renderCellValue(cell ContextFabricScalarValue, source ContextFabricRenderPointSource, index int) (float64, error) {
+	switch {
+	case cell.Number != nil:
+		return *cell.Number, nil
+	case cell.Integer != nil:
+		if *cell.Integer > ContextFabricRenderPointExactIntegerBound || *cell.Integer < -ContextFabricRenderPointExactIntegerBound {
+			return 0, fmt.Errorf("render point cites field %q of claim %q row %d, whose integer value is too large to plot without losing the distinction between adjacent values", source.Field, source.ClaimID, index)
+		}
+		return float64(*cell.Integer), nil
+	default:
+		return 0, fmt.Errorf("render point cites field %q of claim %q row %d, which is not a number", source.Field, source.ClaimID, index)
+	}
 }
 
 func validContextFabricRenderKind(kind ContextFabricRenderKind) bool {

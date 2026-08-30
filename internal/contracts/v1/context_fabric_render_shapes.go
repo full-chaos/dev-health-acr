@@ -180,6 +180,19 @@ const (
 	// naming a longer field could never resolve to a real cell, so the two
 	// bounds are the same bound and are written as one.
 	ContextFabricRenderSourceFieldMaxLength = 128
+	// ContextFabricRenderPointExactIntegerBound is the largest magnitude an
+	// integer source may carry and still be plottable.
+	//
+	// Point.Value is a float64 (a chart axis is continuous; JSON has one
+	// number type), and beyond 2^53 consecutive integers stop being
+	// distinguishable in that type: 9007199254740993 and 9007199254740992
+	// are the same float64. A source carrying such a value would let a
+	// chart claim a DIFFERENT number than the row it cites while comparing
+	// equal -- the exact failure the resolve-and-compare rule exists to
+	// prevent, reintroduced by a silent cast. Such a point is refused
+	// rather than approximated: a chart that cannot carry the number
+	// faithfully must not carry it at all.
+	ContextFabricRenderPointExactIntegerBound = int64(1) << 53
 )
 
 // ContextFabricRenderShape is ONE renderable shape a Context Fabric answer

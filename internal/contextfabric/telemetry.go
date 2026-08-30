@@ -497,7 +497,9 @@ func (t SlogEngineTelemetry) RecordRenderShapeSelection(ctx context.Context, pri
 		return append(args, requestIDLogAttrs(ctx)...)
 	}
 	t.logger.InfoContext(ctx, "context fabric render shape selection",
-		base("render_shapes_selected", len(event.Selected), "render_shape_rules_skipped", len(event.Skipped))...)
+		base("render_shapes_selected", len(event.Selected),
+			"render_shape_rules_skipped", len(event.Skipped),
+			"render_shape_members_truncated", event.MembersTruncated)...)
 	for _, selection := range event.Selected {
 		t.logger.InfoContext(ctx, "context fabric render shape selected", base(
 			"render_shape_kind", string(selection.Kind),
