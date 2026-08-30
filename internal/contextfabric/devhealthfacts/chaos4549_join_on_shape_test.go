@@ -23,17 +23,24 @@ package devhealthfacts_test
 // statement it is asked to run (helpers_test.go's existing
 // fakeClient/capturedQuery -- no code changes needed there), call
 // ReadFacts for the baseline subject kind every provider answers for
-// (same mapping TestLiveSchemaParityAcrossEveryFactProvider uses), PLUS
-// the project-subject branch for the seven producers that answer for a
-// project by a real team_project_ownership/project-identity join
-// (FactMetrics/Health/Workload/Investment/Readiness/Flow/Landscape --
-// chaos4099_capability_kinds_test.go's realProjectJoinKinds) and the
-// repository-subject branch for Flow/Landscape's second shape. Those
-// project/repo branches matter here specifically because they are where
-// projectIdentityJoinSQL/projectIdentityMatchSQL/projectOwnershipJoinSQL
-// (shared.go) compose an ON clause at runtime -- the baseline subject
-// alone never reaches them, and CHAOS-4521b's defect lived in exactly
-// that composition.
+// (same mapping TestLiveSchemaParityAcrossEveryFactProvider uses), PLUS:
+//   - the project-subject branch for the seven producers that answer for a
+//     project by a real team_project_ownership/project-identity join
+//     (FactMetrics/Health/Workload/Investment/Readiness/Flow/Landscape --
+//     chaos4099_capability_kinds_test.go's realProjectJoinKinds) -- this is
+//     where projectIdentityJoinSQL/projectIdentityMatchSQL/
+//     projectOwnershipJoinSQL (shared.go) compose an ON clause at runtime,
+//     which the baseline subject alone never reaches, and CHAOS-4521b's
+//     defect lived in exactly that composition;
+//   - the repository-subject branch for Flow/Landscape's second shape;
+//   - the work-item-subject branch for Identity/Membership's second
+//     declared subject kind (readers.ReadWorkItemRepository, a distinct
+//     JOIN from the repository-subject baseline);
+//   - sweepScopeExpander, which drives chaos4099_scope_expander.go's
+//     ScopeExpander through all six FactScopePolicy values against the
+//     SAME fakeClient -- a completely separate production JOIN ON surface
+//     from the FactProvider sweep above, and (codex review finding)
+//     unswept before this change.
 //
 // RULE: internal/chfixture.JoinONViolations requires every ON clause to be
 // a top-level AND-conjunction of conjuncts, each EXACTLY "<operand> =
@@ -52,6 +59,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -112,6 +120,15 @@ func TestChaos4549AllJoinOnClausesArePortable(t *testing.T) {
 		contextfabric.FactFlow:      repoSubject("repo-1"),
 		contextfabric.FactLandscape: repoSubject("repo-1"),
 	}
+	// Identity/Membership's SECOND declared subject kind: a work item,
+	// dispatching to readers.ReadWorkItemRepository -- a completely
+	// different JOIN ON than the repository-subject baseline (codex
+	// review finding: MembershipProvider declares SubjectWorkItem but was
+	// never actually exercised at that kind).
+	workItemBranch := map[contextfabric.FactKind]contextfabric.SubjectRef{
+		contextfabric.FactIdentity:   workItemSubject("repo-1", "WI-1"),
+		contextfabric.FactMembership: workItemSubject("repo-1", "WI-1"),
+	}
 
 	for _, provider := range providers {
 		capability := provider.Capability()
@@ -126,7 +143,18 @@ func TestChaos4549AllJoinOnClausesArePortable(t *testing.T) {
 		if subject, ok := repoBranch[capability.Kind]; ok {
 			readFactsForJoinShapeCheck(ctx, provider, principal, capability.Kind, subject)
 		}
+		if subject, ok := workItemBranch[capability.Kind]; ok {
+			readFactsForJoinShapeCheck(ctx, provider, principal, capability.Kind, subject)
+		}
 	}
+
+	// chaos4099_scope_expander.go's ScopeExpander is a SEPARATE production
+	// SQL surface from the FactProvider sweep above -- its own JOIN ON
+	// queries were entirely unswept until this codex review finding.
+	// Sharing the SAME fakeClient/orgID means its captured statements land
+	// in client.queries exactly like the providers' do, checked by the
+	// same loop below.
+	sweepScopeExpander(ctx, client, principal, orgID)
 
 	if len(client.queries) == 0 {
 		t.Fatal("no statements captured -- the fake client is not wired to the providers")
@@ -140,7 +168,52 @@ func TestChaos4549AllJoinOnClausesArePortable(t *testing.T) {
 			t.Errorf("a JOIN ON conjunct is not exactly <operand> = <operand> (%q); the pre-26 ClickHouse analyzer rejects anything else in an ON clause (CHAOS-4549)\n%s", violation, query.statement)
 		}
 	}
+	// codex review finding: a sweep that only checks "at least one
+	// statement was captured" still passes if every captured statement
+	// happens to carry zero JOIN clauses (a parser regression that stops
+	// matching ON at all would read as "0 violations" instead of failing
+	// loudly) -- assert real structural coverage, not just query count.
+	if totalClauses == 0 {
+		t.Fatal("0 JOIN ON clauses found across all captured statements -- the ON/AND parser is not matching anything, not proof of portability")
+	}
 	t.Logf("CHAOS-4549: checked %d JOIN ON clauses (%d conjuncts) across %d captured statements (devhealthfacts)", totalClauses, totalConjuncts, len(client.queries))
+}
+
+// sweepScopeExpander exercises every contextfabric.FactScopePolicy
+// chaos4099_scope_expander.go implements, each a distinct production JOIN
+// ON query ScopeExpander composes -- entirely separate from the
+// FactProvider surface the rest of this test sweeps (codex review
+// finding). Errors are not this test's concern, same as
+// readFactsForJoinShapeCheck: only which SQL text reached the client
+// matters here.
+func sweepScopeExpander(ctx context.Context, client *fakeClient, principal storage.Principal, orgID string) {
+	expander := devhealthfacts.NewScopeExpander(client)
+	project := projectSubject("github", "proj-4549-scope")
+	team := teamSubject("CHAOS")
+	policies := []struct {
+		policy  contextfabric.FactScopePolicy
+		origin  contextfabric.SubjectRef
+		target  contextfabric.SubjectKind
+		require contextfabric.FactKind
+	}{
+		{contextfabric.FactScopePolicyProjectWorkItemRepository, project, contextfabric.SubjectRepository, contextfabric.FactMetrics},
+		{contextfabric.FactScopePolicyProjectWorkItemPullRequest, project, contextfabric.SubjectPullRequest, contextfabric.FactPullRequests},
+		{contextfabric.FactScopePolicyProjectWorkItemPullRequestReview, project, contractsv1.ContextFabricSubjectPullRequestReview, contextfabric.FactReviews},
+		{contextfabric.FactScopePolicyTeamPrimaryAttributionRepository, team, contextfabric.SubjectRepository, contextfabric.FactMetrics},
+		{contextfabric.FactScopePolicyTeamPrimaryAttributionPullRequest, team, contextfabric.SubjectPullRequest, contextfabric.FactPullRequests},
+		{contextfabric.FactScopePolicyTeamPrimaryAttributionPullRequestReview, team, contractsv1.ContextFabricSubjectPullRequestReview, contextfabric.FactReviews},
+	}
+	for _, p := range policies {
+		_, _ = expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
+			Principal:       principal,
+			RequirementKind: p.require,
+			Origins:         []contextfabric.SubjectRef{p.origin},
+			Policy:          p.policy,
+			TargetKind:      p.target,
+			TimeContext:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+			Limit:           20,
+		})
+	}
 }
 
 // readFactsForJoinShapeCheck issues one ReadFacts call purely to capture

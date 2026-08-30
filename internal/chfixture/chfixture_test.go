@@ -80,6 +80,21 @@ func TestJoinONViolations(t *testing.T) {
 			wantBad:   nil,
 		},
 		{
+			name:      "an array-subscript operand is portable (splitByString(...)[1], dev-health-go readers/investment_theme.go:135)",
+			statement: "SELECT 1 FROM a INNER JOIN b ON a.repo_uuid = splitByString('#pr', b.evidence_ref)[1]",
+			wantBad:   nil,
+		},
+		{
+			name:      "codex review: a string literal containing = is portable, not a 3-way split",
+			statement: "SELECT 1 FROM a INNER JOIN b ON a.id = 'foo=bar'",
+			wantBad:   nil,
+		},
+		{
+			name:      "codex review: a string literal containing AND is portable, not a phantom conjunct boundary",
+			statement: "SELECT 1 FROM a INNER JOIN b ON a.id = b.id AND a.tag = 'x AND y'",
+			wantBad:   nil,
+		},
+		{
 			name:      "OR-arm is rejected",
 			statement: "SELECT 1 FROM a INNER JOIN b ON a.id = b.id OR a.org_id = b.org_id",
 			wantBad:   []string{"a.id = b.id OR a.org_id = b.org_id"},
@@ -105,6 +120,36 @@ func TestJoinONViolations(t *testing.T) {
 -- so the caller's JOIN ON below never carries a literal comparison -- the
 -- pre-26 analyzer's ON accepts only a plain column-equality conjunction.
 INNER JOIN b ON a.id = b.id`,
+			wantBad: nil,
+		},
+		// R1 (team-lead, 2026-08-29): the ON condition used to end at the
+		// first newline, so an OR/predicate on a LATER line of a
+		// multi-line ON was never seen. These three cases are red against
+		// the pre-fix code (proven in the PR body) and green here.
+		{
+			name: "a1: multi-line ON with OR on the second line is rejected",
+			statement: `SELECT 1 FROM a INNER JOIN b ON a.id = b.id
+	OR a.org_id = b.org_id`,
+			wantBad: []string{"a.id = b.id OR a.org_id = b.org_id"},
+		},
+		{
+			name: "a2: a conjunct split across multiple source lines by AND is still portable",
+			statement: `SELECT 1 FROM a INNER JOIN b ON a.id = b.id
+	AND a.org_id = b.org_id`,
+			wantBad: nil,
+		},
+		{
+			name:      "b1: ON at the start of a line (no leading space) still finds the OR on it",
+			statement: "SELECT 1 FROM a INNER JOIN b\nON a.id = b.id OR a.org_id = b.org_id",
+			wantBad:   []string{"a.id = b.id OR a.org_id = b.org_id"},
+		},
+		{
+			name: "a JOIN ON condition correctly stops at a following clause, never absorbing WHERE/GROUP BY/a second JOIN",
+			statement: `SELECT 1 FROM a
+INNER JOIN b ON a.id = b.id
+LEFT JOIN c ON c.id = b.id
+WHERE a.org_id = {org_id:String}
+GROUP BY a.id`,
 			wantBad: nil,
 		},
 	}

@@ -119,14 +119,48 @@ func majorMinor(version string) (major, minor int, ok bool) {
 // plus how many ON clauses and conjuncts it examined, so a caller can log
 // real coverage instead of a guard that silently checked nothing.
 //
-// SQL line comments (`-- ...`) are stripped before the ON/AND split: this
-// codebase's producers carry many of them, and prose containing the plain
-// word " ON " or " AND " (both ordinary English words, not just SQL
-// keywords) would otherwise register as a phantom clause boundary.
+// ON DETECTION (team-lead's 2026-08-29 R1 finding): a bare
+// `strings.Split(statement, " ON ")` requires a literal space before "ON"
+// and silently misses "JOIN t\nON a = b" (ON at the start of a line, a
+// common multi-line-builder shape); this instead scans for the
+// case-insensitive, word-bounded token "ON" anywhere in the statement.
+//
+// CONDITION BOUNDARY (the other half of the same finding): the condition
+// used to end at the first newline, so a multi-line ON ("ON a = b\n  AND
+// has(x, y)" or "...\n  OR c = d") was checked only on its first line --
+// the violating second line was never seen, which is exactly the shape
+// that made the "0 violations" sweep partly an artifact of this bug
+// rather than proof. The condition now runs from just after "ON" to the
+// next top-level (same paren depth as the ON token) clause-boundary
+// keyword -- WHERE/PREWHERE/GROUP BY/ORDER BY/HAVING/LIMIT/SETTINGS/
+// UNION/WINDOW/QUALIFY, another JOIN (with or without an
+// INNER/LEFT/RIGHT/FULL/CROSS/ANY/ALL/ASOF/SEMI/ANTI/ARRAY qualifier) --
+// or a closing paren that drops below that depth, or end of statement;
+// SQL line comments (`-- ...`) are stripped first (their prose containing
+// the plain words "ON"/"AND"/"WHERE" would otherwise register as phantom
+// structure), and the extracted span has its whitespace (including
+// embedded newlines) collapsed before the top-level-AND split, so a
+// conjunct spanning multiple source lines still matches " AND " and a
+// bare newline never hides an OR/predicate on a later line.
 func JoinONViolations(statement string) (violations []string, clauses, conjuncts int) {
 	statement = stripLineComments(statement)
-	for _, onClause := range strings.Split(statement, " ON ")[1:] {
-		condition := strings.SplitN(onClause, "\n", 2)[0]
+	upper := strings.ToUpper(statement)
+	depths := depthProfile(statement)
+
+	pos := 0
+	for {
+		onStart, ok := nextWord(upper, pos, "ON")
+		if !ok {
+			break
+		}
+		depth := depths[onStart]
+		conditionStart := onStart + len("ON")
+		conditionEnd := clauseEnd(upper, depths, conditionStart, depth)
+		condition := strings.Join(strings.Fields(statement[conditionStart:conditionEnd]), " ")
+		pos = conditionEnd
+		if condition == "" {
+			continue
+		}
 		clauses++
 		for _, conjunct := range splitTopLevelAnd(condition) {
 			conjuncts++
@@ -136,6 +170,47 @@ func JoinONViolations(statement string) (violations []string, clauses, conjuncts
 		}
 	}
 	return violations, clauses, conjuncts
+}
+
+// clauseTerminators are the keywords that end a JOIN ON condition. Listing
+// the join-type QUALIFIERS (INNER, LEFT, ...) rather than "JOIN" itself
+// as the boundary matters: stopping at "JOIN" would leave the qualifier
+// word ("LEFT ", "INNER ") trailing in the extracted condition text,
+// corrupting its last conjunct. Bare "JOIN" is still listed for an
+// unqualified join. "GROUP"/"ORDER" (not "GROUP BY"/"ORDER BY") are
+// enough: "BY" always follows immediately and the boundary is the clause
+// start, not the exact phrase.
+var clauseTerminators = []string{
+	"WHERE", "PREWHERE", "GROUP", "ORDER", "HAVING", "LIMIT", "SETTINGS",
+	"UNION", "WINDOW", "QUALIFY",
+	"INNER", "LEFT", "RIGHT", "FULL", "CROSS", "ANY", "ALL", "ASOF", "SEMI", "ANTI", "ARRAY",
+	"JOIN",
+}
+
+// clauseEnd finds where a JOIN ON condition starting at `from` (at paren
+// depth `depth`) ends: the earliest of the next clauseTerminators keyword
+// at that SAME depth, the position where depth first drops below `depth`
+// (a closing paren belonging to an enclosing scope), or end of string.
+func clauseEnd(upper string, depths []int, from, depth int) int {
+	end := len(upper)
+	// depths[i] is the depth IN EFFECT WHILE processing character i -- so
+	// the ')' that closes us from `depth` down to `depth-1` is itself
+	// still recorded at `depth` (the decrement lands in depths[i+1], not
+	// depths[i]). The boundary is that paren's own position, EXCLUDED
+	// from the condition -- end = i, not i+1, or a trailing ')' leaks
+	// into the extracted text.
+	for i := from; i < len(upper); i++ {
+		if upper[i] == ')' && depths[i] == depth {
+			end = i
+			break
+		}
+	}
+	for _, word := range clauseTerminators {
+		if pos := firstWordAtDepth(upper, depths, from, depth, word); pos >= 0 && pos < end {
+			end = pos
+		}
+	}
+	return end
 }
 
 // stripLineComments removes every `-- ...` SQL line comment (to end of
@@ -150,21 +225,98 @@ func stripLineComments(statement string) string {
 	return strings.Join(lines, "\n")
 }
 
-// splitTopLevelAnd splits condition on " AND " that is not nested inside
-// parentheses, so a (hypothetical) multi-argument function call's own
-// internal " AND " -- there is none in the single-argument shape this rule
-// allows, but the split is written to stay correct regardless of what
-// ends up inside parens -- is never mistaken for a conjunct boundary.
+// depthProfile returns, for every byte offset in s (including one past
+// the end), the paren nesting depth IN EFFECT at that offset -- i.e. the
+// depth BEFORE that byte is processed, so depthProfile(s)[i] is the depth
+// a keyword starting at i is found at.
+func depthProfile(s string) []int {
+	depths := make([]int, len(s)+1)
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		depths[i] = depth
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		}
+	}
+	depths[len(s)] = depth
+	return depths
+}
+
+// isWordChar reports whether b can appear inside a SQL identifier/keyword
+// -- used to enforce word boundaries around a keyword match so "ON" does
+// not match inside "CONCAT" or "action", and "AND" does not match inside
+// "brand".
+func isWordChar(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+}
+
+// nextWord finds the next case-insensitive, word-bounded occurrence of
+// word in upper (which must already be uppercased) at or after from.
+// Word-bounded rejects a substring match that is really part of a longer
+// identifier on either side.
+func nextWord(upper string, from int, word string) (int, bool) {
+	for i := from; i+len(word) <= len(upper); i++ {
+		if upper[i:i+len(word)] != word {
+			continue
+		}
+		if i > 0 && isWordChar(upper[i-1]) {
+			continue
+		}
+		if end := i + len(word); end < len(upper) && isWordChar(upper[end]) {
+			continue
+		}
+		return i, true
+	}
+	return -1, false
+}
+
+// firstWordAtDepth is nextWord restricted to occurrences at exactly the
+// given paren depth, re-searching past any depth mismatch (a keyword
+// appearing deeper than `depth` -- inside a nested subquery expression --
+// does not count as this clause's boundary).
+func firstWordAtDepth(upper string, depths []int, from, depth int, word string) int {
+	pos := from
+	for {
+		idx, ok := nextWord(upper, pos, word)
+		if !ok {
+			return -1
+		}
+		if depths[idx] == depth {
+			return idx
+		}
+		pos = idx + 1
+	}
+}
+
+// splitTopLevelAnd splits condition (already whitespace-collapsed by
+// JoinONViolations) on " AND " that is not nested inside parentheses, so
+// a multi-argument function call's own internal " AND " -- there is none
+// in the shapes this rule allows as a whole operand, but the split is
+// written to stay correct regardless of what ends up inside parens -- is
+// never mistaken for a conjunct boundary.
 func splitTopLevelAnd(condition string) []string {
 	const sep = " AND "
 	var conjuncts []string
 	depth := 0
+	inString := false
 	start := 0
 	for i := 0; i < len(condition); i++ {
-		switch condition[i] {
-		case '(':
+		switch {
+		case condition[i] == '\'':
+			if inString && i+1 < len(condition) && condition[i+1] == '\'' {
+				i++
+				continue
+			}
+			inString = !inString
+			continue
+		case inString:
+			continue
+		case condition[i] == '(':
 			depth++
-		case ')':
+		case condition[i] == ')':
 			depth--
 		}
 		if depth == 0 && i+len(sep) <= len(condition) && condition[i:i+len(sep)] == sep {
@@ -187,11 +339,43 @@ func splitTopLevelAnd(condition string) []string {
 // one side then fails isPortableOperand's requirement that the operand
 // parse in full -- see its comment.
 func isPortableConjunct(conjunct string) bool {
-	parts := strings.Split(conjunct, "=")
+	parts := splitOutsideQuotes(conjunct, "=")
 	if len(parts) != 2 {
 		return false
 	}
 	return isPortableOperand(parts[0]) && isPortableOperand(parts[1])
+}
+
+// splitOutsideQuotes splits s on every occurrence of sep that is not
+// inside a single-quoted SQL string literal (codex review finding): a
+// permitted string-literal operand whose own content contains "=" --
+// "ON a.id = 'foo=bar'" -- would otherwise split into three parts and be
+// wrongly rejected, even though the grammar explicitly allows string
+// literals. A doubled quote (”) is an escaped quote, not the closing
+// delimiter, matching operandParser.stringLiteral.
+func splitOutsideQuotes(s, sep string) []string {
+	var parts []string
+	inString := false
+	start := 0
+	for i := 0; i < len(s); {
+		if s[i] == '\'' {
+			if inString && i+1 < len(s) && s[i+1] == '\'' {
+				i += 2
+				continue
+			}
+			inString = !inString
+			i++
+			continue
+		}
+		if !inString && i+len(sep) <= len(s) && s[i:i+len(sep)] == sep {
+			parts = append(parts, s[start:i])
+			i += len(sep)
+			start = i
+			continue
+		}
+		i++
+	}
+	return append(parts, s[start:])
 }
 
 // isPortableOperand reports whether operand parses IN FULL as the operand
@@ -222,7 +406,36 @@ func (p *operandParser) skipSpace() {
 	}
 }
 
+// operand parses one base operand (literal, column, or function call), then
+// any number of trailing "[operand]" array-subscript accesses -- the
+// splitByString('#pr', evidence_ref)[1] shape dev-health-go's
+// readers/investment_theme.go:135 already carries in a real ON clause,
+// found by this guard's own R1 sweep and, like the literal/multi-arg-call
+// operands above, already proven portable (it is on the current tip; the
+// existing pin sites' integration tests exercise readTeamThemeMix's join
+// against both 24.8 historically and 26.7.5.10 in this PR's own CI run).
 func (p *operandParser) operand() bool {
+	if !p.baseOperand() {
+		return false
+	}
+	for {
+		p.skipSpace()
+		if p.pos >= len(p.s) || p.s[p.pos] != '[' {
+			return true
+		}
+		p.pos++
+		if !p.operand() {
+			return false
+		}
+		p.skipSpace()
+		if p.pos >= len(p.s) || p.s[p.pos] != ']' {
+			return false
+		}
+		p.pos++
+	}
+}
+
+func (p *operandParser) baseOperand() bool {
 	p.skipSpace()
 	if p.pos >= len(p.s) {
 		return false

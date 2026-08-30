@@ -98,5 +98,12 @@ func TestChaos4549AllJoinOnClausesArePortable(t *testing.T) {
 			t.Errorf("a JOIN ON conjunct is not exactly <operand> = <operand> (%q); the pre-26 ClickHouse analyzer rejects anything else in an ON clause (CHAOS-4549)\n%s", violation, statement)
 		}
 	}
+	// codex review finding (devhealthfacts sibling, same class here): a
+	// sweep that only checks "at least one statement was captured" still
+	// passes if every captured statement happens to carry zero JOIN
+	// clauses -- assert real structural coverage, not just query count.
+	if totalClauses == 0 {
+		t.Fatal("0 JOIN ON clauses found across all captured statements -- the ON/AND parser is not matching anything, not proof of portability")
+	}
 	t.Logf("CHAOS-4549: checked %d JOIN ON clauses (%d conjuncts) across %d captured statements (devhealthsource)", totalClauses, totalConjuncts, len(statements))
 }
