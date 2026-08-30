@@ -2,6 +2,7 @@ package falkorgraph
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -188,5 +189,123 @@ func TestDiscoverContextDoesNotSignalCohortDeniedWhenOnlyAWrongKindNodeIsDenied(
 	// comment), unlike the new CHAOS-4577 signal.
 	if telemetry.cohortMembersAuthzDropped != 1 {
 		t.Fatalf("cohortMembersAuthzDropped telemetry = %d, want exactly 1 (the denied repository, counted by the unscoped CHAOS-3888 signal)", telemetry.cohortMembersAuthzDropped)
+	}
+}
+
+// TestDiscoverContextExplicitCohortDoesNotSignalDeniedOnANonExhaustiveMiss
+// is CHAOS-4577 codex round-2 P2, reproduced then fixed. ShapeExplicitCohort
+// (the user named specific members, e.g. "compare the frontend and backend
+// teams") never runs the org-wide exact-name census -- it resolves through
+// the bounded fulltext/hopWalk candidates only. A single denied match there
+// is NOT proof the whole named cohort was denied: other named members may
+// simply never have been retrieved at all (a lexical miss, unrelated to
+// authorization). The cohort_denied_by_authorization signal must stay
+// reserved for a genuinely exhaustive census.
+func TestDiscoverContextExplicitCohortDoesNotSignalDeniedOnANonExhaustiveMiss(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			// runFulltextQuery's CALL db.idx.fulltext.queryNodes(...) YIELDs
+			// (node, score), not (n) -- fakeSubjectNodeRow's "n" key shape
+			// (used by the exact-name/hop-walk arms) is silently unreadable
+			// here and would make this fixture a no-op, not a repro.
+			denied := &node{Properties: map[string]interface{}{propKind: "team", propCanonicalID: "team_denied", propLabel: "Denied"}}
+			denied.Properties["authorization_repositories"] = []string{"acr-context-fabric:no-team-repository-ownership"}
+			return []row{{"node": denied, "score": 1.0}}, nil
+		case strings.Contains(cypher, "$kinds"):
+			t.Fatal("chaos4348ExactNameCandidates must not be called for ShapeExplicitCohort")
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			return nil, nil
+		default:
+			return nil, nil
+		}
+	}}
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
+	request := cohortDiscoveryRequest(contextfabric.ShapeExplicitCohort)
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort != nil {
+		t.Fatalf("Cohort = %#v, want nil -- the only candidate found was denied", result.Cohort)
+	}
+	if result.Coverage.Partial {
+		t.Fatal("Coverage.Partial = true, want false: an explicit-cohort request never ran the exhaustive census, so one denied fulltext match cannot prove the whole named cohort was denied")
+	}
+	for _, reason := range result.Coverage.DegradedReasons {
+		if strings.HasPrefix(reason, "cohort_denied_by_authorization") {
+			t.Fatalf("Coverage.DegradedReasons = %v, must not contain a cohort_denied_by_authorization reason on a non-exhaustive retrieval", result.Coverage.DegradedReasons)
+		}
+	}
+	if telemetry.cohortDeniedByAuthorization != 0 {
+		t.Fatalf("cohortDeniedByAuthorization telemetry = %d, want 0 -- retrieval was not exhaustive", telemetry.cohortDeniedByAuthorization)
+	}
+}
+
+// TestDiscoverContextDoesNotSignalCohortDeniedWhenExactNameCensusTruncated
+// is CHAOS-4577 codex round-2 P2's second scenario, reproduced then fixed.
+// A truncated exact-name census (over exactNameCandidateQueryLimit rows) is
+// already known-incomplete -- the one member that would have survived
+// authorization may be exactly the row truncation cut. Reporting
+// cohort_denied_by_authorization here would claim the denial explains the
+// empty cohort when truncation might; exact_name_candidates_truncated is
+// the more accurate, pre-existing disclosure for this case.
+func TestDiscoverContextDoesNotSignalCohortDeniedWhenExactNameCensusTruncated(t *testing.T) {
+	overLimitRows := make([]row, exactNameCandidateQueryLimit+1)
+	for i := range overLimitRows {
+		overLimitRows[i] = fakeSubjectNodeRow("team", fmt.Sprintf("team_%d", i), fmt.Sprintf("Team %d", i))
+		// Every row denied -- if even one had been authorized, Cohort would
+		// be non-nil and this test would be about a different case
+		// (TestDiscoverContextTruncatedExactNameForcesCohortIncomplete
+		// already covers that one).
+		overLimitRows[i]["n"].(*node).Properties["authorization_repositories"] = []string{"acr-context-fabric:no-team-repository-ownership"}
+	}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "$kinds"):
+			return overLimitRows, nil
+		default:
+			t.Fatalf("unexpected query for a subjectless cohort request with no committed origin: %s", cypher)
+			return nil, nil
+		}
+	}}
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
+	request := cohortDiscoveryRequest(contextfabric.ShapeDiscoveredCohort)
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort != nil {
+		t.Fatalf("Cohort = %#v, want nil -- every candidate was denied", result.Cohort)
+	}
+	if !result.Coverage.Partial {
+		t.Fatal("Coverage.Partial = false, want true -- the census WAS truncated, which is degradation on its own")
+	}
+	var sawTruncated, sawDenied bool
+	for _, reason := range result.Coverage.DegradedReasons {
+		if reason == "exact_name_candidates_truncated" {
+			sawTruncated = true
+		}
+		if strings.HasPrefix(reason, "cohort_denied_by_authorization") {
+			sawDenied = true
+		}
+	}
+	if !sawTruncated {
+		t.Fatalf("Coverage.DegradedReasons = %v, want exact_name_candidates_truncated", result.Coverage.DegradedReasons)
+	}
+	if sawDenied {
+		t.Fatalf("Coverage.DegradedReasons = %v, must not ALSO claim cohort_denied_by_authorization -- the census was truncated, so denial is not established as the (sole) cause", result.Coverage.DegradedReasons)
+	}
+	if telemetry.cohortDeniedByAuthorization != 0 {
+		t.Fatalf("cohortDeniedByAuthorization telemetry = %d, want 0 -- the census was truncated", telemetry.cohortDeniedByAuthorization)
 	}
 }

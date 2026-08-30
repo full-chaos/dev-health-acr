@@ -554,6 +554,19 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// DegradedReasons so a cohort built from an incomplete census never
 	// silently claims completeness.
 	exactNameTruncated := false
+	// ranExhaustiveCensus (CHAOS-4577, codex round-2 P2) reports whether
+	// chaos4348ExactNameCandidates' bounded org-wide kind census actually
+	// ran for this call -- true only inside the same condition
+	// exactNameTruncated is scoped to below. A "whole cohort denied by
+	// authorization" claim is only honest when the candidate pool was an
+	// attempt at an EXHAUSTIVE census: ShapeExplicitCohort and a
+	// discovered_cohort request with an already-committed subject use only
+	// the bounded fulltext/hopWalk candidates (this function's default
+	// node source), which can easily contain one denied match while other,
+	// never-retrieved members of the same cohort simply were not searched
+	// for at all -- reporting authorization denial there would claim more
+	// than a single incomplete, non-exhaustive result can support.
+	ranExhaustiveCensus := false
 	// edgeFilters (CHAOS-3888) aggregates every edge resolveEdge excluded as
 	// edgeFiltered across BOTH sources this function reads from (hopWalk's
 	// committed-origin traversal below, and the full-text-adjacent-edge loop
@@ -719,6 +732,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// is therefore reserved for a GENUINELY subjectless discovered_cohort
 	// request: Shape says "census", AND nothing was already committed.
 	if request.Interpretation.Shape == contextfabric.ShapeDiscoveredCohort && len(request.Resolution.Committed) == 0 {
+		ranExhaustiveCensus = true
 		exactNameNodes, truncated, exactNameErr := a.chaos4348ExactNameCandidates(ctx, key, principal.OrgID, temporal)
 		if exactNameErr != nil {
 			// CHAOS-4077: same never-projected-graph degrade-gracefully
@@ -797,7 +811,21 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// cohort_denied_by_authorization signal for a teams question that had
 	// no denied team at all (codex round-1 P2). See
 	// graphrank.DiscoveredCohort's own doc comment for the distinction.
-	cohortWhollyDeniedByAuthz := cohort == nil && cohortKindScopedAuthzDropped > 0
+	//
+	// Also requires ranExhaustiveCensus && !exactNameTruncated (codex
+	// round-2 P2): ShapeExplicitCohort and a discovered_cohort request with
+	// an already-committed subject never run the org-wide census at all --
+	// their bounded fulltext/hopWalk candidates can contain one denied
+	// match while other cohort members the user actually asked about were
+	// simply never searched for, which is a retrieval gap, not evidence
+	// every member was denied. A truncated census has the same problem:
+	// the row that would have survived authorization may be exactly the
+	// one that got cut. Both cases already have their own, more accurate
+	// disclosure (Cohort.Complete=false / exact_name_candidates_truncated);
+	// this signal stays reserved for a genuinely exhaustive, untruncated
+	// census that still came back with a kind-matching denial and nothing
+	// else.
+	cohortWhollyDeniedByAuthz := cohort == nil && cohortKindScopedAuthzDropped > 0 && ranExhaustiveCensus && !exactNameTruncated
 	if a.config.Telemetry != nil {
 		if edgeFilters.Authz > 0 || edgeFilters.TemporalWindow > 0 || admission.DroppedSelfLoopCount > 0 {
 			a.config.Telemetry.RecordEdgesFilteredByReason(ctx, principal.OrgID, edgeFilters.Authz, edgeFilters.TemporalWindow, admission.DroppedSelfLoopCount)
