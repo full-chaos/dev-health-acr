@@ -66,8 +66,9 @@
             "maxLength": 256
           },
           "minItems": 1,
-          "maxItems": 64,
-          "uniqueItems": true
+          "maxItems": 96,
+          "uniqueItems": true,
+          "description": "Every path in the structured payload that carries model- or source-derived text. CHAOS-4415 raised the cap from 64 to 96: render_shapes added seven display-text paths to each surface, and the declaration is a fixed, contract-owned list, so the cap exists to bound a wire array, never to ration what may be declared untrusted. Raising it admits documents the old bound rejected and rejects none it accepted."
         }
       }
     }
