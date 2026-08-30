@@ -113,3 +113,109 @@ func TestTrendRefusesAVaryingBooleanDimension(t *testing.T) {
 		t.Fatalf("a trend was drawn across a varying boolean dimension: %+v", shapes[0].Series)
 	}
 }
+
+// codex round 1 on this PR, P1 (EXECUTED). The scope check skipped any
+// NUMERIC column, so a numeric dimension — a team id, a year — was treated
+// as a plottable series instead. The rows below are two different teams
+// measured once each, and the rule drew "team_id over time" alongside the
+// measure, which is both nonsense on its own and the very scope split this
+// PR exists to refuse.
+//
+// I named this case in the review prompt and then did not close it; codex
+// executed it and found it open.
+func TestTrendRefusesANumericDimensionColumn(t *testing.T) {
+	t.Parallel()
+	rows := []ClaimedFactRow{
+		{Fields: map[string]ScalarValue{
+			"day": renderScalarString("2026-07-20"), "team_id": renderScalarNumber(101),
+			"items_completed": renderScalarNumber(0),
+		}},
+		{Fields: map[string]ScalarValue{
+			"day": renderScalarString("2026-08-30"), "team_id": renderScalarNumber(202),
+			"items_completed": renderScalarNumber(1),
+		}},
+	}
+	shapes, event := SelectRenderShapes(trendFixture(rows))
+	if len(shapes) != 0 {
+		t.Fatalf("a trend was drawn across two numeric team ids: %+v", shapes[0].Series)
+	}
+	if !skipRecorded(event, contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipMixedScopeRows) {
+		t.Errorf("declined without naming the scope split; skipped=%+v", event.Skipped)
+	}
+}
+
+// Same finding's second half: an identifier present on one row and absent on
+// another keyed as "absent" both ways, so the split was invisible.
+func TestTrendRefusesAnIdentifierPresentOnOnlySomeRows(t *testing.T) {
+	t.Parallel()
+	rows := []ClaimedFactRow{
+		{Fields: map[string]ScalarValue{
+			"day": renderScalarString("2026-07-20"), "team_id": renderScalarNumber(101),
+			"items_completed": renderScalarNumber(0),
+		}},
+		{Fields: map[string]ScalarValue{
+			"day": renderScalarString("2026-08-30"), "items_completed": renderScalarNumber(1),
+		}},
+	}
+	if shapes, _ := SelectRenderShapes(trendFixture(rows)); len(shapes) != 0 {
+		t.Fatalf("a trend was drawn across a present/absent identifier: %+v", shapes[0].Series)
+	}
+}
+
+// codex P2 (EXECUTED): the skip reason must describe what actually stopped
+// the rule. A dated, mixed-scope table with NO numeric column has nothing to
+// plot at all, so "no dated rows" is the honest reason -- reporting a scope
+// split for a table that could never have been a trend sends a reader after
+// the wrong producer.
+func TestTrendReportsNoDatedRowsWhenThereIsNothingToPlot(t *testing.T) {
+	t.Parallel()
+	rows := []ClaimedFactRow{
+		{Fields: map[string]ScalarValue{
+			"day": renderScalarString("2026-07-20"), "work_scope_id": renderScalarString("a"),
+		}},
+		{Fields: map[string]ScalarValue{
+			"day": renderScalarString("2026-08-30"), "work_scope_id": renderScalarString("b"),
+		}},
+	}
+	_, event := SelectRenderShapes(trendFixture(rows))
+	if skipRecorded(event, contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipMixedScopeRows) {
+		t.Errorf("blamed a scope split for a table with no numeric column; skipped=%+v", event.Skipped)
+	}
+	if !skipRecorded(event, contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipNoDatedRows) {
+		t.Errorf("no reason recorded at all; skipped=%+v", event.Skipped)
+	}
+}
+
+// codex P2 (EXECUTED): a refused mixed-scope fact was invisible whenever ANY
+// other fact produced a trend, because the reason was only recorded when the
+// rule produced nothing at all. A silent refusal is undiagnosable from the
+// run's own artifacts, which is the failure mode this file's telemetry
+// exists to prevent.
+func TestMixedScopeIsReportedEvenWhenAnotherFactTrends(t *testing.T) {
+	t.Parallel()
+	good := ClaimedFact{
+		ClaimID: "claim-good", Kind: "flow",
+		Subject: SubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:g", Label: "g"},
+		Field:   "items_completed",
+		Rows: []ClaimedFactRow{
+			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-07-20"), "items_completed": renderScalarNumber(1)}},
+			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-30"), "items_completed": renderScalarNumber(2)}},
+		},
+	}
+	mixed := ClaimedFact{
+		ClaimID: "claim-mixed", Kind: "flow",
+		Subject: SubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:m", Label: "m"},
+		Field:   "items_completed", Rows: liveFlowRows(),
+	}
+	result := InvestigationResult{
+		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
+		ClaimedFacts:   []ClaimedFact{good, mixed},
+	}
+	shapes, event := SelectRenderShapes(result)
+	if len(shapes) != 1 {
+		t.Fatalf("expected the good fact's trend, got %d shapes", len(shapes))
+	}
+	if !skipRecorded(event, contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipMixedScopeRows) {
+		t.Fatalf("the refused mixed-scope fact left no trace; skipped=%+v", event.Skipped)
+	}
+}

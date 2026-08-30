@@ -869,6 +869,25 @@ producer emitting no dated rows are different problems, and a reader
 diagnosing a missing chart must be able to tell them apart from the run's own
 artifacts.
 
+An **identifier column is a dimension whatever its type.** A numeric
+`team_id` of 101 then 202 was originally treated as a plottable series — the
+rule drew "team id over time" beside the real measure, which is nonsense on
+its own and also hid the scope split. `id` / `*_id` columns are therefore
+never plotted and always compared as scope, the same notion the CHAOS-4355
+axis chooser already applies (`ordinalAxisPreferenceScore` deprioritises
+`*_id` for exactly this reason), so both ends agree about what an identifier
+looks like. It is a name heuristic; inferring "this integer is an id" from
+its values would be a worse one, and a producer needing a genuinely numeric
+measure must simply not name it `*_id`.
+
+The scope check runs only once the table has **something to plot**. A dated
+table with no plottable column could never have been a trend, so blaming a
+scope split for it would send a reader after the wrong producer — the honest
+reason there is `no_dated_rows`. And a mixed-scope refusal is recorded
+whether or not some OTHER fact produced a trend: reporting it only when the
+rule produced nothing at all made a refusal invisible the moment any trend
+succeeded.
+
 **Why refuse rather than salvage.** Two alternatives were considered and are
 worse. Selecting the largest scope's rows silently drops the others — the
 silent-truncation class this design has already had to close twice

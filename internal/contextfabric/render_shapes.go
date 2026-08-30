@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -160,12 +161,17 @@ func SelectRenderShapes(result InvestigationResult) ([]contractsv1.ContextFabric
 
 	trends, seriesTruncated, mixedScope := datedFactTrendShapes(result.ClaimedFacts)
 	event.SeriesTruncated = seriesTruncated
-	if len(trends) == 0 {
-		reason := RenderShapeSkipNoDatedRows
-		if mixedScope {
-			reason = RenderShapeSkipMixedScopeRows
-		}
-		event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, reason)
+	// A refused mixed-scope fact is reported whether or not some OTHER fact
+	// produced a trend. Recording the reason only when the rule produced
+	// nothing at all made a refusal invisible the moment any trend
+	// succeeded (codex P2, EXECUTED) -- and a silent refusal is exactly the
+	// undiagnosable-from-artifacts failure this file's telemetry exists to
+	// prevent.
+	if mixedScope {
+		event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipMixedScopeRows)
+	}
+	if len(trends) == 0 && !mixedScope {
+		event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipNoDatedRows)
 	}
 	for _, trend := range trends {
 		if len(shapes) >= contractsv1.ContextFabricRenderShapesMaxCount {
@@ -459,12 +465,26 @@ func datedFactTrendShape(fact ClaimedFact) (shape contractsv1.ContextFabricRende
 	if !found {
 		return contractsv1.ContextFabricRenderShape{}, 0, false, false
 	}
+	// Scope is checked only once this table has SOMETHING to plot. A dated
+	// table with no plottable column could never have been a trend, so
+	// blaming a scope split for it would send a reader after the wrong
+	// producer (codex P2, EXECUTED) -- "no dated rows" is the honest reason.
+	plottable := false
+	for _, column := range columns {
+		if column != dateColumn && plottableRenderColumn(rows, column) {
+			plottable = true
+			break
+		}
+	}
+	if !plottable {
+		return contractsv1.ContextFabricRenderShape{}, 0, false, false
+	}
 	if !rowsShareOneScope(rows, dateColumn, columns) {
 		return contractsv1.ContextFabricRenderShape{}, 0, false, true
 	}
 	var series []contractsv1.ContextFabricRenderSeries
 	for _, column := range columns {
-		if column == dateColumn || !numericRenderColumn(rows, column) {
+		if column == dateColumn || !plottableRenderColumn(rows, column) {
 			continue
 		}
 		if len(series) >= contractsv1.ContextFabricRenderSeriesMaxCount {
@@ -547,7 +567,7 @@ func datedFactTrendShape(fact ClaimedFact) (shape contractsv1.ContextFabricRende
 // tracked separately; refusing is the honest minimum.
 func rowsShareOneScope(rows []ClaimedFactRow, dateColumn string, columns []string) bool {
 	for _, column := range columns {
-		if column == dateColumn || numericRenderColumn(rows, column) {
+		if column == dateColumn || plottableRenderColumn(rows, column) {
 			continue
 		}
 		var first string
@@ -567,7 +587,10 @@ func rowsShareOneScope(rows []ClaimedFactRow, dateColumn string, columns []strin
 
 // scopeCellKey renders a dimension cell as a comparable string. An ABSENT
 // cell and a present one are deliberately different keys: a row that omits
-// the dimension is not known to share it.
+// the dimension is not known to share it. Numbers are keyed too, because an
+// identifier column is a dimension whatever its type -- keying only strings
+// let a numeric id present on one row and absent on another compare equal as
+// "absent" (codex P1, second half).
 func scopeCellKey(value ScalarValue) string {
 	switch {
 	case value.String != nil:
@@ -577,11 +600,42 @@ func scopeCellKey(value ScalarValue) string {
 			return "b:true"
 		}
 		return "b:false"
+	case value.Integer != nil:
+		return "i:" + strconv.FormatInt(*value.Integer, 10)
+	case value.Number != nil:
+		return "n:" + strconv.FormatFloat(*value.Number, 'g', -1, 64)
 	case value.Null:
 		return "null"
 	default:
 		return "absent"
 	}
+}
+
+// identifierColumn reports whether a column NAMES something rather than
+// measures it.
+//
+// An identifier is a dimension whatever its type. Before this, the scope
+// check skipped every numeric column, so a numeric `team_id` of 101 and 202
+// was treated as a plottable series: the rule drew "team id over time"
+// beside the real measure, which is nonsense on its own AND hid the scope
+// split this rule exists to refuse (codex P1, EXECUTED).
+//
+// Name-based, and deliberately the SAME notion the CHAOS-4355 axis chooser
+// already uses (`ordinalAxisPreferenceScore` in the web/ask-dev
+// `fact-rows.ts` deprioritises `id`/`*_id` for exactly this reason), so the
+// two ends agree about what an identifier looks like. A name test is
+// admittedly a heuristic; the alternative -- inferring "this integer is an
+// id" from its values -- is a worse one, and a producer that needs a
+// genuinely numeric MEASURE simply must not name it `*_id`.
+func identifierColumn(column string) bool {
+	lower := strings.ToLower(column)
+	return lower == "id" || strings.HasSuffix(lower, "_id")
+}
+
+// plottableRenderColumn is a column a trend may draw as a series: numeric on
+// every row AND not an identifier.
+func plottableRenderColumn(rows []ClaimedFactRow, column string) bool {
+	return !identifierColumn(column) && numericRenderColumn(rows, column)
 }
 
 // renderRowColumns is first-seen column order across the row set, so shape
