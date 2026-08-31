@@ -90,7 +90,12 @@ When the question names no specific subject but describes a team- or project-lev
 Do not invent canonical entity IDs, measurements, relationships, evidence, staffing, status, health, or authorization.
 Do not produce SQL, GraphQL, Cypher, graph IDs, credentials, or tool calls.
 Use clarification only when materially different authorized subjects or timeframes remain plausible and proceeding would make the answer unreliable.
-window_class is OPTIONAL and, if present, MUST be exactly one of this closed set -- no other spelling, no invented value: %s. Pick the class that best matches what kind of evidence-window judgment the question is asking for; omit it entirely if none fits. Never emit a timestamp, date, or duration for this -- only the class name. window_confidence is OPTIONAL and, if present, MUST be exactly "high" or "low": use "low" whenever the question could plausibly fit more than one window_class, or you are otherwise unsure of the pick.`,
+window_class is OPTIONAL and, if present, MUST be exactly one of this closed set -- no other spelling, no invented value: %s. Pick the class that best matches what kind of evidence-window judgment the question is asking for; omit it entirely if none fits. Never emit a timestamp, date, or duration for this -- only the class name. window_confidence is OPTIONAL and, if present, MUST be exactly "high" or "low": use "low" whenever the question could plausibly fit more than one window_class, or you are otherwise unsure of the pick.
+group_kind, scope_anchor_term and question_family are ALL OPTIONAL, and the correct answer for most questions is to OMIT ALL THREE. Emit them ONLY when the question itself makes them unambiguous; a guess here is worse than an omission, because an omitted field costs nothing and a wrong one sends the question to the wrong kind of answer.
+group_kind: emit ONLY when the question asks for results PARTITIONED INTO GROUPS -- phrasing like "for each X", "per X", "broken down by X", "grouped by X". Its value is the kind of thing the groups ARE, and MUST be exactly one of this closed set -- no other spelling, no invented value: %s. Example: "what are the project statuses for each team" groups projects by TEAM, so group_kind is "team". A question about one subject, or about a flat list with no grouping, has NO group_kind -- omit it. Do NOT emit group_kind merely because the question mentions teams or projects.
+scope_anchor_term: emit ONLY when the question asks about the MEMBERS OF a named parent, where the parent is a DIFFERENT kind of thing than the members -- phrasing like "the X team's projects", "repositories in Y". Its value is the parent's name, copied VERBATIM from the question text under the same verbatim rule that governs subject_terms. Example: in "what are the statuses of the fullchaos team's projects", the answer is about PROJECTS and the anchor is the team, so scope_anchor_term is "fullchaos" and scope_anchor_kind is "team". When you emit scope_anchor_term you SHOULD also emit scope_anchor_kind (the parent's kind, from the same closed set as group_kind). A question whose named subject IS the thing being asked about has NO scope anchor -- omit it.
+requested_subject_kind: the kind of thing the ANSWER is about, from the same closed set as group_kind. Emit it whenever the question makes it clear ("projects", "teams", "repositories"); omit it when the question does not say. It is the counterpart to scope_anchor_kind: in "the fullchaos team's projects" the anchor kind is "team" and requested_subject_kind is "project", and it is that DIFFERENCE that identifies the question as being about a scoped group of members rather than about the named subject itself.
+question_family: emit ONLY if one of these names obviously fits, otherwise omit it: %s. It is a hint; the service decides the family itself and will disagree with you when the question's own structure says otherwise.`,
 	contextFabricFactKindList,
 	contractsv1.ContextFabricRequestedJudgmentMaxLength,
 	contractsv1.ContextFabricSubjectTermsMaxCount,
@@ -102,7 +107,40 @@ window_class is OPTIONAL and, if present, MUST be exactly one of this closed set
 	contractsv1.ContextFabricFactRequirementParametersMaxCount,
 	contractsv1.ContextFabricClarificationReasonMaxLength,
 	contextFabricWindowClassList,
+	contextFabricSubjectKindList,
+	contextFabricQuestionFamilyList,
 )
+
+// contextFabricSubjectKindList and contextFabricQuestionFamilyList
+// (CHAOS-4632) render their closed vocabularies in published order, for
+// the same reason contextFabricFactKindList does: the prompt's closed set
+// is the SAME declaration the sanitizer accepts, so a member added or
+// pruned cannot leave a stale list in the prompt.
+var contextFabricSubjectKindList = func() string {
+	vocabulary := contractsv1.ContextFabricSubjectKindVocabulary()
+	kinds := make([]string, 0, len(vocabulary))
+	for _, kind := range vocabulary {
+		kinds = append(kinds, string(kind))
+	}
+	return strings.Join(kinds, ", ")
+}()
+
+// contextFabricQuestionFamilyList deliberately OMITS unclassified: it is
+// the refuse-to-guess member the SERVICE resolves to, never something a
+// model should be invited to pick. Offering it would turn "the model was
+// unsure" into "the model asserted unclassified", which the precedence
+// table would then treat as an agreeing pick rather than as silence.
+var contextFabricQuestionFamilyList = func() string {
+	vocabulary := contextfabric.QuestionFamilyVocabulary()
+	families := make([]string, 0, len(vocabulary))
+	for _, family := range vocabulary {
+		if family == contextfabric.QuestionFamilyUnclassified {
+			continue
+		}
+		families = append(families, string(family))
+	}
+	return strings.Join(families, ", ")
+}()
 
 // contextFabricFactKindList renders the closed fact-kind vocabulary in
 // published order. The prompt's closed set is therefore the SAME

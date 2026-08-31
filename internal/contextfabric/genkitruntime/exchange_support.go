@@ -143,3 +143,133 @@ func ParseSynthesisOutput(raw []byte) (contextfabric.SynthesisDraft, error) {
 func SynthesisOutputSchema() ([]byte, error) {
 	return json.MarshalIndent(core.InferSchemaMap(synthesisOutput{}), "", "  ")
 }
+
+// InterpretationOutputFamily is the CHAOS-4632 shadow capture
+// ParseInterpretationOutputFamily returns alongside the domain
+// InterpretedQuestion.
+type InterpretationOutputFamily struct {
+	Family                      contextfabric.QuestionFamily
+	FamilyUnrecognized          bool
+	GroupKind                   contextfabric.SubjectKind
+	GroupKindUnrecognized       bool
+	ScopeAnchorTerm             string
+	ScopeAnchorTermTruncated    bool
+	ScopeAnchorKind             contextfabric.SubjectKind
+	ScopeAnchorKindUnrecognized bool
+	RequestedKind               contextfabric.SubjectKind
+	RequestedKindUnrecognized   bool
+}
+
+// ParseInterpretationOutputFamily decodes raw exactly like
+// ParseInterpretationOutput, and additionally returns the SAME sanitized
+// CHAOS-4632 family capture Runtime.InterpretQuestion applies to a
+// genkit-returned interpretationOutput.
+//
+// This exists for the identical reason ParseInterpretationOutputWindow
+// does, and the reason is worth restating because it is the whole point of
+// having ONE sanitizer: both call sanitizeFamilyOutput (runtime.go), so a
+// non-genkit responder (the file-exchange trial transport) populates its
+// own ModelExecutionReceipt with a capture byte-identical to what a real
+// genkit call would have produced. A transport-specific reimplementation
+// would diverge silently, and the divergence would land in the very
+// measurement this slice exists to make -- the labelled semantic
+// correctness of GroupKind and the scope anchor -- where it would be
+// indistinguishable from the model behaving differently.
+//
+// Only sanitized on a SUCCESSFUL toDomain, mirroring both
+// Runtime.InterpretQuestion's ordering and ParseInterpretationOutputWindow's:
+// on a toDomain/Validate failure the returned capture is the zero value.
+func ParseInterpretationOutputFamily(raw []byte, defaultTime contextfabric.TimeContext) (contextfabric.InterpretedQuestion, InterpretationOutputFamily, error) {
+	var output interpretationOutput
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return contextfabric.InterpretedQuestion{}, InterpretationOutputFamily{}, err
+	}
+	interpreted, err := output.toDomain(defaultTime)
+	if err != nil {
+		return interpreted, InterpretationOutputFamily{}, err
+	}
+	capture := sanitizeFamilyOutput(output)
+	return interpreted, InterpretationOutputFamily{
+		Family:                      capture.Family,
+		FamilyUnrecognized:          capture.FamilyUnrecognized,
+		GroupKind:                   capture.GroupKind,
+		GroupKindUnrecognized:       capture.GroupKindUnrecognized,
+		ScopeAnchorTerm:             capture.ScopeAnchorTerm,
+		ScopeAnchorTermTruncated:    capture.ScopeAnchorTruncated,
+		ScopeAnchorKind:             capture.ScopeAnchorKind,
+		ScopeAnchorKindUnrecognized: capture.ScopeAnchorKindUnrecognized,
+		RequestedKind:               capture.RequestedKind,
+		RequestedKindUnrecognized:   capture.RequestedKindUnrecognized,
+	}, nil
+}
+
+// InterpretationOutputCapture is the WHOLE shadow capture from one raw
+// interpretation output -- window (CHAOS-3900 W0) and family (CHAOS-4632)
+// together.
+//
+// This exists because the two were added one slice apart and each got its
+// own parser, which meant a transport had to remember to call BOTH. It did
+// not: the file-exchange transport called only the window parser, so every
+// CHAOS-4632 signal arrived empty and a shadow-harness measurement over a
+// live corpus would have read transport loss as the model never emitting
+// them. That is the SAME defect ParseInterpretationOutputWindow's own call
+// site was created to fix for the window fields one slice earlier -- so
+// the fix is not another parallel function but ONE parser that cannot be
+// half-called, with the two originals delegating to it.
+type InterpretationOutputCapture struct {
+	Window InterpretationOutputWindow
+	Family InterpretationOutputFamily
+}
+
+// ParseInterpretationOutputSignals decodes raw once and returns the domain
+// interpretation plus the COMPLETE shadow capture. Any transport that is
+// not genkit should call THIS, not one of the two narrower parsers, so a
+// future shadow signal is picked up without touching the transport again.
+func ParseInterpretationOutputSignals(raw []byte, defaultTime contextfabric.TimeContext) (contextfabric.InterpretedQuestion, InterpretationOutputCapture, error) {
+	var output interpretationOutput
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return contextfabric.InterpretedQuestion{}, InterpretationOutputCapture{}, err
+	}
+	interpreted, err := output.toDomain(defaultTime)
+	if err != nil {
+		return interpreted, InterpretationOutputCapture{}, err
+	}
+	class, confidence, unrecognized := sanitizeWindowOutput(output)
+	family := sanitizeFamilyOutput(output)
+	return interpreted, InterpretationOutputCapture{
+		Window: InterpretationOutputWindow{Class: class, Confidence: confidence, ClassUnrecognized: unrecognized},
+		Family: InterpretationOutputFamily{
+			Family:                      family.Family,
+			FamilyUnrecognized:          family.FamilyUnrecognized,
+			GroupKind:                   family.GroupKind,
+			GroupKindUnrecognized:       family.GroupKindUnrecognized,
+			ScopeAnchorTerm:             family.ScopeAnchorTerm,
+			ScopeAnchorTermTruncated:    family.ScopeAnchorTruncated,
+			ScopeAnchorKind:             family.ScopeAnchorKind,
+			ScopeAnchorKindUnrecognized: family.ScopeAnchorKindUnrecognized,
+			RequestedKind:               family.RequestedKind,
+			RequestedKindUnrecognized:   family.RequestedKindUnrecognized,
+		},
+	}, nil
+}
+
+// ApplyInterpretationCapture stamps a complete capture onto a receipt --
+// the one place a non-genkit transport needs, so it cannot copy some
+// fields and forget others (which is exactly what happened when the
+// file-exchange transport copied the three window fields and none of the
+// family ones).
+func ApplyInterpretationCapture(receipt *contextfabric.ModelExecutionReceipt, capture InterpretationOutputCapture) {
+	receipt.WindowClass = capture.Window.Class
+	receipt.WindowConfidence = capture.Window.Confidence
+	receipt.WindowClassUnrecognized = capture.Window.ClassUnrecognized
+	receipt.QuestionFamily = capture.Family.Family
+	receipt.QuestionFamilyUnrecognized = capture.Family.FamilyUnrecognized
+	receipt.GroupKind = capture.Family.GroupKind
+	receipt.GroupKindUnrecognized = capture.Family.GroupKindUnrecognized
+	receipt.ScopeAnchorTerm = capture.Family.ScopeAnchorTerm
+	receipt.ScopeAnchorTermTruncated = capture.Family.ScopeAnchorTermTruncated
+	receipt.ScopeAnchorKind = capture.Family.ScopeAnchorKind
+	receipt.ScopeAnchorKindUnrecognized = capture.Family.ScopeAnchorKindUnrecognized
+	receipt.RequestedSubjectKind = capture.Family.RequestedKind
+	receipt.RequestedSubjectKindUnrecognized = capture.Family.RequestedKindUnrecognized
+}

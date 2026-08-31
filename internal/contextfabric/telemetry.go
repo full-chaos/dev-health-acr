@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sort"
+	"strconv"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
@@ -531,4 +532,43 @@ func (t SlogEngineTelemetry) RecordRenderShapeSelection(ctx context.Context, pri
 			"render_shape_skip_reason", string(skip.Reason),
 		)...)
 	}
+}
+
+// RecordQuestionFamilyResolution (CHAOS-4632 §4.3) logs at Info, once per
+// investigation that reaches the family resolver -- including the
+// unclassified and no-majority outcomes, because the denominator has to be
+// countable.
+//
+// EVERY field on the event reaches this line. That is the whole point of
+// the CHAOS-4085 sink discipline (see chaos4085_telemetry_sink_test.go's
+// header): a field populated on a struct and never logged is not
+// telemetry, it is a field. The per-sample rows are flattened into
+// indexed keys rather than a nested object because slog's JSON handler has
+// no group-per-element form, and an operator greppng
+// `cf_family_sample_0_row` needs a key that exists.
+func (t SlogEngineTelemetry) RecordQuestionFamilyResolution(ctx context.Context, principal storage.Principal, event QuestionFamilyResolutionEvent) {
+	args := []any{
+		"org_id", principal.OrgID,
+		"family", string(event.Family),
+		"source", string(event.Source),
+		"ensemble_size", event.EnsembleSize,
+		"downgraded_count", event.DowngradedCount,
+		"consensus_field_divergence", event.ConsensusFieldDivergence,
+		"family_version", event.FamilyVersion,
+		"sample_families", sortedFamilyDistribution(event.SampleFamilies),
+	}
+	for i, sample := range event.Samples {
+		prefix := "sample_" + strconv.Itoa(i) + "_"
+		args = append(args,
+			prefix+"shape", string(sample.Shape),
+			prefix+"attempted_family", string(sample.AttemptedFamily),
+			prefix+"resolved_family", string(sample.ResolvedFamily),
+			prefix+"row", string(sample.Row),
+			prefix+"incompatibility_reason", string(sample.Reason),
+			prefix+"group_kind_set", sample.GroupKindSet,
+			prefix+"scope_anchor_set", sample.ScopeAnchorSet,
+		)
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric question family resolution", args...)
 }

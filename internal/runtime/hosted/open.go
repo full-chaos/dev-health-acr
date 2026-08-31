@@ -752,7 +752,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// built -- see that declaration's own doc comment) so this and the
 	// model runtimes above share one instance.
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
-		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, Sink: receiptSink},
+		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, Sink: receiptSink, FamilyTelemetry: engineTelemetry},
 		Graph:       graphReader,
 		Facts:       factRegistry,
 		Synthesizer: contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry},

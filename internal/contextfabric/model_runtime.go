@@ -144,6 +144,63 @@ type ModelExecutionReceipt struct {
 	WindowClass             WindowClass      `json:"window_class,omitempty"`
 	WindowConfidence        WindowConfidence `json:"window_confidence,omitempty"`
 	WindowClassUnrecognized bool             `json:"window_class_unrecognized,omitempty"`
+	// QuestionFamily/GroupKind/ScopeAnchorTerm and their sanitize-outcome
+	// flags (CHAOS-4632, SHADOW ONLY -- see
+	// chaos4632_question_family_vocab.go's package-level note) are the
+	// model's own family pick and the two NEW structure signals the §4.2
+	// precedence table keys on, captured HERE and deliberately NOT on
+	// InterpretedQuestion.
+	//
+	// WHY HERE AND NOT ON THE INTERPRETATION. InterpretedQuestion is a
+	// type ALIAS to contractsv1.ContextFabricInterpretedQuestion
+	// (model.go:299), so adding a field to it IS a wire-contract widening
+	// -- and ask-dev validates with additionalProperties:false under
+	// strictSchema:true and fails closed to acr_contract_violation, which
+	// makes an "additive" v1 field a BREAKING change for the deployed
+	// consumer (CHAOS-4623; lane-rig-refresh proved it by breaking the
+	// shared rig with #336's render_shape field). The design's §9-S2 gate
+	// cell therefore requires the cheaper falsification FIRST: capture
+	// receipt-only, measure labelled semantic correctness including
+	// NEGATIVE cases, and only then move a contract. This is the exact
+	// sequence CHAOS-3900 W0 -> W1 followed for WindowClass above.
+	//
+	// GroupKind is closed against the ContextFabricSubjectKind registry.
+	// ScopeAnchorTerm is a FREE STRING and is NOT closed against anything
+	// -- it is a retrieval pointer, never a value; nothing branches on its
+	// text. It is bounded and truncation is reported rather than silent.
+	// It is never logged (see chaos4632_question_family_telemetry.go).
+	//
+	// omitempty throughout, for the identical asymmetry-avoidance reason
+	// WindowClass's own comment above gives: every receipt written before
+	// these fields existed, and every non-interpret receipt, has them
+	// absent rather than present-and-empty.
+	QuestionFamily             QuestionFamily `json:"question_family,omitempty"`
+	QuestionFamilyUnrecognized bool           `json:"question_family_unrecognized,omitempty"`
+	GroupKind                  SubjectKind    `json:"group_kind,omitempty"`
+	GroupKindUnrecognized      bool           `json:"group_kind_unrecognized,omitempty"`
+	ScopeAnchorTerm            string         `json:"scope_anchor_term,omitempty"`
+	ScopeAnchorTermTruncated   bool           `json:"scope_anchor_term_truncated,omitempty"`
+	// ScopeAnchorKind and RequestedSubjectKind are the two halves of
+	// §4.2 row 2's ASYMMETRY test ("ScopeAnchorTerm set AND the question
+	// asks about a different kind than the anchor's"). Both are closed
+	// against the ContextFabricSubjectKind registry.
+	//
+	// They are on the receipt, and not merely passed through in memory,
+	// because the labelled semantic-correctness measurement this slice
+	// exists to make has to SCORE them: "was the emitted anchor kind the
+	// right kind" and "was the emitted requested kind the right kind" are
+	// two of the labels, and a signal that is never durably captured
+	// cannot be scored after the fact -- it would have to be re-derived
+	// by re-running, which is exactly the artifact-diagnosability rule
+	// AGENTS.md forbids relying on.
+	ScopeAnchorKind      SubjectKind `json:"scope_anchor_kind,omitempty"`
+	RequestedSubjectKind SubjectKind `json:"requested_subject_kind,omitempty"`
+	// The matching unrecognized flags. Every out-of-vocabulary emission
+	// must be COUNTABLE, because the gating measurement scores false
+	// emission: without these, a model inventing kind names is recorded
+	// identically to one correctly emitting nothing.
+	ScopeAnchorKindUnrecognized      bool `json:"scope_anchor_kind_unrecognized,omitempty"`
+	RequestedSubjectKindUnrecognized bool `json:"requested_subject_kind_unrecognized,omitempty"`
 }
 
 func (r ModelExecutionReceipt) Validate() error {
@@ -881,7 +938,45 @@ type ModelRuntime interface {
 type RuntimeQuestionInterpreter struct {
 	Runtime ModelRuntime
 	Sink    ModelReceiptSink
+	// FamilyTelemetry (CHAOS-4632, SHADOW ONLY) receives one
+	// QuestionFamilyResolutionEvent per Interpret call that produced a
+	// usable interpretation.
+	//
+	// AN EXPLICIT, WIRED FIELD -- never a type assertion on Runtime or on
+	// some optional interface. CHAOS-4085's whole lesson (see
+	// chaos4085_telemetry_sink_test.go's header) is that
+	// CommitAffirmationTelemetry was optional, nothing in production
+	// implemented it, every retraction failed a type assertion, and the
+	// entire event disappeared while tests passed. A nil here means an
+	// operator sees nothing, which is why open.go wires it and
+	// TestSlogEngineTelemetryLogsQuestionFamilyResolution asserts the
+	// PRODUCTION sink's own bytes rather than a struct field.
+	FamilyTelemetry QuestionFamilyTelemetry
 }
+
+// THE ENSEMBLE SIZE IS DELIBERATELY NOT A FIELD HERE, and the absence is
+// the honest statement rather than an oversight.
+//
+// This interpreter runs at N=1: the single interpret call Interpret
+// already makes is the only sample, the §4.2 precedence table decides on
+// its own, and ResolveQuestionFamily records source=model -- the design's
+// own degrade path (§4.1: "the resolver falls back to N=1 plus the
+// precedence table, recording source = model rather than model_consensus
+// -- a visibly weaker guarantee rather than an invisible cost"). No extra
+// model call is made, which is what makes "zero behaviour change" a
+// PROVABLE property of the merged default rather than an assertion: no
+// extra latency, no extra tokens, and nothing gated on the outcome either
+// way.
+//
+// N>1 needs a per-call SEED override on ModelRuntime.InterpretQuestion,
+// which is slice S1's surface (CHAOS-4631, "pin the interpret sampler")
+// and does not exist on origin/main -- main carries only CHAOS-4622's
+// single fixed seed constant. The aggregation itself is complete and
+// table-driven-tested here (ResolveQuestionFamily,
+// ResolveQuestionFamilyEnsemble, EnsembleSeeds); only the seeded call site
+// is missing. A configuration knob wired to a field this type cannot act
+// on would be a knob that silently does nothing, which is worse than no
+// knob -- so it is not added until it can be honoured.
 
 func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal storage.Principal, request InvestigationRequest) (InterpretedQuestion, error) {
 	if r.Runtime == nil {
@@ -910,7 +1005,61 @@ func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal sto
 	if err != nil {
 		return InterpretedQuestion{}, err
 	}
+	// CHAOS-4632 (SHADOW ONLY): resolve the question family from the
+	// signals this interpretation actually produced, and report it.
+	//
+	// Placed AFTER every error return, so the event fires exactly when an
+	// interpretation was produced -- which makes the denominator
+	// "investigations that reached interpretation", the same denominator
+	// every other per-interpretation signal already has. An answer served
+	// from the reuse store never reaches here, and it never reaches
+	// Interpret at all, so the two agree.
+	//
+	// NOTHING BELOW AFFECTS THE RETURN VALUE. `question` is returned
+	// unchanged whatever the family resolves to.
+	r.recordFamilyResolution(ctx, principal, question, receipt)
 	return question, nil
+}
+
+// recordFamilyResolution builds the §4.2 sample from one interpretation's
+// receipt capture, resolves the family, and emits the §4.3 event.
+//
+// FIRES ON EVERY INTERPRETATION, including the ones that resolve to
+// unclassified -- the denominator has to be countable, or "the resolver
+// never classifies anything" and "the resolver never ran" become the same
+// observation. That is the lesson lane-4579 wrote up in its §4 and codex
+// confirmed by mutation in its finding 5.
+func (r RuntimeQuestionInterpreter) recordFamilyResolution(ctx context.Context, principal storage.Principal, interpreted InterpretedQuestion, receipt ModelExecutionReceipt) {
+	if r.FamilyTelemetry == nil {
+		return
+	}
+	samples := []FamilySample{familySampleFrom(interpreted, receipt)}
+	outcome := ResolveQuestionFamily(samples)
+	r.FamilyTelemetry.RecordQuestionFamilyResolution(ctx, principal, QuestionFamilyResolutionEventFrom(outcome, samples))
+}
+
+// familySampleFrom projects ONE interpretation into the precedence table's
+// input.
+//
+// The Shape and terms come from the InterpretedQuestion this very call
+// produced, and the four new signals from the SAME call's sanitized
+// receipt capture -- never from a re-interpretation and never from two
+// different calls. A sample must be exactly what ONE model call produced,
+// or the consensus is aggregating over a combination no model proposed,
+// which is the same field-wise fabrication selectWinningSample exists to
+// prevent one level up.
+func familySampleFrom(interpreted InterpretedQuestion, receipt ModelExecutionReceipt) FamilySample {
+	return FamilySample{
+		Shape:                   interpreted.Shape,
+		SubjectTerms:            interpreted.SubjectTerms,
+		ComparisonTerms:         interpreted.ComparisonTerms,
+		GroupKind:               receipt.GroupKind,
+		ScopeAnchorTerm:         receipt.ScopeAnchorTerm,
+		ScopeAnchorKind:         receipt.ScopeAnchorKind,
+		RequestedKind:           receipt.RequestedSubjectKind,
+		ModelFamily:             receipt.QuestionFamily,
+		ModelFamilyUnrecognized: receipt.QuestionFamilyUnrecognized,
+	}
 }
 
 type RuntimeAnswerSynthesizerOptions struct {

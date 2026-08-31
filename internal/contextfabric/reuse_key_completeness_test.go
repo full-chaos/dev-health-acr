@@ -162,6 +162,34 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	"WindowClass":             {reason: "per-call classification-outcome echo (telemetry only), not a version identity -- the decision-shaping copy lives on ContextFabricInterpretedQuestion, not this receipt; ReuseKey.WindowInferenceVersion (CHAOS-3900 W1) is the real version authority for an inferred window, and it is a deployment-wide constant, not a per-call field"},
 	"WindowConfidence":        {reason: "per-call classification-outcome echo (telemetry only), not a version identity -- same reasoning as WindowClass"},
 	"WindowClassUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as WindowClass"},
+	// CHAOS-4632's six shadow-capture fields are classified for EXACTLY
+	// the same reason as the three CHAOS-3900 W0 fields above, and the
+	// parallel is worth stating rather than assumed: each is a PER-CALL
+	// outcome echoing what one model call emitted, never a
+	// deployment-wide version constant.
+	//
+	// There is an important extra reason here, though. In this slice the
+	// family is SHADOW: it is resolved, recorded and telemetered, and
+	// NOTHING is gated on it -- no answer, plan, offer, clarification or
+	// render selection changes because of it. So a stored answer cannot
+	// have been shaped by any of these values, and there is nothing for a
+	// reuse fence to protect. The deployment-wide authority that WILL
+	// gate reuse once the family starts deciding things is
+	// QuestionFamilyTableVersion (chaos4632_question_family_registry.go),
+	// a single constant -- and it becomes a ReuseKey dimension in the
+	// slice where the family first affects an answer (S4), not here,
+	// where adding it would cold-cache every stored answer in exchange
+	// for no safety at all.
+	"QuestionFamily":                   {reason: "per-call model pick echoed for the shadow capture (telemetry only), not a version identity -- nothing is gated on the family in this slice, so no stored answer was shaped by it; QuestionFamilyTableVersion is the deployment-wide authority and becomes a ReuseKey dimension in the slice where the family first affects an answer"},
+	"QuestionFamilyUnrecognized":       {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"GroupKind":                        {reason: "per-call model-emitted structure signal captured receipt-only (shadow), not a version identity -- same reasoning as QuestionFamily"},
+	"GroupKindUnrecognized":            {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"ScopeAnchorTerm":                  {reason: "per-call model-emitted retrieval pointer captured receipt-only (shadow), not a version identity -- and free text, which could never be a reuse dimension in any case"},
+	"ScopeAnchorTermTruncated":         {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as ScopeAnchorTerm"},
+	"ScopeAnchorKind":                  {reason: "per-call model-emitted structure signal captured receipt-only (shadow), not a version identity -- same reasoning as QuestionFamily"},
+	"RequestedSubjectKind":             {reason: "per-call model-emitted structure signal captured receipt-only (shadow), not a version identity -- same reasoning as QuestionFamily"},
+	"ScopeAnchorKindUnrecognized":      {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"RequestedSubjectKindUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 }
 
 // TestReuseKeyClassifiesEveryVersionSetField is the class-oracle sweep over

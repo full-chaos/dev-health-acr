@@ -294,15 +294,28 @@ func (f *fileExchangeRuntime) InterpretQuestion(ctx context.Context, principal s
 	// divergence measurement over a live corpus run would have read as a
 	// constant "no window ever picked" regardless of what the model
 	// actually returned.
-	interpreted, window, parseErr := genkitruntime.ParseInterpretationOutputWindow(raw, request.TimeContext)
+	// CHAOS-4632: ParseInterpretationOutputSignals, not the narrower
+	// window-only parser, and ApplyInterpretationCapture rather than
+	// hand-copying fields.
+	//
+	// This transport hit the SAME defect TWICE, one slice apart, which is
+	// why the seam changed shape rather than gaining another three lines.
+	// The comment above records the first occurrence: the window fields
+	// were dropped on the floor and every shadow measurement read as "no
+	// window ever picked". The second occurrence was CHAOS-4632's family
+	// signals, which this call did not copy either -- so a labelled
+	// gate run over a live corpus would have scored transport loss as the
+	// model never emitting group_kind or a scope anchor, and the gating
+	// number would have been wrong in the direction that kills the design.
+	// One parser that cannot be half-called, plus one apply function, is
+	// what stops a third occurrence.
+	interpreted, capture, parseErr := genkitruntime.ParseInterpretationOutputSignals(raw, request.TimeContext)
 	if parseErr != nil {
 		receipt.Outcome = "invalid_output"
 		return contextfabric.InterpretedQuestion{}, receipt, fmt.Errorf("%w: %v", contextfabric.ErrModelOutput, parseErr)
 	}
 	receipt.OutputDigest = contextfabric.DigestModelValue(raw)
-	receipt.WindowClass = window.Class
-	receipt.WindowConfidence = window.Confidence
-	receipt.WindowClassUnrecognized = window.ClassUnrecognized
+	genkitruntime.ApplyInterpretationCapture(&receipt, capture)
 	// "pending_validation": RuntimeQuestionInterpreter.Interpret runs its
 	// own Validate()+classification next, exactly as it does for the real
 	// genkit runtime, and upgrades this to "success" itself.
@@ -570,5 +583,221 @@ func TestFileExchangeRoundTrip(t *testing.T) {
 	}
 	if got.Answer != "ok" {
 		t.Fatalf("output = %+v, want answer=ok", got)
+	}
+}
+
+// TestFileExchangeInterpretCarriesEveryShadowSignal is the guard for codex
+// round 2's finding 1, rewritten after codex round 3 showed the first
+// version could not fail for the defect it was written for.
+//
+// WHAT WAS WRONG WITH THE FIRST VERSION, because the lesson is the point.
+// It called ParseInterpretationOutputSignals and ApplyInterpretationCapture
+// DIRECTLY and asserted the receipt they produced. Those two functions are
+// the fix, so of course they carried every field -- but the DEFECT was that
+// the transport did not CALL them. Reverting InterpretQuestion to
+// window-only parsing left that test passing. It asserted the fix instead
+// of the seam, which is precisely AGENTS.md's "a test that cannot fail is
+// worse than no test, because it reads as coverage". My own mutation looked
+// like it verified the guard, because I mutated the apply function the test
+// did call rather than the transport line that had actually been broken.
+//
+// This version drives the REAL fileExchangeRuntime.InterpretQuestion, with
+// a responder writing a payload that sets every shadow signal, and asserts
+// the receipt THAT method returns. Reverting the transport to the
+// window-only parser now fails it.
+//
+// The transport has lost shadow signals twice, one slice apart -- the
+// CHAOS-3900 window fields, then CHAOS-4632's family fields -- and it is the
+// ONLY transport the live trial and shadow harnesses use, so the loss reads
+// as the model never emitting the signal and corrupts the measured number
+// rather than breaking anything visibly.
+func TestFileExchangeInterpretCarriesEveryShadowSignal(t *testing.T) {
+	dir := t.TempDir()
+	runtime, err := newFileExchangeRuntime(dir, "test-model", 10*time.Second)
+	if err != nil {
+		t.Fatalf("newFileExchangeRuntime: %v", err)
+	}
+	runtime.poll = 5 * time.Millisecond
+
+	// Every shadow signal set, with values chosen so a field cannot be
+	// satisfied by another field's value leaking into it.
+	const modelOutput = `{
+		"shape": "discovered_cohort",
+		"requested_judgment": "status_and_drivers",
+		"subject_terms": ["each team"],
+		"time_context": {"axis": "current"},
+		"fact_requirements": [{"kind": "status"}],
+		"clarification_needed": false,
+		"window_class": "trend_assessment",
+		"window_confidence": "high",
+		"question_family": "grouped_cohort_status",
+		"group_kind": "team",
+		"scope_anchor_term": "fullchaos",
+		"scope_anchor_kind": "repository",
+		"requested_subject_kind": "project"
+	}`
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		respondToOneExchangeRequest(t, dir, modelOutput)
+	}()
+
+	interpreted, receipt, err := runtime.InterpretQuestion(context.Background(),
+		storage.Principal{OrgID: "org_1"}, validFileExchangeRequest())
+	<-done
+	if err != nil {
+		t.Fatalf("InterpretQuestion() error = %v", err)
+	}
+	if interpreted.Shape != contextfabric.ShapeDiscoveredCohort {
+		t.Fatalf("interpreted.Shape = %q, want discovered_cohort -- the responder payload did not reach the transport", interpreted.Shape)
+	}
+
+	for _, field := range []struct {
+		name      string
+		got, want string
+	}{
+		{"WindowClass", string(receipt.WindowClass), "trend_assessment"},
+		{"WindowConfidence", string(receipt.WindowConfidence), "high"},
+		{"QuestionFamily", string(receipt.QuestionFamily), "grouped_cohort_status"},
+		{"GroupKind", string(receipt.GroupKind), "team"},
+		{"ScopeAnchorTerm", receipt.ScopeAnchorTerm, "fullchaos"},
+		{"ScopeAnchorKind", string(receipt.ScopeAnchorKind), "repository"},
+		{"RequestedSubjectKind", string(receipt.RequestedSubjectKind), "project"},
+	} {
+		if field.got != field.want {
+			t.Errorf("receipt.%s = %q, want %q -- this transport is the only one the live trial and shadow harnesses use, so a dropped signal is scored as the MODEL never emitting it", field.name, field.got, field.want)
+		}
+	}
+}
+
+// TestFileExchangeInterpretCarriesUnrecognizedFlags is the other half codex
+// round 3 named: the valid-only fixture above cannot notice a dropped
+// *Unrecognized flag, and those flags are what make false emission
+// countable. A harness that lost them would score a model inventing kind
+// names as a model correctly emitting nothing.
+func TestFileExchangeInterpretCarriesUnrecognizedFlags(t *testing.T) {
+	dir := t.TempDir()
+	runtime, err := newFileExchangeRuntime(dir, "test-model", 10*time.Second)
+	if err != nil {
+		t.Fatalf("newFileExchangeRuntime: %v", err)
+	}
+	runtime.poll = 5 * time.Millisecond
+
+	const modelOutput = `{
+		"shape": "discovered_cohort",
+		"requested_judgment": "status_and_drivers",
+		"time_context": {"axis": "current"},
+		"fact_requirements": [{"kind": "status"}],
+		"clarification_needed": false,
+		"window_class": "not_a_window_class",
+		"question_family": "not_a_family",
+		"group_kind": "not_a_kind",
+		"scope_anchor_kind": "not_a_kind",
+		"requested_subject_kind": "not_a_kind"
+	}`
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		respondToOneExchangeRequest(t, dir, modelOutput)
+	}()
+
+	_, receipt, err := runtime.InterpretQuestion(context.Background(),
+		storage.Principal{OrgID: "org_1"}, validFileExchangeRequest())
+	<-done
+	if err != nil {
+		t.Fatalf("InterpretQuestion() error = %v, want success -- an out-of-vocabulary shadow signal must never fail interpretation", err)
+	}
+	for _, flag := range []struct {
+		name string
+		got  bool
+	}{
+		{"WindowClassUnrecognized", receipt.WindowClassUnrecognized},
+		{"QuestionFamilyUnrecognized", receipt.QuestionFamilyUnrecognized},
+		{"GroupKindUnrecognized", receipt.GroupKindUnrecognized},
+		{"ScopeAnchorKindUnrecognized", receipt.ScopeAnchorKindUnrecognized},
+		{"RequestedSubjectKindUnrecognized", receipt.RequestedSubjectKindUnrecognized},
+	} {
+		if !flag.got {
+			t.Errorf("receipt.%s = false; an invented value must stay COUNTABLE through this transport, or the gate scores an inventing model as a correctly-omitting one", flag.name)
+		}
+	}
+}
+
+// respondToOneExchangeRequest waits for the transport to drop exactly one
+// request file and writes output back as its response.
+func respondToOneExchangeRequest(t *testing.T, dir, output string) {
+	t.Helper()
+	requests := filepath.Join(dir, "requests")
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		// discoverExchangeRequestFile, NOT os.ReadDir()[0]. CHAOS-3863
+		// documents exactly why immediately above that function: the
+		// writer publishes by temp+rename, the temp name is dot-prefixed,
+		// "." sorts before any digit, so entries[0] is DETERMINISTICALLY
+		// the temp file whenever both coexist. A responder that takes
+		// entries[0] reads the transient path, returns without writing a
+		// response, and the exchange burns its full timeout -- which is
+		// precisely what these two tests did under -race until this line
+		// changed. Reinventing the loop instead of reusing the helper
+		// beside it is how the same bug gets rediscovered a third time.
+		reqPath, err := discoverExchangeRequestFile(requests)
+		if err == nil && reqPath != "" {
+			// discoverExchangeRequestFile returns a FULL PATH, not a base
+			// name -- joining it onto requests again yields a path that
+			// does not exist.
+			raw, readErr := os.ReadFile(reqPath)
+			if readErr != nil {
+				t.Errorf("read exchange request: %v", readErr)
+				return
+			}
+			var req struct {
+				SessionNonce string `json:"session_nonce"`
+			}
+			if err := json.Unmarshal(raw, &req); err != nil {
+				t.Errorf("parse exchange request: %v", err)
+				return
+			}
+			// The envelope the transport expects, per the instruction
+			// string it sends responders (line ~159):
+			// {"session_nonce": <echoed>, "output": <the JSON object>}.
+			// Built as raw JSON rather than a typed struct so this fixture
+			// stays a byte-level stand-in for what a real responder writes.
+			final, err := json.Marshal(map[string]json.RawMessage{
+				"session_nonce": mustJSONString(t, req.SessionNonce),
+				"output":        json.RawMessage(output),
+			})
+			if err != nil {
+				t.Errorf("marshal reply: %v", err)
+				return
+			}
+			respPath := filepath.Join(dir, "responses", filepath.Base(reqPath))
+			if err := os.WriteFile(respPath, final, 0o644); err != nil {
+				t.Errorf("write exchange response: %v", err)
+			}
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Error("no exchange request appeared within the deadline")
+}
+
+func mustJSONString(t *testing.T, value string) json.RawMessage {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal string: %v", err)
+	}
+	return encoded
+}
+
+// validFileExchangeRequest is a minimal InvestigationRequest that passes
+// Validate, for driving the transport end to end.
+func validFileExchangeRequest() contextfabric.InvestigationRequest {
+	return contextfabric.InvestigationRequest{
+		RequestID:   "request_12345678",
+		Question:    "What are the project statuses for each team?",
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 	}
 }

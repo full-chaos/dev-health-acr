@@ -120,7 +120,28 @@ const (
 	// discipline as v3's original close-the-vocabulary bump: any change
 	// to the interpolated fact-kind list is a prompt content change and
 	// must bump this version.
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v9"
+	// v10 (CHAOS-4632): interpretationSystemPrompt gained five paragraphs
+	// instructing the model on group_kind, scope_anchor_term,
+	// scope_anchor_kind, requested_subject_kind and question_family. The
+	// prompt bytes changed, and v9's own doc comment above states the
+	// governing rule in as many words: ANY change to the prompt's content
+	// is a prompt content change and must bump this version.
+	//
+	// This bump is REQUIRED even though CHAOS-4632 is a shadow slice, and
+	// the reasoning is worth spelling out because it looks at first like a
+	// contradiction. Nothing is gated on the family. But this constant is
+	// a conjunctive ReuseKey dimension (ports.go, answer_reuse.go:376),
+	// and the reuse lookup runs BEFORE Interpret -- so without the bump, a
+	// stored answer produced under the OLD prompt keeps being served after
+	// deployment, and the questions whose interpretation the new
+	// instructions could change would be answered from a cache that
+	// predates them. That is a reuse-DECISION change, which is a behavior
+	// change however shadow the family itself is. Same class 0022's
+	// window_inference_version, 0031's commit_gate_version and 0035's
+	// ranking_formula_version each closed for their own decision, and the
+	// same rule CHAOS-3862 pinned with
+	// TestCHAOS3862_PromptVersionChangeInvalidatesStoredAnswerReuse.
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v10"
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
@@ -308,7 +329,20 @@ const (
 	// exists to prevent (its own doc comment above). Bumping it is the
 	// only change requested by this constant's own contract -- no
 	// caller-visible behavior changes beyond reuse eligibility.
-	DefaultSchemaVersion    = "context-fabric-model-output.v2"
+	// v3 (CHAOS-4632): interpretationOutput gained five optional fields
+	// (question_family, group_kind, scope_anchor_term, scope_anchor_kind,
+	// requested_subject_kind), so the schema genkit infers and sends to
+	// the provider is a DIFFERENT model-output contract than v2's. Unlike
+	// v2's change this is a widening rather than a tightening -- every
+	// v2-valid output is still v3-valid -- but the version exists to say
+	// which contract a stored result was produced UNDER, not merely
+	// whether the old one would still validate: a v2-era result was
+	// interpreted by a model that was never offered these fields and
+	// could not have emitted them. Leaving this at v2 would let reuse
+	// serve such a result as though it came from the same contract as a
+	// v3 call, which is exactly the version-drift class this field exists
+	// to prevent (its own doc comment above).
+	DefaultSchemaVersion    = "context-fabric-model-output.v3"
 	defaultEvaluatorVersion = "context-fabric-grounding.v1"
 	// DefaultPhrasingPromptVersion is v1 (CHAOS-4171 PR2): the SECOND
 	// bounded model call's own prompt, versioned independently of
@@ -847,7 +881,78 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	// never a transport-specific reimplementation that could silently
 	// drift.
 	receipt.WindowClass, receipt.WindowConfidence, receipt.WindowClassUnrecognized = sanitizeWindowOutput(output)
+	// CHAOS-4632 (SHADOW ONLY): the same sanitize-after-validate step for
+	// the family signals. Captured on the receipt only, never on
+	// `interpreted`; nothing downstream of this call reads them to decide
+	// anything, so these lines change no serving-path behavior. Shared
+	// with ParseInterpretationOutputFamily (exchange_support.go) so an
+	// alternate transport's receipt carries an IDENTICAL capture.
+	applyFamilyCapture(&receipt, sanitizeFamilyOutput(output))
 	return interpreted, receipt, nil
+}
+
+// interpretationFamilyCapture is the sanitized CHAOS-4632 capture from one
+// raw interpretationOutput.
+type interpretationFamilyCapture struct {
+	Family                contextfabric.QuestionFamily
+	FamilyUnrecognized    bool
+	GroupKind             contextfabric.SubjectKind
+	GroupKindUnrecognized bool
+	ScopeAnchorTerm       string
+	ScopeAnchorTruncated  bool
+	// ScopeAnchorKind and RequestedKind are the two halves of the
+	// precedence table's row-2 asymmetry test. Both reach the receipt --
+	// see ModelExecutionReceipt's own field comment for why the labelled
+	// measurement requires them to be durably captured rather than only
+	// passed through in memory.
+	//
+	// Their `unrecognized` flags are kept for a reason an earlier revision
+	// of this code got wrong: it DISCARDED both, on the theory that an
+	// unrecognized qualifier is "not a signal in its own right". That is
+	// false for the one number this slice exists to produce. The gating
+	// measurement counts FALSE EMISSION, and discarding the flag makes a
+	// model that emitted `requested_subject_kind="still_not_a_kind"`
+	// indistinguishable from one that correctly emitted NOTHING -- so a
+	// model inventing kinds would score as a model behaving perfectly,
+	// and the gate would report a correctness number that is too high by
+	// exactly the amount that matters.
+	ScopeAnchorKind             contextfabric.SubjectKind
+	ScopeAnchorKindUnrecognized bool
+	RequestedKind               contextfabric.SubjectKind
+	RequestedKindUnrecognized   bool
+}
+
+// sanitizeFamilyOutput applies the CHAOS-4632 sanitize step to a raw
+// interpretationOutput's family fields. The SOLE place this happens --
+// Runtime.InterpretQuestion and ParseInterpretationOutputFamily
+// (exchange_support.go) both call it, so a genkit call and a non-genkit
+// responder capture byte-identical values, never a transport-specific
+// reimplementation that could silently drift. Exactly the arrangement
+// sanitizeWindowOutput's own doc comment defends.
+func sanitizeFamilyOutput(output interpretationOutput) interpretationFamilyCapture {
+	capture := interpretationFamilyCapture{}
+	capture.Family, capture.FamilyUnrecognized = contextfabric.SanitizeQuestionFamily(output.QuestionFamily)
+	capture.GroupKind, capture.GroupKindUnrecognized = contextfabric.SanitizeGroupKind(output.GroupKind)
+	capture.ScopeAnchorTerm, capture.ScopeAnchorTruncated = contextfabric.SanitizeScopeAnchorTerm(output.ScopeAnchorTerm)
+	// Both unrecognized flags are KEPT, not discarded -- see the struct's
+	// own field comment for why discarding them would inflate the gating
+	// measurement precisely where it must not be inflated.
+	capture.ScopeAnchorKind, capture.ScopeAnchorKindUnrecognized = contextfabric.SanitizeGroupKind(output.ScopeAnchorKind)
+	capture.RequestedKind, capture.RequestedKindUnrecognized = contextfabric.SanitizeGroupKind(output.RequestedSubjectKind)
+	return capture
+}
+
+func applyFamilyCapture(receipt *contextfabric.ModelExecutionReceipt, capture interpretationFamilyCapture) {
+	receipt.QuestionFamily = capture.Family
+	receipt.QuestionFamilyUnrecognized = capture.FamilyUnrecognized
+	receipt.GroupKind = capture.GroupKind
+	receipt.GroupKindUnrecognized = capture.GroupKindUnrecognized
+	receipt.ScopeAnchorTerm = capture.ScopeAnchorTerm
+	receipt.ScopeAnchorTermTruncated = capture.ScopeAnchorTruncated
+	receipt.ScopeAnchorKind = capture.ScopeAnchorKind
+	receipt.ScopeAnchorKindUnrecognized = capture.ScopeAnchorKindUnrecognized
+	receipt.RequestedSubjectKind = capture.RequestedKind
+	receipt.RequestedSubjectKindUnrecognized = capture.RequestedKindUnrecognized
 }
 
 // sanitizeWindowOutput applies the CHAOS-3900 W0 sanitize-before-validate
@@ -1577,6 +1682,47 @@ type interpretationOutput struct {
 	// pick; the engine-side post-pass (graphrank.ClassifyWindow) owns bounds.
 	WindowClass      string `json:"window_class,omitempty" jsonschema:"enum=trend_assessment,enum=recent_activity_lookup,enum=state_snapshot,enum=explicit_window"`
 	WindowConfidence string `json:"window_confidence,omitempty" jsonschema:"enum=high,enum=low"`
+	// QuestionFamily/GroupKind/ScopeAnchorTerm/ScopeAnchorKind
+	// (CHAOS-4632, SHADOW ONLY) are the family pick and the two new
+	// structure signals the §4.2 precedence table keys on. Same discipline
+	// as WindowClass immediately above and for the same reason:
+	// deliberately NOT part of contextfabric.InterpretedQuestion/toDomain,
+	// sanitized directly in InterpretQuestion onto ModelExecutionReceipt,
+	// so an out-of-vocabulary pick can never be the reason an otherwise
+	// sound interpretation is rejected (the F5 control-flow rule --
+	// interpreted.Validate() runs inside toDomain, before any caller-side
+	// fallback could run, so closed-enum enforcement must sit strictly
+	// AFTER it, never inside it).
+	//
+	// NO jsonschema enum tag on group_kind/scope_anchor_kind, unlike
+	// window_class: the subject-kind vocabulary has 15 members and is
+	// rendered into the PROMPT (contextFabricSubjectKindList) rather than
+	// pinned in the response schema. That is deliberate -- a schema enum
+	// makes the provider reject the whole response for an out-of-set
+	// value, which converts a shadow capture into a way to fail a real
+	// investigation. Sanitization handles the out-of-set case instead,
+	// and the unrecognized flag makes it countable.
+	QuestionFamily  string `json:"question_family,omitempty"`
+	GroupKind       string `json:"group_kind,omitempty"`
+	ScopeAnchorTerm string `json:"scope_anchor_term,omitempty"`
+	ScopeAnchorKind string `json:"scope_anchor_kind,omitempty"`
+	// RequestedSubjectKind is the kind of thing the ANSWER is about, as
+	// distinct from the kind of any scope anchor. It exists because §4.2's
+	// row 2 is an ASYMMETRY test -- "ScopeAnchorTerm set AND the question
+	// asks about a different kind than the anchor's" -- and both halves
+	// are required for the row to fire.
+	//
+	// The alternative was to read the caller's own ContextFabricRequestedScope.
+	// ExpectedKinds, and that is wrong here: ExpectedKinds is the CALLER's
+	// explicit structure (see its own doc comment in contracts/v1), set by
+	// a panel or an agent that already knows the shape. Q-B's caller sets
+	// nothing, so row 2 would never fire and the scoped family would be
+	// unreachable -- which would make this slice's whole gating
+	// measurement unmeasurable for the one acceptance question it exists
+	// to fix. Asking the model instead puts this field in the SAME
+	// labelled measurement as group_kind and the anchor, where its
+	// correctness is checked rather than assumed.
+	RequestedSubjectKind string `json:"requested_subject_kind,omitempty"`
 }
 
 type outputTimeContext struct {

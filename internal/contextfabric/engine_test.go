@@ -315,6 +315,10 @@ type recordingTelemetry struct {
 	// because "an event happened" is precisely the assertion that let
 	// CHAOS-4085's fields ship unread.
 	factScopeExpansions []FactScopeExpansionEvent
+	// questionFamilyResolutions (CHAOS-4632) records every family
+	// resolution event verbatim, same list-not-count discipline as the
+	// fields around it.
+	questionFamilyResolutions []QuestionFamilyResolutionEvent
 	// categoryFactCompositions (CHAOS-4347) records every status-category
 	// composition event verbatim, same list-not-count discipline.
 	categoryFactCompositions       []CategoryFactCompositionEvent
@@ -487,6 +491,15 @@ func (r *recordingTelemetry) RecordGatedOfferResolution(_ context.Context, _ sto
 type cohortStructureGateRecord struct {
 	outcome CohortStructureGateOutcome
 	shape   InvestigationShape
+}
+
+// RecordQuestionFamilyResolution (CHAOS-4632) records the whole event, not
+// merely the resolved family: the per-sample rows, the downgrade count and
+// the divergence count are the fields that make a split consensus
+// diagnosable, and a double that kept only the outcome would be exactly
+// the kind of test that cannot observe them going missing.
+func (r *recordingTelemetry) RecordQuestionFamilyResolution(_ context.Context, _ storage.Principal, event QuestionFamilyResolutionEvent) {
+	r.questionFamilyResolutions = append(r.questionFamilyResolutions, event)
 }
 
 func (r *recordingTelemetry) RecordCohortStructureGate(_ context.Context, _ storage.Principal, outcome CohortStructureGateOutcome, shape InvestigationShape) {

@@ -1,0 +1,150 @@
+{
+  "comment": [
+    "CHAOS-4632 hand-labelled question set — the GATING MEASUREMENT's ground truth.",
+    "",
+    "The design's §9-S2 gate is LABELLED SEMANTIC CORRECTNESS, not emission rate, and it MUST include",
+    "NEGATIVE cases: 'a model reliably emitting GroupKind=project for Q-A scores 100% on emission and",
+    "builds the wrong group axis'. Precedence row 1 fires on GroupKind ALONE, so a model spuriously",
+    "emitting it on a plain single-subject status question routes that question to a grouped cohort.",
+    "The number that matters is therefore FALSE EMISSION as much as correct emission.",
+    "",
+    "HOW TO READ A ROW. expect_group_kind / expect_scope_anchor / expect_scope_anchor_kind /",
+    "expect_requested_kind are the CORRECT values for that question. An EMPTY string means the field",
+    "MUST be absent — those rows are the negative cases, and they are the majority of this set on",
+    "purpose. expect_family is what the §4.2 precedence table should produce GIVEN correct signals.",
+    "",
+    "expect_scope_anchor is compared case-insensitively after trimming, because it is a retrieval",
+    "pointer rather than a value — the graph resolves it, nothing branches on its text. Where more",
+    "than one verbatim substring names the SAME anchor, expect_scope_anchor_any lists the accepted",
+    "forms and expect_scope_anchor holds the canonical one; scoring accepts any member. Demanding one",
+    "exact string would measure the model's choice of substring rather than whether it found the",
+    "right anchor, which is not what the anchor is for.",
+    "",
+    "THIS FILE IS GROUND TRUTH, NOT OUTPUT. It is authored by hand and reviewed as a claim about what",
+    "these questions MEAN. Never regenerate it from model output: a label set derived from the thing it",
+    "scores measures nothing."
+  ],
+  "cases": [
+    {
+      "id": "qa-grouped-clean",
+      "question": "What are the project statuses for each team, and what are the main drivers?",
+      "note": "Acceptance question Q-A. 'for each team' is the grouping phrase; the groups ARE teams.",
+      "expect_family": "grouped_cohort_status",
+      "expect_group_kind": "team",
+      "expect_scope_anchor": "",
+      "expect_scope_anchor_kind": "",
+      "expect_requested_kind": "project"
+    },
+    {
+      "id": "qa-grouped-typo",
+      "question": "What's are the project statuses for each team, and what are the main drivers?",
+      "note": "Q-A as chris actually typed it. The typo must not change the interpretation; this pair is the typo-robustness probe.",
+      "expect_family": "grouped_cohort_status",
+      "expect_group_kind": "team",
+      "expect_scope_anchor": "",
+      "expect_scope_anchor_kind": "",
+      "expect_requested_kind": "project"
+    },
+    {
+      "id": "qb-scoped",
+      "question": "What are the statuses of the fullchaos team's projects?",
+      "note": "Acceptance question Q-B. The named term is the SCOPE, not the subject — this is the asymmetry row 2 exists for, and the CHAOS-4622 §2 defect is being asked to pick ONE subject here.",
+      "expect_family": "scoped_cohort_status",
+      "expect_group_kind": "",
+      "expect_scope_anchor": "fullchaos",
+      "expect_scope_anchor_kind": "team",
+      "expect_requested_kind": "project"
+    },
+    {
+      "id": "q1-bar-subject-status",
+      "question": "What is the status of the Dev Health Ops project?",
+      "note": "BAR question Q1. NEGATIVE for all three signals. This is the discriminating control: a model that emits group_kind here routes a plain status question to a grouped cohort.",
+      "expect_family": "subject_investigation",
+      "expect_group_kind": "",
+      "expect_scope_anchor": "",
+      "expect_scope_anchor_kind": "",
+      "expect_requested_kind": "project"
+    },
+    {
+      "id": "q2-bar-discovered-cohort",
+      "question": "Which teams are struggling, and why?",
+      "note": "BAR question Q2. NEGATIVE for group_kind: a discovered cohort is a FLAT ranked list, not a partition. 'teams' is what is being ranked, not what the results are grouped BY — this is the single most likely false-emission trap in the set.",
+      "expect_family": "discovered_cohort_ranking",
+      "expect_group_kind": "",
+      "expect_scope_anchor": "",
+      "expect_scope_anchor_kind": "",
+      "expect_requested_kind": "team"
+    },
+    {
+      "id": "neg-single-subject-why",
+      "question": "Why is the acr project struggling?",
+      "note": "NEGATIVE. A why-phrased single-subject question. Merged into subject_investigation by decision D1; drivers are ATTEMPTED, never required.",
+      "expect_family": "subject_investigation",
+      "expect_group_kind": "",
+      "expect_scope_anchor": "",
+      "expect_scope_anchor_kind": "",
+      "expect_requested_kind": "project"
+    },
+    {
+      "id": "neg-mentions-teams-but-not-grouped",
+      "question": "How many teams own the dev-health-acr repository?",
+      "note": "SCOPED, and it took two review rounds to get here — the history is the point. Revision 1 labelled requested_kind=repository (wrong: the answer is a count of TEAMS; the repository bounds the count). Revision 2 fixed that but kept family=subject_investigation with an EMPTY anchor. Main's human review caught the remaining inconsistency, and it is correct: this question is the structural MIRROR of pos-scoped-repositories. There, a named team bounds a cohort of repositories; here, a named repository bounds a cohort of teams. Same asymmetry, opposite direction. 'How many' is PRESENTATION of that cohort — a render concern, not a family: you cannot count the teams without resolving the cohort of teams. Labelling it subject_investigation with no anchor would have taught exactly the surface-form rule cases 8 and 9 exist to defeat, in reverse: 'aggregate questions have no anchor'. NEGATIVE only for group_kind, which stays empty: a bounded cohort is not a partitioned one.",
+      "expect_family": "scoped_cohort_status",
+      "expect_group_kind": "",
+      "expect_scope_anchor": "dev-health-acr",
+      "expect_scope_anchor_kind": "repository",
+      "expect_requested_kind": "team"
+    },
+    {
+      "id": "neg-possessive-but-same-kind",
+      "question": "What is the fullchaos team's status?",
+      "note": "NEGATIVE for the anchor, and the sharpest negative in the set: it has the possessive SURFACE FORM of Q-B but no asymmetry — the answer is about the team ITSELF. A model keying on \"X's Y\" grammar rather than on meaning emits an anchor here and gets it wrong.",
+      "expect_family": "subject_investigation",
+      "expect_group_kind": "",
+      "expect_scope_anchor": "",
+      "expect_scope_anchor_kind": "",
+      "expect_requested_kind": "team"
+    },
+    {
+      "id": "pos-scoped-repositories",
+      "question": "Which repositories does the platform team own?",
+      "note": "POSITIVE for the anchor without the possessive form — the asymmetry is real (repositories scoped by a team) but the grammar differs from Q-B. Pairs with neg-possessive-but-same-kind: together they check the model reads MEANING, not surface form, in both directions. expect_scope_anchor_any exists because the live run emitted 'platform' on one replicate and 'platform team' on the other, and scoring that as an error was MY label being too strict: the design is explicit that ScopeAnchorTerm is a RETRIEVAL POINTER, not a value — nothing branches on its text, only on whether it resolved, and both strings are verbatim substrings naming the same team. A scorer that demanded one exact string would be measuring the model's choice of substring rather than whether it identified the right anchor.",
+      "expect_family": "scoped_cohort_status",
+      "expect_group_kind": "",
+      "expect_scope_anchor": "platform",
+      "expect_scope_anchor_any": ["platform", "platform team"],
+      "expect_scope_anchor_kind": "team",
+      "expect_requested_kind": "repository"
+    },
+    {
+      "id": "pos-grouped-per-phrasing",
+      "question": "Show me open incidents per repository.",
+      "note": "POSITIVE for group_kind via 'per X' rather than 'for each X', and with a grouping kind that is NOT team — so a model that has simply learned 'group_kind is always team' fails this row while passing qa-grouped-clean.",
+      "expect_family": "grouped_cohort_status",
+      "expect_group_kind": "repository",
+      "expect_scope_anchor": "",
+      "expect_scope_anchor_kind": "",
+      "expect_requested_kind": "incident"
+    },
+    {
+      "id": "neg-explicit-comparison",
+      "question": "Compare the acr project to the ask-dev project over the last 90 days.",
+      "note": "NEGATIVE for both new signals. Two named subjects, no grouping, no scope. Row 3 territory.",
+      "expect_family": "explicit_comparison",
+      "expect_group_kind": "",
+      "expect_scope_anchor": "",
+      "expect_scope_anchor_kind": "",
+      "expect_requested_kind": "project"
+    },
+    {
+      "id": "neg-open-question",
+      "question": "What should I worry about?",
+      "note": "NEGATIVE for everything. An open question with no subject axis at all. A model emitting any of the three signals here is inventing structure from nothing, which is the failure mode with the least excuse.",
+      "expect_family": "discovered_cohort_ranking",
+      "expect_group_kind": "",
+      "expect_scope_anchor": "",
+      "expect_scope_anchor_kind": "",
+      "expect_requested_kind": ""
+    }
+  ]
+}
