@@ -810,8 +810,21 @@ type interpretationFamilyCapture struct {
 	// see ModelExecutionReceipt's own field comment for why the labelled
 	// measurement requires them to be durably captured rather than only
 	// passed through in memory.
-	ScopeAnchorKind contextfabric.SubjectKind
-	RequestedKind   contextfabric.SubjectKind
+	//
+	// Their `unrecognized` flags are kept for a reason an earlier revision
+	// of this code got wrong: it DISCARDED both, on the theory that an
+	// unrecognized qualifier is "not a signal in its own right". That is
+	// false for the one number this slice exists to produce. The gating
+	// measurement counts FALSE EMISSION, and discarding the flag makes a
+	// model that emitted `requested_subject_kind="still_not_a_kind"`
+	// indistinguishable from one that correctly emitted NOTHING -- so a
+	// model inventing kinds would score as a model behaving perfectly,
+	// and the gate would report a correctness number that is too high by
+	// exactly the amount that matters.
+	ScopeAnchorKind             contextfabric.SubjectKind
+	ScopeAnchorKindUnrecognized bool
+	RequestedKind               contextfabric.SubjectKind
+	RequestedKindUnrecognized   bool
 }
 
 // sanitizeFamilyOutput applies the CHAOS-4632 sanitize step to a raw
@@ -826,12 +839,11 @@ func sanitizeFamilyOutput(output interpretationOutput) interpretationFamilyCaptu
 	capture.Family, capture.FamilyUnrecognized = contextfabric.SanitizeQuestionFamily(output.QuestionFamily)
 	capture.GroupKind, capture.GroupKindUnrecognized = contextfabric.SanitizeGroupKind(output.GroupKind)
 	capture.ScopeAnchorTerm, capture.ScopeAnchorTruncated = contextfabric.SanitizeScopeAnchorTerm(output.ScopeAnchorTerm)
-	// An unrecognized anchor kind is discarded silently rather than
-	// counted: it is not a signal in its own right, only a qualifier on
-	// the anchor, and row 2 declines to fire without it -- which is the
-	// refuse-to-guess outcome an unrecognized value should produce anyway.
-	capture.ScopeAnchorKind, _ = contextfabric.SanitizeGroupKind(output.ScopeAnchorKind)
-	capture.RequestedKind, _ = contextfabric.SanitizeGroupKind(output.RequestedSubjectKind)
+	// Both unrecognized flags are KEPT, not discarded -- see the struct's
+	// own field comment for why discarding them would inflate the gating
+	// measurement precisely where it must not be inflated.
+	capture.ScopeAnchorKind, capture.ScopeAnchorKindUnrecognized = contextfabric.SanitizeGroupKind(output.ScopeAnchorKind)
+	capture.RequestedKind, capture.RequestedKindUnrecognized = contextfabric.SanitizeGroupKind(output.RequestedSubjectKind)
 	return capture
 }
 
@@ -843,7 +855,9 @@ func applyFamilyCapture(receipt *contextfabric.ModelExecutionReceipt, capture in
 	receipt.ScopeAnchorTerm = capture.ScopeAnchorTerm
 	receipt.ScopeAnchorTermTruncated = capture.ScopeAnchorTruncated
 	receipt.ScopeAnchorKind = capture.ScopeAnchorKind
+	receipt.ScopeAnchorKindUnrecognized = capture.ScopeAnchorKindUnrecognized
 	receipt.RequestedSubjectKind = capture.RequestedKind
+	receipt.RequestedSubjectKindUnrecognized = capture.RequestedKindUnrecognized
 }
 
 // sanitizeWindowOutput applies the CHAOS-3900 W0 sanitize-before-validate

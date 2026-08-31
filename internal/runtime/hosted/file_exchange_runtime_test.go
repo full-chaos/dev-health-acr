@@ -294,15 +294,28 @@ func (f *fileExchangeRuntime) InterpretQuestion(ctx context.Context, principal s
 	// divergence measurement over a live corpus run would have read as a
 	// constant "no window ever picked" regardless of what the model
 	// actually returned.
-	interpreted, window, parseErr := genkitruntime.ParseInterpretationOutputWindow(raw, request.TimeContext)
+	// CHAOS-4632: ParseInterpretationOutputSignals, not the narrower
+	// window-only parser, and ApplyInterpretationCapture rather than
+	// hand-copying fields.
+	//
+	// This transport hit the SAME defect TWICE, one slice apart, which is
+	// why the seam changed shape rather than gaining another three lines.
+	// The comment above records the first occurrence: the window fields
+	// were dropped on the floor and every shadow measurement read as "no
+	// window ever picked". The second occurrence was CHAOS-4632's family
+	// signals, which this call did not copy either -- so a labelled
+	// gate run over a live corpus would have scored transport loss as the
+	// model never emitting group_kind or a scope anchor, and the gating
+	// number would have been wrong in the direction that kills the design.
+	// One parser that cannot be half-called, plus one apply function, is
+	// what stops a third occurrence.
+	interpreted, capture, parseErr := genkitruntime.ParseInterpretationOutputSignals(raw, request.TimeContext)
 	if parseErr != nil {
 		receipt.Outcome = "invalid_output"
 		return contextfabric.InterpretedQuestion{}, receipt, fmt.Errorf("%w: %v", contextfabric.ErrModelOutput, parseErr)
 	}
 	receipt.OutputDigest = contextfabric.DigestModelValue(raw)
-	receipt.WindowClass = window.Class
-	receipt.WindowConfidence = window.Confidence
-	receipt.WindowClassUnrecognized = window.ClassUnrecognized
+	genkitruntime.ApplyInterpretationCapture(&receipt, capture)
 	// "pending_validation": RuntimeQuestionInterpreter.Interpret runs its
 	// own Validate()+classification next, exactly as it does for the real
 	// genkit runtime, and upgrades this to "success" itself.
@@ -570,5 +583,66 @@ func TestFileExchangeRoundTrip(t *testing.T) {
 	}
 	if got.Answer != "ok" {
 		t.Fatalf("output = %+v, want answer=ok", got)
+	}
+}
+
+// TestFileExchangeInterpretCarriesEveryShadowSignal is the guard for codex
+// round 2's finding 1, and it is written as a PROPERTY over the receipt
+// rather than as a list of the fields that exist today.
+//
+// This transport has now lost shadow signals TWICE, one slice apart: the
+// CHAOS-3900 window fields first, then CHAOS-4632's family fields. Both
+// times a hand-written copy block was updated for the slice that added it
+// and not for the slice after. Both times the loss was invisible, because
+// the transport is the ONLY one the live trial and shadow harnesses use --
+// so a measurement over a live corpus reads transport loss as the model
+// never emitting the signal, which is the worst possible failure for a
+// slice whose entire deliverable is a measured number.
+//
+// So this asserts the SEAM, not the fields: the receipt this transport
+// produces must equal the receipt genkit's own sanitizer would produce
+// from the identical raw output. A third shadow signal added later is
+// covered without anyone remembering to extend this test.
+func TestFileExchangeInterpretCarriesEveryShadowSignal(t *testing.T) {
+	raw := []byte(`{
+		"shape": "discovered_cohort",
+		"requested_judgment": "status_and_drivers",
+		"subject_terms": ["each team"],
+		"time_context": {"axis": "current"},
+		"fact_requirements": [{"kind": "status"}],
+		"clarification_needed": false,
+		"window_class": "trend_assessment",
+		"window_confidence": "high",
+		"question_family": "grouped_cohort_status",
+		"group_kind": "team",
+		"scope_anchor_term": "fullchaos",
+		"scope_anchor_kind": "team",
+		"requested_subject_kind": "project"
+	}`)
+	defaultTime := contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}
+
+	_, capture, err := genkitruntime.ParseInterpretationOutputSignals(raw, defaultTime)
+	if err != nil {
+		t.Fatalf("ParseInterpretationOutputSignals: %v", err)
+	}
+	var want contextfabric.ModelExecutionReceipt
+	genkitruntime.ApplyInterpretationCapture(&want, capture)
+
+	// Every shadow signal in the payload must be non-zero on the applied
+	// receipt -- otherwise this test would pass just as happily against a
+	// transport that dropped them all, which is precisely the test that
+	// could not fail and let this recur.
+	for name, value := range map[string]any{
+		"WindowClass":          want.WindowClass,
+		"WindowConfidence":     want.WindowConfidence,
+		"QuestionFamily":       want.QuestionFamily,
+		"GroupKind":            want.GroupKind,
+		"ScopeAnchorTerm":      want.ScopeAnchorTerm,
+		"ScopeAnchorKind":      want.ScopeAnchorKind,
+		"RequestedSubjectKind": want.RequestedSubjectKind,
+	} {
+		if fmt.Sprintf("%v", value) == "" {
+			t.Fatalf("%s is empty after applying a capture built from a payload that SETS it; the fixture or the apply path is broken, and this test would then pass against a transport that drops everything", name)
+		}
 	}
 }

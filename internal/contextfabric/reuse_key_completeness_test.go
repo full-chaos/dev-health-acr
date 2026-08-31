@@ -180,14 +180,16 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	// slice where the family first affects an answer (S4), not here,
 	// where adding it would cold-cache every stored answer in exchange
 	// for no safety at all.
-	"QuestionFamily":             {reason: "per-call model pick echoed for the shadow capture (telemetry only), not a version identity -- nothing is gated on the family in this slice, so no stored answer was shaped by it; QuestionFamilyTableVersion is the deployment-wide authority and becomes a ReuseKey dimension in the slice where the family first affects an answer"},
-	"QuestionFamilyUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
-	"GroupKind":                  {reason: "per-call model-emitted structure signal captured receipt-only (shadow), not a version identity -- same reasoning as QuestionFamily"},
-	"GroupKindUnrecognized":      {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
-	"ScopeAnchorTerm":            {reason: "per-call model-emitted retrieval pointer captured receipt-only (shadow), not a version identity -- and free text, which could never be a reuse dimension in any case"},
-	"ScopeAnchorTermTruncated":   {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as ScopeAnchorTerm"},
-	"ScopeAnchorKind":            {reason: "per-call model-emitted structure signal captured receipt-only (shadow), not a version identity -- same reasoning as QuestionFamily"},
-	"RequestedSubjectKind":       {reason: "per-call model-emitted structure signal captured receipt-only (shadow), not a version identity -- same reasoning as QuestionFamily"},
+	"QuestionFamily":                   {reason: "per-call model pick echoed for the shadow capture (telemetry only), not a version identity -- nothing is gated on the family in this slice, so no stored answer was shaped by it; QuestionFamilyTableVersion is the deployment-wide authority and becomes a ReuseKey dimension in the slice where the family first affects an answer"},
+	"QuestionFamilyUnrecognized":       {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"GroupKind":                        {reason: "per-call model-emitted structure signal captured receipt-only (shadow), not a version identity -- same reasoning as QuestionFamily"},
+	"GroupKindUnrecognized":            {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"ScopeAnchorTerm":                  {reason: "per-call model-emitted retrieval pointer captured receipt-only (shadow), not a version identity -- and free text, which could never be a reuse dimension in any case"},
+	"ScopeAnchorTermTruncated":         {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as ScopeAnchorTerm"},
+	"ScopeAnchorKind":                  {reason: "per-call model-emitted structure signal captured receipt-only (shadow), not a version identity -- same reasoning as QuestionFamily"},
+	"RequestedSubjectKind":             {reason: "per-call model-emitted structure signal captured receipt-only (shadow), not a version identity -- same reasoning as QuestionFamily"},
+	"ScopeAnchorKindUnrecognized":      {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"RequestedSubjectKindUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 }
 
 // TestReuseKeyClassifiesEveryVersionSetField is the class-oracle sweep over

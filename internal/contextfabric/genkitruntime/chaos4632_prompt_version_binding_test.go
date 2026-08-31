@@ -40,6 +40,25 @@ import (
 // came about, via contextFabricFactKindList) trips it too.
 func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 	t.Parallel()
+	// The MODEL-OUTPUT SCHEMA is bound here alongside the prompts.
+	//
+	// Codex round 2 caught that the first version of this guard covered
+	// only the two prompt texts, even though the P1 it was written for was
+	// about BOTH DefaultInterpretationPromptVersion and
+	// DefaultSchemaVersion. A later interpretationOutput change without a
+	// v3 -> v4 bump would have sailed through the very guard added to stop
+	// exactly that, and reuse could again serve a result produced under a
+	// different output contract. A guard that covers half its own finding
+	// is worse than none, because it reads as coverage.
+	//
+	// The schema is reflected from the Go type genkit actually sends
+	// (InterpretationOutputSchema, exchange_support.go), so a field added
+	// to interpretationOutput trips this even though no literal schema
+	// text exists in the repository to diff.
+	schema, err := InterpretationOutputSchema()
+	if err != nil {
+		t.Fatalf("InterpretationOutputSchema: %v", err)
+	}
 	for _, binding := range []struct {
 		name    string
 		version string
@@ -58,13 +77,19 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			content: synthesisSystemPrompt,
 			digest:  "81965d011760f32602f666927f7e8e29585c97046eb3e0689904f8a6c849e410",
 		},
+		{
+			name:    "interpretation model-output schema",
+			version: DefaultSchemaVersion,
+			content: string(schema),
+			digest:  "6e80b8559aad90836256efb2302c5de321bf31b7faeaff33fcc2a99b71f12d86",
+		},
 	} {
 		t.Run(binding.name, func(t *testing.T) {
 			t.Parallel()
 			sum := sha256.Sum256([]byte(binding.content))
 			got := hex.EncodeToString(sum[:])
 			if got != binding.digest {
-				t.Errorf("the %s changed but its pinned digest did not.\n  version constant: %s\n  pinned digest:    %s\n  actual digest:    %s\n\nThis is a MODEL-FACING CONTRACT CHANGE. Both prompt versions are conjunctive ReuseKey dimensions and the reuse lookup runs BEFORE Interpret, so leaving the version unchanged means stored answers produced under the OLD prompt keep being served. Bump the version constant, THEN update this digest, and record what changed in the constant's own doc comment.",
+				t.Errorf("the %s changed but its pinned digest did not.\n  version constant: %s\n  pinned digest:    %s\n  actual digest:    %s\n\nThis is a MODEL-FACING CONTRACT CHANGE. Each version here is a conjunctive ReuseKey dimension and the reuse lookup runs BEFORE Interpret, so leaving the version unchanged means stored answers produced under the OLD contract keep being served. Bump the version constant, THEN update this digest, and record what changed in the constant's own doc comment.",
 					binding.name, binding.version, binding.digest, got)
 			}
 		})

@@ -195,6 +195,12 @@ type ModelExecutionReceipt struct {
 	// AGENTS.md forbids relying on.
 	ScopeAnchorKind      SubjectKind `json:"scope_anchor_kind,omitempty"`
 	RequestedSubjectKind SubjectKind `json:"requested_subject_kind,omitempty"`
+	// The matching unrecognized flags. Every out-of-vocabulary emission
+	// must be COUNTABLE, because the gating measurement scores false
+	// emission: without these, a model inventing kind names is recorded
+	// identically to one correctly emitting nothing.
+	ScopeAnchorKindUnrecognized      bool `json:"scope_anchor_kind_unrecognized,omitempty"`
+	RequestedSubjectKindUnrecognized bool `json:"requested_subject_kind_unrecognized,omitempty"`
 }
 
 func (r ModelExecutionReceipt) Validate() error {

@@ -131,6 +131,69 @@ func TestRuntimeSanitizesOutOfVocabularyFamilySignalsRatherThanFailing(t *testin
 	if !receipt.GroupKindUnrecognized {
 		t.Error("receipt.GroupKindUnrecognized = false, want true")
 	}
+	// Codex round 2, P2: an earlier revision DISCARDED these two flags,
+	// on the theory that an unrecognized qualifier is not a signal in its
+	// own right. That reasoning is wrong for the one number this slice
+	// exists to produce. The gate counts FALSE EMISSION, so a model
+	// emitting requested_subject_kind="still_not_a_kind" must not be
+	// recorded identically to one correctly emitting NOTHING -- otherwise
+	// a model inventing kind names scores as a model behaving perfectly,
+	// and the correctness number is too high by exactly the amount that
+	// matters. The original test asserted the values were discarded and
+	// checked flags only for family and group, so it passed throughout.
+	if !receipt.ScopeAnchorKindUnrecognized {
+		t.Error("receipt.ScopeAnchorKindUnrecognized = false, want true -- an invented anchor kind must be COUNTABLE, not silently identical to a correct omission")
+	}
+	if !receipt.RequestedSubjectKindUnrecognized {
+		t.Error("receipt.RequestedSubjectKindUnrecognized = false, want true -- same reasoning")
+	}
+}
+
+// TestOmissionIsDistinguishableFromAnInventedKind states the property the
+// two flags above exist for, as a property rather than as two booleans:
+// for EVERY new signal, "the model said nothing" and "the model said
+// something invalid" must produce different receipts.
+//
+// This is the shape of the gating measurement's central risk. Both cases
+// leave the value empty; only the flags tell them apart; and they are
+// opposite conclusions about the model.
+func TestOmissionIsDistinguishableFromAnInventedKind(t *testing.T) {
+	t.Parallel()
+	omitted := validInterpretationOutput()
+
+	invented := validInterpretationOutput()
+	invented.QuestionFamily = "invented_family"
+	invented.GroupKind = "invented_kind"
+	invented.ScopeAnchorKind = "invented_kind"
+	invented.RequestedSubjectKind = "invented_kind"
+
+	runtime := mustRuntime(t, &generatorStub{interpretation: omitted}, Config{})
+	_, omittedReceipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+	if err != nil {
+		t.Fatalf("InterpretQuestion() error = %v", err)
+	}
+	inventedRuntime := mustRuntime(t, &generatorStub{interpretation: invented}, Config{})
+	_, inventedReceipt, err := inventedRuntime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+	if err != nil {
+		t.Fatalf("InterpretQuestion() error = %v", err)
+	}
+
+	for _, flag := range []struct {
+		name              string
+		omitted, invented bool
+	}{
+		{"QuestionFamilyUnrecognized", omittedReceipt.QuestionFamilyUnrecognized, inventedReceipt.QuestionFamilyUnrecognized},
+		{"GroupKindUnrecognized", omittedReceipt.GroupKindUnrecognized, inventedReceipt.GroupKindUnrecognized},
+		{"ScopeAnchorKindUnrecognized", omittedReceipt.ScopeAnchorKindUnrecognized, inventedReceipt.ScopeAnchorKindUnrecognized},
+		{"RequestedSubjectKindUnrecognized", omittedReceipt.RequestedSubjectKindUnrecognized, inventedReceipt.RequestedSubjectKindUnrecognized},
+	} {
+		if flag.omitted {
+			t.Errorf("%s = true for an OMITTING model; omission is not an error and counting it as one would pin false emission at 100%%", flag.name)
+		}
+		if !flag.invented {
+			t.Errorf("%s = false for a model that INVENTED a value; the two cases are then indistinguishable on the receipt, and the gate would score an inventing model as a perfect one", flag.name)
+		}
+	}
 }
 
 // TestRuntimeLeavesFamilyFieldsUnsetWhenModelOmitsThem pins the

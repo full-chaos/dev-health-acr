@@ -84,12 +84,12 @@
     {
       "id": "neg-mentions-teams-but-not-grouped",
       "question": "How many teams own the dev-health-acr repository?",
-      "note": "NEGATIVE, and deliberately adversarial: the question MENTIONS teams prominently but asks for neither a grouping nor a scoped cohort. The prompt says in as many words 'do NOT emit group_kind merely because the question mentions teams or projects' — this row is what checks the model obeyed it.",
+      "note": "NEGATIVE, and deliberately adversarial: the question MENTIONS teams prominently but asks for neither a grouping nor a scoped cohort. The prompt says in as many words 'do NOT emit group_kind merely because the question mentions teams or projects' — this row is what checks the model obeyed it. requested_kind is TEAM, not repository: the answer is a count of TEAMS, and the repository is what bounds the count. This label was wrong in the first revision of this file (it said repository) and was corrected after review — a model correctly emitting 'team' would have been scored wrong, which is exactly the silent ground-truth corruption these notes exist to make reviewable.",
       "expect_family": "subject_investigation",
       "expect_group_kind": "",
       "expect_scope_anchor": "",
       "expect_scope_anchor_kind": "",
-      "expect_requested_kind": "repository"
+      "expect_requested_kind": "team"
     },
     {
       "id": "neg-possessive-but-same-kind",
