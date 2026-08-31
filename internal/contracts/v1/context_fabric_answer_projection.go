@@ -97,6 +97,17 @@ type ContextFabricAnswerProjection struct {
 	// judgment rests on canonical observations, not prose.
 	KeyFacts        []ContextFabricProjectedFact     `json:"key_facts"`
 	CoverageSummary []ContextFabricProjectedCoverage `json:"coverage_summary"`
+	// CoverageDetails (CHAOS-4690) carries the canonical result's
+	// structured coverage details onto the served surface — the SAME
+	// ContextFabricCoverageDetail type, not a narrowed copy, for the same
+	// reason Temporal is the canonical label here. Bounded by the same
+	// entry cap as CoverageSummary; overflow is counted in
+	// ProjectionBudget.CoverageOmitted.
+	CoverageDetails []ContextFabricCoverageDetail `json:"coverage_details,omitempty"`
+	// EvidenceRefLabels (CHAOS-4690) maps exactly the refs this projection
+	// retains in EvidenceRefIDs to their display labels — filtered from the
+	// canonical result's own map, 1:1 with already-budgeted refs.
+	EvidenceRefLabels map[string]string `json:"evidence_ref_labels,omitempty"`
 	// Temporal is CHAOS-3781's temporal label, copied verbatim, and like
 	// Limitations it is never dropped. Nil means the answer is about
 	// current state.
@@ -331,6 +342,10 @@ type ContextFabricProjectedCoverage struct {
 	Source string                   `json:"source"`
 	State  ContextFabricSourceState `json:"state"`
 	Reason string                   `json:"reason,omitempty"`
+	// Label and StateLabel (CHAOS-4690 item 4): the canonical source
+	// observation's display labels, copied verbatim.
+	Label      string `json:"label,omitempty"`
+	StateLabel string `json:"state_label,omitempty"`
 }
 
 // ContextFabricProjectionBudget declares what the projection dropped. It is

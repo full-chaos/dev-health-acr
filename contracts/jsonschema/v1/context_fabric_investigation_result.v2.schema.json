@@ -195,6 +195,16 @@
     },
     "completeness": {
       "$ref": "context_fabric_common.v1.schema.json#/$defs/AnswerCompleteness"
+    },
+    "evidence_ref_labels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160
+      },
+      "maxProperties": 8192,
+      "description": "CHAOS-4690: display label per evidence ref id reachable on this result; on a fresh write the key set equals the result's own evidence-ref closure exactly."
     }
   },
   "required": [

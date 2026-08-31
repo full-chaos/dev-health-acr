@@ -417,6 +417,100 @@
           },
           "type": "object"
         },
+        "CoverageDetail": {
+          "additionalProperties": false,
+          "properties": {
+            "basis": {
+              "type": "string"
+            },
+            "code": {
+              "enum": [
+                "fact_unconfigured",
+                "fact_scope_unexpanded",
+                "fact_read_failed",
+                "fact_provider_reported",
+                "fact_pruned",
+                "fact_narrowed",
+                "graph_endpoint_lookup_failed",
+                "graph_exact_name_candidates_truncated",
+                "graph_cohort_denied_by_authorization",
+                "graph_unknown_relationship_type",
+                "graph_validity_unbounded"
+              ],
+              "type": "string"
+            },
+            "count": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "degrading": {
+              "type": "boolean"
+            },
+            "detail_id": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "fact_kind": {
+              "type": "string"
+            },
+            "label": {
+              "maxLength": 160,
+              "minLength": 1,
+              "type": "string"
+            },
+            "narrowed": {
+              "type": "boolean"
+            },
+            "origin_kind": {
+              "type": "string"
+            },
+            "phrasing": {
+              "maxLength": 400,
+              "type": "string"
+            },
+            "policy": {
+              "type": "string"
+            },
+            "raw": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "scope_outcome": {
+              "type": "string"
+            },
+            "skipped_kinds": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "source": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "source_state": {
+              "type": "string"
+            },
+            "supported_kinds": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            }
+          },
+          "required": [
+            "detail_id",
+            "source",
+            "code",
+            "degrading",
+            "label"
+          ],
+          "type": "object"
+        },
         "EffectiveEvidenceWindow": {
           "additionalProperties": false,
           "anyOf": [
@@ -756,8 +850,12 @@
             "complete": {
               "type": "boolean"
             },
-            "truncated": {
-              "type": "boolean"
+            "groups": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedCohortGroup"
+              },
+              "maxItems": 250,
+              "type": "array"
             },
             "kind": {
               "enum": [
@@ -786,13 +884,6 @@
               "maxItems": 250,
               "type": "array"
             },
-            "groups": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedCohortGroup"
-              },
-              "maxItems": 250
-            },
             "ranking_table": {
               "items": {
                 "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedFactRow"
@@ -808,6 +899,9 @@
             "total": {
               "minimum": 0,
               "type": "integer"
+            },
+            "truncated": {
+              "type": "boolean"
             }
           },
           "required": [
@@ -816,6 +910,56 @@
             "rationale",
             "complete",
             "members"
+          ],
+          "type": "object"
+        },
+        "ProjectedCohortGroup": {
+          "additionalProperties": false,
+          "description": "CHAOS-4636: one group of a projected grouped cohort. Mirrors the canonical CohortGroup: the group subject, its members by canonical id into ProjectedCohort.members, its OWN completeness, and the size it had before narrowing.",
+          "not": {
+            "properties": {
+              "complete": {
+                "const": true
+              },
+              "truncated": {
+                "const": true
+              }
+            },
+            "required": [
+              "complete",
+              "truncated"
+            ]
+          },
+          "properties": {
+            "complete": {
+              "type": "boolean"
+            },
+            "member_canonical_ids": {
+              "items": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 250,
+              "type": "array"
+            },
+            "subject": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/SubjectRef"
+            },
+            "total": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "subject",
+            "member_canonical_ids",
+            "complete",
+            "truncated",
+            "total"
           ],
           "type": "object"
         },
@@ -930,6 +1074,10 @@
         "ProjectedCoverage": {
           "additionalProperties": false,
           "properties": {
+            "label": {
+              "maxLength": 160,
+              "type": "string"
+            },
             "reason": {
               "maxLength": 2000,
               "type": "string"
@@ -952,6 +1100,10 @@
                 "not_applicable",
                 "pruned"
               ],
+              "type": "string"
+            },
+            "state_label": {
+              "maxLength": 160,
               "type": "string"
             }
           },
@@ -1112,12 +1264,12 @@
             "subject": {
               "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/SubjectRef"
             },
+            "table": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedFactTable",
+              "description": "CHAOS-4637 / CHAOS-4627, additive and OPTIONAL: the producer's own declaration of what `rows` IS -- a closed shape, the composite key that identifies a row, and the measures. Selection keys on this declaration instead of inferring an axis and a set of measures from row geometry, which is what three defeated inferences and one withdrawn rule (dated_fact_trend) cost. ABSENT means undeclared, and an undeclared table is never charted."
+            },
             "value": {
               "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ScalarValue"
-            },
-            "table": {
-              "description": "CHAOS-4637 / CHAOS-4627, additive and OPTIONAL: the producer's own declaration of what `rows` IS -- a closed shape, the composite key that identifies a row, and the measures. Selection keys on this declaration instead of inferring an axis and a set of measures from row geometry, which is what three defeated inferences and one withdrawn rule (dated_fact_trend) cost. ABSENT means undeclared, and an undeclared table is never charted.",
-              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedFactTable"
             }
           },
           "required": [
@@ -1147,6 +1299,60 @@
           ],
           "type": "object"
         },
+        "ProjectedFactTable": {
+          "additionalProperties": false,
+          "description": "CHAOS-4637: the declaration of what a fact's row table is. Carries no rows of its own -- it describes the rows carried beside it, so a declaration can never double a table's bytes against the response budget.",
+          "properties": {
+            "field": {
+              "description": "The canonical fact field the rows came from. A fact may carry more than one row-shaped field, so a declaration that did not name its own field would describe an unidentified table.",
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "key": {
+              "description": "The COMPOSITE identity of a row, in declared order. Names ROW columns only -- row identity is relative to the fact's own subject, which is carried by `subject` and is never duplicated here. Exactly one column for `time_series`.",
+              "items": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            "measures": {
+              "description": "The columns that MEASURE something. A measure may legitimately be absent from an individual row; a key column may not.",
+              "items": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "order_by": {
+              "description": "For `ranking` only: which declared measure the row order is by.",
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "shape": {
+              "description": "What the table IS. `time_series` is one entity indexed by an instant (exactly one key column, parsing as an instant on every row); `breakdown` is many entities with one observation each; `ranking` is many entities ordered by the measure `order_by` names.",
+              "enum": [
+                "time_series",
+                "breakdown",
+                "ranking"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "field",
+            "shape",
+            "key"
+          ],
+          "type": "object"
+        },
         "ProjectionBudget": {
           "additionalProperties": false,
           "description": "Declares what the projection dropped. truncated is true if and only if at least one omitted count is non-zero or full_result_omitted is set. Silent truncation is a defect: a caller that cannot see what was omitted cannot tell a short answer from a complete one. The counters added after this contract's first shape (limitations, warnings, coverage, reasons, values_clamped) are OPTIONAL: additive-optional means optional, so a payload produced before they existed still validates and an absent counter reads as zero. ACR itself always emits them.",
@@ -1155,13 +1361,13 @@
               "minimum": 0,
               "type": "integer"
             },
-            "cohort_members_omitted": {
+            "cohort_groups_omitted": {
               "minimum": 0,
               "type": "integer"
             },
-            "cohort_groups_omitted": {
-              "type": "integer",
-              "minimum": 0
+            "cohort_members_omitted": {
+              "minimum": 0,
+              "type": "integer"
             },
             "coverage_omitted": {
               "minimum": 0,
@@ -1224,7 +1430,7 @@
           "type": "object"
         },
         "RelativeWindowID": {
-          "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 \u00a75.1).",
+          "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 §5.1).",
           "enum": [
             "trailing_30d",
             "trailing_90d",
@@ -2175,110 +2381,6 @@
             "label"
           ],
           "type": "object"
-        },
-        "ProjectedCohortGroup": {
-          "description": "CHAOS-4636: one group of a projected grouped cohort. Mirrors the canonical CohortGroup: the group subject, its members by canonical id into ProjectedCohort.members, its OWN completeness, and the size it had before narrowing.",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "subject": {
-              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/SubjectRef"
-            },
-            "member_canonical_ids": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 512
-              },
-              "maxItems": 250
-            },
-            "complete": {
-              "type": "boolean"
-            },
-            "truncated": {
-              "type": "boolean"
-            },
-            "total": {
-              "type": "integer",
-              "minimum": 0
-            }
-          },
-          "required": [
-            "subject",
-            "member_canonical_ids",
-            "complete",
-            "truncated",
-            "total"
-          ],
-          "not": {
-            "properties": {
-              "complete": {
-                "const": true
-              },
-              "truncated": {
-                "const": true
-              }
-            },
-            "required": [
-              "complete",
-              "truncated"
-            ]
-          }
-        },
-        "ProjectedFactTable": {
-          "description": "CHAOS-4637: the declaration of what a fact's row table is. Carries no rows of its own -- it describes the rows carried beside it, so a declaration can never double a table's bytes against the response budget.",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "field": {
-              "description": "The canonical fact field the rows came from. A fact may carry more than one row-shaped field, so a declaration that did not name its own field would describe an unidentified table.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128
-            },
-            "shape": {
-              "description": "What the table IS. `time_series` is one entity indexed by an instant (exactly one key column, parsing as an instant on every row); `breakdown` is many entities with one observation each; `ranking` is many entities ordered by the measure `order_by` names.",
-              "type": "string",
-              "enum": [
-                "time_series",
-                "breakdown",
-                "ranking"
-              ]
-            },
-            "key": {
-              "description": "The COMPOSITE identity of a row, in declared order. Names ROW columns only -- row identity is relative to the fact's own subject, which is carried by `subject` and is never duplicated here. Exactly one column for `time_series`.",
-              "type": "array",
-              "minItems": 1,
-              "maxItems": 8,
-              "items": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 128
-              }
-            },
-            "measures": {
-              "description": "The columns that MEASURE something. A measure may legitimately be absent from an individual row; a key column may not.",
-              "type": "array",
-              "maxItems": 32,
-              "items": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 128
-              }
-            },
-            "order_by": {
-              "description": "For `ranking` only: which declared measure the row order is by.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128
-            }
-          },
-          "required": [
-            "field",
-            "shape",
-            "key"
-          ]
         }
       },
       "additionalProperties": false,
@@ -2307,6 +2409,13 @@
             "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ConfirmedStructureEntry"
           },
           "maxItems": 4,
+          "type": "array"
+        },
+        "coverage_details": {
+          "items": {
+            "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/CoverageDetail"
+          },
+          "maxItems": 100,
           "type": "array"
         },
         "coverage_partial": {
@@ -2340,6 +2449,16 @@
           "maxItems": 500,
           "type": "array",
           "uniqueItems": true
+        },
+        "evidence_ref_labels": {
+          "additionalProperties": {
+            "maxLength": 160,
+            "minLength": 1,
+            "type": "string"
+          },
+          "description": "CHAOS-4690: display label per evidence ref id reachable on this result; on a fresh write the key set equals the result's own evidence-ref closure exactly.",
+          "maxProperties": 8192,
+          "type": "object"
         },
         "generated_at": {
           "format": "date-time",
@@ -2515,6 +2634,9 @@
         }
       ],
       "properties": {
+        "answer_plan": {
+          "$ref": "#/$defs/context_fabric_common.v1/$defs/AnswerPlan"
+        },
         "claimed_facts": {
           "items": {
             "$ref": "#/$defs/context_fabric_common.v1/$defs/ClaimedFact"
@@ -2578,6 +2700,16 @@
           "maxItems": 500,
           "type": "array",
           "uniqueItems": true
+        },
+        "evidence_ref_labels": {
+          "additionalProperties": {
+            "maxLength": 160,
+            "minLength": 1,
+            "type": "string"
+          },
+          "description": "CHAOS-4690: display label per evidence ref id reachable on this result; on a fresh write the key set equals the result's own evidence-ref closure exactly.",
+          "maxProperties": 8192,
+          "type": "object"
         },
         "generated_at": {
           "format": "date-time",
@@ -2683,9 +2815,6 @@
         },
         "subject_resolution": {
           "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectResolution"
-        },
-        "answer_plan": {
-          "$ref": "#/$defs/context_fabric_common.v1/$defs/AnswerPlan"
         },
         "temporal": {
           "$ref": "context_fabric_common.v1.schema.json#/$defs/TemporalLabel"
@@ -2977,6 +3106,132 @@
           ],
           "type": "object"
         },
+        "AnswerPlan": {
+          "additionalProperties": false,
+          "description": "CHAOS-4636: what the question was PLANNED to be answered with, produced by a deterministic stage between interpretation and discovery. Declares which render kinds the question authorizes (so a chart is never drawn merely because the geometry allowed it), which fact kinds it needs, and the budget it was built against.",
+          "properties": {
+            "axes": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureNeedKind"
+              },
+              "maxItems": 5,
+              "type": "array"
+            },
+            "budget": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/AnswerPlanBudget"
+            },
+            "fact_kinds": {
+              "items": {
+                "enum": [
+                  "identity",
+                  "membership",
+                  "status",
+                  "actual_completion",
+                  "work",
+                  "blockers",
+                  "required_children",
+                  "pull_requests",
+                  "reviews",
+                  "continuous_integration",
+                  "deployments",
+                  "incidents",
+                  "metrics",
+                  "health",
+                  "workload",
+                  "investment",
+                  "readiness",
+                  "operational_deficiencies",
+                  "source_health",
+                  "evidence",
+                  "flow",
+                  "landscape"
+                ],
+                "type": "string"
+              },
+              "maxItems": 22,
+              "type": "array"
+            },
+            "family": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/QuestionFamily"
+            },
+            "family_source": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/QuestionFamilySource"
+            },
+            "family_version": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "group_kind": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectKind"
+            },
+            "member_kind": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectKind"
+            },
+            "narrowing": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/PlanNarrowing"
+              },
+              "maxItems": 8,
+              "type": "array"
+            },
+            "render_kinds": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/RenderKind"
+              },
+              "maxItems": 8,
+              "type": "array"
+            },
+            "require_drivers": {
+              "type": "boolean"
+            },
+            "require_ranking": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "family",
+            "family_source",
+            "family_version",
+            "require_drivers",
+            "require_ranking",
+            "budget"
+          ],
+          "type": "object"
+        },
+        "AnswerPlanBudget": {
+          "additionalProperties": false,
+          "description": "The ceiling the plan was built against and the headroom it reserved, persisted so an over-budget answer names the number that was wrong.",
+          "properties": {
+            "max_items": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_members": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_serialized_bytes": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "narrowing_basis": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/NarrowingBasis"
+            },
+            "synthesis_headroom": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "max_items",
+            "max_serialized_bytes",
+            "max_members",
+            "synthesis_headroom",
+            "narrowing_basis"
+          ],
+          "type": "object"
+        },
         "AuthorizationScope": {
           "additionalProperties": false,
           "anyOf": [
@@ -3067,6 +3322,15 @@
             "receipt_id"
           ],
           "type": "object"
+        },
+        "BudgetOverrun": {
+          "description": "Which budget axis an assembled answer exceeded.",
+          "enum": [
+            "fits",
+            "items",
+            "bytes"
+          ],
+          "type": "string"
         },
         "CandidateBoundReceipt": {
           "additionalProperties": false,
@@ -3198,12 +3462,12 @@
             "subject": {
               "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectRef"
             },
+            "table": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/ClaimedFactTable",
+              "description": "CHAOS-4637 / CHAOS-4627, additive and OPTIONAL: the producer's own declaration of what `rows` IS -- a closed shape, the composite key that identifies a row, and the measures. Selection keys on this declaration instead of inferring an axis and a set of measures from row geometry, which is what three defeated inferences and one withdrawn rule (dated_fact_trend) cost. ABSENT means undeclared, and an undeclared table is never charted."
+            },
             "value": {
               "$ref": "#/$defs/context_fabric_common.v1/$defs/ScalarValue"
-            },
-            "table": {
-              "description": "CHAOS-4637 / CHAOS-4627, additive and OPTIONAL: the producer's own declaration of what `rows` IS -- a closed shape, the composite key that identifies a row, and the measures. Selection keys on this declaration instead of inferring an axis and a set of measures from row geometry, which is what three defeated inferences and one withdrawn rule (dated_fact_trend) cost. ABSENT means undeclared, and an undeclared table is never charted.",
-              "$ref": "#/$defs/context_fabric_common.v1/$defs/ClaimedFactTable"
             }
           },
           "required": [
@@ -3233,6 +3497,60 @@
           ],
           "type": "object"
         },
+        "ClaimedFactTable": {
+          "additionalProperties": false,
+          "description": "CHAOS-4637: the declaration of what a fact's row table is. Carries no rows of its own -- it describes the rows carried beside it, so a declaration can never double a table's bytes against the response budget.",
+          "properties": {
+            "field": {
+              "description": "The canonical fact field the rows came from. A fact may carry more than one row-shaped field, so a declaration that did not name its own field would describe an unidentified table.",
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "key": {
+              "description": "The COMPOSITE identity of a row, in declared order. Names ROW columns only -- row identity is relative to the fact's own subject, which is carried by `subject` and is never duplicated here. Exactly one column for `time_series`.",
+              "items": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            "measures": {
+              "description": "The columns that MEASURE something. A measure may legitimately be absent from an individual row; a key column may not.",
+              "items": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "order_by": {
+              "description": "For `ranking` only: which declared measure the row order is by.",
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "shape": {
+              "description": "What the table IS. `time_series` is one entity indexed by an instant (exactly one key column, parsing as an instant on every row); `breakdown` is many entities with one observation each; `ranking` is many entities ordered by the measure `order_by` names.",
+              "enum": [
+                "time_series",
+                "breakdown",
+                "ranking"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "field",
+            "shape",
+            "key"
+          ],
+          "type": "object"
+        },
         "Cohort": {
           "additionalProperties": false,
           "not": {
@@ -3256,6 +3574,14 @@
             "exclusions": {
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/CohortExclusion"
+              },
+              "maxItems": 250,
+              "type": "array"
+            },
+            "groups": {
+              "description": "CHAOS-4636: absent on every flat cohort. When present, the cohort-level complete/truncated above are the conjunction/disjunction over these groups, so a reader that ignores groups gets a conservative summary of the whole union rather than a boolean describing only the first group.",
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/CohortGroup"
               },
               "maxItems": 250,
               "type": "array"
@@ -3294,14 +3620,6 @@
             },
             "truncated": {
               "type": "boolean"
-            },
-            "groups": {
-              "description": "CHAOS-4636: absent on every flat cohort. When present, the cohort-level complete/truncated above are the conjunction/disjunction over these groups, so a reader that ignores groups gets a conservative summary of the whole union rather than a boolean describing only the first group.",
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/context_fabric_common.v1/$defs/CohortGroup"
-              },
-              "maxItems": 250
             }
           },
           "required": [
@@ -3328,6 +3646,56 @@
           "required": [
             "subject",
             "reason"
+          ],
+          "type": "object"
+        },
+        "CohortGroup": {
+          "additionalProperties": false,
+          "description": "CHAOS-4636: one group of a GROUPED cohort answer. Members are named by canonical id into Cohort.members rather than nested, so the flattened member list stays authoritative and a grouped answer does not pay for every member twice against the byte budget. A group carries its OWN complete/truncated, which is the representation the flat cohort booleans could not express.",
+          "not": {
+            "properties": {
+              "complete": {
+                "const": true
+              },
+              "truncated": {
+                "const": true
+              }
+            },
+            "required": [
+              "complete",
+              "truncated"
+            ]
+          },
+          "properties": {
+            "complete": {
+              "type": "boolean"
+            },
+            "member_canonical_ids": {
+              "items": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 250,
+              "type": "array"
+            },
+            "subject": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectRef"
+            },
+            "total": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "subject",
+            "member_canonical_ids",
+            "complete",
+            "truncated",
+            "total"
           ],
           "type": "object"
         },
@@ -4180,6 +4548,13 @@
               "maxItems": 100,
               "type": "array"
             },
+            "details": {
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/CoverageDetail"
+              },
+              "maxItems": 100,
+              "type": "array"
+            },
             "partial": {
               "type": "boolean"
             },
@@ -4187,6 +4562,10 @@
               "items": {
                 "additionalProperties": false,
                 "properties": {
+                  "label": {
+                    "maxLength": 160,
+                    "type": "string"
+                  },
                   "observed_at": {
                     "format": "date-time",
                     "type": "string"
@@ -4215,6 +4594,10 @@
                     ],
                     "type": "string"
                   },
+                  "state_label": {
+                    "maxLength": 160,
+                    "type": "string"
+                  },
                   "watermark": {
                     "maxLength": 512,
                     "type": "string"
@@ -4233,6 +4616,100 @@
           "required": [
             "sources",
             "partial"
+          ],
+          "type": "object"
+        },
+        "CoverageDetail": {
+          "additionalProperties": false,
+          "properties": {
+            "basis": {
+              "type": "string"
+            },
+            "code": {
+              "enum": [
+                "fact_unconfigured",
+                "fact_scope_unexpanded",
+                "fact_read_failed",
+                "fact_provider_reported",
+                "fact_pruned",
+                "fact_narrowed",
+                "graph_endpoint_lookup_failed",
+                "graph_exact_name_candidates_truncated",
+                "graph_cohort_denied_by_authorization",
+                "graph_unknown_relationship_type",
+                "graph_validity_unbounded"
+              ],
+              "type": "string"
+            },
+            "count": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "degrading": {
+              "type": "boolean"
+            },
+            "detail_id": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "fact_kind": {
+              "type": "string"
+            },
+            "label": {
+              "maxLength": 160,
+              "minLength": 1,
+              "type": "string"
+            },
+            "narrowed": {
+              "type": "boolean"
+            },
+            "origin_kind": {
+              "type": "string"
+            },
+            "phrasing": {
+              "maxLength": 400,
+              "type": "string"
+            },
+            "policy": {
+              "type": "string"
+            },
+            "raw": {
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "scope_outcome": {
+              "type": "string"
+            },
+            "skipped_kinds": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "source": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "source_state": {
+              "type": "string"
+            },
+            "supported_kinds": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            }
+          },
+          "required": [
+            "detail_id",
+            "source",
+            "code",
+            "degrading",
+            "label"
           ],
           "type": "object"
         },
@@ -5192,6 +5669,57 @@
           ],
           "type": "object"
         },
+        "NarrowingBasis": {
+          "description": "The declared order a narrowing step takes members in. canonical_id_lexical is ARBITRARY and says so -- what a pre-read guard needs is stability, not relevance. attention_rank exists only after the fact read.",
+          "enum": [
+            "canonical_id_lexical",
+            "largest_group_round_robin",
+            "attention_rank"
+          ],
+          "type": "string"
+        },
+        "PlanNarrowing": {
+          "additionalProperties": false,
+          "description": "One recorded narrowing step. On the wire because it IS the disclosure: \"showing 2 of 3 teams, 3 of N projects each\" is a useful partial answer only if the caller is told.",
+          "properties": {
+            "after": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "basis": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/NarrowingBasis"
+            },
+            "before": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "groups": {
+              "type": "boolean"
+            },
+            "overrun": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/BudgetOverrun"
+            },
+            "stage": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/PlanNarrowingStage"
+            }
+          },
+          "required": [
+            "stage",
+            "basis",
+            "before",
+            "after"
+          ],
+          "type": "object"
+        },
+        "PlanNarrowingStage": {
+          "description": "The three moments a plan may narrow. Three, because the budgets become knowable at three different times: cardinality is all that is knowable pre-read; synthesis CREATES the drivers/findings/claims the item budget charges, so pre-synthesis can only bound its INPUTS; and only the assembled result can be measured.",
+          "enum": [
+            "cardinality",
+            "synthesis_input",
+            "assembled_result"
+          ],
+          "type": "string"
+        },
         "PriorSubjectReceiptDisposition": {
           "description": "CHAOS-3478/CHAOS-3813: closed vocabulary for what happened to one PriorSubjectReceipts entry -- unlike StructureDisposition, a skip here never vetoes the investigation (a plural, best-effort conversational hint list degrades per-item by design), it is disclosed instead.",
           "enum": [
@@ -5264,6 +5792,33 @@
             "source_version"
           ],
           "type": "object"
+        },
+        "QuestionFamily": {
+          "description": "CHAOS-4636 (promoted from CHAOS-4632's shadow vocabulary once its false-emission rate was measured on real data). The closed question-family vocabulary. It does not replace InvestigationShape.",
+          "enum": [
+            "subject_investigation",
+            "discovered_cohort_ranking",
+            "scoped_cohort_status",
+            "grouped_cohort_status",
+            "explicit_comparison",
+            "trend",
+            "investment_allocation",
+            "unclassified"
+          ],
+          "type": "string"
+        },
+        "QuestionFamilySource": {
+          "description": "How a family was reached. On the wire beside the family because \"the model said so at N=1\" and \"carried from the previous turn\" are different warrants for the same value.",
+          "enum": [
+            "model_consensus",
+            "model",
+            "model_plurality_rejected",
+            "carried",
+            "structure_precedence",
+            "fallback",
+            "none"
+          ],
+          "type": "string"
         },
         "RelationshipEdge": {
           "additionalProperties": false,
@@ -5524,7 +6079,7 @@
           "type": "object"
         },
         "RelativeWindowID": {
-          "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 \u00a75.1).",
+          "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 §5.1).",
           "enum": [
             "trailing_30d",
             "trailing_90d",
@@ -6907,323 +7462,6 @@
             "label"
           ],
           "type": "object"
-        },
-        "CohortGroup": {
-          "description": "CHAOS-4636: one group of a GROUPED cohort answer. Members are named by canonical id into Cohort.members rather than nested, so the flattened member list stays authoritative and a grouped answer does not pay for every member twice against the byte budget. A group carries its OWN complete/truncated, which is the representation the flat cohort booleans could not express.",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "subject": {
-              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectRef"
-            },
-            "member_canonical_ids": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 512
-              },
-              "maxItems": 250
-            },
-            "complete": {
-              "type": "boolean"
-            },
-            "truncated": {
-              "type": "boolean"
-            },
-            "total": {
-              "type": "integer",
-              "minimum": 0
-            }
-          },
-          "required": [
-            "subject",
-            "member_canonical_ids",
-            "complete",
-            "truncated",
-            "total"
-          ],
-          "not": {
-            "properties": {
-              "complete": {
-                "const": true
-              },
-              "truncated": {
-                "const": true
-              }
-            },
-            "required": [
-              "complete",
-              "truncated"
-            ]
-          }
-        },
-        "QuestionFamily": {
-          "description": "CHAOS-4636 (promoted from CHAOS-4632's shadow vocabulary once its false-emission rate was measured on real data). The closed question-family vocabulary. It does not replace InvestigationShape.",
-          "type": "string",
-          "enum": [
-            "subject_investigation",
-            "discovered_cohort_ranking",
-            "scoped_cohort_status",
-            "grouped_cohort_status",
-            "explicit_comparison",
-            "trend",
-            "investment_allocation",
-            "unclassified"
-          ]
-        },
-        "QuestionFamilySource": {
-          "description": "How a family was reached. On the wire beside the family because \"the model said so at N=1\" and \"carried from the previous turn\" are different warrants for the same value.",
-          "type": "string",
-          "enum": [
-            "model_consensus",
-            "model",
-            "model_plurality_rejected",
-            "carried",
-            "structure_precedence",
-            "fallback",
-            "none"
-          ]
-        },
-        "PlanNarrowingStage": {
-          "description": "The three moments a plan may narrow. Three, because the budgets become knowable at three different times: cardinality is all that is knowable pre-read; synthesis CREATES the drivers/findings/claims the item budget charges, so pre-synthesis can only bound its INPUTS; and only the assembled result can be measured.",
-          "type": "string",
-          "enum": [
-            "cardinality",
-            "synthesis_input",
-            "assembled_result"
-          ]
-        },
-        "NarrowingBasis": {
-          "description": "The declared order a narrowing step takes members in. canonical_id_lexical is ARBITRARY and says so -- what a pre-read guard needs is stability, not relevance. attention_rank exists only after the fact read.",
-          "type": "string",
-          "enum": [
-            "canonical_id_lexical",
-            "largest_group_round_robin",
-            "attention_rank"
-          ]
-        },
-        "BudgetOverrun": {
-          "description": "Which budget axis an assembled answer exceeded.",
-          "type": "string",
-          "enum": [
-            "fits",
-            "items",
-            "bytes"
-          ]
-        },
-        "PlanNarrowing": {
-          "description": "One recorded narrowing step. On the wire because it IS the disclosure: \"showing 2 of 3 teams, 3 of N projects each\" is a useful partial answer only if the caller is told.",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "stage": {
-              "$ref": "#/$defs/context_fabric_common.v1/$defs/PlanNarrowingStage"
-            },
-            "basis": {
-              "$ref": "#/$defs/context_fabric_common.v1/$defs/NarrowingBasis"
-            },
-            "before": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "after": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "groups": {
-              "type": "boolean"
-            },
-            "overrun": {
-              "$ref": "#/$defs/context_fabric_common.v1/$defs/BudgetOverrun"
-            }
-          },
-          "required": [
-            "stage",
-            "basis",
-            "before",
-            "after"
-          ]
-        },
-        "AnswerPlanBudget": {
-          "description": "The ceiling the plan was built against and the headroom it reserved, persisted so an over-budget answer names the number that was wrong.",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "max_items": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "max_serialized_bytes": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "max_members": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "synthesis_headroom": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "narrowing_basis": {
-              "$ref": "#/$defs/context_fabric_common.v1/$defs/NarrowingBasis"
-            }
-          },
-          "required": [
-            "max_items",
-            "max_serialized_bytes",
-            "max_members",
-            "synthesis_headroom",
-            "narrowing_basis"
-          ]
-        },
-        "AnswerPlan": {
-          "description": "CHAOS-4636: what the question was PLANNED to be answered with, produced by a deterministic stage between interpretation and discovery. Declares which render kinds the question authorizes (so a chart is never drawn merely because the geometry allowed it), which fact kinds it needs, and the budget it was built against.",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "family": {
-              "$ref": "#/$defs/context_fabric_common.v1/$defs/QuestionFamily"
-            },
-            "family_source": {
-              "$ref": "#/$defs/context_fabric_common.v1/$defs/QuestionFamilySource"
-            },
-            "family_version": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 64
-            },
-            "group_kind": {
-              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectKind"
-            },
-            "member_kind": {
-              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectKind"
-            },
-            "require_drivers": {
-              "type": "boolean"
-            },
-            "require_ranking": {
-              "type": "boolean"
-            },
-            "render_kinds": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/context_fabric_common.v1/$defs/RenderKind"
-              },
-              "maxItems": 8
-            },
-            "fact_kinds": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "identity",
-                  "membership",
-                  "status",
-                  "actual_completion",
-                  "work",
-                  "blockers",
-                  "required_children",
-                  "pull_requests",
-                  "reviews",
-                  "continuous_integration",
-                  "deployments",
-                  "incidents",
-                  "metrics",
-                  "health",
-                  "workload",
-                  "investment",
-                  "readiness",
-                  "operational_deficiencies",
-                  "source_health",
-                  "evidence",
-                  "flow",
-                  "landscape"
-                ]
-              },
-              "maxItems": 22
-            },
-            "axes": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureNeedKind"
-              },
-              "maxItems": 5
-            },
-            "budget": {
-              "$ref": "#/$defs/context_fabric_common.v1/$defs/AnswerPlanBudget"
-            },
-            "narrowing": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/context_fabric_common.v1/$defs/PlanNarrowing"
-              },
-              "maxItems": 8
-            }
-          },
-          "required": [
-            "family",
-            "family_source",
-            "family_version",
-            "require_drivers",
-            "require_ranking",
-            "budget"
-          ]
-        },
-        "ClaimedFactTable": {
-          "description": "CHAOS-4637: the declaration of what a fact's row table is. Carries no rows of its own -- it describes the rows carried beside it, so a declaration can never double a table's bytes against the response budget.",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "field": {
-              "description": "The canonical fact field the rows came from. A fact may carry more than one row-shaped field, so a declaration that did not name its own field would describe an unidentified table.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128
-            },
-            "shape": {
-              "description": "What the table IS. `time_series` is one entity indexed by an instant (exactly one key column, parsing as an instant on every row); `breakdown` is many entities with one observation each; `ranking` is many entities ordered by the measure `order_by` names.",
-              "type": "string",
-              "enum": [
-                "time_series",
-                "breakdown",
-                "ranking"
-              ]
-            },
-            "key": {
-              "description": "The COMPOSITE identity of a row, in declared order. Names ROW columns only -- row identity is relative to the fact's own subject, which is carried by `subject` and is never duplicated here. Exactly one column for `time_series`.",
-              "type": "array",
-              "minItems": 1,
-              "maxItems": 8,
-              "items": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 128
-              }
-            },
-            "measures": {
-              "description": "The columns that MEASURE something. A measure may legitimately be absent from an individual row; a key column may not.",
-              "type": "array",
-              "maxItems": 32,
-              "items": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 128
-              }
-            },
-            "order_by": {
-              "description": "For `ranking` only: which declared measure the row order is by.",
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128
-            }
-          },
-          "required": [
-            "field",
-            "shape",
-            "key"
-          ]
         }
       },
       "title": "ACR Context Fabric Common Shapes v1"

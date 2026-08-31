@@ -284,7 +284,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// projection does not carry -- because a declaration separated
 		// from the rows it describes leaves the consumer half of
 		// CHAOS-4627 exactly where it was.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 189},
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 206},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -323,7 +323,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// axis yet.
 		// CHAOS-4637: 283 -> 288 -- the same five ClaimedFactTable leaves
 		// as the answer_projection surface above.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 288},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 305},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -485,10 +485,23 @@ func trustedBecauseClosed(path string) bool {
 		// ContextFabricAnswerPlan.Validate before a result is stored.
 		"family", "family_source", "group_kind", "member_kind",
 		"render_kinds", "fact_kinds", "axes",
-		"stage", "basis", "narrowing_basis", "overrun":
+		"stage", "basis", "narrowing_basis", "overrun",
+		// CHAOS-4690: a coverage detail's non-display leaves are closed
+		// vocabularies or closed-enum arrays, validated by
+		// ContextFabricCoverageDetail.Validate before a result is stored:
+		// "code" (ContextFabricCoverageDetailCode), "fact_kind"
+		// (ContextFabricFactKind), "scope_outcome"/"policy" (the mirrored
+		// fact-scope vocabularies; "basis" is already trusted above),
+		// "origin_kind" (ContextFabricSubjectKind) and
+		// "supported_kinds"/"skipped_kinds" (arrays of the same enum).
+		// The detail's DISPLAY text (label/phrasing/raw) is deliberately
+		// NOT here — declared untrusted in both lists.
+		"code", "fact_kind", "scope_outcome", "policy", "origin_kind",
+		"supported_kinds", "skipped_kinds":
 		return true
 	// Opaque identifiers and digests: frozen handles, never prose.
-	case "result_id", "request_id", "receipt_id", "driver_id", "claim_id",
+	case "detail_id", // CHAOS-4690: engine-minted ordinal coverage-detail handle.
+		"result_id", "request_id", "receipt_id", "driver_id", "claim_id",
 		"finding_id", "path_id", "canonical_id", "turn_id", "schema_version",
 		"evidence_ref_ids", "claimed_fact_ids", "path_ids", "content_digest",
 		"snapshot_hash", "watermark",

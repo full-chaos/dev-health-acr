@@ -81,6 +81,17 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 	// enforces. Paths not listed are covered by the structural checks
 	// below rather than a numeric comparison.
 	goBoundsByPath := map[string]int{
+		// CHAOS-4690: CoverageDetail's own bounds, mapped to the write
+		// path's constants/clauses (ContextFabricCoverageDetail.Validate).
+		// count.minimum is Go's own "must be non-negative" clause;
+		// source shares SourceObservation's 1..128 name bound; the two
+		// kind arrays share the 32-entry cap the validator enforces.
+		"common#$defs.CoverageDetail.properties.count.minimum":            0,
+		"common#$defs.CoverageDetail.properties.raw.maxLength":            ContextFabricCoverageDetailRawMaxLength,
+		"common#$defs.CoverageDetail.properties.source.minLength":         1,
+		"common#$defs.CoverageDetail.properties.source.maxLength":         128,
+		"common#$defs.CoverageDetail.properties.supported_kinds.maxItems": contextFabricCoverageDetailKindsMaxCount,
+		"common#$defs.CoverageDetail.properties.skipped_kinds.maxItems":   contextFabricCoverageDetailKindsMaxCount,
 		// Result-level answer text and collections.
 		"result#properties.direct_judgment.maxLength":      contextFabricWriteBounds.judgmentLength,
 		"result#properties.current_state.maxLength":        contextFabricWriteBounds.judgmentLength,

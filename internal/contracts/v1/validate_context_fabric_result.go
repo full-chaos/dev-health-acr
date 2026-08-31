@@ -947,6 +947,12 @@ func (o ContextFabricSourceObservation) validate(requireTrimmed bool) error {
 	if !stringLengthBetween(strings.TrimSpace(o.Source), 1, 128) || !validSourceState(o.State) || !stringLengthBetween(o.Watermark, 0, 512) || !stringLengthBetween(o.Reason, 0, ContextFabricSourceObservationReasonMaxLength) {
 		return fmt.Errorf("source observation violates v1 bounds")
 	}
+	// CHAOS-4690: display labels are optional (absent on legacy rows) but
+	// bounded and trimmed when present.
+	if !stringLengthBetween(o.Label, 0, ContextFabricCoverageDetailLabelMaxLength) || strings.TrimSpace(o.Label) != o.Label ||
+		!stringLengthBetween(o.StateLabel, 0, ContextFabricCoverageDetailLabelMaxLength) || strings.TrimSpace(o.StateLabel) != o.StateLabel {
+		return fmt.Errorf("source observation display labels violate v1 bounds")
+	}
 	if o.ObservedAt != nil && o.ObservedAt.IsZero() {
 		return fmt.Errorf("source observation timestamp is invalid")
 	}
@@ -995,6 +1001,17 @@ func (c ContextFabricCoverage) validate(bounds contextFabricBounds) error {
 			return fmt.Errorf("coverage source names must be unique")
 		}
 		seen[source.Source] = struct{}{}
+	}
+	// CHAOS-4690: structured details are validated on the WRITE path only
+	// (stored rows are immutable; a row persisted before the field existed
+	// carries nil and a row persisted after was validated at write). nil
+	// Details stays valid — optional-first — but a non-nil array must pass
+	// the per-detail bounds, the code-conditioned field table, and the
+	// dual-write derivation pairing with DegradedReasons.
+	if c.Details != nil && bounds.coverageEntries == contextFabricWriteBounds.coverageEntries {
+		if err := validateCoverageDetails(c.Details, c.DegradedReasons, bounds.coverageEntries); err != nil {
+			return fmt.Errorf("coverage details: %w", err)
+		}
 	}
 	return nil
 }
@@ -1428,6 +1445,17 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	}
 	if err := r.Coverage.validate(bounds); err != nil {
 		return fmt.Errorf("coverage: %w", err)
+	}
+	// CHAOS-4690: EvidenceRefLabels, when present, must equal the result's
+	// own evidence-ref closure EXACTLY — not merely be a subset — so an
+	// unlabeled ref is unrepresentable on a fresh write (settled design
+	// §3.2, sol r1 F4). nil stays valid (optional-first; legacy rows and
+	// pre-composition paths). Write path only: stored rows are immutable
+	// and were checked at write.
+	if r.EvidenceRefLabels != nil && bounds.coverageEntries == contextFabricWriteBounds.coverageEntries {
+		if err := validateEvidenceRefLabels(r); err != nil {
+			return fmt.Errorf("evidence_ref_labels: %w", err)
+		}
 	}
 	if err := r.validateCompleteness(bounds); err != nil {
 		return fmt.Errorf("completeness: %w", err)

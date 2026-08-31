@@ -243,6 +243,20 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	"structured.render_shapes[].series[].points[].label",
 	"structured.render_shapes[].series[].points[].source.field",
 	"structured.coverage_summary[].reason",
+	// CHAOS-4690: display labels are server-composed from the closed
+	// display-label registry (context_fabric_display_labels.go), but get
+	// the SAME conservative untrusted classification every other "label"
+	// leaf in this list gets — a consumer that escapes them loses nothing.
+	// coverage_details[].phrasing is GENUINE model output (the synthesis
+	// disclosure surface), same standing as structure_needs[].phrasing
+	// below; coverage_details[].raw restates the composed internal reason
+	// strings, which can embed source-derived text.
+	"structured.coverage_summary[].label",
+	"structured.coverage_summary[].state_label",
+	"structured.coverage_details[].label",
+	"structured.coverage_details[].phrasing",
+	"structured.coverage_details[].raw",
+	"structured.evidence_ref_labels{}",
 	"structured.limitations[]",
 	"structured.warnings[]",
 	// CHAOS-3972 P3+W2: the projection now carries the SAME
@@ -343,6 +357,15 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.render_shapes[].series[].points[].label",
 	"structured.render_shapes[].series[].points[].source.field",
 	"structured.coverage.degraded_reasons[]",
+	// CHAOS-4690: same classification as the projection list's
+	// coverage_details/evidence_ref_labels entries, at the canonical
+	// result's own paths.
+	"structured.coverage.sources[].label",
+	"structured.coverage.sources[].state_label",
+	"structured.coverage.details[].label",
+	"structured.coverage.details[].phrasing",
+	"structured.coverage.details[].raw",
+	"structured.evidence_ref_labels{}",
 	"structured.limitations[]",
 	"structured.warnings[]",
 	// CHAOS-3900 W1: WindowOption.Label IS server-rendered, closed-vocabulary

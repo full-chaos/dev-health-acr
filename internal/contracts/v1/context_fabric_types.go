@@ -1335,12 +1335,28 @@ type ContextFabricSourceObservation struct {
 	ObservedAt *time.Time               `json:"observed_at,omitempty"`
 	Watermark  string                   `json:"watermark,omitempty"`
 	Reason     string                   `json:"reason,omitempty"`
+	// Label and StateLabel (CHAOS-4690 item 4) are the contract-carried
+	// display labels for this source chip, stamped by the engine from the
+	// display-label registry (context_fabric_display_labels.go) so a
+	// consumer never needs a prefix→label table. Optional-first: absent on
+	// every result written before they existed.
+	Label      string `json:"label,omitempty"`
+	StateLabel string `json:"state_label,omitempty"`
 }
 
 type ContextFabricCoverage struct {
 	Sources         []ContextFabricSourceObservation `json:"sources"`
 	Partial         bool                             `json:"partial"`
 	DegradedReasons []string                         `json:"degraded_reasons,omitempty"`
+	// Details (CHAOS-4690 item 1) is the structured form of every coverage
+	// reason this investigation composed — one detail per observation, from
+	// BOTH producers (canonical-fact registry and the graph reader). The
+	// degrading details' Raw strings, in order, ARE DegradedReasons (the
+	// strings are derived from the details by the coverage normalizer, so
+	// the two cannot drift while both ship). Optional-first: nil on every
+	// result written before this field existed; when non-nil the write path
+	// enforces the pairing (validateCoverageDetails).
+	Details []ContextFabricCoverageDetail `json:"details,omitempty"`
 }
 
 type ContextFabricVersionSet struct {
@@ -1468,11 +1484,21 @@ type ContextFabricInvestigationResult struct {
 	// exists and docs/design/context-fabric-result-semantics.md for the
 	// full evidence-kind distinction (canonical observation vs graph
 	// association vs source assertion vs inference).
-	ClaimedFacts        []ContextFabricClaimedFact `json:"claimed_facts"`
-	Coverage            ContextFabricCoverage      `json:"coverage"`
-	Versions            ContextFabricVersionSet    `json:"versions"`
-	DeterministicAnswer string                     `json:"deterministic_answer"`
-	Warnings            []string                   `json:"warnings"`
+	ClaimedFacts []ContextFabricClaimedFact `json:"claimed_facts"`
+	Coverage     ContextFabricCoverage      `json:"coverage"`
+	// EvidenceRefLabels (CHAOS-4690 item 4) maps every evidence ref id
+	// reachable on this result (the same closure synthesis grounding walks:
+	// result-level refs, drivers, findings, cohort members, paths and their
+	// edges, candidates) to its contract-carried display label
+	// (ContextFabricEvidenceRefLabel), so a consumer never needs an
+	// entity-type→label table. Optional-first: nil on every result written
+	// before this field existed; when non-nil the write path enforces EXACT
+	// key equality with the result's own closure — an unlabeled ref is
+	// unrepresentable on a fresh write.
+	EvidenceRefLabels   map[string]string       `json:"evidence_ref_labels,omitempty"`
+	Versions            ContextFabricVersionSet `json:"versions"`
+	DeterministicAnswer string                  `json:"deterministic_answer"`
+	Warnings            []string                `json:"warnings"`
 	// Reused marks whether this result was served from the immutable
 	// result store instead of a fresh investigation (CHAOS-3782, TRD
 	// §19.7, AC-3782-2). When true, ResultID and GeneratedAt above are NOT
