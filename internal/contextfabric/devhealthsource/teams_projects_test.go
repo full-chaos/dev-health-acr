@@ -417,7 +417,7 @@ const zeroRepositoryUUID = "00000000-0000-0000-0000-000000000000"
 func TestWorkItemProjectEdgeUsesTheCanonicalStructuredColumn(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
-	edge := relationshipByID(t, batch, "relationship:work_item_project:"+zeroRepositoryUUID+":linear:CHAOS-3802:linear:631fcb5f-c3e9-49ff-b17c-07877aaac9b7")
+	edge := relationshipByID(t, batch, devhealthsource.ProjectMembershipRelationshipIDForTest(t, devhealthsource.WorkItemSubjectCanonicalIDForTest(t, zeroRepositoryUUID, "linear:CHAOS-3802"), "linear", "631fcb5f-c3e9-49ff-b17c-07877aaac9b7", ""))
 	if edge.Type != contractsv1.ContextFabricRelationshipBelongsToProject {
 		t.Fatalf("edge type = %q, want BELONGS_TO_PROJECT", edge.Type)
 	}
@@ -456,7 +456,7 @@ func TestAttributionDerivedEdgesAreNotLabelledCanonicalTruth(t *testing.T) {
 	if edge.EpistemicStatus != contractsv1.ContextFabricEpistemicSourceAsserted {
 		t.Fatalf("%s: epistemic status = %q, want source_asserted", id, edge.EpistemicStatus)
 	}
-	work := relationshipByID(t, batch, "relationship:work_item_team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos")
+	work := relationshipByID(t, batch, devhealthsource.WorkItemTeamRelationshipIDForTest(t, "cd620f84-2602-8dea-7809-8d1f11825cf4", "gl:42", "gl:full.chaos"))
 	if work.Properties["attribution_source"].String == nil {
 		t.Fatalf("work-item attribution: the attribution's own source enum must ride along, got %+v", work.Properties)
 	}
@@ -485,7 +485,7 @@ func TestWorkItemTeamAttributionEpistemicStatusVariesBySource(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
 
-	native := relationshipByID(t, batch, "relationship:work_item_team:"+zeroRepositoryUUID+":linear:CHAOS-3802:CHAOS")
+	native := relationshipByID(t, batch, devhealthsource.WorkItemTeamRelationshipIDForTest(t, zeroRepositoryUUID, "linear:CHAOS-3802", "CHAOS"))
 	if native.Derivation != contractsv1.ContextFabricDerivationRuleInferred {
 		t.Fatalf("native_team derivation = %q, want rule_inferred (this edge is always Ops' own resolver output)", native.Derivation)
 	}
@@ -493,7 +493,7 @@ func TestWorkItemTeamAttributionEpistemicStatusVariesBySource(t *testing.T) {
 		t.Fatalf("native_team epistemic status = %q, want source_asserted: the provider itself asserted this team membership", native.EpistemicStatus)
 	}
 
-	heuristic := relationshipByID(t, batch, "relationship:work_item_team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos")
+	heuristic := relationshipByID(t, batch, devhealthsource.WorkItemTeamRelationshipIDForTest(t, "cd620f84-2602-8dea-7809-8d1f11825cf4", "gl:42", "gl:full.chaos"))
 	if heuristic.Derivation != contractsv1.ContextFabricDerivationRuleInferred {
 		t.Fatalf("project_ownership derivation = %q, want rule_inferred", heuristic.Derivation)
 	}
@@ -514,11 +514,11 @@ func TestWorkItemTeamAttributionEpistemicStatusVariesBySource(t *testing.T) {
 func TestWorkItemTeamEdgeScopesOnTheWorkItemsOwnRepository(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
-	linear := relationshipByID(t, batch, "relationship:work_item_team:"+zeroRepositoryUUID+":linear:CHAOS-3802:CHAOS")
+	linear := relationshipByID(t, batch, devhealthsource.WorkItemTeamRelationshipIDForTest(t, zeroRepositoryUUID, "linear:CHAOS-3802", "CHAOS"))
 	if got := linear.Authorization.RepositorySlugs; len(got) != 1 || got[0] != "acr-context-fabric:no-repository" {
 		t.Fatalf("repo-less-by-design work item scoped as %v, want the no-repository sentinel (not the orphan one)", got)
 	}
-	gitlab := relationshipByID(t, batch, "relationship:work_item_team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos")
+	gitlab := relationshipByID(t, batch, devhealthsource.WorkItemTeamRelationshipIDForTest(t, "cd620f84-2602-8dea-7809-8d1f11825cf4", "gl:42", "gl:full.chaos"))
 	if got := gitlab.Authorization.RepositorySlugs; len(got) != 1 || got[0] != "full.chaos/dev-health-ops" {
 		t.Fatalf("work item with a real repository scoped as %v, want its repo slug", got)
 	}

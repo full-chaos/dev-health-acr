@@ -1,6 +1,7 @@
 package devhealthsource
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -110,3 +111,59 @@ func ProjectTeamRelationshipIDForTest(t interface{ Fatalf(string, ...any) }, pro
 // the SAME expression the producers page on, rather than a second copy of it
 // that could agree with Go while production disagrees.
 func RowKeySQLForTest(columns ...string) string { return rowKeySQL(columns...) }
+
+// WorkItemTeamRelationshipIDForTest and ProjectMembershipRelationshipIDForTest
+// are the seams for the other two edge families (CHAOS-4635), for the same
+// reason ProjectTeamRelationshipIDForTest exists: an expectation must run the
+// producer's own derivation, never a second copy of it.
+//
+// Both take the RAW values a fixture seeds and derive the endpoint canonical
+// ids exactly as the producers do, so a fixture change and an expectation
+// cannot drift apart.
+func WorkItemTeamRelationshipIDForTest(t interface{ Fatalf(string, ...any) }, repoID, workItemID, teamID string) string {
+	workItemCanonicalID, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, workItemID}, nil)
+	if err != nil {
+		t.Fatalf("derive work item (%q, %q): %v", repoID, workItemID, err)
+		return ""
+	}
+	if omitted {
+		t.Fatalf("work item (%q, %q) is not representable, so no edge exists to assert on", repoID, workItemID)
+		return ""
+	}
+	return workItemTeamRelationshipID(workItemCanonicalID, teamID)
+}
+
+// ProjectMembershipRelationshipIDForTest takes the SUBJECT canonical id
+// directly rather than re-deriving it: the pull-request arm mints its own
+// legacy `pull_request:<repo>:<number>` id (see querySubjectProjectMemberships'
+// doc comment on why identity.Derive is deliberately not used there), so a
+// single derive-by-kind helper here would quietly disagree with the producer
+// for half its call sites.
+func ProjectMembershipRelationshipIDForTest(t interface{ Fatalf(string, ...any) }, subjectCanonicalID, provider, projectID, intervalSuffix string) string {
+	projectCanonicalID, omitted, err := identity.Derive(identity.KindProject, []string{provider, projectID}, nil)
+	if err != nil {
+		t.Fatalf("derive project (%q, %q): %v", provider, projectID, err)
+		return ""
+	}
+	if omitted {
+		t.Fatalf("project (%q, %q) is not representable, so no edge exists to assert on", provider, projectID)
+		return ""
+	}
+	return projectMembershipRelationshipID(subjectCanonicalID, projectCanonicalID, intervalSuffix)
+}
+
+// WorkItemSubjectCanonicalIDForTest and PullRequestSubjectCanonicalIDForTest
+// mirror the two subject-id shapes querySubjectProjectMemberships mints, so a
+// test naming a membership edge builds its FROM endpoint the same way.
+func WorkItemSubjectCanonicalIDForTest(t interface{ Fatalf(string, ...any) }, repoID, workItemID string) string {
+	id, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, workItemID}, nil)
+	if err != nil || omitted {
+		t.Fatalf("derive work item (%q, %q): omitted=%v err=%v", repoID, workItemID, omitted, err)
+		return ""
+	}
+	return id
+}
+
+func PullRequestSubjectCanonicalIDForTest(repoID string, number int) string {
+	return fmt.Sprintf("pull_request:%s:%d", repoID, number)
+}
