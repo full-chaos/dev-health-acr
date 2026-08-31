@@ -116,7 +116,7 @@ func TestBuildSynthesisPromptExcludesRowsShapedCanonicalFields(t *testing.T) {
 		Question: input.Request.Question, Interpretation: input.Interpretation,
 		Resolution: input.Graph.Resolution, Cohort: input.Graph.Cohort,
 		Paths: input.Graph.Paths, DriverCandidates: input.Graph.DriverCandidates,
-		Facts: input.Facts.Facts, Coverage: mergeCoverage(input.Graph.Coverage, input.Facts.Coverage),
+		Facts: input.Facts.Facts, Coverage: contextfabric.MergeCoverage("", input.Graph.Coverage, input.Facts.Coverage),
 	}
 	beforeBytes, err := json.Marshal(before)
 	if err != nil {

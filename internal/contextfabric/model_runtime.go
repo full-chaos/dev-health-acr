@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -1333,7 +1334,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		Limitations:        cloneSlice(draft.Limitations),
 		EvidenceRefIDs:     cloneSlice(draft.EvidenceRefIDs),
 		ClaimedFacts:       claimedFacts,
-		Coverage:           mergeCoverage(input.Graph.Coverage, input.Facts.Coverage),
+		Coverage:           MergeCoverage(principal.OrgID, input.Graph.Coverage, input.Facts.Coverage),
 		// DeterministicAnswer is server-composed, not model-authored: it is
 		// a pure function of the already-validated Status, Drivers, and
 		// ClaimedFacts, computed after ValidateAgainst has passed. That is
@@ -1608,10 +1609,24 @@ func recordModelReceipt(ctx context.Context, principal storage.Principal, sink M
 	return nil
 }
 
-func mergeCoverage(groups ...Coverage) Coverage {
+// MergeCoverage is the SINGLE pure coverage normalizer (CHAOS-4690 §3.4),
+// shared by BOTH merge call sites: this package's own Synthesize (above)
+// and genkitruntime's synthesis-input composition
+// (genkitruntime.synthesisInputFromDomain / BuildSynthesisPrompt) route the
+// SAME two coverage groups through this one function, so their merged
+// Sources/DegradedReasons/Details and minted DetailIDs can never
+// independently drift between the result the caller stores and the input
+// the model actually saw.
+//
+// orgID is used ONLY for the fail-open reconcile WARN log below -- never
+// for merge semantics, which are a pure function of groups alone. Callers
+// with no authenticated principal in scope (genkitruntime.BuildSynthesisPrompt's
+// prompt-preview path) pass "".
+func MergeCoverage(orgID string, groups ...Coverage) Coverage {
 	bySource := make(map[string]SourceObservation)
 	degraded := make(map[string]struct{})
 	partial := false
+	var allDetails []CoverageDetail
 	for _, group := range groups {
 		partial = partial || group.Partial
 		for _, source := range group.Sources {
@@ -1622,18 +1637,143 @@ func mergeCoverage(groups ...Coverage) Coverage {
 		for _, reason := range group.DegradedReasons {
 			degraded[reason] = struct{}{}
 		}
+		allDetails = append(allDetails, group.Details...)
 	}
 	sources := make([]SourceObservation, 0, len(bySource))
 	for _, source := range bySource {
 		sources = append(sources, source)
 	}
 	sort.Slice(sources, func(i, j int) bool { return sources[i].Source < sources[j].Source })
+	// CHAOS-4690 item 4: every merged source chip carries its display
+	// label, stamped from the contracts registry AFTER the priority merge
+	// above -- the label describes whichever observation actually won.
+	for i := range sources {
+		sources[i].Label = contractsv1.ContextFabricSourceObservationLabel(sources[i].Source)
+		sources[i].StateLabel = contractsv1.ContextFabricSourceStateLabel(sources[i].State)
+	}
+	// reasons: EXACTLY today's computation (dedupe map + sort.Strings) --
+	// the golden anchor this ticket must never move. Computed independently
+	// of allDetails below, so a defect on the structured half can never
+	// touch the field every existing consumer already parses.
 	reasons := make([]string, 0, len(degraded))
 	for reason := range degraded {
 		reasons = append(reasons, reason)
 	}
 	sort.Strings(reasons)
-	return Coverage{Sources: sources, Partial: partial || len(reasons) > 0, DegradedReasons: reasons}
+
+	return Coverage{
+		Sources: sources, Partial: partial || len(reasons) > 0, DegradedReasons: reasons,
+		Details: mergeCoverageDetails(allDetails, reasons, orgID),
+	}
+}
+
+// mergeCoverageDetails is MergeCoverage's own Details half (design §3.4):
+// concatenate, sort/dedupe each half separately, RECONCILE the degrading
+// half's derived Raw sequence against the ALREADY-COMPUTED reasons
+// (MergeCoverage's own golden-anchor computation above, never recomputed
+// here), and mint final ordinal ids over the reconciled order.
+//
+// Fail-open, never fail-closed: a mismatch (a group carried a
+// DegradedReasons entry with no paired detail -- a legacy test double, or a
+// future producer bug) drops the WHOLE Details array rather than ship a
+// structured surface the write-path validator would 500 the investigation
+// over (validateCoverageDetails' own 1:1 pairing requirement). The legacy
+// degraded_reasons[] computed by the caller is completely unaffected
+// either way -- this function can only ever narrow Details, never widen or
+// alter reasons.
+func mergeCoverageDetails(all []CoverageDetail, reasons []string, orgID string) []CoverageDetail {
+	var degrading, nonDegrading []CoverageDetail
+	for _, d := range all {
+		if d.Degrading {
+			degrading = append(degrading, d)
+		} else {
+			nonDegrading = append(nonDegrading, d)
+		}
+	}
+	sort.SliceStable(degrading, func(i, j int) bool { return degrading[i].Raw < degrading[j].Raw })
+	degrading = dedupeCoverageDetailsByRaw(degrading)
+	sort.SliceStable(nonDegrading, func(i, j int) bool {
+		if nonDegrading[i].Source != nonDegrading[j].Source {
+			return nonDegrading[i].Source < nonDegrading[j].Source
+		}
+		if nonDegrading[i].Code != nonDegrading[j].Code {
+			return nonDegrading[i].Code < nonDegrading[j].Code
+		}
+		return nonDegrading[i].Raw < nonDegrading[j].Raw
+	})
+	nonDegrading = dedupeCoverageDetailsBySourceCodeRaw(nonDegrading)
+
+	derived := make([]string, 0, len(degrading))
+	for _, d := range degrading {
+		derived = append(derived, d.Raw)
+	}
+	if !equalStringSlices(derived, reasons) {
+		// Content-safe by construction: org id and two counts, never a
+		// segment/reason string (engine.go:251's telemetry contract applies
+		// equally to a diagnostic log line -- this fires from a runtime
+		// package too, genkitruntime, which has no access to the engine's
+		// own EngineTelemetry sink).
+		slog.Default().Warn("context_fabric: coverage detail derivation did not reconcile with degraded_reasons, dropping structured details",
+			"org_id", orgID, "degrading_details", len(derived), "degraded_reasons", len(reasons))
+		return nil
+	}
+
+	merged := make([]CoverageDetail, 0, len(degrading)+len(nonDegrading))
+	merged = append(merged, degrading...)
+	merged = append(merged, nonDegrading...)
+	if len(merged) == 0 {
+		return nil
+	}
+	for i := range merged {
+		merged[i].DetailID = fmt.Sprintf("cov-%02d", i+1)
+	}
+	return merged
+}
+
+func dedupeCoverageDetailsByRaw(details []CoverageDetail) []CoverageDetail {
+	if len(details) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(details))
+	out := make([]CoverageDetail, 0, len(details))
+	for _, d := range details {
+		if _, ok := seen[d.Raw]; ok {
+			continue
+		}
+		seen[d.Raw] = struct{}{}
+		out = append(out, d)
+	}
+	return out
+}
+
+func dedupeCoverageDetailsBySourceCodeRaw(details []CoverageDetail) []CoverageDetail {
+	if len(details) == 0 {
+		return nil
+	}
+	type key struct{ source, code, raw string }
+	seen := make(map[key]struct{}, len(details))
+	out := make([]CoverageDetail, 0, len(details))
+	for _, d := range details {
+		k := key{d.Source, string(d.Code), d.Raw}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, d)
+	}
+	return out
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func sourceStatePriority(state SourceState) int {

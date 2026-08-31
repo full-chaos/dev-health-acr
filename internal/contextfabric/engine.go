@@ -689,6 +689,33 @@ type EngineTelemetry interface {
 	// anything was actually emitted -- budget_exhausted and no_drivers are
 	// themselves the diagnosable event, not a silent no-op.
 	RecordCohortDriverNarration(ctx context.Context, principal storage.Principal, event CohortDriverNarrationEvent)
+	// RecordEvidenceLabelFallback (CHAOS-4690 item 4, design §3.2) reports
+	// how many entries in ONE result's EvidenceRefLabels map fell back to
+	// the generic "Evidence"/"Evidence: <id>" label because their
+	// acr:v1:<entity-type>:<id> ref named an entity-type segment outside
+	// the contracts display-label registry's closed set
+	// (contextFabricEvidenceEntityLabels) -- the segment vocabulary is not
+	// itself closed at the producer signature today (evidenceRefID takes
+	// an arbitrary string, devhealthfacts/shared.go:274), so this is the
+	// only way an operator sees the fallback rate move.
+	//
+	// Content-safe by construction, same discipline every sibling method
+	// on this interface follows and this ticket's own design insists on
+	// (r2 F5): a COUNT only, never the unlabeled segment or ref id itself
+	// -- an arbitrary provider-minted segment is content-bearing and
+	// high-cardinality, exactly what engine.go's telemetry contract
+	// forbids. The concrete unlabeled ref is diagnosable from the run's
+	// own result artifact (it sits in evidence_ref_labels beside its raw
+	// ref id), never from telemetry.
+	//
+	// Declared on THIS interface, not an optional side interface, for the
+	// same CHAOS-4085/CHAOS-4089 reason every sibling method above is: a
+	// branch whose telemetry sink can be omitted by a compiling
+	// implementation is the exact failure mode this repo keeps
+	// re-learning. Called only when count > 0 -- the "nothing to do is
+	// not an outcome" convention this file's other gated telemetry
+	// already follows (RecordModelRowsStripped's own doc comment).
+	RecordEvidenceLabelFallback(ctx context.Context, principal storage.Principal, count int)
 }
 
 // CohortRankedEvent is RecordCohortRanked's content-safe payload: counts and
@@ -1755,6 +1782,20 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if e.telemetry != nil {
 		_, renderShapeEvent := SelectRenderShapes(result)
 		e.telemetry.RecordRenderShapeSelection(ctx, principal, renderShapeEvent)
+	}
+	// CHAOS-4690: the SINGLE stamp point for the decisive path -- AFTER
+	// finalizeResult/fitAssembledResult (fitAssembledResult can re-run
+	// assembly, so composing labels any earlier could stamp a Coverage/
+	// EvidenceRefLabels shape the retry then replaces), immediately before
+	// Validate. Sweep-enumerated (mirrors CHAOS-4636 sweep 2's own
+	// discipline): every other fresh-result exit from Investigate calls
+	// the SAME composer at its own equivalent point (unresolved.go's
+	// terminalResult, window.go's windowVetoResult/
+	// windowConfirmationRequiredResult, structure.go's structureVetoResult)
+	// -- never on tryReuse's reuse path, which serves an immutable stored
+	// result (design §7.3's named legacy exception).
+	if fallbacks := applyCoverageDisplayLabels(&result); fallbacks > 0 && e.telemetry != nil {
+		e.telemetry.RecordEvidenceLabelFallback(ctx, principal, fallbacks)
 	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))

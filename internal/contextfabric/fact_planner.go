@@ -129,6 +129,14 @@ type factPlanEntry struct {
 	// Both being expressible as `Pruned: true` with a different reason
 	// string is how the distinction would erode.
 	ScopeGap *FactScopeGap
+	// UnsupportedKinds and NarrowedDropped (CHAOS-4690) carry, structurally,
+	// what prunedReason/narrowedReason already put into the composed reason
+	// string: the distinct subject kinds this capability could not be asked
+	// about and how many subjects were skipped. They feed the structured
+	// CoverageDetail the registry mints beside the string, so the detail is
+	// built from the SAME partition decision, never re-derived or parsed.
+	UnsupportedKinds []SubjectKind
+	NarrowedDropped  int
 }
 
 // planFactReads decides, after interpretation and before any fan-out, which
@@ -235,16 +243,19 @@ func planFactReads(input factPlanInput, capabilities map[FactKind]FactCapability
 				continue
 			}
 			plan = append(plan, factPlanEntry{
-				Kind:   requirement.Kind,
-				Pruned: true,
-				Reason: prunedReason(capability, unsupportedKinds),
+				Kind:             requirement.Kind,
+				Pruned:           true,
+				Reason:           prunedReason(capability, unsupportedKinds),
+				UnsupportedKinds: unsupportedKinds,
 			})
 		case len(supported) < len(subjects):
 			plan = append(plan, withScopeGapDisclosure(factPlanEntry{
-				Kind:     requirement.Kind,
-				Subjects: supported,
-				Narrowed: true,
-				Reason:   narrowedReason(capability, unsupportedKinds, len(subjects)-len(supported)),
+				Kind:             requirement.Kind,
+				Subjects:         supported,
+				Narrowed:         true,
+				Reason:           narrowedReason(capability, unsupportedKinds, len(subjects)-len(supported)),
+				UnsupportedKinds: unsupportedKinds,
+				NarrowedDropped:  len(subjects) - len(supported),
 			}, input.Scope, capability))
 		default:
 			plan = append(plan, withScopeGapDisclosure(

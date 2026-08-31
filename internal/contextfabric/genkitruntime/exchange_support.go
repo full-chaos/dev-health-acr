@@ -115,9 +115,12 @@ func InterpretationOutputSchema() ([]byte, error) {
 
 // BuildSynthesisPrompt renders the exact bounded-JSON user payload
 // SynthesizeAnswer would send for this input, without performing a
-// network call.
+// network call. No authenticated principal is available on this preview
+// path, so the coverage merge's fail-open reconcile log (CHAOS-4690,
+// contextfabric.MergeCoverage) carries an empty org id here -- merge
+// semantics are otherwise byte-identical to SynthesizeAnswer's own call.
 func BuildSynthesisPrompt(input contextfabric.SynthesisInput, maxBytes int) (string, error) {
-	payload := synthesisInputFromDomain(input)
+	payload := synthesisInputFromDomain("", input)
 	encoded, err := boundedJSON(payload, maxBytes)
 	if err != nil {
 		return "", err

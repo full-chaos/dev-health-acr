@@ -293,6 +293,11 @@ type ClaimedFact = contractsv1.ContextFabricClaimedFact
 type ClaimedFactRow = contractsv1.ContextFabricClaimedFactRow
 type SourceObservation = contractsv1.ContextFabricSourceObservation
 type Coverage = contractsv1.ContextFabricCoverage
+
+// CoverageDetail (CHAOS-4690) is one structured coverage reason -- the
+// wire type, aliased so producers (fact_registry, falkorgraph) mint the
+// exact object the contract validates.
+type CoverageDetail = contractsv1.ContextFabricCoverageDetail
 type AnswerCompleteness = contractsv1.ContextFabricAnswerCompleteness
 type TerminalReason = contractsv1.ContextFabricTerminalReason
 type VersionSet = contractsv1.ContextFabricVersionSet

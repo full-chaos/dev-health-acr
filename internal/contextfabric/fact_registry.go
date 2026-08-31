@@ -508,7 +508,8 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		requirement := requirementsByKind[planned.Kind]
 		registered, ok := r.providers[planned.Kind]
 		if !ok {
-			appendFactCoverage(&bundle, planned.Kind, SourceUnconfigured, nil, "", "canonical fact capability is not configured")
+			appendFactCoverage(&bundle, planned.Kind, SourceUnconfigured, nil, "", "canonical fact capability is not configured",
+				coverageDetailSpec{Code: contractsv1.ContextFabricCoverageDetailFactUnconfigured})
 			r.recordFactRead(ctx, principal, planned.Kind, factReadUnconfigured, SourceUnconfigured, planned.Subjects, 0, false)
 			continue
 		}
@@ -527,7 +528,11 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			// answer-facing sentence is composed from the same decision by
 			// the engine (applyFactScopeDisclosure).
 			gapState := factScopeGapSourceState(planned.ScopeGap.Outcome)
-			appendFactCoverage(&bundle, planned.Kind, gapState, nil, "", planned.Reason)
+			appendFactCoverage(&bundle, planned.Kind, gapState, nil, "", planned.Reason, coverageDetailSpec{
+				Code:           contractsv1.ContextFabricCoverageDetailFactScopeUnexpanded,
+				ScopeGap:       planned.ScopeGap,
+				SupportedKinds: registered.capability.SupportedSubjectKinds,
+			})
 			r.recordFactRead(ctx, principal, planned.Kind, factReadScopeGap, gapState, planned.Subjects, 0, false)
 			continue
 		}
@@ -539,7 +544,10 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			// the bundle partial, because nothing is actually missing from
 			// the answer. factStateDegrades(SourcePruned) is false for that
 			// reason.
-			appendFactCoverage(&bundle, planned.Kind, SourcePruned, nil, "", planned.Reason)
+			appendFactCoverage(&bundle, planned.Kind, SourcePruned, nil, "", planned.Reason, coverageDetailSpec{
+				Code:           contractsv1.ContextFabricCoverageDetailFactPruned,
+				SupportedKinds: registered.capability.SupportedSubjectKinds,
+			})
 			r.recordFactRead(ctx, principal, planned.Kind, factReadPruned, SourcePruned, planned.Subjects, 0, false)
 			continue
 		}
@@ -571,7 +579,8 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			// things. Recording only the failure would silently drop the
 			// record that subjects were dropped -- the unexplained absence
 			// the empty-states rule forbids.
-			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(planned, reason))
+			appendFactCoverage(&bundle, planned.Kind, state, nil, "", withNarrowingNote(planned, reason),
+				factDetailSpecForRead(planned, registered.capability, true, reason))
 			r.recordFactRead(ctx, principal, planned.Kind, factReadFailed, state, query.Subjects, 0, false)
 			continue
 		}
@@ -581,6 +590,11 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		// the narrowing rides on the capability's own observation instead.
 		// Prefixed, never replacing: whatever the provider said about its
 		// own read still has to survive.
+		//
+		// CHAOS-4690: the provider's ORIGINAL reason is captured first — the
+		// structured detail's code depends on whether the provider itself
+		// said anything, which the prefixed composite can no longer answer.
+		providerReason := result.Reason
 		result.Reason = withNarrowingNote(planned, result.Reason)
 		// CHAOS-4099, codex round 3. A read that succeeded over a subject set
 		// the resolver KNOWS is incomplete is a truncated read, and says so.
@@ -601,7 +615,8 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 		// afterwards would report the retained count as the returned count
 		// and hide exactly the truncation the same line reports.
 		factsReturned := len(result.Facts)
-		if err := mergeFactProviderResult(&bundle, registered.capability, query, result, allowedSubjects); err != nil {
+		if err := mergeFactProviderResult(&bundle, registered.capability, query, result, allowedSubjects,
+			factDetailSpecForRead(planned, registered.capability, false, providerReason)); err != nil {
 			// Same reasoning as buildFactQuery's error above: the resolved
 			// scope rides out with the error so its telemetry is not lost.
 			//
@@ -849,7 +864,7 @@ func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, c
 	return FactQuery{Kind: requirement.Kind, Subjects: append([]SubjectRef(nil), subjects...), Cohort: request.Cohort, Time: request.Question.TimeContext, Parameters: parameters}, nil
 }
 
-func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapability, query FactQuery, result FactProviderResult, allowed map[string]SubjectRef) error {
+func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapability, query FactQuery, result FactProviderResult, allowed map[string]SubjectRef, detailSpec coverageDetailSpec) error {
 	if !validFactSourceState(result.State) {
 		return fmt.Errorf("provider returned invalid source state %q", result.State)
 	}
@@ -967,7 +982,7 @@ func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapabil
 	if result.Watermark != "" {
 		bundle.Watermarks[capability.Kind] = result.Watermark
 	}
-	appendFactCoverage(bundle, capability.Kind, result.State, result.ObservedAt, result.Watermark, result.Reason)
+	appendFactCoverage(bundle, capability.Kind, result.State, result.ObservedAt, result.Watermark, result.Reason, detailSpec)
 	// F1: only a provider that actually CONTRIBUTED counts toward the
 	// composed grain. A degraded or empty provider reporting a grain
 	// would let a source that answered nothing coarsen the whole answer.
@@ -1028,15 +1043,61 @@ func coarsestGrain(current, candidate TemporalGrain) TemporalGrain {
 	return current
 }
 
-func appendFactCoverage(bundle *CanonicalFactBundle, kind FactKind, state SourceState, observedAt *time.Time, watermark, reason string) {
+// coverageDetailSpec (CHAOS-4690) carries the STRUCTURED half of one
+// coverage observation into appendFactCoverage — the same decision the
+// composed reason string states, as fields. Code may be left empty: an
+// observation that degrades or carries a reason without an explicit code
+// (a provider's own state/reason, or a merge-induced truncation) defaults
+// to fact_provider_reported, so a degraded reason can never be appended
+// without its paired detail (the dual-write derivation depends on that).
+type coverageDetailSpec struct {
+	Code            contractsv1.ContextFabricCoverageDetailCode
+	ScopeGap        *FactScopeGap
+	SupportedKinds  []SubjectKind
+	SkippedKinds    []SubjectKind
+	NarrowedDropped int
+	Narrowed        bool
+}
+
+// factDetailSpecForRead derives the read-path spec from the plan entry, per
+// the settled design's fixed code precedence: fact_scope_unexpanded >
+// fact_read_failed > fact_provider_reported > fact_narrowed. Narrowing
+// rides as fields on whichever code wins.
+func factDetailSpecForRead(planned factPlanEntry, capability FactCapability, failed bool, providerReason string) coverageDetailSpec {
+	spec := coverageDetailSpec{
+		SupportedKinds: capability.SupportedSubjectKinds,
+	}
+	if planned.Narrowed {
+		spec.Narrowed = true
+		spec.SkippedKinds = planned.UnsupportedKinds
+		spec.NarrowedDropped = planned.NarrowedDropped
+	}
+	switch {
+	case planned.ScopeGap != nil:
+		spec.Code = contractsv1.ContextFabricCoverageDetailFactScopeUnexpanded
+		spec.ScopeGap = planned.ScopeGap
+	case failed:
+		spec.Code = contractsv1.ContextFabricCoverageDetailFactReadFailed
+	case strings.TrimSpace(providerReason) != "":
+		spec.Code = contractsv1.ContextFabricCoverageDetailFactProviderReported
+	case planned.Narrowed:
+		spec.Code = contractsv1.ContextFabricCoverageDetailFactNarrowed
+	}
+	return spec
+}
+
+func appendFactCoverage(bundle *CanonicalFactBundle, kind FactKind, state SourceState, observedAt *time.Time, watermark, reason string, spec coverageDetailSpec) {
 	if strings.TrimSpace(reason) == "" && state != SourceAvailable {
 		reason = "canonical fact capability returned " + string(state)
 	}
+	clampedReason := clampCoverageText(reason, maxCoverageReasonLength)
 	bundle.Coverage.Sources = append(bundle.Coverage.Sources, SourceObservation{
 		Source: "canonical_fact:" + string(kind), State: state, ObservedAt: observedAt, Watermark: watermark,
-		Reason: clampCoverageText(reason, maxCoverageReasonLength),
+		Reason: clampedReason,
 	})
-	if factStateDegrades(state) {
+	degrades := factStateDegrades(state)
+	var degradedEntry string
+	if degrades {
 		bundle.Coverage.Partial = true
 		// Codex round-2 R2-3: clamp the COMPOSED string, not its ingredients.
 		// Clamping reason first and then prefixing "<kind>: " pushed the
@@ -1046,11 +1107,66 @@ func appendFactCoverage(bundle *CanonicalFactBundle, kind FactKind, state Source
 		// prevent. A narrowed provider that fails with a long reason is the
 		// live path: the narrowing note and the failure reason are
 		// concatenated before they ever reach here.
-		bundle.Coverage.DegradedReasons = append(
-			bundle.Coverage.DegradedReasons,
-			clampCoverageText(string(kind)+": "+reason, maxCoverageDegradedReasonLength),
-		)
+		degradedEntry = clampCoverageText(string(kind)+": "+reason, maxCoverageDegradedReasonLength)
+		bundle.Coverage.DegradedReasons = append(bundle.Coverage.DegradedReasons, degradedEntry)
 	}
+	// CHAOS-4690: the paired structured detail. Minted for every
+	// observation that says anything (a degrading state, a non-available
+	// state, or any reason at all); the plain available-and-silent row gets
+	// none. Degrading is EXACTLY factStateDegrades — never a second table
+	// (sol r1 F2) — and a degrading observation ALWAYS gets a detail whose
+	// Raw is the exact DegradedReasons entry just appended, so the
+	// derivation pairing (contracts validateCoverageDetails) holds by
+	// construction.
+	if !degrades && state == SourceAvailable && strings.TrimSpace(reason) == "" {
+		return
+	}
+	code := spec.Code
+	if code == "" {
+		code = contractsv1.ContextFabricCoverageDetailFactProviderReported
+	}
+	// A narrowed read whose provider then reported a non-available state is
+	// a provider-reported observation with narrowing riding along — the
+	// sole-cause fact_narrowed code is reserved for the available-and-silent
+	// narrowed read (settled design's precedence rule).
+	if code == contractsv1.ContextFabricCoverageDetailFactNarrowed && state != SourceAvailable {
+		code = contractsv1.ContextFabricCoverageDetailFactProviderReported
+	}
+	detail := CoverageDetail{
+		// Provisional per-bundle ordinal id: mergeCoverage re-mints the
+		// final result-wide "cov-NN" ids after normalization; this id
+		// exists so a bundle's own Coverage is contract-valid standalone.
+		DetailID:    fmt.Sprintf("cov-fact-%02d", len(bundle.Coverage.Details)+1),
+		Source:      "canonical_fact:" + string(kind),
+		Code:        code,
+		Degrading:   degrades,
+		FactKind:    kind,
+		SourceState: state,
+		Narrowed:    spec.Narrowed,
+	}
+	if len(spec.SupportedKinds) > 0 {
+		detail.SupportedKinds = append([]SubjectKind(nil), spec.SupportedKinds...)
+	}
+	if spec.Narrowed {
+		detail.SkippedKinds = append([]SubjectKind(nil), spec.SkippedKinds...)
+		if code == contractsv1.ContextFabricCoverageDetailFactNarrowed {
+			dropped := spec.NarrowedDropped
+			detail.Count = &dropped
+		}
+	}
+	if spec.ScopeGap != nil {
+		detail.ScopeOutcome = string(spec.ScopeGap.Outcome)
+		detail.OriginKind = spec.ScopeGap.OriginKind
+		detail.Policy = string(spec.ScopeGap.Policy)
+		detail.Basis = string(spec.ScopeGap.Basis)
+	}
+	if degrades {
+		detail.Raw = degradedEntry
+	} else {
+		detail.Raw = clampedReason
+	}
+	detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
+	bundle.Coverage.Details = append(bundle.Coverage.Details, detail)
 }
 
 // clampCoverageText bounds one coverage string to the contract's limit.

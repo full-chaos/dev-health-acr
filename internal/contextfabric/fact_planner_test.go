@@ -606,7 +606,7 @@ func TestAppendFactCoverageClampsReasonToContractBound(t *testing.T) {
 	t.Parallel()
 
 	bundle := CanonicalFactBundle{Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}}
-	appendFactCoverage(&bundle, FactWorkload, SourcePruned, nil, "", strings.Repeat("x", maxCoverageReasonLength+500))
+	appendFactCoverage(&bundle, FactWorkload, SourcePruned, nil, "", strings.Repeat("x", maxCoverageReasonLength+500), coverageDetailSpec{})
 	if got := len(bundle.Coverage.Sources[0].Reason); got != maxCoverageReasonLength {
 		t.Fatalf("reason length = %d, want it clamped to %d", got, maxCoverageReasonLength)
 	}
@@ -813,7 +813,7 @@ func TestAppendFactCoverageDegradedReasonStaysWithinBounds(t *testing.T) {
 	bundle := CanonicalFactBundle{Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}}
 	// Exactly at the reason bound: the old code left this untouched, then
 	// prefixed it, producing an over-long degraded entry.
-	appendFactCoverage(&bundle, FactOperationalDeficiencies, SourceUnavailable, nil, "", strings.Repeat("x", maxCoverageReasonLength))
+	appendFactCoverage(&bundle, FactOperationalDeficiencies, SourceUnavailable, nil, "", strings.Repeat("x", maxCoverageReasonLength), coverageDetailSpec{})
 	if err := bundle.Coverage.Validate(); err != nil {
 		t.Fatalf("Coverage.Validate() error = %v, want the composed degraded reason within v1 bounds", err)
 	}

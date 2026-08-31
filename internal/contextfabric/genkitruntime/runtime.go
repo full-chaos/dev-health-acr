@@ -972,7 +972,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, errors.New("authenticated organization is required")
 	}
-	payload := synthesisInputFromDomain(input)
+	payload := synthesisInputFromDomain(principal.OrgID, input)
 	encoded, err := boundedJSON(payload, r.config.MaxInputBytes)
 	if err != nil {
 		return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, err
@@ -1859,12 +1859,17 @@ type synthesisInput struct {
 	Coverage         contextfabric.Coverage            `json:"coverage"`
 }
 
-func synthesisInputFromDomain(input contextfabric.SynthesisInput) synthesisInput {
+// synthesisInputFromDomain composes the exact bounded-JSON payload
+// SynthesizeAnswer sends the model. orgID (CHAOS-4690) feeds
+// contextfabric.MergeCoverage's own fail-open reconcile WARN log only --
+// never merge semantics; BuildSynthesisPrompt's prompt-preview path has no
+// authenticated principal in scope and passes "".
+func synthesisInputFromDomain(orgID string, input contextfabric.SynthesisInput) synthesisInput {
 	return synthesisInput{
 		Question: input.Request.Question, Interpretation: input.Interpretation,
 		Resolution: input.Graph.Resolution, Cohort: input.Graph.Cohort,
 		Paths: input.Graph.Paths, DriverCandidates: input.Graph.DriverCandidates,
-		Facts: modelFacingFacts(input.Facts.Facts), Coverage: mergeCoverage(input.Graph.Coverage, input.Facts.Coverage),
+		Facts: modelFacingFacts(input.Facts.Facts), Coverage: contextfabric.MergeCoverage(orgID, input.Graph.Coverage, input.Facts.Coverage),
 	}
 }
 
@@ -2018,31 +2023,13 @@ func cloneStringMap(values map[string]string) map[string]string {
 	return result
 }
 
-func mergeCoverage(groups ...contextfabric.Coverage) contextfabric.Coverage {
-	bySource := make(map[string]contextfabric.SourceObservation)
-	reasons := make(map[string]struct{})
-	partial := false
-	for _, group := range groups {
-		partial = partial || group.Partial
-		for _, source := range group.Sources {
-			bySource[source.Source] = source
-		}
-		for _, reason := range group.DegradedReasons {
-			reasons[reason] = struct{}{}
-		}
-	}
-	sources := make([]contextfabric.SourceObservation, 0, len(bySource))
-	for _, source := range bySource {
-		sources = append(sources, source)
-	}
-	sort.Slice(sources, func(i, j int) bool { return sources[i].Source < sources[j].Source })
-	degraded := make([]string, 0, len(reasons))
-	for reason := range reasons {
-		degraded = append(degraded, reason)
-	}
-	sort.Strings(degraded)
-	return contextfabric.Coverage{Sources: sources, Partial: partial || len(degraded) > 0, DegradedReasons: degraded}
-}
+// mergeCoverage is deliberately GONE (CHAOS-4690): this package used to
+// carry its own duplicate coverage-merge implementation (no state
+// priority, no structured details) that could disagree with
+// contextfabric's own merge at model_runtime.go:1336 -- the exact dual-write
+// drift risk design §3.4 exists to close. Both call sites
+// (synthesisInputFromDomain below) now route through the ONE shared pure
+// normalizer, contextfabric.MergeCoverage.
 
 var _ contextfabric.ModelRuntime = (*Runtime)(nil)
 var _ contextfabric.OfferPhrasingModelRuntime = (*Runtime)(nil)

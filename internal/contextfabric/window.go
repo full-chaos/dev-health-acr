@@ -1245,6 +1245,11 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 	// Investigate, so it stamps completeness itself, immediately before
 	// its own Validate -- same placement rule as everywhere else.
 	result.Completeness = ComputeAnswerCompleteness(result)
+	// CHAOS-4690: same "own independent exit, stamp immediately before its
+	// own Validate" placement rule as Completeness above.
+	if fallbacks := applyCoverageDisplayLabels(&result); fallbacks > 0 && e.telemetry != nil {
+		e.telemetry.RecordEvidenceLabelFallback(ctx, principal, fallbacks)
+	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
@@ -1540,6 +1545,11 @@ func (e *Engine) windowConfirmationRequiredResult(
 	// exit from Investigate, so it stamps completeness itself, immediately
 	// before its own Validate -- same placement rule as everywhere else.
 	result.Completeness = ComputeAnswerCompleteness(result)
+	// CHAOS-4690: same "own independent exit, stamp immediately before its
+	// own Validate" placement rule as Completeness above.
+	if fallbacks := applyCoverageDisplayLabels(&result); fallbacks > 0 && e.telemetry != nil {
+		e.telemetry.RecordEvidenceLabelFallback(ctx, principal, fallbacks)
+	}
 	if err := ValidateResult(result); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
