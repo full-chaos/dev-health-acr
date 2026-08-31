@@ -668,6 +668,20 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 // not the interface, is exactly how CHAOS-4631's "no contract change"
 // claim stays true while still shipping the sample parameter the design
 // says must ship now for S2 to consume later.
+//
+// CAVEAT (codex round 1, P2): the sample index only governs the PRIMARY
+// model's seed. If r.config.Fallback is configured and the primary call
+// fails or returns invalid output, the fallback leg runs through
+// r.config.Fallback.InterpretQuestion -- the plain contextfabric.ModelRuntime
+// interface method, which has no sample parameter at all, so a fallback
+// response is always generated under whatever decoding the fallback
+// ModelRuntime uses on its own sample 0, never seed_i. The returned receipt
+// still reports this truthfully (Outcome=="fallback", FallbackUsed==true),
+// so a caller doing an N-sample measurement MUST check FallbackUsed and
+// exclude/flag any such sample -- treating it as a genuine seed_i data
+// point would silently corrupt a distribution measurement with a repeated
+// fallback-sample-0 result. interpretseedbench.Run surfaces FallbackUsed on
+// every Sample for exactly this reason.
 func (r *Runtime) InterpretQuestionForSample(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, sample int) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
 	return r.interpretQuestionWithSample(ctx, principal, request, sample)
 }

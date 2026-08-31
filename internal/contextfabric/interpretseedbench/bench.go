@@ -66,11 +66,22 @@ type Interpreter interface {
 
 // Sample is one (question, sample-index) measurement.
 type Sample struct {
-	QuestionID   string        `json:"question_id"`
-	Sample       int           `json:"sample"`
-	Shape        string        `json:"shape"`
-	Outcome      string        `json:"outcome"`
-	Error        string        `json:"error,omitempty"`
+	QuestionID string `json:"question_id"`
+	Sample     int    `json:"sample"`
+	Shape      string `json:"shape"`
+	Outcome    string `json:"outcome"`
+	Error      string `json:"error,omitempty"`
+	// FallbackUsed (codex round 1, P2) is true when the primary model
+	// failed and a configured fallback answered instead. genkitruntime's
+	// InterpretQuestionForSample doc comment explains why this matters
+	// here specifically: the fallback leg has no sample parameter at all,
+	// so its response was generated under the fallback's own sample-0
+	// decoding, never seed_i -- a FallbackUsed sample is NOT a genuine
+	// (question, sample) data point and must be excluded from any
+	// distribution/cost aggregation that assumes N distinct seeds, or a
+	// repeated fallback-sample-0 result would silently masquerade as
+	// diversity.
+	FallbackUsed bool          `json:"fallback_used"`
 	InputTokens  int           `json:"input_tokens"`
 	OutputTokens int           `json:"output_tokens"`
 	TotalTokens  int           `json:"total_tokens"`
@@ -115,6 +126,7 @@ func Run(ctx context.Context, interpreter Interpreter, principal storage.Princip
 				QuestionID: q.ID, Sample: sample, Duration: duration,
 				InputTokens: receipt.Usage.InputTokens, OutputTokens: receipt.Usage.OutputTokens,
 				TotalTokens: receipt.Usage.TotalTokens, Outcome: receipt.Outcome,
+				FallbackUsed: receipt.FallbackUsed,
 			}
 			if err != nil {
 				result.Error = err.Error()
@@ -127,13 +139,48 @@ func Run(ctx context.Context, interpreter Interpreter, principal storage.Princip
 	return results, nil
 }
 
+// ValidateResults is the "a measurement that did not happen must FAIL,
+// loudly" check (AGENTS.md's verification rules) for this tool specifically:
+// a run where every sample errored produced no distribution and no cost
+// data at all, and Run itself returns a nil error for that case (it
+// records failures rather than treating them as a Run-level fault, which is
+// correct for a handful of transient failures mixed with real samples --
+// but wrong for a total wipeout, which reads as a clean 0-exit-code run
+// with an all-`(error)` table unless a caller checks explicitly). Call this
+// after Run and treat a non-nil error as a hard failure (non-zero exit),
+// not a warning.
+func ValidateResults(samples []Sample) error {
+	if len(samples) == 0 {
+		return fmt.Errorf("no samples were run")
+	}
+	failed := 0
+	for _, s := range samples {
+		if s.Error != "" {
+			failed++
+		}
+	}
+	if failed == len(samples) {
+		return fmt.Errorf("all %d samples failed -- no measurement was actually taken (last error: %s)", failed, samples[len(samples)-1].Error)
+	}
+	return nil
+}
+
 // ShapeDistribution tallies, per question ID, how many of its samples
 // produced each Shape value (errored samples are counted under the empty
 // string key, distinctly from any real Shape, so a run with failures is
 // never silently mistaken for one with total agreement).
+//
+// FallbackUsed samples are EXCLUDED entirely (codex round 1, P2): they were
+// not generated under seed_i (see Sample.FallbackUsed's doc comment), so
+// counting one as a genuine sample of this question's Shape distribution
+// would silently corrupt the measurement with a fallback-model artifact
+// mislabeled as diversity.
 func ShapeDistribution(samples []Sample) map[string]map[string]int {
 	dist := make(map[string]map[string]int)
 	for _, s := range samples {
+		if s.FallbackUsed {
+			continue
+		}
 		byShape, ok := dist[s.QuestionID]
 		if !ok {
 			byShape = make(map[string]int)
@@ -156,13 +203,16 @@ type CostSummary struct {
 }
 
 // CostSummaries aggregates Run's output into one CostSummary per question,
-// in AcceptanceQuestions order for successful (non-empty Outcome=="success")
-// samples only -- a failed call's zero usage would otherwise silently drag
-// the average down and understate the real per-turn-1 cost.
+// in AcceptanceQuestions order for successful, non-fallback samples only --
+// a failed call's zero usage would otherwise silently drag the average
+// down and understate the real per-turn-1 cost, and a FallbackUsed sample
+// spent tokens on a DIFFERENT model (see Sample.FallbackUsed's doc comment)
+// whose cost has no business being folded into the primary model's average
+// (codex round 1, P2).
 func CostSummaries(samples []Sample, questions []Question) []CostSummary {
 	byQuestion := make(map[string][]Sample, len(questions))
 	for _, s := range samples {
-		if s.Error != "" {
+		if s.Error != "" || s.FallbackUsed {
 			continue
 		}
 		byQuestion[s.QuestionID] = append(byQuestion[s.QuestionID], s)

@@ -146,3 +146,120 @@ func TestCostSummariesExcludeFailedSamples(t *testing.T) {
 		t.Fatalf("averages = %#v, want input=150 output=30 total=180", got)
 	}
 }
+
+// fallbackInterpreter simulates a configured Fallback ModelRuntime firing:
+// every call reports FallbackUsed=true on the receipt, exactly as
+// genkitruntime's interpretQuestionWithSample does when the primary model
+// fails and r.config.Fallback.InterpretQuestion succeeds (its doc comment
+// explains why the fallback leg cannot honor `sample`).
+type fallbackInterpreter struct{}
+
+func (fallbackInterpreter) InterpretQuestionForSample(_ context.Context, _ storage.Principal, _ contextfabric.InvestigationRequest, _ int) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
+	return contextfabric.InterpretedQuestion{Shape: contextfabric.InvestigationShape("single_subject")},
+		contextfabric.ModelExecutionReceipt{Outcome: "fallback", FallbackUsed: true, Usage: contextfabric.ModelUsage{InputTokens: 999, OutputTokens: 999, TotalTokens: 1998}},
+		nil
+}
+
+// TestRunSurfacesFallbackUsed is codex round-1 finding 1's red-first pin:
+// Run must propagate receipt.FallbackUsed onto the Sample it records, so a
+// downstream aggregator can tell a fallback-sample-0 result apart from a
+// genuine seed_i sample.
+func TestRunSurfacesFallbackUsed(t *testing.T) {
+	t.Parallel()
+	results, err := Run(context.Background(), fallbackInterpreter{}, storage.Principal{OrgID: "org_1"}, []Question{{ID: "q1", Text: "question one"}}, 1)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(results) != 1 || !results[0].FallbackUsed {
+		t.Fatalf("results = %#v, want exactly one Sample with FallbackUsed=true", results)
+	}
+}
+
+// TestShapeDistributionExcludesFallbackSamples is codex round-1 finding 1's
+// aggregation-side pin: a FallbackUsed sample was generated under the
+// fallback model's own sample-0 decoding, never seed_i, so counting it in
+// the Shape distribution would misrepresent a fallback artifact as a
+// genuine derived-seed data point.
+func TestShapeDistributionExcludesFallbackSamples(t *testing.T) {
+	t.Parallel()
+	samples := []Sample{
+		{QuestionID: "q1", Shape: "discovered_cohort"},
+		{QuestionID: "q1", Shape: "single_subject", FallbackUsed: true},
+	}
+	dist := ShapeDistribution(samples)
+	if dist["q1"]["discovered_cohort"] != 1 {
+		t.Fatalf("dist[q1] = %#v, want discovered_cohort=1", dist["q1"])
+	}
+	if dist["q1"]["single_subject"] != 0 {
+		t.Fatalf("dist[q1] = %#v, the FallbackUsed sample must be excluded entirely, not just uncounted", dist["q1"])
+	}
+	total := 0
+	for _, n := range dist["q1"] {
+		total += n
+	}
+	if total != 1 {
+		t.Fatalf("dist[q1] totals %d samples, want exactly 1 (the fallback sample dropped)", total)
+	}
+}
+
+// TestCostSummariesExcludeFallbackSamples mirrors the Shape-distribution
+// exclusion for cost: a fallback call spent tokens on a DIFFERENT model,
+// so folding its usage into the primary model's average cost would
+// misstate the very number CHAOS-4631 exists to measure.
+func TestCostSummariesExcludeFallbackSamples(t *testing.T) {
+	t.Parallel()
+	samples := []Sample{
+		{QuestionID: "q1", InputTokens: 100, OutputTokens: 20, TotalTokens: 120},
+		{QuestionID: "q1", InputTokens: 999, OutputTokens: 999, TotalTokens: 1998, FallbackUsed: true},
+	}
+	summaries := CostSummaries(samples, []Question{{ID: "q1"}})
+	if len(summaries) != 1 {
+		t.Fatalf("len(summaries) = %d, want 1", len(summaries))
+	}
+	got := summaries[0]
+	if got.Samples != 1 {
+		t.Fatalf("Samples = %d, want 1 (the fallback sample must be excluded)", got.Samples)
+	}
+	if got.AvgTotalTokens != 120 {
+		t.Fatalf("AvgTotalTokens = %v, want 120 (fallback's 1998 must not be averaged in)", got.AvgTotalTokens)
+	}
+}
+
+// TestValidateResultsFailsLoudlyWhenEverySampleErrored is codex round-1
+// finding 2's red-first pin, EXECUTED repro reproduced directly: against an
+// unreachable endpoint, main() printed an all-"(error)" table and exited 0.
+// ValidateResults must return a non-nil error for exactly that shape.
+func TestValidateResultsFailsLoudlyWhenEverySampleErrored(t *testing.T) {
+	t.Parallel()
+	samples := []Sample{
+		{QuestionID: "q1", Sample: 0, Error: "connection refused"},
+		{QuestionID: "q1", Sample: 1, Error: "connection refused"},
+	}
+	if err := ValidateResults(samples); err == nil {
+		t.Fatal("ValidateResults() = nil, want a non-nil error when every sample failed")
+	}
+}
+
+// TestValidateResultsPassesWithPartialFailures proves the fix does not
+// overcorrect: a handful of transient failures mixed with real samples is
+// exactly the case Run's own doc comment says must NOT be treated as a
+// Run-level fault.
+func TestValidateResultsPassesWithPartialFailures(t *testing.T) {
+	t.Parallel()
+	samples := []Sample{
+		{QuestionID: "q1", Sample: 0, Shape: "discovered_cohort"},
+		{QuestionID: "q1", Sample: 1, Error: "connection refused"},
+	}
+	if err := ValidateResults(samples); err != nil {
+		t.Fatalf("ValidateResults() = %v, want nil for a partial failure", err)
+	}
+}
+
+// TestValidateResultsFailsOnEmptyInput guards the degenerate case: zero
+// samples is not a measurement either.
+func TestValidateResultsFailsOnEmptyInput(t *testing.T) {
+	t.Parallel()
+	if err := ValidateResults(nil); err == nil {
+		t.Fatal("ValidateResults(nil) = nil, want a non-nil error")
+	}
+}
