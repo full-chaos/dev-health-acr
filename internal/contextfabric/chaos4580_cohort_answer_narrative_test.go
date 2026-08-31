@@ -10,20 +10,29 @@ import (
 )
 
 // TestEngineRecomposesCohortAnswerNarrativeAfterNarration is CHAOS-4580's
-// end-to-end proof: once narrateCohortDriverJudgments (called from
-// engine.go, after synthesis) actually narrates at least one member, the
-// engine must REPLACE the pre-narration DirectJudgment/DeterministicAnswer
-// -- composed once at synthesis time, before any narrated judgment
-// existed -- with recomposeCohortAnswerNarrative's one-narrative output,
-// and record the decision on the SAME CohortDriverNarrationEvent telemetry
-// already emits.
+// original end-to-end proof, updated for CHAOS-4690 (design §5, sol r1 F1):
+// once narrateCohortDriverJudgments (called from engine.go, after
+// synthesis) actually narrates at least one member, the engine must
+// REPLACE the pre-narration DirectJudgment/DeterministicAnswer -- composed
+// once at synthesis time, before any narrated judgment existed -- with
+// recomposeCohortAnswerNarrative's output, and record the decision on the
+// SAME CohortDriverNarrationEvent telemetry already emits.
 //
-// The fake Synthesizer below returns the EXACT shape chris reported: a
-// DeterministicAnswer whose "Canonical facts:" clause repeats, byte for
-// byte, the same key=value list CurrentState's "Current observed values:"
-// clause states, and a DirectJudgment that opens with the identical
-// status+principal-driver sentence DeterministicAnswer does. Without this
-// ticket's fix, both survive to result verbatim; with it, both are
+// CHAOS-4580 had the replacement carry the status sentence PLUS every
+// principal driver's narrated Summary (scoring arithmetic spliced into the
+// lead). CHAOS-4690's settled language principle supersedes that: the
+// replacement is the bare status sentence alone in BOTH fields, no driver
+// clause, no new deterministic display language. This test still proves
+// the raw canonical-facts key=value list never leaks into
+// DeterministicAnswer -- CHAOS-4580's other complaint -- and now also
+// proves no scoring arithmetic does either.
+//
+// The fake Synthesizer below returns the EXACT shape chris originally
+// reported: a DeterministicAnswer whose "Canonical facts:" clause repeats,
+// byte for byte, the same key=value list CurrentState's "Current observed
+// values:" clause states, and a DirectJudgment that opens with the
+// identical status+principal-driver sentence DeterministicAnswer does.
+// Without the fix, both survive to result verbatim; with it, both are
 // replaced before Validate/Save.
 func TestEngineRecomposesCohortAnswerNarrativeAfterNarration(t *testing.T) {
 	t.Parallel()
@@ -147,13 +156,15 @@ func TestEngineRecomposesCohortAnswerNarrativeAfterNarration(t *testing.T) {
 		t.Fatalf("result.DeterministicAnswer = %q, must never restate the raw facts list CurrentState already carries", result.DeterministicAnswer)
 	}
 
-	// The narrated principal driver's own numbered sentence must be the
-	// content of DeterministicAnswer's "Principal driver(s):" clause --
-	// "numbers inline", not a bare title.
-	if !strings.Contains(result.DeterministicAnswer, "attention points.") {
-		t.Fatalf("result.DeterministicAnswer = %q, want the narrated driver's own numbered summary sentence", result.DeterministicAnswer)
+	// CHAOS-4690: DeterministicAnswer is the bare status sentence, same as
+	// DirectJudgment -- no driver clause, no scoring arithmetic ("(weight ",
+	// "attention points") spliced back in. Supersedes CHAOS-4580's
+	// "numbered summary sentence inline" expectation.
+	wantDeterministicAnswer := "This investigation is partial: some canonical or graph coverage was unavailable."
+	if result.DeterministicAnswer != wantDeterministicAnswer {
+		t.Fatalf("result.DeterministicAnswer = %q, want %q (status sentence alone)", result.DeterministicAnswer, wantDeterministicAnswer)
 	}
-	if !strings.HasPrefix(result.DeterministicAnswer, "This investigation is partial: some canonical or graph coverage was unavailable.") {
-		t.Fatalf("result.DeterministicAnswer = %q, want it to still open with the status sentence", result.DeterministicAnswer)
+	if strings.Contains(result.DeterministicAnswer, "(weight ") || strings.Contains(result.DeterministicAnswer, "attention points") {
+		t.Fatalf("result.DeterministicAnswer = %q, must never carry scoring arithmetic", result.DeterministicAnswer)
 	}
 }

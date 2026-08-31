@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -573,68 +572,39 @@ func selectMembersForDriverNarration(members []CohortMember, count int) []Cohort
 
 // recomposeCohortAnswerNarrative rewrites DirectJudgment and
 // DeterministicAnswer for a cohort answer, once narrateCohortDriverJudgments
-// has appended its per-member judgments to drivers (CHAOS-4580).
+// has appended its per-member judgments to result.Drivers.
 //
-// Before this, both fields were composed ONCE at synthesis time -- before
-// cohort narration existed -- by composeDirectJudgmentFrom/
-// composeDeterministicAnswerFrom (model_runtime.go), which never see the
-// narrated judgments. DeterministicAnswer went on to append the FULL
-// canonical-facts key=value list a second time ("Canonical facts: ..."),
-// byte-identical to the list CurrentState (composeCurrentState) already
-// states once under "Current observed values: ..." -- and DirectJudgment
-// restated the SAME status+principal-driver opening sentence
-// DeterministicAnswer itself opens with, so a reader saw it twice.
+// CHAOS-4690 (chris's language principle, settled design §5, sol r1 F1
+// rework) deliberately REVERSES CHAOS-4580's splice: that ticket had this
+// function append every PRINCIPAL driver's narrated Summary sentence --
+// scoring arithmetic ("(weight 15, value 1.00) contributed 20.0 of
+// Fullchaos's 46.7 attention points.") -- onto DeterministicAnswer. Under
+// the settled principle, deterministic server prose composes NO scoring
+// arithmetic and introduces no new deterministic display language; the
+// numbers stay exactly where they already live structurally, on each
+// driver's own Weight/Value/WeightContributed fields and its
+// cohortDriverJudgmentSummary text (unchanged, still populated on the
+// DriverJudgment entries themselves) -- never re-spliced into the lead
+// prose. The client's regex prose-parser that once scraped this splice back
+// out of DeterministicAnswer dies with it (sibling rip-out ticket deletes
+// prose-detail.ts): there is nothing left in the lead for it to parse.
 //
-// The rewrite: DeterministicAnswer becomes the one narrative -- the status
-// sentence plus every PRINCIPAL driver's own narrated Summary (numbers
-// already inline: "readiness gap (weight 15, value 1.00) contributed 20.0
-// of Fullchaos's 46.7 attention points."), never the raw facts list, which
-// stays exactly where CurrentState already states it. DirectJudgment is
-// reduced to the status sentence ALONE, dropping its own principal-driver
-// restatement -- ContextFabricInvestigationResult.Validate() requires a
-// non-empty DirectJudgment for an answer-capable (complete/partial)
-// status, so it cannot be cleared outright the way CurrentState's own
-// "no canonical facts" fallback can; the status sentence is the one
-// content every investigation composes regardless of drivers, so it is
-// the only clause that can be shared between the two fields without
-// restating this ticket's actual complaint (the SAME principal-driver
-// clause, twice).
+// Both fields now compose to the SAME content: the bare status sentence,
+// independently truncated at each field's own bound.
+// ContextFabricInvestigationResult.Validate() requires a non-empty
+// DirectJudgment for an answer-capable (complete/partial) status, so it
+// cannot be cleared outright the way CurrentState's own "no canonical
+// facts" fallback can; the status sentence is the one content every
+// investigation composes regardless of drivers, so it is what both fields
+// share now that neither carries a driver clause.
 //
 // Only ever called when the cohort produced at least one narrated
 // principal driver (see the engine call site's guard) -- a non-cohort
 // (single-subject) investigation never reaches this function, so its
 // DirectJudgment/DeterministicAnswer composition is completely untouched.
-func recomposeCohortAnswerNarrative(status InvestigationStatus, drivers []DriverJudgment, resolution SubjectResolution) (directJudgment, deterministicAnswer string) {
+func recomposeCohortAnswerNarrative(status InvestigationStatus, resolution SubjectResolution) (directJudgment, deterministicAnswer string) {
 	sentence := statusSentence(status, resolution)
 	directJudgment = truncateAtSentenceBoundary(sentence, directJudgmentMaxLength)
-
-	var b strings.Builder
-	b.WriteString(sentence)
-	if summaries := principalDriverSummaries(drivers); len(summaries) > 0 {
-		b.WriteString(" Principal driver(s): ")
-		b.WriteString(strings.Join(summaries, " "))
-	}
-	deterministicAnswer = truncateAtSentenceBoundary(strings.TrimSpace(b.String()), deterministicAnswerMaxLength)
+	deterministicAnswer = truncateAtSentenceBoundary(sentence, deterministicAnswerMaxLength)
 	return directJudgment, deterministicAnswer
-}
-
-// principalDriverSummaries mirrors principalDriverTitles (model_runtime.go)
-// but returns each principal driver's full narrated Summary sentence --
-// numbers already inline -- rather than its short Title, per CHAOS-4580's
-// "principal drivers as sentences with the numbers inline" requirement.
-func principalDriverSummaries(drivers []DriverJudgment) []string {
-	filtered := make([]DriverJudgment, 0, len(drivers))
-	for _, driver := range drivers {
-		if driver.Standing == DriverPrincipal {
-			filtered = append(filtered, driver)
-		}
-	}
-	sort.Slice(filtered, func(i, j int) bool { return filtered[i].DriverID < filtered[j].DriverID })
-	summaries := make([]string, 0, len(filtered))
-	for _, driver := range filtered {
-		if summary := strings.TrimSpace(driver.Summary); summary != "" {
-			summaries = append(summaries, summary)
-		}
-	}
-	return summaries
 }

@@ -377,19 +377,20 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		// SourceClaimedFactIDs already names its own entry here by
 		// construction (narrateCohortDriverJudgments set both together).
 		result.ClaimedFacts = append(result.ClaimedFacts, mintedClaims...)
-		// CHAOS-4580: once narration produced at least one judgment, recompose
-		// the answer prose so it reads as one narrative instead of restating
-		// the same status+principal-driver sentence in both DirectJudgment
-		// and DeterministicAnswer, and the same canonical-facts key=value
-		// list in both DeterministicAnswer and CurrentState. Guarded on
-		// len(narrated)>0 (not just graphContext.Cohort!=nil) so a cohort
+		// CHAOS-4690 (was CHAOS-4580): once narration produced at least one
+		// judgment, recompose the answer prose to the status sentence alone
+		// -- CHAOS-4580 had this splice the principal driver's narrated
+		// Summary (scoring arithmetic) into DeterministicAnswer; the settled
+		// CHAOS-4690 language principle reverses that, so recompose now only
+		// avoids restating the pre-narration synthesis composition. Guarded
+		// on len(narrated)>0 (not just graphContext.Cohort!=nil) so a cohort
 		// that produced zero narrated judgments -- no_drivers/budget_exhausted,
 		// or every candidate lacked evidence -- leaves the original synthesis
 		// composition alone, same as before this ticket. A non-cohort
 		// (single-subject) investigation never enters this block at all, so
 		// its answer composition is unaffected.
 		if len(narrated) > 0 {
-			result.DirectJudgment, result.DeterministicAnswer = recomposeCohortAnswerNarrative(result.Status, result.Drivers, result.SubjectResolution)
+			result.DirectJudgment, result.DeterministicAnswer = recomposeCohortAnswerNarrative(result.Status, result.SubjectResolution)
 			narrationEvent.AnswerNarrativeRecomposed = true
 		}
 		pending.CohortNarration = &narrationEvent
