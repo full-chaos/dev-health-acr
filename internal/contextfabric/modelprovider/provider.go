@@ -27,6 +27,45 @@ import (
 // generation, which is bounded per attempt by Config.Timeout inside
 // genkitruntime.
 func New(ctx context.Context, cfg Config) (contextfabric.ModelRuntime, error) {
+	// Deliberately NOT a direct `return newPrimaryRuntime(ctx, cfg)`: that
+	// forwards a *genkitruntime.Runtime nil, on the error path, straight
+	// into an interface-typed return value -- Go's classic typed-nil trap.
+	// A nil *genkitruntime.Runtime wrapped in the contextfabric.ModelRuntime
+	// interface is a NON-nil interface value (it carries the concrete
+	// type, just a nil pointer inside it), so every existing "err != nil
+	// implies runtime == nil" caller (composition callers included) would
+	// see a non-nil ModelRuntime alongside the error. Converting to nil
+	// explicitly on the error path keeps New's existing contract byte for
+	// byte identical to before this function's NewGenkitRuntime split.
+	runtime, err := newPrimaryRuntime(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return runtime, nil
+}
+
+// NewGenkitRuntime is New's concrete-type counterpart (CHAOS-4631). It
+// builds the SAME primary runtime New does -- identical validation,
+// identical genkit/compat_oai plugin construction, identical fallback
+// wiring -- but returns the concrete *genkitruntime.Runtime instead of the
+// contextfabric.ModelRuntime interface.
+//
+// The concrete type is required only because InterpretQuestionForSample
+// (genkitruntime's CHAOS-4631 measurement entry point, which takes a
+// sample index) is deliberately NOT part of contextfabric.ModelRuntime --
+// adding it there would widen an interface every production ModelRuntime
+// caller (RuntimeQuestionInterpreter, the fallback chain) depends on, for
+// a method only a measurement harness ever calls. NewGenkitRuntime exists
+// so that harness (cmd/acr-interpret-seed-bench) can reach
+// InterpretQuestionForSample while still going through the SAME
+// environment-driven construction path production composition
+// (internal/runtime/hosted) uses via New -- never a second, hand-rolled
+// genkit/compat_oai setup that could drift from it.
+func NewGenkitRuntime(ctx context.Context, cfg Config) (*genkitruntime.Runtime, error) {
+	return newPrimaryRuntime(ctx, cfg)
+}
+
+func newPrimaryRuntime(ctx context.Context, cfg Config) (*genkitruntime.Runtime, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
