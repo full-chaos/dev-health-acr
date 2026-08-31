@@ -282,6 +282,18 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 	if seriesErr != nil {
 		return 0, seriesErr
 	}
+	// codex CHAOS-4645 round-1 P2 (EXECUTED): see flow.go's readTeamFlow
+	// identical note -- the daily-series query's own withRowLimit(200) cap,
+	// shared across every requested team in one query, must also surface as
+	// Truncated.
+	dailySeriesRowCount := 0
+	for _, dailyRows := range dailyByTeam {
+		dailySeriesRowCount += len(dailyRows)
+	}
+	rowCount := len(rows)
+	if dailySeriesRowCount > rowCount {
+		rowCount = dailySeriesRowCount
+	}
 	for _, r := range rows {
 		subject, ok := bySubject[r.TeamID]
 		if !ok {
@@ -307,7 +319,13 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 		if r.HasP50Days != 0 {
 			fields["forecast_p50_days"] = contextfabric.IntegerFactValue(r.P50Days)
 		}
-		if dailyTable, ok, dailyOmitted := workloadDailyTable(dailyByTeam[r.TeamID], timeBound.effectiveGrain(grainExact)); ok {
+		// codex CHAOS-4645 round-1 P3 (ARGUED, confirmed on read): the scalar
+		// forecast is legitimately "instant" (grainExact, ReadFacts' own
+		// provider-level Grain above), but daily_workload buckets by
+		// toDate(computed_at) -- a genuine daily grain, like every other
+		// producer's own daily table -- so its own declared Grain must say
+		// so, not overstate the precision as instant.
+		if dailyTable, ok, dailyOmitted := workloadDailyTable(dailyByTeam[r.TeamID], timeBound.effectiveGrain(grainDaily)); ok {
 			fields["daily_workload"] = dailyTable
 			if dailyOmitted > 0 {
 				fields["daily_workload_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
@@ -318,7 +336,7 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 			EvidenceRefIDs: []string{evidenceRefID("team", r.TeamID)},
 		})
 	}
-	return len(rows), nil
+	return rowCount, nil
 }
 
 // readProjectWorkload rolls FactWorkload up for a project through
@@ -351,6 +369,17 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 		return 0, false, seriesErr
 	}
 	rowCount = len(scanned)
+	// codex CHAOS-4645 round-1 P2 (EXECUTED): see readTeamWorkload's
+	// identical note -- the daily-series query's own withRowLimit(200) cap,
+	// shared across every requested project in one query, must also surface
+	// as Truncated.
+	dailySeriesRowCount := 0
+	for _, dailyRows := range dailyByProject {
+		dailySeriesRowCount += len(dailyRows)
+	}
+	if dailySeriesRowCount > rowCount {
+		rowCount = dailySeriesRowCount
+	}
 	byProject := make(map[string][]readers.WorkloadProjectRow)
 	var projectOrder []string
 	for _, r := range scanned {
@@ -447,7 +476,8 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 				Rows:  teamRows,
 			}),
 		}
-		if dailyTable, ok, dailyOmitted := workloadDailyTable(dailyByProject[projectKey], timeBound.effectiveGrain(grainExact)); ok {
+		// codex CHAOS-4645 round-1 P3: see readTeamWorkload's identical note.
+		if dailyTable, ok, dailyOmitted := workloadDailyTable(dailyByProject[projectKey], timeBound.effectiveGrain(grainDaily)); ok {
 			fields["daily_workload"] = dailyTable
 			if dailyOmitted > 0 {
 				fields["daily_workload_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))

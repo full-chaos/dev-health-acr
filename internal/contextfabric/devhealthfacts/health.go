@@ -261,11 +261,21 @@ func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids
 	// RankCohort's healthRiskSignal (which reads ONLY fields["severity"])
 	// cannot observe a difference.
 	var dailyByTeam map[string][]healthDailyRow
+	dailySeriesRowCount := 0
 	if scope == "team" {
 		var seriesErr error
 		dailyByTeam, seriesErr = p.queryTeamHealthDailySeries(ctx, orgID, ids, timeBound)
 		if seriesErr != nil {
 			return 0, 0, seriesErr
+		}
+		// codex CHAOS-4645 round-1 P2 (EXECUTED): queryTeamHealthDailySeries
+		// carries its OWN withRowLimit(200) cap, shared across every
+		// requested team in one query -- distinct from the scalar read's own
+		// rowCount below. Folded into rowCount before return so the shared
+		// `rowCount >= maxFactRowsPerQuery` check in ReadFacts also catches
+		// this query hitting its own cap, not only the scalar one.
+		for _, rows := range dailyByTeam {
+			dailySeriesRowCount += len(rows)
 		}
 	}
 	// The hash tiebreak's ifNull(compounding_risk, -1) sentinel is only
@@ -390,6 +400,9 @@ WHERE rn = 1`)
 		})
 		return nil
 	}, timeBound.bindings()...)
+	if dailySeriesRowCount > rowCount {
+		rowCount = dailySeriesRowCount
+	}
 	return rowCount, dailyOmitted, scanErr
 }
 
@@ -508,6 +521,16 @@ ORDER BY project_key, scope, scope_id`)
 	dailyByProject, seriesErr := p.queryProjectHealthDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
 		return rowCount, false, seriesErr
+	}
+	// codex CHAOS-4645 round-1 P2 (EXECUTED): see readScope's identical note
+	// -- the daily-series query's own withRowLimit(200) cap, shared across
+	// every requested project in one query, must also surface as Truncated.
+	dailySeriesRowCount := 0
+	for _, rows := range dailyByProject {
+		dailySeriesRowCount += len(rows)
+	}
+	if dailySeriesRowCount > rowCount {
+		rowCount = dailySeriesRowCount
 	}
 	for _, projectKey := range projectOrder {
 		rows := byProject[projectKey]

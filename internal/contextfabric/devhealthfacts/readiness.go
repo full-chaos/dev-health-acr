@@ -73,11 +73,11 @@ func (p *ReadinessProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	truncated := false
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
-		rowCount, scanErr := p.readTeamReadiness(ctx, orgID, teamSubjects, &facts, timeBound)
+		rowCount, rowsOmitted, scanErr := p.readTeamReadiness(ctx, orgID, teamSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team readiness", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		truncated = truncated || rowCount >= maxFactRowsPerQuery || rowsOmitted > 0
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
@@ -195,11 +195,11 @@ ORDER BY team_id, day DESC`)
 // full tiebreak reasoning. This adapter keeps the CanonicalFact-building
 // half, factored out so ReadFacts can branch by subject kind the same way
 // metrics.go/health.go already do.
-func (p *ReadinessProvider) readTeamReadiness(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
+func (p *ReadinessProvider) readTeamReadiness(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, omittedRows int, err error) {
 	ids, bySubject := subjectIndex(subjects, teamPrefix)
 	rows, err := readers.ReadTeamReadiness(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	// CHAOS-4645, design doc §5.2: a second, ADDITIVE query for the dated
 	// series -- every existing scalar field below is computed byte-identically
@@ -211,7 +211,19 @@ func (p *ReadinessProvider) readTeamReadiness(ctx context.Context, orgID string,
 	// TestRankCohortReadinessUntouchedByDailySeriesField.
 	dailyByTeam, seriesErr := p.queryTeamReadinessDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
-		return 0, seriesErr
+		return 0, 0, seriesErr
+	}
+	// codex CHAOS-4645 round-1 P2 (EXECUTED): see flow.go's readTeamFlow
+	// identical note -- the daily-series query's own withRowLimit(200) cap,
+	// shared across every requested team in one query, must also surface as
+	// Truncated.
+	dailySeriesRowCount := 0
+	for _, dailyRows := range dailyByTeam {
+		dailySeriesRowCount += len(dailyRows)
+	}
+	rowCount = len(rows)
+	if dailySeriesRowCount > rowCount {
+		rowCount = dailySeriesRowCount
 	}
 	// readTeamReadiness mints ONE CanonicalFact per (team, work_scope,
 	// provider) row -- unlike flow.go's readTeamFlow, which pre-aggregates
@@ -248,9 +260,19 @@ func (p *ReadinessProvider) readTeamReadiness(ctx context.Context, orgID string,
 			fields["estimate_coverage_ratio"] = contextfabric.NumberFactValue(r.Ratio)
 		}
 		if !dailyAttached[r.TeamID] {
-			if dailyTable, ok, _ := readinessDailyTable(dailyByTeam[r.TeamID], timeBound.effectiveGrain(grainDaily)); ok {
+			// codex CHAOS-4645 round-1 P2 (ARGUED, confirmed on read):
+			// readiness was the one producer of the four discarding
+			// capFactValueRows' own omitted count for its daily table
+			// instead of reporting it -- health/workload/flow all already
+			// surface a "daily_<x>_omitted_count" field and fold it into
+			// Truncated (see flow.go's readTeamFlow). Matched here.
+			if dailyTable, ok, dailyOmitted := readinessDailyTable(dailyByTeam[r.TeamID], timeBound.effectiveGrain(grainDaily)); ok {
 				fields["daily_readiness"] = dailyTable
 				dailyAttached[r.TeamID] = true
+				omittedRows += dailyOmitted
+				if dailyOmitted > 0 {
+					fields["daily_readiness_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+				}
 			}
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
@@ -258,7 +280,7 @@ func (p *ReadinessProvider) readTeamReadiness(ctx context.Context, orgID string,
 			EvidenceRefIDs: []string{evidenceRefID("team", r.TeamID)},
 		})
 	}
-	return len(rows), nil
+	return rowCount, omittedRows, nil
 }
 
 // queryProjectReadinessDailySeries is queryTeamReadinessDailySeries'
@@ -327,6 +349,17 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 		return 0, false, seriesErr
 	}
 	rowCount = len(scanned)
+	// codex CHAOS-4645 round-1 P2 (EXECUTED): see readTeamReadiness's
+	// identical note -- the daily-series query's own withRowLimit(200) cap,
+	// shared across every requested project in one query, must also surface
+	// as Truncated.
+	dailySeriesRowCount := 0
+	for _, dailyRows := range dailyByProject {
+		dailySeriesRowCount += len(dailyRows)
+	}
+	if dailySeriesRowCount > rowCount {
+		rowCount = dailySeriesRowCount
+	}
 	byProject := make(map[string][]readers.ReadinessProjectRow)
 	var projectOrder []string
 	for _, r := range scanned {
@@ -413,8 +446,13 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 				Rows:  teamRows,
 			}),
 		}
-		if dailyTable, ok, _ := readinessDailyTable(dailyByProject[projectKey], timeBound.effectiveGrain(grainDaily)); ok {
+		// codex CHAOS-4645 round-1 P2: see readTeamReadiness's identical note.
+		if dailyTable, ok, dailyOmitted := readinessDailyTable(dailyByProject[projectKey], timeBound.effectiveGrain(grainDaily)); ok {
 			fields["daily_readiness"] = dailyTable
+			if dailyOmitted > 0 {
+				breakdownTruncated = true
+				fields["daily_readiness_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+			}
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactReadiness, Subject: subject, Fields: fields,

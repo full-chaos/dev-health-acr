@@ -340,6 +340,20 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 	if seriesErr != nil {
 		return rowCount, 0, seriesErr
 	}
+	// codex CHAOS-4645 round-1 P2 (EXECUTED): the daily-series query carries
+	// its OWN withRowLimit(200) cap, shared across every requested team in
+	// ONE query -- distinct from queryTeamScopeRows' own rowCount above. Five
+	// teams x 50 days each can silently drop an entire team's daily_flow rows
+	// under the shared LIMIT while the legacy scope_breakdown read (~1
+	// row/team) never comes close to it, so Truncated must also reflect this
+	// query hitting its own cap, not only the legacy one.
+	dailySeriesRowCount := 0
+	for _, rows := range dailyByTeam {
+		dailySeriesRowCount += len(rows)
+	}
+	if dailySeriesRowCount > rowCount {
+		rowCount = dailySeriesRowCount
+	}
 	totalOmitted := 0
 	for _, teamID := range teamOrder {
 		subject, ok := bySubject[teamID]
@@ -562,6 +576,17 @@ ORDER BY p.id, wm.team_id`)
 	dailyByProject, seriesErr := p.queryProjectFlowDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
 		return rowCount, 0, seriesErr
+	}
+	// codex CHAOS-4645 round-1 P2 (EXECUTED): see readTeamFlow's identical
+	// note -- the daily-series query's own withRowLimit(200) cap, shared
+	// across every requested project in one query, must also surface as
+	// Truncated.
+	dailySeriesRowCount := 0
+	for _, rows := range dailyByProject {
+		dailySeriesRowCount += len(rows)
+	}
+	if dailySeriesRowCount > rowCount {
+		rowCount = dailySeriesRowCount
 	}
 	totalOmitted := 0
 	for _, projectKey := range projectOrder {
