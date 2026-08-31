@@ -148,3 +148,45 @@ func TestInterpretQuestionUsesSampleZero(t *testing.T) {
 		t.Fatalf("InterpretQuestion seed = %v, InterpretQuestionForSample(0) seed = %v, want both = %v", productionConfig["seed"], sampleConfig["seed"], wantSeed)
 	}
 }
+
+// TestDeriveInterpretSeedIsNeverNegative pins the `&^ (1 << 63)` mask in
+// chaos4631InterpretSeedFor.
+//
+// WHY THIS TEST LIVES HERE AND ARRIVED LATE. S2 (CHAOS-4632) carried an
+// interim copy of the seed derivation while S1 was unmerged, and that copy's
+// own test asserted the seed was non-negative. When S1 merged and the copy
+// was deleted, the assertion went with it -- and S1's tests pin determinism,
+// per-sample variation and per-question variation, but NOT sign. Codex
+// caught the loss on the deletion PR. Restored here, beside the derivation
+// it guards, rather than left as a gap nobody owns.
+//
+// WHAT BREAKS WITHOUT THE MASK. FNV-1a returns a uint64, and roughly half of
+// all uint64 values have the high bit set, so an unmasked conversion yields a
+// negative int64 for about half of all (question, sample) pairs. That value
+// is forwarded verbatim as the `seed` decoding parameter on every interpret
+// call, and providers reject a negative seed -- so the failure is not subtle
+// degradation but roughly half of all interpretations failing outright, on
+// the product's most frequent call. A test that covers determinism and
+// variation stays green throughout, because a negative seed is still
+// perfectly deterministic and still varies.
+//
+// The sweep is wide rather than a single spot-check precisely because the
+// defect is probabilistic: one hash that happens to clear the high bit
+// proves nothing.
+func TestDeriveInterpretSeedIsNeverNegative(t *testing.T) {
+	t.Parallel()
+	for _, question := range []string{
+		"What is the status of the Dev Health Ops project?",
+		"Which teams are struggling, and why?",
+		"What are the project statuses for each team?",
+		"What are the statuses of the fullchaos team's projects?",
+		"",
+	} {
+		hash := contextfabric.QuestionHash(question)
+		for sample := 0; sample < 256; sample++ {
+			if seed := chaos4631InterpretSeedFor(hash, sample); seed < 0 {
+				t.Fatalf("chaos4631InterpretSeedFor(hash(%q), %d) = %d, want non-negative -- providers reject a negative seed, and without the high-bit mask roughly half of all pairs land here", question, sample, seed)
+			}
+		}
+	}
+}
