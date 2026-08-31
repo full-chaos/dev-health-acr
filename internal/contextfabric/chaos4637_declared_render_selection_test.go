@@ -448,3 +448,73 @@ func TestTheProductionSinkReportsTheAccountingAndTheTrendLoss(t *testing.T) {
 		t.Errorf("an event with two rules recording no outcome logged no violation; logged:\n%s", buf.String())
 	}
 }
+
+// TestASoleTimeSeriesFieldReachesTheWireDeclaredAndCharts is the mirror of
+// the dual-table test above, and it is the case that actually puts a chart
+// back on the screen.
+//
+// Where a fact carries exactly ONE rows-shaped field and that field is a
+// declared time_series, the declaration reaches the wire and the trend
+// fires. This is not hypothetical: `readiness` and `workload` declare
+// `{time_series}` and NOTHING else for a TEAM subject, and `metrics`
+// declares `{time_series}` and nothing else for a REPOSITORY subject
+// (fact_registry capability tables, CHAOS-4645) -- so those three
+// subject-kind paths are exactly this shape.
+func TestASoleTimeSeriesFieldReachesTheWireDeclaredAndCharts(t *testing.T) {
+	t.Parallel()
+	subject := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:CHAOS", Label: "CHAOS"}
+	fact := CanonicalFact{
+		Kind: FactWorkload, Subject: subject,
+		Fields: map[string]FactValue{
+			// The scalar siblings the model actually sees: modelFacingFacts
+			// drops every Rows-shaped field before synthesis, which is why
+			// producers emit the latest day's values under the SAME names
+			// as the table's measures -- and why a claim's Field can be a
+			// declared measure at all.
+			"backlog_size": IntegerFactValue(31),
+			"daily_workload": TableFactValue(FactTable{
+				Shape: FactTableTimeSeries, Key: []string{"day"},
+				Measures: []string{"backlog_size", "throughput_mean"},
+				Rows: []FactValueRow{
+					{Fields: map[string]FactValue{"day": StringFactValue("2026-08-03"), "backlog_size": IntegerFactValue(18), "throughput_mean": NumberFactValue(2.5)}},
+					{Fields: map[string]FactValue{"day": StringFactValue("2026-08-18"), "backlog_size": IntegerFactValue(24), "throughput_mean": NumberFactValue(3.1)}},
+					{Fields: map[string]FactValue{"day": StringFactValue("2026-08-30"), "backlog_size": IntegerFactValue(31), "throughput_mean": NumberFactValue(3.4)}},
+				},
+			}),
+		},
+	}
+	if err := fact.Fields["daily_workload"].Validate(); err != nil {
+		t.Fatalf("fixture table is not a valid declaration: %v", err)
+	}
+
+	claims := []ClaimedFact{{ClaimID: "claim_workload_team", Kind: FactWorkload, Subject: subject, Field: "backlog_size"}}
+	got, _, _, truncated := attachCanonicalRows(claims, []CanonicalFact{fact})
+	if truncated {
+		t.Fatal("a single-table fact failed closed")
+	}
+	// Non-vacuity: the declaration really arrived, and really is the one
+	// the rows came from.
+	if got[0].Table == nil || got[0].Table.Field != "daily_workload" {
+		t.Fatalf("the sole time_series field did not reach the wire declared: %+v", got[0].Table)
+	}
+	if got[0].Table.Shape != contractsv1.ContextFabricFactTableShapeTimeSeries {
+		t.Fatalf("declared shape = %q, want time_series", got[0].Table.Shape)
+	}
+
+	result := InvestigationResult{
+		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
+		ClaimedFacts:   []ClaimedFact{got[0]},
+	}
+	shapes, event := SelectRenderShapes(result)
+	trend := shapeByRule(shapes, contractsv1.ContextFabricRenderRuleDatedFactTrend)
+	if trend == nil {
+		t.Fatalf("a sole declared time_series produced no trend; skipped=%+v", event.Skipped)
+	}
+	if len(trend.Series) != 1 || trend.Series[0].Key != "backlog_size" {
+		t.Fatalf("want one series on the claim's own measure; got %+v", trend.Series)
+	}
+	result.RenderShapes = shapes
+	if err := contractsv1.ValidateRenderShapesForResult(result); err != nil {
+		t.Fatalf("the trend's points do not resolve against the rows they cite: %v", err)
+	}
+}
