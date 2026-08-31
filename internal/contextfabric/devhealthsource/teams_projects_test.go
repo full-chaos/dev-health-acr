@@ -417,7 +417,7 @@ const zeroRepositoryUUID = "00000000-0000-0000-0000-000000000000"
 func TestWorkItemProjectEdgeUsesTheCanonicalStructuredColumn(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
-	edge := relationshipByID(t, batch, "relationship:work_item_project:"+zeroRepositoryUUID+":linear:CHAOS-3802:linear:631fcb5f-c3e9-49ff-b17c-07877aaac9b7")
+	edge := relationshipByID(t, batch, devhealthsource.ProjectMembershipRelationshipIDForTest(t, devhealthsource.WorkItemSubjectCanonicalIDForTest(t, zeroRepositoryUUID, "linear:CHAOS-3802"), "linear", "631fcb5f-c3e9-49ff-b17c-07877aaac9b7", ""))
 	if edge.Type != contractsv1.ContextFabricRelationshipBelongsToProject {
 		t.Fatalf("edge type = %q, want BELONGS_TO_PROJECT", edge.Type)
 	}
@@ -448,7 +448,7 @@ func TestWorkItemProjectEdgeUsesTheCanonicalStructuredColumn(t *testing.T) {
 func TestAttributionDerivedEdgesAreNotLabelledCanonicalTruth(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
-	id := "relationship:project_team:github:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos:native"
+	id := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891", "gl:full.chaos", "native")
 	edge := relationshipByID(t, batch, id)
 	if edge.Derivation == contractsv1.ContextFabricDerivationCanonicalStructured {
 		t.Fatalf("%s: an Ops-computed attribution must not be labelled canonical_structured", id)
@@ -456,7 +456,7 @@ func TestAttributionDerivedEdgesAreNotLabelledCanonicalTruth(t *testing.T) {
 	if edge.EpistemicStatus != contractsv1.ContextFabricEpistemicSourceAsserted {
 		t.Fatalf("%s: epistemic status = %q, want source_asserted", id, edge.EpistemicStatus)
 	}
-	work := relationshipByID(t, batch, "relationship:work_item_team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos")
+	work := relationshipByID(t, batch, devhealthsource.WorkItemTeamRelationshipIDForTest(t, "cd620f84-2602-8dea-7809-8d1f11825cf4", "gl:42", "gl:full.chaos"))
 	if work.Properties["attribution_source"].String == nil {
 		t.Fatalf("work-item attribution: the attribution's own source enum must ride along, got %+v", work.Properties)
 	}
@@ -485,7 +485,7 @@ func TestWorkItemTeamAttributionEpistemicStatusVariesBySource(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
 
-	native := relationshipByID(t, batch, "relationship:work_item_team:"+zeroRepositoryUUID+":linear:CHAOS-3802:CHAOS")
+	native := relationshipByID(t, batch, devhealthsource.WorkItemTeamRelationshipIDForTest(t, zeroRepositoryUUID, "linear:CHAOS-3802", "CHAOS"))
 	if native.Derivation != contractsv1.ContextFabricDerivationRuleInferred {
 		t.Fatalf("native_team derivation = %q, want rule_inferred (this edge is always Ops' own resolver output)", native.Derivation)
 	}
@@ -493,7 +493,7 @@ func TestWorkItemTeamAttributionEpistemicStatusVariesBySource(t *testing.T) {
 		t.Fatalf("native_team epistemic status = %q, want source_asserted: the provider itself asserted this team membership", native.EpistemicStatus)
 	}
 
-	heuristic := relationshipByID(t, batch, "relationship:work_item_team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos")
+	heuristic := relationshipByID(t, batch, devhealthsource.WorkItemTeamRelationshipIDForTest(t, "cd620f84-2602-8dea-7809-8d1f11825cf4", "gl:42", "gl:full.chaos"))
 	if heuristic.Derivation != contractsv1.ContextFabricDerivationRuleInferred {
 		t.Fatalf("project_ownership derivation = %q, want rule_inferred", heuristic.Derivation)
 	}
@@ -514,11 +514,11 @@ func TestWorkItemTeamAttributionEpistemicStatusVariesBySource(t *testing.T) {
 func TestWorkItemTeamEdgeScopesOnTheWorkItemsOwnRepository(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
-	linear := relationshipByID(t, batch, "relationship:work_item_team:"+zeroRepositoryUUID+":linear:CHAOS-3802:CHAOS")
+	linear := relationshipByID(t, batch, devhealthsource.WorkItemTeamRelationshipIDForTest(t, zeroRepositoryUUID, "linear:CHAOS-3802", "CHAOS"))
 	if got := linear.Authorization.RepositorySlugs; len(got) != 1 || got[0] != "acr-context-fabric:no-repository" {
 		t.Fatalf("repo-less-by-design work item scoped as %v, want the no-repository sentinel (not the orphan one)", got)
 	}
-	gitlab := relationshipByID(t, batch, "relationship:work_item_team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos")
+	gitlab := relationshipByID(t, batch, devhealthsource.WorkItemTeamRelationshipIDForTest(t, "cd620f84-2602-8dea-7809-8d1f11825cf4", "gl:42", "gl:full.chaos"))
 	if got := gitlab.Authorization.RepositorySlugs; len(got) != 1 || got[0] != "full.chaos/dev-health-ops" {
 		t.Fatalf("work item with a real repository scoped as %v, want its repo slug", got)
 	}
@@ -533,7 +533,7 @@ func TestWorkItemTeamEdgeScopesOnTheWorkItemsOwnRepository(t *testing.T) {
 func TestProjectTeamEdgeStatesAnOpenOwnershipWindow(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedEdgeClient())
-	edge := relationshipByID(t, batch, "relationship:project_team:github:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos:native")
+	edge := relationshipByID(t, batch, devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891", "gl:full.chaos", "native"))
 	if edge.ValidFrom == nil {
 		t.Fatal("a collapsed ownership edge must state when ownership began")
 	}
@@ -560,7 +560,7 @@ func TestClosedOwnershipWindowEndsTheEdge(t *testing.T) {
 			projectTeamRow("project-x", "team-y", "manual", began, 0, ended, ended),
 		}},
 	}}
-	edge := relationshipByID(t, teamsProjectsBatch(t, client), "relationship:project_team:github:project-x:team-y:manual")
+	edge := relationshipByID(t, teamsProjectsBatch(t, client), devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "project-x", "team-y", "manual"))
 	if edge.ValidTo == nil || !edge.ValidTo.Equal(ended) {
 		t.Fatalf("ValidTo = %v, want the latest closed window %v", edge.ValidTo, ended)
 	}
@@ -980,15 +980,15 @@ func TestChaos4542_ConflictingIdentityEmitsNoEdge(t *testing.T) {
 	}
 
 	for _, fabricated := range []string{
-		"relationship:project_team:github:proj-a:team-x:native",
-		"relationship:project_team:github:proj-b:team-x:native",
+		devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "proj-a", "team-x", "native"),
+		devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "proj-b", "team-x", "native"),
 	} {
 		if hasRelationshipID(batch, fabricated) {
 			t.Errorf("emitted %q for an ownership row whose project_id and project_key resolve to DIFFERENT projects -- at most one of the two is real and nothing here can say which", fabricated)
 		}
 	}
 	// One conflicting row must not suppress the rest.
-	if !hasRelationshipID(batch, "relationship:project_team:github:proj-clean:team-x:native") {
+	if !hasRelationshipID(batch, devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "proj-clean", "team-x", "native")) {
 		t.Error("lost an unrelated unambiguous edge -- failing closed is per row, never per batch")
 	}
 	output := logged.String()
@@ -1089,7 +1089,7 @@ func TestChaos4542_CleanRowKeepsItsEdgeBesideAConflictingOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NextProjectionBatch: %v", err)
 	}
-	if !hasRelationshipID(batch, "relationship:project_team:github:proj-a:team-x:native") {
+	if !hasRelationshipID(batch, devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "proj-a", "team-x", "native")) {
 		t.Error("dropped an edge a CLEAN ownership row asserted, because a conflicting row shared its group -- failing closed is per row, and a group-level suppression turns the no-fabrication guard into a missing-edge bug")
 	}
 	// The conflicting row is still recorded, even though the edge survived:

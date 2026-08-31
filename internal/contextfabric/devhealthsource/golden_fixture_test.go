@@ -17,11 +17,53 @@ const goldenProjectionBatchPath = "../../../contracts/examples/v1/context_fabric
 // keeps this test honest about a producer that starts emitting a NEW edge:
 // the regenerated set simply grows and the committed fixture no longer
 // matches.
+// CHAOS-4635: all four shapes moved to the injective relationship.v2 digest,
+// so the selector follows FAMILIES rather than the old raw-join prefixes.
+//
+// Three prefixes where there used to be four: the work-item and pull-request
+// project-membership arms now share one family, because the subject's own
+// canonical id already carries its kind. The coverage that pair of prefixes
+// used to give -- proof that BOTH arms are actually emitted -- does not
+// survive the merge, so it is re-asserted directly on the subject kind below.
+// Dropping it silently would have been a real loss of coverage disguised as a
+// rename.
 var goldenRelationshipPrefixes = []string{
+	"relationship.v2:project_membership:",
+	"relationship.v2:work_item_team:",
+	"relationship.v2:project_team:",
+}
+
+// retiredRelationshipPrefixes are id prefixes this fixture USED to carry and
+// no producer emits any more (CHAOS-4635 moved project<->team ownership ids to
+// the injective relationship.v2 digest).
+//
+// The writer sweeps these as well as the live ones, and that is not
+// housekeeping. The sweep above keeps every entry the CURRENT selector does
+// not recognise, on the assumption that an unrecognised entry belongs to some
+// other producer. When a producer CHANGES its id scheme that assumption
+// inverts: the old entry stops matching, survives the regeneration, and the
+// fixture ends up documenting an id nothing emits -- silently, because the
+// comparison only ever looks at entries the selector DOES match. That is
+// exactly what happened on the first regeneration of this change.
+//
+// A retired prefix is deliberately not added to goldenRelationshipPrefixes:
+// that list doubles as a coverage assertion ("the generated set must contain
+// one of each"), and a prefix no producer emits would fail it. The two lists
+// answer different questions -- what must be present, and what must be swept.
+var retiredRelationshipPrefixes = []string{
+	"relationship:project_team:",
+	"relationship:work_item_team:",
 	"relationship:work_item_project:",
 	"relationship:pull_request_project:",
-	"relationship:work_item_team:",
-	"relationship:project_team:",
+}
+
+func hasRetiredGoldenPrefix(relationshipID string) bool {
+	for _, prefix := range retiredRelationshipPrefixes {
+		if strings.HasPrefix(relationshipID, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestGoldenProjectionBatchMatchesProducerOutput is codex round-1 F3, and it
@@ -53,6 +95,24 @@ func TestGoldenProjectionBatchMatchesProducerOutput(t *testing.T) {
 			t.Fatalf("generated set is missing %q -- the fixture cannot document an edge type no producer emitted", want)
 		}
 	}
+	// The replacement for the work_item_project/pull_request_project prefix
+	// split (see goldenRelationshipPrefixes): both membership arms must still
+	// be present, asserted on the subject kind the merged family no longer
+	// spells out in the id.
+	fromKinds := map[contractsv1.ContextFabricSubjectKind]bool{}
+	for _, relationship := range produced {
+		if relationship.Type == contractsv1.ContextFabricRelationshipBelongsToProject {
+			fromKinds[relationship.From.Kind] = true
+		}
+	}
+	for _, want := range []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectWorkItem,
+		contractsv1.ContextFabricSubjectPullRequest,
+	} {
+		if !fromKinds[want] {
+			t.Fatalf("generated set has no BELONGS_TO_PROJECT edge from a %q -- the two membership arms share one relationship family now, so this is what proves both are still emitted", want)
+		}
+	}
 	prefixes := map[string]bool{}
 	for _, relationship := range produced {
 		for _, prefix := range goldenRelationshipPrefixes {
@@ -64,6 +124,23 @@ func TestGoldenProjectionBatchMatchesProducerOutput(t *testing.T) {
 	for _, want := range goldenRelationshipPrefixes {
 		if !prefixes[want] {
 			t.Fatalf("generated set is missing every %q edge -- the fixture cannot document a shape no producer emitted", want)
+		}
+	}
+
+	// The retired-prefix sweep only runs during opt-in REGENERATION, and the
+	// drift comparison below filters the committed set to LIVE prefixes -- so
+	// a fixture carrying all the right rows PLUS a stale one from a previous
+	// id scheme passed silently, documenting an edge no producer emits.
+	// (codex round 2, reproduced: injecting a `relationship:project_team:*`
+	// row into the committed file left this test green.)
+	//
+	// That made the sweep a guard that only helps someone who already did the
+	// right thing. This is the half that FAILS when they did not, and it must
+	// read the committed set UNFILTERED -- the filter is precisely what hid
+	// the orphan.
+	for _, relationship := range goldenRelationshipsFromFixtureUnfiltered(t) {
+		if hasRetiredGoldenPrefix(relationship.RelationshipID) {
+			t.Errorf("the committed fixture still carries %q, whose id scheme no producer emits any more. Regenerate it (the command is below) rather than editing it by hand; a fixture documenting a dead id is worse than a missing one, because it reads as provenance.", relationship.RelationshipID)
 		}
 	}
 
@@ -93,6 +170,25 @@ func goldenRelationshipsFromProducer(t *testing.T) []contractsv1.ContextFabricRe
 		writeGoldenRelationships(t, produced)
 	}
 	return produced
+}
+
+// goldenRelationshipsFromFixtureUnfiltered returns EVERY committed
+// relationship, including ones no selector recognises. The filtered sibling
+// below is right for the drift comparison and wrong for the orphan check --
+// an orphan is by definition an entry the live selector does not match.
+func goldenRelationshipsFromFixtureUnfiltered(t *testing.T) []contractsv1.ContextFabricRelationshipProjection {
+	t.Helper()
+	var doc struct {
+		Relationships []contractsv1.ContextFabricRelationshipProjection `json:"relationships"`
+	}
+	raw, err := os.ReadFile(filepath.Clean(goldenProjectionBatchPath))
+	if err != nil {
+		t.Fatalf("read golden fixture: %v", err)
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("decode golden fixture: %v", err)
+	}
+	return doc.Relationships
 }
 
 func goldenRelationshipsFromFixture(t *testing.T) []contractsv1.ContextFabricRelationshipProjection {
@@ -138,7 +234,7 @@ func writeGoldenRelationships(t *testing.T, produced []contractsv1.ContextFabric
 		if err := json.Unmarshal(entry, &identified); err != nil {
 			t.Fatalf("decode golden relationship: %v", err)
 		}
-		if !hasGoldenPrefix(identified.RelationshipID) {
+		if !hasGoldenPrefix(identified.RelationshipID) && !hasRetiredGoldenPrefix(identified.RelationshipID) {
 			kept = append(kept, entry)
 		}
 	}

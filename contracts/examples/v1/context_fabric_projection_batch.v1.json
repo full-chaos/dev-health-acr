@@ -286,12 +286,46 @@
           "string": "native_team"
         }
       },
-      "relationship_id": "relationship:work_item_team:00000000-0000-0000-0000-000000000000:linear:CHAOS-3802:CHAOS",
+      "relationship_id": "relationship.v2:work_item_team:8dce29ed83b79174cd7aaf8a149a035a",
       "source_version": "devhealthsource.teams_projects.v9",
       "to": {
         "canonical_id": "team:CHAOS",
         "kind": "team",
         "label": "CHAOS"
+      },
+      "type": "OWNED_BY_TEAM"
+    },
+    {
+      "authorization": {
+        "repository_slugs": [
+          "full.chaos/dev-health-ops"
+        ]
+      },
+      "derivation": "rule_inferred",
+      "epistemic_status": "inferred",
+      "evidence_ref_ids": [
+        "acr:v1:work-item-team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos"
+      ],
+      "from": {
+        "canonical_id": "work_item.v2:cd620f84-2602-8dea-7809-8d1f11825cf4:gl%3A42",
+        "kind": "work_item",
+        "label": "gl:42"
+      },
+      "observed_at": "2026-08-13T19:00:02.504Z",
+      "properties": {
+        "attribution_confidence": {
+          "string": "medium"
+        },
+        "attribution_source": {
+          "string": "project_ownership"
+        }
+      },
+      "relationship_id": "relationship.v2:work_item_team:9f75989e94c47882f0eb87d473827a63",
+      "source_version": "devhealthsource.teams_projects.v9",
+      "to": {
+        "canonical_id": "team:gl:full.chaos",
+        "kind": "team",
+        "label": "gl:full.chaos"
       },
       "type": "OWNED_BY_TEAM"
     },
@@ -320,7 +354,7 @@
           "string": "native"
         }
       },
-      "relationship_id": "relationship:project_team:github:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos:native",
+      "relationship_id": "relationship.v2:project_team:02e9edd19d8a937a30f72b830f67b000",
       "source_version": "devhealthsource.teams_projects.v9",
       "to": {
         "canonical_id": "team:gl:full.chaos",
@@ -329,40 +363,6 @@
       },
       "type": "OWNED_BY_TEAM",
       "valid_from": "2026-08-12T13:08:20.079Z"
-    },
-    {
-      "authorization": {
-        "repository_slugs": [
-          "full.chaos/dev-health-ops"
-        ]
-      },
-      "derivation": "rule_inferred",
-      "epistemic_status": "inferred",
-      "evidence_ref_ids": [
-        "acr:v1:work-item-team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos"
-      ],
-      "from": {
-        "canonical_id": "work_item.v2:cd620f84-2602-8dea-7809-8d1f11825cf4:gl%3A42",
-        "kind": "work_item",
-        "label": "gl:42"
-      },
-      "observed_at": "2026-08-13T19:00:02.504Z",
-      "properties": {
-        "attribution_confidence": {
-          "string": "medium"
-        },
-        "attribution_source": {
-          "string": "project_ownership"
-        }
-      },
-      "relationship_id": "relationship:work_item_team:cd620f84-2602-8dea-7809-8d1f11825cf4:gl:42:gl:full.chaos",
-      "source_version": "devhealthsource.teams_projects.v9",
-      "to": {
-        "canonical_id": "team:gl:full.chaos",
-        "kind": "team",
-        "label": "gl:full.chaos"
-      },
-      "type": "OWNED_BY_TEAM"
     },
     {
       "authorization": {
@@ -381,7 +381,7 @@
         "label": "PR #7"
       },
       "observed_at": "2026-08-13T19:00:02.504Z",
-      "relationship_id": "relationship:pull_request_project:cd620f84-2602-8dea-7809-8d1f11825cf4:7:gitlab:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:2026-08-13T19:00:02.504Z:",
+      "relationship_id": "relationship.v2:project_membership:d1cf18bc4600ab81d89b874fa370941f",
       "source_version": "devhealthsource.teams_projects.v9",
       "to": {
         "canonical_id": "project.v2:gitlab:70d529e0-3c06-4597-8480-794fd02328b6%3Agitlab%3A71133891",
@@ -408,7 +408,7 @@
         "label": "linear:CHAOS-3802"
       },
       "observed_at": "2026-08-13T19:00:02.504Z",
-      "relationship_id": "relationship:work_item_project:00000000-0000-0000-0000-000000000000:linear:CHAOS-3802:linear:631fcb5f-c3e9-49ff-b17c-07877aaac9b7",
+      "relationship_id": "relationship.v2:project_membership:6ceb97ee1204d3ae29db9e8ae223ceb3",
       "source_version": "devhealthsource.teams_projects.v9",
       "to": {
         "canonical_id": "project.v2:linear:631fcb5f-c3e9-49ff-b17c-07877aaac9b7",

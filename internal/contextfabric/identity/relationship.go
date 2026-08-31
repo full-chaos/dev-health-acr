@@ -51,6 +51,29 @@ type RelationshipFamily string
 const (
 	RelationshipFamilyWorkItemDependency RelationshipFamily = "work_item_dependency"
 	RelationshipFamilyWorkItemHierarchy  RelationshipFamily = "work_item_hierarchy"
+	// RelationshipFamilyProjectTeam is devhealthsource's project<->team
+	// OWNED_BY_TEAM ownership edge (CHAOS-4635). Its pre-v2 id was a raw
+	// colon join of provider, project id, team id and attribution source --
+	// over id spaces that CONTAIN colons (`{org}:gitlab:71133891`,
+	// `gl:full.chaos`), so two different ownership facts could land on one
+	// id. That is the same defect §1.5 named for work_item_dependency, on a
+	// third producer, which is why it joins this scheme rather than getting
+	// a fourth hand-rolled encoding.
+	RelationshipFamilyProjectTeam RelationshipFamily = "project_team"
+	// RelationshipFamilyWorkItemTeam and RelationshipFamilyProjectMembership
+	// are the two remaining devhealthsource edges that carried a raw colon
+	// join (CHAOS-4635). Same defect, same file, same rebuild window as
+	// project_team: workItemID is routinely `linear:CHAOS-3802` and teamID
+	// `gl:full.chaos`, so the delimiter was not a delimiter in either.
+	//
+	// Project MEMBERSHIP is one family, not two, even though the pre-v2 ids
+	// used separate `work_item_project:`/`pull_request_project:` prefixes:
+	// the subject's OWN canonical id already carries its kind
+	// (`work_item.v2:...` versus `pull_request:...`), so the digest separates
+	// them without a second discriminator. Splitting the family would encode
+	// the same fact twice and invite the two spellings to disagree.
+	RelationshipFamilyWorkItemTeam      RelationshipFamily = "work_item_team"
+	RelationshipFamilyProjectMembership RelationshipFamily = "project_membership"
 )
 
 // DeriveRelationship computes the `relationship.v2:<family>:

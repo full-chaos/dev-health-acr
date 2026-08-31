@@ -291,9 +291,9 @@ func assertTeamsProjectsSchemaParity(t *testing.T, ctx context.Context, query co
 		// column type, engine or sort key -- it is an assertion about output.
 		"teams":                       "team:" + teamID,
 		"projects":                    projectCanonicalID,
-		"project_membership_presence": "relationship:work_item_project:" + repoID + ":WI-CHILD:github:" + projectID,
-		"work_item_team_attributions": "relationship:work_item_team:" + repoID + ":WI-CHILD:" + teamID,
-		"team_project_ownership":      "relationship:project_team:github:" + projectID + ":" + teamID + ":native",
+		"project_membership_presence": devhealthsource.ProjectMembershipRelationshipIDForTest(t, devhealthsource.WorkItemSubjectCanonicalIDForTest(t, repoID, "WI-CHILD"), "github", projectID, ""),
+		"work_item_team_attributions": devhealthsource.WorkItemTeamRelationshipIDForTest(t, repoID, "WI-CHILD", teamID),
+		"team_project_ownership":      devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", projectID, teamID, "native"),
 	}
 	seen := map[string]bool{}
 	for _, entity := range batch.Entities {

@@ -1,6 +1,11 @@
 package devhealthsource
 
-import "time"
+import (
+	"fmt"
+	"time"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+)
 
 // EntityTableNamesForTest exposes entityTables' table names (tables.go) to
 // devhealthsource_test -- CHAOS-3789 codex round-1 F2: the schema-parity
@@ -64,4 +69,101 @@ func ProjectAuthorizationScopeForTest(projectID string) error {
 // rewritten.
 func EdgeValidityForTest(fromValidFrom, fromValidTo, toValidFrom, toValidTo *time.Time) (*time.Time, *time.Time) {
 	return edgeValidity(fromValidFrom, fromValidTo, toValidFrom, toValidTo)
+}
+
+// ProjectTeamRelationshipIDForTest exposes the OWNED_BY_TEAM project<->team
+// edge id to devhealthsource_test, derived exactly the way the producer
+// derives it (CHAOS-4635).
+//
+// It takes the RAW source values a fixture actually seeds -- provider,
+// projects.id, teams.id, the attribution source -- and runs them through the
+// same identity.Derive + projectTeamRelationshipID pair queryProjectTeams
+// uses, so a test expectation cannot become a second spelling of the
+// encoding. That mattered immediately: the ids these tests used to hard-code
+// were a raw colon join, and after the digest change every literal would have
+// had to be re-copied by hand from a failing test's output -- which is how a
+// fixture stops describing the producer and starts describing whatever it
+// last printed.
+//
+// It is also why the conversion could not be mechanical. A literal like
+// `relationship:project_team:github:70d529e0-...:gitlab:71133891:gl:full.chaos:native`
+// cannot be split back into its components without already knowing where the
+// boundaries are -- the exact ambiguity CHAOS-4635 exists to remove. Every
+// call site was therefore rewritten from the fixture's OWN seeded values.
+//
+// Fails loudly rather than returning a wrong expectation: a project id this
+// producer cannot represent yields no edge at all, so a test asserting on one
+// is asserting about something that never existed.
+func ProjectTeamRelationshipIDForTest(t interface{ Fatalf(string, ...any) }, provider, projectID, teamID, source string) string {
+	projectCanonicalID, omitted, err := identity.Derive(identity.KindProject, []string{provider, projectID}, nil)
+	if err != nil {
+		t.Fatalf("derive project canonical id for (%q, %q): %v", provider, projectID, err)
+		return ""
+	}
+	if omitted {
+		t.Fatalf("project (%q, %q) is not representable, so the producer emits no edge for it -- this expectation is about an edge that cannot exist", provider, projectID)
+		return ""
+	}
+	return projectTeamRelationshipID(projectCanonicalID, teamID, source)
+}
+
+// RowKeySQLForTest exposes rowKeySQL so the SQL/Go byte-agreement test builds
+// the SAME expression the producers page on, rather than a second copy of it
+// that could agree with Go while production disagrees.
+func RowKeySQLForTest(columns ...string) string { return rowKeySQL(columns...) }
+
+// WorkItemTeamRelationshipIDForTest and ProjectMembershipRelationshipIDForTest
+// are the seams for the other two edge families (CHAOS-4635), for the same
+// reason ProjectTeamRelationshipIDForTest exists: an expectation must run the
+// producer's own derivation, never a second copy of it.
+//
+// Both take the RAW values a fixture seeds and derive the endpoint canonical
+// ids exactly as the producers do, so a fixture change and an expectation
+// cannot drift apart.
+func WorkItemTeamRelationshipIDForTest(t interface{ Fatalf(string, ...any) }, repoID, workItemID, teamID string) string {
+	workItemCanonicalID, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, workItemID}, nil)
+	if err != nil {
+		t.Fatalf("derive work item (%q, %q): %v", repoID, workItemID, err)
+		return ""
+	}
+	if omitted {
+		t.Fatalf("work item (%q, %q) is not representable, so no edge exists to assert on", repoID, workItemID)
+		return ""
+	}
+	return workItemTeamRelationshipID(workItemCanonicalID, teamID)
+}
+
+// ProjectMembershipRelationshipIDForTest takes the SUBJECT canonical id
+// directly rather than re-deriving it: the pull-request arm mints its own
+// legacy `pull_request:<repo>:<number>` id (see querySubjectProjectMemberships'
+// doc comment on why identity.Derive is deliberately not used there), so a
+// single derive-by-kind helper here would quietly disagree with the producer
+// for half its call sites.
+func ProjectMembershipRelationshipIDForTest(t interface{ Fatalf(string, ...any) }, subjectCanonicalID, provider, projectID, intervalSuffix string) string {
+	projectCanonicalID, omitted, err := identity.Derive(identity.KindProject, []string{provider, projectID}, nil)
+	if err != nil {
+		t.Fatalf("derive project (%q, %q): %v", provider, projectID, err)
+		return ""
+	}
+	if omitted {
+		t.Fatalf("project (%q, %q) is not representable, so no edge exists to assert on", provider, projectID)
+		return ""
+	}
+	return projectMembershipRelationshipID(subjectCanonicalID, projectCanonicalID, intervalSuffix)
+}
+
+// WorkItemSubjectCanonicalIDForTest and PullRequestSubjectCanonicalIDForTest
+// mirror the two subject-id shapes querySubjectProjectMemberships mints, so a
+// test naming a membership edge builds its FROM endpoint the same way.
+func WorkItemSubjectCanonicalIDForTest(t interface{ Fatalf(string, ...any) }, repoID, workItemID string) string {
+	id, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, workItemID}, nil)
+	if err != nil || omitted {
+		t.Fatalf("derive work item (%q, %q): omitted=%v err=%v", repoID, workItemID, omitted, err)
+		return ""
+	}
+	return id
+}
+
+func PullRequestSubjectCanonicalIDForTest(repoID string, number int) string {
+	return fmt.Sprintf("pull_request:%s:%d", repoID, number)
 }
