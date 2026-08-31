@@ -1028,9 +1028,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	var priorHints []SubjectHint
 	var priorValidatedReceipts []BoundSubjectReceipt
 	var priorOutcomes []priorSubjectReceiptOutcome
+	// priorLoadedResults (CHAOS-4636) are the prior results already fetched and
+	// taint-gated above, reused by the plan carry so a follow-up turn costs no
+	// extra store round-trip.
+	var priorLoadedResults map[string]InvestigationResult
 	var priorHintsStaleGraphEpochDelta int64
 	if e.results != nil && len(request.PriorSubjectReceipts) > 0 {
-		priorHints, priorValidatedReceipts, priorHintsStaleGraphEpochDelta, priorOutcomes = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts, binding)
+		priorHints, priorValidatedReceipts, priorHintsStaleGraphEpochDelta, priorOutcomes, priorLoadedResults = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts, binding)
 		// The v1 contract bounds RequestedScope.SubjectHints at 50
 		// (ContextFabricRequestedScope.Validate). request.Validate()
 		// already proved the caller's own hints are within that bound,
@@ -1141,6 +1145,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// so an answer that did not fit names the number that was wrong instead
 	// of leaving a 413 to be re-derived by re-running with instrumentation
 	// added afterward.
+	// CHAOS-4636 carry (extends CHAOS-4387): a follow-up turn that resolved
+	// no family of its own continues the previous turn's reading. One hop,
+	// taint-gated, conflict-fails-closed -- and never the member list, which
+	// would carry an authorization decision (North Star check 18).
+	planCarry := e.resolveCarriedPlan(ctx, principal, request, priorValidatedReceipts, binding, priorLoadedResults)
+	if carried, applied := applyCarriedPlan(familyOutcome, planCarry); applied {
+		familyOutcome = carried
+	}
 	plan := PlanAnswer(PlanAnswerInput{
 		Family:           familyOutcome,
 		Interpretation:   interpretation,
@@ -1403,6 +1415,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	//
 	// Before/After are the CAPS, not a known population: how many members
 	// exist is precisely what has not been read yet.
+	// A carried narrowing basis keeps two turns of one conversation
+	// narrowing the same way. A follow-up that silently changed basis would
+	// make the two answers incomparable while looking like a refinement.
+	if planCarry.Outcome == PlanCarryHit && planCarry.NarrowingBasis != "" {
+		plan.Budget.NarrowingBasis = planCarry.NarrowingBasis
+	}
 	if clamped := plan.Budget.MaxMembers; clamped > 0 && (graphRequest.Options.MaxCohortMembers <= 0 || clamped < graphRequest.Options.MaxCohortMembers) {
 		e.recordPlanNarrowingStep(&plan, PlanNarrowing{
 			Stage:  contractsv1.ContextFabricPlanNarrowingCardinality,
@@ -1872,7 +1890,12 @@ func markTrailingHintOutcomesDroppedByBudget(outcomes []priorSubjectReceiptOutco
 	}
 }
 
-func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt, binding ResolvedGraphBinding) ([]SubjectHint, []BoundSubjectReceipt, int64, []priorSubjectReceiptOutcome) {
+// The fifth return (CHAOS-4636) is every prior result this call ALREADY
+// loaded and taint-gated, so a later carry can read a plan out of one without
+// paying for a second store round-trip. Every entry has passed the CHAOS-3898
+// §2.2 epoch gate below before being put there, so a reader of this map
+// inherits that check rather than needing to repeat it.
+func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt, binding ResolvedGraphBinding) ([]SubjectHint, []BoundSubjectReceipt, int64, []priorSubjectReceiptOutcome, map[string]InvestigationResult) {
 	hints := make([]SubjectHint, 0, len(receipts))
 	validated := make([]BoundSubjectReceipt, 0, len(receipts))
 	outcomes := make([]priorSubjectReceiptOutcome, 0, len(receipts))
@@ -1880,7 +1903,7 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 	var staleGraphEpochDelta int64
 	for _, receipt := range receipts {
 		if ctx.Err() != nil {
-			return hints, validated, staleGraphEpochDelta, outcomes
+			return hints, validated, staleGraphEpochDelta, outcomes, loaded
 		}
 		resultID := strings.TrimSpace(receipt.ResultID)
 		receiptID := strings.TrimSpace(receipt.ReceiptID)
@@ -1939,7 +1962,7 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 			outcomes = append(outcomes, priorSubjectReceiptOutcome{receipt: receipt, preGraphSkipReason: priorSubjectReceiptSkipNoMatch})
 		}
 	}
-	return hints, validated, staleGraphEpochDelta, outcomes
+	return hints, validated, staleGraphEpochDelta, outcomes, loaded
 }
 
 // composePriorSubjectReceiptDispositions builds CHAOS-3478/CHAOS-3813's

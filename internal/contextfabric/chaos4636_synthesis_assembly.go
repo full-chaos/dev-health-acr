@@ -88,10 +88,29 @@ func (p synthesisAssemblyParams) forRetry(graph GraphContext, facts CanonicalFac
 }
 
 // copySubjectResolutionForRetry copies the two slices a pass mutates.
+//
+// NIL-PRESERVING, and that is not a nicety. `append([]T(nil), empty...)`
+// returns NIL, not an empty slice -- so a naive copy turns a non-nil empty
+// Candidates/Committed into nil, and the result contract distinguishes the
+// two: validate_context_fabric_result.go rejects a nil Committed because "no
+// subject committed" and "this field was never populated" are different
+// statements. A subjectless cohort has exactly that shape, so the naive copy
+// made every retried cohort answer fail validation.
 func copySubjectResolutionForRetry(resolution SubjectResolution) SubjectResolution {
 	copied := resolution
-	copied.Candidates = append([]SubjectCandidate(nil), resolution.Candidates...)
-	copied.Committed = append([]SubjectRef(nil), resolution.Committed...)
+	copied.Candidates = copySlicePreservingEmpty(resolution.Candidates)
+	copied.Committed = copySlicePreservingEmpty(resolution.Committed)
+	return copied
+}
+
+// copySlicePreservingEmpty copies a slice, keeping nil nil and keeping a
+// non-nil empty slice non-nil.
+func copySlicePreservingEmpty[T any](source []T) []T {
+	if source == nil {
+		return nil
+	}
+	copied := make([]T, len(source))
+	copy(copied, source)
 	return copied
 }
 
@@ -102,11 +121,12 @@ func copyCohortForRetry(cohort *Cohort) *Cohort {
 		return nil
 	}
 	copied := *cohort
-	copied.Members = append([]CohortMember(nil), cohort.Members...)
+	copied.Members = copySlicePreservingEmpty(cohort.Members)
 	for index := range copied.Members {
-		copied.Members[index].Drivers = append([]CohortMemberDriver(nil), cohort.Members[index].Drivers...)
+		copied.Members[index].Drivers = copySlicePreservingEmpty(cohort.Members[index].Drivers)
 	}
-	copied.Groups = append([]contractsv1.ContextFabricCohortGroup(nil), cohort.Groups...)
+	copied.Groups = copySlicePreservingEmpty(cohort.Groups)
+	copied.Exclusions = copySlicePreservingEmpty(cohort.Exclusions)
 	return &copied
 }
 
