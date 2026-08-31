@@ -858,6 +858,13 @@ func attachCanonicalRows(claims []ClaimedFact, facts []CanonicalFact) (result []
 			continue
 		}
 		claims[i].Rows = rows
+		// CHAOS-4637: the DECLARATION travels with the rows, off the
+		// SAME field selection (canonicalRowsField), so the claim can
+		// never end up declaring one field's shape over another field's
+		// rows. Nil when the chosen field carries no declared Table --
+		// every pre-CHAOS-4633 producer -- which is the wire saying
+		// "undeclared", and undeclared is never charted.
+		claims[i].Table = canonicalFieldTable(canonical)
 		rowsCount += len(rows)
 		byKind[claims[i].Kind] += len(rows)
 	}
@@ -885,6 +892,31 @@ func attachCanonicalRows(claims []ClaimedFact, facts []CanonicalFact) (result []
 // validation -- and a cap that actually binds is reported rather than
 // silently dropping the tail.
 func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricClaimedFactRow, truncated bool) {
+	rowsField, ambiguous, ok := canonicalRowsField(fact)
+	if !ok {
+		return nil, ambiguous
+	}
+	source := fact.Fields[rowsField].Rows
+	rows = make([]contractsv1.ContextFabricClaimedFactRow, 0, len(source))
+	for _, row := range source {
+		rows = append(rows, convertFactValueRow(row))
+	}
+	if len(rows) > contractsv1.ContextFabricClaimedFactMaxRows {
+		return rows[:contractsv1.ContextFabricClaimedFactMaxRows], true
+	}
+	return rows, false
+}
+
+// canonicalRowsField is the ONE place a fact's Rows-shaped field is chosen.
+// canonicalFieldRows and canonicalFieldTable both go through it so the rows
+// a claim serves and the declaration describing them can never come from
+// two different fields -- a divergence that would be invisible on the wire
+// and would make the declaration a lie rather than a guard.
+//
+// ok=false with ambiguous=true is the CHAOS-4355 fail-closed case the
+// caller must still report; ok=false with ambiguous=false simply means the
+// fact carries no table at all.
+func canonicalRowsField(fact CanonicalFact) (field string, ambiguous bool, ok bool) {
 	var rowsField string
 	rowsFieldCount := 0
 	for key, value := range fact.Fields {
@@ -895,9 +927,9 @@ func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricCla
 	}
 	switch rowsFieldCount {
 	case 0:
-		return nil, false
+		return "", false, false
 	case 1:
-		// fall through
+		return rowsField, false, true
 	default:
 		// CHAOS-4645 ruling: the ambiguity CHAOS-4355 fails closed on is no
 		// longer unresolvable now that CHAOS-4633 gives every table an
@@ -914,21 +946,37 @@ func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricCla
 		// migration phases). Two non-time_series tables, or two
 		// time_series tables, give no way to prefer one over the other and
 		// still fail closed exactly as CHAOS-4355 established.
-		if field, ok := uniqueNonTimeSeriesRowsField(fact); ok {
-			rowsField = field
-			break
+		if field, unique := uniqueNonTimeSeriesRowsField(fact); unique {
+			return field, false, true
 		}
-		return nil, true
+		return "", true, false
 	}
-	source := fact.Fields[rowsField].Rows
-	rows = make([]contractsv1.ContextFabricClaimedFactRow, 0, len(source))
-	for _, row := range source {
-		rows = append(rows, convertFactValueRow(row))
+}
+
+// canonicalFieldTable is CHAOS-4637's declaration hop: the wire declaration
+// of the SAME field canonicalRowsField chose, or nil when that field
+// carries none.
+//
+// Nil is not a degraded state that wants a fallback -- it is the statement
+// "this table is undeclared", and CHAOS-4627 rules that an undeclared table
+// is never charted. Inferring a shape here from the rows would reinstate
+// exactly the geometry inference this slice deletes.
+func canonicalFieldTable(fact CanonicalFact) *contractsv1.ContextFabricClaimedFactTable {
+	field, _, ok := canonicalRowsField(fact)
+	if !ok {
+		return nil
 	}
-	if len(rows) > contractsv1.ContextFabricClaimedFactMaxRows {
-		return rows[:contractsv1.ContextFabricClaimedFactMaxRows], true
+	declared := fact.Fields[field].Table
+	if declared == nil {
+		return nil
 	}
-	return rows, false
+	return &contractsv1.ContextFabricClaimedFactTable{
+		Field:    field,
+		Shape:    contractsv1.ContextFabricFactTableShape(declared.Shape),
+		Key:      append([]string(nil), declared.Key...),
+		Measures: append([]string(nil), declared.Measures...),
+		OrderBy:  declared.OrderBy,
+	}
 }
 
 // uniqueNonTimeSeriesRowsField is canonicalFieldRows' CHAOS-4645

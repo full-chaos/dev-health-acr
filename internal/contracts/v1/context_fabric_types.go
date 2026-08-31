@@ -1311,6 +1311,14 @@ type ContextFabricClaimedFact struct {
 	// is a new, answer-surface-only shape so widening a claim can never
 	// widen what a projection batch is allowed to write.
 	Rows []ContextFabricClaimedFactRow `json:"rows,omitempty"`
+	// Table is the OPTIONAL declaration of what Rows IS (CHAOS-4637 /
+	// CHAOS-4627): the producer's own closed Shape, composite Key and
+	// Measures, carried to the wire so selection keys on a DECLARATION
+	// rather than inferring an axis and a set of measures from row
+	// geometry. Absent means undeclared, and undeclared means never
+	// charted -- today's behaviour and CHAOS-4627's ruled safe default.
+	// See ContextFabricClaimedFactTable for why it carries no rows.
+	Table *ContextFabricClaimedFactTable `json:"table,omitempty"`
 }
 
 // ContextFabricClaimedFactRow is one row of a claimed fact's OPTIONAL

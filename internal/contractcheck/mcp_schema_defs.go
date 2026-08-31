@@ -96,6 +96,8 @@ var contextFabricCommonDefsRewrites = map[string]string{
 	"#/$defs/WindowExpandOption": "#/$defs/context_fabric_common.v1/$defs/WindowExpandOption",
 	// CHAOS-4347: ClaimedFact.rows' own new common $defs entry.
 	"#/$defs/ClaimedFactRow": "#/$defs/context_fabric_common.v1/$defs/ClaimedFactRow",
+	// CHAOS-4637: ClaimedFact.table's own new $defs entry.
+	"#/$defs/ClaimedFactTable": "#/$defs/context_fabric_common.v1/$defs/ClaimedFactTable",
 	// CHAOS-4415: render_shapes' own eight new common $defs entries.
 	"#/$defs/RenderShape":        "#/$defs/context_fabric_common.v1/$defs/RenderShape",
 	"#/$defs/RenderSeries":       "#/$defs/context_fabric_common.v1/$defs/RenderSeries",
@@ -203,6 +205,8 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	"#/$defs/WindowExpandOption": "#/$defs/context_fabric_answer_projection.v1/$defs/WindowExpandOption",
 	// CHAOS-4347: ProjectedFact.rows' own new projection-local $defs entry.
 	"#/$defs/ProjectedFactRow": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedFactRow",
+	// CHAOS-4637: ProjectedFact.table's own new $defs entry.
+	"#/$defs/ProjectedFactTable": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedFactTable",
 	// CHAOS-4415: render_shapes' own eight new projection-local $defs
 	// entries -- the projection embeds the SAME shapes common.v1 declares
 	// (see answer_projection_closure_test.go's pinned reused-shapes set),

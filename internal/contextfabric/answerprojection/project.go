@@ -340,6 +340,11 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 				// Value -- it is copied evidence, not something this
 				// projection step computes or narrows.
 				Rows: fact.Rows,
+				// Table (CHAOS-4637) travels WITH the rows it describes,
+				// for the same reason: a declaration separated from its
+				// table is exactly the unidentified table this contract
+				// exists to stop.
+				Table: fact.Table,
 			})
 		}
 		drivers = append(drivers, contractsv1.ContextFabricProjectedDriver{

@@ -899,6 +899,9 @@ func (c ContextFabricClaimedFact) Validate() error {
 	if err := validateClaimedFactRows(c.Rows); err != nil {
 		return fmt.Errorf("rows: %w", err)
 	}
+	if err := validateClaimedFactTable(c.Table, c.Rows); err != nil {
+		return fmt.Errorf("table: %w", err)
+	}
 	return nil
 }
 
@@ -1487,7 +1490,49 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	if err := validateRenderShapes(r.RenderShapes, renderShapeSourcesFromResult(r)); err != nil {
 		return fmt.Errorf("render shapes: %w", err)
 	}
+	if err := validateRenderShapesAgainstPlan(r.RenderShapes, r.AnswerPlan); err != nil {
+		return fmt.Errorf("render shapes: %w", err)
+	}
 
+	return nil
+}
+
+// validateRenderShapesAgainstPlan is CHAOS-4637's plan-tracing refusal:
+// every render shape must trace to a plan item, and a shape whose kind the
+// plan does not authorize is REFUSED rather than drawn.
+//
+// It is deliberately a second, independent gate rather than trust in the
+// selector. SelectRenderShapes already consults the plan, but selection is
+// one code path and a result also arrives here from storage, from a replay,
+// and from any future producer -- and North Star check 10 ("rich views are
+// conditional on intent, never default") is worth stating as a property of
+// the DOCUMENT, not as a property of one function that happened to check.
+//
+// The two nil-ish cases authorize everything, for the same non-regression
+// reason planAuthorizesRenderKind gives: a result written before the
+// planning stage existed carries no plan, and a plan that declared no
+// render kinds has declared no restriction. Inferring a restriction from
+// silence is how a chart quietly disappears.
+//
+// SCOPED TO RENDER SHAPES, deliberately, and not to fact reads. The plan's
+// FactKinds may only WIDEN what the engine reads -- the unconditional
+// ranking-kind injection CHAOS-4636 had to restore is the proof -- so
+// requiring every claimed fact to trace to a plan fact kind would reject
+// correct answers. Cohort membership is already plan-traced by the group
+// kind check earlier in this function.
+func validateRenderShapesAgainstPlan(shapes []ContextFabricRenderShape, plan *ContextFabricAnswerPlan) error {
+	if plan == nil || len(plan.RenderKinds) == 0 || len(shapes) == 0 {
+		return nil
+	}
+	authorized := make(map[ContextFabricRenderKind]struct{}, len(plan.RenderKinds))
+	for _, kind := range plan.RenderKinds {
+		authorized[kind] = struct{}{}
+	}
+	for _, shape := range shapes {
+		if _, ok := authorized[shape.Kind]; !ok {
+			return fmt.Errorf("shape %q has kind %q, which the answer plan does not authorize", shape.ShapeID, shape.Kind)
+		}
+	}
 	return nil
 }
 
