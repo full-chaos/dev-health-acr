@@ -269,6 +269,24 @@ type contextFabricBounds struct {
 	// storage. Rejecting them on read would break reading data the service
 	// itself accepted.
 	rawTextLength bool
+	// planAuthorizedRenderKinds enforces CHAOS-4637's rule that every render
+	// shape's kind is one the answer plan authorized. TRUE on writes, FALSE
+	// on stored reads, and the asymmetry is the whole point.
+	//
+	// Investigation results are IMMUTABLE. A stored row cannot be rewritten
+	// to satisfy a rule introduced after it was written, so a read path
+	// enforcing this would make a previously valid answer permanently
+	// unreadable -- an API 500 and an MCP retrieval failure for a row that
+	// was correct when it was written. That is this file's own documented
+	// invariant (see ValidateStored), and the first version of this check
+	// broke it: it sat in the shared validate() and therefore ran on both
+	// paths (codex round 3, P1).
+	//
+	// Writes stay strict, so the looseness cannot grow: no NEW result can be
+	// persisted carrying a shape its plan does not authorize, which is the
+	// property the rule exists for. Identical reasoning and identical shape
+	// to closedFindingKinds above.
+	planAuthorizedRenderKinds bool
 
 	cohortInclusionReasons      int
 	cohortInclusionReasonLength int
@@ -346,6 +364,7 @@ const contextFabricRelationshipPathMaxNodes = 51
 var contextFabricWriteBounds = contextFabricBounds{
 	closedFindingKinds:                      true,
 	rawTextLength:                           true,
+	planAuthorizedRenderKinds:               true,
 	cohortInclusionReasons:                  32,
 	cohortInclusionReasonLength:             1000,
 	narrativeCount:                          ContextFabricLimitationsMaxCount,
@@ -381,6 +400,7 @@ var contextFabricWriteBounds = contextFabricBounds{
 var contextFabricLegacyBounds = contextFabricBounds{
 	closedFindingKinds:                false,
 	rawTextLength:                     false,
+	planAuthorizedRenderKinds:         false,
 	cohortInclusionReasons:            50,
 	cohortInclusionReasonLength:       1024,
 	narrativeCount:                    250,
@@ -1490,8 +1510,10 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	if err := validateRenderShapes(r.RenderShapes, renderShapeSourcesFromResult(r)); err != nil {
 		return fmt.Errorf("render shapes: %w", err)
 	}
-	if err := validateRenderShapesAgainstPlan(r.RenderShapes, r.AnswerPlan); err != nil {
-		return fmt.Errorf("render shapes: %w", err)
+	if bounds.planAuthorizedRenderKinds {
+		if err := validateRenderShapesAgainstPlan(r.RenderShapes, r.AnswerPlan); err != nil {
+			return fmt.Errorf("render shapes: %w", err)
+		}
 	}
 
 	return nil
@@ -1507,6 +1529,10 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 // and from any future producer -- and North Star check 10 ("rich views are
 // conditional on intent, never default") is worth stating as a property of
 // the DOCUMENT, not as a property of one function that happened to check.
+//
+// WRITE PATH ONLY (bounds.planAuthorizedRenderKinds). Results are immutable,
+// so enforcing a NEW rule on stored reads would make a previously valid
+// answer permanently unreadable -- see that field's own comment.
 //
 // The two nil-ish cases authorize everything, for the same non-regression
 // reason planAuthorizesRenderKind gives: a result written before the

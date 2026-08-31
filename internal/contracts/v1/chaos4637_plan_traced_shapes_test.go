@@ -176,3 +176,41 @@ func TestADeclaredTableMustDescribeTheRowsBesideIt(t *testing.T) {
 		})
 	}
 }
+
+// TestAStoredResultIsNotRefusedByARuleThatDidNotExistWhenItWasWritten is
+// codex round 3 finding 1 (P1, re-run here before it was ledgered).
+//
+// The plan gate was first written into the SHARED validate(), which
+// ValidateStored() also calls — and both investigation result stores
+// validate on read. Investigation results are IMMUTABLE, so a rule
+// introduced after a row was written can never be satisfied by that row:
+// enforcing it on read turns a previously valid answer into an API 500 and
+// an MCP retrieval failure. This file's own ValidateStored doc comment
+// states that invariant in as many words, and the first version of this
+// check broke it.
+//
+// Writes stay strict, which is where the rule earns its keep: no NEW result
+// can be persisted carrying a shape its plan does not authorize.
+func TestAStoredResultIsNotRefusedByARuleThatDidNotExistWhenItWasWritten(t *testing.T) {
+	t.Parallel()
+	result := publishedRenderShapeResult(t)
+	if len(result.RenderShapes) == 0 {
+		t.Fatal("fixture carries no render shape")
+	}
+	kind := result.RenderShapes[0].Kind
+	if kind == ContextFabricRenderKindTable {
+		t.Fatalf("fixture's shape kind is already %q; a plan authorizing only `table` would not exclude it", kind)
+	}
+	result.AnswerPlan = planWithRenderKinds(ContextFabricRenderKindTable)
+
+	// NON-VACUITY: the WRITE path must still refuse it, or this test would
+	// pass against a gate that had simply been deleted.
+	if err := result.Validate(); err == nil {
+		t.Fatal("the write path accepted an unauthorized shape; the rule has been lost, not scoped")
+	}
+
+	// And the READ path must accept it, because the row is immutable.
+	if err := result.ValidateStored(); err != nil {
+		t.Fatalf("a stored result was refused by a rule that post-dates it: %v", err)
+	}
+}
