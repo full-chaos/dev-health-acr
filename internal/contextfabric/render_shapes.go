@@ -95,6 +95,16 @@ const (
 	// silently omitted, so a reader can tell "this build does not select
 	// trends" from "the rule ran and found nothing".
 	RenderShapeSkipTrendRuleWithdrawn RenderShapeSkipReason = "trend_rule_withdrawn"
+	// RenderShapeSkipNotPlanAuthorized (CHAOS-4636) means the geometry
+	// admitted this shape and the PLAN did not authorize its kind.
+	//
+	// This is North Star check 10 made structural: rich views are
+	// conditional on intent, never default. A grouped status list plans
+	// RenderKinds=[table] and RequireRanking=false, so a cohort attention
+	// BAR -- one ranking drawn across every group, for a question that
+	// asked for per-group results -- is not merely wrong here, it was not
+	// requested, and the plan is where that is said.
+	RenderShapeSkipNotPlanAuthorized RenderShapeSkipReason = "not_plan_authorized"
 )
 
 // cohortIntentShapes are the interpreted shapes a cohort chart is an answer
@@ -121,7 +131,18 @@ func SelectRenderShapes(result InvestigationResult) ([]contractsv1.ContextFabric
 
 	_, cohortIntent := cohortIntentShapes[result.Interpretation.Shape]
 	ranked := rankedCohortMembers(result.Cohort)
+	// CHAOS-4636: the plan gates the KIND before the geometry is consulted.
+	// Both cohort rules produce a `series`, so a plan that does not
+	// authorize `series` refuses both -- which is exactly what stops the
+	// group-blind cross-group bar chart a grouped question would otherwise
+	// get. A result with NO plan (every result written before the planning
+	// stage existed, and every path that terminates before planning)
+	// authorizes everything, so nothing that renders today stops rendering.
+	seriesAuthorized := planAuthorizesRenderKind(result.AnswerPlan, contractsv1.ContextFabricRenderKindSeries)
 	switch {
+	case !seriesAuthorized:
+		event.skip(contractsv1.ContextFabricRenderRuleCohortAttentionScore, RenderShapeSkipNotPlanAuthorized)
+		event.skip(contractsv1.ContextFabricRenderRuleCohortDriverContribution, RenderShapeSkipNotPlanAuthorized)
 	case !cohortIntent:
 		event.skip(contractsv1.ContextFabricRenderRuleCohortAttentionScore, RenderShapeSkipNotCohortIntent)
 		event.skip(contractsv1.ContextFabricRenderRuleCohortDriverContribution, RenderShapeSkipNotCohortIntent)
@@ -403,4 +424,25 @@ func humanizeRenderTerm(term string) string {
 		return spaced
 	}
 	return strings.ToUpper(spaced[:1]) + spaced[1:]
+}
+
+// planAuthorizesRenderKind reports whether the plan permits kind.
+//
+// A NIL plan authorizes everything. That is deliberate and is what keeps
+// this slice non-regressive: results written before the planning stage
+// existed, and paths that terminate before planning runs, must render
+// exactly what they render today. An EMPTY RenderKinds list on a real plan
+// also authorizes everything, for the same reason -- a family that has not
+// declared its render kinds has not declared a restriction, and inferring
+// one from silence is how a chart quietly disappears.
+func planAuthorizesRenderKind(plan *contractsv1.ContextFabricAnswerPlan, kind contractsv1.ContextFabricRenderKind) bool {
+	if plan == nil || len(plan.RenderKinds) == 0 {
+		return true
+	}
+	for _, authorized := range plan.RenderKinds {
+		if authorized == kind {
+			return true
+		}
+	}
+	return false
 }

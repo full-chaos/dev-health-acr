@@ -1,0 +1,266 @@
+package contextfabric
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+// CHAOS-4636 stage 3: measure the assembled result, re-synthesize once if it
+// does not fit, and if it still does not fit, refuse in a way that says why.
+//
+// Decision D5, ruled by the orchestrator on 2026-08-30: option C now, option
+// A ticketed separately. The design's original promise -- "always serve,
+// never acr_rejected_request" -- was over-determined and unsound. It required
+// three things that cannot all be true at once: exactly one bounded retry,
+// always serve, and keep the existing route gate. Re-synthesis reduces
+// members and facts but NOT SubjectResolution.Candidates, which the route
+// counts and the contract permits up to 50 -- so on a 30-item budget a valid
+// result with 30 candidates cannot fit once it carries a single driver,
+// finding, claim or member, however small the synthesis input was.
+//
+// So this ships the PLANNED, EXPLAINED refusal instead: it names what was too
+// large and the narrower question that would fit. That is strictly better
+// than the status quo, which is the same refusal with no explanation at all.
+
+// ErrAnswerExceedsBudget is the planned refusal. It is a distinct sentinel
+// rather than a generic failure so the route can classify it as the DESIGNED
+// outcome it is, and so it can never be confused with a serialization defect
+// or an upstream error.
+var ErrAnswerExceedsBudget = errors.New("context fabric answer exceeds the response budget")
+
+// AnswerBudgetRefusal carries what a caller needs in order to ask a question
+// that would fit. It is the whole point of decision D5: today's 413 is
+// reachable and unexplained, so an explained one is a strict improvement even
+// though it is still a refusal.
+type AnswerBudgetRefusal struct {
+	// Overrun names which ceiling was exceeded.
+	Overrun contractsv1.ContextFabricBudgetOverrun
+	// MeasuredItems/MeasuredBytes and the two ceilings are the numbers, so
+	// the refusal is diagnosable from itself.
+	MeasuredItems      int
+	MeasuredBytes      int64
+	MaxItems           int
+	MaxSerializedBytes int64
+	// Family is what was being answered, and NarrowerQuestion is the
+	// concrete suggestion.
+	Family           QuestionFamily
+	NarrowerQuestion string
+	// RetryAttempted records whether the one bounded re-synthesis ran. It
+	// is false when there was nothing left to narrow, and false when the
+	// remaining deadline could not safely hold a second model call -- two
+	// different situations that a caller and an operator both need told
+	// apart.
+	RetryAttempted bool
+}
+
+func (r AnswerBudgetRefusal) Error() string {
+	return fmt.Sprintf("%s: measured %d items and %d bytes against a %d-item, %d-byte budget", ErrAnswerExceedsBudget.Error(), r.MeasuredItems, r.MeasuredBytes, r.MaxItems, r.MaxSerializedBytes)
+}
+
+func (r AnswerBudgetRefusal) Unwrap() error { return ErrAnswerExceedsBudget }
+
+// fitAssembledResult is stage 3.
+func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Principal, plan *AnswerPlan, result InvestigationResult, params synthesisAssemblyParams) (InvestigationResult, error) {
+	budget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes}
+	if budget.MaxItems <= 0 && budget.MaxSerializedBytes <= 0 {
+		// Nothing to measure against. An engine composed without either
+		// ceiling behaves exactly as it did before this slice: it plans,
+		// but it never narrows on a budget it was not told about.
+		return result, nil
+	}
+	measurement, err := contractsv1.MeasureContextFabricResponse(result)
+	if err != nil {
+		// A result that cannot be marshaled is a server defect, not an
+		// over-budget answer. Conflating the two would let a serialization
+		// bug present to the caller as "your question was too big".
+		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("measure assembled result: %w", err))
+	}
+	overrun := measurement.Overrun(budget)
+	if overrun == contractsv1.ContextFabricBudgetFits {
+		return result, nil
+	}
+
+	narrowedGraph, narrowedFacts, before, after, canNarrow := narrowSynthesisInput(params, plan)
+	deadlineOK := e.retryDeadlineAvailable(ctx)
+	if !canNarrow || !deadlineOK {
+		// Refuse, and say which of the two reasons it was. "There was
+		// nothing left to narrow" and "there was not enough of the
+		// deadline left to try" are different diagnoses with different
+		// fixes, and a single unexplained 413 tells a caller neither.
+		return InvestigationResult{}, e.planRefusal(ctx, principal, plan, measurement, overrun, false, deadlineOK)
+	}
+
+	e.recordPlanNarrowingStep(plan, PlanNarrowing{
+		Stage:   contractsv1.ContextFabricPlanNarrowingAssembledResult,
+		Basis:   planStageBasis(contractsv1.ContextFabricPlanNarrowingAssembledResult, false),
+		Before:  before,
+		After:   after,
+		Overrun: overrun,
+	})
+
+	retried, retryErr := e.synthesizeAndAssemble(ctx, principal, params.forRetry(narrowedGraph, narrowedFacts))
+	if retryErr != nil {
+		// A failed retry must not lose the reason the first answer did not
+		// fit. Reporting the retry's own error instead would replace a
+		// budget diagnosis with a synthesis one.
+		return InvestigationResult{}, e.planRefusal(ctx, principal, plan, measurement, overrun, true, deadlineOK)
+	}
+	retryMeasurement, err := contractsv1.MeasureContextFabricResponse(retried)
+	if err != nil {
+		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("measure re-synthesized result: %w", err))
+	}
+	retryOverrun := retryMeasurement.Overrun(budget)
+	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, false, overrun)
+	event.MeasuredItems = retryMeasurement.Items.Budgeted()
+	event.MeasuredBytes = retryMeasurement.Bytes
+	event.RetryAttempted = true
+	event.RetryFit = retryOverrun == contractsv1.ContextFabricBudgetFits
+	event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+	event.RefusalPlanned = !event.RetryFit
+	e.recordPlanNarrowing(ctx, principal, event)
+
+	if retryOverrun != contractsv1.ContextFabricBudgetFits {
+		// ONE bounded retry, never k of them. Decision D5 rejected further
+		// retries explicitly: they inherit the same deadline problem and
+		// merely move the terminal case, arriving at the same unanswered
+		// question with more latency.
+		return InvestigationResult{}, e.refusalFrom(plan, retryMeasurement, retryOverrun, true, deadlineOK)
+	}
+	return retried, nil
+}
+
+// narrowSynthesisInput halves the cohort the retry is given, member-first.
+//
+// HALVES, rather than aiming at a computed target. The relationship between
+// members and the items synthesis will produce from them is not a function
+// this code knows -- drivers-per-member is decided by synthesis -- so a
+// target derived from the overrun would be a guess dressed as arithmetic.
+// Halving is a bounded, declared reduction that makes progress without
+// pretending to a precision it does not have. §6.3 says so in as many words:
+// "the exact clamp is not derivable on paper".
+func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) (GraphContext, CanonicalFactBundle, int, int, bool) {
+	graph := params.Graph
+	facts := params.Facts
+	if graph.Cohort == nil || len(graph.Cohort.Members) <= 1 {
+		// Nothing left to narrow. A cohort of one is the smallest answer
+		// that is still an answer to the question asked; zero members is a
+		// different question.
+		return graph, facts, 0, 0, false
+	}
+	before := len(graph.Cohort.Members)
+	target := before / 2
+	if target < 1 {
+		target = 1
+	}
+	cohort := copyCohortForRetry(graph.Cohort)
+	var kept []CohortMember
+	var narrowed bool
+	if len(cohort.Groups) > 0 {
+		var groups []contractsv1.ContextFabricCohortGroup
+		kept, groups, narrowed = NarrowGroupedCohort(cohort, target)
+		if narrowed {
+			cohort.Groups = groups
+		}
+	} else {
+		kept, narrowed = NarrowFlatCohort(cohort, target)
+	}
+	if !narrowed {
+		// A grouped cohort in which every group already holds exactly one
+		// member cannot narrow further without DROPPING a group, which
+		// decision D2 forbids: "for each team" is the question's own words.
+		// The planned refusal is the correct terminal case here, not a
+		// silent group drop.
+		return graph, facts, before, before, false
+	}
+	removed := RemovedCohortMembers(cohort.Members, kept)
+	cohort.Members = kept
+	if len(cohort.Groups) > 0 {
+		ApplyGroupedCohortCompleteness(cohort)
+	} else {
+		cohort.Complete = false
+		cohort.Truncated = true
+	}
+	// Re-rank: RankCohort min-max normalizes workload WITHIN the cohort, so
+	// scores computed against the wider member set do not describe this one.
+	rankedCohort, _, citations := RankCohort(cohort, facts.Facts, facts.Coverage)
+	graph.Cohort = rankedCohort
+	facts.Facts = RetainFactsForCohort(facts.Facts, rankedCohort, removed)
+	params.CohortSignalCitations = citations
+	return graph, facts, before, len(kept), true
+}
+
+// retryDeadlineAvailable reports whether enough of the request deadline
+// remains to run a second synthesis.
+//
+// This is decision D5's second, independent hole, and closing it is
+// non-negotiable under ANY of the three rulings: the whole request shares one
+// timeout (internal/api/app.go's timeoutMiddleware) and the pre-read budget
+// bounds only fan-out, so a first synthesis that finishes near the deadline
+// turns the retry into a 504 rather than a partial answer.
+//
+// A context with NO deadline always admits the retry -- there is nothing to
+// run out of. A reserve of zero always REFUSES it: an engine that was not
+// told how long it may spend does not gamble the caller's deadline on a
+// second model call.
+func (e *Engine) retryDeadlineAvailable(ctx context.Context) bool {
+	if e.synthesisDeadlineReserve <= 0 {
+		return false
+	}
+	deadline, hasDeadline := ctx.Deadline()
+	if !hasDeadline {
+		return true
+	}
+	return time.Until(deadline) >= e.synthesisDeadlineReserve
+}
+
+// planRefusal emits the telemetry and builds the refusal.
+func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, deadlineOK bool) error {
+	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, 0, 0, false, overrun)
+	event.MeasuredItems = measurement.Items.Budgeted()
+	event.MeasuredBytes = measurement.Bytes
+	event.RetryAttempted = retryAttempted
+	event.RetryFit = false
+	event.RefusalPlanned = true
+	event.DeadlineReserved = e.synthesisDeadlineReserve > 0 && deadlineOK
+	e.recordPlanNarrowing(ctx, principal, event)
+	return e.refusalFrom(plan, measurement, overrun, retryAttempted, deadlineOK)
+}
+
+func (e *Engine) refusalFrom(plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, _ bool) error {
+	return AnswerBudgetRefusal{
+		Overrun:            overrun,
+		MeasuredItems:      measurement.Items.Budgeted(),
+		MeasuredBytes:      measurement.Bytes,
+		MaxItems:           plan.Budget.MaxItems,
+		MaxSerializedBytes: plan.Budget.MaxSerializedBytes,
+		Family:             plan.Family,
+		NarrowerQuestion:   narrowerQuestionFor(*plan),
+		RetryAttempted:     retryAttempted,
+	}
+}
+
+// narrowerQuestionFor names a question that WOULD fit. It is derived from the
+// family, so the suggestion is a property of what was asked rather than a
+// generic apology.
+//
+// Deliberately not the question text: the engine does not rewrite a caller's
+// words. It names the SHAPE of a narrower question, which is what the caller
+// needs in order to ask one.
+func narrowerQuestionFor(plan AnswerPlan) string {
+	switch plan.Family {
+	case QuestionFamilyGroupedCohortStatus:
+		return "ask about one group at a time, or name the groups you care about, so the answer covers fewer members per group"
+	case QuestionFamilyScopedCohortStatus:
+		return "narrow the scope to a single owner, or name the specific members you care about"
+	case QuestionFamilyDiscoveredCohortRanking:
+		return "ask for the top few subjects rather than the whole discovered cohort"
+	case QuestionFamilyExplicitComparison:
+		return "compare two subjects at a time rather than the full set"
+	}
+	return "ask about a single subject, or a shorter evidence window"
+}

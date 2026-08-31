@@ -329,6 +329,7 @@ type recordingTelemetry struct {
 	// resolution event verbatim, same list-not-count discipline as the
 	// fields around it.
 	questionFamilyResolutions []QuestionFamilyResolutionEvent
+	planNarrowings            []PlanNarrowingEvent
 	// categoryFactCompositions (CHAOS-4347) records every status-category
 	// composition event verbatim, same list-not-count discipline.
 	categoryFactCompositions       []CategoryFactCompositionEvent
@@ -510,6 +511,14 @@ type cohortStructureGateRecord struct {
 // the kind of test that cannot observe them going missing.
 func (r *recordingTelemetry) RecordQuestionFamilyResolution(_ context.Context, _ storage.Principal, event QuestionFamilyResolutionEvent) {
 	r.questionFamilyResolutions = append(r.questionFamilyResolutions, event)
+}
+
+// RecordPlanNarrowing (CHAOS-4636) records the whole event for the same
+// reason the family resolution above does: the stage, the basis and the
+// measured numbers are what make an over-budget answer diagnosable, and a
+// double keeping only a count could not observe any of them going missing.
+func (r *recordingTelemetry) RecordPlanNarrowing(_ context.Context, _ storage.Principal, event PlanNarrowingEvent) {
+	r.planNarrowings = append(r.planNarrowings, event)
 }
 
 func (r *recordingTelemetry) RecordCohortStructureGate(_ context.Context, _ storage.Principal, outcome CohortStructureGateOutcome, shape InvestigationShape) {

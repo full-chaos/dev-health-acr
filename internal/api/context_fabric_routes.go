@@ -201,16 +201,24 @@ func investigateRecovered(ctx context.Context, investigator contextfabric.Invest
 // from outside; now it is a specific, alertable signal that something reached
 // the route with no sentinel of its own.
 const (
-	contextFabricClassDeadline            = "deadline_exceeded"
-	contextFabricClassTimeBound           = "invalid_time_bound"
-	contextFabricClassRateLimited         = "rate_limited"
-	contextFabricClassUnavailable         = "dependency_unavailable"
-	contextFabricClassInterpretRejected   = "interpretation_rejected"
-	contextFabricClassSynthesisRejected   = "synthesis_rejected"
-	contextFabricClassModelOutput         = "model_output_invalid"
-	contextFabricClassNoSubjects          = "no_investigation_subjects"
-	contextFabricClassInvalidResult       = "invalid_result"
-	contextFabricClassPanic               = "panic"
+	contextFabricClassDeadline          = "deadline_exceeded"
+	contextFabricClassTimeBound         = "invalid_time_bound"
+	contextFabricClassRateLimited       = "rate_limited"
+	contextFabricClassUnavailable       = "dependency_unavailable"
+	contextFabricClassInterpretRejected = "interpretation_rejected"
+	contextFabricClassSynthesisRejected = "synthesis_rejected"
+	contextFabricClassModelOutput       = "model_output_invalid"
+	contextFabricClassNoSubjects        = "no_investigation_subjects"
+	contextFabricClassInvalidResult     = "invalid_result"
+	contextFabricClassPanic             = "panic"
+	// contextFabricClassBudgetRefusal (CHAOS-4636) is decision D5's PLANNED
+	// refusal: the engine measured its own assembled answer, re-synthesized
+	// once with a smaller input, and it still did not fit. It is a distinct
+	// class from the two 413s below it because it is the only one that
+	// carries a diagnosis -- the plan says which ceiling was exceeded and
+	// what narrower question would fit -- and because the fix for it is a
+	// planner change, not an operator one.
+	contextFabricClassBudgetRefusal       = "budget_refusal"
 	contextFabricClassUnclassified        = "unclassified"
 	contextFabricInvestigationFailureName = "context_fabric_investigation"
 )
@@ -237,6 +245,34 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 		return
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) {
+		return
+	}
+	// CHAOS-4636 / decision D5: the PLANNED, EXPLAINED refusal.
+	//
+	// Classified BEFORE the deadline check on purpose. The engine refuses
+	// rather than retrying when too little of the deadline remains to run a
+	// second synthesis safely, so this error and an exceeded deadline
+	// legitimately arrive together -- and reporting it as a timeout would
+	// hide the one diagnosis that says what to do about it. The request did
+	// not run out of time; the answer did not fit, and the engine declined
+	// to gamble the remaining deadline on a retry that would have 504'd.
+	//
+	// Still a 413, and still not retryable: the same question asked again
+	// produces the same oversized answer. What is new is that the response
+	// says which ceiling was exceeded, by how much, and what narrower
+	// question would fit -- instead of today's bare acr_rejected_request.
+	var budgetRefusal contextfabric.AnswerBudgetRefusal
+	if errors.As(err, &budgetRefusal) {
+		a.writeContextFabricFailure(w, r, err, contextFabricClassBudgetRefusal, http.StatusRequestEntityTooLarge, "invalid_request", "The Context Fabric answer did not fit the response budget", false, map[string]any{
+			"overrun":              string(budgetRefusal.Overrun),
+			"measured_items":       budgetRefusal.MeasuredItems,
+			"measured_bytes":       budgetRefusal.MeasuredBytes,
+			"max_items":            budgetRefusal.MaxItems,
+			"max_serialized_bytes": budgetRefusal.MaxSerializedBytes,
+			"question_family":      string(budgetRefusal.Family),
+			"narrower_question":    budgetRefusal.NarrowerQuestion,
+			"retry_attempted":      budgetRefusal.RetryAttempted,
+		})
 		return
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded) {
