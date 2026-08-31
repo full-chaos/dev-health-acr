@@ -45,9 +45,14 @@ func newReadinessProvider(client contextpacket.ClickHouseQueryClient) *Readiness
 }
 
 func (p *ReadinessProvider) Capability() contextfabric.FactCapability {
-	return newCapability(contextfabric.FactReadiness, "devhealthfacts.readiness", []contextfabric.SubjectKind{
+	capability := newCapability(contextfabric.FactReadiness, "devhealthfacts.readiness", []contextfabric.SubjectKind{
 		contextfabric.SubjectTeam, contextfabric.SubjectProject,
 	})
+	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
+		contextfabric.SubjectProject: {contextfabric.FactTableBreakdown},
+	}
+	capability.EstimatedItems = 20
+	return capability
 }
 
 func (p *ReadinessProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
@@ -205,9 +210,23 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactReadiness, Subject: subject,
 			Fields: map[string]contextfabric.FactValue{
-				"rollup_basis":   contextfabric.StringFactValue("project_work_scope_breakdown"),
-				"team_count":     contextfabric.IntegerFactValue(int64(len(seenTeams))),
-				"team_breakdown": contextfabric.RowsFactValue(teamRows),
+				"rollup_basis": contextfabric.StringFactValue("project_work_scope_breakdown"),
+				"team_count":   contextfabric.IntegerFactValue(int64(len(seenTeams))),
+				// CHAOS-4633 P1: Key = [basis, team_id, team_name,
+				// work_scope_id, provider, day] -- dedupeKey above already
+				// partitions on (team_id, work_scope_id, provider); basis
+				// is a known Fable-F3 constant kept in Key rather than
+				// hoisted out, so as not to change Rows' shape in this
+				// additive P1 (flagged as follow-up, same as workload.go).
+				"team_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+					Shape: contextfabric.FactTableBreakdown,
+					Key:   []string{"basis", "team_id", "team_name", "work_scope_id", "provider", "day"},
+					Measures: []string{
+						"estimated_count", "unestimated_count", "backlog_size", "estimate_coverage_ratio",
+					},
+					Grain: timeBound.effectiveGrain(grainDaily),
+					Rows:  teamRows,
+				}),
 			},
 			EvidenceRefIDs: evidenceRefIDs,
 		})
