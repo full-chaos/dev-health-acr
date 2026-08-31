@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync/atomic"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -359,19 +360,25 @@ func TestBoundEnsembleSizeDegradesRatherThanFailing(t *testing.T) {
 // succeed and agree, so the majority is over TWO, not three-with-a-ghost.
 func TestEnsembleDropsFailedSamplesRatherThanSubstituting(t *testing.T) {
 	t.Parallel()
-	var calls int
+	// atomic, NOT a plain int: ResolveQuestionFamilyEnsemble runs the
+	// samplers CONCURRENTLY by design, so a bare counter here is a data
+	// race -- and `make test-race-split` runs the whole package under
+	// -race in CI, where it is a hard failure rather than a flake. Found
+	// by codex round 1 (P3) and reproduced locally with
+	// `go test -race -run TestEnsembleDropsFailedSamplesRatherThanSubstituting`.
+	var calls atomic.Int32
 	outcome, samples := ResolveQuestionFamilyEnsemble(context.Background(), "q", 3,
 		func(_ context.Context, seed int64) (FamilySample, error) {
 			// Fail exactly one sample, chosen by seed parity so the
 			// choice does not depend on call order.
-			calls++
+			calls.Add(1)
 			if seed%2 == 0 {
 				return FamilySample{}, errors.New("sampler failed")
 			}
 			return cohortSample(), nil
 		})
-	if calls != 3 {
-		t.Fatalf("sampler called %d times, want 3", calls)
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("sampler called %d times, want 3", got)
 	}
 	if len(samples) == 3 {
 		t.Skip("all three seeds were odd for this question; the drop path was not exercised")

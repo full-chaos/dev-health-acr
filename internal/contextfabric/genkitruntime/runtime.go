@@ -119,7 +119,28 @@ const (
 	// discipline as v3's original close-the-vocabulary bump: any change
 	// to the interpolated fact-kind list is a prompt content change and
 	// must bump this version.
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v9"
+	// v10 (CHAOS-4632): interpretationSystemPrompt gained five paragraphs
+	// instructing the model on group_kind, scope_anchor_term,
+	// scope_anchor_kind, requested_subject_kind and question_family. The
+	// prompt bytes changed, and v9's own doc comment above states the
+	// governing rule in as many words: ANY change to the prompt's content
+	// is a prompt content change and must bump this version.
+	//
+	// This bump is REQUIRED even though CHAOS-4632 is a shadow slice, and
+	// the reasoning is worth spelling out because it looks at first like a
+	// contradiction. Nothing is gated on the family. But this constant is
+	// a conjunctive ReuseKey dimension (ports.go, answer_reuse.go:376),
+	// and the reuse lookup runs BEFORE Interpret -- so without the bump, a
+	// stored answer produced under the OLD prompt keeps being served after
+	// deployment, and the questions whose interpretation the new
+	// instructions could change would be answered from a cache that
+	// predates them. That is a reuse-DECISION change, which is a behavior
+	// change however shadow the family itself is. Same class 0022's
+	// window_inference_version, 0031's commit_gate_version and 0035's
+	// ranking_formula_version each closed for their own decision, and the
+	// same rule CHAOS-3862 pinned with
+	// TestCHAOS3862_PromptVersionChangeInvalidatesStoredAnswerReuse.
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v10"
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
@@ -307,7 +328,20 @@ const (
 	// exists to prevent (its own doc comment above). Bumping it is the
 	// only change requested by this constant's own contract -- no
 	// caller-visible behavior changes beyond reuse eligibility.
-	DefaultSchemaVersion    = "context-fabric-model-output.v2"
+	// v3 (CHAOS-4632): interpretationOutput gained five optional fields
+	// (question_family, group_kind, scope_anchor_term, scope_anchor_kind,
+	// requested_subject_kind), so the schema genkit infers and sends to
+	// the provider is a DIFFERENT model-output contract than v2's. Unlike
+	// v2's change this is a widening rather than a tightening -- every
+	// v2-valid output is still v3-valid -- but the version exists to say
+	// which contract a stored result was produced UNDER, not merely
+	// whether the old one would still validate: a v2-era result was
+	// interpreted by a model that was never offered these fields and
+	// could not have emitted them. Leaving this at v2 would let reuse
+	// serve such a result as though it came from the same contract as a
+	// v3 call, which is exactly the version-drift class this field exists
+	// to prevent (its own doc comment above).
+	DefaultSchemaVersion    = "context-fabric-model-output.v3"
 	defaultEvaluatorVersion = "context-fabric-grounding.v1"
 	// DefaultPhrasingPromptVersion is v1 (CHAOS-4171 PR2): the SECOND
 	// bounded model call's own prompt, versioned independently of
