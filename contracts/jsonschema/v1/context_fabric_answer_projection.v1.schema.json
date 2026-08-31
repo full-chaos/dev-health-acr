@@ -574,10 +574,20 @@
         "complete": {
           "type": "boolean"
         },
+        "truncated": {
+          "type": "boolean"
+        },
         "members": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/ProjectedCohortMember"
+          },
+          "maxItems": 250
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectedCohortGroup"
           },
           "maxItems": 250
         },
@@ -1014,6 +1024,10 @@
           "type": "integer",
           "minimum": 0
         },
+        "cohort_groups_omitted": {
+          "type": "integer",
+          "minimum": 0
+        },
         "facts_omitted": {
           "type": "integer",
           "minimum": 0
@@ -1149,7 +1163,7 @@
       }
     },
     "RelativeWindowID": {
-      "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 \u00a75.1).",
+      "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 §5.1).",
       "type": "string",
       "enum": [
         "trailing_30d",
@@ -2284,6 +2298,56 @@
           }
         }
       ]
+    },
+    "ProjectedCohortGroup": {
+      "description": "CHAOS-4636: one group of a projected grouped cohort. Mirrors the canonical CohortGroup: the group subject, its members by canonical id into ProjectedCohort.members, its OWN completeness, and the size it had before narrowing.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subject": {
+          "$ref": "#/$defs/SubjectRef"
+        },
+        "member_canonical_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "maxItems": 250
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "subject",
+        "member_canonical_ids",
+        "complete",
+        "truncated",
+        "total"
+      ],
+      "not": {
+        "properties": {
+          "complete": {
+            "const": true
+          },
+          "truncated": {
+            "const": true
+          }
+        },
+        "required": [
+          "complete",
+          "truncated"
+        ]
+      }
     }
   }
 }

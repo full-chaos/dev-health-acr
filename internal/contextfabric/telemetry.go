@@ -572,3 +572,38 @@ func (t SlogEngineTelemetry) RecordQuestionFamilyResolution(ctx context.Context,
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric question family resolution", args...)
 }
+
+// RecordPlanNarrowing (CHAOS-4636) emits one plan-narrowing decision.
+//
+// Closed enums and counts only -- no question text, no subject identifier,
+// no group label. The three stages are separately named because they are
+// separately diagnosable: stage 1 is precautionary (nothing measured yet),
+// stage 2 bounds what synthesis is given, stage 3 reacts to a measurement
+// that already failed. Collapsing them into one field would make "the plan
+// was too generous" and "synthesis produced more than the headroom allowed"
+// indistinguishable, which is the diagnosis an over-budget answer needs.
+func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal storage.Principal, event PlanNarrowingEvent) {
+	args := []any{
+		"org_id", principal.OrgID,
+		"family", string(event.Family),
+		"family_version", event.FamilyVersion,
+		"stage", string(event.Stage),
+		"basis", string(event.Basis),
+		"before", event.Before,
+		"after", event.After,
+		"groups", event.Groups,
+		"overrun", string(event.Overrun),
+		"measured_items", event.MeasuredItems,
+		"measured_bytes", event.MeasuredBytes,
+		"max_items", event.MaxItems,
+		"max_serialized_bytes", event.MaxSerializedBytes,
+		"retry_attempted", event.RetryAttempted,
+		"retry_fit", event.RetryFit,
+		"retry_failed", event.RetryFailed,
+		"refusal_planned", event.RefusalPlanned,
+		"deadline_reserved", event.DeadlineReserved,
+		"retry_declined", string(event.RetryDeclined),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric plan narrowing", args...)
+}

@@ -96,7 +96,30 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// of this field: Go rejects a negative count with its own clause.
 		// Round-18's ruled mutation (minimum 0 -> 1) passed against that
 		// catch-all before this entry existed.
-		"result#properties.limitations_displaced.minimum":       0,
+		"result#properties.limitations_displaced.minimum": 0,
+		// CHAOS-4636: the answer plan's own bounds, every one mapped
+		// explicitly rather than left to a pattern classifier. The floors
+		// especially: Go rejects each of these with its own clause (see
+		// ContextFabricAnswerPlanBudget.Validate and
+		// ContextFabricPlanNarrowing.Validate), so a catch-all that excused
+		// them as "bounded by a shared helper" would be describing
+		// something untrue -- exactly the hole round 18's ruled 0 -> 1
+		// mutation walked through on limitations_displaced above.
+		"common#$defs.AnswerPlan.properties.render_kinds.maxItems":              ContextFabricAnswerPlanRenderKindsMaxCount,
+		"common#$defs.AnswerPlan.properties.axes.maxItems":                      ContextFabricAnswerPlanAxesMaxCount,
+		"common#$defs.AnswerPlan.properties.fact_kinds.maxItems":                ContextFabricFactKindCount,
+		"common#$defs.AnswerPlan.properties.narrowing.maxItems":                 ContextFabricPlanNarrowingMaxCount,
+		"common#$defs.AnswerPlanBudget.properties.max_items.minimum":            0,
+		"common#$defs.AnswerPlanBudget.properties.max_serialized_bytes.minimum": 0,
+		"common#$defs.AnswerPlanBudget.properties.max_members.minimum":          0,
+		"common#$defs.AnswerPlanBudget.properties.synthesis_headroom.minimum":   0,
+		"common#$defs.PlanNarrowing.properties.before.minimum":                  0,
+		"common#$defs.PlanNarrowing.properties.after.minimum":                   0,
+		// CHAOS-4636: a group's Total is its member count BEFORE narrowing,
+		// and ContextFabricCohortGroup.Validate rejects a total below the
+		// members it lists -- which makes a negative total impossible by a
+		// clause of its own, not by a shared helper.
+		"common#$defs.CohortGroup.properties.total.minimum":     0,
 		"result#properties.limitations.items.maxLength":         contextFabricWriteBounds.narrativeLength,
 		"result#properties.warnings.maxItems":                   contextFabricWriteBounds.narrativeCount,
 		"result#properties.warnings.items.maxLength":            contextFabricWriteBounds.narrativeLength,

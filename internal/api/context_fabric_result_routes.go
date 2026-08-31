@@ -162,7 +162,7 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 		// while override.MaxItems is widened by itemCounts.Paths instead
 		// of shrinking the recorded count.
 		usage := limits.ResourceUsage{
-			Items:  int64(itemCounts.total()),
+			Items:  int64(itemCounts.Total()),
 			Tokens: estimatedTokens,
 			Bytes:  measuredBytes,
 		}

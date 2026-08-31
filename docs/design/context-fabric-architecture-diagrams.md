@@ -51,7 +51,10 @@ flowchart TD
   ASKDEV["Ask Dev UI<br/>StructureNeedsPanel.tsx (ask-dev repo)<br/>renders kind/anchor/handle/window/candidate offers"] --> API["POST /api/v1/context-fabric/investigations<br/>internal/api/context_fabric_routes.go"]
   API --> ENGINE["Engine.Investigate<br/>engine.go:435"]
   ENGINE --> INTERP["Interpret (model call)<br/>RuntimeQuestionInterpreter.Interpret<br/>model_runtime.go:510"]
-  INTERP --> STRUCT["structure needs: kind / anchor / handle / window<br/>composeEffectiveWindow (window.go)<br/>canonicalizeStructure (chaos3900)"]
+  INTERP --> PLANSTAGE["<b>PlanAnswer</b> -- deterministic, NO model call<br/>chaos4636_answer_plan.go (CHAOS-4636 / S5)<br/>family definition x interpretation x budget<br/>-> AnswerPlan (persisted on the result)"]
+  PLANSTAGE --> PLANCARRY{"plan carry, ONE hop<br/>resolveCarriedPlan (chaos4636_plan_carry.go)<br/>-- ONLY when this turn resolved no family<br/>carries family / group kind / narrowing basis<br/><b>NEVER the member list</b> (check 18)"}
+  PLANCARRY --> STRUCT
+  STRUCT["structure needs: kind / anchor / handle / window<br/>composeEffectiveWindow (window.go)<br/>canonicalizeStructure (chaos3900)"]
   STRUCT --> CARRY{"CHAOS-4360 same-conversation<br/>window carry<br/>resolveCarriedWindow<br/>(chaos4360_carry.go)<br/>-- ONLY when effectiveWindow<br/>would be inferred_default"}
   CARRY -->|"hit: nearest chain confirmation<br/>found (bounded walk,<br/>CHAOS-3898 taint gate applied)<br/>effectiveWindow REPLACED,<br/>Source=carried disclosed on<br/>ConfirmedStructure -- never<br/>re-accepts a receipt, the<br/>IsStructureSuperseded guard<br/>is untouched"| WGATE
   CARRY -->|"miss: no reference / unloadable /<br/>stale_graph_epoch / no_confirmed_window /<br/>depth_exceeded"| WGATE{"class-default window gate<br/>WindowCanonicalizationGatedClassDefault<br/>CHAOS-4040/4234"}
@@ -70,6 +73,7 @@ flowchart TD
   PLAN -->|"no supported subject, no scope gap"| PRUNE["pruned:subject_kind_unsupported<br/>proof of absence (CHAOS-3783)"]
   PLAN -->|"no supported subject, scope gap disclosed"| UNEXP["unexpanded:&lt;outcome&gt;<br/>CHAOS-4099 -- honest 'reachable but not read'<br/>NEVER SourcePruned"]
   PLAN -->|"some/all subjects supported"| READ["FactCapabilityRegistry.ReadFacts<br/>fan-out over devhealthfacts providers (ClickHouse)<br/>-- see diagram 4"]
+
   READ --> ROUTE{"project subject:<br/>does the source carry work_scope_id?<br/>CHAOS-4521b"}
   ROUTE -->|"YES -- flow / readiness / workload<br/>work_scope_id IS work_items.project_id"| OWN["ProjectIdentityJoinSQL + MatchSQL<br/>match on (projects.id OR projects.project_key)<br/>NO team-ownership hop"]
   ROUTE -->|"NO -- health / investment / landscape<br/>team/repo-scoped by construction"| HOP["ProjectOwnershipJoinSQL<br/>keyed on ProjectOwnershipJoinColumn (project_id)<br/>+ tpo.provider = p.provider<br/>empty ⇒ no_data + teamScopedProjectReason"]
@@ -86,14 +90,22 @@ flowchart TD
   RETAIN --> LEDGER
   LEDGER["recordFactRead ledger (CHAOS-4521)<br/>ONE record per PLANNED capability:<br/>kind · outcome (unconfigured / scope_gap / pruned / failed / completed / rejected / cancelled)<br/>· state · subjects · subject_kinds · facts · truncated<br/>closed vocabulary + counts only, no labels/IDs"]
   LEDGER --> BUNDLE["CanonicalFactBundle + Coverage"]
-  BUNDLE --> SYN["Synthesize (model call)<br/>RuntimeAnswerSynthesizer.Synthesize<br/>model_runtime.go:596<br/><b>CHAOS-4355 follow-up:</b> modelFacingFacts<br/>(genkitruntime/runtime.go) drops every<br/>Rows-shaped field from canonical_facts<br/>BEFORE this prompt is sent"]
+  BUNDLE --> STAGE2["<b>budget stage 2</b> (CHAOS-4636) -- bound what synthesis is GIVEN<br/>chaos4636_grouped_cohort.go<br/>GROUP (owning team read off each member's own fact rows)<br/>-> NARROW (member-first, D2) -> RANK<br/>facts for removed members dropped WITH them<br/>(an ungrounded claim would fail closure)"]
+  STAGE2 --> SYN["Synthesize (model call)<br/>RuntimeAnswerSynthesizer.Synthesize<br/>model_runtime.go:596<br/><b>CHAOS-4355 follow-up:</b> modelFacingFacts<br/>(genkitruntime/runtime.go) drops every<br/>Rows-shaped field from canonical_facts<br/>BEFORE this prompt is sent"]
   SYN --> ROWS["attachCanonicalRows (CHAOS-4355)<br/>model-authored Rows STRIPPED + tolerated<br/>(cf_model_rows_stripped), never rejected --<br/>engine copies Rows verbatim from the canonical fact<br/>each claim cites -- model_runtime.go"]
   ROWS --> OVERRIDE["applySynthesisStatusOverride<br/>CHAOS-4098 -- decisive clarification_required -> no_match<br/>runs BEFORE the commit gate"]
   OVERRIDE --> GATE2{"CHAOS-4085 DP9 commit-affirmation gate<br/>applyCommitAffirmation<br/>chaos4085_commit_affirmation.go:447"}
   GATE2 -->|"exempt / affirmed"| COMMIT["Commit subject(s)"]
   GATE2 -->|"refused"| RETRACT["Retract-only<br/>(fail-closed, never fabricates a commit)"]
-  COMMIT --> STATUS["Answer status:<br/>complete / degraded / no_match / clarification_required"]
-  RETRACT --> STATUS
+  COMMIT --> STAGE3
+  RETRACT --> STAGE3
+  STAGE3{"<b>budget stage 3</b> (CHAOS-4636) -- MEASURE the assembled result<br/>contractsv1.MeasureContextFabricResponse<br/>the SAME encoder + counts the route's 413 gate uses<br/>(one definition, imported by both planes)"}
+  STAGE3 -->|"fits"| STATUS
+  STAGE3 -->|"over budget, members left to narrow,<br/>reserved deadline available"| RESYN["RE-SYNTHESIZE ONCE with a smaller input<br/>synthesizeAndAssemble re-run (deep-copied)<br/>-- never trims a composed answer"]
+  RESYN -->|"now fits"| STATUS
+  RESYN -->|"still over"| REFUSE
+  STAGE3 -->|"nothing left to narrow,<br/>or too little deadline for a retry"| REFUSE["<b>planned, explained refusal</b> (D5 = C)<br/>AnswerBudgetRefusal -> 413 naming the overrun,<br/>the measured numbers and a narrower question<br/>-- never today's bare acr_rejected_request"]
+  STATUS["Answer status:<br/>complete / degraded / no_match / clarification_required"]
   WOFFER --> STATUS
   STATUS --> SAVE["Save (keyed on clamped request context)"]
   SAVE --> RENDERBACK["answerprojection.Project<br/>-> API / MCP -> Ask Dev renders offers + answer"]
@@ -103,8 +115,8 @@ flowchart TD
   classDef fixed fill:#14532d,stroke:#22c55e,color:#ffffff
   classDef refuse fill:#7f1d1d,stroke:#ef4444,color:#ffffff
   class POOL gap
-  class UNEXP,GATE2,ROWS,CARRY fixed
-  class RETRACT refuse
+  class UNEXP,GATE2,ROWS,CARRY,STAGE2,STAGE3 fixed
+  class RETRACT,REFUSE refuse
 ```
 
 **Caption.** One investigation runs interpretation, a window gate that
@@ -1287,6 +1299,101 @@ and add its box to this diagram.
 
 ---
 
+## 10 — The grouped cohort and the three-stage budget (CHAOS-4636 / S5)
+
+```mermaid
+erDiagram
+  ANSWER_PLAN ||--|| QUESTION_FAMILY : "resolved to"
+  ANSWER_PLAN {
+    QuestionFamily Family "closed, 8 members -- promoted to the wire by S5"
+    QuestionFamilySource FamilySource "closed -- model / consensus / CARRIED / fallback"
+    string FamilyVersion "question-family.v1, the reuse-key fence"
+    SubjectKind GroupKind "grouped family ONLY; never read off another family"
+    SubjectKind MemberKind "stamped from the cohort the graph returned"
+    bool RequireDrivers "grouped_cohort_status: true"
+    bool RequireRanking "grouped_cohort_status: FALSE -- a cross-group ranking was not asked for"
+    RenderKind_list RenderKinds "authorizes; a shape outside it is refused, not drawn"
+    FactKind_list FactKinds "WIDENING ONLY -- may add a kind, never remove one"
+    PlanBudget Budget "the ceiling it was built against"
+    PlanNarrowing_list Narrowing "every step actually taken -- this IS the disclosure"
+  }
+  ANSWER_PLAN ||--|| PLAN_BUDGET : declares
+  PLAN_BUDGET {
+    int MaxItems "effective: service config narrowed by the caller"
+    int64 MaxSerializedBytes "effective: min(service, caller) -- what the route enforces"
+    int MaxMembers "stage 1's pre-read clamp = MaxItems - SynthesisHeadroom"
+    int SynthesisHeadroom "reserved for what synthesis will ADD -- MEASURED, not derived"
+    NarrowingBasis NarrowingBasis "declared even when stage 1 does not act"
+  }
+  ANSWER_PLAN ||--o{ PLAN_NARROWING : records
+  PLAN_NARROWING {
+    PlanNarrowingStage Stage "cardinality / synthesis_input / assembled_result"
+    NarrowingBasis Basis "canonical_id_lexical / largest_group_round_robin / attention_rank"
+    int Before
+    int After
+    bool Groups "true only if GROUPS were dropped -- D2 makes this rare"
+    BudgetOverrun Overrun "items / bytes; absent at stage 1, which measures nothing"
+  }
+  COHORT ||--o{ COHORT_MEMBER : "flattened union (authoritative)"
+  COHORT ||--o{ COHORT_GROUP : "group axis, absent on every flat cohort"
+  COHORT {
+    SubjectKind Kind
+    bool Complete "CONJUNCTION over groups when grouped"
+    bool Truncated "disjunction over groups when grouped"
+  }
+  COHORT_GROUP {
+    SubjectRef Subject "the GROUP entity (a team), never one of its members"
+    string_list MemberCanonicalIDs "references into Members -- not nested copies"
+    bool Complete "the group's OWN completeness"
+    bool Truncated "mutually exclusive with Complete, as on the cohort"
+    int Total "size BEFORE narrowing"
+  }
+  COHORT_GROUP }o--o{ COHORT_MEMBER : "MANY-TO-MANY, deliberately"
+```
+
+**Why the group axis is many-to-many.** Ownership is a relation, not a
+function: `devhealthfacts/shared.go`'s project rollups order
+`team_project_ownership` by `source`, so a project's native and manual
+ownership rows can both be current, and every rollup "must dedupe by
+team_id". A validator forbidding a member in two groups would force the
+engine either to drop a true ownership or to pick one silently. Member
+IDENTITY stays unique — the flattened list is one entry per member, so the
+item budget charges each member once.
+
+**Why groups are references, not nested members.** The flattened list stays
+authoritative, so a consumer that never learned about groups reads one member
+list rather than two that could disagree; and a grouped cohort is exactly the
+shape that strains the byte budget, so paying for every member twice would
+make the grouping the cause of the refusal it exists to avoid.
+
+**Where the grouping comes from, and why it is the inverse of the design's own
+phrasing.** §6.2 describes resolving groups then their members. That direction
+is not reachable for a subjectless cohort: `hopWalk` runs only for committed
+subjects and Q-A commits nothing, the subjectless path
+(`chaos4348ExactNameCandidates`) never touches `Paths`, and CHAOS-4099's
+eligibility table has no team↔project policy and rejects that direction in its
+own "deliberately absent" block. What IS available, free, at the right moment:
+the owning team sits inside the project-subject facts the plan already reads —
+`metrics.team_breakdown`, `workload`'s breakdown, `health.risk_breakdown` rows
+where `scope == "team"`, and `flow`'s scope rows. So the group is read off the
+members' own facts. **The consequence, stated rather than hidden: groups exist
+only AFTER the fact read**, which is why the pre-read stage can clamp nothing
+but the flat member cap and why member-first narrowing lives in stages 2 and 3.
+
+**Why three stages.** Each budget becomes knowable at a different moment, and
+§6.3a records three earlier specifications that all failed the same way —
+enforcing a budget where the quantity did not yet exist, or where the measuring
+code was not reachable. Stage 1 knows only cardinality. Stage 2 cannot count
+the answer because synthesis is what *creates* the drivers, findings and claims
+the budget charges. Only stage 3 can measure, and it measures with a
+`contracts/v1` function both planes import — the route's 413 gate is an
+assertion over the same numbers, not a second measurement.
+
+**Update rule.** Any change to `PlanAnswer`, the narrowing stages, or
+`ContextFabricCohortGroup` updates this diagram in the same PR.
+
+---
+
 ## Sources
 
 - Live code via `codegraph_explore` / `rg` on `dev-health-acr`: `engine.go`
@@ -1297,6 +1404,12 @@ and add its box to this diagram.
   `internal/contracts/v1/context_fabric_types.go`,
   `internal/contextfabric/devhealthfacts/*.go`,
   `internal/contextfabric/render_shapes.go`,
+  `internal/contextfabric/chaos4636_answer_plan.go`,
+  `internal/contextfabric/chaos4636_grouped_cohort.go`,
+  `internal/contextfabric/chaos4636_budget_stage3.go`,
+  `internal/contextfabric/chaos4636_synthesis_assembly.go`,
+  `internal/contextfabric/chaos4636_plan_carry.go`,
+  `internal/contracts/v1/context_fabric_response_budget.go`,
   `internal/contracts/v1/validate_context_fabric_render_shapes.go`,
   `internal/contextfabric/completeness.go`,
   `internal/contracts/v1/context_fabric_completeness.go`,

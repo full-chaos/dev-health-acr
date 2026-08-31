@@ -1004,6 +1004,19 @@ type ContextFabricCohort struct {
 	Rationale  string                         `json:"rationale"`
 	Complete   bool                           `json:"complete"`
 	Truncated  bool                           `json:"truncated"`
+	// Groups (CHAOS-4636) is the group axis of a GROUPED cohort answer --
+	// "the project statuses for EACH team". It is absent on every flat
+	// cohort, which is every cohort this contract carried before it.
+	//
+	// Members stays the flattened union and stays authoritative; a group
+	// names its members by canonical id into it (see
+	// ContextFabricCohortGroup for why the members are referenced rather
+	// than nested). When Groups is present, Complete and Truncated above
+	// are the CONJUNCTION/disjunction over the groups
+	// (CohortCompletenessFromGroups), so a reader that ignores Groups gets
+	// a conservative summary of the whole union instead of a boolean that
+	// happened to describe only the first group.
+	Groups []ContextFabricCohortGroup `json:"groups,omitempty"`
 }
 
 type ContextFabricCohortMember struct {
@@ -1391,24 +1404,40 @@ type ContextFabricFactRequirement struct {
 }
 
 type ContextFabricInvestigationResult struct {
-	SchemaVersion      string                           `json:"schema_version"`
-	ResultID           string                           `json:"result_id"`
-	RequestID          string                           `json:"request_id"`
-	GeneratedAt        time.Time                        `json:"generated_at"`
-	Status             ContextFabricInvestigationStatus `json:"status"`
-	Question           string                           `json:"question"`
-	Interpretation     ContextFabricInterpretedQuestion `json:"interpretation"`
-	SubjectResolution  ContextFabricSubjectResolution   `json:"subject_resolution"`
-	Cohort             *ContextFabricCohort             `json:"cohort,omitempty"`
-	DirectJudgment     string                           `json:"direct_judgment"`
-	CurrentState       string                           `json:"current_state"`
-	StrongestPressures []string                         `json:"strongest_pressures"`
-	Drivers            []ContextFabricDriverJudgment    `json:"drivers"`
-	RemainingWork      []ContextFabricFinding           `json:"remaining_work"`
-	ReadinessGaps      []ContextFabricFinding           `json:"readiness_gaps"`
-	Paths              []ContextFabricRelationshipPath  `json:"paths"`
-	Conflicts          []ContextFabricFinding           `json:"conflicts"`
-	Limitations        []string                         `json:"limitations"`
+	SchemaVersion     string                           `json:"schema_version"`
+	ResultID          string                           `json:"result_id"`
+	RequestID         string                           `json:"request_id"`
+	GeneratedAt       time.Time                        `json:"generated_at"`
+	Status            ContextFabricInvestigationStatus `json:"status"`
+	Question          string                           `json:"question"`
+	Interpretation    ContextFabricInterpretedQuestion `json:"interpretation"`
+	SubjectResolution ContextFabricSubjectResolution   `json:"subject_resolution"`
+	// AnswerPlan (CHAOS-4636) is what this question was PLANNED to be
+	// answered with: the family it resolved to, the fact roles and render
+	// kinds it authorizes, the budget it was built against, and every
+	// narrowing step actually taken.
+	//
+	// It is persisted, not merely computed, for two reasons. It is the
+	// caller's disclosure -- "showing 2 of 3 teams, 3 of N projects each"
+	// is a true partial answer only if the caller is told, which is North
+	// Star checks 5 and 12 together. And it is the diagnosis: after this
+	// slice a 413 is a PLANNER defect, and the plan on the result is what
+	// names which number was wrong, rather than the failure having to be
+	// re-derived by re-running with instrumentation added afterward.
+	//
+	// Absent on every result produced before the planning stage existed,
+	// and on any path that terminates before planning.
+	AnswerPlan         *ContextFabricAnswerPlan        `json:"answer_plan,omitempty"`
+	Cohort             *ContextFabricCohort            `json:"cohort,omitempty"`
+	DirectJudgment     string                          `json:"direct_judgment"`
+	CurrentState       string                          `json:"current_state"`
+	StrongestPressures []string                        `json:"strongest_pressures"`
+	Drivers            []ContextFabricDriverJudgment   `json:"drivers"`
+	RemainingWork      []ContextFabricFinding          `json:"remaining_work"`
+	ReadinessGaps      []ContextFabricFinding          `json:"readiness_gaps"`
+	Paths              []ContextFabricRelationshipPath `json:"paths"`
+	Conflicts          []ContextFabricFinding          `json:"conflicts"`
+	Limitations        []string                        `json:"limitations"`
 	// LimitationsDisplaced counts model-authored limitations the engine
 	// dropped to fit the retrieval-degradation disclosure inside
 	// ContextFabricLimitationsMaxCount (CHAOS-3746).

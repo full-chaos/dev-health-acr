@@ -272,6 +272,9 @@
         "subject_resolution": {
           "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectResolution"
         },
+        "answer_plan": {
+          "$ref": "#/$defs/context_fabric_common.v1/$defs/AnswerPlan"
+        },
         "temporal": {
           "$ref": "context_fabric_common.v1.schema.json#/$defs/TemporalLabel"
         },
@@ -875,6 +878,14 @@
             },
             "truncated": {
               "type": "boolean"
+            },
+            "groups": {
+              "description": "CHAOS-4636: absent on every flat cohort. When present, the cohort-level complete/truncated above are the conjunction/disjunction over these groups, so a reader that ignores groups gets a conservative summary of the whole union rather than a boolean describing only the first group.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/CohortGroup"
+              },
+              "maxItems": 250
             }
           },
           "required": [
@@ -4215,7 +4226,7 @@
               "type": "string"
             },
             "model_identity": {
-              "description": "CHAOS-3782: the provider/model that produced this result's synthesis, e.g. \"openai-compatible/gpt-5-nano\". Never a bare vendor name. Optional: rows persisted before this field existed (or by any writer with answer reuse disabled) omit it entirely; absence never blocks reading an existing result, and never makes that result reuse-eligible either (reuse also requires question_hash, absent on the same rows for the same reason). maxLength is provider (\u003c=256) + \"/\" + model (\u003c=256) = 513, not the 256 shared by every other field here -- those are short deployment/prompt version tokens ACR itself controls.",
+              "description": "CHAOS-3782: the provider/model that produced this result's synthesis, e.g. \"openai-compatible/gpt-5-nano\". Never a bare vendor name. Optional: rows persisted before this field existed (or by any writer with answer reuse disabled) omit it entirely; absence never blocks reading an existing result, and never makes that result reuse-eligible either (reuse also requires question_hash, absent on the same rows for the same reason). maxLength is provider (<=256) + \"/\" + model (<=256) = 513, not the 256 shared by every other field here -- those are short deployment/prompt version tokens ACR itself controls.",
               "maxLength": 513,
               "minLength": 1,
               "type": "string"
@@ -4480,6 +4491,269 @@
             "label"
           ],
           "type": "object"
+        },
+        "CohortGroup": {
+          "description": "CHAOS-4636: one group of a GROUPED cohort answer. Members are named by canonical id into Cohort.members rather than nested, so the flattened member list stays authoritative and a grouped answer does not pay for every member twice against the byte budget. A group carries its OWN complete/truncated, which is the representation the flat cohort booleans could not express.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "subject": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectRef"
+            },
+            "member_canonical_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "maxItems": 250
+            },
+            "complete": {
+              "type": "boolean"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "total": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "subject",
+            "member_canonical_ids",
+            "complete",
+            "truncated",
+            "total"
+          ],
+          "not": {
+            "properties": {
+              "complete": {
+                "const": true
+              },
+              "truncated": {
+                "const": true
+              }
+            },
+            "required": [
+              "complete",
+              "truncated"
+            ]
+          }
+        },
+        "QuestionFamily": {
+          "description": "CHAOS-4636 (promoted from CHAOS-4632's shadow vocabulary once its false-emission rate was measured on real data). The closed question-family vocabulary. It does not replace InvestigationShape.",
+          "type": "string",
+          "enum": [
+            "subject_investigation",
+            "discovered_cohort_ranking",
+            "scoped_cohort_status",
+            "grouped_cohort_status",
+            "explicit_comparison",
+            "trend",
+            "investment_allocation",
+            "unclassified"
+          ]
+        },
+        "QuestionFamilySource": {
+          "description": "How a family was reached. On the wire beside the family because \"the model said so at N=1\" and \"carried from the previous turn\" are different warrants for the same value.",
+          "type": "string",
+          "enum": [
+            "model_consensus",
+            "model",
+            "model_plurality_rejected",
+            "carried",
+            "structure_precedence",
+            "fallback",
+            "none"
+          ]
+        },
+        "PlanNarrowingStage": {
+          "description": "The three moments a plan may narrow. Three, because the budgets become knowable at three different times: cardinality is all that is knowable pre-read; synthesis CREATES the drivers/findings/claims the item budget charges, so pre-synthesis can only bound its INPUTS; and only the assembled result can be measured.",
+          "type": "string",
+          "enum": [
+            "cardinality",
+            "synthesis_input",
+            "assembled_result"
+          ]
+        },
+        "NarrowingBasis": {
+          "description": "The declared order a narrowing step takes members in. canonical_id_lexical is ARBITRARY and says so -- what a pre-read guard needs is stability, not relevance. attention_rank exists only after the fact read.",
+          "type": "string",
+          "enum": [
+            "canonical_id_lexical",
+            "largest_group_round_robin",
+            "attention_rank"
+          ]
+        },
+        "BudgetOverrun": {
+          "description": "Which budget axis an assembled answer exceeded.",
+          "type": "string",
+          "enum": [
+            "fits",
+            "items",
+            "bytes"
+          ]
+        },
+        "PlanNarrowing": {
+          "description": "One recorded narrowing step. On the wire because it IS the disclosure: \"showing 2 of 3 teams, 3 of N projects each\" is a useful partial answer only if the caller is told.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "stage": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/PlanNarrowingStage"
+            },
+            "basis": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/NarrowingBasis"
+            },
+            "before": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "after": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "groups": {
+              "type": "boolean"
+            },
+            "overrun": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/BudgetOverrun"
+            }
+          },
+          "required": [
+            "stage",
+            "basis",
+            "before",
+            "after"
+          ]
+        },
+        "AnswerPlanBudget": {
+          "description": "The ceiling the plan was built against and the headroom it reserved, persisted so an over-budget answer names the number that was wrong.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "max_items": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_serialized_bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_members": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "synthesis_headroom": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "narrowing_basis": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/NarrowingBasis"
+            }
+          },
+          "required": [
+            "max_items",
+            "max_serialized_bytes",
+            "max_members",
+            "synthesis_headroom",
+            "narrowing_basis"
+          ]
+        },
+        "AnswerPlan": {
+          "description": "CHAOS-4636: what the question was PLANNED to be answered with, produced by a deterministic stage between interpretation and discovery. Declares which render kinds the question authorizes (so a chart is never drawn merely because the geometry allowed it), which fact kinds it needs, and the budget it was built against.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "family": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/QuestionFamily"
+            },
+            "family_source": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/QuestionFamilySource"
+            },
+            "family_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "group_kind": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectKind"
+            },
+            "member_kind": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectKind"
+            },
+            "require_drivers": {
+              "type": "boolean"
+            },
+            "require_ranking": {
+              "type": "boolean"
+            },
+            "render_kinds": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/RenderKind"
+              },
+              "maxItems": 8
+            },
+            "fact_kinds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "identity",
+                  "membership",
+                  "status",
+                  "actual_completion",
+                  "work",
+                  "blockers",
+                  "required_children",
+                  "pull_requests",
+                  "reviews",
+                  "continuous_integration",
+                  "deployments",
+                  "incidents",
+                  "metrics",
+                  "health",
+                  "workload",
+                  "investment",
+                  "readiness",
+                  "operational_deficiencies",
+                  "source_health",
+                  "evidence",
+                  "flow",
+                  "landscape"
+                ]
+              },
+              "maxItems": 22
+            },
+            "axes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureNeedKind"
+              },
+              "maxItems": 5
+            },
+            "budget": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/AnswerPlanBudget"
+            },
+            "narrowing": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_common.v1/$defs/PlanNarrowing"
+              },
+              "maxItems": 8
+            }
+          },
+          "required": [
+            "family",
+            "family_source",
+            "family_version",
+            "require_drivers",
+            "require_ranking",
+            "budget"
+          ]
         }
       },
       "title": "ACR Context Fabric Common Shapes v1"

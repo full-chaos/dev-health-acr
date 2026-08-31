@@ -22,6 +22,46 @@ type EngineOptions struct {
 	// ruling's default); this exists as the reversibility lever only.
 	// See chaos4234_offers_only.go.
 	RegimeAOffersDisabled bool
+	// MaxItems (CHAOS-4636) is the SERVICE-configured item ceiling the
+	// investigation route's own 413 gate enforces (ACR_MAX_ITEMS, default
+	// 30). The engine needs it to measure its own assembled answer against
+	// the same number the route will, which is stage 3 of the plan-time
+	// budget: an over-budget answer is re-synthesized once with a smaller
+	// input HERE, before validation and persistence, rather than 413'd
+	// after 48 seconds of server work.
+	//
+	// It is service configuration and never caller input, so it is an
+	// engine option rather than a request field -- a caller must not be
+	// able to raise the ceiling it is measured against.
+	//
+	// ZERO MEANS UNBOUNDED, which is what every existing composition and
+	// every test that does not set it means. An engine left unconfigured
+	// therefore behaves exactly as it did before this slice: it plans, but
+	// it never narrows on an item budget it was not told about.
+	MaxItems int
+	// SynthesisDeadlineReserve (CHAOS-4636, decision D5's non-negotiable
+	// half) is the slice of the request deadline held back for a possible
+	// re-synthesis.
+	//
+	// The whole request shares one timeout (internal/api/app.go's
+	// timeoutMiddleware) and the pre-read budget only bounds fan-out, so an
+	// UNRESERVED retry after a slow first synthesis is a 504 rather than a
+	// partial answer -- the second, independent hole D5 records beside the
+	// over-determined-contract one. Reserving the slice is what makes the
+	// terminal case a designed refusal instead of a timeout.
+	//
+	// Zero disables the reservation, and with it the retry: an engine that
+	// was not told how long it may spend does not gamble the caller's
+	// deadline on a second model call.
+	SynthesisDeadlineReserve time.Duration
+	// MaxSerializedBytes (CHAOS-4636) is the SERVICE-configured byte
+	// ceiling (ACR_MAX_SERIALIZED_BYTES, default 1 MiB). The route enforces
+	// min(service, caller) on the marshaled body; the engine measures
+	// against the same minimum so its own fit decision matches the one the
+	// route will make. Zero means unbounded, and then only the caller's own
+	// requested ceiling applies -- which is what every existing composition
+	// means today.
+	MaxSerializedBytes int64
 	// ReuseProjectionVersion (CHAOS-3782) is the CURRENT value a fresh
 	// investigation's Versions.ProjectionVersion would carry -- composition
 	// must wire it from the exact same configuration
@@ -227,6 +267,11 @@ type EngineTelemetry interface {
 	// empty log stream -- see chaos4085_telemetry_sink_test.go's header
 	// for the full account of what that miss cost.
 	QuestionFamilyTelemetry
+	// PlanTelemetry (CHAOS-4636) is embedded for the same reason
+	// QuestionFamilyTelemetry above is: a required interface, never an
+	// optional one discovered by type assertion. See PlanTelemetry's own
+	// doc comment for the CHAOS-4085 incident that rule comes from.
+	PlanTelemetry
 
 	// RecordPriorSubjectReceiptsSkipped reports how many of one
 	// Investigate call's PriorSubjectReceipts did not end up bound to a
@@ -696,6 +741,9 @@ type Engine struct {
 	priorHandleGrammarChecker  HandleGrammarChecker
 	offerPhraser               OfferPhraser
 	regimeAOffersDisabled      bool
+	maxItems                   int
+	maxSerializedBytes         int64
+	synthesisDeadlineReserve   time.Duration
 	serviceVersion             string
 	now                        func() time.Time
 	newResultID                func() string
@@ -730,11 +778,14 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		priorHandleGrammarChecker:  dependencies.PriorHandleGrammarChecker,
 		offerPhraser:               dependencies.OfferPhraser,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
-		reuseRetrievalIdentity:  options.ReuseRetrievalIdentity,
-		reusePromptVersions:     options.ReusePromptVersions,
-		reuseVersionAuthorities: options.ReuseVersionAuthorities,
-		regimeAOffersDisabled:   options.RegimeAOffersDisabled,
-		serviceVersion:          options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
+		reuseRetrievalIdentity:   options.ReuseRetrievalIdentity,
+		reusePromptVersions:      options.ReusePromptVersions,
+		reuseVersionAuthorities:  options.ReuseVersionAuthorities,
+		regimeAOffersDisabled:    options.RegimeAOffersDisabled,
+		maxItems:                 options.MaxItems,
+		maxSerializedBytes:       options.MaxSerializedBytes,
+		synthesisDeadlineReserve: options.SynthesisDeadlineReserve,
+		serviceVersion:           options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
 	}, nil
 }
 
@@ -977,9 +1028,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	var priorHints []SubjectHint
 	var priorValidatedReceipts []BoundSubjectReceipt
 	var priorOutcomes []priorSubjectReceiptOutcome
+	// priorLoadedResults (CHAOS-4636) are the prior results already fetched and
+	// taint-gated above, reused by the plan carry so a follow-up turn costs no
+	// extra store round-trip.
+	var priorLoadedResults map[string]InvestigationResult
 	var priorHintsStaleGraphEpochDelta int64
 	if e.results != nil && len(request.PriorSubjectReceipts) > 0 {
-		priorHints, priorValidatedReceipts, priorHintsStaleGraphEpochDelta, priorOutcomes = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts, binding)
+		priorHints, priorValidatedReceipts, priorHintsStaleGraphEpochDelta, priorOutcomes, priorLoadedResults = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts, binding)
 		// The v1 contract bounds RequestedScope.SubjectHints at 50
 		// (ContextFabricRequestedScope.Validate). request.Validate()
 		// already proved the caller's own hints are within that bound,
@@ -1080,6 +1135,30 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return InvestigationResult{}, err
 	}
 	interpretation.TimeContext = clampedInterpretedTime
+	// CHAOS-4636 -- the PLANNING STAGE (design §6.1). Deterministic, no
+	// model call, no I/O, placed between interpretation and discovery
+	// because that is the first point where the family is known and the
+	// last point before anything expensive is decided.
+	//
+	// The plan is a value the rest of Investigate reads, not a mutation of
+	// anything it can already see. It is stamped on the result at the end,
+	// so an answer that did not fit names the number that was wrong instead
+	// of leaving a 413 to be re-derived by re-running with instrumentation
+	// added afterward.
+	// CHAOS-4636 carry (extends CHAOS-4387): a follow-up turn that resolved
+	// no family of its own continues the previous turn's reading. One hop,
+	// taint-gated, conflict-fails-closed -- and never the member list, which
+	// would carry an authorization decision (North Star check 18).
+	planCarry := e.resolveCarriedPlan(ctx, principal, request, priorValidatedReceipts, binding, priorLoadedResults)
+	if carried, applied := applyCarriedPlan(familyOutcome, planCarry); applied {
+		familyOutcome = carried
+	}
+	plan := PlanAnswer(PlanAnswerInput{
+		Family:           familyOutcome,
+		Interpretation:   interpretation,
+		Budget:           e.effectiveResponseBudget(request),
+		MaxCohortMembers: request.Options.MaxCohortMembers,
+	})
 	// CHAOS-3900 W1 (codex review finding, round 1): a question_stated/
 	// clarification_confirmed window was canonicalized above against the
 	// REQUEST's own current axis (canonicalizeEvidenceWindow only ever
@@ -1113,7 +1192,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// passed here -- see windowVetoResult's own explicitStructure
 		// parameter doc comment for why a receipt-derived entry cannot
 		// safely reach this veto path.
-		return e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions, structureCanon.Explicit)
+		// CHAOS-4636 / codex round 3 finding 1: this veto returns AFTER the
+		// planning stage has run, so it must stamp the plan like every other
+		// post-plan exit. It is reachable -- a current-axis request carrying
+		// a confirmed window receipt whose interpretation moves the axis to
+		// historical lands here -- and the result is SAVED, so a plan
+		// omitted here is missing from a persisted answer permanently.
+		veto, vetoErr := e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions, structureCanon.Explicit)
+		return stampAnswerPlan(veto, plan), vetoErr
 	}
 	// CHAOS-3977 P5 (design brief §3.4): ONE prior consult per Investigate
 	// call, shared by BOTH DP4(a) sites (the offer-builder merge below,
@@ -1188,7 +1274,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if len(gatedDispositions) > 0 {
 			e.recordPriorSubjectReceiptSkips(ctx, principal, gatedDispositions, priorHintsStaleGraphEpochDelta)
 		}
-		return e.windowConfirmationRequiredResult(ctx, principal, request, &interpretation, *effectiveWindow, &structureCanon, WindowCanonicalizationGatedClassDefault, binding, gatedMaterial, gatedMaterialWindowExpandUnavailable, gatedDispositions)
+		gated, gatedErr := e.windowConfirmationRequiredResult(ctx, principal, request, &interpretation, *effectiveWindow, &structureCanon, WindowCanonicalizationGatedClassDefault, binding, gatedMaterial, gatedMaterialWindowExpandUnavailable, gatedDispositions)
+		return stampAnswerPlan(gated, plan), gatedErr
 	}
 	// CHAOS-3782 Codex round-1 F1: capture the reuse watermark snapshot
 	// HERE, immediately before the graph is read for this fresh
@@ -1290,7 +1377,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				emptyResolution.PriorSubjectReceiptDispositions = composePriorSubjectReceiptDispositions(priorOutcomes, emptyResolution)
 				e.recordPriorSubjectReceiptSkips(ctx, principal, emptyResolution.PriorSubjectReceiptDispositions, priorHintsStaleGraphEpochDelta)
 			}
-			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, emptyResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntry)
+			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, emptyResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntry)
+			return stampAnswerPlan(terminal, plan), terminalErr
 		}
 		// CHAOS-4088: StageSubjectResolution, not StageResolution -- the
 		// binding above already succeeded, so this is the distinct
@@ -1317,6 +1405,40 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// disclosure structure receipts already carry via ConfirmedStructure.
 		resolution.PriorSubjectReceiptDispositions = composePriorSubjectReceiptDispositions(priorOutcomes, resolution)
 		e.recordPriorSubjectReceiptSkips(ctx, principal, resolution.PriorSubjectReceiptDispositions, priorHintsStaleGraphEpochDelta)
+	}
+	// CHAOS-4636 STAGE 1 -- cardinality, PRE-READ (design §6.3).
+	//
+	// Only cardinality is knowable here, and the clamp rides the cap
+	// DiscoveredCohort already honours (discovery.Request.Options.
+	// MaxCohortMembers) rather than a second, parallel limit.
+	//
+	// The declared basis is truthful rather than aspirational.
+	// DiscoveredCohort fills members in the order its candidate nodes
+	// arrive, and since CHAOS-4630 that order is a total sort on
+	// SubjectKey -- kind plus canonical id -- so within a single-kind
+	// cohort it IS canonical-id-lexical. Before CHAOS-4630 it was Go map
+	// iteration order, i.e. not an order at all, which is exactly why an
+	// earlier revision of this design proposed narrowing on something that
+	// did not exist. Attention rank is NOT available here and this stage
+	// does not pretend otherwise: RankCohort runs after the fact read.
+	//
+	// Before/After are the CAPS, not a known population: how many members
+	// exist is precisely what has not been read yet.
+	// A carried narrowing basis keeps two turns of one conversation
+	// narrowing the same way. A follow-up that silently changed basis would
+	// make the two answers incomparable while looking like a refinement.
+	if planCarry.Outcome == PlanCarryHit && planCarry.NarrowingBasis != "" {
+		plan.Budget.NarrowingBasis = planCarry.NarrowingBasis
+	}
+	if clamped := plan.Budget.MaxMembers; clamped > 0 && (graphRequest.Options.MaxCohortMembers <= 0 || clamped < graphRequest.Options.MaxCohortMembers) {
+		e.recordPlanNarrowingStep(&plan, PlanNarrowing{
+			Stage:  contractsv1.ContextFabricPlanNarrowingCardinality,
+			Basis:  contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical,
+			Before: graphRequest.Options.MaxCohortMembers,
+			After:  clamped,
+		})
+		e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingCardinality, graphRequest.Options.MaxCohortMembers, clamped, false, false, ""))
+		graphRequest.Options.MaxCohortMembers = clamped
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
 		Request: graphRequest, Interpretation: interpretation, Resolution: resolution, Binding: binding,
@@ -1345,7 +1467,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// read facts for, and it must keep running.
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if len(subjects) == 0 {
-		return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntry)
+		terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntry)
+		return stampAnswerPlan(terminal, plan), terminalErr
 	}
 
 	// CHAOS-4347: expand a bare "status" category requirement (the model's
@@ -1370,11 +1493,64 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// a kind that is otherwise absent). RankCohort's own per-signal
 	// "missing" handling still applies if a given provider returns no rows
 	// for a given member even after being read.
+	//
+	// CHAOS-4636: that injection is now a PLAN LOOKUP rather than a pointer
+	// test. The plan declares which fact kinds the family needs (a cohort
+	// family declares the ranking-formula kinds), so the requirement list
+	// is PLANNED rather than sampled. The set is unchanged for every family
+	// that reached a cohort before, and the merge position is unchanged
+	// too -- LAST, so a more specific existing requirement for the same
+	// kind always wins and this only fills a kind that is otherwise absent.
+	//
+	// The pointer test is kept as a conjunct deliberately: a plan may
+	// declare a cohort family for a question that then resolves no cohort
+	// at all, and reading five cohort-ranking fact kinds for a subject that
+	// is not a cohort would be a widening this slice has no evidence for.
+	//
+	// CHAOS-4636: the plan is what DECLARES those kinds now, so a cohort
+	// family's fact needs are plannable BEFORE the read rather than
+	// discovered after it. But the plan may only ever WIDEN this list, and
+	// the unconditional injection stays: RankCohort runs whenever a cohort
+	// exists, whatever family was resolved, so a cohort that materialized
+	// under a family the plan did not expect to produce one -- an
+	// `unclassified` question, the fallback that exists precisely so
+	// today's behaviour is unchanged -- must still get the formula's inputs
+	// read. A plan that could REMOVE a kind would be a plan that can make
+	// an answer worse, which is the one thing the widening-only rule
+	// forbids.
 	var cohortRankingRequirements []FactRequirement
 	if graphContext.Cohort != nil {
-		cohortRankingRequirements = []FactRequirement{
-			{Kind: FactHealth}, {Kind: FactWorkload}, {Kind: FactReadiness},
-			{Kind: FactOperationalDeficiencies}, {Kind: FactInvestment},
+		seenRankingKind := make(map[FactKind]struct{}, len(plan.FactKinds)+len(cohortRankingFormulaKinds))
+		appendRankingKind := func(kind FactKind) {
+			if kind == "" {
+				return
+			}
+			if _, exists := seenRankingKind[kind]; exists {
+				return
+			}
+			seenRankingKind[kind] = struct{}{}
+			cohortRankingRequirements = append(cohortRankingRequirements, FactRequirement{Kind: kind})
+		}
+		for _, kind := range cohortRankingFormulaKinds {
+			appendRankingKind(kind)
+		}
+		for _, kind := range plan.FactKinds {
+			appendRankingKind(kind)
+		}
+	}
+	// CHAOS-4636: the plan's own member kind is stamped from the cohort the
+	// graph actually returned, never guessed from the question's wording.
+	// The kind a cohort turned out to have is a fact about the answer, and
+	// a plan asserting one the answer does not have would be the planner
+	// defect this field exists to make visible.
+	if graphContext.Cohort != nil {
+		plan.MemberKind = graphContext.Cohort.Kind
+		if plan.GroupKind == plan.MemberKind {
+			// A group axis that collapsed onto the member kind partitions a
+			// set by itself, which no grouping can mean. Drop the axis
+			// rather than emit a plan the contract refuses -- the answer is
+			// then the flat one it would have been before this slice.
+			plan.GroupKind = ""
 		}
 	}
 	factRequest := CanonicalFactRequest{
@@ -1421,295 +1597,165 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// follows citation, not ranking"): RankCohort hands these forward;
 	// narrateCohortDriverJudgments (post-synthesis, below) is what actually
 	// mints a ClaimedFact, and only for a driver it decides to narrate.
+	//
+	// CHAOS-4636 STAGE 2 -- bound what SYNTHESIS IS GIVEN, post-read,
+	// pre-synthesis (design §6.3).
+	//
+	// It cannot bound the answer, because the answer does not exist:
+	// synthesis is what CREATES Drivers, RemainingWork, ReadinessGaps,
+	// Conflicts and ClaimedFacts, and those are precisely the terms the
+	// item budget charges. So this stage does the only thing it honestly
+	// can -- it bounds the INPUT, leaving the plan's declared headroom for
+	// what synthesis will add.
+	//
+	// The group axis is built HERE, and it has to be: a member's owning
+	// group is read off that member's own facts, which is the first moment
+	// they exist. See chaos4636_grouped_cohort.go for why the design's
+	// group-first phrasing is not reachable and why this direction is.
+	//
+	// ORDER IS LOAD-BEARING: group, then narrow, then rank. RankCohort
+	// min-max normalizes workload WITHIN the cohort, so every member's
+	// score depends on which members are present -- ranking before
+	// narrowing would leave the surviving members carrying scores computed
+	// against members that are no longer in the answer.
+	if graphContext.Cohort != nil && plan.GroupKind != "" {
+		groups, ungrouped := BuildCohortGroups(plan, graphContext.Cohort, facts.Facts)
+		if len(groups) > 0 {
+			cohort := *graphContext.Cohort
+			cohort.Groups = groups
+			ApplyGroupedCohortCompleteness(&cohort)
+			graphContext.Cohort = &cohort
+		} else if ungrouped > 0 {
+			// The group axis was planned and NOTHING could be placed. The
+			// answer degrades to the flat cohort it would have been, and
+			// the plan stops claiming a group axis it did not deliver --
+			// a plan asserting groups the answer does not carry is exactly
+			// the planner defect the persisted plan exists to expose.
+			plan.GroupKind = ""
+		}
+	}
+	if graphContext.Cohort != nil && plan.Budget.MaxMembers > 0 && len(graphContext.Cohort.Members) > plan.Budget.MaxMembers {
+		before := len(graphContext.Cohort.Members)
+		cohort := *graphContext.Cohort
+		var kept []CohortMember
+		var narrowed bool
+		if len(cohort.Groups) > 0 {
+			var narrowedGroups []contractsv1.ContextFabricCohortGroup
+			kept, narrowedGroups, narrowed = NarrowGroupedCohort(&cohort, plan.Budget.MaxMembers)
+			if narrowed {
+				cohort.Groups = narrowedGroups
+			}
+		} else {
+			kept, narrowed = NarrowFlatCohort(&cohort, plan.Budget.MaxMembers)
+		}
+		if narrowed {
+			removed := RemovedCohortMembers(cohort.Members, kept)
+			cohort.Members = kept
+			// Facts for a removed member must not reach synthesis: a claim
+			// minted about a subject the answer no longer contains is an
+			// UNGROUNDED claim, and the evidence-closure validator would
+			// reject the whole result -- turning a narrowed answer into a
+			// failed one.
+			facts.Facts = RetainFactsForCohort(facts.Facts, &cohort, removed)
+			if len(cohort.Groups) > 0 {
+				ApplyGroupedCohortCompleteness(&cohort)
+			} else {
+				cohort.Complete = false
+				cohort.Truncated = true
+			}
+			graphContext.Cohort = &cohort
+			// groupAxis is what the selection ACTUALLY ran over -- this
+			// branch calls NarrowGroupedCohort exactly when the cohort has
+			// groups. groupsNarrowed stays FALSE: decision D2 is member-first
+			// and every group survives, so the D2 counter must not tick.
+			narrowedGroupAxis := len(cohort.Groups) > 0
+			e.recordPlanNarrowingStep(&plan, PlanNarrowing{
+				Stage:  contractsv1.ContextFabricPlanNarrowingSynthesisInput,
+				Basis:  planStageBasis(contractsv1.ContextFabricPlanNarrowingSynthesisInput, narrowedGroupAxis),
+				Before: before,
+				After:  len(kept),
+			})
+			e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingSynthesisInput, before, len(kept), narrowedGroupAxis, false, ""))
+		}
+	}
 	var cohortSignalCitations cohortMemberSignalCitations
+	// rankedForServedResult is seeded here and REPLACED by stage 3 if the
+	// retry re-ranks; e.emit publishes whichever describes the served answer.
+	var rankedForServedResult *CohortRankedEvent
 	if graphContext.Cohort != nil {
 		var rankEvent CohortRankedEvent
 		graphContext.Cohort, rankEvent, cohortSignalCitations = RankCohort(graphContext.Cohort, facts.Facts, facts.Coverage)
-		if e.telemetry != nil {
-			e.telemetry.RecordCohortRanked(ctx, principal, rankEvent)
-		}
+		// DEFERRED, not emitted here: stage 3 may re-rank a narrowed cohort
+		// for the retry, and the event that reaches an operator must describe
+		// the cohort actually SERVED. Emitting at this point published a
+		// ranking computed over members the caller never received whenever a
+		// retry fired.
+		rankedForServedResult = &rankEvent
 	}
 
-	result, err := e.synthesizer.Synthesize(ctx, principal, SynthesisInput{
+	assemblyParams := synthesisAssemblyParams{
 		Request: request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
-	})
+		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
+		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarry: windowCarry,
+		StructureCanon: structureCanon, CarriedStructureEntry: carriedStructureEntry,
+		CommitBases: commitBases, CommitDigests: commitDigests,
+	}
+	// The retry's base is snapshotted BEFORE the first pass runs. Taking it
+	// afterwards copied state pass one had already dirtied in place -- see
+	// synthesisAssemblyParams.snapshot for the two fields and why ordering,
+	// not the existence of a copy, was the defect.
+	retryBase := assemblyParams.snapshot()
+	result, pendingTelemetry, err := e.synthesizeAndAssemble(ctx, principal, assemblyParams)
 	if err != nil {
-		return InvestigationResult{}, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
+		return InvestigationResult{}, err
 	}
-	result.SchemaVersion = InvestigationResultSchemaV1
-	result.ResultID = e.newResultID()
-	result.RequestID = request.RequestID
-	result.GeneratedAt = e.now().UTC()
-	// Codex round-1 F8: explicit, not merely the zero value -- a
-	// Synthesizer implementation that (incorrectly) set Reused=true on
-	// its returned draft must not have that survive into a genuinely
-	// fresh result. Reused=true is ONLY ever valid on the exact object
-	// tryReuse returns.
-	result.Reused = false
-	result.Question = request.Question
-	result.Interpretation = interpretation
-	result.SubjectResolution = resolution
-	// Codex round-1 F4, per the orchestrator's ruling: a retrieval mechanism
-	// that was unavailable for THIS resolution is folded into the answer here,
-	// at the engine, rather than by inventing a path from ResolveSubjects into
-	// the graph adapter's own Coverage construction. ResolveSubjects reports
-	// the request-scoped marker; the engine owns what an answer says about
-	// itself.
+	pendingTelemetry.CohortRanked = rankedForServedResult
+	// CHAOS-4636 STAGE 3 -- measure the ASSEMBLED result and, if it does not
+	// fit, RE-SYNTHESIZE ONCE with a smaller input (design §6.3).
 	//
-	// The limitation string is FIXED and non-interpolated. It names no
-	// mechanism, no provider, no model, and no error text: a limitation is
-	// answer-facing prose, and every cause here (an embed timeout, an
-	// unreachable embedder, a server that served the wrong model, a fenced-off
-	// stale index) has the same consequence for a reader -- retrieval saw less
-	// than it should have. The operator-facing detail belongs in telemetry,
-	// which already receives it.
-	if resolution.RetrievalDegraded {
-		// Deduplicated across BOTH spellings, not by exact equality: a draft
-		// that already carries either form must not gain a second, differently
-		// worded copy of the same statement. At the contract's cap the last
-		// model-authored caveat is DISPLACED rather than the disclosure being
-		// dropped or the whole answer refused -- see withRetrievalDegradation.
-		composed, displaced := withRetrievalDegradation(result.Limitations)
-		result.Limitations = composed
-		// Recorded on the RESULT, because the loss is canonical: a model
-		// caveat this investigation produced is gone from the stored
-		// answer, and the API's canonical view is as much a consumer as
-		// the projection is. It cannot be inferred downstream either --
-		// a displaced list and a list that simply had room are the same
-		// shape and the same length, both ending with the disclosure.
-		result.LimitationsDisplaced += displaced
-		result.Coverage.Partial = true
+	// Here, inside the engine, AFTER synthesis and BEFORE validation and
+	// persistence. Not in the route: by then validation and persistence have
+	// already run, so a change there can make the stored and served answers
+	// diverge. Not with the route's encoder either: internal/api imports
+	// internal/contextfabric and not the reverse, which is the import cycle
+	// revision 3 of this design died on. The measurement lives in
+	// internal/contracts/v1, which both planes import, so the number checked
+	// here is the number the route will check.
+	// CODEX ROUND 1, FINDING 1 (P1): stage 3 used to run HERE, before the
+	// plan, the render shapes and the completeness block were stamped -- but
+	// the route marshals the FINAL document. The engine therefore measured a
+	// smaller thing than the route would, and could accept a result the route
+	// then 413'd on bytes. Gate agreement is the entire reason the
+	// measurement was moved to internal/contracts/v1, so measuring a
+	// different document defeated it.
+	//
+	// So the answer is FINALIZED first -- plan, shapes, completeness -- and
+	// stage 3 measures that. The retry re-runs assembly AND finalization, so
+	// the shape measured on the second pass is the shape that would be
+	// served on the second pass.
+	result = e.finalizeResult(result, plan)
+	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, pendingTelemetry, retryBase)
+	if err != nil {
+		return InvestigationResult{}, err
 	}
-	if result.Cohort == nil {
-		result.Cohort = graphContext.Cohort
-	}
-	if strings.TrimSpace(result.Versions.ServiceVersion) == "" {
-		result.Versions.ServiceVersion = e.serviceVersion
-	}
-	if strings.TrimSpace(result.Versions.ContractVersion) == "" {
-		result.Versions.ContractVersion = InvestigationResultSchemaV1
-	}
-	if strings.TrimSpace(result.Versions.CanonicalServiceVersion) == "" {
-		result.Versions.CanonicalServiceVersion = facts.Version
-	}
-	if strings.TrimSpace(result.Versions.ModelIdentity) == "" {
-		result.Versions.ModelIdentity = "unwired"
-	}
-	// CHAOS-3781 AC-3781-2: a historical answer states the time it speaks
-	// for in a structured field. Composed HERE, from the interpretation
-	// and the coverage the sources actually returned, rather than inside
-	// any AnswerSynthesizer: a synthesizer may use a model, and what time
-	// an answer covers is a fact about which reads ran, never something a
-	// model may assert. The result contract refuses a non-current axis
-	// carrying no label, so a composition bug fails loudly here rather
-	// than shipping an unlabeled historical answer.
-	result.Temporal = composeTemporalLabel(interpretation, result.Coverage, facts.TemporalGrain)
-	temporallyLimited, temporalDisplaced := appendTemporalLimitations(result.Limitations, interpretation)
-	result.Limitations = temporallyLimited
-	result.LimitationsDisplaced += temporalDisplaced
-	// effectiveWindow: composed ABOVE, before ResolveSubjects (CHAOS-4040
-	// reordering -- see that call site's own comment), reused here
-	// unchanged. By construction it can no longer be Provenance==inferred_default
-	// here (that case already gated and returned above) -- every path
-	// reaching this line carries a confirmed/stated window or none at all.
-	result.EffectiveEvidenceWindow = effectiveWindow
+	// The plan is re-stamped after the fit, because stage 3 may have appended
+	// narrowing steps to it: the persisted plan must describe the answer that
+	// was actually produced, not the one first attempted.
+	stampedPlan := plan
+	result.AnswerPlan = &stampedPlan
+	// EVERY per-investigation decision event the assembly produced fires
+	// ONCE here, for the result actually served. The assembly runs twice on a
+	// retry and its first answer is discarded, so emitting from inside it
+	// double-counted every one of them -- see assemblyTelemetry for why this
+	// is a class rule rather than a fix to one emitter.
+	e.emit(ctx, principal, pendingTelemetry)
+	// Render-shape telemetry fires ONCE, for the result actually served --
+	// selection itself is pure and was already run by finalizeResult, but a
+	// retry would otherwise double-count a decision an operator counts.
 	if e.telemetry != nil {
-		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow, windowCarry.Outcome == WindowCarryHit))
-	}
-	// CHAOS-3900 W2 (design brief §4): the fresh disclosure W1's own scope
-	// note deferred -- nil unless the effective window is genuinely
-	// inferred. CHAOS-4040 (sol-max ruling 2026-08-21) makes this call
-	// permanently a no-op ON THIS DECISIVE PATH: composeWindowClarification
-	// only returns non-nil for Provenance==inferred_default, and the gate
-	// above (windowConfirmationRequiredResult) already intercepts every
-	// such window before this line -- see result.EffectiveEvidenceWindow's
-	// own assignment comment above ("every path reaching this line carries
-	// a confirmed/stated window or none at all"). Left in place rather
-	// than removed: it stays correct (nil) if that invariant ever changes,
-	// and matches windowConfirmationRequiredResult's own identical call
-	// for the SAME data, on the gate terminal instead of this one.
-	result.WindowClarification = composeWindowClarification(result.EffectiveEvidenceWindow, result.ResultID, e.now())
-	if result.WindowClarification != nil && request.Options.WindowConfirmationMode == contractsv1.ContextFabricWindowConfirmationNudge {
-		result.Warnings = appendUniqueWarning(result.Warnings, windowConfirmationNudgeSentence)
-	}
-	// CHAOS-3900 P1: the confirmed_structure echo, composed unconditionally
-	// (empty/nil when this request carried no structure receipts) --
-	// mirrors EffectiveEvidenceWindow's own placement, right beside the
-	// window echo it is the structure-frame sibling of.
-	// CHAOS-4360: a carried window is disclosed here too, appended after
-	// every receipt/explicit entry -- appendCarriedStructureEntry is a
-	// no-op unless resolveCarriedWindow actually hit above.
-	result.ConfirmedStructure = appendCarriedStructureEntry(composeConfirmedStructure(mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), structureCanon.Explicit), carriedStructureEntry)
-	// CHAOS-3900 P1.G (design brief §2.1 B5): a decisive result reached via
-	// structure confirmation still carries the full (offered, selected)
-	// pair the Bridge needs. No guard needed: structureCanon.OfferSnapshot
-	// is only ever non-nil alongside structureCanon.Confirmed (see
-	// requestStructureCanonicalization's own doc comment) -- an empty
-	// Confirmed set means OfferSnapshot is already nil by construction.
-	result.StructureOfferSnapshot = structureCanon.OfferSnapshot
-	// CHAOS-4098: the decisive path's synthesized-status override. Placed
-	// HERE, immediately BEFORE the commit-affirmation gate below, for two
-	// reasons that are both ordering constraints rather than preferences.
-	//
-	// AFTER every limitation composer (retrieval degradation, temporal
-	// disclosures) and BEFORE Validate and Save, so its disclosure and its
-	// Coverage.Partial flag are part of the SAME object that is validated,
-	// returned and persisted -- the identical argument the gate below
-	// makes for its own placement.
-	//
-	// BEFORE the gate, not after, because this override RECOMPOSES
-	// DirectJudgment and DeterministicAnswer from the resolution, and the
-	// gate deliberately does NOT recompose them after a retraction (see
-	// its own comment). Running afterwards would silently re-render those
-	// two fields against a post-retraction resolution and change a
-	// decision CHAOS-4085 ruled on, in a ticket that is not about it.
-	// Running first means the override sees exactly the resolution the
-	// original composition saw, so recomposition is a pure status swap.
-	// When BOTH fire on the same result -- the observed case-60 shape --
-	// the prose is therefore composed against the pre-retraction
-	// resolution, which is CHAOS-4085's own documented residual, neither
-	// widened nor narrowed here.
-	e.recordSynthesisStatusOverride(ctx, principal, applySynthesisStatusOverride(&result))
-	// CHAOS-4099: the answer's own statement that some requested evidence
-	// was never reachable. Placed alongside the other post-synthesis
-	// composers and before the commit-affirmation gate, Validate and Save,
-	// so the disclosure, its Coverage.Partial flag and the answer are one
-	// object throughout.
-	applyFactScopeDisclosure(&result, facts.Scope)
-	// CHAOS-4398 PR3b: §5a narrated cohort driver judgments. Placed HERE --
-	// AFTER synthesis (synthesisDriverCount = len(result.Drivers) and
-	// synthesisClaimedFactCount = len(result.ClaimedFacts) are the ACTUAL
-	// counts the model produced, not a guess) and BEFORE the
-	// commit-affirmation gate, Validate and Save, same ordering discipline
-	// as every other post-synthesis composer on this path. Appended to
-	// result.Drivers (never replacing what synthesis already produced) --
-	// narrateCohortDriverJudgments' own budget math already bounds the
-	// combined total at BOTH ContextFabricDriversMaxCount and
-	// ContextFabricClaimedFactsMaxCount (codex R1: a synthesis draft can
-	// legitimately carry up to 250 claims on its own, and narration mints
-	// one more claim per narrated driver, so the claimed-facts budget must
-	// be tracked independently of the driver budget, not assumed to always
-	// have headroom).
-	if graphContext.Cohort != nil {
-		narrated, mintedClaims, narrationEvent := narrateCohortDriverJudgments(graphContext.Cohort, result.Drivers, len(result.ClaimedFacts), cohortSignalCitations)
-		// codex R1 (CHAOS-4398 PR3b), team-lead ruling: every narration-
-		// minted claim must pass the SAME grounding check a model-authored
-		// claim gets from SynthesisDraft.ValidateAgainst -- which this
-		// composer's claims never reach, since narration runs entirely
-		// AFTER that validation already completed. validateMintedClaimsGrounded
-		// re-derives each claim's (Kind, Subject, Field, Value) against
-		// facts.Facts (the SAME canonical fact bundle RankCohort itself
-		// read) BEFORE anything is appended -- fail closed, never serve a
-		// claim that cannot be traced back to a real canonical fact.
-		if err := validateMintedClaimsGrounded(mintedClaims, facts.Facts); err != nil {
-			return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
-		}
-		result.Drivers = append(result.Drivers, narrated...)
-		// CHAOS-4398 PR3b: append the claims THIS composer minted (only for
-		// a driver it actually narrated) AFTER the model's own
-		// draft.ClaimedFacts (Synthesize's own composer already set
-		// result.ClaimedFacts from those) -- append, never overwrite, so
-		// neither side's claims are ever lost. Every narrated driver's
-		// SourceClaimedFactIDs already names its own entry here by
-		// construction (narrateCohortDriverJudgments set both together).
-		result.ClaimedFacts = append(result.ClaimedFacts, mintedClaims...)
-		// CHAOS-4580: once narration produced at least one judgment, recompose
-		// the answer prose so it reads as one narrative instead of restating
-		// the same status+principal-driver sentence in both DirectJudgment
-		// and DeterministicAnswer, and the same canonical-facts key=value
-		// list in both DeterministicAnswer and CurrentState. Guarded on
-		// len(narrated)>0 (not just graphContext.Cohort!=nil) so a cohort
-		// that produced zero narrated judgments -- no_drivers/budget_exhausted,
-		// or every candidate lacked evidence -- leaves the original synthesis
-		// composition alone, same as before this ticket. A non-cohort
-		// (single-subject) investigation never enters this block at all, so
-		// its answer composition is unaffected.
-		if len(narrated) > 0 {
-			result.DirectJudgment, result.DeterministicAnswer = recomposeCohortAnswerNarrative(result.Status, result.Drivers, result.SubjectResolution)
-			narrationEvent.AnswerNarrativeRecomposed = true
-		}
-		if e.telemetry != nil {
-			e.telemetry.RecordCohortDriverNarration(ctx, principal, narrationEvent)
-		}
-	}
-	// CHAOS-4085: the post-synthesis commit-affirmation gate. Placed HERE
-	// deliberately -- after every composer that touches Limitations or
-	// Coverage has run (retrieval degradation, temporal disclosures), and
-	// BEFORE Validate and Save, so the retraction, its disclosure and its
-	// Coverage.Partial flag are all part of the SAME object that is
-	// validated, returned, and persisted. A retraction applied after Save
-	// would leave the stored row disagreeing with the served answer, and a
-	// retraction applied before the limitation composers would be re-capped
-	// underneath it.
-	//
-	// This is the ONLY place a commit is revisited after resolution, and it
-	// is strictly subtractive -- see applyCommitAffirmation's own invariant
-	// list. The deterministic answer is NOT recomposed: an unaffirmed
-	// subject is by construction one the answer does not stand behind, so
-	// the prose already reads as the non-answer it is, and re-synthesizing
-	// would mean a second model call to restate a conclusion the engine has
-	// already reached structurally.
-	//
-	// A retraction that empties Committed does NOT convert this into a
-	// clarification terminal: the caller still receives the answer that was
-	// computed, now honestly carrying no committed subject and saying so in
-	// its limitations. Routing to the subjectless terminal here would
-	// discard a paid-for answer and change this path's contract outcome on
-	// a signal the terminal's own logic never sees.
-	if outcomes := applyCommitAffirmation(&result, affirmationInputs{
-		Bases: commitBases,
-		// result.SubjectResolution.Candidates, not the local resolution's:
-		// the same backing array today, but the RESULT's copy is the one
-		// this gate rewrites states on, so reading and writing the same
-		// authoritative list keeps that true if the two ever diverge.
-		Candidates: result.SubjectResolution.Candidates,
-		Graph:      graphContext,
-		Facts:      facts,
-	}); len(outcomes) > 0 {
-		e.recordCommitAffirmation(ctx, principal, outcomes)
-	}
-	// CHAOS-4087: stamped AFTER applyCommitAffirmation, not before -- that
-	// gate can RETRACT a subject from result.SubjectResolution.Committed
-	// (affirmationInputs.Bases is the SAME commitBases this reads), so
-	// building the digest list from the resolution-time commitDigests
-	// BEFORE affirmation ran would leave a stale entry describing a
-	// subject that is no longer committed. Reading the FINAL Committed
-	// here means a retracted subject's digest is never persisted at all --
-	// exactly the outcome CommitBasisSet's own "a stale proven basis
-	// attached to a subject nothing committed" concern (ResetTo's doc
-	// comment) describes, applied to this wire-safe companion set. One
-	// entry per committed subject, always, even when commitDigests has
-	// none for it (the fail-closed CommitGate=="" reading) -- see
-	// ContextFabricCommitDecisionDigest's own doc comment.
-	if len(result.SubjectResolution.Committed) > 0 {
-		digests := make([]contractsv1.ContextFabricCommitDecisionDigest, 0, len(result.SubjectResolution.Committed))
-		for _, subject := range result.SubjectResolution.Committed {
-			d := commitDigests.For(subject)
-			digests = append(digests, contractsv1.ContextFabricCommitDecisionDigest{
-				Subject: subject, CommitGate: d.CommitGate, IdentityProven: d.IdentityProven,
-				SearchTruncated: d.SearchTruncated, AliasLookupComplete: d.AliasLookupComplete,
-			})
-		}
-		result.SubjectResolution.CommitDecisionDigests = digests
-	}
-	// CHAOS-4415: conditional render shapes. Placed HERE -- on the FINAL
-	// result, after every composer including the commit-affirmation gate,
-	// and immediately BEFORE Validate -- so a shape can never describe
-	// content a later stage removed, and so every number it plots is
-	// resolved against the same document the caller receives. Selection is
-	// deterministic (internal/contextfabric/render_shapes.go); the model
-	// has no draft field for a shape and therefore cannot author one.
-	renderShapes, renderShapeEvent := SelectRenderShapes(result)
-	result.RenderShapes = renderShapes
-	if e.telemetry != nil {
+		_, renderShapeEvent := SelectRenderShapes(result)
 		e.telemetry.RecordRenderShapeSelection(ctx, principal, renderShapeEvent)
 	}
-	// CHAOS-4413: answer completeness/terminal fields. Placed HERE, after
-	// RenderShapes and immediately BEFORE Validate, for the identical
-	// reason RenderShapes is placed here -- Status/ClaimedFacts/Coverage/
-	// Limitations/Warnings are all final at this point and nothing further
-	// can change them out from under the stamped disclosure.
-	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
@@ -1745,7 +1791,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// about to persist (set on the SAME resolution value
 				// earlier in this function) -- the race terminal must not
 				// silently drop them.
-				return e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions)
+				// CHAOS-4636 sweep 2: a THIRD post-plan exit that serves and
+				// persists a result. Found by enumerating every return in
+				// Investigate rather than by fixing the two that were
+				// reported -- which is the whole point of doing this as a
+				// sweep: the class was "post-plan exits", never "this exit".
+				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions)
+				return stampAnswerPlan(superseding, plan), supersededErr
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
@@ -1879,7 +1931,12 @@ func markTrailingHintOutcomesDroppedByBudget(outcomes []priorSubjectReceiptOutco
 	}
 }
 
-func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt, binding ResolvedGraphBinding) ([]SubjectHint, []BoundSubjectReceipt, int64, []priorSubjectReceiptOutcome) {
+// The fifth return (CHAOS-4636) is every prior result this call ALREADY
+// loaded and taint-gated, so a later carry can read a plan out of one without
+// paying for a second store round-trip. Every entry has passed the CHAOS-3898
+// §2.2 epoch gate below before being put there, so a reader of this map
+// inherits that check rather than needing to repeat it.
+func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage.Principal, consumer ConsumerInfo, receipts []BoundSubjectReceipt, binding ResolvedGraphBinding) ([]SubjectHint, []BoundSubjectReceipt, int64, []priorSubjectReceiptOutcome, map[string]InvestigationResult) {
 	hints := make([]SubjectHint, 0, len(receipts))
 	validated := make([]BoundSubjectReceipt, 0, len(receipts))
 	outcomes := make([]priorSubjectReceiptOutcome, 0, len(receipts))
@@ -1887,7 +1944,7 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 	var staleGraphEpochDelta int64
 	for _, receipt := range receipts {
 		if ctx.Err() != nil {
-			return hints, validated, staleGraphEpochDelta, outcomes
+			return hints, validated, staleGraphEpochDelta, outcomes, loaded
 		}
 		resultID := strings.TrimSpace(receipt.ResultID)
 		receiptID := strings.TrimSpace(receipt.ReceiptID)
@@ -1946,7 +2003,7 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 			outcomes = append(outcomes, priorSubjectReceiptOutcome{receipt: receipt, preGraphSkipReason: priorSubjectReceiptSkipNoMatch})
 		}
 	}
-	return hints, validated, staleGraphEpochDelta, outcomes
+	return hints, validated, staleGraphEpochDelta, outcomes, loaded
 }
 
 // composePriorSubjectReceiptDispositions builds CHAOS-3478/CHAOS-3813's

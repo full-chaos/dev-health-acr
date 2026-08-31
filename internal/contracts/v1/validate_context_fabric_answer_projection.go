@@ -487,7 +487,14 @@ func (p ContextFabricAnswerProjection) validateReceipts() error {
 // answers; one that dropped content without saying so is the silent
 // truncation this contract exists to prevent.
 func (b ContextFabricProjectionBudget) Validate() error {
-	counts := []int{b.DriversOmitted, b.WithheldDriversOmitted, b.CohortMembersOmitted, b.FactsOmitted, b.CandidatesOmitted, b.EvidenceRefsOmitted, b.LimitationsOmitted, b.WarningsOmitted, b.CoverageOmitted, b.ReasonsOmitted, b.ValuesClamped, b.RenderShapesOmitted}
+	// CohortGroupsOmitted belongs here like every other counter: the
+	// invariant this function enforces is "Truncated iff ANY omitted count is
+	// non-zero", and a counter absent from this list is outside the invariant
+	// entirely. It was added to the schema, to the golden wire payload, to the
+	// optional-counter registry and to the producer's own Truncated
+	// disjunction -- and missed here, which is the one place that would have
+	// caught a future producer getting it wrong.
+	counts := []int{b.DriversOmitted, b.WithheldDriversOmitted, b.CohortMembersOmitted, b.CohortGroupsOmitted, b.FactsOmitted, b.CandidatesOmitted, b.EvidenceRefsOmitted, b.LimitationsOmitted, b.WarningsOmitted, b.CoverageOmitted, b.ReasonsOmitted, b.ValuesClamped, b.RenderShapesOmitted}
 	dropped := b.FullResultOmitted
 	for _, count := range counts {
 		if count < 0 {

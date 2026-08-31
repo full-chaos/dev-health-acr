@@ -38,6 +38,14 @@ import (
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
+// contextFabricSynthesisDeadlineReserveDivisor is the fraction of the request
+// deadline held back for one re-synthesis (CHAOS-4636 / decision D5, whose
+// reserved-deadline half is non-negotiable under any of the three rulings:
+// without it the terminal case is a 504 rather than a partial answer or a
+// designed refusal). Named rather than inlined so the choice is visible and
+// movable in one place.
+const contextFabricSynthesisDeadlineReserveDivisor = 3
+
 func Open(ctx context.Context, cfg config.Config, options Options) (*Runtime, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate hosted runtime configuration: %w", err)
@@ -823,6 +831,24 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		OfferPhraser: offerPhraser,
 	}, contextfabric.EngineOptions{
 		ServiceVersion: request.options.ServiceVersion, Now: request.options.Now, NewResultID: newInvestigationResultID,
+		// CHAOS-4636: the engine measures its own assembled answer against
+		// the SAME ceilings the investigation route's 413 gate enforces, so
+		// an over-budget answer is re-synthesized once with a smaller input
+		// before validation and persistence -- instead of being refused
+		// after the whole investigation has already been paid for. Wired
+		// from request.config so the two can never be configured apart.
+		MaxItems:           request.config.MaxItems,
+		MaxSerializedBytes: int64(request.config.MaxSerializedBytes),
+		// The reserved synthesis deadline (decision D5, "non-negotiable
+		// under any option"). DERIVED from the request timeout rather than
+		// configured beside it: the whole request shares that one timeout,
+		// so a separately-configured reserve could exceed it and would then
+		// refuse every retry while looking correct. A third leaves two
+		// thirds for the first pass, which on the deployment default
+		// (ACR_REQUEST_TIMEOUT) is comfortably more than a real
+		// investigation takes, and refuses the retry exactly when a first
+		// synthesis ran long enough that a second would have 504'd.
+		SynthesisDeadlineReserve: request.config.RequestTimeout / contextFabricSynthesisDeadlineReserveDivisor,
 		// ReuseProjectionVersion mirrors RuntimeAnswerSynthesizerOptions
 		// above verbatim (contextFabricProjectionVersion, so a fresh
 		// answer's Versions.ProjectionVersion and what reuse compares

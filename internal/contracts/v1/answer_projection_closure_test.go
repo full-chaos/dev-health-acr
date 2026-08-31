@@ -268,7 +268,13 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// leaves (terminal_status, terminal_reason). The canonical result
 		// surface gains the SAME two (265 -> 267): the projection carries
 		// the field verbatim rather than a narrowed copy.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 180},
+		// CHAOS-4636: 180 -> 184 -- the projected group axis contributed four
+		// string leaves (the group subject's kind/canonical_id/label plus
+		// member_canonical_ids[]). The projection carries the group verbatim
+		// rather than a narrowed copy, exactly as it does the render shape.
+		// Unlike the canonical result surface, this one gains NO plan
+		// leaves: the projection does not carry the answer plan.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 184},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -293,7 +299,19 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// mints, not model prose) -- answer_projection is unaffected, since
 		// ProjectedCohortMember has no projected Drivers field to mirror it
 		// onto.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 267},
+		// CHAOS-4636: 267 -> 283 -- sixteen new string leaves, none of them
+		// model prose. Twelve come from AnswerPlan (family, family_source,
+		// family_version, group_kind, member_kind, render_kinds[],
+		// fact_kinds[], axes[], budget.narrowing_basis, and a narrowing
+		// step's stage/basis/overrun) and four from Cohort.Groups (the
+		// group subject's kind/canonical_id/label plus
+		// member_canonical_ids[]). Every one is either a member of a closed
+		// vocabulary or a graph-minted identifier -- the plan is composed by
+		// a deterministic stage, never by a model -- so all sixteen are
+		// trusted-because-closed rather than untrusted. answer_projection is
+		// unaffected: the projection carries neither the plan nor the group
+		// axis yet.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 283},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -434,7 +452,28 @@ func trustedBecauseClosed(path string) bool {
 		// its own five-value closed vocabulary -- both validated against
 		// their own registries before a result is stored, never model
 		// prose.
-		"terminal_status", "terminal_reason":
+		"terminal_status", "terminal_reason",
+		// CHAOS-4636: every string the answer plan carries is either a
+		// closed vocabulary or a service-issued token, because the PLAN IS
+		// COMPOSED BY A DETERMINISTIC STAGE, NEVER BY A MODEL -- that is
+		// the whole point of putting a planning step between interpretation
+		// and discovery. "family" (ContextFabricQuestionFamily) and
+		// "family_source" (ContextFabricQuestionFamilySource) are the two
+		// vocabularies CHAOS-4632 measured before this slice promoted them
+		// to the wire. "group_kind"/"member_kind" are the SAME closed
+		// ContextFabricSubjectKind enum the "kind" case at the top of this
+		// list already trusts, named apart only to say which axis they
+		// name. "render_kinds"/"fact_kinds"/"axes" are ARRAYS of closed
+		// enums (ContextFabricRenderKind / ContextFabricFactKind /
+		// ContextFabricStructureNeedKind), the same standing "missing"
+		// above has. "stage" (ContextFabricPlanNarrowingStage), "basis" and
+		// "narrowing_basis" (ContextFabricNarrowingBasis) and "overrun"
+		// (ContextFabricBudgetOverrun) are the narrowing disclosure's own
+		// three closed vocabularies. Each is rejected by
+		// ContextFabricAnswerPlan.Validate before a result is stored.
+		"family", "family_source", "group_kind", "member_kind",
+		"render_kinds", "fact_kinds", "axes",
+		"stage", "basis", "narrowing_basis", "overrun":
 		return true
 	// Opaque identifiers and digests: frozen handles, never prose.
 	case "result_id", "request_id", "receipt_id", "driver_id", "claim_id",
@@ -464,7 +503,13 @@ func trustedBecauseClosed(path string) bool {
 	case "source":
 		return true
 	// Service-issued version tokens.
-	case "service_version", "contract_version", "backend", "backend_version",
+	case // CHAOS-4636: family_version is QuestionFamilyTableVersion, a
+		// literal the family registry declares and bumps by hand whenever a
+		// row in the family or precedence table changes in a way that could
+		// change an answer -- exactly the same standing as every other
+		// version token here.
+		"family_version",
+		"service_version", "contract_version", "backend", "backend_version",
 		"projection_version", "query_version", "interpretation_version",
 		"synthesis_version", "canonical_service_version", "source_version",
 		"model_identity":

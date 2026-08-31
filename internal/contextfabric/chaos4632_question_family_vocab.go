@@ -57,7 +57,13 @@ import (
 // question wanting both. Splitting them again later is one new row in this
 // vocabulary plus one new precedence row, which is what a closed
 // vocabulary in a table is FOR.
-type QuestionFamily string
+// CHAOS-4636 promoted this vocabulary to the wire (see
+// contractsv1.ContextFabricQuestionFamily). It is an ALIAS, not a copy: a
+// closed vocabulary restated on both sides of a package boundary is one that
+// will drift, and the alias makes drift impossible to express. Everything
+// below -- the ordered array, ValidQuestionFamily, SanitizeQuestionFamily --
+// is unchanged and keeps operating on the same values it always did.
+type QuestionFamily = contractsv1.ContextFabricQuestionFamily
 
 const (
 	// QuestionFamilySubjectInvestigation is "what is the status of X?" and
@@ -65,44 +71,44 @@ const (
 	// drivers ATTEMPTED but never required (decision D1's cost, accepted
 	// with eyes open: North Star check 8's "never a bare score" moves from
 	// a plan-level guarantee to a harness acceptance case).
-	QuestionFamilySubjectInvestigation QuestionFamily = "subject_investigation"
+	QuestionFamilySubjectInvestigation = contractsv1.ContextFabricQuestionFamilySubjectInvestigation // "subject_investigation"
 	// QuestionFamilyDiscoveredCohortRanking is "which teams are
 	// struggling, and why?" -- many subjects, discovered, window is the
 	// ONLY applicable structure axis. This is exactly what CHAOS-4579
 	// shipped as a filter applied after the fact; S4 derives it from this
 	// family instead.
-	QuestionFamilyDiscoveredCohortRanking QuestionFamily = "discovered_cohort_ranking"
+	QuestionFamilyDiscoveredCohortRanking = contractsv1.ContextFabricQuestionFamilyDiscoveredCohortRanking // "discovered_cohort_ranking"
 	// QuestionFamilyScopedCohortStatus is "what are the statuses of the
 	// fullchaos team's projects?" (acceptance question Q-B) -- many
 	// subjects scoped by ONE named parent of a DIFFERENT kind. Never a
 	// single-subject pick: the named term is the scope, not the answer's
 	// subject, and that asymmetry is precedence row 2.
-	QuestionFamilyScopedCohortStatus QuestionFamily = "scoped_cohort_status"
+	QuestionFamilyScopedCohortStatus = contractsv1.ContextFabricQuestionFamilyScopedCohortStatus // "scoped_cohort_status"
 	// QuestionFamilyGroupedCohortStatus is "what are the project statuses
 	// for each team, and what are the main drivers?" (acceptance question
 	// Q-A) -- many subjects partitioned by a grouping kind.
-	QuestionFamilyGroupedCohortStatus QuestionFamily = "grouped_cohort_status"
+	QuestionFamilyGroupedCohortStatus = contractsv1.ContextFabricQuestionFamilyGroupedCohortStatus // "grouped_cohort_status"
 	// QuestionFamilyExplicitComparison is "compare X to Y over 90 days" --
 	// two or more named subjects, matched fact set on BOTH sides, same
 	// window, same measures. Never one-sided.
-	QuestionFamilyExplicitComparison QuestionFamily = "explicit_comparison"
+	QuestionFamilyExplicitComparison = contractsv1.ContextFabricQuestionFamilyExplicitComparison // "explicit_comparison"
 	// QuestionFamilyTrend is "how has X's cycle time moved?" -- needs a
 	// fact declared time_series, which is S3's declaration work. DECLARED
 	// AND DELIBERATELY UNREACHABLE from the precedence table in this
 	// slice; see UnreachableQuestionFamilies below for why that is a
 	// deliberate property with a precedent rather than dead code.
-	QuestionFamilyTrend QuestionFamily = "trend"
+	QuestionFamilyTrend = contractsv1.ContextFabricQuestionFamilyTrend // "trend"
 	// QuestionFamilyInvestmentAllocation is "where did our effort go?" --
 	// investment facts with a declared breakdown table. Declared and
 	// deliberately unreachable in this slice, same as trend.
-	QuestionFamilyInvestmentAllocation QuestionFamily = "investment_allocation"
+	QuestionFamilyInvestmentAllocation = contractsv1.ContextFabricQuestionFamilyInvestmentAllocation // "investment_allocation"
 	// QuestionFamilyUnclassified is the REFUSE-TO-GUESS member and the
 	// vocabulary's own fallback. It is never a failure and never an
 	// error: it is today's behaviour, unchanged, and it is what a split
 	// consensus resolves to rather than breaking a tie by picking a side.
 	// All axes are applicable to it, because nothing has been established
 	// that could narrow them.
-	QuestionFamilyUnclassified QuestionFamily = "unclassified"
+	QuestionFamilyUnclassified = contractsv1.ContextFabricQuestionFamilyUnclassified // "unclassified"
 )
 
 // questionFamilies is the closed vocabulary in published order. The order

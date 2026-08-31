@@ -200,11 +200,28 @@ type ContextFabricProjectedCandidate struct {
 // is the canonical member count before projection, so a caller always sees
 // the true size even when Members is truncated.
 type ContextFabricProjectedCohort struct {
-	Kind      ContextFabricSubjectKind             `json:"kind"`
-	Total     int                                  `json:"total"`
-	Rationale string                               `json:"rationale"`
-	Complete  bool                                 `json:"complete"`
+	Kind      ContextFabricSubjectKind `json:"kind"`
+	Total     int                      `json:"total"`
+	Rationale string                   `json:"rationale"`
+	Complete  bool                     `json:"complete"`
+	// Truncated (CHAOS-4636) is the cohort's own truncation flag, which the
+	// projected cohort did not carry at all before this slice -- so per-group
+	// truncation had no projected representation and a reader could not tell
+	// a complete grouped answer from a partial one.
+	Truncated bool                                 `json:"truncated,omitempty"`
 	Members   []ContextFabricProjectedCohortMember `json:"members"`
+	// Groups (CHAOS-4636) is the group axis, projected. Absent on every flat
+	// cohort. Members are named by canonical id into Members above, exactly
+	// as on the canonical cohort, so the projection carries one member list
+	// rather than two that could disagree.
+	//
+	// The projection clamp is GROUP-AWARE because of this field: it
+	// allocates its member budget across groups before truncating within
+	// them. The pre-CHAOS-4636 clamp kept the LEADING MaxCohortMembers of
+	// the flat list, which for a grouped answer could return every project
+	// of team A and none of team B -- silently, with the caller unable to
+	// tell that a whole group had vanished.
+	Groups []ContextFabricProjectedCohortGroup `json:"groups,omitempty"`
 	// RankingTable (CHAOS-4398 PR3, design doc §4a) is the Rows-panel
 	// rendering of the cohort's ranking: one row per surviving member, in
 	// AttentionRank order, columns for rank/score/data_completeness/window
@@ -217,6 +234,18 @@ type ContextFabricProjectedCohort struct {
 	// false on every member) -- the same "not computed" distinction
 	// RankingComputed itself makes on the canonical member.
 	RankingTable []ContextFabricClaimedFactRow `json:"ranking_table,omitempty"`
+}
+
+// ContextFabricProjectedCohortGroup is one group of a projected grouped
+// cohort. It mirrors ContextFabricCohortGroup: the group subject, its members
+// by canonical id, its OWN completeness, and the size it had before any
+// narrowing.
+type ContextFabricProjectedCohortGroup struct {
+	Subject            ContextFabricSubjectRef `json:"subject"`
+	MemberCanonicalIDs []string                `json:"member_canonical_ids"`
+	Complete           bool                    `json:"complete"`
+	Truncated          bool                    `json:"truncated"`
+	Total              int                     `json:"total"`
 }
 
 // ContextFabricProjectedCohortMember keeps the canonical Rank so a consumer
@@ -317,9 +346,19 @@ type ContextFabricProjectionBudget struct {
 	DriversOmitted         int  `json:"drivers_omitted"`
 	WithheldDriversOmitted int  `json:"withheld_drivers_omitted"`
 	CohortMembersOmitted   int  `json:"cohort_members_omitted"`
-	FactsOmitted           int  `json:"facts_omitted"`
-	CandidatesOmitted      int  `json:"candidates_omitted"`
-	EvidenceRefsOmitted    int  `json:"evidence_refs_omitted"`
+	// CohortGroupsOmitted (CHAOS-4636) counts groups the clamp could not
+	// keep a single member of. It is tracked separately from
+	// CohortMembersOmitted for the same reason WithheldDriversOmitted is
+	// tracked separately from DriversOmitted: a reader who cannot see that a
+	// whole GROUP is missing reads a per-group answer as covering every
+	// group. Decision D2 (member-first) makes this rare by construction --
+	// every group survives with at least one member for as long as the
+	// budget admits any -- which is exactly why a non-zero value here is
+	// worth alerting on rather than expecting.
+	CohortGroupsOmitted int `json:"cohort_groups_omitted"`
+	FactsOmitted        int `json:"facts_omitted"`
+	CandidatesOmitted   int `json:"candidates_omitted"`
+	EvidenceRefsOmitted int `json:"evidence_refs_omitted"`
 	// LimitationsOmitted, WarningsOmitted, and CoverageOmitted exist
 	// because the canonical result bounds these arrays at 250 while the
 	// projection bounds them at 100 (see the Max*Count constants above).

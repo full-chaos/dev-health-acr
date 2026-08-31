@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -123,7 +124,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		//
 		// CHAOS-4523 codex P2 finding: the SAME truthful-accounting rule
 		// applies to Items. usage.Items carries the REAL total
-		// (itemCounts.total(), Paths included) -- Manager.Usage() records
+		// (itemCounts.Total(), Paths included) -- Manager.Usage() records
 		// this verbatim into the org/credential window (manager.go's
 		// complete()), so charging the budgeted() subset here would
 		// silently under-report every response that carries any Paths, the
@@ -134,7 +135,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		// Paths stops binding the gate without the recorded usage ever
 		// diverging from what was actually served.
 		usage := limits.ResourceUsage{
-			Items:  int64(itemCounts.total()),
+			Items:  int64(itemCounts.Total()),
 			Tokens: estimatedTokens,
 			Bytes:  measuredBytes,
 		}
@@ -200,16 +201,24 @@ func investigateRecovered(ctx context.Context, investigator contextfabric.Invest
 // from outside; now it is a specific, alertable signal that something reached
 // the route with no sentinel of its own.
 const (
-	contextFabricClassDeadline            = "deadline_exceeded"
-	contextFabricClassTimeBound           = "invalid_time_bound"
-	contextFabricClassRateLimited         = "rate_limited"
-	contextFabricClassUnavailable         = "dependency_unavailable"
-	contextFabricClassInterpretRejected   = "interpretation_rejected"
-	contextFabricClassSynthesisRejected   = "synthesis_rejected"
-	contextFabricClassModelOutput         = "model_output_invalid"
-	contextFabricClassNoSubjects          = "no_investigation_subjects"
-	contextFabricClassInvalidResult       = "invalid_result"
-	contextFabricClassPanic               = "panic"
+	contextFabricClassDeadline          = "deadline_exceeded"
+	contextFabricClassTimeBound         = "invalid_time_bound"
+	contextFabricClassRateLimited       = "rate_limited"
+	contextFabricClassUnavailable       = "dependency_unavailable"
+	contextFabricClassInterpretRejected = "interpretation_rejected"
+	contextFabricClassSynthesisRejected = "synthesis_rejected"
+	contextFabricClassModelOutput       = "model_output_invalid"
+	contextFabricClassNoSubjects        = "no_investigation_subjects"
+	contextFabricClassInvalidResult     = "invalid_result"
+	contextFabricClassPanic             = "panic"
+	// contextFabricClassBudgetRefusal (CHAOS-4636) is decision D5's PLANNED
+	// refusal: the engine measured its own assembled answer, re-synthesized
+	// once with a smaller input, and it still did not fit. It is a distinct
+	// class from the two 413s below it because it is the only one that
+	// carries a diagnosis -- the plan says which ceiling was exceeded and
+	// what narrower question would fit -- and because the fix for it is a
+	// planner change, not an operator one.
+	contextFabricClassBudgetRefusal       = "budget_refusal"
 	contextFabricClassUnclassified        = "unclassified"
 	contextFabricInvestigationFailureName = "context_fabric_investigation"
 )
@@ -236,6 +245,34 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 		return
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) {
+		return
+	}
+	// CHAOS-4636 / decision D5: the PLANNED, EXPLAINED refusal.
+	//
+	// Classified BEFORE the deadline check on purpose. The engine refuses
+	// rather than retrying when too little of the deadline remains to run a
+	// second synthesis safely, so this error and an exceeded deadline
+	// legitimately arrive together -- and reporting it as a timeout would
+	// hide the one diagnosis that says what to do about it. The request did
+	// not run out of time; the answer did not fit, and the engine declined
+	// to gamble the remaining deadline on a retry that would have 504'd.
+	//
+	// Still a 413, and still not retryable: the same question asked again
+	// produces the same oversized answer. What is new is that the response
+	// says which ceiling was exceeded, by how much, and what narrower
+	// question would fit -- instead of today's bare acr_rejected_request.
+	var budgetRefusal contextfabric.AnswerBudgetRefusal
+	if errors.As(err, &budgetRefusal) {
+		a.writeContextFabricFailure(w, r, err, contextFabricClassBudgetRefusal, http.StatusRequestEntityTooLarge, "invalid_request", "The Context Fabric answer did not fit the response budget", false, map[string]any{
+			"overrun":              string(budgetRefusal.Overrun),
+			"measured_items":       budgetRefusal.MeasuredItems,
+			"measured_bytes":       budgetRefusal.MeasuredBytes,
+			"max_items":            budgetRefusal.MaxItems,
+			"max_serialized_bytes": budgetRefusal.MaxSerializedBytes,
+			"question_family":      string(budgetRefusal.Family),
+			"narrower_question":    budgetRefusal.NarrowerQuestion,
+			"retry_attempted":      budgetRefusal.RetryAttempted,
+		})
 		return
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded) {
@@ -503,81 +540,46 @@ func (a *App) writeContextFabricRejectionError(w http.ResponseWriter, r *http.Re
 // consistency -- is diagnosable from its own log line and error details
 // without re-running with instrumentation added after the fact (CANONICAL
 // ARCHITECTURE's diagnosis-in-artifacts rule).
-type contextFabricItemCounts struct {
-	Candidates    int `json:"candidates"`
-	Drivers       int `json:"drivers"`
-	Paths         int `json:"paths"`
-	RemainingWork int `json:"remaining_work"`
-	ReadinessGaps int `json:"readiness_gaps"`
-	Conflicts     int `json:"conflicts"`
-	ClaimedFacts  int `json:"claimed_facts"`
-	CohortMembers int `json:"cohort_members"`
-}
-
-// total is every category contextFabricResultItems has always summed --
-// unchanged from before CHAOS-4523, and still what a bytes-exceeded
-// response measures and logs.
-func (c contextFabricItemCounts) total() int {
-	return c.Candidates + c.Drivers + c.Paths + c.RemainingWork + c.ReadinessGaps + c.Conflicts + c.ClaimedFacts + c.CohortMembers
-}
-
-// budgeted is the subset the ACR_MAX_ITEMS gate is meant to bound
-// (CHAOS-4523): total minus Paths. A ContextFabricRelationshipPath is
-// graph-evidence provenance -- Nodes/Edges/WhyRelevant/EvidenceRefIDs
-// supporting a driver or claim -- whose count scales with graph density
-// around the resolved subject, not with the size of the answer a client
-// renders: ScopeSection.tsx (web) renders SubjectResolution.Candidates,
-// which stays counted here, but nothing in the web Ask Dev client reads
-// result.paths today (the field exists for programmatic/audit consumers;
-// contracts/openapi carries it, no component consumes it). Charging one
-// path the same as one claimed fact meant a plain repository-status
-// question -- 3 claimed facts, 1 driver, 10 candidates, 14 items of real
-// answer content -- 413'd on 27 provenance paths nobody renders, at the
-// shipped ACR_MAX_ITEMS=30 default (CHAOS-4450 Run J Wall C,
-// req_751c7014.../req_f84f6773...: measured_items 42-43, max_items 30).
 //
-// This method is NOT what gets recorded as usage.Items or charged via
-// CompleteUsageWithBudget (CHAOS-4523 codex P2 finding): Manager.Usage()
-// records usage.Items verbatim into the org/credential window
-// (internal/limits/manager.go's complete()), so charging this shrunk
-// count would silently under-report every response carrying Paths -- the
-// exact false-accounting defect CompleteWithBudget's own doc comment
-// warns against, and the same truthful-accounting rule CHAOS-4355 already
-// established for Tokens. Both call sites instead record usage.Items =
-// total() (truthful) and widen override.MaxItems by Paths, so the GATE
-// condition `total <= MaxItems+Paths` is algebraically identical to
-// `budgeted <= MaxItems` without ever recording a number smaller than
-// what was actually served. budgeted() itself exists as the readable
-// single source of truth for that equivalence, and for tests to state the
-// pass/fail boundary directly instead of re-deriving it inline.
-func (c contextFabricItemCounts) budgeted() int {
-	return c.total() - c.Paths
-}
+// CHAOS-4636: the struct, its Total/Budgeted arithmetic and the counting
+// itself MOVED to internal/contracts/v1 (context_fabric_response_budget.go)
+// so the ENGINE can charge the identical numbers before it validates and
+// persists an answer. internal/api imports internal/contextfabric and not
+// the reverse, so a measurement defined here is unreachable from below; only
+// internal/contracts/v1 is imported by both planes. This alias keeps every
+// existing call site in this package reading the same way while there is now
+// exactly ONE definition -- the route's gate is an assertion over the
+// numbers the engine already checked, not a second, drifting measurement.
+//
+// The Paths-exclusion rationale that used to live on budgeted() here is
+// preserved verbatim beside the code that now performs it. In short: a
+// ContextFabricRelationshipPath is graph-evidence provenance whose count
+// scales with graph density around the resolved subject, not with the size
+// of the answer a client renders, and charging one path the same as one
+// claimed fact 413'd plain repository-status questions on provenance nobody
+// renders (CHAOS-4450 Run J Wall C). Both call sites still record
+// usage.Items = Total() (truthful accounting -- Manager.Usage() writes it
+// verbatim into the org/credential window) and widen override.MaxItems by
+// Paths, so the GATE condition `total <= MaxItems+Paths` stays algebraically
+// identical to `Budgeted() <= MaxItems` without ever recording a number
+// smaller than what was actually served.
+type contextFabricItemCounts = contractsv1.ContextFabricResultItemCounts
 
+// contextFabricResultItemCounts charges every collection the item budget
+// covers. It delegates: see contextFabricItemCounts above for why the
+// definition is not here.
 func contextFabricResultItemCounts(result contextfabric.InvestigationResult) contextFabricItemCounts {
-	counts := contextFabricItemCounts{
-		Candidates:    len(result.SubjectResolution.Candidates),
-		Drivers:       len(result.Drivers),
-		Paths:         len(result.Paths),
-		RemainingWork: len(result.RemainingWork),
-		ReadinessGaps: len(result.ReadinessGaps),
-		Conflicts:     len(result.Conflicts),
-		ClaimedFacts:  len(result.ClaimedFacts),
-	}
-	if result.Cohort != nil {
-		counts.CohortMembers = len(result.Cohort.Members)
-	}
-	return counts
+	return contractsv1.CountContextFabricResultItems(result)
 }
 
-// contextFabricResultItems is contextFabricResultItemCounts(result).total()
+// contextFabricResultItems is contextFabricResultItemCounts(result).Total()
 // -- kept as a standalone function (CHAOS-3755 M3 probe,
 // TestContextFabricResultItemsCountsClaimedFacts) so the "every category
 // counts toward measured size" contract that test pins stays expressed
 // exactly as before. It is no longer what is charged against ACR_MAX_ITEMS
-// -- see contextFabricItemCounts.budgeted.
+// -- see contractsv1.ContextFabricResultItemCounts.Budgeted.
 func contextFabricResultItems(result contextfabric.InvestigationResult) int {
-	return contextFabricResultItemCounts(result).total()
+	return contextFabricResultItemCounts(result).Total()
 }
 
 // marshalContextFabricResponse encodes a Context Fabric response payload
@@ -627,19 +629,19 @@ func MarshalContextFabricResponse(payload any) (encoded []byte, measuredBytes in
 // counts carries the CHAOS-4523 per-category breakdown so an "items" 413
 // names exactly which categories drove the measured count -- e.g.
 // distinguishing 27 provenance Paths (not charged, see
-// contextFabricItemCounts.budgeted) from 30 genuine ClaimedFacts/Drivers
+// contractsv1.ContextFabricResultItemCounts.Budgeted) from 30 genuine ClaimedFacts/Drivers
 // (charged) without re-running the request with a debugger attached.
 func (a *App) logContextFabricResponseBudgetExceeded(r *http.Request, reason string, measuredBytes, maximumBytes, estimatedTokens int64, counts contextFabricItemCounts) {
 	a.logger.WarnContext(r.Context(), "context fabric response exceeded service limits",
 		"request_id", RequestID(r.Context()), "failure_class", "context_fabric_response_budget",
 		"reason", reason, "measured_bytes", measuredBytes, "max_serialized_bytes", maximumBytes,
-		// measured_items is the TRUTHFUL total (counts.total(), Paths
+		// measured_items is the TRUTHFUL total (counts.Total(), Paths
 		// included) -- the same value recorded as usage.Items -- not the
 		// budgeted() subset the gate actually compared against; that
 		// subset and its effective ceiling are max_items+items_paths, so
 		// a reader can derive "budgeted = measured_items - items_paths"
 		// without a false accounting record (CHAOS-4523 codex P2 finding).
-		"estimated_tokens", estimatedTokens, "measured_items", counts.total(),
+		"estimated_tokens", estimatedTokens, "measured_items", counts.Total(),
 		"max_items", a.config.MaxItems, "max_items_effective_for_paths_exclusion", a.config.MaxItems+counts.Paths,
 		"items_candidates", counts.Candidates, "items_drivers", counts.Drivers, "items_paths", counts.Paths,
 		"items_remaining_work", counts.RemainingWork, "items_readiness_gaps", counts.ReadinessGaps,

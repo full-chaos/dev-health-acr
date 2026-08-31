@@ -178,6 +178,9 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	"structured.clarification.candidates[].match_reasons[]",
 	"structured.cohort.rationale",
 	"structured.cohort.members[].subject.label",
+	// CHAOS-4636: a projected group's subject label is the same
+	// graph-derived display text a member's label is.
+	"structured.cohort.groups[].subject.label",
 	"structured.cohort.members[].inclusion_reasons[]",
 	// CHAOS-4398 PR3: RankingTable rows reuse the SAME generic scalar-bag
 	// row shape key_facts[].rows[].fields{}.string already gets below --
@@ -332,6 +335,11 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.cohort.exclusions[].reason",
 	"structured.cohort.exclusions[].subject.label",
 	"structured.cohort.members[].subject.label",
+	// CHAOS-4636: a cohort GROUP's subject label is the same graph-derived
+	// display text a member's or an exclusion's label is, and carries the
+	// same standing -- the group axis added a new place a canonical label
+	// appears, not a new kind of value.
+	"structured.cohort.groups[].subject.label",
 	"structured.conflicts[].subjects[].label",
 	"structured.coverage.sources[].reason",
 	"structured.drivers[].affected_subjects[].label",
