@@ -630,11 +630,21 @@ func datedFactTrendShape(fact ClaimedFact) (*contractsv1.ContextFabricRenderShap
 	if !table.HasMeasure(fact.Field) {
 		return nil, trendStageClaimFieldNotAMeasure
 	}
-	// Key arity is 1 for a time_series by contract; this is the belt to
-	// that braces, so a malformed declaration that somehow reached here
-	// refuses instead of indexing out of range.
+	// Key arity is 1 for a time_series by contract (both the producer's
+	// FactTable.Validate and the wire's validateClaimedFactTable enforce
+	// it), so this is the belt to that braces: a malformed declaration
+	// that somehow reached here refuses instead of indexing out of range.
+	//
+	// The reason is no_time_series_table, NOT claim_field_not_a_measure --
+	// caught by re-reading this file against the CHAOS-4621 class rather
+	// than by a test, since the branch is unreachable. A declaration
+	// calling itself a time_series while carrying two identity columns is
+	// not a time_series, and saying "the claim's field is not a measure"
+	// would blame the claim for the producer's declaration. Recording the
+	// WRONG reason is the same defect class as recording none: two of the
+	// four instances CHAOS-4621 was filed for were exactly that.
 	if len(table.Key) != 1 {
-		return nil, trendStageClaimFieldNotAMeasure
+		return nil, trendStageNoTimeSeriesTable
 	}
 	axis := table.Key[0]
 	rows := fact.Rows
