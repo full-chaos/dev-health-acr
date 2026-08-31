@@ -136,12 +136,25 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	limitationsOmitted += result.LimitationsDisplaced
 	warnings, warningsOmitted := boundedNarrative(result.Warnings, clamp)
 	coverage, coverageOmitted := projectCoverage(result, clamp)
+	// CHAOS-4690: Details share CoverageSummary's own entry cap and its
+	// omission counter -- the design (§7.2) treats the structured detail
+	// array as riding the same coverage-entry budget as the source array,
+	// not a second independently-declared cap.
+	coverageDetails, coverageDetailsOmitted := projectCoverageDetails(result)
+	coverageOmitted += coverageDetailsOmitted
 	// CHAOS-4415: shapes are carried after the cohort and the facts they
 	// cite have been cut, never before -- a shape is admitted only when
 	// this projection still lets its reader check every number it plots.
 	renderShapes, renderShapesOmitted := projectRenderShapes(result, cohort, facts)
 	evidence := index.ids()
 	evidenceOmitted := countUnindexedEvidence(result, index)
+	// CHAOS-4690: EvidenceRefLabels is filtered to EXACTLY the refs this
+	// projection retained (evidence, above) -- never the full canonical
+	// closure, which can include refs a tight budget already dropped. A
+	// nil canonical map (the legacy-result exception, design §7.3) stays
+	// nil; a non-nil canonical map always projects to a non-nil map, even
+	// when no refs survived the budget.
+	evidenceRefLabels := projectEvidenceRefLabels(result, evidence)
 
 	projection := contractsv1.ContextFabricAnswerProjection{
 		SchemaVersion: contractsv1.ContextFabricAnswerProjectionSchema,
@@ -163,6 +176,8 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		PrincipalDrivers:  drivers,
 		KeyFacts:          facts,
 		CoverageSummary:   coverage,
+		CoverageDetails:   coverageDetails,
+		EvidenceRefLabels: evidenceRefLabels,
 		Temporal:          projectTemporal(result),
 		CoveragePartial:   result.Coverage.Partial,
 		Limitations:       limitations,
@@ -922,6 +937,10 @@ func truncateRunes(value string, maxLength int) string {
 // answer -- but the canonical result allows 250 sources against the
 // projection's 100, so the overflow is truncated and DECLARED rather than
 // dropped in silence (codex round-1 F5).
+//
+// Label and StateLabel (CHAOS-4690 item 4) are copied verbatim from each
+// retained source observation -- the engine already stamped them from the
+// display-label registry, so the projection restates rather than recomputes.
 func projectCoverage(result contractsv1.ContextFabricInvestigationResult, clamp *clamper) ([]contractsv1.ContextFabricProjectedCoverage, int) {
 	seen := make(map[string]struct{}, len(result.Coverage.Sources))
 	entries := make([]contractsv1.ContextFabricProjectedCoverage, 0, len(result.Coverage.Sources))
@@ -944,12 +963,66 @@ func projectCoverage(result contractsv1.ContextFabricInvestigationResult, clamp 
 			continue
 		}
 		entries = append(entries, contractsv1.ContextFabricProjectedCoverage{
-			Source: clamp.text(name, contractsv1.ContextFabricProjectedCoverageSourceMaxLength),
-			State:  source.State,
-			Reason: clamp.text(storedText(source.Reason), contractsv1.ContextFabricProjectedCoverageReasonMaxLength),
+			Source:     clamp.text(name, contractsv1.ContextFabricProjectedCoverageSourceMaxLength),
+			State:      source.State,
+			Reason:     clamp.text(storedText(source.Reason), contractsv1.ContextFabricProjectedCoverageReasonMaxLength),
+			Label:      source.Label,
+			StateLabel: source.StateLabel,
 		})
 	}
 	return entries, omitted
+}
+
+// projectCoverageDetails carries the canonical result's structured coverage
+// details (CHAOS-4690 item 1) onto the projection verbatim -- same type,
+// same fields, nothing rewritten -- bounded by the SAME entry cap
+// projectCoverage uses for CoverageSummary. Overflow is counted into the
+// caller's coverage-omission total rather than a second, independent
+// counter: the design (§7.2) treats details as sharing CoverageSummary's
+// budget, so a caller reading CoverageOmitted sees one honest number for
+// "coverage content this projection could not carry," not two disjoint ones
+// that could disagree about whether coverage was truncated at all.
+func projectCoverageDetails(result contractsv1.ContextFabricInvestigationResult) ([]contractsv1.ContextFabricCoverageDetail, int) {
+	details := result.Coverage.Details
+	if len(details) == 0 {
+		return nil, 0
+	}
+	if len(details) <= contractsv1.ContextFabricProjectedCoverageMaxCount {
+		return append([]contractsv1.ContextFabricCoverageDetail(nil), details...), 0
+	}
+	kept := append([]contractsv1.ContextFabricCoverageDetail(nil), details[:contractsv1.ContextFabricProjectedCoverageMaxCount]...)
+	omitted := len(details) - contractsv1.ContextFabricProjectedCoverageMaxCount
+	return kept, omitted
+}
+
+// projectEvidenceRefLabels filters the canonical result's evidence-ref
+// label map (CHAOS-4690 item 4) to EXACTLY the refs this projection
+// retained in EvidenceRefIDs (retained, the evidence index's ids()) --
+// never the full canonical closure, which can name refs a tight evidence
+// budget already dropped from the projection entirely. A retained ref
+// without a canonical label cannot happen for a validly-written result
+// (EvidenceRefLabels, when non-nil, keys the result's WHOLE evidence-ref
+// closure exactly, and every projected ref is drawn from that same
+// closure), so the lookup below is a defensive comma-ok, not a silent
+// narrowing.
+//
+// A nil canonical map is the named legacy exception (design §7.3): a
+// stored result written before this field existed carries no map, and the
+// projection must not synthesize one. A non-nil canonical map always
+// projects to a non-nil map, even when the evidence budget retained
+// nothing -- "the result carries labels but none of them made the cut" is
+// a different, honest statement from "this result predates labels."
+func projectEvidenceRefLabels(result contractsv1.ContextFabricInvestigationResult, retained []string) map[string]string {
+	if result.EvidenceRefLabels == nil {
+		return nil
+	}
+	labels := make(map[string]string, len(retained))
+	for _, ref := range retained {
+		if label, ok := result.EvidenceRefLabels[ref]; ok {
+			labels[ref] = label
+		}
+	}
+	return labels
 }
 
 // projectReceipts emits a continuation handle for every subject this result
