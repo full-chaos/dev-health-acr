@@ -301,3 +301,26 @@ func (e *Engine) recordPlanNarrowingStep(plan *AnswerPlan, step PlanNarrowing) {
 	}
 	plan.Narrowing = append(plan.Narrowing, step)
 }
+
+// stampAnswerPlan attaches the plan to a result produced by one of the
+// EARLY-RETURN paths -- a window-confirmation clarification, or a terminal
+// result with no investigable subject.
+//
+// Those paths are not an afterthought here; for a grouped question, turn 1 IS
+// one of them. A caller asked to confirm a window on "the project statuses for
+// each team" needs to know the answer was planned as a grouped cohort just as
+// much as the caller of turn 2 does, and an operator diagnosing a
+// clarification loop needs the family that produced it. Leaving the plan off
+// these paths would mean the disclosure existed only where the answer already
+// succeeded.
+//
+// Never overwrites a plan a caller path already stamped, and never stamps onto
+// a zero result -- an errored return carries no answer to describe.
+func stampAnswerPlan(result InvestigationResult, plan AnswerPlan) InvestigationResult {
+	if result.ResultID == "" || result.AnswerPlan != nil {
+		return result
+	}
+	stamped := plan
+	result.AnswerPlan = &stamped
+	return result
+}
