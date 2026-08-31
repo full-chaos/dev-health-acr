@@ -760,7 +760,19 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 			if fallbackErr == nil {
 				receipt.FallbackUsed = true
 				receipt.Outcome = "fallback"
-				return interpreted, mergeFallbackReceipt(receipt, fallbackReceipt), nil
+				// CHAOS-4631 codex round 3, P2: assign the MERGED receipt back
+				// onto the outer `receipt` variable before returning it, not
+				// just as the return value. logInterpretDecision's defer reads
+				// `receipt` (mutated in place, per this function's own
+				// preamble comment) -- returning mergeFallbackReceipt's result
+				// without also writing it back left the deferred telemetry
+				// read seeing the PRIMARY's stale Model/ModelVersion even
+				// though Outcome/FallbackUsed correctly showed "fallback":
+				// the log line reported model_id=<primary> for an answer the
+				// fallback model actually produced. EXECUTED by codex against
+				// a real fallback-configured pair.
+				receipt = mergeFallbackReceipt(receipt, fallbackReceipt)
+				return interpreted, receipt, nil
 			}
 			// Both the primary and the fallback failed (CHAOS-3770 F4): the
 			// receipt must not claim FallbackUsed/Outcome="fallback", which
@@ -797,7 +809,11 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 			if fallbackErr == nil {
 				receipt.FallbackUsed = true
 				receipt.Outcome = "fallback"
-				return fallback, mergeFallbackReceipt(receipt, fallbackReceipt), nil
+				// Same fix as the generation-error branch above -- write the
+				// merged receipt back onto `receipt` so the deferred
+				// telemetry read reports the fallback's own model identity.
+				receipt = mergeFallbackReceipt(receipt, fallbackReceipt)
+				return fallback, receipt, nil
 			}
 			// Both legs failed -- CHAOS-3770 F4 residual: this branch (the
 			// primary's output was parseable but semantically invalid) had

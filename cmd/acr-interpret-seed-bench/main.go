@@ -56,7 +56,7 @@ func run(n int, orgID, outPath string) error {
 	// all-"(error)" distribution table with a clean 0 exit code reads as a
 	// completed measurement, and it is not one (codex round 1, P3 EXECUTED
 	// against an unreachable endpoint).
-	validationErr := interpretseedbench.ValidateResults(results)
+	validationErr := interpretseedbench.ValidateResults(results, interpretseedbench.AcceptanceQuestions)
 
 	if outPath != "" {
 		encoded, err := json.MarshalIndent(results, "", "  ")

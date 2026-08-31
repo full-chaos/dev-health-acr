@@ -3,6 +3,7 @@ package interpretseedbench
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -231,11 +232,12 @@ func TestCostSummariesExcludeFallbackSamples(t *testing.T) {
 // ValidateResults must return a non-nil error for exactly that shape.
 func TestValidateResultsFailsLoudlyWhenEverySampleErrored(t *testing.T) {
 	t.Parallel()
+	questions := []Question{{ID: "q1"}}
 	samples := []Sample{
 		{QuestionID: "q1", Sample: 0, Error: "connection refused"},
 		{QuestionID: "q1", Sample: 1, Error: "connection refused"},
 	}
-	if err := ValidateResults(samples); err == nil {
+	if err := ValidateResults(samples, questions); err == nil {
 		t.Fatal("ValidateResults() = nil, want a non-nil error when every sample failed")
 	}
 }
@@ -248,26 +250,55 @@ func TestValidateResultsFailsLoudlyWhenEverySampleErrored(t *testing.T) {
 // distribution/cost table. EXECUTED by codex against a loopback provider.
 func TestValidateResultsFailsLoudlyWhenEverySampleIsFallback(t *testing.T) {
 	t.Parallel()
+	questions := []Question{{ID: "q1"}}
 	samples := []Sample{
 		{QuestionID: "q1", Sample: 0, Shape: "single_subject", Outcome: "fallback", FallbackUsed: true},
 		{QuestionID: "q1", Sample: 1, Shape: "single_subject", Outcome: "fallback", FallbackUsed: true},
 	}
-	if err := ValidateResults(samples); err == nil {
+	if err := ValidateResults(samples, questions); err == nil {
 		t.Fatal("ValidateResults() = nil, want a non-nil error when every sample only produced fallback data")
 	}
 }
 
+// TestValidateResultsFailsLoudlyWhenOneQuestionIsEntirelyFallback is codex
+// round 3's red-first pin: round 2's fix checked "is there any usable
+// sample ANYWHERE in the run", which passes when four of five questions
+// succeed and the fifth is entirely fallback-only -- exit 0, with that
+// question's row of the required per-question table silently empty.
+// EXECUTED by codex: one fallback-only question mixed with four successful
+// ones. ValidateResults must fail per-question, naming the incomplete one.
+func TestValidateResultsFailsLoudlyWhenOneQuestionIsEntirelyFallback(t *testing.T) {
+	t.Parallel()
+	questions := []Question{{ID: "q1"}, {ID: "q2"}}
+	samples := []Sample{
+		{QuestionID: "q1", Sample: 0, Shape: "discovered_cohort"},
+		{QuestionID: "q2", Sample: 0, Shape: "single_subject", Outcome: "fallback", FallbackUsed: true},
+	}
+	err := ValidateResults(samples, questions)
+	if err == nil {
+		t.Fatal("ValidateResults() = nil, want a non-nil error when one question produced zero usable samples")
+	}
+	if !strings.Contains(err.Error(), "q2") {
+		t.Fatalf("ValidateResults() error = %q, want it to name the incomplete question %q", err.Error(), "q2")
+	}
+	if strings.Contains(err.Error(), "q1") {
+		t.Fatalf("ValidateResults() error = %q, must not blame the question that actually completed (q1)", err.Error())
+	}
+}
+
 // TestValidateResultsPassesWithPartialFailures proves the fix does not
-// overcorrect: a handful of transient failures mixed with real samples is
-// exactly the case Run's own doc comment says must NOT be treated as a
-// Run-level fault.
+// overcorrect: a handful of transient failures mixed with real samples,
+// where every question still has at least one usable sample, is exactly
+// the case Run's own doc comment says must NOT be treated as a Run-level
+// fault.
 func TestValidateResultsPassesWithPartialFailures(t *testing.T) {
 	t.Parallel()
+	questions := []Question{{ID: "q1"}}
 	samples := []Sample{
 		{QuestionID: "q1", Sample: 0, Shape: "discovered_cohort"},
 		{QuestionID: "q1", Sample: 1, Error: "connection refused"},
 	}
-	if err := ValidateResults(samples); err != nil {
+	if err := ValidateResults(samples, questions); err != nil {
 		t.Fatalf("ValidateResults() = %v, want nil for a partial failure", err)
 	}
 }
@@ -276,7 +307,7 @@ func TestValidateResultsPassesWithPartialFailures(t *testing.T) {
 // samples is not a measurement either.
 func TestValidateResultsFailsOnEmptyInput(t *testing.T) {
 	t.Parallel()
-	if err := ValidateResults(nil); err == nil {
-		t.Fatal("ValidateResults(nil) = nil, want a non-nil error")
+	if err := ValidateResults(nil, []Question{{ID: "q1"}}); err == nil {
+		t.Fatal("ValidateResults(nil, ...) = nil, want a non-nil error")
 	}
 }

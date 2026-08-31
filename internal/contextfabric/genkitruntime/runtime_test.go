@@ -1235,6 +1235,30 @@ func TestDecisionEventPrimaryFailureClassificationSurvivesSuccessfulFallback(t *
 		if got := attrString(t, events[0].Attrs, "primary_failure_classification"); got != "rate_limited" {
 			t.Fatalf("primary_failure_classification = %q, want %q -- the primary's own failure must stay visible even though receipt.Outcome now reads %q", got, "rate_limited", "fallback")
 		}
+		// CHAOS-4631 codex round 3, P2: the decision event's model_id/
+		// model_version must name the leg that actually produced the
+		// answer -- the FALLBACK's identity (validReceipt's
+		// "deterministic"/"v1") -- not the primary's
+		// ("test/model"/"test-model-v1"), even though outcome/fallback_used
+		// already correctly say "fallback" happened. Before the fix, these
+		// fields read the primary's stale Model/ModelVersion because
+		// mergeFallbackReceipt's result was returned to the caller but
+		// never written back onto the `receipt` variable the deferred log
+		// line reads. prompt_version is DELIBERATELY still the primary's
+		// ("interpret-v1", mustRuntime's default) -- mergeFallbackReceipt's
+		// own doc comment lists exactly Provider/Model/ModelVersion as
+		// fallback-sourced; PromptVersion names which prompt template asked
+		// the question, which is the same template regardless of which
+		// model answered it, so it is correctly NOT part of that merge.
+		if got := attrString(t, events[0].Attrs, "model_id"); got != "deterministic" {
+			t.Fatalf("model_id = %q, want %q (the fallback's own model, not the primary's)", got, "deterministic")
+		}
+		if got := attrString(t, events[0].Attrs, "model_version"); got != "v1" {
+			t.Fatalf("model_version = %q, want %q (the fallback's own version)", got, "v1")
+		}
+		if got := attrString(t, events[0].Attrs, "prompt_version"); got != "interpret-v1" {
+			t.Fatalf("prompt_version = %q, want %q (the primary's -- deliberately not part of the fallback merge)", got, "interpret-v1")
+		}
 	})
 
 	t.Run("synthesize_semantically_invalid", func(t *testing.T) {

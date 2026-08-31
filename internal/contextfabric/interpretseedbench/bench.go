@@ -26,6 +26,7 @@ package interpretseedbench
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -141,12 +142,22 @@ func Run(ctx context.Context, interpreter Interpreter, principal storage.Princip
 
 // ValidateResults is the "a measurement that did not happen must FAIL,
 // loudly" check (AGENTS.md's verification rules) for this tool specifically:
-// a run that produced no USABLE data at all -- no distribution and no cost
-// row for any question -- must never exit 0. Run itself returns a nil error
-// even for a total wipeout (recording failures is correct for the ordinary
-// case of a handful of transient failures mixed with real samples; a
-// Run-level fault is the wrong signal for that). Call this after Run and
+// a run that produced no USABLE data for one of its questions -- no
+// distribution and no cost row for that question -- must never exit 0. Run
+// itself returns a nil error even for a total wipeout (recording failures
+// is correct for the ordinary case of a handful of transient failures
+// mixed with real samples; a Run-level fault is the wrong signal for that).
+// Call this after Run, with the SAME questions list Run was given, and
 // treat a non-nil error as a hard failure (non-zero exit), not a warning.
+//
+// Checked PER QUESTION, not just globally (codex round 3, P2: round 2's
+// global "at least one usable sample anywhere in the run" check passed a
+// run where four of five questions succeeded and the fifth was entirely
+// fallback-only -- exit 0, but that question's row of the required table
+// was silently empty. EXECUTED against a loopback provider, one
+// fallback-only question mixed with four successful ones). The measurement
+// this ticket promises is n samples for EVERY acceptance question, so
+// "some question somewhere got data" is not sufficient completeness.
 //
 // "Usable" mirrors CostSummaries' own filter exactly (isUsableSample,
 // shared with it below) -- Error=="" AND !FallbackUsed. It is DELIBERATELY
@@ -156,25 +167,25 @@ func Run(ctx context.Context, interpreter Interpreter, principal storage.Princip
 // shrink its own denominator. Cost has no equivalent "show the zero" case --
 // a failed call's zero usage would only understate the real per-turn-1
 // cost -- so CostSummaries and this check share one criterion instead.
-//
-// Codex round 2 caught the gap this closes: round 1's fix counted only
-// Error, so an all-FallbackUsed run (every sample errored on the primary,
-// then a configured fallback quietly answered every one) had zero Error
-// samples, passed the round-1 check, and still exited 0 with an entirely
-// empty cost table -- EXECUTED against a loopback provider.
-func ValidateResults(samples []Sample) error {
+func ValidateResults(samples []Sample, questions []Question) error {
 	if len(samples) == 0 {
 		return fmt.Errorf("no samples were run")
 	}
-	valid := 0
+	usableByQuestion := make(map[string]int, len(questions))
 	for _, s := range samples {
 		if isUsableSample(s) {
-			valid++
+			usableByQuestion[s.QuestionID]++
 		}
 	}
-	if valid == 0 {
-		return fmt.Errorf("0 of %d samples produced usable data -- no measurement was actually taken (last sample: error=%q fallback_used=%v)",
-			len(samples), samples[len(samples)-1].Error, samples[len(samples)-1].FallbackUsed)
+	var incomplete []string
+	for _, q := range questions {
+		if usableByQuestion[q.ID] == 0 {
+			incomplete = append(incomplete, q.ID)
+		}
+	}
+	if len(incomplete) > 0 {
+		return fmt.Errorf("%d of %d questions produced ZERO usable samples -- no measurement was taken for: %s",
+			len(incomplete), len(questions), strings.Join(incomplete, ", "))
 	}
 	return nil
 }
