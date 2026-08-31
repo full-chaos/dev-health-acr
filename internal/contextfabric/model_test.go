@@ -214,7 +214,7 @@ func validInvestigationRequestWithConfirmedWindow() InvestigationRequest {
 
 func validInvestigationResult() InvestigationResult {
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
-	return InvestigationResult{
+	result := InvestigationResult{
 		SchemaVersion: InvestigationResultSchemaV1,
 		ResultID:      "result_12345678",
 		RequestID:     "request_12345678",
@@ -243,6 +243,8 @@ func validInvestigationResult() InvestigationResult {
 		DeterministicAnswer: "Ask Dev is not release-ready because required acceptance work remains open.",
 		Warnings:            []string{},
 	}
+	result.Completeness = ComputeAnswerCompleteness(result)
+	return result
 }
 
 func validProjectionBatch() ProjectionBatch {

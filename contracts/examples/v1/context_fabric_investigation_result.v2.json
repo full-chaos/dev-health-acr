@@ -86,5 +86,11 @@
         "offer_source": "engine"
       }
     ]
+  },
+  "completeness": {
+    "terminal_status": "clarification_required",
+    "terminal_reason": "clarification_reason_disclosed",
+    "claimed_facts_count": 0,
+    "rows_count": 0
   }
 }

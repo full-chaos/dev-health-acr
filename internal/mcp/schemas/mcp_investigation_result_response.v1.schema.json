@@ -113,6 +113,9 @@
         "cohort": {
           "$ref": "#/$defs/context_fabric_common.v1/$defs/Cohort"
         },
+        "completeness": {
+          "$ref": "#/$defs/context_fabric_common.v1/$defs/AnswerCompleteness"
+        },
         "confirmed_structure": {
           "items": {
             "$ref": "#/$defs/context_fabric_common.v1/$defs/ConfirmedStructureEntry"
@@ -312,7 +315,8 @@
         "versions",
         "deterministic_answer",
         "warnings",
-        "reused"
+        "reused",
+        "completeness"
       ],
       "title": "ACR Context Fabric Investigation Result v1",
       "type": "object"
@@ -488,6 +492,73 @@
             "canonical_id",
             "matched_term_hash",
             "offer_source"
+          ],
+          "type": "object"
+        },
+        "AnswerCompleteness": {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "else": {
+                "required": [
+                  "terminal_reason"
+                ]
+              },
+              "if": {
+                "properties": {
+                  "terminal_status": {
+                    "const": "complete"
+                  }
+                },
+                "required": [
+                  "terminal_status"
+                ]
+              },
+              "then": {
+                "not": {
+                  "required": [
+                    "terminal_reason"
+                  ]
+                }
+              }
+            }
+          ],
+          "description": "CHAOS-4413: promotes the answer-rate/terminal-state measurement (formerly harness-only telemetry, CHAOS-4386) into the public contract. terminal_status/terminal_reason answer WHY the answer stopped where it did; claimed_facts_count/rows_count answer HOW MUCH of an answer is here -- the un-clamped totals, independent of any bounded consumer's own projection budget.",
+          "properties": {
+            "claimed_facts_count": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rows_count": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "terminal_reason": {
+              "description": "Absent (or empty) exactly when terminal_status is complete -- there is nothing to disclose. Present and one of these closed values on every other status; never the engine's or a model's own raw text.",
+              "enum": [
+                "clarification_reason_disclosed",
+                "degraded_reason_disclosed",
+                "limitation_disclosed",
+                "warning_disclosed",
+                "undisclosed"
+              ],
+              "type": "string"
+            },
+            "terminal_status": {
+              "enum": [
+                "complete",
+                "partial",
+                "degraded",
+                "clarification_required",
+                "no_match"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_status",
+            "claimed_facts_count",
+            "rows_count"
           ],
           "type": "object"
         },
@@ -3026,7 +3097,7 @@
           "type": "object"
         },
         "RelativeWindowID": {
-          "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 \u00a75.1).",
+          "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 §5.1).",
           "enum": [
             "trailing_30d",
             "trailing_90d",
@@ -4144,7 +4215,7 @@
               "type": "string"
             },
             "model_identity": {
-              "description": "CHAOS-3782: the provider/model that produced this result's synthesis, e.g. \"openai-compatible/gpt-5-nano\". Never a bare vendor name. Optional: rows persisted before this field existed (or by any writer with answer reuse disabled) omit it entirely; absence never blocks reading an existing result, and never makes that result reuse-eligible either (reuse also requires question_hash, absent on the same rows for the same reason). maxLength is provider (<=256) + \"/\" + model (<=256) = 513, not the 256 shared by every other field here -- those are short deployment/prompt version tokens ACR itself controls.",
+              "description": "CHAOS-3782: the provider/model that produced this result's synthesis, e.g. \"openai-compatible/gpt-5-nano\". Never a bare vendor name. Optional: rows persisted before this field existed (or by any writer with answer reuse disabled) omit it entirely; absence never blocks reading an existing result, and never makes that result reuse-eligible either (reuse also requires question_hash, absent on the same rows for the same reason). maxLength is provider (\u003c=256) + \"/\" + model (\u003c=256) = 513, not the 256 shared by every other field here -- those are short deployment/prompt version tokens ACR itself controls.",
               "maxLength": 513,
               "minLength": 1,
               "type": "string"

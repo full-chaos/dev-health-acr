@@ -862,5 +862,10 @@
     "rationale": "Matched every team owning at least one repository in the org.",
     "complete": true,
     "truncated": false
+  },
+  "completeness": {
+    "terminal_status": "complete",
+    "claimed_facts_count": 4,
+    "rows_count": 2
   }
 }

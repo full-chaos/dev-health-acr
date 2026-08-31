@@ -103,7 +103,7 @@ func (f fakeInvestigator) Investigate(context.Context, storage.Principal, contex
 // text, never real corpus content -- this repo's own PII-withholding
 // discipline applies to test fixtures too.
 func minimalValidStalledResult(structureNeeds *contractsv1.ContextFabricStructureNeeds) contextfabric.InvestigationResult {
-	return contextfabric.InvestigationResult{
+	result := contextfabric.InvestigationResult{
 		SchemaVersion: contextfabric.InvestigationResultSchemaV1,
 		ResultID:      "result_trial_fake0001",
 		RequestID:     "request_trial000000",
@@ -138,6 +138,8 @@ func minimalValidStalledResult(structureNeeds *contractsv1.ContextFabricStructur
 		Warnings:            []string{},
 		StructureNeeds:      structureNeeds,
 	}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+	return result
 }
 
 // minimalValidStructureNeeds is the smallest StructureNeeds block that

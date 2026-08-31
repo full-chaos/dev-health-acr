@@ -347,5 +347,10 @@
       "provenance": "clarification_confirmed",
       "disposition": "applied"
     }
-  ]
+  ],
+  "completeness": {
+    "terminal_status": "complete",
+    "claimed_facts_count": 4,
+    "rows_count": 2
+  }
 }

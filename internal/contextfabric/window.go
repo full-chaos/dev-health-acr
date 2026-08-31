@@ -1241,6 +1241,10 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 	if len(echo) > 0 {
 		result.ConfirmedStructure = echo
 	}
+	// CHAOS-4413: this window-veto path is its own independent exit from
+	// Investigate, so it stamps completeness itself, immediately before
+	// its own Validate -- same placement rule as everywhere else.
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
@@ -1532,6 +1536,10 @@ func (e *Engine) windowConfirmationRequiredResult(
 	// would be rejected"). A V2 gated result (membership-verify anchor
 	// offers) would fail V1's own AnchorOptions shape check here
 	// otherwise. Mirrors terminalResult's identical dispatch (unresolved.go).
+	// CHAOS-4413: this window-gated terminal path is its own independent
+	// exit from Investigate, so it stamps completeness itself, immediately
+	// before its own Validate -- same placement rule as everywhere else.
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := ValidateResult(result); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}

@@ -253,6 +253,48 @@ func TestAC_3782_2_ReuseMarksResponseWithReusedResultIdentifierAndGenerationTime
 	}
 }
 
+// TestReuseHitBackfillsCompletenessOnALegacyStoredRow is CHAOS-4413's own
+// regression proof for a codex xhigh round-1 P1 (confirmed, executed): a
+// row persisted before Completeness existed reads back through
+// ValidateStored with the exact zero value (the legacy exemption), but a
+// reuse hit serves that same row as a FRESH answer to a new request --
+// before this fix, `reused` returned from Investigate() still carrying
+// the zero-value Completeness, so a bounded consumer projecting it (or
+// re-validating it under write bounds) 500'd on a document the write path
+// would never have produced. Investigate() now backfills a reuse hit's
+// Completeness (a pure function of fields the row already carries) before
+// returning it, exactly as it stamps a decisive result.
+func TestReuseHitBackfillsCompletenessOnALegacyStoredRow(t *testing.T) {
+	t.Parallel()
+
+	project, candidate := reusableCandidate()
+	// Simulate a row persisted before CHAOS-4413: the exact zero value,
+	// not merely "wrong".
+	candidate.Completeness = AnswerCompleteness{}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph:   graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Results: &resultStoreStub{},
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return candidate, true, nil
+		}),
+	})
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !result.Reused {
+		t.Fatal("premise: this must be a reuse hit")
+	}
+	want := ComputeAnswerCompleteness(candidate)
+	if result.Completeness != want {
+		t.Fatalf("result.Completeness = %+v, want backfilled %+v -- a reuse hit must never re-serve a legacy zero-value completeness block", result.Completeness, want)
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("the backfilled reuse result must validate under write bounds: %v", err)
+	}
+}
+
 // TestAC_3782_6_LostSubjectAuthorizationFailsReuseRecheck binds AC-3782-6's
 // subject leg: a caller who has lost access to a subject in the stored
 // result does not receive that result -- ResolveSubjects no longer

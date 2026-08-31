@@ -403,6 +403,11 @@ func (e *Engine) terminalResult(
 	// above from the SAME structureMaterial.AnchorOptionsRequireV2 signal)
 	// -- a v2 result validates under ValidateV2(), never the v1-only
 	// Validate() this path called unconditionally before this ticket.
+	// CHAOS-4413: this subjectless-terminal path is its own independent
+	// exit from Investigate (never reaches engine.go's own stamping call
+	// site), so it stamps completeness itself, immediately before its own
+	// Validate -- same placement rule as everywhere else.
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := ValidateResult(result); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}

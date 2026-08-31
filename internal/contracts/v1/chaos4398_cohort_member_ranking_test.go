@@ -588,6 +588,10 @@ func TestContextFabricCohortMemberDriver_ConcentrationOnlyValidForInvestmentMix(
 // varying only driver/claims to prove the cross-reference check.
 func baseCohortResultWithClaims(driver ContextFabricCohortMemberDriver, claims []ContextFabricClaimedFact) ContextFabricInvestigationResult {
 	score := 42.0
+	rows := 0
+	for _, claim := range claims {
+		rows += len(claim.Rows)
+	}
 	return ContextFabricInvestigationResult{
 		SchemaVersion: ContextFabricInvestigationResultSchema,
 		ResultID:      "result_pr3b_xref01", RequestID: "request_pr3b_xref01",
@@ -627,6 +631,9 @@ func baseCohortResultWithClaims(driver ContextFabricCohortMemberDriver, claims [
 				MissingSignals:   []string{"investment_mix", "operational_deficiencies.severity", "readiness.coverage_gap", "workload.forecast_pressure"},
 				Drivers:          []ContextFabricCohortMemberDriver{driver},
 			}},
+		},
+		Completeness: ContextFabricAnswerCompleteness{
+			TerminalStatus: ContextFabricInvestigationComplete, ClaimedFactsCount: len(claims), RowsCount: rows,
 		},
 	}
 }

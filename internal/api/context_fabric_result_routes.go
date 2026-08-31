@@ -86,6 +86,16 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			return
 		}
 		result := stored.Result
+		// CHAOS-4413 (codex xhigh round-1 P1, confirmed): a row persisted
+		// before Completeness existed reads back with the exact zero
+		// value ValidateStored's legacy exemption allows -- fine for the
+		// canonical view (re-served, not re-validated), but the
+		// projection view below runs Completeness through Validate() with
+		// no such exemption, so an old row 500s the instant a bounded
+		// consumer asks for it. ComputeAnswerCompleteness is a pure
+		// function of fields this row already carries, so this is a
+		// backfill, never an invention, and a no-op for any post-4413 row.
+		result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 		// The consumer projection is served from THIS route, through the
 		// same answerprojection.Project the MCP tool calls (CHAOS-3746
 		// codex round-1 F2). Before this, the API only ever returned the

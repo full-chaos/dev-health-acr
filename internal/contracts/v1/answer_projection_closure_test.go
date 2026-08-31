@@ -264,7 +264,11 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// signal/claim_id/field). The canonical result surface gains the
 		// SAME sixteen (249 -> 265): the projection carries the shape
 		// verbatim rather than a narrowed copy.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 178},
+		// CHAOS-4413: 178 -> 180 -- completeness contributed two new string
+		// leaves (terminal_status, terminal_reason). The canonical result
+		// surface gains the SAME two (265 -> 267): the projection carries
+		// the field verbatim rather than a narrowed copy.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 180},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -289,7 +293,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// mints, not model prose) -- answer_projection is unaffected, since
 		// ProjectedCohortMember has no projected Drivers field to mirror it
 		// onto.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 265},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 267},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -423,7 +427,14 @@ func trustedBecauseClosed(path string) bool {
 		// above. The shape's DISPLAY text (title/axis_label/value_label/
 		// series[].label/points[].label) is deliberately NOT here: it
 		// carries canonical subject labels and is declared untrusted.
-		"presentation", "selected_by", "axis_kind":
+		"presentation", "selected_by", "axis_kind",
+		// CHAOS-4413: "terminal_status" mirrors the sibling "status" leaf
+		// verbatim (ContextFabricInvestigationStatus, already trusted
+		// above) and "terminal_reason" (ContextFabricTerminalReason) is
+		// its own five-value closed vocabulary -- both validated against
+		// their own registries before a result is stored, never model
+		// prose.
+		"terminal_status", "terminal_reason":
 		return true
 	// Opaque identifiers and digests: frozen handles, never prose.
 	case "result_id", "request_id", "receipt_id", "driver_id", "claim_id",

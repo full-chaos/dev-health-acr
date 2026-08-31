@@ -37,6 +37,7 @@ func validMCPTestResult(schemaVersion string) contractsv1.ContextFabricInvestiga
 		Versions:            contractsv1.ContextFabricVersionSet{ServiceVersion: "acr-v1", ContractVersion: schemaVersion, Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1", CanonicalServiceVersion: "ops-v1", ModelIdentity: "test/model-v1"},
 		DeterministicAnswer: "Ask Dev is not release-ready because required work remains.",
 		Warnings:            []string{},
+		Completeness:        contractsv1.ContextFabricAnswerCompleteness{TerminalStatus: contractsv1.ContextFabricInvestigationComplete},
 	}
 }
 

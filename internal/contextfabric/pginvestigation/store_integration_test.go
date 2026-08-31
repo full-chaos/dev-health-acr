@@ -62,7 +62,8 @@ func validResult(resultID string) contextfabric.InvestigationResult {
 			ServiceVersion: "test", ContractVersion: contextfabric.InvestigationResultSchemaV1, Backend: "test",
 			ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1", ModelIdentity: "test/model-v1",
 		},
-		Warnings: []string{},
+		Warnings:     []string{},
+		Completeness: contextfabric.AnswerCompleteness{TerminalStatus: contextfabric.InvestigationComplete},
 	}
 }
 

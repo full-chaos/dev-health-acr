@@ -175,6 +175,10 @@
       "items": {
         "$ref": "#/$defs/RenderShape"
       }
+    },
+    "completeness": {
+      "description": "CHAOS-4413: mirrors the canonical result's field verbatim -- claimed_facts_count/rows_count are the UN-CLAMPED canonical totals, not a count of this projection's own budget-clamped key_facts.",
+      "$ref": "#/$defs/AnswerCompleteness"
     }
   },
   "required": [
@@ -198,7 +202,8 @@
     "evidence_ref_ids",
     "subject_receipts",
     "versions",
-    "projection_budget"
+    "projection_budget",
+    "completeness"
   ],
   "$defs": {
     "SubjectRef": {
@@ -2211,6 +2216,73 @@
         "axis_label",
         "value_label",
         "series"
+      ]
+    },
+    "AnswerCompleteness": {
+      "description": "CHAOS-4413: promotes the answer-rate/terminal-state measurement (formerly harness-only telemetry, CHAOS-4386) into the public contract. terminal_status/terminal_reason answer WHY the answer stopped where it did; claimed_facts_count/rows_count answer HOW MUCH of an answer is here -- the un-clamped totals, independent of any bounded consumer's own projection budget.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "terminal_status": {
+          "type": "string",
+          "enum": [
+            "complete",
+            "partial",
+            "degraded",
+            "clarification_required",
+            "no_match"
+          ]
+        },
+        "terminal_reason": {
+          "type": "string",
+          "enum": [
+            "clarification_reason_disclosed",
+            "degraded_reason_disclosed",
+            "limitation_disclosed",
+            "warning_disclosed",
+            "undisclosed"
+          ],
+          "description": "Absent (or empty) exactly when terminal_status is complete -- there is nothing to disclose. Present and one of these closed values on every other status; never the engine's or a model's own raw text."
+        },
+        "claimed_facts_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rows_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "terminal_status",
+        "claimed_facts_count",
+        "rows_count"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "terminal_status": {
+                "const": "complete"
+              }
+            },
+            "required": [
+              "terminal_status"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "terminal_reason"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "terminal_reason"
+            ]
+          }
+        }
       ]
     }
   }

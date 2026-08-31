@@ -586,6 +586,7 @@ func TestRuntimeAnswerSynthesizerProducesNonNilCollectionsForEmptyDraft(t *testi
 	result.Question = input.Request.Question
 	result.Interpretation = input.Interpretation
 	result.SubjectResolution = input.Graph.Resolution
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		t.Fatalf("result.Validate() error = %v, want a valid public result for an empty-collection draft", err)
 	}

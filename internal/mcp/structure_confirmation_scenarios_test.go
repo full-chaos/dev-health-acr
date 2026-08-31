@@ -37,6 +37,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 )
@@ -150,6 +151,7 @@ func buildRefusalResult(scenario structureConfirmationScenario, resultID, receip
 		}
 	}
 	result.ConfirmedStructure = nil
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 	return result
 }
 
