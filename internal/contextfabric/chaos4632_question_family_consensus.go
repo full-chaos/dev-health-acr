@@ -298,54 +298,70 @@ func countFieldDivergence(samples []FamilySample, outcomes []FamilySampleOutcome
 	return divergent
 }
 
-// FamilySampler produces ONE interpret sample under a given derived seed.
-// The seed is passed rather than derived inside, so the caller owns the
-// derivation and a test can drive the ensemble with no model at all.
-type FamilySampler func(ctx context.Context, seed int64) (FamilySample, error)
-
-// ResolveQuestionFamilyEnsemble runs n interpret samples CONCURRENTLY
-// under n distinct derived seeds and resolves the family from them.
+// FamilySampler produces ONE interpret sample, identified by its SAMPLE
+// INDEX -- never by a seed.
 //
-// Concurrency is the design's own point: "interpret is the cheap call --
-// turn 1 costs 2.0-2.8 s today, and the samples are independent". Running
+// The index, not a seed, is the whole point. Seed derivation is
+// genkitruntime's own unexported concern behind
+// Runtime.InterpretQuestionForSample (CHAOS-4631), so a caller cannot
+// derive, pass, or even observe a seed. That removes by construction the
+// failure this signature used to invite: two derivations drifting apart
+// while each test suite stays self-consistent and neither notices.
+//
+// An earlier revision of this file DID derive seeds, in a local copy
+// carrying a TODO-remove, because S1 had not merged when S2 needed the
+// scheme. S1 has merged (d00080fd) and the copy is deleted -- which is
+// what a TODO-remove is for.
+type FamilySampler func(ctx context.Context, sample int) (FamilySample, error)
+
+// ResolveQuestionFamilyEnsemble runs n interpret samples CONCURRENTLY and
+// resolves the family from them.
+//
+// Concurrency is the design's own point: interpret is the cheap call --
+// turn 1 costs 2.0-2.8 s today, and the samples are independent. Running
 // them serially would multiply turn-1 latency by n, which is the cost that
 // would make the ensemble unshippable.
+//
+// The sampler receives sample indices 0..n-1 and is expected to call
+// Runtime.InterpretQuestionForSample with each. Distinct-and-derived seeds
+// still hold -- they are simply derived inside genkitruntime, where the
+// only copy lives.
 //
 // FAILED SAMPLES ARE DROPPED, NOT SUBSTITUTED. A sampler error yields no
 // sample; the consensus then runs over however many succeeded, and the
 // strict-majority denominator is the number of SUCCESSFUL samples, not n.
-// The alternative -- substituting a zero-valued sample -- would inject a
-// phantom unclassified vote that no model produced, which is the field-wise
-// fabrication this design forbids one level up. If every sample fails, the
-// outcome is the zero-sample outcome (unclassified / source=none), which is
-// the honest report that nothing was measured.
+// Substituting a zero-valued sample would inject a phantom unclassified
+// vote no model produced -- the field-wise fabrication this design forbids
+// one level up. If every sample fails, the outcome is the zero-sample
+// outcome (unclassified / source=none), the honest report that nothing was
+// measured.
 //
-// Sample ORDER is preserved as seed order, not completion order, so the
+// Sample ORDER is preserved as index order, not completion order, so the
 // per-sample telemetry rows are reproducible across runs. The winner is
-// selected by total key anyway (see selectWinningSample), so order does not
+// selected by total key anyway (selectWinningSample), so order does not
 // decide the outcome -- but a reproducible ordering makes two runs of the
 // same question diffable, which a completion-ordered slice would not be.
-func ResolveQuestionFamilyEnsemble(ctx context.Context, question string, n int, sampler FamilySampler) (QuestionFamilyOutcome, []FamilySample) {
-	seeds := EnsembleSeeds(question, n)
-	collected := make([]FamilySample, len(seeds))
-	ok := make([]bool, len(seeds))
+func ResolveQuestionFamilyEnsemble(ctx context.Context, n int, sampler FamilySampler) (QuestionFamilyOutcome, []FamilySample) {
+	bounded := BoundEnsembleSize(n)
+	collected := make([]FamilySample, bounded)
+	ok := make([]bool, bounded)
 
 	var wg sync.WaitGroup
-	for i, seed := range seeds {
+	for i := 0; i < bounded; i++ {
 		wg.Add(1)
-		go func(index int, seed int64) {
+		go func(index int) {
 			defer wg.Done()
-			sample, err := sampler(ctx, seed)
+			sample, err := sampler(ctx, index)
 			if err != nil {
 				return
 			}
 			collected[index] = sample
 			ok[index] = true
-		}(i, seed)
+		}(i)
 	}
 	wg.Wait()
 
-	samples := make([]FamilySample, 0, len(seeds))
+	samples := make([]FamilySample, 0, bounded)
 	for i := range collected {
 		if ok[i] {
 			samples = append(samples, collected[i])

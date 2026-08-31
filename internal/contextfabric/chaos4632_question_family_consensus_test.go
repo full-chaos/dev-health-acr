@@ -270,64 +270,14 @@ func TestDowngradeCountAggregatesAcrossSamples(t *testing.T) {
 	}
 }
 
-// TestEnsembleSeedsAreDistinctAndDerived is the §4.1 seed property, and it
-// is load-bearing rather than cosmetic.
-//
-// One shared pinned seed across all N samples would, against a provider
-// that honours seeds at all, return near-identical samples: the consensus
-// becomes VACUOUSLY UNANIMOUS, fakes the very stability this slice exists
-// to measure, and defeats refuse-to-guess by never producing a tie.
-// Arbitrary per-sample seeds fix the diversity but lose replay.
-// Distinct-and-derived gives both.
-func TestEnsembleSeedsAreDistinctAndDerived(t *testing.T) {
-	t.Parallel()
-	seeds := EnsembleSeeds("Which teams are struggling, and why?", 5)
-	if len(seeds) != 5 {
-		t.Fatalf("got %d seeds, want 5", len(seeds))
-	}
-	seen := map[int64]struct{}{}
-	for i, seed := range seeds {
-		if seed < 0 {
-			t.Errorf("seed %d is negative (%d); providers reject negative seeds", i, seed)
-		}
-		if _, ok := seen[seed]; ok {
-			t.Fatalf("seed %d (%d) is a duplicate -- a shared seed makes the consensus vacuously unanimous", i, seed)
-		}
-		seen[seed] = struct{}{}
-	}
-	// DERIVED, therefore replayable: the same question yields the same
-	// seeds, so an entire turn is reproducible from the question alone.
-	again := EnsembleSeeds("Which teams are struggling, and why?", 5)
-	for i := range seeds {
-		if seeds[i] != again[i] {
-			t.Fatalf("seed %d is not reproducible for the same question", i)
-		}
-	}
-	// Different questions must not collide.
-	other := EnsembleSeeds("What is the status of the Dev Health Ops project?", 5)
-	for i := range seeds {
-		if seeds[i] == other[i] {
-			t.Errorf("seed %d collides across two different questions", i)
-		}
-	}
-}
-
-// TestEnsembleSeedsFollowQuestionCanonicalization pins the choice of hash
-// input: CanonicalizeQuestion's own hash, not the raw string.
-//
-// Two questions the reuse key considers IDENTICAL must seed identically,
-// or a replay of a stored answer's question would draw a different
-// ensemble than the run that produced it.
-func TestEnsembleSeedsFollowQuestionCanonicalization(t *testing.T) {
-	t.Parallel()
-	a := EnsembleSeeds("What is the status of the project?", 3)
-	b := EnsembleSeeds("  What IS the Status of the project?!  ", 3)
-	for i := range a {
-		if a[i] != b[i] {
-			t.Fatalf("seed %d differs for two questions that canonicalize identically", i)
-		}
-	}
-}
+// The two seed tests that stood here are DELETED, not moved: seed
+// derivation is no longer this package's concern. It lives unexported
+// inside genkitruntime behind Runtime.InterpretQuestionForSample
+// (CHAOS-4631, merged as d00080fd), which is the only copy, so the
+// properties they pinned -- distinct, derived, replayable, canonicalized --
+// are S1's to assert. Keeping a second set of assertions here would have
+// re-created in tests exactly the duplication the deletion removes from
+// the code.
 
 // TestBoundEnsembleSizeDegradesRatherThanFailing pins §4.1's cost rule: a
 // misconfiguration must degrade to a weaker guarantee, never fail an
@@ -367,12 +317,12 @@ func TestEnsembleDropsFailedSamplesRatherThanSubstituting(t *testing.T) {
 	// by codex round 1 (P3) and reproduced locally with
 	// `go test -race -run TestEnsembleDropsFailedSamplesRatherThanSubstituting`.
 	var calls atomic.Int32
-	outcome, samples := ResolveQuestionFamilyEnsemble(context.Background(), "q", 3,
-		func(_ context.Context, seed int64) (FamilySample, error) {
-			// Fail exactly one sample, chosen by seed parity so the
-			// choice does not depend on call order.
+	outcome, samples := ResolveQuestionFamilyEnsemble(context.Background(), 3,
+		func(_ context.Context, sample int) (FamilySample, error) {
+			// Fail exactly one sample, chosen by INDEX so the choice is
+			// deterministic and does not depend on completion order.
 			calls.Add(1)
-			if seed%2 == 0 {
+			if sample == 1 {
 				return FamilySample{}, errors.New("sampler failed")
 			}
 			return cohortSample(), nil
@@ -380,8 +330,8 @@ func TestEnsembleDropsFailedSamplesRatherThanSubstituting(t *testing.T) {
 	if got := calls.Load(); got != 3 {
 		t.Fatalf("sampler called %d times, want 3", got)
 	}
-	if len(samples) == 3 {
-		t.Skip("all three seeds were odd for this question; the drop path was not exercised")
+	if len(samples) != 2 {
+		t.Fatalf("collected %d samples, want 2 -- exactly one sampler failed and its sample must be DROPPED", len(samples))
 	}
 	if len(samples) != len(outcome.Samples) {
 		t.Fatalf("outcome has %d sample rows for %d collected samples", len(outcome.Samples), len(samples))
@@ -398,8 +348,8 @@ func TestEnsembleDropsFailedSamplesRatherThanSubstituting(t *testing.T) {
 // unclassified-by-consensus.
 func TestEnsembleWithAllSamplesFailingReportsNothingMeasured(t *testing.T) {
 	t.Parallel()
-	outcome, samples := ResolveQuestionFamilyEnsemble(context.Background(), "q", 3,
-		func(context.Context, int64) (FamilySample, error) { return FamilySample{}, errors.New("down") })
+	outcome, samples := ResolveQuestionFamilyEnsemble(context.Background(), 3,
+		func(context.Context, int) (FamilySample, error) { return FamilySample{}, errors.New("down") })
 	if len(samples) != 0 {
 		t.Fatalf("collected %d samples, want 0", len(samples))
 	}
