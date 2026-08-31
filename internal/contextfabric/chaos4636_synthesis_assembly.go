@@ -42,11 +42,17 @@ import (
 //     SourceClaimedFactIDs onto cohort.Members[i].Drivers[j] in place -- its
 //     own doc comment says so -- and result.Cohort is a pointer ALIAS to the
 //     same cohort, not a copy.
-//  3. The second pass is LABELLED. Four telemetry emissions and one durable
-//     ModelExecutionReceipt fire per call. A silently doubled
-//     RecordCommitAffirmation would corrupt the retraction counter -- a
-//     decision-basis signal -- on exactly the requests one would later be
-//     trying to diagnose.
+//  3. Decision-basis telemetry is DEFERRED, not merely labelled. An earlier
+//     revision added a `Retry` flag intending the sinks to label the second
+//     pass, and then never wired it -- so a retry emitted the
+//     commit-affirmation retraction TWICE for one served answer, corrupting
+//     exactly the counter that exists to diagnose retractions (codex round 2,
+//     finding 1). Labelling was the weaker fix anyway: the first pass's
+//     result is DISCARDED, so its retraction never happened as far as the
+//     caller is concerned, and a labelled-but-present event still has to be
+//     filtered by every consumer. The affirmation outcomes are therefore
+//     RETURNED, and the engine emits them once, for the result it actually
+//     serves.
 
 // synthesisAssemblyParams is every value the assembly reads from
 // Investigate's scope. It is a struct rather than a parameter list so that
@@ -134,7 +140,10 @@ func copyCohortForRetry(cohort *Cohort) *Cohort {
 // to but NOT including render-shape selection, completeness stamping,
 // validation and persistence -- those run once, on whichever pass produced
 // the answer that is actually served.
-func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Principal, params synthesisAssemblyParams) (InvestigationResult, error) {
+func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Principal, params synthesisAssemblyParams) (InvestigationResult, []CommitAffirmationOutcome, error) {
+	// affirmations are RETURNED rather than emitted -- see point 3 in this
+	// file's header. The caller emits them for the served result only.
+	var affirmations []CommitAffirmationOutcome
 	request := params.Request
 	interpretation := params.Interpretation
 	graphContext := params.Graph
@@ -153,7 +162,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		Request: request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
 	})
 	if err != nil {
-		return InvestigationResult{}, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
+		return InvestigationResult{}, nil, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
 	}
 	result.SchemaVersion = InvestigationResultSchemaV1
 	result.ResultID = e.newResultID()
@@ -321,7 +330,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		// read) BEFORE anything is appended -- fail closed, never serve a
 		// claim that cannot be traced back to a real canonical fact.
 		if err := validateMintedClaimsGrounded(mintedClaims, facts.Facts); err != nil {
-			return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
+			return InvestigationResult{}, nil, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 		}
 		result.Drivers = append(result.Drivers, narrated...)
 		// CHAOS-4398 PR3b: append the claims THIS composer minted (only for
@@ -385,7 +394,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		Graph:      graphContext,
 		Facts:      facts,
 	}); len(outcomes) > 0 {
-		e.recordCommitAffirmation(ctx, principal, outcomes)
+		affirmations = outcomes
 	}
 	// CHAOS-4087: stamped AFTER applyCommitAffirmation, not before -- that
 	// gate can RETRACT a subject from result.SubjectResolution.Committed
@@ -411,5 +420,5 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		}
 		result.SubjectResolution.CommitDecisionDigests = digests
 	}
-	return result, nil
+	return result, affirmations, nil
 }

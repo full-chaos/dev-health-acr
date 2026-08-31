@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -168,5 +169,114 @@ func TestStage3MeasuresTheFinalServedShapeNotAPreFinalOne(t *testing.T) {
 	if measuredBytes != served.Bytes {
 		t.Fatalf("stage 3 measured %d bytes but the served result is %d bytes (delta %d) -- the engine and the route are gating different documents",
 			measuredBytes, served.Bytes, served.Bytes-measuredBytes)
+	}
+}
+
+// ── codex round 2 ────────────────────────────────────────────────────────────
+
+// failingRetrySynthesizer succeeds on the first call and fails on the second,
+// which is the shape of a transient upstream fault landing on the retry.
+type failingRetrySynthesizer struct {
+	calls    *int
+	first    AnswerSynthesizer
+	failWith error
+}
+
+func (f failingRetrySynthesizer) Synthesize(ctx context.Context, principal storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+	if *f.calls >= 1 {
+		*f.calls++
+		return InvestigationResult{}, f.failWith
+	}
+	return f.first.Synthesize(ctx, principal, input)
+}
+
+// Codex round 2, finding 2 (P2): a retry synthesis failure was swallowed and
+// reclassified as a deterministic budget refusal, so a transient upstream
+// fault reached the caller as "ask a narrower question" — a non-retryable
+// answer to a retryable problem, with nothing in the telemetry naming what
+// actually happened. Rewording the question would not have helped.
+func TestStage3PropagatesARetrySynthesisFailureRatherThanCallingItABudgetRefusal(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	telemetry := &recordingTelemetry{}
+	// 6 members x 3 claims = 18 claims + 6 members = 24 items over a 12-item
+	// budget, so a retry is required; the retry then fails.
+	base := budgetStageEngine(t, budgetStageCohort(6), 3, budgetStageOptions(12, time.Second), &calls, telemetry)
+	upstream := errors.New("model runtime unavailable")
+	base.synthesizer = failingRetrySynthesizer{calls: &calls, first: base.synthesizer, failWith: upstream}
+
+	_, err := base.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+	if err == nil {
+		t.Fatal("Investigate() returned no error when the retry synthesis failed")
+	}
+	if errors.Is(err, ErrAnswerExceedsBudget) {
+		t.Fatalf("a failed retry was reported as a budget refusal: %v -- the caller would be told to ask a narrower question for a transient upstream fault", err)
+	}
+	if !errors.Is(err, upstream) {
+		t.Fatalf("error = %v, want the retry's own upstream error to survive", err)
+	}
+	// And the over-budget measurement is not lost: it is on the event, with
+	// the retry's failure distinguished from "the retry ran and did not fit".
+	var failed *PlanNarrowingEvent
+	for index := range telemetry.planNarrowings {
+		if telemetry.planNarrowings[index].RetryFailed {
+			failed = &telemetry.planNarrowings[index]
+		}
+	}
+	if failed == nil {
+		t.Fatal("no event recorded the retry FAILING; a swallowed retry error with no telemetry is the silent-failure class")
+	}
+	if failed.MeasuredItems == 0 {
+		t.Fatal("the retry-failure event lost the over-budget measurement that caused the retry")
+	}
+	if failed.RetryFit {
+		t.Fatal("a failed retry reported RetryFit")
+	}
+}
+
+// Codex round 2, finding 1 (P2): the retry ran the assembly twice, and the
+// commit-affirmation retraction was emitted from INSIDE it — so one served
+// investigation emitted two retraction events, corrupting the decision-basis
+// counter. The `Retry` flag existed but was never wired to anything.
+//
+// The fix is to defer rather than label: the first pass's answer is discarded,
+// so its retraction never happened from the caller's point of view.
+//
+// The fixture must actually PRODUCE a retraction, and the test asserts that it
+// did — my first version of this test committed no subject, so no retraction
+// could occur, the count was 0 either way, and it passed against the very
+// defect it claimed to pin. Caught by mutating the fix back.
+func TestRetryEmitsCommitAffirmationTelemetryOnceForTheServedAnswer(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	telemetry := &recordingTelemetry{}
+	// A committed subject with NO canonical fact behind it is what the
+	// affirmation gate retracts (commitSubjectAffirmed requires a canonical
+	// fact attributable to the subject; this fixture's fact reader returns
+	// none).
+	committed := SubjectRef{Kind: SubjectProject, CanonicalID: "project_unaffirmed", Label: "Unaffirmed"}
+	engine := budgetStageEngine(t, budgetStageCohort(6), 2, budgetStageOptions(12, time.Second), &calls, telemetry)
+	engine.graph = &capturingGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committed}},
+		context: GraphContext{
+			Cohort: budgetStageCohort(6),
+			Paths:  []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
+			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("synthesizer called %d times, want 2 -- the fixture must actually retry or this test means nothing", calls)
+	}
+	// NON-VACUITY: a retraction must actually have happened, or the count
+	// below is trivially satisfied.
+	if telemetry.commitAffirmations == 0 {
+		t.Fatal("no commit-affirmation retraction occurred; this fixture cannot observe the double-count it exists to pin")
+	}
+	if telemetry.commitAffirmations != 1 {
+		t.Fatalf("commit-affirmation events = %d for ONE served investigation; the discarded first pass emitted its own", telemetry.commitAffirmations)
 	}
 }

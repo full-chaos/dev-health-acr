@@ -59,6 +59,12 @@ type PlanNarrowingEvent struct {
 	// outside stage 3.
 	RetryAttempted bool
 	RetryFit       bool
+	// RetryFailed distinguishes "the retry ran and its answer still did not
+	// fit" from "the retry could not run at all because synthesis errored".
+	// Without it both read as RetryFit=false, and they are different
+	// diagnoses: the first is a genuinely oversized answer, the second is an
+	// upstream fault that says nothing about the question's size.
+	RetryFailed bool
 	// RefusalPlanned is decision D5's terminal case: the retry did not fit
 	// (or could not be run) and the answer became a PLANNED, EXPLAINED
 	// refusal rather than an unexplained 413. Counting it is how "how often

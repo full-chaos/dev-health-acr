@@ -1682,7 +1682,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		StructureCanon: structureCanon, CarriedStructureEntry: carriedStructureEntry,
 		CommitBases: commitBases, CommitDigests: commitDigests,
 	}
-	result, err := e.synthesizeAndAssemble(ctx, principal, assemblyParams)
+	result, affirmations, err := e.synthesizeAndAssemble(ctx, principal, assemblyParams)
 	if err != nil {
 		return InvestigationResult{}, err
 	}
@@ -1710,7 +1710,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// the shape measured on the second pass is the shape that would be
 	// served on the second pass.
 	result = e.finalizeResult(result, plan)
-	result, err = e.fitAssembledResult(ctx, principal, &plan, result, assemblyParams)
+	result, affirmations, err = e.fitAssembledResult(ctx, principal, &plan, result, affirmations, assemblyParams)
 	if err != nil {
 		return InvestigationResult{}, err
 	}
@@ -1719,6 +1719,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// was actually produced, not the one first attempted.
 	stampedPlan := plan
 	result.AnswerPlan = &stampedPlan
+	// Commit-affirmation telemetry fires ONCE, for the result actually
+	// served. A retry runs the assembly twice and discards the first pass's
+	// answer; emitting from inside the assembly double-counted a retraction
+	// the caller only ever saw once, corrupting the very counter that exists
+	// to diagnose retractions.
+	e.recordCommitAffirmation(ctx, principal, affirmations)
 	// Render-shape telemetry fires ONCE, for the result actually served --
 	// selection itself is pure and was already run by finalizeResult, but a
 	// retry would otherwise double-count a decision an operator counts.

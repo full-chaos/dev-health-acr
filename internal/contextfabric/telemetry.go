@@ -599,6 +599,7 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"max_serialized_bytes", event.MaxSerializedBytes,
 		"retry_attempted", event.RetryAttempted,
 		"retry_fit", event.RetryFit,
+		"retry_failed", event.RetryFailed,
 		"refusal_planned", event.RefusalPlanned,
 		"deadline_reserved", event.DeadlineReserved,
 		"retry_declined", string(event.RetryDeclined),

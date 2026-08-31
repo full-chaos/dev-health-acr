@@ -330,6 +330,7 @@ type recordingTelemetry struct {
 	// fields around it.
 	questionFamilyResolutions []QuestionFamilyResolutionEvent
 	planNarrowings            []PlanNarrowingEvent
+	commitAffirmations        int
 	// categoryFactCompositions (CHAOS-4347) records every status-category
 	// composition event verbatim, same list-not-count discipline.
 	categoryFactCompositions       []CategoryFactCompositionEvent
@@ -519,6 +520,15 @@ func (r *recordingTelemetry) RecordQuestionFamilyResolution(_ context.Context, _
 // double keeping only a count could not observe any of them going missing.
 func (r *recordingTelemetry) RecordPlanNarrowing(_ context.Context, _ storage.Principal, event PlanNarrowingEvent) {
 	r.planNarrowings = append(r.planNarrowings, event)
+}
+
+// RecordCommitAffirmationRetraction (CHAOS-4085) is COUNTED here so a retry
+// that emitted the same retraction twice is observable. That double-count is
+// codex round 2's finding 1: the assembly runs twice on a retry and the first
+// pass's answer is discarded, so a retraction emitted from inside it never
+// happened as far as the caller is concerned.
+func (r *recordingTelemetry) RecordCommitAffirmationRetraction(_ context.Context, _ storage.Principal, _ CommitAffirmationOutcome) {
+	r.commitAffirmations++
 }
 
 func (r *recordingTelemetry) RecordCohortStructureGate(_ context.Context, _ storage.Principal, outcome CohortStructureGateOutcome, shape InvestigationShape) {
