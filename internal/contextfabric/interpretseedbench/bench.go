@@ -141,28 +141,49 @@ func Run(ctx context.Context, interpreter Interpreter, principal storage.Princip
 
 // ValidateResults is the "a measurement that did not happen must FAIL,
 // loudly" check (AGENTS.md's verification rules) for this tool specifically:
-// a run where every sample errored produced no distribution and no cost
-// data at all, and Run itself returns a nil error for that case (it
-// records failures rather than treating them as a Run-level fault, which is
-// correct for a handful of transient failures mixed with real samples --
-// but wrong for a total wipeout, which reads as a clean 0-exit-code run
-// with an all-`(error)` table unless a caller checks explicitly). Call this
-// after Run and treat a non-nil error as a hard failure (non-zero exit),
-// not a warning.
+// a run that produced no USABLE data at all -- no distribution and no cost
+// row for any question -- must never exit 0. Run itself returns a nil error
+// even for a total wipeout (recording failures is correct for the ordinary
+// case of a handful of transient failures mixed with real samples; a
+// Run-level fault is the wrong signal for that). Call this after Run and
+// treat a non-nil error as a hard failure (non-zero exit), not a warning.
+//
+// "Usable" mirrors CostSummaries' own filter exactly (isUsableSample,
+// shared with it below) -- Error=="" AND !FallbackUsed. It is DELIBERATELY
+// stricter than ShapeDistribution's filter, which keeps errored samples
+// (visible under the empty-string Shape key) for a different reason: the
+// printed distribution table should show a failure happened, not silently
+// shrink its own denominator. Cost has no equivalent "show the zero" case --
+// a failed call's zero usage would only understate the real per-turn-1
+// cost -- so CostSummaries and this check share one criterion instead.
+//
+// Codex round 2 caught the gap this closes: round 1's fix counted only
+// Error, so an all-FallbackUsed run (every sample errored on the primary,
+// then a configured fallback quietly answered every one) had zero Error
+// samples, passed the round-1 check, and still exited 0 with an entirely
+// empty cost table -- EXECUTED against a loopback provider.
 func ValidateResults(samples []Sample) error {
 	if len(samples) == 0 {
 		return fmt.Errorf("no samples were run")
 	}
-	failed := 0
+	valid := 0
 	for _, s := range samples {
-		if s.Error != "" {
-			failed++
+		if isUsableSample(s) {
+			valid++
 		}
 	}
-	if failed == len(samples) {
-		return fmt.Errorf("all %d samples failed -- no measurement was actually taken (last error: %s)", failed, samples[len(samples)-1].Error)
+	if valid == 0 {
+		return fmt.Errorf("0 of %d samples produced usable data -- no measurement was actually taken (last sample: error=%q fallback_used=%v)",
+			len(samples), samples[len(samples)-1].Error, samples[len(samples)-1].FallbackUsed)
 	}
 	return nil
+}
+
+// isUsableSample is the single shared filter ValidateResults,
+// ShapeDistribution, and CostSummaries all apply -- see ValidateResults' doc
+// comment for why a second, independently-computed criterion is the bug.
+func isUsableSample(s Sample) bool {
+	return s.Error == "" && !s.FallbackUsed
 }
 
 // ShapeDistribution tallies, per question ID, how many of its samples
@@ -212,7 +233,7 @@ type CostSummary struct {
 func CostSummaries(samples []Sample, questions []Question) []CostSummary {
 	byQuestion := make(map[string][]Sample, len(questions))
 	for _, s := range samples {
-		if s.Error != "" || s.FallbackUsed {
+		if !isUsableSample(s) {
 			continue
 		}
 		byQuestion[s.QuestionID] = append(byQuestion[s.QuestionID], s)

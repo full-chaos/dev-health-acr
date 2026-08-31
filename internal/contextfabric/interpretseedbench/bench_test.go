@@ -240,6 +240,23 @@ func TestValidateResultsFailsLoudlyWhenEverySampleErrored(t *testing.T) {
 	}
 }
 
+// TestValidateResultsFailsLoudlyWhenEverySampleIsFallback is codex round 2's
+// red-first pin: round 1's fix counted only Error, so a run where every
+// sample errored on the primary and a configured fallback answered every
+// one (zero Error, but zero usable data either -- the aggregators exclude
+// FallbackUsed entirely) passed ValidateResults and still printed an empty
+// distribution/cost table. EXECUTED by codex against a loopback provider.
+func TestValidateResultsFailsLoudlyWhenEverySampleIsFallback(t *testing.T) {
+	t.Parallel()
+	samples := []Sample{
+		{QuestionID: "q1", Sample: 0, Shape: "single_subject", Outcome: "fallback", FallbackUsed: true},
+		{QuestionID: "q1", Sample: 1, Shape: "single_subject", Outcome: "fallback", FallbackUsed: true},
+	}
+	if err := ValidateResults(samples); err == nil {
+		t.Fatal("ValidateResults() = nil, want a non-nil error when every sample only produced fallback data")
+	}
+}
+
 // TestValidateResultsPassesWithPartialFailures proves the fix does not
 // overcorrect: a handful of transient failures mixed with real samples is
 // exactly the case Run's own doc comment says must NOT be treated as a
