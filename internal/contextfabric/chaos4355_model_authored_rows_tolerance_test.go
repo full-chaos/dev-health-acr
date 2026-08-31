@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -103,10 +104,11 @@ func TestRuntimeAnswerSynthesizerDoesNotRecordModelRowsStrippedWhenNoneStripped(
 	}
 }
 
-// TestStripModelAuthoredClaimedFactRows is the strip helper's own direct
-// unit test: it must clear Rows, report the exact count, and leave every
-// claim that never carried Rows byte-identical.
-func TestStripModelAuthoredClaimedFactRows(t *testing.T) {
+// TestStripModelAuthoredClaimedFactTableContent is the strip helper's own
+// direct unit test: it must clear Rows AND the CHAOS-4637 Table
+// declaration, report the exact count, and leave every claim that carried
+// neither byte-identical.
+func TestStripModelAuthoredClaimedFactTableContent(t *testing.T) {
 	t.Parallel()
 	value := "fabricated"
 	claims := []ClaimedFact{
@@ -114,7 +116,7 @@ func TestStripModelAuthoredClaimedFactRows(t *testing.T) {
 		{ClaimID: "claim_dirty", Kind: FactReadiness, Field: "release_ready", Value: boolScalar(false),
 			Rows: []ClaimedFactRow{{Fields: map[string]ScalarValue{"anything": {String: &value}}}}},
 	}
-	cleaned, stripped := StripModelAuthoredClaimedFactRows(claims)
+	cleaned, stripped := StripModelAuthoredClaimedFactTableContent(claims)
 	if stripped != 1 {
 		t.Fatalf("stripped = %d, want 1", stripped)
 	}
@@ -126,6 +128,63 @@ func TestStripModelAuthoredClaimedFactRows(t *testing.T) {
 	}
 	if claims[1].Rows == nil {
 		t.Fatalf("claims[1].Rows was mutated in place, want the input slice's claim left untouched")
+	}
+}
+
+// TestAModelAuthoredTableIsStrippedNotRejected is codex round 2 finding 1
+// (P2, EXECUTED by the reviewer and re-run here before being ledgered).
+//
+// CHAOS-4637 added ClaimedFact.Table. The model-output DTO is DERIVED FROM
+// THAT STRUCT by schema inference, so the field silently became something a
+// model may return — and unlike Rows it was not stripped. A model could
+// author a syntactically valid declaration beside a correct scalar claim
+// and NO rows, and the wire validator would then refuse the whole document.
+// Observed on the tip before the fix:
+//
+//	stripped=0 table_nil=false
+//	validate=table: declared table describes rows the fact does not carry
+//
+// A benign hallucination turning a good answer into a failed one is exactly
+// what CHAOS-4355's strip-and-tolerate discipline exists to prevent.
+func TestAModelAuthoredTableIsStrippedNotRejected(t *testing.T) {
+	t.Parallel()
+	claim := ClaimedFact{
+		ClaimID: "claim_model_authored_table", Kind: FactReadiness,
+		Field: "release_ready", Value: boolScalar(true),
+		// NO Rows: the pre-4637 strip has nothing to do here, which is
+		// precisely why the gap existed.
+		Table: &contractsv1.ContextFabricClaimedFactTable{
+			Field: "daily_readiness", Shape: contractsv1.ContextFabricFactTableShapeTimeSeries,
+			Key: []string{"day"}, Measures: []string{"coverage_ratio"},
+		},
+	}
+	// Non-vacuity: the hallucinated declaration is SYNTACTICALLY VALID on
+	// its own, so what follows is about the strip and not about a
+	// malformed fixture being rejected for some other reason.
+	if err := claim.Table.Validate(); err != nil {
+		t.Fatalf("fixture declaration is malformed (%v); a rejection would not be attributable to the strip", err)
+	}
+
+	cleaned, stripped := StripModelAuthoredClaimedFactTableContent([]ClaimedFact{claim})
+	if stripped != 1 {
+		t.Fatalf("stripped = %d, want 1 -- a model-authored declaration must be COUNTED, not silently kept", stripped)
+	}
+	if cleaned[0].Table != nil {
+		t.Fatalf("cleaned[0].Table = %+v, want nil -- a declaration is attached server-side from the cited canonical fact, never authored", cleaned[0].Table)
+	}
+	if claim.Table == nil {
+		t.Fatal("the input claim was mutated in place")
+	}
+	// And the stripped claim now validates on the wire, which is the whole
+	// point: tolerated, not rejected.
+	wire := contractsv1.ContextFabricClaimedFact{
+		ClaimID: cleaned[0].ClaimID, Kind: cleaned[0].Kind,
+		Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:x", Label: "x"},
+		Field:   cleaned[0].Field, Value: contractsv1.ContextFabricScalarValue{Boolean: cleaned[0].Value.Boolean},
+		Rows: cleaned[0].Rows, Table: cleaned[0].Table,
+	}
+	if err := wire.Validate(); err != nil {
+		t.Fatalf("the stripped claim still does not validate: %v", err)
 	}
 }
 

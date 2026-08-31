@@ -590,22 +590,45 @@ func factValueEqualsScalar(fv FactValue, sv ScalarValue) bool {
 	}
 }
 
-// StripModelAuthoredClaimedFactRows returns a copy of claims with any
-// non-empty Rows cleared, plus the count of claims that carried one.
+// StripModelAuthoredClaimedFactTableContent returns a copy of claims with
+// any model-authored table content -- Rows AND the CHAOS-4637 Table
+// declaration -- cleared, plus the count of claims that carried some.
+//
 // SynthesisDraft.ValidateAgainst unconditionally rejects a claim with
-// non-empty Rows -- Rows are attached server-side, from the SAME canonical
-// fact the claim cites, only after validation (attachCanonicalRows below)
-// -- so a model-authored Rows array is a benign hallucination to discard,
-// never a reason to reject an otherwise-valid, closure-passing answer
-// (CHAOS-4355 follow-up). Exported so both this package's
-// RuntimeAnswerSynthesizer.Synthesize and genkitruntime.Runtime's own
-// production ValidateAgainst call site (the actual live rejection source)
-// can apply the identical strip before validating.
-func StripModelAuthoredClaimedFactRows(claims []ClaimedFact) (cleaned []ClaimedFact, strippedCount int) {
+// non-empty Rows. Both Rows and Table are attached server-side, from the
+// SAME canonical fact the claim cites, only after validation
+// (attachCanonicalRows below), so model-authored table content is a benign
+// hallucination to discard, never a reason to reject an otherwise-valid,
+// closure-passing answer (CHAOS-4355 follow-up). Exported so both this
+// package's RuntimeAnswerSynthesizer.Synthesize and genkitruntime.Runtime's
+// own production ValidateAgainst call site (the actual live rejection
+// source) can apply the identical strip before validating.
+//
+// TABLE WAS ADDED HERE BY CHAOS-4637, and the reason is a class worth
+// naming (codex round 2, P2, EXECUTED): the model-output DTO is DERIVED
+// FROM THIS STRUCT by schema inference, so adding a field to ClaimedFact
+// silently widens what a model is allowed to return. A model could then
+// author a syntactically valid Table beside a correct scalar claim and NO
+// rows, and the wire validator would refuse the whole document --
+// "declared table describes rows the fact does not carry" -- turning a good
+// answer into a failed one. Observed verbatim on the tip before this fix:
+//
+//	stripped=0 table_nil=false
+//	validate=table: declared table describes rows the fact does not carry
+//
+// The rule this makes explicit for the next field: ANY field added to a
+// model-output DTO becomes model-authorable, and must be either grounded
+// or stripped. There is no third option, and "the model would not do that"
+// is not one of them.
+func StripModelAuthoredClaimedFactTableContent(claims []ClaimedFact) (cleaned []ClaimedFact, strippedCount int) {
 	cleaned = make([]ClaimedFact, len(claims))
 	for i, claim := range claims {
-		if len(claim.Rows) > 0 {
+		// Counted ONCE per claim, not once per field: the telemetry
+		// dimension counts CLAIMS that carried hallucinated table content,
+		// and a claim carrying both is one such claim.
+		if len(claim.Rows) > 0 || claim.Table != nil {
 			claim.Rows = nil
+			claim.Table = nil
 			strippedCount++
 		}
 		cleaned[i] = claim
@@ -1248,7 +1271,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		// stripped, so stripped is normally 0; this still runs for any
 		// ModelRuntime implementation that does not strip on its own.
 		var stripped int
-		draft.ClaimedFacts, stripped = StripModelAuthoredClaimedFactRows(draft.ClaimedFacts)
+		draft.ClaimedFacts, stripped = StripModelAuthoredClaimedFactTableContent(draft.ClaimedFacts)
 		if stripped > 0 && r.Telemetry != nil {
 			r.Telemetry.RecordModelRowsStripped(ctx, principal, stripped)
 		}
