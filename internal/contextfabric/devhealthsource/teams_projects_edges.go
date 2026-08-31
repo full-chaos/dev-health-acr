@@ -352,7 +352,7 @@ func querySubjectProjectMemberships(ctx context.Context, client contextpacket.Cl
 	// legally share an observed_at down to the millisecond, and without
 	// event_id in the tiebreaker, both the RelationshipID (below) and the
 	// keyset-pagination cursor would collide on it.
-	const rowKey = "concat(subject_kind, ':', repo_id_str, ':', subject_id, ':', provider, ':', project_id, ':', event_id)"
+	rowKey := rowKeySQL("subject_kind", "repo_id_str", "subject_id", "provider", "project_id", "event_id")
 	// toDateTime64(0, 3, 'UTC') matches project_membership_transitions.
 	// occurred_at's own declared scale (DateTime64(3)) -- the NULL branch of
 	// transition arm's `valid_to` (membershipIntervalsSubquery) is derived
@@ -385,7 +385,7 @@ WHERE 1 = 1` + sincePredicate(cursor, "observed_at", rowKey) + orderBy("observed
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
-		rowSortKey := subjectKind + ":" + repoID + ":" + subjectID + ":" + provider + ":" + projectID + ":" + eventID
+		rowSortKey := identity.JoinSegments(subjectKind, repoID, subjectID, provider, projectID, eventID)
 		telemetry.recordRead(source, subjectKind)
 		if isDuplicateAdd != 0 {
 			// See membershipIntervalsSubquery's own doc comment: an ADD
@@ -435,7 +435,7 @@ WHERE 1 = 1` + sincePredicate(cursor, "observed_at", rowKey) + orderBy("observed
 		}
 
 		var fromSubject contractsv1.ContextFabricSubjectRef
-		var relationshipIDPrefix, evidenceRefID string
+		var evidenceRefID string
 		var authorization contractsv1.ContextFabricAuthorizationScope
 		switch subjectKind {
 		case "work_item":
@@ -447,7 +447,6 @@ WHERE 1 = 1` + sincePredicate(cursor, "observed_at", rowKey) + orderBy("observed
 				return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 			}
 			fromSubject = contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: workItemCanonicalID, Label: subjectID}
-			relationshipIDPrefix = "relationship:work_item_project:"
 			evidenceRefID = "acr:v1:work-item:" + repoID + ":" + subjectID
 			// CHAOS-3785 zero-UUID discipline: a Linear-sourced work item's
 			// repo_id is repo-less BY DESIGN and must not read as an orphan.
@@ -471,7 +470,6 @@ WHERE 1 = 1` + sincePredicate(cursor, "observed_at", rowKey) + orderBy("observed
 			// deliberately never used here.
 			pullRequestCanonicalID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
 			fromSubject = contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: pullRequestCanonicalID, Label: fmt.Sprintf("PR #%d", number)}
-			relationshipIDPrefix = "relationship:pull_request_project:"
 			evidenceRefID = "acr:v1:pull-request:" + repoID + ":" + subjectID
 			// Unlike a Linear work item, a pull request always belongs to a
 			// real git repository -- git_pull_requests.repo_id is a
@@ -537,7 +535,7 @@ WHERE 1 = 1` + sincePredicate(cursor, "observed_at", rowKey) + orderBy("observed
 		}
 
 		relationship := contractsv1.ContextFabricRelationshipProjection{
-			RelationshipID:  relationshipIDPrefix + repoID + ":" + subjectID + ":" + provider + ":" + projectID + relationshipIDIntervalSuffix,
+			RelationshipID:  projectMembershipRelationshipID(fromSubject.CanonicalID, projectCanonicalID, relationshipIDIntervalSuffix),
 			Type:            contractsv1.ContextFabricRelationshipBelongsToProject,
 			From:            fromSubject,
 			To:              contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: projectCanonicalID, Label: projectID},
@@ -589,7 +587,7 @@ WHERE 1 = 1` + sincePredicate(cursor, "observed_at", rowKey) + orderBy("observed
 // column's 5089 rows are the zero UUID (CHAOS-3785's trap), so scoping on it
 // would be meaningless.
 func queryWorkItemTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	const rowKey = "concat(toString(w.repo_id), ':', a.work_item_id)"
+	rowKey := rowKeySQL("toString(w.repo_id)", "a.work_item_id")
 	statement := `SELECT a.work_item_id, ifNull(a.team_id, ''), toString(a.source), toString(a.confidence), toString(w.repo_id), ifNull(r.repo, ''), a.computed_at
 FROM work_item_team_attributions AS a FINAL
 INNER JOIN (SELECT work_item_id, repo_id, org_id FROM work_items FINAL WHERE org_id = {org_id:String}) AS w ON w.work_item_id = a.work_item_id AND w.org_id = a.org_id
@@ -603,7 +601,7 @@ WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') 
 			return nil, err
 		}
 		observedAt = observedAt.UTC()
-		rowSortKey := repoID + ":" + workItemID
+		rowSortKey := identity.JoinSegments(repoID, workItemID)
 		workItemCanonicalID, omitted, err := identity.Derive(identity.KindWorkItem, []string{repoID, workItemID}, nil)
 		if err != nil {
 			return nil, err
@@ -613,7 +611,7 @@ WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') 
 		}
 		derivation, epistemicStatus := workItemTeamAttributionDerivation(source)
 		relationship := contractsv1.ContextFabricRelationshipProjection{
-			RelationshipID:  "relationship:work_item_team:" + repoID + ":" + workItemID + ":" + teamID,
+			RelationshipID:  workItemTeamRelationshipID(workItemCanonicalID, teamID),
 			Type:            contractsv1.ContextFabricRelationshipOwnedByTeam,
 			From:            contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: workItemCanonicalID, Label: workItemID},
 			To:              contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: teamCanonicalID(teamID), Label: teamID},
@@ -736,9 +734,53 @@ func projectTeamsQuery(omissions *ambiguityLedger) func(context.Context, context
 	}
 }
 
+// rowKeySegmentSQL is identity.EncodeSegment, in SQL.
+//
+// The escape ORDER is load-bearing and must mirror the Go function exactly:
+// '%' first, then ':'. Reversed, a literal "%3A" in the data would decode
+// back to ':' and the escape would not be injective -- the very property
+// this exists to give.
+func rowKeySegmentSQL(column string) string {
+	return "replaceAll(replaceAll(" + column + ", '%', '%25'), ':', '%3A')"
+}
+
+// rowKeySQL builds a keyset tiebreaker that is INJECTIVE over its components,
+// the SQL half of a pair whose Go half is identity.JoinSegments (CHAOS-4635).
+//
+// WHY THIS IS NOT COSMETIC. A tiebreaker's whole job is to totally order rows
+// that share a watermark, and the keyset predicate is a STRICT `>`. If two
+// distinct rows produce one key, the second is excluded from the next page
+// and is never revisited -- a valid edge silently lost until some later
+// watermark change or a rebuild. The previous keys were raw colon joins over
+// id spaces that CONTAIN colons (`{org}:gitlab:71133891`, `gl:full.chaos`,
+// `linear:CHAOS-3802`), so that was reachable.
+//
+// queryProjectTeams' key was worse than merely ambiguous: it omitted
+// `provider`, which its own GROUP BY includes. Two groups differing only by
+// provider collided with no colon trickery at all -- and cross-provider equal
+// project ids are a documented property of this data model, not an edge case.
+//
+// THE HAZARD THIS INTRODUCES, stated so it is not discovered later. The
+// keyset predicate compares `toString(<this SQL>) > {after:String}` against a
+// string BUILT IN GO, so the two spellings must agree BYTE FOR BYTE or
+// pagination silently skips or replays. They are two implementations of one
+// definition and cannot be collapsed into one, so they are pinned by
+// EXECUTING the SQL against a real server and comparing to the Go value for
+// adversarial inputs -- see the SQL/Go agreement test. Never by eyeballing.
+func rowKeySQL(columns ...string) string {
+	segments := make([]string, len(columns))
+	for i, column := range columns {
+		segments[i] = rowKeySegmentSQL(column)
+	}
+	return "concat(" + strings.Join(segments, ", ':', ") + ")"
+}
+
 // projectTeamsRowKey is the pagination tiebreaker for queryProjectTeams,
 // shared by the keyset predicate and the ORDER BY so the two cannot drift.
-const projectTeamsRowKey = "concat(o.project_id, ':', o.team_id, ':', o.source_name)"
+//
+// CHAOS-4635: escaped, and `provider` restored -- it is part of the GROUP BY,
+// so leaving it out let two distinct groups share a key.
+var projectTeamsRowKey = rowKeySQL("o.provider", "o.project_id", "o.team_id", "o.source_name")
 
 // projectTeamsWatermark is queryProjectTeams' pagination timestamp, shared
 // by the SELECT list, the keyset HAVING and the ORDER BY so the three
@@ -803,6 +845,48 @@ const projectTeamsWatermark = "max(o.row_watermark)"
 // endpoint pair.
 func projectTeamRelationshipID(projectCanonicalID, teamID, source string) string {
 	return identity.DeriveRelationship(identity.RelationshipFamilyProjectTeam, projectCanonicalID, teamCanonicalID(teamID), source)
+}
+
+// workItemTeamRelationshipID is the work_item<->team OWNED_BY_TEAM edge's
+// identity (CHAOS-4635), on the same scheme and for the same reason as its
+// project<->team sibling: the pre-v2 form joined repo id, work item id and
+// team id with colons over values that carry colons (`linear:CHAOS-3802`,
+// `gl:full.chaos`).
+//
+// `repoID` is not an argument because it is already inside
+// workItemCanonicalID (identity.Derive over {repoID, workItemID}) -- the same
+// reason `provider` left the project<->team signature.
+//
+// The type slot is EMPTY, deliberately. The pre-v2 id carried no
+// discriminator beyond the endpoint pair, so this producer already guarantees
+// at most one attribution per (repo, work item, team); passing the
+// attribution source here would SPLIT ids that are one edge today and strand
+// every existing one. A fixed empty slot preserves exactly the current
+// grain -- widening it is a behaviour change, not a rename.
+func workItemTeamRelationshipID(workItemCanonicalID, teamID string) string {
+	return identity.DeriveRelationship(identity.RelationshipFamilyWorkItemTeam, workItemCanonicalID, teamCanonicalID(teamID), "")
+}
+
+// projectMembershipRelationshipID is the subject<->project BELONGS_TO_PROJECT
+// edge's identity (CHAOS-4635), covering both the work-item and pull-request
+// arms.
+//
+// ONE family for both, where the pre-v2 ids used separate
+// `work_item_project:`/`pull_request_project:` prefixes: the subject's own
+// canonical id already carries its kind (`work_item.v2:...` versus
+// `pull_request:...`), so the digest separates the arms without a second
+// discriminator. Encoding the same fact twice would only give the two
+// spellings a chance to disagree.
+//
+// intervalSuffix is CHAOS-4109's per-interval discriminator, and it goes in
+// the DIGEST rather than being appended to the id. That is the whole point:
+// appended, it was one more unescaped colon-joined component
+// (`:<RFC3339Nano>:<eventID>`); in the digest it still makes a transition
+// interval distinct from every other interval for the same (subject, project)
+// pair, which is exactly what it exists to do. work_item_column rows pass the
+// empty string and keep a single id per pair, unchanged.
+func projectMembershipRelationshipID(subjectCanonicalID, projectCanonicalID, intervalSuffix string) string {
+	return identity.DeriveRelationship(identity.RelationshipFamilyProjectMembership, subjectCanonicalID, projectCanonicalID, intervalSuffix)
 }
 
 // projectIdentityWithWatermarkSQL is readers.ProjectIdentityCatalogSQL
@@ -1154,7 +1238,6 @@ GROUP BY o.project_id, o.provider, o.team_id, o.source_name` + havingSincePredic
 }
 
 func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int, omissions *ambiguityLedger) ([]candidate, bool, error) {
-	const rowKey = projectTeamsRowKey
 	statement := projectTeamsStatement(cursor)
 	rows, truncated, err := fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var projectID, teamID, source, provider string
@@ -1165,7 +1248,9 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 			return nil, err
 		}
 		observedAt, validFrom, latestValidTo = observedAt.UTC(), validFrom.UTC(), latestValidTo.UTC()
-		rowSortKey := projectID + ":" + teamID + ":" + source
+		// The Go half of projectTeamsRowKey. identity.JoinSegments applies the
+		// same '%'-then-':' escape rowKeySegmentSQL does, in the same order.
+		rowSortKey := identity.JoinSegments(provider, projectID, teamID, source)
 		// FAIL CLOSED: this ownership row's project_id and project_key
 		// resolve to DIFFERENT projects, so at most one of the two edges it
 		// produces is real and nothing here can say which. Emit neither, and

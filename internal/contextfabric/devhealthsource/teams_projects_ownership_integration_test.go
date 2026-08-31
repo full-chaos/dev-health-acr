@@ -15,6 +15,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
@@ -368,6 +369,10 @@ type ownershipFixture struct {
 	orgID  string
 	source *devhealthsource.TeamsProjectsSource
 	direct clickhousedriver.Conn
+	// query is the SAME production query client the source reads through
+	// (CHAOS-4635). The row-key agreement test runs its expression through it
+	// rather than the raw driver, so it exercises the path production uses.
+	query contextpacket.ClickHouseQueryClient
 }
 
 // TestOwnershipProducerAgainstRealClickHouse is the single entry point for
@@ -432,6 +437,8 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"a projected edge is retracted when its identity starts conflicting", "30000000-0000-4000-8000-000000000010", subRetractsAnEdgeWhoseIdentityStartsConflicting},
 		{"retraction is idempotent across a re-run", "30000000-0000-4000-8000-000000000011", subRetractionIsIdempotentAcrossAReRun},
 		{"retraction only follows max-raising project writes", "30000000-0000-4000-8000-000000000012", subRetractionOnlyFollowsMaxRaisingProjectWrites},
+		{"the row-key SQL agrees with Go byte for byte", "30000000-0000-4000-8000-000000000013", subRowKeySQLAgreesWithGoByteForByte},
+		{"two groups sharing a project id get distinct cursor keys", "30000000-0000-4000-8000-000000000014", subTwoGroupsSharingAProjectIDGetDistinctCursorKeys},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -498,7 +505,7 @@ func newOwnershipFixture(t *testing.T, ctx context.Context, query contextpacket.
 	if err != nil {
 		t.Fatalf("new teams/projects source: %v", err)
 	}
-	return &ownershipFixture{orgID: orgID, source: source, direct: direct}
+	return &ownershipFixture{orgID: orgID, source: source, direct: direct, query: query}
 }
 
 func (f *ownershipFixture) project(t *testing.T, ctx context.Context) contextfabric.ProjectionBatch {
@@ -1389,5 +1396,171 @@ func subRetractionOnlyFollowsMaxRaisingProjectWrites(t *testing.T, ctx context.C
 		"AAA-WATERMARK", fixture.orgID, "WM-KEY", future.Add(time.Hour))
 	if _, ok := drainUntil(t, ctx, fixture, afterLowWrite, func(b contextfabric.ProjectionBatch) bool { return hasTombstone(b, edge) }); !ok {
 		t.Fatalf("%q was not retracted even after a projects-side write that RAISES the partition max -- then the bound is not 'max-raising only', the retraction is simply not working for this shape", edge)
+	}
+}
+
+// subRowKeySQLAgreesWithGoByteForByte is the one test in this file that exists
+// because two implementations of one definition cannot be collapsed into one
+// (CHAOS-4635).
+//
+// The keyset predicate compares `toString(<rowKeySQL expression>) > {after}`
+// against a string BUILT IN GO by identity.JoinSegments. If those two ever
+// disagree by a single byte, pagination silently skips or replays rows -- the
+// failure class this producer's own sincePredicate doc comment was written
+// about. One side runs in ClickHouse and the other in Go, so there is no
+// shared definition to point both at; the only honest substitute is to
+// EXECUTE the SQL against a real server and compare.
+//
+// Eyeballing the two would not do. The escape has an ORDER ('%' before ':')
+// and a preimage hazard: a value already containing "%3A" must not decode back
+// to ':' and collapse into a different value's key. So the inputs below are
+// chosen adversarially rather than illustratively -- each one is a way the
+// pair could disagree.
+func subRowKeySQLAgreesWithGoByteForByte(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	cases := []struct {
+		name              string
+		provider          string
+		projectID, teamID string
+		source            string
+	}{
+		{"plain values", "github", "PROJ-1", "TEAM-1", "native"},
+		{"colons in the project id", "github", "{org}:gitlab:71133891", "TEAM-1", "native"},
+		{"colons in the team id", "github", "PROJ-1", "gl:full.chaos", "native"},
+		{"colons in both, falling differently", "github", "project:team", "source", "native"},
+		{"the same characters, split differently", "github", "project", "team:source", "native"},
+		{"a percent sign, which the escape rewrites first", "github", "100%", "TEAM-1", "native"},
+		{"a %3A PREIMAGE: must not decode back into a separator", "github", "a%3Ab", "TEAM-1", "native"},
+		{"a percent-escape preimage of the escape itself", "github", "a%25%3Ab", "TEAM-1", "native"},
+		{"empty middle component", "github", "", "TEAM-1", "native"},
+		{"unicode", "github", "проект:一", "команда", "native"},
+		{"a trailing colon", "github", "PROJ-1:", "TEAM-1", "native"},
+	}
+	// One statement, one row per case, so a disagreement names its own input.
+	for _, testCase := range cases {
+		want := identity.JoinSegments(testCase.provider, testCase.projectID, testCase.teamID, testCase.source)
+		statement := "SELECT " + devhealthsource.RowKeySQLForTest("{provider:String}", "{project_id:String}", "{team_id:String}", "{source:String}")
+		rows, err := fixture.query.Query(ctx, statement, []contextpacket.ClickHouseBinding{
+			{Name: "provider", Value: testCase.provider},
+			{Name: "project_id", Value: testCase.projectID},
+			{Name: "team_id", Value: testCase.teamID},
+			{Name: "source", Value: testCase.source},
+		})
+		if err != nil {
+			t.Fatalf("%s: run the row-key expression on a real server: %v\n%s", testCase.name, err, statement)
+		}
+		var got string
+		if !rows.Next() {
+			rows.Close()
+			t.Fatalf("%s: the row-key expression returned no row", testCase.name)
+		}
+		if err := rows.Scan(&got); err != nil {
+			rows.Close()
+			t.Fatalf("%s: scan: %v", testCase.name, err)
+		}
+		rows.Close()
+		if got != want {
+			t.Errorf("%s: SQL and Go disagree on the cursor key.\n  SQL: %q\n  Go:  %q\nPagination compares these with a strict >, so a disagreement silently skips or replays rows.", testCase.name, got, want)
+		}
+	}
+
+	// NON-VACUITY, and it is not decoration: every assertion above passes if
+	// the escape is a no-op on both sides. The two inputs that used to
+	// COLLIDE must now produce DIFFERENT keys -- otherwise this test proves
+	// the two spellings agree while both remain broken.
+	collidingA := identity.JoinSegments("github", "project:team", "source", "native")
+	collidingB := identity.JoinSegments("github", "project", "team:source", "native")
+	if collidingA == collidingB {
+		t.Fatalf("the two historically-colliding inputs still share a cursor key %q -- SQL and Go agreeing on a non-injective key is agreement about the wrong thing", collidingA)
+	}
+	// And the provider, which the old key omitted entirely.
+	if identity.JoinSegments("github", "P", "T", "native") == identity.JoinSegments("gitlab", "P", "T", "native") {
+		t.Fatal("two providers still share a cursor key -- the GROUP BY separates them, so the tiebreaker must too")
+	}
+}
+
+// subTwoGroupsSharingAProjectIDGetDistinctCursorKeys is the cursor-key half of
+// CHAOS-4635, and its claim is DELIBERATELY NARROWER than the finding that
+// prompted it. Read the refutation below before widening it back.
+//
+// WHAT IS PROVEN. The parent's tiebreaker was
+// concat(project_id, team_id, source_name) and omitted `provider`, which its
+// own GROUP BY includes. So one project id under two providers, owned by the
+// same team from the same source, is TWO distinct groups with ONE cursor key.
+// Cross-provider equal project ids are a documented property of this data
+// model, not an edge case. Two groups sharing a tiebreaker have no defined
+// order between them, so which one a page ends on is arbitrary and can differ
+// between runs and between engines -- that alone is worth removing from a
+// keyset cursor.
+//
+// WHAT IS NOT PROVEN, and was claimed before it was checked. The review
+// finding said such a collision SILENTLY DROPS an edge at a page boundary.
+// This lane tried twice to reproduce that against a real ClickHouse -- once
+// with the bare pair, once with 205 filler groups at an identical watermark to
+// force a cut -- and the parent PASSED both times, emitting both edges.
+//
+// The reason looks structural rather than lucky. fetch() asks for limit+1 raw
+// rows and truncates by WHOLE ROW GROUPS keyed on (observedAt, sortKey)
+// (truncateToCompleteRows, CHAOS-3753 finding K2). Two rows sharing a
+// watermark AND a key are therefore ONE group: they are emitted together or
+// deferred together, and the cursor never advances past one while the other is
+// unseen. The invariant written for split candidate-lists happens to defend
+// key collisions too.
+//
+// So this test asserts the collision and the arbitrary ordering, NOT a drop.
+// Asserting a drop would be asserting something two executed attempts failed
+// to show, which is exactly the kind of claim that reads as coverage while
+// proving nothing.
+func subTwoGroupsSharingAProjectIDGetDistinctCursorKeys(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	at := ownershipLaterAssertion.Add(96 * time.Hour)
+	// ONE team for both arms: the parent key omits provider, so the pair must
+	// share project id, team and source to collide on it.
+	mustExec(t, ctx, fixture.direct, `INSERT INTO teams VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"TEAM-SHARED", "shared", "", at, fixture.orgID, "github", "TEAM-SHARED", []string{}, uint8(1))
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'gh', 1, 'started', '', ?)`,
+		"SHARED-ID", fixture.orgID, "GH-KEY", at)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'gitlab', ?, 'gl', 1, 'started', '', ?)`,
+		"SHARED-ID", fixture.orgID, "GL-KEY", at)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-SHARED', ?, ?, 'native', ?, NULL, ?)`,
+		fixture.orgID, "SHARED-ID", "GH-KEY", ownershipFirstSeen, at)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'gitlab', 'TEAM-SHARED', ?, ?, 'native', ?, NULL, ?)`,
+		fixture.orgID, "SHARED-ID", "GL-KEY", ownershipFirstSeen, at)
+
+	// The keys must now differ. This is the property the fix delivers, and on
+	// the parent these two strings were identical.
+	ghKey := identity.JoinSegments("github", "SHARED-ID", "TEAM-SHARED", "native")
+	glKey := identity.JoinSegments("gitlab", "SHARED-ID", "TEAM-SHARED", "native")
+	if ghKey == glKey {
+		t.Fatalf("two distinct ownership groups still share the cursor key %q -- their page order is undefined", ghKey)
+	}
+
+	// And both edges are projected, which is the outcome that must survive the
+	// key change regardless of the ordering question.
+	wantGitHub := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "SHARED-ID", "TEAM-SHARED", "native")
+	wantGitLab := devhealthsource.ProjectTeamRelationshipIDForTest(t, "gitlab", "SHARED-ID", "TEAM-SHARED", "native")
+	if wantGitHub == wantGitLab {
+		t.Fatal("the two edges share a relationship id, so this fixture cannot tell them apart")
+	}
+	seen := map[string]bool{}
+	cursor := ""
+	for page := 0; page < 40; page++ {
+		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
+			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
+		})
+		if err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		if !available {
+			break
+		}
+		if batch.NextCursor == cursor {
+			t.Fatalf("page %d: cursor did not advance", page)
+		}
+		cursor = batch.NextCursor
+		for _, relationship := range batch.Relationships {
+			seen[relationship.RelationshipID] = true
+		}
+	}
+	if !seen[wantGitHub] || !seen[wantGitLab] {
+		t.Errorf("an ownership edge is missing: github=%v gitlab=%v", seen[wantGitHub], seen[wantGitLab])
 	}
 }

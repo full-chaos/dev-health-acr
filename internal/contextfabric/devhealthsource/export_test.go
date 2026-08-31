@@ -105,3 +105,8 @@ func ProjectTeamRelationshipIDForTest(t interface{ Fatalf(string, ...any) }, pro
 	}
 	return projectTeamRelationshipID(projectCanonicalID, teamID, source)
 }
+
+// RowKeySQLForTest exposes rowKeySQL so the SQL/Go byte-agreement test builds
+// the SAME expression the producers page on, rather than a second copy of it
+// that could agree with Go while production disagrees.
+func RowKeySQLForTest(columns ...string) string { return rowKeySQL(columns...) }

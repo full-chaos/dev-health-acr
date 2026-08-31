@@ -60,6 +60,20 @@ const (
 	// third producer, which is why it joins this scheme rather than getting
 	// a fourth hand-rolled encoding.
 	RelationshipFamilyProjectTeam RelationshipFamily = "project_team"
+	// RelationshipFamilyWorkItemTeam and RelationshipFamilyProjectMembership
+	// are the two remaining devhealthsource edges that carried a raw colon
+	// join (CHAOS-4635). Same defect, same file, same rebuild window as
+	// project_team: workItemID is routinely `linear:CHAOS-3802` and teamID
+	// `gl:full.chaos`, so the delimiter was not a delimiter in either.
+	//
+	// Project MEMBERSHIP is one family, not two, even though the pre-v2 ids
+	// used separate `work_item_project:`/`pull_request_project:` prefixes:
+	// the subject's OWN canonical id already carries its kind
+	// (`work_item.v2:...` versus `pull_request:...`), so the digest separates
+	// them without a second discriminator. Splitting the family would encode
+	// the same fact twice and invite the two spellings to disagree.
+	RelationshipFamilyWorkItemTeam      RelationshipFamily = "work_item_team"
+	RelationshipFamilyProjectMembership RelationshipFamily = "project_membership"
 )
 
 // DeriveRelationship computes the `relationship.v2:<family>:

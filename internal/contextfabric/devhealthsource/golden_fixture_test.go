@@ -17,13 +17,19 @@ const goldenProjectionBatchPath = "../../../contracts/examples/v1/context_fabric
 // keeps this test honest about a producer that starts emitting a NEW edge:
 // the regenerated set simply grows and the committed fixture no longer
 // matches.
+// CHAOS-4635: all four shapes moved to the injective relationship.v2 digest,
+// so the selector follows FAMILIES rather than the old raw-join prefixes.
+//
+// Three prefixes where there used to be four: the work-item and pull-request
+// project-membership arms now share one family, because the subject's own
+// canonical id already carries its kind. The coverage that pair of prefixes
+// used to give -- proof that BOTH arms are actually emitted -- does not
+// survive the merge, so it is re-asserted directly on the subject kind below.
+// Dropping it silently would have been a real loss of coverage disguised as a
+// rename.
 var goldenRelationshipPrefixes = []string{
-	"relationship:work_item_project:",
-	"relationship:pull_request_project:",
-	"relationship:work_item_team:",
-	// CHAOS-4635: project<->team ownership ids moved to the injective
-	// relationship.v2 digest scheme, so the golden selector follows the
-	// family rather than the old raw-join prefix.
+	"relationship.v2:project_membership:",
+	"relationship.v2:work_item_team:",
 	"relationship.v2:project_team:",
 }
 
@@ -46,6 +52,9 @@ var goldenRelationshipPrefixes = []string{
 // answer different questions -- what must be present, and what must be swept.
 var retiredRelationshipPrefixes = []string{
 	"relationship:project_team:",
+	"relationship:work_item_team:",
+	"relationship:work_item_project:",
+	"relationship:pull_request_project:",
 }
 
 func hasRetiredGoldenPrefix(relationshipID string) bool {
@@ -84,6 +93,24 @@ func TestGoldenProjectionBatchMatchesProducerOutput(t *testing.T) {
 	} {
 		if !kinds[want] {
 			t.Fatalf("generated set is missing %q -- the fixture cannot document an edge type no producer emitted", want)
+		}
+	}
+	// The replacement for the work_item_project/pull_request_project prefix
+	// split (see goldenRelationshipPrefixes): both membership arms must still
+	// be present, asserted on the subject kind the merged family no longer
+	// spells out in the id.
+	fromKinds := map[contractsv1.ContextFabricSubjectKind]bool{}
+	for _, relationship := range produced {
+		if relationship.Type == contractsv1.ContextFabricRelationshipBelongsToProject {
+			fromKinds[relationship.From.Kind] = true
+		}
+	}
+	for _, want := range []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectWorkItem,
+		contractsv1.ContextFabricSubjectPullRequest,
+	} {
+		if !fromKinds[want] {
+			t.Fatalf("generated set has no BELONGS_TO_PROJECT edge from a %q -- the two membership arms share one relationship family now, so this is what proves both are still emitted", want)
 		}
 	}
 	prefixes := map[string]bool{}
