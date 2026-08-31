@@ -24,14 +24,15 @@ import (
 // from the number.
 
 type labelledQuestion struct {
-	ID                    string `json:"id"`
-	Question              string `json:"question"`
-	Note                  string `json:"note"`
-	ExpectFamily          string `json:"expect_family"`
-	ExpectGroupKind       string `json:"expect_group_kind"`
-	ExpectScopeAnchor     string `json:"expect_scope_anchor"`
-	ExpectScopeAnchorKind string `json:"expect_scope_anchor_kind"`
-	ExpectRequestedKind   string `json:"expect_requested_kind"`
+	ID                    string   `json:"id"`
+	Question              string   `json:"question"`
+	Note                  string   `json:"note"`
+	ExpectFamily          string   `json:"expect_family"`
+	ExpectGroupKind       string   `json:"expect_group_kind"`
+	ExpectScopeAnchor     string   `json:"expect_scope_anchor"`
+	ExpectScopeAnchorAny  []string `json:"expect_scope_anchor_any"`
+	ExpectScopeAnchorKind string   `json:"expect_scope_anchor_kind"`
+	ExpectRequestedKind   string   `json:"expect_requested_kind"`
 }
 
 type labelledQuestionSet struct {
@@ -209,6 +210,42 @@ func TestLabelledSetExpectationsMatchThePrecedenceTable(t *testing.T) {
 		got := ResolveFamilyForSample(sample).Family
 		if got != QuestionFamily(testCase.ExpectFamily) {
 			t.Errorf("case %q: feeding its own labels through the precedence table yields %q, but the case is labelled %q -- the ground truth and the table disagree, so a model emitting PERFECT signals would still be scored wrong", testCase.ID, got, testCase.ExpectFamily)
+		}
+	}
+}
+
+// TestScopeAnchorAlternativesAreThemselvesConsistent guards the field added
+// after the live run scored a correct answer as wrong.
+//
+// expect_scope_anchor_any exists because ScopeAnchorTerm is a RETRIEVAL
+// POINTER, not a value: two different verbatim substrings can name the same
+// anchor ("platform" and "platform team" both name the platform team), and
+// scoring one of them as an error measures the model's choice of substring
+// rather than whether it found the right anchor. That is not what the anchor
+// is for, and it is the mistake this field corrects.
+//
+// The guard: whenever alternatives are listed, the canonical
+// expect_scope_anchor must be one of them. Otherwise the two fields could
+// drift into disagreeing about the same case, and a scorer reading either
+// one alone would be right by accident.
+func TestScopeAnchorAlternativesAreThemselvesConsistent(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range loadLabelledQuestions(t) {
+		if len(testCase.ExpectScopeAnchorAny) == 0 {
+			continue
+		}
+		if testCase.ExpectScopeAnchor == "" {
+			t.Errorf("case %q lists anchor alternatives but no canonical expect_scope_anchor", testCase.ID)
+			continue
+		}
+		found := false
+		for _, alternative := range testCase.ExpectScopeAnchorAny {
+			if strings.EqualFold(strings.TrimSpace(alternative), strings.TrimSpace(testCase.ExpectScopeAnchor)) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("case %q canonical anchor %q is not among its own alternatives %v", testCase.ID, testCase.ExpectScopeAnchor, testCase.ExpectScopeAnchorAny)
 		}
 	}
 }

@@ -14,7 +14,11 @@
     "purpose. expect_family is what the §4.2 precedence table should produce GIVEN correct signals.",
     "",
     "expect_scope_anchor is compared case-insensitively after trimming, because it is a retrieval",
-    "pointer rather than a value — the graph resolves it, nothing branches on its text.",
+    "pointer rather than a value — the graph resolves it, nothing branches on its text. Where more",
+    "than one verbatim substring names the SAME anchor, expect_scope_anchor_any lists the accepted",
+    "forms and expect_scope_anchor holds the canonical one; scoring accepts any member. Demanding one",
+    "exact string would measure the model's choice of substring rather than whether it found the",
+    "right anchor, which is not what the anchor is for.",
     "",
     "THIS FILE IS GROUND TRUTH, NOT OUTPUT. It is authored by hand and reviewed as a claim about what",
     "these questions MEAN. Never regenerate it from model output: a label set derived from the thing it",
@@ -84,11 +88,11 @@
     {
       "id": "neg-mentions-teams-but-not-grouped",
       "question": "How many teams own the dev-health-acr repository?",
-      "note": "NEGATIVE, and deliberately adversarial: the question MENTIONS teams prominently but asks for neither a grouping nor a scoped cohort. The prompt says in as many words 'do NOT emit group_kind merely because the question mentions teams or projects' — this row is what checks the model obeyed it. requested_kind is TEAM, not repository: the answer is a count of TEAMS, and the repository is what bounds the count. This label was wrong in the first revision of this file (it said repository) and was corrected after review — a model correctly emitting 'team' would have been scored wrong, which is exactly the silent ground-truth corruption these notes exist to make reviewable.",
-      "expect_family": "subject_investigation",
+      "note": "SCOPED, and it took two review rounds to get here — the history is the point. Revision 1 labelled requested_kind=repository (wrong: the answer is a count of TEAMS; the repository bounds the count). Revision 2 fixed that but kept family=subject_investigation with an EMPTY anchor. Main's human review caught the remaining inconsistency, and it is correct: this question is the structural MIRROR of pos-scoped-repositories. There, a named team bounds a cohort of repositories; here, a named repository bounds a cohort of teams. Same asymmetry, opposite direction. 'How many' is PRESENTATION of that cohort — a render concern, not a family: you cannot count the teams without resolving the cohort of teams. Labelling it subject_investigation with no anchor would have taught exactly the surface-form rule cases 8 and 9 exist to defeat, in reverse: 'aggregate questions have no anchor'. NEGATIVE only for group_kind, which stays empty: a bounded cohort is not a partitioned one.",
+      "expect_family": "scoped_cohort_status",
       "expect_group_kind": "",
-      "expect_scope_anchor": "",
-      "expect_scope_anchor_kind": "",
+      "expect_scope_anchor": "dev-health-acr",
+      "expect_scope_anchor_kind": "repository",
       "expect_requested_kind": "team"
     },
     {
@@ -104,10 +108,11 @@
     {
       "id": "pos-scoped-repositories",
       "question": "Which repositories does the platform team own?",
-      "note": "POSITIVE for the anchor without the possessive form — the asymmetry is real (repositories scoped by a team) but the grammar differs from Q-B. Pairs with neg-possessive-but-same-kind: together they check the model reads MEANING, not surface form, in both directions.",
+      "note": "POSITIVE for the anchor without the possessive form — the asymmetry is real (repositories scoped by a team) but the grammar differs from Q-B. Pairs with neg-possessive-but-same-kind: together they check the model reads MEANING, not surface form, in both directions. expect_scope_anchor_any exists because the live run emitted 'platform' on one replicate and 'platform team' on the other, and scoring that as an error was MY label being too strict: the design is explicit that ScopeAnchorTerm is a RETRIEVAL POINTER, not a value — nothing branches on its text, only on whether it resolved, and both strings are verbatim substrings naming the same team. A scorer that demanded one exact string would be measuring the model's choice of substring rather than whether it identified the right anchor.",
       "expect_family": "scoped_cohort_status",
       "expect_group_kind": "",
       "expect_scope_anchor": "platform",
+      "expect_scope_anchor_any": ["platform", "platform team"],
       "expect_scope_anchor_kind": "team",
       "expect_requested_kind": "repository"
     },
