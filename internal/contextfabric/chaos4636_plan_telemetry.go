@@ -69,7 +69,41 @@ type PlanNarrowingEvent struct {
 	// absent is the signal that a deployment is one slow synthesis away
 	// from a 504 instead of a partial answer.
 	DeadlineReserved bool
+	// RetryDeclined names WHY the one bounded retry did not run.
+	//
+	// It exists because DeadlineReserved alone was ambiguous between two
+	// situations with completely different fixes -- "this deployment
+	// reserves nothing" (change the configuration) and "this request had
+	// already spent too much of its deadline" (the answer is genuinely
+	// slow) -- and a third, "there was nothing left to narrow", which is
+	// neither. Found on the rig: a live refusal reported
+	// deadline_reserved=false and an operator could not tell which of the
+	// three it was without re-reading source, which is exactly the bar
+	// AGENTS.md's diagnosis-in-artifacts rule sets.
+	RetryDeclined RetryDeclinedReason
 }
+
+// RetryDeclinedReason is the CLOSED vocabulary of why the re-synthesis did
+// not run.
+type RetryDeclinedReason string
+
+const (
+	// RetryDeclinedNotApplicable is the zero value: either the answer fit,
+	// or the retry did run.
+	RetryDeclinedNotApplicable RetryDeclinedReason = ""
+	// RetryDeclinedNoReserve: this engine reserves no synthesis deadline,
+	// so it will not gamble the caller's remaining time on a second model
+	// call. A deployment-configuration signal.
+	RetryDeclinedNoReserve RetryDeclinedReason = "no_reserve"
+	// RetryDeclinedInsufficientDeadline: a reserve is configured, but this
+	// request had already spent enough of its deadline that a retry would
+	// have timed out. A slow-answer signal, not a configuration one.
+	RetryDeclinedInsufficientDeadline RetryDeclinedReason = "insufficient_deadline"
+	// RetryDeclinedNothingToNarrow: the cohort was already at one member,
+	// or every group was down to its last member and narrowing further
+	// would drop a group, which decision D2 forbids.
+	RetryDeclinedNothingToNarrow RetryDeclinedReason = "nothing_to_narrow"
+)
 
 // PlanNarrowingEventFrom builds the event for the two pre-measurement stages,
 // where there is nothing measured to report.
@@ -92,12 +126,16 @@ func PlanNarrowingEventFrom(plan AnswerPlan, stage contractsv1.ContextFabricPlan
 // rather than passed so that a caller cannot record a basis its stage could
 // not have used -- the mistake §6.3a records every earlier revision making,
 // in the form of narrowing by an order that did not exist yet.
-func planStageBasis(stage contractsv1.ContextFabricPlanNarrowingStage, groups bool) contractsv1.ContextFabricNarrowingBasis {
-	if groups || stage != contractsv1.ContextFabricPlanNarrowingCardinality {
-		// Once groups exist -- which is only after the fact read, because
-		// the group axis is read off the members' own facts -- narrowing is
-		// round-robin across groups, largest first, so EVERY group survives.
-		// That is decision D2, member-first, ruled 2026-08-30.
+//
+// grouped says whether the cohort ACTUALLY carries a group axis, not merely
+// whether the stage runs late enough for one to exist. Reporting
+// largest_group_round_robin for a flat cohort would name a basis with no
+// groups to round-robin over -- found on the rig, where a live
+// discovered_cohort_ranking refusal logged exactly that.
+func planStageBasis(stage contractsv1.ContextFabricPlanNarrowingStage, grouped bool) contractsv1.ContextFabricNarrowingBasis {
+	if grouped {
+		// Round-robin across groups, largest first, so EVERY group
+		// survives: decision D2, member-first, ruled 2026-08-30.
 		return contractsv1.ContextFabricNarrowingBasisLargestGroupRoundRobin
 	}
 	return contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical

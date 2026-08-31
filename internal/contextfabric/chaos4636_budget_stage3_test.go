@@ -35,7 +35,7 @@ func budgetStageCohort(n int) *Cohort {
 // claimed facts for every cohort member it is GIVEN -- which is what makes a
 // smaller synthesis input produce a smaller answer, and therefore what makes
 // re-synthesis a real reduction rather than a hopeful one.
-func budgetStageEngine(t *testing.T, cohort *Cohort, claimsPerMember int, options EngineOptions, calls *int) *Engine {
+func budgetStageEngine(t *testing.T, cohort *Cohort, claimsPerMember int, options EngineOptions, calls *int, telemetry ...*recordingTelemetry) *Engine {
 	t.Helper()
 	graphCohort := cohort
 	engine, err := NewEngine(EngineDependencies{
@@ -88,7 +88,7 @@ func budgetStageEngine(t *testing.T, cohort *Cohort, claimsPerMember int, option
 				},
 			}, nil
 		}),
-		Telemetry: &recordingTelemetry{},
+		Telemetry: budgetStageTelemetry(telemetry),
 	}, options)
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
@@ -97,6 +97,61 @@ func budgetStageEngine(t *testing.T, cohort *Cohort, claimsPerMember int, option
 }
 
 func ptrString(v string) *string { return &v }
+
+func budgetStageTelemetry(sinks []*recordingTelemetry) EngineTelemetry {
+	if len(sinks) > 0 && sinks[0] != nil {
+		return sinks[0]
+	}
+	return &recordingTelemetry{}
+}
+
+// TestStage3NamesWhyTheRetryWasDeclined: "this deployment reserves nothing",
+// "this request had already spent its deadline" and "there was nothing left to
+// narrow" have completely different fixes, and an operator must be able to
+// tell them apart from the run's own artifacts. Found on the rig, where a live
+// refusal logged only deadline_reserved=false and the three were
+// indistinguishable.
+func TestStage3NamesWhyTheRetryWasDeclined(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		options EngineOptions
+		cohort  *Cohort
+		want    RetryDeclinedReason
+	}{
+		{"no reserve configured", budgetStageOptions(4, 0), budgetStageCohort(4), RetryDeclinedNoReserve},
+		{"nothing left to narrow", budgetStageOptions(4, time.Second), budgetStageCohort(1), RetryDeclinedNothingToNarrow},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			calls := 0
+			telemetry := &recordingTelemetry{}
+			engine := budgetStageEngine(t, testCase.cohort, 20, testCase.options, &calls, telemetry)
+			_, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+			if !errors.Is(err, ErrAnswerExceedsBudget) {
+				t.Fatalf("error = %v, want a planned refusal", err)
+			}
+			var refusalEvent *PlanNarrowingEvent
+			for index := range telemetry.planNarrowings {
+				if telemetry.planNarrowings[index].RefusalPlanned {
+					refusalEvent = &telemetry.planNarrowings[index]
+				}
+			}
+			if refusalEvent == nil {
+				t.Fatal("no refusal event was recorded")
+			}
+			if refusalEvent.RetryDeclined != testCase.want {
+				t.Fatalf("RetryDeclined = %q, want %q", refusalEvent.RetryDeclined, testCase.want)
+			}
+			// A flat cohort must never report a group round-robin basis:
+			// there are no groups to round-robin over.
+			if refusalEvent.Basis != contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical {
+				t.Fatalf("Basis = %q for a flat cohort, want canonical_id_lexical", refusalEvent.Basis)
+			}
+		})
+	}
+}
 
 func budgetStageOptions(maxItems int, reserve time.Duration) EngineOptions {
 	return EngineOptions{

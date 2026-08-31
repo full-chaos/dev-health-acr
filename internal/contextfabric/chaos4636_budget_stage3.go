@@ -85,21 +85,31 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		return result, nil
 	}
 
+	grouped := params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0
 	narrowedGraph, narrowedFacts, before, after, canNarrow := narrowSynthesisInput(params, plan)
-	deadlineOK := e.retryDeadlineAvailable(ctx)
-	if !canNarrow || !deadlineOK {
-		// Refuse, and say which of the two reasons it was. "There was
-		// nothing left to narrow" and "there was not enough of the
-		// deadline left to try" are different diagnoses with different
-		// fixes, and a single unexplained 413 tells a caller neither.
-		return InvestigationResult{}, e.planRefusal(ctx, principal, plan, measurement, overrun, false, deadlineOK)
+	// Name WHICH of the three reasons declined the retry. They have
+	// completely different fixes -- reconfigure the deployment, accept that
+	// this answer is genuinely slow, or accept that nothing was left to
+	// narrow -- and a single unexplained 413 tells an operator none of them.
+	declined := RetryDeclinedNotApplicable
+	switch {
+	case !canNarrow:
+		declined = RetryDeclinedNothingToNarrow
+	case e.synthesisDeadlineReserve <= 0:
+		declined = RetryDeclinedNoReserve
+	case !e.retryDeadlineAvailable(ctx):
+		declined = RetryDeclinedInsufficientDeadline
+	}
+	if declined != RetryDeclinedNotApplicable {
+		return InvestigationResult{}, e.planRefusal(ctx, principal, plan, measurement, overrun, false, grouped, before, declined)
 	}
 
 	e.recordPlanNarrowingStep(plan, PlanNarrowing{
 		Stage:   contractsv1.ContextFabricPlanNarrowingAssembledResult,
-		Basis:   planStageBasis(contractsv1.ContextFabricPlanNarrowingAssembledResult, false),
+		Basis:   planStageBasis(contractsv1.ContextFabricPlanNarrowingAssembledResult, grouped),
 		Before:  before,
 		After:   after,
+		Groups:  false,
 		Overrun: overrun,
 	})
 
@@ -108,14 +118,14 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// A failed retry must not lose the reason the first answer did not
 		// fit. Reporting the retry's own error instead would replace a
 		// budget diagnosis with a synthesis one.
-		return InvestigationResult{}, e.planRefusal(ctx, principal, plan, measurement, overrun, true, deadlineOK)
+		return InvestigationResult{}, e.planRefusal(ctx, principal, plan, measurement, overrun, true, grouped, before, RetryDeclinedNotApplicable)
 	}
 	retryMeasurement, err := contractsv1.MeasureContextFabricResponse(retried)
 	if err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("measure re-synthesized result: %w", err))
 	}
 	retryOverrun := retryMeasurement.Overrun(budget)
-	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, false, overrun)
+	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, overrun)
 	event.MeasuredItems = retryMeasurement.Items.Budgeted()
 	event.MeasuredBytes = retryMeasurement.Bytes
 	event.RetryAttempted = true
@@ -129,7 +139,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// retries explicitly: they inherit the same deadline problem and
 		// merely move the terminal case, arriving at the same unanswered
 		// question with more latency.
-		return InvestigationResult{}, e.refusalFrom(plan, retryMeasurement, retryOverrun, true, deadlineOK)
+		return InvestigationResult{}, e.refusalFrom(plan, retryMeasurement, retryOverrun, true)
 	}
 	return retried, nil
 }
@@ -219,19 +229,24 @@ func (e *Engine) retryDeadlineAvailable(ctx context.Context) bool {
 }
 
 // planRefusal emits the telemetry and builds the refusal.
-func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, deadlineOK bool) error {
-	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, 0, 0, false, overrun)
+//
+// members is the cohort size the refusal could not narrow, carried so the
+// event says WHAT could not be reduced rather than reporting 0 -> 0, which is
+// what it did before the rig showed how uninformative that is.
+func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, grouped bool, members int, declined RetryDeclinedReason) error {
+	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, members, grouped, overrun)
 	event.MeasuredItems = measurement.Items.Budgeted()
 	event.MeasuredBytes = measurement.Bytes
 	event.RetryAttempted = retryAttempted
 	event.RetryFit = false
 	event.RefusalPlanned = true
-	event.DeadlineReserved = e.synthesisDeadlineReserve > 0 && deadlineOK
+	event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+	event.RetryDeclined = declined
 	e.recordPlanNarrowing(ctx, principal, event)
-	return e.refusalFrom(plan, measurement, overrun, retryAttempted, deadlineOK)
+	return e.refusalFrom(plan, measurement, overrun, retryAttempted)
 }
 
-func (e *Engine) refusalFrom(plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, _ bool) error {
+func (e *Engine) refusalFrom(plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted bool) error {
 	return AnswerBudgetRefusal{
 		Overrun:            overrun,
 		MeasuredItems:      measurement.Items.Budgeted(),

@@ -601,6 +601,7 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"retry_fit", event.RetryFit,
 		"refusal_planned", event.RefusalPlanned,
 		"deadline_reserved", event.DeadlineReserved,
+		"retry_declined", string(event.RetryDeclined),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric plan narrowing", args...)
