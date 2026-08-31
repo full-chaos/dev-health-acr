@@ -1350,10 +1350,18 @@ func TestDecisionEventNeverCarriesCorpusText(t *testing.T) {
 		"request_id": true, "org_id_hash": true, "operation": true, "outcome": true,
 		"attempts": true, "fallback_used": true, "primary_failure_classification": true,
 		"axis_source": true,
-		// CHAOS-4622: the applied INTERPRET decoding config, logged as the
-		// fixed named constant (never request/response content) -- see
-		// logInterpretDecision's own doc comment.
-		"decoding_seed": true,
+		// CHAOS-4631: the applied INTERPRET decoding config (a derived seed,
+		// never a fixed constant as of this ticket -- CHAOS-4622's original
+		// constant scheme) plus which sample index derived it, and the
+		// model id/version/prompt version already carried on the durable
+		// receipt -- none of these are ever request/response content, only
+		// closed config/version identifiers. See logInterpretDecision's own
+		// doc comment.
+		"decoding_seed":  true,
+		"sample":         true,
+		"model_id":       true,
+		"model_version":  true,
+		"prompt_version": true,
 	}
 	synthesizeFields := map[string]bool{
 		"request_id": true, "org_id_hash": true, "operation": true, "outcome": true,

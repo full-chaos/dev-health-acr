@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"regexp"
 	"sort"
@@ -400,30 +401,60 @@ type generationRequest struct {
 	Model  string
 	System string
 	Prompt string
-	// Config (CHAOS-4622) is an OPTIONAL provider decoding config, forwarded
-	// verbatim to genkit's ai.WithConfig. Only InterpretQuestion sets this
-	// (to interpretDecodingConfig, below) -- Synthesize/Phrase never set it,
-	// and sdkGenerator.Synthesize/Phrase never read it, so this field is a
-	// no-op for every call site except Interpret.
+	// Config (CHAOS-4622, seed scheme superseded by CHAOS-4631) is an
+	// OPTIONAL provider decoding config, forwarded verbatim to genkit's
+	// ai.WithConfig. Only interpretQuestionWithSample sets this (to
+	// chaos4631InterpretDecodingConfig, below) -- Synthesize/Phrase never
+	// set it, and sdkGenerator.Synthesize/Phrase never read it, so this
+	// field is a no-op for every call site except Interpret.
 	Config any
 }
 
-// chaos4622InterpretSeed is the exact decoding parameter
-// interpretDecodingConfig pins on the INTERPRET call, named individually
-// (not just inlined in the map) so logInterpretDecision can report exactly
-// what was applied without re-inspecting the request payload.
-const chaos4622InterpretSeed = 4622
+// chaos4631InterpretSeedFor derives seed_i = f(stable_question_hash, i)
+// (design doc §4.1 mechanism 1; ticket CHAOS-4631, Fable review finding F1)
+// -- the INTERPRET call's decoding seed, per sample, never one constant
+// shared across every question and every sample.
+//
+// This SUPERSEDES CHAOS-4622's hotfix (`{"seed": 4622}`, one fixed
+// constant for every question and every replicate): that constant reduced
+// flip rate (EXECUTED, lane-4622-hotfix) but is unsound as the basis for
+// S2's future N-sample consensus. Against a seed-honouring provider, N
+// samples run under ONE shared seed return near-identical output, which
+// makes the consensus vacuously unanimous -- fakes the very stability S2
+// exists to measure, and defeats refuse-to-guess by never producing a tie
+// (design §4.1). A derived, per-sample seed keeps the ensemble diverse
+// while staying fully reproducible from the question text alone.
+//
+// Production calls this with sample=0 only (S1 ships N=1; see
+// interpretQuestionWithSample). S2 is the first production caller of
+// sample>0. The CHAOS-4631 Shape-distribution measurement
+// (cmd/acr-interpret-seed-bench) calls InterpretQuestionForSample with
+// sample=0..N-1 directly, to reproduce S2's N-distinct-seed scheme before
+// S2's resolver exists -- sampling under any other scheme (e.g. one fixed
+// seed repeated N times) would measure a distribution the running system
+// will never produce (design §4.1, ticket body point 3).
+//
+// FNV-1a over "<questionHash>:<sample>" is a deterministic, well-mixed
+// 64-bit value; masked into the non-negative int64 range because the wire
+// type (openai-go's Seed, an int64) documents no sign requirement honoured
+// by every provider, and a consistently non-negative seed avoids relying
+// on one. questionHash is contextfabric.QuestionHash(request.Question) --
+// the SAME reuse-key hash already used to key answer-reuse -- rather than
+// a fresh hash construction, so "reproducible from the question hash
+// alone" is the same hash a caller can already recompute.
+func chaos4631InterpretSeedFor(questionHash string, sample int) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(questionHash))
+	_, _ = h.Write([]byte(":"))
+	_, _ = h.Write([]byte(strconv.Itoa(sample)))
+	return int64(h.Sum64() &^ (1 << 63))
+}
 
-// interpretDecodingConfig (CHAOS-4622) pins the INTERPRET call to
-// deterministic-as-possible decoding: a fixed seed, and ONLY a fixed seed.
+// chaos4631InterpretDecodingConfig builds the exact decoding config
+// forwarded to the INTERPRET call's generationRequest.Config -- a fixed
+// seed, and ONLY a fixed seed.
 //
-// Before this, sdkGenerator.Interpret called genkit.GenerateData with NO
-// ai.WithConfig at all, so InterpretedQuestion (incl. .Shape) sampled
-// unseeded and flipped across replicates of the byte-identical question --
-// 6 replicates of one CHAOS-4622 corpus question produced 3 different
-// missing-field bundles, only 1/6 matching the correct interpretation.
-//
-// Temperature is deliberately NOT set here, even though the ticket asked
+// Temperature is deliberately NOT set here, even though CHAOS-4622 asked
 // for "temperature 0 (or the runtime's nearest supported)": the deployed
 // model family rejects it outright. EXECUTED repro against the real
 // provider (org 70d529e0, kiac rig, this runtime's own configured model)
@@ -434,7 +465,7 @@ const chaos4622InterpretSeed = 4622
 // constraint OpenAI's reasoning-model line (o1/o3/gpt-5-class) documents)
 // -- classified ErrModelUnavailable and surfaced to callers as
 // dependency_unavailable, i.e. temperature:0 would have made EVERY
-// interpretation fail, not just made it deterministic. `{"seed": 4622}`
+// interpretation fail, not just made it deterministic. `{"seed": N}`
 // alone, same model, same question: 200, interpretation returned. Seed is
 // this model family's actual supported determinism lever, so it is the
 // "nearest supported" the ticket asks for.
@@ -445,7 +476,9 @@ const chaos4622InterpretSeed = 4622
 // stage). It only makes the SAME input more likely to reliably produce the
 // SAME interpretation, so a still-wrong interpretation for a hard question
 // can stabilize rather than flip; that is this ticket's honest limit, not
-// a regression.
+// a regression -- and the seed provider documents as best-effort, not
+// guaranteed (measured: entropy down on 2 of 3 CHAOS-4622 questions, the
+// missing-bundle variance surviving on all 3).
 //
 // Shaped as a map[string]any (JSON field name "seed") rather than the
 // openai-go SDK's own openai.ChatCompletionNewParams type, so
@@ -458,10 +491,11 @@ const chaos4622InterpretSeed = 4622
 // recognize "seed" at all would silently ignore this whole map (still no
 // worse than today), never fail closed.
 //
-// Deliberately NOT applied to Synthesize/Phrase in this change -- see the
-// CHAOS-4622 handoff for a per-call-site recommendation on those.
-var interpretDecodingConfig = map[string]any{
-	"seed": chaos4622InterpretSeed,
+// Deliberately NOT applied to Synthesize/Phrase in this change -- decision
+// D3 (design doc §10) scopes narrator seeding to its own follow-up
+// measurement ticket, not this one.
+func chaos4631InterpretDecodingConfig(seed int64) map[string]any {
+	return map[string]any{"seed": seed}
 }
 
 type sdkGenerator struct {
@@ -614,7 +648,31 @@ func newWithGenerator(config Config, gen generator) (*Runtime, error) {
 	return &Runtime{generator: gen, config: config, now: time.Now}, nil
 }
 
+// InterpretQuestion is the production entry point: it always samples the
+// interpretation exactly once (S1 ships N=1 -- see chaos4631InterpretSeedFor's
+// doc comment), under the sample-0 derived seed.
 func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
+	return r.interpretQuestionWithSample(ctx, principal, request, 0)
+}
+
+// InterpretQuestionForSample is CHAOS-4631's measurement-only entry point.
+// It is NOT part of the contextfabric.ModelRuntime interface and no
+// production request path calls it (every real investigation calls
+// InterpretQuestion, sample=0, above) -- it exists so the CHAOS-4631
+// Shape-distribution measurement (cmd/acr-interpret-seed-bench) can
+// reproduce S2's future N-distinct-derived-seed consensus scheme against
+// the real configured model, without any wire-visible seed override and
+// without widening contextfabric.ModelRuntime (which every existing
+// ModelRuntime caller -- RuntimeQuestionInterpreter, the fallback chain --
+// keeps depending on unchanged). A method on the concrete *Runtime type,
+// not the interface, is exactly how CHAOS-4631's "no contract change"
+// claim stays true while still shipping the sample parameter the design
+// says must ship now for S2 to consume later.
+func (r *Runtime) InterpretQuestionForSample(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, sample int) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
+	return r.interpretQuestionWithSample(ctx, principal, request, sample)
+}
+
+func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, sample int) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
 	if err := request.Validate(); err != nil {
 		return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{}, fmt.Errorf("interpretation request: %w", err)
 	}
@@ -648,8 +706,15 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 		axisSource                   string
 		primaryFailureClassification string
 	)
+	// CHAOS-4631: the derived seed is a pure function of the question text
+	// and the sample index, known before the call is even attempted -- so
+	// it is computed once, up front, and threaded into both the actual
+	// request and the deferred telemetry read below, rather than mutated
+	// in place the way receipt/axisSource/primaryFailureClassification are.
+	questionHash := contextfabric.QuestionHash(request.Question)
+	decodingSeed := chaos4631InterpretSeedFor(questionHash, sample)
 	defer func() {
-		r.logInterpretDecision(ctx, principal.OrgID, request.RequestID, receipt, primaryFailureClassification, axisSource)
+		r.logInterpretDecision(ctx, principal.OrgID, request.RequestID, receipt, primaryFailureClassification, axisSource, decodingSeed, sample)
 	}()
 
 	started := r.now().UTC()
@@ -659,7 +724,7 @@ func (r *Runtime) InterpretQuestion(ctx context.Context, principal storage.Princ
 		var err error
 		output, usage, err = r.generator.Interpret(callCtx, generationRequest{
 			Model: r.config.ModelRef, System: interpretationSystemPrompt, Prompt: string(encoded),
-			Config: interpretDecodingConfig,
+			Config: chaos4631InterpretDecodingConfig(decodingSeed),
 		})
 		return err
 	})
@@ -1174,7 +1239,7 @@ func safeLogRequestID(requestID string) string {
 	return string(sanitized)
 }
 
-func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string) {
+func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string, decodingSeed int64, sample int) {
 	r.config.Logger.InfoContext(ctx, decisionEventMessage,
 		"request_id", safeLogRequestID(requestID),
 		"org_id_hash", decisionOrgIDHash(orgID),
@@ -1184,17 +1249,28 @@ func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID str
 		"fallback_used", receipt.FallbackUsed,
 		"primary_failure_classification", primaryFailureClassification,
 		"axis_source", axisSource,
-		// CHAOS-4622: the exact decoding config interpretDecodingConfig
-		// applies to this call, logged as a concrete value (not the request
-		// payload) so replay can prove determinism was actually requested
-		// without re-inspecting the receipt. This function only ever logs
-		// the interpret operation, so this is unconditional, unlike
-		// logSynthesizeDecision's appended-only fields. No temperature
-		// field: this model family rejects a non-default temperature
-		// outright (see interpretDecodingConfig's doc comment for the
-		// executed repro), so seed is the only decoding parameter this
-		// change actually applies.
-		"decoding_seed", chaos4622InterpretSeed,
+		// CHAOS-4631: the exact decoding config chaos4631InterpretDecodingConfig
+		// applied to this call (seed + which sample index derived it), logged
+		// as concrete values (never the request/response payload) so replay
+		// can prove determinism was actually requested, and which sample it
+		// was, without re-inspecting the receipt. This function only ever
+		// logs the interpret operation, so this is unconditional, unlike
+		// logSynthesizeDecision's appended-only fields. No temperature field:
+		// this model family rejects a non-default temperature outright (see
+		// chaos4631InterpretDecodingConfig's doc comment for the executed
+		// repro), so seed is the only decoding parameter this change applies.
+		"decoding_seed", decodingSeed,
+		"sample", sample,
+		// CHAOS-4631 ticket point 4: model id and prompt version recorded in
+		// telemetry, not on the result -- receipt.Model/ModelVersion/
+		// PromptVersion are already the durable ModelExecutionReceipt sink's
+		// own fields (model_runtime.go), so this is the SAME values on the
+		// log-line surface too, closing the "diagnosable from the run's own
+		// completed artifacts alone" bar for this decision event specifically
+		// rather than only the separate receipt sink.
+		"model_id", receipt.Model,
+		"model_version", receipt.ModelVersion,
+		"prompt_version", receipt.PromptVersion,
 	)
 }
 
