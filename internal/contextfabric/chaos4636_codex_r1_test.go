@@ -456,3 +456,98 @@ func canonicalIDsOf(members []CohortMember) []string {
 	}
 	return ids
 }
+
+// ── codex round 5 ────────────────────────────────────────────────────────────
+
+// TestGroupedStage2NarrowingRecordsTheGroupBasisAndNotTheD2Counter pins codex
+// round 5's finding, and the design flaw underneath it.
+//
+// The stage-2 site hard-coded `false` for a single boolean that fed BOTH the
+// basis selector and the event's `Groups` field. So a grouped narrowing
+// recorded `canonical_id_lexical` — an order that was not used — in the
+// persisted plan AND the counter. Passing `true` would have fixed the label
+// and falsely incremented decision D2's group-drop counter, which must stay
+// rare. One input, two meanings, no correct value.
+//
+// The assertion is therefore a CONJUNCTION: the group basis must be recorded
+// AND the D2 counter must stay false, because a fix that gets only one of
+// those right is the bug in its other form.
+func TestGroupedStage2NarrowingRecordsTheGroupBasisAndNotTheD2Counter(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	telemetry := &recordingTelemetry{}
+	cohort := budgetStageCohort(3)
+	cohort.Groups = []contractsv1.ContextFabricCohortGroup{{
+		Subject:            SubjectRef{Kind: SubjectTeam, CanonicalID: "team_a", Label: "team_a"},
+		MemberCanonicalIDs: []string{"a_project", "b_project", "c_project"},
+		Complete:           true, Total: 3,
+	}}
+	// The fake interpreter yields no family outcome, so the plan is
+	// `unclassified` -- headroom 0, MaxMembers == MaxItems. A 2-item budget
+	// therefore clamps to 2 members and stage 2 narrows 3 -> 2 over a real
+	// group axis, while 0 claims per member keeps the assembled result inside
+	// the same budget so stage 3 fits and an answer is actually served.
+	//
+	// The groups are set on the FIXTURE rather than built: BuildCohortGroups
+	// needs a grouped family, and this is precisely the "the cohort carries
+	// groups" path that selects NarrowGroupedCohort.
+	engine := budgetStageEngine(t, cohort, 0, budgetStageOptions(2, time.Second), &calls, telemetry)
+	engine.graph = &capturingGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		context: GraphContext{
+			Cohort: cohort,
+			Paths:  []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
+			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	engine.interpreter = interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+		return InterpretedQuestion{
+			Shape: ShapeDiscoveredCohort, RequestedJudgment: "status",
+			TimeContext:      TimeContext{Axis: TemporalCurrent},
+			FactRequirements: []FactRequirement{{Kind: FactStatus}},
+		}, nil
+	})
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+
+	var stage2 *PlanNarrowingEvent
+	for index := range telemetry.planNarrowings {
+		if telemetry.planNarrowings[index].Stage == contractsv1.ContextFabricPlanNarrowingSynthesisInput {
+			stage2 = &telemetry.planNarrowings[index]
+		}
+	}
+	// NON-VACUITY: stage 2 must actually have narrowed a grouped cohort.
+	if stage2 == nil {
+		t.Fatal("stage 2 never narrowed; this fixture cannot observe the basis it exists to pin")
+	}
+	if stage2.Basis != contractsv1.ContextFabricNarrowingBasisLargestGroupRoundRobin {
+		t.Errorf("counter Basis = %q for a grouped narrowing, want largest_group_round_robin", stage2.Basis)
+	}
+	if stage2.Groups {
+		t.Error("counter Groups = true, but decision D2 narrows MEMBERS and every group survived; this is the D2 group-drop counter and must stay false")
+	}
+	// The persisted disclosure must agree with the counter: a caller reading
+	// the plan and an operator reading the metric must see the same order.
+	if result.AnswerPlan == nil {
+		t.Fatal("served result carries no plan")
+	}
+	var planStep *contractsv1.ContextFabricPlanNarrowing
+	for index := range result.AnswerPlan.Narrowing {
+		if result.AnswerPlan.Narrowing[index].Stage == contractsv1.ContextFabricPlanNarrowingSynthesisInput {
+			planStep = &result.AnswerPlan.Narrowing[index]
+		}
+	}
+	if planStep == nil {
+		t.Fatal("the persisted plan records no stage-2 narrowing")
+	}
+	if planStep.Basis != contractsv1.ContextFabricNarrowingBasisLargestGroupRoundRobin {
+		t.Errorf("persisted plan Basis = %q, want largest_group_round_robin", planStep.Basis)
+	}
+	if planStep.Groups {
+		t.Error("persisted plan claims groups were narrowed; members were")
+	}
+}

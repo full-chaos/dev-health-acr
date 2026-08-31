@@ -43,6 +43,11 @@ type PlanNarrowingEvent struct {
 	// Groups reports whether GROUPS were narrowed rather than members.
 	// Decision D2 ruled member-first, so this being true is the rare case
 	// and worth being able to count.
+	//
+	// It is NOT "the selection used a group axis" -- that is what Basis
+	// reports, and conflating the two into one input made a grouped
+	// member-narrowing either mislabel its order or falsely increment this
+	// counter. See PlanNarrowingEventFrom's two separate parameters.
 	Groups bool
 	// Overrun names which budget axis forced the step, empty when nothing
 	// was measured (stage 1) or nothing was over (a recorded fit).
@@ -111,17 +116,26 @@ const (
 	RetryDeclinedNothingToNarrow RetryDeclinedReason = "nothing_to_narrow"
 )
 
-// PlanNarrowingEventFrom builds the event for the two pre-measurement stages,
-// where there is nothing measured to report.
-func PlanNarrowingEventFrom(plan AnswerPlan, stage contractsv1.ContextFabricPlanNarrowingStage, before, after int, groups bool, overrun contractsv1.ContextFabricBudgetOverrun) PlanNarrowingEvent {
+// PlanNarrowingEventFrom builds the event.
+//
+// groupAxis and groupsNarrowed are SEPARATE parameters because they are
+// separate facts, and one boolean serving both made a wrong state
+// representable. "The selection used the group axis" decides which ORDER is
+// reported; "groups were narrowed rather than members" is decision D2's own
+// counter, which must stay rare. A grouped cohort whose MEMBERS were trimmed
+// is groupAxis=true, groupsNarrowed=false -- the ordinary D2 case, and the one
+// the single boolean could not express. Setting that boolean true to fix the
+// basis would have corrupted the D2 counter; leaving it false reported an
+// order that was not used. Two parameters make the bad state unrepresentable.
+func PlanNarrowingEventFrom(plan AnswerPlan, stage contractsv1.ContextFabricPlanNarrowingStage, before, after int, groupAxis, groupsNarrowed bool, overrun contractsv1.ContextFabricBudgetOverrun) PlanNarrowingEvent {
 	return PlanNarrowingEvent{
 		Family:             plan.Family,
 		FamilyVersion:      plan.FamilyVersion,
 		Stage:              stage,
-		Basis:              planStageBasis(stage, groups),
+		Basis:              planStageBasis(stage, groupAxis),
 		Before:             before,
 		After:              after,
-		Groups:             groups,
+		Groups:             groupsNarrowed,
 		Overrun:            overrun,
 		MaxItems:           plan.Budget.MaxItems,
 		MaxSerializedBytes: plan.Budget.MaxSerializedBytes,
@@ -133,13 +147,16 @@ func PlanNarrowingEventFrom(plan AnswerPlan, stage contractsv1.ContextFabricPlan
 // not have used -- the mistake §6.3a records every earlier revision making,
 // in the form of narrowing by an order that did not exist yet.
 //
-// grouped says whether the cohort ACTUALLY carries a group axis, not merely
-// whether the stage runs late enough for one to exist. Reporting
-// largest_group_round_robin for a flat cohort would name a basis with no
-// groups to round-robin over -- found on the rig, where a live
-// discovered_cohort_ranking refusal logged exactly that.
-func planStageBasis(stage contractsv1.ContextFabricPlanNarrowingStage, grouped bool) contractsv1.ContextFabricNarrowingBasis {
-	if grouped {
+// groupAxis says whether the selection ACTUALLY ran over a group axis, not
+// merely whether the stage runs late enough for one to exist.
+//
+// Both directions of getting this wrong have now been observed live and are
+// pinned: reporting largest_group_round_robin for a FLAT cohort names an order
+// with no groups to round-robin over, and reporting canonical_id_lexical for a
+// GROUPED narrowing names an order that was not used. The caller must pass
+// what the selection actually did.
+func planStageBasis(stage contractsv1.ContextFabricPlanNarrowingStage, groupAxis bool) contractsv1.ContextFabricNarrowingBasis {
+	if groupAxis {
 		// Round-robin across groups, largest first, so EVERY group
 		// survives: decision D2, member-first, ruled 2026-08-30.
 		return contractsv1.ContextFabricNarrowingBasisLargestGroupRoundRobin

@@ -1437,7 +1437,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			Before: graphRequest.Options.MaxCohortMembers,
 			After:  clamped,
 		})
-		e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingCardinality, graphRequest.Options.MaxCohortMembers, clamped, false, ""))
+		e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingCardinality, graphRequest.Options.MaxCohortMembers, clamped, false, false, ""))
 		graphRequest.Options.MaxCohortMembers = clamped
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
@@ -1664,13 +1664,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				cohort.Truncated = true
 			}
 			graphContext.Cohort = &cohort
+			// groupAxis is what the selection ACTUALLY ran over -- this
+			// branch calls NarrowGroupedCohort exactly when the cohort has
+			// groups. groupsNarrowed stays FALSE: decision D2 is member-first
+			// and every group survives, so the D2 counter must not tick.
+			narrowedGroupAxis := len(cohort.Groups) > 0
 			e.recordPlanNarrowingStep(&plan, PlanNarrowing{
 				Stage:  contractsv1.ContextFabricPlanNarrowingSynthesisInput,
-				Basis:  planStageBasis(contractsv1.ContextFabricPlanNarrowingSynthesisInput, false),
+				Basis:  planStageBasis(contractsv1.ContextFabricPlanNarrowingSynthesisInput, narrowedGroupAxis),
 				Before: before,
 				After:  len(kept),
 			})
-			e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingSynthesisInput, before, len(kept), false, ""))
+			e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingSynthesisInput, before, len(kept), narrowedGroupAxis, false, ""))
 		}
 	}
 	var cohortSignalCitations cohortMemberSignalCitations

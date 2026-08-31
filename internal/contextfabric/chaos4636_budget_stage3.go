@@ -95,7 +95,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// (codex round 1, finding 5).
 		fit := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
 			cohortMemberCount(params.Graph.Cohort), cohortMemberCount(params.Graph.Cohort),
-			params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0,
+			params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0, false,
 			contractsv1.ContextFabricBudgetFits)
 		fit.MeasuredItems = measurement.Items.Budgeted()
 		fit.MeasuredBytes = measurement.Bytes
@@ -154,7 +154,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// The over-budget measurement is not lost -- it is recorded on the
 		// event below -- but the ERROR the caller sees is the one that
 		// actually stopped the answer.
-		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, before, grouped, overrun)
+		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, before, grouped, false, overrun)
 		event.MeasuredItems = measurement.Items.Budgeted()
 		event.MeasuredBytes = measurement.Bytes
 		event.RetryAttempted = true
@@ -172,7 +172,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		return InvestigationResult{}, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("measure re-synthesized result: %w", err))
 	}
 	retryOverrun := retryMeasurement.Overrun(budget)
-	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, overrun)
+	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun)
 	event.MeasuredItems = retryMeasurement.Items.Budgeted()
 	event.MeasuredBytes = retryMeasurement.Bytes
 	event.RetryAttempted = true
@@ -319,7 +319,7 @@ func (e *Engine) retryDeadlineAvailable(ctx context.Context) bool {
 // event says WHAT could not be reduced rather than reporting 0 -> 0, which is
 // what it did before the rig showed how uninformative that is.
 func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, grouped bool, members int, declined RetryDeclinedReason) error {
-	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, members, grouped, overrun)
+	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, members, grouped, false, overrun)
 	event.MeasuredItems = measurement.Items.Budgeted()
 	event.MeasuredBytes = measurement.Bytes
 	event.RetryAttempted = retryAttempted
