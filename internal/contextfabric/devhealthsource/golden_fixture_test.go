@@ -127,6 +127,23 @@ func TestGoldenProjectionBatchMatchesProducerOutput(t *testing.T) {
 		}
 	}
 
+	// The retired-prefix sweep only runs during opt-in REGENERATION, and the
+	// drift comparison below filters the committed set to LIVE prefixes -- so
+	// a fixture carrying all the right rows PLUS a stale one from a previous
+	// id scheme passed silently, documenting an edge no producer emits.
+	// (codex round 2, reproduced: injecting a `relationship:project_team:*`
+	// row into the committed file left this test green.)
+	//
+	// That made the sweep a guard that only helps someone who already did the
+	// right thing. This is the half that FAILS when they did not, and it must
+	// read the committed set UNFILTERED -- the filter is precisely what hid
+	// the orphan.
+	for _, relationship := range goldenRelationshipsFromFixtureUnfiltered(t) {
+		if hasRetiredGoldenPrefix(relationship.RelationshipID) {
+			t.Errorf("the committed fixture still carries %q, whose id scheme no producer emits any more. Regenerate it (the command is below) rather than editing it by hand; a fixture documenting a dead id is worse than a missing one, because it reads as provenance.", relationship.RelationshipID)
+		}
+	}
+
 	committed := goldenRelationshipsFromFixture(t)
 	wantJSON := mustMarshalIndent(t, produced)
 	gotJSON := mustMarshalIndent(t, committed)
@@ -153,6 +170,25 @@ func goldenRelationshipsFromProducer(t *testing.T) []contractsv1.ContextFabricRe
 		writeGoldenRelationships(t, produced)
 	}
 	return produced
+}
+
+// goldenRelationshipsFromFixtureUnfiltered returns EVERY committed
+// relationship, including ones no selector recognises. The filtered sibling
+// below is right for the drift comparison and wrong for the orphan check --
+// an orphan is by definition an entry the live selector does not match.
+func goldenRelationshipsFromFixtureUnfiltered(t *testing.T) []contractsv1.ContextFabricRelationshipProjection {
+	t.Helper()
+	var doc struct {
+		Relationships []contractsv1.ContextFabricRelationshipProjection `json:"relationships"`
+	}
+	raw, err := os.ReadFile(filepath.Clean(goldenProjectionBatchPath))
+	if err != nil {
+		t.Fatalf("read golden fixture: %v", err)
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("decode golden fixture: %v", err)
+	}
+	return doc.Relationships
 }
 
 func goldenRelationshipsFromFixture(t *testing.T) []contractsv1.ContextFabricRelationshipProjection {
