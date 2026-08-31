@@ -83,6 +83,34 @@ type synthesisAssemblyParams struct {
 	Retry bool
 }
 
+// snapshot deep-copies every value a pass mutates through a shared backing
+// array, and MUST be taken BEFORE the first pass runs.
+//
+// Copying at retry-prep time was the defect: by then pass one had already
+// dirtied the source, so the "deep copy" faithfully copied corrupted state.
+// The rule this encodes is ordering, not existence -- the copy always existed.
+// Two fields are affected and BOTH were dirtied, though only one was reported:
+//
+//   - Resolution: applyCommitAffirmation demotes a retracted candidate IN
+//     PLACE, through the array result.SubjectResolution shares with this.
+//     Consequence: a retry that re-affirms the subject serves it in Committed
+//     while reporting its candidate state as `proposed`.
+//   - Graph.Cohort: narrateCohortDriverJudgments stamps SourceClaimedFactIDs
+//     onto member drivers IN PLACE. Idempotent in practice (the claim ids are
+//     deterministic), which is exactly why it went unnoticed -- but relying on
+//     an accident of idempotency is not the same as taking the copy in time.
+//
+// Taking ONE snapshot before pass one makes the ordering structural: stage 3
+// cannot narrow or retry from anything but pristine state, because dirtied
+// state is no longer reachable from it.
+func (p synthesisAssemblyParams) snapshot() synthesisAssemblyParams {
+	clean := p
+	clean.Resolution = copySubjectResolutionForRetry(p.Resolution)
+	clean.Graph.Cohort = copyCohortForRetry(p.Graph.Cohort)
+	clean.Graph.Resolution = clean.Resolution
+	return clean
+}
+
 // forRetry returns params with every value a second pass would otherwise
 // mutate through a shared backing array replaced by a copy.
 //

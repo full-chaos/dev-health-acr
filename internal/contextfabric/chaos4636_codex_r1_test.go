@@ -551,3 +551,143 @@ func TestGroupedStage2NarrowingRecordsTheGroupBasisAndNotTheD2Counter(t *testing
 		t.Error("persisted plan claims groups were narrowed; members were")
 	}
 }
+
+// ── codex round 6 ────────────────────────────────────────────────────────────
+
+// TestRetryStartsFromPristineResolutionNotPassOnesMutation pins codex round 6's
+// finding 1, and the sweep's second instance of the same class.
+//
+// The deep copy always existed; it ran one step too late. `forRetry` was
+// invoked at retry-prep time, by which point pass one's commit-affirmation had
+// already demoted a retracted candidate IN PLACE through the array
+// `result.SubjectResolution` shares with the params. The copy then faithfully
+// copied corrupted state.
+//
+// Symptom: pass one replaces only its own result-local `Committed` slice
+// header, so the shared `Candidates` array carries `proposed` while `Committed`
+// still names the subject — and a retry that re-affirms serves both, which is
+// self-contradictory and violates the correspondence the affirmation reducer's
+// own tests assert.
+//
+// The sweep found the SAME defect on `Graph.Cohort` (narration stamps driver
+// claim ids in place). That one is idempotent in practice, which is precisely
+// why it went unnoticed — relying on an accident of idempotency is not the same
+// as taking the copy in time. One pre-pass snapshot fixes both structurally.
+func TestRetryStartsFromPristineResolutionNotPassOnesMutation(t *testing.T) {
+	t.Parallel()
+	committed := SubjectRef{Kind: SubjectProject, CanonicalID: "project_subject", Label: "Subject"}
+	cohort := budgetStageCohort(6)
+	calls := 0
+
+	// The repro needs pass one to RETRACT and pass two to AFFIRM, which is why
+	// codex could only argue it: the two passes must synthesize differently.
+	// Affirmation shape 1 is "a claim about the subject standing on a
+	// canonical fact for that subject", so the fact read supplies the fact
+	// (once, before both passes) and the synthesizer emits the CLAIM only on
+	// the second call.
+	subjectFact := CanonicalFact{
+		Kind: FactStatus, Subject: committed,
+		Fields:      map[string]FactValue{"status": {String: ptrString("green")}},
+		SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1",
+	}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{
+				Shape: ShapeDiscoveredCohort, RequestedJudgment: "status",
+				TimeContext:      TimeContext{Axis: TemporalCurrent},
+				FactRequirements: []FactRequirement{{Kind: FactStatus}},
+			}, nil
+		}),
+		Graph: &capturingGraphReader{
+			resolution: SubjectResolution{
+				// Starts COMMITTED. Pass one's affirmation gate retracts it
+				// and demotes THIS entry in place.
+				Candidates: []SubjectCandidate{{
+					ReceiptID: "receipt_committed1", Subject: committed,
+					State: ResolutionCommitted, MatchReasons: []string{"exact name"},
+					Confidence: 0.99, EvidenceRefIDs: []string{},
+				}},
+				Committed: []SubjectRef{committed},
+			},
+			context: GraphContext{
+				Cohort: cohort,
+				Paths:  []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+				FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
+				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+			},
+		},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{
+				Facts:    []CanonicalFact{subjectFact},
+				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				Version:  "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+			}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+			calls++
+			claims := []ClaimedFact{}
+			if input.Graph.Cohort != nil {
+				for _, member := range input.Graph.Cohort.Members {
+					for claim := 0; claim < 2; claim++ {
+						claims = append(claims, ClaimedFact{
+							ClaimID: "claim_" + member.Subject.CanonicalID + "_" + string(rune('0'+claim)),
+							Kind:    FactStatus, Subject: member.Subject, Field: "status",
+							Value: ScalarValue{String: ptrString("green")},
+						})
+					}
+				}
+			}
+			// ONLY the second pass claims about the committed subject, so
+			// pass one retracts it and pass two affirms it.
+			if calls >= 2 {
+				claims = append(claims, ClaimedFact{
+					ClaimID: "claim_subject_0", Kind: FactStatus, Subject: committed,
+					Field: "status", Value: ScalarValue{String: ptrString("green")},
+				})
+			}
+			return InvestigationResult{
+				Status: InvestigationComplete, DirectJudgment: "Fine.", CurrentState: "Nominal.",
+				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{},
+				ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{},
+				Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: claims,
+				Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				DeterministicAnswer: "Fine, based on available context.", Warnings: []string{},
+				Versions: VersionSet{
+					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+					InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+				},
+			}, nil
+		}),
+		Telemetry: &recordingTelemetry{},
+	}, budgetStageOptions(12, time.Second))
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	// NON-VACUITY: the retry must have run, and the subject must have SURVIVED
+	// into Committed -- otherwise the invariant below has nothing to check.
+	if calls != 2 {
+		t.Fatalf("synthesizer called %d times, want 2 -- without a retry this test proves nothing", calls)
+	}
+	if len(result.SubjectResolution.Committed) == 0 {
+		t.Fatal("the subject was not affirmed on the retry; this fixture cannot observe the contradiction it exists to pin")
+	}
+	// THE INVARIANT: a subject named in Committed must have a candidate whose
+	// state agrees. Committed-while-`proposed` is self-contradictory, and it
+	// is both SERVED and PERSISTED.
+	for _, subject := range result.SubjectResolution.Committed {
+		for _, candidate := range result.SubjectResolution.Candidates {
+			if SubjectMapKey(candidate.Subject) != SubjectMapKey(subject) {
+				continue
+			}
+			if candidate.State != ResolutionCommitted {
+				t.Fatalf("subject %q is in Committed but its candidate reports state %q -- the retry inherited pass one's in-place demotion",
+					subject.CanonicalID, candidate.State)
+			}
+		}
+	}
+}

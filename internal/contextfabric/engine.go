@@ -1700,6 +1700,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		StructureCanon: structureCanon, CarriedStructureEntry: carriedStructureEntry,
 		CommitBases: commitBases, CommitDigests: commitDigests,
 	}
+	// The retry's base is snapshotted BEFORE the first pass runs. Taking it
+	// afterwards copied state pass one had already dirtied in place -- see
+	// synthesisAssemblyParams.snapshot for the two fields and why ordering,
+	// not the existence of a copy, was the defect.
+	retryBase := assemblyParams.snapshot()
 	result, pendingTelemetry, err := e.synthesizeAndAssemble(ctx, principal, assemblyParams)
 	if err != nil {
 		return InvestigationResult{}, err
@@ -1729,7 +1734,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// the shape measured on the second pass is the shape that would be
 	// served on the second pass.
 	result = e.finalizeResult(result, plan)
-	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, pendingTelemetry, assemblyParams)
+	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, pendingTelemetry, retryBase)
 	if err != nil {
 		return InvestigationResult{}, err
 	}

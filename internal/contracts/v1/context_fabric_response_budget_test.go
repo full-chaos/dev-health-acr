@@ -151,3 +151,29 @@ func TestContextFabricBudgetOverrunVocabularyIsClosed(t *testing.T) {
 		t.Fatal("ValidContextFabricBudgetOverrun accepted a non-member")
 	}
 }
+
+// TestProjectionBudgetTruncatedCoversEveryOmittedCounter pins codex round 6's
+// finding 2: CohortGroupsOmitted was added to the schema, the golden wire
+// payload, the optional-counter registry and the producer's own Truncated
+// disjunction — and missed from the validator's counts slice, which is the one
+// place that would catch a future producer getting it wrong.
+//
+// "Rule stated in one place, not enforced in another."
+func TestProjectionBudgetTruncatedCoversEveryOmittedCounter(t *testing.T) {
+	if err := (ContextFabricProjectionBudget{CohortGroupsOmitted: 1}).Validate(); err == nil {
+		t.Fatal("a budget reporting an omitted GROUP with Truncated=false validated; the honesty invariant does not cover the counter")
+	}
+	if err := (ContextFabricProjectionBudget{Truncated: true, CohortGroupsOmitted: 1}).Validate(); err != nil {
+		t.Fatalf("a truthfully-truncated group omission was rejected: %v", err)
+	}
+	// The if-and-only-if runs in both directions: claiming truncation that
+	// did not happen teaches a caller to distrust complete answers.
+	if err := (ContextFabricProjectionBudget{Truncated: true}).Validate(); err == nil {
+		t.Fatal("a budget claiming truncation with every counter zero validated")
+	}
+	// Non-vacuity: the zero budget must still be valid, or the assertions
+	// above would pass for the wrong reason.
+	if err := (ContextFabricProjectionBudget{}).Validate(); err != nil {
+		t.Fatalf("the zero budget must validate: %v", err)
+	}
+}
