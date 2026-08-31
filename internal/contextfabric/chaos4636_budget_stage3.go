@@ -65,26 +65,25 @@ func (r AnswerBudgetRefusal) Error() string {
 func (r AnswerBudgetRefusal) Unwrap() error { return ErrAnswerExceedsBudget }
 
 // fitAssembledResult is stage 3.
-// It returns the commit-affirmation outcomes belonging to the result it
-// actually serves, so the caller emits that decision-basis telemetry exactly
-// once. A retry runs the assembly twice and the first pass's answer is
-// discarded; emitting from inside the assembly double-counted a retraction
-// that, from the caller's point of view, happened once (codex round 2,
-// finding 1).
-func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Principal, plan *AnswerPlan, result InvestigationResult, firstPassAffirmations []CommitAffirmationOutcome, params synthesisAssemblyParams) (InvestigationResult, []CommitAffirmationOutcome, error) {
+// It returns the held telemetry belonging to the result it ACTUALLY SERVES,
+// so the caller emits each per-investigation decision event exactly once. A
+// retry runs the assembly twice and discards the first pass's answer, so
+// emitting from inside the assembly double-counted every event in it -- see
+// assemblyTelemetry.
+func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Principal, plan *AnswerPlan, result InvestigationResult, firstPass assemblyTelemetry, params synthesisAssemblyParams) (InvestigationResult, assemblyTelemetry, error) {
 	budget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes}
 	if budget.MaxItems <= 0 && budget.MaxSerializedBytes <= 0 {
 		// Nothing to measure against. An engine composed without either
 		// ceiling behaves exactly as it did before this slice: it plans,
 		// but it never narrows on a budget it was not told about.
-		return result, firstPassAffirmations, nil
+		return result, firstPass, nil
 	}
 	measurement, err := contractsv1.MeasureContextFabricResponse(result)
 	if err != nil {
 		// A result that cannot be marshaled is a server defect, not an
 		// over-budget answer. Conflating the two would let a serialization
 		// bug present to the caller as "your question was too big".
-		return InvestigationResult{}, nil, stageError(StageValidation, fmt.Errorf("measure assembled result: %w", err))
+		return InvestigationResult{}, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("measure assembled result: %w", err))
 	}
 	overrun := measurement.Overrun(budget)
 	if overrun == contractsv1.ContextFabricBudgetFits {
@@ -102,7 +101,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		fit.MeasuredBytes = measurement.Bytes
 		fit.DeadlineReserved = e.synthesisDeadlineReserve > 0
 		e.recordPlanNarrowing(ctx, principal, fit)
-		return result, firstPassAffirmations, nil
+		return result, firstPass, nil
 	}
 
 	grouped := params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0
@@ -121,7 +120,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		declined = RetryDeclinedInsufficientDeadline
 	}
 	if declined != RetryDeclinedNotApplicable {
-		return InvestigationResult{}, nil, e.planRefusal(ctx, principal, plan, measurement, overrun, false, grouped, before, declined)
+		return InvestigationResult{}, assemblyTelemetry{}, e.planRefusal(ctx, principal, plan, measurement, overrun, false, grouped, before, declined)
 	}
 
 	e.recordPlanNarrowingStep(plan, PlanNarrowing{
@@ -133,7 +132,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		Overrun: overrun,
 	})
 
-	retried, retryAffirmations, retryErr := e.synthesizeAndAssemble(ctx, principal, params.forRetry(narrowedGraph, narrowedFacts))
+	retried, retryPending, retryErr := e.synthesizeAndAssemble(ctx, principal, params.forRetry(narrowedGraph, narrowedFacts))
 	if retryErr != nil {
 		// PROPAGATE the retry's own error. An earlier revision discarded it
 		// and returned a budget refusal, so a transient ErrModelUnavailable
@@ -156,14 +155,14 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		event.RetryFailed = true
 		event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 		e.recordPlanNarrowing(ctx, principal, event)
-		return InvestigationResult{}, nil, retryErr
+		return InvestigationResult{}, assemblyTelemetry{}, retryErr
 	}
 	// Finalize the retry too, or the second pass repeats round 1 finding 1's
 	// defect: measuring a pre-final shape and serving a larger one.
 	retried = e.finalizeResult(retried, *plan)
 	retryMeasurement, err := contractsv1.MeasureContextFabricResponse(retried)
 	if err != nil {
-		return InvestigationResult{}, nil, stageError(StageValidation, fmt.Errorf("measure re-synthesized result: %w", err))
+		return InvestigationResult{}, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("measure re-synthesized result: %w", err))
 	}
 	retryOverrun := retryMeasurement.Overrun(budget)
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, overrun)
@@ -180,9 +179,9 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// retries explicitly: they inherit the same deadline problem and
 		// merely move the terminal case, arriving at the same unanswered
 		// question with more latency.
-		return InvestigationResult{}, nil, e.refusalFrom(plan, retryMeasurement, retryOverrun, true)
+		return InvestigationResult{}, assemblyTelemetry{}, e.refusalFrom(plan, retryMeasurement, retryOverrun, true)
 	}
-	return retried, retryAffirmations, nil
+	return retried, retryPending, nil
 }
 
 // cohortMemberCount is nil-safe: a fitting answer with no cohort reports zero

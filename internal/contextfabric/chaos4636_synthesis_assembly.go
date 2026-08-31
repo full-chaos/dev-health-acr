@@ -42,17 +42,24 @@ import (
 //     SourceClaimedFactIDs onto cohort.Members[i].Drivers[j] in place -- its
 //     own doc comment says so -- and result.Cohort is a pointer ALIAS to the
 //     same cohort, not a copy.
-//  3. Decision-basis telemetry is DEFERRED, not merely labelled. An earlier
-//     revision added a `Retry` flag intending the sinks to label the second
-//     pass, and then never wired it -- so a retry emitted the
-//     commit-affirmation retraction TWICE for one served answer, corrupting
-//     exactly the counter that exists to diagnose retractions (codex round 2,
-//     finding 1). Labelling was the weaker fix anyway: the first pass's
-//     result is DISCARDED, so its retraction never happened as far as the
-//     caller is concerned, and a labelled-but-present event still has to be
-//     filtered by every consumer. The affirmation outcomes are therefore
-//     RETURNED, and the engine emits them once, for the result it actually
-//     serves.
+//  3. EVERY per-investigation decision event this function produces is
+//     DEFERRED, not emitted. All of them. That is a CLASS rule, and it is
+//     written as one because fixing a single member of it was not enough:
+//     round 2 found the commit-affirmation retraction double-emitting on a
+//     retry, I deferred that one emitter, and round 3 immediately found two
+//     more in the same function (window canonicalization and cohort driver
+//     narration) doing exactly the same thing. The defect was never "this
+//     emitter"; it was "this function emits, and it runs twice".
+//
+//     So: an emission added to this function in future MUST go into
+//     assemblyTelemetry and be emitted by the caller. The whole point of
+//     `assemblyTelemetry` being a struct rather than a bool is that adding a
+//     field is the visible, reviewable act of declaring a new deferred event.
+//
+//     Deferral rather than labelling, because the first pass's result is
+//     DISCARDED: its window outcome, its narration and its retraction never
+//     happened as far as the caller is concerned, and a labelled-but-present
+//     event still has to be filtered by every consumer of the counter.
 
 // synthesisAssemblyParams is every value the assembly reads from
 // Investigate's scope. It is a struct rather than a parameter list so that
@@ -140,10 +147,10 @@ func copyCohortForRetry(cohort *Cohort) *Cohort {
 // to but NOT including render-shape selection, completeness stamping,
 // validation and persistence -- those run once, on whichever pass produced
 // the answer that is actually served.
-func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Principal, params synthesisAssemblyParams) (InvestigationResult, []CommitAffirmationOutcome, error) {
-	// affirmations are RETURNED rather than emitted -- see point 3 in this
-	// file's header. The caller emits them for the served result only.
-	var affirmations []CommitAffirmationOutcome
+func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Principal, params synthesisAssemblyParams) (InvestigationResult, assemblyTelemetry, error) {
+	// pending holds every per-investigation decision event this pass
+	// produces. NOTHING here emits -- see point 3 in this file's header.
+	var pending assemblyTelemetry
 	request := params.Request
 	interpretation := params.Interpretation
 	graphContext := params.Graph
@@ -162,7 +169,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		Request: request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
 	})
 	if err != nil {
-		return InvestigationResult{}, nil, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
+		return InvestigationResult{}, assemblyTelemetry{}, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
 	}
 	result.SchemaVersion = InvestigationResultSchemaV1
 	result.ResultID = e.newResultID()
@@ -241,9 +248,8 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// here (that case already gated and returned above) -- every path
 	// reaching this line carries a confirmed/stated window or none at all.
 	result.EffectiveEvidenceWindow = effectiveWindow
-	if e.telemetry != nil {
-		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow, windowCarry.Outcome == WindowCarryHit))
-	}
+	windowOutcome := windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow, windowCarry.Outcome == WindowCarryHit)
+	pending.WindowCanonicalization = &windowOutcome
 	// CHAOS-3900 W2 (design brief §4): the fresh disclosure W1's own scope
 	// note deferred -- nil unless the effective window is genuinely
 	// inferred. CHAOS-4040 (sol-max ruling 2026-08-21) makes this call
@@ -297,7 +303,9 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// the prose is therefore composed against the pre-retraction
 	// resolution, which is CHAOS-4085's own documented residual, neither
 	// widened nor narrowed here.
-	e.recordSynthesisStatusOverride(ctx, principal, applySynthesisStatusOverride(&result))
+	// applySynthesisStatusOverride MUTATES result, so it still runs on every
+	// pass; only the RECORDING is deferred.
+	pending.SynthesisStatusOverride = applySynthesisStatusOverride(&result)
 	// CHAOS-4099: the answer's own statement that some requested evidence
 	// was never reachable. Placed alongside the other post-synthesis
 	// composers and before the commit-affirmation gate, Validate and Save,
@@ -330,7 +338,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		// read) BEFORE anything is appended -- fail closed, never serve a
 		// claim that cannot be traced back to a real canonical fact.
 		if err := validateMintedClaimsGrounded(mintedClaims, facts.Facts); err != nil {
-			return InvestigationResult{}, nil, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
+			return InvestigationResult{}, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 		}
 		result.Drivers = append(result.Drivers, narrated...)
 		// CHAOS-4398 PR3b: append the claims THIS composer minted (only for
@@ -356,9 +364,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 			result.DirectJudgment, result.DeterministicAnswer = recomposeCohortAnswerNarrative(result.Status, result.Drivers, result.SubjectResolution)
 			narrationEvent.AnswerNarrativeRecomposed = true
 		}
-		if e.telemetry != nil {
-			e.telemetry.RecordCohortDriverNarration(ctx, principal, narrationEvent)
-		}
+		pending.CohortNarration = &narrationEvent
 	}
 	// CHAOS-4085: the post-synthesis commit-affirmation gate. Placed HERE
 	// deliberately -- after every composer that touches Limitations or
@@ -394,7 +400,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		Graph:      graphContext,
 		Facts:      facts,
 	}); len(outcomes) > 0 {
-		affirmations = outcomes
+		pending.CommitAffirmations = outcomes
 	}
 	// CHAOS-4087: stamped AFTER applyCommitAffirmation, not before -- that
 	// gate can RETRACT a subject from result.SubjectResolution.Committed
@@ -420,5 +426,34 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		}
 		result.SubjectResolution.CommitDecisionDigests = digests
 	}
-	return result, affirmations, nil
+	return result, pending, nil
+}
+
+// assemblyTelemetry is every per-investigation decision event one assembly
+// pass produced, held rather than emitted.
+//
+// It is a STRUCT rather than a flag because that makes adding a deferred
+// event a visible, reviewable act: a new emission in synthesizeAndAssemble
+// has to add a field here and a line to emit(), and a reviewer can see both.
+// The alternative -- a bool that each emitter consults -- is what let three
+// emitters drift out of the rule one at a time.
+type assemblyTelemetry struct {
+	WindowCanonicalization  *WindowCanonicalizationOutcome
+	SynthesisStatusOverride *SynthesisStatusOverrideOutcome
+	CohortNarration         *CohortDriverNarrationEvent
+	CommitAffirmations      []CommitAffirmationOutcome
+}
+
+// emit publishes the held events. The engine calls it EXACTLY ONCE, for the
+// result it actually serves, so a retry's discarded first pass contributes
+// nothing to any per-investigation counter.
+func (e *Engine) emit(ctx context.Context, principal storage.Principal, pending assemblyTelemetry) {
+	if e.telemetry != nil && pending.WindowCanonicalization != nil {
+		e.telemetry.RecordWindowCanonicalization(ctx, principal, *pending.WindowCanonicalization)
+	}
+	e.recordSynthesisStatusOverride(ctx, principal, pending.SynthesisStatusOverride)
+	if e.telemetry != nil && pending.CohortNarration != nil {
+		e.telemetry.RecordCohortDriverNarration(ctx, principal, *pending.CohortNarration)
+	}
+	e.recordCommitAffirmation(ctx, principal, pending.CommitAffirmations)
 }

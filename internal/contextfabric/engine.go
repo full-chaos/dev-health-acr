@@ -1192,7 +1192,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// passed here -- see windowVetoResult's own explicitStructure
 		// parameter doc comment for why a receipt-derived entry cannot
 		// safely reach this veto path.
-		return e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions, structureCanon.Explicit)
+		// CHAOS-4636 / codex round 3 finding 1: this veto returns AFTER the
+		// planning stage has run, so it must stamp the plan like every other
+		// post-plan exit. It is reachable -- a current-axis request carrying
+		// a confirmed window receipt whose interpretation moves the axis to
+		// historical lands here -- and the result is SAVED, so a plan
+		// omitted here is missing from a persisted answer permanently.
+		veto, vetoErr := e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions, structureCanon.Explicit)
+		return stampAnswerPlan(veto, plan), vetoErr
 	}
 	// CHAOS-3977 P5 (design brief §3.4): ONE prior consult per Investigate
 	// call, shared by BOTH DP4(a) sites (the offer-builder merge below,
@@ -1682,7 +1689,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		StructureCanon: structureCanon, CarriedStructureEntry: carriedStructureEntry,
 		CommitBases: commitBases, CommitDigests: commitDigests,
 	}
-	result, affirmations, err := e.synthesizeAndAssemble(ctx, principal, assemblyParams)
+	result, pendingTelemetry, err := e.synthesizeAndAssemble(ctx, principal, assemblyParams)
 	if err != nil {
 		return InvestigationResult{}, err
 	}
@@ -1710,7 +1717,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// the shape measured on the second pass is the shape that would be
 	// served on the second pass.
 	result = e.finalizeResult(result, plan)
-	result, affirmations, err = e.fitAssembledResult(ctx, principal, &plan, result, affirmations, assemblyParams)
+	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, pendingTelemetry, assemblyParams)
 	if err != nil {
 		return InvestigationResult{}, err
 	}
@@ -1719,12 +1726,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// was actually produced, not the one first attempted.
 	stampedPlan := plan
 	result.AnswerPlan = &stampedPlan
-	// Commit-affirmation telemetry fires ONCE, for the result actually
-	// served. A retry runs the assembly twice and discards the first pass's
-	// answer; emitting from inside the assembly double-counted a retraction
-	// the caller only ever saw once, corrupting the very counter that exists
-	// to diagnose retractions.
-	e.recordCommitAffirmation(ctx, principal, affirmations)
+	// EVERY per-investigation decision event the assembly produced fires
+	// ONCE here, for the result actually served. The assembly runs twice on a
+	// retry and its first answer is discarded, so emitting from inside it
+	// double-counted every one of them -- see assemblyTelemetry for why this
+	// is a class rule rather than a fix to one emitter.
+	e.emit(ctx, principal, pendingTelemetry)
 	// Render-shape telemetry fires ONCE, for the result actually served --
 	// selection itself is pure and was already run by finalizeResult, but a
 	// retry would otherwise double-count a decision an operator counts.

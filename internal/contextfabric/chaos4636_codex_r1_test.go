@@ -280,3 +280,97 @@ func TestRetryEmitsCommitAffirmationTelemetryOnceForTheServedAnswer(t *testing.T
 		t.Fatalf("commit-affirmation events = %d for ONE served investigation; the discarded first pass emitted its own", telemetry.commitAffirmations)
 	}
 }
+
+// ── codex round 3 ────────────────────────────────────────────────────────────
+
+// Codex round 3, finding 2 (P2) — and the reason this is written as a CLASS
+// test rather than a third one-emitter test.
+//
+// Round 2 found the commit-affirmation retraction double-emitting on a retry.
+// I deferred that ONE emitter. Round 3 immediately found two more in the same
+// function doing the same thing. The defect was never "this emitter"; it was
+// "this function emits, and a retry runs it twice". So this test asserts the
+// property over EVERY per-investigation event the assembly produces, and a
+// new emission that forgets to defer fails here without anyone remembering to
+// add a case.
+func TestRetryEmitsEveryPerInvestigationEventExactlyOnce(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	telemetry := &recordingTelemetry{}
+	committed := SubjectRef{Kind: SubjectProject, CanonicalID: "project_unaffirmed", Label: "Unaffirmed"}
+	engine := budgetStageEngine(t, budgetStageCohort(6), 2, budgetStageOptions(12, time.Second), &calls, telemetry)
+	engine.graph = &capturingGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committed}},
+		context: GraphContext{
+			Cohort: budgetStageCohort(6),
+			Paths:  []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
+			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("synthesizer called %d times, want 2 -- the fixture must actually retry or this test means nothing", calls)
+	}
+	// Each of these is documented as measuring per-INVESTIGATION behaviour,
+	// so two events for one served investigation corrupts the denominator.
+	for _, check := range []struct {
+		name string
+		got  int
+	}{
+		{"window canonicalization", len(telemetry.windowCanonicalizationOutcomes)},
+		{"cohort driver narration", len(telemetry.cohortDriverNarrations)},
+		{"commit-affirmation retraction", telemetry.commitAffirmations},
+	} {
+		// NON-VACUITY first: an event that never fired cannot observe a
+		// double-count, and a test asserting "<= 1" on zero passes against
+		// the defect it claims to pin.
+		if check.got == 0 {
+			t.Fatalf("%s never fired; this fixture cannot observe its double-count", check.name)
+		}
+		if check.got != 1 {
+			t.Errorf("%s fired %d times for ONE served investigation; the discarded first pass emitted its own", check.name, check.got)
+		}
+	}
+}
+
+// Codex round 3, finding 1 (P2): the axis-conflict window veto returns AFTER
+// the planning stage and was the one post-plan exit that did not stamp the
+// plan — and its result is SAVED, so the omission is permanent in the store.
+//
+// Reachable exactly as codex described: a current-axis request carrying a
+// confirmed window, whose interpretation moves the axis to historical.
+func TestPostPlanAxisConflictVetoCarriesTheAnswerPlan(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	engine := budgetStageEngine(t, budgetStageCohort(2), 1, budgetStageOptions(30, time.Second), &calls)
+	// Interpret moves the axis away from current (valid-time as-of), which is
+	// what the veto exists to catch: the request committed a window the
+	// interpretation no longer honours.
+	// BEFORE the engine's fake clock (time.Unix(200,0)) -- an as-of in the
+	// future is refused by resolveTimeContext before this veto is reached.
+	asOf := time.Unix(100, 0).UTC()
+	engine.interpreter = interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+		return InterpretedQuestion{
+			Shape: ShapeDiscoveredCohort, RequestedJudgment: "status",
+			TimeContext:      TimeContext{Axis: TemporalValidTime, AsOf: &asOf},
+			FactRequirements: []FactRequirement{{Kind: FactStatus}},
+		}, nil
+	})
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.ResultID == "" {
+		t.Fatalf("expected a composed veto result, got %+v", result.Status)
+	}
+	if result.AnswerPlan == nil {
+		t.Fatal("a post-plan veto served and persisted no answer_plan; every exit after PlanAnswer must carry it")
+	}
+	if result.AnswerPlan.Family == "" {
+		t.Fatalf("the stamped plan carries no family: %+v", result.AnswerPlan)
+	}
+}
