@@ -57,12 +57,26 @@ func repoMetricsFlowRow(repoID string, prsMerged, prsWithFirstReview int64) []an
 		uint8(1), float64(4), uint8(1), float64(8), uint8(1), float64(2), uint8(1), float64(6)}
 }
 
+// flowDailySeriesRow shapes one CHAOS-4645 queryTeamFlowDailySeries /
+// queryProjectFlowDailySeries output row: (team_id or "provider:id", day,
+// items_started, items_completed, wip_count_end_of_day,
+// bug_completed_ratio_avg, story_points_completed_sum).
+func flowDailySeriesRow(key, day string, started, completed, wip int64) []any {
+	return []any{key, day, started, completed, wip, float64(0.2), float64(4)}
+}
+
+// flowDailySeriesMatch distinguishes the CHAOS-4645 daily-series queries
+// from the pre-existing latest-per-scope queries (flow_test.go's other
+// fixtures match "work_scope_id ORDER BY day DESC"), so a test can register
+// canned rows for one without corrupting the other's scan.
+const flowDailySeriesMatch = "work_scope_id, day ORDER BY computed_at DESC"
+
 // TestFlowProviderTeamReadsScopeBreakdown is CHAOS-4364's core team shape:
 // work_item_metrics_daily's per-scope Rows breakdown.
 func TestFlowProviderTeamReadsScopeBreakdown(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM work_item_metrics_daily", rows: [][]any{workItemMetricsDailyRow("team-1", "scope-a", 10, 6, 4)}},
+		{match: "work_scope_id ORDER BY day DESC", rows: [][]any{workItemMetricsDailyRow("team-1", "scope-a", 10, 6, 4)}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactFlow)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
@@ -99,7 +113,7 @@ func TestFlowProviderTeamReadsScopeBreakdown(t *testing.T) {
 func TestFlowProviderNeverReadsWorkItemCycleTimes(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM work_item_metrics_daily", rows: [][]any{workItemMetricsDailyRow("team-1", "scope-a", 10, 6, 4)}},
+		{match: "work_scope_id ORDER BY day DESC", rows: [][]any{workItemMetricsDailyRow("team-1", "scope-a", 10, 6, 4)}},
 		{match: "FROM work_item_cycle_times", err: errUnexpectedCycleTimesQuery},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactFlow)
@@ -125,7 +139,7 @@ func TestFlowProviderNeverReadsWorkItemCycleTimes(t *testing.T) {
 func TestFlowProviderTeamMultipleScopesNeverStitched(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM work_item_metrics_daily", rows: [][]any{
+		{match: "work_scope_id ORDER BY day DESC", rows: [][]any{
 			workItemMetricsDailyRow("team-1", "scope-a", 10, 6, 4),
 			workItemMetricsDailyRow("team-1", "scope-b", 3, 1, 2),
 		}},
@@ -156,7 +170,7 @@ func TestFlowProviderTeamMultipleScopesNeverStitched(t *testing.T) {
 func TestFlowProviderProjectRollupSumsCountsDisclosesPerTeamBreakdown(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM work_item_metrics_daily", rows: [][]any{
+		{match: "work_scope_id ORDER BY day DESC", rows: [][]any{
 			projectWorkItemMetricsRow("linear", "proj-1", "team-1", "scope-a", 10, 6),
 			projectWorkItemMetricsRow("linear", "proj-1", "team-2", "scope-b", 5, 2),
 		}},
@@ -220,7 +234,7 @@ func TestFlowProviderRepositoryReadsPRPickupReviewTimings(t *testing.T) {
 func TestFlowProviderScopesQueriesToOrgAndSubjects(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM work_item_metrics_daily", rows: [][]any{workItemMetricsDailyRow("team-1", "scope-a", 1, 1, 1)}},
+		{match: "work_scope_id ORDER BY day DESC", rows: [][]any{workItemMetricsDailyRow("team-1", "scope-a", 1, 1, 1)}},
 	}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactFlow)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
@@ -254,7 +268,7 @@ func TestFlowProviderProjectRollupCapsNestedRowsAtValidateBound(t *testing.T) {
 	for i := 0; i < 70; i++ {
 		rows = append(rows, projectWorkItemMetricsRow("linear", "proj-1", fmt.Sprintf("team-%02d", i), "scope-a", 1, 1))
 	}
-	client := &fakeClient{tables: []fakeTable{{match: "FROM work_item_metrics_daily", rows: rows}}}
+	client := &fakeClient{tables: []fakeTable{{match: "work_scope_id ORDER BY day DESC", rows: rows}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactFlow)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -285,5 +299,92 @@ func TestFlowProviderProjectRollupCapsNestedRowsAtValidateBound(t *testing.T) {
 	}
 	if result.OmittedCount != 6 {
 		t.Fatalf("OmittedCount = %d, want 6", result.OmittedCount)
+	}
+}
+
+// TestFlowProviderTeamReadsDailyFlowSeries is CHAOS-4645's core team shape
+// (design doc §5.2): a genuine time_series alongside the existing
+// scope_breakdown, additive -- scope_breakdown/items_started/
+// items_completed must stay exactly as before this ticket.
+func TestFlowProviderTeamReadsDailyFlowSeries(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "work_scope_id ORDER BY day DESC", rows: [][]any{workItemMetricsDailyRow("team-1", "scope-a", 10, 6, 4)}},
+		{match: flowDailySeriesMatch, rows: [][]any{
+			flowDailySeriesRow("team-1", "2026-02-21", 10, 6, 4),
+			flowDailySeriesRow("team-1", "2026-02-20", 8, 5, 3),
+		}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactFlow)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactFlow, Subjects: []contextfabric.SubjectRef{teamSubject("team-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want 1", result.Facts)
+	}
+	fact := result.Facts[0]
+	// Additive: the pre-existing scalars/breakdown are untouched.
+	if fact.Fields["items_started"].Integer == nil || *fact.Fields["items_started"].Integer != 10 {
+		t.Fatalf("items_started = %#v, want unchanged at 10", fact.Fields["items_started"])
+	}
+	if len(fact.Fields["scope_breakdown"].Rows) != 1 {
+		t.Fatalf("scope_breakdown = %#v, want unchanged at 1 row", fact.Fields["scope_breakdown"].Rows)
+	}
+	table := fact.Fields["daily_flow"].Table
+	if table == nil {
+		t.Fatal("daily_flow field is missing")
+	}
+	if table.Shape != contextfabric.FactTableTimeSeries {
+		t.Fatalf("daily_flow.Shape = %q, want time_series", table.Shape)
+	}
+	if err := fact.Fields["daily_flow"].Validate(); err != nil {
+		t.Fatalf("daily_flow fails FactValue.Validate(): %v", err)
+	}
+	if len(fact.Fields["daily_flow"].Rows) != 2 {
+		t.Fatalf("daily_flow rows = %d, want 2", len(fact.Fields["daily_flow"].Rows))
+	}
+}
+
+// TestFlowProviderProjectReadsDailyFlowSeries mirrors the team case for the
+// project rollup (CHAOS-4645, design doc §5.2), additive alongside the
+// existing team_breakdown.
+func TestFlowProviderProjectReadsDailyFlowSeries(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "work_scope_id ORDER BY day DESC", rows: [][]any{
+			projectWorkItemMetricsRow("linear", "proj-1", "team-1", "scope-a", 10, 6),
+		}},
+		{match: flowDailySeriesMatch, rows: [][]any{
+			flowDailySeriesRow("linear:proj-1", "2026-02-21", 15, 9, 4),
+		}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactFlow)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactFlow, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want 1", result.Facts)
+	}
+	fact := result.Facts[0]
+	if fact.Fields["items_started"].Integer == nil || *fact.Fields["items_started"].Integer != 10 {
+		t.Fatalf("items_started = %#v, want unchanged at 10", fact.Fields["items_started"])
+	}
+	table := fact.Fields["daily_flow"].Table
+	if table == nil {
+		t.Fatal("daily_flow field is missing")
+	}
+	if table.Shape != contextfabric.FactTableTimeSeries {
+		t.Fatalf("daily_flow.Shape = %q, want time_series", table.Shape)
+	}
+	if err := fact.Fields["daily_flow"].Validate(); err != nil {
+		t.Fatalf("daily_flow fails FactValue.Validate(): %v", err)
 	}
 }

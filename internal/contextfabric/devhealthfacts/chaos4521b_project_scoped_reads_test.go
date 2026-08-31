@@ -34,8 +34,12 @@ func TestChaos4521b_ProjectFlowKeysOnTheProjectsOwnWorkScope(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ReadFacts: %v", err)
 	}
-	if len(client.queries) != 1 {
-		t.Fatalf("queries = %d, want exactly one", len(client.queries))
+	// CHAOS-4645: readProjectFlow now issues a SECOND query
+	// (queryProjectFlowDailySeries, for the additive daily_flow time_series)
+	// after the original -- queries[0] is still the original query this
+	// test's assertions are about, since call order is preserved.
+	if len(client.queries) != 2 {
+		t.Fatalf("queries = %d, want exactly two (original + CHAOS-4645 daily series)", len(client.queries))
 	}
 	statement := client.queries[0].statement
 
@@ -269,18 +273,28 @@ func TestChaos4521b_AnUnattributedRowIsKeptButNotCountedAsATeam(t *testing.T) {
 		rows        [][]any
 	}{
 		{
+			// CHAOS-4645: narrowed from the broad "FROM
+			// estimate_coverage_metrics_daily" to readinessOriginalQueryMatch
+			// (readiness_test.go) -- readProjectReadiness now also issues a
+			// SECOND, differently-shaped query (queryProjectReadinessDailySeries)
+			// against the same table, and a broad match here would feed this
+			// case's 12-column fixture into that query's fewer-column scan
+			// targets, panicking on a type assertion inside fakeScanner.Scan.
 			name:        "readiness",
 			kind:        contextfabric.FactReadiness,
-			sourceTable: "FROM estimate_coverage_metrics_daily",
+			sourceTable: readinessOriginalQueryMatch,
 			rows: [][]any{
 				{"linear:proj-1", uint8(0), "", "", "scope-a", "linear", "2026-02-22", int64(3), int64(1), int64(4), uint8(1), float64(0.75)},
 				{"linear:proj-1", uint8(1), "team-1", "Team One", "scope-b", "linear", "2026-02-22", int64(18), int64(2), int64(20), uint8(1), float64(0.9)},
 			},
 		},
 		{
+			// CHAOS-4645: same fix, workloadBaseQueryMatch (workload_test.go)
+			// -- readProjectWorkload also gained queryProjectWorkloadDailySeries
+			// against capacity_forecasts.
 			name:        "workload",
 			kind:        contextfabric.FactWorkload,
-			sourceTable: "FROM capacity_forecasts",
+			sourceTable: workloadBaseQueryMatch,
 			rows: [][]any{
 				{"linear:proj-1", uint8(0), "", "", "scope-a", float64(1.0), float64(0.1), uint8(0), int64(0), uint8(0), uint8(0), int64(4), "2026-07-27 04:00:00"},
 				{"linear:proj-1", uint8(1), "team-1", "Team One", "scope-b", float64(3.2), float64(0.8), uint8(0), int64(0), uint8(0), uint8(1), int64(120), "2026-07-27 04:00:00"},

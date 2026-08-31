@@ -62,9 +62,11 @@ func (p *FlowProvider) Capability() contextfabric.FactCapability {
 	// work_scope_id], per CHAOS-4364/this design's own worked example --
 	// never a time_series, which is exactly CHAOS-4616's fix). Project's
 	// team_breakdown is a breakdown too.
+	// CHAOS-4645, design doc §5.2: team and project also gain a
+	// time_series (daily_flow) alongside their existing breakdown.
 	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
-		contextfabric.SubjectTeam:    {contextfabric.FactTableBreakdown},
-		contextfabric.SubjectProject: {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectTeam:    {contextfabric.FactTableBreakdown, contextfabric.FactTableTimeSeries},
+		contextfabric.SubjectProject: {contextfabric.FactTableBreakdown, contextfabric.FactTableTimeSeries},
 	}
 	capability.EstimatedItems = 20
 	return capability
@@ -172,6 +174,93 @@ func (r flowScopeRow) toFactValueRow() contextfabric.FactValueRow {
 	return contextfabric.FactValueRow{Fields: fields}
 }
 
+// flowDailyRow is one (team_id, day)'s SUMMED work_item_metrics_daily
+// aggregate across every (provider, work_scope_id) scope the team had that
+// day (CHAOS-4645, design doc §5.2). Additive counts are summed exactly the
+// way readProjectFlow already sums a team's own scopes; percentile
+// columns (wip_age/cycle/lead) are DELIBERATELY DROPPED from the daily
+// series -- summing or averaging a percentile across concurrent scopes has
+// no defined meaning, the same rule teamFlowAggregateRow's own doc comment
+// states for the project rollup. bug_completed_ratio is averaged across
+// the day's scopes as a representative value (a ratio of ratios has no
+// single correct combination either, but an average is a defensible
+// approximation for a value that is itself bounded [0,1], unlike a raw
+// percentile).
+type flowDailyRow struct {
+	teamID, day                                    string
+	itemsStarted, itemsCompleted, wipCountEndOfDay int64
+	bugCompletedRatioAvg, storyPointsCompletedSum  float64
+}
+
+func (r flowDailyRow) toFactValueRow() contextfabric.FactValueRow {
+	return contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{
+		"day":                    contextfabric.StringFactValue(r.day),
+		"items_started":          contextfabric.IntegerFactValue(r.itemsStarted),
+		"items_completed":        contextfabric.IntegerFactValue(r.itemsCompleted),
+		"wip_count_end_of_day":   contextfabric.IntegerFactValue(r.wipCountEndOfDay),
+		"bug_completed_ratio":    contextfabric.NumberFactValue(r.bugCompletedRatioAvg),
+		"story_points_completed": contextfabric.NumberFactValue(r.storyPointsCompletedSum),
+	}}
+}
+
+// queryTeamFlowDailySeries reads work_item_metrics_daily as a genuine
+// per-day series (CHAOS-4645, design doc §5.2: "the dated rows already
+// exist in the ClickHouse daily tables these producers read; what is
+// missing is a second, declared projection of them") -- unlike
+// queryTeamScopeRows, which collapses to the single latest row per
+// (team_id, provider, work_scope_id) and therefore can never back a
+// time_series. The inner row_number() here dedupes only a SAME-DAY rerun
+// per (team_id, provider, work_scope_id, day) -- mirroring the tiebreak
+// discipline queryTeamScopeRows already documents -- and the outer
+// GROUP BY sums each day's scopes into one row per (team_id, day), so a
+// multi-scope team still yields exactly one time_series point per day.
+func (p *FlowProvider) queryTeamFlowDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byTeam map[string][]flowDailyRow, err error) {
+	statement := withRowLimit(`SELECT toString(team_id), toString(day), toInt64(sum(items_started)), toInt64(sum(items_completed)), toInt64(sum(wip_count_end_of_day)), avg(bug_completed_ratio), toFloat64(sum(story_points_completed))
+FROM (
+	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed,
+		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed)) DESC) AS rn
+	FROM work_item_metrics_daily
+	WHERE org_id = {org_id:String} AND toString(team_id) IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
+)
+WHERE rn = 1
+GROUP BY team_id, day
+ORDER BY team_id, day DESC`)
+	byTeam = make(map[string][]flowDailyRow)
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var r flowDailyRow
+		var teamID string
+		if err := row.Scan(&teamID, &r.day, &r.itemsStarted, &r.itemsCompleted, &r.wipCountEndOfDay, &r.bugCompletedRatioAvg, &r.storyPointsCompletedSum); err != nil {
+			return err
+		}
+		r.teamID = teamID
+		byTeam[teamID] = append(byTeam[teamID], r)
+		return nil
+	}, timeBound.bindings()...)
+	return byTeam, scanErr
+}
+
+// flowDailyTable builds the CHAOS-4645 time_series FactTable off rows
+// already fetched by queryTeamFlowDailySeries (team) or the project-level
+// per-day rollup (readProjectFlowDailySeries) -- both share this exact
+// shape, so a single declaration serves both subject kinds.
+func flowDailyTable(rows []flowDailyRow, grain contextfabric.TemporalGrain) (contextfabric.FactValue, bool, int) {
+	if len(rows) == 0 {
+		return contextfabric.FactValue{}, false, 0
+	}
+	valueRows := make([]contextfabric.FactValueRow, 0, len(rows))
+	for _, r := range rows {
+		valueRows = append(valueRows, r.toFactValueRow())
+	}
+	valueRows, omitted := capFactValueRows(valueRows)
+	return contextfabric.TableFactValue(contextfabric.FactTable{
+		Shape:    contextfabric.FactTableTimeSeries,
+		Key:      []string{"day"},
+		Measures: []string{"items_started", "items_completed", "wip_count_end_of_day", "bug_completed_ratio", "story_points_completed"},
+		Grain:    grain,
+		Rows:     valueRows,
+	}), true, omitted
+}
+
 // queryTeamScopeRows reads work_item_metrics_daily's latest row per
 // (team_id, provider, work_scope_id) -- provider is part of this table's
 // own primary key (devhealthschema's EngineFull ORDER BY), and different
@@ -240,6 +329,31 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 	if err != nil {
 		return rowCount, 0, err
 	}
+	// CHAOS-4645, design doc §5.2: a second, ADDITIVE query for the dated
+	// series -- the scalar fields below are computed byte-identically to
+	// before this ticket, off the SAME byTeam/queryTeamScopeRows result;
+	// dailyByTeam only ever adds a new "daily_flow" field, never changes an
+	// existing one, so nothing that already reads FactFlow's scalars (flow
+	// is not one of cohort_ranking.go's five RankingSignal* families, so
+	// there is no RankCohort input to pin here) can observe a difference.
+	dailyByTeam, seriesErr := p.queryTeamFlowDailySeries(ctx, orgID, ids, timeBound)
+	if seriesErr != nil {
+		return rowCount, 0, seriesErr
+	}
+	// codex CHAOS-4645 round-1 P2 (EXECUTED): the daily-series query carries
+	// its OWN withRowLimit(200) cap, shared across every requested team in
+	// ONE query -- distinct from queryTeamScopeRows' own rowCount above. Five
+	// teams x 50 days each can silently drop an entire team's daily_flow rows
+	// under the shared LIMIT while the legacy scope_breakdown read (~1
+	// row/team) never comes close to it, so Truncated must also reflect this
+	// query hitting its own cap, not only the legacy one.
+	dailySeriesRowCount := 0
+	for _, rows := range dailyByTeam {
+		dailySeriesRowCount += len(rows)
+	}
+	if dailySeriesRowCount > rowCount {
+		rowCount = dailySeriesRowCount
+	}
 	totalOmitted := 0
 	for _, teamID := range teamOrder {
 		subject, ok := bySubject[teamID]
@@ -282,6 +396,13 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 		}
 		if omitted > 0 {
 			fields["scope_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
+		}
+		if dailyTable, ok, dailyOmitted := flowDailyTable(dailyByTeam[teamID], timeBound.effectiveGrain(grainDaily)); ok {
+			fields["daily_flow"] = dailyTable
+			totalOmitted += dailyOmitted
+			if dailyOmitted > 0 {
+				fields["daily_flow_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+			}
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactFlow, Subject: subject, Fields: fields,
@@ -449,6 +570,24 @@ ORDER BY p.id, wm.team_id`)
 	if scanErr != nil {
 		return rowCount, 0, scanErr
 	}
+	// CHAOS-4645: additive, off the SAME work-scope join, never changing
+	// an existing field -- flow carries no RankCohort signal, so there is
+	// nothing to pin here (see readTeamFlow's identical note).
+	dailyByProject, seriesErr := p.queryProjectFlowDailySeries(ctx, orgID, ids, timeBound)
+	if seriesErr != nil {
+		return rowCount, 0, seriesErr
+	}
+	// codex CHAOS-4645 round-1 P2 (EXECUTED): see readTeamFlow's identical
+	// note -- the daily-series query's own withRowLimit(200) cap, shared
+	// across every requested project in one query, must also surface as
+	// Truncated.
+	dailySeriesRowCount := 0
+	for _, rows := range dailyByProject {
+		dailySeriesRowCount += len(rows)
+	}
+	if dailySeriesRowCount > rowCount {
+		rowCount = dailySeriesRowCount
+	}
 	totalOmitted := 0
 	for _, projectKey := range projectOrder {
 		rows := byProject[projectKey]
@@ -507,12 +646,50 @@ ORDER BY p.id, wm.team_id`)
 		if omitted > 0 {
 			fields["team_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 		}
+		if dailyTable, ok, dailyOmitted := flowDailyTable(dailyByProject[projectKey], timeBound.effectiveGrain(grainDaily)); ok {
+			fields["daily_flow"] = dailyTable
+			totalOmitted += dailyOmitted
+			if dailyOmitted > 0 {
+				fields["daily_flow_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+			}
+		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactFlow, Subject: subject, Fields: fields,
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
 	return rowCount, totalOmitted, nil
+}
+
+// queryProjectFlowDailySeries is queryTeamFlowDailySeries' project-rollup
+// counterpart (CHAOS-4645, design doc §5.2): the project's OWN
+// work_item_metrics_daily rows, matched on work_scope_id with no
+// team-ownership hop (the SAME CHAOS-4521b join readProjectFlow's own doc
+// comment explains), summed across every contributing team FOR EACH DAY --
+// additive counts only, matching readProjectFlow's own "additive counts
+// summed, percentiles dropped" rule for the analogous team_breakdown.
+func (p *FlowProvider) queryProjectFlowDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string][]flowDailyRow, err error) {
+	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), toString(wm.day), toInt64(sum(wm.items_started)), toInt64(sum(wm.items_completed)), toInt64(sum(wm.wip_count_end_of_day)), avg(wm.bug_completed_ratio), toFloat64(sum(wm.story_points_completed))
+FROM ` + projectIdentityJoinSQL() + `
+INNER JOIN (
+	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed,
+		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed)) DESC) AS rn
+	FROM work_item_metrics_daily
+	WHERE org_id = {org_id:String}` + timeBound.dayPredicate("day") + `
+) AS wm ON ` + projectIdentityMatchSQL("wm", "work_scope_id") + ` AND wm.rn = 1
+GROUP BY p.provider, p.id, wm.day
+ORDER BY p.id, wm.day DESC`)
+	byProject = make(map[string][]flowDailyRow)
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var r flowDailyRow
+		var projectKey string
+		if err := row.Scan(&projectKey, &r.day, &r.itemsStarted, &r.itemsCompleted, &r.wipCountEndOfDay, &r.bugCompletedRatioAvg, &r.storyPointsCompletedSum); err != nil {
+			return err
+		}
+		byProject[projectKey] = append(byProject[projectKey], r)
+		return nil
+	}, timeBound.bindings()...)
+	return byProject, scanErr
 }
 
 // readRepositoryFlow reads repo_metrics_daily's PR pickup/review-timing

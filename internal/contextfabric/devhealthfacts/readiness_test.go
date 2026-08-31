@@ -12,13 +12,27 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+// readinessOriginalQueryMatch narrows the fakeClient match to
+// readers.ReadTeamReadiness/readers.ReadProjectReadiness's OWN latest-row
+// query (both share the identical row_number() tiebreak clause), so it does
+// NOT also catch CHAOS-4645's daily-series queries
+// (chaos4645_readiness_daily_test.go's readinessDailySeriesMatch): both
+// query estimate_coverage_metrics_daily, so the broad "FROM
+// estimate_coverage_metrics_daily" match this suite used before CHAOS-4645
+// would route the daily query's rows through the SAME canned fixture shaped
+// for the original 9-column query -- exactly the bug class flow.go's own
+// daily-series queries were found and fixed for: wrong-shaped rows silently
+// scanned into wrong-typed Go targets, which panics via fakeScanner's
+// unchecked type assertion (helpers_test.go's Scan).
+const readinessOriginalQueryMatch = "PARTITION BY team_id, work_scope_id, provider ORDER BY day DESC"
+
 func readinessRow(teamID string) []any {
 	return []any{teamID, "scope-1", "linear", "2026-02-22", int64(18), int64(2), int64(20), uint8(1), float64(0.9)}
 }
 
 func TestReadinessProviderHappyPath(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM estimate_coverage_metrics_daily", rows: [][]any{readinessRow("CHAOS")}}}}
+	client := &fakeClient{tables: []fakeTable{{match: readinessOriginalQueryMatch, rows: [][]any{readinessRow("CHAOS")}}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReadiness)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -50,7 +64,7 @@ func TestReadinessProviderNoRatioOmitsField(t *testing.T) {
 	row := readinessRow("CHAOS")
 	row[7] = uint8(0)
 	row[8] = float64(0)
-	client := &fakeClient{tables: []fakeTable{{match: "FROM estimate_coverage_metrics_daily", rows: [][]any{row}}}}
+	client := &fakeClient{tables: []fakeTable{{match: readinessOriginalQueryMatch, rows: [][]any{row}}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReadiness)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -66,7 +80,7 @@ func TestReadinessProviderNoRatioOmitsField(t *testing.T) {
 
 func TestReadinessProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM estimate_coverage_metrics_daily", rows: nil}}}
+	client := &fakeClient{tables: []fakeTable{{match: readinessOriginalQueryMatch, rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReadiness)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -82,7 +96,7 @@ func TestReadinessProviderZeroRowSubjectHasNoFactEntry(t *testing.T) {
 
 func TestReadinessProviderQueryErrorReturnsFactReadFailure(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM estimate_coverage_metrics_daily", err: errors.New("boom")}}}
+	client := &fakeClient{tables: []fakeTable{{match: readinessOriginalQueryMatch, err: errors.New("boom")}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReadiness)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -96,7 +110,7 @@ func TestReadinessProviderQueryErrorReturnsFactReadFailure(t *testing.T) {
 
 func TestReadinessProviderScopedToOrgAndRequestedSubjects(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM estimate_coverage_metrics_daily", rows: nil}}}
+	client := &fakeClient{tables: []fakeTable{{match: readinessOriginalQueryMatch, rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReadiness)
 	_, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-8"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -118,7 +132,7 @@ func TestReadinessProviderScopedToOrgAndRequestedSubjects(t *testing.T) {
 // result-content guard.
 func TestReadinessProviderRowForUnrequestedTeamNeverAppears(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM estimate_coverage_metrics_daily", rows: [][]any{readinessRow("other-team")}}}}
+	client := &fakeClient{tables: []fakeTable{{match: readinessOriginalQueryMatch, rows: [][]any{readinessRow("other-team")}}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReadiness)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -146,7 +160,7 @@ func readinessProjectRollupRow(provider, projectID, teamID, teamName, workScopeI
 // per-scope coverage row survives verbatim in team_breakdown.
 func TestReadinessProviderProjectRollupBreaksDownByTeamNeverSums(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM estimate_coverage_metrics_daily", rows: [][]any{
+	client := &fakeClient{tables: []fakeTable{{match: readinessOriginalQueryMatch, rows: [][]any{
 		readinessProjectRollupRow("linear", "proj-1", "team-1", "Team One", "scope-a", "linear", 18, 2, 20, 0.9),
 		readinessProjectRollupRow("linear", "proj-1", "team-2", "Team Two", "scope-b", "gitlab", 5, 15, 20, 0.25),
 	}}}}
@@ -182,7 +196,7 @@ func TestReadinessProviderProjectRollupBreaksDownByTeamNeverSums(t *testing.T) {
 
 func TestReadinessProviderProjectRollupNoOwningTeamsHasNoFactEntry(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM estimate_coverage_metrics_daily", rows: nil}}}
+	client := &fakeClient{tables: []fakeTable{{match: readinessOriginalQueryMatch, rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReadiness)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -209,7 +223,7 @@ func readinessRows(n int) [][]any {
 
 func TestReadinessProviderTruncatesWhenRowCountReachesLimit(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM estimate_coverage_metrics_daily", rows: readinessRows(maxReadinessRowsPerQueryForTest)}}}
+	client := &fakeClient{tables: []fakeTable{{match: readinessOriginalQueryMatch, rows: readinessRows(maxReadinessRowsPerQueryForTest)}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactReadiness)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},

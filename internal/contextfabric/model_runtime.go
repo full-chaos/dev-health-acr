@@ -899,6 +899,25 @@ func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricCla
 	case 1:
 		// fall through
 	default:
+		// CHAOS-4645 ruling: the ambiguity CHAOS-4355 fails closed on is no
+		// longer unresolvable now that CHAOS-4633 gives every table an
+		// explicit, registry-asserted Shape. Multiple Rows-shaped fields
+		// resolve DETERMINISTICALLY, never by heuristic or field-name
+		// convention, when the declared shapes pick out exactly one
+		// non-time_series field: that field is the pre-CHAOS-4645 legacy
+		// table (a breakdown, a ranking, or -- for a fact this ticket never
+		// touched -- a field with no Table declaration at all, which is
+		// unambiguously "not a new time_series" too). Serving it keeps the
+		// wire byte-for-byte what it was before CHAOS-4645 added a SECOND,
+		// additive table nothing downstream reads yet (that migration is
+		// P2, by design -- see FactTable's own doc comment on the
+		// migration phases). Two non-time_series tables, or two
+		// time_series tables, give no way to prefer one over the other and
+		// still fail closed exactly as CHAOS-4355 established.
+		if field, ok := uniqueNonTimeSeriesRowsField(fact); ok {
+			rowsField = field
+			break
+		}
 		return nil, true
 	}
 	source := fact.Fields[rowsField].Rows
@@ -910,6 +929,29 @@ func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricCla
 		return rows[:contractsv1.ContextFabricClaimedFactMaxRows], true
 	}
 	return rows, false
+}
+
+// uniqueNonTimeSeriesRowsField is canonicalFieldRows' CHAOS-4645
+// disambiguation: among a fact's Rows-shaped fields, the ones that are NOT
+// declared time_series (a nil Table -- every field this repository minted
+// before CHAOS-4633 -- or a declared Table whose Shape is breakdown/
+// ranking). Reports ok=true only when EXACTLY ONE such field exists; two or
+// zero is exactly as ambiguous as canonicalFieldRows' own multi-field case,
+// and it is the caller's job to fail closed on that, not this function's.
+func uniqueNonTimeSeriesRowsField(fact CanonicalFact) (field string, ok bool) {
+	found := ""
+	count := 0
+	for key, value := range fact.Fields {
+		if len(value.Rows) == 0 {
+			continue
+		}
+		if value.Table != nil && value.Table.Shape == FactTableTimeSeries {
+			continue
+		}
+		count++
+		found = key
+	}
+	return found, count == 1
 }
 
 func convertFactValueRow(row FactValueRow) contractsv1.ContextFabricClaimedFactRow {
