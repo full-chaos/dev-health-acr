@@ -351,6 +351,9 @@ func (p ContextFabricAnswerProjection) validateFacts() (map[string]struct{}, err
 		if err := validateClaimedFactRows(fact.Rows); err != nil {
 			return nil, fmt.Errorf("key fact rows: %w", err)
 		}
+		if err := validateClaimedFactTable(fact.Table, fact.Rows); err != nil {
+			return nil, fmt.Errorf("key fact table: %w", err)
+		}
 		if _, exists := claims[fact.ClaimID]; exists {
 			return nil, fmt.Errorf("answer projection key fact claim IDs must be unique")
 		}

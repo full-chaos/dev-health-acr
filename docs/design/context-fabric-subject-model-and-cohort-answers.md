@@ -753,7 +753,7 @@ no shape, which is the common case.
 |---|---|---|
 | `cohort_attention_score` | `interpretation.shape ∈ {explicit_cohort, discovered_cohort}` AND ≥1 member has `ranking_computed` with a non-null `score` | `series` / `bars`, one point per ranked member in `attention_rank` order, value = that member's `score` |
 | `cohort_driver_contribution` | the rule above fired AND ≥1 ranked member carries drivers AND the distinct signal count fits one stack | `series` / `stacked_bars`, one series per driver family, value = that member's `weight_contributed` for it |
-| `dated_fact_trend` | **never — WITHDRAWN, no producer (§10.3c)** | — |
+| `dated_fact_trend` | the claim's row table is DECLARED `time_series` AND the claim's own `field` is one of its declared `measures` (§10.3c) | `series` / `line` on a `time` axis, one series, axis = `table.key[0]`, value = `rows[i][claim.field]` |
 | — anything else — | | no shape |
 
 Two negatives are as load-bearing as the positives:
@@ -867,10 +867,10 @@ because a row table cannot say which of its columns are measures, not because
 it fired on the wrong questions. The cohort rules, where the risk of
 answering an unasked question is real, do gate on `interpretation.shape`.
 
-### 10.3c WITHDRAWN: `dated_fact_trend` has no producer (CHAOS-4616)
+### 10.3c `dated_fact_trend`: withdrawn (CHAOS-4616), returned declaration-driven (CHAOS-4637)
 
 Rule 3 shipped in slice 1 and was withdrawn the same day. The history is the
-point, because the code is now an absence.
+point, because it is what determined the shape of the fix.
 
 On the live rig the rule drew a line across the `flow` fact for team
 `fullchaos`:
@@ -906,20 +906,51 @@ server-asserted claim resting on a guess, and §10.3's whole point is that a
 chart is a claimed fact.
 
 `ContextFabricRenderKindSeries` with presentation `line` and the
-`dated_fact_trend` rule value both remain in the closed vocabulary, with no
-producer — the same standing as the six other declared-but-unproduced kinds,
-so a future producer needs no contract change. Every selection records the
-skip reason `trend_rule_withdrawn`, so a reader can tell "this build does not
-select trends" from "the rule ran and found nothing".
+`dated_fact_trend` rule value both stayed in the closed vocabulary through
+the withdrawal, so the returning producer needed no contract change — and it
+did not need one.
+
+**The return (CHAOS-4637 / S6, 2026-08-31).** The information was never
+missing; it was never carried. CHAOS-4633 gave every producer's table a
+declared `FactTable` and CHAOS-4645 gave health/readiness/workload/flow their
+team and project time series. S6 carries that declaration to the wire as
+`ContextFabricClaimedFact.table` and deletes the inference:
+
+| question the selector used to guess at | now |
+|---|---|
+| is this a series? | `table.shape == time_series` |
+| which column is the axis? | `table.key[0]` — a `time_series` declares exactly ONE key column, so a two-column identity is a `breakdown` **by definition rather than by judgement** |
+| which column is the measure? | `table.measures ∩ {claim.field}` — exactly one |
+
+The rows above can never be charted again, and not because a guard catches
+them: their identity needs `(provider, work_scope_id)`, a `time_series`
+admits one key column, and `FactTable.Validate` refuses the dishonest
+declaration **at the producer, in the producer's own test**. The wrong state
+is unrepresentable rather than merely guarded.
+
+Exactly ONE measure is plotted. Several declared measures on one value axis
+would assert a commensurability nothing on the wire states; that is
+CHAOS-4625's own designed comparison shape, and it is expressible *because*
+`measures` is a declared list. A table with no declaration at all is never
+charted — the safe default, and the behaviour before the return.
+
+Each rule now exits through exactly one recorded outcome (CHAOS-4621).
+`trend_rule_withdrawn` is gone; in its place the trend rule records the
+FURTHEST stage any fact reached — `no_declared_table`, `no_time_series_table`,
+`claim_field_not_a_measure`, `no_plottable_measure`, or `not_plan_authorized`
+— so a reader can tell "no tables arrived" from "tables arrived and none
+declared itself a series" from "a series arrived and the producer half is
+what is missing".
 
 **What this does NOT remove.** This withdraws a *server assertion* only.
 Consumers still render a claimed fact's row table with their own generic
 visualization (ask-dev's CHAOS-4355 chart), presented as a view of the rows
 rather than as a trend the service vouches for. Nothing disappears from a
 reader's screen; what disappears is the service's claim about what the rows
-mean. The declared-shape contract that would let the rule return is tracked
-as its own design ticket, and it blocks the burndown and forecast producers
-for exactly the same reason.
+mean. The declared-shape contract that would let the rule return was tracked
+as its own design ticket — it landed, and the paragraphs above are its
+result. It unblocks the burndown, forecast, multi-measure, treemap and
+quadrant producers, each of which faced the identical question.
 
 ### 10.4 Fact → shape → renderer
 

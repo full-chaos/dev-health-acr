@@ -269,6 +269,24 @@ type contextFabricBounds struct {
 	// storage. Rejecting them on read would break reading data the service
 	// itself accepted.
 	rawTextLength bool
+	// planAuthorizedRenderKinds enforces CHAOS-4637's rule that every render
+	// shape's kind is one the answer plan authorized. TRUE on writes, FALSE
+	// on stored reads, and the asymmetry is the whole point.
+	//
+	// Investigation results are IMMUTABLE. A stored row cannot be rewritten
+	// to satisfy a rule introduced after it was written, so a read path
+	// enforcing this would make a previously valid answer permanently
+	// unreadable -- an API 500 and an MCP retrieval failure for a row that
+	// was correct when it was written. That is this file's own documented
+	// invariant (see ValidateStored), and the first version of this check
+	// broke it: it sat in the shared validate() and therefore ran on both
+	// paths (codex round 3, P1).
+	//
+	// Writes stay strict, so the looseness cannot grow: no NEW result can be
+	// persisted carrying a shape its plan does not authorize, which is the
+	// property the rule exists for. Identical reasoning and identical shape
+	// to closedFindingKinds above.
+	planAuthorizedRenderKinds bool
 
 	cohortInclusionReasons      int
 	cohortInclusionReasonLength int
@@ -346,6 +364,7 @@ const contextFabricRelationshipPathMaxNodes = 51
 var contextFabricWriteBounds = contextFabricBounds{
 	closedFindingKinds:                      true,
 	rawTextLength:                           true,
+	planAuthorizedRenderKinds:               true,
 	cohortInclusionReasons:                  32,
 	cohortInclusionReasonLength:             1000,
 	narrativeCount:                          ContextFabricLimitationsMaxCount,
@@ -381,6 +400,7 @@ var contextFabricWriteBounds = contextFabricBounds{
 var contextFabricLegacyBounds = contextFabricBounds{
 	closedFindingKinds:                false,
 	rawTextLength:                     false,
+	planAuthorizedRenderKinds:         false,
 	cohortInclusionReasons:            50,
 	cohortInclusionReasonLength:       1024,
 	narrativeCount:                    250,
@@ -898,6 +918,9 @@ func (c ContextFabricClaimedFact) Validate() error {
 	}
 	if err := validateClaimedFactRows(c.Rows); err != nil {
 		return fmt.Errorf("rows: %w", err)
+	}
+	if err := validateClaimedFactTable(c.Table, c.Rows); err != nil {
+		return fmt.Errorf("table: %w", err)
 	}
 	return nil
 }
@@ -1487,7 +1510,55 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	if err := validateRenderShapes(r.RenderShapes, renderShapeSourcesFromResult(r)); err != nil {
 		return fmt.Errorf("render shapes: %w", err)
 	}
+	if bounds.planAuthorizedRenderKinds {
+		if err := validateRenderShapesAgainstPlan(r.RenderShapes, r.AnswerPlan); err != nil {
+			return fmt.Errorf("render shapes: %w", err)
+		}
+	}
 
+	return nil
+}
+
+// validateRenderShapesAgainstPlan is CHAOS-4637's plan-tracing refusal:
+// every render shape must trace to a plan item, and a shape whose kind the
+// plan does not authorize is REFUSED rather than drawn.
+//
+// It is deliberately a second, independent gate rather than trust in the
+// selector. SelectRenderShapes already consults the plan, but selection is
+// one code path and a result also arrives here from storage, from a replay,
+// and from any future producer -- and North Star check 10 ("rich views are
+// conditional on intent, never default") is worth stating as a property of
+// the DOCUMENT, not as a property of one function that happened to check.
+//
+// WRITE PATH ONLY (bounds.planAuthorizedRenderKinds). Results are immutable,
+// so enforcing a NEW rule on stored reads would make a previously valid
+// answer permanently unreadable -- see that field's own comment.
+//
+// The two nil-ish cases authorize everything, for the same non-regression
+// reason planAuthorizesRenderKind gives: a result written before the
+// planning stage existed carries no plan, and a plan that declared no
+// render kinds has declared no restriction. Inferring a restriction from
+// silence is how a chart quietly disappears.
+//
+// SCOPED TO RENDER SHAPES, deliberately, and not to fact reads. The plan's
+// FactKinds may only WIDEN what the engine reads -- the unconditional
+// ranking-kind injection CHAOS-4636 had to restore is the proof -- so
+// requiring every claimed fact to trace to a plan fact kind would reject
+// correct answers. Cohort membership is already plan-traced by the group
+// kind check earlier in this function.
+func validateRenderShapesAgainstPlan(shapes []ContextFabricRenderShape, plan *ContextFabricAnswerPlan) error {
+	if plan == nil || len(plan.RenderKinds) == 0 || len(shapes) == 0 {
+		return nil
+	}
+	authorized := make(map[ContextFabricRenderKind]struct{}, len(plan.RenderKinds))
+	for _, kind := range plan.RenderKinds {
+		authorized[kind] = struct{}{}
+	}
+	for _, shape := range shapes {
+		if _, ok := authorized[shape.Kind]; !ok {
+			return fmt.Errorf("shape %q has kind %q, which the answer plan does not authorize", shape.ShapeID, shape.Kind)
+		}
+	}
 	return nil
 }
 

@@ -590,22 +590,45 @@ func factValueEqualsScalar(fv FactValue, sv ScalarValue) bool {
 	}
 }
 
-// StripModelAuthoredClaimedFactRows returns a copy of claims with any
-// non-empty Rows cleared, plus the count of claims that carried one.
+// StripModelAuthoredClaimedFactTableContent returns a copy of claims with
+// any model-authored table content -- Rows AND the CHAOS-4637 Table
+// declaration -- cleared, plus the count of claims that carried some.
+//
 // SynthesisDraft.ValidateAgainst unconditionally rejects a claim with
-// non-empty Rows -- Rows are attached server-side, from the SAME canonical
-// fact the claim cites, only after validation (attachCanonicalRows below)
-// -- so a model-authored Rows array is a benign hallucination to discard,
-// never a reason to reject an otherwise-valid, closure-passing answer
-// (CHAOS-4355 follow-up). Exported so both this package's
-// RuntimeAnswerSynthesizer.Synthesize and genkitruntime.Runtime's own
-// production ValidateAgainst call site (the actual live rejection source)
-// can apply the identical strip before validating.
-func StripModelAuthoredClaimedFactRows(claims []ClaimedFact) (cleaned []ClaimedFact, strippedCount int) {
+// non-empty Rows. Both Rows and Table are attached server-side, from the
+// SAME canonical fact the claim cites, only after validation
+// (attachCanonicalRows below), so model-authored table content is a benign
+// hallucination to discard, never a reason to reject an otherwise-valid,
+// closure-passing answer (CHAOS-4355 follow-up). Exported so both this
+// package's RuntimeAnswerSynthesizer.Synthesize and genkitruntime.Runtime's
+// own production ValidateAgainst call site (the actual live rejection
+// source) can apply the identical strip before validating.
+//
+// TABLE WAS ADDED HERE BY CHAOS-4637, and the reason is a class worth
+// naming (codex round 2, P2, EXECUTED): the model-output DTO is DERIVED
+// FROM THIS STRUCT by schema inference, so adding a field to ClaimedFact
+// silently widens what a model is allowed to return. A model could then
+// author a syntactically valid Table beside a correct scalar claim and NO
+// rows, and the wire validator would refuse the whole document --
+// "declared table describes rows the fact does not carry" -- turning a good
+// answer into a failed one. Observed verbatim on the tip before this fix:
+//
+//	stripped=0 table_nil=false
+//	validate=table: declared table describes rows the fact does not carry
+//
+// The rule this makes explicit for the next field: ANY field added to a
+// model-output DTO becomes model-authorable, and must be either grounded
+// or stripped. There is no third option, and "the model would not do that"
+// is not one of them.
+func StripModelAuthoredClaimedFactTableContent(claims []ClaimedFact) (cleaned []ClaimedFact, strippedCount int) {
 	cleaned = make([]ClaimedFact, len(claims))
 	for i, claim := range claims {
-		if len(claim.Rows) > 0 {
+		// Counted ONCE per claim, not once per field: the telemetry
+		// dimension counts CLAIMS that carried hallucinated table content,
+		// and a claim carrying both is one such claim.
+		if len(claim.Rows) > 0 || claim.Table != nil {
 			claim.Rows = nil
+			claim.Table = nil
 			strippedCount++
 		}
 		cleaned[i] = claim
@@ -858,6 +881,13 @@ func attachCanonicalRows(claims []ClaimedFact, facts []CanonicalFact) (result []
 			continue
 		}
 		claims[i].Rows = rows
+		// CHAOS-4637: the DECLARATION travels with the rows, off the
+		// SAME field selection (canonicalRowsField), so the claim can
+		// never end up declaring one field's shape over another field's
+		// rows. Nil when the chosen field carries no declared Table --
+		// every pre-CHAOS-4633 producer -- which is the wire saying
+		// "undeclared", and undeclared is never charted.
+		claims[i].Table = canonicalFieldTable(canonical)
 		rowsCount += len(rows)
 		byKind[claims[i].Kind] += len(rows)
 	}
@@ -885,6 +915,31 @@ func attachCanonicalRows(claims []ClaimedFact, facts []CanonicalFact) (result []
 // validation -- and a cap that actually binds is reported rather than
 // silently dropping the tail.
 func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricClaimedFactRow, truncated bool) {
+	rowsField, ambiguous, ok := canonicalRowsField(fact)
+	if !ok {
+		return nil, ambiguous
+	}
+	source := fact.Fields[rowsField].Rows
+	rows = make([]contractsv1.ContextFabricClaimedFactRow, 0, len(source))
+	for _, row := range source {
+		rows = append(rows, convertFactValueRow(row))
+	}
+	if len(rows) > contractsv1.ContextFabricClaimedFactMaxRows {
+		return rows[:contractsv1.ContextFabricClaimedFactMaxRows], true
+	}
+	return rows, false
+}
+
+// canonicalRowsField is the ONE place a fact's Rows-shaped field is chosen.
+// canonicalFieldRows and canonicalFieldTable both go through it so the rows
+// a claim serves and the declaration describing them can never come from
+// two different fields -- a divergence that would be invisible on the wire
+// and would make the declaration a lie rather than a guard.
+//
+// ok=false with ambiguous=true is the CHAOS-4355 fail-closed case the
+// caller must still report; ok=false with ambiguous=false simply means the
+// fact carries no table at all.
+func canonicalRowsField(fact CanonicalFact) (field string, ambiguous bool, ok bool) {
 	var rowsField string
 	rowsFieldCount := 0
 	for key, value := range fact.Fields {
@@ -895,9 +950,9 @@ func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricCla
 	}
 	switch rowsFieldCount {
 	case 0:
-		return nil, false
+		return "", false, false
 	case 1:
-		// fall through
+		return rowsField, false, true
 	default:
 		// CHAOS-4645 ruling: the ambiguity CHAOS-4355 fails closed on is no
 		// longer unresolvable now that CHAOS-4633 gives every table an
@@ -914,21 +969,37 @@ func canonicalFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricCla
 		// migration phases). Two non-time_series tables, or two
 		// time_series tables, give no way to prefer one over the other and
 		// still fail closed exactly as CHAOS-4355 established.
-		if field, ok := uniqueNonTimeSeriesRowsField(fact); ok {
-			rowsField = field
-			break
+		if field, unique := uniqueNonTimeSeriesRowsField(fact); unique {
+			return field, false, true
 		}
-		return nil, true
+		return "", true, false
 	}
-	source := fact.Fields[rowsField].Rows
-	rows = make([]contractsv1.ContextFabricClaimedFactRow, 0, len(source))
-	for _, row := range source {
-		rows = append(rows, convertFactValueRow(row))
+}
+
+// canonicalFieldTable is CHAOS-4637's declaration hop: the wire declaration
+// of the SAME field canonicalRowsField chose, or nil when that field
+// carries none.
+//
+// Nil is not a degraded state that wants a fallback -- it is the statement
+// "this table is undeclared", and CHAOS-4627 rules that an undeclared table
+// is never charted. Inferring a shape here from the rows would reinstate
+// exactly the geometry inference this slice deletes.
+func canonicalFieldTable(fact CanonicalFact) *contractsv1.ContextFabricClaimedFactTable {
+	field, _, ok := canonicalRowsField(fact)
+	if !ok {
+		return nil
 	}
-	if len(rows) > contractsv1.ContextFabricClaimedFactMaxRows {
-		return rows[:contractsv1.ContextFabricClaimedFactMaxRows], true
+	declared := fact.Fields[field].Table
+	if declared == nil {
+		return nil
 	}
-	return rows, false
+	return &contractsv1.ContextFabricClaimedFactTable{
+		Field:    field,
+		Shape:    contractsv1.ContextFabricFactTableShape(declared.Shape),
+		Key:      append([]string(nil), declared.Key...),
+		Measures: append([]string(nil), declared.Measures...),
+		OrderBy:  declared.OrderBy,
+	}
 }
 
 // uniqueNonTimeSeriesRowsField is canonicalFieldRows' CHAOS-4645
@@ -1200,7 +1271,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		// stripped, so stripped is normally 0; this still runs for any
 		// ModelRuntime implementation that does not strip on its own.
 		var stripped int
-		draft.ClaimedFacts, stripped = StripModelAuthoredClaimedFactRows(draft.ClaimedFacts)
+		draft.ClaimedFacts, stripped = StripModelAuthoredClaimedFactTableContent(draft.ClaimedFacts)
 		if stripped > 0 && r.Telemetry != nil {
 			r.Telemetry.RecordModelRowsStripped(ctx, principal, stripped)
 		}

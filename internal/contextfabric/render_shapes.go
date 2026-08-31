@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -61,6 +62,13 @@ type RenderShapeSelectionEvent struct {
 	// projection budget exists to prevent, one layer up. Zero on every
 	// selection that lost nothing.
 	MembersTruncated int
+	// TrendsOmitted counts trends the rule selected and the answer had no
+	// room to carry (ContextFabricRenderShapesMaxCount). A COUNT rather
+	// than a skip reason, deliberately: the rule DID fire, so recording it
+	// as skipped would make the per-rule accounting say two things at once
+	// -- and a ninth shape is a rejected document, not a smaller answer.
+	// Zero on every selection that lost nothing.
+	TrendsOmitted int
 }
 
 // RenderShapeSkip records one rule that did not produce a shape.
@@ -90,11 +98,82 @@ const (
 	// truncated: a stacked bar claims its parts sum to the score, and a
 	// stack missing segments claims something false.
 	RenderShapeSkipTooManySignals RenderShapeSkipReason = "too_many_signals"
-	// RenderShapeSkipTrendRuleWithdrawn -- the dated_fact_trend rule has no
-	// producer (CHAOS-4616). Recorded on every selection rather than
-	// silently omitted, so a reader can tell "this build does not select
-	// trends" from "the rule ran and found nothing".
-	RenderShapeSkipTrendRuleWithdrawn RenderShapeSkipReason = "trend_rule_withdrawn"
+	// The dated_fact_trend rule's reasons (CHAOS-4637). The rule is
+	// evaluated ONCE over every claimed fact, so it exits through exactly
+	// one of these, chosen by the FURTHEST stage any fact reached -- the
+	// most actionable diagnosis rather than the first or the commonest.
+	// A reader seeing no_time_series_table knows tables arrived and none
+	// declared itself a series; one seeing claim_field_not_a_measure
+	// knows a series arrived and the producer half is what is missing.
+	//
+	// RenderShapeSkipNoDeclaredTable -- no claimed fact carried a
+	// DECLARED table. Either the fact carried no rows at all, or it
+	// carried rows a producer never declared. Undeclared is never
+	// charted (CHAOS-4627's ruled default): inferring a shape from the
+	// rows is precisely the geometry inference this slice deletes.
+	RenderShapeSkipNoDeclaredTable RenderShapeSkipReason = "no_declared_table"
+	// RenderShapeSkipNoTimeSeriesTable -- declared tables arrived and
+	// none of them is a time_series. This is where flow.go's
+	// `scope_breakdown` lands, permanently: it declares Shape=breakdown
+	// with Key=[provider, work_scope_id], so the rule that once drew a
+	// line across two different work scopes cannot even consider it.
+	// CHAOS-4616's correction, expressed as a declaration outcome rather
+	// than as a guard inside the selector.
+	RenderShapeSkipNoTimeSeriesTable RenderShapeSkipReason = "no_time_series_table"
+	// RenderShapeSkipClaimFieldNotAMeasure -- a time_series table
+	// arrived, and the claim's own Field is not one of its DECLARED
+	// measures, so there is no single measure this claim is about.
+	//
+	// A trend plots ONE measure. Plotting several declared measures on
+	// one value axis silently asserts they are commensurable, which
+	// nothing on the wire says -- that is CHAOS-4625's separate,
+	// designed comparison shape, and `Measures` being a declared list is
+	// exactly what makes it expressible there. Until it exists, this
+	// refuses rather than picks.
+	RenderShapeSkipClaimFieldNotAMeasure RenderShapeSkipReason = "claim_field_not_a_measure"
+	// RenderShapeSkipUnresolvableMeasureRoles (codex round 1 finding 1,
+	// P1, EXECUTED) -- the table is DECLARED time_series and carries a
+	// declared measure whose cells are not numeric, so this rule cannot
+	// tell a per-row categorical OBSERVATION from a second IDENTITY
+	// dimension, and one of those two readings makes the line a lie.
+	//
+	// This is the hole the one-key-column rule does NOT close. Putting the
+	// work scope in KEY makes the key arity 2 and the table a breakdown by
+	// definition; putting it in MEASURES leaves a declaration that is
+	// internally consistent -- one key column, parsing as an instant,
+	// distinct across rows, every column classified -- and the trend rule,
+	// which reads only the claim's own measure, never looks at the scope
+	// column. The CHAOS-4616 false line comes back through the
+	// DECLARATION instead of through the geometry.
+	//
+	// WHY THIS IS A SELECTION REFUSAL AND NOT A VALIDATION RULE. The
+	// obvious fix -- "a time_series measure must be numeric" -- was
+	// written, and then EXECUTED against the merged producers: it
+	// invalidates health.go's own CHAOS-4645 declaration, which carries
+	// `severity` (a per-day categorical observation of ONE subject, and a
+	// legitimate one) among its measures. `severity` and `work_scope_id`
+	// are syntactically identical and semantically opposite, and the
+	// declaration vocabulary has no third role to tell them apart: design
+	// §5.1 admits only Key or Measures, so a varying non-identity column
+	// has nowhere else to go. Refusing the DECLARATION would break a
+	// correct producer; refusing to DRAW A LINE THROUGH IT costs nothing
+	// today (health's time_series is dual-table and never reaches the
+	// wire) and fails closed if it ever does.
+	//
+	// The real fix is a third declared role, which is CHAOS-4633's
+	// vocabulary and not this slice's -- filed, with this reasoning.
+	RenderShapeSkipUnresolvableMeasureRoles RenderShapeSkipReason = "unresolvable_measure_roles"
+	// RenderShapeSkipNoPlottableMeasure -- the declared measure is
+	// there and its cells cannot be plotted: fewer than two rows carry a
+	// numeric value for it, or the declared axis column does not parse as
+	// an instant. A hole in a line has to be either broken or bridged and
+	// both are claims about data that is not there.
+	RenderShapeSkipNoPlottableMeasure RenderShapeSkipReason = "no_plottable_measure"
+	// RenderShapeSkipShapeBudgetSpent -- trends were selectable and the
+	// answer's render-shape budget (ContextFabricRenderShapesMaxCount) was
+	// already spent. Counted, never silent: emitting a ninth shape would
+	// fail contract validation and turn a good answer into a rejected one.
+	RenderShapeSkipShapeBudgetSpent RenderShapeSkipReason = "shape_budget_spent"
 	// RenderShapeSkipNotPlanAuthorized (CHAOS-4636) means the geometry
 	// admitted this shape and the PLAN did not authorize its kind.
 	//
@@ -167,30 +246,21 @@ func SelectRenderShapes(result InvestigationResult) ([]contractsv1.ContextFabric
 		}
 	}
 
-	// CHAOS-4616: the dated_fact_trend rule is WITHDRAWN. Its vocabulary
-	// stays (see RenderShapeSkipTrendRuleWithdrawn and the
-	// ContextFabricRenderRuleDatedFactTrend constant) so a future producer
-	// needs no contract change, but nothing selects it today.
-	//
-	// Why it was withdrawn rather than fixed: deciding which columns of a
-	// row table are MEASURES and which are DIMENSIONS cannot be done from
-	// the table alone, and three successive attempts to infer it were each
-	// defeated in review -- skipping numeric columns (a numeric team_id
-	// became a plotted series), an id-NAME test (a column called `year`
-	// walked straight through), and finally reading the claim's own Field
-	// (correct for one measure, but it silently narrowed every
-	// multi-measure table to nothing). The information EXISTS at the
-	// producer -- devhealthfacts/flow.go names its table `scope_breakdown`
-	// in as many words -- it is simply not carried on the wire. Until a row
-	// table declares its own shape, any trend this rule drew would be a
-	// server-asserted claim resting on a guess, and a chart is a claimed
-	// fact.
-	//
-	// This removes a SERVER assertion only. Consumers still render row
-	// tables with their own generic visualization, presented as a view of
-	// the rows rather than as a trend the service vouches for -- nothing
-	// disappears from a reader's screen.
-	event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipTrendRuleWithdrawn)
+	// CHAOS-4637: the dated_fact_trend rule RETURNS, and it returns
+	// declaration-driven. It was withdrawn in acr #340 because deciding
+	// which columns of a row table are measures and which are dimensions
+	// cannot be done from the table alone -- three successive inferences
+	// were each defeated in review. The information always existed at the
+	// producer; CHAOS-4633/4645 declared it and this slice is where it is
+	// finally READ. The rule is now one predicate over a declaration, and
+	// there is no geometry left in it to defeat.
+	trends, omitted, reason := datedFactTrendShapes(result, len(shapes))
+	event.TrendsOmitted = omitted
+	if len(trends) > 0 {
+		shapes = append(shapes, trends...)
+	} else {
+		event.skip(contractsv1.ContextFabricRenderRuleDatedFactTrend, reason)
+	}
 
 	if len(shapes) == 0 {
 		return nil, event
@@ -445,4 +515,373 @@ func planAuthorizesRenderKind(plan *contractsv1.ContextFabricAnswerPlan, kind co
 		}
 	}
 	return false
+}
+
+// datedFactTrendShapes is rule 3, CHAOS-4637: one line per claimed fact
+// whose row table the PRODUCER DECLARED a time_series.
+//
+// THE WHOLE RULE IS A DECLARATION LOOKUP. There is no column scan, no
+// numeric-column test, no id-name test, and no "other columns constant"
+// check -- the three inferences that were each defeated in review, plus the
+// correction that replaced them, are all gone, because every question they
+// tried to answer is now answered on the wire:
+//
+//   - IS this a series? Table.Shape == time_series. A table whose identity
+//     needs two columns cannot carry that shape (the declaration's own
+//     arity rule), which is why flow.go's scope_breakdown -- the table that
+//     produced the defect -- can never be selected here again.
+//   - WHICH column is the axis? Table.Key[0]. Declared, and exactly one by
+//     construction.
+//   - WHICH column is the measure? The claim says what it is about:
+//     ClaimedFact.Field, required to be one of Table.Measures. Exactly one
+//     measure is plotted, so the value axis is commensurable by
+//     construction rather than by hope. Several measures over time is a
+//     COMPARISON and is CHAOS-4625's own designed shape; `Measures` being a
+//     declared list is what makes that expressible, and this rule refuses
+//     rather than quietly picking one.
+//
+// What remains is not inference: parsing the DECLARED axis cell to order
+// the points, and unwrapping the DECLARED measure cell to a plottable
+// number. Both are reads of a named column, and both refuse rather than
+// guess when the cell will not yield -- a producer that declared a table it
+// cannot satisfy gets no chart, not an approximated one.
+//
+// Returns the shapes, the number of further trends the shape budget had no
+// room for, and -- only when nothing was selected -- the single closed
+// reason why.
+func datedFactTrendShapes(result InvestigationResult, alreadySelected int) (shapes []contractsv1.ContextFabricRenderShape, omitted int, reason RenderShapeSkipReason) {
+	// The plan gates the KIND before any fact is consulted. North Star
+	// check 10 is enforced by what the question asked for, never by what
+	// the data happened to allow.
+	if !planAuthorizesRenderKind(result.AnswerPlan, contractsv1.ContextFabricRenderKindSeries) {
+		return nil, 0, RenderShapeSkipNotPlanAuthorized
+	}
+	budget := contractsv1.ContextFabricRenderShapesMaxCount - alreadySelected
+	// furthest records the most advanced stage ANY fact reached, so the one
+	// reported reason is the most actionable one. See the skip-reason
+	// vocabulary for why the furthest stage rather than the first.
+	furthest := trendStageNoDeclaredTable
+	for _, fact := range result.ClaimedFacts {
+		shape, stage := datedFactTrendShape(fact)
+		if stage > furthest {
+			furthest = stage
+		}
+		if shape == nil {
+			continue
+		}
+		if len(shapes) >= budget {
+			omitted++
+			continue
+		}
+		shapes = append(shapes, *shape)
+	}
+	if len(shapes) > 0 {
+		return shapes, omitted, ""
+	}
+	// Found by the CHAOS-4637 shape sweep, not by a review round: a fact
+	// could reach trendStageSelected and still append nothing, if the shape
+	// budget was already spent. trendStageReasons has no entry for
+	// trendStageSelected -- correctly, since it is not a refusal -- so the
+	// lookup returned the empty string and this rule would have recorded a
+	// SKIP WITH NO REASON. Accounted() would then report `violated` and the
+	// selector would be exactly the "exit path that forgets its reason"
+	// CHAOS-4621 was filed about, introduced by the code that closes it.
+	//
+	// Not reachable today (the two cohort rules produce at most 2 of the 8
+	// shapes a result may carry, so the trend rule always has room), which
+	// is precisely why only an exhaustive sweep of the class would find it.
+	if furthest == trendStageSelected {
+		return nil, omitted, RenderShapeSkipShapeBudgetSpent
+	}
+	return nil, omitted, trendStageReasons[furthest]
+}
+
+// trendStage orders how far the rule got on one fact. Ordered so that
+// "the furthest stage reached" is simply the maximum.
+type trendStage int
+
+const (
+	trendStageNoDeclaredTable trendStage = iota
+	trendStageNoTimeSeriesTable
+	trendStageClaimFieldNotAMeasure
+	trendStageUnresolvableMeasureRoles
+	trendStageNoPlottableMeasure
+	trendStageSelected
+)
+
+var trendStageReasons = map[trendStage]RenderShapeSkipReason{
+	trendStageNoDeclaredTable:          RenderShapeSkipNoDeclaredTable,
+	trendStageNoTimeSeriesTable:        RenderShapeSkipNoTimeSeriesTable,
+	trendStageClaimFieldNotAMeasure:    RenderShapeSkipClaimFieldNotAMeasure,
+	trendStageUnresolvableMeasureRoles: RenderShapeSkipUnresolvableMeasureRoles,
+	trendStageNoPlottableMeasure:       RenderShapeSkipNoPlottableMeasure,
+}
+
+// datedFactTrendShape evaluates one claimed fact, returning the shape (or
+// nil) and the stage it reached.
+func datedFactTrendShape(fact ClaimedFact) (*contractsv1.ContextFabricRenderShape, trendStage) {
+	table := fact.Table
+	if table == nil {
+		return nil, trendStageNoDeclaredTable
+	}
+	if table.Shape != contractsv1.ContextFabricFactTableShapeTimeSeries {
+		return nil, trendStageNoTimeSeriesTable
+	}
+	if !table.HasMeasure(fact.Field) {
+		return nil, trendStageClaimFieldNotAMeasure
+	}
+	// Key arity is 1 for a time_series by contract (both the producer's
+	// FactTable.Validate and the wire's validateClaimedFactTable enforce
+	// it), so this is the belt to that braces: a malformed declaration
+	// that somehow reached here refuses instead of indexing out of range.
+	//
+	// The reason is no_time_series_table, NOT claim_field_not_a_measure --
+	// caught by re-reading this file against the CHAOS-4621 class rather
+	// than by a test, since the branch is unreachable. A declaration
+	// calling itself a time_series while carrying two identity columns is
+	// not a time_series, and saying "the claim's field is not a measure"
+	// would blame the claim for the producer's declaration. Recording the
+	// WRONG reason is the same defect class as recording none: two of the
+	// four instances CHAOS-4621 was filed for were exactly that.
+	if len(table.Key) != 1 {
+		return nil, trendStageNoTimeSeriesTable
+	}
+	axis := table.Key[0]
+	rows := fact.Rows
+	if len(rows) < 2 || len(rows) > contractsv1.ContextFabricRenderPointsMaxCount {
+		return nil, trendStageNoPlottableMeasure
+	}
+	if !everyDeclaredMeasureIsAQuantity(table, rows) {
+		return nil, trendStageUnresolvableMeasureRoles
+	}
+	points, ok := trendPoints(fact, axis, fact.Field)
+	if !ok {
+		return nil, trendStageNoPlottableMeasure
+	}
+	return &contractsv1.ContextFabricRenderShape{
+		Kind:         contractsv1.ContextFabricRenderKindSeries,
+		Presentation: contractsv1.ContextFabricRenderPresentationLine,
+		SelectedBy:   contractsv1.ContextFabricRenderRuleDatedFactTrend,
+		Title:        clampRenderLabel(humanizeRenderTerm(fact.Field) + " over time — " + fact.Subject.Label),
+		AxisKind:     contractsv1.ContextFabricRenderAxisTime,
+		AxisLabel:    clampRenderLabel(axis),
+		ValueLabel:   clampRenderLabel(humanizeRenderTerm(fact.Field)),
+		Series: []contractsv1.ContextFabricRenderSeries{{
+			Key:    fact.Field,
+			Label:  humanizeRenderTerm(fact.Field),
+			Points: points,
+		}},
+	}, trendStageSelected
+}
+
+// everyDeclaredMeasureIsAQuantity reports whether EVERY declared measure of
+// this time_series -- not merely the one about to be plotted -- carries
+// numbers.
+//
+// Checking the whole declaration rather than just the plotted column is the
+// point. The plotted column is numeric by definition (it would not otherwise
+// be plottable); the risk lives in the columns this rule does not read. A
+// declared measure carrying strings is either a per-row categorical
+// observation or a second entity's identity, and nothing in the declaration
+// vocabulary distinguishes them. A line drawn through the second is the
+// CHAOS-4616 defect; refusing both is the fail-closed reading, and the cost
+// of refusing the first is a chart that was never drawn today anyway.
+//
+// Absent and explicitly-null cells are NOT disqualifying: a
+// conditionally-computed measure (metrics' mttr_hours) is missing data, and
+// missing data says nothing about roles.
+func everyDeclaredMeasureIsAQuantity(table *contractsv1.ContextFabricClaimedFactTable, rows []ClaimedFactRow) bool {
+	for _, row := range rows {
+		for _, measure := range table.Measures {
+			cell, present := row.Fields[measure]
+			if !present || cell.Null {
+				continue
+			}
+			if cell.Integer == nil && cell.Number == nil {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// trendPoints reads the DECLARED axis and the DECLARED measure off every
+// row and orders the points by elapsed time.
+//
+// It refuses the whole series rather than plotting a subset. A measure may
+// legitimately be absent from an individual row of a declared table (a
+// conditionally-computed column), but a LINE with a hole in it has to
+// either break or bridge, and both state something the rows do not. A
+// producer that wants a partial series declares a table that has one.
+//
+// Distinctness is by INSTANT, not by spelling: "2026-08-03T00:00:00Z" and
+// "2026-08-02T17:00:00-07:00" are two spellings of one moment, and a
+// raw-string check would call them distinct and stack two values on one
+// axis position. The producer's own FactTable.Validate makes the key
+// distinct, so a repeat here means the declaration and the rows disagree,
+// and the rows are what a reader would see.
+func trendPoints(fact ClaimedFact, axis, measure string) ([]contractsv1.ContextFabricRenderPoint, bool) {
+	type dated struct {
+		instant time.Time
+		point   contractsv1.ContextFabricRenderPoint
+	}
+	seen := make(map[int64]struct{}, len(fact.Rows))
+	entries := make([]dated, 0, len(fact.Rows))
+	var withTime, withoutTime bool
+	for index, row := range fact.Rows {
+		raw, ok := renderStringCell(row.Fields[axis])
+		if !ok {
+			return nil, false
+		}
+		instant, hasTime, ok := parseRenderDate(raw)
+		if !ok {
+			return nil, false
+		}
+		if hasTime {
+			withTime = true
+		} else {
+			withoutTime = true
+		}
+		if _, repeated := seen[instant.UnixNano()]; repeated {
+			return nil, false
+		}
+		seen[instant.UnixNano()] = struct{}{}
+		value, numeric := renderNumericCell(row.Fields[measure])
+		if !numeric {
+			return nil, false
+		}
+		rowIndex := index
+		entries = append(entries, dated{instant: instant, point: contractsv1.ContextFabricRenderPoint{
+			Label: raw,
+			Value: value,
+			Source: contractsv1.ContextFabricRenderPointSource{
+				Kind:     contractsv1.ContextFabricRenderSourceClaimedFactRow,
+				ClaimID:  fact.ClaimID,
+				RowIndex: &rowIndex,
+				Field:    measure,
+			},
+		}})
+	}
+	// A time axis is POSITIONED by elapsed time. Mixing a bare date with a
+	// zoned timestamp makes one elapsed-time scale ill-defined, so the
+	// column must be all one shape.
+	if withTime && withoutTime {
+		return nil, false
+	}
+	if len(entries) < 2 {
+		return nil, false
+	}
+	sort.SliceStable(entries, func(a, b int) bool { return entries[a].instant.Before(entries[b].instant) })
+	points := make([]contractsv1.ContextFabricRenderPoint, 0, len(entries))
+	for _, entry := range entries {
+		points = append(points, entry.point)
+	}
+	return points, true
+}
+
+// parseRenderDate accepts the ISO-8601 forms every producer in this
+// codebase emits for a day column, and REJECTS anything Go's own parser
+// would silently normalize. It reports whether the value carried a time
+// component so a mixed-shape column can be refused.
+func parseRenderDate(raw string) (time.Time, bool, bool) {
+	for _, layout := range []string{"2006-01-02T15:04:05Z07:00", "2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02T15:04", "2006-01-02 15:04"} {
+		if instant, err := time.Parse(layout, raw); err == nil {
+			return instant, true, true
+		}
+	}
+	if instant, err := time.Parse("2006-01-02", raw); err == nil {
+		return instant, false, true
+	}
+	return time.Time{}, false, false
+}
+
+// renderStringCell unwraps a row cell that must be a present string.
+func renderStringCell(value ScalarValue) (string, bool) {
+	if value.String == nil {
+		return "", false
+	}
+	return *value.String, true
+}
+
+// renderNumericCell unwraps a row cell to a plottable number.
+//
+// An integer past 2^53 is NOT plottable and is refused here rather than
+// cast: beyond that bound a float64 cannot distinguish adjacent integers, so
+// a point built from one would claim a value that differs from the row it
+// cites -- and contractsv1's resolver refuses it, which would turn a valid
+// answer into a rejected one at the last gate. Refusing here means the
+// column simply is not chartable and the fact keeps its table.
+func renderNumericCell(value ScalarValue) (float64, bool) {
+	switch {
+	case value.Number != nil:
+		return *value.Number, true
+	case value.Integer != nil:
+		if *value.Integer > contractsv1.ContextFabricRenderPointExactIntegerBound ||
+			*value.Integer < -contractsv1.ContextFabricRenderPointExactIntegerBound {
+			return 0, false
+		}
+		return float64(*value.Integer), true
+	}
+	return 0, false
+}
+
+// renderShapeRules is the CLOSED set of rules this selector evaluates. It
+// is the denominator the accounting invariant below is total over.
+var renderShapeRules = []contractsv1.ContextFabricRenderShapeRule{
+	contractsv1.ContextFabricRenderRuleCohortAttentionScore,
+	contractsv1.ContextFabricRenderRuleCohortDriverContribution,
+	contractsv1.ContextFabricRenderRuleDatedFactTrend,
+}
+
+// Accounted is CHAOS-4621's structural invariant, as code rather than as a
+// habit: EVERY rule this selector evaluates exits through exactly one
+// recorded outcome -- it selected at least one shape, or it recorded
+// exactly one closed skip reason. Never both, never neither, never two
+// reasons.
+//
+// The same defect class was closed FOUR times case by case in the CHAOS-4415
+// / 4616 work: a refusal that left no trace, or that recorded the wrong
+// reason, or that went invisible as soon as some other rule produced a
+// shape. Case-by-case fixes cannot stop the fifth. This makes the counts
+// TOTAL, so a new exit path that forgets its reason is a failure by
+// construction rather than a silence nobody notices.
+//
+// Reported as an error rather than panicking: a violation is a telemetry
+// defect, and refusing to serve a good answer over one would be a worse
+// outcome than serving it with the defect recorded.
+func (e RenderShapeSelectionEvent) Accounted() error {
+	selected := map[contractsv1.ContextFabricRenderShapeRule]int{}
+	for _, selection := range e.Selected {
+		selected[selection.Rule]++
+	}
+	skipped := map[contractsv1.ContextFabricRenderShapeRule]int{}
+	for _, skip := range e.Skipped {
+		if skip.Reason == "" {
+			return fmt.Errorf("rule %q recorded a skip with no reason", skip.Rule)
+		}
+		skipped[skip.Rule]++
+	}
+	known := make(map[contractsv1.ContextFabricRenderShapeRule]struct{}, len(renderShapeRules))
+	for _, rule := range renderShapeRules {
+		known[rule] = struct{}{}
+		switch {
+		case selected[rule] > 0 && skipped[rule] > 0:
+			return fmt.Errorf("rule %q both selected %d shape(s) and recorded %d skip reason(s)", rule, selected[rule], skipped[rule])
+		case selected[rule] == 0 && skipped[rule] == 0:
+			return fmt.Errorf("rule %q recorded no outcome at all", rule)
+		case skipped[rule] > 1:
+			return fmt.Errorf("rule %q recorded %d skip reasons, want exactly one", rule, skipped[rule])
+		}
+	}
+	for rule := range selected {
+		if _, ok := known[rule]; !ok {
+			return fmt.Errorf("rule %q selected a shape but is not in the evaluated rule set", rule)
+		}
+	}
+	for rule := range skipped {
+		if _, ok := known[rule]; !ok {
+			return fmt.Errorf("rule %q recorded a skip but is not in the evaluated rule set", rule)
+		}
+	}
+	return nil
 }

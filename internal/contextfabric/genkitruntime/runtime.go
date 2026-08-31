@@ -1098,7 +1098,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// a reason to reject an otherwise-valid answer, and never
 		// content this receipt/log line should reflect either way.
 		var stripped int
-		draft.ClaimedFacts, stripped = contextfabric.StripModelAuthoredClaimedFactRows(draft.ClaimedFacts)
+		draft.ClaimedFacts, stripped = contextfabric.StripModelAuthoredClaimedFactTableContent(draft.ClaimedFacts)
 		if stripped > 0 && r.config.Telemetry != nil {
 			r.config.Telemetry.RecordModelRowsStripped(ctx, principal, stripped)
 		}

@@ -513,10 +513,23 @@ func (t SlogEngineTelemetry) RecordRenderShapeSelection(ctx context.Context, pri
 		args := append([]any{"org_id", principal.OrgID, "question_shape", string(event.Shape)}, extra...)
 		return append(args, requestIDLogAttrs(ctx)...)
 	}
+	// render_shape_accounting is CHAOS-4621's structural invariant made
+	// DIAGNOSABLE FROM ARTIFACTS (acr/AGENTS.md): a selector that lost a
+	// rule's outcome says so in the run's own log line, rather than being
+	// discoverable only by re-reading source or re-running with
+	// instrumentation added afterwards. "ok" on every healthy selection,
+	// so the field is a positive statement and not merely the absence of
+	// a complaint.
+	accounting := "ok"
+	if err := event.Accounted(); err != nil {
+		accounting = "violated"
+	}
 	t.logger.InfoContext(ctx, "context fabric render shape selection",
 		base("render_shapes_selected", len(event.Selected),
 			"render_shape_rules_skipped", len(event.Skipped),
-			"render_shape_members_truncated", event.MembersTruncated)...)
+			"render_shape_members_truncated", event.MembersTruncated,
+			"render_shape_trends_omitted", event.TrendsOmitted,
+			"render_shape_accounting", accounting)...)
 	for _, selection := range event.Selected {
 		t.logger.InfoContext(ctx, "context fabric render shape selected", base(
 			"render_shape_kind", string(selection.Kind),

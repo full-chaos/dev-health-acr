@@ -138,6 +138,18 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 		// cannot ship unmarked, carved out today because nothing produces
 		// this shape into a rendered answer yet.
 		"structured.key_facts[].rows[].fields{}.string": "not (yet) rendered by this plain-text markdown view; no producer routes a Rows-bearing fact into a driver's cited claims yet, and the claim's own field/value pair already renders with the untrusted marking",
+		// CHAOS-4637: the DECLARATION of that same table. The plain-text
+		// markdown view does not render the table itself (the carve-out
+		// directly above), so it cannot render a statement about that
+		// table's shape either -- naming the axis column of a table the
+		// reader cannot see would be noise, not disclosure. Declared now,
+		// exactly as rows[] was, so a future rendering cannot ship it
+		// unmarked. Ask Dev reads `table` from Structured directly and is
+		// where the declaration is actually consumed.
+		"structured.key_facts[].table.field":      "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
+		"structured.key_facts[].table.key[]":      "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
+		"structured.key_facts[].table.measures[]": "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
+		"structured.key_facts[].table.order_by":   "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
 		// CHAOS-4398 PR3b: RankingTable and AffectedSubjects are now
 		// rendered (the "## Rows" block and the drivers' own "Affected:"
 		// line) -- the carve-out that stood here through PR3 is gone; both
@@ -424,6 +436,20 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 			Rows: []contractsv1.ContextFabricClaimedFactRow{{
 				Fields: map[string]contractsv1.ContextFabricScalarValue{"team_name": {String: &rowTeamName}},
 			}},
+			// CHAOS-4637: the declared table, with NON-EMPTY key and
+			// measures slices, so the reflection walk can reach and plant
+			// every declared table leaf. This is the same trap Rows above
+			// documents and the same one CHAOS-4636 hit in this file: an
+			// empty slice (or here, a nil *Table pointer) is silently
+			// unresolvable, and a declared-but-unplantable path is a field
+			// this closure is not covering.
+			Table: &contractsv1.ContextFabricClaimedFactTable{
+				Field:    "daily_metrics",
+				Shape:    contractsv1.ContextFabricFactTableShapeRanking,
+				Key:      []string{"team_name"},
+				Measures: []string{"commits_count"},
+				OrderBy:  "commits_count",
+			},
 		}},
 		// CHAOS-4415: a non-empty render shape so the reflection walk below
 		// can reach and plant every declared render_shapes leaf -- same

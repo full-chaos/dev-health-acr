@@ -274,7 +274,17 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// rather than a narrowed copy, exactly as it does the render shape.
 		// Unlike the canonical result surface, this one gains NO plan
 		// leaves: the projection does not carry the answer plan.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 184},
+		// CHAOS-4637: 184 -> 189 -- ClaimedFactTable's five new string
+		// leaves (field, shape, key[], measures[], order_by). `shape` is a
+		// closed vocabulary and is trusted by trustedBecauseClosed; the
+		// other four are producer-issued COLUMN NAMES and are classified
+		// conservatively untrusted, exactly as this list already treats
+		// render_shapes[].series[].key. The declaration reaches BOTH
+		// surfaces this time -- unlike CHAOS-4636's plan, which the
+		// projection does not carry -- because a declaration separated
+		// from the rows it describes leaves the consumer half of
+		// CHAOS-4627 exactly where it was.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 189},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -311,7 +321,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// trusted-because-closed rather than untrusted. answer_projection is
 		// unaffected: the projection carries neither the plan nor the group
 		// axis yet.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 283},
+		// CHAOS-4637: 283 -> 288 -- the same five ClaimedFactTable leaves
+		// as the answer_projection surface above.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 288},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)

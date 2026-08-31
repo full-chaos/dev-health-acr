@@ -316,6 +316,12 @@ type ContextFabricProjectedFact struct {
 	// side to duplicate the type just because the wire schema duplicates
 	// the definition.
 	Rows []ContextFabricClaimedFactRow `json:"rows,omitempty"`
+	// Table mirrors ContextFabricClaimedFact.Table (CHAOS-4637 /
+	// CHAOS-4627), passed through unchanged. The answer surface is where
+	// Ask Dev reads a fact from, so a declaration that stopped at the
+	// canonical result would leave the consumer half of CHAOS-4627
+	// exactly as unable to say what a row table is as before.
+	Table *ContextFabricClaimedFactTable `json:"table,omitempty"`
 }
 
 // ContextFabricProjectedCoverage reports one source's state. Reason is

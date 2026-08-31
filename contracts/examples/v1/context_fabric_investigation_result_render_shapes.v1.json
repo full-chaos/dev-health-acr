@@ -780,7 +780,18 @@
             }
           }
         }
-      ]
+      ],
+      "table": {
+        "field": "daily_readiness",
+        "shape": "time_series",
+        "key": [
+          "day"
+        ],
+        "measures": [
+          "coverage_ratio",
+          "open_requirements"
+        ]
+      }
     },
     {
       "claim_id": "claim_cohort_88cad88367c815eae568ce1f979c1471",
@@ -819,6 +830,61 @@
       "field": "estimate_coverage_ratio",
       "value": {
         "number": 0.6
+      }
+    },
+    {
+      "claim_id": "claim_metrics_ask_dev_commits",
+      "kind": "metrics",
+      "subject": {
+        "kind": "project",
+        "canonical_id": "project_ask_dev",
+        "label": "Ask Dev"
+      },
+      "field": "commits_count",
+      "value": {
+        "integer": 31
+      },
+      "rows": [
+        {
+          "fields": {
+            "day": {
+              "string": "2026-08-03"
+            },
+            "commits_count": {
+              "integer": 18
+            }
+          }
+        },
+        {
+          "fields": {
+            "day": {
+              "string": "2026-08-18"
+            },
+            "commits_count": {
+              "integer": 24
+            }
+          }
+        },
+        {
+          "fields": {
+            "day": {
+              "string": "2026-08-30"
+            },
+            "commits_count": {
+              "integer": 31
+            }
+          }
+        }
+      ],
+      "table": {
+        "field": "daily_metrics",
+        "shape": "time_series",
+        "key": [
+          "day"
+        ],
+        "measures": [
+          "commits_count"
+        ]
       }
     }
   ],
@@ -992,11 +1058,59 @@
           ]
         }
       ]
+    },
+    {
+      "shape_id": "rs_3",
+      "kind": "series",
+      "presentation": "line",
+      "selected_by": "dated_fact_trend",
+      "title": "Commits count over time \u2014 Ask Dev",
+      "axis_kind": "time",
+      "axis_label": "day",
+      "value_label": "Commits count",
+      "series": [
+        {
+          "key": "commits_count",
+          "label": "Commits count",
+          "points": [
+            {
+              "label": "2026-08-03",
+              "value": 18,
+              "source": {
+                "kind": "claimed_fact_row",
+                "claim_id": "claim_metrics_ask_dev_commits",
+                "row_index": 0,
+                "field": "commits_count"
+              }
+            },
+            {
+              "label": "2026-08-18",
+              "value": 24,
+              "source": {
+                "kind": "claimed_fact_row",
+                "claim_id": "claim_metrics_ask_dev_commits",
+                "row_index": 1,
+                "field": "commits_count"
+              }
+            },
+            {
+              "label": "2026-08-30",
+              "value": 31,
+              "source": {
+                "kind": "claimed_fact_row",
+                "claim_id": "claim_metrics_ask_dev_commits",
+                "row_index": 2,
+                "field": "commits_count"
+              }
+            }
+          ]
+        }
+      ]
     }
   ],
   "completeness": {
     "terminal_status": "complete",
-    "claimed_facts_count": 4,
-    "rows_count": 3
+    "claimed_facts_count": 5,
+    "rows_count": 6
   }
 }

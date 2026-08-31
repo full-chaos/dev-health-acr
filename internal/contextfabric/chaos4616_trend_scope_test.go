@@ -1,13 +1,24 @@
 package contextfabric
 
 import (
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// CHAOS-4616: the `dated_fact_trend` rule is WITHDRAWN, and these tests pin
-// that it stays withdrawn.
+// CHAOS-4616: the `dated_fact_trend` rule was WITHDRAWN, and these tests
+// pinned that it stayed withdrawn. CHAOS-4637 (S6) brings it back
+// DECLARATION-DRIVEN, and these tests now pin the stronger property: the
+// rows that produced the misleading chart cannot be charted even now the
+// rule exists again -- and cannot even be DECLARED in a way that would let
+// them be.
+//
+// This file was written with its own way back named in it (see
+// TestUndeclaredRowsAreNeverCharted's comment, unchanged below): "a future
+// producer gated on ... a declared row-table shape (CHAOS-4627) could
+// legitimately select dated_fact_trend with this test still green". That is
+// what happened. Nothing here was relaxed to let it happen.
 //
 // The history matters more than the code, because the code is now an
 // absence. A trend was shipped in CHAOS-4415 slice 1 and, on the live rig,
@@ -52,6 +63,10 @@ func liveFlowRows() []ClaimedFactRow {
 }
 
 func trendFixture(rows []ClaimedFactRow) InvestigationResult {
+	return trendFixtureDeclared(rows, nil)
+}
+
+func trendFixtureDeclared(rows []ClaimedFactRow, table *contractsv1.ContextFabricClaimedFactTable) InvestigationResult {
 	return InvestigationResult{
 		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
 		ClaimedFacts: []ClaimedFact{{
@@ -60,28 +75,107 @@ func trendFixture(rows []ClaimedFactRow) InvestigationResult {
 			Subject: SubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:fullchaos", Label: "fullchaos"},
 			Field:   "items_completed",
 			Rows:    rows,
+			Table:   table,
 		}},
 	}
 }
 
 // TestNoTrendIsSelectedForTheLiveMisleadingRows is the regression that
-// matters: the exact rows that produced the misleading chart must produce no
-// shape at all.
+// matters, now in its strongest form: the exact rows that produced the
+// misleading chart, carrying the HONEST declaration flow.go emits for them,
+// still produce no shape -- and the recorded reason names the declaration
+// rather than a rule-wide withdrawal.
+//
+// Non-vacuity is asserted FIRST, deliberately. A fixture that never reaches
+// the guarded path is green against the defect it claims to pin, which is a
+// failure mode this project has hit repeatedly (lane-4636 shipped three
+// such fixtures and caught all three only by mutating the fix back). So:
+// the declaration must actually be attached, and the rows must actually be
+// the two-scope live rows, before the absence of a shape means anything.
 func TestNoTrendIsSelectedForTheLiveMisleadingRows(t *testing.T) {
 	t.Parallel()
-	shapes, event := SelectRenderShapes(trendFixture(liveFlowRows()))
+	declared := &contractsv1.ContextFabricClaimedFactTable{
+		Field: "scope_breakdown",
+		Shape: contractsv1.ContextFabricFactTableShapeBreakdown,
+		Key:   []string{"work_scope_id"},
+		Measures: []string{
+			"day", "items_completed", "wip_count_end_of_day",
+		},
+	}
+	fixture := trendFixtureDeclared(liveFlowRows(), declared)
+	// Non-vacuity: the fixture reaches the guarded path.
+	if fixture.ClaimedFacts[0].Table == nil {
+		t.Fatal("fixture carries no declaration, so this proves nothing about a declared table")
+	}
+	if len(fixture.ClaimedFacts[0].Rows) != 2 {
+		t.Fatalf("fixture carries %d rows, want the 2 live rows", len(fixture.ClaimedFacts[0].Rows))
+	}
+	first, _ := renderStringCell(fixture.ClaimedFacts[0].Rows[0].Fields["work_scope_id"])
+	second, _ := renderStringCell(fixture.ClaimedFacts[0].Rows[1].Fields["work_scope_id"])
+	if first == second {
+		t.Fatalf("both fixture rows carry work_scope_id %q; the defect needs two DIFFERENT scopes", first)
+	}
+
+	shapes, event := SelectRenderShapes(fixture)
 	if len(shapes) != 0 {
 		t.Fatalf("a shape was selected for the rows that produced the misleading chart: %+v", shapes)
 	}
-	if !skipRecorded(event, contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipTrendRuleWithdrawn) {
-		t.Errorf("the withdrawal is not recorded, so a reader cannot tell it from a rule that ran and found nothing; skipped=%+v", event.Skipped)
+	if !skipRecorded(event, contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipNoTimeSeriesTable) {
+		t.Errorf("the refusal does not name the declaration, so a reader cannot tell it from a rule that found no tables at all; skipped=%+v", event.Skipped)
+	}
+	if err := event.Accounted(); err != nil {
+		t.Errorf("selector accounting: %v", err)
 	}
 }
 
-// TestNoTrendIsSelectedEvenForAPerfectlyShapedTable is the sharper half. A
-// single-scope, single-measure, properly dated table is exactly what a trend
-// SHOULD have been, and it still selects nothing — the rule is withdrawn,
-// not merely narrowed.
+// TestTheMisleadingRowsCannotBeDeclaredATimeSeries is the half that makes
+// the fix structural rather than defensive.
+//
+// The live defect was two DIFFERENT work scopes plotted as one thing
+// changing over time. A producer cannot declare those rows a time_series
+// even if it wants to: the identity of such a row needs (provider,
+// work_scope_id), a time_series declares exactly ONE key column, and a
+// declaration a producer cannot satisfy fails at the producer, in the
+// producer's own test -- not at a renderer three stages later. The wrong
+// state is unrepresentable rather than merely guarded against.
+func TestTheMisleadingRowsCannotBeDeclaredATimeSeries(t *testing.T) {
+	t.Parallel()
+	dishonest := FactTable{
+		Shape:    FactTableTimeSeries,
+		Key:      []string{"provider", "work_scope_id"},
+		Measures: []string{"day", "items_completed"},
+		Rows: []FactValueRow{
+			{Fields: map[string]FactValue{
+				"provider": StringFactValue("github"), "work_scope_id": StringFactValue("full.chaos/chaos-ops"),
+				"day": StringFactValue("2026-07-20"), "items_completed": IntegerFactValue(0),
+			}},
+			{Fields: map[string]FactValue{
+				"provider": StringFactValue("github"), "work_scope_id": StringFactValue("full.chaos/dev-health-ops"),
+				"day": StringFactValue("2026-08-30"), "items_completed": IntegerFactValue(1),
+			}},
+		},
+	}
+	err := dishonest.Validate()
+	if err == nil {
+		t.Fatal("a two-column-key time_series validated; the CHAOS-4616 defect is representable again")
+	}
+	// The error must be about the ARITY, not about something else this
+	// fixture also happens to trip. A first version of this test asserted
+	// only `err != nil` and SURVIVED a mutation that disabled the arity
+	// rule outright -- the rows failed the instant-parse check instead, so
+	// the test was green against the exact defect it named. Naming the
+	// rule is what makes it discriminating.
+	if !strings.Contains(err.Error(), "exactly one column") {
+		t.Fatalf("the declaration was refused for the wrong reason (%v); this test proves nothing about the one-key-column rule", err)
+	}
+}
+
+// TestUndeclaredRowsAreNeverCharted is the sharper half. A single-scope,
+// single-measure, properly dated table is exactly what a trend SHOULD be,
+// and it still selects nothing, because nothing DECLARED it one. That is
+// CHAOS-4627's ruled default and it is what stops the geometry inference
+// from creeping back: "these rows look like a series" is precisely the
+// judgement this slice removed.
 //
 // What this does NOT prove, so nobody reads more into it than it says: it
 // pins UNANNOTATED legacy rows, not universal absence. A future producer
@@ -89,7 +183,7 @@ func TestNoTrendIsSelectedForTheLiveMisleadingRows(t *testing.T) {
 // fact kind — could legitimately select `dated_fact_trend` with this test
 // still green, because its fixture carries no such declaration. That is the
 // intended way back, and this test is not the thing standing in its way.
-func TestNoTrendIsSelectedEvenForAPerfectlyShapedTable(t *testing.T) {
+func TestUndeclaredRowsAreNeverCharted(t *testing.T) {
 	t.Parallel()
 	rows := []ClaimedFactRow{
 		{Fields: map[string]ScalarValue{
@@ -99,14 +193,21 @@ func TestNoTrendIsSelectedEvenForAPerfectlyShapedTable(t *testing.T) {
 			"day": renderScalarString("2026-08-30"), "items_completed": renderScalarNumber(3),
 		}},
 	}
-	if shapes, _ := SelectRenderShapes(trendFixture(rows)); len(shapes) != 0 {
-		t.Fatalf("the withdrawn rule selected a shape: %+v", shapes)
+	shapes, event := SelectRenderShapes(trendFixture(rows))
+	if len(shapes) != 0 {
+		t.Fatalf("an undeclared table was charted: %+v", shapes)
+	}
+	if !skipRecorded(event, contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipNoDeclaredTable) {
+		t.Errorf("undeclared was not recorded as such; skipped=%+v", event.Skipped)
 	}
 }
 
-// TestTheWithdrawalDoesNotDisturbTheCohortRules: the two shapes chris asked
-// for and that are proven live must be unaffected by the withdrawal.
-func TestTheWithdrawalDoesNotDisturbTheCohortRules(t *testing.T) {
+// TestTheTrendRuleDoesNotDisturbTheCohortRules: the two shapes chris asked
+// for and that are proven live must be unaffected, both when the trend rule
+// was absent and now that it is back. chrisTeamsAnswer carries a
+// perfectly-dated readiness table with NO declaration, so the trend rule
+// correctly declines it.
+func TestTheTrendRuleDoesNotDisturbTheCohortRules(t *testing.T) {
 	t.Parallel()
 	shapes, _ := SelectRenderShapes(chrisTeamsAnswer())
 	rules := map[contractsv1.ContextFabricRenderShapeRule]bool{}
@@ -118,6 +219,106 @@ func TestTheWithdrawalDoesNotDisturbTheCohortRules(t *testing.T) {
 		t.Fatalf("the cohort shapes were disturbed by the trend withdrawal; got %+v", rules)
 	}
 	if rules[contractsv1.ContextFabricRenderRuleDatedFactTrend] {
-		t.Fatal("a trend was selected")
+		t.Fatal("a trend was selected for an UNDECLARED table")
+	}
+}
+
+// TestTheScopeColumnCannotBeRecastAsAMeasure is codex round 1 finding 1 (P1,
+// EXECUTED by the reviewer and re-run by this lane before being ledgered).
+//
+// TestTheMisleadingRowsCannotBeDeclaredATimeSeries above closes ONE route
+// back to the CHAOS-4616 defect: putting the scope in the KEY, which makes
+// the key arity 2 and the table a breakdown by definition. It does not close
+// the other: putting the scope in MEASURES. That declaration is internally
+// consistent — one key column, parsing as an instant, distinct across rows,
+// every column classified — and the trend rule, which reads only the claim's
+// own measure, never looks at the scope column at all.
+//
+// Observed on the tip before the fix, with the ORIGINAL two rows:
+//
+//	producer FactTable.Validate: <nil>
+//	wire ClaimedFact.Validate:   <nil>
+//	selected shapes=1
+//	shape rule=dated_fact_trend presentation=line axis=day points=0,1
+//	  labels="2026-07-20","2026-08-30"
+//
+// The same false line, re-entered through the DECLARATION rather than through
+// the geometry. The lesson is the one this file already records in a different
+// key: closing one route is not closing the class, and "the wrong state is
+// unrepresentable" is a claim that has to be swept, not asserted.
+func TestTheScopeColumnCannotBeRecastAsAMeasure(t *testing.T) {
+	t.Parallel()
+	recast := FactTable{
+		Shape:    FactTableTimeSeries,
+		Key:      []string{"day"},
+		Measures: []string{"work_scope_id", "items_completed"},
+		Rows: []FactValueRow{
+			{Fields: map[string]FactValue{
+				"day": StringFactValue("2026-07-20"), "work_scope_id": StringFactValue("full.chaos/chaos-ops"), "items_completed": IntegerFactValue(0),
+			}},
+			{Fields: map[string]FactValue{
+				"day": StringFactValue("2026-08-30"), "work_scope_id": StringFactValue("full.chaos/dev-health-ops"), "items_completed": IntegerFactValue(1),
+			}},
+		},
+	}
+	// Non-vacuity: every OTHER time_series rule this declaration could trip
+	// is satisfied, so the refusal below is attributable to the recasting
+	// and to nothing else.
+	if len(recast.Key) != 1 {
+		t.Fatal("fixture key arity is not 1; it would be refused by the arity rule instead")
+	}
+	if !parsesAsFactTableInstant(*recast.Rows[0].Fields["day"].String) {
+		t.Fatal("fixture key does not parse as an instant; it would be refused by the instant rule instead")
+	}
+
+	// The DECLARATION still validates, and that is deliberate rather than a
+	// gap left open. The obvious fix -- "a time_series measure must be
+	// numeric" -- was written and then EXECUTED against the merged
+	// producers: it invalidates health.go's own CHAOS-4645 declaration,
+	// which carries `severity` (a per-day categorical observation of ONE
+	// subject) among its measures. Verbatim, from that run:
+	//
+	//	fact table row 0 declares "severity" a measure of a time_series but
+	//	its value is not numeric ...
+	//
+	// `severity` and `work_scope_id` are syntactically identical and
+	// semantically opposite. §5.1's vocabulary admits only Key or Measures,
+	// so a varying non-identity column has nowhere else to go, and no
+	// value-shaped rule can separate them. Refusing the declaration would
+	// break a correct producer.
+	if err := recast.Validate(); err != nil {
+		t.Fatalf("the declaration itself is now refused (%v) -- if that is intended, health.go's `severity` measure must have moved too, and this test's reasoning needs rewriting rather than deleting", err)
+	}
+
+	// So the refusal is at SELECTION: this rule declines to draw a LINE
+	// through a table whose measure roles it cannot resolve. That costs
+	// nothing today (health's time_series is dual-table and never reaches
+	// the wire) and fails closed if it ever does.
+	subject := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:fullchaos", Label: "fullchaos"}
+	fact := CanonicalFact{Kind: FactFlow, Subject: subject, Fields: map[string]FactValue{"scope_rows": TableFactValue(recast)}}
+	served, _, _, _ := attachCanonicalRows([]ClaimedFact{{ClaimID: "claim_recast_4616", Kind: FactFlow, Subject: subject, Field: "items_completed"}}, []CanonicalFact{fact})
+	// Non-vacuity: the declaration DID reach the wire, and the claim's
+	// field IS a declared measure -- so every earlier gate passed and the
+	// refusal below is attributable to the new one.
+	if served[0].Table == nil || served[0].Table.Shape != contractsv1.ContextFabricFactTableShapeTimeSeries {
+		t.Fatalf("the recast declaration did not reach the wire; an earlier gate refused it instead: %+v", served[0].Table)
+	}
+	if !served[0].Table.HasMeasure(served[0].Field) {
+		t.Fatal("the claim's field is not a declared measure; claim_field_not_a_measure would refuse it instead")
+	}
+
+	result := InvestigationResult{
+		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
+		ClaimedFacts:   []ClaimedFact{served[0]},
+	}
+	shapes, event := SelectRenderShapes(result)
+	if len(shapes) != 0 {
+		t.Fatalf("the recast declaration was charted -- the CHAOS-4616 false line is back through the declaration: %+v", shapes)
+	}
+	if !skipRecorded(event, contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipUnresolvableMeasureRoles) {
+		t.Errorf("the refusal does not name the unresolvable roles; skipped=%+v", event.Skipped)
+	}
+	if err := event.Accounted(); err != nil {
+		t.Errorf("selector accounting: %v", err)
 	}
 }

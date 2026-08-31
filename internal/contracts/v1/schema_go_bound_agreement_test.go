@@ -151,8 +151,26 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.DriverJudgment.properties.summary.maxLength":                          ContextFabricDriverSummaryMaxLength,
 		"common#$defs.DriverJudgment.properties.qualification.maxLength":                    ContextFabricDriverQualificationMaxLength,
 		"common#$defs.ClaimedFact.properties.field.maxLength":                               ContextFabricClaimedFieldMaxLength,
-		"common#$defs.InterpretedQuestion.properties.subject_terms.maxItems":                contextFabricWriteBounds.interpretationTerms,
-		"common#$defs.InterpretedQuestion.properties.comparison_terms.maxItems":             contextFabricWriteBounds.interpretationTerms,
+		// CHAOS-4637: the declared table. Mapped DECLARATIVELY rather than
+		// probed for the same reason the $defs-nested entries above are:
+		// ContextFabricClaimedFactTable is validated as a whole against
+		// the rows beside it (validateClaimedFactTable), so perturbing one
+		// field in isolation -- which the generic probe must do -- breaks
+		// the key-present-on-every-row invariant and the probe would
+		// attribute the resulting error to the wrong bound.
+		"common#$defs.ClaimedFactTable.properties.field.minLength":              1,
+		"common#$defs.ClaimedFactTable.properties.field.maxLength":              ContextFabricClaimedFieldMaxLength,
+		"common#$defs.ClaimedFactTable.properties.key.minItems":                 1,
+		"common#$defs.ClaimedFactTable.properties.key.maxItems":                 ContextFabricFactTableKeyMaxCount,
+		"common#$defs.ClaimedFactTable.properties.key.items.minLength":          1,
+		"common#$defs.ClaimedFactTable.properties.key.items.maxLength":          ContextFabricFactTableColumnMaxLength,
+		"common#$defs.ClaimedFactTable.properties.measures.maxItems":            ContextFabricFactTableMeasuresMaxCount,
+		"common#$defs.ClaimedFactTable.properties.measures.items.minLength":     1,
+		"common#$defs.ClaimedFactTable.properties.measures.items.maxLength":     ContextFabricFactTableColumnMaxLength,
+		"common#$defs.ClaimedFactTable.properties.order_by.minLength":           1,
+		"common#$defs.ClaimedFactTable.properties.order_by.maxLength":           ContextFabricFactTableColumnMaxLength,
+		"common#$defs.InterpretedQuestion.properties.subject_terms.maxItems":    contextFabricWriteBounds.interpretationTerms,
+		"common#$defs.InterpretedQuestion.properties.comparison_terms.maxItems": contextFabricWriteBounds.interpretationTerms,
 		// CHAOS-4398 PR2: CohortMemberDriver lives one level under
 		// CohortMember.Drivers (a slice of a $defs-nested struct) AND its
 		// own Validate() entangles Value/Weight/WeightContributed with the

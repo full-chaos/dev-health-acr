@@ -204,6 +204,20 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	// just shaped as a table instead of one scalar -- same reasoning,
 	// same leaf-name treatment as value.string just above.
 	"structured.key_facts[].rows[].fields{}.string",
+	// CHAOS-4637: the declared table's own column names. The declaration
+	// is composed by a PRODUCER, never by a model -- but so are
+	// render_shapes[].series[].key and points[].source.field, and this
+	// list already classifies those conservatively for the reason it
+	// states there: a consumer that escapes a producer-issued name loses
+	// nothing, and a consumer that trusts a name a source system turns
+	// out to have chosen loses the guarantee. `shape` is the one leaf
+	// here that IS closed (ContextFabricFactTableShape) and is
+	// allowlisted in trustedBecauseClosed with every other closed
+	// vocabulary instead.
+	"structured.key_facts[].table.field",
+	"structured.key_facts[].table.key[]",
+	"structured.key_facts[].table.measures[]",
+	"structured.key_facts[].table.order_by",
 	// CHAOS-4415: a render shape's DISPLAY text. Title/axis_label/
 	// value_label/series[].label/points[].label are built from canonical
 	// subject labels and producer column names, so they are entity display
@@ -290,6 +304,20 @@ var MCPInvestigationResultUntrustedFields = []string{
 	// CHAOS-4347: same reasoning as claimed_facts[].value.string above --
 	// Rows carries the same producer-sourced fact data, table-shaped.
 	"structured.claimed_facts[].rows[].fields{}.string",
+	// CHAOS-4637: the declared table's own column names. The declaration
+	// is composed by a PRODUCER, never by a model -- but so are
+	// render_shapes[].series[].key and points[].source.field, and this
+	// list already classifies those conservatively for the reason it
+	// states there: a consumer that escapes a producer-issued name loses
+	// nothing, and a consumer that trusts a name a source system turns
+	// out to have chosen loses the guarantee. `shape` is the one leaf
+	// here that IS closed (ContextFabricFactTableShape) and is
+	// allowlisted in trustedBecauseClosed with every other closed
+	// vocabulary instead.
+	"structured.claimed_facts[].table.field",
+	"structured.claimed_facts[].table.key[]",
+	"structured.claimed_facts[].table.measures[]",
+	"structured.claimed_facts[].table.order_by",
 	// CHAOS-4415: a render shape's DISPLAY text. Title/axis_label/
 	// value_label/series[].label/points[].label are built from canonical
 	// subject labels and producer column names, so they are entity display
