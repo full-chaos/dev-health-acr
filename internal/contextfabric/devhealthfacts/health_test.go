@@ -34,6 +34,45 @@ func healthRow(scopeID string) []any {
 	}
 }
 
+// healthScalarMatch distinguishes readScope's own OLD rn=1-per-scope_id
+// scalar/risk_rules query from CHAOS-4645's NEW per-day series queries
+// (queryTeamHealthDailySeries / queryProjectHealthDailySeries): only
+// readScope's tiebreak hash widens to churn_norm (CHAOS-4418), so this
+// substring can never appear in either new query's statement text. A test
+// that registers only healthDailySeriesMatch's canned rows under the old
+// broad "FROM compounding_risk_daily" match would corrupt the OTHER
+// query's scan the moment a team/project subject triggers both queries in
+// one ReadFacts call -- see flow_test.go's identical flowDailySeriesMatch
+// fix for the same bug class on FlowProvider.
+const healthScalarMatch = "ifNull(churn_norm"
+
+// healthProjectRollupMatch is healthScalarMatch's readProjectHealth
+// counterpart: "ifNull(t.name, ”)" (the LEFT JOIN teams alias) appears only
+// in the OLD project rollup query's team branch, never in
+// queryProjectHealthDailySeries, which joins no `teams` table at all.
+const healthProjectRollupMatch = "ifNull(t.name, '')"
+
+// healthDailySeriesMatch distinguishes the CHAOS-4645 daily-series queries
+// (queryTeamHealthDailySeries and queryProjectHealthDailySeries share this
+// EXACT row_number() PARTITION BY signature, so one match constant covers
+// both) from the pre-existing latest-row queries.
+const healthDailySeriesMatch = "PARTITION BY scope_id, day ORDER BY computed_at DESC"
+
+// healthTeamDailySeriesRow shapes one queryTeamHealthDailySeries output row:
+// (scope_id, day, severity, has_risk, risk).
+func healthTeamDailySeriesRow(scopeID, day, severity string, hasRisk uint8, risk float64) []any {
+	return []any{scopeID, day, severity, hasRisk, risk}
+}
+
+// healthProjectDailySeriesRow shapes one queryProjectHealthDailySeries
+// output row: (project_key, day, has_risk, risk, severity) -- has_risk/risk
+// come from max(risk) and severity from argMax(severity, ...), so the
+// column ORDER differs from healthTeamDailySeriesRow's even though both
+// build the same healthDailyRow shape Go-side.
+func healthProjectDailySeriesRow(projectKey, day string, hasRisk uint8, risk float64, severity string) []any {
+	return []any{projectKey, day, hasRisk, risk, severity}
+}
+
 func TestHealthProviderRepoScopeHappyPath(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{{match: "FROM compounding_risk_daily", rows: [][]any{healthRow("repo-1")}}}}
@@ -92,7 +131,7 @@ func TestHealthProviderRepoScopeHappyPath(t *testing.T) {
 
 func TestHealthProviderTeamScopeHappyPath(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM compounding_risk_daily", rows: [][]any{healthRow("CHAOS")}}}}
+	client := &fakeClient{tables: []fakeTable{{match: healthScalarMatch, rows: [][]any{healthRow("CHAOS")}}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -246,7 +285,7 @@ func healthProjectRollupRow(provider, projectID, scope, scopeID, scopeName, seve
 // into one project-level score.
 func TestHealthProviderProjectRollupBreaksDownByTeamAndRepoNeverSums(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: [][]any{
+	client := &fakeClient{tables: []fakeTable{{match: healthProjectRollupMatch, rows: [][]any{
 		healthProjectRollupRow("linear", "proj-1", "team", "team-1", "Team One", "elevated", 0.55),
 		healthProjectRollupRow("linear", "proj-1", "repo", "repo-1", "full.chaos/svc", "high", 0.81),
 	}}}}
@@ -291,7 +330,7 @@ func TestHealthProviderProjectRollupBreaksDownByTeamAndRepoNeverSums(t *testing.
 
 func TestHealthProviderProjectRollupNoOwningTeamsHasNoFactEntry(t *testing.T) {
 	t.Parallel()
-	client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership", rows: nil}}}
+	client := &fakeClient{tables: []fakeTable{{match: healthProjectRollupMatch, rows: nil}}}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
 	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
@@ -331,5 +370,144 @@ func TestHealthProviderTruncatesWhenRowCountReachesLimit(t *testing.T) {
 	}
 	if len(client.queries) == 0 || !strings.Contains(strings.ToUpper(client.queries[len(client.queries)-1].statement), "LIMIT") {
 		t.Fatalf("query statement = %#v, want a LIMIT clause", client.queries)
+	}
+}
+
+// TestHealthProviderTeamReadsDailyHealthSeries is CHAOS-4645's core team
+// shape (design doc §5.2): a genuine time_series alongside the existing
+// scalar severity/compounding_risk and risk_rules breakdown, additive --
+// those must stay exactly as before this ticket.
+func TestHealthProviderTeamReadsDailyHealthSeries(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: healthScalarMatch, rows: [][]any{healthRow("team-1")}},
+		{match: healthDailySeriesMatch, rows: [][]any{
+			healthTeamDailySeriesRow("team-1", "2026-02-21", "high", uint8(1), 0.61),
+			healthTeamDailySeriesRow("team-1", "2026-02-20", "elevated", uint8(1), 0.42),
+		}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{teamSubject("team-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want 1", result.Facts)
+	}
+	fact := result.Facts[0]
+	// Additive: the pre-existing scalars/breakdown are untouched.
+	if fact.Fields["severity"].String == nil || *fact.Fields["severity"].String != "elevated" {
+		t.Fatalf("severity = %#v, want unchanged at elevated (healthRow's own scalar)", fact.Fields["severity"])
+	}
+	if fact.Fields["compounding_risk"].Number == nil || *fact.Fields["compounding_risk"].Number != 0.62 {
+		t.Fatalf("compounding_risk = %#v, want unchanged at 0.62", fact.Fields["compounding_risk"])
+	}
+	if len(fact.Fields["risk_rules"].Rows) != 4 {
+		t.Fatalf("risk_rules rows = %#v, want unchanged at 4", fact.Fields["risk_rules"].Rows)
+	}
+	table := fact.Fields["daily_health"].Table
+	if table == nil {
+		t.Fatal("daily_health field is missing")
+	}
+	if table.Shape != contextfabric.FactTableTimeSeries {
+		t.Fatalf("daily_health.Shape = %q, want time_series", table.Shape)
+	}
+	if err := fact.Fields["daily_health"].Validate(); err != nil {
+		t.Fatalf("daily_health fails FactValue.Validate(): %v", err)
+	}
+	rows := fact.Fields["daily_health"].Rows
+	if len(rows) != 2 {
+		t.Fatalf("daily_health rows = %d, want 2", len(rows))
+	}
+	if got := rows[0].Fields["day"].String; got == nil || *got != "2026-02-21" {
+		t.Fatalf("daily_health rows[0].day = %#v, want 2026-02-21", rows[0].Fields["day"])
+	}
+	if got := rows[0].Fields["compounding_risk"].Number; got == nil || *got != 0.61 {
+		t.Fatalf("daily_health rows[0].compounding_risk = %#v, want 0.61", rows[0].Fields["compounding_risk"])
+	}
+	if got := rows[0].Fields["severity"].String; got == nil || *got != "high" {
+		t.Fatalf("daily_health rows[0].severity = %#v, want high", rows[0].Fields["severity"])
+	}
+}
+
+// TestHealthProviderTeamDailySeriesOmitsNullRisk pins the has/value split
+// (AGENTS.md North Star check 12): a day whose compounding_risk was never
+// computed must report an explicit null, never a fabricated 0.
+func TestHealthProviderTeamDailySeriesOmitsNullRisk(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: healthScalarMatch, rows: [][]any{healthRow("team-1")}},
+		{match: healthDailySeriesMatch, rows: [][]any{
+			healthTeamDailySeriesRow("team-1", "2026-02-21", "unknown", uint8(0), 0),
+		}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{teamSubject("team-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	rows := result.Facts[0].Fields["daily_health"].Rows
+	if len(rows) != 1 {
+		t.Fatalf("daily_health rows = %#v, want 1", rows)
+	}
+	if _, ok := rows[0].Fields["compounding_risk"]; ok {
+		t.Fatalf("daily_health rows[0] = %#v, want compounding_risk omitted (never a fabricated 0)", rows[0].Fields)
+	}
+}
+
+// TestHealthProviderProjectReadsDailyHealthSeries mirrors the team case for
+// the project rollup (CHAOS-4645, design doc §5.2), additive alongside the
+// existing risk_breakdown.
+func TestHealthProviderProjectReadsDailyHealthSeries(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: healthProjectRollupMatch, rows: [][]any{
+			healthProjectRollupRow("linear", "proj-1", "team", "team-1", "Team One", "elevated", 0.55),
+		}},
+		{match: healthDailySeriesMatch, rows: [][]any{
+			healthProjectDailySeriesRow("linear:proj-1", "2026-02-21", uint8(1), 0.71, "high"),
+		}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %#v, want 1", result.Facts)
+	}
+	fact := result.Facts[0]
+	// Additive: risk_breakdown is untouched.
+	if len(fact.Fields["risk_breakdown"].Rows) != 1 {
+		t.Fatalf("risk_breakdown rows = %#v, want unchanged at 1", fact.Fields["risk_breakdown"].Rows)
+	}
+	table := fact.Fields["daily_health"].Table
+	if table == nil {
+		t.Fatal("daily_health field is missing")
+	}
+	if table.Shape != contextfabric.FactTableTimeSeries {
+		t.Fatalf("daily_health.Shape = %q, want time_series", table.Shape)
+	}
+	if err := fact.Fields["daily_health"].Validate(); err != nil {
+		t.Fatalf("daily_health fails FactValue.Validate(): %v", err)
+	}
+	rows := fact.Fields["daily_health"].Rows
+	if len(rows) != 1 {
+		t.Fatalf("daily_health rows = %d, want 1", len(rows))
+	}
+	if got := rows[0].Fields["compounding_risk"].Number; got == nil || *got != 0.71 {
+		t.Fatalf("daily_health rows[0].compounding_risk = %#v, want 0.71 (the MAX across the project's contributing scopes that day)", rows[0].Fields["compounding_risk"])
+	}
+	if got := rows[0].Fields["severity"].String; got == nil || *got != "high" {
+		t.Fatalf("daily_health rows[0].severity = %#v, want high (the severity of the scope that produced the max risk)", rows[0].Fields["severity"])
 	}
 }

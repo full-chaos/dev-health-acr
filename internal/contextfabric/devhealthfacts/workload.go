@@ -56,8 +56,11 @@ func (p *WorkloadProvider) Capability() contextfabric.FactCapability {
 	})
 	// CHAOS-4633: the project rollup already emits a breakdown
 	// (team_breakdown, one row per owning team's own latest forecast).
+	// CHAOS-4645, design doc §5.2: team and project also gain a
+	// time_series (daily_workload) alongside their existing scalars/breakdown.
 	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
-		contextfabric.SubjectProject: {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectTeam:    {contextfabric.FactTableTimeSeries},
+		contextfabric.SubjectProject: {contextfabric.FactTableBreakdown, contextfabric.FactTableTimeSeries},
 	}
 	capability.EstimatedItems = 12
 	return capability
@@ -95,6 +98,162 @@ func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: truncated}, nil
 }
 
+// workloadDailyRow is one (team_id or project, day)'s COMBINED
+// capacity_forecasts snapshot across every work_scope_id forecast a subject
+// has active that day (CHAOS-4645, design doc §5.2: "the dated rows already
+// exist in the ClickHouse daily tables these producers read; what is missing
+// is a second, declared projection of them"). capacity_forecasts carries no
+// `day` column at all (ReplacingMergeTree(computed_at) ORDER BY (org_id,
+// forecast_id), no day partition), so the day this row is keyed on is
+// DERIVED as toString(toDate(computed_at)) by the query below -- the same
+// YYYY-MM-DD string every other producer's own `day` column already
+// produces, so FactTable.Validate's instant-parse check accepts it the same
+// way.
+//
+// backlog_size is SUMMED across the day's concurrent scopes -- an additive
+// count, valid the same way readProjectFlow already sums a team's own
+// scopes.
+//
+// throughput_mean is SUMMED, not averaged: two independent forecasts' own
+// expected throughputs add to one total expected throughput for the
+// subject, which is a meaningful number -- unlike a percentile, which has no
+// defined meaning under summation (flowDailyRow's own doc comment states
+// the identical rule for wip_age/cycle/lead percentiles).
+//
+// throughput_stddev is COMBINED via sqrt(sum(stddev^2)): variances add
+// under independence, so this is the standard combination rule for the sum
+// of independent random variables. Concurrent work-scope forecasts for one
+// team/project are NOT proven independent -- this is a stated SIMPLIFYING
+// ASSUMPTION, not a measured property of the underlying Monte Carlo
+// simulations -- but it is the only defensible combination rule available,
+// and it is strictly better than either silently dropping the field or
+// naively summing the raw stddevs (which is not a valid combination under
+// any correlation assumption).
+//
+// p50_days, insufficient_history and high_variance are DELIBERATELY DROPPED
+// from the daily series: there is no valid combination rule for a rounded
+// percentile-of-days or a boolean flag across concurrent scopes, matching
+// this ticket's own precedent (flowDailyRow drops wip_age/cycle/lead
+// percentiles for the identical reason) of omitting a measure with no valid
+// combination rule rather than fabricating one.
+type workloadDailyRow struct {
+	day                      string
+	backlogSize              int64
+	throughputMeanSum        float64
+	throughputStddevCombined float64
+}
+
+func (r workloadDailyRow) toFactValueRow() contextfabric.FactValueRow {
+	return contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{
+		"day":               contextfabric.StringFactValue(r.day),
+		"backlog_size":      contextfabric.IntegerFactValue(r.backlogSize),
+		"throughput_mean":   contextfabric.NumberFactValue(r.throughputMeanSum),
+		"throughput_stddev": contextfabric.NumberFactValue(r.throughputStddevCombined),
+	}}
+}
+
+// workloadDailyTable builds the CHAOS-4645 time_series FactTable off rows
+// already fetched by queryTeamWorkloadDailySeries (team) or
+// queryProjectWorkloadDailySeries (project) -- both share this exact shape,
+// so a single declaration serves both subject kinds (mirrors flow.go's
+// flowDailyTable).
+func workloadDailyTable(rows []workloadDailyRow, grain contextfabric.TemporalGrain) (contextfabric.FactValue, bool, int) {
+	if len(rows) == 0 {
+		return contextfabric.FactValue{}, false, 0
+	}
+	valueRows := make([]contextfabric.FactValueRow, 0, len(rows))
+	for _, r := range rows {
+		valueRows = append(valueRows, r.toFactValueRow())
+	}
+	valueRows, omitted := capFactValueRows(valueRows)
+	return contextfabric.TableFactValue(contextfabric.FactTable{
+		Shape:    contextfabric.FactTableTimeSeries,
+		Key:      []string{"day"},
+		Measures: []string{"backlog_size", "throughput_mean", "throughput_stddev"},
+		Grain:    grain,
+		Rows:     valueRows,
+	}), true, omitted
+}
+
+// queryTeamWorkloadDailySeries reads capacity_forecasts as a genuine per-day
+// series (CHAOS-4645, design doc §5.2), grouped by toDate(computed_at)
+// across a team's own concurrent work_scope_id forecasts -- unlike
+// readers.ReadTeamWorkload (readTeamWorkload's own base read below), which
+// collapses to the single latest forecast per (team_id, work_scope_id) and
+// therefore can never back a time_series.
+//
+// The inner row_number() dedupes only a SAME-DAY rerun per (team_id,
+// work_scope_id, day) -- mirroring readers.ReadTeamWorkload's own
+// "computed_at DESC, forecast_id DESC" tiebreak (capacity_forecasts carries
+// a real per-row unique id, forecast_id, unlike the hash tiebreaks this
+// package's other daily-series queries need) -- and the outer GROUP BY
+// combines each day's scopes into one row per (team_id, day) using the
+// combination rules workloadDailyRow's own doc comment states.
+//
+// Every column scanned into a Go string is explicitly cast (toString/
+// toDate) rather than left to the driver's own type inference: flow.go's
+// first version of this exact pattern shipped without that cast and passed
+// against the fakeClient test double while failing against real ClickHouse
+// (a type mismatch the driver rejects). FINAL mirrors readers.ReadTeamWorkload's
+// own defensive use -- it only collapses a re-emitted identical forecast_id,
+// never distinct scopes or distinct days, which the row_number() partition
+// above is what actually resolves.
+func (p *WorkloadProvider) queryTeamWorkloadDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byTeam map[string][]workloadDailyRow, err error) {
+	statement := withRowLimit(`SELECT toString(team_id), toString(toDate(computed_at)), toInt64(sum(backlog_size)), sum(throughput_mean), sqrt(sum(pow(throughput_stddev, 2)))
+FROM (
+	SELECT ifNull(team_id, '') AS team_id, work_scope_id, computed_at, backlog_size, throughput_mean, throughput_stddev,
+		row_number() OVER (PARTITION BY team_id, work_scope_id, toDate(computed_at) ORDER BY computed_at DESC, forecast_id DESC) AS rn
+	FROM capacity_forecasts FINAL
+	WHERE org_id = {org_id:String} AND team_id IN {ids:Array(String)}` + timeBound.timestampPredicate("computed_at") + `
+)
+WHERE rn = 1
+GROUP BY team_id, toDate(computed_at)
+ORDER BY team_id, toDate(computed_at) DESC`)
+	byTeam = make(map[string][]workloadDailyRow)
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var r workloadDailyRow
+		var teamID string
+		if err := row.Scan(&teamID, &r.day, &r.backlogSize, &r.throughputMeanSum, &r.throughputStddevCombined); err != nil {
+			return err
+		}
+		byTeam[teamID] = append(byTeam[teamID], r)
+		return nil
+	}, timeBound.bindings()...)
+	return byTeam, scanErr
+}
+
+// queryProjectWorkloadDailySeries is queryTeamWorkloadDailySeries' project-
+// rollup counterpart (CHAOS-4645, design doc §5.2): the SAME
+// projectIdentityJoinSQL/projectIdentityMatchSQL join readProjectWorkload's
+// base read (readers.ReadProjectWorkload) uses, summed across EVERY
+// contributing team's own concurrent work-scope forecasts FOR EACH DAY,
+// using the identical combination rules workloadDailyRow's own doc comment
+// states -- backlog_size and throughput_mean summed, throughput_stddev
+// combined via sqrt(sum(stddev^2)), never averaged.
+func (p *WorkloadProvider) queryProjectWorkloadDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string][]workloadDailyRow, err error) {
+	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), toString(toDate(cf.computed_at)), toInt64(sum(cf.backlog_size)), sum(cf.throughput_mean), sqrt(sum(pow(cf.throughput_stddev, 2)))
+FROM ` + projectIdentityJoinSQL() + `
+INNER JOIN (
+	SELECT team_id, work_scope_id, computed_at, backlog_size, throughput_mean, throughput_stddev,
+		row_number() OVER (PARTITION BY team_id, work_scope_id, toDate(computed_at) ORDER BY computed_at DESC, forecast_id DESC) AS rn
+	FROM capacity_forecasts FINAL
+	WHERE org_id = {org_id:String}` + timeBound.timestampPredicate("computed_at") + `
+) AS cf ON ` + projectIdentityMatchSQL("cf", "work_scope_id") + ` AND cf.rn = 1
+GROUP BY p.provider, p.id, toDate(cf.computed_at)
+ORDER BY p.id, toDate(cf.computed_at) DESC`)
+	byProject = make(map[string][]workloadDailyRow)
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var r workloadDailyRow
+		var projectKey string
+		if err := row.Scan(&projectKey, &r.day, &r.backlogSize, &r.throughputMeanSum, &r.throughputStddevCombined); err != nil {
+			return err
+		}
+		byProject[projectKey] = append(byProject[projectKey], r)
+		return nil
+	}, timeBound.bindings()...)
+	return byProject, scanErr
+}
+
 // readTeamWorkload is CHAOS-3780's original capacity_forecasts read. The
 // query itself (row_number() tiebreak over computed_at/forecast_id for the
 // F3 multi-scope-per-team shape) now lives in readers.ReadTeamWorkload --
@@ -106,6 +265,22 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 	rows, err := readers.ReadTeamWorkload(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
 		return 0, err
+	}
+	// CHAOS-4645, design doc §5.2: a second, ADDITIVE query for the dated
+	// series -- computed byte-identically to before this ticket off the SAME
+	// base read above; dailyByTeam only ever adds a new "daily_workload"
+	// field, never changes an existing one. This provider emits one
+	// CanonicalFact PER (team_id, work_scope_id) -- the F3 fix -- so a
+	// team's combined-across-scopes daily series is attached to EVERY one of
+	// that team's per-scope facts (never only the first), a deliberate
+	// choice: it is simple, order-independent (rows is not guaranteed
+	// ordered per team), and purely additive to each fact individually. It
+	// duplicates the same table across a team's concurrent-scope facts
+	// rather than inventing a new "team-summary" fact shape this design does
+	// not otherwise have.
+	dailyByTeam, seriesErr := p.queryTeamWorkloadDailySeries(ctx, orgID, ids, timeBound)
+	if seriesErr != nil {
+		return 0, seriesErr
 	}
 	for _, r := range rows {
 		subject, ok := bySubject[r.TeamID]
@@ -132,6 +307,12 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 		if r.HasP50Days != 0 {
 			fields["forecast_p50_days"] = contextfabric.IntegerFactValue(r.P50Days)
 		}
+		if dailyTable, ok, dailyOmitted := workloadDailyTable(dailyByTeam[r.TeamID], timeBound.effectiveGrain(grainExact)); ok {
+			fields["daily_workload"] = dailyTable
+			if dailyOmitted > 0 {
+				fields["daily_workload_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+			}
+		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactWorkload, Subject: subject, Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID("team", r.TeamID)},
@@ -157,6 +338,17 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 	scanned, err := readers.ReadProjectWorkload(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
 		return 0, false, err
+	}
+	// CHAOS-4645, design doc §5.2: additive, off the SAME project-identity
+	// join readProjectWorkload's base read above uses -- never changes an
+	// existing field. Workload carries no RankCohort signal at the project
+	// level either (workloadWorstDays only ever reads a team-level
+	// forecast_p50_days scalar, which this project rollup never emits), so
+	// there is nothing to pin for the project subject specifically; the team
+	// subject's pin test covers the shared signal.
+	dailyByProject, seriesErr := p.queryProjectWorkloadDailySeries(ctx, orgID, ids, timeBound)
+	if seriesErr != nil {
+		return 0, false, seriesErr
 	}
 	rowCount = len(scanned)
 	byProject := make(map[string][]readers.WorkloadProjectRow)
@@ -193,7 +385,6 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("team", r.TeamID))
 			}
 			rowFields := map[string]contextfabric.FactValue{
-				"basis": contextfabric.StringFactValue("capacity_forecast"),
 				// null, not "": see readProjectReadiness.
 				"team_id":              teamIDOrNull(r.HasTeam, r.TeamID),
 				"team_name":            stringOrNull(r.TeamName),
@@ -224,33 +415,46 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 		var omitted int
 		teamRows, omitted = capFactValueRows(teamRows)
 		breakdownTruncated = breakdownTruncated || omitted > 0
+		fields := map[string]contextfabric.FactValue{
+			"rollup_basis": contextfabric.StringFactValue("project_work_scope_breakdown"),
+			"team_count":   contextfabric.IntegerFactValue(int64(len(seenTeams))),
+			// CHAOS-4645 (fixing the CHAOS-4633 F3 debt this file's own doc
+			// comment used to flag here): basis is CONSTANT
+			// "capacity_forecast" across every row of team_breakdown, so it
+			// belongs on the fact as a sibling SCALAR -- exactly Fable F3's
+			// ruling -- rather than repeated on every row. CHAOS-4633
+			// deliberately kept it as a row column because touching it would
+			// have changed Rows' shape mid-additive-P1; this ticket is
+			// already touching this producer's Rows shape (daily_workload
+			// below), so the debt is paid down now rather than deferred
+			// again. This is a DELIBERATE, DISCLOSED behavior change: a
+			// consumer reading team_breakdown row Fields["basis"] must now
+			// read fact.Fields["basis"] instead.
+			"basis": contextfabric.StringFactValue("capacity_forecast"),
+			// CHAOS-4633 P1: Key = [team_id, team_name, work_scope_id,
+			// computed_at] -- team_id alone does not guarantee distinctness
+			// (a team can contribute more than one work_scope_id row), so
+			// work_scope_id is part of the declared identity, not a
+			// measure.
+			"team_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+				Shape: contextfabric.FactTableBreakdown,
+				Key:   []string{"team_id", "team_name", "work_scope_id", "computed_at"},
+				Measures: []string{
+					"throughput_mean", "throughput_stddev", "insufficient_history",
+					"high_variance", "backlog_size", "forecast_p50_days",
+				},
+				Grain: timeBound.effectiveGrain(grainExact),
+				Rows:  teamRows,
+			}),
+		}
+		if dailyTable, ok, dailyOmitted := workloadDailyTable(dailyByProject[projectKey], timeBound.effectiveGrain(grainExact)); ok {
+			fields["daily_workload"] = dailyTable
+			if dailyOmitted > 0 {
+				fields["daily_workload_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+			}
+		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
-			Kind: contextfabric.FactWorkload, Subject: subject,
-			Fields: map[string]contextfabric.FactValue{
-				"rollup_basis": contextfabric.StringFactValue("project_work_scope_breakdown"),
-				"team_count":   contextfabric.IntegerFactValue(int64(len(seenTeams))),
-				// CHAOS-4633 P1: Key = [basis, team_id, team_name,
-				// work_scope_id, computed_at] -- basis is constant
-				// "capacity_forecast" across every row in THIS table today
-				// (a known Fable-F3 debt: it belongs in a sibling scalar,
-				// not a row column, but moving it would change Rows'
-				// shape, which P1 must keep byte-identical -- flagged as
-				// follow-up, not silently left undocumented). team_id
-				// alone does not guarantee distinctness (a team can
-				// contribute more than one work_scope_id row), so
-				// work_scope_id is part of the declared identity, not a
-				// measure.
-				"team_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
-					Shape: contextfabric.FactTableBreakdown,
-					Key:   []string{"basis", "team_id", "team_name", "work_scope_id", "computed_at"},
-					Measures: []string{
-						"throughput_mean", "throughput_stddev", "insufficient_history",
-						"high_variance", "backlog_size", "forecast_p50_days",
-					},
-					Grain: timeBound.effectiveGrain(grainExact),
-					Rows:  teamRows,
-				}),
-			},
+			Kind: contextfabric.FactWorkload, Subject: subject, Fields: fields,
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}

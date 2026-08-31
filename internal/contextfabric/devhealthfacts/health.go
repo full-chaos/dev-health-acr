@@ -69,10 +69,15 @@ func (p *HealthProvider) Capability() contextfabric.FactCapability {
 	// CHAOS-4633: risk_rules (repo and team, readScope) and risk_breakdown
 	// (project, readProjectHealth) are both breakdowns -- neither is
 	// ordered by time, and neither has a natural ranking order today.
+	// CHAOS-4645, design doc §5.2: team and project ALSO gain a time_series
+	// (daily_health) alongside their existing breakdown -- additive, so the
+	// breakdown shape stays declared too. Repository is unchanged (out of
+	// this ticket's scope, per the design doc's own "team AND project
+	// subjects" wording) and stays breakdown-only.
 	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
 		contextfabric.SubjectRepository: {contextfabric.FactTableBreakdown},
-		contextfabric.SubjectTeam:       {contextfabric.FactTableBreakdown},
-		contextfabric.SubjectProject:    {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectTeam:       {contextfabric.FactTableBreakdown, contextfabric.FactTableTimeSeries},
+		contextfabric.SubjectProject:    {contextfabric.FactTableBreakdown, contextfabric.FactTableTimeSeries},
 	}
 	capability.EstimatedItems = 12
 	return capability
@@ -92,20 +97,20 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 
 	repoIDs, repoBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), repositoryPrefix)
 	if len(repoIDs) > 0 {
-		rowCount, scanErr := p.readScope(ctx, orgID, "repo", repoIDs, repoBySubject, "repository", &facts, timeBound)
+		rowCount, dailyOmitted, scanErr := p.readScope(ctx, orgID, "repo", repoIDs, repoBySubject, "repository", &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query repository health", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		truncated = truncated || rowCount >= maxFactRowsPerQuery || dailyOmitted > 0
 	}
 
 	teamIDs, teamBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectTeam), teamPrefix)
 	if len(teamIDs) > 0 {
-		rowCount, scanErr := p.readScope(ctx, orgID, "team", teamIDs, teamBySubject, "team", &facts, timeBound)
+		rowCount, dailyOmitted, scanErr := p.readScope(ctx, orgID, "team", teamIDs, teamBySubject, "team", &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team health", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		truncated = truncated || rowCount >= maxFactRowsPerQuery || dailyOmitted > 0
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
@@ -155,7 +160,114 @@ type riskRuleValue struct {
 	weight  float64
 }
 
-func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids []string, bySubject map[string]contextfabric.SubjectRef, evidenceEntityType string, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
+// healthDailyRow is one (scope_id, day)'s compounding_risk_daily row
+// (CHAOS-4645, design doc §5.2) -- unlike readScope's rn=1-per-scope_id
+// read, this dedupes only WITHIN a day (same tiebreak discipline, one level
+// finer), so every day the org actually computed survives as its own row.
+// severity is carried alongside compounding_risk (never dropped) because
+// compounding_risk can be null on a day severity is still recorded for --
+// the same has/value split readScope's own "compounding_risk" scalar uses.
+type healthDailyRow struct {
+	day      string
+	severity string
+	hasRisk  bool
+	risk     float64
+}
+
+func (r healthDailyRow) toFactValueRow() contextfabric.FactValueRow {
+	fields := map[string]contextfabric.FactValue{
+		"day":      contextfabric.StringFactValue(r.day),
+		"severity": stringOrNull(r.severity),
+	}
+	if r.hasRisk {
+		fields["compounding_risk"] = contextfabric.NumberFactValue(r.risk)
+	}
+	return contextfabric.FactValueRow{Fields: fields}
+}
+
+// healthDailyTable builds the CHAOS-4645 time_series FactTable off rows
+// already fetched by queryTeamHealthDailySeries (team) or
+// queryProjectHealthDailySeries (project) -- both share this exact shape
+// (a single "worst/latest compounding_risk + severity for the day" row),
+// so one declaration serves both subject kinds, mirroring flow.go's
+// flowDailyTable.
+func healthDailyTable(rows []healthDailyRow, grain contextfabric.TemporalGrain) (contextfabric.FactValue, bool, int) {
+	if len(rows) == 0 {
+		return contextfabric.FactValue{}, false, 0
+	}
+	valueRows := make([]contextfabric.FactValueRow, 0, len(rows))
+	for _, r := range rows {
+		valueRows = append(valueRows, r.toFactValueRow())
+	}
+	valueRows, omitted := capFactValueRows(valueRows)
+	return contextfabric.TableFactValue(contextfabric.FactTable{
+		Shape:    contextfabric.FactTableTimeSeries,
+		Key:      []string{"day"},
+		Measures: []string{"compounding_risk", "severity"},
+		Grain:    grain,
+		Rows:     valueRows,
+	}), true, omitted
+}
+
+// queryTeamHealthDailySeries reads compounding_risk_daily as a genuine
+// per-day series for scope='team' (CHAOS-4645, design doc §5.2: "the dated
+// rows already exist in the ClickHouse daily tables these producers read;
+// what is missing is a second, declared projection of them") -- unlike
+// readScope, which collapses to the single latest row per scope_id and can
+// therefore never back a time_series. The row_number() here dedupes only a
+// SAME-DAY rerun per (scope_id, day) -- mirroring readScope's own
+// PARTITION BY scope_id ORDER BY day DESC, computed_at DESC, cityHash64(...)
+// tiebreak discipline (this file's own package doc comment: up to 86 rows
+// can share an IDENTICAL computed_at for one (scope, scope_id) key on live
+// data), just partitioned one level finer -- by (scope_id, day) instead of
+// scope_id alone -- so every day survives instead of collapsing to the
+// single latest one.
+func (p *HealthProvider) queryTeamHealthDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byTeam map[string][]healthDailyRow, err error) {
+	statement := withRowLimit(`SELECT scope_id, toString(day), toString(severity), toUInt8(isNotNull(compounding_risk)), toFloat64(ifNull(compounding_risk, 0))
+FROM (
+	SELECT scope_id, day, severity, compounding_risk,
+		row_number() OVER (PARTITION BY scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
+	FROM compounding_risk_daily
+	WHERE org_id = {org_id:String} AND scope = 'team' AND scope_id IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
+)
+WHERE rn = 1
+ORDER BY scope_id, day DESC`)
+	byTeam = make(map[string][]healthDailyRow)
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var r healthDailyRow
+		var scopeID string
+		var hasRisk uint8
+		if err := row.Scan(&scopeID, &r.day, &r.severity, &hasRisk, &r.risk); err != nil {
+			return err
+		}
+		r.hasRisk = hasRisk != 0
+		byTeam[scopeID] = append(byTeam[scopeID], r)
+		return nil
+	}, timeBound.bindings()...)
+	return byTeam, scanErr
+}
+
+func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids []string, bySubject map[string]contextfabric.SubjectRef, evidenceEntityType string, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, dailyOmitted int, err error) {
+	// CHAOS-4645, design doc §5.2: "health ... gain a time_series-declared
+	// table for team AND project subjects, alongside the scalars they emit
+	// today (additive -- the scalar stays, so RankCohort's inputs are
+	// untouched and the ranking numbers cannot move)". Repository is out of
+	// this ticket's scope, so dailyByTeam stays nil there and the loop below
+	// never attaches a daily_health field for it. Fetched off a genuinely
+	// SEPARATE query (queryTeamHealthDailySeries), before the scalar
+	// row_number()-latest-row SELECT below runs, so it can never perturb the
+	// single physical row that query's severity/compounding_risk/risk_rules
+	// fields already come from -- chaos4645_health_daily_test.go pins that
+	// RankCohort's healthRiskSignal (which reads ONLY fields["severity"])
+	// cannot observe a difference.
+	var dailyByTeam map[string][]healthDailyRow
+	if scope == "team" {
+		var seriesErr error
+		dailyByTeam, seriesErr = p.queryTeamHealthDailySeries(ctx, orgID, ids, timeBound)
+		if seriesErr != nil {
+			return 0, 0, seriesErr
+		}
+	}
 	// The hash tiebreak's ifNull(compounding_risk, -1) sentinel is only
 	// unambiguous while -1 is outside compounding_risk's real domain.
 	// compounding_risk is a normalized risk SCORE; live data ranges
@@ -197,7 +309,6 @@ FROM (
 	WHERE org_id = {org_id:String} AND scope = '` + scope + `' AND scope_id IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )
 WHERE rn = 1`)
-	rowCount := 0
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		rowCount++
 		var scopeID, severity, computedAt string
@@ -258,13 +369,28 @@ WHERE rn = 1`)
 			Grain:    timeBound.effectiveGrain(grainDaily),
 			Rows:     ruleRows,
 		})
+		// CHAOS-4645, design doc §5.2: additive alongside the scalar
+		// severity/compounding_risk and risk_rules breakdown above -- fetched
+		// off the SEPARATE dailyByTeam query, never re-derived from this
+		// row's own rn=1 scalars, so this field can only ever be ABSENT
+		// (when scope != "team", or when the series query found no rows),
+		// never wrong.
+		if dailyByTeam != nil {
+			if dailyTable, ok, omitted := healthDailyTable(dailyByTeam[scopeID], timeBound.effectiveGrain(grainDaily)); ok {
+				fields["daily_health"] = dailyTable
+				dailyOmitted += omitted
+				if omitted > 0 {
+					fields["daily_health_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
+				}
+			}
+		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactHealth, Subject: subject, Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID(evidenceEntityType, scopeID)},
 		})
 		return nil
 	}, timeBound.bindings()...)
-	return rowCount, scanErr
+	return rowCount, dailyOmitted, scanErr
 }
 
 // compoundingRiskLatestSubquery returns the row_number()-deduplicated latest
@@ -275,6 +401,19 @@ WHERE rn = 1`)
 func compoundingRiskLatestSubquery(scope string, timeBound factTimeBound) string {
 	return `SELECT scope_id, severity, compounding_risk, computed_at,
 		row_number() OVER (PARTITION BY scope_id ORDER BY day DESC, computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
+	FROM compounding_risk_daily
+	WHERE org_id = {org_id:String} AND scope = '` + scope + `'` + timeBound.dayPredicate("day")
+}
+
+// compoundingRiskDailySubquery is compoundingRiskLatestSubquery's CHAOS-4645
+// counterpart: EVERY day's row_number()-deduplicated row per (scope_id, day)
+// for one compounding_risk_daily scope, instead of collapsing to the single
+// latest row per scope_id. Used by queryProjectHealthDailySeries's two-layer
+// UNION ALL exactly the way compoundingRiskLatestSubquery is used by
+// readProjectHealth's own UNION ALL above.
+func compoundingRiskDailySubquery(scope string, timeBound factTimeBound) string {
+	return `SELECT scope_id, day, severity, compounding_risk,
+		row_number() OVER (PARTITION BY scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
 	FROM compounding_risk_daily
 	WHERE org_id = {org_id:String} AND scope = '` + scope + `'` + timeBound.dayPredicate("day")
 }
@@ -360,6 +499,16 @@ ORDER BY project_key, scope, scope_id`)
 	if scanErr != nil {
 		return rowCount, false, scanErr
 	}
+	// CHAOS-4645, design doc §5.2: additive, off the SAME two-layer
+	// ownership join, never changing an existing field -- health carries a
+	// RankCohort signal (healthRiskSignal reads fields["severity"] only, see
+	// readScope's own note and chaos4645_health_daily_test.go's pin), and
+	// this is a genuinely SEPARATE field (daily_health) on the SAME fact, so
+	// it cannot move what healthRiskSignal reads.
+	dailyByProject, seriesErr := p.queryProjectHealthDailySeries(ctx, orgID, ids, timeBound)
+	if seriesErr != nil {
+		return rowCount, false, seriesErr
+	}
 	for _, projectKey := range projectOrder {
 		rows := byProject[projectKey]
 		subject := bySubject[projectKey]
@@ -402,29 +551,103 @@ ORDER BY project_key, scope, scope_id`)
 		var omitted int
 		riskRows, omitted = capFactValueRows(riskRows)
 		breakdownTruncated = breakdownTruncated || omitted > 0
+		fields := map[string]contextfabric.FactValue{
+			// rollup_basis discloses BOTH chains this fact draws from --
+			// see the package doc comment's two-layer explanation.
+			"rollup_basis": contextfabric.StringFactValue("team_project_ownership_and_team_repo_ownership"),
+			"team_count":   contextfabric.IntegerFactValue(int64(len(seenTeams))),
+			"repo_count":   contextfabric.IntegerFactValue(int64(len(seenRepos))),
+			// CHAOS-4633 P1: Key = [scope, scope_id, scope_name,
+			// severity, computed_at] -- dedupeKey above already
+			// partitions on (scope, scope_id), so those two alone
+			// guarantee distinctness; scope_name/severity/computed_at
+			// ride along as declared identity columns, not measures.
+			"risk_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+				Shape:    contextfabric.FactTableBreakdown,
+				Key:      []string{"scope", "scope_id", "scope_name", "severity", "computed_at"},
+				Measures: []string{"compounding_risk"},
+				Grain:    timeBound.effectiveGrain(grainDaily),
+				Rows:     riskRows,
+			}),
+		}
+		if dailyTable, ok, dailyOmitted := healthDailyTable(dailyByProject[projectKey], timeBound.effectiveGrain(grainDaily)); ok {
+			fields["daily_health"] = dailyTable
+			if dailyOmitted > 0 {
+				breakdownTruncated = true
+				fields["daily_health_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+			}
+		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
-			Kind: contextfabric.FactHealth, Subject: subject,
-			Fields: map[string]contextfabric.FactValue{
-				// rollup_basis discloses BOTH chains this fact draws from --
-				// see the package doc comment's two-layer explanation.
-				"rollup_basis": contextfabric.StringFactValue("team_project_ownership_and_team_repo_ownership"),
-				"team_count":   contextfabric.IntegerFactValue(int64(len(seenTeams))),
-				"repo_count":   contextfabric.IntegerFactValue(int64(len(seenRepos))),
-				// CHAOS-4633 P1: Key = [scope, scope_id, scope_name,
-				// severity, computed_at] -- dedupeKey above already
-				// partitions on (scope, scope_id), so those two alone
-				// guarantee distinctness; scope_name/severity/computed_at
-				// ride along as declared identity columns, not measures.
-				"risk_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
-					Shape:    contextfabric.FactTableBreakdown,
-					Key:      []string{"scope", "scope_id", "scope_name", "severity", "computed_at"},
-					Measures: []string{"compounding_risk"},
-					Grain:    timeBound.effectiveGrain(grainDaily),
-					Rows:     riskRows,
-				}),
-			},
+			Kind: contextfabric.FactHealth, Subject: subject, Fields: fields,
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
 	return rowCount, breakdownTruncated, nil
+}
+
+// queryProjectHealthDailySeries is queryTeamHealthDailySeries' project-rollup
+// counterpart (CHAOS-4645, design doc §5.2): the SAME team+repo two-layer
+// ownership join readProjectHealth's own doc comment explains, but every day
+// survives (compoundingRiskDailySubquery, PARTITIONed by (scope_id, day)
+// instead of scope_id alone), then GROUPed BY day across every contributing
+// team+repo scope for that project.
+//
+// compounding_risk is a normalized RISK SCORE, not an additive count --
+// summing or averaging it across a project's several teams/repos has no
+// defined meaning (readProjectFlow's own note in flow.go makes the analogous
+// point for percentiles: "summing a percentile has no meaning"). This
+// package's own cohort_ranking.go already establishes the precedent for
+// exactly this situation: workloadWorstDays and readinessGapSignal both
+// aggregate the WORST value across a subject's several scope-partitioned
+// facts ("worst case governs", their own doc comments) rather than summing
+// or averaging. A risk score's worst case is its MAX, so MAX(compounding_risk)
+// per day is that same convention, expressed as a SQL aggregate instead of a
+// Go loop over CanonicalFacts because the aggregation happens WITHIN one
+// fact's own daily series (across a project's contributing scopes on ONE
+// day), not across several facts. severity rides along via argMax, keyed to
+// the SAME (risk, tiebreak-hash) ordering that decided the max, so a day's
+// reported severity is always the severity OF the scope that produced that
+// day's reported risk -- never an unrelated scope's severity paired with a
+// different scope's risk.
+//
+// A team can legitimately own a project through more than one ownership
+// `source` row (readProjectHealth's own dedupeTeamRow guard), which would
+// join that team's SAME (day, risk) row into this UNION more than once --
+// unlike readProjectFlow's SUM, that is harmless here: max(x, x) = x, so a
+// duplicated join can never inflate a MAX aggregate the way it would a SUM.
+func (p *HealthProvider) queryProjectHealthDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string][]healthDailyRow, err error) {
+	ownershipPredicate := ownershipValidityPredicate(timeBound)
+	statement := withRowLimit(`SELECT project_key, toString(day), toUInt8(isNotNull(max(risk))), toFloat64(ifNull(max(risk), 0)), toString(argMax(severity, tuple(ifNull(risk, -1), cityHash64(tuple(severity, ifNull(risk, -1))))))
+FROM (
+	SELECT concat(p.provider, ':', p.id) AS project_key, cr.day AS day, cr.severity AS severity, cr.compounding_risk AS risk
+	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
+	INNER JOIN (` + compoundingRiskDailySubquery("team", timeBound) + `) AS cr ON cr.scope_id = p.team_id AND cr.rn = 1
+
+	UNION ALL
+
+	SELECT concat(p.provider, ':', p.id) AS project_key, cr.day AS day, cr.severity AS severity, cr.compounding_risk AS risk
+	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
+	INNER JOIN (
+		SELECT team_id, toString(repo_id) AS repo_key
+		FROM team_repo_ownership FINAL
+		WHERE org_id = {org_id:String} AND repo_id IS NOT NULL` + ownershipPredicate + `
+		GROUP BY team_id, repo_key
+	) AS tro ON tro.team_id = p.team_id
+	INNER JOIN (` + compoundingRiskDailySubquery("repo", timeBound) + `) AS cr ON cr.scope_id = tro.repo_key AND cr.rn = 1
+)
+GROUP BY project_key, day
+ORDER BY project_key, day DESC`)
+	byProject = make(map[string][]healthDailyRow)
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var r healthDailyRow
+		var projectKey string
+		var hasRisk uint8
+		if err := row.Scan(&projectKey, &r.day, &hasRisk, &r.risk, &r.severity); err != nil {
+			return err
+		}
+		r.hasRisk = hasRisk != 0
+		byProject[projectKey] = append(byProject[projectKey], r)
+		return nil
+	}, timeBound.bindings()...)
+	return byProject, scanErr
 }
