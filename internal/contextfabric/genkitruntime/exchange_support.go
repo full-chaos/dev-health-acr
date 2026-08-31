@@ -143,3 +143,58 @@ func ParseSynthesisOutput(raw []byte) (contextfabric.SynthesisDraft, error) {
 func SynthesisOutputSchema() ([]byte, error) {
 	return json.MarshalIndent(core.InferSchemaMap(synthesisOutput{}), "", "  ")
 }
+
+// InterpretationOutputFamily is the CHAOS-4632 shadow capture
+// ParseInterpretationOutputFamily returns alongside the domain
+// InterpretedQuestion.
+type InterpretationOutputFamily struct {
+	Family                   contextfabric.QuestionFamily
+	FamilyUnrecognized       bool
+	GroupKind                contextfabric.SubjectKind
+	GroupKindUnrecognized    bool
+	ScopeAnchorTerm          string
+	ScopeAnchorTermTruncated bool
+	ScopeAnchorKind          contextfabric.SubjectKind
+	RequestedKind            contextfabric.SubjectKind
+}
+
+// ParseInterpretationOutputFamily decodes raw exactly like
+// ParseInterpretationOutput, and additionally returns the SAME sanitized
+// CHAOS-4632 family capture Runtime.InterpretQuestion applies to a
+// genkit-returned interpretationOutput.
+//
+// This exists for the identical reason ParseInterpretationOutputWindow
+// does, and the reason is worth restating because it is the whole point of
+// having ONE sanitizer: both call sanitizeFamilyOutput (runtime.go), so a
+// non-genkit responder (the file-exchange trial transport) populates its
+// own ModelExecutionReceipt with a capture byte-identical to what a real
+// genkit call would have produced. A transport-specific reimplementation
+// would diverge silently, and the divergence would land in the very
+// measurement this slice exists to make -- the labelled semantic
+// correctness of GroupKind and the scope anchor -- where it would be
+// indistinguishable from the model behaving differently.
+//
+// Only sanitized on a SUCCESSFUL toDomain, mirroring both
+// Runtime.InterpretQuestion's ordering and ParseInterpretationOutputWindow's:
+// on a toDomain/Validate failure the returned capture is the zero value.
+func ParseInterpretationOutputFamily(raw []byte, defaultTime contextfabric.TimeContext) (contextfabric.InterpretedQuestion, InterpretationOutputFamily, error) {
+	var output interpretationOutput
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return contextfabric.InterpretedQuestion{}, InterpretationOutputFamily{}, err
+	}
+	interpreted, err := output.toDomain(defaultTime)
+	if err != nil {
+		return interpreted, InterpretationOutputFamily{}, err
+	}
+	capture := sanitizeFamilyOutput(output)
+	return interpreted, InterpretationOutputFamily{
+		Family:                   capture.Family,
+		FamilyUnrecognized:       capture.FamilyUnrecognized,
+		GroupKind:                capture.GroupKind,
+		GroupKindUnrecognized:    capture.GroupKindUnrecognized,
+		ScopeAnchorTerm:          capture.ScopeAnchorTerm,
+		ScopeAnchorTermTruncated: capture.ScopeAnchorTruncated,
+		ScopeAnchorKind:          capture.ScopeAnchorKind,
+		RequestedKind:            capture.RequestedKind,
+	}, nil
+}

@@ -1693,3 +1693,65 @@ type ContextFabricCapabilityLimits struct {
 	MaxEvidenceRefs      int `json:"max_evidence_refs"`
 	MaxSerializedBytes   int `json:"max_serialized_bytes"`
 }
+
+// contextFabricSubjectKinds is the ContextFabricSubjectKind closed
+// vocabulary in published order -- the SAME 15 members
+// validContextFabricSubjectKind has always accepted, lifted out of that
+// function's switch so there is exactly ONE list rather than a switch and
+// a separately-maintained copy. validContextFabricSubjectKind now
+// delegates here (validate_context_fabric_helpers.go), so the two cannot
+// drift.
+//
+// Order matches the const block above: the original twelve, then
+// CHAOS-3753 C7's pull_request_review/ci_pipeline_run, then CHAOS-3898
+// P5's work_item_ref. Append, never reorder -- the same discipline
+// ContextFabricStructureNeedKindVocabulary's own doc comment states.
+//
+// This adds NO wire surface: it exports a vocabulary and a predicate over
+// an enum that already exists and is already validated. No JSON field, no
+// schema property, no OpenAPI path, no MCP tool argument changes.
+var contextFabricSubjectKinds = [...]ContextFabricSubjectKind{
+	ContextFabricSubjectOrganization,
+	ContextFabricSubjectTeam,
+	ContextFabricSubjectProject,
+	ContextFabricSubjectRepository,
+	ContextFabricSubjectWorkItem,
+	ContextFabricSubjectPullRequest,
+	ContextFabricSubjectDeployment,
+	ContextFabricSubjectIncident,
+	ContextFabricSubjectDocument,
+	ContextFabricSubjectDecision,
+	ContextFabricSubjectEpisode,
+	ContextFabricSubjectMetric,
+	ContextFabricSubjectPullRequestReview,
+	ContextFabricSubjectCIRun,
+	ContextFabricSubjectWorkItemRef,
+}
+
+// ContextFabricSubjectKindCount is the closed vocabulary's size.
+const ContextFabricSubjectKindCount = len(contextFabricSubjectKinds)
+
+// ContextFabricSubjectKindVocabulary returns the closed subject-kind
+// vocabulary in published order. An array return, copied on every call,
+// per ContextFabricStructureNeedKindVocabulary's own precedent.
+func ContextFabricSubjectKindVocabulary() [ContextFabricSubjectKindCount]ContextFabricSubjectKind {
+	return contextFabricSubjectKinds
+}
+
+// ValidContextFabricSubjectKind reports whether value is a member of the
+// closed subject-kind registry. Exported counterpart of the long-standing
+// unexported validContextFabricSubjectKind, for callers OUTSIDE this
+// package that need to close a subject-kind-typed field against the
+// registry -- CHAOS-4632's SanitizeGroupKind is the first.
+//
+// The EMPTY value is not a member. A caller that treats "unset" as legal
+// handles that case explicitly, exactly as ValidContextFabricWindowClass
+// requires of its own callers.
+func ValidContextFabricSubjectKind(value ContextFabricSubjectKind) bool {
+	for _, member := range contextFabricSubjectKinds {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}

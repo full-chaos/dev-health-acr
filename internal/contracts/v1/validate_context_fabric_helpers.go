@@ -486,13 +486,15 @@ func validInvestigationShape(value ContextFabricInvestigationShape) bool {
 	}
 }
 
+// validContextFabricSubjectKind delegates to the exported
+// ValidContextFabricSubjectKind (context_fabric_types.go), which reads the
+// single contextFabricSubjectKinds vocabulary. It previously carried its
+// own switch listing all 15 members -- a second copy of the same list,
+// which is exactly the drift the vocabulary array exists to prevent.
+// Kept as an unexported alias so every existing call site in this package
+// is untouched.
 func validContextFabricSubjectKind(value ContextFabricSubjectKind) bool {
-	switch value {
-	case ContextFabricSubjectOrganization, ContextFabricSubjectTeam, ContextFabricSubjectProject, ContextFabricSubjectRepository, ContextFabricSubjectWorkItem, ContextFabricSubjectPullRequest, ContextFabricSubjectDeployment, ContextFabricSubjectIncident, ContextFabricSubjectDocument, ContextFabricSubjectDecision, ContextFabricSubjectEpisode, ContextFabricSubjectMetric, ContextFabricSubjectPullRequestReview, ContextFabricSubjectCIRun, ContextFabricSubjectWorkItemRef:
-		return true
-	default:
-		return false
-	}
+	return ValidContextFabricSubjectKind(value)
 }
 
 // validContextFabricCohortDataCompleteness accepts the empty string as a

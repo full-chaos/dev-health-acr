@@ -214,6 +214,20 @@ type EngineDependencies struct {
 // other investigation content -- so a signal is diagnosable without
 // becoming a new disclosure surface.
 type EngineTelemetry interface {
+	// QuestionFamilyTelemetry (CHAOS-4632 §4.3) is EMBEDDED, not offered
+	// as a separate optional interface a caller might or might not
+	// implement.
+	//
+	// That is deliberate and it is the CHAOS-4085 lesson applied
+	// structurally: CommitAffirmationTelemetry was optional, nothing in
+	// production implemented it, every retraction failed its type
+	// assertion, and the whole event class vanished with tests green
+	// throughout. Embedding makes a telemetry implementation that cannot
+	// report family resolutions a COMPILE ERROR rather than a silently
+	// empty log stream -- see chaos4085_telemetry_sink_test.go's header
+	// for the full account of what that miss cost.
+	QuestionFamilyTelemetry
+
 	// RecordPriorSubjectReceiptsSkipped reports how many of one
 	// Investigate call's PriorSubjectReceipts did not end up bound to a
 	// resolved subject -- whether because the referenced prior result
