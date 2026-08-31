@@ -537,6 +537,17 @@ immediately after `SynthesisDraft.ValidateAgainst` passes.
 `answerprojection.Project` carries it through unchanged (`project.go`'s
 `projectDrivers`, unchanged since #300).
 
+**Updated 2026-08-31 (CHAOS-4637 / S6): the rows now say what they ARE.**
+`ContextFabricClaimedFact.table` / `ContextFabricProjectedFact.table` (new,
+additive, OPTIONAL) carry the producer's CHAOS-4633 `FactTable` declaration —
+`shape` (`time_series` / `breakdown` / `ranking`), the COMPOSITE `key`,
+`measures`, `order_by` — beside the rows they describe. `canonicalFieldTable`
+reads it off the SAME field `canonicalRowsField` chose for the rows, so the
+declaration and the rows can never come from two different fields: a
+divergence there would be invisible on the wire and would make the
+declaration a lie rather than a guard. Absent means undeclared, and an
+undeclared table is never charted (§8).
+
 **Correction, same day (CHAOS-4355 follow-up):** the paragraph above
 originally claimed "the prompt itself was NOT changed -- the model is never
 told Rows exist." That was never actually true and was never verified
@@ -1119,7 +1130,7 @@ page and every other durable artifact; cases are named by index and band.
 
 ---
 
-## 8 — Conditional render shapes (CHAOS-4415 slice 1)
+## 8 — Conditional render shapes (CHAOS-4415 slice 1; CHAOS-4637/S6 made them declaration-driven)
 
 **What it answers.** "Why did this answer get a chart and that one not?" —
 and, harder, "how do I know the chart is telling the truth?"
@@ -1134,6 +1145,32 @@ score, a per-driver contribution breakdown, and dated readiness records.
 
 Selection now lives in the service, and a chart is a claimed fact.
 
+**Updated 2026-08-31 (CHAOS-4637 / S6): the last inference is deleted.**
+`dated_fact_trend` was withdrawn in #340 rather than fixed a fourth time,
+because deciding which columns of a row table are MEASURES and which are
+DIMENSIONS cannot be done from the table alone. It is back, and it now reads
+a DECLARATION: `ContextFabricClaimedFact.table` (new, additive, OPTIONAL)
+carries the producer's own `FactTable` statement — shape, composite key,
+measures, order_by — to the wire. Three questions the selector used to guess
+at are now looked up:
+
+| question | before (inference, defeated three times) | after (declaration) |
+|---|---|---|
+| is this a series? | "a distinct same-shaped date column plus numeric columns" | `table.shape == time_series` |
+| which column is the axis? | first column that parses as a date on every row | `table.key[0]` — arity 1 by contract |
+| which columns are measures? | "numeric, and not id-named" → a numeric `team_id` plotted; a column called `year` walked through | `table.measures ∩ {claim.field}` — exactly one |
+
+A table with NO declaration is never charted (CHAOS-4627's ruled default,
+and the behaviour before this change). Exactly one measure is plotted:
+several on one value axis would assert a commensurability nothing declares,
+which is CHAOS-4625's own designed comparison shape, expressible precisely
+because `measures` is a declared list.
+
+The declaration carries NO rows of its own — it describes the rows beside
+it. A second copy would double a row table's bytes against the same
+`ContextFabricResponseBudget` §10's stage 3 measures, making the declaration
+a cause of the refusals it exists to help avoid.
+
 ```mermaid
 flowchart TD
     subgraph engine["engine.Investigate — AFTER synthesis, commit affirmation, and every composer"]
@@ -1145,18 +1182,21 @@ flowchart TD
     subgraph rules["deterministic rules — no fallback branch, no 'looks chartable'"]
         R1{"shape ∈ explicit_cohort,<br/>discovered_cohort<br/>AND a member has a score?"}
         R2{"rule 1 fired AND<br/>ranked members carry drivers?"}
-        R3{"dated_fact_trend<br/>WITHDRAWN — no producer<br/>(CHAOS-4616)"}
+        R3{"dated_fact_trend (CHAOS-4637)<br/>claim.table.shape == time_series<br/>AND claim.field ∈ table.measures?"}
     end
-    SEL --> R1 --> R2
-    SEL --> R3
+    PLAN{"answer_plan.render_kinds<br/>authorizes 'series'?<br/>(CHAOS-4636/4637 — North Star check 10)"}
+    SEL --> PLAN
+    PLAN -->|yes| R1 --> R2
+    PLAN -->|yes| R3
+    PLAN -->|no| SKIP
 
     S1["series / bars<br/>cohort_attention_score<br/>value ← CohortMember.Score"]
     S2["series / stacked_bars<br/>cohort_driver_contribution<br/>value ← Driver.WeightContributed"]
-    S3["(no shape)<br/>a row table cannot say which<br/>columns are measures"]
+    S3["series / line, time axis<br/>dated_fact_trend<br/>axis ← table.key[0]<br/>value ← rows[i][claim.field]"]
     R1 -->|yes| S1
     R2 -->|yes| S2
     R3 -->|yes| S3
-    R1 -->|no| SKIP["no shape · skip reason recorded<br/>RecordRenderShapeSelection"]
+    R1 -->|no| SKIP["no shape · EXACTLY ONE closed skip reason<br/>per rule (CHAOS-4621 invariant)<br/>RecordRenderShapeSelection"]
     R2 -->|no| SKIP
     R3 -->|no| SKIP
 
@@ -1175,13 +1215,12 @@ flowchart TD
     classDef fixed fill:#123d1c,stroke:#3fa45b,color:#e8ffe8
     classDef gate fill:#3d2a12,stroke:#c08a3e,color:#fff3e0
     classDef bad fill:#4a1414,stroke:#c0392b,color:#ffecec
-    class S1,S2,OUT,PROJ,ASKDEV fixed
-    class S3 bad
-    class R1,R2,R3,VAL gate
+    class S1,S2,S3,OUT,PROJ,ASKDEV fixed
+    class R1,R2,R3,PLAN,VAL gate
     class REJ,SKIP bad
 ```
 
-**The three things this diagram is making non-obvious-but-true.**
+**The five things this diagram is making non-obvious-but-true.**
 
 1. **Selection is downstream of everything.** `SelectRenderShapes` runs on
    the FINAL result, after the commit-affirmation gate, immediately before
@@ -1202,6 +1241,40 @@ flowchart TD
    never trimmed to the segments that happen to fit, because a stacked bar
    claims its parts sum to the score, and a stack missing segments claims
    something false. ask-dev is unaffected: it reads the canonical result.
+
+4. **The PLAN gates the KIND before any geometry is consulted (CHAOS-4636,
+   extended to the trend rule by CHAOS-4637).** North Star check 10 — "rich
+   views are conditional on intent, never default" — is enforced by what the
+   question asked for, not by what the data happened to allow. A grouped
+   status list plans `render_kinds=[table]`, so it gets no chart however
+   chartable its facts are. A NIL plan, and a plan declaring no render kinds,
+   authorize everything: inferring a restriction from silence is how a chart
+   quietly disappears. The gate is stated TWICE on purpose — once in the
+   selector and once in `ContextFabricInvestigationResult.Validate` — because
+   a result also arrives from storage, from a replay, and from any future
+   producer, and the property belongs to the DOCUMENT rather than to one
+   function that happened to check.
+5. **Every rule exits through exactly one recorded outcome (CHAOS-4621).**
+   Selected, or exactly one closed skip reason; never both, never neither,
+   never two. `RenderShapeSelectionEvent.Accounted()` is that invariant as
+   code, and the production sink logs its verdict as
+   `render_shape_accounting=ok|violated`, so a lost outcome is diagnosable
+   from the run's own artifacts. The same defect class — a refusal leaving no
+   trace, recording the wrong reason, or going invisible once another rule
+   produced a shape — was closed FOUR times case by case before this. A
+   trend the shape budget had no room for is a COUNT
+   (`render_shape_trends_omitted`), never a skip: a rule that fired cannot
+   also be recorded as skipped without the accounting saying two things at
+   once.
+
+**What still cannot be charted, and why that is correct.** A fact carrying
+BOTH a legacy breakdown and a CHAOS-4645 time series serves the LEGACY
+field's rows (CHAOS-4645's ruling, pinned against real data), and the
+declaration travels with the rows through the SAME field selector
+(`canonicalRowsField`) so the two can never describe different fields. Such
+a fact therefore declares itself a `breakdown` and is correctly refused as a
+trend. Serving both tables is design §5.1's P2 dual-read cutover — a
+separate slice.
 
 **Update rule.** A new render kind's producer updates this diagram in the
 same PR. The seven kinds declared but unproduced in slice 1 (`table`,

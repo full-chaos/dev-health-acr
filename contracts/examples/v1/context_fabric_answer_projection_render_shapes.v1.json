@@ -261,7 +261,18 @@
             }
           }
         }
-      ]
+      ],
+      "table": {
+        "field": "daily_readiness",
+        "shape": "time_series",
+        "key": [
+          "day"
+        ],
+        "measures": [
+          "coverage_ratio",
+          "open_requirements"
+        ]
+      }
     },
     {
       "claim_id": "claim_cohort_ff977441fb1cb96f9023dcff28d4a624",

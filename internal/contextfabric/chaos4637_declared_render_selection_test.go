@@ -1,10 +1,14 @@
 package contextfabric
 
 import (
+	"bytes"
+	"context"
+	"log/slog"
 	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // CHAOS-4637 (S6): render selection reads the PLAN and the producer's
@@ -398,4 +402,49 @@ func mustSelect(t *testing.T, result InvestigationResult) []contractsv1.ContextF
 	t.Helper()
 	shapes, _ := SelectRenderShapes(result)
 	return shapes
+}
+
+// TestTheProductionSinkReportsTheAccountingAndTheTrendLoss asserts the
+// PRODUCTION sink's own bytes, not a struct field.
+//
+// CHAOS-4085's lesson is why: CommitAffirmationTelemetry was optional,
+// nothing in production implemented it, every retraction failed a type
+// assertion, and the whole event disappeared while the tests passed. An
+// invariant that is only checkable by reading the source is not diagnosable
+// from a run's own artifacts, which is exactly what acr/AGENTS.md forbids --
+// so the accounting verdict has to be IN THE LOG LINE, and this reads the
+// line.
+func TestTheProductionSinkReportsTheAccountingAndTheTrendLoss(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil)))
+	_, event := SelectRenderShapes(declaredTrendAnswer())
+	// Non-vacuity: this is a selection that really did produce shapes and
+	// really is accounted, so "ok" below is a measurement rather than a
+	// default.
+	if len(event.Selected) == 0 {
+		t.Fatal("the fixture selected nothing; render_shape_accounting=ok would say nothing about a real selection")
+	}
+	if err := event.Accounted(); err != nil {
+		t.Fatalf("the fixture is not accounted, so the sink cannot be shown to report ok: %v", err)
+	}
+	telemetry.RecordRenderShapeSelection(context.Background(), storage.Principal{OrgID: "org_4637"}, event)
+	logged := buf.String()
+	for _, want := range []string{
+		"render_shape_accounting=ok",
+		"render_shape_trends_omitted=0",
+		"render_shape_rule=dated_fact_trend",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("the production sink never emitted %q; logged:\n%s", want, logged)
+		}
+	}
+
+	// And a violation must be VISIBLE, or the field is decoration.
+	buf.Reset()
+	broken := RenderShapeSelectionEvent{Shape: event.Shape, Selected: []RenderShapeSelection{event.Selected[0]}}
+	telemetry.RecordRenderShapeSelection(context.Background(), storage.Principal{OrgID: "org_4637"}, broken)
+	if !strings.Contains(buf.String(), "render_shape_accounting=violated") {
+		t.Errorf("an event with two rules recording no outcome logged no violation; logged:\n%s", buf.String())
+	}
 }
