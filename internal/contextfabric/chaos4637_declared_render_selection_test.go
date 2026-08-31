@@ -233,10 +233,22 @@ func TestEveryRuleExitRecordsExactlyOneOutcome(t *testing.T) {
 		r.ClaimedFacts[0].Field = "not_a_measure"
 		return r
 	}
+	unresolvableRoles := func() InvestigationResult {
+		r := declaredTrendAnswer()
+		r.ClaimedFacts[0].Table.Measures = []string{"coverage_ratio", "severity"}
+		for i := range r.ClaimedFacts[0].Rows {
+			r.ClaimedFacts[0].Rows[i].Fields["severity"] = renderScalarString("elevated")
+		}
+		return r
+	}
+	// The DECLARED axis column does not parse as an instant. Breaking the
+	// MEASURE instead would now trip unresolvable_measure_roles first --
+	// which the matrix's own non-vacuity check caught when this case was
+	// written that way, and is exactly what that check is for.
 	unplottable := func() InvestigationResult {
 		r := declaredTrendAnswer()
 		for i := range r.ClaimedFacts[0].Rows {
-			r.ClaimedFacts[0].Rows[i].Fields["coverage_ratio"] = renderScalarString("n/a")
+			r.ClaimedFacts[0].Rows[i].Fields["day"] = renderScalarString("week " + string(rune('a'+i)))
 		}
 		return r
 	}
@@ -258,6 +270,7 @@ func TestEveryRuleExitRecordsExactlyOneOutcome(t *testing.T) {
 		{"undeclared table", undeclared, RenderShapeSkipNoDeclaredTable},
 		{"declared, not a time series", breakdownOnly, RenderShapeSkipNoTimeSeriesTable},
 		{"claim field is not a measure", fieldNotMeasure, RenderShapeSkipClaimFieldNotAMeasure},
+		{"a declared measure is not a quantity", unresolvableRoles, RenderShapeSkipUnresolvableMeasureRoles},
 		{"declared measure is not plottable", unplottable, RenderShapeSkipNoPlottableMeasure},
 	}
 	reached := map[RenderShapeSkipReason]bool{}
@@ -279,7 +292,8 @@ func TestEveryRuleExitRecordsExactlyOneOutcome(t *testing.T) {
 	for _, reason := range []RenderShapeSkipReason{
 		RenderShapeSkipNotCohortIntent, RenderShapeSkipNoRankedMember, RenderShapeSkipNoDrivers,
 		RenderShapeSkipNotPlanAuthorized, RenderShapeSkipNoDeclaredTable, RenderShapeSkipNoTimeSeriesTable,
-		RenderShapeSkipClaimFieldNotAMeasure, RenderShapeSkipNoPlottableMeasure,
+		RenderShapeSkipClaimFieldNotAMeasure, RenderShapeSkipUnresolvableMeasureRoles,
+		RenderShapeSkipNoPlottableMeasure,
 	} {
 		if !reached[reason] {
 			t.Errorf("no case in this matrix ever produces %q, so the invariant is satisfied vacuously for it", reason)
@@ -516,5 +530,56 @@ func TestASoleTimeSeriesFieldReachesTheWireDeclaredAndCharts(t *testing.T) {
 	result.RenderShapes = shapes
 	if err := contractsv1.ValidateRenderShapesForResult(result); err != nil {
 		t.Fatalf("the trend's points do not resolve against the rows they cite: %v", err)
+	}
+}
+
+// TestEveryTrendStageHasAReason is the totality half of the CHAOS-4621
+// invariant, at the level the invariant can actually be broken.
+//
+// `Accounted` proves an EVENT is well formed. It cannot prove the code that
+// builds the event has a reason for every path, and the sweep for this slice
+// found exactly that hole: a fact reaching trendStageSelected while the shape
+// budget was spent produced a skip with the EMPTY reason, because
+// trendStageReasons has no entry for a stage that is not a refusal. Nothing
+// reachable today triggers it, so no scenario test would have caught it --
+// only enumerating the stages does.
+func TestEveryTrendStageHasAReason(t *testing.T) {
+	t.Parallel()
+	for stage := trendStageNoDeclaredTable; stage <= trendStageSelected; stage++ {
+		if stage == trendStageSelected {
+			// Not a refusal: it must NOT have an entry, and the caller
+			// handles it explicitly.
+			if _, exists := trendStageReasons[stage]; exists {
+				t.Errorf("trendStageSelected has a skip reason; a selection is not a refusal")
+			}
+			continue
+		}
+		reason, exists := trendStageReasons[stage]
+		if !exists || reason == "" {
+			t.Errorf("trend stage %d has no skip reason, so a rule exiting through it would record a skip with no reason", stage)
+		}
+	}
+}
+
+// TestTheTrendRuleRecordsAReasonWhenTheShapeBudgetIsSpent is the reachable
+// proof of the same hole: with no room left, the rule must still say why it
+// produced nothing.
+func TestTheTrendRuleRecordsAReasonWhenTheShapeBudgetIsSpent(t *testing.T) {
+	t.Parallel()
+	result := declaredTrendAnswer()
+	// Non-vacuity: with room, this fixture DOES select a trend, so the
+	// difference below is the budget and nothing else.
+	if trend := shapeByRule(mustSelect(t, result), contractsv1.ContextFabricRenderRuleDatedFactTrend); trend == nil {
+		t.Fatal("the fixture selects no trend even with room; the budget cannot be shown to be what refuses it")
+	}
+	shapes, omitted, reason := datedFactTrendShapes(result, contractsv1.ContextFabricRenderShapesMaxCount)
+	if len(shapes) != 0 {
+		t.Fatalf("shapes were selected with no budget left: %+v", shapes)
+	}
+	if omitted == 0 {
+		t.Error("the trend the budget had no room for was dropped with no count recorded")
+	}
+	if reason != RenderShapeSkipShapeBudgetSpent {
+		t.Fatalf("reason = %q, want %q -- an exit with no reason is the exact defect CHAOS-4621 was filed about", reason, RenderShapeSkipShapeBudgetSpent)
 	}
 }

@@ -131,6 +131,38 @@ const (
 	// exactly what makes it expressible there. Until it exists, this
 	// refuses rather than picks.
 	RenderShapeSkipClaimFieldNotAMeasure RenderShapeSkipReason = "claim_field_not_a_measure"
+	// RenderShapeSkipUnresolvableMeasureRoles (codex round 1 finding 1,
+	// P1, EXECUTED) -- the table is DECLARED time_series and carries a
+	// declared measure whose cells are not numeric, so this rule cannot
+	// tell a per-row categorical OBSERVATION from a second IDENTITY
+	// dimension, and one of those two readings makes the line a lie.
+	//
+	// This is the hole the one-key-column rule does NOT close. Putting the
+	// work scope in KEY makes the key arity 2 and the table a breakdown by
+	// definition; putting it in MEASURES leaves a declaration that is
+	// internally consistent -- one key column, parsing as an instant,
+	// distinct across rows, every column classified -- and the trend rule,
+	// which reads only the claim's own measure, never looks at the scope
+	// column. The CHAOS-4616 false line comes back through the
+	// DECLARATION instead of through the geometry.
+	//
+	// WHY THIS IS A SELECTION REFUSAL AND NOT A VALIDATION RULE. The
+	// obvious fix -- "a time_series measure must be numeric" -- was
+	// written, and then EXECUTED against the merged producers: it
+	// invalidates health.go's own CHAOS-4645 declaration, which carries
+	// `severity` (a per-day categorical observation of ONE subject, and a
+	// legitimate one) among its measures. `severity` and `work_scope_id`
+	// are syntactically identical and semantically opposite, and the
+	// declaration vocabulary has no third role to tell them apart: design
+	// §5.1 admits only Key or Measures, so a varying non-identity column
+	// has nowhere else to go. Refusing the DECLARATION would break a
+	// correct producer; refusing to DRAW A LINE THROUGH IT costs nothing
+	// today (health's time_series is dual-table and never reaches the
+	// wire) and fails closed if it ever does.
+	//
+	// The real fix is a third declared role, which is CHAOS-4633's
+	// vocabulary and not this slice's -- filed, with this reasoning.
+	RenderShapeSkipUnresolvableMeasureRoles RenderShapeSkipReason = "unresolvable_measure_roles"
 	// RenderShapeSkipNoPlottableMeasure -- the declared measure is
 	// there and its cells cannot be plotted: fewer than two rows carry a
 	// numeric value for it, or the declared axis column does not parse as
@@ -546,6 +578,21 @@ func datedFactTrendShapes(result InvestigationResult, alreadySelected int) (shap
 	if len(shapes) > 0 {
 		return shapes, omitted, ""
 	}
+	// Found by the CHAOS-4637 shape sweep, not by a review round: a fact
+	// could reach trendStageSelected and still append nothing, if the shape
+	// budget was already spent. trendStageReasons has no entry for
+	// trendStageSelected -- correctly, since it is not a refusal -- so the
+	// lookup returned the empty string and this rule would have recorded a
+	// SKIP WITH NO REASON. Accounted() would then report `violated` and the
+	// selector would be exactly the "exit path that forgets its reason"
+	// CHAOS-4621 was filed about, introduced by the code that closes it.
+	//
+	// Not reachable today (the two cohort rules produce at most 2 of the 8
+	// shapes a result may carry, so the trend rule always has room), which
+	// is precisely why only an exhaustive sweep of the class would find it.
+	if furthest == trendStageSelected {
+		return nil, omitted, RenderShapeSkipShapeBudgetSpent
+	}
 	return nil, omitted, trendStageReasons[furthest]
 }
 
@@ -557,15 +604,17 @@ const (
 	trendStageNoDeclaredTable trendStage = iota
 	trendStageNoTimeSeriesTable
 	trendStageClaimFieldNotAMeasure
+	trendStageUnresolvableMeasureRoles
 	trendStageNoPlottableMeasure
 	trendStageSelected
 )
 
 var trendStageReasons = map[trendStage]RenderShapeSkipReason{
-	trendStageNoDeclaredTable:       RenderShapeSkipNoDeclaredTable,
-	trendStageNoTimeSeriesTable:     RenderShapeSkipNoTimeSeriesTable,
-	trendStageClaimFieldNotAMeasure: RenderShapeSkipClaimFieldNotAMeasure,
-	trendStageNoPlottableMeasure:    RenderShapeSkipNoPlottableMeasure,
+	trendStageNoDeclaredTable:          RenderShapeSkipNoDeclaredTable,
+	trendStageNoTimeSeriesTable:        RenderShapeSkipNoTimeSeriesTable,
+	trendStageClaimFieldNotAMeasure:    RenderShapeSkipClaimFieldNotAMeasure,
+	trendStageUnresolvableMeasureRoles: RenderShapeSkipUnresolvableMeasureRoles,
+	trendStageNoPlottableMeasure:       RenderShapeSkipNoPlottableMeasure,
 }
 
 // datedFactTrendShape evaluates one claimed fact, returning the shape (or
@@ -592,6 +641,9 @@ func datedFactTrendShape(fact ClaimedFact) (*contractsv1.ContextFabricRenderShap
 	if len(rows) < 2 || len(rows) > contractsv1.ContextFabricRenderPointsMaxCount {
 		return nil, trendStageNoPlottableMeasure
 	}
+	if !everyDeclaredMeasureIsAQuantity(table, rows) {
+		return nil, trendStageUnresolvableMeasureRoles
+	}
 	points, ok := trendPoints(fact, axis, fact.Field)
 	if !ok {
 		return nil, trendStageNoPlottableMeasure
@@ -610,6 +662,37 @@ func datedFactTrendShape(fact ClaimedFact) (*contractsv1.ContextFabricRenderShap
 			Points: points,
 		}},
 	}, trendStageSelected
+}
+
+// everyDeclaredMeasureIsAQuantity reports whether EVERY declared measure of
+// this time_series -- not merely the one about to be plotted -- carries
+// numbers.
+//
+// Checking the whole declaration rather than just the plotted column is the
+// point. The plotted column is numeric by definition (it would not otherwise
+// be plottable); the risk lives in the columns this rule does not read. A
+// declared measure carrying strings is either a per-row categorical
+// observation or a second entity's identity, and nothing in the declaration
+// vocabulary distinguishes them. A line drawn through the second is the
+// CHAOS-4616 defect; refusing both is the fail-closed reading, and the cost
+// of refusing the first is a chart that was never drawn today anyway.
+//
+// Absent and explicitly-null cells are NOT disqualifying: a
+// conditionally-computed measure (metrics' mttr_hours) is missing data, and
+// missing data says nothing about roles.
+func everyDeclaredMeasureIsAQuantity(table *contractsv1.ContextFabricClaimedFactTable, rows []ClaimedFactRow) bool {
+	for _, row := range rows {
+		for _, measure := range table.Measures {
+			cell, present := row.Fields[measure]
+			if !present || cell.Null {
+				continue
+			}
+			if cell.Integer == nil && cell.Number == nil {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // trendPoints reads the DECLARED axis and the DECLARED measure off every
