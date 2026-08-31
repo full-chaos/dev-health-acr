@@ -890,6 +890,15 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			// ReuseKey.RankingFormulaVersion for why RankCohort running
 			// after FindReusable makes fencing on it mandatory.
 			RankingFormulaVersion: contextfabric.RankingFormulaVersion,
+			// CHAOS-4634 (S4): one more deployment-current version
+			// authority -- the family definition table
+			// (chaos4632_question_family_registry.go: ApplicableAxes,
+			// AskOrder, RequireDrivers, RequireRanking, RenderKinds,
+			// Budget) that GateOffersByFamily now reads before Interpret's
+			// own reuse lookup could otherwise serve a pre-edit
+			// disclosure from cache. Wired unconditionally, same reasoning
+			// as its seven siblings; see ReuseKey.QuestionFamilyVersion.
+			QuestionFamilyVersion: contextfabric.QuestionFamilyTableVersion,
 		},
 	})
 	if err != nil {

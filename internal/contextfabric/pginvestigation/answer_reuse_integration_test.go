@@ -99,6 +99,11 @@ var testReuseVersionAuthorities = contextfabric.ReuseVersionAuthorities{
 	// CLOSED on an unset value, so leaving this blank would make every
 	// test in this file miss.
 	RankingFormulaVersion: contextfabric.RankingFormulaVersion,
+	// CHAOS-4634 (S4): same mirrored discipline, one more dimension -- the
+	// family definition table fence. FindReusable fails CLOSED on an
+	// unset value, so leaving this blank would make every test in this
+	// file miss.
+	QuestionFamilyVersion: contextfabric.QuestionFamilyTableVersion,
 }
 
 func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKey {
@@ -123,6 +128,9 @@ func reuseKeyFor(result contextfabric.InvestigationResult) contextfabric.ReuseKe
 		// CHAOS-4398 PR3 (R4 ruling): same mirror, one more dimension (the
 		// cohort ranking formula fence).
 		RankingFormulaVersion: testReuseVersionAuthorities.RankingFormulaVersion,
+		// CHAOS-4634 (S4): same mirror, one more dimension (the family
+		// definition table fence).
+		QuestionFamilyVersion: testReuseVersionAuthorities.QuestionFamilyVersion,
 		QuestionHash:          contextfabric.QuestionHash(result.Question),
 		ContractVersion:       result.Versions.ContractVersion,
 		ProjectionVersion:     result.Versions.ProjectionVersion,

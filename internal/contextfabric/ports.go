@@ -147,8 +147,30 @@ type Investigator interface {
 // QuestionInterpreter interprets natural-language engineering questions. It
 // may classify reusable analytical capabilities, but it must not require the
 // question text to match a finite supported-question registry.
+//
+// CHAOS-4634 (S4): Interpret ALSO returns the QuestionFamilyOutcome this
+// same call resolved -- an IN-PROCESS Go return value only, never on the
+// wire (InterpretedQuestion is unchanged; QuestionFamilyOutcome is not a
+// contracts/v1 type). Before S4, CHAOS-4632 (S2) resolved and telemetered
+// this outcome INSIDE RuntimeQuestionInterpreter.Interpret and then
+// discarded it -- shadow only, gating nothing. S4 is the slice where the
+// family first affects an answer (chaos4634_family_offer_gate... see
+// chaos4579_cohort_structure_gate.go's own CHAOS-4634 header), so the
+// outcome must reach Engine rather than die at the interpreter boundary.
+// Returned explicitly, not threaded via ctx: this is load-bearing data the
+// offer-composition call sites (engine.go) require to gate correctly, and
+// a caller who forgets to thread it fails to compile -- the team-lead's
+// own standing rule (engine.go's reuseWatermarkSnapshot comment) for any
+// data a wrong omission could silently mis-answer with, as opposed to a
+// pure cost optimisation (see WithOffersOnlyResolution's contrasting
+// ctx-carried precedent, chaos4234_offers_only.go, for a flag whose
+// omission is safe by construction).
+//
+// Zero blast radius beyond this package's own call sites: RuntimeQuestionInterpreter
+// is the ONLY production implementation (verified: `git grep QuestionInterpreter`
+// finds no second one).
 type QuestionInterpreter interface {
-	Interpret(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error)
+	Interpret(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error)
 }
 
 // GraphReader owns subject/cohort discovery and bounded relationship context.
@@ -836,6 +858,33 @@ type ReuseKey struct {
 	// a dynamic, per-Save value rather than one deployment-current
 	// constant.
 	RankingFormulaVersion string
+	// QuestionFamilyVersion (CHAOS-4634 S4, per the CHAOS-4632/S2 note
+	// deferred here) is a NINTH conjunctive dimension, same NULL-never-
+	// matches fail-closed shape as every sibling above. It binds reuse to
+	// contextfabric.QuestionFamilyTableVersion -- the family definition
+	// table (chaos4632_question_family_registry.go): ApplicableAxes,
+	// AskOrder, RequireDrivers, RequireRanking, RenderKinds, Budget, and
+	// the precedence table that resolves a family in the first place.
+	//
+	// Why reuse MUST be fenced on it, rather than left to age out. S4 is
+	// the FIRST slice where the family affects an answer at all --
+	// GateOffersByFamily (chaos4579_cohort_structure_gate.go) reads
+	// ApplicableAxes to decide which structure_needs axes a turn-1
+	// disclosure carries. tryReuse runs BEFORE Interpret (engine.go), so a
+	// hit serves the stored StructureNeeds verbatim, without the family
+	// gate ever re-running. A table edit that widens or narrows
+	// ApplicableAxes for a family (S2's own doc comment states the bump
+	// rule) must not keep serving a pre-edit disclosure from cache for the
+	// identical question -- exactly the class WindowInferenceVersion and
+	// CommitGateVersion each closed for their own decision.
+	//
+	// Deliberately NOT scoped to only questions that resolved a
+	// non-unclassified family: unclassified's own ApplicableAxes
+	// (allStructureNeedKinds()) is itself a row in the SAME table, so a
+	// table edit could in principle change what "unclassified" discloses
+	// too. Applied unconditionally, same precedent as RankingFormulaVersion
+	// immediately above.
+	QuestionFamilyVersion string
 	// GraphEpoch (CHAOS-3898 §2.3) is this investigation's own
 	// ResolvedGraphBinding.Epoch -- a THIRTEENTH conjunctive dimension,
 	// structurally distinct from every version-string dimension above: a
@@ -933,6 +982,12 @@ type ReuseVersionAuthorities struct {
 	// binds and why it is applied unconditionally to every reuse-
 	// participating row, not only cohort-shaped ones.
 	RankingFormulaVersion string
+	// QuestionFamilyVersion (CHAOS-4634 S4) is ONE MORE version constant,
+	// same shape again -- see ReuseKey.QuestionFamilyVersion's own field
+	// doc comment for what it binds (contextfabric.QuestionFamilyTableVersion)
+	// and why it is applied unconditionally to every reuse-participating
+	// row.
+	QuestionFamilyVersion string
 }
 
 // AnswerReuseGate finds a stored InvestigationResult eligible for reuse

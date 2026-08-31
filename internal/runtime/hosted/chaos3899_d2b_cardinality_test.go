@@ -274,7 +274,7 @@ func TestChaos3899D2BCardinality(t *testing.T) {
 		callCtx, cancelCase := context.WithTimeout(ctx, caseTimeout)
 		func() {
 			defer cancelCase()
-			interpreted, interpretErr := interpreter.Interpret(callCtx, principal, request)
+			interpreted, _, interpretErr := interpreter.Interpret(callCtx, principal, request)
 			var m d2bCaseMeasurement
 			m.Index = i
 			m.IsControl = tc.ExpectID == ""

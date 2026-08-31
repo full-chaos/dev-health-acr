@@ -130,7 +130,7 @@ func (f *fakeReceiptSink) RecordModelExecution(_ context.Context, _ storage.Prin
 func TestRuntimeQuestionInterpreterReturnsErrModelUnavailableWhenRuntimeNil(t *testing.T) {
 	t.Parallel()
 	interpreter := RuntimeQuestionInterpreter{}
-	_, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	_, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
 	if !errors.Is(err, ErrModelUnavailable) {
 		t.Fatalf("Interpret() error = %v, want ErrModelUnavailable", err)
 	}
@@ -148,7 +148,7 @@ func TestRuntimeQuestionInterpreterRecordsReceiptOnSuccess(t *testing.T) {
 		Runtime: fakeModelRuntime{interpreted: interpreted, receipt: validModelReceiptFixture(ModelOperationInterpret)},
 		Sink:    sink,
 	}
-	got, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	got, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
 	if err != nil {
 		t.Fatalf("Interpret() error = %v", err)
 	}
@@ -174,7 +174,7 @@ func TestRuntimeQuestionInterpreterWrapsInvalidStructuredOutput(t *testing.T) {
 		Runtime: fakeModelRuntime{interpreted: invalid, receipt: validModelReceiptFixture(ModelOperationInterpret)},
 		Sink:    sink,
 	}
-	_, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	_, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
 	if !errors.Is(err, ErrModelOutput) {
 		t.Fatalf("Interpret() error = %v, want ErrModelOutput", err)
 	}
@@ -210,7 +210,7 @@ func TestRuntimeQuestionInterpreterClassifiesBoundViolationAsInterpretationRejec
 		Runtime: fakeModelRuntime{interpreted: invalid, receipt: validModelReceiptFixture(ModelOperationInterpret)},
 		Sink:    sink,
 	}
-	_, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	_, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
 	if !errors.Is(err, ErrInterpretationRejected) || !errors.Is(err, ErrModelOutput) {
 		t.Fatalf("Interpret() error = %v, want both ErrInterpretationRejected and ErrModelOutput", err)
 	}
@@ -242,7 +242,7 @@ func TestRuntimeQuestionInterpreterCorrectsReceiptOutcomeToInvalidOutputOnReject
 		Runtime: fakeModelRuntime{interpreted: invalid, receipt: receipt},
 		Sink:    sink,
 	}
-	if _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); !errors.Is(err, ErrModelOutput) {
+	if _, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); !errors.Is(err, ErrModelOutput) {
 		t.Fatalf("Interpret() error = %v, want ErrModelOutput", err)
 	}
 	if len(sink.recorded) != 1 || sink.recorded[0].Outcome != "invalid_output" {
@@ -267,7 +267,7 @@ func TestRuntimeQuestionInterpreterPromotesPendingValidationOutcomeToSuccess(t *
 		Runtime: fakeModelRuntime{interpreted: interpreted, receipt: receipt},
 		Sink:    sink,
 	}
-	if _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil {
+	if _, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil {
 		t.Fatalf("Interpret() error = %v", err)
 	}
 	if len(sink.recorded) != 1 || sink.recorded[0].Outcome != "success" {
@@ -291,7 +291,7 @@ func TestRuntimeQuestionInterpreterSurfacesSinkFailureAlongsideValidationFailure
 		Runtime: fakeModelRuntime{interpreted: invalid, receipt: validModelReceiptFixture(ModelOperationInterpret)},
 		Sink:    sink,
 	}
-	_, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	_, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
 	if !errors.Is(err, ErrModelOutput) {
 		t.Fatalf("Interpret() error = %v, want ErrModelOutput", err)
 	}
@@ -1083,7 +1083,7 @@ func TestErrInterpretationRejectedAndErrSynthesisRejectedAreDistinctFromEachOthe
 		},
 		Sink: &fakeReceiptSink{},
 	}
-	_, interpretErr := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	_, _, interpretErr := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
 
 	input := validSynthesisInputFixture()
 	draft := validSynthesisDraftFixture(input)

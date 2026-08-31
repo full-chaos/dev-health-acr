@@ -987,9 +987,9 @@ type RuntimeQuestionInterpreter struct {
 // while the call site was missing, now resting on a measurement instead of
 // an absence. Add it when a corpus shows N=1 failing.
 
-func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal storage.Principal, request InvestigationRequest) (InterpretedQuestion, error) {
+func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal storage.Principal, request InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
 	if r.Runtime == nil {
-		return InterpretedQuestion{}, ErrModelUnavailable
+		return InterpretedQuestion{}, QuestionFamilyOutcome{}, ErrModelUnavailable
 	}
 	question, receipt, err := r.Runtime.InterpretQuestion(ctx, principal, request)
 	if err == nil {
@@ -1007,15 +1007,19 @@ func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal sto
 		// rejection. errors.Join preserves errors.Is(err, ErrModelOutput)
 		// for callers that only check the classification.
 		if err == nil {
-			return InterpretedQuestion{}, sinkErr
+			return InterpretedQuestion{}, QuestionFamilyOutcome{}, sinkErr
 		}
 		err = errors.Join(err, sinkErr)
 	}
 	if err != nil {
-		return InterpretedQuestion{}, err
+		return InterpretedQuestion{}, QuestionFamilyOutcome{}, err
 	}
-	// CHAOS-4632 (SHADOW ONLY): resolve the question family from the
-	// signals this interpretation actually produced, and report it.
+	// CHAOS-4632/CHAOS-4634: resolve the question family from the signals
+	// this interpretation actually produced, report it, and -- as of S4 --
+	// RETURN it too, so the caller (Engine) can gate offer composition on
+	// it. S2 shipped this same resolution shadow-only (telemetered,
+	// discarded); S4 is the slice where the family first affects an
+	// answer, so it must reach past this function's own return.
 	//
 	// Placed AFTER every error return, so the event fires exactly when an
 	// interpretation was produced -- which makes the denominator
@@ -1024,27 +1028,35 @@ func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal sto
 	// from the reuse store never reaches here, and it never reaches
 	// Interpret at all, so the two agree.
 	//
-	// NOTHING BELOW AFFECTS THE RETURN VALUE. `question` is returned
-	// unchanged whatever the family resolves to.
-	r.recordFamilyResolution(ctx, principal, question, receipt)
-	return question, nil
+	// `question` itself is returned unchanged whatever the family resolves
+	// to -- the family is a SEPARATE return value, never folded onto the
+	// wire InterpretedQuestion.
+	outcome := r.recordFamilyResolution(ctx, principal, question, receipt)
+	return question, outcome, nil
 }
 
 // recordFamilyResolution builds the §4.2 sample from one interpretation's
-// receipt capture, resolves the family, and emits the §4.3 event.
+// receipt capture, resolves the family, emits the §4.3 event, and returns
+// the resolved outcome for the caller to gate on (CHAOS-4634).
 //
 // FIRES ON EVERY INTERPRETATION, including the ones that resolve to
 // unclassified -- the denominator has to be countable, or "the resolver
 // never classifies anything" and "the resolver never ran" become the same
 // observation. That is the lesson lane-4579 wrote up in its §4 and codex
 // confirmed by mutation in its finding 5.
-func (r RuntimeQuestionInterpreter) recordFamilyResolution(ctx context.Context, principal storage.Principal, interpreted InterpretedQuestion, receipt ModelExecutionReceipt) {
-	if r.FamilyTelemetry == nil {
-		return
-	}
+//
+// r.FamilyTelemetry == nil (a composition that never wired it) still
+// resolves and returns the outcome -- CHAOS-4634 gating must not silently
+// go dark just because telemetry was never configured; only the EVENT
+// emission is telemetry-gated, exactly as every other EngineTelemetry
+// call in this package is.
+func (r RuntimeQuestionInterpreter) recordFamilyResolution(ctx context.Context, principal storage.Principal, interpreted InterpretedQuestion, receipt ModelExecutionReceipt) QuestionFamilyOutcome {
 	samples := []FamilySample{familySampleFrom(interpreted, receipt)}
 	outcome := ResolveQuestionFamily(samples)
-	r.FamilyTelemetry.RecordQuestionFamilyResolution(ctx, principal, QuestionFamilyResolutionEventFrom(outcome, samples))
+	if r.FamilyTelemetry != nil {
+		r.FamilyTelemetry.RecordQuestionFamilyResolution(ctx, principal, QuestionFamilyResolutionEventFrom(outcome, samples))
+	}
+	return outcome
 }
 
 // familySampleFrom projects ONE interpretation into the precedence table's

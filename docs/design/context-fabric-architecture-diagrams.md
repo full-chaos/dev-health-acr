@@ -57,9 +57,9 @@ flowchart TD
   CARRY -->|"miss: no reference / unloadable /<br/>stale_graph_epoch / no_confirmed_window /<br/>depth_exceeded"| WGATE{"class-default window gate<br/>WindowCanonicalizationGatedClassDefault<br/>CHAOS-4040/4234"}
   WGATE -->|"regime A: inferred_default"| GATED["gatedOfferMaterial<br/>chaos4234_offers_only.go"]
   GATED --> OFFRES["graph.ResolveSubjects(WithOffersOnlyResolution)<br/>same pool mechanism as regime B,<br/>commit-bearing output DISCARDED"]
-  OFFRES --> CLSGATE{"GateSubjectAxisOffers<br/>§1.3 class gate, CHAOS-4579/4531<br/>chaos4579_cohort_structure_gate.go"}
-  CLSGATE -->|"shape=discovered_cohort:<br/>no subject axis -> drop subject_anchor/subject_handle<br/>rows AND their options together"| WOFFER
-  CLSGATE -->|"single_subject / explicit_cohort / open:<br/>subject axis present -> pass through,<br/>standing zero-candidates ruling unchanged"| WOFFER
+  OFFRES --> CLSGATE{"GateOffersByFamily<br/>family ApplicableAxes gate, CHAOS-4634<br/>(subsumes CHAOS-4579/4531)<br/>chaos4579_cohort_structure_gate.go"}
+  CLSGATE -->|"family=discovered_cohort_ranking:<br/>only window applicable -> drop kind/anchor/handle/candidate<br/>rows AND their options together"| WOFFER
+  CLSGATE -->|"family=subject_investigation / explicit_comparison / unclassified:<br/>no axis restricted -> pass through,<br/>standing zero-candidates ruling unchanged"| WOFFER
   WOFFER["windowConfirmationRequiredResult<br/>status=clarification_required, SubjectResolution EMPTY<br/>kind/handle/candidate offers minted BESIDE window offer"]
   WGATE -->|"regime B: explicit / confirmed window"| RESOLVE["graphrank.ResolveSubjects<br/>ResolveDeps: Search / SearchQuestion / SearchKind /<br/>AliasLookup + CHAOS-4038 coverage floor<br/>(see diagram 2)"]
   RESOLVE --> POOL["candidate pool split:<br/>pool (commit-eligible) vs offerOnlyPool (CHAOS-4271)<br/>-- see diagram 2 for why this matters"]

@@ -867,7 +867,7 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 		}
 
 		callCtx, cancelCase := context.WithTimeout(ctx, caseTimeout)
-		interpreted, interpretErr := interpreter.Interpret(callCtx, principal, request)
+		interpreted, familyOutcome, interpretErr := interpreter.Interpret(callCtx, principal, request)
 		var outcome replayCaseOutcome
 		outcome.Index = i
 		outcome.IsControl = tc.ExpectID == ""
@@ -926,22 +926,24 @@ func TestChaos3884ReplayHarness(t *testing.T) {
 		// stalled-gate/aggregation logic itself (factored out and
 		// unit-tested there).
 		if wiredErr == nil {
-			// CHAOS-4579 (codex round 1, finding 1): production does NOT ask
+			// CHAOS-4579 (codex round 1, finding 1); CHAOS-4634 (S4)
+			// generalized the gate this comment names from Shape-keyed to
+			// family-keyed: production does NOT ask
 			// StructureNeedsWouldDisclose against ResolveSubjects' raw
 			// material any more -- both composeStructureNeeds call sites
-			// first apply §1.3's class-conditional gate
-			// (contextfabric.GateSubjectAxisOffers), which removes the
-			// subject_anchor/subject_handle rows on a shape with no subject
-			// axis. Asking the raw material here would report a
-			// discovered_cohort case whose ONLY material was those two rows
-			// as disclosing, while production discloses nothing -- a false
-			// replay report, and exactly the "two copies of one gate silently
-			// drift" defect this field's own doc comment says
-			// StructureNeedsWouldDisclose was exported to close. Same
-			// discipline, one hop earlier: call the SAME gate production
-			// calls, on the frozen interpretation this case replays, then ask
-			// the SAME disclosure function.
-			gatedOfferMaterial, _ := contextfabric.GateSubjectAxisOffers(wiredOfferMaterial, interpreted.Shape)
+			// first apply the family's ApplicableAxes gate
+			// (contextfabric.GateOffersByFamily), which removes every
+			// inapplicable axis's rows on a family that does not need them.
+			// Asking the raw material here would report a discovered_cohort
+			// case whose ONLY material was those rows as disclosing, while
+			// production discloses nothing -- a false replay report, and
+			// exactly the "two copies of one gate silently drift" defect
+			// this field's own doc comment says StructureNeedsWouldDisclose
+			// was exported to close. Same discipline, one hop earlier: call
+			// the SAME gate production calls, on the SAME family outcome
+			// this case's own Interpret call already resolved, then ask the
+			// SAME disclosure function.
+			gatedOfferMaterial, _ := contextfabric.GateOffersByFamily(wiredOfferMaterial, familyOutcome)
 			outcome.WiredStructureNeedsWouldDisclose = contextfabric.StructureNeedsWouldDisclose(gatedOfferMaterial)
 		}
 		tallyReplayStructureNeedsCoverage(&report, wiredErr, outcome.Wired.CommittedCount, outcome.WiredStructureNeedsWouldDisclose)

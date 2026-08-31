@@ -125,7 +125,7 @@ const (
 // wider") or found something. Every error path also returns empty
 // material: the gated terminal must never be blocked by a read whose only
 // purpose is a better clarification.
-func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Principal, request InvestigationRequest, graphRequest InvestigationRequest, interpretation InterpretedQuestion, binding ResolvedGraphBinding, structureCanon requestStructureCanonicalization, priorEntries []StructurePriorEntry) (material StructureOfferMaterial, windowExpandUnavailable bool) {
+func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Principal, request InvestigationRequest, graphRequest InvestigationRequest, interpretation InterpretedQuestion, familyOutcome QuestionFamilyOutcome, binding ResolvedGraphBinding, structureCanon requestStructureCanonicalization, priorEntries []StructurePriorEntry) (material StructureOfferMaterial, windowExpandUnavailable bool) {
 	record := func(outcome GatedOfferResolutionOutcome) {
 		if e.telemetry != nil {
 			e.telemetry.RecordGatedOfferResolution(ctx, principal, outcome)
@@ -149,24 +149,26 @@ func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Princ
 		return StructureOfferMaterial{}, true
 	}
 	resolved = e.consultPriorStructureOffers(ctx, principal, priorEntries, resolved)
-	// CHAOS-4579/CHAOS-4531 (§1.3 class-conditional gate): applied AFTER
-	// the prior-offer consultation (a prior-sourced anchor offer is exactly
-	// as inapplicable to an axis-less question as an engine-sourced one)
-	// and BEFORE the WouldDisclose check below, so the Empty/Composed
-	// outcome describes what this pass will ACTUALLY disclose. A cohort
-	// question whose only material was anchor/handle therefore records
-	// GatedOfferResolutionEmpty -- accurate, and the cohort gate's own
-	// "applied" event beside it says why, which is what keeps the two
-	// distinguishable in the artifacts alone.
+	// CHAOS-4634 (subsumes CHAOS-4579/CHAOS-4531's §1.3 class-conditional
+	// gate): applied AFTER the prior-offer consultation (a prior-sourced
+	// anchor offer is exactly as inapplicable to a family that excludes
+	// the anchor axis as an engine-sourced one) and BEFORE the
+	// WouldDisclose check below, so the Empty/Composed outcome describes
+	// what this pass will ACTUALLY disclose. A cohort question whose only
+	// material was anchor/handle therefore records GatedOfferResolutionEmpty
+	// -- accurate, and the cohort gate's own "applied" event beside it says
+	// why, which is what keeps the two distinguishable in the artifacts
+	// alone.
 	//
 	// This is the call site chris's 2026-08-29 turn 1 actually took: the
 	// class-default window gate composes the disclosure that asked "Which
 	// repository, project, or team?" and "Which specific item?" on a
-	// plural teams question. interpretation is non-nil by construction on
-	// gate 2 (it is this function's own parameter); gate 1 fires before
-	// Interpret and never reaches here at all -- and never builds anchor
-	// or handle material either, so it needs no gate.
-	resolved, cohortGateOutcome := GateSubjectAxisOffers(resolved, interpretation.Shape)
+	// plural teams question. familyOutcome is resolved by construction on
+	// gate 2 (Interpret has already run and returned it, this function's
+	// own parameter); gate 1 fires before Interpret and never reaches here
+	// at all -- and never builds anchor or handle material either, so it
+	// needs no gate.
+	resolved, cohortGateOutcome := GateOffersByFamily(resolved, familyOutcome)
 	recordCohortStructureGate(ctx, e.telemetry, principal, cohortGateOutcome, interpretation.Shape)
 	if !StructureNeedsWouldDisclose(resolved) {
 		record(GatedOfferResolutionEmpty)

@@ -48,7 +48,7 @@ func TestInterpretResolvesTheFamilyFromTheSAMECallsSignals(t *testing.T) {
 		Sink:            &fakeReceiptSink{},
 		FamilyTelemetry: spy,
 	}
-	if _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil {
+	if _, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil {
 		t.Fatalf("Interpret() error = %v", err)
 	}
 	if len(spy.events) != 1 {
@@ -98,7 +98,7 @@ func TestInterpretFiresTheFamilyEventEvenWhenUnclassified(t *testing.T) {
 		Sink:            &fakeReceiptSink{},
 		FamilyTelemetry: spy,
 	}
-	if _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil {
+	if _, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil {
 		t.Fatalf("Interpret() error = %v", err)
 	}
 	if len(spy.events) != 1 {
@@ -137,7 +137,7 @@ func TestInterpretDoesNotFireTheFamilyEventOnFailure(t *testing.T) {
 			t.Parallel()
 			spy := &familyTelemetrySpy{}
 			interpreter := RuntimeQuestionInterpreter{Runtime: testCase.runtime, Sink: &fakeReceiptSink{}, FamilyTelemetry: spy}
-			if _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err == nil {
+			if _, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err == nil {
 				t.Fatal("Interpret() succeeded, want an error")
 			}
 			if len(spy.events) != 0 {
@@ -177,7 +177,7 @@ func TestFamilyResolutionNeverChangesTheReturnedInterpretation(t *testing.T) {
 			Sink:            &fakeReceiptSink{},
 			FamilyTelemetry: &familyTelemetrySpy{},
 		}
-		got, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+		got, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
 		if err != nil {
 			t.Fatalf("Interpret() error = %v", err)
 		}
@@ -204,7 +204,7 @@ func TestInterpretWithoutFamilyTelemetryStillSucceeds(t *testing.T) {
 		Runtime: fakeModelRuntime{interpreted: groupedInterpretation(), receipt: validModelReceiptFixture(ModelOperationInterpret)},
 		Sink:    &fakeReceiptSink{},
 	}
-	if _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil {
+	if _, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil {
 		t.Fatalf("Interpret() error = %v with nil FamilyTelemetry", err)
 	}
 }

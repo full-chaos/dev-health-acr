@@ -196,6 +196,14 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	if questionHash.Valid && versionAuthorities.RankingFormulaVersion != "" {
 		rankingFormulaVersion = sql.NullString{String: versionAuthorities.RankingFormulaVersion, Valid: true}
 	}
+	// CHAOS-4634 (S4): same gate, one more version authority
+	// (contextfabric's own family definition table -- ApplicableAxes,
+	// AskOrder, RequireDrivers, RequireRanking, RenderKinds, Budget, and
+	// the precedence table that resolves a family).
+	var questionFamilyVersion sql.NullString
+	if questionHash.Valid && versionAuthorities.QuestionFamilyVersion != "" {
+		questionFamilyVersion = sql.NullString{String: versionAuthorities.QuestionFamilyVersion, Valid: true}
+	}
 	// CHAOS-3781: the axis key is supplied by Engine from the CLAMPED
 	// EFFECTIVE request context, matching exactly what FindReusable will
 	// key with. It is NOT re-derived from result.Interpretation here -- an
@@ -231,12 +239,12 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch, timeAxisKey,
 		embedRetrievalIdentity, retrievalPolicyVersion, interpretationPromptVersion, synthesisPromptVersion,
 		queryVersion, canonicalServiceVersion, modelOutputSchemaVersion, identityNormalizationVersion, graphEpochColumn,
-		windowInferenceVersion, commitGateVersion, rankingFormulaVersion,
+		windowInferenceVersion, commitGateVersion, rankingFormulaVersion, questionFamilyVersion,
 	}
 	const insertResultSQL = `
 INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version, question_family_version)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 ON CONFLICT (result_id) DO NOTHING`
 
 	// CHAOS-3927 P4 (design brief §2.1): claims is empty for the
@@ -750,6 +758,15 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	if strings.TrimSpace(key.RankingFormulaVersion) == "" {
 		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
 	}
+	// CHAOS-4634 (S4): same fail-closed convention, one MORE dimension. A
+	// composition that never wired QuestionFamilyVersion must MISS rather
+	// than run a lookup that ignores it: ignoring it would serve a
+	// pre-family-table-edit disclosure under the new table's
+	// ApplicableAxes, which is precisely the bypass this fence exists to
+	// close.
+	if strings.TrimSpace(key.QuestionFamilyVersion) == "" {
+		return contextfabric.InvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
+	}
 	// sol round-2 F4 (noted, not solved -- no telemetry vocabulary change):
 	// every "ordinary miss" this guard block produces -- a genuinely
 	// unconfigured dimension due to a composition bug, same as a normal
@@ -856,6 +873,16 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	// current one. Every pre-migration row holds NULL here and is
 	// permanently excluded. See ReuseKey.RankingFormulaVersion's own field
 	// doc comment.
+	//
+	// CHAOS-4634 (S4): question_family_version = $20 is a NINTH conjunctive
+	// predicate, migration 0036, same NULL-never-matches shape.
+	// GateOffersByFamily runs BEFORE this lookup ever executes in the live
+	// request path (tryReuse precedes Interpret, engine.go), so a hit
+	// would otherwise serve a stored structure_needs disclosure computed
+	// under an OLD family table definition as if it were computed under
+	// the current one. Every pre-migration row holds NULL here and is
+	// permanently excluded. See ReuseKey.QuestionFamilyVersion's own field
+	// doc comment.
 	row := s.db.QueryRowContext(ctx, `
 SELECT payload, source_watermarks
 FROM acr.context_fabric_investigation_results
@@ -877,6 +904,7 @@ WHERE org_id = $1
   AND window_inference_version = $17
   AND commit_gate_version = $18
   AND ranking_formula_version = $19
+  AND question_family_version = $20
   AND source_watermarks IS NOT NULL
   AND invalidation_epoch IS NOT NULL
   AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -894,7 +922,7 @@ LIMIT 1`,
 		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds(), key.TimeAxisKey,
 		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
 		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion, key.GraphEpoch,
-		key.WindowInferenceVersion, key.CommitGateVersion, key.RankingFormulaVersion)
+		key.WindowInferenceVersion, key.CommitGateVersion, key.RankingFormulaVersion, key.QuestionFamilyVersion)
 	var payload, sourceWatermarks []byte
 	switch err := row.Scan(&payload, &sourceWatermarks); {
 	case errors.Is(err, sql.ErrNoRows):
@@ -988,6 +1016,7 @@ SELECT EXISTS (
       AND window_inference_version = $16
       AND commit_gate_version = $17
       AND ranking_formula_version = $18
+      AND question_family_version = $19
       AND source_watermarks IS NOT NULL
       AND invalidation_epoch IS NOT NULL
       AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -998,7 +1027,7 @@ SELECT EXISTS (
 		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds(), key.TimeAxisKey,
 		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
 		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion,
-		key.WindowInferenceVersion, key.CommitGateVersion, key.RankingFormulaVersion,
+		key.WindowInferenceVersion, key.CommitGateVersion, key.RankingFormulaVersion, key.QuestionFamilyVersion,
 	).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("classify reuse miss: %w", sanitizeError(err))
