@@ -1074,7 +1074,6 @@
         "drivers_omitted",
         "withheld_drivers_omitted",
         "cohort_members_omitted",
-        "cohort_groups_omitted",
         "facts_omitted",
         "candidates_omitted",
         "evidence_refs_omitted",

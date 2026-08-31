@@ -46,6 +46,14 @@ var optionalBudgetCounters = []string{
 	"reasons_omitted",
 	"values_clamped",
 	"render_shapes_omitted",
+	// CHAOS-4636: cohort_groups_omitted is SCHEMA-OPTIONAL by the
+	// orchestrator's standing ruling that every wire field this slice adds
+	// must be, so a strict consumer pinned before it still validates a
+	// document that carries it. Go still emits it unconditionally (no
+	// omitempty), for the reason the pinned payload above exists: an
+	// omitempty would make zero indistinguishable from absent, and "no group
+	// was omitted" is a claim, not a silence.
+	"cohort_groups_omitted",
 }
 
 func TestProjectionBudgetWirePayloadIsPinned(t *testing.T) {
