@@ -387,6 +387,22 @@ type FactValue struct {
 	// FactValue caller sets exactly one of the scalar variants and leaves
 	// Rows nil, so this changes nothing for them.
 	Rows []FactValueRow `json:"rows,omitempty"`
+	// Table declares WHAT Rows is (CHAOS-4633, design doc §5.1) -- the
+	// missing piece a consumer used to have to infer: is this a dated
+	// series, a per-entity breakdown, or an ordered ranking; what
+	// (composite) tuple of row columns identifies a row; which columns are
+	// measurements. nil for every pre-CHAOS-4633 caller and for any
+	// FactValue that is not tabular -- purely additive.
+	//
+	// P1 (CHAOS-4633, this ticket) is DUAL-WRITE ONLY: TableFactValue is
+	// the sole constructor, and it builds Table.Rows and the sibling Rows
+	// field from the SAME slice value, so the two can never diverge --
+	// "keep Rows identical" is a property of construction, not a
+	// convention a caller has to remember. No reader in this repository
+	// consults Table yet (model_runtime.go, answerprojection/project.go and
+	// render_shapes.go all still read Rows only); that migration is P2, a
+	// later ticket.
+	Table *FactTable `json:"table,omitempty"`
 }
 
 func StringFactValue(value string) FactValue  { return FactValue{String: &value} }
@@ -399,7 +415,242 @@ func NullFactValue() FactValue                { return FactValue{Null: true} }
 // renderable series/table for facts whose evidence is a set of rows rather
 // than one number. See FactValue.Rows for why this exists instead of an
 // averaged scalar.
+//
+// Deprecated: a producer that also knows its table's shape/key/measures
+// should call TableFactValue instead, which sets Rows AND the CHAOS-4633
+// declaration together. RowsFactValue survives for any caller that
+// genuinely has no declaration to make (a leaf ClaimedFact.Rows, or a test
+// fixture) and stays the correct choice there.
 func RowsFactValue(rows []FactValueRow) FactValue { return FactValue{Rows: rows} }
+
+// TableFactValue builds a declared table-shaped FactValue (CHAOS-4633, P1
+// dual-write): table.Rows becomes BOTH FactValue.Rows and FactValue.Table's
+// own Rows, off the same slice header, so the two fields the design's P1
+// row requires stay "populated identically" by construction -- there is no
+// second place a caller could pass a different row set for one than the
+// other.
+func TableFactValue(table FactTable) FactValue {
+	return FactValue{Rows: table.Rows, Table: &table}
+}
+
+// FactTableShape is the closed vocabulary a declared FactTable's Shape may
+// take (CHAOS-4633, design doc §5.1). A fourth shape is a new major
+// decision, not a value silently accepted here.
+type FactTableShape string
+
+const (
+	// FactTableTimeSeries: one entity, indexed by an instant. Key is
+	// exactly one column, and that column parses as an instant on every
+	// row -- CHAOS-4616's fix stated as a property of the declaration.
+	FactTableTimeSeries FactTableShape = "time_series"
+	// FactTableBreakdown: many entities, one observation each.
+	FactTableBreakdown FactTableShape = "breakdown"
+	// FactTableRanking: many entities, ordered by a measure named in
+	// OrderBy.
+	FactTableRanking FactTableShape = "ranking"
+)
+
+func validFactTableShape(shape FactTableShape) bool {
+	switch shape {
+	case FactTableTimeSeries, FactTableBreakdown, FactTableRanking:
+		return true
+	default:
+		return false
+	}
+}
+
+// maxFactTableKeyColumns and maxFactTableMeasures bound a declaration the
+// same defensive way maxFactValueRows/maxFactValueRowFields already bound a
+// table's row count and per-row field count -- a producer bug that tries to
+// declare an unbounded key/measure list fails Validate rather than reaching
+// a downstream renderer.
+const (
+	maxFactTableKeyColumns = 8
+	maxFactTableMeasures   = 32
+)
+
+// FactTable declares what a tabular FactValue.Rows IS (CHAOS-4633, design
+// doc §5.1): its Shape, the COMPOSITE Key that identifies a row (never a
+// single-column axis -- flow.go's scope_breakdown legitimately needs
+// [provider, work_scope_id], because two different providers can share one
+// work_scope_id string), which columns MEASURE something, and -- for a
+// ranking table only -- which Measure the rows are ordered by.
+//
+// Key names ROW COLUMNS ONLY. Row identity is relative to the fact's own
+// Subject (CanonicalFact.Subject), which must never be duplicated into Key:
+// flow.go's team scope_breakdown declares Key: [provider, work_scope_id],
+// never team_id, because toFactValueRow never emits a team_id column for
+// the SQL to partition scope_breakdown could satisfy.
+type FactTable struct {
+	Shape    FactTableShape `json:"shape"`
+	Key      []string       `json:"key"`
+	Measures []string       `json:"measures"`
+	// OrderBy names a member of Measures. Ranking shape only; every other
+	// shape must leave it empty.
+	OrderBy string `json:"order_by,omitempty"`
+	// Grain is the temporal precision this ONE table was computed at --
+	// the same closed TemporalGrain vocabulary FactProviderResult.Grain
+	// already reports at the whole-result level, now recorded per table
+	// too, since a producer can emit more than one table shape at
+	// different grains.
+	Grain TemporalGrain  `json:"grain,omitempty"`
+	Rows  []FactValueRow `json:"rows"`
+}
+
+// factTableInstantLayouts are the layouts a time_series Key column is
+// accepted to parse under -- every date/instant string this package's
+// producers actually emit: a bare ClickHouse Date ("2026-08-15", every
+// *_daily table's `day`/`as_of_day` column, rendered via toString()) or a
+// full RFC3339 instant. Never a caller-configurable list -- widening it is
+// a code change, not data.
+var factTableInstantLayouts = []string{time.RFC3339, time.RFC3339Nano, "2006-01-02"}
+
+func parsesAsFactTableInstant(value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return false
+	}
+	for _, layout := range factTableInstantLayouts {
+		if _, err := time.Parse(layout, value); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// Validate makes the wrong states unrepresentable (CHAOS-4633, design doc
+// §5.1's own list): every row column is declared into exactly one of Key or
+// Measures; the Key tuple is distinct across rows; a time_series table's
+// Key is exactly one column that parses as an instant on every row; a
+// ranking table's OrderBy names a Measure and the rows are actually in that
+// order. A producer that cannot satisfy its own declaration fails here, in
+// its own test, rather than at a renderer three stages later.
+func (t FactTable) Validate() error {
+	if !validFactTableShape(t.Shape) {
+		return fmt.Errorf("fact table shape is invalid")
+	}
+	if len(t.Key) == 0 || len(t.Key) > maxFactTableKeyColumns {
+		return fmt.Errorf("fact table key must declare between 1 and %d columns", maxFactTableKeyColumns)
+	}
+	if len(t.Measures) > maxFactTableMeasures {
+		return fmt.Errorf("fact table measures exceed bounds")
+	}
+	columns := make(map[string]bool, len(t.Key)+len(t.Measures))
+	for _, name := range t.Key {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return fmt.Errorf("fact table key column name must not be blank")
+		}
+		if columns[name] {
+			return fmt.Errorf("fact table column %q is declared more than once", name)
+		}
+		columns[name] = true
+	}
+	for _, name := range t.Measures {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return fmt.Errorf("fact table measure column name must not be blank")
+		}
+		if columns[name] {
+			return fmt.Errorf("fact table column %q is declared in both key and measures", name)
+		}
+		columns[name] = true
+	}
+	if t.Shape == FactTableRanking {
+		if t.OrderBy == "" || !containsString(t.Measures, t.OrderBy) {
+			return fmt.Errorf("fact table ranking order_by must name a declared measure")
+		}
+	} else if t.OrderBy != "" {
+		return fmt.Errorf("fact table order_by is only valid for the ranking shape")
+	}
+	if t.Shape == FactTableTimeSeries && len(t.Key) != 1 {
+		return fmt.Errorf("fact table time_series key must be exactly one column; a second identity column makes this a breakdown, not a time_series")
+	}
+	if len(t.Rows) == 0 {
+		return fmt.Errorf("fact table must declare at least one row")
+	}
+	if len(t.Rows) > maxFactValueRows {
+		return fmt.Errorf("fact table rows exceed bounds")
+	}
+	seenKeys := make(map[string]bool, len(t.Rows))
+	var previousOrderValue float64
+	for rowIndex, row := range t.Rows {
+		keyParts := make([]string, 0, len(t.Key))
+		for _, name := range t.Key {
+			cell, ok := row.Fields[name]
+			if !ok {
+				return fmt.Errorf("fact table row %d is missing declared key column %q", rowIndex, name)
+			}
+			keyParts = append(keyParts, factTableCellIdentity(cell))
+		}
+		for name := range row.Fields {
+			if !columns[name] {
+				// The Fable F3 rule, verbatim, so the fix is obvious at the
+				// producer rather than rediscovered downstream: a column
+				// constant across the WHOLE table (a unit, a single-provider
+				// series' "provider") is context about the table, not a
+				// row's identity or a measurement of it, and belongs in a
+				// sibling scalar field on the fact -- never in Key,
+				// Measures, or the row itself.
+				return fmt.Errorf("fact table row %d has column %q not declared in key or measures; a column constant across the whole table belongs in a sibling scalar field on the fact, not in the table's rows", rowIndex, name)
+			}
+		}
+		if t.Shape == FactTableTimeSeries {
+			instantCell, ok := row.Fields[t.Key[0]]
+			if !ok || instantCell.String == nil || !parsesAsFactTableInstant(*instantCell.String) {
+				return fmt.Errorf("fact table row %d time_series key %q does not parse as an instant", rowIndex, t.Key[0])
+			}
+		}
+		keyIdentity := strings.Join(keyParts, "\x1f")
+		if seenKeys[keyIdentity] {
+			return fmt.Errorf("fact table key is not distinct across rows")
+		}
+		seenKeys[keyIdentity] = true
+		if t.Shape == FactTableRanking {
+			cell, ok := row.Fields[t.OrderBy]
+			var orderValue float64
+			switch {
+			case ok && cell.Integer != nil:
+				orderValue = float64(*cell.Integer)
+			case ok && cell.Number != nil:
+				orderValue = *cell.Number
+			default:
+				return fmt.Errorf("fact table row %d ranking order_by %q must be a numeric measure", rowIndex, t.OrderBy)
+			}
+			// Ranking order is fixed as DESCENDING (highest value first) --
+			// the sense every ranking consumer in this codebase already
+			// uses (RankCohort's AttentionRank is highest-attention-first),
+			// so a producer cannot declare "ranking" and mean either
+			// direction depending on what its own data happens to show.
+			if rowIndex > 0 && orderValue > previousOrderValue {
+				return fmt.Errorf("fact table rows are not in descending order_by order")
+			}
+			previousOrderValue = orderValue
+		}
+	}
+	return nil
+}
+
+// factTableCellIdentity renders a FactValue cell into a comparable string
+// for Key-distinctness checking. Cells participating in a Key are always
+// scalar leaves (Validate already rejects nested Rows), so this only ever
+// needs the scalar variants; an unset/null cell renders as a fixed sentinel
+// distinct from any real value.
+func factTableCellIdentity(cell FactValue) string {
+	switch {
+	case cell.String != nil:
+		return "s:" + *cell.String
+	case cell.Integer != nil:
+		return fmt.Sprintf("i:%d", *cell.Integer)
+	case cell.Number != nil:
+		return fmt.Sprintf("n:%v", *cell.Number)
+	case cell.Boolean != nil:
+		return fmt.Sprintf("b:%t", *cell.Boolean)
+	default:
+		return "null"
+	}
+}
+
+// containsString is declared in fact_registry.go; reused here.
 
 func (v FactValue) Validate() error {
 	return v.validate(true)
@@ -456,7 +707,47 @@ func (v FactValue) validate(allowRows bool) error {
 	if set != 1 {
 		return fmt.Errorf("fact value must contain exactly one typed value")
 	}
+	if v.Table != nil {
+		if !allowRows {
+			return fmt.Errorf("fact value table must not nest")
+		}
+		if len(v.Rows) == 0 {
+			return fmt.Errorf("fact value declares a table with no rows")
+		}
+		// P1's "keep Rows identical" requirement, checked structurally
+		// rather than trusted: TableFactValue already builds both from one
+		// slice, so this only ever fires for a caller that constructed
+		// FactValue by hand with a divergent pair.
+		if len(v.Rows) != len(v.Table.Rows) {
+			return fmt.Errorf("fact value rows and table rows must be identical (row count differs)")
+		}
+		for i := range v.Rows {
+			if !factValueRowsEqual(v.Rows[i], v.Table.Rows[i]) {
+				return fmt.Errorf("fact value rows and table rows must be identical (row %d differs)", i)
+			}
+		}
+		if err := v.Table.Validate(); err != nil {
+			return fmt.Errorf("fact value table: %w", err)
+		}
+	}
 	return nil
+}
+
+// factValueRowsEqual reports whether two rows carry the same field set and
+// values, by comparing each cell's factTableCellIdentity -- the same
+// scalar-leaf comparison Key-distinctness uses, valid here because a row's
+// fields are always scalar leaves (Validate already rejects nested Rows).
+func factValueRowsEqual(a, b FactValueRow) bool {
+	if len(a.Fields) != len(b.Fields) {
+		return false
+	}
+	for name, cell := range a.Fields {
+		other, ok := b.Fields[name]
+		if !ok || factTableCellIdentity(cell) != factTableCellIdentity(other) {
+			return false
+		}
+	}
+	return true
 }
 
 type CanonicalFact struct {

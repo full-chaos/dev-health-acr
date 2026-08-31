@@ -36,7 +36,7 @@ func TestFactCapabilityRegistryBatchesCapabilitiesAndPreservesEvidenceVersions(t
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	observed := time.Date(2026, 8, 11, 18, 0, 0, 0, time.UTC)
 	status := &factProviderStub{
-		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "status-v2", SupportedSubjectKinds: []SubjectKind{SubjectProject}, RequiresEvidence: true},
+		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "status-v2", SupportedSubjectKinds: []SubjectKind{SubjectProject}, RequiresEvidence: true, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
 		result: FactProviderResult{
 			State: SourceAvailable, ObservedAt: &observed, Watermark: "wm-status", Version: "status-v2",
 			Facts: []CanonicalFact{{
@@ -46,7 +46,7 @@ func TestFactCapabilityRegistryBatchesCapabilitiesAndPreservesEvidenceVersions(t
 		},
 	}
 	readiness := &factProviderStub{
-		capability: FactCapability{Kind: FactReadiness, Name: "ops-readiness", Version: "readiness-v3", SupportedSubjectKinds: []SubjectKind{SubjectProject}, RequiresEvidence: true},
+		capability: FactCapability{Kind: FactReadiness, Name: "ops-readiness", Version: "readiness-v3", SupportedSubjectKinds: []SubjectKind{SubjectProject}, RequiresEvidence: true, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
 		result: FactProviderResult{
 			State: SourceAvailable, ObservedAt: &observed, Watermark: "wm-readiness", Version: "readiness-v3",
 			Facts: []CanonicalFact{{
@@ -86,13 +86,13 @@ func TestFactCapabilityRegistryPreservesIndependentFactsWhenOneCapabilityDegrade
 
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	status := &factProviderStub{
-		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "status-v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}},
+		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "status-v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
 		result: FactProviderResult{State: SourceAvailable, Version: "status-v1", Facts: []CanonicalFact{{
 			Kind: FactStatus, Subject: project, Fields: map[string]FactValue{"status": StringFactValue("in_progress")}, SourceState: SourceAvailable,
 		}}},
 	}
 	readiness := &factProviderStub{
-		capability: FactCapability{Kind: FactReadiness, Name: "ops-readiness", Version: "readiness-v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}},
+		capability: FactCapability{Kind: FactReadiness, Name: "ops-readiness", Version: "readiness-v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
 		err:        &FactReadFailure{State: SourceUnavailable, Reason: "readiness service is unavailable"},
 	}
 	registry, err := NewFactCapabilityRegistry([]FactProvider{status, readiness}, FactRegistryOptions{})
@@ -155,7 +155,7 @@ func TestFactCapabilityRegistryRejectsParametersOutsideServerOwnedCapability(t *
 
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	provider := &factProviderStub{capability: FactCapability{
-		Kind: FactMetrics, Name: "ops-metrics", Version: "metrics-v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, AllowedParameters: []string{"window_days"},
+		Kind: FactMetrics, Name: "ops-metrics", Version: "metrics-v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, AllowedParameters: []string{"window_days"}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject},
 	}}
 	registry, err := NewFactCapabilityRegistry([]FactProvider{provider}, FactRegistryOptions{})
 	if err != nil {
@@ -190,7 +190,7 @@ func TestBuildFactQueryRejectsDisallowedParameterAsInterpretationRejected(t *tes
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	capability := FactCapability{
 		Kind: FactMetrics, Name: "ops-metrics", Version: "metrics-v1",
-		SupportedSubjectKinds: []SubjectKind{SubjectProject}, AllowedParameters: []string{"window_days"},
+		SupportedSubjectKinds: []SubjectKind{SubjectProject}, AllowedParameters: []string{"window_days"}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject},
 	}
 	requirement := FactRequirement{Kind: FactMetrics, Parameters: map[string]string{"sql": "select *"}}
 	request := canonicalFactRequest(project, FactMetrics)
@@ -210,7 +210,7 @@ func TestFactCapabilityRegistryRequiresEvidenceForObservedCapability(t *testing.
 
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	provider := &factProviderStub{
-		capability: FactCapability{Kind: FactReadiness, Name: "ops-readiness", Version: "readiness-v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, RequiresEvidence: true},
+		capability: FactCapability{Kind: FactReadiness, Name: "ops-readiness", Version: "readiness-v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, RequiresEvidence: true, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
 		result: FactProviderResult{State: SourceAvailable, Version: "readiness-v1", Facts: []CanonicalFact{{
 			Kind: FactReadiness, Subject: project, Fields: map[string]FactValue{"release_ready": BooleanFactValue(false)}, SourceState: SourceAvailable, EvidenceRefIDs: []string{},
 		}}},
@@ -229,7 +229,7 @@ func TestFactCapabilityRegistryBoundsProviderDeadline(t *testing.T) {
 
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	provider := &factProviderStub{
-		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "status-v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, Timeout: 10 * time.Millisecond},
+		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "status-v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, Timeout: 10 * time.Millisecond, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
 		wait:       true,
 	}
 	registry, err := NewFactCapabilityRegistry([]FactProvider{provider}, FactRegistryOptions{DefaultTimeout: time.Second})
@@ -248,8 +248,8 @@ func TestFactCapabilityRegistryBoundsProviderDeadline(t *testing.T) {
 func TestFactCapabilityRegistryRejectsDuplicateCapability(t *testing.T) {
 	t.Parallel()
 
-	first := &factProviderStub{capability: FactCapability{Kind: FactStatus, Name: "one", Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}}}
-	second := &factProviderStub{capability: FactCapability{Kind: FactStatus, Name: "two", Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}}}
+	first := &factProviderStub{capability: FactCapability{Kind: FactStatus, Name: "one", Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}}}
+	second := &factProviderStub{capability: FactCapability{Kind: FactStatus, Name: "two", Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}}}
 	if _, err := NewFactCapabilityRegistry([]FactProvider{first, second}, FactRegistryOptions{}); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
 	}
@@ -258,8 +258,8 @@ func TestFactCapabilityRegistryRejectsDuplicateCapability(t *testing.T) {
 func TestFactCapabilityRegistryCapabilitiesAreDeterministicCopies(t *testing.T) {
 	t.Parallel()
 
-	status := &factProviderStub{capability: FactCapability{Kind: FactStatus, Name: "status", Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, AllowedParameters: []string{"window_days"}}}
-	readiness := &factProviderStub{capability: FactCapability{Kind: FactReadiness, Name: "readiness", Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}}}
+	status := &factProviderStub{capability: FactCapability{Kind: FactStatus, Name: "status", Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, AllowedParameters: []string{"window_days"}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}}}
+	readiness := &factProviderStub{capability: FactCapability{Kind: FactReadiness, Name: "readiness", Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}}}
 	registry, err := NewFactCapabilityRegistry([]FactProvider{status, readiness}, FactRegistryOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -306,7 +306,7 @@ func TestFactCapabilityRegistryCapsTotalFactsAcrossProviders(t *testing.T) {
 	providers := make([]FactProvider, 0, len(kinds))
 	for _, kind := range kinds {
 		providers = append(providers, &factProviderStub{
-			capability: FactCapability{Kind: kind, Name: string(kind), Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}},
+			capability: FactCapability{Kind: kind, Name: string(kind), Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
 			result:     FactProviderResult{Facts: manyFacts(kind, project, perProvider), State: SourceAvailable, Version: "v1"},
 		})
 	}
@@ -348,7 +348,7 @@ func TestFactCapabilityRegistryDoesNotCapOrdinaryBundles(t *testing.T) {
 	providers := make([]FactProvider, 0, len(kinds))
 	for _, kind := range kinds {
 		providers = append(providers, &factProviderStub{
-			capability: FactCapability{Kind: kind, Name: string(kind), Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}},
+			capability: FactCapability{Kind: kind, Name: string(kind), Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
 			result:     FactProviderResult{Facts: manyFacts(kind, project, 3), State: SourceAvailable, Version: "v1"},
 		})
 	}
@@ -388,7 +388,7 @@ func manyFacts(kind FactKind, subject SubjectRef, count int) []CanonicalFact {
 func grainProviderStub(kind FactKind, subject SubjectRef, state SourceState, grain TemporalGrain) *factProviderStub {
 	observed := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	return &factProviderStub{
-		capability: FactCapability{Kind: kind, Name: "ops-" + string(kind), Version: "v1", SupportedSubjectKinds: []SubjectKind{subject.Kind}, RequiresEvidence: true},
+		capability: FactCapability{Kind: kind, Name: "ops-" + string(kind), Version: "v1", SupportedSubjectKinds: []SubjectKind{subject.Kind}, RequiresEvidence: true, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
 		result: FactProviderResult{
 			State: state, ObservedAt: &observed, Version: "v1", Grain: grain,
 			Reason: "seeded for the grain-composition test",
@@ -515,7 +515,7 @@ func TestR4_2_OmissionsSurfaceAsPartialCoverage(t *testing.T) {
 	observed := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 
 	omitting := &factProviderStub{
-		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, RequiresEvidence: true},
+		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, RequiresEvidence: true, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
 		result: FactProviderResult{
 			State: SourceAvailable, ObservedAt: &observed, Version: "v1",
 			OmittedCount: 2,

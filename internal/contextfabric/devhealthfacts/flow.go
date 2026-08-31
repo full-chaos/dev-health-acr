@@ -55,9 +55,19 @@ func newFlowProvider(client contextpacket.ClickHouseQueryClient) *FlowProvider {
 }
 
 func (p *FlowProvider) Capability() contextfabric.FactCapability {
-	return newCapability(contextfabric.FactFlow, "devhealthfacts.flow", []contextfabric.SubjectKind{
+	capability := newCapability(contextfabric.FactFlow, "devhealthfacts.flow", []contextfabric.SubjectKind{
 		contextfabric.SubjectTeam, contextfabric.SubjectProject, contextfabric.SubjectRepository,
 	})
+	// CHAOS-4633: team's scope_breakdown is a breakdown (Key = [provider,
+	// work_scope_id], per CHAOS-4364/this design's own worked example --
+	// never a time_series, which is exactly CHAOS-4616's fix). Project's
+	// team_breakdown is a breakdown too.
+	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
+		contextfabric.SubjectTeam:    {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectProject: {contextfabric.FactTableBreakdown},
+	}
+	capability.EstimatedItems = 20
+	return capability
 }
 
 func (p *FlowProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
@@ -250,7 +260,25 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 			"scope_count":     contextfabric.IntegerFactValue(int64(len(rows))),
 			"items_started":   contextfabric.IntegerFactValue(totalStarted),
 			"items_completed": contextfabric.IntegerFactValue(totalCompleted),
-			"scope_breakdown": contextfabric.RowsFactValue(valueRows),
+			// CHAOS-4633 P1: Key = [provider, work_scope_id] -- NEVER
+			// team_id. The design's own canonical citation: two different
+			// providers can legitimately share one work_scope_id string
+			// (queryTeamScopeRows' doc comment), so provider is part of
+			// row identity; team_id is this fact's Subject, never a row
+			// column (toFactValueRow never emits one).
+			"scope_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+				Shape: contextfabric.FactTableBreakdown,
+				Key:   []string{"provider", "work_scope_id"},
+				Measures: []string{
+					"day", "items_started", "items_completed", "wip_count_end_of_day",
+					"bug_completed_ratio", "story_points_completed",
+					"wip_age_p50_hours", "wip_age_p90_hours",
+					"cycle_time_p50_hours", "cycle_time_p90_hours",
+					"lead_time_p50_hours", "lead_time_p90_hours",
+				},
+				Grain: timeBound.effectiveGrain(grainDaily),
+				Rows:  valueRows,
+			}),
 		}
 		if omitted > 0 {
 			fields["scope_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
@@ -458,7 +486,23 @@ ORDER BY p.id, wm.team_id`)
 			"team_count":      contextfabric.IntegerFactValue(int64(len(seenTeams))),
 			"items_started":   contextfabric.IntegerFactValue(totalStarted),
 			"items_completed": contextfabric.IntegerFactValue(totalCompleted),
-			"team_breakdown":  contextfabric.RowsFactValue(teamRows),
+			// CHAOS-4633 P1: Key = [team_id] -- one row per team
+			// (seenTeams dedupe above), each already SUMMED/AVERAGED
+			// across that team's own scopes (teamFlowAggregateRow's own
+			// doc comment).
+			"team_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+				Shape: contextfabric.FactTableBreakdown,
+				Key:   []string{"team_id"},
+				Measures: []string{
+					"items_started", "items_completed", "wip_count_end_of_day",
+					"bug_completed_ratio", "story_points_completed",
+					"wip_age_p50_hours", "wip_age_p90_hours",
+					"cycle_time_p50_hours", "cycle_time_p90_hours",
+					"lead_time_p50_hours", "lead_time_p90_hours",
+				},
+				Grain: timeBound.effectiveGrain(grainDaily),
+				Rows:  teamRows,
+			}),
 		}
 		if omitted > 0 {
 			fields["team_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))

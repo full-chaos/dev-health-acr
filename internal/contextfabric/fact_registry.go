@@ -48,6 +48,12 @@ const CanonicalFactRegistryVersion = "context-fabric-facts.v2"
 // against pathological fanout, not a routine budget.
 const maxCanonicalFactsPerBundle = 2000
 
+// FactRole is declared in chaos4632_question_family_registry.go (S2,
+// §3.1's family table) -- reused here verbatim rather than redeclared, per
+// this design's own "declared once, consumed later" convention:
+// FactCapability.SubjectRoles below is the CHAOS-4633 consumer S2 already
+// anticipated.
+
 type FactCapability struct {
 	Kind                  FactKind
 	Name                  string
@@ -56,6 +62,34 @@ type FactCapability struct {
 	AllowedParameters     []string
 	RequiresEvidence      bool
 	Timeout               time.Duration
+	// Dimension is CHAOS-4468's deliverable 2, verbatim: every registered
+	// FactKind declares which of the nine canonical HealthDimension values
+	// (chaos4632_question_family_registry.go) it speaks to. A new FactKind
+	// registered without one fails Validate, and therefore CI -- see
+	// TestFactCapabilityWithoutDimensionFailsRegistration.
+	Dimension HealthDimension
+	// SubjectRoles declares whether this capability answers for a subject,
+	// a cohort member, or a group (see FactRole's doc comment). Every
+	// devhealthfacts provider today declares exactly {FactRoleSubject}.
+	SubjectRoles []FactRole
+	// Tables declares which CHAOS-4633 FactTableShape(s) this capability
+	// can emit, PER SUBJECT KIND -- never one global list. MetricsProvider
+	// is the canonical reason: it declares repository+team+project
+	// (metrics.go:149-153) but emits a time_series (daily_metrics) only on
+	// the repository path, a plain breakdown for a project rollup, and no
+	// table at all for a team scalar read. A global list would either
+	// falsely admit a team metrics trend or falsely refuse a repository
+	// one. A subject kind with no entry -- or an entry with a nil/empty
+	// shape list -- means "this capability answers for that subject kind
+	// but never emits a declared table for it" (e.g. FactStatus, which
+	// only ever emits scalars).
+	Tables map[SubjectKind][]FactTableShape
+	// EstimatedItems is a plan-time budget input (design doc §6.3): a
+	// rough per-subject row/item count this capability's read is expected
+	// to return, so a plan can size a read BEFORE running it. Zero means
+	// "no estimate declared" (most single-row-per-subject scalar
+	// capabilities); a tabular capability declares its typical row count.
+	EstimatedItems int
 }
 
 func (c FactCapability) Validate() error {
@@ -70,6 +104,50 @@ func (c FactCapability) Validate() error {
 	}
 	if c.Timeout < 0 {
 		return fmt.Errorf("fact capability timeout must not be negative")
+	}
+	if !ValidHealthDimension(c.Dimension) {
+		return fmt.Errorf("fact capability %q must declare a valid dimension (CHAOS-4468)", c.Kind)
+	}
+	if len(c.SubjectRoles) == 0 || len(c.SubjectRoles) > 3 {
+		return fmt.Errorf("fact capability %q must declare between 1 and 3 subject roles", c.Kind)
+	}
+	seenRoles := make(map[FactRole]bool, len(c.SubjectRoles))
+	for _, role := range c.SubjectRoles {
+		if !validFactRole(role) {
+			return fmt.Errorf("fact capability %q declares an invalid subject role", c.Kind)
+		}
+		if seenRoles[role] {
+			return fmt.Errorf("fact capability %q declares subject role %q more than once", c.Kind, role)
+		}
+		seenRoles[role] = true
+	}
+	if len(c.Tables) > 32 {
+		return fmt.Errorf("fact capability %q declares too many table entries", c.Kind)
+	}
+	supported := make(map[SubjectKind]bool, len(c.SupportedSubjectKinds))
+	for _, kind := range c.SupportedSubjectKinds {
+		supported[kind] = true
+	}
+	for subjectKind, shapes := range c.Tables {
+		if !supported[subjectKind] {
+			return fmt.Errorf("fact capability %q declares a table for unsupported subject kind %q", c.Kind, subjectKind)
+		}
+		if len(shapes) > 8 {
+			return fmt.Errorf("fact capability %q declares too many table shapes for subject kind %q", c.Kind, subjectKind)
+		}
+		seenShapes := make(map[FactTableShape]bool, len(shapes))
+		for _, shape := range shapes {
+			if !validFactTableShape(shape) {
+				return fmt.Errorf("fact capability %q declares an invalid table shape for subject kind %q", c.Kind, subjectKind)
+			}
+			if seenShapes[shape] {
+				return fmt.Errorf("fact capability %q declares table shape %q more than once for subject kind %q", c.Kind, shape, subjectKind)
+			}
+			seenShapes[shape] = true
+		}
+	}
+	if c.EstimatedItems < 0 {
+		return fmt.Errorf("fact capability %q estimated items must not be negative", c.Kind)
 	}
 	return nil
 }
@@ -681,7 +759,42 @@ func (r *FactCapabilityRegistry) readProvider(ctx context.Context, principal sto
 		}
 		return FactProviderResult{}, err
 	}
+	r.recordFactTableDeclarations(ctx, principal, registered.capability.Kind, result.Facts)
 	return result, nil
+}
+
+// recordFactTableDeclarations reports RecordFactTableDeclaration (CHAOS-4633
+// design doc §4.3) once per declared FactTable a provider's result carries.
+// Fired HERE, at the registry's own receipt of the provider's result, so a
+// producer drifting from its own declaration is countable BEFORE a renderer
+// three stages downstream ever meets it -- the same reasoning
+// recordFactRead already applies to a zero-facts read.
+//
+// Guarded the same nil-safe way recordFactRead is: a registry built without
+// a Logger (every pre-CHAOS-4633 caller, and any test that does not opt in)
+// emits nothing, exactly as if the signal did not exist -- an unset
+// optional dependency degrades silently rather than panicking, per this
+// package's existing convention.
+func (r *FactCapabilityRegistry) recordFactTableDeclarations(ctx context.Context, principal storage.Principal, kind FactKind, facts []CanonicalFact) {
+	if r == nil || r.logger == nil {
+		return
+	}
+	for _, fact := range facts {
+		for _, value := range fact.Fields {
+			if value.Table == nil {
+				continue
+			}
+			attrs := []any{
+				"org_id", principal.OrgID,
+				"kind", string(kind),
+				"shape", string(value.Table.Shape),
+				"key_arity", len(value.Table.Key),
+				"measure_count", len(value.Table.Measures),
+			}
+			attrs = append(attrs, requestIDLogAttrs(ctx)...)
+			r.logger.InfoContext(ctx, "context fabric fact table declaration", attrs...)
+		}
+	}
 }
 
 // buildFactQuery turns one planned read into the query a provider receives.

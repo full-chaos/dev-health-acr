@@ -51,9 +51,16 @@ func newWorkloadProvider(client contextpacket.ClickHouseQueryClient) *WorkloadPr
 }
 
 func (p *WorkloadProvider) Capability() contextfabric.FactCapability {
-	return newCapability(contextfabric.FactWorkload, "devhealthfacts.workload", []contextfabric.SubjectKind{
+	capability := newCapability(contextfabric.FactWorkload, "devhealthfacts.workload", []contextfabric.SubjectKind{
 		contextfabric.SubjectTeam, contextfabric.SubjectProject,
 	})
+	// CHAOS-4633: the project rollup already emits a breakdown
+	// (team_breakdown, one row per owning team's own latest forecast).
+	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
+		contextfabric.SubjectProject: {contextfabric.FactTableBreakdown},
+	}
+	capability.EstimatedItems = 12
+	return capability
 }
 
 func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
@@ -197,9 +204,15 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 				"backlog_size":         contextfabric.IntegerFactValue(r.BacklogSize),
 				"computed_at":          contextfabric.StringFactValue(r.ComputedAt),
 			}
-			if r.WorkScopeID != "" {
-				rowFields["work_scope_id"] = contextfabric.StringFactValue(r.WorkScopeID)
-			}
+			// CHAOS-4633: work_scope_id is normalized to always-present
+			// (null when absent, matching team_id/team_name's own
+			// teamIDOrNull/stringOrNull convention two lines above) rather
+			// than conditionally omitted -- one team can legitimately
+			// contribute more than one row here (dedupeKey includes
+			// WorkScopeID), so work_scope_id must be a declared Key column
+			// for the table's row identity to stay distinct, and a Key
+			// column must be present on every row (FactTable.Validate).
+			rowFields["work_scope_id"] = stringOrNull(r.WorkScopeID)
 			if r.HasP50Days != 0 {
 				rowFields["forecast_p50_days"] = contextfabric.IntegerFactValue(r.P50Days)
 			}
@@ -214,9 +227,29 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactWorkload, Subject: subject,
 			Fields: map[string]contextfabric.FactValue{
-				"rollup_basis":   contextfabric.StringFactValue("project_work_scope_breakdown"),
-				"team_count":     contextfabric.IntegerFactValue(int64(len(seenTeams))),
-				"team_breakdown": contextfabric.RowsFactValue(teamRows),
+				"rollup_basis": contextfabric.StringFactValue("project_work_scope_breakdown"),
+				"team_count":   contextfabric.IntegerFactValue(int64(len(seenTeams))),
+				// CHAOS-4633 P1: Key = [basis, team_id, team_name,
+				// work_scope_id, computed_at] -- basis is constant
+				// "capacity_forecast" across every row in THIS table today
+				// (a known Fable-F3 debt: it belongs in a sibling scalar,
+				// not a row column, but moving it would change Rows'
+				// shape, which P1 must keep byte-identical -- flagged as
+				// follow-up, not silently left undocumented). team_id
+				// alone does not guarantee distinctness (a team can
+				// contribute more than one work_scope_id row), so
+				// work_scope_id is part of the declared identity, not a
+				// measure.
+				"team_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+					Shape: contextfabric.FactTableBreakdown,
+					Key:   []string{"basis", "team_id", "team_name", "work_scope_id", "computed_at"},
+					Measures: []string{
+						"throughput_mean", "throughput_stddev", "insufficient_history",
+						"high_variance", "backlog_size", "forecast_p50_days",
+					},
+					Grain: timeBound.effectiveGrain(grainExact),
+					Rows:  teamRows,
+				}),
 			},
 			EvidenceRefIDs: evidenceRefIDs,
 		})

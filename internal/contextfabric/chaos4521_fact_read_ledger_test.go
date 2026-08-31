@@ -32,7 +32,7 @@ func TestChaos4521_EveryPlannedCapabilityEmitsAFactReadRecord(t *testing.T) {
 	// FactStatus: a provider that runs and returns NOTHING -- the live
 	// project-status shape.
 	empty := &factProviderStub{
-		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "status-v2", SupportedSubjectKinds: []SubjectKind{SubjectProject}},
+		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "status-v2", SupportedSubjectKinds: []SubjectKind{SubjectProject}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
 		result:     FactProviderResult{State: SourceNoData, Reason: "held no rows", Version: "status-v2"},
 	}
 	// FactHealth: a capability whose only supported subject kind is
@@ -42,7 +42,7 @@ func TestChaos4521_EveryPlannedCapabilityEmitsAFactReadRecord(t *testing.T) {
 	// exact shape Run J observed for status/work/blockers/actual_completion
 	// on the live project question.
 	pruned := &factProviderStub{
-		capability: FactCapability{Kind: FactHealth, Name: "ops-health", Version: "health-v1", SupportedSubjectKinds: []SubjectKind{SubjectRepository}},
+		capability: FactCapability{Kind: FactHealth, Name: "ops-health", Version: "health-v1", SupportedSubjectKinds: []SubjectKind{SubjectRepository}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
 		result:     FactProviderResult{State: SourceAvailable, Version: "health-v1"},
 	}
 
@@ -134,7 +134,7 @@ func TestChaos4521_TheLedgerReportsMergeInducedTruncation(t *testing.T) {
 		})
 	}
 	provider := &factProviderStub{
-		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "status-v2", SupportedSubjectKinds: []SubjectKind{SubjectProject}},
+		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "status-v2", SupportedSubjectKinds: []SubjectKind{SubjectProject}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
 		// Truncated is FALSE: the provider believes it returned everything.
 		result: FactProviderResult{State: SourceAvailable, Version: "status-v2", Facts: facts},
 	}
@@ -199,7 +199,7 @@ func TestChaos4521_TheLedgerRecordsARejectedProviderResult(t *testing.T) {
 	// whole result and ReadFacts returns an error.
 	stranger := SubjectRef{Kind: SubjectProject, CanonicalID: "project_not_asked_for", Label: "Elsewhere"}
 	provider := &factProviderStub{
-		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "status-v2", SupportedSubjectKinds: []SubjectKind{SubjectProject}},
+		capability: FactCapability{Kind: FactStatus, Name: "ops-status", Version: "status-v2", SupportedSubjectKinds: []SubjectKind{SubjectProject}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
 		result: FactProviderResult{State: SourceAvailable, Version: "status-v2", Facts: []CanonicalFact{{
 			Kind: FactStatus, Subject: stranger,
 			Fields:      map[string]FactValue{"status": StringFactValue("in_progress")},

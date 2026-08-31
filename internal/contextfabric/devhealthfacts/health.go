@@ -63,9 +63,19 @@ func newHealthProvider(client contextpacket.ClickHouseQueryClient) *HealthProvid
 }
 
 func (p *HealthProvider) Capability() contextfabric.FactCapability {
-	return newCapability(contextfabric.FactHealth, "devhealthfacts.health", []contextfabric.SubjectKind{
+	capability := newCapability(contextfabric.FactHealth, "devhealthfacts.health", []contextfabric.SubjectKind{
 		contextfabric.SubjectRepository, contextfabric.SubjectTeam, contextfabric.SubjectProject,
 	})
+	// CHAOS-4633: risk_rules (repo and team, readScope) and risk_breakdown
+	// (project, readProjectHealth) are both breakdowns -- neither is
+	// ordered by time, and neither has a natural ranking order today.
+	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
+		contextfabric.SubjectRepository: {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectTeam:       {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectProject:    {contextfabric.FactTableBreakdown},
+	}
+	capability.EstimatedItems = 12
+	return capability
 }
 
 func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
@@ -238,7 +248,16 @@ WHERE rn = 1`)
 			}
 			ruleRows = append(ruleRows, contextfabric.FactValueRow{Fields: rowFields})
 		}
-		fields["risk_rules"] = contextfabric.RowsFactValue(ruleRows)
+		// CHAOS-4633 P1: Key = [signal] -- riskRuleComponents names each
+		// weighted rule component exactly once per scope, so signal alone
+		// identifies a row.
+		fields["risk_rules"] = contextfabric.TableFactValue(contextfabric.FactTable{
+			Shape:    contextfabric.FactTableBreakdown,
+			Key:      []string{"signal"},
+			Measures: []string{"weight", "norm_value", "weighted_contribution"},
+			Grain:    timeBound.effectiveGrain(grainDaily),
+			Rows:     ruleRows,
+		})
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactHealth, Subject: subject, Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID(evidenceEntityType, scopeID)},
@@ -388,10 +407,21 @@ ORDER BY project_key, scope, scope_id`)
 			Fields: map[string]contextfabric.FactValue{
 				// rollup_basis discloses BOTH chains this fact draws from --
 				// see the package doc comment's two-layer explanation.
-				"rollup_basis":   contextfabric.StringFactValue("team_project_ownership_and_team_repo_ownership"),
-				"team_count":     contextfabric.IntegerFactValue(int64(len(seenTeams))),
-				"repo_count":     contextfabric.IntegerFactValue(int64(len(seenRepos))),
-				"risk_breakdown": contextfabric.RowsFactValue(riskRows),
+				"rollup_basis": contextfabric.StringFactValue("team_project_ownership_and_team_repo_ownership"),
+				"team_count":   contextfabric.IntegerFactValue(int64(len(seenTeams))),
+				"repo_count":   contextfabric.IntegerFactValue(int64(len(seenRepos))),
+				// CHAOS-4633 P1: Key = [scope, scope_id, scope_name,
+				// severity, computed_at] -- dedupeKey above already
+				// partitions on (scope, scope_id), so those two alone
+				// guarantee distinctness; scope_name/severity/computed_at
+				// ride along as declared identity columns, not measures.
+				"risk_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+					Shape:    contextfabric.FactTableBreakdown,
+					Key:      []string{"scope", "scope_id", "scope_name", "severity", "computed_at"},
+					Measures: []string{"compounding_risk"},
+					Grain:    timeBound.effectiveGrain(grainDaily),
+					Rows:     riskRows,
+				}),
 			},
 			EvidenceRefIDs: evidenceRefIDs,
 		})

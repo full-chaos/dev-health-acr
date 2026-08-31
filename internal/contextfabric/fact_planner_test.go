@@ -11,7 +11,7 @@ import (
 )
 
 func planCapability(kind FactKind, name string, kinds ...SubjectKind) FactCapability {
-	return FactCapability{Kind: kind, Name: name, Version: "v1", SupportedSubjectKinds: kinds}
+	return FactCapability{Kind: kind, Name: name, Version: "v1", SupportedSubjectKinds: kinds, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}}
 }
 
 func planIndex(capabilities ...FactCapability) map[FactKind]FactCapability {
@@ -682,7 +682,7 @@ func TestMergeRejectsImpossiblePerFactSourceState(t *testing.T) {
 			provider := &factProviderStub{
 				capability: FactCapability{
 					Kind: FactMetrics, Name: "metrics", Version: "v1",
-					SupportedSubjectKinds: []SubjectKind{SubjectRepository}, RequiresEvidence: true,
+					SupportedSubjectKinds: []SubjectKind{SubjectRepository}, RequiresEvidence: true, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject},
 				},
 				result: FactProviderResult{
 					State: SourceAvailable,
@@ -721,7 +721,7 @@ func TestMergeStillAcceptsLegitimatePerFactSourceStates(t *testing.T) {
 		provider := &factProviderStub{
 			capability: FactCapability{
 				Kind: FactMetrics, Name: "metrics", Version: "v1",
-				SupportedSubjectKinds: []SubjectKind{SubjectRepository}, RequiresEvidence: true,
+				SupportedSubjectKinds: []SubjectKind{SubjectRepository}, RequiresEvidence: true, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject},
 			},
 			result: FactProviderResult{
 				State: SourceAvailable,
@@ -763,7 +763,7 @@ func TestMergeRequiresEvidenceOnTruncatedFacts(t *testing.T) {
 	repository := subject(SubjectRepository, "repo_api")
 	evidenceRequiring := FactCapability{
 		Kind: FactMetrics, Name: "metrics", Version: "v1",
-		SupportedSubjectKinds: []SubjectKind{SubjectRepository}, RequiresEvidence: true,
+		SupportedSubjectKinds: []SubjectKind{SubjectRepository}, RequiresEvidence: true, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject},
 	}
 	factWith := func(evidence []string) CanonicalFact {
 		return CanonicalFact{
@@ -896,7 +896,7 @@ func TestPruningIsInvisibleToTruncationAndCaps(t *testing.T) {
 		metrics := &factProviderStub{
 			capability: FactCapability{
 				Kind: FactMetrics, Name: "metrics", Version: "v1",
-				SupportedSubjectKinds: []SubjectKind{SubjectRepository}, RequiresEvidence: true,
+				SupportedSubjectKinds: []SubjectKind{SubjectRepository}, RequiresEvidence: true, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject},
 			},
 			result: FactProviderResult{State: SourceAvailable, Facts: overCap},
 		}
@@ -904,7 +904,7 @@ func TestPruningIsInvisibleToTruncationAndCaps(t *testing.T) {
 		workload := &factProviderStub{
 			capability: FactCapability{
 				Kind: FactWorkload, Name: "workload", Version: "v1",
-				SupportedSubjectKinds: []SubjectKind{SubjectTeam},
+				SupportedSubjectKinds: []SubjectKind{SubjectTeam}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject},
 			},
 			result: FactProviderResult{State: SourceAvailable},
 		}
@@ -1316,7 +1316,7 @@ func TestReadFactsRejectsDisallowedParametersEvenWhenEverythingPrunes(t *testing
 			capability: FactCapability{
 				Kind: FactIncidents, Name: "incidents", Version: "v1",
 				SupportedSubjectKinds: []SubjectKind{SubjectRepository},
-				AllowedParameters:     []string{"window_days"},
+				AllowedParameters:     []string{"window_days"}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject},
 			},
 			result: FactProviderResult{State: SourceAvailable},
 		}

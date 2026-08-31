@@ -350,6 +350,14 @@ func dedupeTeamRow(seenTeams map[string]bool, teamID string) bool {
 	return false
 }
 
+// newCapability builds a FactCapability declaring dimension (CHAOS-4468 --
+// see factKindDimensions for the FactKind -> HealthDimension table every
+// call site in this package draws from) and defaulting SubjectRoles to
+// {FactRoleSubject}: every provider in this package answers strictly for
+// the subject it was asked about, never for a cohort member or group in
+// its own right (that layer sits above devhealthfacts, in
+// fact_planner.go/cohort_ranking.go). A caller that also emits a declared
+// CHAOS-4633 table sets .Tables on the returned value before returning it.
 func newCapability(kind contextfabric.FactKind, name string, subjectKinds []contextfabric.SubjectKind) contextfabric.FactCapability {
 	return contextfabric.FactCapability{
 		Kind:                  kind,
@@ -358,6 +366,72 @@ func newCapability(kind contextfabric.FactKind, name string, subjectKinds []cont
 		SupportedSubjectKinds: subjectKinds,
 		RequiresEvidence:      true,
 		Timeout:               defaultTimeout,
+		Dimension:             factKindDimension(kind),
+		SubjectRoles:          []contextfabric.FactRole{contextfabric.FactRoleSubject},
+	}
+}
+
+// factKindDimension is the dimension↔FactKind half of CHAOS-4468's mapping
+// (design doc §5.3): every FactKind this package registers a provider for
+// maps to exactly one of the nine canonical HealthDimension values, chosen
+// off what that provider's own doc comment says it measures. Asserted, not
+// hand-trusted: TestFactKindDimensionMappingCoversEveryRegisteredProvider
+// (chaos4633_dimension_mapping_test.go) fails CI if a registered FactKind
+// is missing here or maps to an invalid dimension, which is what makes the
+// GENERATED dimension -> FactKind -> ranking-family table CHAOS-4468 asks
+// for possible: it is derived from this map plus the ranking-family
+// registry, never hand-maintained beside them.
+//
+// FactEvidence has no entry: it is registered nowhere (no provider exists
+// for it -- see acr/docs' own producer table), so it never reaches
+// newCapability and asserting a dimension for it here would be asserting a
+// property of code that does not exist.
+func factKindDimension(kind contextfabric.FactKind) contextfabric.HealthDimension {
+	switch kind {
+	// data_trust: identity/membership resolution and ingestion health are
+	// what make every OTHER dimension's facts trustworthy in the first
+	// place -- they answer "can this org's data be believed", not a
+	// delivery signal of their own.
+	case contextfabric.FactIdentity, contextfabric.FactMembership, contextfabric.FactSourceHealth:
+		return contextfabric.HealthDimensionDataTrust
+	// execution_completion: work-item state, actual-completion evidence,
+	// raw work counts, and estimate coverage (readiness.go: "how much of
+	// this team's backlog is estimated") are all about whether committed
+	// work is actually landing.
+	case contextfabric.FactStatus, contextfabric.FactActualCompletion, contextfabric.FactWork, contextfabric.FactReadiness:
+		return contextfabric.HealthDimensionExecutionCompletion
+	// dependencies_and_blockers: named for exactly this dimension.
+	case contextfabric.FactBlockers, contextfabric.FactRequiredChildren:
+		return contextfabric.HealthDimensionDependenciesBlocked
+	// review_and_ci_pressure: PR/review load and the CI signal itself.
+	case contextfabric.FactPullRequests, contextfabric.FactReviews, contextfabric.FactContinuousIntegration:
+		return contextfabric.HealthDimensionReviewCIPressure
+	// reliability_and_release: deployments and incidents are the release
+	// and operational-reliability signals.
+	case contextfabric.FactDeployments, contextfabric.FactIncidents:
+		return contextfabric.HealthDimensionReliabilityRelease
+	// delivery_flow: metrics.go's daily commit/PR/cycle series and
+	// flow.go's own item-flow/WIP series are this platform's two direct
+	// delivery-flow producers.
+	case contextfabric.FactMetrics, contextfabric.FactFlow:
+		return contextfabric.HealthDimensionDeliveryFlow
+	// code_ownership_risk: health.go's compounding_risk formula is
+	// literally w_churn/w_complexity/w_ownership/w_review-weighted risk --
+	// its own doc comment names ownership as one of the weighted inputs.
+	case contextfabric.FactHealth:
+		return contextfabric.HealthDimensionCodeOwnershipRisk
+	// cognitive_workload_pressure: capacity forecasts (workload.go),
+	// IC-level churn/cycle/WIP throughput scatter (landscape.go), and
+	// fired operational-deficiency rules (deficiencies.go, whose own doc
+	// comment cites a CHAOS/saturation rule) are all workload/pressure
+	// signals, not delivery or risk signals in themselves.
+	case contextfabric.FactWorkload, contextfabric.FactLandscape, contextfabric.FactOperationalDeficiencies:
+		return contextfabric.HealthDimensionCognitiveWorkload
+	// investment_balance: named for exactly this dimension.
+	case contextfabric.FactInvestment:
+		return contextfabric.HealthDimensionInvestmentBalance
+	default:
+		return ""
 	}
 }
 

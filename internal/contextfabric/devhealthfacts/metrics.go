@@ -147,9 +147,20 @@ func newMetricsProvider(client contextpacket.ClickHouseQueryClient) *MetricsProv
 }
 
 func (p *MetricsProvider) Capability() contextfabric.FactCapability {
-	return newCapability(contextfabric.FactMetrics, "devhealthfacts.metrics", []contextfabric.SubjectKind{
+	capability := newCapability(contextfabric.FactMetrics, "devhealthfacts.metrics", []contextfabric.SubjectKind{
 		contextfabric.SubjectRepository, contextfabric.SubjectTeam, contextfabric.SubjectProject,
 	})
+	// CHAOS-4633: Tables is PER SUBJECT KIND -- this is the design's own
+	// canonical example. Repository emits a real time_series (daily_metrics,
+	// readRepositoryMetrics); project emits a breakdown (team_breakdown,
+	// readProjectMetrics); team emits scalars only (readTeamMetrics), so it
+	// has no entry at all.
+	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
+		contextfabric.SubjectRepository: {contextfabric.FactTableTimeSeries},
+		contextfabric.SubjectProject:    {contextfabric.FactTableBreakdown},
+	}
+	capability.EstimatedItems = 30
+	return capability
 }
 
 func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
@@ -400,8 +411,25 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 			// truncated series stays diagnosable: CanonicalRows' own
 			// Truncated flag reports that a cap fired, this says how
 			// much was behind it.
-			"day_count":     contextfabric.IntegerFactValue(days[0].totalDays),
-			"daily_metrics": contextfabric.RowsFactValue(dayRows),
+			"day_count": contextfabric.IntegerFactValue(days[0].totalDays),
+			// CHAOS-4633 P1 dual-write: TableFactValue builds Rows AND the
+			// declared Table off the SAME dayRows slice, so they cannot
+			// diverge. Key is exactly [day] (time_series arity 1, parses as
+			// an instant on every row via the toString(day) the SQL already
+			// emits); every other emitted column is a Measure. mttr_hours is
+			// declared even though it is conditionally present per row --
+			// FactValue.Validate only requires a PRESENT column to be
+			// classified, not that every row carry every Measure.
+			"daily_metrics": contextfabric.TableFactValue(contextfabric.FactTable{
+				Shape: contextfabric.FactTableTimeSeries,
+				Key:   []string{"day"},
+				Measures: []string{
+					"commits_count", "prs_merged", "median_pr_cycle_hours",
+					"change_failure_rate", "bus_factor", "code_ownership_gini", "mttr_hours",
+				},
+				Grain: timeBound.effectiveGrain(grainDaily),
+				Rows:  dayRows,
+			}),
 		}
 		// codex R4 finding 1: the latest day's values, under the SAME
 		// field names the pre-CHAOS-4418 reader emitted, as scalar
@@ -521,7 +549,21 @@ func (p *MetricsProvider) readProjectMetrics(ctx context.Context, orgID string, 
 				"weekend_commits_count":     contextfabric.IntegerFactValue(rollup.WeekendCommitsCount),
 				// team_breakdown carries each contributing team's OWN
 				// ratio, never averaged -- see the package doc comment.
-				"team_breakdown": contextfabric.RowsFactValue(teamRows),
+				// CHAOS-4633 P1: Key is [team_id, team_name, day] -- every
+				// row's own identity, not this fact's Subject (the
+				// project); team_id alone already guarantees distinctness,
+				// team_name/day ride along as declared identity columns
+				// rather than measures.
+				"team_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+					Shape: contextfabric.FactTableBreakdown,
+					Key:   []string{"team_id", "team_name", "day"},
+					Measures: []string{
+						"commits_count", "after_hours_commits_count", "weekend_commits_count",
+						"after_hours_commit_ratio", "weekend_commit_ratio",
+					},
+					Grain: timeBound.effectiveGrain(grainDaily),
+					Rows:  teamRows,
+				}),
 			},
 			EvidenceRefIDs: evidenceRefIDs,
 		})

@@ -58,9 +58,14 @@ func newInvestmentProvider(client contextpacket.ClickHouseQueryClient) *Investme
 }
 
 func (p *InvestmentProvider) Capability() contextfabric.FactCapability {
-	return newCapability(contextfabric.FactInvestment, "devhealthfacts.investment", []contextfabric.SubjectKind{
+	capability := newCapability(contextfabric.FactInvestment, "devhealthfacts.investment", []contextfabric.SubjectKind{
 		contextfabric.SubjectTeam, contextfabric.SubjectProject,
 	})
+	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
+		contextfabric.SubjectProject: {contextfabric.FactTableBreakdown},
+	}
+	capability.EstimatedItems = 20
+	return capability
 }
 
 func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
@@ -431,9 +436,11 @@ func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID st
 				"cycle_p50_hours":      contextfabric.NumberFactValue(r.CycleP50Hours),
 				"investment_area":      stringOrNull(r.InvestmentArea),
 			}
-			if r.ProjectStream != "" {
-				rowFields["project_stream"] = contextfabric.StringFactValue(r.ProjectStream)
-			}
+			// CHAOS-4633: normalized to always-present (null when absent)
+			// rather than conditionally omitted -- project_stream is part
+			// of this row's declared Key (dedupeKey above already keys on
+			// it), and a Key column must be present on every row.
+			rowFields["project_stream"] = stringOrNull(r.ProjectStream)
 			teamRows = append(teamRows, contextfabric.FactValueRow{Fields: rowFields})
 		}
 		if len(teamRows) == 0 {
@@ -455,9 +462,23 @@ func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID st
 				// comment for why investment counts are not additive across
 				// (investment_area, project_stream) the way metrics.go's
 				// commit counts are.
-				"rollup_basis":   contextfabric.StringFactValue("team_project_ownership_breakdown"),
-				"team_count":     contextfabric.IntegerFactValue(int64(len(seenTeams))),
-				"team_breakdown": contextfabric.RowsFactValue(teamRows),
+				"rollup_basis": contextfabric.StringFactValue("team_project_ownership_breakdown"),
+				"team_count":   contextfabric.IntegerFactValue(int64(len(seenTeams))),
+				// CHAOS-4633 P1: Key = [team_id, team_name, day,
+				// investment_area, project_stream] -- dedupeKey above
+				// already partitions rows on (team_id, investment_area,
+				// project_stream); day rides along as an identity column
+				// (each team's own latest day), never a Measure.
+				"team_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+					Shape: contextfabric.FactTableBreakdown,
+					Key:   []string{"team_id", "team_name", "day", "investment_area", "project_stream"},
+					Measures: []string{
+						"delivery_units", "work_items_completed", "prs_merged",
+						"churn_loc", "cycle_p50_hours",
+					},
+					Grain: timeBound.effectiveGrain(grainDaily),
+					Rows:  teamRows,
+				}),
 			},
 			EvidenceRefIDs: evidenceRefIDs,
 		})

@@ -47,9 +47,15 @@ func newLandscapeProvider(client contextpacket.ClickHouseQueryClient) *Landscape
 }
 
 func (p *LandscapeProvider) Capability() contextfabric.FactCapability {
-	return newCapability(contextfabric.FactLandscape, "devhealthfacts.landscape", []contextfabric.SubjectKind{
+	capability := newCapability(contextfabric.FactLandscape, "devhealthfacts.landscape", []contextfabric.SubjectKind{
 		contextfabric.SubjectTeam, contextfabric.SubjectProject,
 	})
+	capability.Tables = map[contextfabric.SubjectKind][]contextfabric.FactTableShape{
+		contextfabric.SubjectTeam:    {contextfabric.FactTableBreakdown},
+		contextfabric.SubjectProject: {contextfabric.FactTableBreakdown},
+	}
+	capability.EstimatedItems = 3
+	return capability
 }
 
 func (p *LandscapeProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
@@ -165,8 +171,25 @@ ORDER BY team_id, map_name`)
 		areaRows, omitted := capFactValueRows(areaRows)
 		totalOmitted += omitted
 		fields := map[string]contextfabric.FactValue{
-			"area_count":     contextfabric.IntegerFactValue(int64(len(rows))),
-			"area_breakdown": contextfabric.RowsFactValue(areaRows),
+			"area_count": contextfabric.IntegerFactValue(int64(len(rows))),
+			// CHAOS-4633 P1: Key = [map_name, as_of_day] -- GROUP BY
+			// team_id, map_name, as_of_day above already yields one row per
+			// map for this team's own latest as_of_day, so map_name alone
+			// identifies a row here; as_of_day rides along even though it
+			// is the same value across this particular team's whole table
+			// (a known Fable-F3 case kept in Key rather than hoisted to a
+			// sibling scalar, so as not to change Rows' shape in this
+			// additive P1; flagged as follow-up).
+			"area_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+				Shape: contextfabric.FactTableBreakdown,
+				Key:   []string{"map_name", "as_of_day"},
+				Measures: []string{
+					"identity_count", "churn_loc_30d", "delivery_units_30d",
+					"cycle_p50_30d_hours_avg", "wip_max_30d",
+				},
+				Grain: timeBound.effectiveGrain(grainDaily),
+				Rows:  areaRows,
+			}),
 		}
 		if omitted > 0 {
 			fields["area_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
@@ -260,9 +283,21 @@ ORDER BY p.id, il.team_id, il.map_name`)
 		teamRows, omitted := capFactValueRows(teamRows)
 		totalOmitted += omitted
 		fields := map[string]contextfabric.FactValue{
-			"rollup_basis":   contextfabric.StringFactValue("team_project_ownership_landscape"),
-			"team_count":     contextfabric.IntegerFactValue(int64(len(seenTeams))),
-			"team_breakdown": contextfabric.RowsFactValue(teamRows),
+			"rollup_basis": contextfabric.StringFactValue("team_project_ownership_landscape"),
+			"team_count":   contextfabric.IntegerFactValue(int64(len(seenTeams))),
+			// CHAOS-4633 P1: Key = [team_id, map_name, as_of_day] -- the
+			// SQL's own GROUP BY p.id, il.team_id, il.map_name, il.as_of_day
+			// already yields one row per (team, map) for the project.
+			"team_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
+				Shape: contextfabric.FactTableBreakdown,
+				Key:   []string{"team_id", "map_name", "as_of_day"},
+				Measures: []string{
+					"identity_count", "churn_loc_30d", "delivery_units_30d",
+					"cycle_p50_30d_hours_avg", "wip_max_30d",
+				},
+				Grain: timeBound.effectiveGrain(grainDaily),
+				Rows:  teamRows,
+			}),
 		}
 		if omitted > 0 {
 			fields["team_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
