@@ -43,6 +43,9 @@
     "subject_resolution": {
       "$ref": "context_fabric_common.v1.schema.json#/$defs/SubjectResolution"
     },
+    "answer_plan": {
+      "$ref": "context_fabric_common.v1.schema.json#/$defs/AnswerPlan"
+    },
     "cohort": {
       "$ref": "context_fabric_common.v1.schema.json#/$defs/Cohort"
     },

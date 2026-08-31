@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"sort"
 	"sync"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // CHAOS-4632 §4.1 mechanism 2: N-sample consensus. SHADOW ONLY -- see
@@ -27,33 +29,36 @@ import (
 // QuestionFamilySource names how a family outcome was reached. Closed
 // vocabulary, mirroring WindowClassSource's model|fallback|none shape,
 // which chris's telemetry rules already understand.
-type QuestionFamilySource string
+// CHAOS-4636 promoted this vocabulary to the wire beside the family itself
+// (contractsv1.ContextFabricQuestionFamilySource). Alias, never a copy --
+// same reasoning as QuestionFamily.
+type QuestionFamilySource = contractsv1.ContextFabricQuestionFamilySource
 
 const (
 	// QuestionFamilySourceModelConsensus: N>1 samples, a strict majority
 	// agreed, and one whole winning sample was selected from among them.
-	QuestionFamilySourceModelConsensus QuestionFamilySource = "model_consensus"
+	QuestionFamilySourceModelConsensus = contractsv1.ContextFabricQuestionFamilySourceModelConsensus // "model_consensus"
 	// QuestionFamilySourceModel: N==1 -- the degrade path. The precedence
 	// table alone decided, with no consensus behind it. §4.1: "the
 	// resolver falls back to N=1 plus the precedence table, recording
 	// source = model rather than model_consensus -- a visibly weaker
 	// guarantee rather than an invisible cost."
-	QuestionFamilySourceModel QuestionFamilySource = "model"
+	QuestionFamilySourceModel = contractsv1.ContextFabricQuestionFamilySourceModel // "model"
 	// QuestionFamilySourcePluralityRejected: N>1 samples ran and NO strict
 	// majority emerged. The family is unclassified. This is deliberately
 	// a DIFFERENT source from "none": a tie that was refused is a
 	// different operational state from never having sampled, and
 	// collapsing them would make "the model was split" invisible -- which
 	// is the exact class of miss CHAOS-4085 cost hours to.
-	QuestionFamilySourcePluralityRejected QuestionFamilySource = "model_plurality_rejected"
+	QuestionFamilySourcePluralityRejected = contractsv1.ContextFabricQuestionFamilySourcePluralityRejected // "model_plurality_rejected"
 	// QuestionFamilySourceCarried: mechanism 3 -- the family came from a
 	// confirmed prior-turn receipt and NO model call was made for it.
 	// Declared here because it is part of the closed source vocabulary
 	// §4.3 pins; the carry itself is S5's work (it extends CHAOS-4387).
-	QuestionFamilySourceCarried QuestionFamilySource = "carried"
+	QuestionFamilySourceCarried = contractsv1.ContextFabricQuestionFamilySourceCarried // "carried"
 	// QuestionFamilySourceNone: no samples at all (the interpret call
 	// failed, or the resolver was not run).
-	QuestionFamilySourceNone QuestionFamilySource = "none"
+	QuestionFamilySourceNone = contractsv1.ContextFabricQuestionFamilySourceNone // "none"
 )
 
 // QuestionFamilyOutcome is the resolver's whole verdict.

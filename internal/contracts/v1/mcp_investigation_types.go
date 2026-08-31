@@ -332,6 +332,11 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.cohort.exclusions[].reason",
 	"structured.cohort.exclusions[].subject.label",
 	"structured.cohort.members[].subject.label",
+	// CHAOS-4636: a cohort GROUP's subject label is the same graph-derived
+	// display text a member's or an exclusion's label is, and carries the
+	// same standing -- the group axis added a new place a canonical label
+	// appears, not a new kind of value.
+	"structured.cohort.groups[].subject.label",
 	"structured.conflicts[].subjects[].label",
 	"structured.coverage.sources[].reason",
 	"structured.drivers[].affected_subjects[].label",

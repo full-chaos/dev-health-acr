@@ -194,6 +194,24 @@ func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
 			return fmt.Errorf("cohort member attention ranks must be a dense 1..N sequence over every ranked member")
 		}
 	}
+	// CHAOS-4636: the group axis must close over the member list above --
+	// every named member exists -- and the cohort-level booleans must be
+	// the conjunction the design defines, not an independent claim. A
+	// grouped cohort whose Complete said something its groups did not is
+	// exactly the group-blind read this slice exists to prevent, so it is
+	// refused here rather than disclosed.
+	if len(c.Groups) > 0 {
+		if len(c.Groups) > 250 {
+			return fmt.Errorf("cohort violates v1 bounds")
+		}
+		if err := ValidateCohortGroups(c.Groups, c.Members); err != nil {
+			return fmt.Errorf("groups: %w", err)
+		}
+		complete, truncated := CohortCompletenessFromGroups(c.Groups)
+		if c.Complete != complete || c.Truncated != truncated {
+			return fmt.Errorf("grouped cohort completeness (complete=%v truncated=%v) must be the conjunction over its groups (complete=%v truncated=%v)", c.Complete, c.Truncated, complete, truncated)
+		}
+	}
 	for _, exclusion := range c.Exclusions {
 		if err := exclusion.validate(bounds); err != nil {
 			return fmt.Errorf("exclusions: %w", err)
@@ -1255,9 +1273,33 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	if err := r.SubjectResolution.validate(bounds); err != nil {
 		return fmt.Errorf("subject_resolution: %w", err)
 	}
+	// CHAOS-4636: the plan is validated on both the write and the stored
+	// path. It is absent on every result written before the planning stage
+	// existed, and on any path that terminates before planning, so the rule
+	// is vacuous for those rather than a reason they stop being readable --
+	// the same "legacy rows keep working" discipline LimitationsDisplaced
+	// below already applies.
+	if r.AnswerPlan != nil {
+		if err := r.AnswerPlan.Validate(); err != nil {
+			return fmt.Errorf("answer_plan: %w", err)
+		}
+	}
 	if r.Cohort != nil {
 		if err := r.Cohort.validate(bounds); err != nil {
 			return fmt.Errorf("cohort: %w", err)
+		}
+		// A plan that declared a group axis and a cohort that carries no
+		// groups is a planner defect that would otherwise be invisible:
+		// the answer would silently be the flat one for a question that
+		// asked per-group. Refused here rather than disclosed, because a
+		// consumer cannot tell the difference from the outside.
+		if r.AnswerPlan != nil && r.AnswerPlan.GroupKind != "" && len(r.Cohort.Members) > 0 && len(r.Cohort.Groups) == 0 {
+			return fmt.Errorf("answer plan declares group kind %q but the cohort carries no groups", r.AnswerPlan.GroupKind)
+		}
+		for _, group := range r.Cohort.Groups {
+			if r.AnswerPlan != nil && r.AnswerPlan.GroupKind != "" && group.Subject.Kind != r.AnswerPlan.GroupKind {
+				return fmt.Errorf("cohort group %q has kind %q, which is not the plan's declared group kind %q", group.Subject.CanonicalID, group.Subject.Kind, r.AnswerPlan.GroupKind)
+			}
 		}
 	}
 	// DirectJudgment/CurrentState/DeterministicAnswer are server-composed
