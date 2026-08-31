@@ -198,3 +198,49 @@ func TestGroupAwareAllowanceCountsDistinctMembers(t *testing.T) {
 		t.Fatalf("projected %d groups, want both", len(projection.Cohort.Groups))
 	}
 }
+
+// TestProjectionNeverDropsAnUngroupedMember is the projection's half of the
+// drop-shape sweep, and a SECOND instance of the same defect — found by the
+// sweep, not by any review round.
+//
+// groupAwareMemberAllowance built its population from group member lists only,
+// so a member no group claims never entered the allowance, and projectCohort's
+// `continue` skipped it out of the projection permanently.
+func TestProjectionNeverDropsAnUngroupedMember(t *testing.T) {
+	t.Parallel()
+	result := richResult()
+	result.Cohort = &contractsv1.ContextFabricCohort{
+		Kind: contractsv1.ContextFabricSubjectProject, Rationale: "orphan fixture", Complete: true,
+		Members: []contractsv1.ContextFabricCohortMember{
+			{Subject: subject(contractsv1.ContextFabricSubjectProject, "a1", "a1"), Rank: 1,
+				InclusionReasons: []string{"Graph retrieval associated this subject with the requested condition."}},
+			{Subject: subject(contractsv1.ContextFabricSubjectProject, "a2", "a2"), Rank: 2,
+				InclusionReasons: []string{"Graph retrieval associated this subject with the requested condition."}},
+			{Subject: subject(contractsv1.ContextFabricSubjectProject, "orphan", "orphan"), Rank: 3,
+				InclusionReasons: []string{"Graph retrieval associated this subject with the requested condition."}},
+		},
+		Groups: []contractsv1.ContextFabricCohortGroup{
+			{Subject: subject(contractsv1.ContextFabricSubjectTeam, "team_a", "team_a"),
+				MemberCanonicalIDs: []string{"a1", "a2"}, Complete: true, Total: 2},
+		},
+	}
+	bounds := DefaultBudget
+	bounds.MaxCohortMembers = 2
+
+	projection := Project(result, bounds)
+	if len(projection.Cohort.Members) != 2 {
+		t.Fatalf("projected %d members against a 2-member budget, want 2", len(projection.Cohort.Members))
+	}
+	var sawOrphan bool
+	for _, member := range projection.Cohort.Members {
+		if member.Subject.CanonicalID == "orphan" {
+			sawOrphan = true
+		}
+	}
+	if !sawOrphan {
+		t.Fatal("the ungrouped member was skipped out of the projection; a member no group claims is still a member")
+	}
+	if len(projection.Cohort.Groups) != 1 {
+		t.Fatalf("the group did not survive: %#v", projection.Cohort.Groups)
+	}
+}

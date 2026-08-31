@@ -374,3 +374,85 @@ func TestPostPlanAxisConflictVetoCarriesTheAnswerPlan(t *testing.T) {
 		t.Fatalf("the stamped plan carries no family: %+v", result.AnswerPlan)
 	}
 }
+
+// ── drop-shape sweep (post round 4) ──────────────────────────────────────────
+
+// TestNarrowGroupedCohortNeverDropsAnUngroupedMember pins the data-loss defect
+// round 4 exposed and the sweep confirmed.
+//
+// BuildCohortGroups leaves an unplaceable member ungrouped DELIBERATELY — its
+// own doc comment says inventing a group for one, or silently removing it,
+// "would both be worse than saying so" — and NarrowGroupedCohort then removed
+// it, because its whole population was built from group member lists. The
+// contract and the implementation disagreed for the third time in this area.
+//
+// On real data this is not hypothetical: the providers that carry the team
+// association join on compounding risk, so a member whose facts came back
+// empty genuinely has no derivable group.
+func TestNarrowGroupedCohortNeverDropsAnUngroupedMember(t *testing.T) {
+	t.Parallel()
+	cohort := planFixtureCohort("a1", "a2", "a3", "orphan")
+	cohort.Groups = []contractsv1.ContextFabricCohortGroup{
+		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team_a", Label: "team_a"},
+			MemberCanonicalIDs: []string{"a1", "a2", "a3"}, Complete: true, Total: 3},
+	}
+	kept, groups, narrowed := NarrowGroupedCohort(cohort, 3)
+	if !narrowed {
+		t.Fatal("narrowed = false; 4 members against a 3-member cap must narrow")
+	}
+	var sawOrphan bool
+	for _, member := range kept {
+		if member.Subject.CanonicalID == "orphan" {
+			sawOrphan = true
+		}
+	}
+	if !sawOrphan {
+		t.Fatalf("the ungrouped member was silently dropped; kept = %v", canonicalIDsOf(kept))
+	}
+	if len(groups) != 1 || len(groups[0].MemberCanonicalIDs) == 0 {
+		t.Fatalf("the group did not survive: %#v", groups)
+	}
+	// The cap is over the WHOLE member list, which is what it bounds.
+	if len(kept) > 3 {
+		t.Fatalf("kept %d members against a 3-member cap", len(kept))
+	}
+}
+
+// TestNarrowGroupedCohortCountsUngroupedMembersInTheCap: the population the cap
+// applies to is every cohort member, not just the grouped ones. Counting only
+// grouped members reported "nothing to narrow" for a cohort that was over
+// budget, which is how the oversized answer reached a refusal.
+func TestNarrowGroupedCohortCountsUngroupedMembersInTheCap(t *testing.T) {
+	t.Parallel()
+	cohort := planFixtureCohort("a1", "orphan1", "orphan2")
+	cohort.Groups = []contractsv1.ContextFabricCohortGroup{
+		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team_a", Label: "team_a"},
+			MemberCanonicalIDs: []string{"a1"}, Complete: true, Total: 1},
+	}
+	kept, _, narrowed := NarrowGroupedCohort(cohort, 2)
+	if !narrowed {
+		t.Fatal("narrowed = false: 1 grouped + 2 ungrouped = 3 members against a 2-member cap")
+	}
+	if len(kept) != 2 {
+		t.Fatalf("kept %d members, want 2", len(kept))
+	}
+	// The GROUP's member survives: an ungrouped member is peeled before a
+	// group is taken to its floor.
+	var sawGrouped bool
+	for _, member := range kept {
+		if member.Subject.CanonicalID == "a1" {
+			sawGrouped = true
+		}
+	}
+	if !sawGrouped {
+		t.Fatalf("a group lost its only member while ungrouped members remained: %v", canonicalIDsOf(kept))
+	}
+}
+
+func canonicalIDsOf(members []CohortMember) []string {
+	ids := make([]string, 0, len(members))
+	for _, member := range members {
+		ids = append(ids, member.Subject.CanonicalID)
+	}
+	return ids
+}

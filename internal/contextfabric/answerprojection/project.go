@@ -497,10 +497,33 @@ func groupAwareMemberAllowance(cohort contractsv1.ContextFabricCohort, maxMember
 	if len(cohort.Groups) == 0 || maxMembers <= 0 || len(cohort.Members) <= maxMembers {
 		return nil
 	}
+	// Buckets are the groups PLUS one for members NO GROUP CLAIMS -- the
+	// same fix, and the same defect, as NarrowGroupedCohort. Building the
+	// population from group lists alone meant an ungrouped member never
+	// entered `allowed`, and the caller's `continue` then skipped it out of
+	// the projection permanently. Found by the drop-shape sweep, not by
+	// review.
+	claimed := make(map[string]struct{}, len(cohort.Members))
 	remaining := make([][]string, len(cohort.Groups))
 	for index, group := range cohort.Groups {
 		remaining[index] = group.MemberCanonicalIDs
+		for _, id := range group.MemberCanonicalIDs {
+			claimed[id] = struct{}{}
+		}
 	}
+	for _, member := range cohort.Members {
+		if _, held := claimed[member.Subject.CanonicalID]; !held {
+			// Appended as its own single-member bucket so the round-robin
+			// below treats it as admissible content rather than as a group
+			// to protect.
+			remaining = append(remaining, []string{member.Subject.CanonicalID})
+		}
+	}
+	// KNOWN SUBOPTIMAL, ticketed as CHAOS-4678 -- the same overlap blind spot
+	// NarrowGroupedCohort carries, and for the same reason: a shared member
+	// can cover several groups at once and largest-first does not exploit it.
+	// Bounded consequence: a group omitted where a valid bounded projection
+	// existed, counted in CohortGroupsOmitted rather than lost silently.
 	allowed := make(map[string]struct{}, maxMembers)
 	for progressed := true; len(allowed) < maxMembers && progressed; {
 		progressed = false

@@ -268,9 +268,35 @@ func NarrowGroupedCohort(cohort *Cohort, maxMembers int) (kept []CohortMember, g
 	// that could in fact be narrowed (codex round 1, finding 3). The budget
 	// bounds the flattened member list, which charges each member once, so
 	// the decision has to be taken on the same quantity.
+	// Buckets are the groups PLUS one for members NO GROUP CLAIMS.
+	//
+	// That last bucket is the fix for a real data-loss defect: this function
+	// used to build its whole population from group member lists, so an
+	// ungrouped member was never a survivor and was cut from the result
+	// entirely. BuildCohortGroups leaves such members ungrouped DELIBERATELY
+	// -- its own doc comment says inventing a group for one, or silently
+	// removing it, "would both be worse than saying so" -- and then this
+	// function silently removed it. The contract and the implementation
+	// disagreed, for the third time in this area, and the contract was right.
+	//
+	// The ungrouped bucket is narrowed like a flat cohort's tail rather than
+	// protected like a group: it may reach zero, because there is no
+	// per-group Truncated disclosure covering it, whereas a group dropping to
+	// zero would be the silent group loss decision D2 forbids.
+	const ungroupedBucket = -1
+	claimed := make(map[string]struct{}, len(cohort.Members))
 	remaining := make([][]string, len(cohort.Groups))
 	for index, group := range cohort.Groups {
 		remaining[index] = append([]string(nil), group.MemberCanonicalIDs...)
+		for _, id := range group.MemberCanonicalIDs {
+			claimed[id] = struct{}{}
+		}
+	}
+	var ungrouped []string
+	for _, member := range cohort.Members {
+		if _, held := claimed[member.Subject.CanonicalID]; !held {
+			ungrouped = append(ungrouped, member.Subject.CanonicalID)
+		}
 	}
 	distinct := func() int {
 		unique := make(map[string]struct{}, len(cohort.Members))
@@ -279,34 +305,70 @@ func NarrowGroupedCohort(cohort *Cohort, maxMembers int) (kept []CohortMember, g
 				unique[id] = struct{}{}
 			}
 		}
+		for _, id := range ungrouped {
+			unique[id] = struct{}{}
+		}
 		return len(unique)
 	}
 	if distinct() <= maxMembers {
 		return nil, nil, false
 	}
+	// KNOWN SUBOPTIMAL, ticketed as CHAOS-4678: groups overlap, so one shared
+	// member can cover several groups at once, and peeling from the largest
+	// bucket does not exploit that. With A={a,b}, B={b,c} and a one-member
+	// budget this keeps two members where `b` alone would cover both groups.
+	// The consequence is an avoidable -- but always DISCLOSED -- refusal or
+	// omitted group, never a silent loss or a wrong answer.
 	for distinct() > maxMembers {
-		largest := -1
+		// ONE uniform rule: peel from the LARGEST bucket. Groups are floored
+		// at one member (dropping a group is what decision D2 forbids); the
+		// ungrouped bucket has no such floor, because no per-group Truncated
+		// disclosure covers it.
+		//
+		// Peeling ungrouped members FIRST was my first attempt and it was
+		// wrong: with a 3-member group and one ungrouped member against a
+		// 3-member cap it deleted the ungrouped member, when thinning the
+		// group to 2 keeps BOTH -- the group still present and disclosing its
+		// truncation, and the member not lost. Largest-first is strictly more
+		// informative and needs no special case.
+		largest := -2
+		if len(ungrouped) > 0 {
+			largest = ungroupedBucket
+		}
 		for index := range remaining {
-			// Never take a group to zero while it is the only thing keeping
-			// that group in the answer: one member is the difference between
-			// "this team is truncated" and "this team was silently dropped".
 			if len(remaining[index]) <= 1 {
 				continue
 			}
-			if largest == -1 || len(remaining[index]) > len(remaining[largest]) {
+			switch {
+			case largest == -2:
+				largest = index
+			case largest == ungroupedBucket:
+				if len(remaining[index]) > len(ungrouped) {
+					largest = index
+				}
+			case len(remaining[index]) > len(remaining[largest]):
 				largest = index
 			}
 		}
-		if largest == -1 {
-			// Every group is down to its last member. Narrowing further
-			// would drop a group, which decision D2 forbids -- stage 3's
-			// planned refusal is the correct terminal case, not a silent
-			// group drop.
+		if largest == -2 {
+			// Every group is down to its last member and nothing is
+			// ungrouped. Narrowing further would drop a group, which
+			// decision D2 forbids -- stage 3's planned refusal is the
+			// correct terminal case, not a silent group drop.
 			break
+		}
+		if largest == ungroupedBucket {
+			ungrouped = ungrouped[:len(ungrouped)-1]
+			continue
 		}
 		remaining[largest] = remaining[largest][:len(remaining[largest])-1]
 	}
 	survivors := make(map[string]struct{}, len(cohort.Members))
+	// Ungrouped survivors are survivors: they are cohort members that no
+	// group's truncation disclosure covers, and losing them is data loss.
+	for _, id := range ungrouped {
+		survivors[id] = struct{}{}
+	}
 	groups = make([]contractsv1.ContextFabricCohortGroup, 0, len(cohort.Groups))
 	for index, group := range cohort.Groups {
 		for _, id := range remaining[index] {
