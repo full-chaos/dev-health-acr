@@ -397,7 +397,12 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		// ReuseKey.RankingFormulaVersion's own field doc comment for why
 		// RankCohort running after this lookup makes fencing on it
 		// mandatory, not optional.
-		RankingFormulaVersion:    e.reuseVersionAuthorities.RankingFormulaVersion,
+		RankingFormulaVersion: e.reuseVersionAuthorities.RankingFormulaVersion,
+		// CHAOS-4634 (S4): a SEVENTEENTH conjunctive dimension, same
+		// mirrored discipline -- see ReuseKey.QuestionFamilyVersion's own
+		// field doc comment for why the family gate running before this
+		// lookup exists makes fencing on it mandatory.
+		QuestionFamilyVersion:    e.reuseVersionAuthorities.QuestionFamilyVersion,
 		QueryVersion:             e.reuseVersionAuthorities.QueryVersion,
 		CanonicalServiceVersion:  e.reuseVersionAuthorities.CanonicalServiceVersion,
 		ModelOutputSchemaVersion: e.reuseVersionAuthorities.ModelOutputSchemaVersion,

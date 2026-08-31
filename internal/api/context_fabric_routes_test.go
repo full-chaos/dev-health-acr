@@ -418,7 +418,7 @@ func TestContextFabricInvestigationRouteEndToEndClassifiesRealFailures(t *testin
 				interpreter := contextfabric.RuntimeQuestionInterpreter{
 					Runtime: routeTestModelRuntime{interpreted: invalid}, Sink: noopModelReceiptSink{},
 				}
-				_, err := interpreter.Interpret(ctx, principal, request)
+				_, _, err := interpreter.Interpret(ctx, principal, request)
 				return contextfabric.InvestigationResult{}, err
 			},
 			wantStatus: http.StatusUnprocessableEntity, wantCode: "interpretation_rejected",
@@ -446,7 +446,7 @@ func TestContextFabricInvestigationRouteEndToEndClassifiesRealFailures(t *testin
 					Runtime: routeTestModelRuntime{interpretErr: fmt.Errorf("%w: provider status INTERNAL: %s", contextfabric.ErrModelOutput, secretModelText)},
 					Sink:    noopModelReceiptSink{},
 				}
-				_, err := interpreter.Interpret(ctx, principal, request)
+				_, _, err := interpreter.Interpret(ctx, principal, request)
 				return contextfabric.InvestigationResult{}, err
 			},
 			wantStatus: http.StatusBadGateway, wantCode: "upstream_invalid_output",

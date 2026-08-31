@@ -42,7 +42,7 @@ flowchart TD
     RS -- "error" --> WO
     RS -- "resolution, bases, digests" --> X[DISCARDED]
     RS -- "StructureOfferMaterial" --> P[consultPriorStructureOffers]
-    P --> CG["GateSubjectAxisOffers<br/>§1.3 class gate, CHAOS-4579/4531<br/>shape=discovered_cohort: drop subject_anchor/subject_handle<br/>rows AND their options; every other shape passes through"]
+    P --> CG["GateOffersByFamily<br/>family ApplicableAxes gate, CHAOS-4634 (subsumes CHAOS-4579/4531)<br/>family=discovered_cohort_ranking: drop kind/subject_anchor/subject_handle/subject_candidate<br/>rows AND their options; a family with no axis restriction passes through unchanged"]
     CG --> C["composeGatedStructureNeeds<br/>Missing = [window, +kind/handle/candidate]<br/>WindowOptions + KindOptions + HandleOptions + CandidateOptions<br/>receipts minted by composeStructureNeeds"]
     WO --> R
     C --> R[windowConfirmationRequiredResult<br/>status clarification_required<br/>SubjectResolution EMPTY<br/>persisted with StructureNeeds]
@@ -121,7 +121,8 @@ Gate 1 (explicit-unconfirmed) needs no gate: it fires before `Interpret`
 and never builds anchor or handle material at all.
 
 **Telemetry denominator, stated exactly.** `RecordCohortStructureGate` fires once per
-`GateSubjectAxisOffers` call — once per request that reached a candidate-pool offer decision.
+`GateOffersByFamily` call (CHAOS-4634; subsumes CHAOS-4579/4531's `GateSubjectAxisOffers`) — once
+per request that reached a candidate-pool offer decision.
 That is deliberately *not* the same set as "requests whose result carries `structure_needs`",
 and the two differ in both directions:
 
@@ -139,19 +140,24 @@ decisions read this. Neither is the other's denominator.
 
 **The replay harness reads through the same gate.** The CHAOS-3884 frozen-interpretation replay
 harness computes `wired_structure_needs_would_disclose` from `ResolveSubjects`' raw
-`StructureOfferMaterial`. `GateSubjectAxisOffers` is therefore **exported**, for the same reason
-`StructureNeedsWouldDisclose` is: the harness calls the one function production calls, rather
-than a second copy of its condition. Without that hop a `discovered_cohort` case whose only
-material was anchor/handle rows would be reported as disclosing while production discloses
-nothing — a false replay report.
+`StructureOfferMaterial`. `GateOffersByFamily` is therefore **exported**, for the same reason
+`StructureNeedsWouldDisclose` is: the harness calls the one function production calls (on the
+SAME `QuestionFamilyOutcome` the case's own `Interpret` call resolved), rather than a second copy
+of its condition. Without that hop a `discovered_cohort_ranking` case whose only material was
+kind/anchor/handle rows would be reported as disclosing while production discloses nothing — a
+false replay report.
 
-CHAOS-4452's question-family investigation-planning stage is the structural
-home for this decision — a family would carry, per class, the whole set of
-axes that are even applicable, and every offer builder would consult it
-rather than each disclosing unconditionally and being filtered afterwards.
-This gate is the narrow fix, placed at the composition boundary so 4452 has
-one call-site pair to absorb rather than a scattering of per-builder class
-checks.
+**CHAOS-4452's question-family investigation-planning stage has landed this decision** (CHAOS-4634,
+slice S4): a family (chaos4632_question_family_registry.go) carries, per class, the whole set of
+axes that are even applicable, and `GateOffersByFamily` is the ONE lookup every offer disclosure
+now consults, replacing the Shape-keyed pair (`subjectAxisAbsent`/`kindOfferMaterial`'s own
+class gap) CHAOS-4579/4531 shipped as a narrower, composition-boundary-only fix. The gate still
+sits at the composition boundary, not inside the four offer builders themselves
+(`kindOfferMaterial`/`candidateOfferMaterial`/`anchorOfferMaterial`/`handleOfferMaterial`,
+`graphrank/chaos3900_structure_offers.go`) — those still run unconditionally and their output is
+filtered here, a deliberate S4 scope call (moving the gate earlier, into `graphrank`'s
+~3000-line core resolver, was assessed as materially higher risk than the disclosure-level
+correctness this gate already proves, and is left as a fast-follow).
 
 ## 3. Reversibility
 
@@ -166,7 +172,7 @@ discard is the load-bearing safety layer; the ctx mark
 | Where | Field | Meaning |
 | --- | --- | --- |
 | `EngineTelemetry.RecordGatedOfferResolution` | `composed` / `empty` / `failed` / `disabled` / `refused` / `not_projected` | once per class-default gated request; `not_projected` (codex round-2 finding #2) distinguishes a never-projected org from a genuinely empty pool, same as `subjectlessTerminalReasons`' `graph_not_projected` does for the decisive path |
-| `EngineTelemetry.RecordCohortStructureGate` | `applied` / `no_op` / `subject_bearing` + the `shape` it fired for | once per `GateSubjectAxisOffers` call, at both call sites; `applied` = the anchor/handle rows were removed, `no_op` = axis-less shape with nothing to remove, `subject_bearing` = the shape has a subject axis and the material passed through. Both outcomes AND the denominator are reported, so "cohort vs subject clarification" is a countable split rather than an inference from a missing log line. **Not** one per composed `StructureNeeds` — see the denominator note below |
+| `EngineTelemetry.RecordCohortStructureGate` | `applied` / `no_op` / `subject_bearing` + the `shape` it fired for | once per `GateOffersByFamily` call (CHAOS-4634), at both call sites; `applied` = at least one inapplicable axis's rows were removed, `no_op` = the family restricts some axis but nothing on it was present to remove, `subject_bearing` = the family places no restriction on any of the five wire axes and the material passed through. The DECISION is family-keyed; the reported `shape` dimension is unchanged (still a meaningful cross-check of what the model reported vs. what the family gate decided). Both outcomes AND the denominator are reported, so "cohort vs subject clarification" is a countable split rather than an inference from a missing log line. **Not** one per composed `StructureNeeds` — see the denominator note below |
 | `kind_offer` trace event | `OfferedUnderWindowGate` | this resolution ran in offers-only mode |
 | `ranked_cut` trace stage (`resolution.go`) | `Subject`, `Rank`, `Survived` | one event per candidate, in rank order, before the `MaxSubjectCandidates` cut; `Rank==1` opens a batch, readers keep the last batch |
 | `ranked_cut` companion (`resolve.go`) | `CoverageBypass=true`, `Rank 0` | a coverage-floor find the cut dropped but `unionCandidatesForOffer` still hands to the offer builders |

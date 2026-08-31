@@ -78,8 +78,12 @@ import (
 // shape as 0031's commit_gate_version, fencing reuse on
 // contextfabric.RankingFormulaVersion so a stored cohort answer computed
 // under an old ranking formula is never served under a newer one's
-// semantics.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35}
+// semantics. 0036 is CHAOS-4634 S4's own question_family_version
+// reuse-key dimension (deferred here per the CHAOS-4632/S2 note): same
+// shape again, fencing reuse on contextfabric.QuestionFamilyTableVersion
+// so a stored turn-1 disclosure computed under an old family table
+// definition is never served under a newer one's ApplicableAxes.
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given
@@ -477,15 +481,18 @@ func TestRunner_upgradeTo18AddsIdentityNormalizationReuseKeyColumn(t *testing.T)
 	// CHAOS-3898 §2.3's migration 0021 replaces v5 with v6 (one more reuse-
 	// key dimension, graph_epoch), CHAOS-3900 W1's migration 0022 in turn
 	// replaces v6 with v7 (window_inference_version), CHAOS-4085's
-	// migration 0031 replaces v7 with v8 (commit_gate_version), and
+	// migration 0031 replaces v7 with v8 (commit_gate_version),
 	// CHAOS-4398 PR3's migration 0035 replaces v8 with v9
-	// (ranking_formula_version) -- "latest" here includes all four, so the
-	// index this 0018 upgrade itself created is no longer the CURRENT one;
-	// see TestRunner_upgradeTo21AddsGraphEpochReuseKeyColumn,
+	// (ranking_formula_version), and CHAOS-4634 S4's migration 0036
+	// replaces v9 with v10 (question_family_version) -- "latest" here
+	// includes all five, so the index this 0018 upgrade itself created is
+	// no longer the CURRENT one; see
+	// TestRunner_upgradeTo21AddsGraphEpochReuseKeyColumn,
 	// TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn and
 	// TestRunner_upgradeTo31AddsCommitGateReuseKeyColumn for the dedicated
 	// boundary proofs this same replace-don't-stack pattern needs.
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v8")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v7")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v6")
@@ -548,14 +555,16 @@ func TestRunner_upgradeTo21AddsGraphEpochReuseKeyColumn(t *testing.T) {
 	requireConstraintExists(t, ctx, db, "ck_acr_cf_investigation_results_graph_epoch_nonneg")
 	// CHAOS-3900 W1's migration 0022 replaces v6 with v7 (one more reuse-key
 	// dimension, window_inference_version), CHAOS-4085's migration 0031
-	// replaces v7 with v8 (commit_gate_version), and CHAOS-4398 PR3's
-	// migration 0035 replaces v8 with v9 (ranking_formula_version) --
-	// "latest" here includes all three, so the index this 0021 upgrade
-	// itself created is no longer the CURRENT one; see
-	// TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn
+	// replaces v7 with v8 (commit_gate_version), CHAOS-4398 PR3's
+	// migration 0035 replaces v8 with v9 (ranking_formula_version), and
+	// CHAOS-4634 S4's migration 0036 replaces v9 with v10
+	// (question_family_version) -- "latest" here includes all four, so the
+	// index this 0021 upgrade itself created is no longer the CURRENT one;
+	// see TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn
 	// and TestRunner_upgradeTo31AddsCommitGateReuseKeyColumn for the
 	// dedicated boundary proofs this same replace-don't-stack pattern needs.
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v8")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v7")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v6")
@@ -616,12 +625,15 @@ func TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn(t *testing.T) {
 	requireContextFabricInvestigationResultsColumn(t, ctx, db, "window_inference_version")
 	requireConstraintExists(t, ctx, db, "ck_acr_cf_investigation_results_window_inference_version_length")
 	// CHAOS-4085's migration 0031 replaces v7 with v8 (commit_gate_version),
-	// and CHAOS-4398 PR3's migration 0035 replaces v8 with v9
-	// (ranking_formula_version) -- "latest" here includes both, so the
-	// index this 0022 upgrade itself created is no longer the CURRENT one;
-	// see TestRunner_upgradeTo31AddsCommitGateReuseKeyColumn for the
+	// CHAOS-4398 PR3's migration 0035 replaces v8 with v9
+	// (ranking_formula_version), and CHAOS-4634 S4's migration 0036
+	// replaces v9 with v10 (question_family_version) -- "latest" here
+	// includes all three, so the index this 0022 upgrade itself created is
+	// no longer the CURRENT one; see
+	// TestRunner_upgradeTo31AddsCommitGateReuseKeyColumn for the
 	// dedicated 0022->0031-boundary proof.
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v8")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v7")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v6")
@@ -693,8 +705,97 @@ func TestRunner_upgradeTo35AddsRankingFormulaReuseKeyColumn(t *testing.T) {
 
 	requireContextFabricInvestigationResultsColumn(t, ctx, db, "ranking_formula_version")
 	requireConstraintExists(t, ctx, db, "ck_acr_cf_investigation_results_ranking_formula_version_length")
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
+	// "latest" here also includes CHAOS-4634 S4's migration 0036, which
+	// replaces v9 with v10 (question_family_version) -- see
+	// TestRunner_upgradeTo36AddsQuestionFamilyReuseKeyColumn for the
+	// dedicated 0035->0036-boundary proof.
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v8")
+}
+
+// TestRunner_upgradeTo36AddsQuestionFamilyReuseKeyColumn is the CHAOS-4634
+// S4 dedicated boundary proof this same replace-don't-stack pattern needs:
+// a database at the released main schema through migration 0035
+// (everything before this dimension existed) upgraded to the full embedded
+// set must gain question_family_version, its length constraint, and the
+// v10 index, with the OLD v9 index actually dropped, not left stacked
+// beside it.
+func TestRunner_upgradeTo36AddsQuestionFamilyReuseKeyColumn(t *testing.T) {
+	// Given a database at the released main schema through migration 0035
+	// (everything this dimension builds on top of)...
+	ctx := context.Background()
+	db := newTestDatabase(t, ctx)
+	preQuestionFamilyFiles := fstest.MapFS{}
+	for _, name := range []string{
+		"0001_acr_core.sql",
+		"0002_episode_repository_scoped_idempotency.sql",
+		"0003_credential_rotation_marker.sql",
+		"0004_device_authorization.sql",
+		"0005_device_authorization_hints.sql",
+		"0006_context_fabric_projection_checkpoints.sql",
+		"0007_context_fabric_projection_rebuild_markers.sql",
+		"0008_agent_episodes_updated_at.sql",
+		"0009_context_fabric_investigation_results.sql",
+		"0010_context_fabric_org_model_config.sql",
+		"0011_context_fabric_answer_reuse.sql",
+		"0012_context_fabric_reuse_fallback_identity_cutover.sql",
+		"0013_context_fabric_time_axis_reuse_key.sql",
+		"0014_context_fabric_embed_retrieval_reuse_key.sql",
+		"0015_context_fabric_prompt_version_reuse_key.sql",
+		"0016_context_fabric_clarification_selections.sql",
+		"0017_context_fabric_model_receipts_request_id.sql",
+		"0018_context_fabric_identity_normalization_reuse_key.sql",
+		"0019_context_fabric_graph_lifecycle.sql",
+		"0020_context_fabric_projection_checkpoints_epoch.sql",
+		"0021_context_fabric_graph_epoch_reuse_key.sql",
+		"0022_context_fabric_window_inference_reuse_key.sql",
+		"0023_context_fabric_structure_supersession_claims.sql",
+		"0024_context_fabric_structure_selections.sql",
+		"0025_context_fabric_structure_supersession_backfill.sql",
+		"0026_context_fabric_structure_selections_consensus_evidence.sql",
+		"0027_context_fabric_structure_selections_consensus_panel_size.sql",
+		"0028_context_fabric_structure_priors.sql",
+		"0029_context_fabric_structure_bearing_reuse_cleanup.sql",
+		"0030_workload_token_exchange.sql",
+		"0031_commit_gate_version.sql",
+		"0032_context_fabric_projection_checkpoints_rows_applied.sql",
+		"0033_structure_supersession_claims_subject_candidate.sql",
+		"0034_structure_selections_subject_candidate.sql",
+		"0035_ranking_formula_version_reuse_key.sql",
+	} {
+		preQuestionFamilyFiles[name] = &fstest.MapFile{Data: mustReadFile(t, name)}
+	}
+	released, err := NewRunner(preQuestionFamilyFiles)
+	require.NoError(t, err)
+	require.NoError(t, released.Up(ctx, db))
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
+
+	// When upgrading to the full (post-CHAOS-4634-S4) migration set.
+	latest, err := Embedded()
+	require.NoError(t, err)
+
+	// Then
+	require.NoError(t, latest.Up(ctx, db))
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, latest, db))
+
+	requireContextFabricInvestigationResultsColumn(t, ctx, db, "question_family_version")
+	requireConstraintExists(t, ctx, db, "ck_acr_cf_investigation_results_question_family_version_length")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
+}
+
+// TestRunner_upgradeTo36IsIdempotentOnRetry mirrors
+// TestRunner_upgradeTo35IsIdempotentOnRetry: 0036 must survive being
+// applied twice without erroring.
+func TestRunner_upgradeTo36IsIdempotentOnRetry(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDatabase(t, ctx)
+	runner, err := Embedded()
+	require.NoError(t, err)
+	require.NoError(t, runner.Up(ctx, db))
+	require.NoError(t, runner.Up(ctx, db), "a second Up() over an already-migrated database must not error")
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, runner, db))
 }
 
 // TestRunner_upgradeTo35IsIdempotentOnRetry mirrors

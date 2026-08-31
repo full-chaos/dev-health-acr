@@ -168,19 +168,20 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	// outcome echoing what one model call emitted, never a
 	// deployment-wide version constant.
 	//
-	// There is an important extra reason here, though. In this slice the
-	// family is SHADOW: it is resolved, recorded and telemetered, and
-	// NOTHING is gated on it -- no answer, plan, offer, clarification or
-	// render selection changes because of it. So a stored answer cannot
-	// have been shaped by any of these values, and there is nothing for a
-	// reuse fence to protect. The deployment-wide authority that WILL
-	// gate reuse once the family starts deciding things is
-	// QuestionFamilyTableVersion (chaos4632_question_family_registry.go),
-	// a single constant -- and it becomes a ReuseKey dimension in the
-	// slice where the family first affects an answer (S4), not here,
-	// where adding it would cold-cache every stored answer in exchange
-	// for no safety at all.
-	"QuestionFamily":                   {reason: "per-call model pick echoed for the shadow capture (telemetry only), not a version identity -- nothing is gated on the family in this slice, so no stored answer was shaped by it; QuestionFamilyTableVersion is the deployment-wide authority and becomes a ReuseKey dimension in the slice where the family first affects an answer"},
+	// There is an important extra reason here, though, UPDATED as of
+	// CHAOS-4634 (S4): the family now DOES gate offer composition
+	// (GateOffersByFamily, chaos4579_cohort_structure_gate.go), and reuse
+	// IS fenced on it -- but the fence is ReuseKey.QuestionFamilyVersion,
+	// bound to QuestionFamilyTableVersion (chaos4632_question_family_
+	// registry.go), a single DEPLOYMENT-WIDE constant -- never to this
+	// receipt's own per-call QuestionFamily pick. QuestionFamily here
+	// stays correctly excluded: it is what ONE model call happened to
+	// name, not a version authority a stored answer's shape could be
+	// reused against (two calls resolving the identical family from
+	// identical structure signals still each carry their own
+	// QuestionFamily echo). See ReuseKey.QuestionFamilyVersion's own field
+	// doc comment (ports.go) for the fence itself.
+	"QuestionFamily":                   {reason: "per-call model pick echoed for the shadow capture (telemetry only), not a version identity -- the deployment-wide authority that fences reuse as of CHAOS-4634 is QuestionFamilyTableVersion (ReuseKey.QuestionFamilyVersion), a package constant this receipt field never carries"},
 	"QuestionFamilyUnrecognized":       {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 	"GroupKind":                        {reason: "per-call model-emitted structure signal captured receipt-only (shadow), not a version identity -- same reasoning as QuestionFamily"},
 	"GroupKindUnrecognized":            {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},

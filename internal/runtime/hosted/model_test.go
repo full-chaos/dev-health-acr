@@ -47,7 +47,7 @@ func TestNewContextFabricModelRuntime_keepsTheCleanFiveOhThreeWithoutACredential
 	}
 	// And the nil runtime still produces the classification the endpoint
 	// turns into 503, rather than a panic.
-	_, interpretErr := contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime}.
+	_, _, interpretErr := contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime}.
 		Interpret(context.Background(), storage.Principal{OrgID: "org_test"}, contextfabric.InvestigationRequest{})
 	if !errors.Is(interpretErr, contextfabric.ErrModelUnavailable) {
 		t.Fatalf("Interpret() = %v, want ErrModelUnavailable", interpretErr)

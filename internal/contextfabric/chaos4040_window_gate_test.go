@@ -25,12 +25,20 @@ import (
 // never more).
 type countingInterpreter struct {
 	interpretation InterpretedQuestion
-	calls          int
+	// family (CHAOS-4634 S4) is the QuestionFamilyOutcome this double
+	// reports alongside interpretation. Zero value (Family: "") is not a
+	// registry member -- GateOffersByFamily's own LookupQuestionFamily
+	// miss degrades to CohortStructureGateSubjectBearing (unchanged
+	// material), so a test that does not set this field gets the safe,
+	// byte-identical-to-pre-S4 default. A test exercising family gating
+	// sets it explicitly.
+	family QuestionFamilyOutcome
+	calls  int
 }
 
-func (c *countingInterpreter) Interpret(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+func (c *countingInterpreter) Interpret(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
 	c.calls++
-	return c.interpretation, nil
+	return c.interpretation, c.family, nil
 }
 
 func buildWindowGateEngine(t *testing.T, interpreter QuestionInterpreter, graph *acceptanceGraphReader, results InvestigationResultStore) *Engine {

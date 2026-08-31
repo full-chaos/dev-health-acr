@@ -16,8 +16,18 @@ import (
 
 type interpreterFunc func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error)
 
-func (f interpreterFunc) Interpret(ctx context.Context, principal storage.Principal, request InvestigationRequest) (InterpretedQuestion, error) {
-	return f(ctx, principal, request)
+// Interpret adapts the 2-return test double to QuestionInterpreter's
+// 3-return contract (CHAOS-4634 S4), uniformly reporting
+// QuestionFamilySourceNone/unclassified -- honest for a double that does
+// no family resolution at all, and safe by construction: unclassified's
+// ApplicableAxes is every axis, so GateOffersByFamily never restricts
+// anything for it, which is exactly byte-identical to every one of this
+// double's dozens of pre-S4 callers. A test that needs to exercise real
+// family gating uses countingInterpreter (chaos4040_window_gate_test.go)
+// or RuntimeQuestionInterpreter directly instead.
+func (f interpreterFunc) Interpret(ctx context.Context, principal storage.Principal, request InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	question, err := f(ctx, principal, request)
+	return question, QuestionFamilyOutcome{Family: QuestionFamilyUnclassified, Source: QuestionFamilySourceNone}, err
 }
 
 type graphReaderStub struct {

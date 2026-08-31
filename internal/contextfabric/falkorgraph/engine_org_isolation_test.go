@@ -57,8 +57,8 @@ type fixedInterpreter struct {
 	interpretation contextfabric.InterpretedQuestion
 }
 
-func (f fixedInterpreter) Interpret(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, error) {
-	return f.interpretation, nil
+func (f fixedInterpreter) Interpret(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.QuestionFamilyOutcome, error) {
+	return f.interpretation, contextfabric.QuestionFamilyOutcome{}, nil
 }
 
 type emptyFactReader struct{}

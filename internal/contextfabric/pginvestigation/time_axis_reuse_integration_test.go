@@ -261,6 +261,9 @@ func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) 
 		// CHAOS-4398 PR3 (R4 ruling): same mirror, one more dimension (the
 		// cohort ranking formula fence).
 		RankingFormulaVersion: testReuseVersionAuthorities.RankingFormulaVersion,
+		// CHAOS-4634 (S4): same mirror, one more dimension (the family
+		// definition table fence).
+		QuestionFamilyVersion: testReuseVersionAuthorities.QuestionFamilyVersion,
 	}
 	reused, found, _, err := store.FindReusable(ctx, principal, lookup)
 	require.NoError(t, err)

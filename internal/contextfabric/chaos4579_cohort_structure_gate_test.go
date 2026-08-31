@@ -20,9 +20,23 @@ import (
 // with no subject to anchor. Turn 2, carrying only the window receipt,
 // produced the correct discovered_cohort answer.
 //
-// Every test below is RED on origin/main f7f69b71: gateSubjectAxisOffers
-// does not exist there, and the engine-level pair fails on the Missing
-// assertion for the same reason the live turn 1 did.
+// RE-POINTED for CHAOS-4634 (S4): every direct-unit test below now calls
+// GateOffersByFamily with an explicit QuestionFamilyOutcome instead of
+// GateSubjectAxisOffers with a Shape -- the gate this file pins is
+// family-keyed now, not Shape-keyed (chaos4579_cohort_structure_gate.go's
+// own CHAOS-4634 header explains why). Per CHAOS-4634's own instruction,
+// nothing here was deleted; every scenario keeps its original defect-of-
+// record intent, re-expressed against the family the same interpretation
+// resolves to in production (verified against chaos4632_question_family_
+// precedence.go's own table). The TestCHAOS4579_SubjectlessTerminal_*
+// end-to-end tests need NO change at all: they already exercise the real
+// RuntimeQuestionInterpreter (via buildTerminalGateEngine), which now
+// resolves and threads the family itself from the SAME Shape these tests
+// already set, through the identical precedence rows (4/5) the direct
+// unit tests below use explicitly. The TestCHAOS4579_ClassDefaultGate_*
+// end-to-end tests use the countingInterpreter fake instead, which is
+// given an explicit `family` field below matching what production would
+// resolve for the same interpretation.
 
 // chaos4579CohortMaterial reproduces the material chris's turn 1 actually
 // carried: a kind offer the resolution genuinely earned, beside
@@ -49,29 +63,36 @@ func chaos4579CohortInterpretation() InterpretedQuestion {
 	return interpretation
 }
 
-func TestGateSubjectAxisOffers_DiscoveredCohortDropsAnchorAndHandleRows(t *testing.T) {
+// TestGateOffersByFamily_DiscoveredCohortRankingDropsAnchorHandleAndKindRows
+// is TestGateSubjectAxisOffers_DiscoveredCohortDropsAnchorAndHandleRows,
+// re-pointed -- WITH ONE DELIBERATE CHANGE. The old §1.3 gate left the kind
+// axis untouched on purpose ("a cohort question still legitimately narrows
+// WHICH kind of thing the cohort is drawn from") -- that was
+// kindOfferMaterial's own "still-open class gap" (chaos3900_structure_
+// offers.go:117), which lane-4579's handoff §7 named and deliberately did
+// NOT close. CHAOS-4634 closes it: discovered_cohort_ranking's own
+// ApplicableAxes (chaos4632_question_family_registry.go) declares window
+// ONLY -- design §6.4's own words, "kindOfferMaterial ... not called at
+// all" -- so the kind axis is now gated exactly like anchor and handle.
+// This is a real, intended widening of the fix's reach (CHAOS-4634's own
+// ticket text lists this class gap as one of the things it subsumes), not
+// a regression in this test.
+func TestGateOffersByFamily_DiscoveredCohortRankingDropsAnchorHandleAndKindRows(t *testing.T) {
 	t.Parallel()
 	material := chaos4579CohortMaterial()
 	material.AnchorOptions = []AnchorOption{{Kind: SubjectTeam, CanonicalID: "team:fullchaos", Label: "Fullchaos"}}
 	material.HandleOptions = []HandleOption{{Kind: SubjectTeam, PatternID: "team_slug", Value: "fullchaos"}}
 
-	gated, outcome := GateSubjectAxisOffers(material, ShapeDiscoveredCohort)
+	gated, outcome := GateOffersByFamily(material, QuestionFamilyOutcome{Family: QuestionFamilyDiscoveredCohortRanking})
 
-	wantMissing := []StructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind}
-	if !reflect.DeepEqual(gated.Missing, wantMissing) {
-		t.Fatalf("Missing = %#v, want %#v: a question with no subject axis has no anchor and no handle to be missing", gated.Missing, wantMissing)
+	if len(gated.Missing) != 0 {
+		t.Fatalf("Missing = %#v, want empty: discovered_cohort_ranking's only applicable axis is window, which chaos4579CohortMaterial never disclosed", gated.Missing)
 	}
-	if len(gated.AnchorOptions) != 0 || len(gated.HandleOptions) != 0 {
-		t.Fatalf("AnchorOptions/HandleOptions = %#v/%#v, want both dropped: an option surviving its own Missing row is a receipt redeemable against a need that was never disclosed", gated.AnchorOptions, gated.HandleOptions)
+	if len(gated.AnchorOptions) != 0 || len(gated.HandleOptions) != 0 || len(gated.KindOptions) != 0 {
+		t.Fatalf("AnchorOptions/HandleOptions/KindOptions = %#v/%#v/%#v, want all three dropped: an option surviving its own Missing row is a receipt redeemable against a need that was never disclosed", gated.AnchorOptions, gated.HandleOptions, gated.KindOptions)
 	}
 	if outcome != CohortStructureGateApplied {
 		t.Fatalf("outcome = %q, want %q", outcome, CohortStructureGateApplied)
-	}
-	// The kind axis is deliberately untouched: chris's own turn 1 resolved
-	// kind=team correctly, and a cohort question still legitimately narrows
-	// WHICH kind of thing the cohort is drawn from.
-	if len(gated.KindOptions) != 2 {
-		t.Fatalf("KindOptions = %#v, want the 2 kind offers untouched", gated.KindOptions)
 	}
 }
 
@@ -86,7 +107,10 @@ func TestGateSubjectAxisOffers_SubjectBearingShapeKeepsEmptyOfferedRows(t *testi
 	t.Parallel()
 	material := chaos4579CohortMaterial() // zero anchor/handle options, rows still disclosed
 
-	gated, outcome := GateSubjectAxisOffers(material, ShapeSingleSubject)
+	// ShapeSingleSubject resolves to subject_investigation (precedence row
+	// 5), whose ApplicableAxes covers all five wire axes -- the family
+	// re-point of "this shape has a subject axis".
+	gated, outcome := GateOffersByFamily(material, QuestionFamilyOutcome{Family: QuestionFamilySubjectInvestigation})
 
 	if !reflect.DeepEqual(gated, material) {
 		t.Fatalf("gated = %#v, want the material byte-identical: a single_subject question genuinely IS missing an anchor, and the empty options list is the ruled 'missing-and-helpful, nothing offerable' disclosure", gated)
@@ -104,11 +128,18 @@ func TestGateSubjectAxisOffers_SubjectBearingShapeKeepsEmptyOfferedRows(t *testi
 // NAMES its members, so an anchor is exactly what disambiguates which
 // named things were meant. CHAOS-4531's ruling scopes the gate to
 // discovered_cohort in as many words.
+//
+// Family re-point: a single-term Shape=explicit_cohort sample (fewer than
+// the two DISTINCT subject terms precedence row 3 requires) falls all the
+// way through the table to unclassified (chaos4632_question_family_
+// precedence.go's own row 7 comment names this exact case), whose
+// ApplicableAxes is every axis -- so unclassified is the faithful
+// re-point, not a hand-picked substitute.
 func TestGateSubjectAxisOffers_ExplicitCohortKeepsTheSubjectAxis(t *testing.T) {
 	t.Parallel()
 	material := chaos4579CohortMaterial()
 
-	gated, outcome := GateSubjectAxisOffers(material, ShapeExplicitCohort)
+	gated, outcome := GateOffersByFamily(material, QuestionFamilyOutcome{Family: QuestionFamilyUnclassified})
 
 	if !reflect.DeepEqual(gated, material) {
 		t.Fatalf("gated = %#v, want unchanged for explicit_cohort", gated)
@@ -118,21 +149,40 @@ func TestGateSubjectAxisOffers_ExplicitCohortKeepsTheSubjectAxis(t *testing.T) {
 	}
 }
 
-// TestGateSubjectAxisOffers_OpenShapeKeepsTheSubjectAxis: `open` makes no
-// claim about its own subject structure, and treating it as axis-less
-// would silently suppress the anchor offer for every unclassified
-// question -- far wider than the ruled scope.
-func TestGateSubjectAxisOffers_OpenShapeKeepsTheSubjectAxis(t *testing.T) {
+// TestGateOffersByFamily_OpenShapeNowRoutesToDiscoveredCohortRanking
+// REPLACES TestGateSubjectAxisOffers_OpenShapeKeepsTheSubjectAxis's old
+// assertion, with the change flagged rather than silently dropped.
+//
+// The old §1.3 gate (Shape-keyed) treated ShapeOpen conservatively: "open
+// makes no claim about its own subject structure", so it stayed
+// unrestricted. The CHAOS-4632 precedence table does NOT agree --
+// precedence row 4 explicitly groups `ShapeOpen` with `ShapeDiscoveredCohort`
+// ("the FIRST row that reads Shape" fires on either), so a
+// minimally-structured open-shape sample (no GroupKind, no ScopeAnchorTerm,
+// no comparison terms, fewer than two distinct subject terms) resolves to
+// discovered_cohort_ranking, not unclassified. That is a deliberate
+// decision in the design (§3's own taxonomy table lists `open` among
+// discovered_cohort_ranking's CompatibleShapes), not a defect this test
+// should paper over -- so this test now pins the NEW behavior instead of
+// the old conservative default.
+func TestGateOffersByFamily_OpenShapeNowRoutesToDiscoveredCohortRanking(t *testing.T) {
 	t.Parallel()
 	material := chaos4579CohortMaterial()
 
-	gated, outcome := GateSubjectAxisOffers(material, ShapeOpen)
-
-	if !reflect.DeepEqual(gated, material) {
-		t.Fatalf("gated = %#v, want unchanged for the open shape", gated)
+	// Verify the routing claim against the real resolver, not just assert
+	// a hand-picked family -- this is the fact the test exists to pin.
+	resolved := ResolveQuestionFamily([]FamilySample{{Shape: ShapeOpen, SubjectTerms: []string{"Ask Dev"}}})
+	if resolved.Family != QuestionFamilyDiscoveredCohortRanking {
+		t.Fatalf("ResolveQuestionFamily(Shape=open) = %q, want %q -- precedence row 4 groups Shape=open with Shape=discovered_cohort", resolved.Family, QuestionFamilyDiscoveredCohortRanking)
 	}
-	if outcome != CohortStructureGateSubjectBearing {
-		t.Fatalf("outcome = %q, want %q", outcome, CohortStructureGateSubjectBearing)
+
+	gated, outcome := GateOffersByFamily(material, resolved)
+
+	if len(gated.Missing) != 0 || len(gated.AnchorOptions) != 0 || len(gated.HandleOptions) != 0 || len(gated.KindOptions) != 0 {
+		t.Fatalf("gated = %#v, want every non-window axis dropped: discovered_cohort_ranking's only applicable axis is window", gated)
+	}
+	if outcome != CohortStructureGateApplied {
+		t.Fatalf("outcome = %q, want %q", outcome, CohortStructureGateApplied)
 	}
 }
 
@@ -143,12 +193,16 @@ func TestGateSubjectAxisOffers_OpenShapeKeepsTheSubjectAxis(t *testing.T) {
 // from this gate doing its job.
 func TestGateSubjectAxisOffers_MatchedButNothingToRemoveReportsNoOp(t *testing.T) {
 	t.Parallel()
+	// Family re-point: since CHAOS-4634 also gates the kind axis for
+	// discovered_cohort_ranking (see the DiscoveredCohortRanking test
+	// above), a genuinely-NoOp fixture must already be window-only -- the
+	// old fixture's KindOptions would now make this Applied, not NoOp,
+	// which is the correct new behavior pinned separately.
 	material := StructureOfferMaterial{
-		Missing:     []StructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
-		KindOptions: []KindOption{{Kind: SubjectTeam, Label: "a team", OfferSource: contractsv1.ContextFabricStructureOfferEngine}},
+		Missing: []StructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
 	}
 
-	gated, outcome := GateSubjectAxisOffers(material, ShapeDiscoveredCohort)
+	gated, outcome := GateOffersByFamily(material, QuestionFamilyOutcome{Family: QuestionFamilyDiscoveredCohortRanking})
 
 	if !reflect.DeepEqual(gated.Missing, material.Missing) {
 		t.Fatalf("Missing = %#v, want %#v unchanged", gated.Missing, material.Missing)
@@ -170,7 +224,7 @@ func TestGateSubjectAxisOffers_DiscoveredCohortClearsTheV2Promotion(t *testing.T
 	material.AnchorOptions = []AnchorOption{{Kind: SubjectTeam, CanonicalID: "team:fullchaos", Label: "Fullchaos"}}
 	material.AnchorOptionsRequireV2 = true
 
-	gated, _ := GateSubjectAxisOffers(material, ShapeDiscoveredCohort)
+	gated, _ := GateOffersByFamily(material, QuestionFamilyOutcome{Family: QuestionFamilyDiscoveredCohortRanking})
 
 	if gated.AnchorOptionsRequireV2 {
 		t.Fatal("AnchorOptionsRequireV2 stayed true with zero anchor options: schemaVersion would promote to v2 on a result carrying no v2-bearing option")
@@ -186,18 +240,26 @@ func TestGateSubjectAxisOffers_NeverMutatesItsInput(t *testing.T) {
 	before := chaos4579CohortMaterial()
 	before.AnchorOptions = []AnchorOption{{Kind: SubjectTeam, CanonicalID: "team:fullchaos", Label: "Fullchaos"}}
 
-	if _, _ = GateSubjectAxisOffers(material, ShapeDiscoveredCohort); !reflect.DeepEqual(material, before) {
+	if _, _ = GateOffersByFamily(material, QuestionFamilyOutcome{Family: QuestionFamilyDiscoveredCohortRanking}); !reflect.DeepEqual(material, before) {
 		t.Fatalf("input material mutated to %#v, want %#v", material, before)
 	}
 }
 
-// TestCHAOS4579_ClassDefaultGate_CohortQuestionAsksOnlyForTheWindowAndKind
-// is the defect itself, end to end through the path chris's turn 1 took:
-// the class-default window gate (gate 2) -> gatedOfferMaterial ->
+// TestCHAOS4579_ClassDefaultGate_CohortQuestionAsksOnlyForTheWindow is the
+// defect itself, end to end through the path chris's turn 1 took: the
+// class-default window gate (gate 2) -> gatedOfferMaterial ->
 // composeGatedStructureNeeds.
-func TestCHAOS4579_ClassDefaultGate_CohortQuestionAsksOnlyForTheWindowAndKind(t *testing.T) {
+//
+// Renamed from ...AsksOnlyForTheWindowAndKind (CHAOS-4634): the kind axis
+// is now ALSO gated for discovered_cohort_ranking (see
+// TestGateOffersByFamily_DiscoveredCohortRankingDropsAnchorHandleAndKindRows'
+// own comment for why) -- turn 1 now asks for the window ALONE.
+func TestCHAOS4579_ClassDefaultGate_CohortQuestionAsksOnlyForTheWindow(t *testing.T) {
 	t.Parallel()
-	interpreter := &countingInterpreter{interpretation: chaos4579CohortInterpretation()}
+	interpreter := &countingInterpreter{
+		interpretation: chaos4579CohortInterpretation(),
+		family:         QuestionFamilyOutcome{Family: QuestionFamilyDiscoveredCohortRanking},
+	}
 	graph := chaos4234GatedGraph()
 	graph.material = chaos4579CohortMaterial()
 	store := &staticResultStore{results: map[string]InvestigationResult{}}
@@ -209,17 +271,14 @@ func TestCHAOS4579_ClassDefaultGate_CohortQuestionAsksOnlyForTheWindowAndKind(t 
 		t.Fatalf("Investigate() error = %v", err)
 	}
 	if result.StructureNeeds == nil {
-		t.Fatal("StructureNeeds is nil, want the window + kind disclosure")
+		t.Fatal("StructureNeeds is nil, want the window disclosure")
 	}
-	wantMissing := []StructureNeedKind{
-		contractsv1.ContextFabricStructureNeedWindow,
-		contractsv1.ContextFabricStructureNeedExpectedKind,
-	}
+	wantMissing := []StructureNeedKind{contractsv1.ContextFabricStructureNeedWindow}
 	if !reflect.DeepEqual(result.StructureNeeds.Missing, wantMissing) {
-		t.Fatalf("StructureNeeds.Missing = %#v, want %#v -- CHAOS-4579: a plural cohort question must never be asked for a single anchor or handle it has no subject for", result.StructureNeeds.Missing, wantMissing)
+		t.Fatalf("StructureNeeds.Missing = %#v, want %#v -- CHAOS-4579/CHAOS-4634: a plural cohort question must never be asked for a single anchor, handle, or kind it has no subject axis for", result.StructureNeeds.Missing, wantMissing)
 	}
-	if len(result.StructureNeeds.AnchorOptions) != 0 || len(result.StructureNeeds.HandleOptions) != 0 {
-		t.Fatalf("AnchorOptions/HandleOptions = %#v/%#v, want both empty", result.StructureNeeds.AnchorOptions, result.StructureNeeds.HandleOptions)
+	if len(result.StructureNeeds.AnchorOptions) != 0 || len(result.StructureNeeds.HandleOptions) != 0 || len(result.StructureNeeds.KindOptions) != 0 {
+		t.Fatalf("AnchorOptions/HandleOptions/KindOptions = %#v/%#v/%#v, want all empty", result.StructureNeeds.AnchorOptions, result.StructureNeeds.HandleOptions, result.StructureNeeds.KindOptions)
 	}
 	if result.SchemaVersion != InvestigationResultSchemaV1 {
 		t.Fatalf("SchemaVersion = %q, want v1", result.SchemaVersion)
@@ -246,7 +305,10 @@ func TestCHAOS4579_ClassDefaultGate_CohortQuestionAsksOnlyForTheWindowAndKind(t 
 // rather than a blanket suppression.
 func TestCHAOS4579_ClassDefaultGate_SingleSubjectStillAsksForAnchorAndHandle(t *testing.T) {
 	t.Parallel()
-	interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()} // ShapeSingleSubject
+	interpreter := &countingInterpreter{ // ShapeSingleSubject -> subject_investigation
+		interpretation: bootstrapInterpretation(),
+		family:         QuestionFamilyOutcome{Family: QuestionFamilySubjectInvestigation},
+	}
 	graph := chaos4234GatedGraph()
 	graph.material = chaos4579CohortMaterial()
 	store := &staticResultStore{results: map[string]InvestigationResult{}}
@@ -284,7 +346,10 @@ func TestCHAOS4579_ClassDefaultGate_SingleSubjectStillAsksForAnchorAndHandle(t *
 // keeps "the pool was empty" distinguishable from "the gate removed it".
 func TestCHAOS4579_ClassDefaultGate_CohortWithOnlySubjectAxisMaterialDegradesToWindowOnly(t *testing.T) {
 	t.Parallel()
-	interpreter := &countingInterpreter{interpretation: chaos4579CohortInterpretation()}
+	interpreter := &countingInterpreter{
+		interpretation: chaos4579CohortInterpretation(),
+		family:         QuestionFamilyOutcome{Family: QuestionFamilyDiscoveredCohortRanking},
+	}
 	graph := chaos4234GatedGraph()
 	graph.material = StructureOfferMaterial{
 		Missing: []StructureNeedKind{
@@ -351,7 +416,14 @@ func buildTerminalGateEngine(t *testing.T, shape InvestigationShape, material St
 	return engine
 }
 
-func TestCHAOS4579_SubjectlessTerminal_CohortQuestionDropsAnchorAndHandleRows(t *testing.T) {
+// Renamed from ...CohortQuestionDropsAnchorAndHandleRows (CHAOS-4634): the
+// window in this scenario is ALREADY CONFIRMED
+// (validInvestigationRequestWithConfirmedWindow), and the kind axis is now
+// ALSO gated for discovered_cohort_ranking (see
+// TestGateOffersByFamily_DiscoveredCohortRankingDropsAnchorHandleAndKindRows'
+// own comment for why) -- so this scenario now has NOTHING left to
+// disclose at all, and StructureNeeds is correctly nil.
+func TestCHAOS4579_SubjectlessTerminal_CohortQuestionDropsAnchorHandleAndKindRows(t *testing.T) {
 	t.Parallel()
 	telemetry := &recordingTelemetry{}
 	engine := buildTerminalGateEngine(t, ShapeDiscoveredCohort, chaos4579CohortMaterial(), telemetry)
@@ -360,15 +432,8 @@ func TestCHAOS4579_SubjectlessTerminal_CohortQuestionDropsAnchorAndHandleRows(t 
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
-	if result.StructureNeeds == nil {
-		t.Fatal("StructureNeeds is nil, want the kind disclosure to survive")
-	}
-	wantMissing := []StructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind}
-	if !reflect.DeepEqual(result.StructureNeeds.Missing, wantMissing) {
-		t.Fatalf("StructureNeeds.Missing = %#v, want %#v -- the subjectless terminal is the SECOND call site and must gate identically to the window-gated one", result.StructureNeeds.Missing, wantMissing)
-	}
-	if len(result.StructureNeeds.AnchorOptions) != 0 || len(result.StructureNeeds.HandleOptions) != 0 {
-		t.Fatalf("AnchorOptions/HandleOptions = %#v/%#v, want both empty", result.StructureNeeds.AnchorOptions, result.StructureNeeds.HandleOptions)
+	if result.StructureNeeds != nil {
+		t.Fatalf("StructureNeeds = %#v, want nil: window is already confirmed and every other axis (kind/anchor/handle) is inapplicable to discovered_cohort_ranking, so nothing remains to disclose", result.StructureNeeds)
 	}
 	wantGates := []cohortStructureGateRecord{{CohortStructureGateApplied, ShapeDiscoveredCohort}}
 	if !reflect.DeepEqual(telemetry.cohortStructureGates, wantGates) {

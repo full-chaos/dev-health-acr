@@ -111,11 +111,13 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 	// acr.context_fabric_structure_supersession_claims, the two tables
 	// each hold their own independent CHECK) added 0034, and CHAOS-4398
 	// PR3's R4 ruling (ranking_formula_version reuse-key dimension) added
-	// 0035, so the embedded set is now 35 files. A future migration must
+	// 0035, and CHAOS-4634 S4 (question_family_version reuse-key dimension,
+	// per the CHAOS-4632/S2 note deferring it here) added 0036, so the
+	// embedded set is now 36 files. A future migration must
 	// bump this literal too -- see expectedMigrationVersions in
 	// migrations/postgres/runner_integration_test.go for the same
 	// convention, held in one place there.
-	require.Equal(t, "applied 35 migrations\n", first.String())
+	require.Equal(t, "applied 36 migrations\n", first.String())
 	require.NoError(t, secondErr)
 	require.Equal(t, "no migrations applied\n", second.String())
 }
