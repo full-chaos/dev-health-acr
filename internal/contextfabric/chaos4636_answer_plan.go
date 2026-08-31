@@ -324,3 +324,25 @@ func stampAnswerPlan(result InvestigationResult, plan AnswerPlan) InvestigationR
 	result.AnswerPlan = &stamped
 	return result
 }
+
+// finalizeResult stamps everything that is part of the SERVED document but is
+// not produced by synthesis: the plan, the render shapes it authorizes, and
+// the completeness block.
+//
+// It exists so that stage 3 measures the document the route will marshal.
+// Codex round 1 finding 1 (P1) was exactly this: these three were stamped
+// AFTER the budget check, so the engine measured a smaller thing than the
+// route, and gate agreement -- the whole reason the measurement moved to
+// internal/contracts/v1 -- did not hold on the byte axis.
+//
+// Pure, and deliberately telemetry-free: it runs once per synthesis pass, and
+// a retry must not double-count a render-selection decision. The engine emits
+// that event once, for the result it actually serves.
+func (e *Engine) finalizeResult(result InvestigationResult, plan AnswerPlan) InvestigationResult {
+	stamped := plan
+	result.AnswerPlan = &stamped
+	renderShapes, _ := SelectRenderShapes(result)
+	result.RenderShapes = renderShapes
+	result.Completeness = ComputeAnswerCompleteness(result)
+	return result
+}

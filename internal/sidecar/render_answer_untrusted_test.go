@@ -93,8 +93,18 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 		"structured.render_shapes[].series[].label":                 "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and draws the shape",
 		"structured.render_shapes[].series[].points[].label":        "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and draws the shape",
 		"structured.render_shapes[].series[].points[].source.field": "not rendered by this plain-text markdown view; a point source is provenance a structural consumer resolves, never display text",
-		"structured.question":                                       "the caller already holds the question it asked; echoing it adds nothing to a bounded answer",
-		"structured.clarification.candidates[].match_reasons[]":     "the candidate line carries the subject and receipt an agent needs to choose; match reasoning is inspection detail, available through the full result",
+		// CHAOS-4636: the grouped cohort's GROUP AXIS is not rendered by this
+		// plain-text view. The view lists cohort members flat, and the group
+		// a member belongs to is a structural relationship Ask Dev reads off
+		// Structured and lays out; there is no grouped layout to render here.
+		// Nothing is lost to a reader of this view -- every member still
+		// appears, and per-group completeness is a structural field rather
+		// than display text. The declaration STAYS, exactly as the
+		// render_shapes labels above do, so that a future markdown rendering
+		// of the group axis cannot ship the label unmarked.
+		"structured.cohort.groups[].subject.label":              "not rendered by this plain-text markdown view; the group axis is a structural layout Ask Dev reads off Structured, and every member still appears in the flat member list",
+		"structured.question":                                   "the caller already holds the question it asked; echoing it adds nothing to a bounded answer",
+		"structured.clarification.candidates[].match_reasons[]": "the candidate line carries the subject and receipt an agent needs to choose; match reasoning is inspection detail, available through the full result",
 		// CHAOS-4118 (team-lead ruling 2026-08-22): windowConfirmationRequiredResult
 		// composes StructureNeeds.WindowOptions and WindowClarification.Options
 		// in lockstep from the SAME offer set. Rendering both would show every
@@ -359,6 +369,20 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 				Subject:          contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team_x", Label: "Team X"},
 				Rank:             1,
 				InclusionReasons: []string{"an inclusion reason"},
+			}},
+			// CHAOS-4636: a non-empty group so the reflection walk can reach
+			// and plant "cohort.groups[].subject.label" -- same
+			// "empty slice is silently unresolvable" reasoning as
+			// RankingTable below. A group's subject label is graph-derived
+			// display text carrying exactly the standing a member's label
+			// has, so declaring it untrusted without giving this closure a
+			// group to plant in would be the claimed_facts.field defect
+			// again: declared untrusted, never actually covered.
+			Groups: []contractsv1.ContextFabricProjectedCohortGroup{{
+				Subject:            contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team_x", Label: "Team X"},
+				MemberCanonicalIDs: []string{"team_x"},
+				Complete:           true,
+				Total:              1,
 			}},
 			// CHAOS-4398 PR3: a non-empty entry so the reflection walk
 			// below can reach and plant "cohort.ranking_table[].fields{}.string" --

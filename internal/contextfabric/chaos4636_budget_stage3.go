@@ -82,6 +82,20 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	}
 	overrun := measurement.Overrun(budget)
 	if overrun == contractsv1.ContextFabricBudgetFits {
+		// A FIT is a decision, and this event's own doc comment calls it
+		// "one narrowing decision, or one measured fit". Emitting nothing
+		// made the fit outcome uncountable, so "how often does an answer fit
+		// first time" -- the denominator for every narrowing rate an
+		// operator would want -- could not be answered from the artifacts
+		// (codex round 1, finding 5).
+		fit := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
+			cohortMemberCount(params.Graph.Cohort), cohortMemberCount(params.Graph.Cohort),
+			params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0,
+			contractsv1.ContextFabricBudgetFits)
+		fit.MeasuredItems = measurement.Items.Budgeted()
+		fit.MeasuredBytes = measurement.Bytes
+		fit.DeadlineReserved = e.synthesisDeadlineReserve > 0
+		e.recordPlanNarrowing(ctx, principal, fit)
 		return result, nil
 	}
 
@@ -114,6 +128,11 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	})
 
 	retried, retryErr := e.synthesizeAndAssemble(ctx, principal, params.forRetry(narrowedGraph, narrowedFacts))
+	if retryErr == nil {
+		// Finalize the retry too, or the second pass repeats finding 1's
+		// defect: measuring a pre-final shape and serving a larger one.
+		retried = e.finalizeResult(retried, *plan)
+	}
 	if retryErr != nil {
 		// A failed retry must not lose the reason the first answer did not
 		// fit. Reporting the retry's own error instead would replace a
@@ -142,6 +161,15 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		return InvestigationResult{}, e.refusalFrom(plan, retryMeasurement, retryOverrun, true)
 	}
 	return retried, nil
+}
+
+// cohortMemberCount is nil-safe: a fitting answer with no cohort reports zero
+// rather than being unreportable.
+func cohortMemberCount(cohort *Cohort) int {
+	if cohort == nil {
+		return 0
+	}
+	return len(cohort.Members)
 }
 
 // narrowSynthesisInput halves the cohort the retry is given, member-first.

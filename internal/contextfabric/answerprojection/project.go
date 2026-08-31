@@ -502,7 +502,7 @@ func groupAwareMemberAllowance(cohort contractsv1.ContextFabricCohort, maxMember
 		remaining[index] = group.MemberCanonicalIDs
 	}
 	allowed := make(map[string]struct{}, maxMembers)
-	for taken, progressed := 0, true; taken < maxMembers && progressed; {
+	for progressed := true; len(allowed) < maxMembers && progressed; {
 		progressed = false
 		// Largest group first on each pass, so a big group is thinned
 		// before a small one loses its only member.
@@ -514,13 +514,19 @@ func groupAwareMemberAllowance(cohort contractsv1.ContextFabricCohort, maxMember
 		}
 		sort.SliceStable(order, func(i, j int) bool { return len(remaining[order[i]]) > len(remaining[order[j]]) })
 		for _, index := range order {
-			if taken >= maxMembers {
+			if len(allowed) >= maxMembers {
 				break
 			}
-			allowed[remaining[index][0]] = struct{}{}
+			candidate := remaining[index][0]
 			remaining[index] = remaining[index][1:]
-			taken++
 			progressed = true
+			// The budget bounds DISTINCT members, and groups overlap: a
+			// project owned by two teams is offered by both. Charging the
+			// budget for a member already admitted spent allowance on
+			// nothing and under-filled the answer (codex round 1,
+			// finding 4). Selecting it again is free; only a NEW member
+			// costs.
+			allowed[candidate] = struct{}{}
 		}
 	}
 	return allowed

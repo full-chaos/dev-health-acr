@@ -101,16 +101,25 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 	byGroup := make(map[string][]string, len(cohort.Members))
 	labels := make(map[string]string, len(cohort.Members))
 	for _, member := range cohort.Members {
-		assignment, placed := assignments[SubjectMapKey(member.Subject)]
-		if !placed {
+		placed := assignments[SubjectMapKey(member.Subject)]
+		if len(placed) == 0 {
 			ungrouped++
 			continue
 		}
-		if _, known := byGroup[assignment.canonicalID]; !known {
-			order = append(order, assignment.canonicalID)
-			labels[assignment.canonicalID] = assignment.label
+		// EVERY owning group, not the first one seen. A project genuinely
+		// owned by two teams belongs under both, and dropping one would be
+		// dropping a true ownership -- exactly what ValidateCohortGroups'
+		// own doc comment says a validator must not force. (codex round 1,
+		// finding 2: the contract allowed many-to-many and this loop kept
+		// one assignment per subject, so the two disagreed and the contract
+		// was the correct one.)
+		for _, assignment := range placed {
+			if _, known := byGroup[assignment.canonicalID]; !known {
+				order = append(order, assignment.canonicalID)
+				labels[assignment.canonicalID] = assignment.label
+			}
+			byGroup[assignment.canonicalID] = append(byGroup[assignment.canonicalID], member.Subject.CanonicalID)
 		}
-		byGroup[assignment.canonicalID] = append(byGroup[assignment.canonicalID], member.Subject.CanonicalID)
 	}
 	if len(order) == 0 {
 		return nil, ungrouped
@@ -150,38 +159,43 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 // Rows the same producers still populate, because CHAOS-4633's migration is
 // deliberately dual-write: a producer emits both, and reading only one of
 // them would make this depend on which phase of that migration is deployed.
-func groupAssignmentsByMember(facts []CanonicalFact) map[string]cohortGroupAssignment {
-	assignments := make(map[string]cohortGroupAssignment, len(facts))
+func groupAssignmentsByMember(facts []CanonicalFact) map[string][]cohortGroupAssignment {
+	assignments := make(map[string][]cohortGroupAssignment, len(facts))
+	seen := make(map[string]map[string]struct{}, len(facts))
 	for _, fact := range facts {
 		key := SubjectMapKey(fact.Subject)
-		if _, placed := assignments[key]; placed {
-			// First unambiguous assignment wins, and the fact order is the
-			// read order, which is deterministic. A member whose facts name
-			// two different teams is a real case (ownership is a relation),
-			// but a cohort MEMBER can only be listed under the groups its
-			// facts name; picking the first stably is better than picking
-			// one differently on every run.
-			continue
-		}
 		for _, value := range fact.Fields {
-			assignment, found := groupAssignmentFromValue(value)
-			if !found {
-				continue
+			for _, assignment := range groupAssignmentsFromValue(value) {
+				if _, known := seen[key]; !known {
+					seen[key] = make(map[string]struct{}, 2)
+				}
+				if _, duplicate := seen[key][assignment.canonicalID]; duplicate {
+					continue
+				}
+				seen[key][assignment.canonicalID] = struct{}{}
+				assignments[key] = append(assignments[key], assignment)
 			}
-			assignments[key] = assignment
-			break
 		}
+	}
+	// Sorted per member so the group order a member contributes is stable
+	// across runs: the fact-field iteration above walks a Go map.
+	for key := range assignments {
+		sort.Slice(assignments[key], func(i, j int) bool {
+			return assignments[key][i].canonicalID < assignments[key][j].canonicalID
+		})
 	}
 	return assignments
 }
 
-// groupAssignmentFromValue pulls a group id and label out of one tabular fact
-// value.
-func groupAssignmentFromValue(value FactValue) (cohortGroupAssignment, bool) {
+// groupAssignmentsFromValue pulls EVERY group id and label out of one tabular
+// fact value. A breakdown table legitimately carries one row per owning team,
+// so returning only the first row's team is how finding 2's defect arose.
+func groupAssignmentsFromValue(value FactValue) []cohortGroupAssignment {
 	rows := value.Rows
 	if value.Table != nil && len(value.Table.Rows) > 0 {
 		rows = value.Table.Rows
 	}
+	found := make([]cohortGroupAssignment, 0, len(rows))
 	for _, row := range rows {
 		// health's breakdown is per-scope and only its team rows name a
 		// team. A row that declares a scope at all must declare the team
@@ -189,14 +203,14 @@ func groupAssignmentFromValue(value FactValue) (cohortGroupAssignment, bool) {
 		if scope, declared := rowString(row, groupScopeColumn); declared && scope != groupScopeTeamKind {
 			continue
 		}
-		canonicalID, found := firstRowString(row, groupIDColumnCandidates)
-		if !found || canonicalID == "" {
+		canonicalID, ok := firstRowString(row, groupIDColumnCandidates)
+		if !ok || canonicalID == "" {
 			continue
 		}
 		label, _ := firstRowString(row, groupLabelColumnCandidates)
-		return cohortGroupAssignment{canonicalID: canonicalID, label: label}, true
+		found = append(found, cohortGroupAssignment{canonicalID: canonicalID, label: label})
 	}
-	return cohortGroupAssignment{}, false
+	return found
 }
 
 func rowString(row FactValueRow, column string) (string, bool) {
@@ -245,26 +259,37 @@ func ApplyGroupedCohortCompleteness(cohort *Cohort) {
 // budget admits any members at all. It returns the members that remain, in
 // the cohort's own order, and the groups with their completeness updated.
 func NarrowGroupedCohort(cohort *Cohort, maxMembers int) (kept []CohortMember, groups []contractsv1.ContextFabricCohortGroup, narrowed bool) {
-	if cohort == nil || maxMembers <= 0 || len(cohort.Members) <= maxMembers {
+	if cohort == nil || maxMembers <= 0 || len(cohort.Groups) == 0 {
 		return nil, nil, false
 	}
-	if len(cohort.Groups) == 0 {
-		return nil, nil, false
-	}
-	// Work on a copy of each group's member list so the drop is computed
-	// before anything is mutated.
+	// DISTINCT MEMBERS, not memberships. Groups overlap -- a project owned by
+	// two teams appears in both -- so summing group sizes over-counts, and
+	// deciding on that sum made narrowing report "nothing to do" for a cohort
+	// that could in fact be narrowed (codex round 1, finding 3). The budget
+	// bounds the flattened member list, which charges each member once, so
+	// the decision has to be taken on the same quantity.
 	remaining := make([][]string, len(cohort.Groups))
 	for index, group := range cohort.Groups {
 		remaining[index] = append([]string(nil), group.MemberCanonicalIDs...)
 	}
-	total := len(cohort.Members)
-	for total > maxMembers {
+	distinct := func() int {
+		unique := make(map[string]struct{}, len(cohort.Members))
+		for _, ids := range remaining {
+			for _, id := range ids {
+				unique[id] = struct{}{}
+			}
+		}
+		return len(unique)
+	}
+	if distinct() <= maxMembers {
+		return nil, nil, false
+	}
+	for distinct() > maxMembers {
 		largest := -1
 		for index := range remaining {
-			// Never take a group to zero while it is the only thing
-			// keeping that group in the answer: one member is the
-			// difference between "this team is truncated" and "this team
-			// was silently dropped".
+			// Never take a group to zero while it is the only thing keeping
+			// that group in the answer: one member is the difference between
+			// "this team is truncated" and "this team was silently dropped".
 			if len(remaining[index]) <= 1 {
 				continue
 			}
@@ -280,9 +305,8 @@ func NarrowGroupedCohort(cohort *Cohort, maxMembers int) (kept []CohortMember, g
 			break
 		}
 		remaining[largest] = remaining[largest][:len(remaining[largest])-1]
-		total--
 	}
-	survivors := make(map[string]struct{}, total)
+	survivors := make(map[string]struct{}, len(cohort.Members))
 	groups = make([]contractsv1.ContextFabricCohortGroup, 0, len(cohort.Groups))
 	for index, group := range cohort.Groups {
 		for _, id := range remaining[index] {
@@ -290,9 +314,9 @@ func NarrowGroupedCohort(cohort *Cohort, maxMembers int) (kept []CohortMember, g
 		}
 		narrowedGroup := group
 		narrowedGroup.MemberCanonicalIDs = remaining[index]
-		// Total stays where it was: it is the group's size BEFORE
-		// narrowing, which is exactly what makes the truncation disclosure
-		// informative rather than circular.
+		// Total stays where it was: it is the group's size BEFORE narrowing,
+		// which is exactly what makes the truncation disclosure informative
+		// rather than circular.
 		narrowedGroup.Truncated = len(remaining[index]) < group.Total
 		narrowedGroup.Complete = !narrowedGroup.Truncated && group.Complete
 		groups = append(groups, narrowedGroup)
@@ -304,10 +328,10 @@ func NarrowGroupedCohort(cohort *Cohort, maxMembers int) (kept []CohortMember, g
 		}
 		kept = append(kept, member)
 	}
-	// Rank is a DENSE 1..N sequence the cohort validator enforces across
-	// the member list, so removing members from the middle requires
-	// renumbering. AttentionRank is left alone: RankCohort owns it, and it
-	// is recomputed when the narrowed cohort is re-ranked.
+	// Rank is a DENSE 1..N sequence the cohort validator enforces across the
+	// member list, so removing members from the middle requires renumbering.
+	// AttentionRank is left alone: RankCohort owns it, and it is recomputed
+	// when the narrowed cohort is re-ranked.
 	for index := range kept {
 		kept[index].Rank = index + 1
 	}

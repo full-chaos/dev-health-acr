@@ -1697,33 +1697,35 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// revision 3 of this design died on. The measurement lives in
 	// internal/contracts/v1, which both planes import, so the number checked
 	// here is the number the route will check.
+	// CODEX ROUND 1, FINDING 1 (P1): stage 3 used to run HERE, before the
+	// plan, the render shapes and the completeness block were stamped -- but
+	// the route marshals the FINAL document. The engine therefore measured a
+	// smaller thing than the route would, and could accept a result the route
+	// then 413'd on bytes. Gate agreement is the entire reason the
+	// measurement was moved to internal/contracts/v1, so measuring a
+	// different document defeated it.
+	//
+	// So the answer is FINALIZED first -- plan, shapes, completeness -- and
+	// stage 3 measures that. The retry re-runs assembly AND finalization, so
+	// the shape measured on the second pass is the shape that would be
+	// served on the second pass.
+	result = e.finalizeResult(result, plan)
 	result, err = e.fitAssembledResult(ctx, principal, &plan, result, assemblyParams)
 	if err != nil {
 		return InvestigationResult{}, err
 	}
-	// The plan is stamped LAST, after every narrowing it records has
-	// happened, so the persisted plan describes the answer that was actually
-	// produced rather than the one that was first attempted.
+	// The plan is re-stamped after the fit, because stage 3 may have appended
+	// narrowing steps to it: the persisted plan must describe the answer that
+	// was actually produced, not the one first attempted.
 	stampedPlan := plan
 	result.AnswerPlan = &stampedPlan
-	// CHAOS-4415: conditional render shapes. Placed HERE -- on the FINAL
-	// result, after every composer including the commit-affirmation gate,
-	// and immediately BEFORE Validate -- so a shape can never describe
-	// content a later stage removed, and so every number it plots is
-	// resolved against the same document the caller receives. Selection is
-	// deterministic (internal/contextfabric/render_shapes.go); the model
-	// has no draft field for a shape and therefore cannot author one.
-	renderShapes, renderShapeEvent := SelectRenderShapes(result)
-	result.RenderShapes = renderShapes
+	// Render-shape telemetry fires ONCE, for the result actually served --
+	// selection itself is pure and was already run by finalizeResult, but a
+	// retry would otherwise double-count a decision an operator counts.
 	if e.telemetry != nil {
+		_, renderShapeEvent := SelectRenderShapes(result)
 		e.telemetry.RecordRenderShapeSelection(ctx, principal, renderShapeEvent)
 	}
-	// CHAOS-4413: answer completeness/terminal fields. Placed HERE, after
-	// RenderShapes and immediately BEFORE Validate, for the identical
-	// reason RenderShapes is placed here -- Status/ClaimedFacts/Coverage/
-	// Limitations/Warnings are all final at this point and nothing further
-	// can change them out from under the stamped disclosure.
-	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}

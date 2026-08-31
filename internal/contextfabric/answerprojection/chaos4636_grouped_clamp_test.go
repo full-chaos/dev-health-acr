@@ -163,3 +163,38 @@ func TestAGroupThatLosesEveryMemberIsCountedNotEmitted(t *testing.T) {
 		t.Fatal("a projection that lost a whole group did not declare itself truncated")
 	}
 }
+
+// TestGroupAwareAllowanceCountsDistinctMembers is codex round 1, finding 4,
+// pinned. Groups overlap: a project owned by two teams is offered by both.
+// Charging the member budget for a member already admitted spends allowance on
+// nothing and under-fills the answer — a two-member budget returned one.
+func TestGroupAwareAllowanceCountsDistinctMembers(t *testing.T) {
+	t.Parallel()
+	result := richResult()
+	cohort := &contractsv1.ContextFabricCohort{
+		Kind: contractsv1.ContextFabricSubjectProject, Rationale: "overlap fixture", Complete: true,
+		Members: []contractsv1.ContextFabricCohortMember{
+			{Subject: subject(contractsv1.ContextFabricSubjectProject, "shared", "shared"), Rank: 1,
+				InclusionReasons: []string{"Graph retrieval associated this subject with the requested condition."}},
+			{Subject: subject(contractsv1.ContextFabricSubjectProject, "other", "other"), Rank: 2,
+				InclusionReasons: []string{"Graph retrieval associated this subject with the requested condition."}},
+		},
+		Groups: []contractsv1.ContextFabricCohortGroup{
+			{Subject: subject(contractsv1.ContextFabricSubjectTeam, "team_a", "team_a"),
+				MemberCanonicalIDs: []string{"shared"}, Complete: true, Total: 1},
+			{Subject: subject(contractsv1.ContextFabricSubjectTeam, "team_b", "team_b"),
+				MemberCanonicalIDs: []string{"shared", "other"}, Complete: true, Total: 2},
+		},
+	}
+	result.Cohort = cohort
+	bounds := DefaultBudget
+	bounds.MaxCohortMembers = 2
+
+	projection := Project(result, bounds)
+	if len(projection.Cohort.Members) != 2 {
+		t.Fatalf("projected %d distinct members against a 2-member budget, want 2 -- an already-admitted member must not spend allowance twice", len(projection.Cohort.Members))
+	}
+	if len(projection.Cohort.Groups) != 2 {
+		t.Fatalf("projected %d groups, want both", len(projection.Cohort.Groups))
+	}
+}
