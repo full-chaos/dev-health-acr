@@ -1,0 +1,401 @@
+package contextfabric
+
+import (
+	"strings"
+	"testing"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
+
+// CHAOS-4637 (S6): render selection reads the PLAN and the producer's
+// DECLARED table shape. The geometry inference is gone.
+//
+// Every test here asserts NON-VACUITY FIRST -- that the fixture actually
+// reaches the guarded path -- before asserting the property. Three fixtures
+// in the preceding slice were green against the exact defect they claimed to
+// pin because they never reached it, and every one was caught by mutating
+// the fix back rather than by reading. Green and discriminating are
+// different properties.
+
+// declaredReadinessTable is the declaration the CHAOS-4645 readiness
+// producer emits for its team/project daily series.
+func declaredReadinessTable() *contractsv1.ContextFabricClaimedFactTable {
+	return &contractsv1.ContextFabricClaimedFactTable{
+		Field:    "daily_readiness",
+		Shape:    contractsv1.ContextFabricFactTableShapeTimeSeries,
+		Key:      []string{"day"},
+		Measures: []string{"coverage_ratio"},
+	}
+}
+
+// declaredTrendAnswer is chrisTeamsAnswer with its readiness table
+// DECLARED. chrisTeamsAnswer's own fact already carries a perfectly shaped
+// dated table and gets no trend, because nothing declares it one; this is
+// the same document with the producer's statement attached.
+func declaredTrendAnswer() InvestigationResult {
+	result := chrisTeamsAnswer()
+	result.ClaimedFacts[0].Table = declaredReadinessTable()
+	return result
+}
+
+// TestADeclaredTimeSeriesIsSelectedAsATrend is the way back for the
+// withdrawn capability, and the acceptance headline of this slice: the same
+// answer that got two shapes before now gets three, and the third is the
+// trend -- selected because a producer SAID the table was a time series, not
+// because the columns looked like one.
+func TestADeclaredTimeSeriesIsSelectedAsATrend(t *testing.T) {
+	t.Parallel()
+	// Non-vacuity: the undeclared twin must genuinely get NO trend, or
+	// this test proves nothing about the declaration.
+	if before := shapeByRule(mustSelect(t, chrisTeamsAnswer()), contractsv1.ContextFabricRenderRuleDatedFactTrend); before != nil {
+		t.Fatalf("the UNDECLARED fixture already selects a trend, so the declaration is not what this test measures: %+v", before)
+	}
+
+	result := declaredTrendAnswer()
+	shapes, event := SelectRenderShapes(result)
+	trend := shapeByRule(shapes, contractsv1.ContextFabricRenderRuleDatedFactTrend)
+	if trend == nil {
+		t.Fatalf("a DECLARED time_series was not charted; shapes=%+v skipped=%+v", shapes, event.Skipped)
+	}
+	if trend.Kind != contractsv1.ContextFabricRenderKindSeries ||
+		trend.Presentation != contractsv1.ContextFabricRenderPresentationLine ||
+		trend.AxisKind != contractsv1.ContextFabricRenderAxisTime {
+		t.Errorf("trend is not a time-axis line: kind=%q presentation=%q axis=%q", trend.Kind, trend.Presentation, trend.AxisKind)
+	}
+	// The axis is the DECLARED key column, not a column that happened to
+	// parse as a date.
+	if trend.AxisLabel != "day" {
+		t.Errorf("axis label = %q, want the declared key column %q", trend.AxisLabel, "day")
+	}
+	if len(trend.Series) != 1 || trend.Series[0].Key != "coverage_ratio" {
+		t.Fatalf("want exactly one series keyed on the claim's own declared measure; got %+v", trend.Series)
+	}
+	// Points in INSTANT order, and every value copied verbatim.
+	labels := make([]string, 0, len(trend.Series[0].Points))
+	for _, point := range trend.Series[0].Points {
+		labels = append(labels, point.Label)
+	}
+	if strings.Join(labels, ",") != "2026-08-03,2026-08-18,2026-08-30" {
+		t.Errorf("points are not in instant order: %v", labels)
+	}
+	// Every plotted number must RESOLVE, by exact equality, against the
+	// row cell its own source names -- the same gate the served document
+	// passes through. A chart is a claimed fact; a point that does not
+	// resolve is a rejected document, not a rendering warning.
+	result.RenderShapes = shapes
+	if err := contractsv1.ValidateRenderShapesForResult(result); err != nil {
+		t.Fatalf("the selected trend does not survive the render-shape validator: %v", err)
+	}
+	if err := event.Accounted(); err != nil {
+		t.Errorf("selector accounting: %v", err)
+	}
+}
+
+// TestTheTrendPlotsOnlyTheClaimsOwnDeclaredMeasure. A declared time_series
+// may carry several measures; a trend plots ONE. Plotting several on one
+// value axis would silently assert they are commensurable, which nothing on
+// the wire says -- that is CHAOS-4625's own designed comparison shape.
+func TestTheTrendPlotsOnlyTheClaimsOwnDeclaredMeasure(t *testing.T) {
+	t.Parallel()
+	result := declaredTrendAnswer()
+	// A second measure, present on every row, alongside the claimed one.
+	for i := range result.ClaimedFacts[0].Rows {
+		result.ClaimedFacts[0].Rows[i].Fields["open_findings"] = renderScalarNumber(float64(3 - i))
+	}
+	result.ClaimedFacts[0].Table.Measures = []string{"coverage_ratio", "open_findings"}
+	// Non-vacuity: the second measure is genuinely plottable on its own
+	// terms -- present and numeric on every row -- so its absence from the
+	// chart is a DECISION, not an accident of the fixture.
+	for i, row := range result.ClaimedFacts[0].Rows {
+		if _, numeric := renderNumericCell(row.Fields["open_findings"]); !numeric {
+			t.Fatalf("row %d's second measure is not numeric; the fixture cannot show the rule chose to omit it", i)
+		}
+	}
+
+	trend := shapeByRule(mustSelect(t, result), contractsv1.ContextFabricRenderRuleDatedFactTrend)
+	if trend == nil {
+		t.Fatal("a multi-measure declared time_series produced no trend at all")
+	}
+	if len(trend.Series) != 1 {
+		t.Fatalf("a trend carries %d series; a trend plots exactly one measure, and several on one value axis asserts a commensurability nothing declared", len(trend.Series))
+	}
+	if trend.Series[0].Key != result.ClaimedFacts[0].Field {
+		t.Errorf("series key = %q, want the claim's own field %q", trend.Series[0].Key, result.ClaimedFacts[0].Field)
+	}
+}
+
+// TestAClaimWhoseFieldIsNotADeclaredMeasureIsRefused. The claim names what
+// it is about; if that is not one of the table's declared measures there is
+// no single measure to plot, and the rule refuses rather than picking one.
+func TestAClaimWhoseFieldIsNotADeclaredMeasureIsRefused(t *testing.T) {
+	t.Parallel()
+	result := declaredTrendAnswer()
+	result.ClaimedFacts[0].Field = "coverage_ratio_pct"
+	// Non-vacuity: everything else about this fixture is still chartable.
+	if result.ClaimedFacts[0].Table.Shape != contractsv1.ContextFabricFactTableShapeTimeSeries {
+		t.Fatal("fixture no longer declares a time_series, so the refusal would not be about the measure")
+	}
+	if result.ClaimedFacts[0].Table.HasMeasure(result.ClaimedFacts[0].Field) {
+		t.Fatal("fixture's field IS a declared measure; the guarded path is not reached")
+	}
+
+	shapes, event := SelectRenderShapes(result)
+	if shapeByRule(shapes, contractsv1.ContextFabricRenderRuleDatedFactTrend) != nil {
+		t.Fatal("a claim whose field names no declared measure was charted anyway")
+	}
+	if !skipRecorded(event, contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipClaimFieldNotAMeasure) {
+		t.Errorf("the refusal does not name the measure as the reason; skipped=%+v", event.Skipped)
+	}
+}
+
+// TestThePlanRefusesATrendItDidNotAuthorize is North Star check 10 as a
+// property of the PLAN rather than of the row shape: a question that planned
+// only a table gets no chart, however chartable the data is.
+func TestThePlanRefusesATrendItDidNotAuthorize(t *testing.T) {
+	t.Parallel()
+	authorized := declaredTrendAnswer()
+	// Non-vacuity: without the plan this document DOES produce a trend, so
+	// the refusal below is attributable to the plan and to nothing else.
+	if shapeByRule(mustSelect(t, authorized), contractsv1.ContextFabricRenderRuleDatedFactTrend) == nil {
+		t.Fatal("the plan-free fixture selects no trend; the plan cannot be shown to be what refuses it")
+	}
+
+	result := declaredTrendAnswer()
+	result.AnswerPlan = &contractsv1.ContextFabricAnswerPlan{
+		Family:        contractsv1.ContextFabricQuestionFamilyGroupedCohortStatus,
+		FamilySource:  contractsv1.ContextFabricQuestionFamilySourceFallback,
+		FamilyVersion: "v1",
+		RenderKinds:   []contractsv1.ContextFabricRenderKind{contractsv1.ContextFabricRenderKindTable},
+	}
+	shapes, event := SelectRenderShapes(result)
+	if len(shapes) != 0 {
+		t.Fatalf("the plan authorized only `table` and %d shape(s) were selected: %+v", len(shapes), shapes)
+	}
+	if !skipRecorded(event, contractsv1.ContextFabricRenderRuleDatedFactTrend, RenderShapeSkipNotPlanAuthorized) {
+		t.Errorf("the trend refusal does not name the plan; skipped=%+v", event.Skipped)
+	}
+	if err := event.Accounted(); err != nil {
+		t.Errorf("selector accounting: %v", err)
+	}
+}
+
+// TestEveryRuleExitRecordsExactlyOneOutcome is CHAOS-4621: the structural
+// invariant, over a matrix that reaches every rule and every outcome.
+//
+// The same defect class -- a refusal that leaves no trace, or records the
+// wrong reason, or goes invisible once another rule produces a shape -- was
+// closed FOUR times case by case in the 4415/4616 work. This is the
+// invariant that makes the fifth impossible rather than unlucky.
+func TestEveryRuleExitRecordsExactlyOneOutcome(t *testing.T) {
+	t.Parallel()
+	noPlanKinds := func(kinds ...contractsv1.ContextFabricRenderKind) *contractsv1.ContextFabricAnswerPlan {
+		return &contractsv1.ContextFabricAnswerPlan{
+			Family: contractsv1.ContextFabricQuestionFamilyGroupedCohortStatus, FamilySource: contractsv1.ContextFabricQuestionFamilySourceFallback,
+			FamilyVersion: "v1", RenderKinds: kinds,
+		}
+	}
+	singleSubject := func() InvestigationResult {
+		r := declaredTrendAnswer()
+		r.Interpretation.Shape = contractsv1.ContextFabricShapeSingleSubject
+		return r
+	}
+	unrankedCohort := func() InvestigationResult {
+		r := declaredTrendAnswer()
+		r.Cohort.Members[0].RankingComputed = false
+		r.Cohort.Members[0].Score = nil
+		r.Cohort.Members[0].AttentionRank = 0
+		r.Cohort.Members[0].Drivers = nil
+		return r
+	}
+	noDrivers := func() InvestigationResult {
+		r := declaredTrendAnswer()
+		r.Cohort.Members[0].Score = renderFloat(0)
+		r.Cohort.Members[0].Drivers = nil
+		return r
+	}
+	planBlocked := func() InvestigationResult {
+		r := declaredTrendAnswer()
+		r.AnswerPlan = noPlanKinds(contractsv1.ContextFabricRenderKindTable)
+		return r
+	}
+	undeclared := func() InvestigationResult { return chrisTeamsAnswer() }
+	breakdownOnly := func() InvestigationResult {
+		r := declaredTrendAnswer()
+		r.ClaimedFacts[0].Table.Shape = contractsv1.ContextFabricFactTableShapeBreakdown
+		return r
+	}
+	fieldNotMeasure := func() InvestigationResult {
+		r := declaredTrendAnswer()
+		r.ClaimedFacts[0].Field = "not_a_measure"
+		return r
+	}
+	unplottable := func() InvestigationResult {
+		r := declaredTrendAnswer()
+		for i := range r.ClaimedFacts[0].Rows {
+			r.ClaimedFacts[0].Rows[i].Fields["coverage_ratio"] = renderScalarString("n/a")
+		}
+		return r
+	}
+
+	// The matrix is checked for COVERAGE as well as for the invariant. A
+	// matrix that never reaches a skip reason would satisfy the invariant
+	// vacuously, which is exactly the shape of the failure this test
+	// exists to stop.
+	cases := []struct {
+		name   string
+		result func() InvestigationResult
+		expect RenderShapeSkipReason
+	}{
+		{"trend selected, cohort selected", declaredTrendAnswer, ""},
+		{"not cohort intent", singleSubject, RenderShapeSkipNotCohortIntent},
+		{"no ranked member", unrankedCohort, RenderShapeSkipNoRankedMember},
+		{"no drivers", noDrivers, RenderShapeSkipNoDrivers},
+		{"plan authorizes only table", planBlocked, RenderShapeSkipNotPlanAuthorized},
+		{"undeclared table", undeclared, RenderShapeSkipNoDeclaredTable},
+		{"declared, not a time series", breakdownOnly, RenderShapeSkipNoTimeSeriesTable},
+		{"claim field is not a measure", fieldNotMeasure, RenderShapeSkipClaimFieldNotAMeasure},
+		{"declared measure is not plottable", unplottable, RenderShapeSkipNoPlottableMeasure},
+	}
+	reached := map[RenderShapeSkipReason]bool{}
+	for _, testCase := range cases {
+		_, event := SelectRenderShapes(testCase.result())
+		if err := event.Accounted(); err != nil {
+			t.Errorf("%s: %v (selected=%+v skipped=%+v)", testCase.name, err, event.Selected, event.Skipped)
+		}
+		for _, skip := range event.Skipped {
+			reached[skip.Reason] = true
+		}
+		if testCase.expect != "" && !reached[testCase.expect] {
+			t.Errorf("%s: expected reason %q was never recorded; skipped=%+v", testCase.name, testCase.expect, event.Skipped)
+		}
+	}
+	// Non-vacuity of the matrix itself: every closed reason this selector
+	// can produce must be REACHED by some case above. A reason nothing
+	// reaches is a reason nothing has ever proven correct.
+	for _, reason := range []RenderShapeSkipReason{
+		RenderShapeSkipNotCohortIntent, RenderShapeSkipNoRankedMember, RenderShapeSkipNoDrivers,
+		RenderShapeSkipNotPlanAuthorized, RenderShapeSkipNoDeclaredTable, RenderShapeSkipNoTimeSeriesTable,
+		RenderShapeSkipClaimFieldNotAMeasure, RenderShapeSkipNoPlottableMeasure,
+	} {
+		if !reached[reason] {
+			t.Errorf("no case in this matrix ever produces %q, so the invariant is satisfied vacuously for it", reason)
+		}
+	}
+}
+
+// TestTheAccountingInvariantActuallyDetectsALostOutcome proves Accounted is
+// discriminating rather than a function that returns nil. Without this, the
+// matrix above would pass against an Accounted that never fails.
+func TestTheAccountingInvariantActuallyDetectsALostOutcome(t *testing.T) {
+	t.Parallel()
+	_, event := SelectRenderShapes(declaredTrendAnswer())
+	if err := event.Accounted(); err != nil {
+		t.Fatalf("a healthy selection is already reported as unaccounted: %v", err)
+	}
+	// A rule that recorded nothing at all -- the exact shape of the four
+	// defects CHAOS-4621 was filed for.
+	lost := RenderShapeSelectionEvent{Shape: event.Shape, Selected: []RenderShapeSelection{event.Selected[0]}}
+	if err := lost.Accounted(); err == nil {
+		t.Fatal("an event in which two rules recorded no outcome at all was reported as accounted")
+	}
+	// A rule that recorded two reasons.
+	doubled := event
+	doubled.Skipped = append(append([]RenderShapeSkip{}, event.Skipped...),
+		RenderShapeSkip{Rule: contractsv1.ContextFabricRenderRuleCohortAttentionScore, Reason: RenderShapeSkipNoDrivers})
+	if err := doubled.Accounted(); err == nil {
+		t.Fatal("a rule that both selected a shape and recorded a skip was reported as accounted")
+	}
+}
+
+// TestTheDeclarationDescribesTheFieldWhoseRowsWereServed is the
+// anti-divergence pin, and the reason canonicalRowsField exists.
+//
+// A fact can carry a legacy breakdown AND a CHAOS-4645 time series. The
+// CHAOS-4645 ruling is that the LEGACY field's rows are what a claim
+// serves. If the declaration were computed separately it could describe the
+// OTHER field -- a time_series declaration over breakdown rows -- and the
+// wire would be lying in a way nothing downstream could detect. Instead a
+// trend would be drawn across two work scopes: the original CHAOS-4616
+// defect, reintroduced through the declaration rather than through the
+// geometry.
+func TestTheDeclarationDescribesTheFieldWhoseRowsWereServed(t *testing.T) {
+	t.Parallel()
+	subject := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:CHAOS", Label: "CHAOS"}
+	fact := CanonicalFact{
+		Kind: FactFlow, Subject: subject,
+		Fields: map[string]FactValue{
+			"scope_breakdown": TableFactValue(FactTable{
+				Shape: FactTableBreakdown, Key: []string{"provider", "work_scope_id"},
+				Measures: []string{"day", "items_completed"},
+				Rows: []FactValueRow{
+					{Fields: map[string]FactValue{"provider": StringFactValue("github"), "work_scope_id": StringFactValue("a"), "day": StringFactValue("2026-07-20"), "items_completed": IntegerFactValue(0)}},
+					{Fields: map[string]FactValue{"provider": StringFactValue("github"), "work_scope_id": StringFactValue("b"), "day": StringFactValue("2026-08-30"), "items_completed": IntegerFactValue(1)}},
+				},
+			}),
+			"daily_flow": TableFactValue(FactTable{
+				Shape: FactTableTimeSeries, Key: []string{"day"}, Measures: []string{"items_completed"},
+				Rows: []FactValueRow{
+					{Fields: map[string]FactValue{"day": StringFactValue("2026-07-20"), "items_completed": IntegerFactValue(0)}},
+					{Fields: map[string]FactValue{"day": StringFactValue("2026-08-30"), "items_completed": IntegerFactValue(1)}},
+				},
+			}),
+		},
+	}
+	// Non-vacuity: this really is the dual-table case, and both
+	// declarations really are valid.
+	for _, field := range []string{"scope_breakdown", "daily_flow"} {
+		if err := fact.Fields[field].Validate(); err != nil {
+			t.Fatalf("fixture field %q is not a valid declared table: %v", field, err)
+		}
+	}
+
+	claims := []ClaimedFact{{Kind: FactFlow, Subject: subject, Field: "items_completed"}}
+	got, _, _, truncated := attachCanonicalRows(claims, []CanonicalFact{fact})
+	if truncated {
+		t.Fatal("the dual-table fact failed closed; CHAOS-4645's resolution regressed")
+	}
+	if got[0].Table == nil {
+		t.Fatal("rows were served with no declaration at all")
+	}
+	if got[0].Table.Field != "scope_breakdown" {
+		t.Fatalf("declaration names field %q but the served rows came from scope_breakdown", got[0].Table.Field)
+	}
+	if got[0].Table.Shape != contractsv1.ContextFabricFactTableShapeBreakdown {
+		t.Fatalf("declaration says shape %q over rows that are a breakdown", got[0].Table.Shape)
+	}
+	// And therefore: no trend. The two-scope rows cannot be charted.
+	result := InvestigationResult{
+		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
+		ClaimedFacts:   []ClaimedFact{{ClaimID: "claim_flow_dual", Kind: FactFlow, Subject: subject, Field: "items_completed", Rows: got[0].Rows, Table: got[0].Table}},
+	}
+	if shapes, _ := SelectRenderShapes(result); len(shapes) != 0 {
+		t.Fatalf("the two-scope rows were charted through the declaration: %+v", shapes)
+	}
+}
+
+// TestAnUndeclaredFieldGetsNoDeclaration: a pre-CHAOS-4633 producer's rows
+// still travel, and still carry no declaration -- so they are still never
+// charted, and nothing that renders today stops rendering.
+func TestAnUndeclaredFieldGetsNoDeclaration(t *testing.T) {
+	t.Parallel()
+	subject := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:CHAOS", Label: "CHAOS"}
+	fact := CanonicalFact{Kind: FactFlow, Subject: subject, Fields: map[string]FactValue{
+		"legacy_rows": {Rows: []FactValueRow{
+			{Fields: map[string]FactValue{"day": StringFactValue("2026-07-20"), "items_completed": IntegerFactValue(0)}},
+			{Fields: map[string]FactValue{"day": StringFactValue("2026-08-30"), "items_completed": IntegerFactValue(1)}},
+		}},
+	}}
+	got, rowsCount, _, _ := attachCanonicalRows([]ClaimedFact{{Kind: FactFlow, Subject: subject}}, []CanonicalFact{fact})
+	if rowsCount != 2 {
+		t.Fatalf("legacy rows count = %d, want 2 -- the undeclared table must still travel", rowsCount)
+	}
+	if got[0].Table != nil {
+		t.Fatalf("an undeclared field produced a declaration out of nowhere: %+v", got[0].Table)
+	}
+}
+
+func mustSelect(t *testing.T, result InvestigationResult) []contractsv1.ContextFabricRenderShape {
+	t.Helper()
+	shapes, _ := SelectRenderShapes(result)
+	return shapes
+}

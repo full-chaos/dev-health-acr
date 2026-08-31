@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -154,8 +155,18 @@ func TestTheMisleadingRowsCannotBeDeclaredATimeSeries(t *testing.T) {
 			}},
 		},
 	}
-	if err := dishonest.Validate(); err == nil {
+	err := dishonest.Validate()
+	if err == nil {
 		t.Fatal("a two-column-key time_series validated; the CHAOS-4616 defect is representable again")
+	}
+	// The error must be about the ARITY, not about something else this
+	// fixture also happens to trip. A first version of this test asserted
+	// only `err != nil` and SURVIVED a mutation that disabled the arity
+	// rule outright -- the rows failed the instant-parse check instead, so
+	// the test was green against the exact defect it named. Naming the
+	// rule is what makes it discriminating.
+	if !strings.Contains(err.Error(), "exactly one column") {
+		t.Fatalf("the declaration was refused for the wrong reason (%v); this test proves nothing about the one-key-column rule", err)
 	}
 }
 
