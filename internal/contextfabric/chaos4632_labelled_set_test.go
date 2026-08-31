@@ -249,3 +249,61 @@ func TestScopeAnchorAlternativesAreThemselvesConsistent(t *testing.T) {
 		}
 	}
 }
+
+// TestLabelledAnchorMatchesImplementsTheDeclaredRule is the guard codex
+// round 4 asked for: the JSON declares that scoring accepts any listed
+// alternative, and until this test existed NOTHING in the tree applied that
+// rule -- the claim rested entirely on an off-tree program.
+//
+// It also pins the boundaries of the latitude, which matter more than the
+// latitude itself: an EMPTY label admits ONLY an empty emission (that is the
+// negative case the whole gate turns on), and matching is exact-per-member,
+// never prefix or substring -- otherwise "platform" would satisfy an
+// expected "platform infrastructure", which names a different team, and a
+// real error would score as a pass.
+func TestLabelledAnchorMatchesImplementsTheDeclaredRule(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name         string
+		emitted      string
+		canonical    string
+		alternatives []string
+		want         bool
+	}{
+		{"canonical matches", "platform", "platform", []string{"platform", "platform team"}, true},
+		{"listed alternative matches -- the round-2 live case", "platform team", "platform", []string{"platform", "platform team"}, true},
+		{"case and whitespace folded", "  Platform Team ", "platform", []string{"platform", "platform team"}, true},
+		{"unlisted value rejected", "infrastructure", "platform", []string{"platform", "platform team"}, false},
+		{"NO prefix matching: a longer real name is not satisfied by its prefix", "platform", "platform infrastructure", nil, false},
+		{"NO substring matching either", "platform infrastructure", "platform", nil, false},
+		{"empty label admits ONLY an empty emission", "", "", nil, true},
+		{"empty label REJECTS any emission -- the negative case the gate turns on", "anything", "", []string{"anything"}, false},
+		{"non-empty label rejects an omission", "", "platform", []string{"platform team"}, false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := LabelledAnchorMatches(testCase.emitted, testCase.canonical, testCase.alternatives); got != testCase.want {
+				t.Errorf("LabelledAnchorMatches(%q, %q, %v) = %v, want %v", testCase.emitted, testCase.canonical, testCase.alternatives, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestEveryLabelledCaseIsScorableByTheDeclaredRule closes the loop: every
+// case's OWN canonical anchor must score as a match under the rule, and
+// every alternative it lists must too. A label the scorer would reject is a
+// label that can never be satisfied, and the gating number would silently
+// carry that as a model failure forever.
+func TestEveryLabelledCaseIsScorableByTheDeclaredRule(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range loadLabelledQuestions(t) {
+		if !LabelledAnchorMatches(testCase.ExpectScopeAnchor, testCase.ExpectScopeAnchor, testCase.ExpectScopeAnchorAny) {
+			t.Errorf("case %q: its own canonical anchor %q does not satisfy its own label", testCase.ID, testCase.ExpectScopeAnchor)
+		}
+		for _, alternative := range testCase.ExpectScopeAnchorAny {
+			if !LabelledAnchorMatches(alternative, testCase.ExpectScopeAnchor, testCase.ExpectScopeAnchorAny) {
+				t.Errorf("case %q lists alternative %q that the scoring rule rejects", testCase.ID, alternative)
+			}
+		}
+	}
+}
