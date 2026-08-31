@@ -1674,12 +1674,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 	}
 	var cohortSignalCitations cohortMemberSignalCitations
+	// rankedForServedResult is seeded here and REPLACED by stage 3 if the
+	// retry re-ranks; e.emit publishes whichever describes the served answer.
+	var rankedForServedResult *CohortRankedEvent
 	if graphContext.Cohort != nil {
 		var rankEvent CohortRankedEvent
 		graphContext.Cohort, rankEvent, cohortSignalCitations = RankCohort(graphContext.Cohort, facts.Facts, facts.Coverage)
-		if e.telemetry != nil {
-			e.telemetry.RecordCohortRanked(ctx, principal, rankEvent)
-		}
+		// DEFERRED, not emitted here: stage 3 may re-rank a narrowed cohort
+		// for the retry, and the event that reaches an operator must describe
+		// the cohort actually SERVED. Emitting at this point published a
+		// ranking computed over members the caller never received whenever a
+		// retry fired.
+		rankedForServedResult = &rankEvent
 	}
 
 	assemblyParams := synthesisAssemblyParams{
@@ -1693,6 +1699,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if err != nil {
 		return InvestigationResult{}, err
 	}
+	pendingTelemetry.CohortRanked = rankedForServedResult
 	// CHAOS-4636 STAGE 3 -- measure the ASSEMBLED result and, if it does not
 	// fit, RE-SYNTHESIZE ONCE with a smaller input (design §6.3).
 	//
@@ -1774,7 +1781,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// about to persist (set on the SAME resolution value
 				// earlier in this function) -- the race terminal must not
 				// silently drop them.
-				return e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions)
+				// CHAOS-4636 sweep 2: a THIRD post-plan exit that serves and
+				// persists a result. Found by enumerating every return in
+				// Investigate rather than by fixing the two that were
+				// reported -- which is the whole point of doing this as a
+				// sweep: the class was "post-plan exits", never "this exit".
+				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions)
+				return stampAnswerPlan(superseding, plan), supersededErr
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}

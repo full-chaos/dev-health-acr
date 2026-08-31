@@ -441,7 +441,11 @@ type assemblyTelemetry struct {
 	WindowCanonicalization  *WindowCanonicalizationOutcome
 	SynthesisStatusOverride *SynthesisStatusOverrideOutcome
 	CohortNarration         *CohortDriverNarrationEvent
-	CommitAffirmations      []CommitAffirmationOutcome
+	// CohortRanked is seeded by the engine from the pre-synthesis ranking and
+	// REPLACED by stage 3 when a retry re-ranks a narrowed cohort, so the
+	// event published always describes the cohort actually served.
+	CohortRanked       *CohortRankedEvent
+	CommitAffirmations []CommitAffirmationOutcome
 }
 
 // emit publishes the held events. The engine calls it EXACTLY ONCE, for the
@@ -452,6 +456,9 @@ func (e *Engine) emit(ctx context.Context, principal storage.Principal, pending 
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, *pending.WindowCanonicalization)
 	}
 	e.recordSynthesisStatusOverride(ctx, principal, pending.SynthesisStatusOverride)
+	if e.telemetry != nil && pending.CohortRanked != nil {
+		e.telemetry.RecordCohortRanked(ctx, principal, *pending.CohortRanked)
+	}
 	if e.telemetry != nil && pending.CohortNarration != nil {
 		e.telemetry.RecordCohortDriverNarration(ctx, principal, *pending.CohortNarration)
 	}

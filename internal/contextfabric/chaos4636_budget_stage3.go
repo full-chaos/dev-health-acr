@@ -105,7 +105,8 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	}
 
 	grouped := params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0
-	narrowedGraph, narrowedFacts, before, after, canNarrow := narrowSynthesisInput(params, plan)
+	narrowed := narrowSynthesisInput(params, plan)
+	before, after, canNarrow := narrowed.Before, narrowed.After, narrowed.Narrow
 	// Name WHICH of the three reasons declined the retry. They have
 	// completely different fixes -- reconfigure the deployment, accept that
 	// this answer is genuinely slow, or accept that nothing was left to
@@ -132,7 +133,13 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		Overrun: overrun,
 	})
 
-	retried, retryPending, retryErr := e.synthesizeAndAssemble(ctx, principal, params.forRetry(narrowedGraph, narrowedFacts))
+	retryParams := params.forRetry(narrowed.Graph, narrowed.Facts)
+	// The re-rank's citations MUST travel with the re-ranked cohort:
+	// narrateCohortDriverJudgments resolves them per member, so citations
+	// computed against the wider member set would narrate against members the
+	// retry no longer carries.
+	retryParams.CohortSignalCitations = narrowed.Citations
+	retried, retryPending, retryErr := e.synthesizeAndAssemble(ctx, principal, retryParams)
 	if retryErr != nil {
 		// PROPAGATE the retry's own error. An earlier revision discarded it
 		// and returned a budget refusal, so a transient ErrModelUnavailable
@@ -181,6 +188,13 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// question with more latency.
 		return InvestigationResult{}, assemblyTelemetry{}, e.refusalFrom(plan, retryMeasurement, retryOverrun, true)
 	}
+	// The SERVED answer is the retry's, so the ranking event that describes it
+	// is the retry's too. Emitting the first pass's would report a ranking
+	// computed over members the caller never received -- the same
+	// "telemetry describes a different artifact than the one served" class the
+	// deferred emitters fix.
+	retryRanked := narrowed.Ranked
+	retryPending.CohortRanked = &retryRanked
 	return retried, retryPending, nil
 }
 
@@ -202,14 +216,34 @@ func cohortMemberCount(cohort *Cohort) int {
 // Halving is a bounded, declared reduction that makes progress without
 // pretending to a precision it does not have. §6.3 says so in as many words:
 // "the exact clamp is not derivable on paper".
-func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) (GraphContext, CanonicalFactBundle, int, int, bool) {
+// narrowedInput is what a narrowing produced. It is a STRUCT because the
+// previous signature returned five positional values and the re-rank's
+// citations were assigned back onto `params` -- a VALUE parameter, so the
+// assignment was silently discarded and the retry ran with citations computed
+// against the PRE-narrowing member set. Found by the systematic sweep, not by
+// review: the line looked correct and did nothing.
+type narrowedInput struct {
+	Graph     GraphContext
+	Facts     CanonicalFactBundle
+	Citations cohortMemberSignalCitations
+	// Ranked is the re-rank's own event. RankCohort normalizes within the
+	// cohort, so a narrowed cohort's ranking is genuinely different -- and
+	// the event describing the SERVED answer must be that one, not the
+	// pre-narrowing one the engine already holds.
+	Ranked CohortRankedEvent
+	Before int
+	After  int
+	Narrow bool
+}
+
+func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) narrowedInput {
 	graph := params.Graph
 	facts := params.Facts
 	if graph.Cohort == nil || len(graph.Cohort.Members) <= 1 {
 		// Nothing left to narrow. A cohort of one is the smallest answer
 		// that is still an answer to the question asked; zero members is a
 		// different question.
-		return graph, facts, 0, 0, false
+		return narrowedInput{Graph: graph, Facts: facts}
 	}
 	before := len(graph.Cohort.Members)
 	target := before / 2
@@ -234,7 +268,7 @@ func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) (Gra
 		// decision D2 forbids: "for each team" is the question's own words.
 		// The planned refusal is the correct terminal case here, not a
 		// silent group drop.
-		return graph, facts, before, before, false
+		return narrowedInput{Graph: graph, Facts: facts, Before: before, After: before}
 	}
 	removed := RemovedCohortMembers(cohort.Members, kept)
 	cohort.Members = kept
@@ -246,11 +280,13 @@ func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) (Gra
 	}
 	// Re-rank: RankCohort min-max normalizes workload WITHIN the cohort, so
 	// scores computed against the wider member set do not describe this one.
-	rankedCohort, _, citations := RankCohort(cohort, facts.Facts, facts.Coverage)
+	rankedCohort, rankEvent, citations := RankCohort(cohort, facts.Facts, facts.Coverage)
 	graph.Cohort = rankedCohort
 	facts.Facts = RetainFactsForCohort(facts.Facts, rankedCohort, removed)
-	params.CohortSignalCitations = citations
-	return graph, facts, before, len(kept), true
+	return narrowedInput{
+		Graph: graph, Facts: facts, Citations: citations, Ranked: rankEvent,
+		Before: before, After: len(kept), Narrow: true,
+	}
 }
 
 // retryDeadlineAvailable reports whether enough of the request deadline
