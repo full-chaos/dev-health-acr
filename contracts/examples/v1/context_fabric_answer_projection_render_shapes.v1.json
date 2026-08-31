@@ -337,6 +337,7 @@
     "drivers_omitted": 0,
     "withheld_drivers_omitted": 0,
     "cohort_members_omitted": 0,
+    "cohort_groups_omitted": 0,
     "facts_omitted": 0,
     "candidates_omitted": 0,
     "evidence_refs_omitted": 0,

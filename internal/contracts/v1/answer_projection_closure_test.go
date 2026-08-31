@@ -268,7 +268,13 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// leaves (terminal_status, terminal_reason). The canonical result
 		// surface gains the SAME two (265 -> 267): the projection carries
 		// the field verbatim rather than a narrowed copy.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 180},
+		// CHAOS-4636: 180 -> 184 -- the projected group axis contributed four
+		// string leaves (the group subject's kind/canonical_id/label plus
+		// member_canonical_ids[]). The projection carries the group verbatim
+		// rather than a narrowed copy, exactly as it does the render shape.
+		// Unlike the canonical result surface, this one gains NO plan
+		// leaves: the projection does not carry the answer plan.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 184},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).

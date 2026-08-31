@@ -217,6 +217,8 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	"#/$defs/RenderShapeRule":    "#/$defs/context_fabric_answer_projection.v1/$defs/RenderShapeRule",
 	// CHAOS-4413: completeness' own new projection-local $defs entry.
 	"#/$defs/AnswerCompleteness": "#/$defs/context_fabric_answer_projection.v1/$defs/AnswerCompleteness",
+	// CHAOS-4636: the grouped cohort's own new projection-local $defs entry.
+	"#/$defs/ProjectedCohortGroup": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedCohortGroup",
 }
 
 var mcpResponseDefsSyncs = []mcpResponseDefsSync{

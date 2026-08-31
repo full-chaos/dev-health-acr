@@ -28,7 +28,7 @@ import (
 // to today. It is a fixture, not an assertion about what the numbers SHOULD
 // be -- every counter is zero precisely so the only thing under test is
 // which KEYS reach the wire.
-const projectionBudgetGolden = `{"truncated":false,"drivers_omitted":0,"withheld_drivers_omitted":0,"cohort_members_omitted":0,"facts_omitted":0,"candidates_omitted":0,"evidence_refs_omitted":0,"limitations_omitted":0,"warnings_omitted":0,"coverage_omitted":0,"reasons_omitted":0,"values_clamped":0,"render_shapes_omitted":0,"full_result_omitted":false}`
+const projectionBudgetGolden = `{"truncated":false,"drivers_omitted":0,"withheld_drivers_omitted":0,"cohort_members_omitted":0,"cohort_groups_omitted":0,"facts_omitted":0,"candidates_omitted":0,"evidence_refs_omitted":0,"limitations_omitted":0,"warnings_omitted":0,"coverage_omitted":0,"reasons_omitted":0,"values_clamped":0,"render_shapes_omitted":0,"full_result_omitted":false}`
 
 // optionalBudgetCounters are the ones the schema does not require. They are
 // listed here so the test fails by NAME if one stops being emitted.

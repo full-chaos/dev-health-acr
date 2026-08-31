@@ -123,7 +123,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	clamp := &clamper{}
 	index := newEvidenceIndex(bounds.MaxEvidenceRefs)
 	drivers, driversOmitted, withheldOmitted, facts, factsOmitted := projectDrivers(result, bounds, index, clamp)
-	cohort, cohortOmitted, cohortReasonsOmitted := projectCohort(result, bounds, index, clamp)
+	cohort, cohortOmitted, cohortReasonsOmitted, cohortGroupsOmitted := projectCohort(result, bounds, index, clamp)
 	clarification, candidatesOmitted, candidateReasonsOmitted := projectClarification(result, bounds, clamp)
 	limitations, limitationsOmitted := boundedLimitations(result.Limitations, clamp)
 	// The engine's own displacement counts too (CHAOS-3746 round-16).
@@ -197,6 +197,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		DriversOmitted:         driversOmitted,
 		WithheldDriversOmitted: withheldOmitted,
 		CohortMembersOmitted:   cohortOmitted,
+		CohortGroupsOmitted:    cohortGroupsOmitted,
 		FactsOmitted:           factsOmitted,
 		CandidatesOmitted:      candidatesOmitted,
 		EvidenceRefsOmitted:    evidenceOmitted,
@@ -235,6 +236,12 @@ func declaresDrop(budget contractsv1.ContextFabricProjectionBudget) bool {
 		budget.DriversOmitted > 0 ||
 		budget.WithheldDriversOmitted > 0 ||
 		budget.CohortMembersOmitted > 0 ||
+		// CHAOS-4636: a lost GROUP is a truncation in its own right. Under
+		// decision D2 it should never happen -- every group survives with at
+		// least one member -- so a projection reporting one that did not
+		// also declare itself truncated would be hiding the rarest and most
+		// serious omission this budget can take.
+		budget.CohortGroupsOmitted > 0 ||
 		budget.FactsOmitted > 0 ||
 		budget.CandidatesOmitted > 0 ||
 		budget.EvidenceRefsOmitted > 0 ||
@@ -393,12 +400,22 @@ func countUncitedClaims(result contractsv1.ContextFabricInvestigationResult, ret
 // cohort it discovered, not a statement about this projection. Projection
 // truncation shows up in Total versus len(Members) and in the declared
 // budget, never by silently flipping the engine's own claim.
-func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds Budget, index *evidenceIndex, clamp *clamper) (*contractsv1.ContextFabricProjectedCohort, int, int) {
+func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds Budget, index *evidenceIndex, clamp *clamper) (*contractsv1.ContextFabricProjectedCohort, int, int, int) {
 	if result.Cohort == nil {
-		return nil, 0, 0
+		return nil, 0, 0, 0
 	}
 	canonical := *result.Cohort
 	reasonsOmitted := 0
+	// CHAOS-4636: the member budget is ALLOCATED ACROSS GROUPS before
+	// anything is truncated within them. Without this, the leading-prefix
+	// cut below could return every member of the first group and none of
+	// the second -- for a question that asked about each group -- and the
+	// caller would have no way to tell that a whole group was gone.
+	//
+	// admissible is nil for a flat cohort, which is every cohort this
+	// projection carried before this slice, so the loop below is
+	// byte-identical for them.
+	admissible := groupAwareMemberAllowance(canonical, bounds.MaxCohortMembers)
 	members := make([]contractsv1.ContextFabricProjectedCohortMember, 0, min(len(canonical.Members), bounds.MaxCohortMembers))
 	// retained mirrors members 1:1 (same order, same cut) but keeps the
 	// CANONICAL member -- including Drivers, which the projected member
@@ -410,6 +427,15 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 	for _, member := range canonical.Members {
 		if len(members) >= bounds.MaxCohortMembers {
 			break
+		}
+		if admissible != nil {
+			if _, allowed := admissible[member.Subject.CanonicalID]; !allowed {
+				// CONTINUE, not break: the members this group-aware
+				// allowance skipped are interleaved with the ones it kept,
+				// so stopping at the first skip would reinstate exactly the
+				// leading-prefix cut this exists to remove.
+				continue
+			}
 		}
 		// Same rule as drivers: a member whose citations do not fit the
 		// evidence index is dropped whole rather than kept with dangling
@@ -439,14 +465,103 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 		})
 		retained = append(retained, member)
 	}
+	groups, groupsOmitted := projectCohortGroups(canonical, members)
 	return &contractsv1.ContextFabricProjectedCohort{
-		Kind:         canonical.Kind,
-		Total:        len(canonical.Members),
-		Rationale:    clamp.text(storedText(canonical.Rationale), contractsv1.ContextFabricProjectedCohortRationaleMaxLength),
-		Complete:     canonical.Complete,
+		Kind:      canonical.Kind,
+		Total:     len(canonical.Members),
+		Rationale: clamp.text(storedText(canonical.Rationale), contractsv1.ContextFabricProjectedCohortRationaleMaxLength),
+		Complete:  canonical.Complete,
+		// Truncated is the canonical flag, copied verbatim for the same
+		// reason Complete is: it is the ENGINE's statement about the cohort
+		// it discovered, not this projection's statement about its own cut.
+		// Projection truncation shows up in Total versus len(Members) and in
+		// the declared budget, exactly as it always has.
+		Truncated:    canonical.Truncated,
 		Members:      members,
+		Groups:       groups,
 		RankingTable: buildRankingTable(retained),
-	}, len(canonical.Members) - len(members), reasonsOmitted
+	}, len(canonical.Members) - len(members), reasonsOmitted, groupsOmitted
+}
+
+// groupAwareMemberAllowance decides WHICH members a grouped cohort's budget
+// admits, taking one from the largest group at a time, round-robin.
+//
+// That is decision D2 -- member-first -- applied at the projection boundary
+// as well as in the engine, so the two cannot disagree about which members
+// survive a squeeze. Every group keeps at least one member for as long as the
+// budget admits any members at all.
+//
+// Returns nil when there is no group axis or when every member fits, which
+// leaves the flat path completely untouched.
+func groupAwareMemberAllowance(cohort contractsv1.ContextFabricCohort, maxMembers int) map[string]struct{} {
+	if len(cohort.Groups) == 0 || maxMembers <= 0 || len(cohort.Members) <= maxMembers {
+		return nil
+	}
+	remaining := make([][]string, len(cohort.Groups))
+	for index, group := range cohort.Groups {
+		remaining[index] = group.MemberCanonicalIDs
+	}
+	allowed := make(map[string]struct{}, maxMembers)
+	for taken, progressed := 0, true; taken < maxMembers && progressed; {
+		progressed = false
+		// Largest group first on each pass, so a big group is thinned
+		// before a small one loses its only member.
+		order := make([]int, 0, len(remaining))
+		for index := range remaining {
+			if len(remaining[index]) > 0 {
+				order = append(order, index)
+			}
+		}
+		sort.SliceStable(order, func(i, j int) bool { return len(remaining[order[i]]) > len(remaining[order[j]]) })
+		for _, index := range order {
+			if taken >= maxMembers {
+				break
+			}
+			allowed[remaining[index][0]] = struct{}{}
+			remaining[index] = remaining[index][1:]
+			taken++
+			progressed = true
+		}
+	}
+	return allowed
+}
+
+// projectCohortGroups rebuilds the group axis over the members that actually
+// survived, and counts the groups that lost every member.
+func projectCohortGroups(cohort contractsv1.ContextFabricCohort, members []contractsv1.ContextFabricProjectedCohortMember) ([]contractsv1.ContextFabricProjectedCohortGroup, int) {
+	if len(cohort.Groups) == 0 {
+		return nil, 0
+	}
+	survived := make(map[string]struct{}, len(members))
+	for _, member := range members {
+		survived[member.Subject.CanonicalID] = struct{}{}
+	}
+	groups := make([]contractsv1.ContextFabricProjectedCohortGroup, 0, len(cohort.Groups))
+	omitted := 0
+	for _, group := range cohort.Groups {
+		kept := make([]string, 0, len(group.MemberCanonicalIDs))
+		for _, id := range group.MemberCanonicalIDs {
+			if _, ok := survived[id]; ok {
+				kept = append(kept, id)
+			}
+		}
+		if len(kept) == 0 {
+			// A group with no surviving member is OMITTED and counted,
+			// never emitted empty: an empty group reads as "this team has
+			// no projects", which is a different and false answer.
+			omitted++
+			continue
+		}
+		truncated := len(kept) < group.Total
+		groups = append(groups, contractsv1.ContextFabricProjectedCohortGroup{
+			Subject:            group.Subject,
+			MemberCanonicalIDs: kept,
+			Total:              group.Total,
+			Truncated:          truncated,
+			Complete:           !truncated && group.Complete,
+		})
+	}
+	return groups, omitted
 }
 
 // projectClarification carries the ambiguity a caller must resolve. It is

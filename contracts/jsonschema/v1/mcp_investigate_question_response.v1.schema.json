@@ -756,6 +756,9 @@
             "complete": {
               "type": "boolean"
             },
+            "truncated": {
+              "type": "boolean"
+            },
             "kind": {
               "enum": [
                 "organization",
@@ -782,6 +785,13 @@
               },
               "maxItems": 250,
               "type": "array"
+            },
+            "groups": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedCohortGroup"
+              },
+              "maxItems": 250
             },
             "ranking_table": {
               "items": {
@@ -1145,6 +1155,10 @@
               "minimum": 0,
               "type": "integer"
             },
+            "cohort_groups_omitted": {
+              "type": "integer",
+              "minimum": 0
+            },
             "coverage_omitted": {
               "minimum": 0,
               "type": "integer"
@@ -1198,6 +1212,7 @@
             "drivers_omitted",
             "withheld_drivers_omitted",
             "cohort_members_omitted",
+            "cohort_groups_omitted",
             "facts_omitted",
             "candidates_omitted",
             "evidence_refs_omitted",
@@ -2157,6 +2172,56 @@
             "label"
           ],
           "type": "object"
+        },
+        "ProjectedCohortGroup": {
+          "description": "CHAOS-4636: one group of a projected grouped cohort. Mirrors the canonical CohortGroup: the group subject, its members by canonical id into ProjectedCohort.members, its OWN completeness, and the size it had before narrowing.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "subject": {
+              "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/SubjectRef"
+            },
+            "member_canonical_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "maxItems": 250
+            },
+            "complete": {
+              "type": "boolean"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "total": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "subject",
+            "member_canonical_ids",
+            "complete",
+            "truncated",
+            "total"
+          ],
+          "not": {
+            "properties": {
+              "complete": {
+                "const": true
+              },
+              "truncated": {
+                "const": true
+              }
+            },
+            "required": [
+              "complete",
+              "truncated"
+            ]
+          }
         }
       },
       "additionalProperties": false,
@@ -6985,7 +7050,7 @@
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/RenderKind"
               },
-              "maxItems": 16
+              "maxItems": 8
             },
             "fact_kinds": {
               "type": "array",
@@ -7023,7 +7088,7 @@
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureNeedKind"
               },
-              "maxItems": 16
+              "maxItems": 5
             },
             "budget": {
               "$ref": "#/$defs/context_fabric_common.v1/$defs/AnswerPlanBudget"

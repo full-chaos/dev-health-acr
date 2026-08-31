@@ -4695,7 +4695,7 @@
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/RenderKind"
               },
-              "maxItems": 16
+              "maxItems": 8
             },
             "fact_kinds": {
               "type": "array",
@@ -4733,7 +4733,7 @@
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/StructureNeedKind"
               },
-              "maxItems": 16
+              "maxItems": 5
             },
             "budget": {
               "$ref": "#/$defs/context_fabric_common.v1/$defs/AnswerPlanBudget"
