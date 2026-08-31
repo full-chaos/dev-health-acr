@@ -968,15 +968,24 @@ type RuntimeQuestionInterpreter struct {
 // extra latency, no extra tokens, and nothing gated on the outcome either
 // way.
 //
-// N>1 needs a per-call SEED override on ModelRuntime.InterpretQuestion,
-// which is slice S1's surface (CHAOS-4631, "pin the interpret sampler")
-// and does not exist on origin/main -- main carries only CHAOS-4622's
-// single fixed seed constant. The aggregation itself is complete and
-// table-driven-tested here (ResolveQuestionFamily,
-// ResolveQuestionFamilyEnsemble, EnsembleSeeds); only the seeded call site
-// is missing. A configuration knob wired to a field this type cannot act
-// on would be a knob that silently does nothing, which is worse than no
-// knob -- so it is not added until it can be honoured.
+// N>1 needs a per-sample interpret call, which now EXISTS: S1
+// (CHAOS-4631, merged d00080fd) shipped
+// genkitruntime.Runtime.InterpretQuestionForSample, and
+// ResolveQuestionFamilyEnsemble takes a sampler over sample INDICES that
+// calls it. What is still absent is a reason to turn it on. The measured
+// result on the labelled set (12 cases x 2 replicates, kiac/dh_0830 real
+// data) was 100% resolved-family stability AT N=1 -- the model's own
+// family hint was only 83.3% stable and it did not matter, because the
+// precedence table reads structure signals above Shape and treats that
+// hint as a hint. So the ensemble currently buys nothing measurable, and
+// its price would be paid on every turn 1, the product's most frequent
+// call.
+//
+// This type therefore still has no ensemble-size field. A configuration
+// knob wired to a mechanism that demonstrably improves nothing is a knob
+// that invites spending for no gain -- the same reasoning that kept it out
+// while the call site was missing, now resting on a measurement instead of
+// an absence. Add it when a corpus shows N=1 failing.
 
 func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal storage.Principal, request InvestigationRequest) (InterpretedQuestion, error) {
 	if r.Runtime == nil {
