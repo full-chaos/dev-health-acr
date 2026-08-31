@@ -1129,5 +1129,21 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 	for _, n := range visited {
 		nodes = append(nodes, n)
 	}
+	// CHAOS-4630: visited is a Go map -- ranging it (immediately above)
+	// yields a randomized order per call, not merely an unspecified-but-
+	// stable one. Every consumer of this traversal (DiscoverContext's
+	// resolvedNodes/cohortNodes, and through it graphrank.DiscoveredCohort's
+	// positional Rank and cap truncation) is downstream of this ONE
+	// materialization point, so sorting here -- on the same total,
+	// tie-break-safe key sortCandidateNodesBySubjectKey already uses for
+	// reader.go's exact-name census (the other node source DiscoveredCohort
+	// reads) -- makes every consumer stable without re-fixing this
+	// separately at each call site. An arbitrary-but-stable lexical order is
+	// deliberately not "the more meaningful" order (hop distance, edge
+	// count, ...) -- the ticket's own minimal-fix direction: correctness
+	// (reproducibility once the caller's cap makes order outcome-affecting)
+	// comes first, and a richer order can replace this key later without
+	// touching any consumer's contract.
+	sortCandidateNodesBySubjectKey(nodes)
 	return nodes, edges, failedLookups, filterCounts, nil
 }
