@@ -384,15 +384,19 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 			"scope_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
 				Shape: contextfabric.FactTableBreakdown,
 				Key:   []string{"provider", "work_scope_id"},
+				// day is a StringFactValue as-of date, not a quantity
+				// (CHAOS-4680): an informational sibling column on each
+				// scope's row, not something this table measures.
 				Measures: []string{
-					"day", "items_started", "items_completed", "wip_count_end_of_day",
+					"items_started", "items_completed", "wip_count_end_of_day",
 					"bug_completed_ratio", "story_points_completed",
 					"wip_age_p50_hours", "wip_age_p90_hours",
 					"cycle_time_p50_hours", "cycle_time_p90_hours",
 					"lead_time_p50_hours", "lead_time_p90_hours",
 				},
-				Grain: timeBound.effectiveGrain(grainDaily),
-				Rows:  valueRows,
+				Observations: []string{"day"},
+				Grain:        timeBound.effectiveGrain(grainDaily),
+				Rows:         valueRows,
 			}),
 		}
 		if omitted > 0 {

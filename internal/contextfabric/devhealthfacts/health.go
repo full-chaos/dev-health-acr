@@ -202,11 +202,17 @@ func healthDailyTable(rows []healthDailyRow, grain contextfabric.TemporalGrain) 
 	}
 	valueRows, omitted := capFactValueRows(valueRows)
 	return contextfabric.TableFactValue(contextfabric.FactTable{
-		Shape:    contextfabric.FactTableTimeSeries,
-		Key:      []string{"day"},
-		Measures: []string{"compounding_risk", "severity"},
-		Grain:    grain,
-		Rows:     valueRows,
+		Shape: contextfabric.FactTableTimeSeries,
+		Key:   []string{"day"},
+		// severity is a per-day categorical OBSERVATION of this one
+		// subject (CHAOS-4680), not a quantity -- it belongs beside
+		// compounding_risk, not among the measures a trend can plot.
+		// Declaring it a Measure would have blocked the numeric-only rule
+		// FactTable.Validate now enforces on every Measures column.
+		Measures:     []string{"compounding_risk"},
+		Observations: []string{"severity"},
+		Grain:        grain,
+		Rows:         valueRows,
 	}), true, omitted
 }
 

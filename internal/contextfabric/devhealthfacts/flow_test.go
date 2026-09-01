@@ -97,6 +97,28 @@ func TestFlowProviderTeamReadsScopeBreakdown(t *testing.T) {
 	if len(breakdown) != 1 || *breakdown[0].Fields["work_scope_id"].String != "scope-a" {
 		t.Fatalf("scope_breakdown = %#v", breakdown)
 	}
+	if err := fact.Fields["scope_breakdown"].Validate(); err != nil {
+		t.Fatalf("scope_breakdown fails FactValue.Validate(): %v", err)
+	}
+	// CHAOS-4680: day is a StringFactValue as-of date, not a quantity -- a
+	// Measures column is now producer-validated numeric-only
+	// (FactTable.Validate), so a regression that puts day back in
+	// Measures fails Validate() above.
+	table := fact.Fields["scope_breakdown"].Table
+	for _, measure := range table.Measures {
+		if measure == "day" {
+			t.Fatalf("scope_breakdown.Measures = %v, must not classify day (a date string) as a measure", table.Measures)
+		}
+	}
+	foundObservation := false
+	for _, observation := range table.Observations {
+		if observation == "day" {
+			foundObservation = true
+		}
+	}
+	if !foundObservation {
+		t.Fatalf("scope_breakdown.Observations = %v, want day declared as an observation", table.Observations)
+	}
 	if *breakdown[0].Fields["wip_age_p50_hours"].Number != 12 {
 		t.Fatalf("wip_age_p50_hours = %#v", breakdown[0].Fields["wip_age_p50_hours"])
 	}

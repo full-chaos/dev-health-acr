@@ -285,6 +285,34 @@
       "field": "severity",
       "value": {
         "string": "elevated"
+      },
+      "rows": [
+        {
+          "fields": {
+            "day": {
+              "string": "2026-08-15"
+            },
+            "compounding_risk": {
+              "number": 0.61
+            },
+            "severity": {
+              "string": "elevated"
+            }
+          }
+        }
+      ],
+      "table": {
+        "field": "daily_health",
+        "shape": "time_series",
+        "key": [
+          "day"
+        ],
+        "measures": [
+          "compounding_risk"
+        ],
+        "observations": [
+          "severity"
+        ]
       }
     },
     {

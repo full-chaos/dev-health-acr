@@ -469,12 +469,17 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 			"team_breakdown": contextfabric.TableFactValue(contextfabric.FactTable{
 				Shape: contextfabric.FactTableBreakdown,
 				Key:   []string{"team_id", "team_name", "work_scope_id", "computed_at"},
+				// insufficient_history/high_variance are BooleanFactValue
+				// flags, not quantities (CHAOS-4680): a boolean is exactly
+				// the "not a quantity" case Observations exists for, so
+				// they moved out of Measures rather than tripping the
+				// numeric-measures rule FactTable.Validate now enforces.
 				Measures: []string{
-					"throughput_mean", "throughput_stddev", "insufficient_history",
-					"high_variance", "backlog_size", "forecast_p50_days",
+					"throughput_mean", "throughput_stddev", "backlog_size", "forecast_p50_days",
 				},
-				Grain: timeBound.effectiveGrain(grainExact),
-				Rows:  teamRows,
+				Observations: []string{"insufficient_history", "high_variance"},
+				Grain:        timeBound.effectiveGrain(grainExact),
+				Rows:         teamRows,
 			}),
 		}
 		// codex CHAOS-4645 round-1 P3: see readTeamWorkload's identical note.

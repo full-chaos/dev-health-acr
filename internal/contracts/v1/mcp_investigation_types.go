@@ -217,6 +217,9 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	"structured.key_facts[].table.field",
 	"structured.key_facts[].table.key[]",
 	"structured.key_facts[].table.measures[]",
+	// CHAOS-4680: the third declared role's own column names, classified
+	// exactly like key[]/measures[] just above for the identical reason.
+	"structured.key_facts[].table.observations[]",
 	"structured.key_facts[].table.order_by",
 	// CHAOS-4415: a render shape's DISPLAY text. Title/axis_label/
 	// value_label/series[].label/points[].label are built from canonical
@@ -331,6 +334,9 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.claimed_facts[].table.field",
 	"structured.claimed_facts[].table.key[]",
 	"structured.claimed_facts[].table.measures[]",
+	// CHAOS-4680: the third declared role's own column names, classified
+	// exactly like key[]/measures[] just above for the identical reason.
+	"structured.claimed_facts[].table.observations[]",
 	"structured.claimed_facts[].table.order_by",
 	// CHAOS-4415: a render shape's DISPLAY text. Title/axis_label/
 	// value_label/series[].label/points[].label are built from canonical

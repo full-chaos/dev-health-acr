@@ -247,3 +247,70 @@ func TestChaos4521_TheLedgerRecordsARejectedProviderResult(t *testing.T) {
 		t.Errorf("the rejected-read record leaked subject content")
 	}
 }
+
+// TestChaos4680_TheLedgerNamesANonNumericMeasureRejection is a codex round-1
+// finding (P2, ARGUED): a rejected provider fact ledgered only the generic
+// "rejected" outcome, so an operator reading the ledger for a build where a
+// producer regressed a Measures column back to non-numeric (this ticket's
+// own defect class) could not tell that CAUSE apart from an out-of-scope
+// subject, an invalid source state, or any other reason
+// mergeFactProviderResult refuses a result. errors.Is against
+// ErrFactTableMeasureNotNumeric narrows the outcome for that one cause
+// without logging Validate()'s free-text message.
+func TestChaos4680_TheLedgerNamesANonNumericMeasureRejection(t *testing.T) {
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	invalidTable := TableFactValue(FactTable{
+		Shape:    FactTableTimeSeries,
+		Key:      []string{"day"},
+		Measures: []string{"compounding_risk"},
+		Rows: []FactValueRow{
+			{Fields: map[string]FactValue{"day": StringFactValue("2026-08-15"), "compounding_risk": StringFactValue("high")}},
+		},
+	})
+	provider := &factProviderStub{
+		capability: FactCapability{Kind: FactHealth, Name: "devhealthfacts.health", Version: "health-v1", SupportedSubjectKinds: []SubjectKind{SubjectProject}, Dimension: HealthDimensionExecutionCompletion, SubjectRoles: []FactRole{FactRoleSubject}},
+		result: FactProviderResult{State: SourceAvailable, Version: "health-v1", Facts: []CanonicalFact{{
+			Kind: FactHealth, Subject: project,
+			Fields:      map[string]FactValue{"daily_health": invalidTable},
+			SourceState: SourceAvailable,
+		}}},
+	}
+
+	var sink bytes.Buffer
+	restore := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&sink, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(restore) })
+
+	registry, err := NewFactCapabilityRegistry([]FactProvider{provider}, FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+	}
+	_, readErr := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, canonicalFactRequest(project, FactHealth))
+	if readErr == nil {
+		t.Fatalf("precondition: expected the non-numeric measure to be rejected")
+	}
+	if !strings.Contains(readErr.Error(), "is not numeric") {
+		t.Fatalf("ReadFacts() error = %v, want it to name the numeric-measure invariant", readErr)
+	}
+
+	var record map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(sink.String()), "\n") {
+		var candidate map[string]any
+		if err := json.Unmarshal([]byte(line), &candidate); err != nil {
+			continue
+		}
+		if candidate["msg"] == "context fabric fact read" {
+			record = candidate
+		}
+	}
+	if record == nil {
+		t.Fatalf("no fact-read record was emitted for the rejected provider result")
+	}
+	if record["kind"] != string(FactHealth) || record["outcome"] != "rejected_non_numeric_measure" {
+		t.Errorf("record = %v, want kind=%q outcome=%q", record, FactHealth, "rejected_non_numeric_measure")
+	}
+	// Corpus-safe: the free-text Validate() message never reaches the log.
+	if strings.Contains(sink.String(), "compounding_risk") {
+		t.Errorf("the ledger record leaked Validate()'s free-text message")
+	}
+}

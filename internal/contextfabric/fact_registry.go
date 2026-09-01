@@ -626,7 +626,19 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 			// ledger to attribute -- leaving it out made the
 			// one-record-per-planned-capability claim false on the runs that
 			// need it most.
-			r.recordFactRead(ctx, principal, planned.Kind, factReadRejected, "", query.Subjects, factsReturned, false)
+			//
+			// CHAOS-4680 codex finding: the generic "rejected" outcome alone
+			// left an operator unable to tell a non-numeric-measure
+			// declaration apart from every other reason mergeFactProviderResult
+			// can refuse a provider's result. errors.Is against the domain
+			// sentinel narrows the outcome for that ONE cause, without
+			// logging Validate()'s free-text message (recordFactRead's own
+			// "no provider reason string" discipline).
+			outcome := factReadRejected
+			if errors.Is(err, ErrFactTableMeasureNotNumeric) {
+				outcome = factReadRejectedNonNumericMeasure
+			}
+			r.recordFactRead(ctx, principal, planned.Kind, outcome, "", query.Subjects, factsReturned, false)
 			return bundle, fmt.Errorf("fact capability %s: %w", planned.Kind, err)
 		}
 		// BOTH the state and the truncation flag are read back off the
@@ -679,6 +691,14 @@ const (
 	// carry facts). These paths abort the whole investigation, so no
 	// coverage entry is ever minted for them.
 	factReadRejected factReadOutcome = "rejected"
+	// factReadRejectedNonNumericMeasure (CHAOS-4680) narrows factReadRejected
+	// for the ONE cause codex found undiagnosable without it: a provider
+	// declared a Measures column whose cell is not numeric
+	// (FactTable.ErrFactTableMeasureNotNumeric). Detected by errors.Is
+	// against that sentinel, never by parsing Validate()'s free-text
+	// message -- this file's own "no provider reason string" discipline
+	// (recordFactRead's doc comment) forbids that.
+	factReadRejectedNonNumericMeasure factReadOutcome = "rejected_non_numeric_measure"
 	// factReadCancelled: the caller's context was cancelled mid-read.
 	// Distinct from failed, which is the provider returning an error of
 	// its own: nothing was wrong with the capability.

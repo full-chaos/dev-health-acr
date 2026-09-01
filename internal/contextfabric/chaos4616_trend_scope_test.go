@@ -228,24 +228,20 @@ func TestTheTrendRuleDoesNotDisturbTheCohortRules(t *testing.T) {
 //
 // TestTheMisleadingRowsCannotBeDeclaredATimeSeries above closes ONE route
 // back to the CHAOS-4616 defect: putting the scope in the KEY, which makes
-// the key arity 2 and the table a breakdown by definition. It does not close
-// the other: putting the scope in MEASURES. That declaration is internally
-// consistent — one key column, parsing as an instant, distinct across rows,
-// every column classified — and the trend rule, which reads only the claim's
-// own measure, never looks at the scope column at all.
+// the key arity 2 and the table a breakdown by definition. This test closes
+// the other: putting the scope in MEASURES.
 //
-// Observed on the tip before the fix, with the ORIGINAL two rows:
-//
-//	producer FactTable.Validate: <nil>
-//	wire ClaimedFact.Validate:   <nil>
-//	selected shapes=1
-//	shape rule=dated_fact_trend presentation=line axis=day points=0,1
-//	  labels="2026-07-20","2026-08-30"
-//
-// The same false line, re-entered through the DECLARATION rather than through
-// the geometry. The lesson is the one this file already records in a different
-// key: closing one route is not closing the class, and "the wrong state is
-// unrepresentable" is a claim that has to be swept, not asserted.
+// UPDATED FOR CHAOS-4680, per this test's own prior warning ("if that is
+// intended, health.go's `severity` measure must have moved too, and this
+// test's reasoning needs rewriting rather than deleting"). At the time this
+// test was written, the declaration below validated cleanly -- Measures
+// carried no numeric requirement, because doing so would have invalidated
+// health.go's own `severity` measure (a legitimate per-day categorical
+// observation with nowhere else to go). CHAOS-4680 gives it somewhere else
+// to go (FactTable.Observations), which makes a required-numeric Measures
+// rule safe. The recast declaration below is therefore now refused AT
+// VALIDATION, at the producer -- closing the hole structurally rather than
+// merely refusing to draw a line through it at selection.
 func TestTheScopeColumnCannotBeRecastAsAMeasure(t *testing.T) {
 	t.Parallel()
 	recast := FactTable{
@@ -271,45 +267,47 @@ func TestTheScopeColumnCannotBeRecastAsAMeasure(t *testing.T) {
 		t.Fatal("fixture key does not parse as an instant; it would be refused by the instant rule instead")
 	}
 
-	// The DECLARATION still validates, and that is deliberate rather than a
-	// gap left open. The obvious fix -- "a time_series measure must be
-	// numeric" -- was written and then EXECUTED against the merged
-	// producers: it invalidates health.go's own CHAOS-4645 declaration,
-	// which carries `severity` (a per-day categorical observation of ONE
-	// subject) among its measures. Verbatim, from that run:
-	//
-	//	fact table row 0 declares "severity" a measure of a time_series but
-	//	its value is not numeric ...
-	//
-	// `severity` and `work_scope_id` are syntactically identical and
-	// semantically opposite. §5.1's vocabulary admits only Key or Measures,
-	// so a varying non-identity column has nowhere else to go, and no
-	// value-shaped rule can separate them. Refusing the declaration would
-	// break a correct producer.
-	if err := recast.Validate(); err != nil {
-		t.Fatalf("the declaration itself is now refused (%v) -- if that is intended, health.go's `severity` measure must have moved too, and this test's reasoning needs rewriting rather than deleting", err)
+	// CHAOS-4680: the declaration is now refused at the producer, because
+	// work_scope_id is a string cell declared as a Measure, and Measures is
+	// now required to be numeric.
+	err := recast.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want an error: a numeric-identity route recast as a measure must be rejected at the producer")
+	}
+	if !strings.Contains(err.Error(), "not numeric") {
+		t.Fatalf("the declaration was refused for the wrong reason (%v); this test proves nothing about the numeric-measures rule", err)
 	}
 
-	// So the refusal is at SELECTION: this rule declines to draw a LINE
-	// through a table whose measure roles it cannot resolve. That costs
-	// nothing today (health's time_series is dual-table and never reaches
-	// the wire) and fails closed if it ever does.
+	// The class is not fully closed by this alone: a table that reached the
+	// WIRE without going through domain Validate() (a pre-CHAOS-4680 stored
+	// result, or a hand-built wire fixture) still needs a second gate. That
+	// gate is RenderShapeSkipUnresolvableMeasureRoles, retained in
+	// render_shapes.go as defense-in-depth -- proven here directly against
+	// the wire type, bypassing FactTable.Validate() entirely, which is
+	// exactly the scenario the domain-level fix cannot reach.
 	subject := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:fullchaos", Label: "fullchaos"}
-	fact := CanonicalFact{Kind: FactFlow, Subject: subject, Fields: map[string]FactValue{"scope_rows": TableFactValue(recast)}}
-	served, _, _, _ := attachCanonicalRows([]ClaimedFact{{ClaimID: "claim_recast_4616", Kind: FactFlow, Subject: subject, Field: "items_completed"}}, []CanonicalFact{fact})
-	// Non-vacuity: the declaration DID reach the wire, and the claim's
-	// field IS a declared measure -- so every earlier gate passed and the
-	// refusal below is attributable to the new one.
-	if served[0].Table == nil || served[0].Table.Shape != contractsv1.ContextFabricFactTableShapeTimeSeries {
-		t.Fatalf("the recast declaration did not reach the wire; an earlier gate refused it instead: %+v", served[0].Table)
+	wireTable := &contractsv1.ContextFabricClaimedFactTable{
+		Field: "scope_rows", Shape: contractsv1.ContextFabricFactTableShapeTimeSeries,
+		Key: []string{"day"}, Measures: []string{"work_scope_id", "items_completed"},
 	}
-	if !served[0].Table.HasMeasure(served[0].Field) {
+	claim := ClaimedFact{
+		ClaimID: "claim_recast_4616", Kind: FactFlow, Subject: subject, Field: "items_completed",
+		Table: wireTable,
+		Rows: []ClaimedFactRow{
+			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-07-20"), "work_scope_id": renderScalarString("full.chaos/chaos-ops"), "items_completed": renderScalarNumber(0)}},
+			{Fields: map[string]ScalarValue{"day": renderScalarString("2026-08-30"), "work_scope_id": renderScalarString("full.chaos/dev-health-ops"), "items_completed": renderScalarNumber(1)}},
+		},
+	}
+	// Non-vacuity: the declaration DOES describe the wire rows, and the
+	// claim's field IS a declared measure -- so every earlier gate passes
+	// and the refusal below is attributable to the unresolvable-roles gate.
+	if !claim.Table.HasMeasure(claim.Field) {
 		t.Fatal("the claim's field is not a declared measure; claim_field_not_a_measure would refuse it instead")
 	}
 
 	result := InvestigationResult{
 		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
-		ClaimedFacts:   []ClaimedFact{served[0]},
+		ClaimedFacts:   []ClaimedFact{claim},
 	}
 	shapes, event := SelectRenderShapes(result)
 	if len(shapes) != 0 {
