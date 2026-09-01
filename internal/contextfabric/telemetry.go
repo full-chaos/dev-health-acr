@@ -474,6 +474,33 @@ func (t SlogEngineTelemetry) RecordCohortDriverNarration(ctx context.Context, pr
 	}, requestIDLogAttrs(ctx)...)...)
 }
 
+// RecordEvidenceLabelFallback implements EngineTelemetry (CHAOS-4690 item
+// 4). Content-safe: org id and one closed count -- never the unlabeled
+// evidence ref or its entity-type segment (r2 F5; see the interface's own
+// doc comment). Called only when count > 0, same gated-telemetry
+// discipline as RecordModelRowsStripped above it on the interface.
+func (t SlogEngineTelemetry) RecordEvidenceLabelFallback(ctx context.Context, principal storage.Principal, count int) {
+	args := append([]any{"org_id", principal.OrgID, "cf_evidence_label_fallback", count}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric evidence ref label fell back to the generic label", args...)
+}
+
+// RecordCoverageDisclosurePhrasing implements EngineTelemetry (CHAOS-4690
+// Commit F, design §4.2). Content-safe: org id, the closed outcome enum,
+// and two counts -- never a detail_id, a phrasing's text, or a Label. Info
+// level for every outcome, including rejected_by_guard/
+// discarded_undecodable: neither degrades the served answer (every detail
+// still ships Label-only), it is an ordinary, expected shape an operator
+// may still want the rate of.
+func (t SlogEngineTelemetry) RecordCoverageDisclosurePhrasing(ctx context.Context, principal storage.Principal, outcome CoverageDisclosureOutcome, phrased, total int) {
+	args := append([]any{
+		"org_id", principal.OrgID,
+		"outcome", string(outcome),
+		"phrased", phrased,
+		"total", total,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric coverage disclosure phrasing", args...)
+}
+
 // RecordCategoryFactComposition implements EngineTelemetry (CHAOS-4347) --
 // the operator-visible record of a status-category requirement being
 // expanded into a composed fact-kind set. Content-safe: two closed enums

@@ -388,6 +388,23 @@ type recordingTelemetry struct {
 	// cohortDriverNarrations (CHAOS-4398 PR3b) mirrors the SAME
 	// list-not-count discipline.
 	cohortDriverNarrations []CohortDriverNarrationEvent
+	// evidenceLabelFallbacks (CHAOS-4690) mirrors modelRowsStripped's own
+	// list-not-count discipline: a test asserts the exact count recorded
+	// for a given call, never merely that something fired.
+	evidenceLabelFallbacks []int
+	// coverageDisclosurePhrasings (CHAOS-4690 Commit F) mirrors the SAME
+	// list-not-count discipline: a test asserts the exact
+	// outcome/phrased/total triple recorded for a given call, never
+	// merely that something fired.
+	coverageDisclosurePhrasings []coverageDisclosurePhrasingRecord
+}
+
+// coverageDisclosurePhrasingRecord (CHAOS-4690 Commit F) mirrors
+// bindingEpochDeltaRecord's own shape one field triple over.
+type coverageDisclosurePhrasingRecord struct {
+	outcome CoverageDisclosureOutcome
+	phrased int
+	total   int
 }
 
 // windowCarryRecord (CHAOS-4360) mirrors priorSubjectReceiptSkipReasonRecord's
@@ -589,6 +606,14 @@ func (r *recordingTelemetry) RecordCohortRanked(_ context.Context, _ storage.Pri
 
 func (r *recordingTelemetry) RecordCohortDriverNarration(_ context.Context, _ storage.Principal, event CohortDriverNarrationEvent) {
 	r.cohortDriverNarrations = append(r.cohortDriverNarrations, event)
+}
+
+func (r *recordingTelemetry) RecordEvidenceLabelFallback(_ context.Context, _ storage.Principal, count int) {
+	r.evidenceLabelFallbacks = append(r.evidenceLabelFallbacks, count)
+}
+
+func (r *recordingTelemetry) RecordCoverageDisclosurePhrasing(_ context.Context, _ storage.Principal, outcome CoverageDisclosureOutcome, phrased, total int) {
+	r.coverageDisclosurePhrasings = append(r.coverageDisclosurePhrasings, coverageDisclosurePhrasingRecord{outcome: outcome, phrased: phrased, total: total})
 }
 
 func mustEngineForPriorReceiptTest(t *testing.T, graph GraphReader, store InvestigationResultStore, telemetry EngineTelemetry) *Engine {

@@ -29,7 +29,13 @@ import (
 // test ever catching it. Assert the exact current value instead.
 func TestDefaultSynthesisPromptVersionBumpedForModelFacingFactsChange(t *testing.T) {
 	t.Parallel()
-	const wantVersion = "context-fabric-synthesis.v13"
+	// v13 -> v14 (CHAOS-4690 Commit F): the coverage_disclosures paragraph
+	// bumped the constant again, for its own, unrelated reason (that
+	// constant's own doc comment). This test's job stays the same --
+	// assert the EXACT current value, never a loose inequality -- so it
+	// still catches a typo or an accidental double-bump on the next
+	// change too.
+	const wantVersion = "context-fabric-synthesis.v14"
 	if DefaultSynthesisPromptVersion != wantVersion {
 		t.Fatalf("DefaultSynthesisPromptVersion = %q, want %q (moved off the pre-CHAOS-4355-follow-up v12 value now that modelFacingFacts changes the prompt payload)", DefaultSynthesisPromptVersion, wantVersion)
 	}
@@ -116,7 +122,7 @@ func TestBuildSynthesisPromptExcludesRowsShapedCanonicalFields(t *testing.T) {
 		Question: input.Request.Question, Interpretation: input.Interpretation,
 		Resolution: input.Graph.Resolution, Cohort: input.Graph.Cohort,
 		Paths: input.Graph.Paths, DriverCandidates: input.Graph.DriverCandidates,
-		Facts: input.Facts.Facts, Coverage: mergeCoverage(input.Graph.Coverage, input.Facts.Coverage),
+		Facts: input.Facts.Facts, Coverage: contextfabric.MergeCoverage("", input.Graph.Coverage, input.Facts.Coverage),
 	}
 	beforeBytes, err := json.Marshal(before)
 	if err != nil {

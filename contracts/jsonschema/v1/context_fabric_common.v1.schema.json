@@ -314,7 +314,7 @@
       }
     },
     "RelativeWindowID": {
-      "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 \u00a75.1).",
+      "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 §5.1).",
       "type": "string",
       "enum": [
         "trailing_30d",
@@ -3056,6 +3056,14 @@
               "reason": {
                 "type": "string",
                 "maxLength": 2000
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 160
+              },
+              "state_label": {
+                "type": "string",
+                "maxLength": 160
               }
             },
             "required": [
@@ -3074,6 +3082,13 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 2000
+          },
+          "maxItems": 100
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CoverageDetail"
           },
           "maxItems": 100
         }
@@ -4488,6 +4503,100 @@
         "field",
         "shape",
         "key"
+      ]
+    },
+    "CoverageDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "detail_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "code": {
+          "type": "string",
+          "enum": [
+            "fact_unconfigured",
+            "fact_scope_unexpanded",
+            "fact_read_failed",
+            "fact_provider_reported",
+            "fact_pruned",
+            "fact_narrowed",
+            "graph_endpoint_lookup_failed",
+            "graph_exact_name_candidates_truncated",
+            "graph_cohort_denied_by_authorization",
+            "graph_unknown_relationship_type",
+            "graph_validity_unbounded"
+          ]
+        },
+        "degrading": {
+          "type": "boolean"
+        },
+        "fact_kind": {
+          "type": "string"
+        },
+        "source_state": {
+          "type": "string"
+        },
+        "scope_outcome": {
+          "type": "string"
+        },
+        "origin_kind": {
+          "type": "string"
+        },
+        "supported_kinds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32
+        },
+        "skipped_kinds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32
+        },
+        "policy": {
+          "type": "string"
+        },
+        "basis": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "narrowed": {
+          "type": "boolean"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "phrasing": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "raw": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      },
+      "required": [
+        "detail_id",
+        "source",
+        "code",
+        "degrading",
+        "label"
       ]
     }
   }

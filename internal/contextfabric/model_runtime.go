@@ -6,10 +6,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -275,6 +278,48 @@ type SynthesisDraft struct {
 	ClaimedFacts        []ClaimedFact       `json:"claimed_facts"`
 	DeterministicAnswer string              `json:"deterministic_answer"`
 	Warnings            []string            `json:"warnings"`
+	// CoverageDisclosures (CHAOS-4690 Commit F, design §4.1) is the
+	// LENIENTLY-decoded model-authored coverage_disclosures subdocument --
+	// the ONE new model-authorable surface this commit adds. It is nil
+	// whenever the model omitted the field (or sent JSON null) AND
+	// whenever CoverageDisclosuresUndecodable is true (see that field's
+	// own doc comment) -- so nil alone never distinguishes "nothing
+	// offered" from "offered something we could not parse"; that is
+	// exactly what CoverageDisclosuresUndecodable is for. Nothing here is
+	// guard-verified yet -- applyCoverageDisclosures (below) is the only
+	// consumer, and it checks ref closure, uniqueness, bounds, and the
+	// digit ban against the SAME merged result.Coverage.Details the
+	// caller is about to serve before applying a single entry.
+	CoverageDisclosures []CoverageDisclosure `json:"-"`
+	// CoverageDisclosuresUndecodable is true when the model's raw
+	// coverage_disclosures value was present (non-empty, non-null) but
+	// failed to unmarshal into []CoverageDisclosure -- e.g.
+	// `"coverage_disclosures":[{"detail_id":"cov-01","text":17}]` (design
+	// §4.1's r2 F1 scenario: schema validation cannot catch this because
+	// the field is deliberately unconstrained, genkitruntime.synthesisOutput's
+	// own doc comment explains why). This is a LENIENT decode failure,
+	// never an error: the whole synthesis answer must still be served,
+	// Label-only, with telemetry outcome discarded_undecodable
+	// distinguishing it from the ordinary "nothing offered" absent
+	// outcome (CoverageDisclosures nil, this false).
+	CoverageDisclosuresUndecodable bool `json:"-"`
+}
+
+// CoverageDisclosure is one model-authored, UNGUARDED phrasing for one
+// coverage detail -- the raw entry shape of the synthesis model's
+// coverage_disclosures subdocument (CHAOS-4690 Commit F, design §4.1).
+// Membership (DetailID must name a real detail on the result's own merged
+// Coverage.Details), uniqueness, bounds, and the digit ban are all
+// enforced by applyCoverageDisclosures, never here -- this type carries
+// exactly what the model said, nothing more.
+type CoverageDisclosure struct {
+	// DetailID/Text carry explicit json tags (snake_case) because this
+	// type is unmarshalled directly off the model's raw JSON
+	// (genkitruntime.parseCoverageDisclosures) -- Go's default,
+	// tag-less field matching would never match "detail_id"/"text"
+	// against DetailID/Text.
+	DetailID string `json:"detail_id"`
+	Text     string `json:"text"`
 }
 
 func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
@@ -1333,7 +1378,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		Limitations:        cloneSlice(draft.Limitations),
 		EvidenceRefIDs:     cloneSlice(draft.EvidenceRefIDs),
 		ClaimedFacts:       claimedFacts,
-		Coverage:           mergeCoverage(input.Graph.Coverage, input.Facts.Coverage),
+		Coverage:           MergeCoverage(principal.OrgID, input.Graph.Coverage, input.Facts.Coverage),
 		// DeterministicAnswer is server-composed, not model-authored: it is
 		// a pure function of the already-validated Status, Drivers, and
 		// ClaimedFacts, computed after ValidateAgainst has passed. That is
@@ -1361,7 +1406,188 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 			ModelIdentity: nonEmptyVersion(modelIdentity(receipt.Provider, receipt.Model), "unwired"),
 		},
 	}
+	// CHAOS-4690 Commit F (design §4.2): the coverage-disclosure guard
+	// runs AFTER result is fully composed -- result.Coverage carries the
+	// SAME merged, ordinal-DetailID-minted details the caller is about to
+	// serve, which is exactly what ref closure must check against (never
+	// input.Graph.Coverage/input.Facts.Coverage, the unmerged halves).
+	// Never rejects the answer: every branch below only decides whether
+	// Phrasing gets applied, never whether Synthesize returns an error.
+	outcome, violation := classifyCoverageDisclosures(draft, &result)
+	if violation != "" {
+		// Content-safe by construction, same discipline as
+		// mergeCoverageDetails' own fail-open WARN above: org id and the
+		// closed violation class only, never the model's own detail_id or
+		// text (r2 F5's "content-safe by construction" rule applied to
+		// this guard too).
+		slog.Default().Warn("context_fabric: coverage disclosure guard discarded the model's whole disclosure set",
+			"org_id", principal.OrgID, "violation", string(violation))
+	}
+	if r.Telemetry != nil {
+		phrased, total := coverageDisclosurePhrasedCount(result.Coverage.Details)
+		r.Telemetry.RecordCoverageDisclosurePhrasing(ctx, principal, outcome, phrased, total)
+	}
 	return result, nil
+}
+
+// CoverageDisclosureOutcome is the closed vocabulary
+// EngineTelemetry.RecordCoverageDisclosurePhrasing reports (CHAOS-4690
+// Commit F, design §4.2).
+type CoverageDisclosureOutcome string
+
+const (
+	// CoverageDisclosurePhrased: every one of result.Coverage.Details
+	// received a guard-verified Phrasing from this call's disclosure set.
+	CoverageDisclosurePhrased CoverageDisclosureOutcome = "phrased"
+	// CoverageDisclosurePartialAbsent: the guard applied a non-empty,
+	// fully-valid disclosure set, but it named FEWER detail_ids than
+	// result.Coverage.Details carries -- the model exercised its ruled
+	// latitude to phrase SOME entries and leave others Label-only, which
+	// is legitimate (design §4.1: "the model MAY write one plain-language
+	// sentence" per entry, never must), not a guard failure.
+	CoverageDisclosurePartialAbsent CoverageDisclosureOutcome = "partial_absent"
+	// CoverageDisclosureRejectedByGuard: the model returned a
+	// well-formed, decodable disclosure set, but at least one entry
+	// violated ref closure, uniqueness, the text bound, or the digit ban
+	// -- the WHOLE set was discarded, every detail ships Label-only.
+	CoverageDisclosureRejectedByGuard CoverageDisclosureOutcome = "rejected_by_guard"
+	// CoverageDisclosureDiscardedUndecodable: the model's raw
+	// coverage_disclosures value was present but could not be unmarshalled
+	// into []CoverageDisclosure (SynthesisDraft.CoverageDisclosuresUndecodable) --
+	// distinct from CoverageDisclosureAbsent so an operator can tell
+	// "the model tried and we could not read it" from "the model offered
+	// nothing this call".
+	CoverageDisclosureDiscardedUndecodable CoverageDisclosureOutcome = "discarded_undecodable"
+	// CoverageDisclosureAbsent: the model omitted coverage_disclosures (or
+	// sent an empty/null value) -- the ordinary, expected shape on a call
+	// with nothing degrading to phrase, or a model that chose not to
+	// phrase anything this turn.
+	CoverageDisclosureAbsent CoverageDisclosureOutcome = "absent"
+)
+
+// CoverageDisclosureViolation is the closed vocabulary the guard-rejection
+// WARN log line's "violation" attribute carries (CHAOS-4690 Commit F,
+// design §4.2) -- content-safe by construction, same discipline as every
+// other closed-enum-only log line in this file.
+type CoverageDisclosureViolation string
+
+const (
+	// CoverageDisclosureViolationUnknownDetailID: a disclosure's detail_id
+	// names no entry on result.Coverage.Details -- the ref-closure clause
+	// ("a disclosure must be traceable to the structured reason it
+	// phrases", design §4.2).
+	CoverageDisclosureViolationUnknownDetailID CoverageDisclosureViolation = "unknown_detail_id"
+	// CoverageDisclosureViolationDuplicateDetailID: the same detail_id
+	// appears more than once in one disclosure set.
+	CoverageDisclosureViolationDuplicateDetailID CoverageDisclosureViolation = "duplicate_detail_id"
+	// CoverageDisclosureViolationTextBound: a disclosure's Text is empty
+	// after trimming, carries leading/trailing whitespace, or exceeds
+	// contractsv1.ContextFabricCoverageDetailPhrasingMaxLength runes.
+	CoverageDisclosureViolationTextBound CoverageDisclosureViolation = "text_bound"
+	// CoverageDisclosureViolationDigitsForbidden: a disclosure's Text
+	// carries a Unicode digit rune anywhere -- quantities are the
+	// deterministic Label's job alone (design §4.1/r1 F5).
+	CoverageDisclosureViolationDigitsForbidden CoverageDisclosureViolation = "digits_forbidden"
+	// CoverageDisclosureViolationParseFailed: the raw subdocument itself
+	// could not be unmarshalled (SynthesisDraft.CoverageDisclosuresUndecodable) --
+	// reported through the SAME closed vocabulary as the guard's own
+	// clauses so one log line shape covers both discard reasons.
+	CoverageDisclosureViolationParseFailed CoverageDisclosureViolation = "parse_failed"
+)
+
+// classifyCoverageDisclosures is Synthesize's own dispatcher: it picks the
+// discarded_undecodable outcome directly off SynthesisDraft's decode-layer
+// flag (never re-derived here -- the parse either succeeded or it did not,
+// and only genkitruntime's lenient parser can know which), and otherwise
+// defers to applyCoverageDisclosures for the guard-clause classification
+// against the ALREADY-composed result.
+func classifyCoverageDisclosures(draft SynthesisDraft, result *InvestigationResult) (CoverageDisclosureOutcome, CoverageDisclosureViolation) {
+	if draft.CoverageDisclosuresUndecodable {
+		return CoverageDisclosureDiscardedUndecodable, CoverageDisclosureViolationParseFailed
+	}
+	return applyCoverageDisclosures(result, draft.CoverageDisclosures)
+}
+
+// applyCoverageDisclosures is the CHAOS-4690 Commit F guard (design §4.2).
+// It runs against result.Coverage.Details -- the SAME merged, ordinal
+// DetailID-minted set the caller is about to serve -- and enforces, in
+// order:
+//
+//  1. every disclosure's DetailID names a detail on result.Coverage.Details
+//     (ref closure: "a disclosure must be traceable to the structured
+//     reason it phrases");
+//  2. no DetailID repeats within the set;
+//  3. Text is non-empty after trimming, trims to itself (no
+//     leading/trailing whitespace), and is at most
+//     contractsv1.ContextFabricCoverageDetailPhrasingMaxLength runes
+//     (mirrors ContextFabricCoverageDetail.Validate's own Phrasing bound,
+//     validate_context_fabric_result.go / context_fabric_coverage_detail.go);
+//  4. Text carries no Unicode digit rune anywhere -- quantities are the
+//     deterministic Label's job, never the model's.
+//
+// ANY violation on ANY entry discards the WHOLE set -- the same
+// OfferPhraser discipline classifyOfferPhrasingDraft applies
+// (chaos4171_offer_phrasing.go): a partially-trusted disclosure set is
+// treated exactly like an untrusted one, never applied piecemeal. On a
+// discard (or an empty/absent set), result is left completely unmodified;
+// on success, survivors are written into their matching detail's Phrasing
+// field, in place. Pure and side-effect-free beyond that in-place write --
+// no logging, no telemetry -- so each clause is testable in isolation.
+func applyCoverageDisclosures(result *InvestigationResult, disclosures []CoverageDisclosure) (CoverageDisclosureOutcome, CoverageDisclosureViolation) {
+	if len(disclosures) == 0 {
+		return CoverageDisclosureAbsent, ""
+	}
+	indexByDetailID := make(map[string]int, len(result.Coverage.Details))
+	for i, detail := range result.Coverage.Details {
+		indexByDetailID[detail.DetailID] = i
+	}
+	seen := make(map[string]struct{}, len(disclosures))
+	targets := make([]int, 0, len(disclosures))
+	for _, disclosure := range disclosures {
+		idx, ok := indexByDetailID[disclosure.DetailID]
+		if !ok {
+			return CoverageDisclosureRejectedByGuard, CoverageDisclosureViolationUnknownDetailID
+		}
+		if _, duplicate := seen[disclosure.DetailID]; duplicate {
+			return CoverageDisclosureRejectedByGuard, CoverageDisclosureViolationDuplicateDetailID
+		}
+		seen[disclosure.DetailID] = struct{}{}
+		trimmed := strings.TrimSpace(disclosure.Text)
+		if trimmed == "" || trimmed != disclosure.Text || utf8.RuneCountInString(disclosure.Text) > contractsv1.ContextFabricCoverageDetailPhrasingMaxLength {
+			return CoverageDisclosureRejectedByGuard, CoverageDisclosureViolationTextBound
+		}
+		for _, r := range disclosure.Text {
+			if unicode.IsDigit(r) {
+				return CoverageDisclosureRejectedByGuard, CoverageDisclosureViolationDigitsForbidden
+			}
+		}
+		targets = append(targets, idx)
+	}
+	for i, disclosure := range disclosures {
+		result.Coverage.Details[targets[i]].Phrasing = disclosure.Text
+	}
+	if len(disclosures) < len(result.Coverage.Details) {
+		return CoverageDisclosurePartialAbsent, ""
+	}
+	return CoverageDisclosurePhrased, ""
+}
+
+// coverageDisclosurePhrasedCount reports, from the result's own final
+// Coverage.Details -- never from the model's disclosure count -- how many
+// details actually carry a Phrasing and how many details exist in total.
+// Reading it back off the result (rather than threading a count through
+// applyCoverageDisclosures' return) means the reported number is always
+// what the served answer actually contains, on every outcome including the
+// three that apply nothing (rejected_by_guard, discarded_undecodable,
+// absent), where phrased is always 0.
+func coverageDisclosurePhrasedCount(details []CoverageDetail) (phrased, total int) {
+	total = len(details)
+	for _, detail := range details {
+		if detail.Phrasing != "" {
+			phrased++
+		}
+	}
+	return phrased, total
 }
 
 // composeDirectJudgment/composeCurrentState/composeDeterministicAnswer's
@@ -1608,10 +1834,24 @@ func recordModelReceipt(ctx context.Context, principal storage.Principal, sink M
 	return nil
 }
 
-func mergeCoverage(groups ...Coverage) Coverage {
+// MergeCoverage is the SINGLE pure coverage normalizer (CHAOS-4690 §3.4),
+// shared by BOTH merge call sites: this package's own Synthesize (above)
+// and genkitruntime's synthesis-input composition
+// (genkitruntime.synthesisInputFromDomain / BuildSynthesisPrompt) route the
+// SAME two coverage groups through this one function, so their merged
+// Sources/DegradedReasons/Details and minted DetailIDs can never
+// independently drift between the result the caller stores and the input
+// the model actually saw.
+//
+// orgID is used ONLY for the fail-open reconcile WARN log below -- never
+// for merge semantics, which are a pure function of groups alone. Callers
+// with no authenticated principal in scope (genkitruntime.BuildSynthesisPrompt's
+// prompt-preview path) pass "".
+func MergeCoverage(orgID string, groups ...Coverage) Coverage {
 	bySource := make(map[string]SourceObservation)
 	degraded := make(map[string]struct{})
 	partial := false
+	var allDetails []CoverageDetail
 	for _, group := range groups {
 		partial = partial || group.Partial
 		for _, source := range group.Sources {
@@ -1622,18 +1862,143 @@ func mergeCoverage(groups ...Coverage) Coverage {
 		for _, reason := range group.DegradedReasons {
 			degraded[reason] = struct{}{}
 		}
+		allDetails = append(allDetails, group.Details...)
 	}
 	sources := make([]SourceObservation, 0, len(bySource))
 	for _, source := range bySource {
 		sources = append(sources, source)
 	}
 	sort.Slice(sources, func(i, j int) bool { return sources[i].Source < sources[j].Source })
+	// CHAOS-4690 item 4: every merged source chip carries its display
+	// label, stamped from the contracts registry AFTER the priority merge
+	// above -- the label describes whichever observation actually won.
+	for i := range sources {
+		sources[i].Label = contractsv1.ContextFabricSourceObservationLabel(sources[i].Source)
+		sources[i].StateLabel = contractsv1.ContextFabricSourceStateLabel(sources[i].State)
+	}
+	// reasons: EXACTLY today's computation (dedupe map + sort.Strings) --
+	// the golden anchor this ticket must never move. Computed independently
+	// of allDetails below, so a defect on the structured half can never
+	// touch the field every existing consumer already parses.
 	reasons := make([]string, 0, len(degraded))
 	for reason := range degraded {
 		reasons = append(reasons, reason)
 	}
 	sort.Strings(reasons)
-	return Coverage{Sources: sources, Partial: partial || len(reasons) > 0, DegradedReasons: reasons}
+
+	return Coverage{
+		Sources: sources, Partial: partial || len(reasons) > 0, DegradedReasons: reasons,
+		Details: mergeCoverageDetails(allDetails, reasons, orgID),
+	}
+}
+
+// mergeCoverageDetails is MergeCoverage's own Details half (design §3.4):
+// concatenate, sort/dedupe each half separately, RECONCILE the degrading
+// half's derived Raw sequence against the ALREADY-COMPUTED reasons
+// (MergeCoverage's own golden-anchor computation above, never recomputed
+// here), and mint final ordinal ids over the reconciled order.
+//
+// Fail-open, never fail-closed: a mismatch (a group carried a
+// DegradedReasons entry with no paired detail -- a legacy test double, or a
+// future producer bug) drops the WHOLE Details array rather than ship a
+// structured surface the write-path validator would 500 the investigation
+// over (validateCoverageDetails' own 1:1 pairing requirement). The legacy
+// degraded_reasons[] computed by the caller is completely unaffected
+// either way -- this function can only ever narrow Details, never widen or
+// alter reasons.
+func mergeCoverageDetails(all []CoverageDetail, reasons []string, orgID string) []CoverageDetail {
+	var degrading, nonDegrading []CoverageDetail
+	for _, d := range all {
+		if d.Degrading {
+			degrading = append(degrading, d)
+		} else {
+			nonDegrading = append(nonDegrading, d)
+		}
+	}
+	sort.SliceStable(degrading, func(i, j int) bool { return degrading[i].Raw < degrading[j].Raw })
+	degrading = dedupeCoverageDetailsByRaw(degrading)
+	sort.SliceStable(nonDegrading, func(i, j int) bool {
+		if nonDegrading[i].Source != nonDegrading[j].Source {
+			return nonDegrading[i].Source < nonDegrading[j].Source
+		}
+		if nonDegrading[i].Code != nonDegrading[j].Code {
+			return nonDegrading[i].Code < nonDegrading[j].Code
+		}
+		return nonDegrading[i].Raw < nonDegrading[j].Raw
+	})
+	nonDegrading = dedupeCoverageDetailsBySourceCodeRaw(nonDegrading)
+
+	derived := make([]string, 0, len(degrading))
+	for _, d := range degrading {
+		derived = append(derived, d.Raw)
+	}
+	if !equalStringSlices(derived, reasons) {
+		// Content-safe by construction: org id and two counts, never a
+		// segment/reason string (engine.go:251's telemetry contract applies
+		// equally to a diagnostic log line -- this fires from a runtime
+		// package too, genkitruntime, which has no access to the engine's
+		// own EngineTelemetry sink).
+		slog.Default().Warn("context_fabric: coverage detail derivation did not reconcile with degraded_reasons, dropping structured details",
+			"org_id", orgID, "degrading_details", len(derived), "degraded_reasons", len(reasons))
+		return nil
+	}
+
+	merged := make([]CoverageDetail, 0, len(degrading)+len(nonDegrading))
+	merged = append(merged, degrading...)
+	merged = append(merged, nonDegrading...)
+	if len(merged) == 0 {
+		return nil
+	}
+	for i := range merged {
+		merged[i].DetailID = fmt.Sprintf("cov-%02d", i+1)
+	}
+	return merged
+}
+
+func dedupeCoverageDetailsByRaw(details []CoverageDetail) []CoverageDetail {
+	if len(details) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(details))
+	out := make([]CoverageDetail, 0, len(details))
+	for _, d := range details {
+		if _, ok := seen[d.Raw]; ok {
+			continue
+		}
+		seen[d.Raw] = struct{}{}
+		out = append(out, d)
+	}
+	return out
+}
+
+func dedupeCoverageDetailsBySourceCodeRaw(details []CoverageDetail) []CoverageDetail {
+	if len(details) == 0 {
+		return nil
+	}
+	type key struct{ source, code, raw string }
+	seen := make(map[key]struct{}, len(details))
+	out := make([]CoverageDetail, 0, len(details))
+	for _, d := range details {
+		k := key{d.Source, string(d.Code), d.Raw}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, d)
+	}
+	return out
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func sourceStatePriority(state SourceState) int {

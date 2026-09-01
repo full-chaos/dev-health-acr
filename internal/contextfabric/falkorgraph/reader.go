@@ -881,11 +881,34 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 
 	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortWhollyDeniedByAuthz
 	var degradedReasons []string
+	var coverageDetails []contextfabric.CoverageDetail
+	// CHAOS-4690: every degraded reason this reader composes gets a paired
+	// structured detail whose Raw is the exact composed string — the
+	// dual-write derivation (degraded_reasons is derived from the degrading
+	// details downstream) depends on the pairing being minted together.
+	appendGraphDetail := func(code contractsv1.ContextFabricCoverageDetailCode, degrading bool, count *int, raw, source string) {
+		detail := contextfabric.CoverageDetail{
+			// Provisional per-group ordinal id; mergeCoverage re-mints the
+			// final result-wide ids after normalization.
+			DetailID:  fmt.Sprintf("cov-graph-%02d", len(coverageDetails)+1),
+			Source:    source,
+			Code:      code,
+			Degrading: degrading,
+			Count:     count,
+			Raw:       raw,
+		}
+		detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
+		coverageDetails = append(coverageDetails, detail)
+	}
 	if failedLookups > 0 {
-		degradedReasons = append(degradedReasons, fmt.Sprintf("endpoint_lookup_failed:%d", failedLookups))
+		reason := fmt.Sprintf("endpoint_lookup_failed:%d", failedLookups)
+		degradedReasons = append(degradedReasons, reason)
+		count := failedLookups
+		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphEndpointLookupFailed, true, &count, reason, "context-fabric:graph")
 	}
 	if exactNameTruncated {
 		degradedReasons = append(degradedReasons, "exact_name_candidates_truncated")
+		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphExactNameCandidatesTruncated, true, nil, "exact_name_candidates_truncated", "context-fabric:graph")
 	}
 	if cohortWhollyDeniedByAuthz {
 		// CHAOS-4577: the discovered_cohort request found candidate members,
@@ -898,10 +921,16 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// denial count (only candidates matching this cohort's requested
 		// kind), not the unscoped cohortAuthzDropped -- see
 		// graphrank.DiscoveredCohort's doc comment.
-		degradedReasons = append(degradedReasons, fmt.Sprintf("cohort_denied_by_authorization:%d", cohortKindScopedAuthzDropped))
+		cohortDeniedReason := fmt.Sprintf("cohort_denied_by_authorization:%d", cohortKindScopedAuthzDropped)
+		degradedReasons = append(degradedReasons, cohortDeniedReason)
+		deniedCount := cohortKindScopedAuthzDropped
+		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphCohortDeniedByAuthorization, true, &deniedCount, cohortDeniedReason, "context-fabric:graph")
 	}
 	if admission.DroppedUnknownRelationshipTypeCount > 0 {
-		degradedReasons = append(degradedReasons, fmt.Sprintf("unknown_relationship_type:%d", admission.DroppedUnknownRelationshipTypeCount))
+		unknownTypeReason := fmt.Sprintf("unknown_relationship_type:%d", admission.DroppedUnknownRelationshipTypeCount)
+		degradedReasons = append(degradedReasons, unknownTypeReason)
+		droppedCount := admission.DroppedUnknownRelationshipTypeCount
+		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphUnknownRelationshipType, true, &droppedCount, unknownTypeReason, "context-fabric:graph")
 		slog.Default().Warn("context_fabric: dropped relationship edge(s) with a type outside the closed vocabulary",
 			"count", admission.DroppedUnknownRelationshipTypeCount, "types", admission.DroppedUnknownRelationshipTypeNames)
 	}
@@ -911,12 +940,18 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// a failure and must not set Partial. The graph answered fully;
 		// part of what it returned simply carries no validity bound, and a
 		// reader deserves to see that separately from real degradation.
+		validityReason := fmt.Sprintf("graph elements carrying no validity window were admitted at the requested time: %d", unbounded)
 		sources = append(sources, contextfabric.SourceObservation{
 			Source:     "context-fabric:graph-validity-windows",
 			State:      contextfabric.SourceNotApplicable,
 			ObservedAt: ptrTime(a.now().UTC()),
-			Reason:     fmt.Sprintf("graph elements carrying no validity window were admitted at the requested time: %d", unbounded),
+			Reason:     validityReason,
 		})
+		// CHAOS-4690: the matching NON-degrading detail (this row never sets
+		// Partial — see the source comment above), so the structured surface
+		// covers the sources[].reason shape too, not only degraded_reasons.
+		unboundedCount := unbounded
+		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphValidityUnbounded, false, &unboundedCount, validityReason, "context-fabric:graph-validity-windows")
 	}
 	return contextfabric.GraphContext{
 		Resolution: request.Resolution, Cohort: cohort, Paths: admission.Paths, DriverCandidates: admission.Drivers,
@@ -925,6 +960,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			Sources:         sources,
 			Partial:         partial,
 			DegradedReasons: degradedReasons,
+			Details:         coverageDetails,
 		},
 	}, nil
 }

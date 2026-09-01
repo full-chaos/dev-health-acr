@@ -29,7 +29,7 @@ func TestCoverageClampsTrackTheContractRatherThanMirrorIt(t *testing.T) {
 	bundle := CanonicalFactBundle{}
 	// Well past both limits, and degrading, so both the reason and the
 	// composed degraded entry are exercised in one call.
-	appendFactCoverage(&bundle, FactStatus, SourceUnavailable, nil, "", strings.Repeat("r", reasonLimit+500))
+	appendFactCoverage(&bundle, FactStatus, SourceUnavailable, nil, "", strings.Repeat("r", reasonLimit+500), coverageDetailSpec{})
 
 	if len(bundle.Coverage.Sources) != 1 {
 		t.Fatalf("expected one coverage source, got %d", len(bundle.Coverage.Sources))

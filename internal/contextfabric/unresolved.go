@@ -410,6 +410,13 @@ func (e *Engine) terminalResult(
 	// site), so it stamps completeness itself, immediately before its own
 	// Validate -- same placement rule as everywhere else.
 	result.Completeness = ComputeAnswerCompleteness(result)
+	// CHAOS-4690: this subjectless-terminal path never reaches engine.go's
+	// own stamp point either (same reasoning as the Completeness comment
+	// immediately above), so it stamps coverage/evidence-ref display
+	// labels itself, at the same "immediately before Validate" placement.
+	if fallbacks := applyCoverageDisplayLabels(&result); fallbacks > 0 && e.telemetry != nil {
+		e.telemetry.RecordEvidenceLabelFallback(ctx, principal, fallbacks)
+	}
 	if err := ValidateResult(result); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}

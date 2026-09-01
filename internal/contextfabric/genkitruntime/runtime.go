@@ -1,6 +1,7 @@
 package genkitruntime
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -305,7 +306,14 @@ const (
 	// one -- the version-bump-forces-a-cold-cache mechanism this constant
 	// exists for is exactly what CHAOS-3862's
 	// TestCHAOS3862_PromptVersionChangeInvalidatesStoredAnswerReuse pins.
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v13"
+	//
+	// v13 -> v14 (CHAOS-4690 Commit F, design §4.1): synthesisSystemPrompt
+	// gains the coverage_disclosures paragraph -- a genuine change to the
+	// bytes this call sends, so a row generated before the model was ever
+	// told this field exists must not satisfy a reuse lookup as though it
+	// were generated under the new prompt (same standing rule as v6-v13
+	// above).
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v14"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation
@@ -972,7 +980,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, errors.New("authenticated organization is required")
 	}
-	payload := synthesisInputFromDomain(input)
+	payload := synthesisInputFromDomain(principal.OrgID, input)
 	encoded, err := boundedJSON(payload, r.config.MaxInputBytes)
 	if err != nil {
 		return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, err
@@ -1859,12 +1867,17 @@ type synthesisInput struct {
 	Coverage         contextfabric.Coverage            `json:"coverage"`
 }
 
-func synthesisInputFromDomain(input contextfabric.SynthesisInput) synthesisInput {
+// synthesisInputFromDomain composes the exact bounded-JSON payload
+// SynthesizeAnswer sends the model. orgID (CHAOS-4690) feeds
+// contextfabric.MergeCoverage's own fail-open reconcile WARN log only --
+// never merge semantics; BuildSynthesisPrompt's prompt-preview path has no
+// authenticated principal in scope and passes "".
+func synthesisInputFromDomain(orgID string, input contextfabric.SynthesisInput) synthesisInput {
 	return synthesisInput{
 		Question: input.Request.Question, Interpretation: input.Interpretation,
 		Resolution: input.Graph.Resolution, Cohort: input.Graph.Cohort,
 		Paths: input.Graph.Paths, DriverCandidates: input.Graph.DriverCandidates,
-		Facts: modelFacingFacts(input.Facts.Facts), Coverage: mergeCoverage(input.Graph.Coverage, input.Facts.Coverage),
+		Facts: modelFacingFacts(input.Facts.Facts), Coverage: contextfabric.MergeCoverage(orgID, input.Graph.Coverage, input.Facts.Coverage),
 	}
 }
 
@@ -1920,6 +1933,30 @@ type synthesisOutput struct {
 	ClaimedFacts        []contextfabric.ClaimedFact `json:"claimed_facts"`
 	DeterministicAnswer string                      `json:"deterministic_answer"`
 	Warnings            []string                    `json:"warnings"`
+	// CoverageDisclosures (CHAOS-4690 Commit F, design §4.1) is
+	// DELIBERATELY typed json.RawMessage, not a typed []struct -- genkit's
+	// invopop/jsonschema reflector special-cases json.RawMessage as an
+	// UNCONSTRAINED schema (reflect.go:231 rawMessageType,
+	// reflectSliceOrArray's own `if t == rawMessageType { return }`
+	// early-out, verified against the vendored invopop/jsonschema@v0.13.0
+	// this module pins). A typed field here would instead produce a
+	// normal array-of-object schema, and genkit v1.11 validates the WHOLE
+	// parsed JSON against the output schema BEFORE unmarshalling
+	// (ai/format_json.go:76, ai/generate.go:1157) -- so one malformed
+	// entry (e.g. `"text": 17`) would reject the ENTIRE generation
+	// upstream of any local guard, discarding a perfectly valid
+	// status/drivers/claimed_facts payload over one bad disclosure. With
+	// an unconstrained schema, structured-output validation can never
+	// fail on this field by construction; the model's guidance comes
+	// entirely from the jsonschema description below and the synthesis
+	// prompt (prompts.go), and ALL content policing is local: toDomain
+	// leniently decodes this raw value (parseCoverageDisclosures), and
+	// contextfabric.applyCoverageDisclosures guards the decoded result
+	// against the same merged coverage details the answer actually
+	// carries. A malformed value here is reported as "undecodable", never
+	// as a decode error toDomain's caller would propagate -- see
+	// parseCoverageDisclosures' own doc comment.
+	CoverageDisclosures json.RawMessage `json:"coverage_disclosures,omitempty" jsonschema:"description=Optional. An array of at most one entry per coverage.details entry: {detail_id, text}. detail_id must exactly match a coverage.details[].detail_id from the input. text is one short plain-language sentence, faithful only to that entry's own fields (no invented cause/system/name), and must contain NO digits -- the quantity is already stated beside it."`
 }
 
 // phrasingOption is one offered option's own model-facing input row
@@ -1961,6 +1998,7 @@ func (o synthesisOutput) toDomain() (contextfabric.SynthesisDraft, error) {
 		EvidenceRefIDs: trimmedUnique(o.EvidenceRefIDs), ClaimedFacts: append([]contextfabric.ClaimedFact(nil), o.ClaimedFacts...),
 		DeterministicAnswer: strings.TrimSpace(o.DeterministicAnswer), Warnings: trimmedUnique(o.Warnings),
 	}
+	draft.CoverageDisclosures, draft.CoverageDisclosuresUndecodable = parseCoverageDisclosures(o.CoverageDisclosures)
 	if strings.TrimSpace(draft.DeterministicAnswer) == "" {
 		// Return draft (not a zero value) alongside the error: the caller
 		// (Runtime.SynthesizeAnswer) needs it to diagnose whether any
@@ -1983,6 +2021,39 @@ func (o synthesisOutput) toDomain() (contextfabric.SynthesisDraft, error) {
 		)
 	}
 	return draft, nil
+}
+
+// parseCoverageDisclosures lenient-decodes the model's raw
+// coverage_disclosures subdocument (CHAOS-4690 Commit F, design §4.1).
+// Because synthesisOutput.CoverageDisclosures is deliberately UNCONSTRAINED
+// in the output schema (see that field's own doc comment), genkit's
+// structured-output validation can never reject a malformed value here --
+// this is the ONLY place that malformation is ever detected, and it is
+// detected leniently: any unmarshal failure (a non-array top-level value,
+// a non-string "text" such as `"text": 17`, a non-string "detail_id", ...)
+// reports undecodable=true and a nil slice, NEVER an error -- the whole
+// synthesis call must still succeed, serving every coverage detail
+// Label-only (design §4.1's own r2 F1 scenario: "valid answer +
+// `"text": 17` => answer served"). An absent field, a JSON null, or
+// whitespace-only raw bytes is legitimately "nothing offered" -- reported
+// as (nil, false), NOT undecodable, so
+// contextfabric.RuntimeAnswerSynthesizer.Synthesize's telemetry can tell
+// "the model tried and we could not read it" (discarded_undecodable) apart
+// from "the model offered nothing this call" (absent).
+//
+// ParseSynthesisOutput (exchange_support.go) calls synthesisOutput.toDomain
+// directly, so it routes through this exact same lenient parser -- there is
+// no second decode path for the file-exchange transport to drift from.
+func parseCoverageDisclosures(raw json.RawMessage) ([]contextfabric.CoverageDisclosure, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil, false
+	}
+	var disclosures []contextfabric.CoverageDisclosure
+	if err := json.Unmarshal(trimmed, &disclosures); err != nil {
+		return nil, true
+	}
+	return disclosures, false
 }
 
 func trimmedUnique(values []string) []string {
@@ -2018,31 +2089,13 @@ func cloneStringMap(values map[string]string) map[string]string {
 	return result
 }
 
-func mergeCoverage(groups ...contextfabric.Coverage) contextfabric.Coverage {
-	bySource := make(map[string]contextfabric.SourceObservation)
-	reasons := make(map[string]struct{})
-	partial := false
-	for _, group := range groups {
-		partial = partial || group.Partial
-		for _, source := range group.Sources {
-			bySource[source.Source] = source
-		}
-		for _, reason := range group.DegradedReasons {
-			reasons[reason] = struct{}{}
-		}
-	}
-	sources := make([]contextfabric.SourceObservation, 0, len(bySource))
-	for _, source := range bySource {
-		sources = append(sources, source)
-	}
-	sort.Slice(sources, func(i, j int) bool { return sources[i].Source < sources[j].Source })
-	degraded := make([]string, 0, len(reasons))
-	for reason := range reasons {
-		degraded = append(degraded, reason)
-	}
-	sort.Strings(degraded)
-	return contextfabric.Coverage{Sources: sources, Partial: partial || len(degraded) > 0, DegradedReasons: degraded}
-}
+// mergeCoverage is deliberately GONE (CHAOS-4690): this package used to
+// carry its own duplicate coverage-merge implementation (no state
+// priority, no structured details) that could disagree with
+// contextfabric's own merge at model_runtime.go:1336 -- the exact dual-write
+// drift risk design §3.4 exists to close. Both call sites
+// (synthesisInputFromDomain below) now route through the ONE shared pure
+// normalizer, contextfabric.MergeCoverage.
 
 var _ contextfabric.ModelRuntime = (*Runtime)(nil)
 var _ contextfabric.OfferPhrasingModelRuntime = (*Runtime)(nil)

@@ -445,6 +445,10 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 	expected := []string{
 		"AcceptedGrammar", "AnchorOption", "AnswerCompleteness", "BoundSubjectReceipt", "CandidateOption",
 		"ConfirmedStructureEntry",
+		// CHAOS-4690: CoverageDetail joins deliberately -- the projection
+		// carries the SAME structured coverage detail the canonical result
+		// does (settled design §7.2), not a narrowed copy.
+		"CoverageDetail",
 		"EffectiveEvidenceWindow", "HandleOption", "KindOption",
 		"PriorSubjectReceiptDisposition", "PriorSubjectReceiptDispositionEntry",
 		"RelativeWindowID",
