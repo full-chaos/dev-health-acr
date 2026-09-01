@@ -151,6 +151,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			})
 			return
 		}
+		a.logContextFabricResponseBudgetMeasured(r, measuredBytes, maximumBytes, estimatedTokens, itemCounts)
 		a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_completed", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status})
 		writeEncodedJSON(w, http.StatusOK, encoded)
 	})
@@ -631,6 +632,35 @@ func MarshalContextFabricResponse(payload any) (encoded []byte, measuredBytes in
 	return marshalContextFabricResponse(payload)
 }
 
+// contextFabricResponseBudgetFields (CHAOS-4540) is the closed field set
+// shared by the exceed-path WARN and the passing-path INFO measurement line
+// below -- the SAME numbers either way, so a passing run's headroom is
+// exactly as diagnosable as a failing run's overrun. estimatedTokens is
+// reported for diagnostics only -- these routes deliberately do not gate on
+// it (see the usage.Tokens comment at both call sites). counts carries the
+// CHAOS-4523 per-category breakdown so a reader can see exactly which
+// categories drove the measured count -- e.g. distinguishing 27 provenance
+// Paths (not charged, see contractsv1.ContextFabricResultItemCounts.
+// Budgeted) from 30 genuine ClaimedFacts/Drivers (charged) -- without
+// re-running the request with a debugger attached, on a pass exactly as
+// much as on a 413.
+func contextFabricResponseBudgetFields(maxItems int, measuredBytes, maximumBytes, estimatedTokens int64, counts contextFabricItemCounts) []any {
+	return []any{
+		"measured_bytes", measuredBytes, "max_serialized_bytes", maximumBytes,
+		// measured_items is the TRUTHFUL total (counts.Total(), Paths
+		// included) -- the same value recorded as usage.Items -- not the
+		// budgeted() subset the gate actually compares against; that
+		// subset and its effective ceiling are max_items+items_paths, so
+		// a reader can derive "budgeted = measured_items - items_paths"
+		// without a false accounting record (CHAOS-4523 codex P2 finding).
+		"estimated_tokens", estimatedTokens, "measured_items", counts.Total(),
+		"max_items", maxItems, "max_items_effective_for_paths_exclusion", maxItems + counts.Paths,
+		"items_candidates", counts.Candidates, "items_drivers", counts.Drivers, "items_paths", counts.Paths,
+		"items_remaining_work", counts.RemainingWork, "items_readiness_gaps", counts.ReadinessGaps,
+		"items_conflicts", counts.Conflicts, "items_claimed_facts", counts.ClaimedFacts, "items_cohort_members", counts.CohortMembers,
+	}
+}
+
 // logContextFabricResponseBudgetExceeded is the CHAOS-4355 response-bound
 // follow-up's decision-basis telemetry (CANONICAL ARCHITECTURE's
 // diagnosis-in-artifacts rule): every time a Context Fabric response fails
@@ -640,28 +670,26 @@ func MarshalContextFabricResponse(payload any) (encoded []byte, measuredBytes in
 // request_id already carries, so the defect is diagnosable from the run's
 // own artifacts without re-running with instrumentation added after the
 // fact. See writeError's "details" map on the caller side for the
-// caller-visible half of this same disclosure. estimatedTokens is reported
-// for diagnostics only -- these routes deliberately do not gate on it (see
-// the usage.Tokens comment at both call sites).
-//
-// counts carries the CHAOS-4523 per-category breakdown so an "items" 413
-// names exactly which categories drove the measured count -- e.g.
-// distinguishing 27 provenance Paths (not charged, see
-// contractsv1.ContextFabricResultItemCounts.Budgeted) from 30 genuine ClaimedFacts/Drivers
-// (charged) without re-running the request with a debugger attached.
+// caller-visible half of this same disclosure.
 func (a *App) logContextFabricResponseBudgetExceeded(r *http.Request, reason string, measuredBytes, maximumBytes, estimatedTokens int64, counts contextFabricItemCounts) {
-	a.logger.WarnContext(r.Context(), "context fabric response exceeded service limits",
-		"request_id", RequestID(r.Context()), "failure_class", "context_fabric_response_budget",
-		"reason", reason, "measured_bytes", measuredBytes, "max_serialized_bytes", maximumBytes,
-		// measured_items is the TRUTHFUL total (counts.Total(), Paths
-		// included) -- the same value recorded as usage.Items -- not the
-		// budgeted() subset the gate actually compared against; that
-		// subset and its effective ceiling are max_items+items_paths, so
-		// a reader can derive "budgeted = measured_items - items_paths"
-		// without a false accounting record (CHAOS-4523 codex P2 finding).
-		"estimated_tokens", estimatedTokens, "measured_items", counts.Total(),
-		"max_items", a.config.MaxItems, "max_items_effective_for_paths_exclusion", a.config.MaxItems+counts.Paths,
-		"items_candidates", counts.Candidates, "items_drivers", counts.Drivers, "items_paths", counts.Paths,
-		"items_remaining_work", counts.RemainingWork, "items_readiness_gaps", counts.ReadinessGaps,
-		"items_conflicts", counts.Conflicts, "items_claimed_facts", counts.ClaimedFacts, "items_cohort_members", counts.CohortMembers)
+	fields := append([]any{
+		"request_id", RequestID(r.Context()), "failure_class", "context_fabric_response_budget", "reason", reason,
+	}, contextFabricResponseBudgetFields(a.config.MaxItems, measuredBytes, maximumBytes, estimatedTokens, counts)...)
+	a.logger.WarnContext(r.Context(), "context fabric response exceeded service limits", fields...)
+}
+
+// logContextFabricResponseBudgetMeasured (CHAOS-4540) is the exceed line's
+// success-path counterpart: emitted UNCONDITIONALLY on every assembled
+// answer that passes both budget gates, carrying the SAME closed fields at
+// INFO rather than WARN. Before this, the only place measured_items/
+// measured_bytes/estimated_tokens were ever logged was a run that had
+// already failed -- so a passing configuration's own margin could only ever
+// be stated as "it fits", never as a number, and #328's item-count
+// regression from 40-42 down to under 30 had nowhere to be read off from a
+// successful run. The exceed-path WARN above is unchanged in name, level and
+// field set, so existing consumers of it are unaffected.
+func (a *App) logContextFabricResponseBudgetMeasured(r *http.Request, measuredBytes, maximumBytes, estimatedTokens int64, counts contextFabricItemCounts) {
+	fields := append([]any{"request_id", RequestID(r.Context())},
+		contextFabricResponseBudgetFields(a.config.MaxItems, measuredBytes, maximumBytes, estimatedTokens, counts)...)
+	a.logger.InfoContext(r.Context(), "context fabric response measured", fields...)
 }
