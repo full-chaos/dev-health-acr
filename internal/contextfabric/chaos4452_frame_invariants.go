@@ -100,7 +100,10 @@ const (
 	// FrameInvariantI14: non-empty Emphasis implies a derived ranking
 	// obligation. PHASE A2.
 	FrameInvariantI14 FrameInvariant = "i14"
-	// FrameInvariantI15: Goals is non-empty after sanitization.
+	// FrameInvariantI15: Goals is non-empty AND every member is in the
+	// closed vocabulary -- the same pairing I10 makes for obligations.
+	// See checkI15 for why membership is checked here and not left to
+	// the sanitization boundary.
 	FrameInvariantI15 FrameInvariant = "i15"
 	// FrameInvariantI16: every axis the frame SETS is discharged (law
 	// L2, per-frame). PHASE A2.
@@ -269,35 +272,36 @@ type FrameValidationFailure struct {
 type FrameFailureDetail string
 
 const (
-	FrameFailureNoVariant            FrameFailureDetail = "no_variant_set"
-	FrameFailureMultipleVariants     FrameFailureDetail = "multiple_variants_set"
-	FrameFailureVariantKindMismatch  FrameFailureDetail = "variant_disagrees_with_kind"
-	FrameFailureKindUnset            FrameFailureDetail = "kind_unset"
-	FrameFailureTooFewOperands       FrameFailureDetail = "too_few_operands"
-	FrameFailureNoTerms              FrameFailureDetail = "no_terms"
-	FrameFailureBlankTerm            FrameFailureDetail = "blank_term"
-	FrameFailureNoAnchorTerms        FrameFailureDetail = "no_anchor_terms"
-	FrameFailureMemberKindUnset      FrameFailureDetail = "member_kind_unset"
-	FrameFailureMemberKindInvalid    FrameFailureDetail = "member_kind_invalid"
-	FrameFailureGroupKindUnset       FrameFailureDetail = "group_kind_unset"
-	FrameFailureGroupKindInvalid     FrameFailureDetail = "group_kind_invalid"
-	FrameFailureGroupEqualsMember    FrameFailureDetail = "group_kind_equals_member_kind"
-	FrameFailureCompareNeedsSet      FrameFailureDetail = "compare_requires_explicit_set"
-	FrameFailureTrendNeedsTemporal   FrameFailureDetail = "trend_requires_non_current_temporal"
-	FrameFailureCountNeedsSetKind    FrameFailureDetail = "count_requires_set_valued_kind"
-	FrameFailureOrgCountNeedsMember  FrameFailureDetail = "org_count_requires_member_kind"
-	FrameFailureNoGoals              FrameFailureDetail = "goal_set_empty"
-	FrameFailureNoObligations        FrameFailureDetail = "obligation_set_empty"
-	FrameFailureObligationInvalid    FrameFailureDetail = "obligation_outside_vocabulary"
-	FrameFailureEmphasisNeedsRanking FrameFailureDetail = "emphasis_requires_ranking_obligation"
-	FrameFailureAxisUndischarged     FrameFailureDetail = "axis_undischarged"
-	FrameFailureOperandKindUnset     FrameFailureDetail = "operand_kind_unset"
-	FrameFailureOperandNoVariant     FrameFailureDetail = "operand_no_variant_set"
-	FrameFailureOperandMultiVariant  FrameFailureDetail = "operand_multiple_variants_set"
-	FrameFailureOperandKindMismatch  FrameFailureDetail = "operand_disagrees_with_kind"
-	FrameFailureOperandNoTerms       FrameFailureDetail = "operand_no_terms"
-	FrameFailureOperandNoAnchor      FrameFailureDetail = "operand_no_anchor_terms"
-	FrameFailureOperandMemberKind    FrameFailureDetail = "operand_member_kind_invalid"
+	FrameFailureNoVariant             FrameFailureDetail = "no_variant_set"
+	FrameFailureMultipleVariants      FrameFailureDetail = "multiple_variants_set"
+	FrameFailureVariantKindMismatch   FrameFailureDetail = "variant_disagrees_with_kind"
+	FrameFailureKindUnset             FrameFailureDetail = "kind_unset"
+	FrameFailureTooFewOperands        FrameFailureDetail = "too_few_operands"
+	FrameFailureNoTerms               FrameFailureDetail = "no_terms"
+	FrameFailureBlankTerm             FrameFailureDetail = "blank_term"
+	FrameFailureNoAnchorTerms         FrameFailureDetail = "no_anchor_terms"
+	FrameFailureMemberKindUnset       FrameFailureDetail = "member_kind_unset"
+	FrameFailureMemberKindInvalid     FrameFailureDetail = "member_kind_invalid"
+	FrameFailureGroupKindUnset        FrameFailureDetail = "group_kind_unset"
+	FrameFailureGroupKindInvalid      FrameFailureDetail = "group_kind_invalid"
+	FrameFailureGroupEqualsMember     FrameFailureDetail = "group_kind_equals_member_kind"
+	FrameFailureCompareNeedsSet       FrameFailureDetail = "compare_requires_explicit_set"
+	FrameFailureTrendNeedsTemporal    FrameFailureDetail = "trend_requires_non_current_temporal"
+	FrameFailureCountNeedsSetKind     FrameFailureDetail = "count_requires_set_valued_kind"
+	FrameFailureOrgCountNeedsMember   FrameFailureDetail = "org_count_requires_member_kind"
+	FrameFailureNoGoals               FrameFailureDetail = "goal_set_empty"
+	FrameFailureGoalOutsideVocabulary FrameFailureDetail = "goal_outside_vocabulary"
+	FrameFailureNoObligations         FrameFailureDetail = "obligation_set_empty"
+	FrameFailureObligationInvalid     FrameFailureDetail = "obligation_outside_vocabulary"
+	FrameFailureEmphasisNeedsRanking  FrameFailureDetail = "emphasis_requires_ranking_obligation"
+	FrameFailureAxisUndischarged      FrameFailureDetail = "axis_undischarged"
+	FrameFailureOperandKindUnset      FrameFailureDetail = "operand_kind_unset"
+	FrameFailureOperandNoVariant      FrameFailureDetail = "operand_no_variant_set"
+	FrameFailureOperandMultiVariant   FrameFailureDetail = "operand_multiple_variants_set"
+	FrameFailureOperandKindMismatch   FrameFailureDetail = "operand_disagrees_with_kind"
+	FrameFailureOperandNoTerms        FrameFailureDetail = "operand_no_terms"
+	FrameFailureOperandNoAnchor       FrameFailureDetail = "operand_no_anchor_terms"
+	FrameFailureOperandMemberKind     FrameFailureDetail = "operand_member_kind_invalid"
 )
 
 // ValidateFramePhaseA1 evaluates the SYNTACTIC invariants over the fields
@@ -683,12 +687,45 @@ func checkI9(frame QuestionFrame) (FrameValidationFailure, bool) {
 }
 
 func checkI15(frame QuestionFrame) (FrameValidationFailure, bool) {
-	if len(frame.Goals) > 0 {
-		return FrameValidationFailure{}, false
+	if len(frame.Goals) == 0 {
+		// An empty goal set is a FAILURE, never a default. Round 2's
+		// P1-7: the old "unset goal defaults to assess_state" rule
+		// silently turned "which teams are struggling?" into a status
+		// question, losing the ranking operation with no repair,
+		// clarification or refusal.
+		return FrameValidationFailure{Invariant: FrameInvariantI15, Phase: FrameValidationPhaseA1, Detail: FrameFailureNoGoals}, true
 	}
-	// An empty goal set is a FAILURE, never a default. Round 2's P1-7:
-	// the old "unset goal defaults to assess_state" rule silently turned
-	// "which teams are struggling?" into a status question, losing the
-	// ranking operation with no repair, clarification or refusal.
-	return FrameValidationFailure{Invariant: FrameInvariantI15, Phase: FrameValidationPhaseA1, Detail: FrameFailureNoGoals}, true
+	// MEMBERSHIP, not merely non-emptiness -- and the asymmetry with the
+	// design's prose is deliberate rather than an over-reach.
+	//
+	// §13.2.1 says an unknown goal string is DROPPED at the SANITIZATION
+	// boundary, never an error, and §13.5.2 states I15 as "Goals is
+	// non-empty AFTER SANITIZATION". Both are about a frame that HAS been
+	// sanitized. This function validates frames it did not build, and it
+	// cannot distinguish "the caller sanitized and this is a real member"
+	// from "the caller skipped sanitization". Trusting the caller is what
+	// made an unrecognized goal invisible in three places at once: it
+	// contributes no obligations (a map miss in table 1), it contributes
+	// no axis discharge (a map miss in goalDischarge, so I16 cannot see
+	// the axis it should have failed on), and it reaches
+	// FrameValidationEventFrom verbatim -- which put ARBITRARY MODEL TEXT
+	// into the `proposed_goals` log field, defeating the closed-vocabulary
+	// rule and the no-free-text telemetry rule in one step.
+	//
+	// I10 is the design's own precedent for the shape of this fix: it
+	// reads "Obligations is non-empty AND every member is in the closed
+	// vocabulary". I15 is the same invariant for the goal axis and now
+	// says the same thing.
+	//
+	// In production this fires almost never: the emission path sanitizes
+	// first, so an unknown goal is dropped and only the all-unknown case
+	// reaches here, as empty. What it catches is a caller that skipped
+	// sanitization -- which is a bug the validator now NAMES instead of
+	// swallowing.
+	for _, goal := range frame.Goals {
+		if !ValidInvestigationGoal(goal) {
+			return FrameValidationFailure{Invariant: FrameInvariantI15, Phase: FrameValidationPhaseA1, Detail: FrameFailureGoalOutsideVocabulary}, true
+		}
+	}
+	return FrameValidationFailure{}, false
 }

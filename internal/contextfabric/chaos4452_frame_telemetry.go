@@ -169,15 +169,15 @@ func FrameValidationEventFrom(proposed QuestionFrame, result FrameRepairResult, 
 		RepairAttempted:      result.RepairAttempted,
 		RepairLatencyMS:      result.RepairLatency.Milliseconds(),
 		RepairBoundViolation: result.ViolatedBound,
-		ProposedKind:         proposed.SubjectExpression.Kind,
-		ProposedGoals:        append([]InvestigationGoal(nil), proposed.Goals...),
+		ProposedKind:         vocabularyKindOnly(proposed.SubjectExpression.Kind),
+		ProposedGoals:        vocabularyGoalsOnly(proposed.Goals),
 		FrameVersion:         QuestionFrameVersion,
 	}
 	if result.Outcome == FrameValidationOutcomeRepaired {
 		if result.Frame.SubjectExpression.Kind != proposed.SubjectExpression.Kind {
-			event.RepairedKind = result.Frame.SubjectExpression.Kind
+			event.RepairedKind = vocabularyKindOnly(result.Frame.SubjectExpression.Kind)
 		}
-		event.RepairedGoals = append([]InvestigationGoal(nil), result.Frame.Goals...)
+		event.RepairedGoals = vocabularyGoalsOnly(result.Frame.Goals)
 	}
 	if result.Outcome == FrameValidationOutcomeValid || result.Outcome == FrameValidationOutcomeRepaired {
 		event.DerivedObligationCount = len(result.Frame.Obligations)
@@ -208,6 +208,42 @@ type FrameValidationTelemetry interface {
 	// RecordFrameValidation reports ONE frame's validation. Fired on
 	// EVERY frame reaching validation, including valid ones.
 	RecordFrameValidation(ctx context.Context, principal storage.Principal, event FrameValidationEvent)
+}
+
+// vocabularyGoalsOnly and vocabularyKindOnly are the LAST LINE before a
+// log field, and they exist because the first version of this projection
+// did not have one.
+//
+// The event is built from the frame the model PROPOSED, which by
+// construction is the one object here that has not yet been proven
+// closed-vocabulary. A frame reaching this function with an unrecognized
+// goal put ARBITRARY MODEL TEXT into `proposed_goals` and straight into
+// the log line -- a corpus-leak vector and a breach of the closed-enum
+// telemetry rule, found by adversarial review after this package's own
+// leak test passed (that test planted its canary in the anchor TERMS and
+// asserted the record was clean, so it covered the leak the author thought
+// of rather than the leak class).
+//
+// Invariant I15 now REJECTS such a frame in phase A1, so in a correct flow
+// nothing unrecognized ever reaches here. These filters stay anyway:
+// telemetry is the one place where being wrong is silent and permanent,
+// and a defence that is only correct while an upstream check holds is a
+// defence that fails the day someone adds a second caller.
+func vocabularyGoalsOnly(goals []InvestigationGoal) []InvestigationGoal {
+	out := make([]InvestigationGoal, 0, len(goals))
+	for _, goal := range goals {
+		if ValidInvestigationGoal(goal) {
+			out = append(out, goal)
+		}
+	}
+	return out
+}
+
+func vocabularyKindOnly(kind SubjectExpressionKind) SubjectExpressionKind {
+	if !ValidSubjectExpressionKind(kind) {
+		return ""
+	}
+	return kind
 }
 
 // goalsLogValue renders a goal set as a flat slice of strings for slog.

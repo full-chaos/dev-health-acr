@@ -467,21 +467,73 @@ func ValidateAndRepairFrame(
 // NormalizeFrame applies the derivations §13.2.1's authorship table calls
 // for, and NOTHING ELSE. It runs strictly between phase A1 and phase A2.
 //
-// The only derivation today is the temporal default: "Unset derives
-// `current`". It is a function rather than an inline assignment because
-// the A1/A2 boundary has to be a NAMED point in the flow -- an inline
-// default would put a write to the frame inside the validator, which is
-// how the design got into the phase confusion round 2 caught.
+// It is a function rather than a few inline assignments because the A1/A2
+// boundary has to be a NAMED point in the flow -- an inline default would
+// put a write to the frame inside the validator, which is how the design
+// got into the phase confusion round 2 caught.
 //
-// Version is stamped here so every frame that survives validation carries
-// the derivation-table version that produced it, which is what lets a
-// persisted frame be replayed against the right table.
+// THREE THINGS HAPPEN HERE, all of them §13.2.1's authorship table read
+// literally:
+//
+//  1. "Temporal: unset derives `current`", and an out-of-vocabulary
+//     Temporal derives it too. A Temporal outside the vocabulary is not an
+//     error anywhere in the design, but left in place it is INVISIBLE: it
+//     misses table 2's map and misses temporalDischarge's map, so it
+//     contributes no obligation and no discharge and I16 cannot see the
+//     axis. Deriving `current` makes the axis mean something rather than
+//     silently nothing.
+//
+//  2. "Emphasis / Dimensions: closed enum set" -- each is re-sanitized
+//     here, dropping any member outside its vocabulary, which is exactly
+//     what §13.2.1 says the server does with an unknown member ("DROPPED
+//     from the set, never an error"). Same invisibility argument: an
+//     unknown dimension misses table 3 AND misses dimensionDischarge's
+//     obligation branch, so it would quietly fall through to the
+//     fact-kind-constraint discharge and look decided.
+//
+//     Goals are NOT sanitized here -- they are a phase-A1 FAILURE under
+//     I15 instead. The asymmetry is the design's: an empty goal set is a
+//     failure rather than a default, and goals are the one axis whose
+//     values reach a log field, so they get named rather than silently
+//     repaired. See checkI15.
+//
+//  3. Version is stamped, so every frame that survives validation carries
+//     the derivation-table version that produced it -- which is what lets
+//     a persisted frame be replayed against the right table.
 func NormalizeFrame(frame QuestionFrame) QuestionFrame {
-	if frame.Temporal == "" {
+	if !ValidTemporalIntent(frame.Temporal) {
 		frame.Temporal = TemporalIntentCurrent
 	}
+	frame.Emphasis = validEmphasisOnly(frame.Emphasis)
+	frame.Dimensions = validDimensionsOnly(frame.Dimensions)
 	if frame.Version == "" {
 		frame.Version = QuestionFrameVersion
 	}
 	return frame
+}
+
+func validEmphasisOnly(in []AnswerEmphasis) []AnswerEmphasis {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]AnswerEmphasis, 0, len(in))
+	for _, member := range in {
+		if ValidAnswerEmphasis(member) {
+			out = append(out, member)
+		}
+	}
+	return out
+}
+
+func validDimensionsOnly(in []HealthDimension) []HealthDimension {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]HealthDimension, 0, len(in))
+	for _, member := range in {
+		if ValidHealthDimension(member) {
+			out = append(out, member)
+		}
+	}
+	return out
 }

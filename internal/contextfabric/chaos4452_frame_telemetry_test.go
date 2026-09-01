@@ -142,10 +142,19 @@ func TestFrameValidationTelemetryFiresOnValidFramesToo(t *testing.T) {
 // for scoring and must NEVER reach a log field. This test builds a frame
 // whose terms are distinctive and asserts both that the key set is closed
 // and that the term text appears nowhere in the record.
+//
+// STRENGTHENED after codex round 1 finding 2. The first version planted a
+// canary ONLY in the anchor terms, asserted the record was clean, and
+// passed -- while `proposed_goals` was leaking arbitrary model text
+// through a different field. A leak test that covers one field is a test
+// for the leak its author thought of, not for the leak class, and it reads
+// as coverage either way. It now plants a canary in a GOAL as well, which
+// is the field that actually leaked.
 func TestFrameValidationTelemetryLeaksNoQuestionContent(t *testing.T) {
 	const secretAnchor = "zzz-confidential-team-name"
+	const secretGoal = "zzz-confidential-goal-text"
 	proposed := QuestionFrame{
-		Goals: []InvestigationGoal{GoalAssessState},
+		Goals: []InvestigationGoal{GoalAssessState, InvestigationGoal(secretGoal)},
 		SubjectExpression: SubjectExpression{
 			Kind: SubjectExpressionChildrenOfScope,
 			Scoped: &ScopedSetExpression{
@@ -179,6 +188,119 @@ func TestFrameValidationTelemetryLeaksNoQuestionContent(t *testing.T) {
 		if containsSecret(value, secretAnchor) {
 			t.Fatalf("record[%q] contains the anchor term -- retrieval pointers are captured on the RECEIPT for scoring and must never reach a log field", key)
 		}
+		if containsSecret(value, secretGoal) {
+			t.Fatalf("record[%q] contains the unrecognized goal text -- this is the field that actually leaked before the vocabulary filter was added", key)
+		}
+	}
+}
+
+// TestUnrecognizedGoalIsRejectedAndNeverReachesTelemetry is codex round 1's
+// finding 2, reproduced by this lane and closed.
+//
+// THE DEFECT, executed on the pre-fix tree: a frame carrying
+// `Goals=[assess_state, "arbitrary model text"]` returned
+// `outcome="valid"` and the sink logged
+// `proposed_goals = [assess_state arbitrary model text zzz-leak]`.
+//
+// It was invisible in three places at once. The unknown goal missed
+// table 1's map, so it contributed no obligation; it missed
+// goalDischarge's map, so I16 could not see the axis it should have
+// failed on; and it reached the event verbatim, putting free text into a
+// log field. I15 checked only NON-EMPTINESS, which is what the design's
+// prose says -- but the design's prose describes a frame that has already
+// been through sanitization, and a validator cannot assume its caller ran
+// it.
+//
+// WHY THE PACKAGE'S OWN LEAK TEST MISSED IT, recorded because it is the
+// more useful half: TestFrameValidationTelemetryLeaksNoQuestionContent
+// plants its canary in the scoped ANCHOR TERMS and asserts the record is
+// clean. It passed throughout. It covered the leak the author thought of,
+// not the leak CLASS -- which is the green-but-vacuous failure AGENTS.md
+// names. That test now plants a canary in a GOAL as well.
+func TestUnrecognizedGoalIsRejectedAndNeverReachesTelemetry(t *testing.T) {
+	const junk = "arbitrary model text zzz-leak"
+	proposed := QuestionFrame{
+		Goals: []InvestigationGoal{GoalAssessState, InvestigationGoal(junk)},
+		SubjectExpression: SubjectExpression{
+			Kind:  SubjectExpressionNamed,
+			Named: &NamedSubjectExpression{Terms: []string{"dev health ops"}},
+		},
+	}
+
+	// HALF ONE -- the validator names it, in phase A1, as I15.
+	failure, bad := ValidateFramePhaseA1(proposed)
+	if !bad {
+		t.Fatal("a goal outside the closed vocabulary must fail phase A1 -- silently ignoring it means the axis contributes no obligation AND no discharge, so nothing downstream can see it")
+	}
+	if failure.Invariant != FrameInvariantI15 {
+		t.Fatalf("failed invariant = %q, want %q -- I15 is the goal-axis invariant, and I10 is the design's own precedent for pairing non-emptiness with vocabulary membership",
+			failure.Invariant, FrameInvariantI15)
+	}
+	if failure.Detail != FrameFailureGoalOutsideVocabulary {
+		t.Fatalf("failure detail = %q, want %q -- an out-of-vocabulary goal and an empty goal set are different operational states", failure.Detail, FrameFailureGoalOutsideVocabulary)
+	}
+
+	// HALF TWO -- the whole flow refuses, rather than returning usable.
+	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_sink_test"}, nil, proposed, nil, "", nil)
+	if result.Outcome != FrameValidationOutcomeRefusedInvalid {
+		t.Fatalf("outcome = %q, want %q", result.Outcome, FrameValidationOutcomeRefusedInvalid)
+	}
+
+	// HALF THREE -- and even so, nothing free-text reaches the log line.
+	event := FrameValidationEventFrom(proposed, result, "")
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordFrameValidation(context.Background(), storage.Principal{OrgID: "org_sink_test"}, event)
+	})
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1", len(records))
+	}
+	for key, value := range records[0] {
+		if containsSecret(value, junk) {
+			t.Fatalf("record[%q] carries the unrecognized goal text -- telemetry is the one place where being wrong is silent and permanent", key)
+		}
+	}
+	if !containsSecret(records[0]["proposed_goals"], string(GoalAssessState)) {
+		t.Errorf("proposed_goals = %v -- the RECOGNIZED goal must survive the filter; dropping the whole set would destroy the field's diagnostic value",
+			records[0]["proposed_goals"])
+	}
+}
+
+// TestUnrecognizedEmphasisAndDimensionsAreSanitizedByNormalization is the
+// other half of the same class. Neither reaches a log field, so neither is
+// a leak -- but left in place both are INVISIBLE, missing their derivation
+// map and their discharge map, so the axis contributes nothing while
+// looking decided.
+//
+// These are DROPPED rather than failed, which is §13.2.1 read literally:
+// "an unknown string is DROPPED from the set, never an error". Goals are
+// the deliberate exception (I15), because an empty goal set is a failure
+// and because goals are the one axis whose values are logged.
+func TestUnrecognizedEmphasisAndDimensionsAreSanitizedByNormalization(t *testing.T) {
+	frame := QuestionFrame{
+		Goals: []InvestigationGoal{GoalRankOrSurvey},
+		SubjectExpression: SubjectExpression{
+			Kind:       SubjectExpressionDiscoveredKind,
+			Discovered: &DiscoveredSetExpression{MemberKind: contractsv1.ContextFabricSubjectTeam},
+		},
+		Emphasis:   []AnswerEmphasis{EmphasisNegativeOutliers, AnswerEmphasis("sideways_outliers")},
+		Dimensions: []HealthDimension{HealthDimensionDeliveryFlow, HealthDimension("vibes")},
+		Temporal:   TemporalIntent("whenever"),
+	}
+	normalized := NormalizeFrame(frame)
+
+	if len(normalized.Emphasis) != 1 || normalized.Emphasis[0] != EmphasisNegativeOutliers {
+		t.Errorf("emphasis = %v, want only the recognized member", normalized.Emphasis)
+	}
+	if len(normalized.Dimensions) != 1 || normalized.Dimensions[0] != HealthDimensionDeliveryFlow {
+		t.Errorf("dimensions = %v, want only the recognized member", normalized.Dimensions)
+	}
+	if normalized.Temporal != TemporalIntentCurrent {
+		t.Errorf("temporal = %q, want %q -- an out-of-vocabulary temporal misses table 2 AND temporalDischarge, so leaving it in place makes the axis mean silently nothing",
+			normalized.Temporal, TemporalIntentCurrent)
+	}
+	// And the frame is then usable, because none of these is an error.
+	if failure, bad := ValidateFramePhaseA2(DeriveFrameObligations(normalized, nil), ""); bad {
+		t.Fatalf("normalized frame fails A2 on %q -- dropping an unknown member must never be a way to fail a sound interpretation", failure.Invariant)
 	}
 }
 
