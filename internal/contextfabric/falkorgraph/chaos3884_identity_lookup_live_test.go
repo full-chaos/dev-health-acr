@@ -113,6 +113,8 @@ func (f *fakeIdentityTelemetry) RecordCohortMembersAuthzDropped(context.Context,
 func (f *fakeIdentityTelemetry) RecordEdgesFilteredByReason(context.Context, string, int, int, int) {
 }
 func (f *fakeIdentityTelemetry) RecordCohortDeniedByAuthorization(context.Context, string, int) {}
+func (f *fakeIdentityTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bool, falkorgraph.CohortExactNameCensusBasis) {
+}
 
 // TestLiveAliasIdentityFastPathCommitsAUniqueClaimant is CHAOS-3884 Option
 // C's live end-to-end proof: a repository entity projected into a real

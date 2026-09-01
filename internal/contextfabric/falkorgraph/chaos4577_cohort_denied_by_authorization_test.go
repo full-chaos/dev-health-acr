@@ -194,13 +194,22 @@ func TestDiscoverContextDoesNotSignalCohortDeniedWhenOnlyAWrongKindNodeIsDenied(
 
 // TestDiscoverContextExplicitCohortDoesNotSignalDeniedOnANonExhaustiveMiss
 // is CHAOS-4577 codex round-2 P2, reproduced then fixed. ShapeExplicitCohort
-// (the user named specific members, e.g. "compare the frontend and backend
-// teams") never runs the org-wide exact-name census -- it resolves through
-// the bounded fulltext/hopWalk candidates only. A single denied match there
-// is NOT proof the whole named cohort was denied: other named members may
-// simply never have been retrieved at all (a lexical miss, unrelated to
-// authorization). The cohort_denied_by_authorization signal must stay
-// reserved for a genuinely exhaustive census.
+// with a resolved scope anchor (the user named specific members, e.g.
+// "compare the frontend and backend teams") never runs the org-wide
+// exact-name census -- it resolves through the bounded fulltext/hopWalk
+// candidates only. A single denied match there is NOT proof the whole named
+// cohort was denied: other named members may simply never have been
+// retrieved at all (a lexical miss, unrelated to authorization). The
+// cohort_denied_by_authorization signal must stay reserved for a genuinely
+// exhaustive census.
+//
+// CHAOS-4622 remainder amendment: this scenario now requires
+// ScopeAnchorResolved: true explicitly -- an explicit_cohort request with
+// NO resolved anchor is a different, previously-mishandled case (see
+// TestDiscoverContextExplicitCohortWithoutNamedAnchorCallsExactNameCandidates,
+// chaos4395_cohort_exact_name_test.go) that now DOES run the exhaustive
+// census. This test stays scoped to the genuinely-named case its own doc
+// comment always described.
 func TestDiscoverContextExplicitCohortDoesNotSignalDeniedOnANonExhaustiveMiss(t *testing.T) {
 	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
 		switch {
@@ -213,7 +222,7 @@ func TestDiscoverContextExplicitCohortDoesNotSignalDeniedOnANonExhaustiveMiss(t 
 			denied.Properties["authorization_repositories"] = []string{"acr-context-fabric:no-team-repository-ownership"}
 			return []row{{"node": denied, "score": 1.0}}, nil
 		case strings.Contains(cypher, "$kinds"):
-			t.Fatal("chaos4348ExactNameCandidates must not be called for ShapeExplicitCohort")
+			t.Fatal("chaos4348ExactNameCandidates must not be called for ShapeExplicitCohort with a resolved scope anchor")
 			return nil, nil
 		case strings.Contains(cypher, "UNION"):
 			return nil, nil
@@ -224,7 +233,7 @@ func TestDiscoverContextExplicitCohortDoesNotSignalDeniedOnANonExhaustiveMiss(t 
 	telemetry := &recordingTelemetry{}
 	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
 	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
-	request := cohortDiscoveryRequest(contextfabric.ShapeExplicitCohort)
+	request := cohortDiscoveryRequestWithScopeAnchor(contextfabric.ShapeExplicitCohort, true)
 
 	result, err := adapter.DiscoverContext(context.Background(), principal, request)
 	if err != nil {

@@ -1495,6 +1495,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
 		Request: graphRequest, Interpretation: interpretation, Resolution: resolution, Binding: binding,
+		ScopeAnchorResolved: scopeAnchorResolved(familyOutcome),
 	})
 	if err != nil {
 		return InvestigationResult{}, stageError(StageGraph, fmt.Errorf("discover graph context: %w", err))
@@ -2298,6 +2299,20 @@ func (e *Engine) emitBindingEpochDelta(ctx context.Context, principal storage.Pr
 		return
 	}
 	e.telemetry.RecordBindingEpochDelta(ctx, principal, sample.flipped, sample.delta)
+}
+
+// scopeAnchorResolved (CHAOS-4622 remainder) reduces the winning
+// question-family sample's ScopeAnchorTerm to whether it resolved --
+// GraphDiscoveryRequest.ScopeAnchorResolved's own doc comment explains why
+// only the bool travels past this point. WinningSampleIndex is -1 when
+// ResolveQuestionFamily found no consensus winner (no majority, or zero
+// samples) -- outcome.WinningSample is then its zero value, whose empty
+// ScopeAnchorTerm would already read as false on its own -- the explicit
+// index check is belt-and-braces, making "no winner" and "winner named
+// nothing" two distinct paths to the same false rather than one relying on
+// zero-value behavior a future WinningSample field addition could change.
+func scopeAnchorResolved(outcome QuestionFamilyOutcome) bool {
+	return outcome.WinningSampleIndex >= 0 && outcome.WinningSample.ScopeAnchorTerm != ""
 }
 
 func investigationSubjects(resolution SubjectResolution, cohort *Cohort) []SubjectRef {

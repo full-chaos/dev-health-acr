@@ -423,6 +423,18 @@ type GraphTelemetry interface {
 	// indistinguishable, from the caller's side, from "there really are no
 	// such teams" unless this signal exists.
 	RecordCohortDeniedByAuthorization(ctx context.Context, orgID string, count int)
+	// RecordCohortExactNameCensusGate (CHAOS-4622 remainder) reports ONE
+	// DiscoverContext call's exact-name org-wide census admission decision
+	// for a cohort-shaped (discovered_cohort/explicit_cohort) request --
+	// see cohortExactNameCensusEligibility's own doc comment for the
+	// closed CohortExactNameCensusBasis vocabulary this reports. Never
+	// called for a non-cohort Shape (the gate is not applicable there).
+	// Before this signal, an explicit_cohort request that should have
+	// received the same census a discovered_cohort request gets had no
+	// observable trace of WHY it didn't -- an operator saw only the
+	// downstream garbled clarification, never the gate decision that
+	// produced it.
+	RecordCohortExactNameCensusGate(ctx context.Context, orgID string, admitted bool, basis CohortExactNameCensusBasis)
 }
 
 // VectorFenceResult is CHAOS-3890's reason enum for the AC-3778-7 read
@@ -485,6 +497,8 @@ func (NoopTelemetry) RecordSubjectCandidatesAuthzDropped(context.Context, string
 func (NoopTelemetry) RecordCohortMembersAuthzDropped(context.Context, string, int)         {}
 func (NoopTelemetry) RecordEdgesFilteredByReason(context.Context, string, int, int, int)   {}
 func (NoopTelemetry) RecordCohortDeniedByAuthorization(context.Context, string, int)       {}
+func (NoopTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bool, CohortExactNameCensusBasis) {
+}
 
 // SlogTelemetry is the production GraphTelemetry: structured operational logs
 // through log/slog, the repository's standard.
@@ -664,6 +678,15 @@ func (t SlogTelemetry) RecordEdgesFilteredByReason(_ context.Context, orgID stri
 func (t SlogTelemetry) RecordCohortDeniedByAuthorization(_ context.Context, orgID string, count int) {
 	t.logger().Warn("context_fabric: entire discovered cohort denied by authorization",
 		"org_id", orgID, "count", count)
+}
+
+// RecordCohortExactNameCensusGate logs at Info -- both outcomes (admitted
+// and denied) are ordinary, expected decisions of a correct gate, not
+// degradation; see cohortExactNameCensusEligibility's own doc comment for
+// what basis means.
+func (t SlogTelemetry) RecordCohortExactNameCensusGate(_ context.Context, orgID string, admitted bool, basis CohortExactNameCensusBasis) {
+	t.logger().Info("context_fabric: cohort exact-name census gate",
+		"org_id", orgID, "admitted", admitted, "basis", string(basis))
 }
 
 func (c Config) validate() error {
