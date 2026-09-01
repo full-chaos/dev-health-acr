@@ -89,6 +89,29 @@ func TestEvidenceRefIDIsTypedAndTotal(t *testing.T) {
 	}
 }
 
+// TestEvidenceRefIDPanicsOnUnregisteredEntityType pins codex round 2's P2
+// (EXECUTED): ContextFabricEvidenceEntityType is a named string, so an
+// UNTYPED string constant coerces to it silently -- EvidenceRefID("service",
+// id) type-checks and compiles even though "service" names no declared
+// member. Before EvidenceRefID's runtime guard was added, this call
+// returned "acr:v1:service:id" with no error and no panic (confirmed by
+// running this exact repro against the pre-fix code). The guard is what
+// makes "cannot mint a segment outside the registry" true in practice, not
+// only in the type signature -- red on the pre-fix code, green here.
+func TestEvidenceRefIDPanicsOnUnregisteredEntityType(t *testing.T) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("EvidenceRefID(\"service\", ...) did not panic; an untyped string literal outside the closed vocabulary must not silently mint a ref")
+		}
+		message, ok := r.(string)
+		if !ok || !strings.Contains(message, "service") {
+			t.Fatalf("panic value %v does not name the offending entity type", r)
+		}
+	}()
+	_ = EvidenceRefID("service", "42")
+}
+
 func TestSourceObservationLabels(t *testing.T) {
 	for _, kind := range ContextFabricFactKindVocabulary() {
 		label := ContextFabricSourceObservationLabel("canonical_fact:" + string(kind))

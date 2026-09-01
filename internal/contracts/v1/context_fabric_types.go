@@ -492,7 +492,27 @@ func ContextFabricEvidenceEntityTypeVocabulary() [ContextFabricEvidenceEntityTyp
 // ref (CHAOS-4698) from a closed-vocabulary entity type, so a producer
 // cannot mint a segment outside contextFabricEvidenceEntityLabels. The wire
 // format itself is unchanged -- this only closes what can construct it.
+//
+// PANICS if entityType is outside contextFabricEvidenceEntityTypes. This is
+// NOT defense against untrusted input -- entityType is always a Go source
+// value at all ~84 call sites, never derived from a request at runtime --
+// it is defense against Go's own named-string-type escape hatch: because
+// ContextFabricEvidenceEntityType is `type X string`, an UNTYPED string
+// constant coerces to it silently at compile time (EvidenceRefID("service",
+// id) compiles and type-checks even though ContextFabricEvidenceEntityType
+// declares no "service" member -- codex round-2 P2, EXECUTED). The closed
+// vocabulary is therefore not actually closed at the Go type-checker; this
+// guard is what makes "cannot mint a segment outside the registry" true in
+// practice rather than only in the type signature. A caller that manages to
+// pass an unregistered value has a bug at the CALL SITE (a typo, or a
+// literal that should have been a named constant) -- panicking there, at
+// construction, is strictly stronger than the alternative of silently
+// minting the ref and letting it surface later as a fallback-label metric
+// tick, which is the exact defect class this ticket exists to close.
 func EvidenceRefID(entityType ContextFabricEvidenceEntityType, id string) string {
+	if !validEvidenceEntityType(entityType) {
+		panic("contracts: EvidenceRefID called with an entity type outside the closed vocabulary: " + string(entityType) + " -- add it to contextFabricEvidenceEntityTypes and contextFabricEvidenceEntityLabels in the SAME change")
+	}
 	return "acr:v1:" + string(entityType) + ":" + id
 }
 

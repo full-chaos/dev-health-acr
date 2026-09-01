@@ -13,30 +13,46 @@ import (
 	"testing"
 )
 
-// hardcodedEvidenceEntitySegment matches a HARDCODED "acr:v1:<word>:" shape --
-// the exact form the four unregistered devhealthsource segments (CHAOS-4698)
-// were minted with, and the pre-fix contents of every site this ticket
-// converted. It deliberately does NOT match a bare "acr:v1:" prefix (nothing
-// hardcoded follows), which is what EvidenceRefID's own literal and
-// source_queries.go/read_adapter.go's SQL-splice prefixes reduce to once the
-// entity-type segment comes from a non-literal expression -- see
-// TestNoHardcodedEvidenceRefEntitySegments' own doc comment for why those
-// sites pass this check without an explicit file-path exception.
-var hardcodedEvidenceEntitySegment = regexp.MustCompile(`acr:v1:[A-Za-z][A-Za-z0-9_-]*:`)
+// hardcodedEvidenceEntitySegment matches "acr:v1:" followed by ANY further
+// character in the SAME literal or literal run -- not just a hardcoded word.
+//
+// A first version of this regex required a hardcoded WORD to follow
+// (`acr:v1:[A-Za-z][A-Za-z0-9_-]*:`), matching only the exact shape the four
+// unregistered devhealthsource segments were minted with. Codex round 2
+// (P2, EXECUTED) found the gap that shape leaves open: a format-string
+// literal like `fmt.Sprintf("acr:v1:%s:%s", entityType, id)` never routes
+// through EvidenceRefID at all, and "%s" doesn't match [A-Za-z], so the
+// narrower regex missed it silently -- confirmed by executing it.
+//
+// The fix widens the match to "acr:v1:" plus ANY next character, which is
+// strictly more inclusive and still produces zero false positives on the
+// two legitimate patterns: EvidenceRefID's own literal and the
+// source_queries.go/read_adapter.go SQL-splice literals ALL end their
+// literal/run text EXACTLY at "acr:v1:" (nothing follows within the same
+// literal before a non-literal operand -- string(entityType), the enum
+// call -- takes over), so there is no next character in that literal for
+// this regex to see. Anything that reaches this far (a hardcoded word, a
+// %-verb, digits, anything) means the entity-type segment is, at least in
+// part, embedded in source rather than sourced from the enum -- exactly
+// what "route through the typed constructor" is supposed to forbid.
+var hardcodedEvidenceEntitySegment = regexp.MustCompile(`acr:v1:[\s\S]`)
 
 // TestNoHardcodedEvidenceRefEntitySegments is CHAOS-4698's OTHER half: the
 // closed enum stops an unlabeled MEMBER from compiling, but the wire ref is
 // still a plain string, so nothing in the type system stops a producer from
-// bypassing EvidenceRefID entirely with "acr:v1:" + "some-new-type" + ":" +
-// id -- exactly how the four devhealthsource segments (episode,
-// work-item-hierarchy, project-team, work-item-team) got in unlabeled in the
-// first place. This test closes that path structurally: it AST-walks every
-// production .go file under internal/ (test files are exempt -- a fixture
-// asserting the read-time fallback on an unregistered ref, e.g.
-// "acr:v1:service:api" in context_fabric_display_labels_test.go, is the
-// point of that test, not a producer) and fails on any string literal, or
-// contiguous run of string literals joined by +, that contains a hardcoded
-// "acr:v1:<word>:" shape.
+// bypassing EvidenceRefID entirely -- with a hardcoded literal
+// ("acr:v1:" + "some-new-type" + ":" + id, exactly how the four
+// devhealthsource segments got in unlabeled) OR with a format string
+// (fmt.Sprintf("acr:v1:%s:%s", entityType, id), which never calls
+// EvidenceRefID and so never reaches its own totality guard either --
+// codex round 2 P2, EXECUTED). This test closes both paths structurally: it
+// AST-walks every production .go file under internal/ (test files are
+// exempt -- a fixture asserting the read-time fallback on an unregistered
+// ref, e.g. "acr:v1:service:api" in context_fabric_display_labels_test.go,
+// is the point of that test, not a producer) and fails on any string
+// literal, or contiguous run of string literals joined by +, whose
+// concatenated text contains "acr:v1:" followed by ANY further character --
+// a hardcoded word, a %-verb, anything.
 //
 // It walks runs, not single literals, because a single-literal check alone
 // has an evasion: "acr:v1:" + "commit" + ":" splits the dangerous shape
@@ -45,16 +61,18 @@ var hardcodedEvidenceEntitySegment = regexp.MustCompile(`acr:v1:[A-Za-z][A-Za-z0
 // non-literal operand -- a variable, a call -- breaks the run) closes that
 // gap while leaving the two legitimate patterns untouched: EvidenceRefID's
 // own `"acr:v1:" + string(entityType) + ":" + id` (the "acr:v1:" run ends
-// with nothing hardcoded after it; string(entityType) breaks the run before
-// any word could follow) and source_queries.go/read_adapter.go's SQL splice,
-// which ends its own literal run at "...concat('acr:v1:" before splicing in
-// string(contractsv1.ContextFabricEvidenceEntityX) and resuming with a fresh
-// "..." literal for the rest of the SQL
-// (same shape: the literal run ends exactly at "acr:v1:", the enum call
-// breaks it). Neither needs a path-based exception -- the regex is
-// structurally incapable of matching a run that ends where the entity type
-// begins, which is exactly what "route through the typed constructor" means
-// for a string-literal AST.
+// with NOTHING after it; string(entityType) breaks the run before any
+// character could follow) and source_queries.go/read_adapter.go's SQL
+// splice, which ends its own literal run at "...concat('acr:v1:" before
+// splicing in string(contractsv1.ContextFabricEvidenceEntityX) and resuming
+// with a fresh "..." literal for the rest of the SQL (same shape: the
+// literal run ends exactly at "acr:v1:", the enum call breaks it). Neither
+// needs a path-based exception -- the regex is structurally incapable of
+// matching a run that ends where the entity type begins, which is exactly
+// what "route through the typed constructor" means for a string-literal
+// AST, and it makes no difference whether the AST node reached is a +-chain
+// operand or a plain call argument (fmt.Sprintf's format string is visited
+// the same way any other standalone literal is).
 func TestNoHardcodedEvidenceRefEntitySegments(t *testing.T) {
 	root := moduleRootFromThisFile(t)
 	internalDir := filepath.Join(root, "internal")
@@ -88,7 +106,7 @@ func TestNoHardcodedEvidenceRefEntitySegments(t *testing.T) {
 		t.Fatalf("walk internal/ for evidence-ref literal guard: %v", err)
 	}
 	for _, v := range violations {
-		t.Errorf("hardcoded acr:v1:<entity-type>: segment outside EvidenceRefID: %s -- route this through EvidenceRefID(ContextFabricEvidenceEntityX, id) and add the member to contextFabricEvidenceEntityLabels in the same change", v)
+		t.Errorf("acr:v1: evidence ref literal built outside EvidenceRefID: %s -- route this through EvidenceRefID(ContextFabricEvidenceEntityX, id) instead of a literal or format string, and add the member to contextFabricEvidenceEntityLabels in the same change", v)
 	}
 }
 
