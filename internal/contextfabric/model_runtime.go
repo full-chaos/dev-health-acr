@@ -205,6 +205,60 @@ type ModelExecutionReceipt struct {
 	// identically to one correctly emitting nothing.
 	ScopeAnchorKindUnrecognized      bool `json:"scope_anchor_kind_unrecognized,omitempty"`
 	RequestedSubjectKindUnrecognized bool `json:"requested_subject_kind_unrecognized,omitempty"`
+	// QuestionFrame and its validation outcome (CHAOS-4452 stage 2,
+	// SHADOW ONLY -- see chaos4452_frame_vocab.go's package-level note)
+	// are the compositional frame the model proposed and the server
+	// validated, captured HERE for exactly the reasons the two blocks
+	// above give and one more that is specific to this slice.
+	//
+	// THE SAME RECEIPT-FIRST SEQUENCE, one layer up. §13.4.3 states phase
+	// 1 in as many words: "the frame is derived, validated, persisted on
+	// the RECEIPT ONLY and telemetered; the shipped §4.2 precedence table
+	// still decides the family... No wire field, so no two-step deploy in
+	// phase 1." The promotion to a schema-OPTIONAL wire field behind an
+	// ask-dev pin bump is phase 2 and is gated on this shadow's data.
+	//
+	// THE SLICE-SPECIFIC REASON: the S7b-i gate is LABELLED SEMANTIC
+	// CORRECTNESS OF THE WHOLE EXPRESSION with negative cases -- "is the
+	// emitted Kind right, and are its variant's fields right" -- plus
+	// invariant-failure and repair-success rates. None of that is
+	// scoreable from an outcome alone; it needs the object that was
+	// scored, durably, or the measurement would have to be re-derived by
+	// re-running, which is precisely the artifact-diagnosability rule
+	// AGENTS.md forbids relying on. Emission RATE is the wrong metric
+	// here twice over, and §4.2 already says why: a model reliably
+	// emitting a spurious structured field scores 100% on emission and
+	// builds the wrong answer.
+	//
+	// TERMS AND ANCHOR TERMS ARE ON THE RECEIPT AND NEVER IN TELEMETRY.
+	// They are free-form model output, bounded by SanitizeSubjectTerms,
+	// and the same rule ScopeAnchorTerm above is held to applies: durable
+	// capture for scoring, closed enums only in any log line (see
+	// chaos4452_frame_telemetry.go, which carries no term field at all).
+	//
+	// omitempty throughout, on the identical asymmetry-avoidance ground:
+	// every receipt written before these fields existed, and every
+	// non-interpret receipt, has them absent rather than
+	// present-and-empty.
+	QuestionFrame *QuestionFrame `json:"question_frame,omitempty"`
+	// FrameOutcome is the closed §13.6 outcome vocabulary value. Present
+	// on every interpret receipt whose frame reached validation,
+	// INCLUDING valid ones -- the denominator has to be countable, and a
+	// field that appears only on failures makes "never rejected" and
+	// "never ran" the same observation.
+	FrameOutcome FrameValidationOutcome `json:"frame_outcome,omitempty"`
+	// FrameFailedInvariant is the FIRST failed invariant in table order,
+	// i1...i19, empty on a valid frame.
+	FrameFailedInvariant FrameInvariant `json:"frame_failed_invariant,omitempty"`
+	// FrameRepairAttempted and FrameRepairLatencyMS are behaviour change
+	// B4's measurement: "a malformed frame can spend one extra model
+	// call", gated on "inside the reserved deadline; measured repair rate
+	// + latency". An unmeasured extra model call is an unbounded one.
+	FrameRepairAttempted  bool  `json:"frame_repair_attempted,omitempty"`
+	FrameRepairLatencyMS  int64 `json:"frame_repair_latency_ms,omitempty"`
+	FrameGoalsDropped     int   `json:"frame_goals_dropped,omitempty"`
+	FrameTermsTruncated   int   `json:"frame_terms_truncated,omitempty"`
+	FrameKindUnrecognized bool  `json:"frame_kind_unrecognized,omitempty"`
 }
 
 func (r ModelExecutionReceipt) Validate() error {

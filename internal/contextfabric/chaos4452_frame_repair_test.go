@@ -1,0 +1,483 @@
+package contextfabric
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+// ORACLE O12 (design §13.11a) -- "the repair bound and the operand union
+// are consistent (round 3 findings 4 and 9)".
+//
+// Both halves land in S7b-i. They are driven by a STUB repairer rather
+// than a live model, deliberately: the repair BOUND is server-side
+// arithmetic, and an oracle that needed a provider to run would be an
+// oracle that does not run in CI.
+
+// stubRepairer returns a fixed candidate and counts its calls, so "exactly
+// one repair attempt" is observable rather than assumed.
+type stubRepairer struct {
+	candidate QuestionFrame
+	err       error
+	calls     int
+	seen      FrameRepairRequest
+}
+
+func (s *stubRepairer) RepairFrame(_ context.Context, _ storage.Principal, request FrameRepairRequest) (QuestionFrame, error) {
+	s.calls++
+	s.seen = request
+	if s.err != nil {
+		return QuestionFrame{}, s.err
+	}
+	return s.candidate, nil
+}
+
+func discoveredTeamsEmphasisFrame(goals ...InvestigationGoal) QuestionFrame {
+	return QuestionFrame{
+		Goals: goals,
+		SubjectExpression: SubjectExpression{
+			Kind:       SubjectExpressionDiscoveredKind,
+			Discovered: &DiscoveredSetExpression{MemberKind: contractsv1.ContextFabricSubjectTeam},
+		},
+		Emphasis: []AnswerEmphasis{EmphasisNegativeOutliers, EmphasisPositiveOutliers},
+	}
+}
+
+// TestO12aRepairAddsRankOrSurveyAndNeverDropsEmphasis is O12(a) verbatim:
+// "A frame {Goals={assess_state}, discovered_kind,
+// Emphasis=[negative,positive]} fails I14, and the ONE permitted repair
+// adds rank_or_survey and passes every invariant -- because I14 names
+// Goals; a repair that drops Emphasis instead is refused as a narrowing."
+//
+// This is independent review R9's scenario. Under the design's FIRST
+// drop-only repair rule the options were "silently discard Emphasis"
+// (narrowing the answer the 12:42 08-31 paraphrase ruling says must be
+// given) or "refuse" -- and WHICH one happened depended on the sampler's
+// goal pick, reintroducing exactly the instability this design exists to
+// remove. Because Goals is a SET, the repair can instead ADD
+// rank_or_survey: a monotone widening under law L1 that satisfies I14
+// without discarding anything the user asked for.
+func TestO12aRepairAddsRankOrSurveyAndNeverDropsEmphasis(t *testing.T) {
+	proposed := discoveredTeamsEmphasisFrame(GoalAssessState)
+
+	t.Run("the widening repair is accepted", func(t *testing.T) {
+		widened := discoveredTeamsEmphasisFrame(GoalAssessState, GoalRankOrSurvey)
+		repairer := &stubRepairer{candidate: widened}
+
+		result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"}, repairer, proposed, nil, "", nil)
+
+		if repairer.calls != 1 {
+			t.Fatalf("repairer called %d times, want exactly 1 -- the bound is ONE attempt, not k", repairer.calls)
+		}
+		if repairer.seen.Failure.Invariant != FrameInvariantI14 {
+			t.Fatalf("repairer was told invariant %q, want %q -- the repair is targeted at the FAILED invariant", repairer.seen.Failure.Invariant, FrameInvariantI14)
+		}
+		if result.Outcome != FrameValidationOutcomeRepaired {
+			t.Fatalf("outcome = %q (invariant %q), want %q", result.Outcome, result.Failure.Invariant, FrameValidationOutcomeRepaired)
+		}
+		if !result.Frame.HasGoal(GoalRankOrSurvey) {
+			t.Fatalf("repaired goals = %v, want rank_or_survey added", result.Frame.Goals)
+		}
+		if !result.Frame.HasGoal(GoalAssessState) {
+			t.Fatalf("repaired goals = %v, want assess_state retained -- the repair may widen, never narrow", result.Frame.Goals)
+		}
+		if len(result.Frame.Emphasis) != 2 {
+			t.Fatalf("repaired emphasis = %v, want both ends retained", result.Frame.Emphasis)
+		}
+		if !result.Frame.HasObligation(ObligationRanking) {
+			t.Fatalf("repaired obligations = %v, want ranking derived so I14 is satisfied", result.Frame.Obligations)
+		}
+		// "and passes EVERY invariant" -- not merely the one that failed.
+		if failure, bad := ValidateFramePhaseA1(result.Frame); bad {
+			t.Fatalf("repaired frame fails A1 on %q", failure.Invariant)
+		}
+		if failure, bad := ValidateFramePhaseA2(result.Frame, ""); bad {
+			t.Fatalf("repaired frame fails A2 on %q", failure.Invariant)
+		}
+	})
+
+	t.Run("the emphasis-dropping repair is refused as a narrowing", func(t *testing.T) {
+		narrowed := discoveredTeamsEmphasisFrame(GoalAssessState)
+		narrowed.Emphasis = nil
+		repairer := &stubRepairer{candidate: narrowed}
+
+		result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"}, repairer, proposed, nil, "", nil)
+
+		if result.Outcome != FrameValidationOutcomeRefusedInvalid {
+			t.Fatalf("outcome = %q, want %q -- discarding emphasis narrows the answer the paraphrase ruling requires", result.Outcome, FrameValidationOutcomeRefusedInvalid)
+		}
+		if result.ViolatedBound != FrameRepairBoundEmphasisNarrowed {
+			t.Fatalf("violated bound = %q, want %q", result.ViolatedBound, FrameRepairBoundEmphasisNarrowed)
+		}
+		if result.Failure.Invariant != FrameInvariantI14 {
+			t.Fatalf("refusal reports invariant %q, want the ORIGINAL failure %q", result.Failure.Invariant, FrameInvariantI14)
+		}
+	})
+}
+
+// TestO12bSubjectOperandUnionFailuresAreRecordedAsI19 is O12(b) verbatim:
+// "A SubjectOperand with both pointers nil, both non-nil, or a pointer
+// that disagrees with Kind fails I19 by name; a scoped operand with empty
+// AnchorTerms fails I5 through I19; the failed invariant is recorded as
+// i19."
+//
+// Round 3's finding 9 is why this exists: the frozen design added the
+// operand TYPE without extending any invariant, so an operand with two
+// optional pointers had no discriminator and no exactly-one rule, and I3
+// (which validates only Named.Terms) could not be satisfied by a scoped
+// operand at all.
+func TestO12bSubjectOperandUnionFailuresAreRecordedAsI19(t *testing.T) {
+	compareFrame := func(operands ...SubjectOperand) QuestionFrame {
+		return QuestionFrame{
+			Goals: []InvestigationGoal{GoalCompare},
+			SubjectExpression: SubjectExpression{
+				Kind:     SubjectExpressionExplicitSet,
+				Explicit: &ExplicitSetExpression{Operands: operands},
+			},
+			Temporal: TemporalIntentCurrent,
+		}
+	}
+	goodNamed := SubjectOperand{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"team a"}}}
+
+	for _, testCase := range []struct {
+		name    string
+		operand SubjectOperand
+		detail  FrameFailureDetail
+	}{
+		{
+			name:    "both pointers nil",
+			operand: SubjectOperand{Kind: SubjectOperandNamed},
+			detail:  FrameFailureOperandNoVariant,
+		},
+		{
+			name: "both pointers non-nil",
+			operand: SubjectOperand{
+				Kind:   SubjectOperandNamed,
+				Named:  &NamedSubjectExpression{Terms: []string{"team b"}},
+				Scoped: &ScopedSetExpression{AnchorTerms: []string{"team b"}, MemberKind: contractsv1.ContextFabricSubjectProject},
+			},
+			detail: FrameFailureOperandMultiVariant,
+		},
+		{
+			name: "pointer disagrees with Kind",
+			operand: SubjectOperand{
+				Kind:   SubjectOperandNamed,
+				Scoped: &ScopedSetExpression{AnchorTerms: []string{"team b"}, MemberKind: contractsv1.ContextFabricSubjectProject},
+			},
+			detail: FrameFailureOperandKindMismatch,
+		},
+		{
+			name:    "operand Kind unset",
+			operand: SubjectOperand{Named: &NamedSubjectExpression{Terms: []string{"team b"}}},
+			detail:  FrameFailureOperandKindUnset,
+		},
+		{
+			// "a scoped operand with empty AnchorTerms fails I5 through
+			// I19; the failed invariant is recorded as i19."
+			name: "scoped operand with empty AnchorTerms",
+			operand: SubjectOperand{
+				Kind:   SubjectOperandScoped,
+				Scoped: &ScopedSetExpression{MemberKind: contractsv1.ContextFabricSubjectProject},
+			},
+			detail: FrameFailureOperandNoAnchor,
+		},
+		{
+			name: "named operand with no terms",
+			operand: SubjectOperand{
+				Kind:  SubjectOperandNamed,
+				Named: &NamedSubjectExpression{},
+			},
+			detail: FrameFailureOperandNoTerms,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			failure, bad := ValidateFramePhaseA1(compareFrame(goodNamed, testCase.operand))
+			if !bad {
+				t.Fatal("a malformed operand must fail phase A1")
+			}
+			if failure.Invariant != FrameInvariantI19 {
+				t.Fatalf("failed invariant = %q, want %q -- operand failures are recorded as i19, never folded into i2 or i5",
+					failure.Invariant, FrameInvariantI19)
+			}
+			if failure.Detail != testCase.detail {
+				t.Fatalf("failure detail = %q, want %q", failure.Detail, testCase.detail)
+			}
+		})
+	}
+
+	// The negative control: a well-formed mixed-variant comparison passes,
+	// which is the R10 closure the union was added for -- "compare team
+	// A's PROJECTS with team B's PROJECTS" is expressible.
+	mixed := compareFrame(
+		goodNamed,
+		SubjectOperand{Kind: SubjectOperandScoped, Scoped: &ScopedSetExpression{AnchorTerms: []string{"team b"}, MemberKind: contractsv1.ContextFabricSubjectProject}},
+	)
+	if failure, bad := ValidateFramePhaseA1(mixed); bad {
+		t.Fatalf("a well-formed mixed-variant comparison must pass A1; failed on %q/%q", failure.Invariant, failure.Detail)
+	}
+}
+
+// TestRepairBoundRefusesAnUnnamedKindChange pins the safety half of §13.6
+// rule 2. The bound was LOOSENED after round 2 showed it made I7 and I9
+// repairs structurally unreachable; this test is what stops the loosening
+// from becoming "the repair may reinterpret the question".
+func TestRepairBoundRefusesAnUnnamedKindChange(t *testing.T) {
+	// I14 reads Goals, Emphasis and the derived obligations. It does NOT
+	// name SubjectExpression.Kind, so a repair that changes the Kind is
+	// out of bounds even though the frame really is invalid.
+	proposed := discoveredTeamsEmphasisFrame(GoalAssessState)
+	reinterpreted := QuestionFrame{
+		Goals: []InvestigationGoal{GoalAssessState, GoalRankOrSurvey},
+		SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionGroupedMembers,
+			Grouped: &GroupedSetExpression{
+				GroupKind:  contractsv1.ContextFabricSubjectTeam,
+				MemberKind: contractsv1.ContextFabricSubjectProject,
+			},
+		},
+		Emphasis: []AnswerEmphasis{EmphasisNegativeOutliers, EmphasisPositiveOutliers},
+	}
+	repairer := &stubRepairer{candidate: reinterpreted}
+
+	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"}, repairer, proposed, nil, "", nil)
+
+	if result.Outcome != FrameValidationOutcomeRefusedKindChange {
+		t.Fatalf("outcome = %q, want %q -- a Kind change on an invariant that does not name Kind is the repair talking itself into a different question",
+			result.Outcome, FrameValidationOutcomeRefusedKindChange)
+	}
+	if result.ViolatedBound != FrameRepairBoundKindChanged {
+		t.Fatalf("violated bound = %q, want %q", result.ViolatedBound, FrameRepairBoundKindChanged)
+	}
+}
+
+// TestRepairBoundPermitsAKindChangeTheInvariantNames is the reachability
+// half. Round 2's P2-1: pinning Kind absolutely made every I7 and I9
+// failure unrepairable, so those frames always refused even when the
+// misclassification was obviously repairable. The bound was TOO TIGHT,
+// not too loose.
+func TestRepairBoundPermitsAKindChangeTheInvariantNames(t *testing.T) {
+	// I9 names Kind: "Goals ∋ count_or_aggregate ⇒ Kind ∈ {...}". A count
+	// over a single named subject is repairable by moving the Kind to a
+	// set-valued variant.
+	proposed := QuestionFrame{
+		Goals: []InvestigationGoal{GoalCountOrAggregate},
+		SubjectExpression: SubjectExpression{
+			Kind:  SubjectExpressionNamed,
+			Named: &NamedSubjectExpression{Terms: []string{"fullchaos team"}},
+		},
+	}
+	repaired := QuestionFrame{
+		Goals: []InvestigationGoal{GoalCountOrAggregate},
+		SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionChildrenOfScope,
+			Scoped: &ScopedSetExpression{
+				AnchorTerms: []string{"fullchaos team"},
+				MemberKind:  contractsv1.ContextFabricSubjectProject,
+			},
+		},
+	}
+	repairer := &stubRepairer{candidate: repaired}
+
+	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"}, repairer, proposed, nil, "", nil)
+
+	if result.Outcome != FrameValidationOutcomeRepaired {
+		t.Fatalf("outcome = %q (bound %q), want repaired -- I9 names Kind, so the Kind repair is in bounds",
+			result.Outcome, result.ViolatedBound)
+	}
+	if result.Frame.SubjectExpression.Kind != SubjectExpressionChildrenOfScope {
+		t.Fatalf("repaired kind = %q, want children_of_scope", result.Frame.SubjectExpression.Kind)
+	}
+}
+
+// TestRepairBoundRefusesAnUnnamedGoalRemoval pins the ASYMMETRY: adding a
+// goal is permitted where the invariant names the goal axis; REMOVING one
+// is permitted only when the invariant names that goal. Widening is safe;
+// narrowing is the failure mode.
+func TestRepairBoundRefusesAnUnnamedGoalRemoval(t *testing.T) {
+	proposed := discoveredTeamsEmphasisFrame(GoalAssessState)
+	// I14 reads Goals, so an ADD is in bounds -- but assess_state is not
+	// a goal I14 NAMES, so removing it is not.
+	stripped := discoveredTeamsEmphasisFrame(GoalRankOrSurvey)
+	repairer := &stubRepairer{candidate: stripped}
+
+	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"}, repairer, proposed, nil, "", nil)
+
+	if result.ViolatedBound != FrameRepairBoundGoalRemoved {
+		t.Fatalf("violated bound = %q, want %q -- dropping a goal the invariant does not name is a narrowing",
+			result.ViolatedBound, FrameRepairBoundGoalRemoved)
+	}
+	if result.Outcome != FrameValidationOutcomeRefusedInvalid {
+		t.Fatalf("outcome = %q, want %q", result.Outcome, FrameValidationOutcomeRefusedInvalid)
+	}
+}
+
+// TestRepairBoundPermitsAGoalRemovalTheInvariantNames is its counterpart:
+// I7's condition literally reads "Goals ∋ compare ⇒ Kind == explicit_set",
+// so I7 NAMES compare and dropping it is the other legal repair for an I7
+// failure.
+func TestRepairBoundPermitsAGoalRemovalTheInvariantNames(t *testing.T) {
+	proposed := QuestionFrame{
+		Goals: []InvestigationGoal{GoalAssessState, GoalCompare},
+		SubjectExpression: SubjectExpression{
+			Kind:  SubjectExpressionNamed,
+			Named: &NamedSubjectExpression{Terms: []string{"dev health ops"}},
+		},
+	}
+	dropped := QuestionFrame{
+		Goals: []InvestigationGoal{GoalAssessState},
+		SubjectExpression: SubjectExpression{
+			Kind:  SubjectExpressionNamed,
+			Named: &NamedSubjectExpression{Terms: []string{"dev health ops"}},
+		},
+	}
+	repairer := &stubRepairer{candidate: dropped}
+
+	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"}, repairer, proposed, nil, "", nil)
+
+	if result.Outcome != FrameValidationOutcomeRepaired {
+		t.Fatalf("outcome = %q (bound %q), want repaired -- I7 names compare, so dropping it is in bounds",
+			result.Outcome, result.ViolatedBound)
+	}
+	if result.Frame.HasGoal(GoalCompare) {
+		t.Fatalf("repaired goals = %v, want compare dropped", result.Frame.Goals)
+	}
+}
+
+// TestRepairIsAttemptedExactlyOnce pins §13.6 rule 1. "Exactly one repair
+// attempt. Not k. A second attempt is a refusal." A repairer that returns
+// a still-invalid candidate must NOT be called again.
+func TestRepairIsAttemptedExactlyOnce(t *testing.T) {
+	proposed := discoveredTeamsEmphasisFrame(GoalAssessState)
+	// The candidate keeps the same defect: still no ranking obligation.
+	stillInvalid := discoveredTeamsEmphasisFrame(GoalAssessState)
+	repairer := &stubRepairer{candidate: stillInvalid}
+
+	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"}, repairer, proposed, nil, "", nil)
+
+	if repairer.calls != 1 {
+		t.Fatalf("repairer called %d times, want exactly 1", repairer.calls)
+	}
+	if result.Outcome != FrameValidationOutcomeRefusedInvalid {
+		t.Fatalf("outcome = %q, want %q -- still invalid after one attempt is a refusal", result.Outcome, FrameValidationOutcomeRefusedInvalid)
+	}
+	if !result.RepairAttempted {
+		t.Fatal("RepairAttempted = false after a repair ran -- B4's repair RATE would be unmeasurable")
+	}
+}
+
+// TestRepairErrorRefusesRatherThanPassingThrough. A repairer error is a
+// failure to repair, not a pass: the frame was and remains invalid.
+func TestRepairErrorRefusesRatherThanPassingThrough(t *testing.T) {
+	proposed := discoveredTeamsEmphasisFrame(GoalAssessState)
+	repairer := &stubRepairer{err: errors.New("provider unavailable")}
+
+	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"}, repairer, proposed, nil, "", nil)
+
+	if result.Outcome != FrameValidationOutcomeRefusedInvalid {
+		t.Fatalf("outcome = %q, want %q", result.Outcome, FrameValidationOutcomeRefusedInvalid)
+	}
+	if !result.RepairAttempted {
+		t.Fatal("an errored repair still counts as attempted -- otherwise the repair rate's denominator is wrong")
+	}
+}
+
+// TestRepairLatencyIsMeasured pins behaviour change B4's gate: "inside the
+// reserved deadline; MEASURED repair rate + latency in the S7b-i gate". A
+// latency that is never recorded is an extra model call nobody can bound.
+func TestRepairLatencyIsMeasured(t *testing.T) {
+	proposed := discoveredTeamsEmphasisFrame(GoalAssessState)
+	repairer := &stubRepairer{candidate: discoveredTeamsEmphasisFrame(GoalAssessState, GoalRankOrSurvey)}
+
+	base := time.Unix(1_700_000_000, 0)
+	ticks := []time.Time{base, base.Add(250 * time.Millisecond)}
+	index := 0
+	clock := func() time.Time {
+		value := ticks[index]
+		if index < len(ticks)-1 {
+			index++
+		}
+		return value
+	}
+
+	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"}, repairer, proposed, nil, "", clock)
+
+	if result.RepairLatency != 250*time.Millisecond {
+		t.Fatalf("repair latency = %s, want 250ms", result.RepairLatency)
+	}
+	event := FrameValidationEventFrom(proposed, result, "")
+	if event.RepairLatencyMS != 250 {
+		t.Fatalf("event repair_latency_ms = %d, want 250", event.RepairLatencyMS)
+	}
+	if !event.RepairAttempted {
+		t.Fatal("event repair_attempted = false after a repair ran")
+	}
+}
+
+// TestValidFrameEmitsTelemetryWithNoFailure is the "fires on EVERY frame
+// reaching validation, INCLUDING valid ones" rule. An event that appears
+// only on failure makes "the validator never rejects anything" and "the
+// validator never ran" the same observation.
+func TestValidFrameEmitsTelemetryWithNoFailure(t *testing.T) {
+	proposed := namedFrame(GoalAssessState)
+	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"}, nil, proposed, nil, "", nil)
+	if result.Outcome != FrameValidationOutcomeValid {
+		t.Fatalf("outcome = %q, want valid", result.Outcome)
+	}
+	event := FrameValidationEventFrom(proposed, result, "")
+	if event.Outcome != FrameValidationOutcomeValid {
+		t.Fatalf("event outcome = %q, want valid", event.Outcome)
+	}
+	if event.FailedInvariant != "" {
+		t.Fatalf("event failed_invariant = %q on a valid frame, want empty", event.FailedInvariant)
+	}
+	if event.DerivedObligationCount == 0 {
+		t.Fatal("event derived_obligation_count = 0 on a valid frame")
+	}
+	if event.FrameVersion != QuestionFrameVersion {
+		t.Fatalf("event frame_version = %q, want %q", event.FrameVersion, QuestionFrameVersion)
+	}
+	if len(event.ProposedGoals) != 1 || event.ProposedGoals[0] != GoalAssessState {
+		t.Fatalf("event proposed_goals = %v, want [assess_state] -- §13.2.4 rule 3's governance depends on this field", event.ProposedGoals)
+	}
+}
+
+// TestWidenedObligationsAreAdvisoryAndNeverNarrow pins §13.2.4's two
+// safe-direction rules at the type level.
+func TestWidenedObligationsAreAdvisoryAndNeverNarrow(t *testing.T) {
+	frame := NormalizeFrame(namedFrame(GoalAssessState))
+	base := DeriveFrameObligations(frame, nil)
+
+	// A model emits a spurious `ranking` obligation on a plain
+	// current-state question, plus a member the server already derived.
+	widened := DeriveFrameObligations(frame, []AnswerObligation{ObligationRanking, ObligationState})
+
+	if len(widened.Obligations) != len(base.Obligations) {
+		t.Fatalf("derived obligations moved under a widening: %v -> %v -- the model may never change the DERIVED set",
+			base.Obligations, widened.Obligations)
+	}
+	requiredness, ok := widened.Requiredness(ObligationRanking)
+	if !ok || requiredness != RequirednessAdvisory {
+		t.Fatalf("widened ranking requiredness = %q/%v, want advisory", requiredness, ok)
+	}
+	// A member the server already derived stays REQUIRED and does not
+	// also appear as advisory.
+	requiredness, ok = widened.Requiredness(ObligationState)
+	if !ok || requiredness != RequirednessRequired {
+		t.Fatalf("state requiredness = %q/%v, want required", requiredness, ok)
+	}
+	for _, member := range widened.WidenedObligations {
+		if member == ObligationState {
+			t.Fatal("a derived obligation was also recorded as widened -- one member cannot be both required and advisory")
+		}
+	}
+	// HasObligation must NOT see the advisory member: an advisory
+	// obligation satisfying I14 would let a model emission discharge an
+	// invariant that exists to check a DERIVED value.
+	if widened.HasObligation(ObligationRanking) {
+		t.Fatal("HasObligation returned true for a model-widened obligation")
+	}
+}
