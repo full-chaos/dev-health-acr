@@ -361,3 +361,24 @@ func TestNarrowSynthesisInputBasisSurvivesTheNoNarrowReturn(t *testing.T) {
 		t.Fatalf("Basis = %q on the no-narrow return, want overlap_aware_set_cover -- the selection DID run, it just found nothing left to narrow", result.Basis)
 	}
 }
+
+// TestNarrowSynthesisInputTrivialCohortReportsNoBasisAtAll documents the
+// DELIBERATE counterpart to the finding above (shape-swept from the same
+// class, team-lead's review): a cohort of at most one member returns before
+// ANY selection algorithm runs at all -- there is no basis to report because
+// none executed, unlike the no-narrow case above where the overlap-aware
+// selection DID run and simply found nothing left to cut. Pinning this
+// distinction so a future change cannot "fix" it into looking like the
+// bug class this ticket already closed.
+func TestNarrowSynthesisInputTrivialCohortReportsNoBasisAtAll(t *testing.T) {
+	t.Parallel()
+	cohort := planFixtureCohort("a1")
+	params := synthesisAssemblyParams{Graph: GraphContext{Cohort: cohort}, Facts: CanonicalFactBundle{}}
+	result := narrowSynthesisInput(params, &AnswerPlan{})
+	if result.Narrow {
+		t.Fatal("a one-member cohort cannot narrow further")
+	}
+	if result.Basis != "" {
+		t.Fatalf("Basis = %q, want the empty zero value -- no selection algorithm ran at all for a trivial cohort", result.Basis)
+	}
+}
