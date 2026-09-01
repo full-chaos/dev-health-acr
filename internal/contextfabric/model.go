@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -538,6 +539,14 @@ func parsesAsFactTableInstant(value string) bool {
 	return false
 }
 
+// ErrFactTableMeasureNotNumeric is FactTable.Validate's sentinel for the
+// CHAOS-4680 numeric-measures rule, so a caller can classify this ONE
+// invariant into closed-vocabulary telemetry (fact_registry.go's
+// recordFactRead) without parsing an error string -- this package's
+// existing "no provider reason string" telemetry discipline (recordFactRead's
+// own doc comment) forbids logging Validate()'s free-text message verbatim.
+var ErrFactTableMeasureNotNumeric = errors.New("fact table measure is not numeric")
+
 // Validate makes the wrong states unrepresentable (CHAOS-4633, design doc
 // §5.1's own list): every row column is declared into exactly one of Key or
 // Measures; the Key tuple is distinct across rows; a time_series table's
@@ -651,7 +660,7 @@ func (t FactTable) Validate() error {
 				continue
 			}
 			if cell.Integer == nil && cell.Number == nil {
-				return fmt.Errorf("fact table row %d measure %q is not numeric; a per-row categorical observation belongs in observations, not measures", rowIndex, name)
+				return fmt.Errorf("fact table row %d measure %q is not numeric; a per-row categorical observation belongs in observations, not measures: %w", rowIndex, name, ErrFactTableMeasureNotNumeric)
 			}
 		}
 		keyIdentity := strings.Join(keyParts, "\x1f")
