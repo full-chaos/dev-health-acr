@@ -13,83 +13,56 @@ import (
 	"testing"
 )
 
-// hardcodedEvidenceEntitySegment matches "acr:v1:" followed by ANY further
-// character in the SAME literal or literal run -- not just a hardcoded word.
+// evidenceRefLiteralAllowlist is the SHORT, closed list of files allowed to
+// mention "acr:v1" in a string literal at all -- the only places a producer
+// may construct part of an acr:v1:<entity-type>:<id> ref.
 //
-// A first version of this regex required a hardcoded WORD to follow
-// (`acr:v1:[A-Za-z][A-Za-z0-9_-]*:`), matching only the exact shape the four
-// unregistered devhealthsource segments were minted with. Codex round 2
-// (P2, EXECUTED) found the gap that shape leaves open: a format-string
-// literal like `fmt.Sprintf("acr:v1:%s:%s", entityType, id)` never routes
-// through EvidenceRefID at all, and "%s" doesn't match [A-Za-z], so the
-// narrower regex missed it silently -- confirmed by executing it.
+// This is CHAOS-4698's structural close of a problem two codex rounds
+// exposed while this guard chased individual construction IDIOMS instead:
+// round 2 found a hardcoded literal AND a Sprintf format string evading an
+// idiom-specific check; round 3 found strings.Join evading the fix for
+// those. Each fix closed the ONE shape raised, and each new round found
+// another, because Go string assembly has no finite list of shapes
+// (bytes.Buffer, strings.Builder, a loop, text/template -- all still
+// possible after three rounds of idiom-chasing). The lane coordinator's
+// ruling: stop enumerating idioms, close by INVARIANT instead. The
+// invariant is simple and idiom-independent -- ANY mechanism that ever
+// mints an acr:v1:<entity-type>:<id> ref must have the literal substring
+// "acr:v1" appear SOMEWHERE in that mechanism's own source as a string
+// literal, regardless of what combines it with anything else at runtime.
+// So instead of asking "does this specific AST shape look dangerous,"
+// TestNoAcrV1LiteralOutsideAllowlist asks the idiom-independent question:
+// "does ANY string literal in this file mention acr:v1 at all" -- and if
+// the file isn't one of these three, that is a violation regardless of
+// idiom, full stop. The idiom-enumeration problem disappears because
+// nothing is enumerated.
 //
-// The fix widens the match to "acr:v1:" plus ANY next character, which is
-// strictly more inclusive and still produces zero false positives on the
-// two legitimate patterns: EvidenceRefID's own literal and the
-// source_queries.go/read_adapter.go SQL-splice literals ALL end their
-// literal/run text EXACTLY at "acr:v1:" (nothing follows within the same
-// literal before a non-literal operand -- string(entityType), the enum
-// call -- takes over), so there is no next character in that literal for
-// this regex to see. Anything that reaches this far (a hardcoded word, a
-// %-verb, digits, anything) means the entity-type segment is, at least in
-// part, embedded in source rather than sourced from the enum -- exactly
-// what "route through the typed constructor" is supposed to forbid.
-var hardcodedEvidenceEntitySegment = regexp.MustCompile(`acr:v1:[\s\S]`)
+// The one thing this does NOT close, stated plainly rather than claimed
+// away a fourth time: a literal split BELOW the substring "acr:v1" itself
+// -- "acr" + ":v1", or "a"+"cr:v1" -- still evades a literal-content scan.
+// That remains code-review territory a static check cannot replace; it is
+// also a shape no codex round has found and no producer in this codebase
+// has ever come close to (every real site either concatenates or splices
+// at a natural word boundary, never mid-token).
+var evidenceRefLiteralAllowlist = map[string]bool{
+	"internal/contracts/v1/context_fabric_types.go": true, // EvidenceRefID itself
+	"internal/contextpacket/source_queries.go":      true, // SQL catalog, enum-spliced
+	"internal/contextpacket/read_adapter.go":        true, // SQL catalog, enum-spliced
+}
 
-// TestNoHardcodedEvidenceRefEntitySegments is CHAOS-4698's OTHER half: the
-// closed enum stops an unlabeled MEMBER from compiling, but the wire ref is
-// still a plain string, so nothing in the type system stops a producer from
-// bypassing EvidenceRefID entirely -- with a hardcoded literal
-// ("acr:v1:" + "some-new-type" + ":" + id, exactly how the four
-// devhealthsource segments got in unlabeled), a format string
-// (fmt.Sprintf("acr:v1:%s:%s", entityType, id) -- codex round 2 P2,
-// EXECUTED), or a joined slice (strings.Join([]string{"acr:v1:", ...}, "")
-// -- codex round 3 P2, ARGUED, no current production site). None of the
-// three call EvidenceRefID, so none reach its own totality guard either.
-// This test closes all three paths it knows about: it AST-walks every
-// production .go file under internal/ (test files are exempt -- a fixture
-// asserting the read-time fallback on an unregistered ref, e.g.
-// "acr:v1:service:api" in context_fabric_display_labels_test.go, is the
-// point of that test, not a producer) and fails on any string literal, or
-// contiguous run of string literals joined by + or as strings.Join
-// elements, whose concatenated text contains "acr:v1:" followed by ANY
-// further character -- a hardcoded word, a %-verb, anything.
-//
-// ACKNOWLEDGED RESIDUAL, stated plainly rather than overclaimed a third
-// time: Go string assembly is unbounded (bytes.Buffer, strings.Builder, a
-// byte-by-byte loop, text/template, reflection) and no finite list of
-// AST shapes closes all of it -- this guard covers the three shapes an
-// actual codex round has found (which are also the three that match how
-// every real producer in this codebase already builds strings), not a
-// formal proof that no bypass is possible. The two OTHER guards this
-// ticket adds are what carry weight against a shape this one misses: a
-// stored ref with an unregistered segment still increments
-// RecordEvidenceLabelFallback at read time (still counted, still visible,
-// just not compile-time-blocked), and any new producer PR is still subject
-// to ordinary code review, which is the actual backstop no static analysis
-// replaces.
-//
-// It walks runs, not single literals, because a single-literal check alone
-// has an evasion: "acr:v1:" + "commit" + ":" splits the dangerous shape
-// across three literals, none of which individually matches. Flattening a
-// maximal run of ADJACENT string-literal operands in a +-chain (a
-// non-literal operand -- a variable, a call -- breaks the run) closes that
-// gap while leaving the two legitimate patterns untouched: EvidenceRefID's
-// own `"acr:v1:" + string(entityType) + ":" + id` (the "acr:v1:" run ends
-// with NOTHING after it; string(entityType) breaks the run before any
-// character could follow) and source_queries.go/read_adapter.go's SQL
-// splice, which ends its own literal run at "...concat('acr:v1:" before
-// splicing in string(contractsv1.ContextFabricEvidenceEntityX) and resuming
-// with a fresh "..." literal for the rest of the SQL (same shape: the
-// literal run ends exactly at "acr:v1:", the enum call breaks it). Neither
-// needs a path-based exception -- the regex is structurally incapable of
-// matching a run that ends where the entity type begins, which is exactly
-// what "route through the typed constructor" means for a string-literal
-// AST, and it makes no difference whether the AST node reached is a +-chain
-// operand or a plain call argument (fmt.Sprintf's format string is visited
-// the same way any other standalone literal is).
-func TestNoHardcodedEvidenceRefEntitySegments(t *testing.T) {
+// TestNoAcrV1LiteralOutsideAllowlist is layer 1, the invariant check: it
+// AST-walks every production (non-`_test.go`) .go file under internal/
+// OTHER than the three files in evidenceRefLiteralAllowlist (test files are
+// exempt -- a fixture asserting the read-time fallback on an unregistered
+// ref, e.g. "acr:v1:service:api" in context_fabric_display_labels_test.go,
+// is the point of that test, not a producer) and fails if ANY string
+// literal contains the substring "acr:v1", regardless of what AST shape
+// surrounds it -- a bare literal, a +-chain, a Sprintf format string, a
+// strings.Join slice element, a strings.Builder.WriteString argument, a
+// loop body, anything. See evidenceRefLiteralAllowlist's own doc comment
+// for why this closes the idiom-enumeration problem two prior codex rounds
+// exposed, and what it still cannot close.
+func TestNoAcrV1LiteralOutsideAllowlist(t *testing.T) {
 	root := moduleRootFromThisFile(t)
 	internalDir := filepath.Join(root, "internal")
 	var violations []string
@@ -100,14 +73,71 @@ func TestNoHardcodedEvidenceRefEntitySegments(t *testing.T) {
 		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			rel = path
+		}
+		rel = filepath.ToSlash(rel)
+		if evidenceRefLiteralAllowlist[rel] {
+			return nil
+		}
 		fset := token.NewFileSet()
 		file, parseErr := parser.ParseFile(fset, path, nil, 0)
 		if parseErr != nil {
 			return parseErr
 		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			rel = path
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			value, unquoteErr := strconv.Unquote(lit.Value)
+			if unquoteErr != nil {
+				return true
+			}
+			if strings.Contains(value, "acr:v1") {
+				pos := fset.Position(lit.Pos())
+				violations = append(violations, pos.String()+" ("+rel+"): "+value)
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk internal/ for the acr:v1 literal allowlist guard: %v", err)
+	}
+	for _, v := range violations {
+		t.Errorf("acr:v1 literal outside the allowlist: %s -- route this through EvidenceRefID(ContextFabricEvidenceEntityX, id) instead of embedding the prefix directly, and add the member to contextFabricEvidenceEntityLabels in the same change (or, if this file genuinely needs to mention the prefix, add it to evidenceRefLiteralAllowlist and verify it under TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary)", v)
+	}
+}
+
+// hardcodedEvidenceEntitySegment matches "acr:v1:" followed by ANY further
+// character in the SAME literal or literal run -- not just a hardcoded
+// word. Used only by layer 2, TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary,
+// to verify that even the three files layer 1 exempts don't hardcode an
+// entity-type segment themselves.
+var hardcodedEvidenceEntitySegment = regexp.MustCompile(`acr:v1:[\s\S]`)
+
+// TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary is layer 2: within the
+// three files evidenceRefLiteralAllowlist exempts from layer 1, verify each
+// one's own acr:v1: literal (or +-chain / strings.Join run of literals)
+// ends EXACTLY at the prefix boundary -- nothing hardcoded follows before a
+// non-literal operand (string(entityType), an enum-derived splice) takes
+// over. This is the SAME check an earlier, idiom-enumerating version of
+// this guard ran across the whole tree; layer 1 replaced that job
+// tree-wide, so this layer's only remaining purpose is making sure the
+// three TRUSTED files stay trustworthy -- a future edit to
+// source_queries.go that hardcoded a segment inline would otherwise sail
+// through layer 1 (the file is allowlisted) with nothing else to catch it.
+func TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary(t *testing.T) {
+	root := moduleRootFromThisFile(t)
+	var violations []string
+	for rel := range evidenceRefLiteralAllowlist {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, nil, 0)
+		if parseErr != nil {
+			t.Fatalf("parse allowlisted file %s: %v", rel, parseErr)
 		}
 		for _, run := range adjacentStringLiteralRuns(file) {
 			joined := strings.Join(run.values, "")
@@ -116,13 +146,9 @@ func TestNoHardcodedEvidenceRefEntitySegments(t *testing.T) {
 				violations = append(violations, pos.String()+" ("+rel+"): "+joined)
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk internal/ for evidence-ref literal guard: %v", err)
 	}
 	for _, v := range violations {
-		t.Errorf("acr:v1: evidence ref literal built outside EvidenceRefID: %s -- route this through EvidenceRefID(ContextFabricEvidenceEntityX, id) instead of a literal or format string, and add the member to contextFabricEvidenceEntityLabels in the same change", v)
+		t.Errorf("allowlisted file's acr:v1: literal run does not end exactly at the prefix boundary -- an entity-type segment is hardcoded even inside a reviewed producer file: %s", v)
 	}
 }
 
@@ -132,17 +158,12 @@ type literalRun struct {
 }
 
 // adjacentStringLiteralRuns returns every maximal run of directly-adjacent
-// string BasicLits joined by + in the file, PLUS every standalone string
-// literal that isn't part of any + expression at all -- a bare
-// "const q = `SELECT ...`" with no splice. read_adapter.go's
-// clickHouseEvidenceQueryV1 was exactly this shape before this ticket fixed
-// it, and a first version of this guard that only walked BinaryExpr nodes
-// missed it entirely, caught only by running this guard red-first against
-// origin/main and noticing that file was silently absent from the failures.
-// A non-literal operand (identifier, call, anything else) ends the current
-// run without being part of it -- see the test's own doc comment for why
-// that is exactly the boundary that keeps EvidenceRefID and the SQL-splice
-// sites clean without a path exception.
+// string BasicLits joined by + in the file, every standalone string literal
+// that isn't part of any + expression at all, and every strings.Join
+// composite-literal's string elements -- the three shapes codex rounds 2
+// and 3 found evading an earlier, narrower version of this function (kept
+// here for layer 2's use; layer 1 does not need this level of shape
+// awareness at all, which is the whole point of closing by invariant).
 func adjacentStringLiteralRuns(file *ast.File) []literalRun {
 	var runs []literalRun
 	record := func(pos token.Pos, value string) {
@@ -201,18 +222,6 @@ func adjacentStringLiteralRuns(file *ast.File) []literalRun {
 			}
 			return true
 		case *ast.CallExpr:
-			// strings.Join([]string{"acr:v1:", "service", ":", id}, "") is
-			// codex round 3's finding (P2, ARGUED, no current production
-			// site): a +-chain and a Sprintf format string are both single
-			// AST nodes this guard already sees whole, but strings.Join's
-			// dangerous literals are SEPARATE elements of a slice literal,
-			// joined only at RUNTIME -- outside anything the +-chain/
-			// standalone-literal cases above can see as one unit. Handling
-			// this specific call shape (rather than chasing every possible
-			// Go string-assembly idiom -- bytes.Buffer, strings.Builder, a
-			// loop, text/template -- which is an unbounded set no static
-			// literal scan can fully close; see this test's own doc comment
-			// for the acknowledged residual) closes the exact shape raised.
 			sel, ok := node.Fun.(*ast.SelectorExpr)
 			if !ok || sel.Sel == nil || sel.Sel.Name != "Join" {
 				return true
