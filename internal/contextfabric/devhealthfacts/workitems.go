@@ -7,6 +7,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -48,7 +49,7 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactStatus, Subject: subject,
 			Fields:         map[string]contextfabric.FactValue{"status": stringOrNull(row.Status)},
-			EvidenceRefIDs: []string{evidenceRefID("work-item", row.RepoID+":"+row.ID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
 		})
 	}
 	state, emptyReason := currentAxisReadState(len(facts))
@@ -92,7 +93,7 @@ func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principa
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactWork, Subject: subject,
 			Fields:         map[string]contextfabric.FactValue{"title": stringOrNull(row.Title)},
-			EvidenceRefIDs: []string{evidenceRefID("work-item", row.RepoID+":"+row.ID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
 		})
 	}
 	state, emptyReason := currentAxisReadState(len(facts))
@@ -153,7 +154,7 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactActualCompletion, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("work-item", row.RepoID+":"+row.ID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
 		})
 	}
 	state, retentionReason := timeBound.retentionState(len(rows))

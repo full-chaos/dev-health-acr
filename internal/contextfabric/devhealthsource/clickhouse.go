@@ -448,7 +448,7 @@ func organizationCandidate(orgID string, observedAt time.Time) candidate {
 		// (see docs/design/context-fabric-projection-worker.md); the org ID
 		// is the best available label until Dev Health Ops exposes one.
 		Authorization:  contractsv1.ContextFabricAuthorizationScope{ProjectIDs: []string{organizationScopeID(orgID)}},
-		EvidenceRefIDs: []string{"acr:v1:organization:" + orgID}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
+		EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityOrganization, orgID)}, ObservedAt: observedAt, SourceVersion: ClickHouseSourceVersion,
 	}
 	return candidate{observedAt: observedAt, sortKey: entity.Subject.CanonicalID, entity: &entity}
 }

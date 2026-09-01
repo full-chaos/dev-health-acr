@@ -63,35 +63,48 @@ var contextFabricSourceStateLabels = map[ContextFabricSourceState]string{
 	ContextFabricSourcePruned:        "not needed",
 }
 
-// contextFabricEvidenceEntityLabels labels every KNOWN acr:v1:<entity-type>
-// segment (the producers in internal/contextpacket/source_queries.go and
-// internal/contextfabric). The segment vocabulary is NOT closed at the
-// producer signature today (evidenceRefID takes an arbitrary string), so an
-// unknown segment falls back to the generic "Evidence" label — countable
-// via RecordEvidenceLabelFallback (count only, never the segment) and
-// visible beside its raw ref in evidence_ref_labels. The follow-up that
-// closes the taxonomy into a typed enum is filed at CHAOS-4690 close-out.
-var contextFabricEvidenceEntityLabels = map[string]string{
-	"commit":               "Commit",
-	"repository":           "Repository",
-	"work-item":            "Work item",
-	"work-item-dependency": "Work item dependency",
-	"commit-file":          "Commit file",
-	"pull-request":         "Pull request",
-	"review":               "Review",
-	"ci":                   "CI run",
-	"graph":                "Relationship",
-	"ai-run":               "AI workflow run",
-	"ai-artifact":          "AI artifact",
-	"review-outcome":       "Review outcome",
-	"deployment":           "Deployment",
-	"incident":             "Incident",
-	"deployment-incident":  "Deployment/incident link",
-	"hotspot":              "File hotspot",
-	"complexity":           "File complexity",
-	"team":                 "Team",
-	"project":              "Project",
-	"organization":         "Organization",
+// contextFabricEvidenceEntityLabels labels every member of the closed
+// ContextFabricEvidenceEntityType vocabulary (CHAOS-4698) -- the producers
+// in internal/contextpacket/source_queries.go and internal/contextfabric
+// that mint an acr:v1:<entity-type>:<id> ref. TOTAL over that vocabulary,
+// enforced by TestEvidenceEntityLabelsAreTotal: a new member cannot ship
+// without joining this map in the SAME change, mirroring
+// contextFabricFactKindLabels. A ref segment OUTSIDE this vocabulary can
+// still appear at read time (a legacy stored row an acr producer did not
+// mint) -- ContextFabricEvidenceRefLabel keeps parsing by raw string for
+// that case and falls back to the generic "Evidence" label, countable via
+// RecordEvidenceLabelFallback (count only, never the segment).
+var contextFabricEvidenceEntityLabels = map[ContextFabricEvidenceEntityType]string{
+	ContextFabricEvidenceEntityCommit:             "Commit",
+	ContextFabricEvidenceEntityRepository:         "Repository",
+	ContextFabricEvidenceEntityWorkItem:           "Work item",
+	ContextFabricEvidenceEntityWorkItemDependency: "Work item dependency",
+	ContextFabricEvidenceEntityCommitFile:         "Commit file",
+	ContextFabricEvidenceEntityPullRequest:        "Pull request",
+	ContextFabricEvidenceEntityReview:             "Review",
+	ContextFabricEvidenceEntityCI:                 "CI run",
+	ContextFabricEvidenceEntityGraph:              "Relationship",
+	ContextFabricEvidenceEntityAIRun:              "AI workflow run",
+	ContextFabricEvidenceEntityAIArtifact:         "AI artifact",
+	ContextFabricEvidenceEntityReviewOutcome:      "Review outcome",
+	ContextFabricEvidenceEntityDeployment:         "Deployment",
+	ContextFabricEvidenceEntityIncident:           "Incident",
+	ContextFabricEvidenceEntityDeploymentIncident: "Deployment/incident link",
+	ContextFabricEvidenceEntityHotspot:            "File hotspot",
+	ContextFabricEvidenceEntityComplexity:         "File complexity",
+	ContextFabricEvidenceEntityTeam:               "Team",
+	ContextFabricEvidenceEntityProject:            "Project",
+	ContextFabricEvidenceEntityOrganization:       "Organization",
+	// The next four were already minted by devhealthsource producers
+	// (episodes.go, tables.go's work-item-hierarchy edges,
+	// teams_projects_edges.go's project-team/work-item-team edges) but had
+	// NO registry entry -- they rendered the generic "Evidence" label and
+	// counted as a fallback on every read. CHAOS-4698 requiring the typed
+	// enum surfaced the gap; closing it is this change's actual taxonomy fix.
+	ContextFabricEvidenceEntityEpisode:           "Episode",
+	ContextFabricEvidenceEntityWorkItemHierarchy: "Work item hierarchy",
+	ContextFabricEvidenceEntityProjectTeam:       "Project/team link",
+	ContextFabricEvidenceEntityWorkItemTeam:      "Work item/team link",
 }
 
 // humanizeVocabularyToken is the deterministic transform for a token from
@@ -171,7 +184,7 @@ func ContextFabricEvidenceRefLabel(refID string) (string, bool) {
 	}
 	entityType := parts[2]
 	id := strings.Join(parts[3:], ":")
-	label, known := contextFabricEvidenceEntityLabels[entityType]
+	label, known := contextFabricEvidenceEntityLabels[ContextFabricEvidenceEntityType(entityType)]
 	if !known {
 		if id == "" {
 			return "Evidence", false

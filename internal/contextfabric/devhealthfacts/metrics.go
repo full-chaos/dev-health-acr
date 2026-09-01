@@ -447,7 +447,7 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactMetrics, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("repository", repoID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, repoID)},
 		})
 	}
 	return rowCount, breakdownTruncated, nil
@@ -480,7 +480,7 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 				"after_hours_commit_ratio":  contextfabric.NumberFactValue(r.AfterHoursCommitRatio),
 				"weekend_commit_ratio":      contextfabric.NumberFactValue(r.WeekendCommitRatio),
 			},
-			EvidenceRefIDs: []string{evidenceRefID("team", r.TeamID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.TeamID)},
 		})
 	}
 	return len(rows), nil
@@ -519,7 +519,7 @@ func (p *MetricsProvider) readProjectMetrics(ctx context.Context, orgID string, 
 		// invariant 8 requires for every fact-producing read in this
 		// package.
 		evidenceRefIDs := make([]string, 0, len(rollup.TeamBreakdown)+1)
-		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("project", rollup.ProjectKey))
+		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, rollup.ProjectKey))
 		for _, r := range rollup.TeamBreakdown {
 			teamRows = append(teamRows, contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{
 				"team_id":                   contextfabric.StringFactValue(r.TeamID),
@@ -531,7 +531,7 @@ func (p *MetricsProvider) readProjectMetrics(ctx context.Context, orgID string, 
 				"after_hours_commit_ratio":  contextfabric.NumberFactValue(r.AfterHoursCommitRatio),
 				"weekend_commit_ratio":      contextfabric.NumberFactValue(r.WeekendCommitRatio),
 			}})
-			evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("team", r.TeamID))
+			evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.TeamID))
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactMetrics, Subject: subject,

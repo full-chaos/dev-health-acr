@@ -7,6 +7,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -196,7 +197,7 @@ ORDER BY team_id, map_name`)
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactLandscape, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("team", teamID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 		})
 	}
 	return rowCount, totalOmitted, nil
@@ -266,7 +267,7 @@ ORDER BY p.id, il.team_id, il.map_name`)
 		subject := bySubject[projectKey]
 		teamRows := make([]contextfabric.FactValueRow, 0, len(rows))
 		evidenceRefIDs := make([]string, 0, len(rows)+1)
-		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("project", projectKey))
+		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, projectKey))
 		seenTeams := make(map[string]bool, len(rows))
 		for _, entry := range rows {
 			teamRow := entry.row.toFactValueRow()
@@ -274,7 +275,7 @@ ORDER BY p.id, il.team_id, il.map_name`)
 			teamRows = append(teamRows, teamRow)
 			if !seenTeams[entry.teamID] {
 				seenTeams[entry.teamID] = true
-				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("team", entry.teamID))
+				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, entry.teamID))
 			}
 		}
 		if len(teamRows) == 0 {

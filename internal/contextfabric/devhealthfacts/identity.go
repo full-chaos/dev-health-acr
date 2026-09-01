@@ -6,6 +6,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -60,7 +61,7 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 			}
 			facts = append(facts, contextfabric.CanonicalFact{
 				Kind: contextfabric.FactIdentity, Subject: subject, Fields: fields,
-				EvidenceRefIDs: []string{evidenceRefID("repository", row.ID)},
+				EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, row.ID)},
 			})
 		}
 		truncated = truncated || len(rows) >= maxFactRowsPerQuery
@@ -85,7 +86,7 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 					"id":    contextfabric.StringFactValue(row.ID),
 					"title": stringOrNull(row.Title),
 				},
-				EvidenceRefIDs: []string{evidenceRefID("work-item", row.RepoID+":"+row.ID)},
+				EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
 			})
 		}
 		truncated = truncated || len(rows) >= maxFactRowsPerQuery
@@ -143,7 +144,7 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 			facts = append(facts, contextfabric.CanonicalFact{
 				Kind: contextfabric.FactMembership, Subject: subject,
 				Fields:         map[string]contextfabric.FactValue{"organization_id": contextfabric.StringFactValue(orgID)},
-				EvidenceRefIDs: []string{evidenceRefID("repository", row.ID)},
+				EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, row.ID)},
 			})
 		}
 		truncated = truncated || len(rows) >= maxFactRowsPerQuery
@@ -168,7 +169,7 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 					"repository_id":   contextfabric.StringFactValue(row.RepoID),
 					"repository_name": stringOrNull(row.RepoSlug),
 				},
-				EvidenceRefIDs: []string{evidenceRefID("work-item", row.RepoID+":"+row.ID)},
+				EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
 			})
 		}
 		truncated = truncated || len(rows) >= maxFactRowsPerQuery

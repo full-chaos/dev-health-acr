@@ -151,7 +151,7 @@ func episodeCandidate(row storage.EpisodeProjectionRecord) candidate {
 		EpisodeID: canonicalID,
 		Subject:   contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectEpisode, CanonicalID: canonicalID, Label: label},
 		Goal:      goal, Outcome: row.Outcome, Summary: summary,
-		Authorization: repoAuthorization(row.RepoSlug), EvidenceRefIDs: []string{"acr:v1:episode:" + row.EpisodeID},
+		Authorization: repoAuthorization(row.RepoSlug), EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityEpisode, row.EpisodeID)},
 		StartedAt: row.StartedAt, EndedAt: row.EndedAt, SourceVersion: EpisodesSourceVersion,
 	}
 	return candidate{observedAt: row.UpdatedAt, sortKey: row.EpisodeID, episode: &episode}

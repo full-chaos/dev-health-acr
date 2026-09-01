@@ -447,7 +447,7 @@ WHERE 1 = 1` + sincePredicate(cursor, "observed_at", rowKey) + orderBy("observed
 				return []candidate{progressCandidate(observedAt, rowSortKey)}, nil
 			}
 			fromSubject = contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: workItemCanonicalID, Label: subjectID}
-			evidenceRefID = "acr:v1:work-item:" + repoID + ":" + subjectID
+			evidenceRefID = contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, repoID+":"+subjectID)
 			// CHAOS-3785 zero-UUID discipline: a Linear-sourced work item's
 			// repo_id is repo-less BY DESIGN and must not read as an orphan.
 			authorization = workItemAuthorization(repoID, repoSlug)
@@ -470,7 +470,7 @@ WHERE 1 = 1` + sincePredicate(cursor, "observed_at", rowKey) + orderBy("observed
 			// deliberately never used here.
 			pullRequestCanonicalID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
 			fromSubject = contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: pullRequestCanonicalID, Label: fmt.Sprintf("PR #%d", number)}
-			evidenceRefID = "acr:v1:pull-request:" + repoID + ":" + subjectID
+			evidenceRefID = contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, repoID+":"+subjectID)
 			// Unlike a Linear work item, a pull request always belongs to a
 			// real git repository -- git_pull_requests.repo_id is a
 			// non-nullable UUID at the source. A repoSlug miss here is
@@ -619,7 +619,7 @@ WHERE a.org_id = {org_id:String} AND a.is_primary = 1 AND ifNull(a.team_id, '') 
 			Derivation:      derivation,
 			EpistemicStatus: epistemicStatus,
 			Authorization:   workItemAuthorization(repoID, repoSlug),
-			EvidenceRefIDs:  []string{"acr:v1:work-item-team:" + repoID + ":" + workItemID + ":" + teamID},
+			EvidenceRefIDs:  []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemTeam, repoID+":"+workItemID+":"+teamID)},
 			ObservedAt:      observedAt,
 			SourceVersion:   TeamsProjectsSourceVersion,
 		}
@@ -1383,7 +1383,7 @@ func queryProjectTeams(ctx context.Context, client contextpacket.ClickHouseQuery
 			Derivation:      contractsv1.ContextFabricDerivationRuleInferred,
 			EpistemicStatus: contractsv1.ContextFabricEpistemicSourceAsserted,
 			Authorization:   contractsv1.ContextFabricAuthorizationScope{ProjectIDs: []string{projectID}, TeamIDs: []string{teamID}},
-			EvidenceRefIDs:  []string{"acr:v1:project-team:" + provider + ":" + projectID + ":" + teamID},
+			EvidenceRefIDs:  []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityProjectTeam, provider+":"+projectID+":"+teamID)},
 			ObservedAt:      observedAt,
 			SourceVersion:   TeamsProjectsSourceVersion,
 		}

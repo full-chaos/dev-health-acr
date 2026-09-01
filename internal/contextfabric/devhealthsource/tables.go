@@ -165,7 +165,7 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + 
 		// repos records no deletion column, so a repository's window is
 		// open-ended: valid from creation, with no recorded end.
 		entity := contractsv1.ContextFabricEntityProjection{
-			Subject: subject, Properties: properties, Authorization: repoAuthorization(slug), EvidenceRefIDs: []string{"acr:v1:repository:" + id},
+			Subject: subject, Properties: properties, Authorization: repoAuthorization(slug), EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, id)},
 			ObservedAt: observedAt, ValidFrom: requiredTime(createdAt), SourceVersion: ClickHouseSourceVersion,
 		}
 		if provider != "" {
@@ -255,7 +255,7 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", rowKe
 		setStringProperty(properties, "native_team_key", teamKey, 0)
 		setStringProperty(properties, "project_name", projectName, 0)
 		setStringProperty(properties, "labels", joinedSortedList(labels, 10, 40, ", "), 0)
-		evidenceRefID := "acr:v1:work-item:" + repoID + ":" + workItemID
+		evidenceRefID := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, repoID+":"+workItemID)
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: workItemAuthorization(repoID, repoSlug),
 			EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt,
@@ -333,14 +333,15 @@ WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowK
 		setStringProperty(properties, "repo", repoSlug, 0)
 		setStringProperty(properties, "branch", headBranch, 0)
 		setStringProperty(properties, "body", body, 1200)
+		evidenceRefID := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, repoID+":"+fmt.Sprint(number))
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:pull-request:" + repoID + ":" + fmt.Sprint(number)}, ObservedAt: observedAt,
+			EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt,
 			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
 			{observedAt: observedAt, sortKey: rowSortKey, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:pull-request:"+repoID+":"+fmt.Sprint(number), rowSortKey, validFrom, validTo),
+			belongsToRepository(subject, repoSlug, repoID, observedAt, evidenceRefID, rowSortKey, validFrom, validTo),
 		}, nil
 	})
 }
@@ -393,7 +394,7 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, rowKey
 		// fields. status is 0% populated live -- nothing to add there.
 		setStringProperty(properties, "release_ref", releaseRef, 0)
 		setStringProperty(properties, "repo", repoSlug, 0)
-		evidenceRefID := "acr:v1:deployment:" + repoID + ":" + deploymentID
+		evidenceRefID := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityDeployment, repoID+":"+deploymentID)
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
 			EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt,
@@ -459,14 +460,15 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id"
 		// ships; it is body-class text and follows the §3 provider-
 		// locality gate at composition time.
 		setStringProperty(properties, "description", description, 800)
+		evidenceRefID := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityIncident, incidentID)
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:incident:" + incidentID}, ObservedAt: observedAt,
+			EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt,
 			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
 			{observedAt: observedAt, sortKey: incidentID, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:incident:"+incidentID, incidentID, validFrom, validTo),
+			belongsToRepository(subject, repoSlug, repoID, observedAt, evidenceRefID, incidentID, validFrom, validTo),
 		}, nil
 	})
 }
@@ -569,7 +571,7 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 		}
 		sourceValidFrom, sourceValidTo := requiredTime(sourceCreatedAt), optionalTime(sourceHasEnded, sourceEndedAt)
 		sourceSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: sourceCanonicalID, Label: sourceID}
-		evidenceRefID := "acr:v1:work-item-dependency:" + repoID + ":" + sourceID + ":" + targetID + ":" + relationshipType
+		evidenceRefID := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemDependency, repoID+":"+sourceID+":"+targetID+":"+relationshipType)
 
 		// The target join is LEFT: a target_work_item_id is not
 		// guaranteed to name a work item at all (see this function's doc
@@ -755,7 +757,7 @@ WHERE c.org_id = {org_id:String} AND c.parent_id != '' AND c.parent_id != c.work
 			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: childCanonicalID, Label: childID},
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: parentCanonicalID, Label: parentID},
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
-			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{"acr:v1:work-item-hierarchy:" + repoID + ":" + childID + ":" + parentID},
+			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItemHierarchy, repoID+":"+childID+":"+parentID)},
 			ObservedAt: observedAt, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: rowSortKey, relationship: &relationship}}, nil
@@ -835,7 +837,7 @@ WHERE toString(e.org_id) = {org_id:String} AND e.deployment_id != '' AND e.incid
 			From:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectDeployment, CanonicalID: deploymentCanonicalID, Label: deploymentID},
 			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectIncident, CanonicalID: "incident:" + incidentID, Label: incidentID},
 			Derivation: contractsv1.ContextFabricDerivationRuleInferred, EpistemicStatus: contractsv1.ContextFabricEpistemicSourceAsserted,
-			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{"acr:v1:deployment-incident:" + edgeID},
+			Authorization: repoAuthorization(repoSlug), EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityDeploymentIncident, edgeID)},
 			ObservedAt: observedAt, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{{observedAt: observedAt, sortKey: edgeID, relationship: &relationship}}, nil
@@ -906,7 +908,7 @@ WHERE r.org_id = {org_id:String}` + sincePredicate(cursor, "r.submitted_at", row
 		properties["number"] = intScalar(number)
 		setStringProperty(properties, "pr_title", pullRequestTitle, 0)
 		setStringProperty(properties, "repo", repoSlug, 0)
-		evidenceRefID := "acr:v1:review:" + repoID + ":" + reviewID
+		evidenceRefID := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityReview, repoID+":"+reviewID)
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
 			EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt,
@@ -984,14 +986,15 @@ WHERE c.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, rowKey
 		// the only semantic text a CI run carries.
 		setStringProperty(properties, "pipeline_name", pipelineName, 0)
 		setStringProperty(properties, "repo", repoSlug, 0)
+		evidenceRefID := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityCI, repoID+":"+runID)
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject: subject, Properties: properties, Authorization: repoAuthorization(repoSlug),
-			EvidenceRefIDs: []string{"acr:v1:ci:" + repoID + ":" + runID}, ObservedAt: observedAt,
+			EvidenceRefIDs: []string{evidenceRefID}, ObservedAt: observedAt,
 			ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
 		}
 		return []candidate{
 			{observedAt: observedAt, sortKey: rowSortKey, entity: &entity},
-			belongsToRepository(subject, repoSlug, repoID, observedAt, "acr:v1:ci:"+repoID+":"+runID, rowSortKey, validFrom, validTo),
+			belongsToRepository(subject, repoSlug, repoID, observedAt, evidenceRefID, rowSortKey, validFrom, validTo),
 		}, nil
 	})
 }

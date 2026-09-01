@@ -5,6 +5,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -71,7 +72,7 @@ func (p *IncidentsProvider) ReadFacts(ctx context.Context, principal storage.Pri
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactIncidents, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("incident", row.ID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityIncident, row.ID)},
 		})
 	}
 	state, retentionReason := timeBound.retentionState(len(rows))
