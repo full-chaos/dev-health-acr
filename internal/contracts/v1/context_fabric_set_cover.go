@@ -136,9 +136,26 @@ func oneMemberPerGroup(groups []ContextFabricCohortGroup) []string {
 // is the smallest reproducing case: {a,c} and {b,c} are both valid minimum
 // covers, {a,c} is lexically smaller, and the naive reconstruction returned
 // {b,c} (codex round 1, finding 2, EXECUTED).
+//
+// An EMPTY group -- ContextFabricCohortGroup.Validate() permits
+// MemberCanonicalIDs=[] -- has no member that could ever cover it, so its
+// bit is excluded from `full` rather than left in it: including an
+// unreachable bit made dp[full] UNREACHABLE, and minimumCoverSelection
+// returned NIL FOR EVERY GROUP, not just the empty one, voiding the floor
+// for every group that had a perfectly good cover available (codex round
+// 4, EXECUTED: an empty team_A beside a real team_B left team_B's own sole
+// member unprotected against an unrelated group's larger pool in the fill
+// phase). An empty group is a real, disclosed degenerate case -- exactly
+// the "member no group claims" / "group no member claims" pairing
+// BuildCohortGroups already declares rather than invents a member for --
+// and it must not collapse the floor for every OTHER group.
 func minimumCoverSelection(groups []ContextFabricCohortGroup) []string {
-	k := len(groups)
-	full := (1 << k) - 1
+	full := 0
+	for index, group := range groups {
+		if len(group.MemberCanonicalIDs) > 0 {
+			full |= 1 << index
+		}
+	}
 	if full == 0 {
 		return nil
 	}

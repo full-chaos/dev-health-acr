@@ -304,12 +304,28 @@ func (n ContextFabricPlanNarrowing) Validate() error {
 	if n.Overrun != "" && !ValidContextFabricBudgetOverrun(n.Overrun) {
 		return fmt.Errorf("plan narrowing overrun %q is not a member of the closed vocabulary", n.Overrun)
 	}
-	// Attention rank does not exist before the fact read, so a stage that
-	// runs earlier cannot honestly claim to have used it. This is the one
-	// mistake §6.3a records being made in EVERY earlier revision, stated
-	// here as something the contract refuses to represent.
-	if n.Basis == ContextFabricNarrowingBasisAttentionRank && n.Stage == ContextFabricPlanNarrowingCardinality {
-		return fmt.Errorf("plan narrowing at the pre-read cardinality stage cannot use attention rank, which RankCohort computes only after the fact read")
+	// Neither attention rank nor either GROUPED basis exists before the fact
+	// read, so a stage that runs earlier cannot honestly claim to have used
+	// any of them. Attention rank needs RankCohort's scores; both grouped
+	// bases need GROUPS, and this package's own header records that groups
+	// exist only after the fact read too -- member-first narrowing over a
+	// group axis necessarily lives in stages 2 and 3, never the pre-read
+	// cardinality clamp (codex round 4, EXECUTED: this check covered only
+	// attention rank and silently accepted a cardinality-stage record
+	// claiming the overlap-aware set cover, which stage 1 structurally
+	// cannot run -- and largest_group_round_robin turns out to have had the
+	// identical, pre-existing gap, caught by this fix's own test rather
+	// than by review). This is the one mistake §6.3a records being made in
+	// EVERY earlier revision, stated here as something the contract
+	// refuses to represent -- for every basis that cannot exist yet, not
+	// just the one this slice's design first guarded.
+	if n.Stage == ContextFabricPlanNarrowingCardinality {
+		switch n.Basis {
+		case ContextFabricNarrowingBasisAttentionRank:
+			return fmt.Errorf("plan narrowing at the pre-read cardinality stage cannot use attention rank, which RankCohort computes only after the fact read")
+		case ContextFabricNarrowingBasisOverlapAwareSetCover, ContextFabricNarrowingBasisLargestGroupRoundRobin:
+			return fmt.Errorf("plan narrowing at the pre-read cardinality stage cannot use %q, which requires groups that do not exist until after the fact read", n.Basis)
+		}
 	}
 	return nil
 }
@@ -342,8 +358,13 @@ func (b ContextFabricAnswerPlanBudget) Validate() error {
 	if b.MaxItems < 0 || b.MaxSerializedBytes < 0 || b.MaxMembers < 0 || b.SynthesisHeadroom < 0 {
 		return fmt.Errorf("answer plan budget fields must be non-negative")
 	}
-	if b.NarrowingBasis != "" && !ValidContextFabricNarrowingBasis(b.NarrowingBasis) {
-		return fmt.Errorf("answer plan narrowing basis %q is not a member of the closed vocabulary", b.NarrowingBasis)
+	// This field records ONLY what stage 1 declared (its own doc comment),
+	// and stage 1 is structurally flat -- groups do not exist until after
+	// the fact read -- so canonical_id_lexical is the only value it can
+	// ever honestly hold (codex round 4, EXECUTED: this check accepted any
+	// closed-vocabulary member, including bases stage 1 cannot run).
+	if b.NarrowingBasis != "" && b.NarrowingBasis != ContextFabricNarrowingBasisCanonicalIDLexical {
+		return fmt.Errorf("answer plan narrowing basis %q is not stage 1's own order (canonical_id_lexical is the only value this field can honestly hold)", b.NarrowingBasis)
 	}
 	if b.MaxItems > 0 && b.SynthesisHeadroom > b.MaxItems {
 		return fmt.Errorf("answer plan reserved %d items of synthesis headroom against a %d-item budget", b.SynthesisHeadroom, b.MaxItems)

@@ -226,6 +226,30 @@ func TestSelectGroupCoverMembersMinimumCoverIsLexicographicallySmallest(t *testi
 	}
 }
 
+// TestSelectGroupCoverMembersEmptyGroupDoesNotCollapseTheFloor pins codex
+// round 4, finding 1 (P2, EXECUTED): ContextFabricCohortGroup.Validate()
+// permits MemberCanonicalIDs=[], and the exact solver's target mask used to
+// include that group's bit unconditionally -- making the full mask
+// UNREACHABLE (no member can ever set an empty group's bit) and collapsing
+// minimumCoverSelection to nil for EVERY group, not just the empty one.
+// team_C's larger, unrelated pool then won the leftover-budget fill outright
+// and team_B's own sole member was never protected at all.
+func TestSelectGroupCoverMembersEmptyGroupDoesNotCollapseTheFloor(t *testing.T) {
+	t.Parallel()
+	groups := []ContextFabricCohortGroup{
+		{Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team_A", Label: "team_A"}, MemberCanonicalIDs: nil, Complete: true, Total: 0},
+		{Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team_B", Label: "team_B"}, MemberCanonicalIDs: []string{"b"}, Complete: true, Total: 1},
+		{Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team_C", Label: "team_C"}, MemberCanonicalIDs: []string{"c1", "c2", "c3"}, Complete: true, Total: 3},
+	}
+	selected, basis := SelectGroupCoverMembers(groups, nil, 1)
+	if basis != ContextFabricNarrowingBasisOverlapAwareSetCover {
+		t.Fatalf("basis = %q, want overlap_aware_set_cover", basis)
+	}
+	if _, ok := selected["b"]; !ok {
+		t.Fatalf("selected = %v, want team_B's floor member {b} protected -- an unrelated empty group must not void the floor for every other group", selected)
+	}
+}
+
 func sameSet(a, b map[string]struct{}) bool {
 	if len(a) != len(b) {
 		return false
