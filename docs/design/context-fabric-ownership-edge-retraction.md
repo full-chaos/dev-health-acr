@@ -65,14 +65,17 @@ flowchart TD
 
     TPO --> A["arm A — scope arm<br/>o.project_ref = p.scope<br/>retraction_only = 0"]
     TPO --> B["arm B — key arm<br/>o.project_key = p.scope<br/>WHERE p.scope_kind = 'key'<br/>retraction_only = 0"]
-    TPO --> C["arm C — RETRACTION arm<br/>o.project_key = p.project_key<br/>WHERE p.key_project_count > 1<br/>retraction_only = 1"]
+    TPO --> C["arm C — RETRACTION arm (own key)<br/>o.project_key = p.project_key<br/>WHERE p.key_project_count > 1 AND o.project_key != ''<br/>retraction_only = 1"]
+    TPO --> D["arm D — RETRACTION arm (key via ref)<br/>o.project_ref = p.project_key<br/>WHERE p.key_project_count > 1 AND o.project_key = ''<br/>retraction_only = 1"]
     PRJ --> A
     PRJ --> B
     PRJ --> C
+    PRJ --> D
 
     A --> W["window layer, per ownership identity<br/>unassertable = retraction_only OR min(project_id) != max(project_id)<br/>row_watermark = greatest(o.updated_at, max(project_updated_at))"]
     B --> W
     C --> W
+    D --> W
 
     W --> G["GROUP BY resolved project_id, provider, team_id, source_name"]
     G --> Q{"countIf(unassertable = 0) = 0 ?"}
@@ -128,6 +131,12 @@ ownership row produces **no result row at all** and the scan has nothing to
 retract. Arm C resolves the key across the AMBIGUOUS key partition — one row
 per project sharing that key — flagged `retraction_only = 1` so `unassertable`
 is forced true and it can never assert.
+
+### 2.2a Arm D — the same hole, on the other column (CHAOS-4566)
+
+`ProjectOwnershipJoinColumn` (aliased `project_ref` here) is `team_project_ownership.project_id`, documented as carrying whichever id space a source actually writes — for GitLab today, a project *key*, not a UUID. So an ownership row can name an ambiguous key through `project_ref` while its own `project_key` column sits empty. Arm A finds no scope row to match (the key is ambiguous, so the expansion never emitted it); arm B requires `scope_kind = 'key'`, which an empty column cannot satisfy; arm C requires `project_key != ''`. Before arm D, that row was invisible to all three arms simultaneously: no edge, no conflict, no retraction, no telemetry.
+
+Arm D is arm C's mirror over the other column, restricted to the complementary case (`project_key = ''`) so it can never double-match a row arm C already covers. Both resolve through the same `ambiguousProjectIdentitySQL()` source, so "ambiguous" has one definition for both arms to disagree from — the fan-out (one candidate row per project sharing the key) and the retraction shape are otherwise identical to arm C's, described below.
 
 **How arm C knows a key is ambiguous, and the trap in the obvious answer.**
 Not `key_resolution_count`. The expansion emits two scope rows per project, and
