@@ -115,21 +115,10 @@ func TestNoAcrV1LiteralOutsideAllowlist(t *testing.T) {
 		if parseErr != nil {
 			return parseErr
 		}
-		ast.Inspect(file, func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
-			}
-			value, unquoteErr := strconv.Unquote(lit.Value)
-			if unquoteErr != nil {
-				return true
-			}
-			if strings.Contains(value, "acr:v1") {
-				pos := fset.Position(lit.Pos())
-				violations = append(violations, pos.String()+" ("+rel+"): "+value)
-			}
-			return true
-		})
+		for _, hit := range acrV1LiteralStringValues(file) {
+			pos := fset.Position(hit.pos)
+			violations = append(violations, pos.String()+" ("+rel+"): "+hit.value)
+		}
 		return nil
 	})
 	if err != nil {
@@ -137,6 +126,103 @@ func TestNoAcrV1LiteralOutsideAllowlist(t *testing.T) {
 	}
 	for _, v := range violations {
 		t.Errorf("acr:v1 literal outside the allowlist: %s -- route this through EvidenceRefID(ContextFabricEvidenceEntityX, id) instead of embedding the prefix directly, and add the member to contextFabricEvidenceEntityLabels in the same change (or, if this file genuinely needs to mention the prefix, add it to evidenceRefLiteralAllowlist and verify it under TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary)", v)
+	}
+}
+
+type acrV1LiteralHit struct {
+	pos   token.Pos
+	value string
+}
+
+// acrV1LiteralStringValues returns every string BasicLit in file whose
+// unquoted value contains the substring "acr:v1", regardless of what Go
+// expression or idiom surrounds it (a bare literal, a +-chain, a Sprintf
+// format string, a strings.Join slice element, a strings.Builder.WriteString
+// argument, a loop body, anything) -- the idiom-agnostic core of layer 1
+// (TestNoAcrV1LiteralOutsideAllowlist), factored out here so
+// TestAcrV1LiteralStringValuesCoversEvasionIdioms can exercise it directly
+// against an in-memory fixture (parsed straight from a []byte, never
+// written to disk) without planting a real .go file under internal/, which
+// would trip the very invariant under test.
+func acrV1LiteralStringValues(file *ast.File) []acrV1LiteralHit {
+	var hits []acrV1LiteralHit
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		value, unquoteErr := strconv.Unquote(lit.Value)
+		if unquoteErr != nil {
+			return true
+		}
+		if strings.Contains(value, "acr:v1") {
+			hits = append(hits, acrV1LiteralHit{pos: lit.Pos(), value: value})
+		}
+		return true
+	})
+	return hits
+}
+
+// TestAcrV1LiteralStringValuesCoversEvasionIdioms is a permanent regression
+// pin for the THREE construction idioms CHAOS-4698's codex rounds found
+// evading an earlier, idiom-enumerating version of this guard before it was
+// closed by invariant (see evidenceRefLiteralAllowlist's own doc comment):
+// a hardcoded literal concatenation, an fmt.Sprintf format string, and a
+// strings.Join slice. Each fixture is parsed in-memory only
+// (go/parser.ParseFile from a string, never written to disk) and fed
+// straight to acrV1LiteralStringValues -- the SAME function layer 1 itself
+// calls -- so a future change that narrows that function back toward
+// idiom-specific matching (instead of "any string literal containing the
+// substring, anywhere") regresses this test, not just a manually-run,
+// never-committed proof.
+func TestAcrV1LiteralStringValuesCoversEvasionIdioms(t *testing.T) {
+	cases := []struct {
+		name   string
+		source string
+	}{
+		{
+			name: "hardcoded literal concatenation",
+			source: `package zzevidencefixture
+
+func zzFixtureConcat(id string) string {
+	return "acr:v1:" + "commit" + ":" + id
+}
+`,
+		},
+		{
+			name: "fmt.Sprintf format string",
+			source: `package zzevidencefixture
+
+import "fmt"
+
+func zzFixtureSprintf(entityType, id string) string {
+	return fmt.Sprintf("acr:v1:%s:%s", entityType, id)
+}
+`,
+		},
+		{
+			name: "strings.Join",
+			source: `package zzevidencefixture
+
+import "strings"
+
+func zzFixtureJoin(id string) string {
+	return strings.Join([]string{"acr:v1:", "service", ":", id}, "")
+}
+`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, tc.name+".go", tc.source, 0)
+			if err != nil {
+				t.Fatalf("parse in-memory fixture: %v", err)
+			}
+			if hits := acrV1LiteralStringValues(file); len(hits) == 0 {
+				t.Fatalf("expected the idiom-agnostic literal scan to flag this fixture (it contains a string literal with the acr:v1 substring) -- the %q evasion idiom is no longer caught", tc.name)
+			}
+		})
 	}
 }
 
@@ -245,6 +331,214 @@ func TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary(t *testing.T) {
 	}
 	for _, v := range violations {
 		t.Errorf("allowlisted file's acr:v1: literal run does not end exactly at the prefix boundary -- an entity-type segment is hardcoded even inside a reviewed producer file: %s", v)
+	}
+}
+
+// evidenceRefLiteralFixtureOverlayPath is the single synthetic filename
+// every CHAOS-4721 layer-2 fixture sub-test below overlays into the REAL
+// internal/contracts/v1 package via packages.Config.Overlay -- the fixture
+// source is NEVER written to disk (Overlay presents its content purely in
+// memory to the type checker), and the same literal path is safe to reuse
+// across sub-tests because each sub-test issues its own independent
+// packages.Load call with its own single-entry Overlay map.
+const evidenceRefLiteralFixtureOverlayPath = "zz_evidence_ref_literal_guard_fixture_overlay.go"
+
+// loadLayer2Fixture type-checks source as an ADDITIONAL, in-memory-only file
+// of the real internal/contracts/v1 package and returns the SAME layer-2
+// primitives (runs, shadows) TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary
+// itself computes for a real allowlisted file, via the PRODUCTION
+// adjacentStringLiteralRuns / resolveStringOperand code paths -- so
+// TestEvidenceRefLiteralGuardShapeFixtures below is a regression pin on the
+// actual guard behavior, not a reimplementation of it that could silently
+// drift from what ships.
+func loadLayer2Fixture(t *testing.T, root, importPath, source string) ([]literalRun, []shadowRef) {
+	t.Helper()
+	overlayPath := filepath.Join(root, "internal", "contracts", "v1", evidenceRefLiteralFixtureOverlayPath)
+	cfg := &packages.Config{
+		Dir:     root,
+		Mode:    packages.NeedName | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
+		Overlay: map[string][]byte{overlayPath: []byte(source)},
+	}
+	pkgs, err := packages.Load(cfg, importPath)
+	if err != nil {
+		t.Fatalf("packages.Load(%s) with fixture overlay: %v", importPath, err)
+	}
+	if n := packages.PrintErrors(pkgs); n > 0 {
+		t.Fatalf("packages.Load(%s) with fixture overlay reported %d error(s) (printed above) -- fixture source does not type-check cleanly", importPath, n)
+	}
+	if len(pkgs) != 1 || pkgs[0].TypesInfo == nil || pkgs[0].Types == nil {
+		t.Fatalf("packages.Load(%s) with fixture overlay returned %d package(s) with usable type info, want exactly 1", importPath, len(pkgs))
+	}
+	pkg := pkgs[0]
+	var file *ast.File
+	for _, f := range pkg.Syntax {
+		if pkg.Fset.Position(f.Pos()).Filename == overlayPath {
+			file = f
+			break
+		}
+	}
+	if file == nil {
+		t.Fatalf("packages.Load(%s) with fixture overlay did not include syntax for the overlay file", importPath)
+	}
+	fileConsts := map[string]types.Object{}
+	scope := pkg.Types.Scope()
+	for _, name := range scope.Names() {
+		constObj, ok := scope.Lookup(name).(*types.Const)
+		if !ok {
+			continue
+		}
+		basic, ok := constObj.Type().Underlying().(*types.Basic)
+		if !ok || basic.Info()&types.IsString == 0 {
+			continue
+		}
+		if pkg.Fset.Position(constObj.Pos()).Filename == overlayPath {
+			fileConsts[name] = constObj
+		}
+	}
+	return adjacentStringLiteralRuns(file, pkg.TypesInfo, fileConsts)
+}
+
+// TestEvidenceRefLiteralGuardShapeFixtures is CHAOS-4721's permanent
+// regression pin for the object-identity fix, requested at review: prior to
+// this test, the RED (fails wrongly on origin/main today) / GREEN (this
+// branch catches it) / mutation-proof evidence for the shadowing defect
+// existed only as manually-run, never-committed proof in a throwaway
+// worktree (per lane-4698's own precedent for this self-referential guard,
+// since a real .go file containing the fixture would trip layer 1). Using
+// packages.Config.Overlay closes that gap without ever writing the fixture
+// to disk: each case below is type-checked as an in-memory-only additional
+// file of the real internal/contracts/v1 package.
+func TestEvidenceRefLiteralGuardShapeFixtures(t *testing.T) {
+	root := moduleRootFromThisFile(t)
+	modulePath := moduleImportPath(t, root)
+	importPath := modulePath + "/internal/contracts/v1"
+
+	cases := []struct {
+		name          string
+		source        string
+		wantViolation bool
+	}{
+		{
+			// The gap this ticket closes: origin/main's shipped interim fix
+			// (shadowedLocalNames) only tracks token.VAR GenDecls, `:=`
+			// AssignStmt DEFINE, Field (params/results), and RangeStmt --
+			// never a LOCAL `const` declaration -- so this exact shape
+			// passes the guard wrongly today (proven EXECUTED in a detached
+			// worktree at origin/main during this lane's own review; see
+			// the PR body / handoff for the transcript). Object-identity
+			// resolution catches it because go/types resolves the
+			// identifier to the local const's own DIFFERENT object,
+			// regardless of which declaration kind shadows it.
+			name: "local const shadows a top-level const with a hardcoded segment",
+			source: `package v1
+
+const zzFixturePrefixLocalConst = "safe"
+const zzFixtureSegmentLocalConst = "safe"
+
+func zzFixtureShadowLocalConst(id string) string {
+	const zzFixturePrefixLocalConst = "acr:v1:"
+	const zzFixtureSegmentLocalConst = "service"
+	return zzFixturePrefixLocalConst + zzFixtureSegmentLocalConst + ":" + id
+}
+`,
+			wantViolation: true,
+		},
+		{
+			// The original CHAOS-4698 verification-round repro (a `:=`
+			// local var shadow) -- kept as permanent regression coverage
+			// for the historically-fixed case, not just the local-const gap
+			// above.
+			name: ":= local var shadows a top-level const with a hardcoded segment (the original CHAOS-4698 repro)",
+			source: `package v1
+
+const zzFixturePrefixVarShadow = "safe"
+const zzFixtureSegmentVarShadow = "safe"
+
+func zzFixtureShadowVar(id string) string {
+	zzFixturePrefixVarShadow := "acr:v1:"
+	zzFixtureSegmentVarShadow := "service"
+	return zzFixturePrefixVarShadow + zzFixtureSegmentVarShadow + ":" + id
+}
+`,
+			wantViolation: true,
+		},
+		{
+			// The ticket's named false-positive class: the interim,
+			// name-based fix flags this file-wide (the name appears as a
+			// local SOMEWHERE), even though this reference IS the tracked
+			// const and this file's benign helper has nothing to do with
+			// acr:v1 hardcoding. Object identity resolves the benign
+			// reference correctly and never even calls resolveStringOperand
+			// on the unrelated parameter (it never appears in a
+			// string-building expression).
+			name: "benign unrelated reuse of a tracked const's name elsewhere in the file",
+			source: `package v1
+
+const zzFixtureBenignConst = "harmless-"
+
+func zzFixtureBenignHelper() string {
+	return zzFixtureBenignConst + "suffix"
+}
+
+func zzFixtureBenignUnrelated(zzFixtureBenignConst string) string {
+	return zzFixtureBenignConst
+}
+`,
+			wantViolation: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runs, shadows := loadLayer2Fixture(t, root, importPath, tc.source)
+			violated := len(shadows) > 0
+			for _, run := range runs {
+				if hardcodedEvidenceEntitySegment.MatchString(strings.Join(run.values, "")) {
+					violated = true
+				}
+			}
+			if violated != tc.wantViolation {
+				t.Fatalf("got violated=%v (shadows=%d, runs=%d), want violated=%v", violated, len(shadows), len(runs), tc.wantViolation)
+			}
+		})
+	}
+}
+
+// TestEvidenceRefLiteralGuardFailsClosedOnTypeCheckError pins the OTHER
+// half of the ticket's fail-closed rule (chris: unknown = reject, never =
+// pass): TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary hard-fails
+// (t.Fatalf) via packages.PrintErrors when an allowlisted package does not
+// type-check cleanly, rather than silently treating an unbindable package
+// as clean. This test pins the underlying CONDITION that t.Fatalf depends
+// on -- that packages.Load actually surfaces a type-check error for broken
+// source -- directly, since re-invoking the exported guard test itself to
+// assert it fails is not idiomatic (its t.Fatalf would abort this test
+// too).
+func TestEvidenceRefLiteralGuardFailsClosedOnTypeCheckError(t *testing.T) {
+	root := moduleRootFromThisFile(t)
+	modulePath := moduleImportPath(t, root)
+	importPath := modulePath + "/internal/contracts/v1"
+	overlayPath := filepath.Join(root, "internal", "contracts", "v1", evidenceRefLiteralFixtureOverlayPath)
+	source := `package v1
+
+func zzFixtureBroken() string {
+	return zzFixtureUndefinedIdentifier
+}
+`
+	cfg := &packages.Config{
+		Dir:     root,
+		Mode:    packages.NeedName | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
+		Overlay: map[string][]byte{overlayPath: []byte(source)},
+	}
+	pkgs, err := packages.Load(cfg, importPath)
+	if err != nil {
+		// packages.Load itself refusing to load is ALSO a valid fail-closed
+		// signal -- either way, the caller must not proceed as if the
+		// package type-checked cleanly.
+		return
+	}
+	if n := packages.PrintErrors(pkgs); n == 0 {
+		t.Fatalf("expected packages.Load to report a type-check error for source referencing an undefined identifier, got none -- this is the exact condition TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary relies on to fail closed instead of silently treating an unbindable package as clean")
 	}
 }
 
