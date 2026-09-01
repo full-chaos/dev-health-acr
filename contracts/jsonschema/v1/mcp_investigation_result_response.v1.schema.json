@@ -1058,7 +1058,7 @@
               "type": "array"
             },
             "groups": {
-              "description": "CHAOS-4636: absent on every flat cohort. When present, the cohort-level complete/truncated above are the conjunction/disjunction over these groups, so a reader that ignores groups gets a conservative summary of the whole union rather than a boolean describing only the first group.",
+              "description": "CHAOS-4636: absent on every flat cohort. When present, the cohort-level complete/truncated above are AT LEAST AS CONSERVATIVE as the conjunction/disjunction over these groups (complete=true requires every group complete; any group truncated requires the cohort truncated), so a reader that ignores groups gets a conservative summary of the whole union rather than a boolean describing only the first group. CHAOS-4733: the cohort-level pair can be MORE conservative than the groups alone show -- complete=false, or truncated=true, while every group individually looks complete -- because a discovery-level cap on the whole cohort (before any group existed) is not a fact any one group's own total-vs-presented count can carry.",
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/CohortGroup"
               },
@@ -1147,6 +1147,7 @@
           },
           "properties": {
             "complete": {
+              "description": "CHAOS-4733: carries the pre-grouping, discovery-level completeness as well as this group's own placement -- a group built from a discovery-capped cohort is never complete=true.",
               "type": "boolean"
             },
             "member_canonical_ids": {
@@ -1162,10 +1163,12 @@
               "$ref": "#/$defs/context_fabric_common.v1/$defs/SubjectRef"
             },
             "total": {
+              "description": "This group's member count AS DISCOVERED when the group was built, before any narrowing. Not adjusted for an upstream discovery-level cap that may have left members belonging to this group undiscovered entirely; that possibility is disclosed via complete and the cohort's own truncated, never by inflating total past what was actually seen.",
               "minimum": 0,
               "type": "integer"
             },
             "truncated": {
+              "description": "CHAOS-4733: this group's OWN presented-vs-total signal only (implies total > member_canonical_ids.length). A discovery-level cap on the whole cohort before this group existed is carried on the cohort's own truncated field instead, not here -- see Cohort.groups' description.",
               "type": "boolean"
             }
           },

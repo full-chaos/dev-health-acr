@@ -23,10 +23,24 @@ import "fmt"
 // union, so they CANNOT express "team A complete, team B truncated" -- mixed
 // group completeness had no representation at all.
 //
-// So the group carries its OWN completeness, and the cohort-level booleans are
-// defined as the conjunction (Complete = every group complete). An old reader
-// that ignores Groups then gets a CONSERVATIVE answer rather than a wrong one:
-// never Complete: true over a partially-truncated union.
+// So the group carries its OWN completeness, and the cohort-level booleans
+// are AT LEAST as conservative as the conjunction/disjunction over the groups
+// (Complete implies every group complete; every group's own Truncated
+// implies the cohort's). An old reader that ignores Groups then gets a
+// CONSERVATIVE answer rather than a wrong one: never Complete: true over a
+// partially-truncated union.
+//
+// CHAOS-4733: that conjunction is a FLOOR under the cohort's own claim, not
+// its exact definition. A discovery-level cap -- the whole cohort truncated
+// BEFORE any group existed -- is a fact no individual group's own
+// Total-vs-presented ratio can carry (a freshly built group's Total equals
+// its member count, and Validate forbids Truncated=true there), so the
+// cohort can independently be MORE conservative than its groups: Complete
+// false, or Truncated true, while every group looks complete on its own.
+// What the groups forbid is the cohort claiming LESS: Complete=true is
+// invalid unless every group is complete, and Truncated=false is invalid
+// while any group is truncated. See ContextFabricCohort.validate and
+// ContextFabricCohortGroup.Total's own doc comment.
 
 // ContextFabricCohortGroup is one group of a grouped cohort answer -- for a
 // "per team" question, one team and the members that belong to it.
@@ -50,10 +64,29 @@ type ContextFabricCohortGroup struct {
 	// Complete and Truncated are this group's OWN completeness, which is
 	// the representation the flat booleans could not express. They are
 	// mutually exclusive, exactly as they are on the cohort.
+	//
+	// CHAOS-4733: Complete carries the pre-grouping, discovery-level
+	// completeness too (a group built from a discovery-capped cohort is
+	// never Complete=true), but Truncated does NOT -- Truncated is
+	// specifically "this group's own MemberCanonicalIDs were trimmed below
+	// its Total" (Validate enforces Truncated => Total >
+	// len(MemberCanonicalIDs)), true only once narrowing has actually
+	// shrunk this group. A discovery-level cap that happened before this
+	// group existed is carried on the COHORT's own Truncated instead
+	// (option (b) of CHAOS-4733's acceptance criteria) -- a reader must
+	// read cohort.truncated, not assume a capped discovery always shows up
+	// as some group's truncated=true.
 	Complete  bool `json:"complete"`
 	Truncated bool `json:"truncated"`
-	// Total is this group's member count BEFORE any narrowing, so a caller
-	// reading a truncated group still sees the true size. It is never less
+	// Total is this group's member count AS DISCOVERED -- as of when this
+	// group was BUILT, before any narrowing. It is not a claim about how
+	// many projects the team owns in the world, and it is not adjusted when
+	// a discovery-level cap upstream (before this group existed) may have
+	// left members belonging to this team undiscovered entirely -- that
+	// possibility is disclosed via Complete and the cohort's own Truncated,
+	// never by inflating Total past what was actually seen. A later
+	// narrowing lowers the listed members and leaves Total where it was,
+	// which is what makes ITS truncation disclosure true. It is never less
 	// than len(MemberCanonicalIDs).
 	Total int `json:"total"`
 }

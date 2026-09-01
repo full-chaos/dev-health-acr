@@ -195,11 +195,22 @@ func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
 		}
 	}
 	// CHAOS-4636: the group axis must close over the member list above --
-	// every named member exists -- and the cohort-level booleans must be
-	// the conjunction the design defines, not an independent claim. A
-	// grouped cohort whose Complete said something its groups did not is
-	// exactly the group-blind read this slice exists to prevent, so it is
-	// refused here rather than disclosed.
+	// every named member exists.
+	//
+	// CHAOS-4733: the cohort-level booleans must be AT LEAST AS
+	// CONSERVATIVE as the conjunction/disjunction over the groups, not
+	// exactly equal to it. Equality was the original CHAOS-4636 rule, and
+	// it was wrong: a discovery-level cap (the whole cohort truncated
+	// BEFORE any group existed) is a fact no individual group's own
+	// Total-vs-presented ratio can carry -- a freshly built group's Total
+	// equals its member count, so Validate forbids it from claiming
+	// Truncated=true -- which means an honest cohort-level Truncated=true
+	// can legitimately have zero groups individually marked truncated. What
+	// the groups still forbid is the cohort claiming LESS than they show:
+	// Complete=true is refused unless every group is complete (a grouped
+	// cohort whose Complete said something its groups did not is exactly
+	// the group-blind read this slice exists to prevent), and Truncated
+	// false is refused while any group is truncated.
 	if len(c.Groups) > 0 {
 		if len(c.Groups) > 250 {
 			return fmt.Errorf("cohort violates v1 bounds")
@@ -207,9 +218,12 @@ func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
 		if err := ValidateCohortGroups(c.Groups, c.Members); err != nil {
 			return fmt.Errorf("groups: %w", err)
 		}
-		complete, truncated := CohortCompletenessFromGroups(c.Groups)
-		if c.Complete != complete || c.Truncated != truncated {
-			return fmt.Errorf("grouped cohort completeness (complete=%v truncated=%v) must be the conjunction over its groups (complete=%v truncated=%v)", c.Complete, c.Truncated, complete, truncated)
+		groupComplete, groupTruncated := CohortCompletenessFromGroups(c.Groups)
+		if c.Complete && !groupComplete {
+			return fmt.Errorf("cohort claims complete=true but its groups do not (group-derived complete=%v)", groupComplete)
+		}
+		if groupTruncated && !c.Truncated {
+			return fmt.Errorf("cohort claims truncated=false but a group is truncated (group-derived truncated=%v)", groupTruncated)
 		}
 	}
 	for _, exclusion := range c.Exclusions {

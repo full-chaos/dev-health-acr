@@ -88,6 +88,21 @@ type cohortGroupAssignment struct {
 // is not a grouped answer; falling back to the flat one is the honest
 // degradation, and the plan's own validation is what then reports that the
 // group axis went unsatisfied.
+//
+// CHAOS-4733: every returned group's Complete is seeded from cohort.Complete
+// as it stands on entry -- the DISCOVERY-level (pre-grouping) flag
+// DiscoveredCohort or a truncated census set, not a bare true. A discovery
+// cap is a cap on the WHOLE cohort before any group exists, so a member
+// never discovered could belong to any group; no group built from a capped
+// cohort may claim Complete=true. Truncated is deliberately NOT seeded the
+// same way -- it stays false here, because Truncated is this group's own
+// Total-vs-presented signal (see ContextFabricCohortGroup's doc comment) and
+// nothing has trimmed anything yet; the discovery-level truncation is
+// preserved at the COHORT level instead (ApplyGroupedCohortCompleteness).
+// Together these are what make grouping a CONSERVATIVE fold rather than a
+// rewrite: cohort.Complete can come back true after grouping only if it was
+// already true before grouping, and cohort.Truncated never comes back false
+// if it was already true.
 func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (groups []contractsv1.ContextFabricCohortGroup, ungrouped int) {
 	if plan.GroupKind == "" || cohort == nil || len(cohort.Members) == 0 {
 		return nil, 0
@@ -142,10 +157,32 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 			// leaves Total where it was, which is what makes the
 			// truncation disclosure true.
 			Total: len(members),
-			// Complete as built: every member this group could place is
-			// listed. Narrowing is what flips this, and it flips it
-			// explicitly.
-			Complete:  true,
+			// Complete as built INHERITS the pre-grouping cohort's own
+			// discovery-level completeness (CHAOS-4733), never a bare
+			// true. cohort.Members here is the set discovery actually
+			// returned; if discovery capped it (cohort.Truncated) or a
+			// truncated census left it incomplete (!cohort.Complete), an
+			// undiscovered member could belong to ANY group -- there is no
+			// way to know which -- so no group can honestly claim
+			// completeness either. Narrowing (NarrowGroupedCohort) ANDs a
+			// further drop onto this same field; it must start from an
+			// honest value or "every group survives narrowing" would still
+			// read Complete=true over a cohort that was never fully seen.
+			Complete: cohort.Complete,
+			// Truncated stays false here on purpose (CHAOS-4733): it is
+			// this group's OWN presented-vs-Total signal (Truncated implies
+			// Total > len(MemberCanonicalIDs), enforced by
+			// ContextFabricCohortGroup.Validate), and nothing has trimmed
+			// this group relative to its own Total yet -- Total was just
+			// set to len(members) two lines up. A discovery-level cap that
+			// happened BEFORE any group existed is not a fact about any
+			// ONE group's presented-vs-total ratio, so it cannot be
+			// expressed here without breaking that invariant; it is
+			// carried instead as the cohort-level Truncated signal (see
+			// ApplyGroupedCohortCompleteness) -- option (b) of CHAOS-4733's
+			// acceptance criteria, not (a). NarrowGroupedCohort is the only
+			// place that legitimately sets a group's Truncated true, and it
+			// does so by actually shrinking MemberCanonicalIDs below Total.
 			Truncated: false,
 		})
 	}
@@ -230,19 +267,43 @@ func firstRowString(row FactValueRow, columns []string) (string, bool) {
 	return "", false
 }
 
-// ApplyGroupedCohortCompleteness rewrites the cohort-level booleans as the
-// conjunction over the groups.
+// ApplyGroupedCohortCompleteness FOLDS the cohort-level booleans down to the
+// conjunction/disjunction over the groups -- it narrows what is already
+// there, it does not replace it.
 //
 // This is what stops an old reader going group-blind. Complete over the flat
 // union cannot say "team A complete, team B truncated"; defining it as "every
 // group complete" means a reader that ignores Groups gets a CONSERVATIVE
 // answer -- never Complete: true over a partially-truncated union -- rather
 // than a boolean that happened to describe only whichever group came first.
+//
+// CHAOS-4733: this reads cohort.Complete/cohort.Truncated as they stand ON
+// ENTRY -- at the first call in a request, that is the PRE-GROUPING,
+// discovery-level state DiscoveredCohort (or a truncated census) set, before
+// any group existed -- and ANDs/ORs the group-derived values into them,
+// rather than overwriting them outright. A discovery-level truncation is a
+// fact about the WHOLE cohort before grouping, not a fact any one group's
+// own Total/MemberCanonicalIDs ratio can carry (see
+// ContextFabricCohortGroup.Total's doc comment: a group whose Total equals
+// its member count cannot legally claim Truncated=true), so it is preserved
+// here, at the cohort level, instead of being pushed into the groups --
+// CHAOS-4733 acceptance criterion 3's option (b). Complete happens to
+// reconcile with the group conjunction too, because BuildCohortGroups also
+// seeds every group's own Complete from this same pre-grouping value; the OR
+// on Truncated is what a pure group-only derivation could never express.
+//
+// Called a second time after stage-2/3 narrowing (over the NARROWED groups),
+// this composes correctly for the same reason: it ANDs/ORs onto whatever the
+// first call already produced, so a later, less-restrictive group state can
+// never re-loosen an earlier, more-restrictive one -- only narrowing itself
+// (a real trim) can tighten it further.
 func ApplyGroupedCohortCompleteness(cohort *Cohort) {
 	if cohort == nil || len(cohort.Groups) == 0 {
 		return
 	}
-	cohort.Complete, cohort.Truncated = contractsv1.CohortCompletenessFromGroups(cohort.Groups)
+	groupComplete, groupTruncated := contractsv1.CohortCompletenessFromGroups(cohort.Groups)
+	cohort.Complete = cohort.Complete && groupComplete
+	cohort.Truncated = cohort.Truncated || groupTruncated
 }
 
 // NarrowGroupedCohort selects which members a grouped cohort's budget

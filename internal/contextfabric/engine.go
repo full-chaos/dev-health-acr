@@ -1679,12 +1679,32 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// narrowing would leave the surviving members carrying scores computed
 	// against members that are no longer in the answer.
 	if graphContext.Cohort != nil && plan.GroupKind != "" {
+		// CHAOS-4733: captured BEFORE BuildCohortGroups/
+		// ApplyGroupedCohortCompleteness run, so the telemetry below reports
+		// the pre-grouping, discovery-level state -- the exact signal that
+		// used to have no surviving representation once grouped.
+		preGroupingComplete, preGroupingTruncated := graphContext.Cohort.Complete, graphContext.Cohort.Truncated
 		groups, ungrouped := BuildCohortGroups(plan, graphContext.Cohort, facts.Facts)
 		if len(groups) > 0 {
 			cohort := *graphContext.Cohort
 			cohort.Groups = groups
 			ApplyGroupedCohortCompleteness(&cohort)
 			graphContext.Cohort = &cohort
+			groupsMarkedIncomplete := 0
+			for _, group := range groups {
+				if !group.Complete {
+					groupsMarkedIncomplete++
+				}
+			}
+			e.recordGroupedCohortCompleteness(ctx, principal, GroupedCohortCompletenessEvent{
+				Family:                 plan.Family,
+				PreGroupingComplete:    preGroupingComplete,
+				PreGroupingTruncated:   preGroupingTruncated,
+				GroupCount:             len(groups),
+				GroupsMarkedIncomplete: groupsMarkedIncomplete,
+				Complete:               cohort.Complete,
+				Truncated:              cohort.Truncated,
+			})
 		} else if ungrouped > 0 {
 			// The group axis was planned and NOTHING could be placed. The
 			// answer degrades to the flat cohort it would have been, and

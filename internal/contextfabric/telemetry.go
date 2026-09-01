@@ -647,3 +647,23 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric plan narrowing", args...)
 }
+
+// RecordGroupedCohortCompleteness (CHAOS-4733) emits one grouped-cohort
+// completeness fold: whether the pre-grouping cohort was truncated at
+// discovery, how many resulting groups came out marked incomplete, and the
+// final cohort-level flags. Closed enums and counts only, same discipline as
+// RecordPlanNarrowing.
+func (t SlogEngineTelemetry) RecordGroupedCohortCompleteness(ctx context.Context, principal storage.Principal, event GroupedCohortCompletenessEvent) {
+	args := []any{
+		"org_id", principal.OrgID,
+		"family", string(event.Family),
+		"pre_grouping_complete", event.PreGroupingComplete,
+		"pre_grouping_truncated", event.PreGroupingTruncated,
+		"group_count", event.GroupCount,
+		"groups_marked_incomplete", event.GroupsMarkedIncomplete,
+		"complete", event.Complete,
+		"truncated", event.Truncated,
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric grouped cohort completeness", args...)
+}
