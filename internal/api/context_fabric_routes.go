@@ -481,6 +481,24 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 	if errors.As(err, &rejection) {
 		fields = append(fields, "rejection_reason", string(contextfabric.SynthesisRejectionReasonOf(err)))
 	}
+	// CHAOS-4726: a rejected synthesis never reaches stage 3, so
+	// RecordPlanNarrowing's "context fabric plan narrowing" assembled_result
+	// line -- the only place the narrowing basis was previously visible --
+	// is structurally absent for every synthesis_rejected 422 (40/40 live,
+	// proven on org 70d529e0). narrowing_basis is stage 1's always-declared
+	// order; narrowing_last_stage/narrowing_last_basis name whichever of
+	// stage 1/2 most recently narrowed before synthesis was invoked, empty
+	// when neither did. Present for ANY error at or after the synthesis
+	// call site (Engine.Investigate), not only a classified rejection --
+	// the state is equally true and equally diagnosable for an upstream
+	// synthesis fault.
+	if snapshot, ok := contextfabric.SynthesisNarrowingSnapshotOf(err); ok {
+		fields = append(fields,
+			"narrowing_basis", string(snapshot.DeclaredBasis),
+			"narrowing_last_stage", string(snapshot.LastStage),
+			"narrowing_last_basis", string(snapshot.LastBasis),
+		)
+	}
 	a.logger.Log(context.WithoutCancel(r.Context()), level, "context fabric investigation failed", fields...)
 }
 
