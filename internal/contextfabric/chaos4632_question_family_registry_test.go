@@ -168,6 +168,14 @@ func TestEveryFamilyDeclaresValidClosedVocabularyColumns(t *testing.T) {
 		if !validPlanBudgetProfile(definition.Budget) {
 			t.Errorf("family %q declares Budget %q, not a vocabulary member", definition.Family, definition.Budget)
 		}
+		// CHAOS-4735. The empty value is deliberately NOT a vocabulary
+		// member, so a family added later cannot inherit "no continuation"
+		// by forgetting the column -- it has to say `none` on purpose. This
+		// column is CONSUMED and reaches the 413 body, so an undeclared one
+		// would serve an empty token to a caller.
+		if !ValidNarrowingContinuationAxis(definition.NarrowerContinuationAxis) {
+			t.Errorf("family %q declares NarrowerContinuationAxis %q, not a vocabulary member", definition.Family, definition.NarrowerContinuationAxis)
+		}
 		for _, role := range definition.FactRoles {
 			if !validFactRole(role) {
 				t.Errorf("family %q declares FactRole %q, not a vocabulary member", definition.Family, role)

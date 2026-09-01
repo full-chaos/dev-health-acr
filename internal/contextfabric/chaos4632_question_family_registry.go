@@ -200,6 +200,93 @@ func validPlanBudgetProfile(value PlanBudgetProfile) bool {
 	}
 }
 
+// NarrowingContinuationAxis names WHICH structural dimension of a question
+// could be reduced to make its answer fit the response budget. Closed
+// vocabulary, declared here because it is a per-family property and the
+// registry is where a family's declared columns live.
+//
+// CHAOS-4735. This REPLACES `narrowerQuestionFor`, which switched on the
+// family and returned one of five fixed English sentences that the route
+// served verbatim as error.details.narrower_question in the 413 body. That
+// was the banned shape -- a vocabulary-to-sentence table in the engine, on a
+// user-facing wire -- under chris's rulings of 2026-08-31 13:35 and 13:40:
+// language is the model layer's job at BOTH boundaries.
+//
+// WHY A TOKEN AND NOT A SENTENCE. The old sentences carried two things mixed
+// together: a STRUCTURAL claim about what could be reduced, which the engine
+// genuinely knows because it planned the answer, and an ENGLISH rendering of
+// that claim, which the engine has no business authoring. The axis is the
+// first half alone. A consumer -- or synthesis, under the same guards as
+// coverage disclosures -- phrases it, or nothing is phrased at all.
+//
+// WHY IT LIVES IN THE REGISTRY AND NOT BESIDE THE REFUSAL. Reading the family
+// to pick an axis is still reading the family, and the stage-2 amendment
+// (design §13.4.3) keeps that read list closed at four purposes. A
+// `switch plan.Family` in the budget stage would be a FIFTH site and would
+// fail the sweep this ticket's criterion 4 installs -- correctly, because a
+// switch returning a token today is one sentence away from being the table
+// again. Declaring the axis as a registry column means the refusal LOOKS IT
+// UP instead of deciding it, which is the move `planBudget` already makes for
+// the budget profile.
+type NarrowingContinuationAxis string
+
+const (
+	// NarrowingContinuationNone: no axis can be named, so the refusal
+	// carries no continuation at all rather than a guess. The honest value
+	// for `unclassified`, where nothing about the question's shape was
+	// established in the first place.
+	NarrowingContinuationNone NarrowingContinuationAxis = "none"
+	// NarrowingContinuationEvidenceWindow: the same subject over less
+	// time. The only axis available when there is exactly one subject and
+	// the volume is in its facts.
+	NarrowingContinuationEvidenceWindow NarrowingContinuationAxis = "evidence_window"
+	// NarrowingContinuationResultCount: fewer members out of a discovered
+	// cohort. Available here and not under scope_anchor because the
+	// ranking is already computed, so a prefix of it is a real answer.
+	NarrowingContinuationResultCount NarrowingContinuationAxis = "result_count"
+	// NarrowingContinuationScopeAnchor: a narrower scope. Distinct from
+	// result_count because a scoped cohort is not ranked -- cutting the
+	// scope is the only principled reduction available to it.
+	NarrowingContinuationScopeAnchor NarrowingContinuationAxis = "scope_anchor"
+	// NarrowingContinuationGroupSelection: fewer groups. Decision D2
+	// forbids dropping a group silently, so naming the group axis to the
+	// caller is what remains once per-group narrowing is exhausted.
+	NarrowingContinuationGroupSelection NarrowingContinuationAxis = "group_selection"
+	// NarrowingContinuationComparisonPair: fewer subjects per comparison.
+	NarrowingContinuationComparisonPair NarrowingContinuationAxis = "comparison_pair"
+)
+
+var narrowingContinuationAxes = [...]NarrowingContinuationAxis{
+	NarrowingContinuationNone,
+	NarrowingContinuationEvidenceWindow,
+	NarrowingContinuationResultCount,
+	NarrowingContinuationScopeAnchor,
+	NarrowingContinuationGroupSelection,
+	NarrowingContinuationComparisonPair,
+}
+
+// NarrowingContinuationAxisCount is the closed vocabulary's size.
+const NarrowingContinuationAxisCount = len(narrowingContinuationAxes)
+
+// NarrowingContinuationAxisVocabulary returns the closed vocabulary in its
+// published order. The return type is an ARRAY, so the value is copied to the
+// caller and the vocabulary cannot be mutated in place.
+func NarrowingContinuationAxisVocabulary() [NarrowingContinuationAxisCount]NarrowingContinuationAxis {
+	return narrowingContinuationAxes
+}
+
+// ValidNarrowingContinuationAxis reports membership of the closed vocabulary.
+// The EMPTY value is NOT a member: a family that declared no axis is a
+// registry defect, and `none` is how "no axis" is said deliberately.
+func ValidNarrowingContinuationAxis(value NarrowingContinuationAxis) bool {
+	for _, member := range narrowingContinuationAxes {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
 // The two NEW axes §3 names for the scoped and grouped families.
 //
 // THESE ARE NOT WIRE VALUES IN THIS SLICE. ContextFabricStructureNeedKind
@@ -257,6 +344,15 @@ type QuestionFamilyDefinition struct {
 	RenderKinds []contractsv1.ContextFabricRenderKind
 	// Budget is the plan-time budget profile. Declared, not consumed.
 	Budget PlanBudgetProfile
+	// NarrowerContinuationAxis is the structural dimension a caller could
+	// reduce if this family's answer does not fit the response budget.
+	//
+	// CONSUMED, unlike most of this table: the planned budget refusal reads
+	// it (chaos4636_budget_stage3.go) and it reaches the 413 body as a
+	// closed token. Every family must declare one; `none` is the way to
+	// say there is no axis, and the registry test rejects the empty value
+	// so a new family cannot inherit "no continuation" by omission.
+	NarrowerContinuationAxis NarrowingContinuationAxis
 	// CompatibleShapes is §4.2's structural gate: which InvestigationShape
 	// values are consistent with this family.
 	//
@@ -305,6 +401,11 @@ var questionFamilyDefinitions = []QuestionFamilyDefinition{
 		},
 		Budget:           PlanBudgetSingleSubject,
 		CompatibleShapes: []InvestigationShape{ShapeSingleSubject},
+		// One subject already. The only thing left to reduce is how much
+		// history its facts cover -- which is exactly the live 413 this
+		// axis has to answer for: a single team, all_time, 12 workload
+		// facts assembling past the item ceiling.
+		NarrowerContinuationAxis: NarrowingContinuationEvidenceWindow,
 	},
 	{
 		Family:      QuestionFamilyDiscoveredCohortRanking,
@@ -323,6 +424,9 @@ var questionFamilyDefinitions = []QuestionFamilyDefinition{
 		},
 		Budget:           PlanBudgetFlatCohort,
 		CompatibleShapes: []InvestigationShape{ShapeDiscoveredCohort, ShapeOpen},
+		// The cohort IS ranked, so a shorter prefix of it is a true answer
+		// to the same question rather than a different question.
+		NarrowerContinuationAxis: NarrowingContinuationResultCount,
 	},
 	{
 		Family:      QuestionFamilyScopedCohortStatus,
@@ -349,6 +453,10 @@ var questionFamilyDefinitions = []QuestionFamilyDefinition{
 			contractsv1.ContextFabricRenderKindTable,
 		},
 		Budget: PlanBudgetFlatCohort,
+		// NOT result_count: a scoped cohort carries no ranking, so "the top
+		// few" would be an arbitrary cut presented as a selection. The
+		// scope is the caller's own term and is the honest thing to narrow.
+		NarrowerContinuationAxis: NarrowingContinuationScopeAnchor,
 		// Q-B's own replicates produced single_subject AND explicit_cohort
 		// for the SAME question -- both are listed, which is the honest
 		// statement of what this family is compatible with, and is also
@@ -378,6 +486,10 @@ var questionFamilyDefinitions = []QuestionFamilyDefinition{
 			contractsv1.ContextFabricRenderKindTable,
 		},
 		Budget: PlanBudgetGroupedCohort,
+		// Decision D2 forbids the engine dropping a group to fit, so once
+		// per-group narrowing is exhausted the group axis is the caller's
+		// to cut, not ours.
+		NarrowerContinuationAxis: NarrowingContinuationGroupSelection,
 		// Q-A's replicates produced discovered_cohort AND explicit_cohort
 		// for the SAME question.
 		CompatibleShapes: []InvestigationShape{ShapeDiscoveredCohort, ShapeExplicitCohort, ShapeOpen},
@@ -405,8 +517,11 @@ var questionFamilyDefinitions = []QuestionFamilyDefinition{
 			contractsv1.ContextFabricRenderKindTable,
 			contractsv1.ContextFabricRenderKindQuadrant,
 		},
-		Budget:           PlanBudgetMatchedPair,
-		CompatibleShapes: []InvestigationShape{ShapeExplicitCohort, ShapeSingleSubject},
+		Budget: PlanBudgetMatchedPair,
+		// Both sides must carry the same measures over the same window, so
+		// the pair count is the only dimension that can move.
+		NarrowerContinuationAxis: NarrowingContinuationComparisonPair,
+		CompatibleShapes:         []InvestigationShape{ShapeExplicitCohort, ShapeSingleSubject},
 	},
 	{
 		Family:      QuestionFamilyTrend,
@@ -427,6 +542,9 @@ var questionFamilyDefinitions = []QuestionFamilyDefinition{
 		},
 		Budget:           PlanBudgetSingleSubject,
 		CompatibleShapes: []InvestigationShape{ShapeSingleSubject, ShapeDiscoveredCohort},
+		// A trend is defined by its window; shortening it is the reduction
+		// that keeps the question intact.
+		NarrowerContinuationAxis: NarrowingContinuationEvidenceWindow,
 	},
 	{
 		Family:      QuestionFamilyInvestmentAllocation,
@@ -449,6 +567,9 @@ var questionFamilyDefinitions = []QuestionFamilyDefinition{
 		},
 		Budget:           PlanBudgetSingleSubject,
 		CompatibleShapes: []InvestigationShape{ShapeSingleSubject, ShapeOpen},
+		// "Where did the effort go" is a window question; the allocation
+		// denominator is the window itself.
+		NarrowerContinuationAxis: NarrowingContinuationEvidenceWindow,
 	},
 	{
 		Family:    QuestionFamilyUnclassified,
@@ -457,15 +578,19 @@ var questionFamilyDefinitions = []QuestionFamilyDefinition{
 		// "there is none". Nothing narrows, so ALL axes stay applicable
 		// and today's behaviour is unchanged, which is exactly what
 		// unclassified is for.
-		SubjectAxis:      SubjectAxisNone,
-		ApplicableAxes:   allStructureNeedKinds(),
-		AskOrder:         nil,
-		FactRoles:        nil,
-		RequireDrivers:   false,
-		RequireRanking:   false,
-		RenderKinds:      nil,
-		Budget:           PlanBudgetUnbounded,
-		CompatibleShapes: allInvestigationShapes(),
+		SubjectAxis:    SubjectAxisNone,
+		ApplicableAxes: allStructureNeedKinds(),
+		AskOrder:       nil,
+		FactRoles:      nil,
+		RequireDrivers: false,
+		RequireRanking: false,
+		RenderKinds:    nil,
+		Budget:         PlanBudgetUnbounded,
+		// Nothing about the question's shape was established, so no axis
+		// can be named. The refusal carries NO continuation rather than a
+		// guess -- "missing is not healthy" applies to advice too.
+		NarrowerContinuationAxis: NarrowingContinuationNone,
+		CompatibleShapes:         allInvestigationShapes(),
 	},
 }
 

@@ -1,0 +1,23 @@
+{
+  "schema_version": "error.v1",
+  "request_id": "req_01J0ACR004",
+  "error": {
+    "code": "invalid_request",
+    "message": "The Context Fabric answer did not fit the response budget",
+    "http_status": 413,
+    "retryable": false,
+    "details": {
+      "overrun": "items",
+      "measured_items": 41,
+      "measured_bytes": 0,
+      "max_items": 30,
+      "max_serialized_bytes": 1048576,
+      "question_family": "grouped_cohort_status",
+      "retry_attempted": true,
+      "narrower_continuation": {
+        "family": "grouped_cohort_status",
+        "axis": "group_selection"
+      }
+    }
+  }
+}

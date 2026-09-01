@@ -149,6 +149,22 @@ func TestStage3NamesWhyTheRetryWasDeclined(t *testing.T) {
 			if refusalEvent.Basis != contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical {
 				t.Fatalf("Basis = %q for a flat cohort, want canonical_id_lexical", refusalEvent.Basis)
 			}
+			// CHAOS-4735 criterion 6: the refusal telemetry carries the
+			// continuation it offered, as a closed token. Before this the
+			// event said which family refused and how badly, but not what
+			// the caller was told to do about it -- and the field that held
+			// that was free English, which cannot be a log dimension.
+			declared, found := LookupQuestionFamily(refusalEvent.Family)
+			if !found {
+				t.Fatalf("refusal event carries family %q, which has no registry row", refusalEvent.Family)
+			}
+			if refusalEvent.NarrowerContinuationAxis != declared.NarrowerContinuationAxis {
+				t.Fatalf("NarrowerContinuationAxis = %q, want the registry's declared %q for family %q",
+					refusalEvent.NarrowerContinuationAxis, declared.NarrowerContinuationAxis, refusalEvent.Family)
+			}
+			if !ValidNarrowingContinuationAxis(refusalEvent.NarrowerContinuationAxis) {
+				t.Fatalf("NarrowerContinuationAxis = %q is not a vocabulary member", refusalEvent.NarrowerContinuationAxis)
+			}
 		})
 	}
 }
@@ -239,8 +255,25 @@ func TestStage3RefusesWithAnExplanationWhenTheRetryStillDoesNotFit(t *testing.T)
 	if refusal.MeasuredItems <= refusal.MaxItems {
 		t.Fatalf("refusal reports %d measured items against a %d ceiling; it should exceed it", refusal.MeasuredItems, refusal.MaxItems)
 	}
-	if refusal.NarrowerQuestion == "" {
-		t.Fatal("the refusal names no narrower question; an unexplained 413 is exactly the status quo this replaces")
+	// CHAOS-4735: the refusal still EXPLAINS, but with a closed token rather
+	// than an English sentence the engine wrote. Asserting vocabulary
+	// MEMBERSHIP rather than non-emptiness is the point -- non-emptiness is
+	// what a re-introduced phrase table would also satisfy.
+	if !ValidNarrowingContinuationAxis(refusal.NarrowerContinuationAxis) {
+		t.Fatalf("NarrowerContinuationAxis = %q, not a member of the closed vocabulary; an unexplained 413 is the status quo this replaces, and free text is the shape it may not be replaced WITH", refusal.NarrowerContinuationAxis)
+	}
+	// And it is the family's DECLARED axis, not something re-derived at the
+	// refusal. This fixture's plan carries `unclassified`, whose declared
+	// axis is `none` -- which is the correct answer and a deliberate
+	// behaviour change: the deleted switch's DEFAULT arm handed unclassified
+	// questions "ask about a single subject, or a shorter evidence window",
+	// inventing advice for a question the engine had just failed to classify.
+	declared, found := LookupQuestionFamily(refusal.Family)
+	if !found {
+		t.Fatalf("refusal carries family %q, which has no registry row", refusal.Family)
+	}
+	if refusal.NarrowerContinuationAxis != declared.NarrowerContinuationAxis {
+		t.Fatalf("NarrowerContinuationAxis = %q for family %q, want the registry's declared %q", refusal.NarrowerContinuationAxis, refusal.Family, declared.NarrowerContinuationAxis)
 	}
 	if !refusal.RetryAttempted {
 		t.Fatal("RetryAttempted = false, but the deadline allowed a retry and there were members to narrow")
