@@ -1778,7 +1778,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	retryBase := assemblyParams.snapshot()
 	result, pendingTelemetry, err := e.synthesizeAndAssemble(ctx, principal, assemblyParams)
 	if err != nil {
-		return InvestigationResult{}, err
+		// CHAOS-4726: attach the narrowing state as of THIS call site --
+		// stage 1 and (if it ran) stage 2 are the only stages that can have
+		// acted before synthesis was invoked, and this is the last point in
+		// the pipeline where plan.Narrowing is both complete for that window
+		// and still in scope. Every path out of synthesizeAndAssemble on
+		// error, rejection included, passes through here.
+		return InvestigationResult{}, withSynthesisNarrowingSnapshot(err, plan)
 	}
 	pendingTelemetry.CohortRanked = rankedForServedResult
 	// CHAOS-4636 STAGE 3 -- measure the ASSEMBLED result and, if it does not

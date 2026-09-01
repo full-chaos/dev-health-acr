@@ -162,7 +162,14 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		event.RetryFailed = true
 		event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 		e.recordPlanNarrowing(ctx, principal, event)
-		return InvestigationResult{}, assemblyTelemetry{}, retryErr
+		// CHAOS-4726 codex round 1: the FIRST synthesis call's rejection is
+		// caught at the Investigate call site (engine.go), but this retry
+		// call is a SECOND, separate invocation that can itself be rejected
+		// -- and plan.Narrowing already carries the assembled_result step
+		// recorded just above, so this is its own accurate "state right
+		// before this synthesis call" snapshot, not a stale reuse of the
+		// first call's.
+		return InvestigationResult{}, assemblyTelemetry{}, withSynthesisNarrowingSnapshot(retryErr, *plan)
 	}
 	// Finalize the retry too, or the second pass repeats round 1 finding 1's
 	// defect: measuring a pre-final shape and serving a larger one.
