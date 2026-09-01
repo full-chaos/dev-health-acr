@@ -550,4 +550,12 @@ func TestHealthProviderProjectReadsDailyHealthSeries(t *testing.T) {
 	if got := rows[0].Fields["severity"].String; got == nil || *got != "high" {
 		t.Fatalf("daily_health rows[0].severity = %#v, want high (the severity of the scope that produced the max risk)", rows[0].Fields["severity"])
 	}
+	// CHAOS-4681: before this ticket, a project's top-level Fields carried
+	// no scalar matching daily_health's sole declared Measure --
+	// genkitruntime.modelFacingFacts drops daily_health itself before
+	// synthesis, so a project-subject health trend could never be claimed
+	// at all. The freshest day is now copied in under its own field names.
+	if fact.Fields["compounding_risk"].Number == nil || *fact.Fields["compounding_risk"].Number != 0.71 {
+		t.Fatalf("compounding_risk = %#v, want a scalar sibling matching the declared measure (0.71)", fact.Fields["compounding_risk"])
+	}
 }

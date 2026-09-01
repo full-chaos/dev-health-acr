@@ -525,6 +525,17 @@ ORDER BY project_key, scope, scope_id`)
 	// readScope's own note and chaos4645_health_daily_test.go's pin), and
 	// this is a genuinely SEPARATE field (daily_health) on the SAME fact, so
 	// it cannot move what healthRiskSignal reads.
+	//
+	// CHAOS-4681 note: unlike the team subject, this PROJECT rollup's
+	// top-level Fields did not carry "severity" or "compounding_risk" before
+	// this ticket, so healthRiskSignal never saw a project-subject FactHealth
+	// fact carry either. Below, the freshest daily_health day is now copied
+	// in under its own field names (metrics.go's readRepositoryMetrics
+	// idiom) -- healthRiskSignal is subject-kind-blind, so it WOULD start
+	// reading a project member's severity if a project-kind Cohort ever
+	// existed. None does today (no production caller constructs
+	// `Cohort{Kind: SubjectProject}`), so current RankCohort behavior is
+	// unaffected; flagged for whoever adds project cohorts next.
 	dailyByProject, seriesErr := p.queryProjectHealthDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
 		return rowCount, false, seriesErr
@@ -605,6 +616,17 @@ ORDER BY project_key, scope, scope_id`)
 			if dailyOmitted > 0 {
 				breakdownTruncated = true
 				fields["daily_health_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+			}
+			// CHAOS-4681: same gap and same fix as readProjectWorkload's
+			// identical note -- a project's top-level fields carried no
+			// scalar matching daily_health's sole declared Measure
+			// (compounding_risk; severity is CHAOS-4680's Observation, not a
+			// Measure, so it does not need one), so a trend could never be
+			// claimed here. dailyByProject's own ORDER BY ... DESC makes
+			// index 0 the freshest day; copied under its own field names,
+			// metrics.go's readRepositoryMetrics idiom.
+			for name, value := range dailyByProject[projectKey][0].toFactValueRow().Fields {
+				fields[name] = value
 			}
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{

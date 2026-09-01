@@ -488,6 +488,20 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 			if dailyOmitted > 0 {
 				fields["daily_workload_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
 			}
+			// CHAOS-4681: the project rollup declared a time_series but named
+			// no scalar sibling matching any of its Measures -- unlike the
+			// team subject a few lines up (which already carries
+			// throughput_mean/throughput_stddev/backlog_size at the top
+			// level), a project's ONLY top-level fields before this were
+			// rollup_basis/team_count/basis/team_breakdown, so a trend could
+			// never be claimed here at all: modelFacingFacts drops
+			// daily_workload before synthesis, and nothing else names a
+			// measure. Same idiom metrics.go's readRepositoryMetrics already
+			// uses: the freshest day (dailyByProject's own ORDER BY ... DESC)
+			// copied in under its own field names.
+			for name, value := range dailyByProject[projectKey][0].toFactValueRow().Fields {
+				fields[name] = value
+			}
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactWorkload, Subject: subject, Fields: fields,

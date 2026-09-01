@@ -338,13 +338,20 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 		return 0, false, err
 	}
 	// CHAOS-4645, design doc §5.2: additive, off the SAME project-identity
-	// join -- never changing an existing field. FactReadiness carries no
-	// project-level RankCohort signal (readinessGapSignal's numberField read
-	// of "estimate_coverage_ratio" never matches this fact: this rollup's
-	// Fields never set that key -- see readinessGapSignal's own doc comment
-	// and TestRankCohortReadinessUntouchedByDailySeriesField), so there is
-	// nothing to pin for the project shape beyond the team pin already
-	// covers.
+	// join -- never changing an existing field.
+	//
+	// UPDATED for CHAOS-4681: this rollup's top-level Fields NOW sets
+	// "estimate_coverage_ratio" (the freshest daily_readiness day, copied in
+	// below under its own field name -- metrics.go's readRepositoryMetrics
+	// idiom), so the claim this comment used to make here no longer holds.
+	// readinessGapSignal's numberField read of that key is subject-kind-blind
+	// (it scans every FactReadiness fact in the member's own slice), so it
+	// WOULD pick this up if a project-kind Cohort ever existed -- none does
+	// today (no production caller constructs `Cohort{Kind: SubjectProject}`,
+	// confirmed by repository-wide search), so RankCohort's current team-only
+	// behavior, and TestRankCohortReadinessUntouchedByDailySeriesField's own
+	// team-cohort fixture, are both unaffected. Flagged here rather than left
+	// silently stale, for whoever adds project cohorts next.
 	dailyByProject, seriesErr := p.queryProjectReadinessDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
 		return 0, false, seriesErr
@@ -453,6 +460,15 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 			if dailyOmitted > 0 {
 				breakdownTruncated = true
 				fields["daily_readiness_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+			}
+			// CHAOS-4681: same gap and same fix as readProjectWorkload's
+			// identical note -- a project's top-level fields carried no
+			// scalar matching any of daily_readiness's declared Measures, so
+			// a trend could never be claimed here. dailyByProject's own
+			// ORDER BY ... DESC makes index 0 the freshest day; copied under
+			// its own field names, metrics.go's readRepositoryMetrics idiom.
+			for name, value := range dailyByProject[projectKey][0].toFactValueRow().Fields {
+				fields[name] = value
 			}
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
