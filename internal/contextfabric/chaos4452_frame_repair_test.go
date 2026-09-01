@@ -347,6 +347,141 @@ func TestRepairBoundPermitsAGoalRemovalTheInvariantNames(t *testing.T) {
 	}
 }
 
+// TestRepairBoundRefusesAKindChangeLicensedOnlyByAVariantRead is a
+// SELF-FOUND defect, closed before review. It is recorded as such rather
+// than quietly fixed.
+//
+// The first implementation computed "does this invariant name the Kind?"
+// as `reads[subject_expression_kind] || reads[subject_expression_variant]`.
+// Six phase-A1 invariants read the VARIANT (I2, I3, I4, I5, I6, I19), so
+// every one of them silently licensed a WHOLESALE Kind change. I6's
+// condition is about GroupKind and MemberKind -- fields INSIDE the grouped
+// variant -- and says nothing about which variant the frame is; letting
+// "you grouped a kind by itself" be repaired into a different topology is
+// exactly the reinterpretation §13.6 rule 2 exists to forbid.
+//
+// The fix reads the discriminator alone. This test is RED against the
+// pre-fix predicate.
+func TestRepairBoundRefusesAKindChangeLicensedOnlyByAVariantRead(t *testing.T) {
+	// I6: grouped_members with GroupKind == MemberKind.
+	proposed := QuestionFrame{
+		Goals: []InvestigationGoal{GoalAssessState},
+		SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionGroupedMembers,
+			Grouped: &GroupedSetExpression{
+				GroupKind:  contractsv1.ContextFabricSubjectTeam,
+				MemberKind: contractsv1.ContextFabricSubjectTeam,
+			},
+		},
+		Temporal: TemporalIntentCurrent,
+	}
+	failure, bad := ValidateFramePhaseA1(proposed)
+	if !bad || failure.Invariant != FrameInvariantI6 {
+		t.Fatalf("precondition: want an I6 failure, got %q/%v", failure.Invariant, bad)
+	}
+
+	// A "repair" that abandons the grouping entirely and answers a
+	// single-subject question instead.
+	reinterpreted := QuestionFrame{
+		Goals: []InvestigationGoal{GoalAssessState},
+		SubjectExpression: SubjectExpression{
+			Kind:  SubjectExpressionNamed,
+			Named: &NamedSubjectExpression{Terms: []string{"the team"}},
+		},
+		Temporal: TemporalIntentCurrent,
+	}
+	if violation := CheckFrameRepairBound(proposed, reinterpreted, failure); violation != FrameRepairBoundKindChanged {
+		t.Fatalf("bound violation = %q, want %q -- I6 names GroupKind/MemberKind, not the union discriminator, so it may not license a topology change",
+			violation, FrameRepairBoundKindChanged)
+	}
+
+	// The legitimate I6 repair -- correcting MemberKind inside the SAME
+	// variant -- must still be accepted, or the bound is too tight again.
+	corrected := QuestionFrame{
+		Goals: []InvestigationGoal{GoalAssessState},
+		SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionGroupedMembers,
+			Grouped: &GroupedSetExpression{
+				GroupKind:  contractsv1.ContextFabricSubjectTeam,
+				MemberKind: contractsv1.ContextFabricSubjectProject,
+			},
+		},
+		Temporal: TemporalIntentCurrent,
+	}
+	if violation := CheckFrameRepairBound(proposed, corrected, failure); violation != FrameRepairBoundNone {
+		t.Fatalf("bound violation = %q on the legitimate in-variant repair, want none", violation)
+	}
+}
+
+// TestRepairBoundRefusesAnUnnamedVariantRewrite is the second half of the
+// same self-found defect.
+//
+// §13.6 rule 2's FIRST sentence is the general rule -- "the repair call may
+// only supply or correct the FIELDS THE FAILED INVARIANT NAMES" -- and the
+// Goals/Kind clause is its most-cited instance, not its whole extent. The
+// first implementation pinned only Goals, Kind, Emphasis, Dimensions and
+// Temporal, which left the VARIANT'S OWN CONTENTS rewritable on any
+// failure whose invariant does not read them. Rewriting the anchor terms
+// of a question is talking yourself into a different question just as
+// surely as changing the Kind is.
+func TestRepairBoundRefusesAnUnnamedVariantRewrite(t *testing.T) {
+	// I14 reads Goals, Emphasis and the derived obligations -- NOT the
+	// subject expression.
+	proposed := QuestionFrame{
+		Goals: []InvestigationGoal{GoalAssessState},
+		SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionChildrenOfScope,
+			Scoped: &ScopedSetExpression{
+				AnchorTerms: []string{"fullchaos team"},
+				MemberKind:  contractsv1.ContextFabricSubjectProject,
+			},
+		},
+		Temporal: TemporalIntentCurrent,
+		Emphasis: []AnswerEmphasis{EmphasisNegativeOutliers},
+	}
+	failure := FrameValidationFailure{Invariant: FrameInvariantI14, Phase: FrameValidationPhaseA2, Detail: FrameFailureEmphasisNeedsRanking}
+
+	// Same Kind, same variant type -- a DIFFERENT team, and a different
+	// member kind. A silently different question.
+	rewritten := proposed
+	rewritten.Goals = []InvestigationGoal{GoalAssessState, GoalRankOrSurvey}
+	rewritten.SubjectExpression = SubjectExpression{
+		Kind: SubjectExpressionChildrenOfScope,
+		Scoped: &ScopedSetExpression{
+			AnchorTerms: []string{"platform team"},
+			MemberKind:  contractsv1.ContextFabricSubjectRepository,
+		},
+	}
+	if violation := CheckFrameRepairBound(proposed, rewritten, failure); violation != FrameRepairBoundUnnamedFieldChanged {
+		t.Fatalf("bound violation = %q, want %q -- I14 does not read the subject expression, so its repair may not rewrite the anchor or the member kind",
+			violation, FrameRepairBoundUnnamedFieldChanged)
+	}
+
+	// The legitimate I14 repair -- add the goal, touch nothing else -- is
+	// still accepted.
+	widened := proposed
+	widened.Goals = []InvestigationGoal{GoalAssessState, GoalRankOrSurvey}
+	if violation := CheckFrameRepairBound(proposed, widened, failure); violation != FrameRepairBoundNone {
+		t.Fatalf("bound violation = %q on the legitimate goal-widening repair, want none", violation)
+	}
+}
+
+// TestRepairBoundRefusesAnUnnamedDimensionWidening. A repair that ADDS a
+// dimension nobody asked about is not narrowing, but it is still answering
+// a question the user did not ask -- and a dimension adds an obligation
+// (§13.2.3 table 3), so it changes the plan.
+func TestRepairBoundRefusesAnUnnamedDimensionWidening(t *testing.T) {
+	proposed := discoveredTeamsEmphasisFrame(GoalAssessState)
+	failure := FrameValidationFailure{Invariant: FrameInvariantI14, Phase: FrameValidationPhaseA2}
+
+	widened := discoveredTeamsEmphasisFrame(GoalAssessState, GoalRankOrSurvey)
+	widened.Dimensions = []HealthDimension{HealthDimensionInvestmentBalance}
+
+	if violation := CheckFrameRepairBound(proposed, widened, failure); violation != FrameRepairBoundUnnamedFieldChanged {
+		t.Fatalf("bound violation = %q, want %q", violation, FrameRepairBoundUnnamedFieldChanged)
+	}
+}
+
 // TestRepairIsAttemptedExactlyOnce pins §13.6 rule 1. "Exactly one repair
 // attempt. Not k. A second attempt is a refusal." A repairer that returns
 // a still-invalid candidate must NOT be called again.
