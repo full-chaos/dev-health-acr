@@ -405,9 +405,10 @@ type recordingTelemetry struct {
 // coverageDisclosurePhrasingRecord (CHAOS-4690 Commit F) mirrors
 // bindingEpochDeltaRecord's own shape one field triple over.
 type coverageDisclosurePhrasingRecord struct {
-	outcome CoverageDisclosureOutcome
-	phrased int
-	total   int
+	outcome   CoverageDisclosureOutcome
+	violation CoverageDisclosureViolation
+	phrased   int
+	total     int
 }
 
 // windowCarryRecord (CHAOS-4360) mirrors priorSubjectReceiptSkipReasonRecord's
@@ -621,8 +622,8 @@ func (r *recordingTelemetry) RecordEvidenceLabelFallback(_ context.Context, _ st
 	r.evidenceLabelFallbacks = append(r.evidenceLabelFallbacks, count)
 }
 
-func (r *recordingTelemetry) RecordCoverageDisclosurePhrasing(_ context.Context, _ storage.Principal, outcome CoverageDisclosureOutcome, phrased, total int) {
-	r.coverageDisclosurePhrasings = append(r.coverageDisclosurePhrasings, coverageDisclosurePhrasingRecord{outcome: outcome, phrased: phrased, total: total})
+func (r *recordingTelemetry) RecordCoverageDisclosurePhrasing(_ context.Context, _ storage.Principal, outcome CoverageDisclosureOutcome, violation CoverageDisclosureViolation, phrased, total int) {
+	r.coverageDisclosurePhrasings = append(r.coverageDisclosurePhrasings, coverageDisclosurePhrasingRecord{outcome: outcome, violation: violation, phrased: phrased, total: total})
 }
 
 func mustEngineForPriorReceiptTest(t *testing.T, graph GraphReader, store InvestigationResultStore, telemetry EngineTelemetry) *Engine {

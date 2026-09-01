@@ -1410,11 +1410,21 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	// CHAOS-4690 Commit F (design §4.2): the coverage-disclosure guard
 	// runs AFTER result is fully composed -- result.Coverage carries the
 	// SAME merged, ordinal-DetailID-minted details the caller is about to
-	// serve, which is exactly what ref closure must check against (never
-	// input.Graph.Coverage/input.Facts.Coverage, the unmerged halves).
-	// Never rejects the answer: every branch below only decides whether
-	// Phrasing gets applied, never whether Synthesize returns an error.
-	outcome, violation := classifyCoverageDisclosures(draft, &result)
+	// serve.
+	//
+	// CHAOS-4734: the guard's universe is explicitly the MODEL-FACING
+	// detail_id set, never implicitly "whatever result.Coverage.Details
+	// happens to be". Today the two are the SAME set -- nothing narrows
+	// what synthesis is shown before this result is composed, and
+	// modelFacingCoverageDetailIDs below is deliberately built from this
+	// same result.Coverage.Details to keep that equivalence a byte-
+	// identical no-op (see chaos4734_coverage_disclosure_guard_test.go's
+	// no-op-today assertion). The day a narrower model-facing disclosure
+	// projection ships, this is the one line that changes: pass THAT
+	// projection's ids instead, and the guard starts catching a
+	// canonical-but-unshown detail_id it cannot distinguish today.
+	modelFacingCoverageDetailIDs := coverageDetailIDSet(result.Coverage.Details)
+	outcome, violation := classifyCoverageDisclosures(draft, &result, modelFacingCoverageDetailIDs)
 	if violation != "" {
 		// Content-safe by construction, same discipline as
 		// mergeCoverageDetails' own fail-open WARN above: org id and the
@@ -1426,7 +1436,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	}
 	if r.Telemetry != nil {
 		phrased, total := coverageDisclosurePhrasedCount(result.Coverage.Details)
-		r.Telemetry.RecordCoverageDisclosurePhrasing(ctx, principal, outcome, phrased, total)
+		r.Telemetry.RecordCoverageDisclosurePhrasing(ctx, principal, outcome, violation, phrased, total)
 	}
 	return result, nil
 }
@@ -1474,10 +1484,23 @@ type CoverageDisclosureViolation string
 
 const (
 	// CoverageDisclosureViolationUnknownDetailID: a disclosure's detail_id
-	// names no entry on result.Coverage.Details -- the ref-closure clause
-	// ("a disclosure must be traceable to the structured reason it
-	// phrases", design §4.2).
+	// names no entry on result.Coverage.Details at all -- unknown to the
+	// CANONICAL set, not merely to what the model was shown. The
+	// ref-closure clause ("a disclosure must be traceable to the
+	// structured reason it phrases", design §4.2).
 	CoverageDisclosureViolationUnknownDetailID CoverageDisclosureViolation = "unknown_detail_id"
+	// CoverageDisclosureViolationUnknownToModelFacingSet (CHAOS-4734): a
+	// disclosure's detail_id names a REAL, canonical entry on
+	// result.Coverage.Details, but one outside the model-facing id set
+	// this call actually showed synthesis. Distinct from
+	// UnknownDetailID because it is the more dangerous case: a model that
+	// pattern-guesses a canonical-but-unshown id (ids are minted as
+	// sequential cov-NN) cannot be told apart from one that genuinely read
+	// it, unless the guard checks the model-facing set specifically. Both
+	// violations land on the SAME whole-set-discard outcome
+	// (rejected_by_guard) -- this is a diagnosis label, not a different
+	// disposition.
+	CoverageDisclosureViolationUnknownToModelFacingSet CoverageDisclosureViolation = "unknown_to_model_facing_set"
 	// CoverageDisclosureViolationDuplicateDetailID: the same detail_id
 	// appears more than once in one disclosure set.
 	CoverageDisclosureViolationDuplicateDetailID CoverageDisclosureViolation = "duplicate_detail_id"
@@ -1502,21 +1525,40 @@ const (
 // and only genkitruntime's lenient parser can know which), and otherwise
 // defers to applyCoverageDisclosures for the guard-clause classification
 // against the ALREADY-composed result.
-func classifyCoverageDisclosures(draft SynthesisDraft, result *InvestigationResult) (CoverageDisclosureOutcome, CoverageDisclosureViolation) {
+//
+// modelFacingDetailIDs (CHAOS-4734) is passed straight through -- see
+// applyCoverageDisclosures' own doc comment for what it must be.
+func classifyCoverageDisclosures(draft SynthesisDraft, result *InvestigationResult, modelFacingDetailIDs map[string]struct{}) (CoverageDisclosureOutcome, CoverageDisclosureViolation) {
 	if draft.CoverageDisclosuresUndecodable {
 		return CoverageDisclosureDiscardedUndecodable, CoverageDisclosureViolationParseFailed
 	}
-	return applyCoverageDisclosures(result, draft.CoverageDisclosures)
+	return applyCoverageDisclosures(result, draft.CoverageDisclosures, modelFacingDetailIDs)
+}
+
+// coverageDetailIDSet builds the id-membership set applyCoverageDisclosures
+// checks a disclosure's DetailID against -- a plain helper so every caller
+// derives it the same way rather than inlining a map literal per call site.
+func coverageDetailIDSet(details []CoverageDetail) map[string]struct{} {
+	ids := make(map[string]struct{}, len(details))
+	for _, detail := range details {
+		ids[detail.DetailID] = struct{}{}
+	}
+	return ids
 }
 
 // applyCoverageDisclosures is the CHAOS-4690 Commit F guard (design §4.2).
-// It runs against result.Coverage.Details -- the SAME merged, ordinal
-// DetailID-minted set the caller is about to serve -- and enforces, in
-// order:
+// It enforces, in order:
 //
-//  1. every disclosure's DetailID names a detail on result.Coverage.Details
-//     (ref closure: "a disclosure must be traceable to the structured
-//     reason it phrases");
+//  1. every disclosure's DetailID is in modelFacingDetailIDs -- CHAOS-4734's
+//     ref-closure clause, corrected: "a disclosure must be traceable to a
+//     structured reason the MODEL WAS ACTUALLY SHOWN", not merely to one
+//     that exists somewhere in the canonical result. A detail_id absent
+//     from modelFacingDetailIDs is REJECTED regardless of whether it also
+//     names a real entry on result.Coverage.Details -- that split (canonical
+//     but unshown vs. unknown everywhere) is diagnosed via violation, but
+//     both are the same whole-set-discard disposition, because a model
+//     cannot legitimately reference a detail it was never given, canonical
+//     or not;
 //  2. no DetailID repeats within the set;
 //  3. Text is non-empty after trimming, trims to itself (no
 //     leading/trailing whitespace), and is at most
@@ -1526,6 +1568,14 @@ func classifyCoverageDisclosures(draft SynthesisDraft, result *InvestigationResu
 //  4. Text carries no Unicode digit rune anywhere -- quantities are the
 //     deterministic Label's job, never the model's.
 //
+// modelFacingDetailIDs MUST be a subset of result.Coverage.Details' own
+// DetailIDs -- it is derived FROM that set (today, coverageDetailIDSet of
+// the whole thing; after a narrower model-facing projection ships, of
+// whatever subset synthesis was actually shown). indexByDetailID below
+// still resolves against result.Coverage.Details, because accepting a
+// disclosure only proves WHICH detail to write Phrasing onto -- it does not
+// relax where that write is allowed to land.
+//
 // ANY violation on ANY entry discards the WHOLE set -- the same
 // OfferPhraser discipline classifyOfferPhrasingDraft applies
 // (chaos4171_offer_phrasing.go): a partially-trusted disclosure set is
@@ -1534,7 +1584,7 @@ func classifyCoverageDisclosures(draft SynthesisDraft, result *InvestigationResu
 // on success, survivors are written into their matching detail's Phrasing
 // field, in place. Pure and side-effect-free beyond that in-place write --
 // no logging, no telemetry -- so each clause is testable in isolation.
-func applyCoverageDisclosures(result *InvestigationResult, disclosures []CoverageDisclosure) (CoverageDisclosureOutcome, CoverageDisclosureViolation) {
+func applyCoverageDisclosures(result *InvestigationResult, disclosures []CoverageDisclosure, modelFacingDetailIDs map[string]struct{}) (CoverageDisclosureOutcome, CoverageDisclosureViolation) {
 	if len(disclosures) == 0 {
 		return CoverageDisclosureAbsent, ""
 	}
@@ -1545,9 +1595,16 @@ func applyCoverageDisclosures(result *InvestigationResult, disclosures []Coverag
 	seen := make(map[string]struct{}, len(disclosures))
 	targets := make([]int, 0, len(disclosures))
 	for _, disclosure := range disclosures {
-		idx, ok := indexByDetailID[disclosure.DetailID]
-		if !ok {
+		idx, canonical := indexByDetailID[disclosure.DetailID]
+		if !canonical {
+			// Unknown everywhere -- not even a real canonical detail.
 			return CoverageDisclosureRejectedByGuard, CoverageDisclosureViolationUnknownDetailID
+		}
+		if _, shown := modelFacingDetailIDs[disclosure.DetailID]; !shown {
+			// CHAOS-4734: real, canonical, but the model was never shown
+			// it -- the hallucinated-but-real reference this fix exists
+			// to catch, distinct from "unknown everywhere" above.
+			return CoverageDisclosureRejectedByGuard, CoverageDisclosureViolationUnknownToModelFacingSet
 		}
 		if _, duplicate := seen[disclosure.DetailID]; duplicate {
 			return CoverageDisclosureRejectedByGuard, CoverageDisclosureViolationDuplicateDetailID

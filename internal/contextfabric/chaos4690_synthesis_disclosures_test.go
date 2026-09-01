@@ -34,7 +34,7 @@ func twoDetailResult() *InvestigationResult {
 func TestApplyCoverageDisclosures_AbsentWhenNil(t *testing.T) {
 	t.Parallel()
 	result := twoDetailResult()
-	outcome, violation := applyCoverageDisclosures(result, nil)
+	outcome, violation := applyCoverageDisclosures(result, nil, coverageDetailIDSet(result.Coverage.Details))
 	if outcome != CoverageDisclosureAbsent || violation != "" {
 		t.Fatalf("applyCoverageDisclosures(nil) = (%q, %q), want (absent, \"\")", outcome, violation)
 	}
@@ -48,7 +48,7 @@ func TestApplyCoverageDisclosures_AbsentWhenNil(t *testing.T) {
 func TestApplyCoverageDisclosures_AbsentWhenEmpty(t *testing.T) {
 	t.Parallel()
 	result := twoDetailResult()
-	outcome, violation := applyCoverageDisclosures(result, []CoverageDisclosure{})
+	outcome, violation := applyCoverageDisclosures(result, []CoverageDisclosure{}, coverageDetailIDSet(result.Coverage.Details))
 	if outcome != CoverageDisclosureAbsent || violation != "" {
 		t.Fatalf("applyCoverageDisclosures([]) = (%q, %q), want (absent, \"\")", outcome, violation)
 	}
@@ -61,7 +61,7 @@ func TestApplyCoverageDisclosures_PhrasedWhenEveryDetailCovered(t *testing.T) {
 		{DetailID: "cov-01", Text: "Readiness data could not be reached this time."},
 		{DetailID: "cov-02", Text: "Status data was not part of this check."},
 	}
-	outcome, violation := applyCoverageDisclosures(result, disclosures)
+	outcome, violation := applyCoverageDisclosures(result, disclosures, coverageDetailIDSet(result.Coverage.Details))
 	if outcome != CoverageDisclosurePhrased || violation != "" {
 		t.Fatalf("applyCoverageDisclosures() = (%q, %q), want (phrased, \"\")", outcome, violation)
 	}
@@ -79,7 +79,7 @@ func TestApplyCoverageDisclosures_PartialAbsentWhenSomeDetailsUncovered(t *testi
 	disclosures := []CoverageDisclosure{
 		{DetailID: "cov-01", Text: "Readiness data could not be reached this time."},
 	}
-	outcome, violation := applyCoverageDisclosures(result, disclosures)
+	outcome, violation := applyCoverageDisclosures(result, disclosures, coverageDetailIDSet(result.Coverage.Details))
 	if outcome != CoverageDisclosurePartialAbsent || violation != "" {
 		t.Fatalf("applyCoverageDisclosures() = (%q, %q), want (partial_absent, \"\")", outcome, violation)
 	}
@@ -102,7 +102,7 @@ func TestApplyCoverageDisclosures_GuardUnknownDetailID(t *testing.T) {
 		{DetailID: "cov-01", Text: "Readiness data could not be reached this time."},
 		{DetailID: "cov-99", Text: "This detail does not exist."},
 	}
-	outcome, violation := applyCoverageDisclosures(result, disclosures)
+	outcome, violation := applyCoverageDisclosures(result, disclosures, coverageDetailIDSet(result.Coverage.Details))
 	if outcome != CoverageDisclosureRejectedByGuard || violation != CoverageDisclosureViolationUnknownDetailID {
 		t.Fatalf("applyCoverageDisclosures() = (%q, %q), want (rejected_by_guard, unknown_detail_id)", outcome, violation)
 	}
@@ -118,7 +118,7 @@ func TestApplyCoverageDisclosures_GuardDuplicateDetailID(t *testing.T) {
 		{DetailID: "cov-01", Text: "Readiness data could not be reached this time."},
 		{DetailID: "cov-01", Text: "A second, different thing about the same detail."},
 	}
-	outcome, violation := applyCoverageDisclosures(result, disclosures)
+	outcome, violation := applyCoverageDisclosures(result, disclosures, coverageDetailIDSet(result.Coverage.Details))
 	if outcome != CoverageDisclosureRejectedByGuard || violation != CoverageDisclosureViolationDuplicateDetailID {
 		t.Fatalf("applyCoverageDisclosures() = (%q, %q), want (rejected_by_guard, duplicate_detail_id)", outcome, violation)
 	}
@@ -139,7 +139,7 @@ func TestApplyCoverageDisclosures_GuardTextBound_Empty(t *testing.T) {
 		{DetailID: "cov-01", Text: "Readiness data could not be reached this time."},
 		{DetailID: "cov-02", Text: ""},
 	}
-	outcome, violation := applyCoverageDisclosures(result, disclosures)
+	outcome, violation := applyCoverageDisclosures(result, disclosures, coverageDetailIDSet(result.Coverage.Details))
 	if outcome != CoverageDisclosureRejectedByGuard || violation != CoverageDisclosureViolationTextBound {
 		t.Fatalf("applyCoverageDisclosures() = (%q, %q), want (rejected_by_guard, text_bound)", outcome, violation)
 	}
@@ -154,7 +154,7 @@ func TestApplyCoverageDisclosures_GuardTextBound_Untrimmed(t *testing.T) {
 	disclosures := []CoverageDisclosure{
 		{DetailID: "cov-01", Text: " Readiness data could not be reached this time."},
 	}
-	outcome, violation := applyCoverageDisclosures(result, disclosures)
+	outcome, violation := applyCoverageDisclosures(result, disclosures, coverageDetailIDSet(result.Coverage.Details))
 	if outcome != CoverageDisclosureRejectedByGuard || violation != CoverageDisclosureViolationTextBound {
 		t.Fatalf("applyCoverageDisclosures() = (%q, %q), want (rejected_by_guard, text_bound)", outcome, violation)
 	}
@@ -166,7 +166,7 @@ func TestApplyCoverageDisclosures_GuardTextBound_OverMaxLength(t *testing.T) {
 	disclosures := []CoverageDisclosure{
 		{DetailID: "cov-01", Text: strings.Repeat("a", contractsv1.ContextFabricCoverageDetailPhrasingMaxLength+1)},
 	}
-	outcome, violation := applyCoverageDisclosures(result, disclosures)
+	outcome, violation := applyCoverageDisclosures(result, disclosures, coverageDetailIDSet(result.Coverage.Details))
 	if outcome != CoverageDisclosureRejectedByGuard || violation != CoverageDisclosureViolationTextBound {
 		t.Fatalf("applyCoverageDisclosures() = (%q, %q), want (rejected_by_guard, text_bound)", outcome, violation)
 	}
@@ -178,7 +178,7 @@ func TestApplyCoverageDisclosures_TextAtMaxLengthIsAccepted(t *testing.T) {
 	disclosures := []CoverageDisclosure{
 		{DetailID: "cov-01", Text: strings.Repeat("a", contractsv1.ContextFabricCoverageDetailPhrasingMaxLength)},
 	}
-	outcome, violation := applyCoverageDisclosures(result, disclosures)
+	outcome, violation := applyCoverageDisclosures(result, disclosures, coverageDetailIDSet(result.Coverage.Details))
 	if outcome != CoverageDisclosurePartialAbsent || violation != "" {
 		t.Fatalf("applyCoverageDisclosures() = (%q, %q), want (partial_absent, \"\") -- exactly the max length must be accepted", outcome, violation)
 	}
@@ -190,7 +190,7 @@ func TestApplyCoverageDisclosures_GuardDigitsForbidden(t *testing.T) {
 	disclosures := []CoverageDisclosure{
 		{DetailID: "cov-01", Text: "3 readiness checks could not be reached."},
 	}
-	outcome, violation := applyCoverageDisclosures(result, disclosures)
+	outcome, violation := applyCoverageDisclosures(result, disclosures, coverageDetailIDSet(result.Coverage.Details))
 	if outcome != CoverageDisclosureRejectedByGuard || violation != CoverageDisclosureViolationDigitsForbidden {
 		t.Fatalf("applyCoverageDisclosures() = (%q, %q), want (rejected_by_guard, digits_forbidden)", outcome, violation)
 	}
@@ -203,7 +203,7 @@ func TestApplyCoverageDisclosures_GuardDigitsForbidden_WholeSetDiscardedIncludin
 		{DetailID: "cov-01", Text: "Readiness data could not be reached this time."},
 		{DetailID: "cov-02", Text: "This mentions a digit like 2 in passing."},
 	}
-	outcome, violation := applyCoverageDisclosures(result, disclosures)
+	outcome, violation := applyCoverageDisclosures(result, disclosures, coverageDetailIDSet(result.Coverage.Details))
 	if outcome != CoverageDisclosureRejectedByGuard || violation != CoverageDisclosureViolationDigitsForbidden {
 		t.Fatalf("applyCoverageDisclosures() = (%q, %q), want (rejected_by_guard, digits_forbidden)", outcome, violation)
 	}
@@ -219,7 +219,7 @@ func TestClassifyCoverageDisclosures_UndecodableTakesPrecedence(t *testing.T) {
 	t.Parallel()
 	result := twoDetailResult()
 	draft := SynthesisDraft{CoverageDisclosuresUndecodable: true}
-	outcome, violation := classifyCoverageDisclosures(draft, result)
+	outcome, violation := classifyCoverageDisclosures(draft, result, coverageDetailIDSet(result.Coverage.Details))
 	if outcome != CoverageDisclosureDiscardedUndecodable || violation != CoverageDisclosureViolationParseFailed {
 		t.Fatalf("classifyCoverageDisclosures() = (%q, %q), want (discarded_undecodable, parse_failed)", outcome, violation)
 	}

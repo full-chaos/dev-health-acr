@@ -491,10 +491,11 @@ func (t SlogEngineTelemetry) RecordEvidenceLabelFallback(ctx context.Context, pr
 // discarded_undecodable: neither degrades the served answer (every detail
 // still ships Label-only), it is an ordinary, expected shape an operator
 // may still want the rate of.
-func (t SlogEngineTelemetry) RecordCoverageDisclosurePhrasing(ctx context.Context, principal storage.Principal, outcome CoverageDisclosureOutcome, phrased, total int) {
+func (t SlogEngineTelemetry) RecordCoverageDisclosurePhrasing(ctx context.Context, principal storage.Principal, outcome CoverageDisclosureOutcome, violation CoverageDisclosureViolation, phrased, total int) {
 	args := append([]any{
 		"org_id", principal.OrgID,
 		"outcome", string(outcome),
+		"violation", string(violation),
 		"phrased", phrased,
 		"total", total,
 	}, requestIDLogAttrs(ctx)...)

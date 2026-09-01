@@ -730,6 +730,17 @@ type EngineTelemetry interface {
 	// how many of the result's coverage details ended up carrying a
 	// Phrasing (phrased) out of how many exist in total (total).
 	//
+	// violation (CHAOS-4734) is the closed CoverageDisclosureViolation
+	// naming WHY a rejected_by_guard outcome fired -- empty on every other
+	// outcome. Its two "unknown" members are what make the guard's fix
+	// countable from artifacts: UnknownToModelFacingSet is a canonical
+	// detail_id the model was never shown (a hallucinated-but-real
+	// reference -- the case this ticket's guard-universe fix exists to
+	// catch), UnknownDetailID is a detail_id that names nothing canonical
+	// at all. Before a narrower model-facing projection ships, the two
+	// converge to the same practical meaning; they diverge the moment one
+	// does, and an operator needs the split before that day, not after.
+	//
 	// Declared on THIS interface, not an optional side interface, for the
 	// same CHAOS-4085/CHAOS-4089 reason every sibling method above is: a
 	// branch whose telemetry sink can be omitted by a compiling
@@ -745,9 +756,9 @@ type EngineTelemetry interface {
 	// denominator every other outcome's rate is read against, not a
 	// signal worth suppressing.
 	//
-	// Content-safe by construction: a closed outcome enum and two counts
-	// only, never a detail_id, a phrasing's text, or a Label.
-	RecordCoverageDisclosurePhrasing(ctx context.Context, principal storage.Principal, outcome CoverageDisclosureOutcome, phrased, total int)
+	// Content-safe by construction: two closed enums and two counts only,
+	// never a detail_id, a phrasing's text, or a Label.
+	RecordCoverageDisclosurePhrasing(ctx context.Context, principal storage.Principal, outcome CoverageDisclosureOutcome, violation CoverageDisclosureViolation, phrased, total int)
 }
 
 // CohortRankedEvent is RecordCohortRanked's content-safe payload: counts and
