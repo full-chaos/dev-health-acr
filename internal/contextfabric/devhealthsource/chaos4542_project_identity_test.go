@@ -99,33 +99,33 @@ func TestChaos4542_TheProducerConsumesTheSharedIdentityHelpers(t *testing.T) {
 	if !strings.Contains(statement, readers.ProjectIdentityCatalogSQL()) {
 		t.Errorf("the producer does not use readers.ProjectIdentityCatalogSQL verbatim; a local copy would drift from the fact readers' definition of project identity\n%s", statement)
 	}
-	if !strings.Contains(statement, readers.ProjectIdentityMatchSQL("o", "project_ref")) {
+	// CHAOS-4750: the asserting arm matches BOTH the scope-arm and key-arm
+	// cases through one shared column (scope_value), not two separately
+	// spelled ON predicates -- see projectTeamsAssertingArm. The helper call
+	// itself still pins that the match target is p.scope, not a hand-rolled
+	// copy of it.
+	if !strings.Contains(statement, readers.ProjectIdentityMatchSQL("o", "scope_value")) {
 		t.Errorf("the producer does not use readers.ProjectIdentityMatchSQL\n%s", statement)
 	}
-	// The key-to-key arm must be present too. Arm A alone loses an
-	// ownership row whose project_id correlates with nothing while its
-	// project_key is the only column tying it to a project -- caught live
-	// by the "tied assertions resolve deterministically" fixture, which
-	// seeds exactly that shape.
-	//
-	// RESPELLED by defect 6, not relaxed: the arm now matches the key SCOPE
-	// ROW (o.project_key = p.scope, scope_kind = 'key') rather than
-	// p.project_key, which every scope row carries. The assertion keeps its
-	// original job -- this arm has been dropped three separate times -- and
-	// tracks the spelling that is now load-bearing.
-	if !strings.Contains(statement, "o.project_key = p.scope") {
-		t.Errorf("the producer dropped the key-to-key arm; ownership rows keyed only by project_key would vanish\n%s", statement)
+	// The key-to-key case must still be present too. The scope case alone
+	// loses an ownership row whose project_id correlates with nothing while
+	// its project_key is the only column tying it to a project -- caught
+	// live by the "tied assertions resolve deterministically" fixture,
+	// which seeds exactly that shape.
+	if !strings.Contains(statement, "'key' AS required_scope_kind") || !strings.Contains(statement, "p.scope_kind = o.required_scope_kind") {
+		t.Errorf("the producer dropped the key-to-key case; ownership rows keyed only by project_key would vanish\n%s", statement)
 	}
-	// Four arms now (CHAOS-4565 added the first retraction arm, CHAOS-4566
-	// added a second retraction arm for the project_ref-carried ambiguous
-	// key), unioned at ROW level: (arms - 1) arm-level UNION ALLs, plus one
-	// inside EVERY arm's own copy of the identity expansion -- arms A and B
-	// each embed projectIdentityWithWatermarkSQL() once, and arms C and D
-	// each embed ambiguousProjectIdentitySQL(), which itself wraps
-	// projectIdentityWithWatermarkSQL() once more. One internal UNION per
-	// arm, general in the arm count, not pinned to three.
-	if want := len(projectTeamsArms()) + (len(projectTeamsArms()) - 1); strings.Count(statement, "UNION ALL") != want {
-		t.Errorf("UNION ALL count = %d, want %d (one per arm from the identity expansion, plus one between each pair of arms)\n%s", strings.Count(statement, "UNION ALL"), want, statement)
+	// CHAOS-4750 collapsed the four CHAOS-4566 arms into two (asserting,
+	// retraction), each unioning its own two match variants at the
+	// OWNERSHIP row level instead of embedding a separate copy of the
+	// project source per variant. Three UNION ALLs per arm now: one between
+	// the two arms, one inside each arm's own ownership-side union (one per
+	// arm), and one inside each arm's single embedded copy of the identity
+	// expansion (again one per arm, since resolved/ambiguous each wrap
+	// ProjectIdentityCatalogSQL's own internal id/key union exactly once).
+	// (arms - 1) + arms + arms = 3*arms - 1, general in the arm count.
+	if want := 3*len(projectTeamsArms()) - 1; strings.Count(statement, "UNION ALL") != want {
+		t.Errorf("UNION ALL count = %d, want %d (arm-level, plus one ownership-side union and one identity-expansion union per arm)\n%s", strings.Count(statement, "UNION ALL"), want, statement)
 	}
 }
 
@@ -201,28 +201,39 @@ func TestChaos4542_KeyArmSelectsTheKeyScopeRowAndTheScopeArmDoesNot(t *testing.T
 	t.Parallel()
 	statement := projectTeamsStatement(cursorState{})
 	arms := projectTeamsArms()
-	// FOUR arms as of CHAOS-4566: scope, key, and TWO retraction arms --
-	// arm C (the ambiguous key lives in the ownership row's own
-	// project_key) and arm D (the ambiguous key arrives via project_ref
-	// while project_key is empty, R4 P2's shape).
-	if len(arms) != 4 {
-		t.Fatalf("expected four arms (scope, key, and two retraction arms), got %d", len(arms))
+	// TWO arms as of CHAOS-4750: the asserting arm (old scope + key arms,
+	// unioned at the ownership row level) and the retraction arm (old
+	// own-key + project_ref retraction arms, unioned the same way). Each
+	// still carries both of its two match variants -- the guards below
+	// check the variants directly, since there is no longer one arm per
+	// variant to index into.
+	if len(arms) != 2 {
+		t.Fatalf("expected two arms (asserting, retraction), got %d", len(arms))
 	}
 	for i, arm := range arms {
 		if !strings.Contains(statement, arm) {
 			t.Fatalf("arm %d is not in the assembled statement -- this test would be asserting about SQL the producer does not run", i)
 		}
 	}
-	asserting, retractionOwnKey, retractionViaRef := 0, 0, 0
+	asserting, retraction := 0, 0
 	for i, arm := range arms {
 		switch {
 		case strings.Contains(arm, "toUInt8(0) AS retraction_only"):
 			asserting++
-			if strings.Contains(arm, "o.project_key = p.project_key") {
-				t.Errorf("arm %d can ASSERT and joins p.project_key, which EVERY scope row carries -- an id row with the same key matches, which is defect 6", i)
+			// Defect 6 (CHAOS-4542): an arm that can ASSERT an edge must
+			// never resolve through p.project_key, a column EVERY scope row
+			// carries -- an id row with the same key would match. The
+			// asserting arm now names only p.scope and p.scope_kind, never
+			// p.project_key, so this is structural rather than a substring
+			// that could quietly stop matching anything.
+			if strings.Contains(arm, "p.project_key") {
+				t.Errorf("arm %d can ASSERT and references p.project_key, which EVERY scope row carries -- an id row with the same key matches, which is defect 6", i)
 			}
-			if strings.Contains(arm, "p.key_resolution_count") {
-				t.Errorf("arm %d can ASSERT and gates on key_resolution_count, a per-scope-row number read as if it described a key (TELEMETRY after v0.5.5)", i)
+			if strings.Contains(arm, "p.key_resolution_count") || strings.Contains(arm, "p.key_project_count") {
+				t.Errorf("arm %d can ASSERT and gates on a key-ambiguity count -- an asserting arm must never depend on ambiguity", i)
+			}
+			if !strings.Contains(arm, "'' AS required_scope_kind") || !strings.Contains(arm, "'key' AS required_scope_kind") {
+				t.Errorf("arm %d must carry both the unrestricted (scope) and 'key' (key) match variants, unioned at the ownership row level", i)
 			}
 		case strings.Contains(arm, "toUInt8(1) AS retraction_only"):
 			// SHAPE ONLY -- and read the warning before trusting it.
@@ -239,44 +250,37 @@ func TestChaos4542_KeyArmSelectsTheKeyScopeRowAndTheScopeArmDoesNot(t *testing.T
 			// C-arm predicate, so it stays green while the real integration
 			// test is red."
 			//
-			// So what this asserts is that the retraction arms are WIRED the
-			// way the design says. Whether either MATCHES ANYTHING is proved
-			// only by TestOwnershipProducerAgainstRealClickHouse's "a
-			// projected edge is retracted when its key becomes ambiguous"
+			// So what this asserts is that the retraction arm is WIRED the
+			// way the design says. Whether either variant MATCHES ANYTHING
+			// is proved only by TestOwnershipProducerAgainstRealClickHouse's
+			// "a projected edge is retracted when its key becomes ambiguous"
 			// and "...ambiguous key arrives via project_ref" subtests,
 			// against a real server. Do not read a green here as coverage of
 			// that.
+			retraction++
 			if !strings.Contains(arm, "p.key_project_count > 1") {
-				t.Errorf("arm %d is a retraction arm but does not fan across the ambiguous key partition -- then an ambiguous key produces no row at all and nothing can be retracted, which is the CHAOS-4565 defect unfixed", i)
+				t.Errorf("arm %d is the retraction arm but does not fan across the ambiguous key partition -- then an ambiguous key produces no row at all and nothing can be retracted, which is the CHAOS-4565 defect unfixed", i)
 			}
 			// The unsatisfiable predicate itself, banned by name so it cannot
 			// come back as an "obvious simplification".
 			if strings.Contains(arm, "p.key_resolution_count") {
 				t.Errorf("arm %d gates ambiguity on key_resolution_count, which the pinned expansion makes permanently false for an ambiguous key (id rows hard-code 1; key rows exist only at 1) -- the arm would match nothing and every test but the real-ClickHouse one would stay green", i)
 			}
-			switch {
-			case strings.Contains(arm, "o.project_key = p.project_key"):
-				retractionOwnKey++
-				if !strings.Contains(arm, "o.project_key != ''") {
-					t.Errorf("arm %d (own-key retraction) does not restrict to project_key != '' -- it would double-match rows arm D (project_ref) already covers", i)
-				}
-			case strings.Contains(arm, "o.project_ref = p.project_key"):
-				retractionViaRef++
-				if !strings.Contains(arm, "o.project_key = ''") {
-					t.Errorf("arm %d (project_ref retraction, CHAOS-4566 R4 P2) does not restrict to project_key = '' -- it would double-match rows arm C already covers", i)
-				}
-			default:
-				t.Errorf("arm %d is a retraction arm but joins neither o.project_key nor o.project_ref to p.project_key", i)
+			if !strings.Contains(arm, "project_key AS match_value") || !strings.Contains(arm, "project_ref AS match_value") {
+				t.Errorf("arm %d must carry both the own-key and project_ref (CHAOS-4566 R4 P2) match variants, unioned at the ownership row level", i)
+			}
+			if !strings.Contains(arm, "WHERE project_key != ''") || !strings.Contains(arm, "WHERE project_key = ''") {
+				t.Errorf("arm %d's two match variants must stay mutually exclusive on the ownership row's own project_key, or they would double-match the same row", i)
 			}
 		default:
 			t.Errorf("arm %d declares no retraction_only literal, so nothing here can tell whether it may assert", i)
 		}
 	}
-	if asserting != 2 || retractionOwnKey != 1 || retractionViaRef != 1 {
-		t.Fatalf("want exactly two asserting arms, one own-key retraction arm, and one project_ref retraction arm, got %d, %d, %d", asserting, retractionOwnKey, retractionViaRef)
+	if asserting != 1 || retraction != 1 {
+		t.Fatalf("want exactly one asserting arm and one retraction arm, got %d, %d", asserting, retraction)
 	}
-	if !strings.Contains(statement, "o.project_key = p.scope") || !strings.Contains(statement, "WHERE p.scope_kind = 'key'") {
-		t.Error("the key arm must match the key scope row and name scope_kind = 'key'")
+	if !strings.Contains(statement, "WHERE o.required_scope_kind = '' OR p.scope_kind = o.required_scope_kind") {
+		t.Error("the asserting arm must gate the key variant on the key scope row via required_scope_kind")
 	}
 	// 24.8 rejects an ON that is not a plain column equality, so the kind
 	// restriction must sit in a WHERE -- 'key' is a literal.

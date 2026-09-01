@@ -913,68 +913,125 @@ func projectMembershipRelationshipID(subjectCanonicalID, projectCanonicalID, int
 // `projects FINAL` is ReplacingMergeTree(updated_at) ordered by
 // (org_id, provider, id), so this join is 1:1 and cannot fan the catalog
 // out; the ON is two plain column equalities, which 24.8 accepts.
-// projectTeamsOwnershipArm builds ONE arm of queryProjectTeams' row-level
-// union: ownership rows resolved to a project by `match`, narrowed by
-// `where`, tagged with the retraction_only literal '0' or '1'.
 //
-// A package-level function and not the closure it used to be (CHAOS-4565),
-// for a testability reason worth stating. The invariant that matters here is
-// per arm -- an arm that can ASSERT an edge must not resolve through
-// p.project_key, which every scope row carries (CHAOS-4542 defect 6), while
-// the retraction arm must. A test cannot check that by splitting the
-// assembled statement on "UNION ALL": the identity expansion contains one of
-// its own inside every arm, so the split yields six fragments and any guard
-// written over them is asserting about the wrong strings. Building arms
-// through a named function lets the test hold a real arm.
+// projectTeamsOwnershipRowsSQL is the raw team_project_ownership row source
+// every arm resolves against: one row per ownership assertion, carrying BOTH
+// identity columns (project_ref, project_key) regardless of which one an arm
+// matches through. Every arm below reads this identical shape, so the two
+// columns cannot drift between what an arm matches on and what it reports as
+// ownership_ref/ownership_key.
+func projectTeamsOwnershipRowsSQL() string {
+	return `(
+		SELECT provider, ` + readers.ProjectOwnershipJoinColumn + ` AS project_ref, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name, valid_from, valid_to, updated_at
+		FROM team_project_ownership FINAL
+		WHERE org_id = {org_id:String}
+	)`
+}
+
+// projectTeamsAssertingArm is the OLD arms A and B, unioned at the OWNERSHIP
+// row level (CHAOS-4750) rather than each embedding its own copy of
+// `resolved` -- the same trade CHAOS-4552 proved for
+// readers.ProjectOwnershipJoinSQL: one shared project-identity scan instead
+// of one per arm, at the cost of one extra team_project_ownership scan (a
+// fraction of `projects`' size, and not the metric this ticket measures).
 //
-// `where` carries any scope_kind or ambiguity restriction. It is a WHERE and
-// not part of the ON because 24.8 rejects an ON that is not a plain column
-// equality.
-func projectTeamsOwnershipArm(projects, match, where, retractionOnly string) string {
+//   - project_ref rows tag required_scope_kind = ” -- the SCOPE arm (old
+//     arm A). Matches a scope row of EITHER kind on purpose: project_ref is
+//     not an id column, it is whichever id space that row uses, and must
+//     never be given a scope_kind restriction (CHAOS-4521b, CHAOS-4542).
+//   - project_key rows tag required_scope_kind = 'key' -- the KEY arm (old
+//     arm B). Matches the key SCOPE ROW, never p.project_key (a column
+//     EVERY scope row carries -- CHAOS-4542 defect 6): the restriction sits
+//     in the WHERE below, not the ON, because 24.8 rejects an ON that is not
+//     a plain equality and 'key' is a literal.
+//
+// Both branches join through readers.ProjectIdentityMatchSQL against
+// p.scope -- the shared helper's target column, not a hand-rolled copy of
+// it -- differentiated only by which raw column feeds scope_value and by the
+// required_scope_kind gate. Neither branch ever names p.project_key, which
+// is what makes defect 6 structurally impossible here rather than merely
+// untested.
+func projectTeamsAssertingArm(resolved string) string {
+	ownership := `(
+		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at,
+		       project_ref AS scope_value, '' AS required_scope_kind
+		FROM ` + projectTeamsOwnershipRowsSQL() + `
+
+		UNION ALL
+
+		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at,
+		       project_key AS scope_value, 'key' AS required_scope_kind
+		FROM ` + projectTeamsOwnershipRowsSQL() + `
+	) AS o`
 	return `
 		SELECT p.id AS project_id, p.provider AS provider,
 		       o.project_ref AS ownership_ref, o.project_key AS ownership_key,
 		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at,
-		       p.project_updated_at AS project_updated_at, toUInt8(` + retractionOnly + `) AS retraction_only
-		FROM ` + projects + `
-		INNER JOIN (
-			SELECT provider, ` + readers.ProjectOwnershipJoinColumn + ` AS project_ref, ifNull(project_key, '') AS project_key, team_id, toString(source) AS source_name, valid_from, valid_to, updated_at
-			FROM team_project_ownership FINAL
-			WHERE org_id = {org_id:String}
-		) AS o ON o.provider = p.provider AND ` + match + `
-		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id` + where
+		       p.project_updated_at AS project_updated_at, toUInt8(0) AS retraction_only
+		FROM ` + resolved + `
+		INNER JOIN ` + ownership + ` ON o.provider = p.provider AND ` + readers.ProjectIdentityMatchSQL("o", "scope_value") + `
+		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id
+		WHERE o.required_scope_kind = '' OR p.scope_kind = o.required_scope_kind`
+}
+
+// projectTeamsRetractionArm is the OLD arms C and D, unioned the same way
+// over the AMBIGUOUS project source instead of the resolved one.
+//
+//   - rows whose OWN project_key is non-empty match through project_key
+//     (old arm C) -- tagged match_value = project_key, guarded by
+//     project_key != ”.
+//   - rows whose OWN project_key is empty match through project_ref (old
+//     arm D, CHAOS-4566 R4 P2) -- tagged match_value = project_ref, guarded
+//     by project_key = ”.
+//
+// The two WHERE filters are mutually exclusive over the SAME raw row set --
+// identical to arm C/D's own mutually-exclusive guards, just moved from
+// "which arm a row reaches" to "which half of one union a row reaches". No
+// row gains or loses a match path, and neither branch can double-match a row
+// the other already covers.
+func projectTeamsRetractionArm(ambiguous string) string {
+	ownership := `(
+		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at,
+		       project_key AS match_value
+		FROM ` + projectTeamsOwnershipRowsSQL() + `
+		WHERE project_key != ''
+
+		UNION ALL
+
+		SELECT provider, project_ref, project_key, team_id, source_name, valid_from, valid_to, updated_at,
+		       project_ref AS match_value
+		FROM ` + projectTeamsOwnershipRowsSQL() + `
+		WHERE project_key = ''
+	) AS o`
+	return `
+		SELECT p.id AS project_id, p.provider AS provider,
+		       o.project_ref AS ownership_ref, o.project_key AS ownership_key,
+		       o.team_id AS team_id, o.source_name AS source_name, o.valid_from AS valid_from, o.valid_to AS valid_to, o.updated_at AS updated_at,
+		       p.project_updated_at AS project_updated_at, toUInt8(1) AS retraction_only
+		FROM ` + ambiguous + `
+		INNER JOIN ` + ownership + ` ON o.provider = p.provider AND o.match_value = p.project_key
+		INNER JOIN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String}) AS t ON t.id = o.team_id
+		WHERE p.key_project_count > 1`
 }
 
 // projectTeamsArms is the ordered arm list projectTeamsStatement unions, and
 // the seam a test reads to check which arms may assert.
 //
-// FOUR arms, not three (CHAOS-4566 R4 P2). The retraction source only ever
-// had one shape in mind: an ownership row naming the ambiguous key through
-// its OWN project_key column. But ProjectOwnershipJoinColumn (aliased
-// project_ref here) is documented as carrying whichever id space a source
-// actually writes -- readers v0.5.5's own comment on it: "today's GitLab
-// rows hold a project KEY there" -- so a row can name an ambiguous key
-// through project_ref while its project_key column is empty. That row
-// matches arm A's scope join at nothing (the ambiguous key has no scope row
-// to match), arm B at nothing (its own project_key is empty, and arm B
-// requires scope_kind = 'key'), and the THIRD arm below at nothing (it
-// requires project_key != ”). Before this arm, such a row was dropped by
-// every path at once: no edge, no conflict, no retraction, no telemetry --
-// exactly the silent omission this ticket exists to close.
-//
-// The fourth arm is arm C's mirror image over the OTHER column, restricted
-// to the complementary case (project_key empty) so the two never double-
-// match the same ownership row against the same ambiguous partition. Both
-// still resolve through ambiguousProjectIdentitySQL, so there is one
-// definition of "ambiguous" for both arms to disagree from.
+// TWO arms, not four (CHAOS-4750). The four CHAOS-4566 arms unioned four
+// separately-embedded copies of the project-identity expansion -- 12
+// physical `projects FINAL` scans per read, measured against real
+// ClickHouse before this change. Every arm's OUTPUT is unchanged: this
+// function still produces the same four match combinations (scope/either
+// kind, key/key-scope-only, ambiguous-via-own-key, ambiguous-via-ref), just
+// grouped into two arms that each embed their shared project source ONCE.
+// See projectTeamsAssertingArm and projectTeamsRetractionArm for what each
+// pair still means.
 func projectTeamsArms() []string {
 	resolved := projectIdentityWithWatermarkSQL()
 	ambiguous := ambiguousProjectIdentitySQL()
 	return []string{
-		projectTeamsOwnershipArm(resolved, readers.ProjectIdentityMatchSQL("o", "project_ref"), "", "0"),
-		projectTeamsOwnershipArm(resolved, "o.project_key = p.scope", "\n\t\tWHERE p.scope_kind = 'key'", "0"),
-		projectTeamsOwnershipArm(ambiguous, "o.project_key = p.project_key", "\n\t\tWHERE p.key_project_count > 1 AND o.project_key != ''", "1"),
-		projectTeamsOwnershipArm(ambiguous, "o.project_ref = p.project_key", "\n\t\tWHERE p.key_project_count > 1 AND o.project_key = ''", "1"),
+		projectTeamsAssertingArm(resolved),
+		projectTeamsRetractionArm(ambiguous),
 	}
 }
 
@@ -1076,30 +1133,36 @@ func projectIdentityWithWatermarkSQL() string {
 // HAVING through havingSincePredicate -- the same condition delegated,
 // not a second spelling of it.
 func projectTeamsStatement(cursor cursorState) string {
-	// TWO equality-joined arms, UNION ALL'd at ROW level, then aggregated
-	// on the RESOLVED projects.id.
+	// TWO arm BLOCKS (CHAOS-4750 respelling of what was four separately
+	// embedded arms), UNION ALL'd at ROW level, then aggregated on the
+	// RESOLVED projects.id. Each block itself unions two match variants at
+	// the OWNERSHIP row level -- see projectTeamsAssertingArm and
+	// projectTeamsRetractionArm -- so there are still four ways a row can
+	// resolve; what changed is only how many times the project source gets
+	// embedded, not what any of the four can do:
 	//
-	//  A. o.project_id  = p.scope        -- the SCOPE arm. It matches scope
-	//     rows of BOTH kinds deliberately and must NOT be given a
-	//     scope_kind restriction: project_id is not an id column, it is
-	//     whichever id space that row uses, and today's GitLab rows hold a
-	//     project KEY there. CHAOS-4530's UUID-keyed rows match the id row,
-	//     today's GitLab rows match the key row.
-	//  B. o.project_key = p.scope        -- the KEY arm, and the ONLY arm
-	//     that names scope_kind. It matches the key SCOPE ROW rather than
-	//     p.project_key, a column EVERY scope row carries: joining that
-	//     column let an id row satisfy a key-shaped guard, and two projects
-	//     sharing a key both matched an ownership row naming neither
-	//     (CHAOS-4542 defect 6). An ambiguous key now has no scope row at
-	//     all -- readers v0.5.5 applies the filter inside the expansion --
-	//     so neither arm can resolve one, and no guard here can be
-	//     forgotten. This arm is otherwise the ORIGINAL join, kept. An
-	//     ownership row may carry a project_id that correlates with nothing
-	//     while its project_key is the only column tying it to a project.
-	//     Dropping this arm loses those rows entirely -- which is exactly
-	//     what the "tied assertions resolve deterministically" fixture
-	//     caught: it seeds project_id 'ownership-row-open'/'-closed' against
-	//     project_key 'TIE-KEY', so arm A matches neither.
+	//  The ASSERTING block's SCOPE variant matches project_ref against a
+	//  scope row of BOTH kinds deliberately and must NOT be given a
+	//  scope_kind restriction: project_ref is not an id column, it is
+	//  whichever id space that row uses, and today's GitLab rows hold a
+	//  project KEY there. CHAOS-4530's UUID-keyed rows match the id row,
+	//  today's GitLab rows match the key row.
+	//
+	//  The ASSERTING block's KEY variant, and the only one that names
+	//  scope_kind, matches project_key against the key SCOPE ROW rather
+	//  than p.project_key, a column EVERY scope row carries: joining that
+	//  column let an id row satisfy a key-shaped guard, and two projects
+	//  sharing a key both matched an ownership row naming neither
+	//  (CHAOS-4542 defect 6). An ambiguous key now has no scope row at
+	//  all -- readers v0.5.5 applies the filter inside the expansion --
+	//  so neither variant can resolve one, and no guard here can be
+	//  forgotten. This variant is otherwise the ORIGINAL join, kept. An
+	//  ownership row may carry a project_ref that correlates with nothing
+	//  while its project_key is the only column tying it to a project.
+	//  Dropping this variant loses those rows entirely -- which is exactly
+	//  what the "tied assertions resolve deterministically" fixture
+	//  caught: it seeds project_id 'ownership-row-open'/'-closed' against
+	//  project_key 'TIE-KEY', so the scope variant matches neither.
 	//
 	// The union is at ROW level, not after aggregation, because the
 	// aggregates (min(valid_from), the argMax window pair, max(updated_at))
@@ -1120,11 +1183,11 @@ func projectTeamsStatement(cursor cursorState) string {
 	// equality, and 'key' is a literal.
 	//
 	// retractionOnly is the literal '0' or '1' (CHAOS-4565). A retraction
-	// arm's rows exist ONLY so a group can be SEEN and retracted; they can
+	// block's rows exist ONLY so a group can be SEEN and retracted; they can
 	// never assert an edge -- see the RETRACTION ARM note below.
 	// FAIL CLOSED on conflicting identities (codex R2 P2-1).
 	//
-	// The two arms resolve INDEPENDENTLY, so one ownership row whose
+	// The scope and key variants resolve INDEPENDENTLY, so one ownership row whose
 	// project_id resolves project A while its project_key resolves a
 	// DIFFERENT project B produces a row from each, and the outer grouping
 	// keeps both because it groups by the RESOLVED project. One of those
@@ -1161,7 +1224,7 @@ func projectTeamsStatement(cursor cursorState) string {
 	// mismatch this file has paid for before. conflict_identities and
 	// conflicting_identity_present spell the conflict half out explicitly
 	// where the ledger and the retraction reason still need exactly it.
-	// THE RETRACTION ARM (CHAOS-4565), arm C, and why the other two could
+	// THE RETRACTION ARM (CHAOS-4565), and why the asserting block could
 	// not carry it. Full design note, with the rejected alternatives and the
 	// mermaid of the whole path:
 	// docs/design/context-fabric-ownership-edge-retraction.md
@@ -1178,19 +1241,22 @@ func projectTeamsStatement(cursor cursorState) string {
 	// The two suppression paths are NOT symmetric, which is the whole
 	// reason this arm exists:
 	//
-	//   - CONFLICTING IDENTITY is decided in the SCAN. Both arms produce a
-	//     row, the group sees them, and edge_suppressed already reports it.
-	//     A group that reaches the scan can be retracted from the scan.
+	//   - CONFLICTING IDENTITY is decided in the SCAN. Both asserting
+	//     variants produce a row, the group sees them, and edge_suppressed
+	//     already reports it. A group that reaches the scan can be
+	//     retracted from the scan.
 	//   - An AMBIGUOUS KEY is decided UPSTREAM, in SQL:
 	//     ProjectIdentityJoinSQL emits no key scope row at all for
-	//     key_resolution_count > 1. Arm B therefore matches nothing, arm A
-	//     matches nothing for a key-only ownership row, and the row
-	//     produces NO RESULT ROW. There is nothing for the scan to see, so
-	//     a scan-side retraction alone would silently fix only half the
-	//     defect -- and the ambiguity half is the OLDER one, live since v7.
+	//     key_resolution_count > 1. The key variant therefore matches
+	//     nothing, the scope variant matches nothing for a key-only
+	//     ownership row, and the row produces NO RESULT ROW. There is
+	//     nothing for the scan to see, so a scan-side retraction alone
+	//     would silently fix only half the defect -- and the ambiguity
+	//     half is the OLDER one, live since v7.
 	//
-	// Arm C makes the invisible half visible WITHOUT re-admitting it as an
-	// assertion: it resolves an ownership key across the AMBIGUOUS key
+	// The retraction arm makes the invisible half visible WITHOUT
+	// re-admitting it as an assertion: it resolves an ownership key across
+	// the AMBIGUOUS key
 	// partition (key_resolution_count > 1), one row per project sharing
 	// that key, flagged retraction_only = 1. Those projects are exactly the
 	// candidates the edge could have been projected to while the key was
@@ -1204,10 +1270,13 @@ func projectTeamsStatement(cursor cursorState) string {
 	//   de-duplicator: an ambiguous key has no key scope row by
 	//   construction, so 'id' is the only row each such project has, and
 	//   naming it keeps one row per project if that ever changes.
-	//   o.project_key != '' is defence in depth -- the empty-key partition
-	//   already has key_resolution_count = 0, so it cannot reach > 1 -- but
-	//   an empty key matching every keyless project is precisely the defect
-	//   class this file has shipped before, so it is spelled out.
+	//   The retraction block's two variants each restrict to project_key
+	//   != '' or project_key = '' as defence in depth -- the empty-key
+	//   partition already has key_resolution_count = 0, so it cannot reach
+	//   > 1 -- but an empty key matching every keyless project is precisely
+	//   the defect class this file has shipped before, so it is spelled
+	//   out, and keeping the two guards mutually exclusive is what stops
+	//   one ownership row from double-matching through both variants.
 	//
 	// This arm must never be given the power to assert. unassertable below
 	// is forced to 1 for every retraction_only row, so a retraction arm can
@@ -1227,19 +1296,20 @@ func projectTeamsStatement(cursor cursorState) string {
 	// So the row watermark is greatest(the ownership row's own updated_at,
 	// the newest updated_at among every project this ownership row's
 	// identity values can reach). The window partition is the ownership
-	// row's own identity -- and arms A/B/C are unioned BEFORE it -- so
-	// "every project this row can reach" is not a second query, it is
+	// row's own identity -- and both arm blocks are unioned BEFORE it --
+	// so "every project this row can reach" is not a second query, it is
 	// exactly the rows already present. A projects-side edit therefore
 	// pushes the affected groups past the cursor on the very next tick,
 	// with no rebuild and no checkpoint reset.
 	//
-	// retraction_only is IN the partition key. Without it, arm C's extra
-	// resolved projects would land inside arm A/B's own min()/max()
-	// comparison and be read as an identity conflict, so an ownership row
-	// with a perfectly good project_id would be suppressed the moment its
-	// UNUSED project_key became ambiguous -- turning a retraction feature
-	// into an edge-deletion bug. Splitting the partition keeps arm A/B's
-	// conflict test byte-identical to what it was.
+	// retraction_only is IN the partition key. Without it, the retraction
+	// block's extra resolved projects would land inside the asserting
+	// block's own min()/max() comparison and be read as an identity
+	// conflict, so an ownership row with a perfectly good project_id would
+	// be suppressed the moment its UNUSED project_key became ambiguous --
+	// turning a retraction feature into an edge-deletion bug. Splitting the
+	// partition keeps the asserting block's conflict test byte-identical
+	// to what it was.
 	const identityPartition = " OVER (PARTITION BY provider, ownership_ref, ownership_key, retraction_only)"
 	return `SELECT o.project_id, o.team_id, o.source_name,
        minIf(o.valid_from, o.unassertable = 0) AS first_valid_from,
