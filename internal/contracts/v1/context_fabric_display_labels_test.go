@@ -46,6 +46,49 @@ func TestSourceStateLabelsAreTotal(t *testing.T) {
 	}
 }
 
+// TestEvidenceEntityLabelsAreTotal pins CHAOS-4698's totality discipline in
+// BOTH directions, mirroring TestFactKindLabelsAreTotal:
+//  1. every enum member has a label (mutate: remove a member's entry from
+//     contextFabricEvidenceEntityLabels -> this loop fails);
+//  2. every label registry entry names a real enum member (mutate: insert
+//     an entry keyed by a string outside the vocabulary -> this loop fails
+//     via validEvidenceEntityType, independent of the count check).
+func TestEvidenceEntityLabelsAreTotal(t *testing.T) {
+	for _, entityType := range ContextFabricEvidenceEntityTypeVocabulary() {
+		label, ok := contextFabricEvidenceEntityLabels[entityType]
+		if !ok {
+			t.Errorf("evidence entity type %q has no display label; add it to contextFabricEvidenceEntityLabels in the SAME change that adds the type", entityType)
+			continue
+		}
+		if strings.TrimSpace(label) == "" {
+			t.Errorf("evidence entity type %q has an empty display label", entityType)
+		}
+	}
+	for entityType := range contextFabricEvidenceEntityLabels {
+		if !validEvidenceEntityType(entityType) {
+			t.Errorf("label registry has entry %q with no corresponding enum member — a stale label outlives its type", entityType)
+		}
+	}
+	if len(contextFabricEvidenceEntityLabels) != ContextFabricEvidenceEntityTypeCount {
+		t.Errorf("label registry has %d entries, vocabulary has %d", len(contextFabricEvidenceEntityLabels), ContextFabricEvidenceEntityTypeCount)
+	}
+}
+
+// TestEvidenceRefIDIsTypedAndTotal pins the OTHER half of CHAOS-4698: every
+// producer constructor is reachable only through the closed enum, so
+// EvidenceRefID can never observably mint a ref whose segment misses the
+// registry. If this ever went false, ContextFabricEvidenceRefLabel would
+// silently start falling back on an acr-minted ref -- the exact defect
+// class this ticket closes.
+func TestEvidenceRefIDIsTypedAndTotal(t *testing.T) {
+	for _, entityType := range ContextFabricEvidenceEntityTypeVocabulary() {
+		ref := EvidenceRefID(entityType, "x")
+		if _, known := ContextFabricEvidenceRefLabel(ref); !known {
+			t.Errorf("EvidenceRefID(%q, ...) produced a ref that ContextFabricEvidenceRefLabel does not recognize: %q", entityType, ref)
+		}
+	}
+}
+
 func TestSourceObservationLabels(t *testing.T) {
 	for _, kind := range ContextFabricFactKindVocabulary() {
 		label := ContextFabricSourceObservationLabel("canonical_fact:" + string(kind))
@@ -81,8 +124,11 @@ func TestEvidenceRefLabels(t *testing.T) {
 		{"acr:v1:pull-request:42", "Pull request: 42", true},
 		{"acr:v1:commit:deadbeef", "Commit: deadbeef", true},
 		{"acr:v1:ci:123", "CI run: 123", true},
-		// Unknown segment: the generic floor, and the caller counts it —
-		// sol r1 F4's honest limit (evidenceRefID takes arbitrary strings).
+		// Unknown segment: the generic floor, and the caller counts it.
+		// CHAOS-4698 closed this at the PRODUCER signature (EvidenceRefID
+		// takes the closed enum, see TestEvidenceRefIDIsTypedAndTotal) --
+		// this read-time path stays open on purpose, for a ref that
+		// predates the enum or was minted by another system.
 		{"acr:v1:service:api", "Evidence: api", false},
 		{"not-an-acr-ref", "Evidence", false},
 		{"acr:v1:team", "Evidence", false},

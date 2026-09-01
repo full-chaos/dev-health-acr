@@ -6,6 +6,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -406,7 +407,7 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactFlow, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("team", teamID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 		})
 	}
 	return rowCount, totalOmitted, nil
@@ -596,7 +597,7 @@ ORDER BY p.id, wm.team_id`)
 		var totalStarted, totalCompleted int64
 		teamRows := make([]contextfabric.FactValueRow, 0, len(rows))
 		evidenceRefIDs := make([]string, 0, len(rows)+1)
-		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("project", projectKey))
+		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, projectKey))
 		for _, r := range rows {
 			if seenTeams[r.teamID] {
 				continue
@@ -607,7 +608,7 @@ ORDER BY p.id, wm.team_id`)
 			teamRow := r.row.toFactValueRow()
 			teamRow.Fields["team_id"] = contextfabric.StringFactValue(r.teamID)
 			teamRows = append(teamRows, teamRow)
-			evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("team", r.teamID))
+			evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.teamID))
 		}
 		if len(teamRows) == 0 {
 			continue
@@ -749,7 +750,7 @@ WHERE rn = 1`)
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactFlow, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("repository", repoID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, repoID)},
 		})
 		return nil
 	}, timeBound.bindings()...)

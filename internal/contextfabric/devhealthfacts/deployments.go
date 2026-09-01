@@ -6,6 +6,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -102,7 +103,7 @@ func (p *DeploymentsProvider) readDeploymentStatus(ctx context.Context, orgID st
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactDeployments, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("deployment", r.RepoID+":"+r.DeploymentID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityDeployment, r.RepoID+":"+r.DeploymentID)},
 		})
 	}
 	return len(rows), nil
@@ -139,7 +140,7 @@ func (p *DeploymentsProvider) readRepositoryAggregate(ctx context.Context, orgID
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactDeployments, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("repository", r.RepoID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, r.RepoID)},
 		})
 	}
 	return len(rows), nil

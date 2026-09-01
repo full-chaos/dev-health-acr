@@ -6,6 +6,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -97,7 +98,7 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 
 	repoIDs, repoBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), repositoryPrefix)
 	if len(repoIDs) > 0 {
-		rowCount, dailyOmitted, scanErr := p.readScope(ctx, orgID, "repo", repoIDs, repoBySubject, "repository", &facts, timeBound)
+		rowCount, dailyOmitted, scanErr := p.readScope(ctx, orgID, "repo", repoIDs, repoBySubject, contractsv1.ContextFabricEvidenceEntityRepository, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query repository health", scanErr)
 		}
@@ -106,7 +107,7 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 
 	teamIDs, teamBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectTeam), teamPrefix)
 	if len(teamIDs) > 0 {
-		rowCount, dailyOmitted, scanErr := p.readScope(ctx, orgID, "team", teamIDs, teamBySubject, "team", &facts, timeBound)
+		rowCount, dailyOmitted, scanErr := p.readScope(ctx, orgID, "team", teamIDs, teamBySubject, contractsv1.ContextFabricEvidenceEntityTeam, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team health", scanErr)
 		}
@@ -247,7 +248,7 @@ ORDER BY scope_id, day DESC`)
 	return byTeam, scanErr
 }
 
-func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids []string, bySubject map[string]contextfabric.SubjectRef, evidenceEntityType string, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, dailyOmitted int, err error) {
+func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids []string, bySubject map[string]contextfabric.SubjectRef, evidenceEntityType contractsv1.ContextFabricEvidenceEntityType, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, dailyOmitted int, err error) {
 	// CHAOS-4645, design doc §5.2: "health ... gain a time_series-declared
 	// table for team AND project subjects, alongside the scalars they emit
 	// today (additive -- the scalar stays, so RankCohort's inputs are
@@ -540,7 +541,7 @@ ORDER BY project_key, scope, scope_id`)
 		seenRepos := make(map[string]bool, len(rows))
 		riskRows := make([]contextfabric.FactValueRow, 0, len(rows))
 		evidenceRefIDs := make([]string, 0, len(rows)+1)
-		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("project", projectKey))
+		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, projectKey))
 		for _, r := range rows {
 			dedupeKey := r.scope + "\x00" + r.scopeID
 			if dedupeTeamRow(seenScopeEntries, dedupeKey) {
@@ -549,11 +550,11 @@ ORDER BY project_key, scope, scope_id`)
 			switch r.scope {
 			case "team":
 				if !dedupeTeamRow(seenTeams, r.scopeID) {
-					evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("team", r.scopeID))
+					evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.scopeID))
 				}
 			case "repo":
 				if !dedupeTeamRow(seenRepos, r.scopeID) {
-					evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("repository", r.scopeID))
+					evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, r.scopeID))
 				}
 			}
 			rowFields := map[string]contextfabric.FactValue{

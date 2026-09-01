@@ -873,3 +873,15 @@ func validFactKind(value ContextFabricFactKind) bool {
 	}
 	return false
 }
+
+// validEvidenceEntityType derives from contextFabricEvidenceEntityTypes
+// rather than restating the vocabulary in a second switch, so the accepted
+// set and the declared set cannot drift apart -- mirrors validFactKind.
+func validEvidenceEntityType(value ContextFabricEvidenceEntityType) bool {
+	for _, entityType := range contextFabricEvidenceEntityTypes {
+		if entityType == value {
+			return true
+		}
+	}
+	return false
+}

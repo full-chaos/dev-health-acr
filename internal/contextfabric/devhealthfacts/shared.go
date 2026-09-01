@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
@@ -276,8 +277,13 @@ func pullRequestKey(repoID string, number int64) string {
 // queryWorkItems' `EvidenceRefIDs: []string{"acr:v1:work-item:" + workItemID}`)
 // so evidence refs minted here resolve through the same source_evidence
 // path as the ones devhealthsource already produces.
-func evidenceRefID(entityType, id string) string {
-	return "acr:v1:" + entityType + ":" + id
+//
+// entityType is CHAOS-4698's closed ContextFabricEvidenceEntityType
+// vocabulary, registry-asserted against contextFabricEvidenceEntityLabels
+// (internal/contracts/v1) -- a new segment cannot compile here without
+// joining that registry in the same change.
+func evidenceRefID(entityType contractsv1.ContextFabricEvidenceEntityType, id string) string {
+	return contractsv1.EvidenceRefID(entityType, id)
 }
 
 // projectOwnershipJoinSQL returns the SQL join fragment resolving every

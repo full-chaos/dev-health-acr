@@ -694,10 +694,16 @@ type EngineTelemetry interface {
 	// the generic "Evidence"/"Evidence: <id>" label because their
 	// acr:v1:<entity-type>:<id> ref named an entity-type segment outside
 	// the contracts display-label registry's closed set
-	// (contextFabricEvidenceEntityLabels) -- the segment vocabulary is not
-	// itself closed at the producer signature today (evidenceRefID takes
-	// an arbitrary string, devhealthfacts/shared.go:274), so this is the
-	// only way an operator sees the fallback rate move.
+	// (contextFabricEvidenceEntityLabels).
+	//
+	// CHAOS-4698 closed the segment vocabulary at the producer signature
+	// (evidenceRefID / contractsv1.EvidenceRefID take the closed
+	// ContextFabricEvidenceEntityType enum, registry-asserted total), so
+	// this fallback is now STRUCTURALLY UNREACHABLE for a ref an acr
+	// producer mints today -- a new segment cannot compile without joining
+	// the registry. It stays reachable, and this counter stays the only
+	// way an operator sees it move, for a ref that predates the enum or
+	// was minted by another system and lands in a legacy stored row.
 	//
 	// Content-safe by construction, same discipline every sibling method
 	// on this interface follows and this ticket's own design insists on

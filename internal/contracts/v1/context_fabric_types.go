@@ -403,6 +403,99 @@ func ContextFabricFactKindVocabulary() [ContextFabricFactKindCount]ContextFabric
 	return contextFabricFactKinds
 }
 
+// ContextFabricEvidenceEntityType is the closed vocabulary for the
+// <entity-type> segment of an acr-minted "acr:v1:<entity-type>:<id>"
+// evidence ref (CHAOS-4698). Every acr producer that mints a ref -- rather
+// than reading one back from a legacy stored row -- takes this type instead
+// of an arbitrary string, so a new segment cannot compile without joining
+// contextFabricEvidenceEntityLabels in the SAME change: the same totality
+// discipline ContextFabricFactKind already has. This closes CHAOS-4690's
+// sol r1 F4 "honest limit" for acr-minted refs only -- legacy stored rows
+// can still carry an unregistered segment (pre-enum data, or another
+// system's ref), so ContextFabricEvidenceRefLabel keeps parsing and
+// labeling by raw string and RecordEvidenceLabelFallback keeps counting
+// what it finds unregistered there.
+type ContextFabricEvidenceEntityType string
+
+const (
+	ContextFabricEvidenceEntityAIArtifact         ContextFabricEvidenceEntityType = "ai-artifact"
+	ContextFabricEvidenceEntityAIRun              ContextFabricEvidenceEntityType = "ai-run"
+	ContextFabricEvidenceEntityCI                 ContextFabricEvidenceEntityType = "ci"
+	ContextFabricEvidenceEntityCommit             ContextFabricEvidenceEntityType = "commit"
+	ContextFabricEvidenceEntityCommitFile         ContextFabricEvidenceEntityType = "commit-file"
+	ContextFabricEvidenceEntityComplexity         ContextFabricEvidenceEntityType = "complexity"
+	ContextFabricEvidenceEntityDeployment         ContextFabricEvidenceEntityType = "deployment"
+	ContextFabricEvidenceEntityDeploymentIncident ContextFabricEvidenceEntityType = "deployment-incident"
+	ContextFabricEvidenceEntityEpisode            ContextFabricEvidenceEntityType = "episode"
+	ContextFabricEvidenceEntityGraph              ContextFabricEvidenceEntityType = "graph"
+	ContextFabricEvidenceEntityHotspot            ContextFabricEvidenceEntityType = "hotspot"
+	ContextFabricEvidenceEntityIncident           ContextFabricEvidenceEntityType = "incident"
+	ContextFabricEvidenceEntityOrganization       ContextFabricEvidenceEntityType = "organization"
+	ContextFabricEvidenceEntityProject            ContextFabricEvidenceEntityType = "project"
+	ContextFabricEvidenceEntityProjectTeam        ContextFabricEvidenceEntityType = "project-team"
+	ContextFabricEvidenceEntityPullRequest        ContextFabricEvidenceEntityType = "pull-request"
+	ContextFabricEvidenceEntityRepository         ContextFabricEvidenceEntityType = "repository"
+	ContextFabricEvidenceEntityReview             ContextFabricEvidenceEntityType = "review"
+	ContextFabricEvidenceEntityReviewOutcome      ContextFabricEvidenceEntityType = "review-outcome"
+	ContextFabricEvidenceEntityTeam               ContextFabricEvidenceEntityType = "team"
+	ContextFabricEvidenceEntityWorkItem           ContextFabricEvidenceEntityType = "work-item"
+	ContextFabricEvidenceEntityWorkItemDependency ContextFabricEvidenceEntityType = "work-item-dependency"
+	ContextFabricEvidenceEntityWorkItemHierarchy  ContextFabricEvidenceEntityType = "work-item-hierarchy"
+	ContextFabricEvidenceEntityWorkItemTeam       ContextFabricEvidenceEntityType = "work-item-team"
+)
+
+// contextFabricEvidenceEntityTypes is the closed evidence-entity-type
+// vocabulary in published order -- the SINGLE declaration validEvidenceEntityType
+// and the totality test both derive from, mirroring contextFabricFactKinds.
+// UNEXPORTED for the same reason (codex round-10 F2): an exported slice/array
+// var would be a second writable path to the set the validator consults.
+// Callers get ContextFabricEvidenceEntityTypeVocabulary(), a copy.
+var contextFabricEvidenceEntityTypes = [...]ContextFabricEvidenceEntityType{
+	ContextFabricEvidenceEntityAIArtifact,
+	ContextFabricEvidenceEntityAIRun,
+	ContextFabricEvidenceEntityCI,
+	ContextFabricEvidenceEntityCommit,
+	ContextFabricEvidenceEntityCommitFile,
+	ContextFabricEvidenceEntityComplexity,
+	ContextFabricEvidenceEntityDeployment,
+	ContextFabricEvidenceEntityDeploymentIncident,
+	ContextFabricEvidenceEntityEpisode,
+	ContextFabricEvidenceEntityGraph,
+	ContextFabricEvidenceEntityHotspot,
+	ContextFabricEvidenceEntityIncident,
+	ContextFabricEvidenceEntityOrganization,
+	ContextFabricEvidenceEntityProject,
+	ContextFabricEvidenceEntityProjectTeam,
+	ContextFabricEvidenceEntityPullRequest,
+	ContextFabricEvidenceEntityRepository,
+	ContextFabricEvidenceEntityReview,
+	ContextFabricEvidenceEntityReviewOutcome,
+	ContextFabricEvidenceEntityTeam,
+	ContextFabricEvidenceEntityWorkItem,
+	ContextFabricEvidenceEntityWorkItemDependency,
+	ContextFabricEvidenceEntityWorkItemHierarchy,
+	ContextFabricEvidenceEntityWorkItemTeam,
+}
+
+// ContextFabricEvidenceEntityTypeCount is the size of the closed
+// evidence-entity-type vocabulary, as a compile-time constant.
+const ContextFabricEvidenceEntityTypeCount = len(contextFabricEvidenceEntityTypes)
+
+// ContextFabricEvidenceEntityTypeVocabulary returns the closed
+// evidence-entity-type vocabulary in published order. An ARRAY return, so
+// the caller gets a copy (see contextFabricFactKinds' doc comment).
+func ContextFabricEvidenceEntityTypeVocabulary() [ContextFabricEvidenceEntityTypeCount]ContextFabricEvidenceEntityType {
+	return contextFabricEvidenceEntityTypes
+}
+
+// EvidenceRefID builds the canonical "acr:v1:<entity-type>:<id>" evidence
+// ref (CHAOS-4698) from a closed-vocabulary entity type, so a producer
+// cannot mint a segment outside contextFabricEvidenceEntityLabels. The wire
+// format itself is unchanged -- this only closes what can construct it.
+func EvidenceRefID(entityType ContextFabricEvidenceEntityType, id string) string {
+	return "acr:v1:" + string(entityType) + ":" + id
+}
+
 // ContextFabricDriverCategory is a closed vocabulary for
 // ContextFabricDriverJudgment.Category / ContextFabricFinding.Kind values
 // that assert something canonical-fact-shaped (as opposed to a

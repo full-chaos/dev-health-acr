@@ -106,7 +106,7 @@ func (p *ContinuousIntegrationProvider) readRunStatus(ctx context.Context, orgID
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactContinuousIntegration, Subject: subject,
 			Fields:         map[string]contextfabric.FactValue{"status": stringOrNull(r.Status)},
-			EvidenceRefIDs: []string{evidenceRefID("ci", r.RepoID+":"+r.RunID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityCI, r.RepoID+":"+r.RunID)},
 		})
 	}
 	return len(rows), nil
@@ -146,7 +146,7 @@ func (p *ContinuousIntegrationProvider) readRepositoryAggregate(ctx context.Cont
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactContinuousIntegration, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("repository", r.RepoID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, r.RepoID)},
 		})
 	}
 	return len(rows), nil

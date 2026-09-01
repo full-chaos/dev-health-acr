@@ -1054,7 +1054,7 @@ WHERE tm.org_id = {org_id:String}` + sincePredicate(cursor, queryTeamsEffectiveU
 			// convention would turn into the "*" wildcard -- see that
 			// sentinel's own doc comment for why that must not happen here).
 			Authorization:  contractsv1.ContextFabricAuthorizationScope{TeamIDs: []string{id}, RepositorySlugs: repositorySlugs},
-			EvidenceRefIDs: []string{"acr:v1:team:" + id},
+			EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, id)},
 			ObservedAt:     observedAt,
 			SourceVersion:  TeamsProjectsSourceVersion,
 		}
@@ -1155,7 +1155,7 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) +
 			ProviderIDs:    providerID(provider, id),
 			Properties:     properties,
 			Authorization:  authorization,
-			EvidenceRefIDs: []string{"acr:v1:project:" + provider + ":" + id},
+			EvidenceRefIDs: []string{contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, provider+":"+id)},
 			ObservedAt:     observedAt,
 			SourceVersion:  TeamsProjectsSourceVersion,
 		}

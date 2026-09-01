@@ -6,6 +6,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -277,7 +278,7 @@ func (p *ReadinessProvider) readTeamReadiness(ctx context.Context, orgID string,
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactReadiness, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("team", r.TeamID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.TeamID)},
 		})
 	}
 	return rowCount, omittedRows, nil
@@ -378,7 +379,7 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 		seenTeams := make(map[string]bool, len(rows))
 		teamRows := make([]contextfabric.FactValueRow, 0, len(rows))
 		evidenceRefIDs := make([]string, 0, len(rows)+1)
-		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("project", projectKey))
+		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, projectKey))
 		for _, r := range rows {
 			dedupeKey := r.TeamID + "\x00" + r.WorkScopeID + "\x00" + r.Provider
 			if dedupeTeamRow(seenTeamScope, dedupeKey) {
@@ -391,7 +392,7 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 			// ref, which would otherwise be the malformed `acr:v1:team:`
 			// with an empty id. Missing is not a team whose name is blank.
 			if r.HasTeam != 0 && !dedupeTeamRow(seenTeams, r.TeamID) {
-				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("team", r.TeamID))
+				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.TeamID))
 			}
 			rowFields := map[string]contextfabric.FactValue{
 				// null, not "": the row says "no team recorded", which is a

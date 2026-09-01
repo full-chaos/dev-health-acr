@@ -5,6 +5,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -102,7 +103,7 @@ WHERE rn = 1 AND fired = 1`)
 				"window_start":      contextfabric.StringFactValue(windowStart),
 				"window_end":        contextfabric.StringFactValue(windowEnd),
 			},
-			EvidenceRefIDs: []string{evidenceRefID("team", teamID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 		})
 		return nil
 	}, timeBound.bindings()...)

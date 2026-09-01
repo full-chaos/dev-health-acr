@@ -71,7 +71,7 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactPullRequests, Subject: subject,
 			Fields:         map[string]contextfabric.FactValue{"state": stringOrNull(row.State)},
-			EvidenceRefIDs: []string{evidenceRefID("pull-request", row.RepoID+":"+strconv.FormatInt(number, 10))},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityPullRequest, row.RepoID+":"+strconv.FormatInt(number, 10))},
 		})
 	}
 	state, retentionReason := timeBound.retentionState(len(rows))
@@ -117,7 +117,7 @@ func (p *ReviewsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactReviews, Subject: subject,
 			Fields:         map[string]contextfabric.FactValue{"state": stringOrNull(row.State)},
-			EvidenceRefIDs: []string{evidenceRefID("review", row.RepoID+":"+row.ReviewID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityReview, row.RepoID+":"+row.ReviewID)},
 		})
 	}
 	state, retentionReason := timeBound.retentionState(len(rows))

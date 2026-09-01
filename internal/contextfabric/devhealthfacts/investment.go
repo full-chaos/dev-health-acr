@@ -6,6 +6,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
 )
@@ -159,7 +160,7 @@ func (p *InvestmentProvider) readTeamInvestment(ctx context.Context, orgID strin
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactInvestment, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID("team", r.TeamID)},
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.TeamID)},
 		})
 	}
 	return len(rows), omittedUnrepresentableCount, nil
@@ -358,7 +359,7 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 		if !merged {
 			*facts = append(*facts, contextfabric.CanonicalFact{
 				Kind: contextfabric.FactInvestment, Subject: subject, Fields: fields,
-				EvidenceRefIDs: []string{evidenceRefID("team", teamID)},
+				EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 			})
 		}
 	}
@@ -412,14 +413,14 @@ func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID st
 		seenTeams := make(map[string]bool, len(rows))
 		teamRows := make([]contextfabric.FactValueRow, 0, len(rows))
 		evidenceRefIDs := make([]string, 0, len(rows)+1)
-		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("project", projectKey))
+		evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, projectKey))
 		for _, r := range rows {
 			dedupeKey := r.TeamID + "\x00" + r.InvestmentArea + "\x00" + r.ProjectStream
 			if dedupeTeamRow(seenTeamAreaStream, dedupeKey) {
 				continue
 			}
 			if !dedupeTeamRow(seenTeams, r.TeamID) {
-				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID("team", r.TeamID))
+				evidenceRefIDs = append(evidenceRefIDs, evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.TeamID))
 			}
 			// churnLOC's representability was already verified in the scan
 			// loop above (non-representable rows never reach byProject), so
