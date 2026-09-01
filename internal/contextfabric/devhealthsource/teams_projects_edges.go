@@ -947,12 +947,34 @@ func projectTeamsOwnershipArm(projects, match, where, retractionOnly string) str
 
 // projectTeamsArms is the ordered arm list projectTeamsStatement unions, and
 // the seam a test reads to check which arms may assert.
+//
+// FOUR arms, not three (CHAOS-4566 R4 P2). The retraction source only ever
+// had one shape in mind: an ownership row naming the ambiguous key through
+// its OWN project_key column. But ProjectOwnershipJoinColumn (aliased
+// project_ref here) is documented as carrying whichever id space a source
+// actually writes -- readers v0.5.5's own comment on it: "today's GitLab
+// rows hold a project KEY there" -- so a row can name an ambiguous key
+// through project_ref while its project_key column is empty. That row
+// matches arm A's scope join at nothing (the ambiguous key has no scope row
+// to match), arm B at nothing (its own project_key is empty, and arm B
+// requires scope_kind = 'key'), and the THIRD arm below at nothing (it
+// requires project_key != ”). Before this arm, such a row was dropped by
+// every path at once: no edge, no conflict, no retraction, no telemetry --
+// exactly the silent omission this ticket exists to close.
+//
+// The fourth arm is arm C's mirror image over the OTHER column, restricted
+// to the complementary case (project_key empty) so the two never double-
+// match the same ownership row against the same ambiguous partition. Both
+// still resolve through ambiguousProjectIdentitySQL, so there is one
+// definition of "ambiguous" for both arms to disagree from.
 func projectTeamsArms() []string {
 	resolved := projectIdentityWithWatermarkSQL()
+	ambiguous := ambiguousProjectIdentitySQL()
 	return []string{
 		projectTeamsOwnershipArm(resolved, readers.ProjectIdentityMatchSQL("o", "project_ref"), "", "0"),
 		projectTeamsOwnershipArm(resolved, "o.project_key = p.scope", "\n\t\tWHERE p.scope_kind = 'key'", "0"),
-		projectTeamsOwnershipArm(ambiguousProjectIdentitySQL(), "o.project_key = p.project_key", "\n\t\tWHERE p.key_project_count > 1 AND o.project_key != ''", "1"),
+		projectTeamsOwnershipArm(ambiguous, "o.project_key = p.project_key", "\n\t\tWHERE p.key_project_count > 1 AND o.project_key != ''", "1"),
+		projectTeamsOwnershipArm(ambiguous, "o.project_ref = p.project_key", "\n\t\tWHERE p.key_project_count > 1 AND o.project_key = ''", "1"),
 	}
 }
 

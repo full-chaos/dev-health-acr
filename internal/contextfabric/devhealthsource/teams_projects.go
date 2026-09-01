@@ -154,7 +154,27 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // backlog is drained. CHAOS-4565's acceptance -- "no rebuild is required,
 // and no checkpoint is reset" -- is about the steady state after this
 // deploy, and that path is rebuild-free.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v9"
+//
+// v9 -> v10 (CHAOS-4566, codex round-2 finding P2, ARGUED and confirmed
+// against this file's own precedent): arm D adds a SECOND retraction shape
+// -- an ambiguous key arriving via project_ref rather than the ownership
+// row's own project_key -- but a new UNION arm is not a new write. Exactly
+// the v8->v9 trap: an organization already caught up under a v9 checkpoint
+// has ownership rows whose project_ref-carried key was ALREADY ambiguous
+// before this deploy, and neither that row's own updated_at nor the
+// colliding project's project_updated_at moved on deploy day, so
+// row_watermark never crosses the existing checkpoint and arm D is
+// unreachable for every one of them -- forever, without this bump.
+//
+// The steady state after this deploy (a NEW collision arriving
+// post-deploy) is already rebuild-free -- proved, for the project_ref
+// shape specifically, by
+// subRetractsAnEdgeWhoseAmbiguousKeyArrivesViaProjectRef's second tick,
+// which starts from the FIRST tick's own cursor rather than a reset one,
+// the same discipline subRetractsAnEdgeWhoseKeyBecomesAmbiguous already
+// used for arm C. This bump is only for the backlog that predates the
+// deploy.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v10"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -232,6 +252,41 @@ type TeamsProjectsSource struct {
 	// organization. ConsumedWithoutPublishing hands it to the worker.
 	consumedMu sync.Mutex
 	consumed   map[string]consumedProgress
+
+	// censusMu guards census, CHAOS-4566's per-organization cache of the
+	// catalog ambiguity fact for one source run -- same run-scoped-not-
+	// page-scoped discipline as omissions/presence/teamAuth. Without it, an
+	// oversized backfill reissued the org-wide `projects FINAL` scan on
+	// every PAGE (NextProjectionBatch is one call per page) even though the
+	// fact it establishes -- "this organization has N ambiguous keys" --
+	// cannot change within a run.
+	censusMu sync.Mutex
+	census   map[string]*catalogCensus
+}
+
+// catalogCensus memoises one organization's ambiguous-key catalog count
+// (CHAOS-4566) for the run. done is set only AFTER a successful query: a
+// failed attempt must not be cached as a permanent zero, or a transient
+// ClickHouse error on page one would silence every later page's chance to
+// report a real ambiguity.
+type catalogCensus struct {
+	done bool
+}
+
+// censusFor returns this organization's census cache, starting a fresh one
+// when the run starts from scratch -- the identical boundary ledgerFor
+// already uses for the ambiguity ledger, so the two caches share one
+// lifetime definition instead of drifting into two.
+func (s *TeamsProjectsSource) censusFor(orgID string, fromScratch bool) *catalogCensus {
+	s.censusMu.Lock()
+	defer s.censusMu.Unlock()
+	if s.census == nil {
+		s.census = map[string]*catalogCensus{}
+	}
+	if fromScratch || s.census[orgID] == nil {
+		s.census[orgID] = &catalogCensus{}
+	}
+	return s.census[orgID]
 }
 
 // consumedProgress is a memo, never a source of truth. It records the cursor
@@ -829,9 +884,15 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	// shape for the job. What an operator gets here is "this organization has
 	// N ambiguous keys", which a plain query can actually establish.
 	//
-	// Once per call rather than once per page. It is still repeated across
-	// the calls of an oversized backfill -- noted on the follow-up ticket
-	// with the rest of the census work, not silently.
+	// Once per RUN (CHAOS-4566), not once per page. NextProjectionBatch is
+	// one call per page, and this used to re-run the org-wide `projects
+	// FINAL` scan on every one of them -- harmless at today's 20-project
+	// scale, a real cost against an oversized backfill. census caches
+	// success for the run's lifetime (censusFor's fromScratch boundary, the
+	// same one ledgerFor already uses), so a multi-page catch-up pays for
+	// the scan once. A failed query is never cached: done is set only after
+	// countAmbiguousProjectKeysInCatalog returns cleanly, so the very next
+	// page retries rather than silencing the fact for the rest of the run.
 	// Routed through the SAME boundary as every source-table read (codex
 	// R3). Returning this error raw skipped tableReadError and
 	// logTableReadFailure entirely, so a census failure reached the
@@ -839,9 +900,13 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	// inside the very change that added that classification because its
 	// absence had cost this lane two rounds. A read is a read: it does not
 	// get a private error path because it is telemetry.
-	if err := countAmbiguousProjectKeysInCatalog(ctx, s.client, s.logger, strings.TrimSpace(checkpoint.OrgID)); err != nil {
-		logTableReadFailure(ctx, s.logger, TeamsProjectsSourceName, checkpoint.OrgID, ambiguityCensusTable, err)
-		return contextfabric.ProjectionBatch{}, false, &tableReadError{table: ambiguityCensusTable, cause: err}
+	census := s.censusFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
+	if !census.done {
+		if err := countAmbiguousProjectKeysInCatalog(ctx, s.client, s.logger, strings.TrimSpace(checkpoint.OrgID)); err != nil {
+			logTableReadFailure(ctx, s.logger, TeamsProjectsSourceName, checkpoint.OrgID, ambiguityCensusTable, err)
+			return contextfabric.ProjectionBatch{}, false, &tableReadError{table: ambiguityCensusTable, cause: err}
+		}
+		census.done = true
 	}
 	presence := s.presenceLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logPresenceTelemetry(ctx, s.logger, checkpoint.OrgID, presence)

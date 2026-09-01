@@ -434,6 +434,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"two id-space ownership rows for one project yield exactly one edge", "30000000-0000-4000-8000-00000000000d", subTwoIDSpaceRowsYieldExactlyOneEdge},
 		{"empty-key projects each keep their own edge", "30000000-0000-4000-8000-00000000000e", subEmptyKeyProjectsEachKeepTheirOwnEdge},
 		{"a projected edge is retracted when its key becomes ambiguous", "30000000-0000-4000-8000-00000000000f", subRetractsAnEdgeWhoseKeyBecomesAmbiguous},
+		{"a projected edge is retracted when its ambiguous key arrives via project_ref", "30000000-0000-4000-8000-000000000015", subRetractsAnEdgeWhoseAmbiguousKeyArrivesViaProjectRef},
 		{"a projected edge is retracted when its identity starts conflicting", "30000000-0000-4000-8000-000000000010", subRetractsAnEdgeWhoseIdentityStartsConflicting},
 		{"retraction is idempotent across a re-run", "30000000-0000-4000-8000-000000000011", subRetractionIsIdempotentAcrossAReRun},
 		{"retraction only follows max-raising project writes", "30000000-0000-4000-8000-000000000012", subRetractionOnlyFollowsMaxRaisingProjectWrites},
@@ -1238,6 +1239,75 @@ func subRetractsAnEdgeWhoseKeyBecomesAmbiguous(t *testing.T, ctx context.Context
 	if !controlSeen {
 		if _, found := drainUntil(t, ctx, fixture, "", func(b contextfabric.ProjectionBatch) bool { return hasRelationship(b, control) }); !found {
 			t.Fatalf("%q is gone: an unrelated, unambiguous ownership lost its edge, so the retraction is not scoped to the row that became unsubstantiable", control)
+		}
+	}
+}
+
+// subRetractsAnEdgeWhoseAmbiguousKeyArrivesViaProjectRef is CHAOS-4566 R4
+// P2's shape: the ambiguous key lives in the ownership row's project_id
+// (project_ref) column, not its project_key column, which is NULL. Before
+// arm D this row matched nothing at all -- not arm A/B (the key's scope row
+// does not exist once ambiguous), and not arm C (which requires
+// project_key != ”). So the edge went missing with no tombstone, no
+// conflict, and no telemetry: silence indistinguishable from "there was
+// never an edge here".
+func subRetractsAnEdgeWhoseAmbiguousKeyArrivesViaProjectRef(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	at := ownershipLaterAssertion.Add(72 * time.Hour)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'retract me via ref', 1, 'started', '', ?)`,
+		"PROJ-RETRACT-REF", fixture.orgID, "RETRACT-REF-KEY", at)
+	// project_key NULL on purpose: the row's ONLY tie to the project is
+	// project_id, which carries the key-shaped value, exactly the GitLab
+	// shape readers.ProjectOwnershipJoinColumn's own doc comment describes.
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, NULL, 'native', ?, NULL, ?)`,
+		fixture.orgID, "RETRACT-REF-KEY", ownershipFirstSeen, at)
+	// The CONTROL rides the same ticks: an ordinary, unambiguous project_id
+	// match with the same NULL-project_key shape, so a false-positive fix
+	// that started matching every empty-project_key row shows up here.
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'keep me too', 1, 'started', '', ?)`,
+		"PROJ-KEEP-REF", fixture.orgID, "KEEP-REF-KEY", at)
+	mustExec(t, ctx, fixture.direct, `INSERT INTO team_project_ownership VALUES (?, 'github', 'TEAM-GITHUB', ?, NULL, 'native', ?, NULL, ?)`,
+		fixture.orgID, "PROJ-KEEP-REF", ownershipFirstSeen, at)
+
+	edge := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-RETRACT-REF", "TEAM-GITHUB", "native")
+	control := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-KEEP-REF", "TEAM-GITHUB", "native")
+
+	cursor, ok := drainUntil(t, ctx, fixture, "", func(b contextfabric.ProjectionBatch) bool { return hasRelationship(b, edge) })
+	if !ok {
+		t.Fatalf("%q was never projected -- RETRACT-REF-KEY is unambiguous at this point (only PROJ-RETRACT-REF answers to it), so arm A's scope join must resolve it; if this fails, an unrelated arm regressed on the ordinary case, not the ambiguity path this test targets", edge)
+	}
+
+	// THE ONLY MUTATION: a second project starts answering to the same key.
+	// team_project_ownership is not touched at all.
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects VALUES (?, ?, 'github', ?, 'the collision', 1, 'started', '', ?)`,
+		"PROJ-RETRACT-REF-OTHER", fixture.orgID, "RETRACT-REF-KEY", at.Add(time.Hour))
+
+	cursor, ok = drainUntil(t, ctx, fixture, cursor, func(b contextfabric.ProjectionBatch) bool { return hasTombstone(b, edge) })
+	if !ok {
+		t.Fatalf("no incremental tick retracted %q after its project_ref-carried key became ambiguous -- arm D (o.project_ref = p.project_key WHERE ... AND o.project_key = '') either regressed or never matched this row's shape", edge)
+	}
+
+	controlSeen := false
+	for page := 0; page < 40; page++ {
+		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
+			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
+		})
+		if err != nil {
+			t.Fatalf("drain page %d: %v", page, err)
+		}
+		if !available {
+			break
+		}
+		cursor = batch.NextCursor
+		if hasRelationship(batch, edge) {
+			t.Fatalf("%q was re-asserted after being retracted; the ambiguity is still there, so nothing may put the edge back", edge)
+		}
+		if hasRelationship(batch, control) {
+			controlSeen = true
+		}
+	}
+	if !controlSeen {
+		if _, found := drainUntil(t, ctx, fixture, "", func(b contextfabric.ProjectionBatch) bool { return hasRelationship(b, control) }); !found {
+			t.Fatalf("%q is gone: an unrelated ownership row sharing the same empty-project_key shape lost its edge, so arm D over-matched beyond the row that actually became ambiguous", control)
 		}
 	}
 }

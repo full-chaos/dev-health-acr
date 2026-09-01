@@ -55,6 +55,12 @@ type fakeTable struct {
 
 type fakeClient struct {
 	tables []fakeTable
+
+	// ambiguousProjectKeysQueries counts how many times the catalog
+	// ambiguity census (countAmbiguousProjectKeysInCatalog) actually ran a
+	// query, for CHAOS-4566's once-per-run assertion: a plain call count
+	// through fakeClient's real dispatch, not a mock expectation.
+	ambiguousProjectKeysQueries int
 }
 
 // ambiguousProjectKeysMarker identifies the catalog ambiguity count
@@ -68,6 +74,7 @@ const ambiguousProjectKeysMarker = "AS ambiguous_keys"
 func (c *fakeClient) Query(_ context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	requireOrgIDBinding(statement, bindings)
 	if strings.Contains(statement, ambiguousProjectKeysMarker) {
+		c.ambiguousProjectKeysQueries++
 		for _, table := range c.tables {
 			if table.match == ambiguousProjectKeysMarker {
 				if table.err != nil {

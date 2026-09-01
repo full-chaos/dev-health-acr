@@ -1148,3 +1148,61 @@ func TestChaos4542_ConflictTelemetryFiresOnTheCallThatSuppressed(t *testing.T) {
 		t.Fatalf("the call that suppressed an edge reported nothing -- an operator does not get a second tick to find out an ownership was dropped, and a deferred ledger.conflictCount() argument is read before any query runs; got:\n%s", output)
 	}
 }
+
+// TestChaos4566_CatalogCensusRunsOnceForTheWholeRun pins the R4 P2
+// performance acceptance line: the org-wide ambiguous-project-key catalog
+// scan (countAmbiguousProjectKeysInCatalog) must run once per RUN, not once
+// per PAGE. NextProjectionBatch is one call per page, and before CHAOS-4566
+// this query ran inside every one of them -- harmless at today's ~20-project
+// scale, a real repeated cost against an oversized backfill.
+//
+// fakeClient.ambiguousProjectKeysQueries counts real dispatches through the
+// same Query path every other read in this producer uses, not a mock
+// expectation -- so this pins the actual call count, not an intended one.
+func TestChaos4566_CatalogCensusRunsOnceForTheWholeRun(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{}
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
+	if err != nil {
+		t.Fatalf("NewTeamsProjectsSource: %v", err)
+	}
+
+	// Page 1: Cursor == "" is the from-scratch boundary censusFor resets on
+	// -- the run's first page, where the census must run.
+	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: "",
+	}); err != nil {
+		t.Fatalf("page 1: %v", err)
+	}
+	if client.ambiguousProjectKeysQueries != 1 {
+		t.Fatalf("page 1 (from scratch) ran the catalog census %d times, want exactly 1", client.ambiguousProjectKeysQueries)
+	}
+
+	// Pages 2 and 3: a non-empty cursor is NOT from-scratch (the same
+	// boundary retractionBatch's doc comment relies on) -- the incremental
+	// continuation of the SAME run. The census must be served from cache,
+	// not re-queried.
+	for page := 2; page <= 3; page++ {
+		if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+			OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName,
+			Cursor: testCursor(t, time.Unix(0, 0).UTC(), ""),
+		}); err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		if client.ambiguousProjectKeysQueries != 1 {
+			t.Fatalf("page %d (incremental, same run) ran the catalog census %d times total, want the page-1 count to still be 1 -- an oversized backfill would repeat the org-wide `projects FINAL` scan on every page", page, client.ambiguousProjectKeysQueries)
+		}
+	}
+
+	// A NEW run (a rebuild, or a fresh process) resets the cache: Cursor ==
+	// "" again must re-run the census, or a genuinely new ambiguity that
+	// arrived since the last run would never be reported.
+	if _, _, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{
+		OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: "",
+	}); err != nil {
+		t.Fatalf("new run: %v", err)
+	}
+	if client.ambiguousProjectKeysQueries != 2 {
+		t.Fatalf("a new from-scratch run did not re-run the catalog census (got %d total queries, want 2) -- the cache must reset per run, not live forever", client.ambiguousProjectKeysQueries)
+	}
+}
