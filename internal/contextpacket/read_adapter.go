@@ -16,7 +16,7 @@ import (
 
 const QueryVersionV1 = "context-query.v1"
 
-const clickHouseEvidenceQueryV1 = `SELECT concat('acr:v1:commit:', hash) AS evidence_ref_id, 'dev_health' AS system, 'commit' AS entity_type, hash AS entity_id, ifNull(message, hash) AS display_label, '' AS safe_uri, 'native' AS provenance, 1.0 AS confidence, ifNull(message, '') AS citation, committer_when AS observed_at FROM git_commits FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND ({commit_sha:String} = '' OR hash = {commit_sha:String}) AND ({as_of:Nullable(DateTime)} IS NULL OR committer_when <= {as_of:Nullable(DateTime)}) AND ({time_window_days:UInt16} = 0 OR committer_when >= coalesce({as_of:Nullable(DateTime)}, now()) - INTERVAL {time_window_days:UInt16} DAY)`
+var clickHouseEvidenceQueryV1 = `SELECT concat('acr:v1:` + string(contractsv1.ContextFabricEvidenceEntityCommit) + `:', hash) AS evidence_ref_id, 'dev_health' AS system, 'commit' AS entity_type, hash AS entity_id, ifNull(message, hash) AS display_label, '' AS safe_uri, 'native' AS provenance, 1.0 AS confidence, ifNull(message, '') AS citation, committer_when AS observed_at FROM git_commits FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID} AND ({commit_sha:String} = '' OR hash = {commit_sha:String}) AND ({as_of:Nullable(DateTime)} IS NULL OR committer_when <= {as_of:Nullable(DateTime)}) AND ({time_window_days:UInt16} = 0 OR committer_when >= coalesce({as_of:Nullable(DateTime)}, now()) - INTERVAL {time_window_days:UInt16} DAY)`
 
 var ErrPrincipalOrganization = errors.New("contextpacket: principal organization is required")
 
