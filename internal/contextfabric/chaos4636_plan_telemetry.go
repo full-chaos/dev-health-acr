@@ -127,12 +127,12 @@ const (
 // the single boolean could not express. Setting that boolean true to fix the
 // basis would have corrupted the D2 counter; leaving it false reported an
 // order that was not used. Two parameters make the bad state unrepresentable.
-func PlanNarrowingEventFrom(plan AnswerPlan, stage contractsv1.ContextFabricPlanNarrowingStage, before, after int, groupAxis, groupsNarrowed bool, overrun contractsv1.ContextFabricBudgetOverrun) PlanNarrowingEvent {
+func PlanNarrowingEventFrom(plan AnswerPlan, stage contractsv1.ContextFabricPlanNarrowingStage, before, after int, groupAxis, groupsNarrowed bool, overrun contractsv1.ContextFabricBudgetOverrun, groupedBasis contractsv1.ContextFabricNarrowingBasis) PlanNarrowingEvent {
 	return PlanNarrowingEvent{
 		Family:             plan.Family,
 		FamilyVersion:      plan.FamilyVersion,
 		Stage:              stage,
-		Basis:              planStageBasis(stage, groupAxis),
+		Basis:              planStageBasis(stage, groupAxis, groupedBasis),
 		Before:             before,
 		After:              after,
 		Groups:             groupsNarrowed,
@@ -148,17 +148,28 @@ func PlanNarrowingEventFrom(plan AnswerPlan, stage contractsv1.ContextFabricPlan
 // in the form of narrowing by an order that did not exist yet.
 //
 // groupAxis says whether the selection ACTUALLY ran over a group axis, not
-// merely whether the stage runs late enough for one to exist.
+// merely whether the stage runs late enough for one to exist. groupedBasis is
+// which grouped order NarrowGroupedCohort actually ran (CHAOS-4678:
+// overlap_aware_set_cover or, beyond the guard, largest_group_round_robin);
+// it is ignored when groupAxis is false, and a caller that has no narrowing
+// to report (e.g. a measured FIT, where nothing ran) passes the zero value,
+// which falls back to largest_group_round_robin -- the same basis this
+// function always named for a grouped axis before CHAOS-4678.
 //
 // Both directions of getting this wrong have now been observed live and are
 // pinned: reporting largest_group_round_robin for a FLAT cohort names an order
 // with no groups to round-robin over, and reporting canonical_id_lexical for a
 // GROUPED narrowing names an order that was not used. The caller must pass
 // what the selection actually did.
-func planStageBasis(stage contractsv1.ContextFabricPlanNarrowingStage, groupAxis bool) contractsv1.ContextFabricNarrowingBasis {
+func planStageBasis(stage contractsv1.ContextFabricPlanNarrowingStage, groupAxis bool, groupedBasis contractsv1.ContextFabricNarrowingBasis) contractsv1.ContextFabricNarrowingBasis {
 	if groupAxis {
+		if contractsv1.ValidContextFabricNarrowingBasis(groupedBasis) {
+			return groupedBasis
+		}
 		// Round-robin across groups, largest first, so EVERY group
-		// survives: decision D2, member-first, ruled 2026-08-30.
+		// survives: decision D2, member-first, ruled 2026-08-30. The
+		// pre-CHAOS-4678 default for a caller that ran no selection
+		// (nothing to narrow) and so has no actual basis to report.
 		return contractsv1.ContextFabricNarrowingBasisLargestGroupRoundRobin
 	}
 	return contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical

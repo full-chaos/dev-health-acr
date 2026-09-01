@@ -244,3 +244,77 @@ func TestProjectionNeverDropsAnUngroupedMember(t *testing.T) {
 		t.Fatalf("the group did not survive: %#v", projection.Cohort.Groups)
 	}
 }
+
+// TestProjectionExploitsOverlapForTheWorkedExample is CHAOS-4678's own
+// example at the projection boundary: groups A={a,b}, B={b,c}, budget=1. The
+// old largest-group-round-robin allowance kept one member per group, over
+// budget; groupAwareMemberAllowance now exploits the shared member.
+func TestProjectionExploitsOverlapForTheWorkedExample(t *testing.T) {
+	t.Parallel()
+	result := richResult()
+	result.Cohort = &contractsv1.ContextFabricCohort{
+		Kind: contractsv1.ContextFabricSubjectProject, Rationale: "worked example", Complete: true,
+		Members: []contractsv1.ContextFabricCohortMember{
+			{Subject: subject(contractsv1.ContextFabricSubjectProject, "a", "a"), Rank: 1,
+				InclusionReasons: []string{"Graph retrieval associated this subject with the requested condition."}},
+			{Subject: subject(contractsv1.ContextFabricSubjectProject, "b", "b"), Rank: 2,
+				InclusionReasons: []string{"Graph retrieval associated this subject with the requested condition."}},
+			{Subject: subject(contractsv1.ContextFabricSubjectProject, "c", "c"), Rank: 3,
+				InclusionReasons: []string{"Graph retrieval associated this subject with the requested condition."}},
+		},
+		Groups: []contractsv1.ContextFabricCohortGroup{
+			{Subject: subject(contractsv1.ContextFabricSubjectTeam, "A", "A"), MemberCanonicalIDs: []string{"a", "b"}, Complete: true, Total: 2},
+			{Subject: subject(contractsv1.ContextFabricSubjectTeam, "B", "B"), MemberCanonicalIDs: []string{"b", "c"}, Complete: true, Total: 2},
+		},
+	}
+	bounds := DefaultBudget
+	bounds.MaxCohortMembers = 1
+
+	projection := Project(result, bounds)
+	if len(projection.Cohort.Members) != 1 || projection.Cohort.Members[0].Subject.CanonicalID != "b" {
+		t.Fatalf("projected members = %#v, want exactly {b}, the shared member covering both groups", projection.Cohort.Members)
+	}
+	if len(projection.Cohort.Groups) != 2 {
+		t.Fatalf("projected %d groups, want both -- the shared member covers both within the cap", len(projection.Cohort.Groups))
+	}
+}
+
+// TestProjectionDegradedVisibilityInvariantsSurviveTheFloor: when the
+// overlap-aware floor genuinely cannot fit inside the budget (three groups
+// sharing no single common member, budget for only two), the projection's
+// existing degraded-visibility disclosures -- CohortGroupsOmitted and
+// ProjectionBudget.Truncated -- still fire. CHAOS-4678 changes WHICH members
+// get selected; it must not touch how a shortfall is disclosed.
+func TestProjectionDegradedVisibilityInvariantsSurviveTheFloor(t *testing.T) {
+	t.Parallel()
+	result := richResult()
+	result.Cohort = &contractsv1.ContextFabricCohort{
+		Kind: contractsv1.ContextFabricSubjectProject, Rationale: "three disjoint-enough groups", Complete: true,
+		Members: []contractsv1.ContextFabricCohortMember{
+			{Subject: subject(contractsv1.ContextFabricSubjectProject, "a1", "a1"), Rank: 1,
+				InclusionReasons: []string{"Graph retrieval associated this subject with the requested condition."}},
+			{Subject: subject(contractsv1.ContextFabricSubjectProject, "b1", "b1"), Rank: 2,
+				InclusionReasons: []string{"Graph retrieval associated this subject with the requested condition."}},
+			{Subject: subject(contractsv1.ContextFabricSubjectProject, "c1", "c1"), Rank: 3,
+				InclusionReasons: []string{"Graph retrieval associated this subject with the requested condition."}},
+		},
+		Groups: []contractsv1.ContextFabricCohortGroup{
+			{Subject: subject(contractsv1.ContextFabricSubjectTeam, "ta", "ta"), MemberCanonicalIDs: []string{"a1"}, Complete: true, Total: 1},
+			{Subject: subject(contractsv1.ContextFabricSubjectTeam, "tb", "tb"), MemberCanonicalIDs: []string{"b1"}, Complete: true, Total: 1},
+			{Subject: subject(contractsv1.ContextFabricSubjectTeam, "tc", "tc"), MemberCanonicalIDs: []string{"c1"}, Complete: true, Total: 1},
+		},
+	}
+	bounds := DefaultBudget
+	bounds.MaxCohortMembers = 2
+
+	projection := Project(result, bounds)
+	if len(projection.Cohort.Members) != 2 {
+		t.Fatalf("projected %d members against a 2-member budget, want 2 (the hard output cap, even though the floor wanted 3)", len(projection.Cohort.Members))
+	}
+	if projection.ProjectionBudget.CohortGroupsOmitted == 0 {
+		t.Fatal("a group lost every member to the budget cap but CohortGroupsOmitted did not count it")
+	}
+	if !projection.ProjectionBudget.Truncated {
+		t.Fatal("ProjectionBudget.Truncated is false for a projection that lost a whole group")
+	}
+}

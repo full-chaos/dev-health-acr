@@ -1490,7 +1490,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			Before: graphRequest.Options.MaxCohortMembers,
 			After:  clamped,
 		})
-		e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingCardinality, graphRequest.Options.MaxCohortMembers, clamped, false, false, ""))
+		e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingCardinality, graphRequest.Options.MaxCohortMembers, clamped, false, false, "", ""))
 		graphRequest.Options.MaxCohortMembers = clamped
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
@@ -1692,9 +1692,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		cohort := *graphContext.Cohort
 		var kept []CohortMember
 		var narrowed bool
+		var basis contractsv1.ContextFabricNarrowingBasis
 		if len(cohort.Groups) > 0 {
 			var narrowedGroups []contractsv1.ContextFabricCohortGroup
-			kept, narrowedGroups, narrowed = NarrowGroupedCohort(&cohort, plan.Budget.MaxMembers)
+			kept, narrowedGroups, narrowed, basis = NarrowGroupedCohort(&cohort, plan.Budget.MaxMembers)
 			if narrowed {
 				cohort.Groups = narrowedGroups
 			}
@@ -1724,11 +1725,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			narrowedGroupAxis := len(cohort.Groups) > 0
 			e.recordPlanNarrowingStep(&plan, PlanNarrowing{
 				Stage:  contractsv1.ContextFabricPlanNarrowingSynthesisInput,
-				Basis:  planStageBasis(contractsv1.ContextFabricPlanNarrowingSynthesisInput, narrowedGroupAxis),
+				Basis:  planStageBasis(contractsv1.ContextFabricPlanNarrowingSynthesisInput, narrowedGroupAxis, basis),
 				Before: before,
 				After:  len(kept),
 			})
-			e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingSynthesisInput, before, len(kept), narrowedGroupAxis, false, ""))
+			e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingSynthesisInput, before, len(kept), narrowedGroupAxis, false, "", basis))
 		}
 	}
 	var cohortSignalCitations cohortMemberSignalCitations

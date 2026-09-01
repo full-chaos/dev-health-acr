@@ -250,7 +250,7 @@ func TestNarrowGroupedCohortIsMemberFirst(t *testing.T) {
 		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "tb", Label: "tb"}, MemberCanonicalIDs: []string{"b1"}, Complete: true, Total: 1},
 		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "tc", Label: "tc"}, MemberCanonicalIDs: []string{"c1"}, Complete: true, Total: 1},
 	}
-	kept, groups, narrowed := NarrowGroupedCohort(cohort, 3)
+	kept, groups, narrowed, _ := NarrowGroupedCohort(cohort, 3)
 	if !narrowed {
 		t.Fatal("narrowed = false")
 	}
@@ -293,7 +293,7 @@ func TestNarrowGroupedCohortRefusesToDropAGroup(t *testing.T) {
 		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "tb", Label: "tb"}, MemberCanonicalIDs: []string{"b1"}, Complete: true, Total: 1},
 		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "tc", Label: "tc"}, MemberCanonicalIDs: []string{"c1"}, Complete: true, Total: 1},
 	}
-	if _, _, narrowed := NarrowGroupedCohort(cohort, 1); narrowed {
+	if _, _, narrowed, _ := NarrowGroupedCohort(cohort, 1); narrowed {
 		t.Fatal("narrowing dropped a whole group to reach the target, which decision D2 forbids")
 	}
 }

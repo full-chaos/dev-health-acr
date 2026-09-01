@@ -245,8 +245,12 @@ func ApplyGroupedCohortCompleteness(cohort *Cohort) {
 	cohort.Complete, cohort.Truncated = contractsv1.CohortCompletenessFromGroups(cohort.Groups)
 }
 
-// NarrowGroupedCohort removes members until the cohort holds at most
-// maxMembers, taking one from the LARGEST group at a time, round-robin.
+// NarrowGroupedCohort selects which members a grouped cohort's budget
+// admits, exploiting overlap: group membership is many-to-many, and one
+// shared member can cover several groups at once (CHAOS-4678). It calls
+// contractsv1.SelectGroupCoverMembers, which is EXACT for group counts up to
+// contractsv1.ContextFabricSetCoverGroupGuard and falls back to the
+// pre-CHAOS-4678 largest-group-round-robin order beyond it.
 //
 // This is decision D2 -- MEMBER-FIRST -- ruled by the orchestrator on
 // 2026-08-30: "'for each team' is the question's own words", so dropping a
@@ -255,12 +259,15 @@ func ApplyGroupedCohortCompleteness(cohort *Cohort) {
 // contract already knows how to make, via per-group Truncated; "we silently
 // answered about fewer teams" is not.
 //
-// Every group therefore survives with at least one member for as long as the
-// budget admits any members at all. It returns the members that remain, in
-// the cohort's own order, and the groups with their completeness updated.
-func NarrowGroupedCohort(cohort *Cohort, maxMembers int) (kept []CohortMember, groups []contractsv1.ContextFabricCohortGroup, narrowed bool) {
+// Every group that the budget CAN cover -- accounting for sharing -- keeps
+// at least one member; a group goes uncovered only when the budget is too
+// small to cover it even at maximum overlap. It returns the members that
+// remain, in the cohort's own order, the groups with their completeness
+// updated, and the basis the selection actually used (for the caller's
+// telemetry -- see contracts/v1's ContextFabricNarrowingBasis).
+func NarrowGroupedCohort(cohort *Cohort, maxMembers int) (kept []CohortMember, groups []contractsv1.ContextFabricCohortGroup, narrowed bool, basis contractsv1.ContextFabricNarrowingBasis) {
 	if cohort == nil || maxMembers <= 0 || len(cohort.Groups) == 0 {
-		return nil, nil, false
+		return nil, nil, false, ""
 	}
 	// DISTINCT MEMBERS, not memberships. Groups overlap -- a project owned by
 	// two teams appears in both -- so summing group sizes over-counts, and
@@ -268,26 +275,18 @@ func NarrowGroupedCohort(cohort *Cohort, maxMembers int) (kept []CohortMember, g
 	// that could in fact be narrowed (codex round 1, finding 3). The budget
 	// bounds the flattened member list, which charges each member once, so
 	// the decision has to be taken on the same quantity.
-	// Buckets are the groups PLUS one for members NO GROUP CLAIMS.
 	//
-	// That last bucket is the fix for a real data-loss defect: this function
-	// used to build its whole population from group member lists, so an
-	// ungrouped member was never a survivor and was cut from the result
-	// entirely. BuildCohortGroups leaves such members ungrouped DELIBERATELY
-	// -- its own doc comment says inventing a group for one, or silently
-	// removing it, "would both be worse than saying so" -- and then this
-	// function silently removed it. The contract and the implementation
-	// disagreed, for the third time in this area, and the contract was right.
-	//
-	// The ungrouped bucket is narrowed like a flat cohort's tail rather than
-	// protected like a group: it may reach zero, because there is no
-	// per-group Truncated disclosure covering it, whereas a group dropping to
-	// zero would be the silent group loss decision D2 forbids.
-	const ungroupedBucket = -1
+	// Ungrouped members -- ones BuildCohortGroups could not place -- are a
+	// real case (its own doc comment: inventing a group for one, or
+	// silently removing it, "would both be worse than saying so"), and they
+	// are cohort members like any other: dropping them silently here would
+	// be the same data-loss defect this function used to carry. They are
+	// narrowed like a flat cohort's tail rather than protected like a
+	// group: no per-group Truncated disclosure covers them, so they may
+	// reach zero, whereas a group dropping to zero would be the silent
+	// group loss decision D2 forbids.
 	claimed := make(map[string]struct{}, len(cohort.Members))
-	remaining := make([][]string, len(cohort.Groups))
-	for index, group := range cohort.Groups {
-		remaining[index] = append([]string(nil), group.MemberCanonicalIDs...)
+	for _, group := range cohort.Groups {
 		for _, id := range group.MemberCanonicalIDs {
 			claimed[id] = struct{}{}
 		}
@@ -298,88 +297,25 @@ func NarrowGroupedCohort(cohort *Cohort, maxMembers int) (kept []CohortMember, g
 			ungrouped = append(ungrouped, member.Subject.CanonicalID)
 		}
 	}
-	distinct := func() int {
-		unique := make(map[string]struct{}, len(cohort.Members))
-		for _, ids := range remaining {
-			for _, id := range ids {
-				unique[id] = struct{}{}
-			}
-		}
-		for _, id := range ungrouped {
-			unique[id] = struct{}{}
-		}
-		return len(unique)
+	distinct := len(claimed) + len(ungrouped)
+	if distinct <= maxMembers {
+		return nil, nil, false, ""
 	}
-	if distinct() <= maxMembers {
-		return nil, nil, false
-	}
-	// KNOWN SUBOPTIMAL, ticketed as CHAOS-4678: groups overlap, so one shared
-	// member can cover several groups at once, and peeling from the largest
-	// bucket does not exploit that. With A={a,b}, B={b,c} and a one-member
-	// budget this keeps two members where `b` alone would cover both groups.
-	// The consequence is an avoidable -- but always DISCLOSED -- refusal or
-	// omitted group, never a silent loss or a wrong answer.
-	for distinct() > maxMembers {
-		// ONE uniform rule: peel from the LARGEST bucket. Groups are floored
-		// at one member (dropping a group is what decision D2 forbids); the
-		// ungrouped bucket has no such floor, because no per-group Truncated
-		// disclosure covers it.
-		//
-		// Peeling ungrouped members FIRST was my first attempt and it was
-		// wrong: with a 3-member group and one ungrouped member against a
-		// 3-member cap it deleted the ungrouped member, when thinning the
-		// group to 2 keeps BOTH -- the group still present and disclosing its
-		// truncation, and the member not lost. Largest-first is strictly more
-		// informative and needs no special case.
-		largest := -2
-		if len(ungrouped) > 0 {
-			largest = ungroupedBucket
-		}
-		for index := range remaining {
-			if len(remaining[index]) <= 1 {
-				continue
-			}
-			switch {
-			case largest == -2:
-				largest = index
-			case largest == ungroupedBucket:
-				if len(remaining[index]) > len(ungrouped) {
-					largest = index
-				}
-			case len(remaining[index]) > len(remaining[largest]):
-				largest = index
-			}
-		}
-		if largest == -2 {
-			// Every group is down to its last member and nothing is
-			// ungrouped. Narrowing further would drop a group, which
-			// decision D2 forbids -- stage 3's planned refusal is the
-			// correct terminal case, not a silent group drop.
-			break
-		}
-		if largest == ungroupedBucket {
-			ungrouped = ungrouped[:len(ungrouped)-1]
-			continue
-		}
-		remaining[largest] = remaining[largest][:len(remaining[largest])-1]
-	}
-	survivors := make(map[string]struct{}, len(cohort.Members))
-	// Ungrouped survivors are survivors: they are cohort members that no
-	// group's truncation disclosure covers, and losing them is data loss.
-	for _, id := range ungrouped {
-		survivors[id] = struct{}{}
-	}
+	survivors, basis := contractsv1.SelectGroupCoverMembers(cohort.Groups, ungrouped, maxMembers)
 	groups = make([]contractsv1.ContextFabricCohortGroup, 0, len(cohort.Groups))
-	for index, group := range cohort.Groups {
-		for _, id := range remaining[index] {
-			survivors[id] = struct{}{}
+	for _, group := range cohort.Groups {
+		keptIDs := make([]string, 0, len(group.MemberCanonicalIDs))
+		for _, id := range group.MemberCanonicalIDs {
+			if _, ok := survivors[id]; ok {
+				keptIDs = append(keptIDs, id)
+			}
 		}
 		narrowedGroup := group
-		narrowedGroup.MemberCanonicalIDs = remaining[index]
+		narrowedGroup.MemberCanonicalIDs = keptIDs
 		// Total stays where it was: it is the group's size BEFORE narrowing,
 		// which is exactly what makes the truncation disclosure informative
 		// rather than circular.
-		narrowedGroup.Truncated = len(remaining[index]) < group.Total
+		narrowedGroup.Truncated = len(keptIDs) < group.Total
 		narrowedGroup.Complete = !narrowedGroup.Truncated && group.Complete
 		groups = append(groups, narrowedGroup)
 	}
@@ -397,7 +333,7 @@ func NarrowGroupedCohort(cohort *Cohort, maxMembers int) (kept []CohortMember, g
 	for index := range kept {
 		kept[index].Rank = index + 1
 	}
-	return kept, groups, len(kept) != len(cohort.Members)
+	return kept, groups, len(kept) != len(cohort.Members), basis
 }
 
 // NarrowFlatCohort is the ungrouped counterpart of NarrowGroupedCohort: it

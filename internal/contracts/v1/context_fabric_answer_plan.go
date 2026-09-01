@@ -208,12 +208,25 @@ const (
 	// read; a plan claiming it earlier would be claiming an order that does
 	// not exist yet.
 	ContextFabricNarrowingBasisAttentionRank ContextFabricNarrowingBasis = "attention_rank"
+	// ContextFabricNarrowingBasisOverlapAwareSetCover supersedes
+	// largest_group_round_robin for a grouped narrowing (CHAOS-4678):
+	// group membership is many-to-many, and a member shared by several
+	// groups can cover all of them at once. Round-robin does not exploit
+	// that -- with groups A={a,b}, B={b,c} and a one-member budget it keeps
+	// TWO members (a and b) where the shared member b alone covers both.
+	// This basis is an EXACT minimum (or budget-maximal) set cover over the
+	// groups, ties broken by canonical_id_lexical, used whenever the group
+	// count is at most ContextFabricSetCoverGroupGuard; beyond that guard
+	// the selection falls back to largest_group_round_robin untouched and
+	// reports that basis instead, never claiming an order it did not run.
+	ContextFabricNarrowingBasisOverlapAwareSetCover ContextFabricNarrowingBasis = "overlap_aware_set_cover"
 )
 
 var contextFabricNarrowingBases = [...]ContextFabricNarrowingBasis{
 	ContextFabricNarrowingBasisCanonicalIDLexical,
 	ContextFabricNarrowingBasisLargestGroupRoundRobin,
 	ContextFabricNarrowingBasisAttentionRank,
+	ContextFabricNarrowingBasisOverlapAwareSetCover,
 }
 
 // ContextFabricNarrowingBasisCount is the closed vocabulary's size.
