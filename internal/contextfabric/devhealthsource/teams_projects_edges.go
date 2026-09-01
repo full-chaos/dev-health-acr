@@ -958,7 +958,7 @@ func projectTeamsOwnershipArm(projects, match, where, retractionOnly string) str
 // matches arm A's scope join at nothing (the ambiguous key has no scope row
 // to match), arm B at nothing (its own project_key is empty, and arm B
 // requires scope_kind = 'key'), and the THIRD arm below at nothing (it
-// requires project_key != ''). Before this arm, such a row was dropped by
+// requires project_key != ”). Before this arm, such a row was dropped by
 // every path at once: no edge, no conflict, no retraction, no telemetry --
 // exactly the silent omission this ticket exists to close.
 //

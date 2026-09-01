@@ -1248,7 +1248,7 @@ func subRetractsAnEdgeWhoseKeyBecomesAmbiguous(t *testing.T, ctx context.Context
 // (project_ref) column, not its project_key column, which is NULL. Before
 // arm D this row matched nothing at all -- not arm A/B (the key's scope row
 // does not exist once ambiguous), and not arm C (which requires
-// project_key != ''). So the edge went missing with no tombstone, no
+// project_key != ”). So the edge went missing with no tombstone, no
 // conflict, and no telemetry: silence indistinguishable from "there was
 // never an edge here".
 func subRetractsAnEdgeWhoseAmbiguousKeyArrivesViaProjectRef(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
