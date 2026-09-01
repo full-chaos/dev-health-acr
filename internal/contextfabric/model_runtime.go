@@ -1679,30 +1679,44 @@ func composeCurrentState(draft SynthesisDraft) string {
 }
 
 // composeDeterministicAnswer renders DeterministicAnswer server-side from
-// already-validated structured fields only (Status, principal Drivers,
-// ClaimedFacts) -- see the call site's comment for why. It never reads
+// already-validated structured fields only (Status, principal Drivers) --
+// see the call site's comment for why. It never reads
 // draft.DirectJudgment/CurrentState/DeterministicAnswer (unvalidated
-// model prose) and cannot itself diverge from a canonical fact value
-// because every value it renders came from ClaimedFacts, which
-// ValidateAgainst already proved equal to the canonical fact bundle.
+// model prose).
+//
+// CHAOS-4699: this used to also append a "Canonical facts: k=v; k=v." raw
+// sentence list built from ClaimedFacts. Removed under the standing
+// language principle (chris 2026-08-31 13:35, CHAOS-4690): deterministic
+// lead prose composes the status floor only; the facts already live in
+// their own structured fields (ClaimedFacts) and in composeCurrentState's
+// one canonical statement -- restating them here was pure duplication in
+// internal-ish k=v vocabulary, not new information. The cohort path's
+// equivalent duplication (CHAOS-4580/CHAOS-4636) was removed the same way.
+// ClaimedFacts is still validated against canonical facts by
+// ValidateAgainst before this ever runs, so nothing here can diverge from
+// a canonical value -- there's just no longer a reason to restate it in
+// this field too.
 func composeDeterministicAnswer(draft SynthesisDraft, resolution SubjectResolution) string {
 	return composeDeterministicAnswerFrom(draft.Status, draft.Drivers, draft.ClaimedFacts, resolution)
 }
 
-// composeDeterministicAnswerFrom is composeDeterministicAnswer's body,
-// taking the four values it actually reads. Same split, same reason, as
-// composeDirectJudgmentFrom above -- see that function's doc comment.
-func composeDeterministicAnswerFrom(status InvestigationStatus, drivers []DriverJudgment, claims []ClaimedFact, resolution SubjectResolution) string {
+// composeDeterministicAnswerFrom is composeDeterministicAnswer's body.
+// Same split, same reason, as composeDirectJudgmentFrom above -- see that
+// function's doc comment.
+//
+// claims is accepted but deliberately unread (see composeDeterministicAnswer's
+// doc comment) -- kept as a parameter rather than dropped so every existing
+// call site (the CHAOS-4098 status-override recompose, tests deriving an
+// expected value from this same renderer) keeps calling the shared
+// renderer with the same arguments composeDeterministicAnswer itself
+// passes, instead of each caller needing to know which fields this
+// renderer currently reads.
+func composeDeterministicAnswerFrom(status InvestigationStatus, drivers []DriverJudgment, _ []ClaimedFact, resolution SubjectResolution) string {
 	var b strings.Builder
 	b.WriteString(statusSentence(status, resolution))
 	if titles := principalDriverTitles(drivers); len(titles) > 0 {
 		b.WriteString(" Principal driver(s): ")
 		b.WriteString(strings.Join(titles, "; "))
-		b.WriteString(".")
-	}
-	if sentences := claimedFactSentences(claims); len(sentences) > 0 {
-		b.WriteString(" Canonical facts: ")
-		b.WriteString(strings.Join(sentences, "; "))
 		b.WriteString(".")
 	}
 	return truncateAtSentenceBoundary(strings.TrimSpace(b.String()), deterministicAnswerMaxLength)
