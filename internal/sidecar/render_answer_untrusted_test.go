@@ -102,7 +102,7 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 		// than display text. The declaration STAYS, exactly as the
 		// render_shapes labels above do, so that a future markdown rendering
 		// of the group axis cannot ship the label unmarked.
-		"structured.cohort.groups[].subject.label":              "not rendered by this plain-text markdown view; the group axis is a structural layout Ask Dev reads off Structured, and every member still appears in the flat member list",
+		"structured.cohort.groups[].subject.label": "not rendered by this plain-text markdown view; the group axis is a structural layout Ask Dev reads off Structured, and every member still appears in the flat member list",
 		// CHAOS-4690: display labels and structured coverage details are
 		// Ask Dev's rendering surface (it reads Structured directly and
 		// renders phrasing ▸ label with raw behind a Details fold). This
@@ -111,12 +111,12 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 		// here; the label/phrasing/raw duplicates ride only on Structured.
 		// All six declarations STAY (exactly the render_shapes precedent
 		// above) so a future markdown rendering cannot ship them unmarked.
-		"structured.coverage_summary[].label":       "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the display labels",
-		"structured.coverage_summary[].state_label": "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the display labels",
-		"structured.coverage_details[].label":       "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the structured coverage details",
-		"structured.coverage_details[].phrasing":    "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the structured coverage details",
-		"structured.coverage_details[].raw":         "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the structured coverage details (raw stays behind its Details fold there)",
-		"structured.evidence_ref_labels{}":          "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the evidence chips with these labels",
+		"structured.coverage_summary[].label":                   "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the display labels",
+		"structured.coverage_summary[].state_label":             "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the display labels",
+		"structured.coverage_details[].label":                   "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the structured coverage details",
+		"structured.coverage_details[].phrasing":                "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the structured coverage details",
+		"structured.coverage_details[].raw":                     "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the structured coverage details (raw stays behind its Details fold there)",
+		"structured.evidence_ref_labels{}":                      "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the evidence chips with these labels",
 		"structured.question":                                   "the caller already holds the question it asked; echoing it adds nothing to a bounded answer",
 		"structured.clarification.candidates[].match_reasons[]": "the candidate line carries the subject and receipt an agent needs to choose; match reasoning is inspection detail, available through the full result",
 		// CHAOS-4118 (team-lead ruling 2026-08-22): windowConfirmationRequiredResult
@@ -504,9 +504,9 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 		}},
 		EvidenceRefLabels: map[string]string{"evidence_inject01": "Evidence: inject01"},
 		Limitations:       []string{"a limitation"},
-		Warnings:        []string{"a warning"},
-		EvidenceRefIDs:  []string{"evidence_inject01"},
-		SubjectReceipts: []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: "result_injection1", ReceiptID: "receipt_injection1"}},
+		Warnings:          []string{"a warning"},
+		EvidenceRefIDs:    []string{"evidence_inject01"},
+		SubjectReceipts:   []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: "result_injection1", ReceiptID: "receipt_injection1"}},
 		// CHAOS-3972 P3+W2: populated so the reflection-based planting walk
 		// below can reach every declared structure_needs/confirmed_structure/
 		// window_clarification leaf -- a nil block here is exactly the "path
