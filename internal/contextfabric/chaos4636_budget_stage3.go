@@ -96,7 +96,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		fit := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
 			cohortMemberCount(params.Graph.Cohort), cohortMemberCount(params.Graph.Cohort),
 			params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0, false,
-			contractsv1.ContextFabricBudgetFits)
+			contractsv1.ContextFabricBudgetFits, params.GroupedNarrowingBasis)
 		fit.MeasuredItems = measurement.Items.Budgeted()
 		fit.MeasuredBytes = measurement.Bytes
 		fit.DeadlineReserved = e.synthesisDeadlineReserve > 0
@@ -121,12 +121,12 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		declined = RetryDeclinedInsufficientDeadline
 	}
 	if declined != RetryDeclinedNotApplicable {
-		return InvestigationResult{}, assemblyTelemetry{}, e.planRefusal(ctx, principal, plan, measurement, overrun, false, grouped, before, declined)
+		return InvestigationResult{}, assemblyTelemetry{}, e.planRefusal(ctx, principal, plan, measurement, overrun, false, grouped, narrowed.Basis, before, declined)
 	}
 
 	e.recordPlanNarrowingStep(plan, PlanNarrowing{
 		Stage:   contractsv1.ContextFabricPlanNarrowingAssembledResult,
-		Basis:   planStageBasis(contractsv1.ContextFabricPlanNarrowingAssembledResult, grouped),
+		Basis:   planStageBasis(contractsv1.ContextFabricPlanNarrowingAssembledResult, grouped, narrowed.Basis),
 		Before:  before,
 		After:   after,
 		Groups:  false,
@@ -154,7 +154,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// The over-budget measurement is not lost -- it is recorded on the
 		// event below -- but the ERROR the caller sees is the one that
 		// actually stopped the answer.
-		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, before, grouped, false, overrun)
+		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, before, grouped, false, overrun, narrowed.Basis)
 		event.MeasuredItems = measurement.Items.Budgeted()
 		event.MeasuredBytes = measurement.Bytes
 		event.RetryAttempted = true
@@ -172,7 +172,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		return InvestigationResult{}, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("measure re-synthesized result: %w", err))
 	}
 	retryOverrun := retryMeasurement.Overrun(budget)
-	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun)
+	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, narrowed.Basis)
 	event.MeasuredItems = retryMeasurement.Items.Budgeted()
 	event.MeasuredBytes = retryMeasurement.Bytes
 	event.RetryAttempted = true
@@ -234,6 +234,9 @@ type narrowedInput struct {
 	Before int
 	After  int
 	Narrow bool
+	// Basis is which grouped order NarrowGroupedCohort actually ran
+	// (CHAOS-4678), zero for a flat cohort or when nothing narrowed.
+	Basis contractsv1.ContextFabricNarrowingBasis
 }
 
 func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) narrowedInput {
@@ -253,9 +256,10 @@ func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) narr
 	cohort := copyCohortForRetry(graph.Cohort)
 	var kept []CohortMember
 	var narrowed bool
+	var basis contractsv1.ContextFabricNarrowingBasis
 	if len(cohort.Groups) > 0 {
 		var groups []contractsv1.ContextFabricCohortGroup
-		kept, groups, narrowed = NarrowGroupedCohort(cohort, target)
+		kept, groups, narrowed, basis = NarrowGroupedCohort(cohort, target)
 		if narrowed {
 			cohort.Groups = groups
 		}
@@ -268,7 +272,13 @@ func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) narr
 		// decision D2 forbids: "for each team" is the question's own words.
 		// The planned refusal is the correct terminal case here, not a
 		// silent group drop.
-		return narrowedInput{Graph: graph, Facts: facts, Before: before, After: before}
+		//
+		// Basis travels even here (codex round 1, finding 4): the grouped
+		// selection still RAN and still has a real basis to report even
+		// though it produced no change -- dropping it here made the
+		// refusal telemetry fall back to a stale default that named an
+		// order that did not execute.
+		return narrowedInput{Graph: graph, Facts: facts, Before: before, After: before, Basis: basis}
 	}
 	removed := RemovedCohortMembers(cohort.Members, kept)
 	cohort.Members = kept
@@ -285,7 +295,7 @@ func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) narr
 	facts.Facts = RetainFactsForCohort(facts.Facts, rankedCohort, removed)
 	return narrowedInput{
 		Graph: graph, Facts: facts, Citations: citations, Ranked: rankEvent,
-		Before: before, After: len(kept), Narrow: true,
+		Before: before, After: len(kept), Narrow: true, Basis: basis,
 	}
 }
 
@@ -318,8 +328,8 @@ func (e *Engine) retryDeadlineAvailable(ctx context.Context) bool {
 // members is the cohort size the refusal could not narrow, carried so the
 // event says WHAT could not be reduced rather than reporting 0 -> 0, which is
 // what it did before the rig showed how uninformative that is.
-func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, grouped bool, members int, declined RetryDeclinedReason) error {
-	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, members, grouped, false, overrun)
+func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members int, declined RetryDeclinedReason) error {
+	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, members, grouped, false, overrun, basis)
 	event.MeasuredItems = measurement.Items.Budgeted()
 	event.MeasuredBytes = measurement.Bytes
 	event.RetryAttempted = retryAttempted

@@ -336,3 +336,49 @@ func TestAnUnconfiguredBudgetNarrowsNothing(t *testing.T) {
 		t.Fatalf("an unconfigured engine narrowed the cohort: %+v", result.Cohort)
 	}
 }
+
+// TestNarrowSynthesisInputBasisSurvivesTheNoNarrowReturn pins codex round 1,
+// finding 4 (EXECUTED): a grouped cohort already at its floor (every group
+// down to one member) runs the overlap-aware selection, finds no room to
+// narrow further, and returns Narrow=false through the SAME early return
+// that also carries Before/After -- but that return did not carry Basis,
+// so the caller's refusal telemetry fell back to a stale default
+// (largest_group_round_robin) that named an order that never ran.
+func TestNarrowSynthesisInputBasisSurvivesTheNoNarrowReturn(t *testing.T) {
+	t.Parallel()
+	cohort := planFixtureCohort("a1", "b1", "c1")
+	cohort.Groups = []contractsv1.ContextFabricCohortGroup{
+		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "ta", Label: "ta"}, MemberCanonicalIDs: []string{"a1"}, Complete: true, Total: 1},
+		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "tb", Label: "tb"}, MemberCanonicalIDs: []string{"b1"}, Complete: true, Total: 1},
+		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "tc", Label: "tc"}, MemberCanonicalIDs: []string{"c1"}, Complete: true, Total: 1},
+	}
+	params := synthesisAssemblyParams{Graph: GraphContext{Cohort: cohort}, Facts: CanonicalFactBundle{}}
+	result := narrowSynthesisInput(params, &AnswerPlan{})
+	if result.Narrow {
+		t.Fatal("every group is already at its floor; expected the no-narrow terminal case")
+	}
+	if result.Basis != contractsv1.ContextFabricNarrowingBasisOverlapAwareSetCover {
+		t.Fatalf("Basis = %q on the no-narrow return, want overlap_aware_set_cover -- the selection DID run, it just found nothing left to narrow", result.Basis)
+	}
+}
+
+// TestNarrowSynthesisInputTrivialCohortReportsNoBasisAtAll documents the
+// DELIBERATE counterpart to the finding above (shape-swept from the same
+// class, team-lead's review): a cohort of at most one member returns before
+// ANY selection algorithm runs at all -- there is no basis to report because
+// none executed, unlike the no-narrow case above where the overlap-aware
+// selection DID run and simply found nothing left to cut. Pinning this
+// distinction so a future change cannot "fix" it into looking like the
+// bug class this ticket already closed.
+func TestNarrowSynthesisInputTrivialCohortReportsNoBasisAtAll(t *testing.T) {
+	t.Parallel()
+	cohort := planFixtureCohort("a1")
+	params := synthesisAssemblyParams{Graph: GraphContext{Cohort: cohort}, Facts: CanonicalFactBundle{}}
+	result := narrowSynthesisInput(params, &AnswerPlan{})
+	if result.Narrow {
+		t.Fatal("a one-member cohort cannot narrow further")
+	}
+	if result.Basis != "" {
+		t.Fatalf("Basis = %q, want the empty zero value -- no selection algorithm ran at all for a trivial cohort", result.Basis)
+	}
+}

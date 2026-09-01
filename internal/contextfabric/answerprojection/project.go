@@ -504,12 +504,17 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 }
 
 // groupAwareMemberAllowance decides WHICH members a grouped cohort's budget
-// admits, taking one from the largest group at a time, round-robin.
+// admits, exploiting overlap: group membership is many-to-many, and one
+// shared member can cover several groups at once (CHAOS-4678).
 //
 // That is decision D2 -- member-first -- applied at the projection boundary
 // as well as in the engine, so the two cannot disagree about which members
-// survive a squeeze. Every group keeps at least one member for as long as the
-// budget admits any members at all.
+// survive a squeeze. Every group the budget CAN cover keeps at least one
+// member, for as long as the budget admits any at all: this calls
+// contractsv1.SelectGroupCoverMembers, which is EXACT for group counts up to
+// contractsv1.ContextFabricSetCoverGroupGuard (the same selection
+// NarrowGroupedCohort uses) and falls back to the pre-CHAOS-4678
+// largest-group-round-robin order beyond it.
 //
 // Returns nil when there is no group axis or when every member fits, which
 // leaves the flat path completely untouched.
@@ -517,61 +522,22 @@ func groupAwareMemberAllowance(cohort contractsv1.ContextFabricCohort, maxMember
 	if len(cohort.Groups) == 0 || maxMembers <= 0 || len(cohort.Members) <= maxMembers {
 		return nil
 	}
-	// Buckets are the groups PLUS one for members NO GROUP CLAIMS -- the
-	// same fix, and the same defect, as NarrowGroupedCohort. Building the
-	// population from group lists alone meant an ungrouped member never
-	// entered `allowed`, and the caller's `continue` then skipped it out of
-	// the projection permanently. Found by the drop-shape sweep, not by
-	// review.
+	// Ungrouped members -- ones no group claims -- are cohort members like
+	// any other; the same defect NarrowGroupedCohort used to carry (and the
+	// drop-shape sweep found here too) is silently losing them.
 	claimed := make(map[string]struct{}, len(cohort.Members))
-	remaining := make([][]string, len(cohort.Groups))
-	for index, group := range cohort.Groups {
-		remaining[index] = group.MemberCanonicalIDs
+	for _, group := range cohort.Groups {
 		for _, id := range group.MemberCanonicalIDs {
 			claimed[id] = struct{}{}
 		}
 	}
+	var ungrouped []string
 	for _, member := range cohort.Members {
 		if _, held := claimed[member.Subject.CanonicalID]; !held {
-			// Appended as its own single-member bucket so the round-robin
-			// below treats it as admissible content rather than as a group
-			// to protect.
-			remaining = append(remaining, []string{member.Subject.CanonicalID})
+			ungrouped = append(ungrouped, member.Subject.CanonicalID)
 		}
 	}
-	// KNOWN SUBOPTIMAL, ticketed as CHAOS-4678 -- the same overlap blind spot
-	// NarrowGroupedCohort carries, and for the same reason: a shared member
-	// can cover several groups at once and largest-first does not exploit it.
-	// Bounded consequence: a group omitted where a valid bounded projection
-	// existed, counted in CohortGroupsOmitted rather than lost silently.
-	allowed := make(map[string]struct{}, maxMembers)
-	for progressed := true; len(allowed) < maxMembers && progressed; {
-		progressed = false
-		// Largest group first on each pass, so a big group is thinned
-		// before a small one loses its only member.
-		order := make([]int, 0, len(remaining))
-		for index := range remaining {
-			if len(remaining[index]) > 0 {
-				order = append(order, index)
-			}
-		}
-		sort.SliceStable(order, func(i, j int) bool { return len(remaining[order[i]]) > len(remaining[order[j]]) })
-		for _, index := range order {
-			if len(allowed) >= maxMembers {
-				break
-			}
-			candidate := remaining[index][0]
-			remaining[index] = remaining[index][1:]
-			progressed = true
-			// The budget bounds DISTINCT members, and groups overlap: a
-			// project owned by two teams is offered by both. Charging the
-			// budget for a member already admitted spent allowance on
-			// nothing and under-filled the answer (codex round 1,
-			// finding 4). Selecting it again is free; only a NEW member
-			// costs.
-			allowed[candidate] = struct{}{}
-		}
-	}
+	allowed, _ := contractsv1.SelectGroupCoverMembers(cohort.Groups, ungrouped, maxMembers)
 	return allowed
 }
 

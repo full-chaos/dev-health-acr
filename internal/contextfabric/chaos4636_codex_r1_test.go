@@ -77,7 +77,7 @@ func TestNarrowGroupedCohortCountsDistinctMembersNotMemberships(t *testing.T) {
 		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team_a", Label: "team_a"}, MemberCanonicalIDs: []string{"a", "b"}, Complete: true, Total: 2},
 		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team_b", Label: "team_b"}, MemberCanonicalIDs: []string{"b", "c"}, Complete: true, Total: 2},
 	}
-	kept, groups, narrowed := NarrowGroupedCohort(cohort, 2)
+	kept, groups, narrowed, _ := NarrowGroupedCohort(cohort, 2)
 	if !narrowed {
 		t.Fatal("narrowed = false, but two distinct members can be retained while keeping both groups")
 	}
@@ -396,7 +396,7 @@ func TestNarrowGroupedCohortNeverDropsAnUngroupedMember(t *testing.T) {
 		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team_a", Label: "team_a"},
 			MemberCanonicalIDs: []string{"a1", "a2", "a3"}, Complete: true, Total: 3},
 	}
-	kept, groups, narrowed := NarrowGroupedCohort(cohort, 3)
+	kept, groups, narrowed, _ := NarrowGroupedCohort(cohort, 3)
 	if !narrowed {
 		t.Fatal("narrowed = false; 4 members against a 3-member cap must narrow")
 	}
@@ -429,7 +429,7 @@ func TestNarrowGroupedCohortCountsUngroupedMembersInTheCap(t *testing.T) {
 		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team_a", Label: "team_a"},
 			MemberCanonicalIDs: []string{"a1"}, Complete: true, Total: 1},
 	}
-	kept, _, narrowed := NarrowGroupedCohort(cohort, 2)
+	kept, _, narrowed, _ := NarrowGroupedCohort(cohort, 2)
 	if !narrowed {
 		t.Fatal("narrowed = false: 1 grouped + 2 ungrouped = 3 members against a 2-member cap")
 	}
@@ -524,8 +524,11 @@ func TestGroupedStage2NarrowingRecordsTheGroupBasisAndNotTheD2Counter(t *testing
 	if stage2 == nil {
 		t.Fatal("stage 2 never narrowed; this fixture cannot observe the basis it exists to pin")
 	}
-	if stage2.Basis != contractsv1.ContextFabricNarrowingBasisLargestGroupRoundRobin {
-		t.Errorf("counter Basis = %q for a grouped narrowing, want largest_group_round_robin", stage2.Basis)
+	// CHAOS-4678: grouped narrowing now runs the overlap-aware exact set
+	// cover, not the old round-robin, so the recorded basis names THAT
+	// order -- never an order that did not run.
+	if stage2.Basis != contractsv1.ContextFabricNarrowingBasisOverlapAwareSetCover {
+		t.Errorf("counter Basis = %q for a grouped narrowing, want overlap_aware_set_cover", stage2.Basis)
 	}
 	if stage2.Groups {
 		t.Error("counter Groups = true, but decision D2 narrows MEMBERS and every group survived; this is the D2 group-drop counter and must stay false")
@@ -544,11 +547,27 @@ func TestGroupedStage2NarrowingRecordsTheGroupBasisAndNotTheD2Counter(t *testing
 	if planStep == nil {
 		t.Fatal("the persisted plan records no stage-2 narrowing")
 	}
-	if planStep.Basis != contractsv1.ContextFabricNarrowingBasisLargestGroupRoundRobin {
-		t.Errorf("persisted plan Basis = %q, want largest_group_round_robin", planStep.Basis)
+	if planStep.Basis != contractsv1.ContextFabricNarrowingBasisOverlapAwareSetCover {
+		t.Errorf("persisted plan Basis = %q, want overlap_aware_set_cover", planStep.Basis)
 	}
 	if planStep.Groups {
 		t.Error("persisted plan claims groups were narrowed; members were")
+	}
+	// codex round 3, finding 1 (EXECUTED): stage 3's OWN "fit" event -- the
+	// cohort narrowed nothing further, but it is measuring the cohort stage
+	// 2 already shaped, and must name THAT basis rather than a stale
+	// default (largest_group_round_robin, which never ran here at all).
+	var fit *PlanNarrowingEvent
+	for index := range telemetry.planNarrowings {
+		if telemetry.planNarrowings[index].Stage == contractsv1.ContextFabricPlanNarrowingAssembledResult {
+			fit = &telemetry.planNarrowings[index]
+		}
+	}
+	if fit == nil {
+		t.Fatal("stage 3 emitted no assembled_result fit event; this fixture cannot observe the basis it exists to pin")
+	}
+	if fit.Basis != contractsv1.ContextFabricNarrowingBasisOverlapAwareSetCover {
+		t.Errorf("stage-3 fit event Basis = %q, want overlap_aware_set_cover -- stage 2 already narrowed this cohort with it", fit.Basis)
 	}
 }
 
