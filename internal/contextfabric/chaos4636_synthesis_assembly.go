@@ -78,6 +78,15 @@ type synthesisAssemblyParams struct {
 	CarriedStructureEntry *ConfirmedStructureEntry
 	CommitBases           CommitBasisSet
 	CommitDigests         CommitDecisionDigestSet
+	// GroupedNarrowingBasis is which grouped order (if any) already shaped
+	// Graph.Cohort before assembly ran -- stage 2's own selection, carried
+	// forward so stage 3's "fits" event (which measures this cohort as-is,
+	// having narrowed nothing itself) can report the order that actually
+	// produced it instead of a stale default (codex round 3, EXECUTED: a
+	// grouped cohort narrowed by overlap_aware_set_cover at stage 2, that
+	// then fits without a stage-3 narrowing, reported
+	// largest_group_round_robin). Zero value when stage 2 narrowed nothing.
+	GroupedNarrowingBasis contractsv1.ContextFabricNarrowingBasis
 	// Retry marks the SECOND pass. It exists so the doubled emissions above
 	// are attributable rather than silent.
 	Retry bool

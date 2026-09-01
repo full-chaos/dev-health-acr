@@ -553,6 +553,22 @@ func TestGroupedStage2NarrowingRecordsTheGroupBasisAndNotTheD2Counter(t *testing
 	if planStep.Groups {
 		t.Error("persisted plan claims groups were narrowed; members were")
 	}
+	// codex round 3, finding 1 (EXECUTED): stage 3's OWN "fit" event -- the
+	// cohort narrowed nothing further, but it is measuring the cohort stage
+	// 2 already shaped, and must name THAT basis rather than a stale
+	// default (largest_group_round_robin, which never ran here at all).
+	var fit *PlanNarrowingEvent
+	for index := range telemetry.planNarrowings {
+		if telemetry.planNarrowings[index].Stage == contractsv1.ContextFabricPlanNarrowingAssembledResult {
+			fit = &telemetry.planNarrowings[index]
+		}
+	}
+	if fit == nil {
+		t.Fatal("stage 3 emitted no assembled_result fit event; this fixture cannot observe the basis it exists to pin")
+	}
+	if fit.Basis != contractsv1.ContextFabricNarrowingBasisOverlapAwareSetCover {
+		t.Errorf("stage-3 fit event Basis = %q, want overlap_aware_set_cover -- stage 2 already narrowed this cohort with it", fit.Basis)
+	}
 }
 
 // ── codex round 6 ────────────────────────────────────────────────────────────

@@ -96,7 +96,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		fit := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
 			cohortMemberCount(params.Graph.Cohort), cohortMemberCount(params.Graph.Cohort),
 			params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0, false,
-			contractsv1.ContextFabricBudgetFits, "")
+			contractsv1.ContextFabricBudgetFits, params.GroupedNarrowingBasis)
 		fit.MeasuredItems = measurement.Items.Budgeted()
 		fit.MeasuredBytes = measurement.Bytes
 		fit.DeadlineReserved = e.synthesisDeadlineReserve > 0
