@@ -120,30 +120,114 @@ func cohortDiscoveryRequest(shape contextfabric.InvestigationShape) contextfabri
 	}
 }
 
-// TestDiscoverContextExplicitCohortNeverCallsExactNameCandidates is codex
-// round-1 finding P1: explicit_cohort means the question NAMES specific
-// members ("compare the frontend and backend teams"), while
-// chaos4348ExactNameCandidates returns the WHOLE org-wide kind census with
-// no term filtering at all. Admitting it for explicit_cohort would widen a
-// question naming two teams into a cohort containing every team in the org
-// -- the exact-name fetch is wired ONLY for discovered_cohort.
-func TestDiscoverContextExplicitCohortNeverCallsExactNameCandidates(t *testing.T) {
+// cohortDiscoveryRequestWithScopeAnchor is cohortDiscoveryRequest's CHAOS-
+// 4622-remainder variant: sets ScopeAnchorResolved, the signal
+// cohortExactNameCensusEligibility reads to distinguish a genuinely-named
+// explicit_cohort request ("compare the frontend and backend teams") from a
+// bare-kind-noun one that Shape's own instability happened to land on
+// explicit_cohort ("which teams are struggling").
+func cohortDiscoveryRequestWithScopeAnchor(shape contextfabric.InvestigationShape, scopeAnchorResolved bool) contextfabric.GraphDiscoveryRequest {
+	request := cohortDiscoveryRequest(shape)
+	request.ScopeAnchorResolved = scopeAnchorResolved
+	return request
+}
+
+// TestDiscoverContextExplicitCohortWithNamedAnchorNeverCallsExactNameCandidates
+// is CHAOS-4395's original carve-out (codex round-1 finding P1), PRESERVED
+// and now pinned on the specific condition that keeps it correct rather
+// than on Shape alone: explicit_cohort means the question NAMES specific
+// members ("compare the frontend and backend teams") -- when the winning
+// interpretation sample actually resolved a scope anchor,
+// chaos4348ExactNameCandidates' termless, org-wide kind census must still
+// never run, or a question naming two teams would widen into a cohort
+// containing every team in the org.
+//
+// This test used to gate on Shape alone (explicit_cohort ⇒ never), which
+// CHAOS-4622 traced as the wrong condition: Shape is the unstable variable,
+// and a bare-kind-noun cohort survey landing on explicit_cohort by
+// misclassification deserves the SAME census a discovered_cohort replicate
+// of the identical question gets. See
+// TestDiscoverContextExplicitCohortWithoutNamedAnchorCallsExactNameCandidates
+// immediately below for that other half.
+func TestDiscoverContextExplicitCohortWithNamedAnchorNeverCallsExactNameCandidates(t *testing.T) {
 	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
 		switch {
 		case strings.Contains(cypher, "fulltext"):
 			return nil, nil
 		case strings.Contains(cypher, "$kinds"):
-			t.Fatal("chaos4348ExactNameCandidates must not be called for ShapeExplicitCohort -- only ShapeDiscoveredCohort names a termless census")
+			t.Fatal("chaos4348ExactNameCandidates must not be called for ShapeExplicitCohort with a resolved scope anchor -- the question named specific members")
 			return nil, nil
 		default:
 			return nil, nil
 		}
 	}}
-	adapter := newFakeAdapter(t, fake)
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
 	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
 
-	if _, err := adapter.DiscoverContext(context.Background(), principal, cohortDiscoveryRequest(contextfabric.ShapeExplicitCohort)); err != nil {
+	if _, err := adapter.DiscoverContext(context.Background(), principal, cohortDiscoveryRequestWithScopeAnchor(contextfabric.ShapeExplicitCohort, true)); err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(telemetry.cohortExactNameCensusGates) != 1 {
+		t.Fatalf("cohortExactNameCensusGates = %v, want exactly 1 gate decision recorded", telemetry.cohortExactNameCensusGates)
+	}
+	got := telemetry.cohortExactNameCensusGates[0]
+	if got.admitted || got.basis != CohortExactNameCensusBasisAnchorSet {
+		t.Fatalf("gate decision = %+v, want {admitted:false basis:%q}", got, CohortExactNameCensusBasisAnchorSet)
+	}
+}
+
+// TestDiscoverContextExplicitCohortWithoutNamedAnchorCallsExactNameCandidates
+// is CHAOS-4622's remainder fix itself, RED on the parent commit (the gate
+// there reads Shape == ShapeDiscoveredCohort alone, so an explicit_cohort
+// request -- regardless of anchor -- always hit the `t.Fatal` this test's
+// fake conn would raise on a `$kinds` query).
+//
+// chris's own verbatim CHAOS-4686 question ("What are the states of each
+// team's health?...") and CHAOS-4622's own garbled captures share exactly
+// this shape: Shape non-deterministically resolves to explicit_cohort for
+// a question that names no specific team, and the winning interpretation
+// sample's ScopeAnchorTerm is unset because there was genuinely nothing to
+// anchor on. Denying the reliable census in that state left only the noisy
+// fulltext/single-subject fallback, which is what produced the "Ops Team +
+// 2 unrelated CI pipeline runs" garble. This proves the census now runs and
+// finds the real cohort even when Shape lands on explicit_cohort, as long
+// as no subject was actually named.
+func TestDiscoverContextExplicitCohortWithoutNamedAnchorCallsExactNameCandidates(t *testing.T) {
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			// The lexical search over "which teams are struggling" finds
+			// nothing -- no team is named by label, alias, or provider key,
+			// same as the discovered_cohort sibling test above.
+			return nil, nil
+		case strings.Contains(cypher, "$kinds"):
+			teamRow := fakeSubjectNodeRow("team", "team_platform", "Platform")
+			teamRow["n"].(*node).Properties["authorization_repositories"] = []string{"full-chaos/dev-health-acr"}
+			teamRow["n"].(*node).Properties["authorization_teams"] = []string{"team_platform"}
+			return []row{teamRow}, nil
+		default:
+			t.Fatalf("unexpected query for an anchor-unset explicit_cohort request: %s", cypher)
+			return nil, nil
+		}
+	}}
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"full-chaos/dev-health-acr"}}
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, cohortDiscoveryRequestWithScopeAnchor(contextfabric.ShapeExplicitCohort, false))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil || len(result.Cohort.Members) != 1 || result.Cohort.Members[0].Subject.CanonicalID != "team_platform" {
+		t.Fatalf("Cohort = %#v, want exactly one member (team_platform) discovered through the exact-name arm", result.Cohort)
+	}
+	if len(telemetry.cohortExactNameCensusGates) != 1 {
+		t.Fatalf("cohortExactNameCensusGates = %v, want exactly 1 gate decision recorded", telemetry.cohortExactNameCensusGates)
+	}
+	got := telemetry.cohortExactNameCensusGates[0]
+	if !got.admitted || got.basis != CohortExactNameCensusBasisAnchorUnset {
+		t.Fatalf("gate decision = %+v, want {admitted:true basis:%q}", got, CohortExactNameCensusBasisAnchorUnset)
 	}
 }
 

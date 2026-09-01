@@ -373,6 +373,18 @@ type GraphDiscoveryRequest struct {
 	// investigation's ResolveSubjects call already used -- never
 	// independently re-resolved. See GraphReader's doc comment.
 	Binding ResolvedGraphBinding `json:"-"`
+	// ScopeAnchorResolved (CHAOS-4622 remainder) is CHAOS-4632's own
+	// ScopeAnchorTerm signal (chaos4632_question_family_precedence.go),
+	// reduced to whether it resolved -- a RETRIEVAL POINTER, never a value
+	// (ScopeAnchorTerm's own doc comment: "nothing anywhere branches on its
+	// text"), so only the bool travels this far, never the term itself.
+	// True means this turn's winning interpretation sample named a
+	// specific subject; false means it did not, regardless of which Shape
+	// label the model happened to emit this turn -- Shape alone is the
+	// unstable variable CHAOS-4622 traced the garble to. See
+	// DiscoverContext's own exact-name census gate for the one place this
+	// is read.
+	ScopeAnchorResolved bool `json:"-"`
 }
 
 // CanonicalFactReader is the typed, read-only boundary back to canonical Dev

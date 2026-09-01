@@ -729,9 +729,20 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// produces or validates. Appending the org-wide census onto a request
 	// that already has a committed anchor would widen a subject-anchored
 	// investigation into an organization-wide cohort. The exact-name fetch
-	// is therefore reserved for a GENUINELY subjectless discovered_cohort
-	// request: Shape says "census", AND nothing was already committed.
-	if request.Interpretation.Shape == contextfabric.ShapeDiscoveredCohort && len(request.Resolution.Committed) == 0 {
+	// is therefore reserved for a GENUINELY subjectless eligible request:
+	// Shape/anchor say "census" (see cohortExactNameCensusEligibility's own
+	// doc comment -- CHAOS-4622 remainder widened this past Shape ==
+	// ShapeDiscoveredCohort alone), AND nothing was already committed.
+	shapeAnchorEligible, censusBasis := cohortExactNameCensusEligibility(request.Interpretation.Shape, request.ScopeAnchorResolved)
+	censusAdmitted := shapeAnchorEligible && len(request.Resolution.Committed) == 0
+	if censusBasis != "" && a.config.Telemetry != nil {
+		reportedBasis := censusBasis
+		if shapeAnchorEligible && !censusAdmitted {
+			reportedBasis = CohortExactNameCensusBasisAlreadyCommitted
+		}
+		a.config.Telemetry.RecordCohortExactNameCensusGate(ctx, principal.OrgID, censusAdmitted, reportedBasis)
+	}
+	if censusAdmitted {
 		ranExhaustiveCensus = true
 		exactNameNodes, truncated, exactNameErr := a.chaos4348ExactNameCandidates(ctx, key, principal.OrgID, temporal)
 		if exactNameErr != nil {

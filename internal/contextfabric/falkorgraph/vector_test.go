@@ -1169,6 +1169,11 @@ type recordingTelemetry struct {
 	// this only fires when the WHOLE cohort was denied.
 	cohortDeniedByAuthorization int
 
+	// cohortExactNameCensusGates records every RecordCohortExactNameCensusGate
+	// call verbatim (CHAOS-4622 remainder) -- a slice, so a test can assert
+	// the exact admitted/basis pair reported, not merely that the gate fired.
+	cohortExactNameCensusGates []cohortExactNameCensusGateRecord
+
 	// embedFailureEscalations records every
 	// RecordVectorProjectionEmbedFailuresEscalated call verbatim
 	// (CHAOS-4259) -- a slice, so a test can assert exactly when escalation
@@ -1207,6 +1212,14 @@ type lexiconExpansionRecord struct {
 type efRuntimeMismatchRecord struct {
 	key                             string
 	policyEfRuntime, indexEfRuntime int
+}
+
+// cohortExactNameCensusGateRecord is one recorded
+// RecordCohortExactNameCensusGate call's arguments (CHAOS-4622 remainder).
+type cohortExactNameCensusGateRecord struct {
+	orgID    string
+	admitted bool
+	basis    CohortExactNameCensusBasis
 }
 
 func (r *recordingTelemetry) RecordObservationTraversalDegraded(context.Context, string, int) {}
@@ -1254,6 +1267,9 @@ func (r *recordingTelemetry) RecordEdgesFilteredByReason(_ context.Context, _ st
 }
 func (r *recordingTelemetry) RecordCohortDeniedByAuthorization(_ context.Context, _ string, count int) {
 	r.cohortDeniedByAuthorization += count
+}
+func (r *recordingTelemetry) RecordCohortExactNameCensusGate(_ context.Context, orgID string, admitted bool, basis CohortExactNameCensusBasis) {
+	r.cohortExactNameCensusGates = append(r.cohortExactNameCensusGates, cohortExactNameCensusGateRecord{orgID: orgID, admitted: admitted, basis: basis})
 }
 
 func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {
