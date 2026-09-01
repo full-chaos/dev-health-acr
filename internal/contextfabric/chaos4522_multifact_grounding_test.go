@@ -242,6 +242,10 @@ func TestEveryValidateAgainstRejectionCarriesAClosedVocabularyReason(t *testing.
 			value := "fabricated"
 			d.ClaimedFacts[0].Rows = []ClaimedFactRow{{Fields: map[string]ScalarValue{"anything": {String: &value}}}}
 		}, RejectionReasonClaimRowsModelAuthored},
+		{"claim_time_series_rows", func(_ *SynthesisInput, d *SynthesisDraft) {
+			value := "fabricated"
+			d.ClaimedFacts[0].TimeSeriesRows = []ClaimedFactRow{{Fields: map[string]ScalarValue{"anything": {String: &value}}}}
+		}, RejectionReasonClaimTimeSeriesRowsModelAuthored},
 		{"claim_subject", func(_ *SynthesisInput, d *SynthesisDraft) {
 			d.ClaimedFacts[0].Subject = SubjectRef{Kind: SubjectProject, CanonicalID: "project_never_resolved", Label: "Elsewhere"}
 		}, RejectionReasonClaimSubjectOutOfScope},

@@ -115,10 +115,15 @@ func TestStripModelAuthoredClaimedFactTableContent(t *testing.T) {
 		{ClaimID: "claim_clean", Kind: FactReadiness, Field: "release_ready", Value: boolScalar(true)},
 		{ClaimID: "claim_dirty", Kind: FactReadiness, Field: "release_ready", Value: boolScalar(false),
 			Rows: []ClaimedFactRow{{Fields: map[string]ScalarValue{"anything": {String: &value}}}}},
+		// CHAOS-4682 (§5.1 P2): a third claim carrying ONLY the additive
+		// TimeSeriesRows pair -- proving the strip clears it independently
+		// of Rows, not merely alongside it.
+		{ClaimID: "claim_dirty_time_series", Kind: FactReadiness, Field: "release_ready", Value: boolScalar(false),
+			TimeSeriesRows: []ClaimedFactRow{{Fields: map[string]ScalarValue{"anything": {String: &value}}}}},
 	}
 	cleaned, stripped := StripModelAuthoredClaimedFactTableContent(claims)
-	if stripped != 1 {
-		t.Fatalf("stripped = %d, want 1", stripped)
+	if stripped != 2 {
+		t.Fatalf("stripped = %d, want 2", stripped)
 	}
 	if cleaned[0].Rows != nil {
 		t.Fatalf("cleaned[0].Rows = %+v, want nil (unchanged -- never carried Rows)", cleaned[0].Rows)
@@ -128,6 +133,12 @@ func TestStripModelAuthoredClaimedFactTableContent(t *testing.T) {
 	}
 	if claims[1].Rows == nil {
 		t.Fatalf("claims[1].Rows was mutated in place, want the input slice's claim left untouched")
+	}
+	if cleaned[2].TimeSeriesRows != nil {
+		t.Fatalf("cleaned[2].TimeSeriesRows = %+v, want nil (cleared)", cleaned[2].TimeSeriesRows)
+	}
+	if claims[2].TimeSeriesRows == nil {
+		t.Fatalf("claims[2].TimeSeriesRows was mutated in place, want the input slice's claim left untouched")
 	}
 }
 
@@ -182,6 +193,51 @@ func TestAModelAuthoredTableIsStrippedNotRejected(t *testing.T) {
 		Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:x", Label: "x"},
 		Field:   cleaned[0].Field, Value: contractsv1.ContextFabricScalarValue{Boolean: cleaned[0].Value.Boolean},
 		Rows: cleaned[0].Rows, Table: cleaned[0].Table,
+	}
+	if err := wire.Validate(); err != nil {
+		t.Fatalf("the stripped claim still does not validate: %v", err)
+	}
+}
+
+// TestAModelAuthoredTimeSeriesTableIsStrippedNotRejected mirrors
+// TestAModelAuthoredTableIsStrippedNotRejected exactly, for
+// TimeSeriesTable (CHAOS-4682, §5.1 P2): the same class of gap
+// StripModelAuthoredClaimedFactTableContent's own doc comment names --
+// "ANY field added to a model-output DTO becomes model-authorable, and
+// must be either grounded or stripped" -- applied to the field this
+// ticket added.
+func TestAModelAuthoredTimeSeriesTableIsStrippedNotRejected(t *testing.T) {
+	t.Parallel()
+	claim := ClaimedFact{
+		ClaimID: "claim_model_authored_time_series_table", Kind: FactReadiness,
+		Field: "release_ready", Value: boolScalar(true),
+		// NO TimeSeriesRows: a hallucinated declaration with nothing to
+		// describe is exactly the shape that turned a good answer into a
+		// rejected one for Table before this strip existed.
+		TimeSeriesTable: &contractsv1.ContextFabricClaimedFactTable{
+			Field: "daily_readiness", Shape: contractsv1.ContextFabricFactTableShapeTimeSeries,
+			Key: []string{"day"}, Measures: []string{"coverage_ratio"},
+		},
+	}
+	if err := claim.TimeSeriesTable.Validate(); err != nil {
+		t.Fatalf("fixture declaration is malformed (%v); a rejection would not be attributable to the strip", err)
+	}
+
+	cleaned, stripped := StripModelAuthoredClaimedFactTableContent([]ClaimedFact{claim})
+	if stripped != 1 {
+		t.Fatalf("stripped = %d, want 1 -- a model-authored declaration must be COUNTED, not silently kept", stripped)
+	}
+	if cleaned[0].TimeSeriesTable != nil {
+		t.Fatalf("cleaned[0].TimeSeriesTable = %+v, want nil -- a declaration is attached server-side from the cited canonical fact, never authored", cleaned[0].TimeSeriesTable)
+	}
+	if claim.TimeSeriesTable == nil {
+		t.Fatal("the input claim was mutated in place")
+	}
+	wire := contractsv1.ContextFabricClaimedFact{
+		ClaimID: cleaned[0].ClaimID, Kind: cleaned[0].Kind,
+		Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:x", Label: "x"},
+		Field:   cleaned[0].Field, Value: contractsv1.ContextFabricScalarValue{Boolean: cleaned[0].Value.Boolean},
+		TimeSeriesRows: cleaned[0].TimeSeriesRows, TimeSeriesTable: cleaned[0].TimeSeriesTable,
 	}
 	if err := wire.Validate(); err != nil {
 		t.Fatalf("the stripped claim still does not validate: %v", err)

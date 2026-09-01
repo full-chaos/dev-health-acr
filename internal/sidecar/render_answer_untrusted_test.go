@@ -165,6 +165,17 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 		"structured.key_facts[].table.measures[]":     "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
 		"structured.key_facts[].table.observations[]": "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
 		"structured.key_facts[].table.order_by":       "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
+		// CHAOS-4682 (§5.1 P2): the ADDITIVE time_series_rows/time_series_table
+		// pair is the SAME carve-out as rows/table above, for the identical
+		// reason -- this plain-text view has no chart for either table, and
+		// the claim's own field/value pair already renders and carries the
+		// untrusted marking.
+		"structured.key_facts[].time_series_rows[].fields{}.string": "not (yet) rendered by this plain-text markdown view; no producer routes a Rows-bearing fact into a driver's cited claims yet, and the claim's own field/value pair already renders with the untrusted marking",
+		"structured.key_facts[].time_series_table.field":            "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].time_series_rows above). Ask Dev reads the declaration from Structured directly",
+		"structured.key_facts[].time_series_table.key[]":            "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].time_series_rows above). Ask Dev reads the declaration from Structured directly",
+		"structured.key_facts[].time_series_table.measures[]":       "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].time_series_rows above). Ask Dev reads the declaration from Structured directly",
+		"structured.key_facts[].time_series_table.observations[]":   "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].time_series_rows above). Ask Dev reads the declaration from Structured directly",
+		"structured.key_facts[].time_series_table.order_by":         "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].time_series_rows above). Ask Dev reads the declaration from Structured directly",
 		// CHAOS-4398 PR3b: RankingTable and AffectedSubjects are now
 		// rendered (the "## Rows" block and the drivers' own "Affected:"
 		// line) -- the carve-out that stood here through PR3 is gone; both
@@ -371,6 +382,10 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 	// own Fields map entry -- same "never share a *string backing value
 	// across declared paths" reasoning as rowTeamName above.
 	rankingRowTeamName := "indigo"
+	// CHAOS-4682 (§5.1 P2): a fourth, distinct backing string for the
+	// additive time_series_rows[] Fields map entry -- same reasoning as
+	// rowTeamName/rankingRowTeamName above.
+	timeSeriesRowDay := "violet"
 	return contractsv1.ContextFabricAnswerProjection{
 		SchemaVersion:      contractsv1.ContextFabricAnswerProjectionSchema,
 		ResultID:           "result_injection1",
@@ -467,6 +482,19 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 				// identical reason Key/Measures are.
 				Observations: []string{"code_ownership_gini"},
 				OrderBy:      "commits_count",
+			},
+			// CHAOS-4682 (§5.1 P2): the ADDITIVE time_series_rows/
+			// time_series_table pair, non-empty for the identical
+			// "silently unresolvable" reason Rows/Table above document.
+			TimeSeriesRows: []contractsv1.ContextFabricClaimedFactRow{{
+				Fields: map[string]contractsv1.ContextFabricScalarValue{"day": {String: &timeSeriesRowDay}},
+			}},
+			TimeSeriesTable: &contractsv1.ContextFabricClaimedFactTable{
+				Field:        "daily_workload",
+				Shape:        contractsv1.ContextFabricFactTableShapeTimeSeries,
+				Key:          []string{"day"},
+				Measures:     []string{"backlog_size"},
+				Observations: []string{"insufficient_history"},
 			},
 		}},
 		// CHAOS-4415: a non-empty render shape so the reflection walk below

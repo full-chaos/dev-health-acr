@@ -914,6 +914,103 @@
           "commits_count"
         ]
       }
+    },
+    {
+      "claim_id": "claim_workload_ask_dev_backlog",
+      "kind": "workload",
+      "subject": {
+        "kind": "project",
+        "canonical_id": "project_ask_dev",
+        "label": "Ask Dev"
+      },
+      "field": "backlog_size",
+      "value": {
+        "integer": 12
+      },
+      "rows": [
+        {
+          "fields": {
+            "team_id": {
+              "string": "team_chaos"
+            },
+            "team_name": {
+              "string": "CHAOS"
+            },
+            "work_scope_id": {
+              "string": "scope-1"
+            },
+            "computed_at": {
+              "string": "2026-08-30T00:00:00Z"
+            },
+            "backlog_size": {
+              "integer": 12
+            },
+            "throughput_mean": {
+              "number": 4.2
+            }
+          }
+        }
+      ],
+      "table": {
+        "field": "team_breakdown",
+        "shape": "breakdown",
+        "key": [
+          "team_id",
+          "team_name",
+          "work_scope_id",
+          "computed_at"
+        ],
+        "measures": [
+          "throughput_mean",
+          "throughput_stddev",
+          "backlog_size",
+          "forecast_p50_days"
+        ]
+      },
+      "time_series_rows": [
+        {
+          "fields": {
+            "day": {
+              "string": "2026-08-03"
+            },
+            "backlog_size": {
+              "integer": 9
+            }
+          }
+        },
+        {
+          "fields": {
+            "day": {
+              "string": "2026-08-18"
+            },
+            "backlog_size": {
+              "integer": 11
+            }
+          }
+        },
+        {
+          "fields": {
+            "day": {
+              "string": "2026-08-30"
+            },
+            "backlog_size": {
+              "integer": 12
+            }
+          }
+        }
+      ],
+      "time_series_table": {
+        "field": "daily_workload",
+        "shape": "time_series",
+        "key": [
+          "day"
+        ],
+        "measures": [
+          "backlog_size",
+          "throughput_mean",
+          "throughput_stddev"
+        ]
+      }
     }
   ],
   "coverage": {
@@ -1092,7 +1189,7 @@
       "kind": "series",
       "presentation": "line",
       "selected_by": "dated_fact_trend",
-      "title": "Commits count over time \u2014 Ask Dev",
+      "title": "Commits count over time — Ask Dev",
       "axis_kind": "time",
       "axis_label": "day",
       "value_label": "Commits count",
@@ -1134,11 +1231,59 @@
           ]
         }
       ]
+    },
+    {
+      "shape_id": "rs_4",
+      "kind": "series",
+      "presentation": "line",
+      "selected_by": "dated_fact_trend",
+      "title": "Backlog size over time — Ask Dev",
+      "axis_kind": "time",
+      "axis_label": "day",
+      "value_label": "Backlog size",
+      "series": [
+        {
+          "key": "backlog_size",
+          "label": "Backlog size",
+          "points": [
+            {
+              "label": "2026-08-03",
+              "value": 9,
+              "source": {
+                "kind": "claimed_fact_row",
+                "claim_id": "claim_workload_ask_dev_backlog",
+                "row_index": 0,
+                "field": "backlog_size"
+              }
+            },
+            {
+              "label": "2026-08-18",
+              "value": 11,
+              "source": {
+                "kind": "claimed_fact_row",
+                "claim_id": "claim_workload_ask_dev_backlog",
+                "row_index": 1,
+                "field": "backlog_size"
+              }
+            },
+            {
+              "label": "2026-08-30",
+              "value": 12,
+              "source": {
+                "kind": "claimed_fact_row",
+                "claim_id": "claim_workload_ask_dev_backlog",
+                "row_index": 2,
+                "field": "backlog_size"
+              }
+            }
+          ]
+        }
+      ]
     }
   ],
   "completeness": {
     "terminal_status": "complete",
-    "claimed_facts_count": 5,
-    "rows_count": 7
+    "claimed_facts_count": 6,
+    "rows_count": 8
   }
 }

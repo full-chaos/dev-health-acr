@@ -288,7 +288,14 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// contributed one new string leaf (table.observations[]),
 		// classified conservatively untrusted exactly like key[]/
 		// measures[] just above.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 207},
+		// CHAOS-4682: 207 -> 214 -- the additive time_series_rows/
+		// time_series_table pair (§5.1 P2) contributed the SAME seven
+		// leaves table/rows already contributes (field, key[], measures[],
+		// observations[], order_by, shape, and rows[].fields{}.string),
+		// classified identically and for the identical reason: a dual-table
+		// fact's second table is producer-issued content, exactly as
+		// untrusted as its first.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 214},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -329,7 +336,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// as the answer_projection surface above.
 		// CHAOS-4680: 305 -> 306 -- the same new table.observations[] leaf
 		// as the answer_projection surface above.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 306},
+		// CHAOS-4682: 306 -> 313 -- the same seven new time_series_rows/
+		// time_series_table leaves as the answer_projection surface above.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 313},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)

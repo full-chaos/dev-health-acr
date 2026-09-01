@@ -279,7 +279,7 @@ func renderShapeSourcesFromResult(result ContextFabricInvestigationResult) rende
 		}
 	}
 	for _, fact := range result.ClaimedFacts {
-		sources.factRows[fact.ClaimID] = fact.Rows
+		sources.factRows[fact.ClaimID] = fact.renderableRows()
 	}
 	return sources
 }
@@ -330,7 +330,7 @@ func renderShapeSourcesFromProjection(projection ContextFabricAnswerProjection) 
 		}
 	}
 	for _, fact := range projection.KeyFacts {
-		sources.factRows[fact.ClaimID] = fact.Rows
+		sources.factRows[fact.ClaimID] = fact.renderableRows()
 	}
 	return sources
 }

@@ -360,6 +360,15 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 				// table is exactly the unidentified table this contract
 				// exists to stop.
 				Table: fact.Table,
+				// TimeSeriesRows/TimeSeriesTable (CHAOS-4682, §5.1 P2)
+				// mirror Rows/Table exactly, for the identical reason:
+				// the additive second table is copied evidence too, and
+				// dropping it here would silently defeat P2 on this
+				// bounded surface -- a dual-table fact's trend would
+				// reach the canonical result but never Ask Dev, which
+				// reads from here.
+				TimeSeriesRows:  fact.TimeSeriesRows,
+				TimeSeriesTable: fact.TimeSeriesTable,
 			})
 		}
 		drivers = append(drivers, contractsv1.ContextFabricProjectedDriver{

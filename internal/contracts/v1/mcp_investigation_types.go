@@ -221,6 +221,18 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	// exactly like key[]/measures[] just above for the identical reason.
 	"structured.key_facts[].table.observations[]",
 	"structured.key_facts[].table.order_by",
+	// CHAOS-4682 (§5.1 P2): the ADDITIVE time_series_rows/time_series_table
+	// pair carries the SAME producer-sourced content as rows/table just
+	// above -- a dual-table fact's second table, classified identically
+	// and for the identical reason. time_series_table.shape is the one
+	// leaf here that is closed and lives in trustedBecauseClosed instead,
+	// same treatment as table.shape.
+	"structured.key_facts[].time_series_rows[].fields{}.string",
+	"structured.key_facts[].time_series_table.field",
+	"structured.key_facts[].time_series_table.key[]",
+	"structured.key_facts[].time_series_table.measures[]",
+	"structured.key_facts[].time_series_table.observations[]",
+	"structured.key_facts[].time_series_table.order_by",
 	// CHAOS-4415: a render shape's DISPLAY text. Title/axis_label/
 	// value_label/series[].label/points[].label are built from canonical
 	// subject labels and producer column names, so they are entity display
@@ -338,6 +350,16 @@ var MCPInvestigationResultUntrustedFields = []string{
 	// exactly like key[]/measures[] just above for the identical reason.
 	"structured.claimed_facts[].table.observations[]",
 	"structured.claimed_facts[].table.order_by",
+	// CHAOS-4682 (§5.1 P2): the ADDITIVE time_series_rows/time_series_table
+	// pair, classified identically to rows/table just above and for the
+	// identical reason. time_series_table.shape lives in
+	// trustedBecauseClosed instead, same treatment as table.shape.
+	"structured.claimed_facts[].time_series_rows[].fields{}.string",
+	"structured.claimed_facts[].time_series_table.field",
+	"structured.claimed_facts[].time_series_table.key[]",
+	"structured.claimed_facts[].time_series_table.measures[]",
+	"structured.claimed_facts[].time_series_table.observations[]",
+	"structured.claimed_facts[].time_series_table.order_by",
 	// CHAOS-4415: a render shape's DISPLAY text. Title/axis_label/
 	// value_label/series[].label/points[].label are built from canonical
 	// subject labels and producer column names, so they are entity display
