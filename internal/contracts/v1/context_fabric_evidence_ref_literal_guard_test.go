@@ -2,8 +2,10 @@ package v1
 
 import (
 	"go/ast"
+	"go/constant"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/tools/go/packages"
 )
 
 // evidenceRefLiteralAllowlist is the SHORT, closed list of files allowed to
@@ -159,42 +163,82 @@ var hardcodedEvidenceEntitySegment = regexp.MustCompile(`acr:v1:[\s\S]`)
 // it) would otherwise sail through layer 1 (the file is allowlisted) with
 // nothing else to catch it.
 //
-// Const resolution is bounded to SAME-FILE, top-level, single-value string
-// consts -- not a general dataflow analysis, not vars, not consts from an
-// import, not anything requiring more than one file's AST. That is a
+// Const resolution is bounded to SAME-FILE, top-level, string consts -- not
+// a general dataflow analysis, not vars, not consts from an import, not
+// anything requiring more than one file's own type-checked AST. That is a
 // tractable, closed extension appropriate for three small, already fully
 // reviewed files; it does not reopen the unbounded-idiom problem the
 // coordinator's invariant ruling closed for the rest of the tree.
 //
-// Also fails on any AMBIGUOUS identifier -- a name resolveStringOperand
-// would otherwise resolve to a top-level const, but that is ALSO declared
-// as a local (a parameter, a `:=`, a local `var`) SOMEWHERE in the file
-// (verification round P2, EXECUTED-confirmed by planting the shadow, chris
-// ruled fail-closed 2026-09-01 07:55 PDT): resolveStringOperand's own doc
-// comment explains why this check is deliberately NAME-based, not
-// object-identity-based, and fails closed rather than risk resolving a
-// shadowed reference to the wrong declaration.
+// Resolution is OBJECT-IDENTITY-based (CHAOS-4721, replacing the original
+// NAME-based version): go/types type-checks each allowlisted file's own
+// package (via golang.org/x/tools/go/packages, real importer, real
+// dependency resolution) and resolveStringOperand compares
+// types.Info.Uses[ident] against the SPECIFIC types.Object of the tracked
+// top-level const of that name -- not the name alone. A same-named local
+// (a parameter, a `:=`, a local `var`, or even a local `const`) that
+// shadows the top-level const resolves via go/types to a DIFFERENT object,
+// so it is never mistaken for the const it shadows (verification round P2,
+// EXECUTED-confirmed by planting the shadow; chris ruled fail-closed
+// 2026-09-01 07:55 PDT while this fix was tracked as CHAOS-4721). That
+// shadow case is reported as a violation -- CERTAIN, not ambiguous, because
+// go/types has already resolved exactly which declaration the identifier
+// means; it is no longer the file-wide "this name appears as a local
+// ANYWHERE" heuristic the interim fix used, so an unrelated same-named
+// local elsewhere in the file that is never used in one of these
+// expressions no longer produces a spurious fail.
 func TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary(t *testing.T) {
 	root := moduleRootFromThisFile(t)
+	modulePath := moduleImportPath(t, root)
+
+	importPaths := map[string]bool{}
+	for rel := range evidenceRefLiteralAllowlist {
+		importPaths[modulePath+"/"+filepath.ToSlash(filepath.Dir(rel))] = true
+	}
+	patterns := make([]string, 0, len(importPaths))
+	for importPath := range importPaths {
+		patterns = append(patterns, importPath)
+	}
+
+	cfg := &packages.Config{
+		Dir:  root,
+		Mode: packages.NeedName | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
+	}
+	pkgs, err := packages.Load(cfg, patterns...)
+	if err != nil {
+		t.Fatalf("packages.Load(%v): %v", patterns, err)
+	}
+	if n := packages.PrintErrors(pkgs); n > 0 {
+		t.Fatalf("packages.Load(%v) reported %d package error(s) (printed above) -- an allowlisted package did not type-check cleanly", patterns, n)
+	}
+	pkgByPath := make(map[string]*packages.Package, len(pkgs))
+	for _, p := range pkgs {
+		pkgByPath[p.PkgPath] = p
+	}
+
 	var violations []string
 	for rel := range evidenceRefLiteralAllowlist {
-		path := filepath.Join(root, filepath.FromSlash(rel))
-		fset := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fset, path, nil, 0)
-		if parseErr != nil {
-			t.Fatalf("parse allowlisted file %s: %v", rel, parseErr)
+		importPath := modulePath + "/" + filepath.ToSlash(filepath.Dir(rel))
+		pkg, ok := pkgByPath[importPath]
+		if !ok || pkg.TypesInfo == nil || pkg.Types == nil {
+			t.Fatalf("packages.Load did not return usable type info for %s (needed for allowlisted file %s)", importPath, rel)
 		}
-		consts := fileStringConsts(file)
-		shadowed := shadowedLocalNames(file)
-		runs, ambiguous := adjacentStringLiteralRuns(file, consts, shadowed)
-		for _, a := range ambiguous {
-			pos := fset.Position(a.pos)
-			violations = append(violations, pos.String()+" ("+rel+"): identifier \""+a.name+"\" is used in a string-building expression AND is ALSO declared as a local elsewhere in this file -- ambiguous without proper scope resolution, failing closed for human review; rename to remove the shadow")
+		absPath := filepath.Join(root, filepath.FromSlash(rel))
+		target, statErr := os.Stat(absPath)
+		if statErr != nil {
+			t.Fatalf("stat allowlisted file %s: %v", rel, statErr)
+		}
+		file := findSyntaxFile(t, pkg, target)
+		fileConsts := topLevelStringConstsDeclaredInFile(pkg, target)
+		runs, shadows := adjacentStringLiteralRuns(file, pkg.TypesInfo, fileConsts)
+		for _, s := range shadows {
+			pos := pkg.Fset.Position(s.pos)
+			violations = append(violations, pos.String()+" ("+rel+"): identifier \""+s.name+"\" shadows the top-level const of the same name and is used in a string-building expression in this trusted file -- go/types confirms it refers to a DIFFERENT declaration than the tracked const, which is exactly the shape a hardcoded-segment evasion would take; rename to remove the shadow")
 		}
 		for _, run := range runs {
 			joined := strings.Join(run.values, "")
 			if hardcodedEvidenceEntitySegment.MatchString(joined) {
-				pos := fset.Position(run.pos)
+				pos := pkg.Fset.Position(run.pos)
 				violations = append(violations, pos.String()+" ("+rel+"): "+joined)
 			}
 		}
@@ -204,114 +248,104 @@ func TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary(t *testing.T) {
 	}
 }
 
-// shadowedLocalNames returns the set of identifier names declared as a
-// LOCAL anywhere in the file -- a function parameter or named result, a
-// `:=` short variable declaration, a local `var`, or a range variable.
-// Used by resolveStringOperand (via TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary)
-// to fail closed whenever a name that ALSO exists as a top-level const
-// could plausibly refer to a shadowing local instead -- see that function's
-// own doc comment for why "anywhere in the file", not just the enclosing
-// function, is the deliberately conservative scope chris ruled for.
-func shadowedLocalNames(file *ast.File) map[string]bool {
-	names := map[string]bool{}
-	add := func(ident *ast.Ident) {
-		if ident != nil && ident.Name != "" && ident.Name != "_" {
-			names[ident.Name] = true
+// moduleImportPath reads the module directive from go.mod at root, so the
+// allowlist's repo-relative file paths (the single source of truth for
+// which files/packages this guard type-checks) can be turned into import
+// paths for packages.Load without a second, separately-maintained mapping
+// that could drift from evidenceRefLiteralAllowlist.
+func moduleImportPath(t *testing.T, root string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatalf("read go.mod: %v", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if after, ok := strings.CutPrefix(line, "module "); ok {
+			return strings.TrimSpace(after)
 		}
 	}
-	ast.Inspect(file, func(n ast.Node) bool {
-		switch node := n.(type) {
-		case *ast.AssignStmt:
-			if node.Tok == token.DEFINE {
-				for _, lhs := range node.Lhs {
-					if ident, ok := lhs.(*ast.Ident); ok {
-						add(ident)
-					}
-				}
-			}
-		case *ast.GenDecl:
-			if node.Tok == token.VAR {
-				for _, spec := range node.Specs {
-					if valueSpec, ok := spec.(*ast.ValueSpec); ok {
-						for _, ident := range valueSpec.Names {
-							add(ident)
-						}
-					}
-				}
-			}
-		case *ast.Field:
-			// Covers function parameters AND named results -- both appear
-			// as *ast.Field under a *ast.FuncType's Params/Results.
-			for _, ident := range node.Names {
-				add(ident)
-			}
-		case *ast.RangeStmt:
-			if node.Tok == token.DEFINE {
-				if ident, ok := node.Key.(*ast.Ident); ok {
-					add(ident)
-				}
-				if ident, ok := node.Value.(*ast.Ident); ok {
-					add(ident)
-				}
-			}
-		}
-		return true
-	})
-	return names
+	t.Fatalf("go.mod at %s has no module directive", root)
+	return ""
 }
 
-// fileStringConsts collects every top-level, single-value string const
-// declaration in the file (const NAME = "literal") into a name -> value
-// map, so adjacentStringLiteralRuns can resolve an *ast.Ident operand back
-// to the literal it names -- see TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary's
-// own doc comment for the scope and reasoning.
-func fileStringConsts(file *ast.File) map[string]string {
-	consts := map[string]string{}
-	for _, decl := range file.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok || genDecl.Tok != token.CONST {
+// findSyntaxFile returns the *ast.File packages.Load parsed for target out
+// of pkg.Syntax -- the SAME AST nodes pkg.TypesInfo.Uses/Defs key on, unlike
+// a fresh go/parser.ParseFile of the same path, whose *ast.Ident nodes would
+// not appear in the type-checked package's Uses map at all. Matched via
+// os.SameFile rather than a raw path-string comparison, robust to symlinks
+// and any path normalization the go/packages driver applies.
+func findSyntaxFile(t *testing.T, pkg *packages.Package, target os.FileInfo) *ast.File {
+	t.Helper()
+	for _, f := range pkg.Syntax {
+		filename := pkg.Fset.Position(f.Pos()).Filename
+		info, err := os.Stat(filename)
+		if err != nil {
 			continue
 		}
-		for _, spec := range genDecl.Specs {
-			valueSpec, ok := spec.(*ast.ValueSpec)
-			if !ok || len(valueSpec.Names) != 1 || len(valueSpec.Values) != 1 {
-				continue
-			}
-			lit, ok := valueSpec.Values[0].(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				continue
-			}
-			value, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				continue
-			}
-			consts[valueSpec.Names[0].Name] = value
+		if os.SameFile(target, info) {
+			return f
 		}
+	}
+	t.Fatalf("packages.Load(%s) did not include syntax for the requested file", pkg.PkgPath)
+	return nil
+}
+
+// topLevelStringConstsDeclaredInFile returns the package-scope (top-level)
+// string consts whose declaration lives in target, keyed by name, as their
+// go/types objects -- NOT their values; resolveStringOperand reads the
+// value straight off the *types.Const via go/constant, so there is only one
+// place (the type checker itself) that ever decides what a const's value
+// is. Restricted to consts declared in target (matched via os.SameFile, not
+// a path string) rather than any const visible from the package scope,
+// preserving the deliberate SAME-FILE bound TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary's
+// own doc comment explains -- a const declared in a sibling file of the
+// same package is out of scope here even though go/types would resolve it
+// fine, because this check is not a general dataflow analysis.
+func topLevelStringConstsDeclaredInFile(pkg *packages.Package, target os.FileInfo) map[string]types.Object {
+	consts := map[string]types.Object{}
+	scope := pkg.Types.Scope()
+	for _, name := range scope.Names() {
+		constObj, ok := scope.Lookup(name).(*types.Const)
+		if !ok {
+			continue
+		}
+		basic, ok := constObj.Type().Underlying().(*types.Basic)
+		if !ok || basic.Info()&types.IsString == 0 {
+			continue
+		}
+		declFilename := pkg.Fset.Position(constObj.Pos()).Filename
+		declInfo, err := os.Stat(declFilename)
+		if err != nil || !os.SameFile(target, declInfo) {
+			continue
+		}
+		consts[name] = constObj
 	}
 	return consts
 }
 
 // resolveStringOperand returns expr's string value if it is a string
-// BasicLit, OR an *ast.Ident naming a same-file top-level string const (per
-// fileStringConsts) -- otherwise resolved is false and the caller treats
-// expr as a run-breaking non-literal operand.
+// BasicLit, OR an *ast.Ident that go/types resolves (via info.Uses) to
+// EXACTLY the types.Object of a same-file top-level string const named in
+// fileConsts -- otherwise resolved is false and the caller treats expr as a
+// run-breaking non-literal operand.
 //
-// Deliberately NAME-based, not object-identity-based (verification round
-// P2, EXECUTED-confirmed, chris ruled 2026-09-01 07:55 PDT): go/ast alone
-// does not resolve which DECLARATION an *ast.Ident refers to -- that needs
-// go/types, a real type-checker, with an importer for the file's actual
-// imports. Rather than build that for three small files, this resolves by
-// NAME and, when a name is ambiguous (it also appears as a shadowedLocalNames
-// entry -- a parameter, a `:=`, a local var, ANYWHERE in the file, not just
-// the enclosing function), returns ambiguous=true instead of silently
-// picking either interpretation. A caller that gets ambiguous=true must
-// FAIL the check, not skip it -- resolving the wrong way is what let a
-// planted local shadow of a top-level const slip past both layers
-// undetected (the exact bug this fail-closed behavior fixes). The correct,
-// known endpoint is object-identity resolution via go/types; tracked as a
-// follow-up (see the Linear ticket cited in this file's own commit and in
-// .codex-review-context.md) rather than built here now.
-func resolveStringOperand(expr ast.Expr, consts map[string]string, shadowed map[string]bool) (value string, resolved bool, ambiguous bool) {
+// OBJECT-IDENTITY-based (CHAOS-4721, replacing the interim NAME-based
+// version): info comes from a real go/types check of the file's actual
+// package, with a real importer resolving its actual imports (via
+// golang.org/x/tools/go/packages -- see
+// TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary), so info.Uses[e] is
+// the SPECIFIC declaration e refers to, not a name to pattern-match. When
+// e's name matches a tracked top-level const but info.Uses[e] is a
+// DIFFERENT object -- a parameter, a `:=`, a local var, or even a local
+// `const` of the same name -- that is a certain, not ambiguous, shadow:
+// go/types has already told us this reference does NOT mean the tracked
+// const, so resolveStringOperand does not resolve it (shadows=true) rather
+// than risk resolving a shadowed reference to the wrong declaration, the
+// exact bug the interim, name-based version had (a planted local shadow of
+// a top-level const silently substituted the CONST's value for the
+// reference, verification round P2).
+func resolveStringOperand(expr ast.Expr, info *types.Info, fileConsts map[string]types.Object) (value string, resolved bool, shadows bool) {
 	switch e := expr.(type) {
 	case *ast.BasicLit:
 		if e.Kind != token.STRING {
@@ -323,20 +357,19 @@ func resolveStringOperand(expr ast.Expr, consts map[string]string, shadowed map[
 		}
 		return v, true, false
 	case *ast.Ident:
-		v, isConst := consts[e.Name]
-		if !isConst {
-			// Not a top-level const at all -- an ordinary parameter/local
-			// like "id" or "entityType". No ambiguity: this is simply a
-			// non-literal operand, the same as before consts existed.
+		tracked, isTracked := fileConsts[e.Name]
+		if !isTracked {
+			// Not a name this file declares as a top-level string const at
+			// all -- an ordinary parameter/local like "id" or "entityType".
 			return "", false, false
 		}
-		if shadowed[e.Name] {
-			// IS a top-level const, but the SAME NAME is also declared as
-			// a local somewhere in the file -- cannot tell by name alone
-			// which declaration this reference means. Fail closed.
-			return "", false, true
+		if obj := info.Uses[e]; obj == tracked {
+			constObj := obj.(*types.Const)
+			return constant.StringVal(constObj.Val()), true, false
 		}
-		return v, true, false
+		// The name matches a tracked top-level const, but go/types resolved
+		// THIS specific reference to a different object -- a local shadow.
+		return "", false, true
 	default:
 		return "", false, false
 	}
@@ -347,7 +380,7 @@ type literalRun struct {
 	values []string
 }
 
-type ambiguousRef struct {
+type shadowRef struct {
 	pos  token.Pos
 	name string
 }
@@ -360,13 +393,14 @@ type ambiguousRef struct {
 // here for layer 2's use; layer 1 does not need this level of shape
 // awareness at all, which is the whole point of closing by invariant). An
 // operand may be a literal directly, or an *ast.Ident resolved through
-// consts (see fileStringConsts / resolveStringOperand) -- the merge-gate
-// round's P2 finding. Any AMBIGUOUS identifier (shadowed per shadowedLocalNames)
-// is returned separately, not folded into a run, so the caller can fail
-// the check unconditionally on it (verification round P2).
-func adjacentStringLiteralRuns(file *ast.File, consts map[string]string, shadowed map[string]bool) ([]literalRun, []ambiguousRef) {
+// fileConsts via go/types object identity (see resolveStringOperand) -- the
+// merge-gate round's P2 finding. Any identifier resolveStringOperand
+// reports as SHADOWING a tracked const is returned separately, not folded
+// into a run, so the caller can fail the check on it (verification round
+// P2, now object-identity-certain rather than name-ambiguous).
+func adjacentStringLiteralRuns(file *ast.File, info *types.Info, fileConsts map[string]types.Object) ([]literalRun, []shadowRef) {
 	var runs []literalRun
-	var ambiguous []ambiguousRef
+	var shadowed []shadowRef
 	record := func(pos token.Pos, value string) {
 		runs = append(runs, literalRun{pos: pos, values: []string{value}})
 	}
@@ -379,11 +413,11 @@ func adjacentStringLiteralRuns(file *ast.File, consts map[string]string, shadowe
 			current = literalRun{}
 		}
 		for _, operand := range operands {
-			value, resolved, isAmbiguous := resolveStringOperand(operand, consts, shadowed)
-			if isAmbiguous {
+			value, resolved, shadows := resolveStringOperand(operand, info, fileConsts)
+			if shadows {
 				flush()
 				if ident, ok := operand.(*ast.Ident); ok {
-					ambiguous = append(ambiguous, ambiguousRef{pos: operand.Pos(), name: ident.Name})
+					shadowed = append(shadowed, shadowRef{pos: operand.Pos(), name: ident.Name})
 				}
 				continue
 			}
@@ -446,7 +480,7 @@ func adjacentStringLiteralRuns(file *ast.File, consts map[string]string, shadowe
 		}
 		return true
 	})
-	return runs, ambiguous
+	return runs, shadowed
 }
 
 // flattenAdd returns the leaf operands of a +-expression chain in left-to-
