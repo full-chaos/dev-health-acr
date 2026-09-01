@@ -153,6 +153,17 @@ func ContextFabricSourceObservationLabel(source string) string {
 // acr:v1:<entity-type>:<id...> evidence ref, plus whether the entity-type
 // segment was in the known registry (false = the generic floor was used;
 // the caller counts that via telemetry, never the segment itself).
+//
+// The label is CLAMPED to the label bound (terra r2 P1, EXECUTED): the ref
+// id itself may legally run to ContextFabricEvidenceRefIDMaxLength (256)
+// runes, so an unclamped "<noun>: <id>" concatenation could exceed the
+// 160-rune label bound -- and because the engine stamps this label for
+// every closure member immediately before write-path validation, the
+// oversized label would fail the WHOLE investigation (ErrInvalidResult →
+// 500) on a perfectly valid evidence ref. Truncating a chip label is
+// strictly better than losing the answer that carries it -- the full id
+// stays one fold away in the raw evidence_ref_ids the consumer already
+// renders in Details.
 func ContextFabricEvidenceRefLabel(refID string) (string, bool) {
 	parts := strings.Split(refID, ":")
 	if len(parts) < 4 || parts[0] != "acr" || parts[1] != "v1" {
@@ -165,12 +176,12 @@ func ContextFabricEvidenceRefLabel(refID string) (string, bool) {
 		if id == "" {
 			return "Evidence", false
 		}
-		return "Evidence: " + id, false
+		return clampLabel("Evidence: " + id), false
 	}
 	if id == "" {
 		return label, true
 	}
-	return label + ": " + id, true
+	return clampLabel(label + ": " + id), true
 }
 
 // countPhrase renders a detail's structured Count for a label — the ONLY

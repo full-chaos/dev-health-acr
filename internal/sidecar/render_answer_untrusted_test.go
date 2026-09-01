@@ -103,6 +103,20 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 		// render_shapes labels above do, so that a future markdown rendering
 		// of the group axis cannot ship the label unmarked.
 		"structured.cohort.groups[].subject.label":              "not rendered by this plain-text markdown view; the group axis is a structural layout Ask Dev reads off Structured, and every member still appears in the flat member list",
+		// CHAOS-4690: display labels and structured coverage details are
+		// Ask Dev's rendering surface (it reads Structured directly and
+		// renders phrasing ▸ label with raw behind a Details fold). This
+		// plain-text markdown view keeps rendering the coverage summary's
+		// own source/state/reason columns, so nothing is lost to a reader
+		// here; the label/phrasing/raw duplicates ride only on Structured.
+		// All six declarations STAY (exactly the render_shapes precedent
+		// above) so a future markdown rendering cannot ship them unmarked.
+		"structured.coverage_summary[].label":       "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the display labels",
+		"structured.coverage_summary[].state_label": "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the display labels",
+		"structured.coverage_details[].label":       "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the structured coverage details",
+		"structured.coverage_details[].phrasing":    "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the structured coverage details",
+		"structured.coverage_details[].raw":         "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the structured coverage details (raw stays behind its Details fold there)",
+		"structured.evidence_ref_labels{}":          "not rendered by this plain-text markdown view; Ask Dev reads Structured directly and renders the evidence chips with these labels",
 		"structured.question":                                   "the caller already holds the question it asked; echoing it adds nothing to a bounded answer",
 		"structured.clarification.candidates[].match_reasons[]": "the candidate line carries the subject and receipt an agent needs to choose; match reasoning is inspection detail, available through the full result",
 		// CHAOS-4118 (team-lead ruling 2026-08-22): windowConfirmationRequiredResult
@@ -476,8 +490,20 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 		}},
 		CoverageSummary: []contractsv1.ContextFabricProjectedCoverage{{
 			Source: "work_items", State: contractsv1.ContextFabricSourceUnavailable, Reason: "a reason",
+			Label: "a source label", StateLabel: "a state label",
 		}},
-		Limitations:     []string{"a limitation"},
+		// CHAOS-4690: populated so the planting walk reaches every declared
+		// coverage_details/evidence_ref_labels leaf -- same reasoning as the
+		// StructureNeeds block below.
+		CoverageDetails: []contractsv1.ContextFabricCoverageDetail{{
+			DetailID: "cov-01", Source: "canonical_fact:blockers",
+			Code:      contractsv1.ContextFabricCoverageDetailFactReadFailed,
+			Degrading: true, FactKind: contractsv1.ContextFabricFactBlockers,
+			SourceState: contractsv1.ContextFabricSourceUnavailable,
+			Label:       "a detail label", Phrasing: "a detail phrasing", Raw: "blockers: a raw reason",
+		}},
+		EvidenceRefLabels: map[string]string{"evidence_inject01": "Evidence: inject01"},
+		Limitations:       []string{"a limitation"},
 		Warnings:        []string{"a warning"},
 		EvidenceRefIDs:  []string{"evidence_inject01"},
 		SubjectReceipts: []contractsv1.ContextFabricBoundSubjectReceipt{{ResultID: "result_injection1", ReceiptID: "receipt_injection1"}},

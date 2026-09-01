@@ -124,3 +124,29 @@ func TestCoverageDetailLabelQuantities(t *testing.T) {
 		t.Errorf("narrowing rider missing: %q", got)
 	}
 }
+
+// TestEvidenceRefLabelClampsAtMaxLengthRef pins terra r2's P1 (EXECUTED):
+// a contract-VALID evidence ref at the full 256-rune id bound must compose
+// a label that still satisfies the 160-rune label bound and the exact-
+// closure validator — an unclamped label failed the whole investigation
+// (500) on a legal ref. Red on 37df311d (label 250 runes, validator
+// rejects); green with the clamp.
+func TestEvidenceRefLabelClampsAtMaxLengthRef(t *testing.T) {
+	longRef := "acr:v1:team:" + strings.Repeat("x", ContextFabricEvidenceRefIDMaxLength-len("acr:v1:team:"))
+	if got := len([]rune(longRef)); got != ContextFabricEvidenceRefIDMaxLength {
+		t.Fatalf("fixture ref is %d runes, want the exact bound %d", got, ContextFabricEvidenceRefIDMaxLength)
+	}
+	for _, ref := range []string{longRef, "acr:v1:unregistered-segment:" + strings.Repeat("y", 240)} {
+		label, _ := ContextFabricEvidenceRefLabel(ref)
+		if got := len([]rune(label)); got > ContextFabricCoverageDetailLabelMaxLength {
+			t.Fatalf("label for %d-rune ref is %d runes, exceeds the %d bound", len([]rune(ref)), got, ContextFabricCoverageDetailLabelMaxLength)
+		}
+		result := ContextFabricInvestigationResult{
+			EvidenceRefIDs:    []string{ref},
+			EvidenceRefLabels: map[string]string{ref: label},
+		}
+		if err := validateEvidenceRefLabels(result); err != nil {
+			t.Fatalf("derived label for a contract-valid ref must validate, got: %v", err)
+		}
+	}
+}
