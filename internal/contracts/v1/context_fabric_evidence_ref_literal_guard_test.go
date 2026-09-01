@@ -165,6 +165,15 @@ var hardcodedEvidenceEntitySegment = regexp.MustCompile(`acr:v1:[\s\S]`)
 // tractable, closed extension appropriate for three small, already fully
 // reviewed files; it does not reopen the unbounded-idiom problem the
 // coordinator's invariant ruling closed for the rest of the tree.
+//
+// Also fails on any AMBIGUOUS identifier -- a name resolveStringOperand
+// would otherwise resolve to a top-level const, but that is ALSO declared
+// as a local (a parameter, a `:=`, a local `var`) SOMEWHERE in the file
+// (verification round P2, EXECUTED-confirmed by planting the shadow, chris
+// ruled fail-closed 2026-09-01 07:55 PDT): resolveStringOperand's own doc
+// comment explains why this check is deliberately NAME-based, not
+// object-identity-based, and fails closed rather than risk resolving a
+// shadowed reference to the wrong declaration.
 func TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary(t *testing.T) {
 	root := moduleRootFromThisFile(t)
 	var violations []string
@@ -176,7 +185,13 @@ func TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary(t *testing.T) {
 			t.Fatalf("parse allowlisted file %s: %v", rel, parseErr)
 		}
 		consts := fileStringConsts(file)
-		for _, run := range adjacentStringLiteralRuns(file, consts) {
+		shadowed := shadowedLocalNames(file)
+		runs, ambiguous := adjacentStringLiteralRuns(file, consts, shadowed)
+		for _, a := range ambiguous {
+			pos := fset.Position(a.pos)
+			violations = append(violations, pos.String()+" ("+rel+"): identifier \""+a.name+"\" is used in a string-building expression AND is ALSO declared as a local elsewhere in this file -- ambiguous without proper scope resolution, failing closed for human review; rename to remove the shadow")
+		}
+		for _, run := range runs {
 			joined := strings.Join(run.values, "")
 			if hardcodedEvidenceEntitySegment.MatchString(joined) {
 				pos := fset.Position(run.pos)
@@ -187,6 +202,62 @@ func TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary(t *testing.T) {
 	for _, v := range violations {
 		t.Errorf("allowlisted file's acr:v1: literal run does not end exactly at the prefix boundary -- an entity-type segment is hardcoded even inside a reviewed producer file: %s", v)
 	}
+}
+
+// shadowedLocalNames returns the set of identifier names declared as a
+// LOCAL anywhere in the file -- a function parameter or named result, a
+// `:=` short variable declaration, a local `var`, or a range variable.
+// Used by resolveStringOperand (via TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary)
+// to fail closed whenever a name that ALSO exists as a top-level const
+// could plausibly refer to a shadowing local instead -- see that function's
+// own doc comment for why "anywhere in the file", not just the enclosing
+// function, is the deliberately conservative scope chris ruled for.
+func shadowedLocalNames(file *ast.File) map[string]bool {
+	names := map[string]bool{}
+	add := func(ident *ast.Ident) {
+		if ident != nil && ident.Name != "" && ident.Name != "_" {
+			names[ident.Name] = true
+		}
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.AssignStmt:
+			if node.Tok == token.DEFINE {
+				for _, lhs := range node.Lhs {
+					if ident, ok := lhs.(*ast.Ident); ok {
+						add(ident)
+					}
+				}
+			}
+		case *ast.GenDecl:
+			if node.Tok == token.VAR {
+				for _, spec := range node.Specs {
+					if valueSpec, ok := spec.(*ast.ValueSpec); ok {
+						for _, ident := range valueSpec.Names {
+							add(ident)
+						}
+					}
+				}
+			}
+		case *ast.Field:
+			// Covers function parameters AND named results -- both appear
+			// as *ast.Field under a *ast.FuncType's Params/Results.
+			for _, ident := range node.Names {
+				add(ident)
+			}
+		case *ast.RangeStmt:
+			if node.Tok == token.DEFINE {
+				if ident, ok := node.Key.(*ast.Ident); ok {
+					add(ident)
+				}
+				if ident, ok := node.Value.(*ast.Ident); ok {
+					add(ident)
+				}
+			}
+		}
+		return true
+	})
+	return names
 }
 
 // fileStringConsts collects every top-level, single-value string const
@@ -221,31 +292,64 @@ func fileStringConsts(file *ast.File) map[string]string {
 }
 
 // resolveStringOperand returns expr's string value if it is a string
-// BasicLit, OR an *ast.Ident naming a same-file top-level string const
-// (per fileStringConsts) -- otherwise ok is false and the caller treats
+// BasicLit, OR an *ast.Ident naming a same-file top-level string const (per
+// fileStringConsts) -- otherwise resolved is false and the caller treats
 // expr as a run-breaking non-literal operand.
-func resolveStringOperand(expr ast.Expr, consts map[string]string) (string, bool) {
+//
+// Deliberately NAME-based, not object-identity-based (verification round
+// P2, EXECUTED-confirmed, chris ruled 2026-09-01 07:55 PDT): go/ast alone
+// does not resolve which DECLARATION an *ast.Ident refers to -- that needs
+// go/types, a real type-checker, with an importer for the file's actual
+// imports. Rather than build that for three small files, this resolves by
+// NAME and, when a name is ambiguous (it also appears as a shadowedLocalNames
+// entry -- a parameter, a `:=`, a local var, ANYWHERE in the file, not just
+// the enclosing function), returns ambiguous=true instead of silently
+// picking either interpretation. A caller that gets ambiguous=true must
+// FAIL the check, not skip it -- resolving the wrong way is what let a
+// planted local shadow of a top-level const slip past both layers
+// undetected (the exact bug this fail-closed behavior fixes). The correct,
+// known endpoint is object-identity resolution via go/types; tracked as a
+// follow-up (see the Linear ticket cited in this file's own commit and in
+// .codex-review-context.md) rather than built here now.
+func resolveStringOperand(expr ast.Expr, consts map[string]string, shadowed map[string]bool) (value string, resolved bool, ambiguous bool) {
 	switch e := expr.(type) {
 	case *ast.BasicLit:
 		if e.Kind != token.STRING {
-			return "", false
+			return "", false, false
 		}
-		value, err := strconv.Unquote(e.Value)
+		v, err := strconv.Unquote(e.Value)
 		if err != nil {
-			return "", false
+			return "", false, false
 		}
-		return value, true
+		return v, true, false
 	case *ast.Ident:
-		value, ok := consts[e.Name]
-		return value, ok
+		v, isConst := consts[e.Name]
+		if !isConst {
+			// Not a top-level const at all -- an ordinary parameter/local
+			// like "id" or "entityType". No ambiguity: this is simply a
+			// non-literal operand, the same as before consts existed.
+			return "", false, false
+		}
+		if shadowed[e.Name] {
+			// IS a top-level const, but the SAME NAME is also declared as
+			// a local somewhere in the file -- cannot tell by name alone
+			// which declaration this reference means. Fail closed.
+			return "", false, true
+		}
+		return v, true, false
 	default:
-		return "", false
+		return "", false, false
 	}
 }
 
 type literalRun struct {
 	pos    token.Pos
 	values []string
+}
+
+type ambiguousRef struct {
+	pos  token.Pos
+	name string
 }
 
 // adjacentStringLiteralRuns returns every maximal run of directly-adjacent
@@ -257,9 +361,12 @@ type literalRun struct {
 // awareness at all, which is the whole point of closing by invariant). An
 // operand may be a literal directly, or an *ast.Ident resolved through
 // consts (see fileStringConsts / resolveStringOperand) -- the merge-gate
-// round's P2 finding.
-func adjacentStringLiteralRuns(file *ast.File, consts map[string]string) []literalRun {
+// round's P2 finding. Any AMBIGUOUS identifier (shadowed per shadowedLocalNames)
+// is returned separately, not folded into a run, so the caller can fail
+// the check unconditionally on it (verification round P2).
+func adjacentStringLiteralRuns(file *ast.File, consts map[string]string, shadowed map[string]bool) ([]literalRun, []ambiguousRef) {
 	var runs []literalRun
+	var ambiguous []ambiguousRef
 	record := func(pos token.Pos, value string) {
 		runs = append(runs, literalRun{pos: pos, values: []string{value}})
 	}
@@ -272,8 +379,15 @@ func adjacentStringLiteralRuns(file *ast.File, consts map[string]string) []liter
 			current = literalRun{}
 		}
 		for _, operand := range operands {
-			value, ok := resolveStringOperand(operand, consts)
-			if !ok {
+			value, resolved, isAmbiguous := resolveStringOperand(operand, consts, shadowed)
+			if isAmbiguous {
+				flush()
+				if ident, ok := operand.(*ast.Ident); ok {
+					ambiguous = append(ambiguous, ambiguousRef{pos: operand.Pos(), name: ident.Name})
+				}
+				continue
+			}
+			if !resolved {
 				flush()
 				continue
 			}
@@ -332,7 +446,7 @@ func adjacentStringLiteralRuns(file *ast.File, consts map[string]string) []liter
 		}
 		return true
 	})
-	return runs
+	return runs, ambiguous
 }
 
 // flattenAdd returns the leaf operands of a +-expression chain in left-to-
