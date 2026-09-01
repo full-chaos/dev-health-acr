@@ -342,16 +342,25 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 	//
 	// UPDATED for CHAOS-4681: this rollup's top-level Fields NOW sets
 	// "estimate_coverage_ratio" (the freshest daily_readiness day, copied in
-	// below under its own field name -- metrics.go's readRepositoryMetrics
-	// idiom), so the claim this comment used to make here no longer holds.
-	// readinessGapSignal's numberField read of that key is subject-kind-blind
-	// (it scans every FactReadiness fact in the member's own slice), so it
-	// WOULD pick this up if a project-kind Cohort ever existed -- none does
-	// today (no production caller constructs `Cohort{Kind: SubjectProject}`,
-	// confirmed by repository-wide search), so RankCohort's current team-only
-	// behavior, and TestRankCohortReadinessUntouchedByDailySeriesField's own
-	// team-cohort fixture, are both unaffected. Flagged here rather than left
-	// silently stale, for whoever adds project cohorts next.
+	// below under its own field name), so the claim this comment used to
+	// make here no longer holds. readinessGapSignal's numberField read of
+	// that key is subject-kind-blind, and project cohorts ARE constructed
+	// in production (graphrank/discover.go's interpretedCohortKind, on a
+	// "project"/"initiative" question -- an earlier version of this comment
+	// claimed otherwise; that claim was wrong, caught in codex round 1, and
+	// no test by the name this comment used to cite ever existed).
+	//
+	// Unlike health.go's project rollup (which deliberately does NOT copy
+	// its Observation field, "severity", to avoid engaging
+	// healthRiskSignal), estimate_coverage_ratio here IS the declared
+	// Measure this ticket exists to expose -- there is no narrower copy
+	// that both satisfies the ticket and avoids readinessGapSignal. A
+	// project cohort's readiness-gap signal, previously always
+	// `available=false`, now correctly reports the same worst-covered-scope
+	// gap a team cohort already gets. This is accepted as the intended
+	// generalization, not a defect: readinessGapSignal was always written
+	// to be subject-kind-blind, and this ticket is precisely what was
+	// missing for it to work on project subjects too.
 	dailyByProject, seriesErr := p.queryProjectReadinessDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
 		return 0, false, seriesErr
