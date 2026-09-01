@@ -160,10 +160,11 @@ func TestEveryDeclaredUntrustedStringIsMarkedInTheRendering(t *testing.T) {
 		// exactly as rows[] was, so a future rendering cannot ship it
 		// unmarked. Ask Dev reads `table` from Structured directly and is
 		// where the declaration is actually consumed.
-		"structured.key_facts[].table.field":      "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
-		"structured.key_facts[].table.key[]":      "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
-		"structured.key_facts[].table.measures[]": "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
-		"structured.key_facts[].table.order_by":   "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
+		"structured.key_facts[].table.field":          "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
+		"structured.key_facts[].table.key[]":          "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
+		"structured.key_facts[].table.measures[]":     "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
+		"structured.key_facts[].table.observations[]": "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
+		"structured.key_facts[].table.order_by":       "not rendered by this plain-text markdown view; it declares the shape of a table this view does not render (see key_facts[].rows above). Ask Dev reads the declaration from Structured directly",
 		// CHAOS-4398 PR3b: RankingTable and AffectedSubjects are now
 		// rendered (the "## Rows" block and the drivers' own "Affected:"
 		// line) -- the carve-out that stood here through PR3 is gone; both
@@ -462,7 +463,10 @@ func baseProjection() contractsv1.ContextFabricAnswerProjection {
 				Shape:    contractsv1.ContextFabricFactTableShapeRanking,
 				Key:      []string{"team_name"},
 				Measures: []string{"commits_count"},
-				OrderBy:  "commits_count",
+				// CHAOS-4680: the third declared role, non-empty for the
+				// identical reason Key/Measures are.
+				Observations: []string{"code_ownership_gini"},
+				OrderBy:      "commits_count",
 			},
 		}},
 		// CHAOS-4415: a non-empty render shape so the reflection walk below
