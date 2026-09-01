@@ -189,6 +189,45 @@ type PlanTelemetry interface {
 	// diagnosable and a single summary field could not represent two stages
 	// acting for different reasons.
 	RecordPlanNarrowing(ctx context.Context, principal storage.Principal, event PlanNarrowingEvent)
+	// RecordGroupedCohortCompleteness (CHAOS-4733) reports the outcome of
+	// folding a grouped cohort's completeness at BuildCohortGroups +
+	// ApplyGroupedCohortCompleteness time: whether the pre-grouping cohort
+	// was itself truncated at discovery, and how many of the groups built
+	// from it came out marked incomplete. Before this fix, a served
+	// Complete=true grouped cohort over a capped discovery was invisible in
+	// every artifact; this is what makes it countable. Closed
+	// enums/counts only, fired once per grouped answer.
+	RecordGroupedCohortCompleteness(ctx context.Context, principal storage.Principal, event GroupedCohortCompletenessEvent)
+}
+
+// GroupedCohortCompletenessEvent (CHAOS-4733) is CLOSED ENUMS AND COUNTS
+// ONLY -- no question text, no subject identifier, no group label -- the
+// same discipline PlanNarrowingEvent holds, for the same reason.
+type GroupedCohortCompletenessEvent struct {
+	// Family identifies which plan grouped, so a regression can be
+	// attributed to a family-table row.
+	Family QuestionFamily
+	// PreGroupingComplete/PreGroupingTruncated are the cohort's own
+	// discovery-level flags AS THEY STOOD before BuildCohortGroups ran --
+	// what DiscoveredCohort (or a truncated census) set. This is the
+	// signal that used to have no surviving representation once grouped.
+	PreGroupingComplete  bool
+	PreGroupingTruncated bool
+	// GroupCount is how many groups BuildCohortGroups produced.
+	GroupCount int
+	// GroupsMarkedIncomplete counts groups whose own Complete came out
+	// false -- under this fix, that is every group whenever
+	// PreGroupingComplete is false, so the count is mostly diagnostic of
+	// group count rather than of anything the groups decided on their own,
+	// but it is what makes "how many groups a truncated discovery actually
+	// touched" countable without re-deriving it from PreGroupingComplete
+	// and GroupCount at query time.
+	GroupsMarkedIncomplete int
+	// Complete/Truncated are the FINAL cohort-level flags after
+	// ApplyGroupedCohortCompleteness folded the pre-grouping state and the
+	// groups together.
+	Complete  bool
+	Truncated bool
 }
 
 // recordPlanNarrowing is the engine's nil-safe emitter.
@@ -197,6 +236,15 @@ func (e *Engine) recordPlanNarrowing(ctx context.Context, principal storage.Prin
 		return
 	}
 	e.telemetry.RecordPlanNarrowing(ctx, principal, event)
+}
+
+// recordGroupedCohortCompleteness is the engine's nil-safe emitter for
+// GroupedCohortCompletenessEvent.
+func (e *Engine) recordGroupedCohortCompleteness(ctx context.Context, principal storage.Principal, event GroupedCohortCompletenessEvent) {
+	if e.telemetry == nil {
+		return
+	}
+	e.telemetry.RecordGroupedCohortCompleteness(ctx, principal, event)
 }
 
 // effectiveResponseBudget is the ceiling this request will actually be
