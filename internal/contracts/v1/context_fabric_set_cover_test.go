@@ -87,14 +87,25 @@ func TestSelectGroupCoverMembersTiesBreakByCanonicalIDLexical(t *testing.T) {
 // dropping a group -- exactly as the pre-CHAOS-4678 round-robin behaved, and
 // exactly what a stage-3 measurement (not this function) turns into a
 // planned refusal.
+//
+// The shared member is deliberately placed LAST in each of A and B's member
+// lists (codex round 2, finding 1, EXECUTED): with it first, the OLD
+// per-group-independent peel algorithm discards each group's LAST element
+// first and happens to converge on the shared member by coincidence of list
+// order, not because it is overlap-aware -- making an earlier version of
+// this test pass identically against origin/main's pre-CHAOS-4678 algorithm
+// (own re-run: `NarrowGroupedCohort` on that exact fixture also returns
+// `{shared, c1}`), which proved nothing about THIS change. With the shared
+// member last, the old algorithm peels it away from BOTH groups
+// independently and ends up with 3 members ({a1, b1, c1}, no sharing
+// exploited); the new algorithm still finds the true 2-member minimum cover
+// ({shared, c1}) regardless of list order, which is the genuinely
+// differentiating assertion added below.
 func TestSelectGroupCoverMembersFloorSurvivesEvenOverBudget(t *testing.T) {
 	t.Parallel()
-	// No member is shared between all three groups, so the minimum cover
-	// needs at least 2 members (e.g. "shared" for A and B, plus one for C),
-	// which exceeds the 1-member budget.
 	groups := []ContextFabricCohortGroup{
-		{Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "A", Label: "A"}, MemberCanonicalIDs: []string{"shared", "a1"}, Complete: true, Total: 2},
-		{Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "B", Label: "B"}, MemberCanonicalIDs: []string{"shared", "b1"}, Complete: true, Total: 2},
+		{Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "A", Label: "A"}, MemberCanonicalIDs: []string{"a1", "shared"}, Complete: true, Total: 2},
+		{Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "B", Label: "B"}, MemberCanonicalIDs: []string{"b1", "shared"}, Complete: true, Total: 2},
 		{Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "C", Label: "C"}, MemberCanonicalIDs: []string{"c1"}, Complete: true, Total: 1},
 	}
 	selected, basis := SelectGroupCoverMembers(groups, nil, 1)
@@ -114,8 +125,13 @@ func TestSelectGroupCoverMembersFloorSurvivesEvenOverBudget(t *testing.T) {
 			t.Fatalf("group %q lost every member; selected = %v -- decision D2's floor forbids dropping a group", group.Subject.CanonicalID, selected)
 		}
 	}
-	if len(selected) <= 1 {
-		t.Fatalf("selected %d members for a 1-member budget that cannot cover 3 disjoint-enough groups with 1 member; the floor should have gone OVER budget, not silently satisfied it", len(selected))
+	// THE DIFFERENTIATING ASSERTION: the true minimum cover is 2 members
+	// (the shared member plus C's), not 3 -- proving the selection actually
+	// exploited the overlap rather than merely floor-protecting each group
+	// independently, which is all the old algorithm did.
+	want := map[string]struct{}{"shared": {}, "c1": {}}
+	if !sameSet(selected, want) {
+		t.Fatalf("selected = %v, want the overlap-exploiting 2-member floor {shared,c1}, not a 3-member independent-peel floor", selected)
 	}
 }
 
