@@ -716,6 +716,32 @@ type EngineTelemetry interface {
 	// not an outcome" convention this file's other gated telemetry
 	// already follows (RecordModelRowsStripped's own doc comment).
 	RecordEvidenceLabelFallback(ctx context.Context, principal storage.Principal, count int)
+	// RecordCoverageDisclosurePhrasing (CHAOS-4690 Commit F, design §4.2)
+	// reports the outcome of ONE Synthesize call's coverage-disclosure
+	// guard (RuntimeAnswerSynthesizer.Synthesize, model_runtime.go) --
+	// the closed CoverageDisclosureOutcome vocabulary (phrased/
+	// partial_absent/rejected_by_guard/discarded_undecodable/absent) plus
+	// how many of the result's coverage details ended up carrying a
+	// Phrasing (phrased) out of how many exist in total (total).
+	//
+	// Declared on THIS interface, not an optional side interface, for the
+	// same CHAOS-4085/CHAOS-4089 reason every sibling method above is: a
+	// branch whose telemetry sink can be omitted by a compiling
+	// implementation is the exact failure mode this repo keeps
+	// re-learning.
+	//
+	// Called UNCONDITIONALLY, once per Synthesize call that reaches
+	// result composition (ValidateAgainst already passed) -- unlike the
+	// "nothing to do is not an outcome" gated methods beside it
+	// (RecordModelRowsStripped, RecordEvidenceLabelFallback), absent is
+	// itself one of this method's own closed outcome values and is the
+	// expected common case (most answers disclose nothing), so it is the
+	// denominator every other outcome's rate is read against, not a
+	// signal worth suppressing.
+	//
+	// Content-safe by construction: a closed outcome enum and two counts
+	// only, never a detail_id, a phrasing's text, or a Label.
+	RecordCoverageDisclosurePhrasing(ctx context.Context, principal storage.Principal, outcome CoverageDisclosureOutcome, phrased, total int)
 }
 
 // CohortRankedEvent is RecordCohortRanked's content-safe payload: counts and

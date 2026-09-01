@@ -75,7 +75,10 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			name:    "synthesis system prompt",
 			version: DefaultSynthesisPromptVersion,
 			content: synthesisSystemPrompt,
-			digest:  "81965d011760f32602f666927f7e8e29585c97046eb3e0689904f8a6c849e410",
+			// v13 -> v14 (CHAOS-4690 Commit F): the coverage_disclosures
+			// paragraph. See DefaultSynthesisPromptVersion's own doc
+			// comment for what changed and why.
+			digest: "f29c3351272cffa109843d398a9fca9d3b4f2a4be51848a7b74b9309340d36a4",
 		},
 		{
 			name:    "interpretation model-output schema",
