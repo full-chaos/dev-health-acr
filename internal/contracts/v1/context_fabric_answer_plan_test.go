@@ -2,51 +2,79 @@ package v1
 
 import "testing"
 
-// TestPlanNarrowingCardinalityStageRejectsBasesItCannotHonestlyClaim pins
-// codex round 4, finding 1 (EXECUTED): a pre-read cardinality-stage record
-// claiming overlap_aware_set_cover passed validation, even though groups do
-// not exist until after the fact read (this package's own header). The
-// pre-existing attention_rank check is exercised alongside it -- it had no
-// direct unit test of its own before this one.
-func TestPlanNarrowingCardinalityStageRejectsBasesItCannotHonestlyClaim(t *testing.T) {
+// TestPlanNarrowingStageBasisTotality is the VALIDATION TOTALITY sweep chris
+// ordered: every stage x basis combination (3 stages x 4 bases = 12 cells),
+// each with an EXPLICIT accept/reject verdict, matching what live code can
+// actually produce -- not argued in the abstract.
+//
+// Live-code source of truth for each cell, traced through the engine rather
+// than assumed:
+//   - Stage 1 (cardinality) hardcodes canonical_id_lexical unconditionally
+//     (chaos4636_answer_plan.go's planBudget); nothing else runs there.
+//   - Stage 2 (synthesis_input) runs AFTER the fact read but BEFORE
+//     RankCohort (engine.go calls RankCohort strictly after the stage-2
+//     narrowing block), so attention_rank cannot be live there either --
+//     found by writing this sweep, not by review (codex round 4's gap
+//     covered only the cardinality stage). Stage 2 reports
+//     canonical_id_lexical (flat cohort), overlap_aware_set_cover (grouped,
+//     within the guard) or largest_group_round_robin (grouped, beyond it).
+//   - Stage 3 (assembled_result) is where RankCohort's output could in
+//     principle be reported as attention_rank -- this enum member's own
+//     doc comment says "available ONLY at stage 3" -- though no CURRENT
+//     code path actually emits it there; it is accepted as the designed,
+//     forward-compatible home for a basis nothing yet produces, not
+//     rejected as unreachable. Stage 3 also reports canonical_id_lexical
+//     (flat) and either grouped basis (see chaos4636_budget_stage3.go).
+func TestPlanNarrowingStageBasisTotality(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		name    string
-		basis   ContextFabricNarrowingBasis
-		wantErr bool
-	}{
-		{"canonical_id_lexical is the only honest stage-1 order", ContextFabricNarrowingBasisCanonicalIDLexical, false},
-		{"attention_rank does not exist before the fact read", ContextFabricNarrowingBasisAttentionRank, true},
-		{"overlap_aware_set_cover needs groups that do not exist before the fact read", ContextFabricNarrowingBasisOverlapAwareSetCover, true},
-		{"largest_group_round_robin also needs groups that do not exist yet", ContextFabricNarrowingBasisLargestGroupRoundRobin, true},
+	stages := []ContextFabricPlanNarrowingStage{
+		ContextFabricPlanNarrowingCardinality,
+		ContextFabricPlanNarrowingSynthesisInput,
+		ContextFabricPlanNarrowingAssembledResult,
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			n := ContextFabricPlanNarrowing{
-				Stage: ContextFabricPlanNarrowingCardinality, Basis: tc.basis, Before: 5, After: 5,
-			}
-			err := n.Validate()
-			if tc.wantErr && err == nil {
-				t.Fatalf("Validate() = nil, want an error for basis %q at the cardinality stage", tc.basis)
-			}
-			if !tc.wantErr && err != nil {
-				t.Fatalf("Validate() = %v, want nil for basis %q at the cardinality stage", err, tc.basis)
-			}
-		})
+	bases := []ContextFabricNarrowingBasis{
+		ContextFabricNarrowingBasisCanonicalIDLexical,
+		ContextFabricNarrowingBasisLargestGroupRoundRobin,
+		ContextFabricNarrowingBasisAttentionRank,
+		ContextFabricNarrowingBasisOverlapAwareSetCover,
 	}
-}
-
-// TestPlanNarrowingSynthesisInputStageAcceptsTheSetCover: the SAME basis
-// that the cardinality stage must reject is exactly what a later,
-// post-fact-read stage is expected to report -- proving the fix is scoped
-// to the stage, not a blanket rejection of the new enum member.
-func TestPlanNarrowingSynthesisInputStageAcceptsTheSetCover(t *testing.T) {
-	t.Parallel()
-	n := ContextFabricPlanNarrowing{
-		Stage: ContextFabricPlanNarrowingSynthesisInput, Basis: ContextFabricNarrowingBasisOverlapAwareSetCover, Before: 5, After: 3,
+	// acceptedAt[basis] = the set of stages that basis is honest at.
+	acceptedAt := map[ContextFabricNarrowingBasis]map[ContextFabricPlanNarrowingStage]bool{
+		ContextFabricNarrowingBasisCanonicalIDLexical: {
+			ContextFabricPlanNarrowingCardinality:     true,
+			ContextFabricPlanNarrowingSynthesisInput:  true,
+			ContextFabricPlanNarrowingAssembledResult: true,
+		},
+		ContextFabricNarrowingBasisLargestGroupRoundRobin: {
+			ContextFabricPlanNarrowingCardinality:     false,
+			ContextFabricPlanNarrowingSynthesisInput:  true,
+			ContextFabricPlanNarrowingAssembledResult: true,
+		},
+		ContextFabricNarrowingBasisAttentionRank: {
+			ContextFabricPlanNarrowingCardinality:     false,
+			ContextFabricPlanNarrowingSynthesisInput:  false,
+			ContextFabricPlanNarrowingAssembledResult: true,
+		},
+		ContextFabricNarrowingBasisOverlapAwareSetCover: {
+			ContextFabricPlanNarrowingCardinality:     false,
+			ContextFabricPlanNarrowingSynthesisInput:  true,
+			ContextFabricPlanNarrowingAssembledResult: true,
+		},
 	}
-	if err := n.Validate(); err != nil {
-		t.Fatalf("Validate() = %v, want nil -- the set cover is exactly what a post-fact-read stage should report", err)
+	for _, stage := range stages {
+		for _, basis := range bases {
+			wantAccept := acceptedAt[basis][stage]
+			t.Run(string(stage)+"_x_"+string(basis), func(t *testing.T) {
+				n := ContextFabricPlanNarrowing{Stage: stage, Basis: basis, Before: 5, After: 3}
+				err := n.Validate()
+				if wantAccept && err != nil {
+					t.Fatalf("Validate() = %v, want ACCEPT for stage=%q basis=%q", err, stage, basis)
+				}
+				if !wantAccept && err == nil {
+					t.Fatalf("Validate() = nil, want REJECT for stage=%q basis=%q -- this combination is not something live code can produce", stage, basis)
+				}
+			})
+		}
 	}
 }
 

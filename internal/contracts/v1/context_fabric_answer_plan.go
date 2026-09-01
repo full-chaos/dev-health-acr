@@ -304,26 +304,31 @@ func (n ContextFabricPlanNarrowing) Validate() error {
 	if n.Overrun != "" && !ValidContextFabricBudgetOverrun(n.Overrun) {
 		return fmt.Errorf("plan narrowing overrun %q is not a member of the closed vocabulary", n.Overrun)
 	}
-	// Neither attention rank nor either GROUPED basis exists before the fact
-	// read, so a stage that runs earlier cannot honestly claim to have used
-	// any of them. Attention rank needs RankCohort's scores; both grouped
-	// bases need GROUPS, and this package's own header records that groups
-	// exist only after the fact read too -- member-first narrowing over a
-	// group axis necessarily lives in stages 2 and 3, never the pre-read
-	// cardinality clamp (codex round 4, EXECUTED: this check covered only
-	// attention rank and silently accepted a cardinality-stage record
-	// claiming the overlap-aware set cover, which stage 1 structurally
-	// cannot run -- and largest_group_round_robin turns out to have had the
-	// identical, pre-existing gap, caught by this fix's own test rather
-	// than by review). This is the one mistake §6.3a records being made in
-	// EVERY earlier revision, stated here as something the contract
-	// refuses to represent -- for every basis that cannot exist yet, not
-	// just the one this slice's design first guarded.
-	if n.Stage == ContextFabricPlanNarrowingCardinality {
-		switch n.Basis {
-		case ContextFabricNarrowingBasisAttentionRank:
-			return fmt.Errorf("plan narrowing at the pre-read cardinality stage cannot use attention rank, which RankCohort computes only after the fact read")
-		case ContextFabricNarrowingBasisOverlapAwareSetCover, ContextFabricNarrowingBasisLargestGroupRoundRobin:
+	// A stage cannot honestly claim a basis that does not exist yet at the
+	// moment it runs. Attention rank needs RankCohort's scores, which this
+	// enum's own doc comment says are "available ONLY at stage 3" -- i.e.
+	// NOT at stage 2 either, since RankCohort runs after stage 2's own
+	// narrowing, not before it. Both grouped bases need GROUPS, and this
+	// package's own header records that groups exist only after the fact
+	// read too -- member-first narrowing over a group axis necessarily
+	// lives in stages 2 and 3, never the pre-read cardinality clamp (codex
+	// round 4, EXECUTED: this check covered only attention-rank-at-
+	// cardinality and silently accepted a cardinality-stage record claiming
+	// the overlap-aware set cover -- and largest_group_round_robin turns
+	// out to have had the identical, pre-existing gap, caught by this fix's
+	// own test rather than by review; attention-rank-at-synthesis-input was
+	// a further gap the totality sweep this table exists for turned up).
+	// This is the one mistake §6.3a records being made in EVERY earlier
+	// revision, stated here as something the contract refuses to
+	// represent -- for every stage x basis combination live code cannot
+	// produce, not just the ones earlier revisions happened to guard.
+	switch n.Basis {
+	case ContextFabricNarrowingBasisAttentionRank:
+		if n.Stage != ContextFabricPlanNarrowingAssembledResult {
+			return fmt.Errorf("plan narrowing at stage %q cannot use attention rank, which RankCohort computes only after synthesis-input narrowing has already run", n.Stage)
+		}
+	case ContextFabricNarrowingBasisOverlapAwareSetCover, ContextFabricNarrowingBasisLargestGroupRoundRobin:
+		if n.Stage == ContextFabricPlanNarrowingCardinality {
 			return fmt.Errorf("plan narrowing at the pre-read cardinality stage cannot use %q, which requires groups that do not exist until after the fact read", n.Basis)
 		}
 	}

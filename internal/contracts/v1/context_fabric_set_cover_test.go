@@ -250,6 +250,179 @@ func TestSelectGroupCoverMembersEmptyGroupDoesNotCollapseTheFloor(t *testing.T) 
 	}
 }
 
+// degenerateSweepGroup is one group in a degenerate-input sweep row: just
+// the shape SelectGroupCoverMembers reads (id + member list), independent
+// of the wire/engine cohort types each call site wraps it in.
+type degenerateSweepGroup struct {
+	id      string
+	members []string
+}
+
+// degenerateSweepRow is one degenerate-input case. checkFloor is false only
+// for the budget<=0 boundary, where SelectGroupCoverMembers's own documented
+// contract is "nothing admitted" -- the floor legitimately does not hold
+// there, and asserting it would be asserting the wrong thing.
+type degenerateSweepRow struct {
+	name       string
+	groups     []degenerateSweepGroup
+	ungrouped  []string
+	maxMembers int
+	checkFloor bool
+}
+
+func disjointSingletonGroups(n int) []degenerateSweepGroup {
+	groups := make([]degenerateSweepGroup, n)
+	for i := 0; i < n; i++ {
+		id := groupLetter(i)
+		groups[i] = degenerateSweepGroup{id: id, members: []string{id + "_m"}}
+	}
+	return groups
+}
+
+func groupLetter(i int) string {
+	// Stable, collision-free ids past 26 groups: A..Z, then AA, AB, ...
+	if i < 26 {
+		return string(rune('A' + i))
+	}
+	return groupLetter(i/26-1) + groupLetter(i%26)
+}
+
+// degenerateInputSweepRows is chris's ordered sweep (08:10, after the round-4
+// empty-group finding): the floor invariant is now a CLASS with two prior
+// violations in this PR (round 1's guard-fallback path, round 4's empty
+// group), so every degenerate shape of the input space gets its own row
+// rather than trusting the two fixes already made to generalize.
+func degenerateInputSweepRows() []degenerateSweepRow {
+	return []degenerateSweepRow{
+		{
+			name:       "single empty group, nothing else",
+			groups:     []degenerateSweepGroup{{id: "A", members: nil}},
+			maxMembers: 2, checkFloor: true, // vacuous: no non-empty group to protect
+		},
+		{
+			name: "mixed empty and non-empty groups",
+			groups: []degenerateSweepGroup{
+				{id: "A", members: nil},
+				{id: "B", members: []string{"b1"}},
+				{id: "C", members: []string{"c1", "c2"}},
+			},
+			maxMembers: 1, checkFloor: true,
+		},
+		{
+			name: "ALL groups empty",
+			groups: []degenerateSweepGroup{
+				{id: "A", members: nil}, {id: "B", members: nil}, {id: "C", members: nil},
+			},
+			maxMembers: 3, checkFloor: true, // vacuous: nothing to protect, nothing to select
+		},
+		{
+			name:       "budget 0",
+			groups:     []degenerateSweepGroup{{id: "A", members: []string{"a1"}}},
+			maxMembers: 0, checkFloor: false, // documented boundary: nothing admitted
+		},
+		{
+			name:       "budget 1, single group with several members",
+			groups:     []degenerateSweepGroup{{id: "A", members: []string{"a1", "a2", "a3"}}},
+			maxMembers: 1, checkFloor: true,
+		},
+		{
+			name:       "single group, budget larger than the group",
+			groups:     []degenerateSweepGroup{{id: "A", members: []string{"a1"}}},
+			maxMembers: 5, checkFloor: true,
+		},
+		{
+			name:       "exactly at the guard (12 groups), tight budget",
+			groups:     disjointSingletonGroups(ContextFabricSetCoverGroupGuard),
+			maxMembers: 6, checkFloor: true,
+		},
+		{
+			name:       "one beyond the guard (13 groups), tight budget",
+			groups:     disjointSingletonGroups(ContextFabricSetCoverGroupGuard + 1),
+			maxMembers: 6, checkFloor: true,
+		},
+		{
+			name: "duplicate member shared by every group",
+			groups: []degenerateSweepGroup{
+				{id: "A", members: []string{"shared"}},
+				{id: "B", members: []string{"shared"}},
+				{id: "C", members: []string{"shared"}},
+			},
+			maxMembers: 1, checkFloor: true,
+		},
+		{
+			name: "a group whose every member is shared with another group",
+			groups: []degenerateSweepGroup{
+				{id: "A", members: []string{"x", "y"}}, // both of A's members belong elsewhere too
+				{id: "B", members: []string{"x"}},
+				{id: "C", members: []string{"y"}},
+			},
+			maxMembers: 2, checkFloor: true,
+		},
+		{
+			name: "empty group beyond the guard alongside real ones",
+			groups: append(
+				[]degenerateSweepGroup{{id: "EMPTY", members: nil}},
+				disjointSingletonGroups(ContextFabricSetCoverGroupGuard+1)...,
+			),
+			maxMembers: 6, checkFloor: true,
+		},
+		{
+			name:       "ungrouped members alongside groups, tight budget",
+			groups:     []degenerateSweepGroup{{id: "A", members: []string{"a1"}}},
+			ungrouped:  []string{"orphan1", "orphan2"},
+			maxMembers: 1, checkFloor: true,
+		},
+	}
+}
+
+// TestSelectGroupCoverMembersDegenerateInputSweep is chris's ordered
+// degenerate-input sweep, run against the shared core both call sites
+// delegate to. See TestNarrowGroupedCohortDegenerateInputSweep and
+// TestGroupAwareMemberAllowanceDegenerateInputSweep for the same rows
+// through each call site.
+func TestSelectGroupCoverMembersDegenerateInputSweep(t *testing.T) {
+	t.Parallel()
+	for _, row := range degenerateInputSweepRows() {
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			groups := make([]ContextFabricCohortGroup, len(row.groups))
+			for i, g := range row.groups {
+				groups[i] = ContextFabricCohortGroup{
+					Subject:            ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: g.id, Label: g.id},
+					MemberCanonicalIDs: g.members,
+					Complete:           true,
+					Total:              len(g.members),
+				}
+			}
+			first, firstBasis := SelectGroupCoverMembers(groups, row.ungrouped, row.maxMembers)
+			// DETERMINISM on every row: rerun and compare.
+			for i := 0; i < 5; i++ {
+				got, gotBasis := SelectGroupCoverMembers(groups, row.ungrouped, row.maxMembers)
+				if gotBasis != firstBasis || !sameSet(got, first) {
+					t.Fatalf("run %d: got (%v, %q), want (%v, %q) -- identical requests must select identical members", i, got, gotBasis, first, firstBasis)
+				}
+			}
+			if !row.checkFloor {
+				return
+			}
+			for _, g := range row.groups {
+				if len(g.members) == 0 {
+					continue // nothing could ever cover an empty group
+				}
+				var covered bool
+				for _, id := range g.members {
+					if _, ok := first[id]; ok {
+						covered = true
+					}
+				}
+				if !covered {
+					t.Fatalf("group %q lost every member; selected = %v -- the floor must hold for every non-empty group", g.id, first)
+				}
+			}
+		})
+	}
+}
+
 func sameSet(a, b map[string]struct{}) bool {
 	if len(a) != len(b) {
 		return false
