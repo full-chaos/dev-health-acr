@@ -284,7 +284,11 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// projection does not carry -- because a declaration separated
 		// from the rows it describes leaves the consumer half of
 		// CHAOS-4627 exactly where it was.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 206},
+		// CHAOS-4680: 206 -> 207 -- FactTable's third declared role
+		// contributed one new string leaf (table.observations[]),
+		// classified conservatively untrusted exactly like key[]/
+		// measures[] just above.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 207},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -323,7 +327,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// axis yet.
 		// CHAOS-4637: 283 -> 288 -- the same five ClaimedFactTable leaves
 		// as the answer_projection surface above.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 305},
+		// CHAOS-4680: 305 -> 306 -- the same new table.observations[] leaf
+		// as the answer_projection surface above.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 306},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)

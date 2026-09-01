@@ -344,7 +344,7 @@ func TestTheDeclarationDescribesTheFieldWhoseRowsWereServed(t *testing.T) {
 		Fields: map[string]FactValue{
 			"scope_breakdown": TableFactValue(FactTable{
 				Shape: FactTableBreakdown, Key: []string{"provider", "work_scope_id"},
-				Measures: []string{"day", "items_completed"},
+				Measures: []string{"items_completed"}, Observations: []string{"day"},
 				Rows: []FactValueRow{
 					{Fields: map[string]FactValue{"provider": StringFactValue("github"), "work_scope_id": StringFactValue("a"), "day": StringFactValue("2026-07-20"), "items_completed": IntegerFactValue(0)}},
 					{Fields: map[string]FactValue{"provider": StringFactValue("github"), "work_scope_id": StringFactValue("b"), "day": StringFactValue("2026-08-30"), "items_completed": IntegerFactValue(1)}},

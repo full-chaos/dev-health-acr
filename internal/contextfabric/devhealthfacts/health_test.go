@@ -418,6 +418,26 @@ func TestHealthProviderTeamReadsDailyHealthSeries(t *testing.T) {
 	if err := fact.Fields["daily_health"].Validate(); err != nil {
 		t.Fatalf("daily_health fails FactValue.Validate(): %v", err)
 	}
+	// CHAOS-4680: severity is a per-day categorical OBSERVATION, not a
+	// quantity, and must be declared as one -- a Measures column is now
+	// producer-validated numeric-only (FactTable.Validate), so a
+	// regression that puts severity back in Measures fails Validate()
+	// above, since the cell below is a string. This assertion pins WHERE
+	// it lives, not merely that validation happened to pass.
+	for _, measure := range table.Measures {
+		if measure == "severity" {
+			t.Fatalf("daily_health.Measures = %v, must not classify severity (a categorical observation) as a measure", table.Measures)
+		}
+	}
+	foundObservation := false
+	for _, observation := range table.Observations {
+		if observation == "severity" {
+			foundObservation = true
+		}
+	}
+	if !foundObservation {
+		t.Fatalf("daily_health.Observations = %v, want severity declared as an observation", table.Observations)
+	}
 	rows := fact.Fields["daily_health"].Rows
 	if len(rows) != 2 {
 		t.Fatalf("daily_health rows = %d, want 2", len(rows))
@@ -499,6 +519,26 @@ func TestHealthProviderProjectReadsDailyHealthSeries(t *testing.T) {
 	}
 	if err := fact.Fields["daily_health"].Validate(); err != nil {
 		t.Fatalf("daily_health fails FactValue.Validate(): %v", err)
+	}
+	// CHAOS-4680: severity is a per-day categorical OBSERVATION, not a
+	// quantity, and must be declared as one -- a Measures column is now
+	// producer-validated numeric-only (FactTable.Validate), so a
+	// regression that puts severity back in Measures fails Validate()
+	// above, since the cell below is a string. This assertion pins WHERE
+	// it lives, not merely that validation happened to pass.
+	for _, measure := range table.Measures {
+		if measure == "severity" {
+			t.Fatalf("daily_health.Measures = %v, must not classify severity (a categorical observation) as a measure", table.Measures)
+		}
+	}
+	foundObservation := false
+	for _, observation := range table.Observations {
+		if observation == "severity" {
+			foundObservation = true
+		}
+	}
+	if !foundObservation {
+		t.Fatalf("daily_health.Observations = %v, want severity declared as an observation", table.Observations)
 	}
 	rows := fact.Fields["daily_health"].Rows
 	if len(rows) != 1 {

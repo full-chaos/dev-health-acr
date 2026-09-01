@@ -1039,11 +1039,12 @@ func canonicalFieldTable(fact CanonicalFact) *contractsv1.ContextFabricClaimedFa
 		return nil
 	}
 	return &contractsv1.ContextFabricClaimedFactTable{
-		Field:    field,
-		Shape:    contractsv1.ContextFabricFactTableShape(declared.Shape),
-		Key:      append([]string(nil), declared.Key...),
-		Measures: append([]string(nil), declared.Measures...),
-		OrderBy:  declared.OrderBy,
+		Field:        field,
+		Shape:        contractsv1.ContextFabricFactTableShape(declared.Shape),
+		Key:          append([]string(nil), declared.Key...),
+		Measures:     append([]string(nil), declared.Measures...),
+		Observations: append([]string(nil), declared.Observations...),
+		OrderBy:      declared.OrderBy,
 	}
 }
 

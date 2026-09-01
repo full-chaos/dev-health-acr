@@ -465,4 +465,25 @@ func TestWorkloadProviderProjectRollupBasisIsFactLevelScalar(t *testing.T) {
 	if err := fact.Fields["team_breakdown"].Validate(); err != nil {
 		t.Fatalf("team_breakdown fails FactValue.Validate(): %v", err)
 	}
+	// CHAOS-4680: insufficient_history/high_variance are BooleanFactValue
+	// flags, not quantities -- a Measures column is now producer-validated
+	// numeric-only (FactTable.Validate), so a regression that puts them
+	// back in Measures fails Validate() above, since the cells are
+	// booleans. This assertion pins WHERE they live.
+	for _, measure := range table.Measures {
+		if measure == "insufficient_history" || measure == "high_variance" {
+			t.Fatalf("team_breakdown.Measures = %v, must not classify a boolean flag as a measure", table.Measures)
+		}
+	}
+	wantObservations := map[string]bool{"insufficient_history": false, "high_variance": false}
+	for _, observation := range table.Observations {
+		if _, want := wantObservations[observation]; want {
+			wantObservations[observation] = true
+		}
+	}
+	for name, found := range wantObservations {
+		if !found {
+			t.Fatalf("team_breakdown.Observations = %v, want %q declared as an observation", table.Observations, name)
+		}
+	}
 }

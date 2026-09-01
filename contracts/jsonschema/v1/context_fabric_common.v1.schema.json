@@ -4493,6 +4493,16 @@
             "maxLength": 128
           }
         },
+        "observations": {
+          "description": "CHAOS-4680: columns that vary row to row, are not part of the row's identity, and are not a quantity -- a per-day severity label, say. Every column of every row belongs to exactly one of key, measures or observations at the producer; like a measure, an observation may legitimately be absent from an individual row.",
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
         "order_by": {
           "description": "For `ranking` only: which declared measure the row order is by.",
           "type": "string",

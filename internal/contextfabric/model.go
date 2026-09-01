@@ -464,32 +464,48 @@ func validFactTableShape(shape FactTableShape) bool {
 	}
 }
 
-// maxFactTableKeyColumns and maxFactTableMeasures bound a declaration the
-// same defensive way maxFactValueRows/maxFactValueRowFields already bound a
-// table's row count and per-row field count -- a producer bug that tries to
-// declare an unbounded key/measure list fails Validate rather than reaching
-// a downstream renderer.
+// maxFactTableKeyColumns, maxFactTableMeasures and maxFactTableObservations
+// bound a declaration the same defensive way maxFactValueRows/
+// maxFactValueRowFields already bound a table's row count and per-row field
+// count -- a producer bug that tries to declare an unbounded key/measure/
+// observation list fails Validate rather than reaching a downstream
+// renderer.
 const (
-	maxFactTableKeyColumns = 8
-	maxFactTableMeasures   = 32
+	maxFactTableKeyColumns   = 8
+	maxFactTableMeasures     = 32
+	maxFactTableObservations = 32
 )
 
 // FactTable declares what a tabular FactValue.Rows IS (CHAOS-4633, design
 // doc §5.1): its Shape, the COMPOSITE Key that identifies a row (never a
 // single-column axis -- flow.go's scope_breakdown legitimately needs
 // [provider, work_scope_id], because two different providers can share one
-// work_scope_id string), which columns MEASURE something, and -- for a
-// ranking table only -- which Measure the rows are ordered by.
+// work_scope_id string), which columns MEASURE something, which columns are
+// per-row categorical OBSERVATIONS (CHAOS-4680), and -- for a ranking table
+// only -- which Measure the rows are ordered by.
 //
 // Key names ROW COLUMNS ONLY. Row identity is relative to the fact's own
 // Subject (CanonicalFact.Subject), which must never be duplicated into Key:
 // flow.go's team scope_breakdown declares Key: [provider, work_scope_id],
 // never team_id, because toFactValueRow never emits a team_id column for
 // the SQL to partition scope_breakdown could satisfy.
+//
+// Observations is the third role CHAOS-4680 adds: a column that varies row
+// to row, is not part of the row's identity, and is not a quantity -- a
+// per-day severity label, say. Before this role existed, such a column had
+// nowhere to go but Measures, which is exactly where a NUMERIC identity
+// column (a numeric team_id) could hide undetected, because nothing
+// separated "a genuine quantity" from "a value that happens to be a
+// string" -- the CHAOS-4616 defect re-entering through the declaration
+// instead of the geometry (see health.go's severity, CHAOS-4645). With
+// Observations available, Measures is REQUIRED to be numeric on every row
+// that carries a cell for it (Validate below), closing that route at the
+// producer instead of merely refusing to render it three stages later.
 type FactTable struct {
-	Shape    FactTableShape `json:"shape"`
-	Key      []string       `json:"key"`
-	Measures []string       `json:"measures"`
+	Shape        FactTableShape `json:"shape"`
+	Key          []string       `json:"key"`
+	Measures     []string       `json:"measures"`
+	Observations []string       `json:"observations,omitempty"`
 	// OrderBy names a member of Measures. Ranking shape only; every other
 	// shape must leave it empty.
 	OrderBy string `json:"order_by,omitempty"`
@@ -539,7 +555,11 @@ func (t FactTable) Validate() error {
 	if len(t.Measures) > maxFactTableMeasures {
 		return fmt.Errorf("fact table measures exceed bounds")
 	}
-	columns := make(map[string]bool, len(t.Key)+len(t.Measures))
+	if len(t.Observations) > maxFactTableObservations {
+		return fmt.Errorf("fact table observations exceed bounds")
+	}
+	columns := make(map[string]bool, len(t.Key)+len(t.Measures)+len(t.Observations))
+	measureColumns := make(map[string]bool, len(t.Measures))
 	for _, name := range t.Key {
 		name = strings.TrimSpace(name)
 		if name == "" {
@@ -556,7 +576,18 @@ func (t FactTable) Validate() error {
 			return fmt.Errorf("fact table measure column name must not be blank")
 		}
 		if columns[name] {
-			return fmt.Errorf("fact table column %q is declared in both key and measures", name)
+			return fmt.Errorf("fact table column %q is declared in more than one of key, measures, or observations", name)
+		}
+		columns[name] = true
+		measureColumns[name] = true
+	}
+	for _, name := range t.Observations {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return fmt.Errorf("fact table observation column name must not be blank")
+		}
+		if columns[name] {
+			return fmt.Errorf("fact table column %q is declared in more than one of key, measures, or observations", name)
 		}
 		columns[name] = true
 	}
@@ -595,14 +626,32 @@ func (t FactTable) Validate() error {
 				// series' "provider") is context about the table, not a
 				// row's identity or a measurement of it, and belongs in a
 				// sibling scalar field on the fact -- never in Key,
-				// Measures, or the row itself.
-				return fmt.Errorf("fact table row %d has column %q not declared in key or measures; a column constant across the whole table belongs in a sibling scalar field on the fact, not in the table's rows", rowIndex, name)
+				// Measures, Observations, or the row itself.
+				return fmt.Errorf("fact table row %d has column %q not declared in key, measures, or observations; a column constant across the whole table belongs in a sibling scalar field on the fact, not in the table's rows", rowIndex, name)
 			}
 		}
 		if t.Shape == FactTableTimeSeries {
 			instantCell, ok := row.Fields[t.Key[0]]
 			if !ok || instantCell.String == nil || !parsesAsFactTableInstant(*instantCell.String) {
 				return fmt.Errorf("fact table row %d time_series key %q does not parse as an instant", rowIndex, t.Key[0])
+			}
+		}
+		// CHAOS-4680: a Measures column, on any row that carries a cell for
+		// it, must be numeric. A per-row categorical observation (a
+		// severity label, say) belongs in Observations, which carries no
+		// such requirement -- this is precisely the rule review defeated
+		// three times before Observations existed to receive the columns
+		// it would otherwise have wrongly rejected (see FactTable's own
+		// doc comment). Absent and explicitly-null cells are not
+		// disqualifying: a conditionally-computed measure is missing data,
+		// which says nothing about its role.
+		for name := range measureColumns {
+			cell, present := row.Fields[name]
+			if !present || cell.Null {
+				continue
+			}
+			if cell.Integer == nil && cell.Number == nil {
+				return fmt.Errorf("fact table row %d measure %q is not numeric; a per-row categorical observation belongs in observations, not measures", rowIndex, name)
 			}
 		}
 		keyIdentity := strings.Join(keyParts, "\x1f")

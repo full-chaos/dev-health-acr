@@ -22,10 +22,11 @@ import (
 //
 // The information was never missing -- it was simply never carried.
 // devhealthfacts producers have declared contextfabric.FactTable since
-// CHAOS-4633: a closed Shape, the COMPOSITE Key that identifies a row, and
-// the Measures. This type is that declaration reaching the wire, so
-// selection keys on the DECLARATION and no renaming, retyping or column
-// addition by a producer can reopen the defect.
+// CHAOS-4633: a closed Shape, the COMPOSITE Key that identifies a row, the
+// Measures, and (CHAOS-4680) the per-row categorical Observations. This
+// type is that declaration reaching the wire, so selection keys on the
+// DECLARATION and no renaming, retyping or column addition by a producer
+// can reopen the defect.
 //
 // It is a DECLARATION ONLY and deliberately carries no rows of its own: it
 // describes the rows already in ContextFabricClaimedFact.Rows. Carrying a
@@ -78,9 +79,10 @@ func ValidContextFabricFactTableShape(shape ContextFabricFactTableShape) bool {
 // a row key could name could never describe a real column, so the two
 // bounds are one bound and are written as one.
 const (
-	ContextFabricFactTableKeyMaxCount      = 8
-	ContextFabricFactTableMeasuresMaxCount = 32
-	ContextFabricFactTableColumnMaxLength  = 128
+	ContextFabricFactTableKeyMaxCount          = 8
+	ContextFabricFactTableMeasuresMaxCount     = 32
+	ContextFabricFactTableObservationsMaxCount = 32
+	ContextFabricFactTableColumnMaxLength      = 128
 )
 
 // ContextFabricClaimedFactTable declares what ContextFabricClaimedFact.Rows
@@ -109,6 +111,12 @@ type ContextFabricClaimedFactTable struct {
 	// conditionally-computed mttr_hours, say), which is why only Key is
 	// cross-checked against the rows here.
 	Measures []string `json:"measures,omitempty"`
+	// Observations are columns that vary row to row, are not part of the
+	// row's identity, and are not a quantity -- a per-day severity label,
+	// say (CHAOS-4680). Every column of every row belongs to exactly one of
+	// Key, Measures or Observations at the producer; like Measures, an
+	// Observation may legitimately be absent from an individual row.
+	Observations []string `json:"observations,omitempty"`
 	// OrderBy names the Measure a ranking's row order is by. Required for
 	// ranking, empty for every other shape.
 	OrderBy string `json:"order_by,omitempty"`
@@ -118,6 +126,17 @@ type ContextFabricClaimedFactTable struct {
 func (t ContextFabricClaimedFactTable) HasMeasure(name string) bool {
 	for _, measure := range t.Measures {
 		if measure == name {
+			return true
+		}
+	}
+	return false
+}
+
+// HasObservation reports whether name is a declared observation of this
+// table.
+func (t ContextFabricClaimedFactTable) HasObservation(name string) bool {
+	for _, observation := range t.Observations {
+		if observation == name {
 			return true
 		}
 	}
@@ -146,17 +165,19 @@ func (t ContextFabricClaimedFactTable) Validate() error {
 	if len(t.Measures) > ContextFabricFactTableMeasuresMaxCount {
 		return fmt.Errorf("declared table names more than %d measures", ContextFabricFactTableMeasuresMaxCount)
 	}
-	seen := make(map[string]struct{}, len(t.Key)+len(t.Measures))
-	for _, column := range append(append([]string{}, t.Key...), t.Measures...) {
+	if len(t.Observations) > ContextFabricFactTableObservationsMaxCount {
+		return fmt.Errorf("declared table names more than %d observations", ContextFabricFactTableObservationsMaxCount)
+	}
+	seen := make(map[string]struct{}, len(t.Key)+len(t.Measures)+len(t.Observations))
+	for _, column := range append(append(append([]string{}, t.Key...), t.Measures...), t.Observations...) {
 		if !stringLengthBetween(column, 1, ContextFabricFactTableColumnMaxLength) || strings.TrimSpace(column) != column {
 			return fmt.Errorf("declared table column name violates v1 bounds")
 		}
 		if _, exists := seen[column]; exists {
-			// A column in both Key and Measures would be claiming to
-			// identify a row AND to measure it, and the two readings
-			// disagree about whether varying it means "a different row"
-			// or "the same row changed".
-			return fmt.Errorf("declared table column %q appears more than once across key and measures", column)
+			// A column in more than one of Key, Measures and Observations
+			// would be claiming more than one role at once, and the
+			// readings disagree about what varying it means.
+			return fmt.Errorf("declared table column %q appears more than once across key, measures, and observations", column)
 		}
 		seen[column] = struct{}{}
 	}

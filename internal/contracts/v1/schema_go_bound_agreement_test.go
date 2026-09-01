@@ -169,15 +169,20 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// field in isolation -- which the generic probe must do -- breaks
 		// the key-present-on-every-row invariant and the probe would
 		// attribute the resulting error to the wrong bound.
-		"common#$defs.ClaimedFactTable.properties.field.minLength":              1,
-		"common#$defs.ClaimedFactTable.properties.field.maxLength":              ContextFabricClaimedFieldMaxLength,
-		"common#$defs.ClaimedFactTable.properties.key.minItems":                 1,
-		"common#$defs.ClaimedFactTable.properties.key.maxItems":                 ContextFabricFactTableKeyMaxCount,
-		"common#$defs.ClaimedFactTable.properties.key.items.minLength":          1,
-		"common#$defs.ClaimedFactTable.properties.key.items.maxLength":          ContextFabricFactTableColumnMaxLength,
-		"common#$defs.ClaimedFactTable.properties.measures.maxItems":            ContextFabricFactTableMeasuresMaxCount,
-		"common#$defs.ClaimedFactTable.properties.measures.items.minLength":     1,
-		"common#$defs.ClaimedFactTable.properties.measures.items.maxLength":     ContextFabricFactTableColumnMaxLength,
+		"common#$defs.ClaimedFactTable.properties.field.minLength":          1,
+		"common#$defs.ClaimedFactTable.properties.field.maxLength":          ContextFabricClaimedFieldMaxLength,
+		"common#$defs.ClaimedFactTable.properties.key.minItems":             1,
+		"common#$defs.ClaimedFactTable.properties.key.maxItems":             ContextFabricFactTableKeyMaxCount,
+		"common#$defs.ClaimedFactTable.properties.key.items.minLength":      1,
+		"common#$defs.ClaimedFactTable.properties.key.items.maxLength":      ContextFabricFactTableColumnMaxLength,
+		"common#$defs.ClaimedFactTable.properties.measures.maxItems":        ContextFabricFactTableMeasuresMaxCount,
+		"common#$defs.ClaimedFactTable.properties.measures.items.minLength": 1,
+		"common#$defs.ClaimedFactTable.properties.measures.items.maxLength": ContextFabricFactTableColumnMaxLength,
+		// CHAOS-4680: the third declared role, mapped declaratively for the
+		// identical reason key/measures above are.
+		"common#$defs.ClaimedFactTable.properties.observations.maxItems":        ContextFabricFactTableObservationsMaxCount,
+		"common#$defs.ClaimedFactTable.properties.observations.items.minLength": 1,
+		"common#$defs.ClaimedFactTable.properties.observations.items.maxLength": ContextFabricFactTableColumnMaxLength,
 		"common#$defs.ClaimedFactTable.properties.order_by.minLength":           1,
 		"common#$defs.ClaimedFactTable.properties.order_by.maxLength":           ContextFabricFactTableColumnMaxLength,
 		"common#$defs.InterpretedQuestion.properties.subject_terms.maxItems":    contextFabricWriteBounds.interpretationTerms,
