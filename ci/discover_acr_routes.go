@@ -39,11 +39,33 @@ import (
 	"strings"
 )
 
+// deployedService is the service every route this script discovers belongs
+// to. It is a CONSTANT rather than a parsed value on purpose, and the
+// reasoning is load-bearing: discoverRoutes walks exactly ONE file,
+// internal/api/app.go, which is the mux of the dev-health-acr-api
+// deployment. A route found there cannot belong to any other service.
+//
+// This is what makes the checker's SERVICE MISMATCH comparison meaningful.
+// The endpoint-profile schema models profiles per deployed APP -- its
+// service enum also carries dev-health-acr-mcp, a separately deployed acr
+// service whose surfaces this script does not walk at all -- so a row
+// claiming a service other than this one for a surface registered on THIS
+// mux is making a false claim about which middleware stack its security
+// analysis applies to.
+//
+// When a second acr app is profiled it gets its OWN walk emitting its own
+// service, never a widening of this constant: a constant that covers two
+// apps would re-open the hole it exists to close.
+const deployedService = "dev-health-acr-api"
+
 type Route struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
 	File   string `json:"file"`
 	Line   int    `json:"line"`
+	// Service is the deployed app whose mux this route was found on.
+	// See deployedService.
+	Service string `json:"service"`
 }
 
 type Report struct {
@@ -192,7 +214,7 @@ func discoverRoutes(file string, consts map[string]string) ([]Route, []string, e
 			// reported precisely rather than mis-split.
 			method, path = "ANY", pattern
 		}
-		routes = append(routes, Route{Method: method, Path: path, File: relPath(file), Line: i + 1})
+		routes = append(routes, Route{Method: method, Path: path, File: relPath(file), Line: i + 1, Service: deployedService})
 	}
 	return routes, unresolved, nil
 }

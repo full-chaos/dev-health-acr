@@ -64,27 +64,44 @@ func realDiscovererPath(t *testing.T) string {
 // layout this lane was assigned (dev-health/ops-worktrees/chaos-3273-wave0)
 // as a developer convenience. Returns ok=false rather than guessing when
 // nothing is reachable.
-func opsOwnedFixturePaths(t *testing.T) (schemaPath, credentialClassesPath string, ok bool) {
+// contractGateRequired reports whether this process is the CI step whose
+// job is to run the real-tree contract proof.
+//
+// It keys on ACR_CONTRACT_GATE, set only by the "Verify endpoint-profile
+// inventory against the pinned ops contract" step in .github/workflows/ci.yml,
+// NOT on CI. Merge-gate finding (CHAOS-3273): CI is set in every job on
+// every runner, but the sparse checkout that delivers the ops-owned inputs
+// exists in exactly one step -- so a guard keyed on CI failed in `unit` and
+// in every `race` shard, producing a red build that said nothing about the
+// contract. Wrong predicate, right instinct.
+func contractGateRequired() bool {
+	return os.Getenv("ACR_CONTRACT_GATE") == "required"
+}
+
+// opsOwnedFixturePaths locates the three ops-owned inputs from explicit
+// environment variables, and from nowhere else.
+//
+// There used to be a fallback here that walked up to a sibling
+// ops-worktrees/chaos-3273-wave0 checkout on the developer's machine. It is
+// deleted deliberately: that crutch is why the CI failure above never
+// reproduced locally. Every local run silently found a real schema through a
+// path that exists on one workstation and nowhere else, so the gate looked
+// green in exactly the place a human would check before pushing. A
+// convenience that makes a broken CI wiring invisible locally is the class
+// this wave exists to kill, not an exception to it.
+//
+// Local runs now set the three variables explicitly, or the proof skips and
+// says so. A skip that names its reason is honest; a pass obtained through a
+// path nobody declared is not.
+func opsOwnedFixturePaths(t *testing.T) (schemaPath, credentialClassesPath, credentialClassesSchemaPath string, ok bool) {
 	t.Helper()
-	if s := os.Getenv("ACR_ENDPOINT_PROFILE_SCHEMA"); s != "" {
-		if c := os.Getenv("ACR_CREDENTIAL_CLASSES"); c != "" {
-			if fileExists(s) && fileExists(c) {
-				return s, c, true
-			}
-		}
+	s := os.Getenv("ACR_ENDPOINT_PROFILE_SCHEMA")
+	c := os.Getenv("ACR_CREDENTIAL_CLASSES")
+	cs := os.Getenv("ACR_CREDENTIAL_CLASSES_SCHEMA")
+	if s != "" && c != "" && cs != "" && fileExists(s) && fileExists(c) && fileExists(cs) {
+		return s, c, cs, true
 	}
-	if os.Getenv("CI") != "" {
-		return "", "", false
-	}
-	// dev-health/acr-worktrees/<lane> -> dev-health/ops-worktrees/chaos-3273-wave0
-	devHealthRoot := filepath.Clean(filepath.Join(repoRoot(t), "..", ".."))
-	candidateOpsRoot := filepath.Join(devHealthRoot, "ops-worktrees", "chaos-3273-wave0")
-	s := filepath.Join(candidateOpsRoot, "contracts", "auth", "v1", "endpoint-profile.schema.json")
-	c := filepath.Join(candidateOpsRoot, "contracts", "auth", "v1", "credential-classes.json")
-	if fileExists(s) && fileExists(c) {
-		return s, c, true
-	}
-	return "", "", false
+	return "", "", "", false
 }
 
 func fileExists(p string) bool {
@@ -93,7 +110,7 @@ func fileExists(p string) bool {
 }
 
 func TestRealTreePassesTheGateToday(t *testing.T) {
-	schemaPath, credentialClassesPath, ok := opsOwnedFixturePaths(t)
+	schemaPath, credentialClassesPath, credentialClassesSchemaPath, ok := opsOwnedFixturePaths(t)
 	if !ok {
 		// Codex/coordinator-verified gap (round 1): "skip cleanly rather
 		// than silently pass" was the right call LOCALLY, but codex is
@@ -111,22 +128,27 @@ func TestRealTreePassesTheGateToday(t *testing.T) {
 		// via the sparse-checkout step itself failing before this test
 		// even runs; this check is the belt-and-braces layer for every
 		// OTHER way the inputs could go missing).
-		if os.Getenv("CI") != "" {
+		if contractGateRequired() {
 			t.Fatalf(
-				"ops-owned schema/credential-classes files not reachable in CI "+
-					"(ACR_ENDPOINT_PROFILE_SCHEMA=%q ACR_CREDENTIAL_CLASSES=%q) -- "+
+				"ops-owned schema/credential-classes files not reachable in the contract-gate step "+
+					"(ACR_ENDPOINT_PROFILE_SCHEMA=%q ACR_CREDENTIAL_CLASSES=%q ACR_CREDENTIAL_CLASSES_SCHEMA=%q) -- "+
 					"the pinned sparse checkout (ci/ops-contract.pin) did not deliver "+
 					"usable inputs; this must fail, not skip, or the contract gate silently never runs",
 				os.Getenv("ACR_ENDPOINT_PROFILE_SCHEMA"), os.Getenv("ACR_CREDENTIAL_CLASSES"),
+				os.Getenv("ACR_CREDENTIAL_CLASSES_SCHEMA"),
 			)
 		}
-		t.Skip("ops-owned endpoint-profile.schema.json / credential-classes.json not reachable " +
-			"(cross-repo distribution gap -- see main.go doc comment); set " +
-			"ACR_ENDPOINT_PROFILE_SCHEMA / ACR_CREDENTIAL_CLASSES to run this proof")
+		t.Skip("ops-owned endpoint-profile.schema.json / credential-classes.json / " +
+			"credential-classes.schema.json not reachable (they are owned by ops and not " +
+			"vendored here -- see main.go doc comment). This is a SKIP only outside the " +
+			"contract-gate step; inside it (ACR_CONTRACT_GATE=required) the same condition " +
+			"is a FAILURE. To run this proof locally, set ACR_ENDPOINT_PROFILE_SCHEMA, " +
+			"ACR_CREDENTIAL_CLASSES and ACR_CREDENTIAL_CLASSES_SCHEMA to a checkout of the " +
+			"ops commit named in ci/ops-contract.pin")
 	}
 	root := repoRoot(t)
 	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, realDiscovererPath(t))
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,33 +157,36 @@ func TestRealTreePassesTheGateToday(t *testing.T) {
 	}
 }
 
-func TestRealTreeProofFailsLoudlyInCIWhenInputsAreMissing(t *testing.T) {
+func TestRealTreeProofFailsLoudlyInTheContractGateStepWhenInputsAreMissing(t *testing.T) {
 	// EXECUTED repro for the fix above: actually run this package's own
-	// TestRealTreePassesTheGateToday in a subprocess with CI=1 and the
-	// override env vars UNSET, and assert it FAILS (not skips, not
-	// passes) -- proving the CI branch fires, not just that the code
-	// compiles. The subprocess's own sibling-worktree fallback is
-	// irrelevant here regardless of what exists on this host, since the
-	// CI branch in opsOwnedFixturePaths skips that fallback entirely once
-	// CI is set.
+	// TestRealTreePassesTheGateToday in a subprocess with
+	// ACR_CONTRACT_GATE=required and the three input env vars UNSET, and
+	// assert it FAILS (not skips, not passes) -- proving the branch fires,
+	// not just that the code compiles.
+	//
+	// The predicate is ACR_CONTRACT_GATE, not CI: keyed on CI this fired in
+	// every job on the runner while the inputs arrived in only one, which
+	// is how the first push of this branch went red for a reason that had
+	// nothing to do with the contract.
 	pkgDir := filepath.Join(repoRoot(t), "ci", "checkendpointprofiles")
 	cmd := exec.Command("go", "test", "-run", "^TestRealTreePassesTheGateToday$", "-v", ".")
 	cmd.Dir = pkgDir
 	env := os.Environ()
 	filtered := env[:0]
 	for _, kv := range env {
-		if strings.HasPrefix(kv, "ACR_ENDPOINT_PROFILE_SCHEMA=") || strings.HasPrefix(kv, "ACR_CREDENTIAL_CLASSES=") {
+		if strings.HasPrefix(kv, "ACR_ENDPOINT_PROFILE_SCHEMA=") || strings.HasPrefix(kv, "ACR_CREDENTIAL_CLASSES=") ||
+			strings.HasPrefix(kv, "ACR_CREDENTIAL_CLASSES_SCHEMA=") {
 			continue
 		}
 		filtered = append(filtered, kv)
 	}
-	cmd.Env = append(filtered, "CI=1")
+	cmd.Env = append(filtered, "ACR_CONTRACT_GATE=required")
 	output, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("expected the subprocess to fail (CI=1, no ops inputs configured), but it exited 0:\n%s", output)
+		t.Fatalf("expected the subprocess to fail (ACR_CONTRACT_GATE=required, no ops inputs configured), but it exited 0:\n%s", output)
 	}
 	if strings.Contains(string(output), "--- SKIP") {
-		t.Fatalf("expected a FAIL, not a SKIP, when CI=1 and ops inputs are missing:\n%s", output)
+		t.Fatalf("expected a FAIL, not a SKIP, when ACR_CONTRACT_GATE=required and ops inputs are missing:\n%s", output)
 	}
 	if !strings.Contains(string(output), "--- FAIL") {
 		t.Fatalf("expected an explicit --- FAIL in subprocess output:\n%s", output)
@@ -325,21 +350,64 @@ const fixtureSchemaJSON = `{
   }
 }`
 
-func seedFixtureSchemaAndCredentialClasses(t *testing.T, root string) (schemaPath, credentialClassesPath string) {
+// fixtureCredentialClassSchemaJSON mirrors the SHAPE of ops's real
+// credential-classes.schema.json rather than its exact contents: a closed
+// object per class carrying the four properties L0's inventory guarantees
+// (issuer, validator, lifecycle authority, allowed route set). It is
+// deliberately a fixture and not the real file for the same reason
+// fixtureSchemaJSON is -- these tests must not depend on an ops checkout
+// being present -- but it must REQUIRE more than class_id, because the
+// merge-gate finding was that a document of bare {class_id} entries passed.
+const fixtureCredentialClassSchemaJSON = `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["classes"],
+  "properties": {
+    "classes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["class_id", "issuer", "validator", "lifecycle_authority", "allowed_routes"],
+        "properties": {
+          "class_id": {"type": "string"},
+          "issuer": {"type": "string"},
+          "validator": {"type": "string"},
+          "lifecycle_authority": {"type": "string"},
+          "allowed_routes": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}`
+
+func fixtureCredentialClass(id string) map[string]any {
+	return map[string]any{
+		"class_id":            id,
+		"issuer":              "fixture-issuer",
+		"validator":           "fixture-validator",
+		"lifecycle_authority": "fixture-authority",
+		"allowed_routes":      []string{"/fixture"},
+	}
+}
+
+func seedFixtureSchemaAndCredentialClasses(t *testing.T, root string) (schemaPath, credentialClassesPath, credentialClassesSchemaPath string) {
 	t.Helper()
 	credentialClasses := map[string]any{
 		"classes": []map[string]any{
-			{"class_id": "acr_client_credential"},
-			{"class_id": "acr_device_flow_code"},
-			{"class_id": "acr_web_assertion"},
-			{"class_id": "internal_svc_acr_token"},
+			fixtureCredentialClass("acr_client_credential"),
+			fixtureCredentialClass("acr_device_flow_code"),
+			fixtureCredentialClass("acr_web_assertion"),
+			fixtureCredentialClass("internal_svc_acr_token"),
 		},
 	}
 	schemaPath = filepath.Join(root, "fixture-schema.json")
 	credentialClassesPath = filepath.Join(root, "fixture-credential-classes.json")
+	credentialClassesSchemaPath = filepath.Join(root, "fixture-credential-classes.schema.json")
 	writeFile(t, schemaPath, fixtureSchemaJSON)
 	writeJSON(t, credentialClassesPath, credentialClasses)
-	return schemaPath, credentialClassesPath
+	writeFile(t, credentialClassesSchemaPath, fixtureCredentialClassSchemaJSON)
+	return schemaPath, credentialClassesPath, credentialClassesSchemaPath
 }
 
 func writeJSON(t *testing.T, path string, v any) {
@@ -406,30 +474,33 @@ func writeInventory(t *testing.T, root string, rows []map[string]any) string {
 }
 
 type fixture struct {
-	root                              string
-	inventoryPath                     string
-	schemaPath, credentialClassesPath string
-	discovererPath                    string
+	root                        string
+	inventoryPath               string
+	schemaPath                  string
+	credentialClassesPath       string
+	credentialClassesSchemaPath string
+	discovererPath              string
 }
 
 func minimalValidFixture(t *testing.T, rows []map[string]any) fixture {
 	t.Helper()
 	root := t.TempDir()
 	seedFixtureAppGo(t, root)
-	schemaPath, credentialClassesPath := seedFixtureSchemaAndCredentialClasses(t, root)
+	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
 	inventoryPath := writeInventory(t, root, rows)
 	return fixture{
-		root:                  root,
-		inventoryPath:         inventoryPath,
-		schemaPath:            schemaPath,
-		credentialClassesPath: credentialClassesPath,
-		discovererPath:        realDiscovererPath(t),
+		root:                        root,
+		inventoryPath:               inventoryPath,
+		schemaPath:                  schemaPath,
+		credentialClassesPath:       credentialClassesPath,
+		credentialClassesSchemaPath: credentialClassesSchemaPath,
+		discovererPath:              realDiscovererPath(t),
 	}
 }
 
 func (f fixture) check(t *testing.T) []string {
 	t.Helper()
-	errs, err := check(f.root, f.inventoryPath, f.schemaPath, f.credentialClassesPath, f.discovererPath)
+	errs, err := check(f.root, f.inventoryPath, f.schemaPath, f.credentialClassesPath, f.credentialClassesSchemaPath, f.discovererPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,6 +584,77 @@ func TestGateCatchesAnUnknownService(t *testing.T) {
 	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{"service": "totally-unregistered-app"})})
 	errs := f.check(t)
 	mustContain(t, errs, "JSON SCHEMA VIOLATION", "totally-unregistered-app")
+}
+
+// --- merge-gate round on 896ca76e: three EXECUTED false-negative classes ---
+//
+// Each of these was constructed by the reviewer as an inventory or vocabulary
+// document INCONSISTENT with the source of truth that the gate nevertheless
+// ACCEPTED (errs empty, exit 0). They are the reason the round happened after
+// the push rather than before it.
+
+func TestGateCatchesAValidButWrongService(t *testing.T) {
+	// THE CLASS: not an unknown service (TestGateCatchesAnUnknownService
+	// already covers that, and the schema's enum catches it) but a service
+	// that is perfectly VALID in the enum and wrong for this surface.
+	// Before the fix, relabelling a row registered on the acr api mux to
+	// the also-valid dev-health-acr-mcp returned OK. `service` selects the
+	// deployed app -- and therefore the middleware stack -- the row's
+	// entire security analysis applies to, so a wrong-but-valid value
+	// silently invalidates the row's reasoning while still satisfying G-1.
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{
+		"service": "dev-health-acr-mcp",
+	})})
+	errs := f.check(t)
+	mustContain(t, errs, "SERVICE MISMATCH", "dev-health-acr-mcp", "dev-health-acr-api")
+}
+
+func TestGateAcceptsTheServiceDiscoveryActuallyFound(t *testing.T) {
+	// False-positive guard for the check above: the correct service must
+	// still pass. A mismatch rule that rejects correct rows is worse than
+	// no rule, because it gets disabled.
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(nil)})
+	errs := f.check(t)
+	for _, e := range errs {
+		if strings.Contains(e, "SERVICE MISMATCH") {
+			t.Fatalf("correct service must not be reported as a mismatch: %s", e)
+		}
+	}
+}
+
+func TestGateCatchesCredentialClassesStrippedToIDsOnly(t *testing.T) {
+	// THE CLASS: the closed vocabulary document was loaded only to harvest
+	// class_ids and never validated against its own schema, so every class
+	// reduced to a bare {"class_id": "..."} passed. "Closed vocabulary"
+	// then means "closed set of ids", not the issuer / validator /
+	// lifecycle-authority / allowed-route guarantee the inventory cites.
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(nil)})
+	writeJSON(t, f.credentialClassesPath, map[string]any{
+		"classes": []map[string]any{
+			{"class_id": "acr_client_credential"},
+			{"class_id": "acr_device_flow_code"},
+		},
+	})
+	errs := f.check(t)
+	mustContain(t, errs, "CREDENTIAL CLASS SCHEMA VIOLATION")
+}
+
+func TestGateCatchesADuplicateCredentialClassID(t *testing.T) {
+	// THE CLASS: two CONFLICTING definitions of one class_id both survived,
+	// because the checker collapsed classes into a set. JSON Schema cannot
+	// express uniqueness of a field across objects in an array (uniqueItems
+	// compares whole items, and these differ in every other field), so this
+	// has to be a checker rule.
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(nil)})
+	dup := fixtureCredentialClass("acr_client_credential")
+	conflicting := fixtureCredentialClass("acr_client_credential")
+	conflicting["issuer"] = "a-different-issuer"
+	conflicting["validator"] = "a-different-validator"
+	writeJSON(t, f.credentialClassesPath, map[string]any{
+		"classes": []map[string]any{dup, conflicting},
+	})
+	errs := f.check(t)
+	mustContain(t, errs, "DUPLICATE CREDENTIAL CLASS", "acr_client_credential")
 }
 
 func TestGateCatchesAProtectedRowWithNoAcceptedCredentialClasses(t *testing.T) {
@@ -761,7 +903,7 @@ func TestGateReadsIssuedCredentialDirectionAndExposureReachabilityLive(t *testin
 	// surface_kind to.
 	root := t.TempDir()
 	seedFixtureAppGo(t, root)
-	schemaPath, credentialClassesPath := seedFixtureSchemaAndCredentialClasses(t, root)
+	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
 	schema, err := loadJSON(schemaPath)
 	if err != nil {
 		t.Fatal(err)
@@ -790,7 +932,7 @@ func TestGateReadsIssuedCredentialDirectionAndExposureReachabilityLive(t *testin
 		"gaps":     []any{},
 	})
 	inventoryPath := writeInventory(t, root, []map[string]any{row})
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, realDiscovererPath(t))
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -863,7 +1005,7 @@ func TestGateCatchesTheRealCommittedOffByOneAnchorBug(t *testing.T) {
 			"\n"+
 			"func protectedRuntimeHandler(next http.Handler) http.Handler { return next }\n",
 	)
-	schemaPath, credentialClassesPath := seedFixtureSchemaAndCredentialClasses(t, root)
+	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
 	row := minimalValidRow(map[string]any{
 		"primary_validator": map[string]any{
 			"description": "wraps itself in protectedRuntimeHandler",
@@ -874,7 +1016,7 @@ func TestGateCatchesTheRealCommittedOffByOneAnchorBug(t *testing.T) {
 		},
 	})
 	inventoryPath := writeInventory(t, root, []map[string]any{row})
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, realDiscovererPath(t))
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -890,7 +1032,7 @@ func TestGateCatchesAnIssuedCredentialAnchorWithNoExtractableFunctionName(t *tes
 	// file exists and the line is in bounds.
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, fixtureAppFile), "package api\n\nimport \"net/http\"\n")
-	schemaPath, credentialClassesPath := seedFixtureSchemaAndCredentialClasses(t, root)
+	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
 	row := minimalValidRow(map[string]any{
 		"classification":              "protected",
 		"public_rationale":            nil,
@@ -905,7 +1047,7 @@ func TestGateCatchesAnIssuedCredentialAnchorWithNoExtractableFunctionName(t *tes
 		"gaps": []any{},
 	})
 	inventoryPath := writeInventory(t, root, []map[string]any{row})
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, realDiscovererPath(t))
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -981,30 +1123,13 @@ func TestGateCatchesAnUnresolvedRegistration(t *testing.T) {
 			"}\n"+
 			"\n"+
 			"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n")
-	schemaPath, credentialClassesPath := seedFixtureSchemaAndCredentialClasses(t, root)
+	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
 	inventoryPath := writeInventory(t, root, nil)
-	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, realDiscovererPath(t))
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	mustContain(t, errs, "UNRESOLVED REGISTRATION")
-}
-
-func TestSchemaEnumReadsServerActionLiveFromSchema(t *testing.T) {
-	// The gate reads surface_kind's enum LIVE from the schema file rather
-	// than hardcoding it, so it accepts a schema-level vocabulary addition
-	// (server_action, added for the web lane's Next.js Server Action
-	// ruling) with zero checker code change.
-	root := t.TempDir()
-	schemaPath, _ := seedFixtureSchemaAndCredentialClasses(t, root)
-	schema, err := loadJSON(schemaPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	vocab := schemaEnum(schema, "surface_kind")
-	if !vocab["server_action"] {
-		t.Fatalf("expected surface_kind vocabulary to include server_action, got %v", vocab)
-	}
 }
 
 // ---------------------------------------------------------------------------

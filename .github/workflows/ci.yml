@@ -367,10 +367,38 @@ jobs:
       # ci/ops-contract.pin's own commit message for which lane/branch)
       # from every other one (a stale or simply wrong pin), so a red run
       # here is never mistaken for a broken mechanism.
-      - name: Verify the pinned ops commit is resolvable
+      # A pin that accepts any resolvable ref is not a pin. Merge-gate
+      # finding (CHAOS-3273, terra round on 896ca76e, EXECUTED): with only
+      # the resolvability probe below, putting the literal `main` in
+      # ci/ops-contract.pin passed and the sparse checkout then followed
+      # ops's default branch -- silently reintroducing exactly the floating
+      # ref this whole mechanism exists to reject, while the file, the
+      # commit message and this comment block all claimed otherwise. A
+      # mechanism documented as bought must actually be bought, so the
+      # shape is checked BEFORE the ref is resolved: a branch or tag name
+      # is rejected on its face, not by whether it happens to resolve.
+      - name: Verify the pin names an immutable commit, not a floating ref
         run: |
           set -euo pipefail
           sha="${{ steps.ops-pin.outputs.sha }}"
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            cat >&2 <<EOF
+          ci/ops-contract.pin must name a full 40-character lowercase commit
+          SHA. It currently holds: $sha
+
+          REJECTED CASE: a branch name or tag (e.g. "main", "v1.2.0") -- any
+          floating ref. Those resolve perfectly well, which is the problem:
+          the checkout would then track whatever that ref points at, so a
+          push to dev-health-ops would change what this job validates
+          against with no commit in this repo recording that it happened.
+          The pin exists to make a contract change an acr-side commit. An
+          abbreviated SHA is rejected for the same reason it is rejected in
+          go.mod: it is not stable against future collisions.
+
+          Put the full SHA of the ops commit this repo trusts.
+          EOF
+            exit 1
+          fi
           # git ls-remote only resolves NAMED refs (branches/tags), never
           # an arbitrary commit SHA -- verified against ops's own current
           # origin/main tip, which it reports as absent too. A bare
@@ -409,11 +437,40 @@ jobs:
           sparse-checkout: |
             contracts/auth/v1/endpoint-profile.schema.json
             contracts/auth/v1/credential-classes.json
+            contracts/auth/v1/credential-classes.schema.json
           sparse-checkout-cone-mode: false
+      # credential-classes.schema.json joined this list at the merge-gate
+      # round: the gate validated the endpoint-profile inventory against its
+      # schema but loaded the credential-class document only to harvest ids,
+      # so a vocabulary whose entries had lost their issuer, validator,
+      # lifecycle authority and allowed route set still passed. Validating it
+      # needs its schema present, so a missing entry here would turn a real
+      # check back into an absent one.
       - name: Verify endpoint-profile inventory against the pinned ops contract
         env:
           ACR_ENDPOINT_PROFILE_SCHEMA: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/endpoint-profile.schema.json
           ACR_CREDENTIAL_CLASSES: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/credential-classes.json
+          ACR_CREDENTIAL_CLASSES_SCHEMA: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/credential-classes.schema.json
+          # ACR_CONTRACT_GATE marks THIS step as the one job that is
+          # required to run the real-tree contract proof, and is the
+          # predicate the proof's fail-closed branch keys on.
+          #
+          # It replaces a check on `CI`, which was the wrong predicate:
+          # `CI` is set in every job on every runner, but the sparse
+          # checkout that delivers the three ops-owned inputs exists only
+          # here -- so the proof failed in `unit` and in every `race`
+          # shard, which is a red build that says nothing about the
+          # contract. Keying on a marker only this step sets means the
+          # proof fails loudly exactly where it is supposed to run, and
+          # skips (with its reason) where it is not.
+          #
+          # "Then a deleted step means the gate silently never runs" is the
+          # obvious objection, and it is why scripts/ci/test-workflow-contract.sh
+          # asserts this step exists and sets all three input paths plus
+          # this marker. The runtime guard proves the inputs ARRIVED; the
+          # workflow-contract test proves the step still EXISTS. Neither
+          # alone closes the class.
+          ACR_CONTRACT_GATE: required
         run: go test ./ci/checkendpointprofiles/...
 
   container-contract-smoke:

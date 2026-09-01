@@ -247,6 +247,59 @@ check_race_shard_agreement() {
   fi
 }
 
+# The endpoint-profile contract gate is the one CI step that runs the
+# real-tree auth-surface proof, and the proof's own fail-closed branch keys
+# on the ACR_CONTRACT_GATE marker this step sets. That makes deleting or
+# gutting the step invisible at runtime: with no step, nothing sets the
+# marker, so the proof skips with a reason nobody reads and every job stays
+# green while guardrail G-1 goes unenforced.
+#
+# The runtime guard proves the inputs ARRIVED where the gate runs. This
+# check proves the step still EXISTS and still supplies all four values.
+# Neither closes the class alone -- that is the whole reason both exist.
+check_endpoint_profile_gate_step() {
+  local file="$1" block
+  block="$(awk '
+    /Verify endpoint-profile inventory against the pinned ops contract/ { grab=1 }
+    grab && /^      - / && !/Verify endpoint-profile inventory/ { grab=0 }
+    grab { print }
+  ' "$file")"
+
+  if [ -z "$block" ]; then
+    printf 'no "Verify endpoint-profile inventory against the pinned ops contract" step found in %s -- guardrail G-1 would go unenforced with every job green\n' "$file" >&2
+    return 1
+  fi
+
+  local key
+  for key in ACR_ENDPOINT_PROFILE_SCHEMA ACR_CREDENTIAL_CLASSES ACR_CREDENTIAL_CLASSES_SCHEMA; do
+    if ! printf '%s' "$block" | grep -q "$key:"; then
+      printf 'the endpoint-profile gate step does not set %s -- the gate cannot validate an input it is not given\n' "$key" >&2
+      return 1
+    fi
+  done
+
+  if ! printf '%s' "$block" | grep -q 'ACR_CONTRACT_GATE: required'; then
+    printf 'the endpoint-profile gate step does not set ACR_CONTRACT_GATE: required -- without it the real-tree proof SKIPS instead of failing when its inputs are missing\n' >&2
+    return 1
+  fi
+
+  if ! printf '%s' "$block" | grep -q 'go test ./ci/checkendpointprofiles/'; then
+    printf 'the endpoint-profile gate step does not run go test ./ci/checkendpointprofiles/ -- it sets the environment for a proof it never invokes\n' >&2
+    return 1
+  fi
+}
+
+# A pin that accepts a branch name is not a pin: the sparse checkout would
+# follow ops's moving default branch with no acr commit recording it. The
+# workflow must reject the shape BEFORE resolving the ref.
+check_pin_requires_full_sha() {
+  local file="$1"
+  if ! grep -qF '[0-9a-f]{40}' "$file"; then
+    printf 'the workflow does not require ci/ops-contract.pin to be a full 40-hex commit SHA -- a branch name would resolve and silently float\n' >&2
+    return 1
+  fi
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -257,6 +310,8 @@ run_all_checks() {
   check_race_shard_agreement "$file"
   check_container_oci_scan_same_job "$file"
   check_isolated_devhealthschema_job "$file"
+  check_endpoint_profile_gate_step "$file"
+  check_pin_requires_full_sha "$file"
 }
 
 # ---- positive run -------------------------------------------------------
@@ -357,5 +412,37 @@ isolated_job_no_timeout="$tmpdir/isolated-job-no-timeout.yml"
 sed 's/ GOTEST_TIMEOUT=900s//' "$workflow" > "$isolated_job_no_timeout"
 assert_check_fails 'dropped the isolated job'"'"'s explicit GOTEST_TIMEOUT override' \
   check_isolated_devhealthschema_job "$isolated_job_no_timeout"
+
+# (l) delete the endpoint-profile gate step. Nothing then sets
+# ACR_CONTRACT_GATE, so the real-tree proof skips rather than fails and the
+# build stays green with the auth-surface contract unchecked.
+gate_step_removed="$tmpdir/gate-step-removed.yml"
+awk '
+  /Verify endpoint-profile inventory against the pinned ops contract/ { skip=1 }
+  skip && /^      - / && !/Verify endpoint-profile inventory/ { skip=0 }
+  !skip { print }
+' "$workflow" > "$gate_step_removed"
+assert_check_fails 'deleted the endpoint-profile gate step' \
+  check_endpoint_profile_gate_step "$gate_step_removed"
+
+# (m) keep the step but drop the ACR_CONTRACT_GATE marker, which downgrades
+# the real-tree proof from FAIL to SKIP exactly where it is meant to run.
+gate_marker_removed="$tmpdir/gate-marker-removed.yml"
+awk '/ACR_CONTRACT_GATE: required/ { next } { print }' "$workflow" > "$gate_marker_removed"
+assert_check_fails 'dropped ACR_CONTRACT_GATE: required from the gate step' \
+  check_endpoint_profile_gate_step "$gate_marker_removed"
+
+# (n) keep the step and the marker but stop supplying the credential-class
+# schema, so the vocabulary document goes back to being unvalidated.
+gate_input_removed="$tmpdir/gate-input-removed.yml"
+awk '/ACR_CREDENTIAL_CLASSES_SCHEMA:/ { next } { print }' "$workflow" > "$gate_input_removed"
+assert_check_fails 'dropped ACR_CREDENTIAL_CLASSES_SCHEMA from the gate step' \
+  check_endpoint_profile_gate_step "$gate_input_removed"
+
+# (o) remove the pin's full-SHA requirement, restoring the floating-ref hole.
+pin_regex_removed="$tmpdir/pin-regex-removed.yml"
+grep -vF '[0-9a-f]{40}' "$workflow" > "$pin_regex_removed"
+assert_check_fails 'removed the full-SHA requirement on ci/ops-contract.pin' \
+  check_pin_requires_full_sha "$pin_regex_removed"
 
 printf 'PASS: all negative controls correctly failed their check\n'

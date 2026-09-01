@@ -15,16 +15,29 @@
 // importable package, so subprocess invocation is the least-invasive reuse
 // path that does not touch L1's already-committed file.
 //
-// KNOWN CROSS-REPO GAP (see this lane's report to auth-cp): the schema
-// (contracts/auth/v1/endpoint-profile.schema.json) and the credential-class
-// closed vocabulary (contracts/auth/v1/credential-classes.json) are OWNED BY
-// OPS (docs/endpoint-profiles.md: "Shared schema (owned by ops, reused as
-// is)") and are NOT vendored into this repo. This gate takes their paths as
-// required flags rather than defaulting to a same-repo path that would not
-// exist in a real acr-only checkout; CI wiring must supply them (e.g. a
-// checkout/fetch step pulling the ops repo's contracts/auth/v1/ directory at
-// a pinned commit). Building that wiring is outside this lane's scope --
-// flagged, not silently guessed around.
+// CROSS-REPO INPUTS: the endpoint-profile schema
+// (contracts/auth/v1/endpoint-profile.schema.json), the credential-class
+// closed vocabulary (contracts/auth/v1/credential-classes.json) and that
+// vocabulary's own schema (contracts/auth/v1/credential-classes.schema.json)
+// are OWNED BY OPS (docs/endpoint-profiles.md: "Shared schema (owned by ops,
+// reused as is)") and are NOT vendored into this repo. This gate takes their
+// paths as REQUIRED flags rather than defaulting to a same-repo path that
+// would not exist in a real acr-only checkout. .github/workflows/ci.yml
+// supplies them from a sparse checkout of the ops repo at the commit named in
+// ci/ops-contract.pin.
+//
+// KNOWN LIMITS -- each carries a ticket, because a documented limitation with
+// no ticket reads as an excuse and one with a ticket reads as a known gap
+// someone owns:
+//   - Discovery re-derives registrations from SOURCE TEXT, not from a served
+//     router object, so a registration it cannot resolve is not cross-checked.
+//     It fails closed (UNRESOLVED REGISTRATION) rather than skipping.
+//     CHAOS-4761.
+//   - Multi-mount route collapse in the discovery half: CHAOS-4760.
+//   - Anchor CONTENT verification is a name match, not a proof that the named
+//     line is the validator.
+//   - The inventory's declared source_commit and credential_class_source are
+//     NOT verified by this gate: CHAOS-4765.
 //
 // Usage:
 //
@@ -32,7 +45,8 @@
 //	    -root PATH \
 //	    -inventory contracts/auth/v1/endpoint-profiles.acr.json \
 //	    -schema /path/to/endpoint-profile.schema.json \
-//	    -credential-classes /path/to/credential-classes.json
+//	    -credential-classes /path/to/credential-classes.json \
+//	    -credential-classes-schema /path/to/credential-classes.schema.json
 package main
 
 import (
@@ -72,6 +86,10 @@ type discoveredRoute struct {
 	Path   string `json:"path"`
 	File   string `json:"file"`
 	Line   int    `json:"line"`
+	// Service is the deployed app whose mux discovery found this route on.
+	// See discover_acr_routes.go's deployedService for why discovery can
+	// state this at all.
+	Service string `json:"service"`
 }
 
 type discoverReport struct {
@@ -150,44 +168,92 @@ func asString(v any) (string, bool) {
 	return s, ok
 }
 
-func stringSet(items []any) map[string]bool {
-	out := map[string]bool{}
-	for _, it := range items {
-		if s, ok := it.(string); ok {
-			out[s] = true
+// NOTE ON LIVE VOCABULARY (merge-gate round on 896ca76e): this file used to
+// carry a schemaEnum() helper that read a field's enum out of the schema, and
+// a test named for the gate's live-vocabulary property that called only that
+// helper. The helper had NO call path from check() -- it was dead code, and
+// the test that appeared to prove the property proved nothing about the gate.
+// Both are gone. The property is real and is delivered by validateAgainstSchema
+// below: full Draft 2020-12 validation reads every enum out of the schema
+// document by construction, so a schema-level vocabulary addition is accepted
+// with zero checker change. That is proven at GATE level, through check(), by
+// TestGateReadsIssuedCredentialDirectionAndExposureReachabilityLive.
+
+// validateAgainstSchema validates one loaded JSON document against one
+// Draft 2020-12 schema file, appending each reported violation to errs under
+// the given label. ONE code path for both documents the gate validates: the
+// merge-gate round found the credential-class document going unvalidated
+// precisely because it had no path through here, and two parallel
+// implementations would let that happen again.
+//
+// A failure to read, parse or resolve the SCHEMA ITSELF is returned as an
+// error rather than appended: the gate must fail loudly when it cannot
+// validate, never report a clean run it did not perform.
+func validateAgainstSchema(schemaPath string, document any, label string, errs *[]string) error {
+	schemaBytes, err := os.ReadFile(schemaPath)
+	if err != nil {
+		return fmt.Errorf("reading schema %s: %w", schemaPath, err)
+	}
+	var schemaTyped jsonschema.Schema
+	if err := json.Unmarshal(schemaBytes, &schemaTyped); err != nil {
+		return fmt.Errorf("parsing schema %s: %w", schemaPath, err)
+	}
+	resolved, err := schemaTyped.Resolve(&jsonschema.ResolveOptions{})
+	if err != nil {
+		return fmt.Errorf("resolving schema %s: %w", schemaPath, err)
+	}
+	if err := resolved.Validate(document); err != nil {
+		for _, line := range strings.Split(err.Error(), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				*errs = append(*errs, label+": "+line)
+			}
 		}
 	}
-	return out
+	return nil
 }
 
-// schemaEnum reads $defs.endpointProfile.properties.<field>.enum LIVE from
-// the loaded schema, rather than hardcoding a vocabulary here, so a
-// schema-level vocabulary addition (e.g. surface_kind gaining
-// "server_action" for the web lane's Next.js Server Action ruling) is
-// accepted with zero checker code change. Returns nil if the field has no
-// enum constraint (not a closed vocabulary).
-func schemaEnum(schema map[string]any, field string) map[string]bool {
-	defs := asObject(schema["$defs"])
-	profile := asObject(defs["endpointProfile"])
-	props := asObject(profile["properties"])
-	node := asObject(props[field])
-	enum, ok := node["enum"]
-	if !ok {
-		return nil
-	}
-	return stringSet(asArray(enum))
-}
-
-func credentialClassVocabulary(credentialClasses map[string]any) map[string]bool {
+// credentialClassVocabulary reduces the ops-owned credential-class document
+// to the set of ids the inventory may reference, AND reports ids declared
+// more than once.
+//
+// Merge-gate finding (CHAOS-3273, terra round on 896ca76e; the same class
+// ops fixed): the previous version collapsed classes into a set and returned
+// only that, so two CONFLICTING definitions of one class_id -- different
+// issuer, different validator, different lifecycle authority -- both
+// survived as a single set member and the gate returned no errors. A closed
+// vocabulary that can hold one id twice with two meanings is not closed.
+//
+// This cannot be expressed in JSON Schema: uniqueness of a field ACROSS
+// objects in an array has no keyword (uniqueItems compares whole items, so
+// two entries differing in any other field are already "unique"). It is a
+// checker rule by necessity, not by preference.
+func credentialClassVocabulary(credentialClasses map[string]any) (map[string]bool, []string) {
 	classes := asArray(credentialClasses["classes"])
 	out := map[string]bool{}
+	counts := map[string]int{}
+	var order []string
 	for _, c := range classes {
 		obj := asObject(c)
 		if id, ok := asString(obj["class_id"]); ok {
+			if counts[id] == 0 {
+				order = append(order, id)
+			}
+			counts[id]++
 			out[id] = true
 		}
 	}
-	return out
+	var errs []string
+	for _, id := range order {
+		if counts[id] > 1 {
+			errs = append(errs, fmt.Sprintf(
+				"DUPLICATE CREDENTIAL CLASS: class_id %q is declared %d times in the credential-class document -- "+
+					"a closed vocabulary cannot hold one id with two definitions (JSON Schema cannot express cross-object id uniqueness)",
+				id, counts[id],
+			))
+		}
+	}
+	return out, errs
 }
 
 // gapsMention reports whether row.gaps contains an entry mentioning needle
@@ -240,7 +306,7 @@ func indexOf(haystack, needle string) int {
 // exactly the drift Codex found: a schema-declared rule this file never
 // re-derived.
 
-func check(root, inventoryPath, schemaPath, credentialClassesPath, discovererPath string) ([]string, error) {
+func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, discovererPath string) ([]string, error) {
 	var errs []string
 
 	inventory, err := loadJSON(inventoryPath)
@@ -251,7 +317,20 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, discovererPat
 	if err != nil {
 		return nil, fmt.Errorf("loading credential classes: %w", err)
 	}
-	classVocab := credentialClassVocabulary(credentialClasses)
+	classVocab, vocabErrs := credentialClassVocabulary(credentialClasses)
+	errs = append(errs, vocabErrs...)
+
+	// Merge-gate finding (CHAOS-3273, terra round on 896ca76e): the
+	// credential-class document was loaded only to harvest ids, and never
+	// validated against credential-classes.schema.json -- the schema that
+	// makes each entry carry an issuer, a validator, a lifecycle authority
+	// and an allowed route set. Every class reduced to bare {"class_id":
+	// "..."} therefore passed. The inventory's closed vocabulary was being
+	// enforced against a document whose own contents nothing checked, which
+	// makes "closed vocabulary" a claim about ids only.
+	if err := validateAgainstSchema(credentialClassesSchemaPath, credentialClasses, "CREDENTIAL CLASS SCHEMA VIOLATION", &errs); err != nil {
+		return nil, err
+	}
 
 	report, err := runDiscovery(root, discovererPath)
 	if err != nil {
@@ -291,25 +370,8 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, discovererPat
 	// Go maps instead of read from the schema); nothing checked row-level
 	// field TYPES at all, so a row with an obviously wrong type anywhere
 	// passed silently.
-	schemaBytes, err := os.ReadFile(schemaPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading schema: %w", err)
-	}
-	var schemaTyped jsonschema.Schema
-	if err := json.Unmarshal(schemaBytes, &schemaTyped); err != nil {
-		return nil, fmt.Errorf("parsing schema: %w", err)
-	}
-	resolved, err := schemaTyped.Resolve(&jsonschema.ResolveOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("resolving schema: %w", err)
-	}
-	if err := resolved.Validate(inventory); err != nil {
-		for _, line := range strings.Split(err.Error(), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				errs = append(errs, "JSON SCHEMA VIOLATION: "+line)
-			}
-		}
+	if err := validateAgainstSchema(schemaPath, inventory, "JSON SCHEMA VIOLATION", &errs); err != nil {
+		return nil, err
 	}
 
 	rowsRaw, _ := inventory["rows"].([]any)
@@ -523,6 +585,30 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, discovererPat
 		}
 		if sk, _ := asString(row["surface_kind"]); sk != "rest" {
 			errs = append(errs, fmt.Sprintf("STALE ANCHOR: row %q claims surface_kind=%q but %s:%d is a REST route (content drift)", id, sk, file, line))
+		}
+
+		// Merge-gate finding (CHAOS-3273, terra round on 896ca76e; same
+		// class ops fixed in 4bab8745b): `service` was validated against
+		// the schema's closed enum but never compared with what discovery
+		// actually found, so relabelling a row to a DIFFERENT VALID value
+		// returned OK. That is not a cosmetic mislabel. `service` selects
+		// which deployed app -- and therefore which middleware stack --
+		// the row's whole security analysis applies to, so a row attributed
+		// to the wrong app silently invalidates its own reasoning while
+		// still satisfying guardrail G-1.
+		//
+		// Only compared when discovery states a service: an older
+		// discoverer report (or a future one that walks a source it cannot
+		// attribute) leaves it empty, and comparing against "" would
+		// manufacture a failure on every row rather than checking anything.
+		if surface.Service != "" {
+			if svc, _ := asString(row["service"]); svc != surface.Service {
+				errs = append(errs, fmt.Sprintf(
+					"SERVICE MISMATCH: row %q claims service=%q but %s:%d is registered on the %q mux "+
+						"(the row's reachable-validator and middleware reasoning is attributed to the wrong deployed app)",
+					id, svc, file, line, surface.Service,
+				))
+			}
 		}
 	}
 
@@ -771,11 +857,12 @@ func main() {
 	inventory := flag.String("inventory", "contracts/auth/v1/endpoint-profiles.acr.json", "inventory JSON path (relative to root)")
 	schema := flag.String("schema", "", "endpoint-profile.schema.json path (owned by ops; must be supplied, see file doc comment)")
 	credentialClasses := flag.String("credential-classes", "", "credential-classes.json path (owned by ops; must be supplied, see file doc comment)")
+	credentialClassesSchema := flag.String("credential-classes-schema", "", "credential-classes.schema.json path (owned by ops; must be supplied, see file doc comment)")
 	discoverer := flag.String("discoverer", "", "path to discover_acr_routes.go (default: <root>/ci/discover_acr_routes.go)")
 	flag.Parse()
 
-	if *schema == "" || *credentialClasses == "" {
-		fmt.Fprintln(os.Stderr, "checkendpointprofiles: -schema and -credential-classes are required (ops-owned files, not vendored into this repo -- see main.go doc comment)")
+	if *schema == "" || *credentialClasses == "" || *credentialClassesSchema == "" {
+		fmt.Fprintln(os.Stderr, "checkendpointprofiles: -schema, -credential-classes and -credential-classes-schema are required (ops-owned files, not vendored into this repo -- see main.go doc comment)")
 		os.Exit(2)
 	}
 
@@ -793,7 +880,7 @@ func main() {
 		discovererPath = filepath.Join(rootAbs, "ci", "discover_acr_routes.go")
 	}
 
-	errs, err := check(rootAbs, inventoryPath, *schema, *credentialClasses, discovererPath)
+	errs, err := check(rootAbs, inventoryPath, *schema, *credentialClasses, *credentialClassesSchema, discovererPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "checkendpointprofiles:", err)
 		os.Exit(1)
