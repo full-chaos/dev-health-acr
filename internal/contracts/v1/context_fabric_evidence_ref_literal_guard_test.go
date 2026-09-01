@@ -59,7 +59,12 @@ import (
 //     Ordinary code review is the actual, and only, defense here -- a
 //     reviewer seeing ANY post-processing of an EvidenceRefID result, or a
 //     ref built from a non-literal source, should treat it as an
-//     automatic hold.
+//     automatic hold. Chris's ruling on this exact residual: accepted --
+//     this file's promise is MINT-TIME closure, not post-construction
+//     integrity, and RecordEvidenceLabelFallback is the runtime backstop:
+//     a stored ref built this way still carries an unregistered segment,
+//     so a nonzero fallback count for an acr-minted ref is an INCIDENT
+//     SIGNAL to investigate, not noise to ignore.
 //  2. A literal split BELOW the substring "acr:v1" itself ("acr" + ":v1")
 //     still evades a literal-content scan -- same code-review-territory
 //     conclusion, and (like #1) no producer in this codebase has ever come
