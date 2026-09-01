@@ -148,6 +148,68 @@ func TestSelectGroupCoverMembersGuardFallback(t *testing.T) {
 	}
 }
 
+// TestSelectGroupCoverMembersGuardFallbackFloorSurvivesEvenOverBudget pins
+// codex round 1, finding 1 (P1, EXECUTED): beyond the guard, a budget
+// TIGHTER than the group count must still never drop a group -- exactly the
+// same unconditional floor the exact path guarantees. The first guard-
+// fallback test above used a budget exactly equal to the group count, which
+// never actually exercised the floor under pressure and passed either way;
+// this is the tightened version that would have caught the regression.
+func TestSelectGroupCoverMembersGuardFallbackFloorSurvivesEvenOverBudget(t *testing.T) {
+	t.Parallel()
+	groupCount := ContextFabricSetCoverGroupGuard + 1
+	groups := make([]ContextFabricCohortGroup, groupCount)
+	for i := 0; i < groupCount; i++ {
+		id := string(rune('A' + i))
+		groups[i] = ContextFabricCohortGroup{
+			Subject:            ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: id, Label: id},
+			MemberCanonicalIDs: []string{id + "1"},
+			Complete:           true,
+			Total:              1,
+		}
+	}
+	// Budget is one LESS than the group count -- too tight to cover every
+	// group even at 1 member each.
+	selected, basis := SelectGroupCoverMembers(groups, nil, groupCount-1)
+	if basis != ContextFabricNarrowingBasisLargestGroupRoundRobin {
+		t.Fatalf("basis = %q beyond the guard, want largest_group_round_robin", basis)
+	}
+	for _, group := range groups {
+		if _, ok := selected[group.MemberCanonicalIDs[0]]; !ok {
+			t.Fatalf("group %q lost its only member under a tight budget beyond the guard; selected = %v -- the floor must hold even OVER budget, exactly as the exact path does", group.Subject.CanonicalID, selected)
+		}
+	}
+	if len(selected) != groupCount {
+		t.Fatalf("selected %d members, want all %d (over the %d-member budget, preserving the floor)", len(selected), groupCount, groupCount-1)
+	}
+}
+
+// TestSelectGroupCoverMembersMinimumCoverIsLexicographicallySmallest pins
+// codex round 1, finding 2 (P2, EXECUTED): among several equally-small
+// minimum covers, the selection must be the LEXICOGRAPHICALLY SMALLEST set,
+// not merely *a* deterministic one. Groups A={a,b}, B={a,c}, C={c,d} with a
+// 2-member budget admit two distinct minimum covers, {a,c} and {b,c}; {a,c}
+// is lexically smaller and must be the one chosen. A naive bitmask-DP
+// reconstruction that just follows "the first transition that reached this
+// state" is deterministic but ends up member-mask-order dependent rather
+// than canonical_id_lexical, and returned {b,c} here.
+func TestSelectGroupCoverMembersMinimumCoverIsLexicographicallySmallest(t *testing.T) {
+	t.Parallel()
+	groups := []ContextFabricCohortGroup{
+		{Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "A", Label: "A"}, MemberCanonicalIDs: []string{"a", "b"}, Complete: true, Total: 2},
+		{Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "B", Label: "B"}, MemberCanonicalIDs: []string{"a", "c"}, Complete: true, Total: 2},
+		{Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "C", Label: "C"}, MemberCanonicalIDs: []string{"c", "d"}, Complete: true, Total: 2},
+	}
+	selected, basis := SelectGroupCoverMembers(groups, nil, 2)
+	if basis != ContextFabricNarrowingBasisOverlapAwareSetCover {
+		t.Fatalf("basis = %q, want overlap_aware_set_cover", basis)
+	}
+	want := map[string]struct{}{"a": {}, "c": {}}
+	if !sameSet(selected, want) {
+		t.Fatalf("selected = %v, want the lexicographically smallest minimum cover {a,c} (not {b,c}, which is equally minimal but lexically larger)", selected)
+	}
+}
+
 func sameSet(a, b map[string]struct{}) bool {
 	if len(a) != len(b) {
 		return false

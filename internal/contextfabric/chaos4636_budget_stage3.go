@@ -272,7 +272,13 @@ func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) narr
 		// decision D2 forbids: "for each team" is the question's own words.
 		// The planned refusal is the correct terminal case here, not a
 		// silent group drop.
-		return narrowedInput{Graph: graph, Facts: facts, Before: before, After: before}
+		//
+		// Basis travels even here (codex round 1, finding 4): the grouped
+		// selection still RAN and still has a real basis to report even
+		// though it produced no change -- dropping it here made the
+		// refusal telemetry fall back to a stale default that named an
+		// order that did not execute.
+		return narrowedInput{Graph: graph, Facts: facts, Before: before, After: before, Basis: basis}
 	}
 	removed := RemovedCohortMembers(cohort.Members, kept)
 	cohort.Members = kept
