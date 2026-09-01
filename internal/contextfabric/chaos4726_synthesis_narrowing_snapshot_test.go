@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -156,5 +157,44 @@ func TestInvestigateAttachesNarrowingSnapshotOnSynthesisRejection(t *testing.T) 
 	}
 	if !errors.As(investigateErr, new(*SynthesisRejection)) {
 		t.Fatal("errors.As(Investigate error, *SynthesisRejection) = false -- the snapshot must wrap the rejection, not replace it")
+	}
+}
+
+// TestInvestigateAttachesNarrowingSnapshotOnStage3RetrySynthesisFailure is
+// codex round 1's finding on this ticket: the FIRST synthesis call's
+// rejection is caught at the Investigate call site, but stage 3's retry
+// (chaos4636_budget_stage3.go's fitAssembledResult) is a SECOND, separate
+// synthesis invocation that can itself fail, and that path bypassed the
+// snapshot entirely -- the retry's own error was returned unwrapped. This
+// pins that the retry-failure path now carries a snapshot too, and that its
+// LastStage is assembled_result (stage 3's own narrowing step, appended to
+// plan.Narrowing immediately before the retry runs) -- not stale state left
+// over from the first, failed attempt.
+func TestInvestigateAttachesNarrowingSnapshotOnStage3RetrySynthesisFailure(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	// 6 members x 3 claims = 18 claims + 6 members = 24 items over a 12-item
+	// budget -- the SAME fixture shape as
+	// TestStage3PropagatesARetrySynthesisFailureRatherThanCallingItABudgetRefusal,
+	// which pins that the retry's error survives at all; this test pins
+	// that it now also carries the narrowing snapshot.
+	engine := budgetStageEngine(t, budgetStageCohort(6), 3, budgetStageOptions(12, time.Second), &calls, &recordingTelemetry{})
+	upstream := errors.New("model runtime unavailable")
+	engine.synthesizer = failingRetrySynthesizer{calls: &calls, first: engine.synthesizer, failWith: upstream}
+
+	_, investigateErr := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+	if investigateErr == nil {
+		t.Fatal("Investigate() error = nil, want the retry's propagated failure")
+	}
+	if !errors.Is(investigateErr, upstream) {
+		t.Fatalf("errors.Is(Investigate error, upstream) = false -- want %v, got %v", upstream, investigateErr)
+	}
+
+	snapshot, ok := SynthesisNarrowingSnapshotOf(investigateErr)
+	if !ok {
+		t.Fatalf("SynthesisNarrowingSnapshotOf(Investigate error) ok = false -- the stage-3 retry failure path must attach the pre-retry narrowing state too; got %v", investigateErr)
+	}
+	if snapshot.LastStage != contractsv1.ContextFabricPlanNarrowingAssembledResult {
+		t.Fatalf("LastStage = %q, want assembled_result -- stage 3's own narrowing step runs immediately before the retry call", snapshot.LastStage)
 	}
 }
