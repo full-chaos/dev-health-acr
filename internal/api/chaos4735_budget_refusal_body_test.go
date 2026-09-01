@@ -25,10 +25,41 @@ import (
 // most of why it survived to be found by an outside reviewer.
 
 // closedToken is the shape every string in the refusal's details must have:
-// one lower-case token. A sentence has spaces; a token does not. That is the
-// whole discrimination, and it is deliberately cruder than a vocabulary check
-// because it needs no maintenance to keep catching the defect class.
+// one lower-case token. A sentence has spaces; a token does not.
+//
+// NOT SUFFICIENT ON ITS OWN, and codex round 1 proved it: `ask_about_one_subject`
+// is a snake_case phrase that satisfies this regex perfectly. A reviewer
+// constructed a `narrower_hint` field carrying exactly that and this test
+// passed. The regex is retained as a cheap first filter, but the assertion
+// that actually holds the line is `allowedDetailKeys` below -- a CLOSED key
+// set. Shape checks can be satisfied by a determined author; an allowlist of
+// keys cannot be satisfied by adding a key.
 var closedToken = regexp.MustCompile(`^[a-z0-9_]+$`)
+
+// allowedDetailKeys is the COMPLETE set of keys the 413 details object may
+// carry. Anything else fails, whatever it contains.
+//
+// This is the fix for codex round 1's P1. The earlier version of this test
+// checked the SHAPE of values and never asked which keys existed, so a new
+// key smuggling family-keyed advice through was invisible to it. A budget
+// refusal's details is a small fixed object -- there is no reason for it to
+// be open, and closing it turns "someone added a field" from something a
+// reviewer might notice into something CI reports.
+var allowedDetailKeys = map[string]bool{
+	"overrun":               true,
+	"measured_items":        true,
+	"measured_bytes":        true,
+	"max_items":             true,
+	"max_serialized_bytes":  true,
+	"question_family":       true,
+	"retry_attempted":       true,
+	"narrower_continuation": true,
+}
+
+// allowedContinuationKeys is the same discipline one level down. The
+// continuation object is where a "hint" or "suggestion" string would most
+// naturally be added later.
+var allowedContinuationKeys = map[string]bool{"family": true, "axis": true}
 
 func TestChaos4735BudgetRefusal413CarriesNoServerAuthoredProse(t *testing.T) {
 	t.Parallel()
@@ -77,6 +108,17 @@ func TestChaos4735BudgetRefusal413CarriesNoServerAuthoredProse(t *testing.T) {
 				t.Errorf("413 details still carry narrower_question: %v", details["narrower_question"])
 			}
 
+			// 1b. The key set is CLOSED. Codex round 1 defeated the
+			//     shape-only version of this test with a `narrower_hint`
+			//     key whose snake_case value passed every value check. A
+			//     value assertion cannot catch a new field; a key
+			//     allowlist catches it by construction.
+			for key := range details {
+				if !allowedDetailKeys[key] {
+					t.Errorf("413 details carry an unexpected key %q = %v. The refusal's details is a closed object; a new key needs a ruling, not a line in the allowlist -- and family-keyed advice is exactly what arrives this way", key, details[key])
+				}
+			}
+
 			// 2. Nothing in details is prose. This is the assertion that
 			//    survives a rename: it does not care what the field is
 			//    called, only that no value in the object is a sentence.
@@ -88,6 +130,17 @@ func TestChaos4735BudgetRefusal413CarriesNoServerAuthoredProse(t *testing.T) {
 			//    language keyed on a vocabulary value, not about the error
 			//    envelope having a message field at all.
 			assertNoProse(t, details, "details")
+
+			// 2b. The two string-valued scalars are VOCABULARY MEMBERS, not
+			//     merely token-shaped. This is the same lesson as 1b: shape
+			//     is a weaker claim than membership, and the gap between
+			//     them is where invented text lives.
+			if overrun, _ := details["overrun"].(string); !contractsv1.ValidContextFabricBudgetOverrun(contractsv1.ContextFabricBudgetOverrun(overrun)) {
+				t.Errorf("overrun = %q, not a member of the closed overrun vocabulary", overrun)
+			}
+			if got, _ := details["question_family"].(string); got != string(family) {
+				t.Errorf("question_family = %q, want %q", got, family)
+			}
 
 			// 3. The continuation is present exactly when an axis exists,
 			//    and absent -- not "none" -- when it does not.
@@ -104,6 +157,11 @@ func TestChaos4735BudgetRefusal413CarriesNoServerAuthoredProse(t *testing.T) {
 			fields, ok := continuation.(map[string]any)
 			if !ok {
 				t.Fatalf("narrower_continuation = %T, want an object", continuation)
+			}
+			for key := range fields {
+				if !allowedContinuationKeys[key] {
+					t.Errorf("narrower_continuation carries an unexpected key %q = %v", key, fields[key])
+				}
 			}
 			if got := fields["family"]; got != string(family) {
 				t.Errorf("continuation family = %v, want %q", got, family)

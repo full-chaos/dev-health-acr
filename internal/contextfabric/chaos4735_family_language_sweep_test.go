@@ -129,6 +129,7 @@ func TestChaos4735NoFamilyKeyedStringTableInProduction(t *testing.T) {
 
 	filesWithHits := map[string]bool{}
 	var proseViolations []string
+	var dispatchViolations []string
 
 	for _, dir := range familySweepRoots {
 		for _, path := range productionGoFiles(t, root, dir) {
@@ -144,9 +145,11 @@ func TestChaos4735NoFamilyKeyedStringTableInProduction(t *testing.T) {
 				t.Fatalf("parse %s: %v", relative, err)
 			}
 
-			if fileNamesAFamilyConstant(file, discriminating) {
+			dispatches := familyDispatchesWithoutConstants(fileSet, file, relative)
+			if fileNamesAFamilyConstant(file, discriminating) || len(dispatches) > 0 {
 				filesWithHits[relative] = true
 			}
+			dispatchViolations = append(dispatchViolations, dispatches...)
 			proseViolations = append(proseViolations, familyKeyedStringLiterals(fileSet, file, relative, constants)...)
 		}
 	}
@@ -176,6 +179,16 @@ func TestChaos4735NoFamilyKeyedStringTableInProduction(t *testing.T) {
 	if len(missing) > 0 {
 		t.Errorf("sanctioned family read sites no longer name any family constant:\n  %s\nEither the purpose moved and this list is stale, or the sweep's needle set is wrong. A stale allowlist silently widens the sweep's blind spot.",
 			strings.Join(missing, "\n  "))
+	}
+
+	// ---- Assertion C: no family dispatch that dodges the vocabulary. ----
+	// Reported separately from A and B because it is its own defect class and
+	// a shared message would make a failure say the wrong thing about which
+	// rule broke.
+	if len(dispatchViolations) > 0 {
+		sort.Strings(dispatchViolations)
+		t.Errorf("production code dispatches on the question family WITHOUT naming a closed-vocabulary constant:\n  %s\nThis is the shape adversarial review used to defeat the first version of this sweep: no constant, no switch, invisible to a needle set built on constants. Read the family through the registry, or compare against the declared constants.",
+			strings.Join(dispatchViolations, "\n  "))
 	}
 
 	// ---- Assertion B: no family-keyed prose anywhere (criterion 1). ----
@@ -257,6 +270,141 @@ func fileNamesAFamilyConstant(file *ast.File, constants map[string]bool) bool {
 		return true
 	})
 	return found
+}
+
+// familyDispatchesWithoutConstants finds family dispatch that NAMES NO FAMILY
+// CONSTANT, and is therefore invisible to a sweep built only on the constant
+// needle set.
+//
+// FOUND BY ADVERSARIAL REVIEW (codex round 1, P1, EXECUTED, reproduced by this
+// lane before it was fixed). The first version of this sweep detected
+// `switch`es and map literals keyed on family CONSTANTS. The reviewer
+// constructed a 413 branch that compared the family to a RAW STRING LITERAL
+// and served a snake_case phrase:
+//
+//	if string(budgetRefusal.Family) == "subject_investigation" {
+//	        details["narrower_hint"] = "ask_about_one_subject"
+//	}
+//
+// No constant, no switch, no map. Both the sweep and the handler test passed.
+// That is a direct false negative on the one claim this whole ticket rests on,
+// and it is the more likely shape in practice, not a contrived one: it is what
+// you write when you do not know the constants exist.
+//
+// Two dispatch forms are caught, and both are reported REGARDLESS of whether
+// they yield text. Comparing or indexing by family without using the closed
+// vocabulary is already a family read outside the sanctioned four purposes;
+// whether this particular instance also authors a sentence is a separate
+// question that assertion B answers.
+//
+//  1. A family-typed expression compared to a NON-EMPTY string literal. The
+//     `string(...)` conversion is seen through, because that is how the
+//     reviewer's construction was written and how anyone would write it.
+//  2. A map literal with a TEXTUAL value type whose keys are family WIRE
+//     VALUES written as raw strings -- `map[string]string{
+//     "subject_investigation": "..."}`. This closes the raw-keyed table, which
+//     rule 1 misses because such a table's literal never mentions the family
+//     type and never names a constant.
+//
+// A rejected third rule, recorded because the rejection is the interesting
+// part: "indexing by a family-typed expression" was tried and REMOVED. It
+// fired on `outcome.SampleFamilies[resolved.Family]++`
+// (chaos4632_question_family_consensus.go), which is a vote TALLY --
+// map[QuestionFamily]int, an aggregation whose keys happen to be families, not
+// a table that yields anything. Keying on the index alone cannot tell a tally
+// from a lookup without type information, and a rule that fires on correct
+// code gets switched off. Rule 2 keys on the map's VALUE TYPE instead, which
+// is the property that actually distinguishes them.
+//
+// RESIDUAL LIMIT, stated rather than hidden: a slice indexed by a family
+// ORDINAL would evade both rules. It requires deriving an ordinal from the
+// family first, which needs a comparison (rule 1) or the vocabulary array, and
+// no such code exists today -- but this sweep does not prove it never could.
+//
+// The EMPTY string literal is excluded, on exactly the reasoning that excludes
+// the `unclassified` sentinel from assertion A: `Family == ""` is an emptiness
+// test, not a read of which family this is. Production writes the two together
+// (`Family == "" || Family == QuestionFamilyUnclassified`), which is the
+// clearest evidence they are the same check.
+func familyDispatchesWithoutConstants(fileSet *token.FileSet, file *ast.File, relative string) []string {
+	var violations []string
+	report := func(pos token.Pos, shape string) {
+		violations = append(violations, relative+":"+itoa(fileSet.Position(pos).Line)+" ("+shape+")")
+	}
+	// The needle set is empty on purpose: these detectors key on the family
+	// TYPE, which is the whole point -- they must fire where no constant is
+	// named.
+	noConstants := map[string]bool{}
+
+	ast.Inspect(file, func(node ast.Node) bool {
+		switch typed := node.(type) {
+		case *ast.BinaryExpr:
+			if typed.Op != token.EQL && typed.Op != token.NEQ {
+				return true
+			}
+			for left, right := range map[ast.Expr]ast.Expr{typed.X: typed.Y, typed.Y: typed.X} {
+				if !exprNamesFamily(left, noConstants, true) {
+					continue
+				}
+				literal, ok := right.(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					continue
+				}
+				// `""` is an emptiness test, not a family read.
+				if literal.Value == `""` {
+					continue
+				}
+				report(typed.OpPos, "question family compared to the string literal "+literal.Value+" instead of a closed-vocabulary constant")
+			}
+		case *ast.CompositeLit:
+			mapType, ok := typed.Type.(*ast.MapType)
+			if !ok || !textualTypeExpr(mapType.Value) {
+				return true
+			}
+			for _, element := range typed.Elts {
+				pair, ok := element.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				literal, ok := pair.Key.(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					continue
+				}
+				if familyWireValueLiterals()[literal.Value] {
+					report(literal.Pos(), "map to text keyed by the family wire value "+literal.Value+" written as a raw string")
+				}
+			}
+		}
+		return true
+	})
+	return violations
+}
+
+// familyWireValueLiterals is the eight closed-vocabulary values as they would
+// appear as Go string literals, quotes included. Derived from the vocabulary
+// so a new family is covered without editing this test.
+func familyWireValueLiterals() map[string]bool {
+	values := map[string]bool{}
+	for _, family := range contractsv1.ContextFabricQuestionFamilyVocabulary() {
+		values[`"`+string(family)+`"`] = true
+	}
+	return values
+}
+
+// textualTypeExpr reports whether a type expression is one a sentence can be
+// stored in: `string`, or a named type whose underlying type is a string.
+// Named types are matched by NAME rather than resolved, because the sweep
+// parses without type information -- so this is deliberately generous, and
+// generous is the right direction for a gate.
+func textualTypeExpr(expr ast.Expr) bool {
+	switch typed := expr.(type) {
+	case *ast.Ident:
+		return typed.Name == "string" || strings.HasSuffix(typed.Name, "String") ||
+			strings.HasSuffix(typed.Name, "Text") || strings.HasSuffix(typed.Name, "Message")
+	case *ast.SelectorExpr:
+		return textualTypeExpr(typed.Sel)
+	}
+	return false
 }
 
 // familyKeyedStringLiterals finds every place a family-keyed switch or map
@@ -403,20 +551,39 @@ func stringLiteralPos(expr ast.Expr) (token.Pos, bool) {
 	return token.NoPos, false
 }
 
-// productionGoFiles lists the non-test .go files directly under dir.
+// productionGoFiles lists the non-test .go files under dir, RECURSIVELY.
+//
+// Recursive since codex round 1: the first version read only the top level,
+// so every subpackage was a blind spot -- and these trees have many
+// (falkorgraph, graphrank, devhealthfacts, pgprojection, answerprojection,
+// modelprovider, and more under internal/contextfabric alone). A sweep whose
+// coverage claim stops at one directory level is a sweep that names the wrong
+// scope in its own failure message.
 func productionGoFiles(t *testing.T, root, dir string) []string {
 	t.Helper()
-	entries, err := os.ReadDir(filepath.Join(root, filepath.FromSlash(dir)))
-	if err != nil {
-		t.Fatalf("read %s: %v", dir, err)
-	}
+	base := filepath.Join(root, filepath.FromSlash(dir))
 	var paths []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
+	err := filepath.WalkDir(base, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		paths = append(paths, filepath.Join(root, filepath.FromSlash(dir), name))
+		if entry.IsDir() {
+			// testdata is fixture material, not production code; vendored
+			// trees are not ours to police.
+			if entry.Name() == "testdata" || entry.Name() == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", dir, err)
 	}
 	if len(paths) == 0 {
 		t.Fatalf("no production Go files under %s -- the sweep would pass vacuously", dir)
