@@ -157,9 +157,19 @@ func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
 	// without moving its group's watermark -- which is precisely why nothing
 	// retracted it. Those already-live stale edges are unreachable to the
 	// mechanism that removes them, so the backlog is drained by one rebuild
-	// and everything after it is rebuild-free. See the constant's own doc
-	// comment.
-	if want := "devhealthsource.teams_projects.v9"; TeamsProjectsSourceVersion != want {
+	// and everything after it is rebuild-free.
+	//
+	// v9 -> v10 is CHAOS-4566's arm D (the project_ref-carried ambiguous
+	// key), and it is the identical trap one level down: adding a new UNION
+	// arm changes what the SQL can see, not what any row in ClickHouse
+	// already wrote, so an organization already caught up under v9 has
+	// pre-existing project_ref-ambiguous rows that arm D can never reach
+	// without one more forced rebuild. This exact bump was the codex
+	// round-2 finding on this ticket -- initially missed, since nothing
+	// else in this file's test suite forces it (a guard that only checks
+	// the two literals stay in sync does not know a THIRD literal was
+	// owed). See the constant's own doc comment.
+	if want := "devhealthsource.teams_projects.v10"; TeamsProjectsSourceVersion != want {
 		t.Fatalf("TeamsProjectsSourceVersion = %q, want %q -- changing this constant is a deliberate full-rebuild decision, so update this test with the reason in the constant's doc comment", TeamsProjectsSourceVersion, want)
 	}
 }

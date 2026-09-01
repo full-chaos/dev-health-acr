@@ -154,7 +154,27 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // backlog is drained. CHAOS-4565's acceptance -- "no rebuild is required,
 // and no checkpoint is reset" -- is about the steady state after this
 // deploy, and that path is rebuild-free.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v9"
+//
+// v9 -> v10 (CHAOS-4566, codex round-2 finding P2, ARGUED and confirmed
+// against this file's own precedent): arm D adds a SECOND retraction shape
+// -- an ambiguous key arriving via project_ref rather than the ownership
+// row's own project_key -- but a new UNION arm is not a new write. Exactly
+// the v8->v9 trap: an organization already caught up under a v9 checkpoint
+// has ownership rows whose project_ref-carried key was ALREADY ambiguous
+// before this deploy, and neither that row's own updated_at nor the
+// colliding project's project_updated_at moved on deploy day, so
+// row_watermark never crosses the existing checkpoint and arm D is
+// unreachable for every one of them -- forever, without this bump.
+//
+// The steady state after this deploy (a NEW collision arriving
+// post-deploy) is already rebuild-free -- proved, for the project_ref
+// shape specifically, by
+// subRetractsAnEdgeWhoseAmbiguousKeyArrivesViaProjectRef's second tick,
+// which starts from the FIRST tick's own cursor rather than a reset one,
+// the same discipline subRetractsAnEdgeWhoseKeyBecomesAmbiguous already
+// used for arm C. This bump is only for the backlog that predates the
+// deploy.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v10"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
