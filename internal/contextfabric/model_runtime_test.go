@@ -853,8 +853,15 @@ func TestRuntimeAnswerSynthesizerComposesDeterministicAnswerServerSide(t *testin
 	if !strings.Contains(result.DeterministicAnswer, "Release acceptance remains open") {
 		t.Fatalf("DeterministicAnswer = %q, want it to include the principal driver title", result.DeterministicAnswer)
 	}
-	if !strings.Contains(result.DeterministicAnswer, "readiness.release_ready=false") {
-		t.Fatalf("DeterministicAnswer = %q, want it to include the claimed fact restatement", result.DeterministicAnswer)
+	// CHAOS-4699: the raw "Canonical facts: k=v" restatement is gone from
+	// this field -- the same claim still lives structurally in
+	// result.ClaimedFacts (asserted below) and in result.CurrentState's own
+	// canonical statement, so this is deduplication, not a coverage loss.
+	if strings.Contains(result.DeterministicAnswer, "Canonical facts:") || strings.Contains(result.DeterministicAnswer, "readiness.release_ready=false") {
+		t.Fatalf("DeterministicAnswer = %q, want no raw k=v claimed-fact list (single-subject path, CHAOS-4699)", result.DeterministicAnswer)
+	}
+	if !strings.Contains(result.CurrentState, "readiness.release_ready=false") {
+		t.Fatalf("CurrentState = %q, want it to still carry the claimed fact restatement", result.CurrentState)
 	}
 	if len(result.ClaimedFacts) != 1 || result.ClaimedFacts[0].ClaimID != "claim_readiness_1" {
 		t.Fatalf("result.ClaimedFacts = %#v, want the validated claim carried through", result.ClaimedFacts)
