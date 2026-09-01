@@ -42,17 +42,33 @@ var hardcodedEvidenceEntitySegment = regexp.MustCompile(`acr:v1:[\s\S]`)
 // still a plain string, so nothing in the type system stops a producer from
 // bypassing EvidenceRefID entirely -- with a hardcoded literal
 // ("acr:v1:" + "some-new-type" + ":" + id, exactly how the four
-// devhealthsource segments got in unlabeled) OR with a format string
-// (fmt.Sprintf("acr:v1:%s:%s", entityType, id), which never calls
-// EvidenceRefID and so never reaches its own totality guard either --
-// codex round 2 P2, EXECUTED). This test closes both paths structurally: it
-// AST-walks every production .go file under internal/ (test files are
-// exempt -- a fixture asserting the read-time fallback on an unregistered
-// ref, e.g. "acr:v1:service:api" in context_fabric_display_labels_test.go,
-// is the point of that test, not a producer) and fails on any string
-// literal, or contiguous run of string literals joined by +, whose
-// concatenated text contains "acr:v1:" followed by ANY further character --
-// a hardcoded word, a %-verb, anything.
+// devhealthsource segments got in unlabeled), a format string
+// (fmt.Sprintf("acr:v1:%s:%s", entityType, id) -- codex round 2 P2,
+// EXECUTED), or a joined slice (strings.Join([]string{"acr:v1:", ...}, "")
+// -- codex round 3 P2, ARGUED, no current production site). None of the
+// three call EvidenceRefID, so none reach its own totality guard either.
+// This test closes all three paths it knows about: it AST-walks every
+// production .go file under internal/ (test files are exempt -- a fixture
+// asserting the read-time fallback on an unregistered ref, e.g.
+// "acr:v1:service:api" in context_fabric_display_labels_test.go, is the
+// point of that test, not a producer) and fails on any string literal, or
+// contiguous run of string literals joined by + or as strings.Join
+// elements, whose concatenated text contains "acr:v1:" followed by ANY
+// further character -- a hardcoded word, a %-verb, anything.
+//
+// ACKNOWLEDGED RESIDUAL, stated plainly rather than overclaimed a third
+// time: Go string assembly is unbounded (bytes.Buffer, strings.Builder, a
+// byte-by-byte loop, text/template, reflection) and no finite list of
+// AST shapes closes all of it -- this guard covers the three shapes an
+// actual codex round has found (which are also the three that match how
+// every real producer in this codebase already builds strings), not a
+// formal proof that no bypass is possible. The two OTHER guards this
+// ticket adds are what carry weight against a shape this one misses: a
+// stored ref with an unregistered segment still increments
+// RecordEvidenceLabelFallback at read time (still counted, still visible,
+// just not compile-time-blocked), and any new producer PR is still subject
+// to ordinary code review, which is the actual backstop no static analysis
+// replaces.
 //
 // It walks runs, not single literals, because a single-literal check alone
 // has an evasion: "acr:v1:" + "commit" + ":" splits the dangerous shape
@@ -183,6 +199,56 @@ func adjacentStringLiteralRuns(file *ast.File) []literalRun {
 			if value, err := strconv.Unquote(node.Value); err == nil {
 				record(node.Pos(), value)
 			}
+			return true
+		case *ast.CallExpr:
+			// strings.Join([]string{"acr:v1:", "service", ":", id}, "") is
+			// codex round 3's finding (P2, ARGUED, no current production
+			// site): a +-chain and a Sprintf format string are both single
+			// AST nodes this guard already sees whole, but strings.Join's
+			// dangerous literals are SEPARATE elements of a slice literal,
+			// joined only at RUNTIME -- outside anything the +-chain/
+			// standalone-literal cases above can see as one unit. Handling
+			// this specific call shape (rather than chasing every possible
+			// Go string-assembly idiom -- bytes.Buffer, strings.Builder, a
+			// loop, text/template -- which is an unbounded set no static
+			// literal scan can fully close; see this test's own doc comment
+			// for the acknowledged residual) closes the exact shape raised.
+			sel, ok := node.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel == nil || sel.Sel.Name != "Join" {
+				return true
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if !ok || pkg.Name != "strings" || len(node.Args) == 0 {
+				return true
+			}
+			composite, ok := node.Args[0].(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			var current literalRun
+			flush := func() {
+				if len(current.values) > 0 {
+					runs = append(runs, current)
+				}
+				current = literalRun{}
+			}
+			for _, elt := range composite.Elts {
+				lit, ok := elt.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					flush()
+					continue
+				}
+				value, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					flush()
+					continue
+				}
+				if len(current.values) == 0 {
+					current.pos = lit.Pos()
+				}
+				current.values = append(current.values, value)
+			}
+			flush()
 			return true
 		}
 		return true
