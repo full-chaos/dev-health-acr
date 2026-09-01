@@ -178,6 +178,7 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			})
 			return
 		}
+		a.logContextFabricResponseBudgetMeasured(r, measuredBytes, maximumBytes, estimatedTokens, itemCounts)
 		a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_result_read", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status, "view": string(view)})
 		writeEncodedJSON(w, http.StatusOK, encoded)
 	})

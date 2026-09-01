@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -18,7 +19,14 @@ import (
 // ticket's proof needs to read the emitted line, not just the response.
 func newContextFabricTestAppWithProductionLimitsAndLogs(t *testing.T, investigator contextfabric.Investigator) (*App, string, *bytes.Buffer) {
 	t.Helper()
-	app, token, logs := newContextFabricTestAppWithResultsAndLogs(t, investigator, nil)
+	return newContextFabricTestAppWithProductionLimitsResultsAndLogs(t, investigator, nil)
+}
+
+// newContextFabricTestAppWithProductionLimitsResultsAndLogs is the same,
+// but also wires a result store, for the GET-by-id result route.
+func newContextFabricTestAppWithProductionLimitsResultsAndLogs(t *testing.T, investigator contextfabric.Investigator, results contextfabric.InvestigationResultStore) (*App, string, *bytes.Buffer) {
+	t.Helper()
+	app, token, logs := newContextFabricTestAppWithResultsAndLogs(t, investigator, results)
 	app.config.MaxItems = productionMaxItems
 	app.config.MaxOutputTokens = productionMaxOutputTokens
 	app.config.MaxSerializedBytes = productionMaxSerializedBytes
@@ -145,5 +153,39 @@ func TestContextFabricInvestigationRouteExceededPathStillLogsTheExceedLine(t *te
 		if entry["msg"] == "context fabric response measured" {
 			t.Fatalf("a 413 response also logged the passing-path measurement line: %v -- the answer never reached the point that line describes", entry)
 		}
+	}
+}
+
+// TestContextFabricInvestigationResultRoutePassingAnswerLogsBudgetMeasurement
+// is the GET-by-id sibling: context_fabric_result_routes.go shares the same
+// exceed-path telemetry helper as the POST route (both call
+// logContextFabricResponseBudgetExceeded), and had the identical gap --
+// re-reading a stored, passing result via GET never logged its own
+// measurement either.
+func TestContextFabricInvestigationResultRoutePassingAnswerLogsBudgetMeasurement(t *testing.T) {
+	result := threeRollupProjectStatusResult("result_4540_get_pass")
+	measuredBytes := marshaledSize(t, result)
+	estimatedTokens := (measuredBytes + 3) / 4
+	wantItems := contextFabricResultItemCounts(result).Total()
+	store := memoryinvestigation.NewStore()
+	seeded := seedResult3355(t, store, callerOrgID, result)
+
+	app, token, logs := newContextFabricTestAppWithProductionLimitsResultsAndLogs(t, nil, store)
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, investigationResultRequest(t, token, seeded.ResultID))
+
+	if response.Code != 200 {
+		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	entry := decodeLogLine(t, logs.String(), "context fabric response measured")
+	if got, want := entry["measured_bytes"], float64(measuredBytes); got != want {
+		t.Fatalf("measured_bytes = %#v, want %v", got, want)
+	}
+	if got, want := entry["measured_items"], float64(wantItems); got != want {
+		t.Fatalf("measured_items = %#v, want %v", got, want)
+	}
+	if got, want := entry["estimated_tokens"], float64(estimatedTokens); got != want {
+		t.Fatalf("estimated_tokens = %#v, want %v", got, want)
 	}
 }
