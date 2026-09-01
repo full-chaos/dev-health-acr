@@ -333,6 +333,14 @@ type ContextFabricProjectedFact struct {
 	// canonical result would leave the consumer half of CHAOS-4627
 	// exactly as unable to say what a row table is as before.
 	Table *ContextFabricClaimedFactTable `json:"table,omitempty"`
+	// TimeSeriesRows/TimeSeriesTable mirror
+	// ContextFabricClaimedFact.TimeSeriesRows/TimeSeriesTable (CHAOS-4682,
+	// §5.1 P2), passed through unchanged -- the answer surface is where
+	// Ask Dev actually reads a fact from, so a dual-table fact's
+	// time_series would stay just as unreachable to a consumer as before
+	// P2 if this projection stopped at the canonical result.
+	TimeSeriesRows  []ContextFabricClaimedFactRow  `json:"time_series_rows,omitempty"`
+	TimeSeriesTable *ContextFabricClaimedFactTable `json:"time_series_table,omitempty"`
 }
 
 // ContextFabricProjectedCoverage reports one source's state. Reason is

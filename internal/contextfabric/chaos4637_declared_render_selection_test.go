@@ -381,13 +381,52 @@ func TestTheDeclarationDescribesTheFieldWhoseRowsWereServed(t *testing.T) {
 	if got[0].Table.Shape != contractsv1.ContextFabricFactTableShapeBreakdown {
 		t.Fatalf("declaration says shape %q over rows that are a breakdown", got[0].Table.Shape)
 	}
-	// And therefore: no trend. The two-scope rows cannot be charted.
+	// CHAOS-4682 (§5.1 P2, orchestrator ruling 2026-09-01): Table/Rows keep
+	// serving the legacy field, UNCHANGED from the assertions above -- but
+	// the fact's OTHER field, daily_flow (a genuine time_series), now ALSO
+	// reaches the wire through the ADDITIVE TimeSeriesTable/TimeSeriesRows
+	// pair. Before P2 this pair did not exist and daily_flow's rows never
+	// left the producer at all.
+	if got[0].TimeSeriesTable == nil {
+		t.Fatal("the fact's time_series field (daily_flow) was not attached to the additive pair -- P2 regressed")
+	}
+	if got[0].TimeSeriesTable.Field != "daily_flow" {
+		t.Fatalf("time_series_table names field %q, want daily_flow", got[0].TimeSeriesTable.Field)
+	}
+	if got[0].TimeSeriesTable.Shape != contractsv1.ContextFabricFactTableShapeTimeSeries {
+		t.Fatalf("time_series_table declares shape %q, want time_series", got[0].TimeSeriesTable.Shape)
+	}
+	if len(got[0].TimeSeriesRows) != 2 {
+		t.Fatalf("time_series_rows = %d rows, want the 2 daily_flow rows", len(got[0].TimeSeriesRows))
+	}
+	// And therefore: a trend NOW renders, off the additive pair -- this is
+	// the P2 unlock itself, the exact reversal of this test's own
+	// pre-CHAOS-4682 name. The two-scope breakdown still cannot be charted
+	// (Table/Rows are still a breakdown, unchanged), but the fact as a
+	// whole is no longer chart-blind.
 	result := InvestigationResult{
 		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
-		ClaimedFacts:   []ClaimedFact{{ClaimID: "claim_flow_dual", Kind: FactFlow, Subject: subject, Field: "items_completed", Rows: got[0].Rows, Table: got[0].Table}},
+		ClaimedFacts: []ClaimedFact{{
+			ClaimID: "claim_flow_dual", Kind: FactFlow, Subject: subject, Field: "items_completed",
+			Rows: got[0].Rows, Table: got[0].Table,
+			TimeSeriesRows: got[0].TimeSeriesRows, TimeSeriesTable: got[0].TimeSeriesTable,
+		}},
 	}
-	if shapes, _ := SelectRenderShapes(result); len(shapes) != 0 {
-		t.Fatalf("the two-scope rows were charted through the declaration: %+v", shapes)
+	shapes, event := SelectRenderShapes(result)
+	trend := shapeByRule(shapes, contractsv1.ContextFabricRenderRuleDatedFactTrend)
+	if trend == nil {
+		t.Fatalf("the dual-table fact's time_series was not charted; shapes=%+v skipped=%+v", shapes, event.Skipped)
+	}
+	if len(trend.Series) != 1 || len(trend.Series[0].Points) != 2 {
+		t.Fatalf("trend = %+v, want one series with the 2 daily_flow points", trend)
+	}
+	// Every plotted number must RESOLVE, by exact equality, against the
+	// row cell its own source names -- the render-shape validator's own
+	// gate, and the one that would catch a RowIndex resolved against the
+	// WRONG array (Table's Rows instead of TimeSeriesRows).
+	result.RenderShapes = shapes
+	if err := contractsv1.ValidateRenderShapesForResult(result); err != nil {
+		t.Fatalf("the dual-table trend does not survive the render-shape validator: %v", err)
 	}
 }
 

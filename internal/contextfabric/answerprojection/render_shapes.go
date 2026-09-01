@@ -117,10 +117,20 @@ func (s projectedRenderSources) carries(source contractsv1.ContextFabricRenderPo
 			if fact.ClaimID != source.ClaimID {
 				continue
 			}
-			if *source.RowIndex < 0 || *source.RowIndex >= len(fact.Rows) {
+			// CHAOS-4682 (§5.1 P2): mirrors contracts/v1's own
+			// ContextFabricProjectedFact.renderableRows -- TimeSeriesRows
+			// is the only array datedFactTrendShape (the sole producer of
+			// this source kind) ever addresses on a dual-table fact, so
+			// preferring it here is the same deterministic rule the
+			// canonical result's own resolver applies, not a guess.
+			rows := fact.TimeSeriesRows
+			if len(rows) == 0 {
+				rows = fact.Rows
+			}
+			if *source.RowIndex < 0 || *source.RowIndex >= len(rows) {
 				return false
 			}
-			cell, ok := fact.Rows[*source.RowIndex].Fields[source.Field]
+			cell, ok := rows[*source.RowIndex].Fields[source.Field]
 			if !ok {
 				return false
 			}

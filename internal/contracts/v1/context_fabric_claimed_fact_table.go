@@ -224,3 +224,48 @@ func validateClaimedFactTable(table *ContextFabricClaimedFactTable, rows []Conte
 	}
 	return nil
 }
+
+// renderableRows (CHAOS-4682, §5.1 P2) picks the SAME row array a
+// ContextFabricRenderSourceClaimedFactRow point could have come from --
+// mirroring internal/contextfabric's datedFactTrendShape, the only current
+// producer of that source kind: it prefers the additive TimeSeriesRows
+// whenever present (the only array datedFactTrendShape ever addresses on a
+// dual-table fact), falling back to Rows otherwise. Resolving a RowIndex
+// with this same preference is not a guess -- it is the one deterministic
+// rule every ClaimedFactRow-sourced point in the system already follows;
+// see this file's own note on ContextFabricClaimedFact.Table for why P2
+// never changes what Rows itself means.
+func (c ContextFabricClaimedFact) renderableRows() []ContextFabricClaimedFactRow {
+	if len(c.TimeSeriesRows) > 0 {
+		return c.TimeSeriesRows
+	}
+	return c.Rows
+}
+
+// renderableRows mirrors ContextFabricClaimedFact.renderableRows for the
+// answer-projection surface -- see that method's doc comment.
+func (f ContextFabricProjectedFact) renderableRows() []ContextFabricClaimedFactRow {
+	if len(f.TimeSeriesRows) > 0 {
+		return f.TimeSeriesRows
+	}
+	return f.Rows
+}
+
+// validateTimeSeriesTable is CHAOS-4682's (§5.1 P2) validator for the
+// ADDITIVE TimeSeriesTable/TimeSeriesRows pair: everything
+// validateClaimedFactTable already checks, PLUS the one invariant that pair
+// exists to guarantee and Table/Rows does not -- when present, its Shape is
+// ALWAYS time_series. A declaration of any other shape in this field would
+// contradict the field's own name and defeat the trend rule's "read
+// TimeSeriesTable first" preference (render_shapes.go's datedFactTrendShape)
+// silently, by describing a table that TimeSeriesTable was never meant to
+// hold.
+func validateTimeSeriesTable(table *ContextFabricClaimedFactTable, rows []ContextFabricClaimedFactRow) error {
+	if table == nil {
+		return nil
+	}
+	if table.Shape != ContextFabricFactTableShapeTimeSeries {
+		return fmt.Errorf("time_series_table declares shape %q, want %q", table.Shape, ContextFabricFactTableShapeTimeSeries)
+	}
+	return validateClaimedFactTable(table, rows)
+}

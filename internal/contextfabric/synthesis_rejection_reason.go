@@ -39,14 +39,20 @@ const (
 	RejectionReasonEvidenceUnknown            SynthesisRejectionReason = "evidence_unknown"
 
 	// Claimed facts.
-	RejectionReasonClaimInvalid              SynthesisRejectionReason = "claim_invalid"
-	RejectionReasonClaimRowsModelAuthored    SynthesisRejectionReason = "claim_rows_model_authored"
-	RejectionReasonClaimIDDuplicate          SynthesisRejectionReason = "claim_id_duplicate"
-	RejectionReasonClaimSubjectOutOfScope    SynthesisRejectionReason = "claim_subject_out_of_scope"
-	RejectionReasonClaimSubjectLabelMismatch SynthesisRejectionReason = "claim_subject_label_mismatch"
-	RejectionReasonClaimNoCanonicalFact      SynthesisRejectionReason = "claim_no_canonical_fact"
-	RejectionReasonClaimFieldUnobserved      SynthesisRejectionReason = "claim_field_unobserved"
-	RejectionReasonClaimValueContradicts     SynthesisRejectionReason = "claim_value_contradicts_canonical"
+	RejectionReasonClaimInvalid           SynthesisRejectionReason = "claim_invalid"
+	RejectionReasonClaimRowsModelAuthored SynthesisRejectionReason = "claim_rows_model_authored"
+	// RejectionReasonClaimTimeSeriesRowsModelAuthored (CHAOS-4682, §5.1 P2)
+	// is claim_rows_model_authored's own rule applied to the additive
+	// TimeSeriesRows pair: a distinct reason, not a reuse, so a reader
+	// diagnosing a rejection can tell which of the two model-authorable
+	// row fields the model actually set.
+	RejectionReasonClaimTimeSeriesRowsModelAuthored SynthesisRejectionReason = "claim_time_series_rows_model_authored"
+	RejectionReasonClaimIDDuplicate                 SynthesisRejectionReason = "claim_id_duplicate"
+	RejectionReasonClaimSubjectOutOfScope           SynthesisRejectionReason = "claim_subject_out_of_scope"
+	RejectionReasonClaimSubjectLabelMismatch        SynthesisRejectionReason = "claim_subject_label_mismatch"
+	RejectionReasonClaimNoCanonicalFact             SynthesisRejectionReason = "claim_no_canonical_fact"
+	RejectionReasonClaimFieldUnobserved             SynthesisRejectionReason = "claim_field_unobserved"
+	RejectionReasonClaimValueContradicts            SynthesisRejectionReason = "claim_value_contradicts_canonical"
 
 	// Drivers.
 	RejectionReasonDriverInvalid              SynthesisRejectionReason = "driver_invalid"
@@ -86,30 +92,31 @@ const (
 // and this codebase has already been bitten by exactly that shape of
 // coupling.
 var canonicalSynthesisRejectionReasons = map[SynthesisRejectionReason]SynthesisRejectionReason{
-	RejectionReasonUnclassified:                RejectionReasonUnclassified,
-	RejectionReasonStatusInvalid:               RejectionReasonStatusInvalid,
-	RejectionReasonDirectJudgmentMissing:       RejectionReasonDirectJudgmentMissing,
-	RejectionReasonDeterministicAnswerMissing:  RejectionReasonDeterministicAnswerMissing,
-	RejectionReasonEvidenceUnknown:             RejectionReasonEvidenceUnknown,
-	RejectionReasonClaimInvalid:                RejectionReasonClaimInvalid,
-	RejectionReasonClaimRowsModelAuthored:      RejectionReasonClaimRowsModelAuthored,
-	RejectionReasonClaimIDDuplicate:            RejectionReasonClaimIDDuplicate,
-	RejectionReasonClaimSubjectOutOfScope:      RejectionReasonClaimSubjectOutOfScope,
-	RejectionReasonClaimSubjectLabelMismatch:   RejectionReasonClaimSubjectLabelMismatch,
-	RejectionReasonClaimNoCanonicalFact:        RejectionReasonClaimNoCanonicalFact,
-	RejectionReasonClaimFieldUnobserved:        RejectionReasonClaimFieldUnobserved,
-	RejectionReasonClaimValueContradicts:       RejectionReasonClaimValueContradicts,
-	RejectionReasonDriverInvalid:               RejectionReasonDriverInvalid,
-	RejectionReasonDriverSubjectOutOfScope:     RejectionReasonDriverSubjectOutOfScope,
-	RejectionReasonDriverSubjectLabelMismatch:  RejectionReasonDriverSubjectLabelMismatch,
-	RejectionReasonDriverPathUnknown:           RejectionReasonDriverPathUnknown,
-	RejectionReasonDriverEvidenceUnknown:       RejectionReasonDriverEvidenceUnknown,
-	RejectionReasonDriverClaimUngrounded:       RejectionReasonDriverClaimUngrounded,
-	RejectionReasonFindingInvalid:              RejectionReasonFindingInvalid,
-	RejectionReasonFindingSubjectOutOfScope:    RejectionReasonFindingSubjectOutOfScope,
-	RejectionReasonFindingSubjectLabelMismatch: RejectionReasonFindingSubjectLabelMismatch,
-	RejectionReasonFindingEvidenceUnknown:      RejectionReasonFindingEvidenceUnknown,
-	RejectionReasonFindingClaimUngrounded:      RejectionReasonFindingClaimUngrounded,
+	RejectionReasonUnclassified:                     RejectionReasonUnclassified,
+	RejectionReasonStatusInvalid:                    RejectionReasonStatusInvalid,
+	RejectionReasonDirectJudgmentMissing:            RejectionReasonDirectJudgmentMissing,
+	RejectionReasonDeterministicAnswerMissing:       RejectionReasonDeterministicAnswerMissing,
+	RejectionReasonEvidenceUnknown:                  RejectionReasonEvidenceUnknown,
+	RejectionReasonClaimInvalid:                     RejectionReasonClaimInvalid,
+	RejectionReasonClaimRowsModelAuthored:           RejectionReasonClaimRowsModelAuthored,
+	RejectionReasonClaimTimeSeriesRowsModelAuthored: RejectionReasonClaimTimeSeriesRowsModelAuthored,
+	RejectionReasonClaimIDDuplicate:                 RejectionReasonClaimIDDuplicate,
+	RejectionReasonClaimSubjectOutOfScope:           RejectionReasonClaimSubjectOutOfScope,
+	RejectionReasonClaimSubjectLabelMismatch:        RejectionReasonClaimSubjectLabelMismatch,
+	RejectionReasonClaimNoCanonicalFact:             RejectionReasonClaimNoCanonicalFact,
+	RejectionReasonClaimFieldUnobserved:             RejectionReasonClaimFieldUnobserved,
+	RejectionReasonClaimValueContradicts:            RejectionReasonClaimValueContradicts,
+	RejectionReasonDriverInvalid:                    RejectionReasonDriverInvalid,
+	RejectionReasonDriverSubjectOutOfScope:          RejectionReasonDriverSubjectOutOfScope,
+	RejectionReasonDriverSubjectLabelMismatch:       RejectionReasonDriverSubjectLabelMismatch,
+	RejectionReasonDriverPathUnknown:                RejectionReasonDriverPathUnknown,
+	RejectionReasonDriverEvidenceUnknown:            RejectionReasonDriverEvidenceUnknown,
+	RejectionReasonDriverClaimUngrounded:            RejectionReasonDriverClaimUngrounded,
+	RejectionReasonFindingInvalid:                   RejectionReasonFindingInvalid,
+	RejectionReasonFindingSubjectOutOfScope:         RejectionReasonFindingSubjectOutOfScope,
+	RejectionReasonFindingSubjectLabelMismatch:      RejectionReasonFindingSubjectLabelMismatch,
+	RejectionReasonFindingEvidenceUnknown:           RejectionReasonFindingEvidenceUnknown,
+	RejectionReasonFindingClaimUngrounded:           RejectionReasonFindingClaimUngrounded,
 }
 
 // ValidSynthesisRejectionReason reports whether reason is a member of the

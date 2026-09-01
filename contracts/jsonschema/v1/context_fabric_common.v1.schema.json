@@ -2963,6 +2963,18 @@
         "table": {
           "description": "CHAOS-4637 / CHAOS-4627, additive and OPTIONAL: the producer's own declaration of what `rows` IS -- a closed shape, the composite key that identifies a row, and the measures. Selection keys on this declaration instead of inferring an axis and a set of measures from row geometry, which is what three defeated inferences and one withdrawn rule (dated_fact_trend) cost. ABSENT means undeclared, and an undeclared table is never charted.",
           "$ref": "#/$defs/ClaimedFactTable"
+        },
+        "time_series_rows": {
+          "description": "CHAOS-4682 (§5.1 P2 dual-read cutover), additive and OPTIONAL: the CHAOS-4645 time_series rows riding ALONGSIDE the legacy field `rows` already serves, present only on a dual-table fact (a legacy table AND a time_series table at once). `rows`/`table` above keep their CURRENT meaning and preference unconditionally -- this never changes what they carry. Nil on a single-table fact, whose one table is already served by `rows`.",
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/ClaimedFactRow"
+          }
+        },
+        "time_series_table": {
+          "description": "CHAOS-4682 (§5.1 P2), additive and OPTIONAL: declares what `time_series_rows` IS, the same way `table` declares `rows`. Its shape is ALWAYS time_series when present -- that is the entire reason this pair exists, distinct from `table`, whose shape is never time_series whenever this pair is populated.",
+          "$ref": "#/$defs/ClaimedFactTable"
         }
       },
       "required": [

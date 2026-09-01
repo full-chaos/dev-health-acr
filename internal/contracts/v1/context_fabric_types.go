@@ -1431,7 +1431,38 @@ type ContextFabricClaimedFact struct {
 	// geometry. Absent means undeclared, and undeclared means never
 	// charted -- today's behaviour and CHAOS-4627's ruled safe default.
 	// See ContextFabricClaimedFactTable for why it carries no rows.
+	//
+	// Table/Rows keep their CURRENT meaning and preference UNCHANGED by
+	// CHAOS-4682 (design doc §5.1 P2, orchestrator ruling 2026-09-01):
+	// when a fact carries a legacy (non-time_series) table alongside a
+	// CHAOS-4645 time_series one, this pair still serves the LEGACY table,
+	// byte-for-byte what it served before P2. Changing what an EXISTING
+	// field denotes is a P3 cutover question, not P2's -- P2 is strictly
+	// additive. See TimeSeriesTable/TimeSeriesRows below for the second
+	// table P2 adds.
 	Table *ContextFabricClaimedFactTable `json:"table,omitempty"`
+	// TimeSeriesRows is CHAOS-4682's (§5.1 P2) ADDITIVE second table: the
+	// CHAOS-4645 time_series rows riding ALONGSIDE the legacy field Rows
+	// already serves, present only when a fact carries a legacy table AND
+	// a time_series table at once (a dual-table fact -- e.g. a project's
+	// team_breakdown alongside its daily_workload). Before P2, that
+	// time_series table existed at the producer, passed validation, and
+	// never reached the wire at all, because Table/Rows can name only one
+	// field and CHAOS-4645 rules the legacy field wins it. Nil on a
+	// single-table fact (its one table is already served by Rows above)
+	// and nil when the fact's several Rows-shaped fields are ambiguous in
+	// the same way that already defeats Table/Rows (two time_series
+	// fields, or two non-time_series fields) -- see
+	// canonicalTimeSeriesField's own doc comment for the exact rule.
+	TimeSeriesRows []ContextFabricClaimedFactRow `json:"time_series_rows,omitempty"`
+	// TimeSeriesTable declares what TimeSeriesRows IS, the same way Table
+	// declares Rows -- see ContextFabricClaimedFactTable for why it
+	// carries no rows of its own. Its Shape is always
+	// ContextFabricFactTableShapeTimeSeries when present: that is the
+	// entire reason this pair exists, distinct from Table's own Shape,
+	// which is never time_series whenever this pair is populated (see the
+	// note above).
+	TimeSeriesTable *ContextFabricClaimedFactTable `json:"time_series_table,omitempty"`
 }
 
 // ContextFabricClaimedFactRow is one row of a claimed fact's OPTIONAL

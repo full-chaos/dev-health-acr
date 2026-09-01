@@ -339,6 +339,14 @@ func (t SlogEngineTelemetry) RecordProjectedRowsByFactKind(ctx context.Context, 
 	}
 }
 
+// RecordDualTableFacts implements EngineTelemetry (CHAOS-4682, §5.1 P2) --
+// see that method's doc comment for the two counts' meaning. Content-safe:
+// an org id and two non-identifying counts.
+func (t SlogEngineTelemetry) RecordDualTableFacts(ctx context.Context, principal storage.Principal, dualTableClaims, secondaryRowsBytes int) {
+	args := append([]any{"org_id", principal.OrgID, "dual_table_claims", dualTableClaims, "secondary_rows_bytes", secondaryRowsBytes}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric dual table facts", args...)
+}
+
 // RecordModelRowsStripped implements EngineTelemetry (CHAOS-4355
 // follow-up). Content-safe: an org id and one closed, non-identifying
 // count -- never the stripped rows themselves.

@@ -634,6 +634,20 @@ type EngineTelemetry interface {
 	// absent" the same way RecordFactScopeExpansion's zero-valued counts
 	// must not collapse into "nobody counted".
 	RecordProjectedRowsByFactKind(ctx context.Context, principal storage.Principal, byKind map[FactKind]int)
+	// RecordDualTableFacts (CHAOS-4682, §5.1 P2, standing order from the
+	// same ruling) reports, once per Synthesize call that reaches claim
+	// assembly -- same gating as RecordProjectedRowsCount, which this
+	// always accompanies -- how many claims this call attached a SECOND,
+	// additive time_series table to (attachCanonicalRowsWithDualTableTelemetry's
+	// dualTableClaims), and the total serialized byte size of every
+	// TimeSeriesRows attached this call (secondaryRowsBytes). P2's own
+	// design doc measured this cost as low single-digit KB per affected
+	// claim against a 256KB response ceiling on one real fixture; this is
+	// the ongoing measurement at scale the ruling asked for rather than
+	// trusting that one-off number indefinitely. Both zero-included on
+	// every call, same "quiet run is as visible as a busy one" convention
+	// as RecordProjectedRowsCount.
+	RecordDualTableFacts(ctx context.Context, principal storage.Principal, dualTableClaims, secondaryRowsBytes int)
 	// RecordRenderShapeSelection (CHAOS-4415) reports which conditional
 	// render shapes the deterministic selection rules chose for THIS
 	// answer, and -- equally important -- which eligible rule produced

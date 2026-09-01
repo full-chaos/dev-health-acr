@@ -620,7 +620,19 @@ var trendStageReasons = map[trendStage]RenderShapeSkipReason{
 // datedFactTrendShape evaluates one claimed fact, returning the shape (or
 // nil) and the stage it reached.
 func datedFactTrendShape(fact ClaimedFact) (*contractsv1.ContextFabricRenderShape, trendStage) {
-	table := fact.Table
+	// CHAOS-4682 (§5.1 P2, orchestrator ruling 2026-09-01): prefer the
+	// ADDITIVE TimeSeriesTable/TimeSeriesRows pair when present -- a
+	// dual-table fact's time_series, unreachable before P2 because Table/
+	// Rows always served the legacy field instead (CHAOS-4645's ruling).
+	// Falling back to Table/Rows below is UNCHANGED pre-P2 behavior: it is
+	// only ever a time_series there for a fact that was already
+	// single-table (a fact with a legacy+time_series pair now has
+	// TimeSeriesTable set, so it never reaches this fallback with a
+	// breakdown Table pretending to be a trend).
+	table, rows := fact.TimeSeriesTable, fact.TimeSeriesRows
+	if table == nil {
+		table, rows = fact.Table, fact.Rows
+	}
 	if table == nil {
 		return nil, trendStageNoDeclaredTable
 	}
@@ -647,14 +659,13 @@ func datedFactTrendShape(fact ClaimedFact) (*contractsv1.ContextFabricRenderShap
 		return nil, trendStageNoTimeSeriesTable
 	}
 	axis := table.Key[0]
-	rows := fact.Rows
 	if len(rows) < 2 || len(rows) > contractsv1.ContextFabricRenderPointsMaxCount {
 		return nil, trendStageNoPlottableMeasure
 	}
 	if !everyDeclaredMeasureIsAQuantity(table, rows) {
 		return nil, trendStageUnresolvableMeasureRoles
 	}
-	points, ok := trendPoints(fact, axis, fact.Field)
+	points, ok := trendPoints(fact, rows, axis, fact.Field)
 	if !ok {
 		return nil, trendStageNoPlottableMeasure
 	}
@@ -720,15 +731,22 @@ func everyDeclaredMeasureIsAQuantity(table *contractsv1.ContextFabricClaimedFact
 // axis position. The producer's own FactTable.Validate makes the key
 // distinct, so a repeat here means the declaration and the rows disagree,
 // and the rows are what a reader would see.
-func trendPoints(fact ClaimedFact, axis, measure string) ([]contractsv1.ContextFabricRenderPoint, bool) {
+func trendPoints(fact ClaimedFact, rows []ClaimedFactRow, axis, measure string) ([]contractsv1.ContextFabricRenderPoint, bool) {
 	type dated struct {
 		instant time.Time
 		point   contractsv1.ContextFabricRenderPoint
 	}
-	seen := make(map[int64]struct{}, len(fact.Rows))
-	entries := make([]dated, 0, len(fact.Rows))
+	seen := make(map[int64]struct{}, len(rows))
+	entries := make([]dated, 0, len(rows))
 	var withTime, withoutTime bool
-	for index, row := range fact.Rows {
+	// rows is the CALLER's resolved table -- fact.TimeSeriesRows when the
+	// fact is dual-table (CHAOS-4682, §5.1 P2), fact.Rows otherwise (see
+	// datedFactTrendShape). RowIndex below addresses THIS array, and every
+	// resolver of a ContextFabricRenderSourceClaimedFactRow point applies
+	// the identical preference (renderableRows / the answerprojection
+	// mirror) to read it back, so the two can never disagree about which
+	// array a row index means.
+	for index, row := range rows {
 		raw, ok := renderStringCell(row.Fields[axis])
 		if !ok {
 			return nil, false

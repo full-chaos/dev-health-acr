@@ -373,6 +373,10 @@ type recordingTelemetry struct {
 	// list-not-count discipline: a test asserts the exact map recorded
 	// for a given call, never merely that something fired.
 	projectedRowsByFactKind []map[FactKind]int
+	// dualTableFacts (CHAOS-4682, §5.1 P2) mirrors the SAME list-not-count
+	// discipline: a test asserts the exact dualTableClaims/secondaryRowsBytes
+	// pair, never merely that something fired.
+	dualTableFacts []dualTableFactsRecord
 	// windowGateOfferDisclosures/windowExpandOfferRedemptions (CHAOS-4314)
 	// mirror the SAME list-not-count discipline as windowCanonicalizationOutcomes
 	// above.
@@ -457,6 +461,11 @@ type bindingEpochDeltaRecord struct {
 type projectedRowsCountRecord struct {
 	count     int
 	truncated bool
+}
+
+type dualTableFactsRecord struct {
+	dualTableClaims    int
+	secondaryRowsBytes int
 }
 
 func (r *recordingTelemetry) RecordAnswerReuse(_ context.Context, _ storage.Principal, outcome AnswerReuseOutcome) {
@@ -599,6 +608,10 @@ func (r *recordingTelemetry) RecordProjectedRowsCount(_ context.Context, _ stora
 
 func (r *recordingTelemetry) RecordProjectedRowsByFactKind(_ context.Context, _ storage.Principal, byKind map[FactKind]int) {
 	r.projectedRowsByFactKind = append(r.projectedRowsByFactKind, byKind)
+}
+
+func (r *recordingTelemetry) RecordDualTableFacts(_ context.Context, _ storage.Principal, dualTableClaims, secondaryRowsBytes int) {
+	r.dualTableFacts = append(r.dualTableFacts, dualTableFactsRecord{dualTableClaims: dualTableClaims, secondaryRowsBytes: secondaryRowsBytes})
 }
 
 func (r *recordingTelemetry) RecordModelRowsStripped(_ context.Context, _ storage.Principal, claims int) {

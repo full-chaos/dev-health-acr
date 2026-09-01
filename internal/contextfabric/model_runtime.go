@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -427,6 +428,14 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		if len(claim.Rows) > 0 {
 			return rejectSynthesis(RejectionReasonClaimRowsModelAuthored, "claimed fact %q sets rows directly -- rows are attached from the cited canonical fact, never model-authored", claim.ClaimID)
 		}
+		// CHAOS-4682 (§5.1 P2): TimeSeriesRows is the SAME producer-facing
+		// renderable-table capability as Rows above, applied to the
+		// additive second table -- the identical reasoning, the identical
+		// unconditional fail-closed rejection, a distinct reason so a
+		// reader can tell the two apart.
+		if len(claim.TimeSeriesRows) > 0 {
+			return rejectSynthesis(RejectionReasonClaimTimeSeriesRowsModelAuthored, "claimed fact %q sets time_series_rows directly -- time_series_rows are attached from the cited canonical fact, never model-authored", claim.ClaimID)
+		}
 		if _, exists := claimedByID[claim.ClaimID]; exists {
 			return rejectSynthesis(RejectionReasonClaimIDDuplicate, "claimed fact IDs must be unique")
 		}
@@ -671,9 +680,21 @@ func StripModelAuthoredClaimedFactTableContent(claims []ClaimedFact) (cleaned []
 		// Counted ONCE per claim, not once per field: the telemetry
 		// dimension counts CLAIMS that carried hallucinated table content,
 		// and a claim carrying both is one such claim.
-		if len(claim.Rows) > 0 || claim.Table != nil {
+		//
+		// CHAOS-4682 (§5.1 P2): TimeSeriesRows/TimeSeriesTable are exactly
+		// this doc comment's own rule applied to the field this ticket
+		// added -- also derived into the model-output DTO, also
+		// attached server-side only (attachCanonicalRowsWithDualTableTelemetry
+		// below), also stripped here rather than trusted. Without this, a
+		// model-authored time_series_rows on a fact whose canonical
+		// counterpart carries no genuine second table would survive
+		// un-clobbered: attachCanonicalRows only OVERWRITES the pair when
+		// a real secondary field exists, never clears it when none does.
+		if len(claim.Rows) > 0 || claim.Table != nil || len(claim.TimeSeriesRows) > 0 || claim.TimeSeriesTable != nil {
 			claim.Rows = nil
 			claim.Table = nil
+			claim.TimeSeriesRows = nil
+			claim.TimeSeriesTable = nil
 			strippedCount++
 		}
 		cleaned[i] = claim
@@ -901,6 +922,17 @@ func canonicalFactGroupSize(facts []CanonicalFact, claim ClaimedFact) int {
 // reader diagnosing why a repository-subject's metrics/health Rows count
 // is/was 0 needs to tell them apart.
 func attachCanonicalRows(claims []ClaimedFact, facts []CanonicalFact) (result []ClaimedFact, rowsCount int, byKind map[FactKind]int, truncated bool) {
+	dualTableClaims, secondaryRowsBytes := 0, 0
+	return attachCanonicalRowsWithDualTableTelemetry(claims, facts, &dualTableClaims, &secondaryRowsBytes)
+}
+
+// attachCanonicalRowsWithDualTableTelemetry is attachCanonicalRows' full
+// implementation, additionally reporting CHAOS-4682's (§5.1 P2) dual-table
+// telemetry by pointer so every existing call site -- nine of them across
+// this package's tests alone -- keeps compiling against attachCanonicalRows'
+// original four-value return unchanged; only Synthesize (the one caller that
+// actually emits telemetry) calls this directly.
+func attachCanonicalRowsWithDualTableTelemetry(claims []ClaimedFact, facts []CanonicalFact, dualTableClaims, secondaryRowsBytes *int) (result []ClaimedFact, rowsCount int, byKind map[FactKind]int, truncated bool) {
 	byKind = make(map[FactKind]int, len(claims))
 	for i := range claims {
 		if _, seen := byKind[claims[i].Kind]; !seen {
@@ -935,6 +967,19 @@ func attachCanonicalRows(claims []ClaimedFact, facts []CanonicalFact) (result []
 		claims[i].Table = canonicalFieldTable(canonical)
 		rowsCount += len(rows)
 		byKind[claims[i].Kind] += len(rows)
+		// CHAOS-4682 (§5.1 P2): the SECOND, additive table -- see
+		// canonicalTimeSeriesField's own doc comment for exactly when this
+		// is non-nil. Table/Rows above are computed identically to
+		// pre-CHAOS-4682 behavior; this never changes what they contain.
+		if seriesRows, seriesTruncated := canonicalTimeSeriesFieldRows(canonical); len(seriesRows) > 0 {
+			truncated = truncated || seriesTruncated
+			claims[i].TimeSeriesRows = seriesRows
+			claims[i].TimeSeriesTable = canonicalTimeSeriesFieldTable(canonical)
+			*dualTableClaims++
+			if encoded, marshalErr := json.Marshal(seriesRows); marshalErr == nil {
+				*secondaryRowsBytes += len(encoded)
+			}
+		}
 	}
 	return claims, rowsCount, byKind, truncated
 }
@@ -1069,6 +1114,91 @@ func uniqueNonTimeSeriesRowsField(fact CanonicalFact) (field string, ok bool) {
 		found = key
 	}
 	return found, count == 1
+}
+
+// canonicalTimeSeriesField is CHAOS-4682's (§5.1 P2, orchestrator ruling
+// 2026-09-01) ADDITIVE second-field selector: the CHAOS-4645 time_series
+// field riding ALONGSIDE the legacy field canonicalRowsField already serves
+// through ClaimedFact.Table/Rows. Table/Rows keep their CURRENT meaning and
+// preference unconditionally -- this function only ever identifies a SECOND,
+// optional field; it never changes which field canonicalRowsField picks.
+//
+// Present (ok=true) only when canonicalRowsField unambiguously resolved a
+// legacy field (legacyOK && !ambiguous) AND, among the fact's OTHER
+// Rows-shaped fields (excluding that legacy field), EXACTLY ONE is declared
+// time_series. Two cases return nil deliberately, both mirroring
+// canonicalRowsField's own no-fallback posture:
+//
+//   - A single-table fact (whether time_series or breakdown/ranking/
+//     undeclared) has nothing left to add: canonicalRowsField already
+//     consumed its one Rows-shaped field, so no "other" field remains.
+//   - A fact whose ambiguity already defeats canonicalRowsField (two
+//     time_series fields, or two non-time_series fields) has no unique
+//     time_series field to prefer either -- guessing which of two would be
+//     exactly the CHAOS-4355 failure mode this file exists to avoid.
+func canonicalTimeSeriesField(fact CanonicalFact) (field string, ok bool) {
+	legacyField, ambiguous, legacyOK := canonicalRowsField(fact)
+	if !legacyOK || ambiguous {
+		return "", false
+	}
+	found := ""
+	count := 0
+	for key, value := range fact.Fields {
+		if key == legacyField || len(value.Rows) == 0 {
+			continue
+		}
+		if value.Table == nil || value.Table.Shape != FactTableTimeSeries {
+			continue
+		}
+		count++
+		found = key
+	}
+	return found, count == 1
+}
+
+// canonicalTimeSeriesFieldRows mirrors canonicalFieldRows, off
+// canonicalTimeSeriesField instead of canonicalRowsField -- see that
+// function's doc comment for when it returns a field at all. Unlike
+// canonicalFieldRows, there is no separate "ambiguous, report it" case to
+// return: canonicalTimeSeriesField's own no-fallback cases are symmetric
+// with canonicalRowsField's, which already reports them via
+// canonicalFieldRows' truncated return for the SAME fact.
+func canonicalTimeSeriesFieldRows(fact CanonicalFact) (rows []contractsv1.ContextFabricClaimedFactRow, truncated bool) {
+	field, ok := canonicalTimeSeriesField(fact)
+	if !ok {
+		return nil, false
+	}
+	source := fact.Fields[field].Rows
+	rows = make([]contractsv1.ContextFabricClaimedFactRow, 0, len(source))
+	for _, row := range source {
+		rows = append(rows, convertFactValueRow(row))
+	}
+	if len(rows) > contractsv1.ContextFabricClaimedFactMaxRows {
+		return rows[:contractsv1.ContextFabricClaimedFactMaxRows], true
+	}
+	return rows, false
+}
+
+// canonicalTimeSeriesFieldTable mirrors canonicalFieldTable, off
+// canonicalTimeSeriesField. Never nil-Shape-mismatched: canonicalTimeSeriesField
+// only ever names a field whose Table.Shape is already FactTableTimeSeries.
+func canonicalTimeSeriesFieldTable(fact CanonicalFact) *contractsv1.ContextFabricClaimedFactTable {
+	field, ok := canonicalTimeSeriesField(fact)
+	if !ok {
+		return nil
+	}
+	declared := fact.Fields[field].Table
+	if declared == nil {
+		return nil
+	}
+	return &contractsv1.ContextFabricClaimedFactTable{
+		Field:        field,
+		Shape:        contractsv1.ContextFabricFactTableShape(declared.Shape),
+		Key:          append([]string(nil), declared.Key...),
+		Measures:     append([]string(nil), declared.Measures...),
+		Observations: append([]string(nil), declared.Observations...),
+		OrderBy:      declared.OrderBy,
+	}
 }
 
 func convertFactValueRow(row FactValueRow) contractsv1.ContextFabricClaimedFactRow {
@@ -1346,7 +1476,8 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 	// point starts with Rows nil -- what follows copies rows verbatim from
 	// the canonical fact each claim cites, never from the model, closing
 	// the routing gap the CHAOS-4347 rejection above left open.
-	claimedFacts, rowsCount, rowsByKind, rowsTruncated := attachCanonicalRows(cloneSlice(draft.ClaimedFacts), input.Facts.Facts)
+	var dualTableClaims, secondaryRowsBytes int
+	claimedFacts, rowsCount, rowsByKind, rowsTruncated := attachCanonicalRowsWithDualTableTelemetry(cloneSlice(draft.ClaimedFacts), input.Facts.Facts, &dualTableClaims, &secondaryRowsBytes)
 	if r.Telemetry != nil {
 		r.Telemetry.RecordProjectedRowsCount(ctx, principal, rowsCount, rowsTruncated)
 		// CHAOS-4418: the SAME total, broken down per FactKind -- see
@@ -1354,6 +1485,11 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		// kind must still appear (never omitted alongside a kind never
 		// claimed at all).
 		r.Telemetry.RecordProjectedRowsByFactKind(ctx, principal, rowsByKind)
+		// CHAOS-4682 (§5.1 P2, standing order): the dual-table count and the
+		// ADDITIONAL bytes the second table costs, so the CHAOS-4636 stage-3
+		// response budget's 256KB ceiling is watched at scale rather than
+		// assumed safe from this session's own one-off measurement.
+		r.Telemetry.RecordDualTableFacts(ctx, principal, dualTableClaims, secondaryRowsBytes)
 	}
 	result := InvestigationResult{
 		Status: draft.Status,
