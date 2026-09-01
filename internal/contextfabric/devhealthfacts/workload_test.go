@@ -417,6 +417,17 @@ func TestWorkloadProviderProjectReadsDailyWorkloadSeries(t *testing.T) {
 	if len(fact.Fields["daily_workload"].Rows) != 1 {
 		t.Fatalf("daily_workload rows = %d, want 1", len(fact.Fields["daily_workload"].Rows))
 	}
+	// CHAOS-4681: before this ticket, a project's top-level Fields carried
+	// no scalar matching any of daily_workload's declared Measures --
+	// genkitruntime.modelFacingFacts drops daily_workload itself before
+	// synthesis, so a project-subject workload trend could never be claimed
+	// at all. The freshest day is now copied in under its own field names.
+	if fact.Fields["backlog_size"].Integer == nil || *fact.Fields["backlog_size"].Integer != 160 {
+		t.Fatalf("backlog_size = %#v, want a scalar sibling matching the declared measure (160)", fact.Fields["backlog_size"])
+	}
+	if fact.Fields["throughput_mean"].Number == nil || *fact.Fields["throughput_mean"].Number != 12.2 {
+		t.Fatalf("throughput_mean = %#v, want a scalar sibling matching the declared measure (12.2)", fact.Fields["throughput_mean"])
+	}
 }
 
 // TestWorkloadProviderProjectRollupBasisIsFactLevelScalar is the CHAOS-4645

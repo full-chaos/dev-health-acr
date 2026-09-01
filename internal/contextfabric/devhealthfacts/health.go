@@ -525,6 +525,21 @@ ORDER BY project_key, scope, scope_id`)
 	// readScope's own note and chaos4645_health_daily_test.go's pin), and
 	// this is a genuinely SEPARATE field (daily_health) on the SAME fact, so
 	// it cannot move what healthRiskSignal reads.
+	//
+	// CHAOS-4681 note: unlike the team subject, this PROJECT rollup's
+	// top-level Fields did not carry "compounding_risk" before this ticket,
+	// so healthRiskSignal never saw a project-subject FactHealth fact carry
+	// a usable severity either. Below, the freshest daily_health day's
+	// declared Measure (compounding_risk only, NOT severity) is now copied
+	// in under its own field name. healthRiskSignal is subject-kind-blind
+	// and project cohorts ARE constructed in production
+	// (graphrank/discover.go's interpretedCohortKind, on a
+	// "project"/"initiative" question) -- corrected from an earlier,
+	// incorrect claim to the contrary (codex round 1 finding). Deliberately
+	// copying only compounding_risk, never severity, keeps RankCohort
+	// behavior unaffected for now; a project cohort's health-risk signal
+	// stays unavailable exactly as before, until that generalization is
+	// itself reviewed and tested on its own.
 	dailyByProject, seriesErr := p.queryProjectHealthDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
 		return rowCount, false, seriesErr
@@ -605,6 +620,29 @@ ORDER BY project_key, scope, scope_id`)
 			if dailyOmitted > 0 {
 				breakdownTruncated = true
 				fields["daily_health_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+			}
+			// CHAOS-4681: same gap as readProjectWorkload's identical note --
+			// a project's top-level fields carried no scalar matching
+			// daily_health's sole declared Measure (compounding_risk), so a
+			// trend could never be claimed here. dailyByProject's own
+			// ORDER BY ... DESC makes index 0 the freshest day.
+			//
+			// UNLIKE metrics.go's readRepositoryMetrics idiom (which copies
+			// the whole freshest-day row), this copies ONLY the declared
+			// Measure, not the whole row: the row's other field, "severity"
+			// (CHAOS-4680's Observation, not a Measure), is exactly the
+			// field name healthRiskSignal (cohort_ranking.go) reads off ANY
+			// FactHealth fact regardless of subject kind, and project
+			// cohorts ARE constructed in production
+			// (graphrank/discover.go's interpretedCohortKind, on a
+			// "project"/"initiative" question -- codex round 1 finding,
+			// confirmed). Copying severity here would silently start
+			// feeding project cohorts into health-risk ranking, a real
+			// behavior change this ticket never reviewed or tested. Copying
+			// only the declared Measure satisfies this ticket's actual
+			// scope (a scalar sibling for the declared measure) without it.
+			if risk, ok := dailyByProject[projectKey][0].toFactValueRow().Fields["compounding_risk"]; ok {
+				fields["compounding_risk"] = risk
 			}
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{

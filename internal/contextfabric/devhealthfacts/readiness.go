@@ -338,13 +338,29 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 		return 0, false, err
 	}
 	// CHAOS-4645, design doc §5.2: additive, off the SAME project-identity
-	// join -- never changing an existing field. FactReadiness carries no
-	// project-level RankCohort signal (readinessGapSignal's numberField read
-	// of "estimate_coverage_ratio" never matches this fact: this rollup's
-	// Fields never set that key -- see readinessGapSignal's own doc comment
-	// and TestRankCohortReadinessUntouchedByDailySeriesField), so there is
-	// nothing to pin for the project shape beyond the team pin already
-	// covers.
+	// join -- never changing an existing field.
+	//
+	// UPDATED for CHAOS-4681: this rollup's top-level Fields NOW sets
+	// "estimate_coverage_ratio" (the freshest daily_readiness day, copied in
+	// below under its own field name), so the claim this comment used to
+	// make here no longer holds. readinessGapSignal's numberField read of
+	// that key is subject-kind-blind, and project cohorts ARE constructed
+	// in production (graphrank/discover.go's interpretedCohortKind, on a
+	// "project"/"initiative" question -- an earlier version of this comment
+	// claimed otherwise; that claim was wrong, caught in codex round 1, and
+	// no test by the name this comment used to cite ever existed).
+	//
+	// Unlike health.go's project rollup (which deliberately does NOT copy
+	// its Observation field, "severity", to avoid engaging
+	// healthRiskSignal), estimate_coverage_ratio here IS the declared
+	// Measure this ticket exists to expose -- there is no narrower copy
+	// that both satisfies the ticket and avoids readinessGapSignal. A
+	// project cohort's readiness-gap signal, previously always
+	// `available=false`, now correctly reports the same worst-covered-scope
+	// gap a team cohort already gets. This is accepted as the intended
+	// generalization, not a defect: readinessGapSignal was always written
+	// to be subject-kind-blind, and this ticket is precisely what was
+	// missing for it to work on project subjects too.
 	dailyByProject, seriesErr := p.queryProjectReadinessDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
 		return 0, false, seriesErr
@@ -453,6 +469,15 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 			if dailyOmitted > 0 {
 				breakdownTruncated = true
 				fields["daily_readiness_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+			}
+			// CHAOS-4681: same gap and same fix as readProjectWorkload's
+			// identical note -- a project's top-level fields carried no
+			// scalar matching any of daily_readiness's declared Measures, so
+			// a trend could never be claimed here. dailyByProject's own
+			// ORDER BY ... DESC makes index 0 the freshest day; copied under
+			// its own field names, metrics.go's readRepositoryMetrics idiom.
+			for name, value := range dailyByProject[projectKey][0].toFactValueRow().Fields {
+				fields[name] = value
 			}
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{

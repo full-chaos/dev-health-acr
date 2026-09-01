@@ -195,6 +195,24 @@ func TestReadinessProviderProjectReadsDailyReadinessSeries(t *testing.T) {
 	if err := fact.Fields["daily_readiness"].Validate(); err != nil {
 		t.Fatalf("daily_readiness fails FactValue.Validate(): %v", err)
 	}
+	// CHAOS-4681: before this ticket, a project's top-level Fields carried
+	// no scalar matching any of daily_readiness's declared Measures --
+	// genkitruntime.modelFacingFacts drops daily_readiness itself before
+	// synthesis, so a project-subject readiness trend could never be
+	// claimed at all. The freshest day (dailyBySeriesRow above) is now
+	// copied in under its own field names, matching table.Measures.
+	foundMeasure := false
+	for _, measure := range table.Measures {
+		if measure == "estimated_count" {
+			foundMeasure = true
+		}
+	}
+	if !foundMeasure {
+		t.Fatal("fixture regressed: daily_readiness no longer declares estimated_count a measure")
+	}
+	if fact.Fields["estimated_count"].Integer == nil || *fact.Fields["estimated_count"].Integer != 18 {
+		t.Fatalf("estimated_count = %#v, want a scalar sibling matching the declared measure (18)", fact.Fields["estimated_count"])
+	}
 }
 
 // TestReadinessProviderProjectRollupBasisMovesToFactLevelScalar pins the
