@@ -47,7 +47,7 @@ func TestChaos4690_ApplyCoverageDisplayLabels_RecomputesDetailLabel(t *testing.T
 		Coverage: Coverage{
 			Details: []CoverageDetail{{
 				DetailID: "cov-01", Source: "context-fabric:graph",
-				Code: contractsv1.ContextFabricCoverageDetailGraphEndpointLookupFailed,
+				Code:      contractsv1.ContextFabricCoverageDetailGraphEndpointLookupFailed,
 				Degrading: true, Count: &count, Raw: "endpoint_lookup_failed:3",
 				Label: "", // deliberately unstamped -- a terminal path composing Coverage by hand
 			}},

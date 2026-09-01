@@ -369,14 +369,14 @@ func TestChaos4690_MergeCoverage_DegradingDedupedByRawKeepingFirst(t *testing.T)
 	countA, countB := 2, 2
 	groupA := Coverage{
 		DegradedReasons: []string{raw},
-		Details: []CoverageDetail{detailFixture(contractsv1.ContextFabricCoverageDetailGraphEndpointLookupFailed, "context-fabric:graph", true, raw, func(d *CoverageDetail) { d.Count = &countA })},
+		Details:         []CoverageDetail{detailFixture(contractsv1.ContextFabricCoverageDetailGraphEndpointLookupFailed, "context-fabric:graph", true, raw, func(d *CoverageDetail) { d.Count = &countA })},
 	}
 	// A second group somehow produced the SAME composed raw string (e.g. a
 	// retry path) -- the dedupe-by-Raw rule must collapse this to one
 	// detail, mirroring degraded_reasons[]'s own set semantics.
 	groupB := Coverage{
 		DegradedReasons: []string{raw},
-		Details: []CoverageDetail{detailFixture(contractsv1.ContextFabricCoverageDetailGraphEndpointLookupFailed, "context-fabric:graph", true, raw, func(d *CoverageDetail) { d.Count = &countB })},
+		Details:         []CoverageDetail{detailFixture(contractsv1.ContextFabricCoverageDetailGraphEndpointLookupFailed, "context-fabric:graph", true, raw, func(d *CoverageDetail) { d.Count = &countB })},
 	}
 
 	merged := MergeCoverage("org_test", groupA, groupB)
