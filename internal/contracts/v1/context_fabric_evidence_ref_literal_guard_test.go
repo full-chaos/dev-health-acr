@@ -37,13 +37,33 @@ import (
 // idiom, full stop. The idiom-enumeration problem disappears because
 // nothing is enumerated.
 //
-// The one thing this does NOT close, stated plainly rather than claimed
-// away a fourth time: a literal split BELOW the substring "acr:v1" itself
-// -- "acr" + ":v1", or "a"+"cr:v1" -- still evades a literal-content scan.
-// That remains code-review territory a static check cannot replace; it is
-// also a shape no codex round has found and no producer in this codebase
-// has ever come close to (every real site either concatenates or splices
-// at a natural word boundary, never mid-token).
+// What this does NOT close, stated plainly rather than claimed away a
+// fourth time -- the merge-gate round (P2, ARGUED, no live producer) found
+// TWO distinct residuals, and the first one shows the invariant above is
+// not universally true, only true for constructing a NEW ref from nothing:
+//
+//  1. Constructing a ref legitimately via EvidenceRefID, then POST-
+//     PROCESSING the resulting string -- e.g.
+//     strings.Replace(EvidenceRefID(ContextFabricEvidenceEntityCommit, id),
+//     "commit", runtimeType, 1). No "acr:v1" literal is required anywhere
+//     for this to mint an arbitrary segment, because the invariant this
+//     file relies on only holds for MINTING a ref, not for TRANSFORMING an
+//     already-valid one. The same applies to []byte/rune assembly, an
+//     env-var-sourced prefix, or an embedded-file constant -- any mechanism
+//     where the string "acr:v1" is never itself Go source text. This is a
+//     deliberately obfuscated, actively-adversarial construction with no
+//     legitimate resemblance to how any real producer in this codebase
+//     builds a ref; closing it with more static analysis is not a bounded
+//     problem (the next round would find regexp.ReplaceAll, unsafe pointer
+//     tricks, reflection) the way the const-indirection fix below was.
+//     Ordinary code review is the actual, and only, defense here -- a
+//     reviewer seeing ANY post-processing of an EvidenceRefID result, or a
+//     ref built from a non-literal source, should treat it as an
+//     automatic hold.
+//  2. A literal split BELOW the substring "acr:v1" itself ("acr" + ":v1")
+//     still evades a literal-content scan -- same code-review-territory
+//     conclusion, and (like #1) no producer in this codebase has ever come
+//     close to it.
 var evidenceRefLiteralAllowlist = map[string]bool{
 	"internal/contracts/v1/context_fabric_types.go": true, // EvidenceRefID itself
 	"internal/contextpacket/source_queries.go":      true, // SQL catalog, enum-spliced
@@ -120,15 +140,26 @@ var hardcodedEvidenceEntitySegment = regexp.MustCompile(`acr:v1:[\s\S]`)
 
 // TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary is layer 2: within the
 // three files evidenceRefLiteralAllowlist exempts from layer 1, verify each
-// one's own acr:v1: literal (or +-chain / strings.Join run of literals)
-// ends EXACTLY at the prefix boundary -- nothing hardcoded follows before a
-// non-literal operand (string(entityType), an enum-derived splice) takes
-// over. This is the SAME check an earlier, idiom-enumerating version of
-// this guard ran across the whole tree; layer 1 replaced that job
-// tree-wide, so this layer's only remaining purpose is making sure the
-// three TRUSTED files stay trustworthy -- a future edit to
-// source_queries.go that hardcoded a segment inline would otherwise sail
-// through layer 1 (the file is allowlisted) with nothing else to catch it.
+// one's own acr:v1: literal (or +-chain / strings.Join run of literals, with
+// same-file top-level string const identifiers resolved back to their
+// values first) ends EXACTLY at the prefix boundary -- nothing hardcoded
+// follows before a non-literal operand (string(entityType), an
+// enum-derived splice) takes over. This is the SAME check an earlier,
+// idiom-enumerating version of this guard ran across the whole tree; layer
+// 1 replaced that job tree-wide, so this layer's only remaining purpose is
+// making sure the three TRUSTED files stay trustworthy -- a future edit to
+// source_queries.go that hardcoded a segment inline (directly, or one
+// const hop away: `const prefix = "acr:v1:"; const segment = "service"`,
+// the merge-gate round's P2 ARGUED finding, EXECUTED-confirmed by planting
+// it) would otherwise sail through layer 1 (the file is allowlisted) with
+// nothing else to catch it.
+//
+// Const resolution is bounded to SAME-FILE, top-level, single-value string
+// consts -- not a general dataflow analysis, not vars, not consts from an
+// import, not anything requiring more than one file's AST. That is a
+// tractable, closed extension appropriate for three small, already fully
+// reviewed files; it does not reopen the unbounded-idiom problem the
+// coordinator's invariant ruling closed for the rest of the tree.
 func TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary(t *testing.T) {
 	root := moduleRootFromThisFile(t)
 	var violations []string
@@ -139,7 +170,8 @@ func TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary(t *testing.T) {
 		if parseErr != nil {
 			t.Fatalf("parse allowlisted file %s: %v", rel, parseErr)
 		}
-		for _, run := range adjacentStringLiteralRuns(file) {
+		consts := fileStringConsts(file)
+		for _, run := range adjacentStringLiteralRuns(file, consts) {
 			joined := strings.Join(run.values, "")
 			if hardcodedEvidenceEntitySegment.MatchString(joined) {
 				pos := fset.Position(run.pos)
@@ -152,22 +184,100 @@ func TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary(t *testing.T) {
 	}
 }
 
+// fileStringConsts collects every top-level, single-value string const
+// declaration in the file (const NAME = "literal") into a name -> value
+// map, so adjacentStringLiteralRuns can resolve an *ast.Ident operand back
+// to the literal it names -- see TestAllowlistedAcrV1LiteralsEndAtThePrefixBoundary's
+// own doc comment for the scope and reasoning.
+func fileStringConsts(file *ast.File) map[string]string {
+	consts := map[string]string{}
+	for _, decl := range file.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			valueSpec, ok := spec.(*ast.ValueSpec)
+			if !ok || len(valueSpec.Names) != 1 || len(valueSpec.Values) != 1 {
+				continue
+			}
+			lit, ok := valueSpec.Values[0].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				continue
+			}
+			value, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				continue
+			}
+			consts[valueSpec.Names[0].Name] = value
+		}
+	}
+	return consts
+}
+
+// resolveStringOperand returns expr's string value if it is a string
+// BasicLit, OR an *ast.Ident naming a same-file top-level string const
+// (per fileStringConsts) -- otherwise ok is false and the caller treats
+// expr as a run-breaking non-literal operand.
+func resolveStringOperand(expr ast.Expr, consts map[string]string) (string, bool) {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		if e.Kind != token.STRING {
+			return "", false
+		}
+		value, err := strconv.Unquote(e.Value)
+		if err != nil {
+			return "", false
+		}
+		return value, true
+	case *ast.Ident:
+		value, ok := consts[e.Name]
+		return value, ok
+	default:
+		return "", false
+	}
+}
+
 type literalRun struct {
 	pos    token.Pos
 	values []string
 }
 
 // adjacentStringLiteralRuns returns every maximal run of directly-adjacent
-// string BasicLits joined by + in the file, every standalone string literal
+// string operands joined by + in the file, every standalone string literal
 // that isn't part of any + expression at all, and every strings.Join
 // composite-literal's string elements -- the three shapes codex rounds 2
 // and 3 found evading an earlier, narrower version of this function (kept
 // here for layer 2's use; layer 1 does not need this level of shape
-// awareness at all, which is the whole point of closing by invariant).
-func adjacentStringLiteralRuns(file *ast.File) []literalRun {
+// awareness at all, which is the whole point of closing by invariant). An
+// operand may be a literal directly, or an *ast.Ident resolved through
+// consts (see fileStringConsts / resolveStringOperand) -- the merge-gate
+// round's P2 finding.
+func adjacentStringLiteralRuns(file *ast.File, consts map[string]string) []literalRun {
 	var runs []literalRun
 	record := func(pos token.Pos, value string) {
 		runs = append(runs, literalRun{pos: pos, values: []string{value}})
+	}
+	appendOperands := func(operands []ast.Expr) {
+		var current literalRun
+		flush := func() {
+			if len(current.values) > 0 {
+				runs = append(runs, current)
+			}
+			current = literalRun{}
+		}
+		for _, operand := range operands {
+			value, ok := resolveStringOperand(operand, consts)
+			if !ok {
+				flush()
+				continue
+			}
+			if len(current.values) == 0 {
+				current.pos = operand.Pos()
+			}
+			current.values = append(current.values, value)
+		}
+		flush()
 	}
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch node := n.(type) {
@@ -184,31 +294,7 @@ func adjacentStringLiteralRuns(file *ast.File) []literalRun {
 			// separately visiting this chain's own BasicLit children as
 			// standalone literals (the *ast.BasicLit case below) or as
 			// their own redundant, double-counted runs.
-			operands := flattenAdd(node)
-			var current literalRun
-			flush := func() {
-				if len(current.values) > 0 {
-					runs = append(runs, current)
-				}
-				current = literalRun{}
-			}
-			for _, operand := range operands {
-				lit, ok := operand.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					flush()
-					continue
-				}
-				value, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					flush()
-					continue
-				}
-				if len(current.values) == 0 {
-					current.pos = lit.Pos()
-				}
-				current.values = append(current.values, value)
-			}
-			flush()
+			appendOperands(flattenAdd(node))
 			return false
 		case *ast.BasicLit:
 			// Reached only for a string literal NOT inside an ADD chain --
@@ -234,30 +320,9 @@ func adjacentStringLiteralRuns(file *ast.File) []literalRun {
 			if !ok {
 				return true
 			}
-			var current literalRun
-			flush := func() {
-				if len(current.values) > 0 {
-					runs = append(runs, current)
-				}
-				current = literalRun{}
-			}
-			for _, elt := range composite.Elts {
-				lit, ok := elt.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					flush()
-					continue
-				}
-				value, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					flush()
-					continue
-				}
-				if len(current.values) == 0 {
-					current.pos = lit.Pos()
-				}
-				current.values = append(current.values, value)
-			}
-			flush()
+			operands := make([]ast.Expr, len(composite.Elts))
+			copy(operands, composite.Elts)
+			appendOperands(operands)
 			return true
 		}
 		return true

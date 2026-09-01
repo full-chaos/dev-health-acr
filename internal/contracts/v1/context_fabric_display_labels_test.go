@@ -80,11 +80,24 @@ func TestEvidenceEntityLabelsAreTotal(t *testing.T) {
 // registry. If this ever went false, ContextFabricEvidenceRefLabel would
 // silently start falling back on an acr-minted ref -- the exact defect
 // class this ticket closes.
+//
+// Asserts the label matches the ENTITY TYPE's OWN registered label, not
+// just that some label was known (merge-gate round P3, ARGUED): a mutant
+// EvidenceRefID that always minted "acr:v1:commit:x" regardless of
+// entityType would pass a known-only check for every member, since
+// "commit" is itself a registered segment, while every non-commit member
+// silently mislabeled as Commit.
 func TestEvidenceRefIDIsTypedAndTotal(t *testing.T) {
 	for _, entityType := range ContextFabricEvidenceEntityTypeVocabulary() {
 		ref := EvidenceRefID(entityType, "x")
-		if _, known := ContextFabricEvidenceRefLabel(ref); !known {
+		label, known := ContextFabricEvidenceRefLabel(ref)
+		if !known {
 			t.Errorf("EvidenceRefID(%q, ...) produced a ref that ContextFabricEvidenceRefLabel does not recognize: %q", entityType, ref)
+			continue
+		}
+		wantLabel := contextFabricEvidenceEntityLabels[entityType] + ": x"
+		if label != wantLabel {
+			t.Errorf("EvidenceRefID(%q, ...) round-tripped to label %q, want %q -- the segment does not match the entity type that constructed it", entityType, label, wantLabel)
 		}
 	}
 }
