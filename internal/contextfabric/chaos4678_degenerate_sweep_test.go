@@ -40,6 +40,12 @@ func disjointSingletonGroupsCF(n int) []degenerateSweepGroup {
 func degenerateSweepRowsCF() []degenerateSweepRow {
 	return []degenerateSweepRow{
 		{
+			name:       "single empty group, nothing else",
+			groups:     []degenerateSweepGroup{{id: "A", members: nil}},
+			ungrouped:  []string{"orphan"},
+			maxMembers: 1, checkFloor: true, // vacuous for the group; orphan is the only real member
+		},
+		{
 			name:       "mixed empty and non-empty groups",
 			groups:     []degenerateSweepGroup{{id: "A", members: nil}, {id: "B", members: []string{"b1"}}, {id: "C", members: []string{"c1", "c2"}}},
 			maxMembers: 1, checkFloor: true,
@@ -47,6 +53,7 @@ func degenerateSweepRowsCF() []degenerateSweepRow {
 		{
 			name:       "ALL groups empty",
 			groups:     []degenerateSweepGroup{{id: "A", members: nil}, {id: "B", members: nil}},
+			ungrouped:  []string{"orphan"}, // keeps the cohort non-trivial; vacuous floor, real determinism check
 			maxMembers: 3, checkFloor: true,
 		},
 		{
@@ -70,6 +77,14 @@ func degenerateSweepRowsCF() []degenerateSweepRow {
 			maxMembers: 6, checkFloor: true,
 		},
 		{
+			name: "empty group beyond the guard alongside real ones",
+			groups: append(
+				[]degenerateSweepGroup{{id: "EMPTY", members: nil}},
+				disjointSingletonGroupsCF(contractsv1.ContextFabricSetCoverGroupGuard+1)...,
+			),
+			maxMembers: 6, checkFloor: true,
+		},
+		{
 			name: "duplicate member shared by every group",
 			groups: []degenerateSweepGroup{
 				{id: "A", members: []string{"shared"}}, {id: "B", members: []string{"shared"}}, {id: "C", members: []string{"shared"}},
@@ -89,14 +104,19 @@ func degenerateSweepRowsCF() []degenerateSweepRow {
 			ungrouped:  []string{"orphan1", "orphan2"},
 			maxMembers: 1, checkFloor: true,
 		},
+		{
+			name:       "budget 0",
+			groups:     []degenerateSweepGroup{{id: "A", members: []string{"a1"}}},
+			maxMembers: 0, checkFloor: false, // documented boundary: the cohort is returned unchanged (narrowed=false), not emptied
+		},
 	}
 }
 
 // TestNarrowGroupedCohortDegenerateInputSweep runs the sweep through the
-// engine's own NarrowGroupedCohort. Every row keeps the cohort's total
-// member count safely above maxMembers so the function actually narrows
-// (its own early return when everything already fits would make the floor
-// assertion vacuous for the wrong reason).
+// engine's own NarrowGroupedCohort, calling it with each row's OWN
+// maxMembers unmodified -- including budget 0, whose floor semantics differ
+// (see that row's own comment) and must not be silently coerced into a
+// narrowing case.
 func TestNarrowGroupedCohortDegenerateInputSweep(t *testing.T) {
 	t.Parallel()
 	for _, row := range degenerateSweepRowsCF() {
@@ -116,11 +136,7 @@ func TestNarrowGroupedCohortDegenerateInputSweep(t *testing.T) {
 				allMembers = append(allMembers, id)
 			}
 			if len(allMembers) == 0 {
-				// Nothing to narrow at all (e.g. "ALL groups empty" with no
-				// ungrouped members) -- NarrowGroupedCohort is not the
-				// right surface for this row; SelectGroupCoverMembers
-				// already covers it directly.
-				t.Skip("no members at all; covered by the shared-core sweep")
+				t.Fatal("row has no members at all -- every row must carry at least one real member (e.g. via ungrouped) so this surface is actually exercised")
 			}
 			cohort := planFixtureCohort(allMembers...)
 			groups := make([]contractsv1.ContextFabricCohortGroup, len(row.groups))
@@ -133,14 +149,7 @@ func TestNarrowGroupedCohortDegenerateInputSweep(t *testing.T) {
 				}
 			}
 			cohort.Groups = groups
-
-			// Force narrowing to actually run: NarrowGroupedCohort no-ops
-			// when the cohort already fits, which would make the floor
-			// check vacuous.
 			target := row.maxMembers
-			if target <= 0 {
-				target = 1
-			}
 			var firstKept []CohortMember
 			var firstBasis contractsv1.ContextFabricNarrowingBasis
 			for i := 0; i < 5; i++ {

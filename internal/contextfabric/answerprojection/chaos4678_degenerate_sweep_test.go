@@ -40,14 +40,31 @@ func disjointSingletonGroupsAP(n int) []degenerateSweepGroupAP {
 func degenerateSweepRowsAP() []degenerateSweepRowAP {
 	return []degenerateSweepRowAP{
 		{
+			name:       "single empty group, nothing else",
+			groups:     []degenerateSweepGroupAP{{id: "A", members: nil}},
+			ungrouped:  []string{"orphan"},
+			maxMembers: 1, checkFloor: true,
+		},
+		{
 			name:       "mixed empty and non-empty groups",
 			groups:     []degenerateSweepGroupAP{{id: "A", members: nil}, {id: "B", members: []string{"b1"}}, {id: "C", members: []string{"c1", "c2"}}},
 			maxMembers: 1, checkFloor: true,
 		},
 		{
+			name:       "ALL groups empty",
+			groups:     []degenerateSweepGroupAP{{id: "A", members: nil}, {id: "B", members: nil}},
+			ungrouped:  []string{"orphan"},
+			maxMembers: 3, checkFloor: true,
+		},
+		{
 			name:       "budget 1, single group with several members",
 			groups:     []degenerateSweepGroupAP{{id: "A", members: []string{"a1", "a2", "a3"}}},
 			maxMembers: 1, checkFloor: true,
+		},
+		{
+			name:       "single group, budget larger than the group",
+			groups:     []degenerateSweepGroupAP{{id: "A", members: []string{"a1"}}},
+			maxMembers: 5, checkFloor: true,
 		},
 		{
 			name:       "exactly at the guard (12 groups), tight budget",
@@ -57,6 +74,14 @@ func degenerateSweepRowsAP() []degenerateSweepRowAP {
 		{
 			name:       "one beyond the guard (13 groups), tight budget",
 			groups:     disjointSingletonGroupsAP(contractsv1.ContextFabricSetCoverGroupGuard + 1),
+			maxMembers: 6, checkFloor: true,
+		},
+		{
+			name: "empty group beyond the guard alongside real ones",
+			groups: append(
+				[]degenerateSweepGroupAP{{id: "EMPTY", members: nil}},
+				disjointSingletonGroupsAP(contractsv1.ContextFabricSetCoverGroupGuard+1)...,
+			),
 			maxMembers: 6, checkFloor: true,
 		},
 		{
@@ -78,6 +103,11 @@ func degenerateSweepRowsAP() []degenerateSweepRowAP {
 			groups:     []degenerateSweepGroupAP{{id: "A", members: []string{"a1"}}},
 			ungrouped:  []string{"orphan1", "orphan2"},
 			maxMembers: 1, checkFloor: true,
+		},
+		{
+			name:       "budget 0",
+			groups:     []degenerateSweepGroupAP{{id: "A", members: []string{"a1"}}, {id: "B", members: []string{"b1"}}},
+			maxMembers: 0, checkFloor: false, // documented boundary: nil ("no restriction"), not "nothing admitted"
 		},
 	}
 }
