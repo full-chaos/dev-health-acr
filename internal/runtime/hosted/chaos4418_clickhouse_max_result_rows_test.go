@@ -30,13 +30,20 @@ import (
 //     widens readRepositoryMetrics' own per-repository `LIMIT n BY repo_id`)
 //     past a shipped value that was not revisited with it.
 func TestClickHouseClientOptionsSetMaxResultRowsAboveTheDocumentedWorstCase(t *testing.T) {
+	// dev-health-go v0.6.2 made MaxResultRows *uint (nil = unset, use the
+	// package default; a pointer to 0 = explicitly unlimited). A nil
+	// pointer here is the exact "field deleted from shipped Options"
+	// regression this test's own doc comment names first.
 	shipped := clickHouseClientOptions(config.Config{}, nil).MaxResultRows
-	if shipped == 0 {
-		t.Fatal("shipped MaxResultRows = 0 -- an unset field means dev-health-go's own 1,000-row default, which ClickHouse's default result_overflow_mode=throw turns into a FAILED query for as few as ~12 repositories x 90 days")
+	if shipped == nil {
+		t.Fatal("shipped MaxResultRows is nil (field left unset) -- unset means dev-health-go's own 1,000-row default, which ClickHouse's default result_overflow_mode=throw turns into a FAILED query for as few as ~12 repositories x 90 days")
+	}
+	if *shipped == 0 {
+		t.Fatal("shipped MaxResultRows = 0, which now means EXPLICITLY unlimited, not unset -- the same failure mode as leaving it nil is possible, but spelled as an accidental 'no ceiling' rather than a missing field")
 	}
 	worstCase := uint(contractsv1.ContextFabricMaxCohortMembersLimit * devhealthfacts.MetricsSeriesPerRepositoryRowCap)
-	if shipped < worstCase {
+	if *shipped < worstCase {
 		t.Fatalf("shipped MaxResultRows = %d, want >= %d (ContextFabricMaxCohortMembersLimit=%d x MetricsSeriesPerRepositoryRowCap=%d) -- readRepositoryMetrics carries no query-wide LIMIT of its own, so a cohort-shaped request at both ceilings is the real row count this client must be able to return",
-			shipped, worstCase, contractsv1.ContextFabricMaxCohortMembersLimit, devhealthfacts.MetricsSeriesPerRepositoryRowCap)
+			*shipped, worstCase, contractsv1.ContextFabricMaxCohortMembersLimit, devhealthfacts.MetricsSeriesPerRepositoryRowCap)
 	}
 }

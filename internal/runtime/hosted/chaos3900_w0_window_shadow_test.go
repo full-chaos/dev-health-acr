@@ -202,8 +202,9 @@ func TestChaos3900W0WindowShadow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clickhouse TLS config: %v", err)
 	}
+	maxBytesToRead := cfg.ClickHouseMaxBytesToRead
 	client, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
-		DSN: cfg.ClickHouseDSN, TLS: tlsConfig, MaxBytesToRead: cfg.ClickHouseMaxBytesToRead,
+		DSN: cfg.ClickHouseDSN, TLS: tlsConfig, MaxBytesToRead: &maxBytesToRead,
 	})
 	if err != nil {
 		t.Fatalf("open clickhouse client: %v", err)

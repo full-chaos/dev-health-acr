@@ -34,6 +34,18 @@ const clickHouseTooManyRowsOrBytes int32 = 396
 // that could drift away from it.
 const MetricsSeriesPerRepositoryRowCapForTest = devhealthfacts.MetricsSeriesPerRepositoryRowCap
 
+// productionMaxResultRows returns a fresh *uint holding the same value
+// internal/runtime/hosted/clickhouse.go actually ships (mirrored here, not
+// imported, since that package is not importable from a test binary in
+// this one). dev-health-go v0.6.2 made Options.MaxResultRows *uint so a
+// caller can express "explicitly unlimited" (a pointer to 0) distinctly
+// from "unset, use the package default" (nil); a fresh pointer per call
+// keeps every call site's Options independent.
+func productionMaxResultRows() *uint {
+	v := uint(2 * contractsv1.ContextFabricMaxCohortMembersLimit * devhealthfacts.MetricsSeriesPerRepositoryRowCap)
+	return &v
+}
+
 // seedRepositoryMetricsDays inserts dayCount consecutive days for one
 // repository in ONE batch. Deliberately not a loop of single-row Exec
 // calls: the scenarios below seed up to 1,080 rows, and a round trip per
@@ -192,7 +204,7 @@ func TestCHAOS4418RepositoryMetricsAgainstRealClickHouse(t *testing.T) {
 			// TestClickHouseClientOptionsSetMaxResultRowsAboveTheDocumentedWorstCase
 			// pins the derivation, this proves the EFFECT of configuring
 			// it against a real server.
-			const configuredMaxResultRows = 2 * contractsv1.ContextFabricMaxCohortMembersLimit * devhealthfacts.MetricsSeriesPerRepositoryRowCap
+			configuredMaxResultRows := productionMaxResultRows()
 			fixedClient, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
 				DSN: dsn, DialTimeout: 10 * time.Second, MaxResultRows: configuredMaxResultRows,
 			})
@@ -203,7 +215,7 @@ func TestCHAOS4418RepositoryMetricsAgainstRealClickHouse(t *testing.T) {
 			provider := findProvider(t, devhealthfacts.NewProviders(fixedClient), contextfabric.FactMetrics)
 			result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, query)
 			if err != nil {
-				t.Fatalf("ReadFacts() error = %v, want success with MaxResultRows=%d", err, configuredMaxResultRows)
+				t.Fatalf("ReadFacts() error = %v, want success with MaxResultRows=%d", err, *configuredMaxResultRows)
 			}
 			if len(result.Facts) != repoCount {
 				t.Fatalf("len(result.Facts) = %d, want exactly %d -- every requested repository must get its own fact", len(result.Facts), repoCount)
@@ -228,7 +240,7 @@ func TestCHAOS4418RepositoryMetricsAgainstRealClickHouse(t *testing.T) {
 		const repoID = "55555555-5555-5555-5555-000000000001"
 		const dayCount = MetricsSeriesPerRepositoryRowCapForTest + 50
 		client, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
-			DSN: dsn, DialTimeout: 10 * time.Second, MaxResultRows: 2 * contractsv1.ContextFabricMaxCohortMembersLimit * devhealthfacts.MetricsSeriesPerRepositoryRowCap,
+			DSN: dsn, DialTimeout: 10 * time.Second, MaxResultRows: productionMaxResultRows(),
 		})
 		if err != nil {
 			t.Fatalf("open query client: %v", err)
@@ -268,7 +280,7 @@ func TestCHAOS4418RepositoryMetricsAgainstRealClickHouse(t *testing.T) {
 	// first N" mean "keep the NEWEST N".
 	t.Run("B_the_64_row_per_fact_boundary_keeps_the_newest_days", func(t *testing.T) {
 		client, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
-			DSN: dsn, DialTimeout: 10 * time.Second, MaxResultRows: 2 * contractsv1.ContextFabricMaxCohortMembersLimit * devhealthfacts.MetricsSeriesPerRepositoryRowCap,
+			DSN: dsn, DialTimeout: 10 * time.Second, MaxResultRows: productionMaxResultRows(),
 		})
 		if err != nil {
 			t.Fatalf("open query client: %v", err)
