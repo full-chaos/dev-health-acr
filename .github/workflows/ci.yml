@@ -95,7 +95,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.26.6'
+          go-version: '1.27.0'
           cache: true
       - name: Verify Go formatting
         run: make fmt-check
@@ -120,7 +120,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.26.6'
+          go-version: '1.27.0'
           cache: true
       # CHAOS-3859 sol review F1: deploy/compose/acr_db_init_integration_test.go
       # shells out to psql/pg_isready to prove acr-db-init.sh's runtime-acl
@@ -213,7 +213,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.26.6'
+          go-version: '1.27.0'
           cache: true
       # CHAOS-3859 sol review F1: deploy/compose/acr_db_init_integration_test.go
       # shells out to psql/pg_isready to prove acr-db-init.sh's runtime-acl
@@ -282,7 +282,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.26.6'
+          go-version: '1.27.0'
           cache: true
       - name: Run isolated devhealthschema race suite
         run: |
@@ -300,7 +300,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.26.6'
+          go-version: '1.27.0'
           cache: true
       - name: Cross-compile supported targets
         run: make crosscompile
@@ -320,7 +320,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.26.6'
+          go-version: '1.27.0'
           cache: true
       # Must run before anything else in this job that could dirty the
       # worktree: the script refuses to start unless `git status --porcelain`

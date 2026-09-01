@@ -198,11 +198,22 @@ func TestChaos4521b_ThePseudoProjectOwnershipRowAttributesToNothing(t *testing.T
 	//    property that actually holds -- no projects row, no attribution --
 	//    is the one worth pinning, and it needs no knowledge of the format.
 	//
-	//    Counting arms rather than merely finding one join: a future arm
-	//    added as a LEFT JOIN, or one reading a different table, would
+	//    Counting the reads rather than merely finding one join: a future
+	//    arm added as a LEFT JOIN, or one reading a different table, would
 	//    reintroduce the hazard silently.
-	if projectsReads := strings.Count(statement, "FROM projects FINAL"); projectsReads != strings.Count(statement, "UNION ALL")+1 {
-		t.Errorf("not every arm resolves through `projects`: %d reads for %d arms\n%s", projectsReads, strings.Count(statement, "UNION ALL")+1, statement)
+	//
+	//    The count is pinned as a literal, not derived from UNION ALL
+	//    separators (as it was before CHAOS-4552). That derivation assumed
+	//    each top-level arm was its own UNION ALL branch, each embedding
+	//    its own copy of the identity expansion -- true of the OLD
+	//    two-arm shape, not the new one, where the arms union on the
+	//    OWNERSHIP side instead and there is only ONE top-level join
+	//    against `projects`. Two is dev-health-go's own pinned count
+	//    (readers/ownership_test.go's TestChaos4552_OwnershipJoinScansProjectsOnce)
+	//    for readers.ProjectOwnershipJoinSQL's rendered SQL alone; nothing
+	//    in ReadProjectInvestment's own wrapping adds another.
+	if projectsReads := strings.Count(statement, "FROM projects FINAL"); projectsReads != 2 {
+		t.Errorf("not every read resolves through `projects` the expected number of times: got %d, want 2\n%s", projectsReads, statement)
 	}
 	if strings.Contains(statement, "LEFT JOIN (\n\tSELECT provider") {
 		t.Errorf("an ownership arm is a LEFT JOIN; a missing projects row would no longer drop it\n%s", statement)

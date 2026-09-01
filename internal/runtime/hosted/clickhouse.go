@@ -48,9 +48,20 @@ const clickHouseMaxResultRowsWorstCase = contractsv1.ContextFabricMaxCohortMembe
 // lowering that field is the regression this whole finding is about, and a
 // test that only re-computes the constant expression cannot catch it.
 func clickHouseClientOptions(cfg config.Config, tlsConfig *tls.Config) runtimeclickhouse.Options {
+	// dev-health-go v0.6.2 (CHAOS-4651) made MaxResultRows/MaxBytesToRead
+	// *uint/*uint64 so a caller can express "explicitly unlimited" (a
+	// pointer to 0) distinctly from "unset, use the package default"
+	// (nil) -- collapsing that through a plain uint/uint64 made unlimited
+	// inexpressible. cfg.Validate() rejects ClickHouseMaxBytesToRead == 0
+	// (config.go), so this is always an explicit positive ceiling, never
+	// unlimited or unset; taking its address preserves that meaning
+	// exactly under the new pointer type.
+	maxBytesToRead := cfg.ClickHouseMaxBytesToRead
+	maxResultRows := uint(clickHouseMaxResultRowsHeadroomFactor * clickHouseMaxResultRowsWorstCase)
 	return runtimeclickhouse.Options{
-		DSN: cfg.ClickHouseDSN, TLS: tlsConfig, MaxBytesToRead: cfg.ClickHouseMaxBytesToRead,
-		// MaxResultRows: left unset, dev-health-go's own Options default
+		DSN: cfg.ClickHouseDSN, TLS: tlsConfig, MaxBytesToRead: &maxBytesToRead,
+		// MaxResultRows must be set explicitly (never left nil/unset):
+		// dev-health-go's own Options default
 		// is 1,000 (clickhouse/options.go, "max_result_rows"), and
 		// ClickHouse's default result_overflow_mode is "throw" --
 		// exceeding it FAILS the whole query, not just truncates it. The
@@ -71,7 +82,7 @@ func clickHouseClientOptions(cfg config.Config, tlsConfig *tls.Config) runtimecl
 		// those fires long before this ceiling, so raising it relaxes no
 		// other reader's safety margin. The PR this shipped under carries
 		// the full per-query accounting.
-		MaxResultRows: clickHouseMaxResultRowsHeadroomFactor * clickHouseMaxResultRowsWorstCase,
+		MaxResultRows: &maxResultRows,
 	}
 }
 

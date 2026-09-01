@@ -75,8 +75,14 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 	if err != nil {
 		return nil, errors.Join(err, runtime.Close())
 	}
+	// dev-health-go v0.6.2 (CHAOS-4651) made MaxBytesToRead *uint64 so a
+	// caller can express "explicitly unlimited" (a pointer to 0) distinct
+	// from "unset, use the package default" (nil). cfg.Validate() rejects
+	// ClickHouseMaxBytesToRead == 0, so this is always an explicit
+	// positive ceiling; taking its address preserves that meaning exactly.
+	maxBytesToRead := cfg.ClickHouseMaxBytesToRead
 	clickhouseClient, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
-		DSN: cfg.ClickHouseDSN, TLS: tlsConfig, MaxBytesToRead: cfg.ClickHouseMaxBytesToRead,
+		DSN: cfg.ClickHouseDSN, TLS: tlsConfig, MaxBytesToRead: &maxBytesToRead,
 	})
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("open clickhouse: %w", err), runtime.Close())
