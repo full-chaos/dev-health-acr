@@ -47,20 +47,20 @@ package contextfabric
 //     comment named as UNCAUGHT: "anything reached through a function
 //     boundary or a struct field, where the family and the text are in
 //     different scopes."
-//   - SANCTIONED READERS are exempted by go/types OBJECT IDENTITY, not by
-//     file path. The four purposes (design 13.4.3 / CHAOS-4782: the
-//     precedence table that PRODUCES the family, the registry -- which is
-//     also where budget-profile selection actually lives, see
-//     sweep-for-4782.go.txt's correction of design row 8 -- LookupQuestionFamily,
-//     and the vocabulary declarations on both sides of the wire boundary)
-//     are resolved ONCE, at test time, to their declared *types.Object
-//     set from the four purpose files. A read is sanctioned only if its
-//     ENCLOSING top-level declaration resolves, through the type checker,
-//     to one of those objects -- not "is this violation's file path in an
-//     allowlist". This is strictly narrower than the old file-level
-//     check: an unrelated function added to one of the four purpose files
-//     is NOT automatically sanctioned just by sharing a file with a
-//     sanctioned one.
+//   - SANCTIONED READERS are exempted by go/types OBJECT IDENTITY of an
+//     EXPLICIT, CLOSED LIST of individual declarations (familyGateSanctionedSymbols)
+//     -- not by file path, and (codex round 1, P2) not by "every
+//     declaration in a purpose file" either, which is extensionally the
+//     same file-level granularity as a path allowlist. Each read site is
+//     sanctioned only if its ENCLOSING top-level declaration resolves,
+//     through the type checker, to one of the specific listed objects. A
+//     new, unrelated function added to one of the four purpose FILES is
+//     NOT sanctioned; only the specific declarations design 13.4.3 names
+//     as the four purposes are (the precedence table that PRODUCES the
+//     family, the registry -- which is also where budget-profile
+//     selection actually lives, see sweep-for-4782.go.txt's correction of
+//     design row 8 -- LookupQuestionFamily, and the vocabulary
+//     declarations on both sides of the wire boundary).
 //
 // WHAT THIS STILL DOES NOT PROVE, stated so green is not mistaken for a
 // nonexistence proof (the same discipline chaos4735_family_language_sweep_test.go
@@ -118,33 +118,127 @@ var familyGateSweptImportPaths = []string{
 	"github.com/full-chaos/dev-health-acr/internal/mcp/...",
 }
 
-// familyGateSanctionedFiles are the four purpose files whose TOP-LEVEL
-// DECLARATIONS bootstrap the sanctioned-object set. This is still an
-// anchor into the source (the four purposes have to start somewhere), but
-// unlike chaos4735_family_language_sweep_test.go's sanctionedFamilyReadSites,
-// the ENFORCEMENT below never compares a violation's file path against
-// this list -- it compares the violation's ENCLOSING DECLARATION's
-// resolved go/types.Object against the set of objects declared in these
-// files. A new, unrelated function added to one of these files is not
-// sanctioned merely by proximity.
-var familyGateSanctionedFiles = []string{
-	// Purpose 1: the precedence table that PRODUCES the family.
-	"internal/contextfabric/chaos4632_question_family_precedence.go",
-	// Purpose 2: the registry -- LookupQuestionFamily, which is also
-	// where budget-profile selection lives (sweep-for-4782.go.txt's
-	// correction of design 13.9a row 8).
-	"internal/contextfabric/chaos4632_question_family_registry.go",
-	// Purpose 3: the package-local vocabulary aliases.
-	"internal/contextfabric/chaos4632_question_family_vocab.go",
-	// Purpose 4: the wire vocabulary declaration itself.
-	"internal/contracts/v1/context_fabric_answer_plan.go",
+// familyGateContextFabricPkgPath and familyGateContractsPkgPath are the two
+// packages that own a sanctioned declaration.
+const (
+	familyGateContextFabricPkgPath = "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	familyGateContractsPkgPath     = "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
+
+// familyGateSanctionedSymbol names ONE declared symbol that constitutes a
+// sanctioned reader, by (package, name) -- resolved via go/types package
+// SCOPE LOOKUP, which returns the declaration's *types.Object directly.
+// `file` is a belt-and-braces check, not the enforcement mechanism: after
+// resolving the object, its declaration position must fall in this file,
+// or resolution fails loudly (renamed or moved without updating this
+// list).
+//
+// CODEX ROUND 1, P2, EXECUTED: an earlier version of this file sanctioned
+// EVERY top-level declaration found in the four purpose FILES. That is
+// extensionally the same file-level granularity chaos4735's
+// sanctionedFamilyReadSites had (a NEW, unrelated function added to one of
+// these files was sanctioned merely by sharing a file with a real
+// purpose), just reached through go/types identity instead of a path
+// string -- identity of "everything in this file" is not narrower than
+// "this file". The fix is this EXPLICIT, closed list of the declarations
+// that actually constitute each purpose. This is not the "allowlist of
+// violation SHAPES" the ticket warns against (that anti-pattern was about
+// enumerating ways prose could be authored); this is the sanctioned-READER
+// list design 13.4.3 already calls a CLOSED set of four purposes -- a
+// human names it once, and each individual read site is checked against it
+// by identity rather than by path or name string.
+type familyGateSanctionedSymbol struct {
+	pkgPath string
+	file    string // repo-relative, for the position check only
+	name    string
 }
 
-// familyGateContractsPurposeFile is purpose 4 alone, used by
-// TestFamilyTextGateCatchesHistoricalConstructions, whose fixture loads never
-// include internal/contextfabric (purposes 1-3).
-var familyGateContractsPurposeFile = []string{
-	"internal/contracts/v1/context_fabric_answer_plan.go",
+// familyGateSanctionedSymbols is the full closed list: every declaration
+// that legitimately reads, produces, or dispatches on the question family,
+// across all four purposes. Derived by running this gate with an EMPTY
+// sanctioned set against the real tree and mapping every resulting
+// violation back to its enclosing declaration (recorded so the next person
+// re-deriving this list has the method, not just the result).
+var familyGateSanctionedSymbols = []familyGateSanctionedSymbol{
+	// Purpose 1: the precedence table that PRODUCES the family.
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_precedence.go", "UnreachableQuestionFamilies"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_precedence.go", "familyIsUnreachable"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_precedence.go", "ResolveFamilyForSample"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_precedence.go", "precedenceFamily"},
+	// Purpose 2: the registry -- LookupQuestionFamily, which is also where
+	// budget-profile selection lives (sweep-for-4782.go.txt's correction
+	// of design 13.9a row 8) -- and the table its lookup reads.
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_registry.go", "questionFamilyDefinitions"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_registry.go", "LookupQuestionFamily"},
+	// Purpose 3: the package-local vocabulary aliases.
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_vocab.go", "QuestionFamily"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_vocab.go", "QuestionFamilySubjectInvestigation"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_vocab.go", "QuestionFamilyDiscoveredCohortRanking"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_vocab.go", "QuestionFamilyScopedCohortStatus"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_vocab.go", "QuestionFamilyGroupedCohortStatus"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_vocab.go", "QuestionFamilyExplicitComparison"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_vocab.go", "QuestionFamilyTrend"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_vocab.go", "QuestionFamilyInvestmentAllocation"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_vocab.go", "QuestionFamilyUnclassified"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_vocab.go", "questionFamilies"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_vocab.go", "QuestionFamilyVocabulary"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_vocab.go", "ValidQuestionFamily"},
+	{familyGateContextFabricPkgPath, "internal/contextfabric/chaos4632_question_family_vocab.go", "SanitizeQuestionFamily"},
+	// Purpose 4: the wire vocabulary declaration itself.
+	familyGateContractsPurposeSymbolType,
+	familyGateContractsPurposeSymbolOrderedArray,
+	familyGateContractsPurposeSymbolSubjectInvestigation,
+	familyGateContractsPurposeSymbolDiscoveredCohortRanking,
+	familyGateContractsPurposeSymbolScopedCohortStatus,
+	familyGateContractsPurposeSymbolGroupedCohortStatus,
+	familyGateContractsPurposeSymbolExplicitComparison,
+	familyGateContractsPurposeSymbolTrend,
+	familyGateContractsPurposeSymbolInvestmentAllocation,
+	familyGateContractsPurposeSymbolUnclassified,
+	familyGateContractsPurposeSymbolVocabulary,
+	familyGateContractsPurposeSymbolValid,
+	familyGateContractsPurposeSymbolCount,
+}
+
+// The purpose-4 symbols are declared individually (not inline in the slice
+// literal above) because TestFamilyTextGateCatchesHistoricalConstructions's
+// fixture loads carry ONLY purpose 4 (their loads never include
+// internal/contextfabric) and need the same list under a second name.
+const familyGateContractsFile = "internal/contracts/v1/context_fabric_answer_plan.go"
+
+var (
+	familyGateContractsPurposeSymbolType                    = familyGateSanctionedSymbol{familyGateContractsPkgPath, familyGateContractsFile, "ContextFabricQuestionFamily"}
+	familyGateContractsPurposeSymbolOrderedArray            = familyGateSanctionedSymbol{familyGateContractsPkgPath, familyGateContractsFile, "contextFabricQuestionFamilies"}
+	familyGateContractsPurposeSymbolSubjectInvestigation    = familyGateSanctionedSymbol{familyGateContractsPkgPath, familyGateContractsFile, "ContextFabricQuestionFamilySubjectInvestigation"}
+	familyGateContractsPurposeSymbolDiscoveredCohortRanking = familyGateSanctionedSymbol{familyGateContractsPkgPath, familyGateContractsFile, "ContextFabricQuestionFamilyDiscoveredCohortRanking"}
+	familyGateContractsPurposeSymbolScopedCohortStatus      = familyGateSanctionedSymbol{familyGateContractsPkgPath, familyGateContractsFile, "ContextFabricQuestionFamilyScopedCohortStatus"}
+	familyGateContractsPurposeSymbolGroupedCohortStatus     = familyGateSanctionedSymbol{familyGateContractsPkgPath, familyGateContractsFile, "ContextFabricQuestionFamilyGroupedCohortStatus"}
+	familyGateContractsPurposeSymbolExplicitComparison      = familyGateSanctionedSymbol{familyGateContractsPkgPath, familyGateContractsFile, "ContextFabricQuestionFamilyExplicitComparison"}
+	familyGateContractsPurposeSymbolTrend                   = familyGateSanctionedSymbol{familyGateContractsPkgPath, familyGateContractsFile, "ContextFabricQuestionFamilyTrend"}
+	familyGateContractsPurposeSymbolInvestmentAllocation    = familyGateSanctionedSymbol{familyGateContractsPkgPath, familyGateContractsFile, "ContextFabricQuestionFamilyInvestmentAllocation"}
+	familyGateContractsPurposeSymbolUnclassified            = familyGateSanctionedSymbol{familyGateContractsPkgPath, familyGateContractsFile, "ContextFabricQuestionFamilyUnclassified"}
+	familyGateContractsPurposeSymbolVocabulary              = familyGateSanctionedSymbol{familyGateContractsPkgPath, familyGateContractsFile, "ContextFabricQuestionFamilyVocabulary"}
+	familyGateContractsPurposeSymbolValid                   = familyGateSanctionedSymbol{familyGateContractsPkgPath, familyGateContractsFile, "ValidContextFabricQuestionFamily"}
+	familyGateContractsPurposeSymbolCount                   = familyGateSanctionedSymbol{familyGateContractsPkgPath, familyGateContractsFile, "ContextFabricQuestionFamilyCount"}
+)
+
+// familyGateContractsPurposeSymbols is purpose 4 alone, used by
+// TestFamilyTextGateCatchesHistoricalConstructions, whose fixture loads
+// never include internal/contextfabric (purposes 1-3).
+var familyGateContractsPurposeSymbols = []familyGateSanctionedSymbol{
+	familyGateContractsPurposeSymbolType,
+	familyGateContractsPurposeSymbolOrderedArray,
+	familyGateContractsPurposeSymbolSubjectInvestigation,
+	familyGateContractsPurposeSymbolDiscoveredCohortRanking,
+	familyGateContractsPurposeSymbolScopedCohortStatus,
+	familyGateContractsPurposeSymbolGroupedCohortStatus,
+	familyGateContractsPurposeSymbolExplicitComparison,
+	familyGateContractsPurposeSymbolTrend,
+	familyGateContractsPurposeSymbolInvestmentAllocation,
+	familyGateContractsPurposeSymbolUnclassified,
+	familyGateContractsPurposeSymbolVocabulary,
+	familyGateContractsPurposeSymbolValid,
+	familyGateContractsPurposeSymbolCount,
 }
 
 // familyGateViolation is one finding: a file:line plus a human message.
@@ -176,7 +270,7 @@ type familyGateFacts struct {
 // be walked, and on that slice ONLY -- go/types object identity (used
 // throughout via pointer equality) is only meaningful within one
 // type-checking session.
-func familyGateResolveFacts(t *testing.T, pkgs []*packages.Package, sanctionedFiles []string) familyGateFacts {
+func familyGateResolveFacts(t *testing.T, pkgs []*packages.Package, sanctionedSymbols []familyGateSanctionedSymbol) familyGateFacts {
 	t.Helper()
 
 	var contractsPkg *packages.Package
@@ -239,7 +333,7 @@ func familyGateResolveFacts(t *testing.T, pkgs []*packages.Package, sanctionedFi
 		t.Fatalf("expected the closed vocabulary to carry exactly one unclassified sentinel per loaded spelling (%d spellings); discriminating=%d of %d", spellings, len(discriminating), len(allConstants))
 	}
 
-	sanctioned := familyGateResolveSanctionedObjects(t, pkgs, sanctionedFiles)
+	sanctioned := familyGateResolveSanctionedObjects(t, pkgs, sanctionedSymbols)
 
 	return familyGateFacts{
 		familyType:         familyType,
@@ -257,67 +351,38 @@ func familyGateResolveFacts(t *testing.T, pkgs []*packages.Package, sanctionedFi
 // function's object, and every name in every var/const spec. A read is
 // sanctioned iff its enclosing declaration resolves to one of these
 // objects.
-func familyGateResolveSanctionedObjects(t *testing.T, pkgs []*packages.Package, sanctionedFiles []string) map[types.Object]bool {
+func familyGateResolveSanctionedObjects(t *testing.T, pkgs []*packages.Package, symbols []familyGateSanctionedSymbol) map[types.Object]bool {
 	t.Helper()
 	sanctioned := map[types.Object]bool{}
-	if len(sanctionedFiles) == 0 {
+	if len(symbols) == 0 {
 		// Historical-construction fixtures are loaded standalone (see
-		// TestFamilyTextGateCatchesHistoricalConstructions): they never
-		// contain a sanctioned declaration, and loading the whole of
-		// internal/contextfabric just to resolve an empty exemption set
-		// would triple each fixture's load cost for no signal. An empty
-		// input here means "exempt nothing", not "resolution failed".
+		// TestFamilyTextGateCatchesHistoricalConstructions): most never
+		// contain a sanctioned declaration at all. An empty input here
+		// means "exempt nothing", not "resolution failed".
 		return sanctioned
 	}
-	matched := map[string]bool{}
-
+	pkgByPath := map[string]*packages.Package{}
 	for _, p := range pkgs {
-		for i, filePath := range p.CompiledGoFiles {
-			relPath := filepath.ToSlash(filePath)
-			for _, want := range sanctionedFiles {
-				if !strings.HasSuffix(relPath, "/"+want) && relPath != want {
-					continue
-				}
-				matched[want] = true
-				file := p.Syntax[i]
-				for _, decl := range file.Decls {
-					switch d := decl.(type) {
-					case *ast.FuncDecl:
-						if obj := p.TypesInfo.Defs[d.Name]; obj != nil {
-							sanctioned[obj] = true
-						}
-					case *ast.GenDecl:
-						for _, spec := range d.Specs {
-							switch s := spec.(type) {
-							case *ast.ValueSpec:
-								for _, name := range s.Names {
-									if obj := p.TypesInfo.Defs[name]; obj != nil {
-										sanctioned[obj] = true
-									}
-								}
-							case *ast.TypeSpec:
-								if obj := p.TypesInfo.Defs[s.Name]; obj != nil {
-									sanctioned[obj] = true
-								}
-							}
-						}
-					}
-				}
-			}
-		}
+		pkgByPath[p.PkgPath] = p
 	}
 
-	var missing []string
-	for _, want := range sanctionedFiles {
-		if !matched[want] {
-			missing = append(missing, want)
+	for _, sym := range symbols {
+		p, ok := pkgByPath[sym.pkgPath]
+		if !ok {
+			t.Fatalf("sanctioned symbol %s.%s: package %s is not part of the loaded program", sym.pkgPath, sym.name, sym.pkgPath)
 		}
-	}
-	if len(missing) > 0 {
-		t.Fatalf("sanctioned-reader source files not found in the loaded program (renamed or moved?): %v", missing)
+		obj := p.Types.Scope().Lookup(sym.name)
+		if obj == nil {
+			t.Fatalf("sanctioned symbol %s.%s not found in %s -- renamed or moved?", sym.pkgPath, sym.name, sym.pkgPath)
+		}
+		gotFile := filepath.ToSlash(p.Fset.Position(obj.Pos()).Filename)
+		if !strings.HasSuffix(gotFile, "/"+sym.file) && gotFile != sym.file {
+			t.Fatalf("sanctioned symbol %s.%s resolved to %s, want a file ending in %s -- moved without updating familyGateSanctionedSymbols?", sym.pkgPath, sym.name, gotFile, sym.file)
+		}
+		sanctioned[obj] = true
 	}
 	if len(sanctioned) == 0 {
-		t.Fatalf("resolved zero sanctioned objects from %v -- the sweep would exempt nothing, which is not the same as a correctly narrow allowlist", sanctionedFiles)
+		t.Fatalf("resolved zero sanctioned objects from %d symbols -- the sweep would exempt nothing, which is not the same as a correctly narrow allowlist", len(symbols))
 	}
 	return sanctioned
 }
@@ -512,8 +577,7 @@ func (w *familyGateWalker) eval(expr ast.Expr) familyGateTaintKind {
 	case *ast.UnaryExpr:
 		return w.eval(e.X)
 	case *ast.CompositeLit:
-		w.evalCompositeLit(e)
-		return familyGateNotTainted
+		return w.evalCompositeLit(e)
 	default:
 		return w.rawIfFamilyTyped(expr)
 	}
@@ -570,49 +634,77 @@ func familyGateElemType(t types.Type) types.Type {
 	return nil
 }
 
-// evalCompositeLit handles two independent things: (1) struct-literal
-// field values, which feed the field-taint pass (`T{Field: taintedExpr}`),
-// and (2) map/array/slice literals, which are checked against the two
+// evalCompositeLit handles three independent things: (1) struct-literal
+// field values, which feed the field-taint pass (`T{Field: taintedExpr}`)
+// AND make the composite literal EXPRESSION ITSELF tainted whenever any
+// field value is -- see evalStructLit's doc comment for why this matters;
+// (2) map/array/slice literals, which are checked against the two
 // structural rules carried over from chaos4735 -- a map whose KEY TYPE is
 // family-identical and whose VALUE type may hold text (R2's shape, closed
 // structurally as well as via the general index rule above), and a map
 // literal keyed by the family's RAW WIRE VALUE written as a string literal
 // (no family-typed expression appears at all, so the type/dataflow rules
 // above cannot see it -- this one stays purely textual, same as chaos4735
-// rule 2).
-func (w *familyGateWalker) evalCompositeLit(lit *ast.CompositeLit) {
+// rule 2); (3) any element of a composite literal that is itself tainted
+// makes the literal tainted-derived, so a tainted array/slice/map VALUE
+// used downstream (e.g. as an index or another literal's field) is still
+// seen.
+func (w *familyGateWalker) evalCompositeLit(lit *ast.CompositeLit) familyGateTaintKind {
 	t := w.pkg.TypesInfo.TypeOf(lit)
 	if t == nil {
+		tainted := familyGateNotTainted
 		for _, elt := range lit.Elts {
-			w.evalCompositeElt(elt, nil)
+			if k := w.evalCompositeElt(elt); k.tainted() {
+				tainted = familyGateTaintDerived
+			}
 		}
-		return
+		return tainted
 	}
 	switch u := t.Underlying().(type) {
 	case *types.Struct:
-		w.evalStructLit(lit, u, t)
+		return w.evalStructLit(lit, u, t)
 	case *types.Map:
-		w.evalMapLit(lit, u, t)
+		return w.evalMapLit(lit, u, t)
 	default:
+		tainted := familyGateNotTainted
 		for _, elt := range lit.Elts {
-			w.evalCompositeElt(elt, nil)
+			if k := w.evalCompositeElt(elt); k.tainted() {
+				tainted = familyGateTaintDerived
+			}
 		}
+		return tainted
 	}
 }
 
-func (w *familyGateWalker) evalStructLit(lit *ast.CompositeLit, structT *types.Struct, named types.Type) {
-	for i, elt := range lit.Elts {
+// evalStructLit records field-taint facts (unchanged) AND now returns
+// whether the LITERAL ITSELF is tainted, when any field value is.
+//
+// CODEX ROUND 1, P1, EXECUTED: without this, a composite literal that
+// WRAPS a tainted value (e.g. `struct{ Family QuestionFamily }{Family:
+// family}`) evaluated as untainted at the expression level, so using it
+// directly as a MAP KEY or an INDEX -- rather than assigning it to a named
+// variable's field, which the field-taint pass already covered -- was
+// invisible to every sink rule. A struct VALUE that carries a tainted
+// field is itself family-derived data; wrapping does not launder it.
+func (w *familyGateWalker) evalStructLit(lit *ast.CompositeLit, structT *types.Struct, named types.Type) familyGateTaintKind {
+	litTainted := familyGateNotTainted
+	for _, elt := range lit.Elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
 		if !ok {
 			// Positional struct literal: still evaluate for nested
-			// violations, but positional field-taint tracking is out of
-			// scope (keyed literals are the realistic shape and the one
-			// the fixtures use).
-			w.eval(elt)
-			_ = i
+			// violations and literal-level taint, but positional
+			// field-taint tracking (the GLOBAL, cross-function pass) is
+			// out of scope (keyed literals are the realistic shape and
+			// the one the fixtures use).
+			if w.eval(elt).tainted() {
+				litTainted = familyGateTaintDerived
+			}
 			continue
 		}
 		valueKind := w.eval(kv.Value)
+		if valueKind.tainted() {
+			litTainted = familyGateTaintDerived
+		}
 		ident, ok := kv.Key.(*ast.Ident)
 		if !ok {
 			continue
@@ -631,40 +723,51 @@ func (w *familyGateWalker) evalStructLit(lit *ast.CompositeLit, structT *types.S
 		}
 	}
 	_ = named
+	_ = structT
+	return litTainted
 }
 
-func (w *familyGateWalker) evalMapLit(lit *ast.CompositeLit, mapT *types.Map, named types.Type) {
+func (w *familyGateWalker) evalMapLit(lit *ast.CompositeLit, mapT *types.Map, named types.Type) familyGateTaintKind {
 	familyKeyed := types.Identical(mapT.Key(), w.an.facts.familyType)
 	textual := familyGateMayHoldText(mapT.Elem())
 	if familyKeyed && textual {
 		w.report(lit.Lbrace, fmt.Sprintf(
 			"map literal of type %s: key type is the question-family type and the value type can hold text -- the R2 class (codex round 2)", named.String()))
 	}
+	litTainted := familyGateNotTainted
 	for _, elt := range lit.Elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
 		if !ok {
-			w.eval(elt)
+			if w.eval(elt).tainted() {
+				litTainted = familyGateTaintDerived
+			}
 			continue
 		}
-		w.eval(kv.Value)
+		if w.eval(kv.Value).tainted() {
+			litTainted = familyGateTaintDerived
+		}
 		if lit2, ok := familyGateStringLiteral(kv.Key); ok && textual {
 			if w.an.facts.wireValueLiterals[lit2.Value] {
 				w.report(lit2.Pos(), fmt.Sprintf(
 					"map literal of type %s: key %s is one of the family's raw wire values written as a string literal, and the value type can hold text", named.String(), lit2.Value))
 			}
-		} else {
-			w.eval(kv.Key)
+		} else if w.eval(kv.Key).tainted() {
+			litTainted = familyGateTaintDerived
 		}
 	}
+	return litTainted
 }
 
-func (w *familyGateWalker) evalCompositeElt(elt ast.Expr, _ types.Type) {
+func (w *familyGateWalker) evalCompositeElt(elt ast.Expr) familyGateTaintKind {
 	if kv, ok := elt.(*ast.KeyValueExpr); ok {
-		w.eval(kv.Key)
-		w.eval(kv.Value)
-		return
+		keyKind := w.eval(kv.Key)
+		valueKind := w.eval(kv.Value)
+		if keyKind.tainted() || valueKind.tainted() {
+			return familyGateTaintDerived
+		}
+		return familyGateNotTainted
 	}
-	w.eval(elt)
+	return w.eval(elt)
 }
 
 // assign updates local taint state for one LHS/RHS pair of an assignment
@@ -1201,6 +1304,24 @@ func familyGateLoadRoot(t *testing.T) string {
 	}
 }
 
+// familyGateBuildFlags pins the build tags this load compiles under to
+// EXACTLY what the real binaries and CI build with.
+//
+// CODEX ROUND 1, P3, EXECUTED: a production file gated behind an
+// unrecognized build tag compiled cleanly (`go build`/`go vet`/`go test
+// -tags <tag>`) while packages.Load's default (empty BuildFlags, i.e. no
+// tags) silently excluded it -- no error, just absence. Checked at
+// gate-authoring time (2026-09-02): NEITHER the Makefile NOR
+// .github/workflows/ci.yml passes `-tags` to any build/vet/test
+// invocation anywhere in this repository, so "no tags" is not a
+// convenient default here -- it is what CI actually builds with. Pinning
+// it explicitly (rather than leaving the zero value to mean the same
+// thing implicitly) makes that coupling visible: if this repository ever
+// adopts a build tag for production code, updating this constant is the
+// forcing function, not an afterthought this analysis would otherwise
+// drift out of sync with silently.
+var familyGateBuildFlags = []string{}
+
 func familyGateLoadPackages(t *testing.T, dir string, patterns ...string) []*packages.Package {
 	t.Helper()
 	cfg := &packages.Config{
@@ -1208,7 +1329,8 @@ func familyGateLoadPackages(t *testing.T, dir string, patterns ...string) []*pac
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
 			packages.NeedImports | packages.NeedDeps | packages.NeedTypes |
 			packages.NeedTypesInfo | packages.NeedSyntax,
-		Tests: false,
+		Tests:      false,
+		BuildFlags: familyGateBuildFlags,
 	}
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
@@ -1239,7 +1361,7 @@ func familyGateLoadPackages(t *testing.T, dir string, patterns ...string) []*pac
 func TestNoServedTextIsDerivedFromQuestionFamily(t *testing.T) {
 	root := familyGateLoadRoot(t)
 	pkgs := familyGateLoadPackages(t, root, familyGateSweptImportPaths...)
-	facts := familyGateResolveFacts(t, pkgs, familyGateSanctionedFiles)
+	facts := familyGateResolveFacts(t, pkgs, familyGateSanctionedSymbols)
 	violations := familyGateRun(t, pkgs, facts)
 
 	// False-positive guard (CHAOS-4782 acceptance): the vote-tally maps
@@ -1273,6 +1395,11 @@ type familyGateFixture struct {
 }
 
 var familyGateFixtures = []familyGateFixture{
+	{
+		name:        "R5b_composite_literal_wrapped_family_key",
+		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/p1_repro_composite_key",
+		description: "codex round 1, P1, EXECUTED against this gate: a struct wrapping the family value used as a map key -- a NEW class, not a re-find",
+	},
 	{
 		name:        "R1_raw_string_literal_after_conversion",
 		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r1_raw_literal",
@@ -1313,7 +1440,7 @@ func TestFamilyTextGateCatchesHistoricalConstructions(t *testing.T) {
 			}
 			pkgs := familyGateLoadPackages(t, root, patterns...)
 			// Only the contracts/v1 purpose file, not the full
-			// familyGateSanctionedFiles: the other three sanctioned files
+			// familyGateSanctionedSymbols: the other three sanctioned files
 			// live in internal/contextfabric, which these standalone
 			// fixtures do not import and this test does not load (paying
 			// the full production-roots load cost per fixture would not
@@ -1323,7 +1450,7 @@ func TestFamilyTextGateCatchesHistoricalConstructions(t *testing.T) {
 			// discriminating constant's own declaration in
 			// context_fabric_answer_plan.go would itself read as an
 			// "unsanctioned reference".
-			facts := familyGateResolveFacts(t, pkgs, familyGateContractsPurposeFile)
+			facts := familyGateResolveFacts(t, pkgs, familyGateContractsPurposeSymbols)
 			violations := familyGateRun(t, pkgs, facts)
 			if len(violations) == 0 {
 				t.Fatalf("RED-FIRST FAILURE: fixture %s (%s) produced ZERO violations -- the gate does not catch this historical construction", fx.name, fx.description)
