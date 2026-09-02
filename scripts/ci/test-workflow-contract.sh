@@ -322,7 +322,14 @@ check_pin_binds_checkout_ref() {
     printf 'no checkout step for full-chaos/dev-health-ops found in %s\n' "$file" >&2
     return 1
   fi
+  # SC2016 is exactly what we want here: `${{ ... }}` is a GitHub Actions
+  # expression that must be matched LITERALLY in the workflow text. Expanding
+  # it in the shell would compare against an empty string and the check would
+  # pass on any workflow at all -- the same "guard present but property not
+  # held" failure this function exists to catch.
+  # shellcheck disable=SC2016
   if ! printf '%s' "$block" | grep -qF 'ref: ${{ steps.ops-pin.outputs.sha }}'; then
+    # shellcheck disable=SC2016
     printf 'the ops-contract checkout does not use the validated pin (expected ref: ${{ steps.ops-pin.outputs.sha }}) -- the full-SHA check would pass while CI followed a floating ref\n' >&2
     return 1
   fi
