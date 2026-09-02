@@ -47,35 +47,108 @@ import (
 // is a snake_case phrase that satisfies this regex perfectly. A reviewer
 // constructed a `narrower_hint` field carrying exactly that and this test
 // passed. The regex is retained as a cheap first filter, but the assertion
-// that actually holds the line is `allowedDetailKeys` below -- a CLOSED key
-// set. Shape checks can be satisfied by a determined author; an allowlist of
-// keys cannot be satisfied by adding a key.
+// that actually holds the line is `detailFieldOracles` below -- a per-field
+// type and value domain. Shape checks can be satisfied by a determined author,
+// and so can a key allowlist (round 4 did exactly that); a domain cannot.
 var closedToken = regexp.MustCompile(`^[a-z0-9_]+$`)
 
-// allowedDetailKeys is the COMPLETE set of keys the 413 details object may
-// carry. Anything else fails, whatever it contains.
+// detailFieldOracles is the COMPLETE contract for the 413 details object: for
+// every permitted key, what its value must BE. Not a set of allowed names -- a
+// per-field type and value domain.
 //
-// This is the fix for codex round 1's P1. The earlier version of this test
-// checked the SHAPE of values and never asked which keys existed, so a new
-// key smuggling family-keyed advice through was invisible to it. A budget
-// refusal's details is a small fixed object -- there is no reason for it to
-// be open, and closing it turns "someone added a field" from something a
-// reviewer might notice into something CI reports.
-var allowedDetailKeys = map[string]bool{
-	"overrun":               true,
-	"measured_items":        true,
-	"measured_bytes":        true,
-	"max_items":             true,
-	"max_serialized_bytes":  true,
-	"question_family":       true,
-	"retry_attempted":       true,
-	"narrower_continuation": true,
+// WHY IT IS NOT A KEY SET ANY MORE (codex round 4, P1, EXECUTED, reproduced
+// here before fixing). The previous version closed the key NAMES and left the
+// value domain open, so a family-keyed phrase could ride inside an
+// already-allowed key with the wrong type:
+//
+//	details["retry_attempted"] = "ask_about_one_subject"   // should be a bool
+//
+// `assertNoProse` accepted it because it is token-shaped, and the membership
+// checks only covered `overrun`, `question_family` and the continuation axis.
+// The served body carried `"retry_attempted":"ask_about_one_subject"` and all
+// three tests in this package passed. That falsified this file's own claim to
+// carry acceptance criterion 1.
+//
+// This is the FOURTH time the same mistake has been made in this change, and
+// naming the pattern is more useful than the fix: every previous version was
+// an allowlist of the things the author had thought of -- constant names, then
+// type names, then key names -- each defended as a closed check. A key set is
+// only closed over keys. The domain is what a value can be, and it has to be
+// stated per field or it is open by default.
+//
+// So each entry below is a PREDICATE, and the test requires every permitted
+// key to have one. There is nowhere left for a string to hide: a field is
+// either a bool, a number, a member of a named vocabulary, or a structurally
+// checked object.
+var detailFieldOracles = map[string]func(*testing.T, any, contractsv1.ContextFabricQuestionFamily){
+	"overrun": func(t *testing.T, value any, _ contractsv1.ContextFabricQuestionFamily) {
+		text, ok := value.(string)
+		if !ok {
+			t.Errorf("overrun = %T, want string", value)
+			return
+		}
+		if !contractsv1.ValidContextFabricBudgetOverrun(contractsv1.ContextFabricBudgetOverrun(text)) {
+			t.Errorf("overrun = %q, not a member of the closed overrun vocabulary", text)
+		}
+	},
+	"question_family": func(t *testing.T, value any, family contractsv1.ContextFabricQuestionFamily) {
+		text, ok := value.(string)
+		if !ok {
+			t.Errorf("question_family = %T, want string", value)
+			return
+		}
+		if text != string(family) {
+			t.Errorf("question_family = %q, want %q", text, family)
+		}
+	},
+	// Booleans and numbers are the fields the round-4 construction hid in.
+	// JSON decodes every number to float64, so the assertion is on the Go
+	// type after decoding, not on the wire spelling.
+	"retry_attempted":      requireBool("retry_attempted"),
+	"measured_items":       requireNumber("measured_items"),
+	"measured_bytes":       requireNumber("measured_bytes"),
+	"max_items":            requireNumber("max_items"),
+	"max_serialized_bytes": requireNumber("max_serialized_bytes"),
+	"narrower_continuation": func(t *testing.T, value any, family contractsv1.ContextFabricQuestionFamily) {
+		fields, ok := value.(map[string]any)
+		if !ok {
+			t.Errorf("narrower_continuation = %T, want an object", value)
+			return
+		}
+		for key := range fields {
+			if key != "family" && key != "axis" {
+				t.Errorf("narrower_continuation carries an unexpected key %q = %v", key, fields[key])
+			}
+		}
+		if got, _ := fields["family"].(string); got != string(family) {
+			t.Errorf("continuation family = %v, want %q", fields["family"], family)
+		}
+		axis, ok := fields["axis"].(string)
+		if !ok {
+			t.Errorf("continuation axis = %T, want string", fields["axis"])
+			return
+		}
+		if !contextfabric.ValidNarrowingContinuationAxis(contextfabric.NarrowingContinuationAxis(axis)) {
+			t.Errorf("continuation axis = %q, not a member of the closed vocabulary", axis)
+		}
+	},
 }
 
-// allowedContinuationKeys is the same discipline one level down. The
-// continuation object is where a "hint" or "suggestion" string would most
-// naturally be added later.
-var allowedContinuationKeys = map[string]bool{"family": true, "axis": true}
+func requireBool(name string) func(*testing.T, any, contractsv1.ContextFabricQuestionFamily) {
+	return func(t *testing.T, value any, _ contractsv1.ContextFabricQuestionFamily) {
+		if _, ok := value.(bool); !ok {
+			t.Errorf("%s = %#v (%T), want a bool. A non-bool here is how round 4 smuggled family-keyed text through an allowed key", name, value, value)
+		}
+	}
+}
+
+func requireNumber(name string) func(*testing.T, any, contractsv1.ContextFabricQuestionFamily) {
+	return func(t *testing.T, value any, _ contractsv1.ContextFabricQuestionFamily) {
+		if _, ok := value.(float64); !ok {
+			t.Errorf("%s = %#v (%T), want a number", name, value, value)
+		}
+	}
+}
 
 func TestChaos4735BudgetRefusal413CarriesNoServerAuthoredProse(t *testing.T) {
 	t.Parallel()
@@ -124,15 +197,24 @@ func TestChaos4735BudgetRefusal413CarriesNoServerAuthoredProse(t *testing.T) {
 				t.Errorf("413 details still carry narrower_question: %v", details["narrower_question"])
 			}
 
-			// 1b. The key set is CLOSED. Codex round 1 defeated the
-			//     shape-only version of this test with a `narrower_hint`
-			//     key whose snake_case value passed every value check. A
-			//     value assertion cannot catch a new field; a key
-			//     allowlist catches it by construction.
-			for key := range details {
-				if !allowedDetailKeys[key] {
-					t.Errorf("413 details carry an unexpected key %q = %v. The refusal's details is a closed object; a new key needs a ruling, not a line in the allowlist -- and family-keyed advice is exactly what arrives this way", key, details[key])
+			// 1b. Every key is permitted AND its value is in domain.
+			//     Round 1 defeated a value-only check with a new key;
+			//     round 4 defeated a key-only check with a phrase in an
+			//     allowed key. Both halves are required, and the domain
+			//     half is per-field.
+			for key, value := range details {
+				oracle, permitted := detailFieldOracles[key]
+				if !permitted {
+					t.Errorf("413 details carry an unexpected key %q = %v. The refusal's details is a closed object; a new key needs a ruling, not a line in the allowlist -- and family-keyed advice is exactly what arrives this way", key, value)
+					continue
 				}
+				oracle(t, value, family)
+			}
+			// Non-vacuity: an oracle that never runs proves nothing. Every
+			// field the route actually emits must have been checked, and
+			// the object must not have silently shrunk to nothing.
+			if len(details) < 7 {
+				t.Errorf("413 details carry only %d fields (%v); the refusal is expected to be self-diagnosing, and a shrunken body would make these oracles vacuous", len(details), details)
 			}
 
 			// 2. Nothing in details is prose. This is the assertion that
@@ -170,22 +252,15 @@ func TestChaos4735BudgetRefusal413CarriesNoServerAuthoredProse(t *testing.T) {
 			if !present {
 				t.Fatalf("family %q declares axis %q but the body carries no continuation", family, definition.NarrowerContinuationAxis)
 			}
+			// Shape, keys, types and vocabulary membership are already
+			// covered by the continuation oracle above. What remains is the
+			// claim only this test can make: the served axis is the one the
+			// REGISTRY declares, not one re-derived at the route.
 			fields, ok := continuation.(map[string]any)
 			if !ok {
 				t.Fatalf("narrower_continuation = %T, want an object", continuation)
 			}
-			for key := range fields {
-				if !allowedContinuationKeys[key] {
-					t.Errorf("narrower_continuation carries an unexpected key %q = %v", key, fields[key])
-				}
-			}
-			if got := fields["family"]; got != string(family) {
-				t.Errorf("continuation family = %v, want %q", got, family)
-			}
 			axis, _ := fields["axis"].(string)
-			if !contextfabric.ValidNarrowingContinuationAxis(contextfabric.NarrowingContinuationAxis(axis)) {
-				t.Errorf("continuation axis = %q, not a member of the closed vocabulary", axis)
-			}
 			if axis != string(definition.NarrowerContinuationAxis) {
 				t.Errorf("continuation axis = %q, want the registry's declared %q -- the route must SERVE the declaration, not re-derive it", axis, definition.NarrowerContinuationAxis)
 			}
