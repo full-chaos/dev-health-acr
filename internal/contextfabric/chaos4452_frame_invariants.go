@@ -221,7 +221,14 @@ type FrameInvariantSpec struct {
 	// the derived-value invariants (I10, I16, I18), which are outcomes of
 	// the frame rather than fields of it, and every phase-B and phase-C
 	// invariant, which §13.6 rule 6 says repair is never invoked for.
-	Constrains []FrameField
+	//
+	// PATHS, not field tokens. A token names a level; a path names a
+	// place in the tree, and prefix semantics let an invariant constrain
+	// a LIST (`...operands`) distinctly from its ELEMENTS
+	// (`...operands[]`). That distinction is the one four review rounds
+	// kept finding missing, and as a path it is a property of the grammar
+	// rather than a rule anyone has to remember.
+	Constrains []FramePath
 }
 
 // frameInvariantSpecs is the invariant table IN EVALUATION ORDER.
@@ -236,40 +243,44 @@ type FrameInvariantSpec struct {
 var frameInvariantSpecs = []FrameInvariantSpec{
 	{ID: FrameInvariantI1, Phase: FrameValidationPhaseA1,
 		Reads:      []FrameField{FrameFieldSubjectExpressionKind, FrameFieldSubjectTerms, FrameFieldAnchorTerms, FrameFieldOperands, FrameFieldMemberKind, FrameFieldGroupKind},
-		Constrains: []FrameField{FrameFieldSubjectExpressionKind}},
+		Constrains: []FramePath{"subject_expression.kind"}},
 	{ID: FrameInvariantI17, Phase: FrameValidationPhaseA1,
 		Reads:      []FrameField{FrameFieldGoals, FrameFieldSubjectExpressionKind, FrameFieldMemberKind},
-		Constrains: []FrameField{FrameFieldMemberKind}},
+		Constrains: []FramePath{"subject_expression.org.member_kind"}},
 	{ID: FrameInvariantI2, Phase: FrameValidationPhaseA1,
-		Reads:      []FrameField{FrameFieldOperands},
-		Constrains: []FrameField{FrameFieldOperands}},
+		Reads: []FrameField{FrameFieldOperands},
+		// The LIST, with no `[]` marker: I2's condition is a COUNT, so it
+		// may change how many operands there are and never what one IS.
+		Constrains: []FramePath{"subject_expression.explicit.operands"}},
 	{ID: FrameInvariantI3, Phase: FrameValidationPhaseA1,
 		Reads:      []FrameField{FrameFieldSubjectTerms},
-		Constrains: []FrameField{FrameFieldSubjectTerms}},
+		Constrains: []FramePath{"subject_expression.named.terms"}},
 	{ID: FrameInvariantI19, Phase: FrameValidationPhaseA1,
-		Reads:      []FrameField{FrameFieldOperands},
-		Constrains: []FrameField{FrameFieldOperands}},
+		Reads: []FrameField{FrameFieldOperands},
+		// The ELEMENTS, with the marker: a malformed operand is exactly
+		// what I19 exists to have corrected.
+		Constrains: []FramePath{"subject_expression.explicit.operands[]"}},
 	{ID: FrameInvariantI4, Phase: FrameValidationPhaseA1,
 		Reads:      []FrameField{FrameFieldMemberKind},
-		Constrains: []FrameField{FrameFieldMemberKind}},
+		Constrains: []FramePath{"subject_expression.discovered.member_kind"}},
 	{ID: FrameInvariantI5, Phase: FrameValidationPhaseA1,
 		Reads:      []FrameField{FrameFieldAnchorTerms, FrameFieldMemberKind},
-		Constrains: []FrameField{FrameFieldAnchorTerms, FrameFieldMemberKind}},
+		Constrains: []FramePath{"subject_expression.scoped.anchor_terms", "subject_expression.scoped.member_kind"}},
 	{ID: FrameInvariantI6, Phase: FrameValidationPhaseA1,
 		Reads:      []FrameField{FrameFieldGroupKind, FrameFieldMemberKind},
-		Constrains: []FrameField{FrameFieldGroupKind, FrameFieldMemberKind}},
+		Constrains: []FramePath{"subject_expression.grouped.group_kind", "subject_expression.grouped.member_kind"}},
 	{ID: FrameInvariantI7, Phase: FrameValidationPhaseA1,
 		Reads:      []FrameField{FrameFieldGoals, FrameFieldSubjectExpressionKind},
-		Constrains: []FrameField{FrameFieldGoals, FrameFieldSubjectExpressionKind}},
+		Constrains: []FramePath{"goals", "subject_expression.kind"}},
 	{ID: FrameInvariantI8, Phase: FrameValidationPhaseA1,
 		Reads:      []FrameField{FrameFieldGoals, FrameFieldTemporal},
-		Constrains: []FrameField{FrameFieldGoals, FrameFieldTemporal}},
+		Constrains: []FramePath{"goals", "temporal"}},
 	{ID: FrameInvariantI9, Phase: FrameValidationPhaseA1,
 		Reads:      []FrameField{FrameFieldGoals, FrameFieldSubjectExpressionKind},
-		Constrains: []FrameField{FrameFieldGoals, FrameFieldSubjectExpressionKind}},
+		Constrains: []FramePath{"goals", "subject_expression.kind"}},
 	{ID: FrameInvariantI15, Phase: FrameValidationPhaseA1,
 		Reads:      []FrameField{FrameFieldGoals},
-		Constrains: []FrameField{FrameFieldGoals}},
+		Constrains: []FramePath{"goals"}},
 
 	// The A2 invariants read DERIVED values and constrain NOTHING: an
 	// obligation set is an outcome of the frame, not a field of it, so
@@ -280,7 +291,7 @@ var frameInvariantSpecs = []FrameInvariantSpec{
 		Reads: []FrameField{FrameFieldObligations}},
 	{ID: FrameInvariantI14, Phase: FrameValidationPhaseA2,
 		Reads:      []FrameField{FrameFieldObligations, FrameFieldEmphasis, FrameFieldGoals},
-		Constrains: []FrameField{FrameFieldGoals}},
+		Constrains: []FramePath{"goals"}},
 	{ID: FrameInvariantI18, Phase: FrameValidationPhaseA2,
 		Reads: []FrameField{FrameFieldSubjectExpressionKind, FrameFieldEmittedShape, FrameFieldDerivedShape}},
 	{ID: FrameInvariantI16, Phase: FrameValidationPhaseA2,
@@ -298,11 +309,12 @@ var frameInvariantSpecs = []FrameInvariantSpec{
 		Reads: []FrameField{FrameFieldGroupKind, FrameFieldMemberKind, FrameFieldGroupMembership}},
 }
 
-// FrameInvariantConstrains reports whether an invariant's condition
-// constrains field.
-func FrameInvariantConstrains(spec FrameInvariantSpec, field FrameField) bool {
-	for _, member := range spec.Constrains {
-		if member == field {
+// FrameInvariantConstrainsPath reports whether an invariant's condition
+// permits a repair to change path, using the path grammar's prefix
+// semantics.
+func FrameInvariantConstrainsPath(spec FrameInvariantSpec, path FramePath) bool {
+	for _, constrained := range spec.Constrains {
+		if PathConstrainedBy(constrained, path) {
 			return true
 		}
 	}

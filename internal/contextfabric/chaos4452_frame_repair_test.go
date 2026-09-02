@@ -812,9 +812,16 @@ func TestGoalsAreCanonicalizedIntoASet(t *testing.T) {
 	}
 }
 
-// TestRoundThreeShapeSweep is the SHAPE SWEEP the review skill's standing
-// remedy requires after a re-find, executed as a test rather than written
-// as a table nobody runs.
+// TestRoundThreeShapeSweep is a table of concrete REPAIR SCENARIOS, kept
+// as regression cases for the specific defects rounds 1-4 found.
+//
+// IT IS NOT THE SWEEP ANY MORE. The sweep is generated from the derived
+// path set in chaos4452_frame_sweep_test.go, because a hand-listed axis
+// table is exactly what let four rounds find one defect at four depths --
+// this table's own I2 rows exercised term replacement and addition and
+// never a nested discriminator change, which is how round 4 got in. These
+// rows survive as worked examples with their negative controls; the
+// coverage claim belongs to the generated sweep.
 //
 // THE CLASS, stated once: "the repair bound permits rewriting subject
 // payload the failed invariant does not actually constrain." It was found
@@ -928,24 +935,27 @@ func TestRoundThreeShapeSweep(t *testing.T) {
 	}
 }
 
-// TestEveryInvariantConstrainsOnlyWhatItReads is the structural guard on
-// the split itself.
+// TestEveryInvariantConstrainsOnlyDeclaredPaths is the structural guard on
+// the Reads/Constrains split, now stated over the DERIVED path tree.
 //
-// An invariant cannot constrain something it never looked at, so
-// Constrains must be a SUBSET of Reads. And the derived-value and
+// Every constrained path must be a real path of the frame's type tree — a
+// typo, or a path left behind by a renamed field, would silently constrain
+// nothing and quietly widen the bound. And the derived-value and
 // resolution-phase invariants must constrain NOTHING: an obligation set is
 // an outcome of the frame rather than a field of it, and repair is never
-// invoked for a phase-B or phase-C failure at all. Asserting the empty list
-// makes that rule structural instead of a comment.
-func TestEveryInvariantConstrainsOnlyWhatItReads(t *testing.T) {
+// invoked for a phase-B or phase-C failure at all.
+func TestEveryInvariantConstrainsOnlyDeclaredPaths(t *testing.T) {
+	valid := map[FramePath]bool{}
+	for _, path := range FramePaths() {
+		valid[path] = true
+	}
 	for _, spec := range FrameInvariantSpecs() {
-		reads := map[FrameField]bool{}
-		for _, field := range spec.Reads {
-			reads[field] = true
-		}
-		for _, field := range spec.Constrains {
-			if !reads[field] {
-				t.Errorf("invariant %q constrains %q without reading it", spec.ID, field)
+		for _, path := range spec.Constrains {
+			if !valid[path] {
+				t.Errorf("invariant %q constrains %q, which is not a path of the frame type tree", spec.ID, path)
+			}
+			if derivedFramePath(path) {
+				t.Errorf("invariant %q constrains derived value %q", spec.ID, path)
 			}
 		}
 		switch spec.Phase {
@@ -954,12 +964,11 @@ func TestEveryInvariantConstrainsOnlyWhatItReads(t *testing.T) {
 				t.Errorf("phase-%s invariant %q constrains %v -- repair is never invoked for a resolution or evidence failure", spec.Phase, spec.ID, spec.Constrains)
 			}
 		}
-		// No invariant may constrain a DERIVED value: a repair writes
-		// fields, and a derived value is not one.
-		for _, field := range spec.Constrains {
-			if derivedFrameFields[field] {
-				t.Errorf("invariant %q constrains derived value %q", spec.ID, field)
-			}
+	}
+	for _, id := range []FrameInvariant{FrameInvariantI10, FrameInvariantI16, FrameInvariantI18} {
+		spec, _ := frameInvariantSpec(id)
+		if len(spec.Constrains) != 0 {
+			t.Errorf("derived-value invariant %q constrains %v -- there is no field for a repair to write", id, spec.Constrains)
 		}
 	}
 }

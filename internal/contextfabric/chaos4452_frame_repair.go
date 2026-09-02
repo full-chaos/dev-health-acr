@@ -1,9 +1,9 @@
 package contextfabric
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"time"
 
@@ -209,44 +209,48 @@ func invariantReads(id FrameInvariant) map[FrameField]bool {
 // So every axis is compared, and an axis the invariant does not name may
 // not move at all.
 func CheckFrameRepairBound(proposed, repaired QuestionFrame, failure FrameValidationFailure) FrameRepairBoundViolation {
-	constrains := invariantConstrains(failure.Invariant)
+	spec, ok := frameInvariantSpec(failure.Invariant)
+	if !ok {
+		// An unknown invariant constrains nothing, so every change is out
+		// of bounds. Refusing is the safe direction and keeps the bound
+		// total over a vocabulary that may grow.
+		spec = FrameInvariantSpec{}
+	}
 
-	// KIND. Only an invariant whose CONDITION is about the discriminator
-	// licenses moving it -- I1 (the discriminator is itself inconsistent),
-	// I7 and I9 (whose conditions are literally about which Kind a goal
-	// requires).
-	kindMoved := repaired.SubjectExpression.Kind != proposed.SubjectExpression.Kind
-	if kindMoved && !constrains[FrameFieldSubjectExpressionKind] {
+	// THE SPECIFIC RULES RUN FIRST, and the ordering is a diagnosis
+	// decision rather than a logical one: every rule below is a special
+	// case of "a repair may change only what the invariant constrains",
+	// but each names a sharper failure. Reporting `unnamed_field_changed`
+	// for a dropped subject pointer would be true and useless.
+
+	changed := changedFramePaths(proposed, repaired)
+	kindMoved := changed["subject_expression.kind"]
+	kindConstrained := FrameInvariantConstrainsPath(spec, "subject_expression.kind")
+
+	// RULE 0 -- an unlicensed discriminator move is reported FIRST, ahead
+	// of its own consequences. Re-typing the subject necessarily disturbs
+	// pointers and payload, so without this the operator would be told
+	// "a pointer appeared" about a repair that actually changed the
+	// question's whole topology.
+	if kindMoved && !kindConstrained {
 		return FrameRepairBoundKindChanged
 	}
 
-	// RETRIEVAL POINTERS -- terms and anchor terms, wherever they live.
+	// RULE A -- RETRIEVAL POINTERS: never removed; added only when the
+	// failed invariant constrains a pointer-carrying path.
 	//
-	// ONE RULE, and it replaces three per-instance patches that each
-	// closed one hole and left the next:
-	//
-	//   a pointer may NEVER be removed, and may be ADDED only when the
-	//   failed invariant constrains a field that carries pointers.
-	//
-	// Every instance review found falls out of it. Introducing
-	// "platform team" on an I9 failure: I9 constrains neither terms nor
-	// anchor terms, so the addition is refused. DELETING every pointer on
-	// an I9 failure and returning a subject-less grouped set: removal is
-	// refused outright. Replacing `team a` with `platform` on an I2
-	// failure: I2 does constrain the operands, so the ADDITION is legal --
-	// and the REMOVAL of `team a` is not, which is what makes a
-	// "replacement" refusable while a genuine second operand stays
-	// reachable. The legitimate I9 redistribution (a named subject's term
-	// becoming a scoped set's anchor) moves a pointer between fields
-	// without adding or removing one, so it passes untouched.
-	proposedPointers := retrievalPointers(proposed.SubjectExpression)
-	repairedPointers := retrievalPointers(repaired.SubjectExpression)
+	// Global over every pointer path in the tree rather than per path,
+	// because a legitimate Kind move REDISTRIBUTES pointers between paths
+	// (a named subject's terms become a scoped set's anchor) without
+	// adding or removing one.
+	proposedPointers := framePointerSet(proposed)
+	repairedPointers := framePointerSet(repaired)
 	for pointer := range proposedPointers {
 		if !repairedPointers[pointer] {
 			return FrameRepairBoundSubjectPointerDropped
 		}
 	}
-	if !constrains[FrameFieldSubjectTerms] && !constrains[FrameFieldAnchorTerms] && !constrains[FrameFieldOperands] {
+	if !constrainsAnyPointerPath(spec) {
 		for pointer := range repairedPointers {
 			if !proposedPointers[pointer] {
 				return FrameRepairBoundSubjectRetargeted
@@ -254,217 +258,254 @@ func CheckFrameRepairBound(proposed, repaired QuestionFrame, failure FrameValida
 		}
 	}
 
-	// KIND-VALUED VARIANT FIELDS. Each needs its own permission, EXCEPT on
-	// a legitimate Kind move -- the variant being moved TO demands its own
-	// member or group kind, and the old variant had nowhere to carry one.
-	// That exception is scoped to the kind-valued fields alone; the
-	// pointer rule above still applies across the move, which is what
-	// stops "the Kind changed" from excusing the whole payload.
-	if !kindMoved {
-		if memberKindOf(repaired.SubjectExpression) != memberKindOf(proposed.SubjectExpression) && !constrains[FrameFieldMemberKind] {
-			return FrameRepairBoundUnnamedFieldChanged
-		}
-		if groupKindOf(repaired.SubjectExpression) != groupKindOf(proposed.SubjectExpression) && !constrains[FrameFieldGroupKind] {
-			return FrameRepairBoundUnnamedFieldChanged
-		}
-		if expectedKindOf(repaired.SubjectExpression) != expectedKindOf(proposed.SubjectExpression) && !constrains[FrameFieldExpectedKind] {
-			return FrameRepairBoundUnnamedFieldChanged
-		}
-		if operandCount(repaired.SubjectExpression) != operandCount(proposed.SubjectExpression) && !constrains[FrameFieldOperands] {
-			return FrameRepairBoundUnnamedFieldChanged
-		}
-	}
-
-	// OPERANDS, one level DOWN from the outer variant -- and the level
-	// round 4 found the bound was still too coarse at.
+	// RULE B -- any SUB-STRUCTURE that was already well-formed under its
+	// own invariant is FROZEN.
 	//
-	// `FrameFieldOperands` was the same blunt token the outer
-	// `subject_expression_variant` had been: I2's condition is
-	// `len(Operands) >= 2`, a COUNT, but the token also covered every
-	// operand's discriminator, member kind and expected kind. Review's
-	// executed repro changed an EXISTING, well-formed operand from
-	// `named_subject("team a")` into `children_of_scope(anchor "team a",
-	// member project)` -- the term string preserved, so the pointer rule
-	// let it through, while the question turned from "how is team A doing"
-	// into "how are team A's projects doing".
-	//
-	// The rule, and it is the same principle the whole bound rests on
-	// applied one level down: A REPAIR MAY CORRECT AN OPERAND THE SERVER
-	// PROVED INCONSISTENT, AND MAY ADD NEW ONES; AN OPERAND THAT WAS
-	// ALREADY WELL-FORMED IS FROZEN. I19's own predicate decides
-	// "well-formed", shared rather than restated. Both legitimate repairs
-	// stay reachable: I2's adds an operand and leaves the existing one
-	// alone, and I19's corrects precisely the operand that was malformed.
-	if frozen, ok := frozenOperandViolation(proposed.SubjectExpression, repaired.SubjectExpression); !ok {
-		return frozen
+	// Quantified over every slice-of-struct path the reflection finds, so
+	// a second nested structure is covered without being noticed. An
+	// unregistered structure defaults to frozen: the safe direction, and
+	// it forces a decision about what "well-formed" means there rather
+	// than letting the new level inherit whichever hand-written rule sat
+	// nearest.
+	if violation, clean := frozenStructureViolation(proposed, repaired, spec); !clean {
+		return violation
 	}
 
-	// GOALS.
-	proposedGoals := goalSet(proposed.Goals)
-	repairedGoals := goalSet(repaired.Goals)
-	named := invariantNamedGoals[failure.Invariant]
-	for goal := range repairedGoals {
-		if !proposedGoals[goal] && !constrains[FrameFieldGoals] {
-			return FrameRepairBoundGoalAdded
-		}
-	}
-	for goal := range proposedGoals {
-		if repairedGoals[goal] {
-			continue
-		}
-		// A removal needs BOTH: the invariant constrains the goal axis,
-		// and it names this particular goal.
-		if !constrains[FrameFieldGoals] || !named[goal] {
-			return FrameRepairBoundGoalRemoved
-		}
-	}
-
-	// EMPHASIS and DIMENSIONS. Narrowing is refused UNCONDITIONALLY --
-	// there is no invariant whose repair requires discarding something the
-	// user asked for -- and a widening still needs the axis constrained.
+	// RULE C -- NARROWING is refused unconditionally on the set-valued
+	// axes, even where the invariant constrains them: no invariant's
+	// repair requires discarding something the user asked for, and
+	// narrowing is the failure direction the whole bound exists to
+	// prevent. Goal removal is the one exception, and it is narrower
+	// still: permitted only when the invariant NAMES that goal.
 	if narrowed(emphasisSet(proposed.Emphasis), emphasisSet(repaired.Emphasis)) {
 		return FrameRepairBoundEmphasisNarrowed
 	}
 	if narrowed(dimensionSet(proposed.Dimensions), dimensionSet(repaired.Dimensions)) {
 		return FrameRepairBoundDimensionsNarrowed
 	}
-	if !constrains[FrameFieldEmphasis] && len(emphasisSet(repaired.Emphasis)) != len(emphasisSet(proposed.Emphasis)) {
-		return FrameRepairBoundUnnamedFieldChanged
-	}
-	if !constrains[FrameFieldDimensions] && len(dimensionSet(repaired.Dimensions)) != len(dimensionSet(proposed.Dimensions)) {
-		return FrameRepairBoundUnnamedFieldChanged
+	named := invariantNamedGoals[failure.Invariant]
+	for goal := range goalSet(proposed.Goals) {
+		if goalSet(repaired.Goals)[goal] {
+			continue
+		}
+		if !named[goal] {
+			return FrameRepairBoundGoalRemoved
+		}
 	}
 
-	// TEMPORAL.
-	if repaired.Temporal != proposed.Temporal && !constrains[FrameFieldTemporal] {
-		return FrameRepairBoundUnnamedFieldChanged
+	// RULE D -- the GENERAL rule, and the one the others are special
+	// cases of: a repair may change ONLY paths the failed invariant
+	// constrains.
+	//
+	// Stated ONCE, over the whole DERIVED path tree, which is the point.
+	// Four review rounds found the same defect at four depths because the
+	// rule was written per level and each level had to be hand-listed.
+	// Here depth is not an axis anyone enumerates: `changedFramePaths`
+	// walks the type tree by reflection, so a new field or a new level of
+	// nesting is covered the moment it exists.
+	for path := range changed {
+		if FrameInvariantConstrainsPath(spec, path) {
+			continue
+		}
+		if derivedFramePath(path) {
+			// Obligations and the version are SERVER-DERIVED; they are
+			// recomputed after every repair rather than carried from the
+			// candidate, so a difference here is the server's own work,
+			// not the repairer's.
+			continue
+		}
+		// THE ONE EXCEPTION, and it is scoped to the variant subtree: a
+		// permitted discriminator move necessarily rewrites the variant it
+		// discriminates -- you cannot switch to `children_of_scope`
+		// without setting a scoped payload the old variant had nowhere to
+		// carry. Without this, every legal I7/I9 repair would be
+		// unreachable, which is the too-tight failure mode round 2
+		// rejected. Rules A and B still applied ACROSS the move above,
+		// which is what stops "the Kind changed" from excusing the payload.
+		if kindMoved && kindConstrained && strings.HasPrefix(string(path), "subject_expression.") {
+			continue
+		}
+		return violationForPath(path)
 	}
 
 	return FrameRepairBoundNone
 }
 
-// frozenOperandViolation reports whether every WELL-FORMED operand of the
-// proposal survives structurally in the repair. It returns ok=false plus
-// the violation when one does not.
-//
-// Structural comparison is by the operand's own JSON, for the reason
-// sameSubjectExpression uses it: a hand-written per-variant comparison
-// grows a hole the day an operand gains a field, which is the drift class
-// law L6 bans and precisely how this bound went wrong at the outer level.
-func frozenOperandViolation(proposed, repaired SubjectExpression) (FrameRepairBoundViolation, bool) {
-	if proposed.Explicit == nil {
-		return FrameRepairBoundNone, true
+// violationForPath maps a changed-but-unconstrained path onto the closed
+// violation vocabulary, so telemetry keeps naming WHICH kind of overreach
+// happened rather than collapsing to one code.
+func violationForPath(path FramePath) FrameRepairBoundViolation {
+	switch {
+	case path == "subject_expression.kind":
+		return FrameRepairBoundKindChanged
+	case path == "goals":
+		return FrameRepairBoundGoalAdded
+	case strings.HasSuffix(string(path), framePathElementMarker) ||
+		strings.Contains(string(path), framePathElementMarker+"."):
+		return FrameRepairBoundOperandRewritten
+	default:
+		return FrameRepairBoundUnnamedFieldChanged
 	}
-	survivors := map[string]bool{}
-	if repaired.Explicit != nil {
-		for _, operand := range repaired.Explicit.Operands {
-			if encoded, err := json.Marshal(operand); err == nil {
-				survivors[string(encoded)] = true
+}
+
+// derivedFramePath reports whether a path holds a SERVER-DERIVED value,
+// which the bound must ignore: the server recomputes obligations and
+// stamps the version after every repair, so a difference there is its own
+// work rather than the repairer's.
+func derivedFramePath(path FramePath) bool {
+	switch path {
+	case "obligations", "widened_obligations", "version":
+		return true
+	}
+	return false
+}
+
+// constrainsAnyPointerPath reports whether the invariant constrains any
+// path that carries retrieval pointers.
+// constrainsAnyPointerPath reports whether the invariant licenses NEW
+// pointers appearing.
+//
+// It asks CONTAINMENT rather than constraint, which is the one place the
+// two relations must differ: an invariant that constrains the operand LIST
+// may add an operand, and an added operand arrives carrying its own terms.
+// Asking `PathConstrainedBy` here would refuse every legitimate
+// add-an-operand repair, which is the too-tight failure mode this bound
+// has already hit once. Editing an EXISTING element is still refused --
+// by the frozen-structure rule, which is a different question.
+func constrainsAnyPointerPath(spec FrameInvariantSpec) bool {
+	for path := range pointerCarryingPaths() {
+		for _, constrained := range spec.Constrains {
+			if PathContains(constrained, path) {
+				return true
 			}
 		}
 	}
-	for _, operand := range proposed.Explicit.Operands {
-		if !subjectOperandWellFormed(operand) {
-			// The malformed operand is exactly what a repair is for.
+	return false
+}
+
+// framePointerSet collects every retrieval pointer the frame carries, at
+// any depth, derived from the pointer-carrying paths rather than from a
+// per-variant walk.
+func framePointerSet(frame QuestionFrame) map[string]bool {
+	out := map[string]bool{}
+	for _, term := range frame.SubjectExpression.SubjectTerms() {
+		if trimmed := strings.TrimSpace(term); trimmed != "" {
+			out[trimmed] = true
+		}
+	}
+	if frame.SubjectExpression.Scoped != nil {
+		for _, term := range frame.SubjectExpression.Scoped.AnchorTerms {
+			if trimmed := strings.TrimSpace(term); trimmed != "" {
+				out[trimmed] = true
+			}
+		}
+	}
+	if frame.SubjectExpression.Explicit != nil {
+		for _, operand := range frame.SubjectExpression.Explicit.Operands {
+			for _, term := range operand.Terms() {
+				if trimmed := strings.TrimSpace(term); trimmed != "" {
+					out[trimmed] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
+// frozenStructureViolation applies rule 3 over every slice-of-struct path
+// the type tree declares.
+func frozenStructureViolation(proposed, repaired QuestionFrame, spec FrameInvariantSpec) (FrameRepairBoundViolation, bool) {
+	for _, path := range FrameStructurePaths() {
+		if FrameInvariantConstrainsPath(spec, path) {
+			// The invariant constrains the ELEMENTS themselves (I19), so
+			// correcting one is exactly what this repair is for.
 			continue
 		}
-		encoded, err := json.Marshal(operand)
-		if err != nil || !survivors[string(encoded)] {
-			return FrameRepairBoundOperandRewritten, false
+		predicate, registered := wellFormedPredicates[path]
+		before := structureElements(proposed, path)
+		after := structureElements(repaired, path)
+		survivors := map[string]bool{}
+		for _, encoded := range after {
+			survivors[encoded.key] = true
+		}
+		for _, element := range before {
+			// An element that was NOT well-formed is exactly what a
+			// repair is for. An UNREGISTERED structure is treated as
+			// always-well-formed, i.e. frozen -- the safe default.
+			if registered && !predicate(element.value) {
+				continue
+			}
+			if !survivors[element.key] {
+				return FrameRepairBoundOperandRewritten, false
+			}
 		}
 	}
 	return FrameRepairBoundNone, true
 }
 
-// memberKindOf, groupKindOf, expectedKindOf and operandCount read the
-// kind-valued parts of whichever variant is set, so the bound can compare
-// them without a switch per call site.
-func memberKindOf(e SubjectExpression) SubjectKind {
-	kind, _ := e.MemberKind()
-	return kind
+type structureElement struct {
+	key   string
+	value reflect.Value
 }
 
-func groupKindOf(e SubjectExpression) SubjectKind {
-	kind, _ := e.GroupKind()
-	return kind
-}
-
-func expectedKindOf(e SubjectExpression) SubjectKind {
-	if e.Named == nil || e.Named.ExpectedKind == nil {
-		return ""
+// structureElements returns the elements at a slice-of-struct path, each
+// with a canonical key for identity comparison.
+func structureElements(frame QuestionFrame, path FramePath) []structureElement {
+	segments := strings.Split(strings.TrimSuffix(string(path), framePathElementMarker), ".")
+	v := reflect.ValueOf(frame)
+	for _, segment := range segments {
+		v = fieldByJSONName(v, segment)
+		if !v.IsValid() {
+			return nil
+		}
 	}
-	return *e.Named.ExpectedKind
-}
-
-func operandCount(e SubjectExpression) int {
-	if e.Explicit == nil {
-		return 0
+	for v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return nil
+		}
+		v = v.Elem()
 	}
-	return len(e.Explicit.Operands)
-}
-
-// invariantConstrains returns the declared Constrains list for an
-// invariant, as a set. Sourced from the SAME spec table the validator and
-// law L4's property test use -- a second table here would be the parallel
-// authority law L6 bans, and it is how this bound went wrong three times.
-func invariantConstrains(id FrameInvariant) map[FrameField]bool {
-	for _, spec := range frameInvariantSpecs {
-		if spec.ID != id {
+	if v.Kind() != reflect.Slice {
+		return nil
+	}
+	out := make([]structureElement, 0, v.Len())
+	for i := 0; i < v.Len(); i++ {
+		element := v.Index(i)
+		encoded, err := json.Marshal(element.Interface())
+		if err != nil {
 			continue
 		}
-		out := make(map[FrameField]bool, len(spec.Constrains))
-		for _, field := range spec.Constrains {
-			out[field] = true
-		}
-		return out
+		out = append(out, structureElement{key: string(encoded), value: element})
 	}
-	return nil
+	return out
 }
 
-// retrievalPointers collects every free-string pointer an expression
-// carries -- a named subject's terms, a scoped set's anchor terms, and
-// both for every operand -- as a set, so a Kind move can be checked for
-// re-targeting without caring HOW the pointers were redistributed between
-// variants.
-func retrievalPointers(expression SubjectExpression) map[string]bool {
-	pointers := map[string]bool{}
-	add := func(terms []string) {
-		for _, term := range terms {
-			trimmed := strings.TrimSpace(term)
-			if trimmed != "" {
-				pointers[trimmed] = true
-			}
+func fieldByJSONName(v reflect.Value, name string) reflect.Value {
+	for v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return reflect.Value{}
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return reflect.Value{}
+	}
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		if jsonFieldName(t.Field(i)) == name {
+			return v.Field(i)
 		}
 	}
-	if expression.Named != nil {
-		add(expression.Named.Terms)
-	}
-	if expression.Scoped != nil {
-		add(expression.Scoped.AnchorTerms)
-	}
-	if expression.Explicit != nil {
-		for _, operand := range expression.Explicit.Operands {
-			if operand.Named != nil {
-				add(operand.Named.Terms)
-			}
-			if operand.Scoped != nil {
-				add(operand.Scoped.AnchorTerms)
-			}
-		}
-	}
-	return pointers
+	return reflect.Value{}
 }
 
-func sameSubjectExpression(a, b SubjectExpression) bool {
-	left, leftErr := json.Marshal(a)
-	right, rightErr := json.Marshal(b)
-	if leftErr != nil || rightErr != nil {
-		// A marshalling failure must not read as "unchanged". Refusing
-		// the repair is the conservative direction: the bound's job is to
-		// prove a candidate is inside it, not to assume it.
-		return false
+func frameInvariantSpec(id FrameInvariant) (FrameInvariantSpec, bool) {
+	for _, spec := range frameInvariantSpecs {
+		if spec.ID == id {
+			return spec, true
+		}
 	}
-	return bytes.Equal(left, right)
+	return FrameInvariantSpec{}, false
 }
 
 func goalSet(in []InvestigationGoal) map[InvestigationGoal]bool {
