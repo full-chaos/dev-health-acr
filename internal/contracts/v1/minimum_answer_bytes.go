@@ -49,4 +49,4 @@ package v1
 // by arithmetic, so raising it in place would have multiplied a
 // model-authorable output bound inside a change meant to tighten a budget. That
 // derivation is re-anchored to its own real-data measurement.
-const ContextFabricMinimumAnswerBytes = 2160
+const ContextFabricMinimumAnswerBytes = 2153

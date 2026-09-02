@@ -32,6 +32,12 @@ import (
 // run through Validate() before measurement: a measurement of a document the
 // contract would reject is not a bound on anything.
 
+// fixedMeasurementInstant pins every measured fixture's timestamp. A zero
+// fractional second is deliberate: it is the SHORTEST RFC3339Nano encoding, so
+// the measurement is the floor for the timestamp too rather than an accident of
+// when the test ran.
+var fixedMeasurementInstant = time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+
 // worstCaseRune is the single character that costs the most SERIALIZED BYTES
 // per rune of a length-bounded field.
 //
@@ -143,7 +149,7 @@ func maxEnvelopeResult(t *testing.T) ContextFabricInvestigationResult {
 	}
 	result.AnswerPlan = &plan
 
-	result.GeneratedAt = time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	result.GeneratedAt = fixedMeasurementInstant
 	return result
 }
 
@@ -207,14 +213,20 @@ func TestMeasureMinimumAnswerEnvelopeBytes(t *testing.T) {
 		t.Fatalf("measure: %v", err)
 	}
 
-	// Stability: the same document must measure the same twice, or a pin
-	// taken from it is noise.
-	again, err := MeasureContextFabricResponse(result)
+	// Stability, and this assertion is the one that was wrong. It used to
+	// measure the SAME value twice, which cannot detect a nondeterministic
+	// INPUT -- and there was one: the shared fixture's GeneratedAt was a live
+	// clock, and RFC3339Nano drops trailing zeros, so the document's size
+	// varied by up to 8 bytes between runs. It passed locally and failed in
+	// CI. A stability check must REBUILD the fixture, not re-measure one copy.
+	rebuilt, err := MeasureContextFabricResponse(maxEnvelopeResult(t))
 	if err != nil {
-		t.Fatalf("re-measure: %v", err)
+		t.Fatalf("re-measure a rebuilt fixture: %v", err)
 	}
-	if again.Bytes != measurement.Bytes {
-		t.Fatalf("measurement is not stable: %d then %d", measurement.Bytes, again.Bytes)
+	if rebuilt.Bytes != measurement.Bytes {
+		t.Fatalf("the fixture is not deterministic: two builds measured %d and %d bytes.\n"+
+			"A pin taken from it is a coin toss. Find the live input -- a clock, a map iteration, a random id -- and pin it.",
+			measurement.Bytes, rebuilt.Bytes)
 	}
 
 	t.Logf("MEASURED maximal envelope: %d bytes, %d budgeted items", measurement.Bytes, measurement.Items.Budgeted())
@@ -248,6 +260,13 @@ func TestMeasureMinimumAnswerEnvelopeBytes(t *testing.T) {
 	// irreducible envelope plus minimal content -- and the request-dependent part
 	// is a runtime check. This measures the static half.
 	irreducible := validContextFabricContractResult()
+	// GeneratedAt MUST be pinned. The shared fixture sets it to time.Now(),
+	// and Go marshals a timestamp as RFC3339Nano, which DROPS trailing zeros
+	// in the fractional second -- so the same document serializes to anywhere
+	// between 22 and 30 bytes depending on when it was built. An exact pin
+	// against a fixture with a live clock is not a measurement, it is a
+	// coin toss that happened to land on 2,160 locally and did not in CI.
+	irreducible.GeneratedAt = fixedMeasurementInstant
 	irreducible.Question = "q"
 	irreducible.Interpretation.SubjectTerms = []string{"s"}
 	irreducible.Interpretation.ComparisonTerms = nil
