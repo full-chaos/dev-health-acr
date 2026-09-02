@@ -306,13 +306,48 @@ func servedReusedPayloadNeverCarriesAFailedRef(t *testing.T, stored Investigatio
 		// negative. A negative one would cancel a real removal inside any
 		// aggregate and silently suppress the disclosure below.
 		for label, value := range map[string]int{
-			"Refs": counts.Refs, "DroppedCandidates": counts.DroppedCandidates,
+			"Refs": counts.Refs(), "DroppedCandidates": counts.DroppedCandidates,
 			"DroppedMembers": counts.DroppedMembers, "DroppedDrivers": counts.DroppedDrivers,
 			"DroppedFindings": counts.DroppedFindings, "DroppedPaths": counts.DroppedPaths,
 			"StrippedLabels": counts.StrippedLabels,
 		} {
 			if value < 0 {
 				t.Fatalf("trial %d: %s = %d; a removal count must never be negative", trial, label, value)
+			}
+		}
+		// The removal set must be EXACTLY the references that left the
+		// payload: everything the stored result carried and the served one
+		// does not.
+		//
+		// An earlier version of this assertion bounded the count by
+		// len(missing) and was wrong — this test caught it. A reference
+		// can leave the payload without ever being missing: when stripping
+		// empties an object the contract requires to carry evidence, the
+		// whole object is dropped, and the OTHER references it carried go
+		// with it. Those are real losses to disclose, so the honest bound
+		// is not "how many were unprovable" but "how many actually went
+		// away".
+		//
+		// Stated as set equality it catches both directions at once: a
+		// per-carrier tally over-reports, and a strip that forgets a site
+		// under-reports.
+		servedRefs := map[string]struct{}{}
+		for _, ref := range collectEvidenceRefs(resultEvidenceSurface(degraded)) {
+			servedRefs[ref] = struct{}{}
+		}
+		departed := map[string]struct{}{}
+		for _, ref := range collectEvidenceRefs(resultEvidenceSurface(stored)) {
+			if _, stillServed := servedRefs[ref]; !stillServed {
+				departed[ref] = struct{}{}
+			}
+		}
+		if counts.Refs() != len(departed) {
+			t.Fatalf("trial %d: reported %d references removed, but %d actually left the payload (missing set was %d)",
+				trial, counts.Refs(), len(departed), len(missing))
+		}
+		for ref := range departed {
+			if _, recorded := counts.RemovedRefs[ref]; !recorded {
+				t.Fatalf("trial %d: %q left the served payload but is not in the removal set, so it is not disclosed", trial, ref)
 			}
 		}
 		// Anything removed MUST be disclosed. This is the caller-facing
@@ -621,8 +656,15 @@ func storedResultWithEveryRefSite(t *testing.T) InvestigationResult {
 			Derivation: DerivationGraphAssociated, EpistemicStatus: EpistemicInferred,
 			EvidenceRefIDs: []string{"evidence_edge_a"},
 		}},
-		WhyRelevant:    "The project contains the repository the question is about.",
-		EvidenceRefIDs: []string{"evidence_path_a"},
+		WhyRelevant: "The project contains the repository the question is about.",
+		// ALIASED ON PURPOSE: "evidence_edge_a" is carried by BOTH this
+		// path and its edge above. The earlier fixture gave every site a
+		// distinct id, which is tidy and which structurally excluded the
+		// one shape where a reference is removed at two carriers at once
+		// -- so the property could not have caught a per-carrier
+		// over-count. A fixture whose values are all distinct is a
+		// fixture that cannot observe aliasing.
+		EvidenceRefIDs: []string{"evidence_path_a", "evidence_edge_a"},
 	}}
 	// The display-label map, keyed by the result's own closure exactly as a
 	// fresh result carries it. Without this the property test would never
@@ -925,8 +967,8 @@ func TestAnUnderLabelledStoredRowStillDisclosesItsNarrowing(t *testing.T) {
 	if counts.StrippedLabels < 0 {
 		t.Errorf("StrippedLabels = %d; a removal count must never be negative", counts.StrippedLabels)
 	}
-	if counts.Refs != 1 {
-		t.Errorf("Refs = %d, want 1", counts.Refs)
+	if counts.Refs() != 1 {
+		t.Errorf("Refs = %d, want 1", counts.Refs())
 	}
 	if counts.empty() {
 		t.Fatalf("a reference was removed but the counts read as empty: %+v", counts)
@@ -1005,8 +1047,8 @@ func TestTheExactCancellingCaseStillDiscloses(t *testing.T) {
 		t.Errorf("no structured coverage detail after removing a reference; counts = %+v", counts)
 	}
 	// And the numbers that produced the cancellation.
-	if counts.Refs != 1 {
-		t.Errorf("Refs = %d, want 1", counts.Refs)
+	if counts.Refs() != 1 {
+		t.Errorf("Refs = %d, want 1", counts.Refs())
 	}
 	if counts.StrippedLabels != 0 {
 		t.Errorf("StrippedLabels = %d, want 0 -- the removed ref was never labelled, so nothing was removed FROM the map", counts.StrippedLabels)
@@ -1014,4 +1056,76 @@ func TestTheExactCancellingCaseStillDiscloses(t *testing.T) {
 	if counts.empty() {
 		t.Error("counts read as empty after a real removal; this is the cancellation the disclosure branch used to trust")
 	}
+}
+
+// TestARefRemovedAtTwoCarriersIsCountedOnce is the permanent form of the
+// third review finding.
+//
+// One reference may legally ride at several carriers at once — a path's own
+// list and one of its edges', a driver and a finding, a candidate and a
+// cohort member. Each slice is validated on its own, and the contract's
+// evidence closure deduplicates globally, so the shape is valid stored data
+// rather than corruption.
+//
+// The strip counted per carrier. Removing one such reference reported TWO,
+// and that number is not internal bookkeeping: it is what telemetry emits,
+// what the structured coverage detail carries, and what the caller-facing
+// sentence quotes. A caller was told two pieces of evidence had become
+// invisible when one had.
+//
+// Not an authorization defect — nothing unproven was ever served. It is the
+// same class as the cancelling-total finding above: the disclosure was
+// wrong, this time overstating the loss.
+func TestARefRemovedAtTwoCarriersIsCountedOnce(t *testing.T) {
+	t.Parallel()
+
+	const shared = "evidence_shared_across_two_carriers"
+
+	stored := storedResultWithEveryRefSite(t)
+	path := stored.Paths[0]
+	path.EvidenceRefIDs = []string{shared}
+	path.Edges[0].EvidenceRefIDs = []string{shared}
+	stored.Paths = []RelationshipPath{path}
+	stored.EvidenceRefLabels = map[string]string{}
+	for ref := range contractsv1.ContextFabricEvidenceRefClosure(stored) {
+		label, _ := contractsv1.ContextFabricEvidenceRefLabel(ref)
+		stored.EvidenceRefLabels[ref] = label
+	}
+	stored.Completeness = ComputeAnswerCompleteness(stored)
+	if err := ValidateStoredResult(stored); err != nil {
+		t.Fatalf("a reference carried at two sites must be a LEGAL stored shape, but: %v", err)
+	}
+
+	degraded, counts, _, ok := degradeReusedResult(stored, map[string]struct{}{shared: {}})
+	if !ok {
+		t.Fatalf("degrade refused; counts = %+v", counts)
+	}
+
+	// ONE reference id went away, however many carriers held it.
+	if counts.Refs() != 1 {
+		t.Errorf("Refs() = %d, want 1 — one reference id was removed, at two carriers", counts.Refs())
+	}
+	// The three places that number reaches someone.
+	if got := coverageDetailCount(degraded.Coverage, contractsv1.ContextFabricCoverageDetailReuseAuxiliaryRefsStripped); got != 1 {
+		t.Errorf("structured coverage Count = %d, want 1", got)
+	}
+	if reason := composeReuseNarrowingReason(counts); !strings.Contains(reason, "1 evidence reference(s)") {
+		t.Errorf("caller-facing reason overstates the loss: %q", reason)
+	}
+	// And the reference really is gone from every carrier that held it.
+	for _, ref := range collectEvidenceRefs(resultEvidenceSurface(degraded)) {
+		if ref == shared {
+			t.Fatalf("the served payload still carries %q", shared)
+		}
+	}
+}
+
+// coverageDetailCount returns the Count a coverage detail carries, or -1.
+func coverageDetailCount(coverage Coverage, code contractsv1.ContextFabricCoverageDetailCode) int {
+	for _, detail := range coverage.Details {
+		if detail.Code == code && detail.Count != nil {
+			return *detail.Count
+		}
+	}
+	return -1
 }

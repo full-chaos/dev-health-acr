@@ -231,8 +231,11 @@ func partitionMissingRefs(stored InvestigationResult, graphContext GraphContext)
 // disclosed: a reused answer that quietly lost members or drivers would be
 // a narrowed answer presenting itself as a whole one.
 type reuseStripCounts struct {
-	// Refs is how many distinct evidence references were removed.
-	Refs int
+	// RemovedRefs is the SET of distinct reference ids removed anywhere in
+	// the payload -- every list carrier and the display-label map. A set,
+	// not a tally, because one reference can ride at several carriers at
+	// once and the caller lost ONE reference, not one per carrier.
+	RemovedRefs map[string]struct{}
 	// The object counts are entries dropped ENTIRELY because stripping
 	// their refs left them invalid under the contract -- a driver with
 	// neither paths nor evidence, for instance, is not a driver.
@@ -242,16 +245,46 @@ type reuseStripCounts struct {
 	DroppedFindings   int
 	DroppedPaths      int
 	// StrippedLabels is how many display-label entries the rebuild
-	// dropped. Counted separately from Refs because a label entry is a
-	// SECOND way the same reference reaches a caller: a strip that removed
-	// a reference from every list and left its label behind removed
-	// nothing at all, and a single total would have hidden that.
+	// dropped. Kept as a DIAGNOSTIC beside the reference set, never added
+	// into it: a label entry is a second way the same reference reaches a
+	// caller (a strip that cleared every list and left the labels behind
+	// removed nothing at all), but the reference it names is already in
+	// RemovedRefs, so adding it would double-count the same loss in the
+	// number the caller reads.
 	StrippedLabels int
 }
 
+// Refs is how many DISTINCT evidence references the degrade removed. This
+// is the number the caller is told and the number telemetry reports.
+func (c reuseStripCounts) Refs() int { return len(c.RemovedRefs) }
+
+// recordRemoved adds ids to the removed set, allocating on first use.
+func (c *reuseStripCounts) recordRemoved(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	if c.RemovedRefs == nil {
+		c.RemovedRefs = make(map[string]struct{}, len(ids))
+	}
+	for _, id := range ids {
+		c.RemovedRefs[id] = struct{}{}
+	}
+}
+
+// objectDrops is how many whole entries were dropped because stripping
+// left them invalid. Distinct from references by construction: these are
+// objects, and each is dropped at most once.
+func (c reuseStripCounts) objectDrops() int {
+	return c.DroppedCandidates + c.DroppedMembers + c.DroppedDrivers + c.DroppedFindings + c.DroppedPaths
+}
+
 // Total is every removal the caller should be told about.
+// Total is every removal the caller should be told about: distinct
+// references plus whole entries dropped. StrippedLabels is deliberately
+// NOT summed -- the reference a dropped label names is already counted in
+// the reference set, and adding it would report one loss twice.
 func (c reuseStripCounts) Total() int {
-	return c.Refs + c.DroppedCandidates + c.DroppedMembers + c.DroppedDrivers + c.DroppedFindings + c.DroppedPaths + c.StrippedLabels
+	return c.Refs() + c.objectDrops()
 }
 
 // empty reports whether NOTHING was removed. Deliberately checked
@@ -261,26 +294,36 @@ func (c reuseStripCounts) Total() int {
 // arithmetic that can cancel. Every component is non-negative by
 // construction; this makes it not matter if one day one is not.
 func (c reuseStripCounts) empty() bool {
-	return c.Refs == 0 &&
+	return len(c.RemovedRefs) == 0 &&
 		c.DroppedCandidates == 0 && c.DroppedMembers == 0 && c.DroppedDrivers == 0 &&
 		c.DroppedFindings == 0 && c.DroppedPaths == 0 && c.StrippedLabels == 0
 }
 
-// keepRefs returns ids minus missing, and how many were removed. It always
-// returns a NEW slice when anything changed, so a stored result's own
-// backing arrays are never mutated -- the reused candidate is a shallow
+// keepRefs returns ids minus missing, and THE IDS IT REMOVED -- not a count.
+//
+// Returning ids rather than a tally is what makes the caller able to count
+// DISTINCT references across the whole payload. One reference may ride at
+// several carriers at once (a path's own list and one of its edges', a
+// driver and a finding, a member and a candidate): each slice is validated
+// on its own and the contract's closure deduplicates globally, so that is a
+// legal stored shape. Summing per-site tallies counted such a reference once
+// per carrier and told the caller more references had become invisible than
+// reference IDs actually had.
+//
+// It always returns a NEW slice when anything changed, so a stored result's
+// own backing arrays are never mutated -- the reused candidate is a shallow
 // value copy and shares every slice with whatever else holds it.
-func keepRefs(ids []string, missing map[string]struct{}) ([]string, int) {
-	removed := 0
+func keepRefs(ids []string, missing map[string]struct{}) ([]string, []string) {
+	var removed []string
 	for _, id := range ids {
 		if _, gone := missing[id]; gone {
-			removed++
+			removed = append(removed, id)
 		}
 	}
-	if removed == 0 {
-		return ids, 0
+	if len(removed) == 0 {
+		return ids, nil
 	}
-	kept := make([]string, 0, len(ids)-removed)
+	kept := make([]string, 0, len(ids)-len(removed))
 	for _, id := range ids {
 		if _, gone := missing[id]; gone {
 			continue
@@ -322,13 +365,26 @@ func stripUnverifiedEvidenceRefs(result InvestigationResult, missing map[string]
 	if len(missing) == 0 {
 		return result, counts
 	}
+	// The reference set is computed from the payload BEFORE and AFTER,
+	// using the same collector that defines what the payload serves --
+	// never by tallying per site.
+	//
+	// Per-site tallies were wrong in BOTH directions and each direction
+	// was found the hard way. They OVER-counted, because one reference can
+	// ride at several carriers and each removal was counted separately.
+	// They also UNDER-counted: when stripping empties an object the
+	// contract requires to carry evidence, the whole object is dropped and
+	// the OTHER references it held leave with it — losses no site's own
+	// tally ever saw. A before/after difference cannot miss either case,
+	// and because it is taken with the collector it cannot drift from what
+	// the payload actually exposes.
+	before := collectEvidenceRefs(resultEvidenceSurface(result))
 
 	if len(result.SubjectResolution.Candidates) > 0 {
 		kept := make([]SubjectCandidate, 0, len(result.SubjectResolution.Candidates))
 		for _, candidate := range result.SubjectResolution.Candidates {
 			refs, removed := keepRefs(candidate.EvidenceRefIDs, missing)
-			counts.Refs += removed
-			if removed > 0 {
+			if len(removed) > 0 {
 				validBefore := candidate.Validate() == nil
 				candidate.EvidenceRefIDs = refs
 				if strippingBrokeIt(validBefore, candidate.Validate()) {
@@ -346,8 +402,7 @@ func stripUnverifiedEvidenceRefs(result InvestigationResult, missing map[string]
 		kept := make([]CohortMember, 0, len(cohort.Members))
 		for _, member := range cohort.Members {
 			refs, removed := keepRefs(member.EvidenceRefIDs, missing)
-			counts.Refs += removed
-			if removed > 0 {
+			if len(removed) > 0 {
 				validBefore := member.Validate() == nil
 				member.EvidenceRefIDs = refs
 				if strippingBrokeIt(validBefore, member.Validate()) {
@@ -371,8 +426,7 @@ func stripUnverifiedEvidenceRefs(result InvestigationResult, missing map[string]
 		kept := make([]DriverJudgment, 0, len(result.Drivers))
 		for _, driver := range result.Drivers {
 			refs, removed := keepRefs(driver.EvidenceRefIDs, missing)
-			counts.Refs += removed
-			if removed > 0 {
+			if len(removed) > 0 {
 				validBefore := driver.Validate() == nil
 				driver.EvidenceRefIDs = refs
 				if strippingBrokeIt(validBefore, driver.Validate()) {
@@ -392,8 +446,7 @@ func stripUnverifiedEvidenceRefs(result InvestigationResult, missing map[string]
 		kept := make([]Finding, 0, len(*findings))
 		for _, finding := range *findings {
 			refs, removed := keepRefs(finding.EvidenceRefIDs, missing)
-			counts.Refs += removed
-			if removed > 0 {
+			if len(removed) > 0 {
 				validBefore := finding.Validate() == nil
 				finding.EvidenceRefIDs = refs
 				if strippingBrokeIt(validBefore, finding.Validate()) {
@@ -410,19 +463,17 @@ func stripUnverifiedEvidenceRefs(result InvestigationResult, missing map[string]
 		kept := make([]RelationshipPath, 0, len(result.Paths))
 		for _, path := range result.Paths {
 			refs, removed := keepRefs(path.EvidenceRefIDs, missing)
-			counts.Refs += removed
 			edgesChanged := false
 			edges := make([]RelationshipEdge, 0, len(path.Edges))
 			for _, edge := range path.Edges {
 				edgeRefs, edgeRemoved := keepRefs(edge.EvidenceRefIDs, missing)
-				counts.Refs += edgeRemoved
-				if edgeRemoved > 0 {
+				if len(edgeRemoved) > 0 {
 					edge.EvidenceRefIDs = edgeRefs
 					edgesChanged = true
 				}
 				edges = append(edges, edge)
 			}
-			if removed > 0 || edgesChanged {
+			if len(removed) > 0 || edgesChanged {
 				validBefore := path.Validate() == nil
 				path.EvidenceRefIDs = refs
 				path.Edges = edges
@@ -484,6 +535,15 @@ func stripUnverifiedEvidenceRefs(result InvestigationResult, missing map[string]
 	// the whole reuse before this function is reached, so by construction
 	// no top-level ref is in the missing set here. Asserted by the
 	// property test rather than assumed.
+	served := make(map[string]struct{})
+	for _, ref := range collectEvidenceRefs(resultEvidenceSurface(result)) {
+		served[ref] = struct{}{}
+	}
+	for _, ref := range before {
+		if _, stillServed := served[ref]; !stillServed {
+			counts.recordRemoved([]string{ref})
+		}
+	}
 	return result, counts
 }
 
@@ -538,7 +598,8 @@ func discloseReuseNarrowing(result InvestigationResult, counts reuseStripCounts)
 	coverage.DegradedReasons = reasons
 
 	if disclosure == reuseDegradeDisclosureStructured {
-		total := counts.Total()
+		// The caller-facing quantity is DISTINCT references removed.
+		total := counts.Refs()
 		detail := contractsv1.ContextFabricCoverageDetail{
 			DetailID:  "cov-reuse-01",
 			Source:    reuseAuxiliaryRefsStrippedSource,
@@ -563,17 +624,17 @@ func discloseReuseNarrowing(result InvestigationResult, counts reuseStripCounts)
 // quantity and the cause in the engine's own deterministic words -- the
 // fail-closed floor, never model-authored.
 func composeReuseNarrowingReason(counts reuseStripCounts) string {
-	if counts.Refs > 0 && counts.Total() == counts.Refs+counts.StrippedLabels {
+	if counts.objectDrops() == 0 {
 		return fmt.Sprintf(
 			"reused answer narrowed: %d evidence reference(s) are no longer visible to you and were removed",
-			counts.Refs,
+			counts.Refs(),
 		)
 	}
 	return fmt.Sprintf(
 		"reused answer narrowed: %d evidence reference(s) are no longer visible to you and were removed, "+
 			"together with %d item(s) left without any evidence",
-		counts.Refs,
-		counts.Total()-counts.Refs,
+		counts.Refs(),
+		counts.objectDrops(),
 	)
 }
 
