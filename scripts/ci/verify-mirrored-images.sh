@@ -28,7 +28,21 @@ set -euo pipefail
 # checked directly before anything reads the file.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-repo="${1:?usage: verify-mirrored-images.sh <owner/repo, e.g. \$GITHUB_REPOSITORY>}"
+repo="${1:?usage: verify-mirrored-images.sh <owner/repo, e.g. \$GITHUB_REPOSITORY> [dispatch-ref]}"
+# CHAOS-4889: optional second arg names the ref actually being built (e.g.
+# release.yml's mirror-preflight passes the resolved release commit, which
+# for an old-tag re-release is NOT main -- see mirror-images.yml's own
+# CHAOS-4889 `ref` input). When set, a MISSING/MISMATCH error names the
+# exact `gh workflow run` command an operator needs, instead of the generic
+# "run Mirror images" hint that defaults to mirroring main's pins, which do
+# not help an old tag whose pins were never mirrored. ci.yml's call passes
+# no second arg and keeps the generic hint unchanged.
+dispatch_ref="${2:-}"
+if [ -n "$dispatch_ref" ]; then
+  dispatch_hint="run \`gh workflow run mirror-images.yml -f ref=${dispatch_ref}\` and wait for it to complete, then re-run this job"
+else
+  dispatch_hint='run "Mirror images" (workflow_dispatch) and wait for it to complete, then re-run this job'
+fi
 
 images_file="$(mktemp)"
 trap 'rm -f "$images_file"' EXIT
@@ -46,8 +60,8 @@ while IFS=$'\t' read -r image dest_tag; do
   dest="ghcr.io/${repo}/${ref_repo}:${dest_tag}"
   mirrored="$(docker buildx imagetools inspect "$dest" --format '{{ .Manifest.Digest }}' 2>/dev/null || true)"
   if [ -z "$mirrored" ]; then
-    printf '::error::MISSING %-40s -> %s -- run "Mirror images" (workflow_dispatch) and wait for it to complete, then re-run this job\n' \
-      "$image" "$dest"
+    printf '::error::MISSING %-40s -> %s -- %s\n' \
+      "$image" "$dest" "$dispatch_hint"
     missing=1
     continue
   fi

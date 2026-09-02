@@ -65,6 +65,15 @@ name: Mirror images
 
 "on":
   workflow_dispatch:
+    inputs:
+      ref:
+        description: >-
+          Branch, tag, or commit whose Dockerfile/testcontainers pins to
+          mirror (CHAOS-4889: lets an operator mirror an older tag's pins
+          before re-releasing it, instead of only ever mirroring main).
+        required: false
+        default: main
+        type: string
   schedule:
     # Weekly. Every entry below except clickhouse is pinned by digest, so this
     # only refreshes the mirror's own retention; it is not chasing upstream
@@ -117,8 +126,14 @@ jobs:
     # anything useful.
     if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
     steps:
+      # CHAOS-4889: a manual dispatch names the ref to resolve pins from
+      # (default "main", matching every non-dispatch trigger's own ref);
+      # schedule/push/pull_request continue to check out whatever ref
+      # triggered them via the github.ref fallback.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with: {persist-credentials: false}
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          persist-credentials: false
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7

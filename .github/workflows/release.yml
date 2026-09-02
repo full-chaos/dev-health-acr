@@ -166,7 +166,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify every mirrored image is resolvable before any job pulls one
-        run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
+        # CHAOS-4889: pass the resolved release commit as the dispatch-ref
+        # hint -- for a workflow_dispatch re-release of an old tag this is
+        # NOT main, and a MISSING error must name the ref whose pins
+        # actually need mirroring, not the generic "run Mirror images" hint
+        # that would silently re-mirror main's (already-mirrored) pins.
+        run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}" "${{ needs.preflight.outputs.commit }}"
 
   build:
     needs: [preflight, mirror-preflight]
