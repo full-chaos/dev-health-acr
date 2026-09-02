@@ -357,6 +357,33 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.InvestigationOptions.properties.max_evidence_refs.maximum":      500,
 		"common#$defs.InvestigationOptions.properties.max_serialized_bytes.minimum":   ContextFabricSerializedBytesMin,
 		"common#$defs.InvestigationOptions.properties.max_serialized_bytes.maximum":   ContextFabricSerializedBytesMax,
+		// CHAOS-4867 (main's ruling, option A): the request-side substring
+		// case that used to excuse InvestigationOptions above excused these
+		// four sibling shapes with the exact same false claim. An audit
+		// (schemaOnlyBoundReason's own doc comment) confirmed a Go Validate
+		// numerically checks every one of these fourteen fields; every value
+		// already agreed, so registering them (rather than deferring them)
+		// carries no risk of silently changing a bound.
+		"common#$defs.ConsumerInfo.properties.name.minLength":    1,
+		"common#$defs.ConsumerInfo.properties.name.maxLength":    200,
+		"common#$defs.ConsumerInfo.properties.surface.minLength": 1,
+		"common#$defs.ConsumerInfo.properties.surface.maxLength": 200,
+		// ContextFabricConversationTurn.Validate (validate_context_fabric_request.go)
+		// trims the content before measuring it -- the length bound itself
+		// is the same 1..12000 the schema states.
+		"common#$defs.ConversationTurn.properties.content.minLength":              1,
+		"common#$defs.ConversationTurn.properties.content.maxLength":              12000,
+		"common#$defs.RequestedScope.properties.repository_slugs.maxItems":        200,
+		"common#$defs.RequestedScope.properties.repository_slugs.items.minLength": 1,
+		"common#$defs.RequestedScope.properties.repository_slugs.items.maxLength": 512,
+		"common#$defs.RequestedScope.properties.subject_hints.maxItems":           50,
+		// SubjectHint.id/label have no schema minLength (both optional,
+		// zero-value-omitted the same way VersionSet.model_identity is in
+		// asymmetricBounds above) -- only the ceiling is a shared bound.
+		"common#$defs.SubjectHint.properties.id.maxLength":     256,
+		"common#$defs.SubjectHint.properties.label.maxLength":  512,
+		"common#$defs.SubjectHint.properties.source.minLength": 1,
+		"common#$defs.SubjectHint.properties.source.maxLength": 64,
 	}
 
 	discovered := schemaBounds(t, documents)
@@ -829,50 +856,41 @@ func probeResult() ContextFabricInvestigationResult {
 // numbers in Go would create a second source of truth to drift against --
 // the very problem this file exists to prevent.
 // requestSideDeferredBounds lists exact schema paths under request-side
-// shapes where a Go Validate DOES numerically check the field (see each
-// entry's citation) but this file does not yet map it declaratively into
-// goBoundsByPath. See schemaOnlyBoundReason's own comment for why this
-// exists and why it is temporary. A path here that stops matching any
-// discovered schema bound (the field renamed or removed) describes
-// nothing and should be deleted, not left behind.
-var requestSideDeferredBounds = map[string]string{
-	"common#$defs.ConsumerInfo.properties.name.minLength":                     "deferred (CHAOS-4867 follow-up): ContextFabricConsumerInfo.Validate, validate_context_fabric_request.go:293 -- stringLengthBetween(c.Name, 1, 200)",
-	"common#$defs.ConsumerInfo.properties.name.maxLength":                     "deferred (CHAOS-4867 follow-up): ContextFabricConsumerInfo.Validate, validate_context_fabric_request.go:293 -- stringLengthBetween(c.Name, 1, 200)",
-	"common#$defs.ConsumerInfo.properties.surface.minLength":                  "deferred (CHAOS-4867 follow-up): ContextFabricConsumerInfo.Validate, validate_context_fabric_request.go:293 -- stringLengthBetween(c.Surface, 1, 200)",
-	"common#$defs.ConsumerInfo.properties.surface.maxLength":                  "deferred (CHAOS-4867 follow-up): ContextFabricConsumerInfo.Validate, validate_context_fabric_request.go:293 -- stringLengthBetween(c.Surface, 1, 200)",
-	"common#$defs.ConversationTurn.properties.content.minLength":              "deferred (CHAOS-4867 follow-up): ContextFabricConversationTurn.Validate, validate_context_fabric_request.go:118 -- stringLengthBetween(strings.TrimSpace(t.Content), 1, 12000)",
-	"common#$defs.ConversationTurn.properties.content.maxLength":              "deferred (CHAOS-4867 follow-up): ContextFabricConversationTurn.Validate, validate_context_fabric_request.go:118 -- stringLengthBetween(strings.TrimSpace(t.Content), 1, 12000)",
-	"common#$defs.RequestedScope.properties.repository_slugs.maxItems":        "deferred (CHAOS-4867 follow-up): ContextFabricRequestedScope.Validate, validate_context_fabric_request.go:151 -- len(s.RepositorySlugs) > 200",
-	"common#$defs.RequestedScope.properties.repository_slugs.items.minLength": "deferred (CHAOS-4867 follow-up): ContextFabricRequestedScope.Validate, validate_context_fabric_request.go:154 -> uniqueTrimmedStrings, validate_context_fabric_helpers.go:464 -- floor of 1",
-	"common#$defs.RequestedScope.properties.repository_slugs.items.maxLength": "deferred (CHAOS-4867 follow-up): ContextFabricRequestedScope.Validate, validate_context_fabric_request.go:154 -> uniqueTrimmedStrings(s.RepositorySlugs, 512)",
-	"common#$defs.RequestedScope.properties.subject_hints.maxItems":           "deferred (CHAOS-4867 follow-up): ContextFabricRequestedScope.Validate, validate_context_fabric_request.go:151 -- len(s.SubjectHints) > 50",
-	"common#$defs.SubjectHint.properties.id.maxLength":                        "deferred (CHAOS-4867 follow-up): ContextFabricSubjectHint.Validate, validate_context_fabric_request.go:166 -- stringLengthBetween(h.ID, 0, 256)",
-	"common#$defs.SubjectHint.properties.label.maxLength":                     "deferred (CHAOS-4867 follow-up): ContextFabricSubjectHint.Validate, validate_context_fabric_request.go:166 -- stringLengthBetween(h.Label, 0, 512)",
-	"common#$defs.SubjectHint.properties.source.minLength":                    "deferred (CHAOS-4867 follow-up): ContextFabricSubjectHint.Validate, validate_context_fabric_request.go:166 -- stringLengthBetween(h.Source, 1, 64)",
-	"common#$defs.SubjectHint.properties.source.maxLength":                    "deferred (CHAOS-4867 follow-up): ContextFabricSubjectHint.Validate, validate_context_fabric_request.go:166 -- stringLengthBetween(h.Source, 1, 64)",
-}
+// shapes where a Go Validate numerically checks the field but this file
+// does not map it declaratively into goBoundsByPath -- a deliberate,
+// evidenced, TEMPORARY exemption, never a substring guess. It is empty
+// today: the audit that built this mechanism (ruled by main 2026-09-02)
+// found fourteen such paths -- ConsumerInfo, ConversationTurn,
+// RequestedScope, SubjectHint -- and every one turned out cheap enough to
+// register directly in goBoundsByPath instead (see that map, CHAOS-4867
+// entries), so none needed to sit here. The mechanism stays: a path
+// legitimately blocked on a follow-up (an entangled Validate, say, the
+// same reason several $defs-nested entries in goBoundsByPath are mapped
+// declaratively rather than probed) belongs here, cited the same way,
+// rather than added back to a name-substring case. A path here that stops
+// matching any discovered schema bound describes nothing and should be
+// deleted, not left behind.
+var requestSideDeferredBounds = map[string]string{}
 
 func schemaOnlyBoundReason(path string) string {
 	// CHAOS-4867: this used to be one substring case matching
 	// RequestedScope/SubjectHint/ConversationTurn/BoundSubjectReceipt/
 	// ConsumerInfo/TimeContext, all excused with the SAME blanket claim --
 	// "bounded by the request contract, not by result validation". That
-	// claim was false for InvestigationOptions (fixed above, mapped into
-	// goBoundsByPath) and an audit (ruled by main 2026-09-02) found it is
-	// ALSO false for ConsumerInfo, ConversationTurn, RequestedScope, and
-	// SubjectHint: a Go Validate numerically checks every one of their
-	// fourteen bounds below, and every one already agrees with the
-	// published schema. Those four are deliberately NOT reconciled here
-	// (main files a follow-up ticket to do it the CHAOS-4867 way, same as
-	// InvestigationOptions) -- but this file no longer describes them as
-	// schema-only, because they are not. Each entry names the Go check
-	// that would fail if the two sides ever drifted, so this is an
-	// honest, temporary deferral, not a second copy of the same false
-	// claim. BoundSubjectReceipt and TimeContext are absent from the map
-	// on purpose: the schema declares no numeric bound under either
-	// today, so there is nothing to defer -- and a bound added to either
-	// one later has no entry here and fails by name, exactly like any
-	// other unmapped path.
+	// claim was false for InvestigationOptions (mapped into goBoundsByPath)
+	// and an audit (ruled by main 2026-09-02) found it ALSO false for
+	// ConsumerInfo, ConversationTurn, RequestedScope, and SubjectHint: a Go
+	// Validate numerically checks every one of their fourteen bounds, and
+	// every one already agreed with the published schema -- so all
+	// fourteen are registered in goBoundsByPath instead (main's ruling:
+	// option A, fold them in rather than defer). No path in this case
+	// survives with a false reason. BoundSubjectReceipt and TimeContext
+	// needed no entry anywhere: the schema declares no numeric bound under
+	// either, so a bound added to one later has no entry here or in
+	// goBoundsByPath and fails by name, exactly like any other unmapped
+	// path. requestSideDeferredBounds (below the switch's helper maps,
+	// checked first) stays as the mechanism for the next genuinely-blocked
+	// case -- it is empty, not deleted.
 	if reason, deferred := requestSideDeferredBounds[path]; deferred {
 		return reason
 	}
