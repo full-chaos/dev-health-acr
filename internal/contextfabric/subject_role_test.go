@@ -467,3 +467,135 @@ func TestRankingAttachesToEachOperandOfAnExplicitSet(t *testing.T) {
 		t.Fatalf("ranking reached operands %v, want BOTH -- an ordering over a comparison must cover every operand, and both operand variants must contribute", subjects)
 	}
 }
+
+// everyVariantExpression builds one representative expression per variant,
+// with a member kind supplied everywhere the variant admits one -- INCLUDING
+// organization_scope, which is the pairing the recorded corpus never builds.
+func everyVariantExpression() map[SubjectExpressionKind]SubjectExpression {
+	member := SubjectRepository
+	return map[SubjectExpressionKind]SubjectExpression{
+		SubjectExpressionNamed:             namedExpression(SubjectTeam),
+		SubjectExpressionGroupedMembers:    groupedExpression(SubjectProject, SubjectTeam),
+		SubjectExpressionChildrenOfScope:   scopedExpression(SubjectProject),
+		SubjectExpressionDiscoveredKind:    discoveredExpression(SubjectTeam),
+		SubjectExpressionOrganizationScope: orgExpression(&member),
+		SubjectExpressionExplicitSet: {
+			Kind: SubjectExpressionExplicitSet,
+			Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+				{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"a"}, ExpectedKind: kindPointer(SubjectTeam)}},
+				{Kind: SubjectOperandScoped, Scoped: &ScopedSetExpression{AnchorTerms: []string{"b"}, MemberKind: SubjectProject}},
+			}},
+		},
+	}
+}
+
+// TestTheRoleRulesHoldOverEveryVariantAndGoalPair is the GENERATED SWEEP.
+//
+// WHY A SWEEP AND NOT ANOTHER FIXTURE. A review round found that
+// {assess_state, organization_scope with a member kind} derived a
+// per-repository read for an organization-level question. The corpus could
+// not see it because C7 is organization+count+member-present and B5 is
+// organization+assess_state+member-absent -- the pair is never built. And
+// the coverage test guarding that corpus asked only that each VARIANT and
+// each ROLE appear at least once, which is one-dimensional coverage over a
+// two-dimensional matrix and accepts exactly this hole. Adding a fixture for
+// the pair someone noticed would leave the next pair open.
+//
+// So every (variant x goal) pair the grammar allows is built and checked
+// against PROPERTIES of the stated rules rather than against an expected
+// coordinate list. Properties, deliberately: a second table of expected
+// coordinates would be a second implementation of the rule, and a table
+// beside the thing it checks is the co-editable-authority defect this slice
+// has already paid for twice.
+func TestTheRoleRulesHoldOverEveryVariantAndGoalPair(t *testing.T) {
+	expressions := everyVariantExpression()
+	pairs, coordinates := 0, 0
+
+	for _, variant := range SubjectExpressionKindVocabulary() {
+		expression, built := expressions[variant]
+		if !built {
+			t.Errorf("variant %q has no expression in the sweep: the closed union grew and the sweep did not", variant)
+			continue
+		}
+		for _, goal := range InvestigationGoalVocabulary() {
+			frame := frameWith([]InvestigationGoal{goal}, expression, TemporalIntentCurrent, nil)
+			pairs++
+
+			offered := map[SubjectRole]map[SubjectKind]bool{}
+			for _, slot := range frameRoleSlots(frame.SubjectExpression) {
+				if offered[slot.Role] == nil {
+					offered[slot.Role] = map[SubjectKind]bool{}
+				}
+				offered[slot.Role][slot.Subject] = true
+			}
+
+			populations := map[AnswerObligation][]SubjectRole{}
+			for _, coordinate := range DeriveRequirementCoordinates(frame) {
+				coordinates++
+				where := string(variant) + "/" + string(goal) + " " + string(coordinate.Obligation)
+
+				// P1: a coordinate may only name a (role, subject) the
+				// topology actually offers. Anything else is invented.
+				if !offered[coordinate.Role][coordinate.Subject] {
+					t.Errorf("%s: derived (%s, %s), which this variant does not offer", where, coordinate.Role, coordinate.Subject)
+				}
+
+				kind, known := KindOfObligation(coordinate.Obligation)
+				// P2: answer-contract obligations never yield a coordinate.
+				if !known || kind == ObligationKindAnswerContract {
+					t.Errorf("%s: an answer-contract obligation produced a coordinate", where)
+					continue
+				}
+				// P3: only `state` reaches a grouping axis.
+				if coordinate.Role == SubjectRoleGroup && coordinate.Obligation != ObligationState {
+					t.Errorf("%s: attached to the group axis; only state does", where)
+				}
+				// P4: the organization's member slot serves POPULATION
+				// obligations only -- it names a counted entity kind.
+				if variant == SubjectExpressionOrganizationScope && coordinate.Role == SubjectRoleMember &&
+					coordinate.Obligation != ObligationCount && coordinate.Obligation != ObligationRanking {
+					t.Errorf("%s: a read obligation attached to the organization's counted-member slot", where)
+				}
+				if kind == ObligationKindComputed {
+					populations[coordinate.Obligation] = append(populations[coordinate.Obligation], coordinate.Role)
+				}
+			}
+
+			// P5: a computed obligation attaches within ONE role, never
+			// across several.
+			//
+			// THE FIRST VERSION OF THIS PROPERTY WAS WRONG AND THE SWEEP SAID
+			// SO. It required at most one coordinate per computed obligation,
+			// which fails on an explicit comparison: "how many X does team A
+			// have versus team B" counts EACH operand, and a ranking over a
+			// comparison orders each operand too -- a rule this package
+			// already pins in TestRankingAttachesToEachOperandOfAnExplicitSet.
+			// The real invariant, and the one design finding S3 names, is that
+			// a cardinality must not MULTIPLY ACROSS ROLE KINDS: not member
+			// and group and subject at once. Several operands are one role.
+			//
+			// The property was corrected rather than the code, because the
+			// code was right. A sweep whose disagreements are resolved by
+			// editing the subject is not a sweep.
+			for obligation, roles := range populations {
+				first := roles[0]
+				for _, role := range roles[1:] {
+					if role != first {
+						t.Errorf("%s/%s: computed obligation %s attached to roles %v; a cardinality names one kind of population",
+							variant, goal, obligation, roles)
+						break
+					}
+				}
+			}
+		}
+	}
+
+	want := SubjectExpressionKindCount * InvestigationGoalCount
+	if pairs != want {
+		t.Fatalf("swept %d pairs, want %d -- the sweep is not covering the grammar it claims to", pairs, want)
+	}
+	if coordinates == 0 {
+		t.Fatal("no coordinates reached the assertions across the whole sweep")
+	}
+	t.Logf("swept %d (variant x goal) pairs, %d coordinates", pairs, coordinates)
+}
