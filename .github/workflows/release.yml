@@ -202,7 +202,11 @@ jobs:
       # CHAOS-4855: golang (Dockerfile), tonistiigi/binfmt, moby/buildkit,
       # aquasec/trivy, anchore/syft all redirect at the ghcr.io/full-chaos
       # mirror -- see docs/container-images.md.
-      ACR_IMAGE_MIRROR_PREFIX: ghcr.io/${{ github.repository_owner }}/
+      # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
+      # GHCR package write access is per-creating-repo, not shared org-wide;
+      # the flat path 403'd against an existing ops-owned package (see
+      # mirror-images.yml's header for the full story).
+      ACR_IMAGE_MIRROR_PREFIX: ghcr.io/${{ github.repository }}/
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0

@@ -92,7 +92,7 @@ The Trivy **vulnerability database** is the deliberate exception: it carries
 no pin anywhere in source. See "Vulnerability scanning" below for why, and
 for how a scan failure is triaged.
 
-## The ghcr.io/full-chaos mirror (CHAOS-4855)
+## The ghcr.io/full-chaos/dev-health-acr mirror (CHAOS-4855)
 
 Every image above except the two already-non-Docker-Hub runtimes
 (`gcr.io/distroless`, `cgr.dev/chainguard`) is pulled from Docker Hub, and
@@ -102,44 +102,61 @@ That quota ran out on 2026-09-02 and failed a `container-contract-smoke` run
 mid-pull. dev-health-ops hit the same class of failure against its own
 (authenticated) account and fixed it by mirroring every Docker Hub pull to
 `ghcr.io/full-chaos` (#2111); `.github/workflows/mirror-images.yml` copies
-that pattern here, adjusted for where acr's own pulls are.
+that pattern here, adjusted for where acr's own pulls are -- and for one
+thing #2111 didn't have to deal with (next paragraph).
+
+The destination is `ghcr.io/full-chaos/dev-health-acr/<repo>`, i.e.
+`ghcr.io/<owner>/<repo>` (acr's own), **not** the flat `ghcr.io/full-chaos`
+ops's #2111 mirror uses, and that is load-bearing rather than a style choice:
+`ghcr.io/full-chaos` looks like a shared org-level namespace (ops's mirror
+already publishes `postgres`, `clickhouse/clickhouse-server`,
+`testcontainers/ryuk`, and `edoburu/pgbouncer` there), but GHCR package
+**write** access is scoped to whichever repo's token created the package, not
+shared org-wide -- confirmed the hard way: the first version of this mirror
+tried to publish acr's postgres digest under ops's existing
+`ghcr.io/full-chaos/postgres` package (a different tag, same flat path) and
+got `403 Forbidden, denied: permission_denied: write_package`. Reads of those
+PUBLIC packages still work from any repo -- so `testcontainers/ryuk` and
+`edoburu/pgbouncer` remain readable via ops's copies wherever a pull happens
+to reach them -- but this workflow cannot ADD anything to a package it did
+not create. So every image this workflow **writes** lands under acr's own
+path, including its own copy of the reaper (`testcontainers/ryuk`):
+`TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX` is one prefix applied uniformly to
+every testcontainers pull, so it cannot resolve the reaper from a different
+namespace than postgres/clickhouse/falkordb.
 
 Every pull is redirected through one of two mechanisms, chosen entirely by
 what does the pulling -- neither touches a pinned digest:
 
 - **testcontainers-go's own `TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX`** (set to
-  `ghcr.io/full-chaos` in the `unit`, `race`, and `build` CI jobs): covers
-  every `postgres`/`clickhouse`/`falkordb` testcontainers fixture and the
-  library's own hardcoded reaper (`testcontainers/ryuk`), with zero Go source
-  changes -- the library prepends the registry to whatever ref the code
-  already declares.
-- **`ACR_IMAGE_MIRROR_PREFIX`** (set to `ghcr.io/full-chaos/`, trailing slash
-  included, in the `container-contract-smoke`, `container-reproducible`,
-  `container-oci-scan`, and release.yml `container` jobs): covers everything
-  that mechanism can't reach -- the Dockerfile's `golang` base image (via a
-  build ARG), the QEMU binfmt and BuildKit driver images `docker/setup-qemu-
-  action`/`docker/setup-buildx-action` pull, and the `aquasec/trivy` /
-  `anchore/syft` / migration-smoke `postgres` pulls in `scripts/container/
-  scan.sh` and `verify.sh`. Empty by default, so a local build or script run
-  still pulls straight from Docker Hub, unchanged.
+  `ghcr.io/full-chaos/dev-health-acr` in the `unit`, `race`, and `build` CI
+  jobs): covers every `postgres`/`clickhouse`/`falkordb` testcontainers
+  fixture and the library's own hardcoded reaper (`testcontainers/ryuk`),
+  with zero Go source changes -- the library prepends the registry to
+  whatever ref the code already declares.
+- **`ACR_IMAGE_MIRROR_PREFIX`** (set to `ghcr.io/full-chaos/dev-health-acr/`,
+  trailing slash included, in the `container-contract-smoke`,
+  `container-reproducible`, `container-oci-scan`, and release.yml
+  `container` jobs): covers everything that mechanism can't reach -- the
+  Dockerfile's `golang` base image (via a build ARG), the QEMU binfmt and
+  BuildKit driver images `docker/setup-qemu-action`/`docker/setup-buildx-
+  action` pull, and the `aquasec/trivy` / `anchore/syft` / migration-smoke
+  `postgres` pulls in `scripts/container/scan.sh` and `verify.sh`. Empty by
+  default, so a local build or script run still pulls straight from Docker
+  Hub, unchanged.
 
-`testcontainers/ryuk:0.14.0` and `edoburu/pgbouncer` are already mirrored by
-ops's own #2111 at the same digest/tag acr needs -- verified via
-`gh api /orgs/full-chaos/packages?package_type=container` before this was
-written -- so acr's mirror workflow does not remirror them.
-
-`ghcr.io/full-chaos` is a shared **org-level** package namespace (ops writes
-to it too), so every digest-pinned image here is mirrored under a synthetic
+Every digest-pinned image is mirrored under a synthetic
 `mirror-<first-12-of-the-sha256>` tag rather than the upstream tag: every
 consumer above requests the ref by full digest, which Docker resolves
-regardless of what tag(s) exist, so this never has to collide with a tag
-another program's workflow owns. The one exception is
-`clickhouse/clickhouse-server`: its pin (`internal/chfixture.Image`,
-CHAOS-4549) is a bare tag with no digest, by design, so
-`TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX` requests it by that literal tag and the
-mirror must publish under the same literal tag -- there is no digest to
-derive a synthetic one from. See `mirror-images.yml`'s own header comment for
-the full reasoning.
+regardless of what tag(s) exist, so the tag is purely cosmetic bookkeeping
+for this now-acr-owned path. The one exception is `clickhouse/clickhouse-
+server`: its pin (`internal/chfixture.Image`, CHAOS-4549) is a bare tag with
+no digest, by design, so `TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX` requests it
+by that literal tag and the mirror must publish under the same literal tag --
+there is no digest to derive a synthetic one from. `testcontainers/ryuk` is
+the other tag-only entry, restated in the workflow rather than read from any
+file in this repo (testcontainers-go's own hardcoded reaper default). See
+`mirror-images.yml`'s own header comment for the full reasoning.
 
 Compose-only pulls (the root `compose.yml`'s ClickHouse/PgBouncer/Valkey/
 Mailpit/nginx helpers, and this repo's own `deploy/compose/acr.compose.yml`

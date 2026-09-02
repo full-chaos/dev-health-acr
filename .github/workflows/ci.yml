@@ -124,7 +124,14 @@ jobs:
       # here runs testcontainers-backed fixtures with no build tag or skip
       # guard (chfixture, falkorgraph, the postgres fixtures), so this job
       # needs both the prefix and the ghcr login below.
-      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+      # CHAOS-4855 R1 (learned the hard way): ghcr.io/full-chaos is NOT a
+      # writable-shared namespace -- GHCR ties package write access to
+      # whichever repo's token created it. Mirroring acr's postgres digest
+      # under ops's existing ghcr.io/full-chaos/postgres package 403'd
+      # ("permission_denied: write_package") the first time this ran. acr
+      # mirrors everything (including its own copy of the reaper) under its
+      # own repo-scoped path instead -- see mirror-images.yml.
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -230,7 +237,9 @@ jobs:
     env:
       # CHAOS-4855: see the identical env on the unit job above -- the race
       # shards run the same testcontainers-backed suite, partitioned.
-      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+      # CHAOS-4855 R1: see the unit job's env above for why this is
+      # ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner>.
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -332,7 +341,9 @@ jobs:
       # which starts real postgres/clickhouse testcontainers fixtures
       # (cmd/acr-api/hosted_real_integration_test.go) -- same mirror redirect
       # as the unit/race jobs.
-      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+      # CHAOS-4855 R1: see the unit job's env above for why this is
+      # ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner>.
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -528,7 +539,11 @@ jobs:
       # CHAOS-4855: golang (Dockerfile), tonistiigi/binfmt, moby/buildkit,
       # aquasec/trivy, anchore/syft, and the verify.sh postgres probe all
       # redirect at the ghcr.io/full-chaos mirror -- see docs/container-images.md.
-      ACR_IMAGE_MIRROR_PREFIX: ghcr.io/${{ github.repository_owner }}/
+      # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
+      # see the unit job's TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX comment above
+      # for why (GHCR package write access is per-creating-repo, not shared
+      # org-wide; the flat path 403'd against an existing ops-owned package).
+      ACR_IMAGE_MIRROR_PREFIX: ghcr.io/${{ github.repository }}/
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -598,7 +613,11 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       # CHAOS-4855: see container-contract-smoke above.
-      ACR_IMAGE_MIRROR_PREFIX: ghcr.io/${{ github.repository_owner }}/
+      # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
+      # see the unit job's TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX comment above
+      # for why (GHCR package write access is per-creating-repo, not shared
+      # org-wide; the flat path 403'd against an existing ops-owned package).
+      ACR_IMAGE_MIRROR_PREFIX: ghcr.io/${{ github.repository }}/
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -658,7 +677,11 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       # CHAOS-4855: see container-contract-smoke above.
-      ACR_IMAGE_MIRROR_PREFIX: ghcr.io/${{ github.repository_owner }}/
+      # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
+      # see the unit job's TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX comment above
+      # for why (GHCR package write access is per-creating-repo, not shared
+      # org-wide; the flat path 403'd against an existing ops-owned package).
+      ACR_IMAGE_MIRROR_PREFIX: ghcr.io/${{ github.repository }}/
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0

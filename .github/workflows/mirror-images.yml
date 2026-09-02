@@ -21,18 +21,29 @@
 # different manifest, silently changing the digest. The verify step below
 # fails the run if the digests ever diverge, so this cannot rot quietly.
 #
-# TAG NAMING is deliberately NOT the upstream tag for any digest-pinned image.
-# ghcr.io/full-chaos is a shared ORG-level namespace (confirmed via
-# `gh api /orgs/full-chaos/packages?package_type=container`): ops's own mirror
-# already writes `postgres:18-alpine` and `clickhouse-server:26.7`/`mirrored`
-# there. Every acr consumer of a digest-pinned image (ACR_IMAGE_MIRROR_PREFIX
-# for Dockerfile/buildx/qemu/trivy/syft/verify.sh, and
-# TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX for postgres/falkordb testcontainers)
-# requests `<prefix>/<repo>:<original-tag>@sha256:<digest>` -- a reference
-# Docker resolves BY DIGEST, so the destination tag is never actually looked
-# up. That means this workflow is free to tag every digest-pinned mirror
-# `mirror-<first-12-of-the-sha256>` instead of reusing the upstream tag, so it
-# never writes a tag ops's workflow (or any other program's) already owns.
+# DESTINATION NAMESPACE is ghcr.io/<owner>/<repo> (i.e.
+# ghcr.io/full-chaos/dev-health-acr), NOT the flat ghcr.io/<owner> ops's own
+# #2111 mirror uses -- and that is not a style choice, it is load-bearing.
+# ghcr.io/full-chaos looks like a shared org-level namespace (confirmed via
+# `gh api /orgs/full-chaos/packages?package_type=container`: ops's mirror
+# already publishes `postgres`, `clickhouse/clickhouse-server`,
+# `testcontainers/ryuk`, `edoburu/pgbouncer` there), but package WRITE access
+# on GHCR is scoped to whichever repo's token created the package, not shared
+# org-wide -- a first attempt at mirroring acr's postgres digest under ops's
+# existing `ghcr.io/full-chaos/postgres` (a different tag, same flat path)
+# 403'd: `unexpected status from POST .../blobs/uploads/: 403 Forbidden,
+# denied: permission_denied: write_package`. Reads of those PUBLIC packages
+# still work from any repo (that is how ryuk below is a pull-only reuse, not
+# a mirror entry) -- only writes are repo-scoped. So every image this
+# workflow WRITES lands under acr's own path, including the reaper (acr does
+# not attempt to write into ops's existing ryuk package either).
+#
+# Because of that, every digest-pinned image here is tagged
+# `mirror-<first-12-of-the-sha256>` rather than the upstream tag: every
+# consumer resolves the ref by full digest (Docker looks the manifest up by
+# digest regardless of what tag(s) exist), so the destination tag is
+# never actually looked up, and this workflow never has to worry about
+# colliding with a tag on a path it now exclusively owns.
 #
 # THE ONE EXCEPTION is clickhouse/clickhouse-server: acr's pin
 # (internal/chfixture.Image, CHAOS-4549) is a TAG, "26.7.5.10", with no
@@ -40,9 +51,7 @@
 # bumped by hand as prod's floor advances. TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX
 # prepends the registry to whatever ref the Go code declares UNCHANGED; it
 # cannot rename the tag. So for this one image, and only this one, the
-# destination tag must be the literal upstream tag "26.7.5.10" -- verified
-# against ops's own mirrored clickhouse tags (`mirrored`, `26.7`) to confirm
-# neither collides with it before this was written.
+# destination tag must be the literal upstream tag "26.7.5.10".
 #
 # NO setup-buildx-action, and NO Docker Hub login -- both deliberate, same
 # reasoning as ops's #2111: setup-buildx-action's default driver pulls
@@ -111,14 +120,16 @@ jobs:
 
       # One line per image: "<upstream ref>\t<dest tag>". The dest tag is
       # `mirror-<sha12>` for every digest-pinned ref (tag is never looked up
-      # for those -- see the file header) and the literal upstream tag only
-      # for clickhouse, which has none.
+      # for those -- see the file header) and the literal upstream tag for
+      # clickhouse and ryuk, which have none.
       #
       # Sourced from the same files the consumers read (Dockerfile,
       # chfixture.go, scan.sh, verify.sh) rather than restated as bare
       # strings, so this list cannot silently drift from what CI actually
       # pulls -- the extraction fails closed (`|| die`) if any pattern stops
-      # matching.
+      # matching. ryuk_ref is the one deliberate exception (see its own
+      # comment below): it is restated because testcontainers-go's reaper
+      # default is not declared anywhere in this repo's source.
       - name: Resolve every image acr CI pulls from Docker Hub
         id: images
         run: |
@@ -147,6 +158,16 @@ jobs:
           falkordb_ref="$(grep -rhoE 'falkordb/falkordb@sha256:[0-9a-f]{64}' \
             cmd/acr-projector internal/contextfabric/falkorgraph deploy/compose | sort -u | head -n1)" \
             || die "could not resolve the falkordb image from any test/compose source"
+          # testcontainers-go's own hardcoded reaper default (internal/config.
+          # ReaperDefaultImage in the pinned module version) -- not declared
+          # anywhere in this repo's source, so it is restated here rather than
+          # extracted. ops already mirrors this exact tag, but only under its
+          # OWN repo's ghcr path (see the file header): this workflow writes
+          # its own copy under acr's path since TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX
+          # is one prefix applied uniformly to every testcontainers pull,
+          # postgres/clickhouse/falkordb included, so it cannot resolve the
+          # reaper from a different namespace than the rest.
+          ryuk_ref='testcontainers/ryuk:0.14.0'
 
           # dest_tag prints "mirror-<first-12-of-the-sha256>" for a
           # digest-pinned ref, or the bare upstream tag if there is no
@@ -169,6 +190,7 @@ jobs:
             printf '%s\t%s\n' "$binfmt_ref" "$(dest_tag "$binfmt_ref")"
             printf '%s\t%s\n' "$buildkit_ref" "$(dest_tag "$buildkit_ref")"
             printf '%s\t%s\n' "$falkordb_ref" "$(dest_tag "$falkordb_ref")"
+            printf '%s\t%s\n' "$ryuk_ref" "$(dest_tag "$ryuk_ref")"
           } > images.tsv
 
           echo "--- images to mirror (upstream ref / dest tag) ---"
@@ -176,21 +198,23 @@ jobs:
 
       - name: Mirror each image to ghcr.io, preserving its digest
         env:
-          OWNER: ${{ github.repository_owner }}
+          # ghcr.io/<owner>/<repo> -- see the file header for why this is
+          # NOT the flat ghcr.io/<owner> ops's own mirror uses.
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           while IFS=$'\t' read -r image dest_tag; do
             [ -n "$image" ] || continue
             repo="${image%%@*}"
             repo="${repo%%:*}"
-            dest="ghcr.io/${OWNER}/${repo}:${dest_tag}"
+            dest="ghcr.io/${REPO}/${repo}:${dest_tag}"
             printf '\n=== from %s\n    to   %s\n' "$image" "$dest"
             docker buildx imagetools create --tag "$dest" "$image"
           done < images.tsv
 
       - name: Verify every mirrored digest matches upstream
         env:
-          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           failed=0
@@ -198,7 +222,7 @@ jobs:
             [ -n "$image" ] || continue
             repo="${image%%@*}"
             repo="${repo%%:*}"
-            dest="ghcr.io/${OWNER}/${repo}:${dest_tag}"
+            dest="ghcr.io/${REPO}/${repo}:${dest_tag}"
             mirrored="$(docker buildx imagetools inspect "$dest" --format '{{ .Manifest.Digest }}')"
             case "$image" in
               *@sha256:*)
@@ -211,9 +235,9 @@ jobs:
                 fi
                 ;;
               *)
-                # Tag-pinned upstream (clickhouse, see the file header).
-                # Nothing to assert a digest against; record what the mirror
-                # now serves.
+                # Tag-pinned upstream (clickhouse and ryuk -- see the file
+                # header and the ryuk_ref comment above). Nothing to assert a
+                # digest against; record what the mirror now serves.
                 printf 'NOTE %-40s tag-pinned upstream (%s), mirrored digest %s\n' \
                   "$repo" "${image##*:}" "$mirrored"
                 ;;
