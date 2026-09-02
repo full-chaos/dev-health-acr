@@ -674,6 +674,11 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"family_version", event.FamilyVersion,
 		"stage", string(event.Stage),
 		"basis", string(event.Basis),
+		// CHAOS-4809: whether that basis was REPORTED by a selection or
+		// DEFAULTED by planStageBasis. Without it a reader must assume the
+		// order named actually ran, and the same ticket is the proof that
+		// assumption is unsafe.
+		"basis_observed", event.BasisObserved,
 		"before", event.Before,
 		"after", event.After,
 		"groups", event.Groups,

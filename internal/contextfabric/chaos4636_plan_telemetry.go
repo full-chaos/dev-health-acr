@@ -37,6 +37,24 @@ type PlanNarrowingEvent struct {
 	Stage contractsv1.ContextFabricPlanNarrowingStage
 	// Basis is the declared order members were taken in.
 	Basis contractsv1.ContextFabricNarrowingBasis
+	// BasisObserved says whether Basis is an order the selection REPORTED
+	// or one planStageBasis defaulted to on the caller's behalf.
+	//
+	// CHAOS-4809. planStageBasis returns largest_group_round_robin for ANY
+	// grouped axis whose caller ran no selection -- a measured fit, for
+	// instance -- and canonical_id_lexical for every flat one. Both are
+	// declared defaults, and neither is distinguishable on the wire from an
+	// order a selection actually chose members by. So a reader who saw
+	// `basis: overlap_aware_set_cover` had to ASSUME a set-cover selection
+	// ran, and that ticket is precisely a demonstration that the assumption
+	// is unsafe: it is the field that stayed truthful while before/after
+	// went false, and a reader had no way to know which to trust.
+	//
+	// This encodes the PROVENANCE of the value rather than the value again.
+	// It is DERIVED in PlanNarrowingEventFrom from the same inputs
+	// planStageBasis uses, never passed, so a caller cannot claim an
+	// observation its stage did not make.
+	BasisObserved bool
 	// Before and After are counts of what was narrowed.
 	Before int
 	After  int
@@ -142,10 +160,15 @@ const (
 // order that was not used. Two parameters make the bad state unrepresentable.
 func PlanNarrowingEventFrom(plan AnswerPlan, stage contractsv1.ContextFabricPlanNarrowingStage, before, after int, groupAxis, groupsNarrowed bool, overrun contractsv1.ContextFabricBudgetOverrun, groupedBasis contractsv1.ContextFabricNarrowingBasis) PlanNarrowingEvent {
 	return PlanNarrowingEvent{
-		Family:             plan.Family,
-		FamilyVersion:      plan.FamilyVersion,
-		Stage:              stage,
-		Basis:              planStageBasis(stage, groupAxis, groupedBasis),
+		Family:        plan.Family,
+		FamilyVersion: plan.FamilyVersion,
+		Stage:         stage,
+		Basis:         planStageBasis(stage, groupAxis, groupedBasis),
+		// Exactly the condition under which planStageBasis returns the
+		// caller's own value rather than one of its two declared defaults.
+		// Derived from the same two inputs, in the same file, so the two
+		// cannot drift apart into a claim of observation over a default.
+		BasisObserved:      groupAxis && contractsv1.ValidContextFabricNarrowingBasis(groupedBasis),
 		Before:             before,
 		After:              after,
 		Groups:             groupsNarrowed,

@@ -10,6 +10,34 @@ import "sort"
 // rather than risk an exponential blowup on a pathological org.
 const ContextFabricSetCoverGroupGuard = 12
 
+// ValidContextFabricCohortMemberSelectionBasis reports whether basis is an
+// order the group-aware member clamp can ACTUALLY have selected by.
+//
+// It is deliberately NARROWER than ValidContextFabricNarrowingBasis. The
+// narrowing vocabulary has four members, but SelectGroupCoverMembers -- the
+// sole producer of this field -- can only ever return two of them: the exact
+// cover within ContextFabricSetCoverGroupGuard, and the round-robin fallback
+// beyond it. The other two describe orders that reach members by a different
+// route entirely: canonical_id_lexical is the FLAT narrowing's declared
+// order, which by construction runs only where there is no group axis to
+// select over, and attention_rank exists only after the fact read, which is
+// later than any clamp.
+//
+// Validating this field against the full vocabulary would admit a document
+// claiming a grouped clamp selected by attention rank -- an order with no
+// code path -- and that is the very defect class this field was added to
+// close: an artifact stating something about the selection that cannot be
+// true. A closed vocabulary that is wider than its producer is not a closed
+// vocabulary; it is an unenforced comment.
+func ValidContextFabricCohortMemberSelectionBasis(basis ContextFabricNarrowingBasis) bool {
+	switch basis {
+	case ContextFabricNarrowingBasisOverlapAwareSetCover, ContextFabricNarrowingBasisLargestGroupRoundRobin:
+		return true
+	default:
+		return false
+	}
+}
+
 // SelectGroupCoverMembers picks which cohort members a member-budget admits
 // out of a grouped cohort, exploiting overlap: group membership is
 // many-to-many, and a member shared by several groups can cover all of them

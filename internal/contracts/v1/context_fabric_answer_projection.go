@@ -385,9 +385,35 @@ type ContextFabricProjectionBudget struct {
 	// budget admits any -- which is exactly why a non-zero value here is
 	// worth alerting on rather than expecting.
 	CohortGroupsOmitted int `json:"cohort_groups_omitted"`
-	FactsOmitted        int `json:"facts_omitted"`
-	CandidatesOmitted   int `json:"candidates_omitted"`
-	EvidenceRefsOmitted int `json:"evidence_refs_omitted"`
+	// CohortMemberSelectionBasis (CHAOS-4809) names the ORDER the
+	// group-aware clamp took members in when it decided which of them
+	// survived. Empty -- and omitted from the wire -- for every projection
+	// whose clamp ran no group-aware selection at all, which is every flat
+	// cohort and every grouped cohort that fitted its budget.
+	//
+	// The counters above say HOW MUCH was dropped. This says BY WHAT ORDER
+	// the survivors were chosen, which is the one thing about a squeezed
+	// grouped cohort that could not be recovered from the artifact: the
+	// projection ran a real overlap-aware set-cover selection and discarded
+	// the basis at the call site, so nothing anywhere named the order.
+	//
+	// It completes the disclosure rather than starting it. The selection's
+	// BEFORE is Cohort.Total, its AFTER is len(Cohort.Members), the delta is
+	// CohortMembersOmitted, and the kept member ids are the projected
+	// members' own canonical ids -- all already on this artifact. Only the
+	// order was missing.
+	//
+	// ContextFabricNarrowingBasis's own doc comment is why this is a
+	// contract field and not a log line: the vocabulary exists so that every
+	// member of it is disclosed to the caller, "including -- especially --
+	// the one that is arbitrary". A boundary that selects without disclosing
+	// contradicts the type's reason for existing. answerprojection is pure
+	// by a binding constraint and cannot reach a telemetry sink, so the
+	// artifact is the only honest place for it.
+	CohortMemberSelectionBasis ContextFabricNarrowingBasis `json:"cohort_member_selection_basis,omitempty"`
+	FactsOmitted               int                         `json:"facts_omitted"`
+	CandidatesOmitted          int                         `json:"candidates_omitted"`
+	EvidenceRefsOmitted        int                         `json:"evidence_refs_omitted"`
 	// LimitationsOmitted, WarningsOmitted, and CoverageOmitted exist
 	// because the canonical result bounds these arrays at 250 while the
 	// projection bounds them at 100 (see the Max*Count constants above).

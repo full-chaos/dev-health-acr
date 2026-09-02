@@ -123,7 +123,7 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	clamp := &clamper{}
 	index := newEvidenceIndex(bounds.MaxEvidenceRefs)
 	drivers, driversOmitted, withheldOmitted, facts, factsOmitted := projectDrivers(result, bounds, index, clamp)
-	cohort, cohortOmitted, cohortReasonsOmitted, cohortGroupsOmitted := projectCohort(result, bounds, index, clamp)
+	cohort, cohortOmitted, cohortReasonsOmitted, cohortGroupsOmitted, cohortSelectionBasis := projectCohort(result, bounds, index, clamp)
 	clarification, candidatesOmitted, candidateReasonsOmitted := projectClarification(result, bounds, clamp)
 	limitations, limitationsOmitted := boundedLimitations(result.Limitations, clamp)
 	// The engine's own displacement counts too (CHAOS-3746 round-16).
@@ -213,15 +213,20 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		WithheldDriversOmitted: withheldOmitted,
 		CohortMembersOmitted:   cohortOmitted,
 		CohortGroupsOmitted:    cohortGroupsOmitted,
-		FactsOmitted:           factsOmitted,
-		CandidatesOmitted:      candidatesOmitted,
-		EvidenceRefsOmitted:    evidenceOmitted,
-		ReasonsOmitted:         cohortReasonsOmitted + candidateReasonsOmitted,
-		ValuesClamped:          clamp.count,
-		LimitationsOmitted:     limitationsOmitted,
-		WarningsOmitted:        warningsOmitted,
-		CoverageOmitted:        coverageOmitted,
-		RenderShapesOmitted:    renderShapesOmitted,
+		// CHAOS-4809: the order the group-aware clamp chose the surviving
+		// members by. Empty for every projection whose clamp ran no
+		// group-aware selection, so it never claims an order that did not
+		// execute.
+		CohortMemberSelectionBasis: cohortSelectionBasis,
+		FactsOmitted:               factsOmitted,
+		CandidatesOmitted:          candidatesOmitted,
+		EvidenceRefsOmitted:        evidenceOmitted,
+		ReasonsOmitted:             cohortReasonsOmitted + candidateReasonsOmitted,
+		ValuesClamped:              clamp.count,
+		LimitationsOmitted:         limitationsOmitted,
+		WarningsOmitted:            warningsOmitted,
+		CoverageOmitted:            coverageOmitted,
+		RenderShapesOmitted:        renderShapesOmitted,
 	}
 	projection.ProjectionBudget.Truncated = declaresDrop(projection.ProjectionBudget)
 	if projection.CommittedSubjects == nil {
@@ -429,9 +434,14 @@ func countUncitedClaims(result contractsv1.ContextFabricInvestigationResult, ret
 // cohort it discovered, not a statement about this projection. Projection
 // truncation shows up in Total versus len(Members) and in the declared
 // budget, never by silently flipping the engine's own claim.
-func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds Budget, index *evidenceIndex, clamp *clamper) (*contractsv1.ContextFabricProjectedCohort, int, int, int) {
+// The final return is the BASIS the group-aware allowance selected by
+// (CHAOS-4809), empty when no group-aware selection ran. It is returned
+// rather than logged because this package is pure by a binding constraint
+// and has no sink to log to -- and because the caller a basis is owed is the
+// consumer reading the projection, not only an operator.
+func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds Budget, index *evidenceIndex, clamp *clamper) (*contractsv1.ContextFabricProjectedCohort, int, int, int, contractsv1.ContextFabricNarrowingBasis) {
 	if result.Cohort == nil {
-		return nil, 0, 0, 0
+		return nil, 0, 0, 0, ""
 	}
 	canonical := *result.Cohort
 	reasonsOmitted := 0
@@ -444,7 +454,7 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 	// admissible is nil for a flat cohort, which is every cohort this
 	// projection carried before this slice, so the loop below is
 	// byte-identical for them.
-	admissible := groupAwareMemberAllowance(canonical, bounds.MaxCohortMembers)
+	admissible, selectionBasis := groupAwareMemberAllowance(canonical, bounds.MaxCohortMembers)
 	members := make([]contractsv1.ContextFabricProjectedCohortMember, 0, min(len(canonical.Members), bounds.MaxCohortMembers))
 	// retained mirrors members 1:1 (same order, same cut) but keeps the
 	// CANONICAL member -- including Drivers, which the projected member
@@ -494,6 +504,27 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 		})
 		retained = append(retained, member)
 	}
+	// CHAOS-4809: the allowance is NOT the last cut in this function, so it
+	// does not automatically get to name the order the survivors were chosen
+	// by. Two later rules can still drop a member it admitted: the
+	// MaxCohortMembers break at the top of the loop -- reachable because
+	// SelectGroupCoverMembers computes its group floor UNCONDITIONALLY and
+	// can come back OVER budget rather than drop a group (its own doc
+	// comment) -- and the evidence-index rule that drops a citing member
+	// whole.
+	//
+	// When either fires, the survivor set is a canonical-order prefix of
+	// what the selection admitted, not the selection's own choice, and
+	// publishing the selection's basis would state that an order chose these
+	// members when a different rule did. That is precisely the defect this
+	// field was added to remove, one boundary further down.
+	//
+	// So the basis travels only when EVERY admitted member survived. The
+	// field's absence already means "no group-aware selection chose this
+	// set", which covers this case exactly as it covers a flat cohort.
+	if selectionBasis != "" && len(members) != len(admissible) {
+		selectionBasis = ""
+	}
 	groups, groupsOmitted := projectCohortGroups(canonical, members)
 	return &contractsv1.ContextFabricProjectedCohort{
 		Kind:      canonical.Kind,
@@ -509,7 +540,7 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 		Members:      members,
 		Groups:       groups,
 		RankingTable: buildRankingTable(retained),
-	}, len(canonical.Members) - len(members), reasonsOmitted, groupsOmitted
+	}, len(canonical.Members) - len(members), reasonsOmitted, groupsOmitted, selectionBasis
 }
 
 // groupAwareMemberAllowance decides WHICH members a grouped cohort's budget
@@ -527,9 +558,13 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 //
 // Returns nil when there is no group axis or when every member fits, which
 // leaves the flat path completely untouched.
-func groupAwareMemberAllowance(cohort contractsv1.ContextFabricCohort, maxMembers int) map[string]struct{} {
+func groupAwareMemberAllowance(cohort contractsv1.ContextFabricCohort, maxMembers int) (map[string]struct{}, contractsv1.ContextFabricNarrowingBasis) {
 	if len(cohort.Groups) == 0 || maxMembers <= 0 || len(cohort.Members) <= maxMembers {
-		return nil
+		// No selection runs on this path, so there is no basis to report.
+		// The empty string is the honest answer; naming the order this
+		// function WOULD have used is the inverse of the CHAOS-4809 defect
+		// -- an artifact describing a selection that never happened.
+		return nil, ""
 	}
 	// Ungrouped members -- ones no group claims -- are cohort members like
 	// any other; the same defect NarrowGroupedCohort used to carry (and the
@@ -546,8 +581,14 @@ func groupAwareMemberAllowance(cohort contractsv1.ContextFabricCohort, maxMember
 			ungrouped = append(ungrouped, member.Subject.CanonicalID)
 		}
 	}
-	allowed, _ := contractsv1.SelectGroupCoverMembers(cohort.Groups, ungrouped, maxMembers)
-	return allowed
+	// CHAOS-4809: the second return value is the basis, and discarding it
+	// here was the whole defect. The selection is exact set cover within
+	// ContextFabricSetCoverGroupGuard and the largest-group-round-robin
+	// fallback beyond it -- two genuinely different orders producing
+	// genuinely different survivors, which a reader of the projection had
+	// no way to tell apart.
+	allowed, basis := contractsv1.SelectGroupCoverMembers(cohort.Groups, ungrouped, maxMembers)
+	return allowed, basis
 }
 
 // projectCohortGroups rebuilds the group axis over the members that actually
