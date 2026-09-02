@@ -29,7 +29,11 @@ func TestChaos4542_ProjectTeamsResolvesOnProjectIdentity(t *testing.T) {
 	if strings.Contains(statement, "{ids:") {
 		t.Errorf("the producer references an ids parameter it never binds; a catalog walker must use ProjectIdentityCatalogSQL\n%s", statement)
 	}
-	if !strings.Contains(statement, "id AS scope") || !strings.Contains(statement, "project_key AS scope") {
+	// RESPELLED for dev-health-go v0.6.3 (CHAOS-4751), not relaxed: the two
+	// scope rows are one ARRAY JOIN fan-out now rather than two UNION ALL
+	// branches. Same property, one literal, and it additionally pins that
+	// the key row is the guarded one.
+	if !strings.Contains(statement, "if(key_scope_emitted, [id, project_key], [id]) AS scope") {
 		t.Errorf("the identity expansion is missing; both scope rows must be present\n%s", statement)
 	}
 	// 2. The old key-only join is gone, in both of its parts.
@@ -118,13 +122,17 @@ func TestChaos4542_TheProducerConsumesTheSharedIdentityHelpers(t *testing.T) {
 	// CHAOS-4750 collapsed the four CHAOS-4566 arms into two (asserting,
 	// retraction), each unioning its own two match variants at the
 	// OWNERSHIP row level instead of embedding a separate copy of the
-	// project source per variant. Three UNION ALLs per arm now: one between
-	// the two arms, one inside each arm's own ownership-side union (one per
-	// arm), and one inside each arm's single embedded copy of the identity
-	// expansion (again one per arm, since resolved/ambiguous each wrap
-	// ProjectIdentityCatalogSQL's own internal id/key union exactly once).
-	// (arms - 1) + arms + arms = 3*arms - 1, general in the arm count.
-	if want := 3*len(projectTeamsArms()) - 1; strings.Count(statement, "UNION ALL") != want {
+	// project source per variant. That left three UNION ALLs per arm: one
+	// between the two arms, one inside each arm's own ownership-side union,
+	// and one inside each arm's embedded copy of the identity expansion.
+	//
+	// The third term is GONE as of dev-health-go v0.6.3 (CHAOS-4751):
+	// ProjectIdentityCatalogSQL no longer has an internal id/key UNION ALL
+	// at all -- it reads its row source once and fans the two scope rows
+	// out with ARRAY JOIN. So the identity expansion contributes ZERO
+	// unions per arm, by construction rather than by arithmetic.
+	// (arms - 1) + arms = 2*arms - 1, still general in the arm count.
+	if want := 2*len(projectTeamsArms()) - 1; strings.Count(statement, "UNION ALL") != want {
 		t.Errorf("UNION ALL count = %d, want %d (arm-level, plus one ownership-side union and one identity-expansion union per arm)\n%s", strings.Count(statement, "UNION ALL"), want, statement)
 	}
 }
