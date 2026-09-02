@@ -638,14 +638,31 @@ func LookupQuestionFamily(family QuestionFamily) (QuestionFamilyDefinition, bool
 //
 // BUMP THIS whenever any row above changes in a way that could change an
 // answer -- ApplicableAxes, AskOrder, RequireDrivers, RequireRanking,
-// RenderKinds, Budget, or the precedence table in
-// chaos4632_question_family_precedence.go. In THIS slice nothing is gated,
-// so no answer can change; the version exists now so that S4 and S5 inherit
-// a reuse fence that already works, rather than adding one after the
-// family starts deciding things. Same reasoning
-// ReuseKey.RankingFormulaVersion's own migration (0035) records for the
-// ranking formula.
-const QuestionFamilyTableVersion = "question-family.v1"
+// RenderKinds, Budget, NarrowerContinuationAxis, or the precedence table in
+// chaos4632_question_family_precedence.go.
+//
+// v1 -> v2 (CHAOS-4735). The original text said "in THIS slice nothing is
+// gated, so no answer can change", and that stopped being true the moment a
+// row became CONSUMED: NarrowerContinuationAxis is read by the planned budget
+// refusal and reaches the caller as error.details.narrower_continuation. A
+// registry row that changes a served answer is a version change, and the
+// comment claiming otherwise is corrected here rather than left to mislead
+// the next reader.
+//
+// Found by adversarial review (round 5, argued): without the bump,
+// PlanAnswer stamps the unchanged version into PlanNarrowingEvent, so refusal
+// telemetry either side of this deploy is conflated under one table version
+// and "did the continuation advice change" cannot be answered from the
+// artifacts. It was argued rather than executed because no historical
+// telemetry store was available to run the cross-deploy query -- the defect
+// is in what the data would let you ask later, which is exactly the class
+// that is cheap now and impossible retroactively.
+//
+// This is also a REUSE FENCE (ReuseKey.QuestionFamilyVersion), so the bump
+// invalidates answers cached under the old table. That is the intended
+// effect, not a side effect: an answer whose continuation was computed from
+// the v1 table should not be replayed as though it came from v2.
+const QuestionFamilyTableVersion = "question-family.v2"
 
 func allStructureNeedKinds() []StructureNeedKind {
 	wire := contractsv1.ContextFabricStructureNeedKindVocabulary()
