@@ -225,15 +225,38 @@ func partitionProjectableCandidates(all []candidate, observe func(quarantineObse
 			})
 		}
 	}
-	kept = dropDuplicateIdentities(kept, observe)
+	// ORDER IS LOAD-BEARING: the dependent sweep runs BEFORE identity
+	// deduplication, never after.
+	//
+	// Both passes can drop a candidate that shares an identity with another,
+	// and the wrong order loses the survivor. Two unresolved rows for the
+	// same target -- one whose edge is quarantined, one whose edge is valid --
+	// mint the SAME `work_item_ref` stub. Deduplicating first keeps whichever
+	// sorted earlier; if that is the quarantined row's stub, the sweep then
+	// removes it as an orphan and the VALID row's stub is already gone, so the
+	// batch carries a relationship pointing at a subject it never projected.
+	// The graph then gets only the implicit endpoint stub the edge write
+	// creates, which asserts no validity window and is therefore admitted at
+	// every requested time -- silently over-admitting the subject historically.
+	//
+	// Sweeping first removes exactly the orphans, and deduplication then
+	// chooses among candidates that are all still supported.
+	kept = dropOrphanedDependents(kept, quarantinedRelationships, observe)
+	return dropDuplicateIdentities(kept, observe)
+}
+
+// dropOrphanedDependents removes candidates whose supported item was
+// quarantined. Split out from the main pass so the ordering against
+// deduplication is explicit at the call site rather than implied by
+// statement order inside one function.
+func dropOrphanedDependents(all []candidate, quarantinedRelationships map[string]struct{}, observe func(quarantineObservation)) []candidate {
 	if len(quarantinedRelationships) == 0 {
-		return kept
+		return all
 	}
-	// Second pass: an item is not projectable just because it is VALID. A
-	// candidate that exists only to support a quarantined item is an
-	// unreachable orphan, and emitting it would turn a clean drop into
-	// silent graph litter. Runs only when something was actually dropped,
-	// so the common path stays a single walk.
+	kept := all
+	// An item is not projectable just because it is VALID: a candidate that
+	// exists only to support a quarantined item is an unreachable orphan, and
+	// emitting it would turn a clean drop into silent graph litter.
 	survivors := kept[:0]
 	for _, c := range kept {
 		if c.supports != "" {

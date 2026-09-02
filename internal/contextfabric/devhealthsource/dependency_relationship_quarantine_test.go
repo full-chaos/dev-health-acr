@@ -810,3 +810,70 @@ func TestMappedUnresolvedPairDoesNotDuplicateItsStubSubject(t *testing.T) {
 		t.Fatalf("the redundant stub and edge must be dropped as duplicates and COUNTED: %v", reasons)
 	}
 }
+
+// TestValidRowKeepsItsStubWhenAQuarantinedRowSharesTheTarget is round 3's
+// second finding, and an ORDERING bug between the two passes this branch
+// added -- neither of which is wrong on its own.
+//
+// Two unresolved rows name the same target. One row's edge is quarantined for
+// an unknown type; the other's is perfectly valid. Both mint the SAME
+// `work_item_ref` stub subject. Deduplicating BEFORE the orphan sweep keeps
+// whichever sorted earlier — the quarantined row's stub — and the sweep then
+// removes it as an orphan, by which time the valid row's stub has already
+// been discarded as a duplicate. The batch ends up carrying a relationship
+// that points at a subject it never projected.
+//
+// That is not merely untidy. The graph then holds only the implicit endpoint
+// stub the edge write creates, which asserts no validity window and is
+// therefore admitted at EVERY requested time — so a temporally-bounded
+// subject silently becomes unbounded, over-admitting it historically.
+//
+// Sweeping orphans FIRST and deduplicating afterwards makes the passes
+// compose: the sweep removes exactly the unsupported candidates, and
+// deduplication then chooses among candidates that are all still supported.
+func TestValidRowKeepsItsStubWhenAQuarantinedRowSharesTheTarget(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// The quarantined row sorts FIRST, so it is the one dedup would keep.
+	rows := [][]any{
+		unresolvedDependencyRow("WI-1", "EXT-1", "EXTERNAL_ISSUE_KEY", at, created),
+		unresolvedDependencyRow("WI-2", "EXT-1", "RELATES_TO", at.Add(time.Second), created),
+	}
+	batch, available, err, observations := projectWithQuarantineLog(t, dependencyTablesOnly(t, at, rows), testCursor(t, at.Add(-time.Hour), ""))
+	if err != nil || !available {
+		t.Fatalf("err=%v available=%v", err, available)
+	}
+
+	if len(batch.Relationships) != 1 {
+		t.Fatalf("relationships = %d, want the 1 valid RELATES_TO edge", len(batch.Relationships))
+	}
+	edge := batch.Relationships[0]
+
+	// The decisive assertion: the surviving edge's endpoint must be projected
+	// as a real entity, not left to the backend's implicit stub.
+	if len(batch.Entities) != 1 {
+		t.Fatalf("entities = %d, want exactly 1 stub for the target the surviving edge points at -- without it the backend mints an implicit stub with NO validity window, admitted at every requested time: %+v",
+			len(batch.Entities), batch.Entities)
+	}
+	stub := batch.Entities[0]
+	if stub.Subject.CanonicalID != edge.To.CanonicalID {
+		t.Fatalf("projected stub %q does not match the surviving edge's target %q", stub.Subject.CanonicalID, edge.To.CanonicalID)
+	}
+	if stub.ValidFrom == nil {
+		t.Fatal("the surviving stub must carry the validity window its source row asserted; a nil window is what the implicit backend stub would have given us anyway")
+	}
+
+	// Both drops still counted, neither silent.
+	reasons := map[string]int{}
+	for _, entry := range observations {
+		reasons[fmt.Sprint(entry["quarantine_reason"])]++
+	}
+	if reasons["unknown_relationship_type"] != 1 {
+		t.Fatalf("want the quarantined edge counted once: %v", reasons)
+	}
+	if reasons["orphaned_dependent"] != 1 {
+		t.Fatalf("want the quarantined row's own stub dropped as an orphan and counted: %v", reasons)
+	}
+}
