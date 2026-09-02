@@ -13,60 +13,56 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// CHAOS-4735: the question family may not be read to author user language,
-// and the set of places that read it at all stays closed.
+// CHAOS-4735 — DEFENCE-IN-DEPTH HEURISTIC over known family-keyed language
+// shapes. This is NOT a proof of nonexistence, and it must not be described as
+// one.
 //
-// WHY THIS IS AN AST SWEEP AND NOT A UNIT TEST. The defect this pins is a
-// SHAPE, not a value: `narrowerQuestionFor` switched on plan.Family and
-// returned one of five fixed English sentences, which the route served
-// verbatim as error.details.narrower_question in the 413 body. A unit test
-// asserting "narrowerQuestionFor no longer exists" dies the moment someone
-// writes the same switch under a different name -- which is exactly the
-// pressure the floor capstone puts on this code, because the floor's own
-// narrower continuation sits on this mechanism and the natural build EXTENDS
-// the switch. Acceptance criterion 1 asks for mechanical nonexistence; a
-// sweep over the syntax is the only form of that claim which survives a
-// rename.
+// WHY THE CLAIM WAS DOWNGRADED, which is the useful part of this comment.
+// Three consecutive adversarial review rounds each defeated an earlier version
+// of this sweep with a genuinely NEW construction, none of them contrived:
 //
-// The two rulings this enforces are chris's, 2026-08-31 13:35 and 13:40:
-// language is the model layer's job at BOTH boundaries, and vocabulary->
-// sentence tables are banned outright rather than deprecated.
+//	R1  `string(plan.Family) == "subject_investigation"` — a comparison to a
+//	    raw string literal. Named no constant, so a needle set built on
+//	    constant names could not see it. Also: the walk was not recursive, so
+//	    every subpackage was invisible.
+//	R2  `type phrase string` + `map[QuestionFamily]phrase{...}` — a named type
+//	    whose underlying type is string. Matching textual types by NAME could
+//	    not resolve it.
+//	R3  family -> ordinal via `QuestionFamilyVocabulary()`, then index a
+//	    `[]string` table. Requires DATA FLOW to see; syntax cannot.
 //
-// It carries TWO assertions, because criteria 1 and 4 are two different
-// claims about the same syntax and separating them makes a failure say which
-// one broke:
+// R1 and R2 are closed below. R3 IS NOT, and saying so is the point: closing
+// it needs `go/types` to resolve aliases plus data-flow tracking from a
+// QuestionFamily value to a text-yielding index. That is a different kind of
+// analysis and it is ticketed separately rather than bolted on here.
 //
-//	A (criterion 4) -- the set of production files that name a DISCRIMINATING
-//	  family value is exactly the sanctioned set. Checked in BOTH directions,
-//	  so the sanctioned list cannot rot into a list of files that no longer
-//	  mention a family.
-//	B (criterion 1) -- no family-keyed switch or map anywhere, sanctioned
-//	  files included, yields a string literal. This is the prose bar, and it
-//	  is what criterion 5's mutation must trip.
+// The pattern across all three is one mistake made three ways: each version
+// was an ALLOWLIST OF SHAPES THE AUTHOR HAD THOUGHT OF, defended as a
+// universal claim. The claim is what was wrong, not the shapes. So the
+// universal claim now lives where it has actually held — the WIRE tests in
+// internal/api (closed `details` key set, and `error.message` invariance
+// across families), which caught R2's and R3's constructions when this sweep
+// did not.
 //
-// WHY "DISCRIMINATING", AND WHY THAT IS NOT A LOOPHOLE. The first run of this
-// sweep flagged three files the ticket's own grep had not seen
-// (chaos4632_question_family_consensus.go, chaos4636_answer_plan.go,
-// chaos4636_plan_carry.go) because that grep listed only the five cohort
-// families and the sweep derives all eight. Every one of those hits is
-// QuestionFamilyUnclassified and nothing else: the resolver's refuse-to-guess
-// initial value, the sanitizer's fallback, and two carry-time emptiness
-// checks written literally as `Family == "" || Family == Unclassified`.
-// Comparing against the member that MEANS "no family" is an emptiness test,
-// not a read of which family this is, so it is not one of the four purposes
-// and adding three files to the allowlist to accommodate it would dilute the
-// one thing criterion 4 pins.
+// WHAT THIS CATCHES (the value it still has: these are the shapes a person
+// reaches for first, and it catches them in review rather than at the wire):
+//   - a `switch` on a family-typed tag, or on family constants, whose arms
+//     return or assign a string literal;
+//   - a map from the family type to anything that can hold text;
+//   - a map to text keyed by a family WIRE VALUE written as a raw string;
+//   - a family-typed expression compared to a non-empty string literal;
+//   - any of the above anywhere under the four swept trees, recursively.
 //
-// The exclusion cannot be used to smuggle a read back in, for two reasons
-// that are both mechanical rather than promised:
+// WHAT THIS DOES NOT CATCH, stated so no one mistakes green for proof:
+//   - ordinal indirection (R3) — family to index to a text table;
+//   - anything reached through a function boundary or a struct field, where
+//     the family and the text are in different scopes;
+//   - text tables in packages outside the four swept roots;
+//   - a family read that reaches text via any other closed token in between.
 //
-//  1. A file naming Unclassified AND any other family value is still counted,
-//     because the hit test looks for a discriminating member. The sentinel
-//     buys a file nothing.
-//  2. Assertion B keeps the FULL vocabulary, so
-//     `case QuestionFamilyUnclassified: return "..."` is still a violation --
-//     and a `switch plan.Family` is caught by type regardless of which
-//     constants its arms name.
+// Assertion A (the closed four-purpose read list) is unaffected by the
+// downgrade — it is a claim about which FILES name a family value, which
+// syntax can answer exactly.
 
 // sanctionedFamilyReadSites is the CLOSED four-purpose read list from the
 // stage-2 amendment (design §13.4.3), as file paths relative to the
@@ -101,7 +97,7 @@ var familySweepRoots = []string{
 	"internal/mcp",
 }
 
-func TestChaos4735NoFamilyKeyedStringTableInProduction(t *testing.T) {
+func TestChaos4735KnownFamilyLanguageShapesAreAbsent(t *testing.T) {
 	root := repositoryRootForFamilySweep(t)
 	constants := familyValueConstantNames(t, root)
 

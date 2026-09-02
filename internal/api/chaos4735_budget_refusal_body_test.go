@@ -13,14 +13,30 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// CHAOS-4735, the wire half. The engine-side sweep
-// (chaos4735_family_language_sweep_test.go) proves no family-keyed string
-// table exists in the source; this proves what the 413 body actually
-// CONTAINS, which is the claim a consumer cares about and the one the
-// independent review demonstrated by serving the sentence end to end.
+// CHAOS-4735 — THESE TESTS CARRY ACCEPTANCE CRITERION 1. The source sweep
+// (chaos4735_family_language_sweep_test.go) is a defence-in-depth heuristic
+// over known shapes and is explicitly NOT a nonexistence proof; the
+// mechanical claim lives here, on the wire.
 //
-// There was no handler-level test over this body before this change. The
-// planned refusal shipped with its shape pinned only at the engine, so the
+// That allocation was not a preference, it was measured. Three adversarial
+// review rounds each defeated the source sweep with a new construction. TWO OF
+// THE THREE were caught here anyway and could not reach a caller: R2 tried to
+// route family-keyed text through `error.message` and the family-invariance
+// test below rejected it; R3 tried a new `details` key and the closed key set
+// rejected it. The source sweep is the early-warning layer; this is the layer
+// that has actually held.
+//
+// THE LIMIT OF THAT CLAIM, stated so it is not overread: these tests cover
+// **the API investigation route's 413 body only** -- its `details` object and
+// its `error.message`. They say nothing about MCP's projection surface, about
+// other endpoints, or about any future served field. MCP in particular returns
+// `ContextFabricAnswerProjection` through a separate field-by-field projector,
+// so a family-keyed string reaching THAT surface would be invisible to
+// everything in this file. A closed-key check for the MCP surface is ticketed
+// separately.
+//
+// There was no handler-level test over this body before this change at all.
+// The planned refusal shipped with its shape pinned only at the engine, so the
 // English sentence reached the wire without any test observing it -- which is
 // most of why it survived to be found by an outside reviewer.
 
