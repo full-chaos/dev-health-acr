@@ -332,41 +332,21 @@ func TestClassifierReachesEveryClassItDeclares(t *testing.T) {
 		t.Fatalf("assertion reach: %d of %d arms reached their assertions", reached, len(failureClasses))
 	}
 
-	// The reachability loop above cannot detect a SHADOWED arm on its own:
-	// it probes each sentinel bare, and a bare sentinel satisfies only
-	// itself, so reordering the table leaves it green. Measured, not
-	// assumed -- a mutation that swapped ErrQueryBudgetExceeded behind
-	// ErrUnavailable survived it.
+	// REPORTED LIMIT, measured rather than assumed. A mutation that swaps
+	// two rows of failureClasses SURVIVES this test today, and that is
+	// correct rather than a hole: at this commit no entry's sentinel
+	// satisfies another's, so first-match cannot pick a wrong row and the
+	// order is genuinely inert. devhealthsource's tableReadError -- the one
+	// producer whose Unwrap could make ErrQueryBudgetExceeded and
+	// ErrUnavailable overlap -- returns one or the other, never both.
 	//
-	// What actually makes the order inert TODAY is that no entry's sentinel
-	// satisfies another's, so first-match cannot pick the wrong row. That is
-	// the invariant asserted here, and asserting it is what gives the
-	// ordering comment on failureClasses teeth: the day someone adds a
-	// sentinel that wraps an existing one -- which is exactly what
-	// devhealthsource's tableReadError would do if its Unwrap ever returned
-	// BOTH ErrQueryBudgetExceeded and ErrUnavailable instead of one or the
-	// other -- this fails and forces the ordering decision to be made
-	// deliberately rather than discovered in production.
-	pairs := 0
-	for i, earlier := range failureClasses {
-		for j, later := range failureClasses {
-			if i >= j {
-				continue
-			}
-			pairs++
-			if earlier.class == later.class {
-				// Deliberately shared class (cancellation and deadline);
-				// first-match cannot pick a WRONG class between these.
-				continue
-			}
-			if errors.Is(later.sentinel, earlier.sentinel) {
-				t.Fatalf("sentinel %v (class %q, row %d) satisfies %v (class %q, row %d) declared BEFORE it: "+
-					"first-match will classify it as %q. Either order them deliberately or split the classes",
-					later.sentinel, later.class, j, earlier.sentinel, earlier.class, i, earlier.class)
-			}
-		}
-	}
-	if pairs == 0 {
-		t.Fatal("no ordered pair was compared; the shadowing check is vacuous")
-	}
+	// A separate pairwise "no sentinel shadows an earlier one" assertion was
+	// written here and then REMOVED as subsumed, because two mutations
+	// showed the loop above already covers it: with ErrQueryBudgetExceeded
+	// mutated to wrap ErrUnavailable and the table order left correct, this
+	// test stays green; with the same wrap AND the two rows swapped, it
+	// fails with "an arm shadowed by an earlier entry". So the day a real
+	// overlap appears, the reordering hazard the failureClasses comment
+	// describes is caught here -- by this loop, with no second guard to keep
+	// in step.
 }
