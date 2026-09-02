@@ -41,35 +41,23 @@ const (
 	// and A2 with no repair.
 	FrameValidationOutcomeValid FrameValidationOutcome = "valid"
 	// FrameValidationOutcomeRepaired: one bounded repair ran and the
-	// repaired frame passed the SAME invariants, unrelaxed. RESERVED --
-	// nothing emits it in this slice, which ships repair as refuse-only;
-	// the vocabulary member is kept so the closed set does not change
-	// meaning when the bound lands.
+	// repaired frame passed the SAME invariants, unrelaxed.
 	FrameValidationOutcomeRepaired FrameValidationOutcome = "repaired"
-	// FrameValidationOutcomeRefusedInvalid: the frame failed an invariant
-	// and was refused. The family is unclassified -- refuse to guess.
-	//
-	// In THIS slice it is the only refusal outcome, because there is no
-	// repair path: a frame that fails validation is refused immediately
-	// rather than after an attempt (§13.6 rule 4 reached directly).
+	// FrameValidationOutcomeRefusedInvalid: still invalid after the one
+	// permitted attempt (or the repairer errored, or none was
+	// configured). The frame is refused and the family is unclassified --
+	// refuse to guess.
 	FrameValidationOutcomeRefusedInvalid FrameValidationOutcome = "refused_invalid"
 	// FrameValidationOutcomeRefusedKindChange: the repair proposed a
 	// SubjectExpression.Kind change the violated invariant does not name.
 	//
-	// RESERVED, like `repaired` above: nothing in this slice emits it,
-	// because nothing here repairs. It stays in the vocabulary because
-	// §13.6's telemetry table DECLARES these four members, and shrinking a
-	// design-declared closed vocabulary to match one slice's emission
-	// subset would be a design change made by omission. The registry test
-	// asserts the count, which is how that deviation was caught rather
-	// than shipped.
-	//
-	// A DISTINCT OUTCOME FROM refused_invalid on purpose. "The repair
+	// A DISTINCT OUTCOME FROM refused_invalid ON PURPOSE. "The repair
 	// could not fix it" and "the repair tried to answer a different
 	// question" are different operational states, and collapsing them
-	// would make a repairer drifting toward re-interpretation invisible --
-	// the same class of miss that made a split ensemble invisible before
-	// the family telemetry split `model_plurality_rejected` from `none`.
+	// would make a repairer drifting toward re-interpretation invisible
+	// -- the same class of miss that made a split ensemble invisible
+	// before the family telemetry split `model_plurality_rejected` from
+	// `none`.
 	FrameValidationOutcomeRefusedKindChange FrameValidationOutcome = "refused_kind_change"
 )
 
@@ -80,10 +68,7 @@ var frameValidationOutcomes = [...]FrameValidationOutcome{
 	FrameValidationOutcomeRefusedKindChange,
 }
 
-// FrameValidationOutcomeCount is four, per §13.6's telemetry table. Two of
-// the four (`repaired`, `refused_kind_change`) are RESERVED in this slice,
-// which has no repair path: the vocabulary is the design's, and one
-// slice's emission subset does not shrink it.
+// FrameValidationOutcomeCount is four.
 const FrameValidationOutcomeCount = len(frameValidationOutcomes)
 
 // FrameValidationOutcomeVocabulary returns the closed vocabulary.
@@ -116,12 +101,24 @@ type FrameValidationEvent struct {
 	FailedPhase FrameValidationPhase
 	// FailureDetail is the closed reason code within that invariant.
 	FailureDetail FrameFailureDetail
+	// RepairAttempted records whether the repairer was called.
+	RepairAttempted bool
+	// RepairLatencyMS is the repair call's wall time. Behaviour change
+	// B4's gate is "inside the reserved deadline; measured repair rate +
+	// latency", and an unmeasured extra model call is an unbounded one.
+	RepairLatencyMS int64
+	// RepairBoundViolation names why a repaired candidate was rejected,
+	// empty when none was.
+	RepairBoundViolation FrameRepairBoundViolation
 
-	// ProposedKind is the closed union discriminator as the model
-	// proposed it.
+	// ProposedKind / RepairedKind are the closed union discriminator as
+	// PROPOSED and (if repaired) as REPAIRED. RepairedKind is empty when
+	// no repair ran or the kind did not move.
 	ProposedKind SubjectExpressionKind
+	RepairedKind SubjectExpressionKind
 
-	// ProposedGoals is the closed goal set as proposed. A set, in vocabulary order, so two runs of
+	// ProposedGoals / RepairedGoals are the closed goal sets, as
+	// proposed and as repaired. Sets, in vocabulary order, so two runs of
 	// one frame produce identical rows.
 	//
 	// THE GOAL SET IS RECORDED PER FRAME BECAUSE §13.2.4 RULE 3 DEPENDS
@@ -132,6 +129,7 @@ type FrameValidationEvent struct {
 	// a split is countable". Without this field that governance is a
 	// sentence rather than a mechanism.
 	ProposedGoals []InvestigationGoal
+	RepairedGoals []InvestigationGoal
 
 	// DerivedObligationCount / WidenedObligationCount are counts, not
 	// lists: the obligation set is derivable from the goal set and the
@@ -156,8 +154,10 @@ type FrameValidationEvent struct {
 	FrameVersion string
 }
 
-// FrameValidationEventFrom projects a repair result into the telemetry
-// event.
+// FrameValidationEventFrom projects a no-repair validation result into the
+// telemetry event. This is the shipped (main) signature, unchanged here so
+// the no-repair call sites this branch shares with #373 stay byte-for-byte
+// identical.
 //
 // proposed is the frame as the model proposed it, BEFORE normalization, so
 // ProposedKind and ProposedGoals report what the model actually said
@@ -173,6 +173,48 @@ func FrameValidationEventFrom(proposed QuestionFrame, result FrameValidationResu
 		FrameVersion:    QuestionFrameVersion,
 	}
 	if result.Outcome == FrameValidationOutcomeValid {
+		event.DerivedObligationCount = len(result.Frame.Obligations)
+		event.WidenedObligationCount = len(result.Frame.WidenedObligations)
+		event.FrameVersion = result.Frame.Version
+		if divergence, diverged := ShapeAgreement(emittedShape, result.Frame.SubjectExpression); diverged {
+			event.ShapeDiverged = true
+			event.EmittedShape = divergence.Emitted
+			event.DerivedShape = divergence.Derived
+		}
+	}
+	if event.FrameVersion == "" {
+		event.FrameVersion = QuestionFrameVersion
+	}
+	return event
+}
+
+// FrameValidationEventFromRepair is FrameValidationEventFrom's
+// repair-aware counterpart, over FrameRepairResult -- the bound-specific
+// entry point (ValidateAndRepairFrame) that carries repair-attempt,
+// latency and bound-violation data the no-repair path has none of. Kept
+// as a SEPARATE function rather than an overload of FrameValidationEventFrom
+// (Go has none) so the shipped surface's no-repair call sites need no
+// change at all.
+func FrameValidationEventFromRepair(proposed QuestionFrame, result FrameRepairResult, emittedShape InvestigationShape) FrameValidationEvent {
+	event := FrameValidationEvent{
+		Outcome:              result.Outcome,
+		FailedInvariant:      result.Failure.Invariant,
+		FailedPhase:          result.Failure.Phase,
+		FailureDetail:        result.Failure.Detail,
+		RepairAttempted:      result.RepairAttempted,
+		RepairLatencyMS:      result.RepairLatency.Milliseconds(),
+		RepairBoundViolation: result.ViolatedBound,
+		ProposedKind:         vocabularyKindOnly(proposed.SubjectExpression.Kind),
+		ProposedGoals:        vocabularyGoalsOnly(proposed.Goals),
+		FrameVersion:         QuestionFrameVersion,
+	}
+	if result.Outcome == FrameValidationOutcomeRepaired {
+		if result.Frame.SubjectExpression.Kind != proposed.SubjectExpression.Kind {
+			event.RepairedKind = vocabularyKindOnly(result.Frame.SubjectExpression.Kind)
+		}
+		event.RepairedGoals = vocabularyGoalsOnly(result.Frame.Goals)
+	}
+	if result.Outcome == FrameValidationOutcomeValid || result.Outcome == FrameValidationOutcomeRepaired {
 		event.DerivedObligationCount = len(result.Frame.Obligations)
 		event.WidenedObligationCount = len(result.Frame.WidenedObligations)
 		event.FrameVersion = result.Frame.Version

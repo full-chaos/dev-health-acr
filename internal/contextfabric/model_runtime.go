@@ -249,10 +249,16 @@ type ModelExecutionReceipt struct {
 	FrameOutcome FrameValidationOutcome `json:"frame_outcome,omitempty"`
 	// FrameFailedInvariant is the FIRST failed invariant in table order,
 	// i1...i19, empty on a valid frame.
-	FrameFailedInvariant  FrameInvariant `json:"frame_failed_invariant,omitempty"`
-	FrameGoalsDropped     int            `json:"frame_goals_dropped,omitempty"`
-	FrameTermsTruncated   int            `json:"frame_terms_truncated,omitempty"`
-	FrameKindUnrecognized bool           `json:"frame_kind_unrecognized,omitempty"`
+	FrameFailedInvariant FrameInvariant `json:"frame_failed_invariant,omitempty"`
+	// FrameRepairAttempted and FrameRepairLatencyMS are behaviour change
+	// B4's measurement: "a malformed frame can spend one extra model
+	// call", gated on "inside the reserved deadline; measured repair rate
+	// + latency". An unmeasured extra model call is an unbounded one.
+	FrameRepairAttempted  bool  `json:"frame_repair_attempted,omitempty"`
+	FrameRepairLatencyMS  int64 `json:"frame_repair_latency_ms,omitempty"`
+	FrameGoalsDropped     int   `json:"frame_goals_dropped,omitempty"`
+	FrameTermsTruncated   int   `json:"frame_terms_truncated,omitempty"`
+	FrameKindUnrecognized bool  `json:"frame_kind_unrecognized,omitempty"`
 }
 
 func (r ModelExecutionReceipt) Validate() error {
