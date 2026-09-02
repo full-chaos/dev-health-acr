@@ -1624,6 +1624,13 @@ func (r RuntimeQuestionInterpreter) recordFamilyResolution(ctx context.Context, 
 	// routing decision is already made and is never an input to it -- so
 	// "routing is unaffected" is a property of the control flow rather
 	// than a claim, and a reader can see it in one screen.
+	// The validated frame's obligations ride the outcome to finalization,
+	// where the B8 shadow measures against them rather than against the
+	// plan's registry-copied flags. Empty when no frame validated, which
+	// the shadow treats as "cannot measure" rather than "nothing required".
+	if receipt.QuestionFrame != nil && receipt.FrameOutcome == FrameValidationOutcomeValid {
+		outcome.FrameObligations = append([]AnswerObligation(nil), receipt.QuestionFrame.Obligations...)
+	}
 	shadow := ShadowFamilyAgreement(receipt, outcome)
 	if r.FamilyTelemetry != nil {
 		event := QuestionFamilyResolutionEventFrom(outcome, samples)

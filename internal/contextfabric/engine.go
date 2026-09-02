@@ -1950,7 +1950,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// that is wrong. It reads the result AFTER the plan re-stamp, so
 		// the demands it holds the answer against are the ones the served
 		// plan actually states.
-		e.telemetry.RecordServerStatusShadow(ctx, principal, DeriveServerStatus(result))
+		e.telemetry.RecordServerStatusShadow(ctx, principal, DeriveServerStatus(result, familyOutcome.FrameObligations))
 	}
 	// CHAOS-4690: the SINGLE stamp point for the decisive path -- AFTER
 	// finalizeResult/fitAssembledResult (fitAssembledResult can re-run

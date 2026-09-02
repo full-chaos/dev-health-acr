@@ -310,3 +310,169 @@ func TestProjectionTopologyIsAlwaysTheFramesOwnDiscriminator(t *testing.T) {
 	}
 	t.Logf("%d frames: the projection's topology is the frame's own discriminator on every one", len(frames))
 }
+
+// -----------------------------------------------------------------------
+// NEGATIVE CONTROLS FOR EVERY ARM — the class fix for the re-find
+// -----------------------------------------------------------------------
+
+// Review found the same defect twice: an arm claiming a cause it had not
+// verified. Round 1 found it at `organization_route`; round 2 found it at
+// `goal_row_unreachable`. I fixed the first arm and did not sweep the other
+// seven, which is the per-instance fix the standing rule predicts and the
+// reason the second one was still there to find.
+//
+// So every arm now carries a NEGATIVE CONTROL: an input that is CLOSE to
+// the arm's situation but differs in the one condition the arm's name
+// asserts. A class fixture proves an arm is REACHABLE; only a negative
+// control proves it does not reach FURTHER than its name. The two together
+// are what "the classification is structural rather than tuned" has to mean
+// to be checkable.
+
+// TestEveryPrecedenceRowIsClassifiedAsStructureOrNot keeps the helper the
+// goal-row arm now consults from silently widening.
+//
+// `precedenceRowAssertsItsOwnStructure` has a default arm, so a row added to
+// the precedence vocabulary later would fall into "asserts nothing" and
+// quietly widen every class that consults it. This asserts the
+// classification is TOTAL over the shipped row vocabulary, by naming both
+// sides explicitly.
+func TestEveryPrecedenceRowIsClassifiedAsStructureOrNot(t *testing.T) {
+	t.Parallel()
+	assertsStructure := map[FamilyPrecedenceRow]bool{
+		FamilyPrecedenceRowGroupKind:   true,
+		FamilyPrecedenceRowScopeAnchor: true,
+		FamilyPrecedenceRowComparison:  true,
+	}
+	assertsNothing := map[FamilyPrecedenceRow]bool{
+		FamilyPrecedenceRowCohortShape:   true,
+		FamilyPrecedenceRowSingleSubject: true,
+		FamilyPrecedenceRowNone:          true,
+	}
+	all := []FamilyPrecedenceRow{
+		FamilyPrecedenceRowGroupKind, FamilyPrecedenceRowScopeAnchor, FamilyPrecedenceRowComparison,
+		FamilyPrecedenceRowCohortShape, FamilyPrecedenceRowSingleSubject, FamilyPrecedenceRowNone,
+	}
+	for _, row := range all {
+		inStructure, inNothing := assertsStructure[row], assertsNothing[row]
+		if inStructure == inNothing {
+			t.Errorf("precedence row %q is in neither partition or both -- a row that is not classified defaults into 'asserts nothing' and widens every class that consults this", row)
+			continue
+		}
+		if got := precedenceRowAssertsItsOwnStructure(row); got != inStructure {
+			t.Errorf("precedenceRowAssertsItsOwnStructure(%q) = %v, want %v", row, got, inStructure)
+		}
+	}
+	t.Logf("all %d precedence rows classified, partition total", len(all))
+}
+
+// TestEveryAgreementArmHasANegativeControl is the class fix.
+//
+// Each row is an input built to sit ONE condition away from an arm's
+// situation. If the arm fires anyway, it is claiming a cause it has not
+// established — which is precisely the defect found at two different arms
+// on two consecutive rounds.
+func TestEveryAgreementArmHasANegativeControl(t *testing.T) {
+	t.Parallel()
+
+	namedTeam := labelNamed("team-a", SubjectTeam)
+	discovered := SubjectExpression{Kind: SubjectExpressionDiscoveredKind,
+		Discovered: &DiscoveredSetExpression{MemberKind: SubjectTeam}}
+	grouped := labelGrouped(SubjectTeam, SubjectProject)
+
+	cases := []struct {
+		arm      FamilyAgreementClass
+		control  string
+		frame    QuestionFrame
+		sample   FamilySample
+		mustNot  bool
+		expected FamilyAgreementClass
+	}{
+		{
+			arm:     FamilyAgreementAgreed,
+			control: "the two families DIFFER; `agreed` must not fire on a near-miss where both merely reached a cohort family",
+			frame:   agreementFrame(t, []InvestigationGoal{GoalAssessState}, grouped, TemporalIntentCurrent),
+			sample:  FamilySample{Shape: ShapeDiscoveredCohort, SubjectTerms: []string{"a"}},
+			mustNot: true,
+		},
+		{
+			arm:     FamilyAgreementProjectionUnclassified,
+			control: "the projection classified fine; the arm must not fire merely because the PRECEDENCE side refused",
+			frame:   agreementFrame(t, []InvestigationGoal{GoalAssessState}, grouped, TemporalIntentCurrent),
+			sample:  FamilySample{Shape: ShapeExplicitCohort, SubjectTerms: []string{"a"}},
+			mustNot: true,
+		},
+		{
+			arm:     FamilyAgreementPrecedenceUnclassified,
+			control: "the precedence side classified fine; the arm must not fire merely because the PROJECTION refused",
+			frame:   QuestionFrame{},
+			sample:  FamilySample{Shape: ShapeSingleSubject, SubjectTerms: []string{"a"}},
+			mustNot: true,
+		},
+		{
+			// THE ROUND-2 FINDING, as a permanent control.
+			arm:      FamilyAgreementGoalRowUnreachable,
+			control:  "the projection fired a goal row, but the precedence table fired a row that ASSERTS ITS OWN STRUCTURE (a spurious group kind). The range difference does not explain that, and absorbing it hides a real mis-signal",
+			frame:    agreementFrame(t, []InvestigationGoal{GoalDescribeTrend}, namedTeam, TemporalIntentTimeSeries),
+			sample:   FamilySample{Shape: ShapeSingleSubject, GroupKind: SubjectTeam, SubjectTerms: []string{"a"}},
+			mustNot:  true,
+			expected: FamilyAgreementUnexplained,
+		},
+		{
+			arm:     FamilyAgreementComparisonTermCount,
+			control: "only ONE distinct subject term, so the precedence comparison row never fires; the arm must not claim a comparison theft that did not happen",
+			frame:   agreementFrame(t, []InvestigationGoal{GoalAssessState}, grouped, TemporalIntentCurrent),
+			sample:  FamilySample{Shape: ShapeDiscoveredCohort, SubjectTerms: []string{"only-one"}},
+			mustNot: true,
+		},
+		{
+			// THE ROUND-1 FINDING, kept as a control.
+			arm:      FamilyAgreementOrganizationRoute,
+			control:  "a NAMED-SUBJECT frame in the organization route's exact precedence situation. Row 7 covers both topologies, so an arm keyed on the row alone counts this as a B5 organization route",
+			frame:    agreementFrame(t, []InvestigationGoal{GoalAssessState}, namedTeam, TemporalIntentCurrent),
+			sample:   FamilySample{Shape: ShapeOpen, SubjectTerms: []string{"team-a"}},
+			mustNot:  true,
+			expected: FamilyAgreementShapeDivergence,
+		},
+		{
+			arm:     FamilyAgreementShapeDivergence,
+			control: "the precedence table fired a STRUCTURE row rather than a Shape row, so the divergence is not attributable to Shape",
+			frame:   agreementFrame(t, []InvestigationGoal{GoalAssessState}, namedTeam, TemporalIntentCurrent),
+			sample:  FamilySample{Shape: ShapeSingleSubject, GroupKind: SubjectTeam, SubjectTerms: []string{"a"}},
+			mustNot: true,
+		},
+		{
+			arm:     FamilyAgreementUnexplained,
+			control: "a disagreement that IS explained -- the residual bucket must not absorb a case a named arm covers",
+			frame:   agreementFrame(t, []InvestigationGoal{GoalRankOrSurvey}, discovered, TemporalIntentCurrent),
+			sample:  FamilySample{Shape: ShapeSingleSubject, SubjectTerms: []string{"a"}},
+			mustNot: true,
+		},
+	}
+
+	if len(cases) != FamilyAgreementClassCount {
+		t.Fatalf("%d negative controls for %d arms -- every arm needs one", len(cases), FamilyAgreementClassCount)
+	}
+	covered := map[FamilyAgreementClass]bool{}
+	for _, testCase := range cases {
+		if covered[testCase.arm] {
+			t.Errorf("two controls declare arm %q", testCase.arm)
+		}
+		covered[testCase.arm] = true
+
+		agreement := ClassifyFamilyAgreement(DeriveQuestionFamily(testCase.frame), ResolveFamilyForSample(testCase.sample))
+		if testCase.mustNot && agreement.Class == testCase.arm {
+			t.Errorf("NEGATIVE CONTROL FAILED for %q: the arm fired on an input that differs in the condition its name asserts.\n  projected=%s/%s precedence=%s/%s\n  The control says: %s",
+				testCase.arm, agreement.ProjectedFamily, agreement.ProjectedRow,
+				agreement.PrecedenceFamily, agreement.PrecedenceRow, testCase.control)
+		}
+		if testCase.expected != "" && agreement.Class != testCase.expected {
+			t.Errorf("control for %q landed in %q, want %q -- the input must be attributed to its REAL cause, not merely kept out of the wrong arm",
+				testCase.arm, agreement.Class, testCase.expected)
+		}
+	}
+	for _, class := range FamilyAgreementClassVocabulary() {
+		if !covered[class] {
+			t.Errorf("arm %q has no negative control -- nothing proves it does not reach further than its name", class)
+		}
+	}
+}

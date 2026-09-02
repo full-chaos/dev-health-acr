@@ -39,6 +39,18 @@ func obligationsString(obligations []AnswerObligation) string {
 	return "{" + strings.Join(out, ", ") + "}"
 }
 
+func sameOperandKinds(got, want []SubjectOperandKind) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func sameObligationSet(got, want []AnswerObligation) bool {
 	if len(got) != len(want) {
 		return false
@@ -517,8 +529,16 @@ func TestO5AWidenedObligationChangesNothingThatDecides(t *testing.T) {
 			widenedSeen++
 		}
 
-		if got, want := DeriveQuestionFamily(widened.Frame), DeriveQuestionFamily(plain.Frame); got != want {
-			t.Fatalf("O5 VIOLATED: a widened obligation changed the projected family for %s: %+v vs %+v -- model output must not reroute", generated, got, want)
+		// Compared field by field rather than by struct equality: the
+		// projection now carries a slice, and `==` on a struct containing
+		// one does not compile. Every field is named explicitly so a field
+		// added later fails to compile here rather than silently dropping
+		// out of the comparison -- which is what a reflect.DeepEqual would
+		// have hidden.
+		got, want := DeriveQuestionFamily(widened.Frame), DeriveQuestionFamily(plain.Frame)
+		if got.Family != want.Family || got.Row != want.Row || got.Topology != want.Topology ||
+			!sameOperandKinds(got.OperandKinds, want.OperandKinds) {
+			t.Fatalf("O5 VIOLATED: a widened obligation changed the projection for %s: %+v vs %+v -- model output must not reroute", generated, got, want)
 		}
 		if !sameObligationSet(widened.Frame.Obligations, plain.Frame.Obligations) {
 			t.Fatalf("O5 VIOLATED: a widened obligation changed the REQUIRED set for %s: %s vs %s -- a widening is advisory and must not join the required set",
@@ -619,7 +639,7 @@ var declaredLosses = []declaredLoss{
 	},
 	{
 		family: QuestionFamilySubjectInvestigation, obligation: ObligationPrincipalDrivers,
-		why: "a why-phrased single-subject question. This is decision D1's ACCEPTED COST, already recorded in the registry row's own comment: drivers are always ATTEMPTED and never required on this family, so the North Star bar (never a bare score) is enforced by an acceptance case rather than by this column. Found by this sweep with 231 witnesses -- it is the largest loss in the table and the one a per-instance test would never have surfaced, because nobody was looking at the family that carries it.",
+		why: "a why-phrased single-subject question. **REPORTED AND UNPROTECTED, not an accepted loss** -- this row previously claimed the never-a-bare-score bar was 'enforced by an acceptance case rather than by this column', and review showed that claim does not hold. Traced: the frame derives principal_drivers; the registry row sets RequireDrivers=false; the plan COPIES that false flag; nothing in the plan path or the synthesis validation requires a non-empty driver set; and the only acceptance case asserting the bar covers RENDER-SHAPE selection, not the plan. So no mechanism enforces the stated condition. The waiver is withdrawn and the gap is stated instead. What DOES now observe it: the B8 status shadow measures against the frame's obligations rather than the plan's flag, so a served answer with an empty required driver set is counted (616 of the 770 driver-requiring corpus frames sit on a family whose flag says drivers are not required). REPORTING is all this slice does; ENFORCING belongs to the slice that flips routing off the family -- see the reported-gaps note in the PR body.",
 	},
 	{
 		family: QuestionFamilyTrend, obligation: ObligationRanking,
@@ -757,3 +777,88 @@ func TestEveryProjectionLossIsDeclared(t *testing.T) {
 	reach.require(t, len(frames))
 	t.Logf("declared-loss sweep: %d frames (%d multi-goal), %d distinct (family, obligation) losses, all declared", reach.reached, multiGoal, len(found))
 }
+
+// -----------------------------------------------------------------------
+// O10, STRENGTHENED — a cohort axis is not enough
+// -----------------------------------------------------------------------
+
+// TestCohortAxisMatchesTheActualOperandShape closes the hole review found
+// in O10.
+//
+// O10 asserts a cohort frame lands on a family with SOME cohort
+// SubjectAxis. `many_named` is one, so O10 accepted an explicit set of two
+// SCOPED populations landing on a family that declares two NAMED subjects,
+// a subject fact-role and a matched-pair budget. The oracle written to
+// catch topology mismatches was blind to a topology mismatch, because its
+// predicate was "is it a cohort" rather than "is it THIS cohort".
+//
+// The axis has to match the shape the frame actually carries:
+// `many_named` means every operand names a subject. An operand that names a
+// SCOPE describes a population, and a plan built on a matched-pair budget
+// under-authorizes the reads both populations need.
+//
+// The projection is NOT changed to route these elsewhere -- design row 3
+// keys on the discriminator, and re-routing is a decision this slice has no
+// standing to make. The mismatch is DECLARED below and asserted here, so it
+// is a known, measured loss rather than an invisible one.
+func TestCohortAxisMatchesTheActualOperandShape(t *testing.T) {
+	t.Parallel()
+	frames := generateFrames(t)
+	reach := &reachCounter{name: "operand-shape axis check"}
+	scopedOperandFrames := 0
+
+	for _, generated := range frames {
+		projection := DeriveQuestionFamily(generated.frame)
+		definition, ok := LookupQuestionFamily(projection.Family)
+		if !ok {
+			t.Fatalf("projected family %q has no registry row", projection.Family)
+		}
+		if definition.SubjectAxis != SubjectAxisManyNamed {
+			reach.skip()
+			continue
+		}
+		reach.reach()
+
+		carriesScoped := false
+		for _, kind := range projection.OperandKinds {
+			if kind == SubjectOperandScoped {
+				carriesScoped = true
+			}
+		}
+		if !carriesScoped {
+			continue
+		}
+		scopedOperandFrames++
+		if !declaredTopologyLossScopedOperandsAsNamedPair {
+			t.Fatalf("a frame with a SCOPED operand projects to %q, whose registry axis is many_named -- two populations planned as two named subjects (%s)",
+				projection.Family, generated)
+		}
+	}
+
+	// NON-VACUITY. If no frame in the corpus carries a scoped operand under
+	// a many_named family, this check passed without ever reaching the case
+	// it exists for -- which is exactly how the original O10 read green.
+	if scopedOperandFrames == 0 {
+		t.Fatal("no frame exercised the scoped-operand-under-many_named case; this check proves nothing")
+	}
+	reach.require(t, 1)
+	t.Logf("operand-shape axis check: %d many_named frames, %d of them carrying a scoped operand (the declared topology loss)", reach.reached, scopedOperandFrames)
+}
+
+// declaredTopologyLossScopedOperandsAsNamedPair records the ONE topology
+// loss this slice declares, as a named constant rather than a silent
+// tolerance in a condition.
+//
+// An explicit set containing a scoped operand projects to
+// `explicit_comparison`, whose registry row declares `many_named`,
+// `FactRoleSubject` and a matched-pair budget. The frame describes two
+// POPULATIONS; the family describes two SUBJECTS.
+//
+// REPORTED, NOT FIXED, and the boundary is deliberate: correcting it means
+// either a ninth family or re-routing a design-normative row, and both are
+// routing decisions that belong to the slice that performs the flip. What
+// this slice owes is that the loss is visible and counted rather than
+// discovered by the next reviewer. Setting this to false turns the check
+// above into an assertion that the loss does not exist, which is what the
+// mutation harness uses to prove the check can fail.
+const declaredTopologyLossScopedOperandsAsNamedPair = true

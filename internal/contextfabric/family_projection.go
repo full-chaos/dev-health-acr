@@ -132,6 +132,52 @@ type FamilyProjection struct {
 	// carry every distinction a future consumer might need would grow one
 	// member per consumer.
 	Topology SubjectExpressionKind
+
+	// OperandKinds are the arms present in an explicit set's operand union,
+	// deduplicated and in vocabulary order. Empty for every other variant.
+	//
+	// CARRIED FOR THE SAME REASON AS Topology, and found by the same class
+	// of review finding one round later. `explicit_set` legally admits
+	// SCOPED operands -- that is how "team A's projects versus team B's
+	// projects" is expressed -- and the projection returns
+	// `explicit_comparison` for the whole variant. But that family's
+	// registry row declares `many_named`, a subject fact-role and a
+	// matched-pair budget: it describes two NAMED subjects held against
+	// each other, not two scoped POPULATIONS.
+	//
+	// The family does not change: design row 3 keys on the discriminator,
+	// and changing it here would be a routing decision this slice has no
+	// standing to make. What changes is that the projection now REPORTS the
+	// operand shape, so the mismatch is visible to an oracle instead of
+	// being invisible inside "it is a cohort family". It is declared as a
+	// topology loss and swept, rather than discovered again later.
+	OperandKinds []SubjectOperandKind
+}
+
+// projectionOperandKinds reads the arms an explicit set actually carries.
+//
+// Deduplicated and in vocabulary order, so the value is a SET rather than a
+// transcript of the order the model happened to emit -- the same rule every
+// other derived set in this layer follows, and for the same reason: a
+// function whose output can differ by input order is not a pure projection.
+func projectionOperandKinds(expression SubjectExpression) []SubjectOperandKind {
+	if expression.Kind != SubjectExpressionExplicitSet || expression.Explicit == nil {
+		return nil
+	}
+	present := map[SubjectOperandKind]bool{}
+	for _, operand := range expression.Explicit.Operands {
+		present[operand.Kind] = true
+	}
+	if len(present) == 0 {
+		return nil
+	}
+	out := make([]SubjectOperandKind, 0, len(present))
+	for _, kind := range SubjectOperandKindVocabulary() {
+		if present[kind] {
+			out = append(out, kind)
+		}
+	}
+	return out
 }
 
 // DeriveQuestionFamily projects a frame onto the shipped eight-member
@@ -189,13 +235,13 @@ func DeriveQuestionFamily(frame QuestionFrame) FamilyProjection {
 	// Rows 1-4 -- TOPOLOGY. The discriminator alone decides; no goal, no
 	// temporal, no dimension is read.
 	case SubjectExpressionGroupedMembers:
-		return FamilyProjection{Family: QuestionFamilyGroupedCohortStatus, Row: FamilyProjectionRowGrouped, Topology: frame.SubjectExpression.Kind}
+		return FamilyProjection{Family: QuestionFamilyGroupedCohortStatus, Row: FamilyProjectionRowGrouped, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
 	case SubjectExpressionChildrenOfScope:
-		return FamilyProjection{Family: QuestionFamilyScopedCohortStatus, Row: FamilyProjectionRowScoped, Topology: frame.SubjectExpression.Kind}
+		return FamilyProjection{Family: QuestionFamilyScopedCohortStatus, Row: FamilyProjectionRowScoped, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
 	case SubjectExpressionExplicitSet:
-		return FamilyProjection{Family: QuestionFamilyExplicitComparison, Row: FamilyProjectionRowExplicit, Topology: frame.SubjectExpression.Kind}
+		return FamilyProjection{Family: QuestionFamilyExplicitComparison, Row: FamilyProjectionRowExplicit, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
 	case SubjectExpressionDiscoveredKind:
-		return FamilyProjection{Family: QuestionFamilyDiscoveredCohortRanking, Row: FamilyProjectionRowDiscovered, Topology: frame.SubjectExpression.Kind}
+		return FamilyProjection{Family: QuestionFamilyDiscoveredCohortRanking, Row: FamilyProjectionRowDiscovered, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
 
 	// Rows 5-7 -- a SINGLE SUBJECT. Only here do goals decide, and the row
 	// order is their precedence.
@@ -213,11 +259,11 @@ func DeriveQuestionFamily(frame QuestionFrame) FamilyProjection {
 	case SubjectExpressionNamed, SubjectExpressionOrganizationScope:
 		switch {
 		case frame.HasGoal(GoalAllocateInvestment):
-			return FamilyProjection{Family: QuestionFamilyInvestmentAllocation, Row: FamilyProjectionRowInvestment, Topology: frame.SubjectExpression.Kind}
+			return FamilyProjection{Family: QuestionFamilyInvestmentAllocation, Row: FamilyProjectionRowInvestment, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
 		case frame.HasGoal(GoalDescribeTrend):
-			return FamilyProjection{Family: QuestionFamilyTrend, Row: FamilyProjectionRowTrend, Topology: frame.SubjectExpression.Kind}
+			return FamilyProjection{Family: QuestionFamilyTrend, Row: FamilyProjectionRowTrend, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
 		default:
-			return FamilyProjection{Family: QuestionFamilySubjectInvestigation, Row: FamilyProjectionRowSubject, Topology: frame.SubjectExpression.Kind}
+			return FamilyProjection{Family: QuestionFamilySubjectInvestigation, Row: FamilyProjectionRowSubject, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
 		}
 
 	// Row 8 -- the discriminator is not a vocabulary member. A refused or
@@ -230,6 +276,6 @@ func DeriveQuestionFamily(frame QuestionFrame) FamilyProjection {
 	// cannot silently vanish into row 7. This row catches the frames that
 	// never became valid at all.
 	default:
-		return FamilyProjection{Family: QuestionFamilyUnclassified, Row: FamilyProjectionRowNone, Topology: frame.SubjectExpression.Kind}
+		return FamilyProjection{Family: QuestionFamilyUnclassified, Row: FamilyProjectionRowNone, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
 	}
 }

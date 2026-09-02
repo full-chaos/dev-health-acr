@@ -23,21 +23,32 @@ package contextfabric
 // requirement OUTCOMES, and `PlanRequirementOutcome` does not exist yet --
 // it is a later slice's type. So this is NOT T6's derivation and does not
 // claim to be. It is the closest server-side statement available at this
-// slice: did the served document carry what the PLAN demanded of it. When
-// the outcome type lands, this derivation is replaced by the real one and
-// the disagreement series restarts under a new version -- which is why the
-// version constant below exists and is reported on every observation.
+// slice: did the served document carry what the FRAME's derived obligations
+// demanded of it. When the outcome type lands, this derivation is replaced
+// by the real one and the series restarts under a new version.
 //
-// WHY IT NEEDS NO NEW PLUMBING, stated because the alternative was
-// considered and rejected. Threading the interpretation's requirement rows
-// down to finalization would mean either widening the AnswerPlan (a type
-// ALIAS to the wire contract, so a field there is a contract change and an
-// ask-dev pin bump) or widening the QuestionInterpreter interface. Both are
-// real changes to shipped surfaces for a shadow measurement. The plan the
-// result already carries states its own demands -- RequireDrivers,
-// RequireRanking, FactKinds -- and the result states what was served, so
-// the comparison is computable from the two objects finalization already
-// holds.
+// IT MEASURES AGAINST THE FRAME, NOT THE PLAN'S FLAGS, and that correction
+// came from review. The first version held the answer against the plan's
+// RequireDrivers/RequireRanking -- which the plan copies from the family
+// registry row. Those flags are precisely the authority the design says a
+// family may no longer be read for, because a family understates a composed
+// question. So the shadow AGREED WITH THE DEFECT instead of measuring it:
+// an answer with an empty driver set, for a frame that derived
+// `principal_drivers`, was reported `served` because the registry row said
+// drivers were not required. A shadow that reads the production flag cannot
+// see the production gap.
+//
+// The frame's obligation set is the demand the question actually made, and
+// it is what a later authorship flip would serve -- so it is the only thing
+// a disagreement rate can be measured against and still mean something.
+//
+// HOW THE OBLIGATIONS GET HERE, since the plumbing was the reason the first
+// version read the wrong thing. They ride `QuestionFamilyOutcome`, which is
+// INTERNAL to this package (not a wire alias) and is already threaded from
+// interpretation through to finalization. No contract surface, no consumer
+// pin, no interface widened. Widening the answer plan would have been a
+// contract change; widening the interpreter interface would have been a
+// shipped-surface change; neither is acceptable for a shadow measurement.
 
 // ServerStatusBasis names the FACT that drove the server-derived status.
 // Closed vocabulary, telemetry-safe: no question text, no subject, no
@@ -79,6 +90,17 @@ const (
 	// limitation can be a note about scope rather than a gap.
 	ServerStatusBasisLimitationDisclosed ServerStatusBasis = "limitation_disclosed"
 
+	// ServerStatusBasisNoFrame: no validated frame reached finalization, so
+	// there are no derived obligations to hold the answer against and the
+	// server DECLINES.
+	//
+	// DISTINCT FROM no_plan, deliberately. A missing plan and a missing
+	// frame are different failures with different remedies, and after the
+	// shadow moved off the plan's flags onto the frame's obligations the
+	// frame became the thing that can be absent. Collapsing them would put
+	// two causes in one bucket in the distribution the flip is read from.
+	ServerStatusBasisNoFrame ServerStatusBasis = "no_frame"
+
 	// ServerStatusBasisNoPlan: no plan was stamped, so there is nothing to
 	// hold the answer against and the server DECLINES to derive a status.
 	//
@@ -91,6 +113,7 @@ const (
 
 var serverStatusBases = [...]ServerStatusBasis{
 	ServerStatusBasisNoPlan,
+	ServerStatusBasisNoFrame,
 	ServerStatusBasisNoClaimedFacts,
 	ServerStatusBasisDriversAbsent,
 	ServerStatusBasisRankingAbsent,
@@ -129,7 +152,14 @@ func ValidServerStatusBasis(value ServerStatusBasis) bool {
 // another. Without the version, replacing the rule would silently splice
 // two incomparable series together and the flip would be decided on the
 // join.
-const ServerStatusShadowVersion = "status-shadow.plan-demands.v1"
+//
+// Bumped from `plan-demands.v1` when the derivation moved off the plan's
+// registry-copied flags onto the frame's own derived obligations. A rate
+// measured under the old rule is NOT comparable with one measured under
+// this one -- the old rule could not see the case this one exists to count
+// -- so the two series must never be spliced, and the version is what makes
+// the splice visible.
+const ServerStatusShadowVersion = "status-shadow.frame-obligations.v2"
 
 // ServerStatusShadow is ONE observation: what the model said, what the
 // server would say, why, and whether they differ.
@@ -173,7 +203,7 @@ type ServerStatusShadow struct {
 // disagreement in the other direction would measure this derivation's
 // opinion about clarifications and refusals, which it has no standing to
 // hold.
-func DeriveServerStatus(result InvestigationResult) ServerStatusShadow {
+func DeriveServerStatus(result InvestigationResult, frameObligations []AnswerObligation) ServerStatusShadow {
 	shadow := ServerStatusShadow{
 		ModelStatus: result.Status,
 		Version:     ServerStatusShadowVersion,
@@ -181,13 +211,22 @@ func DeriveServerStatus(result InvestigationResult) ServerStatusShadow {
 
 	plan := result.AnswerPlan
 	if plan == nil {
-		// No plan, no demands, nothing to hold the answer against.
+		// No plan, no fact kinds named, nothing to hold the answer against.
 		shadow.Basis = ServerStatusBasisNoPlan
+		return shadow
+	}
+	if len(frameObligations) == 0 {
+		// No validated frame: the obligations this derivation measures
+		// against do not exist. DECLINED, not "nothing was required" --
+		// treating an absent frame as an absence of demands would report
+		// `served` for every interpretation that failed frame validation,
+		// which is the population most likely to be incomplete.
+		shadow.Basis = ServerStatusBasisNoFrame
 		return shadow
 	}
 
 	shadow.Derived = true
-	shadow.Basis = serverStatusBasis(result, *plan)
+	shadow.Basis = serverStatusBasis(result, *plan, frameObligations)
 	if shadow.Basis == ServerStatusBasisServed {
 		shadow.ServerStatus = InvestigationComplete
 	} else {
@@ -203,14 +242,38 @@ func DeriveServerStatus(result InvestigationResult) ServerStatusShadow {
 	return shadow
 }
 
-func serverStatusBasis(result InvestigationResult, plan AnswerPlan) ServerStatusBasis {
+// serverStatusBasis holds the answer against the FRAME's derived
+// obligations, not against the plan's flags.
+//
+// THE DIFFERENCE IS THE WHOLE POINT, and review found it the hard way. The
+// plan's RequireDrivers/RequireRanking are copied from the family registry
+// row, and the design's own position is that those flags are the wrong
+// authority -- they are on the list of things the family may no longer be
+// read for, precisely because a family understates a composed question.
+// Measuring the served answer against them made this shadow agree with the
+// production defect instead of measuring it: an answer with an empty driver
+// set, for a frame that DERIVED `principal_drivers`, was reported `served`
+// because the registry row said drivers were not required.
+//
+// The frame's obligation set is the demand the question actually made. That
+// is what a later authorship flip would serve, so it is what the
+// disagreement rate has to be measured against for the rate to mean
+// anything.
+//
+// `FactKinds` still comes from the plan: it is the READ plan, a server
+// derivation rather than a family flag, and the frame has no equivalent.
+func serverStatusBasis(result InvestigationResult, plan AnswerPlan, frameObligations []AnswerObligation) ServerStatusBasis {
+	required := make(map[AnswerObligation]bool, len(frameObligations))
+	for _, obligation := range frameObligations {
+		required[obligation] = true
+	}
 	if len(plan.FactKinds) > 0 && len(result.ClaimedFacts) == 0 {
 		return ServerStatusBasisNoClaimedFacts
 	}
-	if plan.RequireDrivers && len(result.Drivers) == 0 {
+	if required[ObligationPrincipalDrivers] && len(result.Drivers) == 0 {
 		return ServerStatusBasisDriversAbsent
 	}
-	if plan.RequireRanking && result.Cohort == nil {
+	if required[ObligationRanking] && result.Cohort == nil {
 		return ServerStatusBasisRankingAbsent
 	}
 	if len(result.Coverage.DegradedReasons) > 0 {

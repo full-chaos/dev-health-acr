@@ -200,7 +200,25 @@ func classifyFamilyAgreement(projection FamilyProjection, precedence FamilySampl
 	if precedence.Family == QuestionFamilyUnclassified {
 		return FamilyAgreementPrecedenceUnclassified
 	}
-	if projection.Row == FamilyProjectionRowInvestment || projection.Row == FamilyProjectionRowTrend {
+	// The RANGE difference -- but only when the precedence side has no
+	// structural cause of its own to report.
+	//
+	// This arm fired on the projection row ALONE, which is the same defect
+	// the organization-route arm had: claiming a cause without verifying
+	// it. A named-subject trend frame whose receipt carried a spurious
+	// GroupKind routed the precedence table to a grouped cohort by its
+	// row 1, and this arm absorbed that into "trend is unreachable" --
+	// attributing a real structural mis-signal to a range difference. The
+	// identical spurious signal was classified `unexplained` on a
+	// non-trend frame, so one bad GroupKind was reported two ways
+	// depending on a goal that had nothing to do with it.
+	//
+	// The range difference is only the cause when the precedence table read
+	// the SAME structure and merely could not reach the family. A precedence
+	// row that asserts its own structure signal has told us something the
+	// range difference does not explain, and it must be reported as that.
+	if (projection.Row == FamilyProjectionRowInvestment || projection.Row == FamilyProjectionRowTrend) &&
+		!precedenceRowAssertsItsOwnStructure(precedence.Row) {
 		return FamilyAgreementGoalRowUnreachable
 	}
 	if precedence.Row == FamilyPrecedenceRowComparison {
@@ -227,6 +245,30 @@ func classifyFamilyAgreement(projection FamilyProjection, precedence FamilySampl
 		return FamilyAgreementShapeDivergence
 	}
 	return FamilyAgreementUnexplained
+}
+
+// precedenceRowAssertsItsOwnStructure reports whether a precedence row
+// fired on a STRUCTURE SIGNAL the sample carried, rather than on the shape
+// or on nothing.
+//
+// Rows 1-3 of the precedence table each fire on a signal the interpretation
+// emitted -- a grouping kind, a scope-anchor asymmetry, a comparison term
+// count. When one of those fires, the precedence table has named a cause,
+// and any agreement class that attributes the disagreement to something
+// else is hiding it. Rows 4-5 read Shape, which is a classification rather
+// than an emitted structure signal, and row 7 fired on nothing at all.
+//
+// Enumerated positively and asserted total against the row vocabulary by
+// TestEveryPrecedenceRowIsClassifiedAsStructureOrNot, so a row added later
+// cannot default into "asserts nothing" and silently widen every class that
+// consults this.
+func precedenceRowAssertsItsOwnStructure(row FamilyPrecedenceRow) bool {
+	switch row {
+	case FamilyPrecedenceRowGroupKind, FamilyPrecedenceRowScopeAnchor, FamilyPrecedenceRowComparison:
+		return true
+	default:
+		return false
+	}
 }
 
 // FamilyAgreementCounters is the tally over a population of comparisons.
