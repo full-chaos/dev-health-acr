@@ -3,7 +3,7 @@ package contextfabric
 // CHAOS-4452 stage 2 (S7b-i), design §13.5.2 and §13.6: frame validation
 // and normalization.
 //
-// SHADOW ONLY -- see chaos4452_frame_vocab.go's package-level note.
+// SHADOW ONLY -- see frame_vocab.go's package-level note.
 //
 // REPAIR IS NOT IN THIS SLICE, and its absence is a decision rather than an
 // omission. §13.6 admits ONE bounded repair attempt on a frame that fails

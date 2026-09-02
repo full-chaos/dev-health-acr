@@ -586,7 +586,7 @@ func SanitizeHealthDimensions(raw []string) (dimensions []HealthDimension, dropp
 // WIDENING whose members are `advisory`.
 //
 // Deliberately NOT used to build the derived set. Derivation reads the
-// frame's other axes (chaos4452_frame_obligations.go) and never a
+// frame's other axes (frame_obligations.go) and never a
 // model-emitted obligation list, because an obligation set the model could
 // author is an obligation set the model could NARROW, which is the exact
 // failure §13.2.1 forbids.

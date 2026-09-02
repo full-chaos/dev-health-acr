@@ -9,7 +9,7 @@ import (
 // CHAOS-4452 stage 2 (S7b-i), design §13.5.2: the cross-field invariants,
 // in FOUR phases.
 //
-// SHADOW ONLY -- see chaos4452_frame_vocab.go's package-level note.
+// SHADOW ONLY -- see frame_vocab.go's package-level note.
 //
 // WHY THE PHASE SPLIT IS LOAD-BEARING RATHER THAN TIDINESS (law L4, and
 // round 2's P1-6). The feedback listed these as ONE set. They are not:

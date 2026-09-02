@@ -311,7 +311,7 @@ func TestGoalsAreCanonicalizedIntoASet(t *testing.T) {
 // as regression cases for the specific defects rounds 1-4 found.
 //
 // IT IS NOT THE SWEEP ANY MORE. The sweep is generated from the derived
-// path set in chaos4452_frame_sweep_test.go, because a hand-listed axis
+// path set in frame_sweep_test.go, because a hand-listed axis
 // table is exactly what let four rounds find one defect at four depths --
 // this table's own I2 rows exercised term replacement and addition and
 // never a nested discriminator change, which is how round 4 got in. These

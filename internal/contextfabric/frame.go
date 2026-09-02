@@ -3,7 +3,7 @@ package contextfabric
 // CHAOS-4452 stage 2 (S7b-i), design §13.2 and §13.5.1: the compositional
 // QuestionFrame and the SubjectExpression discriminated union.
 //
-// SHADOW ONLY -- see chaos4452_frame_vocab.go's package-level note. No
+// SHADOW ONLY -- see frame_vocab.go's package-level note. No
 // wire surface, no schema, no migration; the frame rides
 // ModelExecutionReceipt in phase 1.
 //

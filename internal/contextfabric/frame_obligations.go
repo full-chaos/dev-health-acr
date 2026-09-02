@@ -3,7 +3,7 @@ package contextfabric
 // CHAOS-4452 stage 2 (S7b-i), design §13.2.3: obligation derivation from
 // the whole frame, re-derived UNDER the eight algebra laws of §13.2.2a.
 //
-// SHADOW ONLY -- see chaos4452_frame_vocab.go's package-level note.
+// SHADOW ONLY -- see frame_vocab.go's package-level note.
 //
 // SCOPE BOUNDARY, stated first because it is the one this slice is most
 // likely to be accused of crossing. This file derives OBLIGATIONS from the
@@ -18,7 +18,7 @@ package contextfabric
 // producing 22 EMPTY requirement cells over 13 frames, including every
 // acceptance question. What survives here is what was traced and is
 // registry-FREE: these four tables, and the obligation KIND classification
-// in chaos4452_frame_vocab.go.
+// in frame_vocab.go.
 //
 // WHY THE TABLES ARE WRITTEN UNDER LAWS RATHER THAN ON THEIR OWN. Round 2
 // of the design review stopped the design lane with eight re-finds and the

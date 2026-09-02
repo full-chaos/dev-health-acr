@@ -206,7 +206,7 @@ type ModelExecutionReceipt struct {
 	ScopeAnchorKindUnrecognized      bool `json:"scope_anchor_kind_unrecognized,omitempty"`
 	RequestedSubjectKindUnrecognized bool `json:"requested_subject_kind_unrecognized,omitempty"`
 	// QuestionFrame and its validation outcome (CHAOS-4452 stage 2,
-	// SHADOW ONLY -- see chaos4452_frame_vocab.go's package-level note)
+	// SHADOW ONLY -- see frame_vocab.go's package-level note)
 	// are the compositional frame the model proposed and the server
 	// validated, captured HERE for exactly the reasons the two blocks
 	// above give and one more that is specific to this slice.
@@ -234,7 +234,7 @@ type ModelExecutionReceipt struct {
 	// They are free-form model output, bounded by SanitizeSubjectTerms,
 	// and the same rule ScopeAnchorTerm above is held to applies: durable
 	// capture for scoring, closed enums only in any log line (see
-	// chaos4452_frame_telemetry.go, which carries no term field at all).
+	// frame_telemetry.go, which carries no term field at all).
 	//
 	// omitempty throughout, on the identical asymmetry-avoidance ground:
 	// every receipt written before these fields existed, and every
