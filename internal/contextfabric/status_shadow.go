@@ -80,6 +80,14 @@ const (
 	// and the answer carries no cohort to have ranked.
 	ServerStatusBasisRankingAbsent ServerStatusBasis = "required_ranking_absent"
 
+	// ServerStatusBasisRemainingWorkAbsent: the FRAME derives remaining_work
+	// and the answer lists none.
+	ServerStatusBasisRemainingWorkAbsent ServerStatusBasis = "required_remaining_work_absent"
+
+	// ServerStatusBasisReadinessAbsent: the FRAME derives readiness and the
+	// answer lists no readiness gap.
+	ServerStatusBasisReadinessAbsent ServerStatusBasis = "required_readiness_absent"
+
 	// ServerStatusBasisCoverageDegraded: the coverage block declares a
 	// degraded reason. The engine's own disclosure that it did not see
 	// everything it meant to.
@@ -89,6 +97,23 @@ const (
 	// limitation. Weaker than the four above and evaluated last, because a
 	// limitation can be a note about scope rather than a gap.
 	ServerStatusBasisLimitationDisclosed ServerStatusBasis = "limitation_disclosed"
+
+	// ServerStatusBasisUnobservable: the frame requires an obligation this
+	// derivation CANNOT observe in the served result, and everything it can
+	// observe is satisfied.
+	//
+	// THE HONEST ANSWER TO "did the answer carry what the frame demanded",
+	// and it is a DECLINED derivation rather than a verdict. Review found
+	// the shadow reporting `served` for a frame requiring `count`: no arm
+	// checks a count, so every predicate fell through to "everything is
+	// present". That is the shadow asserting an answer complete on the
+	// strength of not having looked.
+	//
+	// Reporting the inability is the difference between a measurement and a
+	// guess, and it keeps the disagreement rate honest in the direction that
+	// matters: an unobservable obligation must never be counted as
+	// agreement, because the flip decision reads that rate.
+	ServerStatusBasisUnobservable ServerStatusBasis = "unobservable_obligation"
 
 	// ServerStatusBasisNoFrame: no validated frame reached finalization, so
 	// there are no derived obligations to hold the answer against and the
@@ -114,9 +139,12 @@ const (
 var serverStatusBases = [...]ServerStatusBasis{
 	ServerStatusBasisNoPlan,
 	ServerStatusBasisNoFrame,
+	ServerStatusBasisUnobservable,
 	ServerStatusBasisNoClaimedFacts,
 	ServerStatusBasisDriversAbsent,
 	ServerStatusBasisRankingAbsent,
+	ServerStatusBasisRemainingWorkAbsent,
+	ServerStatusBasisReadinessAbsent,
 	ServerStatusBasisCoverageDegraded,
 	ServerStatusBasisLimitationDisclosed,
 	ServerStatusBasisServed,
@@ -142,6 +170,66 @@ func ValidServerStatusBasis(value ServerStatusBasis) bool {
 		}
 	}
 	return false
+}
+
+// obligationObservation declares, for ONE obligation, whether this
+// derivation can observe it in a served result.
+type obligationObservation struct {
+	// observed is whether a served result exposes this obligation at all.
+	observed bool
+	// field names the result field consulted, or the reason there is none.
+	field string
+}
+
+// obligationObservations is the declaration, and it is asserted TOTAL over
+// the closed obligation vocabulary by
+// TestEveryObligationDeclaresWhetherTheShadowObservesIt.
+//
+// WHY A DECLARATION AND NOT MORE ARMS. The derivation checked two
+// obligations by name out of thirteen, and every other one fell through to
+// `served` -- so eleven obligations could be required by a frame, absent
+// from the answer, and reported as complete. Review found one of them
+// (`count`); adding an arm for `count` would have left the other ten, which
+// is the per-instance fix this branch has now produced three times.
+//
+// Stating it as a declaration means an obligation added to the vocabulary
+// later cannot default into "silently served": the totality test fails
+// until someone says which it is. The unobservable ones are a REPORTED
+// limit of this instrument, not a claim that nothing is missing.
+//
+// `trend_series` is deliberately unobservable even though a claimed fact
+// can carry time-series rows: that pair is outside this slice's boundary,
+// and adding a consumer of it here is a coupling this PR is not permitted
+// to introduce. Named rather than silently omitted.
+var obligationObservations = map[AnswerObligation]obligationObservation{
+	ObligationPrincipalDrivers: {true, "result.Drivers"},
+	ObligationRanking:          {true, "result.Cohort"},
+	ObligationRemainingWork:    {true, "result.RemainingWork"},
+	ObligationReadiness:        {true, "result.ReadinessGaps"},
+	ObligationEvidence:         {true, "result.ClaimedFacts"},
+	ObligationCoverage:         {true, "result.Coverage"},
+
+	ObligationState:               {false, "no distinct result field -- the state is prose, and judging it would mean modelling what synthesis should have said"},
+	ObligationCompletion:          {false, "no distinct result field"},
+	ObligationHealth:              {false, "no distinct result field -- the health reading is carried inside the state prose"},
+	ObligationCount:               {false, "no distinct result field -- a cardinality is carried in the answer text, not in a countable field"},
+	ObligationAllocationBreakdown: {false, "carried inside claimed-fact rows, which this derivation does not interpret"},
+	ObligationTrendSeries:         {false, "would require reading the time-series pair, which is outside this slice's boundary"},
+	ObligationPeriodDelta:         {false, "no distinct result field"},
+}
+
+// unobservedRequiredObligation returns the first required obligation this
+// derivation cannot observe, in vocabulary order so the answer is stable.
+func unobservedRequiredObligation(required map[AnswerObligation]bool) (AnswerObligation, bool) {
+	for _, obligation := range AnswerObligationVocabulary() {
+		if !required[obligation] {
+			continue
+		}
+		if observation, declared := obligationObservations[obligation]; !declared || !observation.observed {
+			return obligation, true
+		}
+	}
+	return "", false
 }
 
 // ServerStatusShadowVersion identifies THIS derivation.
@@ -225,8 +313,14 @@ func DeriveServerStatus(result InvestigationResult, frameObligations []AnswerObl
 		return shadow
 	}
 
-	shadow.Derived = true
 	shadow.Basis = serverStatusBasis(result, *plan, frameObligations)
+	if shadow.Basis == ServerStatusBasisUnobservable {
+		// DECLINED, not a verdict: the derivation could not see what the
+		// frame required. Counting it either way would put a limit of the
+		// instrument into the rate the flip is decided on.
+		return shadow
+	}
+	shadow.Derived = true
 	if shadow.Basis == ServerStatusBasisServed {
 		shadow.ServerStatus = InvestigationComplete
 	} else {
@@ -276,11 +370,25 @@ func serverStatusBasis(result InvestigationResult, plan AnswerPlan, frameObligat
 	if required[ObligationRanking] && result.Cohort == nil {
 		return ServerStatusBasisRankingAbsent
 	}
+	if required[ObligationRemainingWork] && len(result.RemainingWork) == 0 {
+		return ServerStatusBasisRemainingWorkAbsent
+	}
+	if required[ObligationReadiness] && len(result.ReadinessGaps) == 0 {
+		return ServerStatusBasisReadinessAbsent
+	}
 	if len(result.Coverage.DegradedReasons) > 0 {
 		return ServerStatusBasisCoverageDegraded
 	}
 	if len(result.Limitations) > 0 {
 		return ServerStatusBasisLimitationDisclosed
+	}
+	// LAST, and deliberately after every observable check: `served` may only
+	// be claimed once nothing REQUIRED is unobservable. Everything this
+	// derivation can see is satisfied; if the frame also demanded something
+	// it cannot see, the honest answer is that it could not tell.
+	if obligation, unobserved := unobservedRequiredObligation(required); unobserved {
+		_ = obligation
+		return ServerStatusBasisUnobservable
 	}
 	return ServerStatusBasisServed
 }

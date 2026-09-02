@@ -57,14 +57,30 @@ const (
 	// counts exactly that difference.
 	FamilyAgreementGoalRowUnreachable FamilyAgreementClass = "goal_row_unreachable_in_precedence"
 
-	// FamilyAgreementComparisonTermCount: the precedence table fired its
-	// COMPARISON row, which triggers on ">=2 distinct subject terms", and
-	// the projection read the topology instead. This is behaviour change
-	// B6 and the class the design most wants counted: both Q-A typo
-	// replicates carry two distinct subject terms, so the comparison row
-	// fired before Shape was ever read and a grouped question routed to
-	// explicit_comparison.
-	FamilyAgreementComparisonTermCount FamilyAgreementClass = "comparison_term_count"
+	// FamilyAgreementPrecedenceComparisonRow: the precedence table fired its
+	// COMPARISON row and the projection read the topology instead.
+	//
+	// NARROWED, NOT PATCHED, and the rename is the narrowing. This class was
+	// called `comparison_term_count` and its documentation claimed the B6
+	// behaviour specifically -- a grouped question stolen because the sample
+	// carried ">=2 distinct subject terms". Review showed the precedence
+	// comparison row fires on EITHER that term count OR a single non-empty
+	// comparison term, and the class was reporting both under a name that
+	// asserts only the first. A sample with one comparison term and no
+	// subject terms at all was being counted as a term-count theft.
+	//
+	// The classifier's LOGIC is deliberately unchanged: it fires on the
+	// precedence comparison row, which is exactly what it can observe and
+	// exactly what its negative control proves. What changed is that the
+	// name and the documentation no longer claim more than that. The B6
+	// sub-condition is REPORTED as not distinguished (see the
+	// enforced-versus-reported table in the tests) rather than asserted.
+	//
+	// Distinguishing the two sub-conditions would need the sample's terms,
+	// which are free-text model output and never reach a telemetry field --
+	// so it is not a thing this class can be made to do, and saying so is
+	// more useful than a fourth attempt at the arm.
+	FamilyAgreementPrecedenceComparisonRow FamilyAgreementClass = "precedence_comparison_row"
 
 	// FamilyAgreementOrganizationRoute: the precedence table sent an
 	// org-wide question to the discovered-cohort RANKING (its row 4 reads
@@ -100,7 +116,7 @@ var familyAgreementClasses = [...]FamilyAgreementClass{
 	FamilyAgreementProjectionUnclassified,
 	FamilyAgreementPrecedenceUnclassified,
 	FamilyAgreementGoalRowUnreachable,
-	FamilyAgreementComparisonTermCount,
+	FamilyAgreementPrecedenceComparisonRow,
 	FamilyAgreementOrganizationRoute,
 	FamilyAgreementShapeDivergence,
 	FamilyAgreementUnexplained,
@@ -222,7 +238,7 @@ func classifyFamilyAgreement(projection FamilyProjection, precedence FamilySampl
 		return FamilyAgreementGoalRowUnreachable
 	}
 	if precedence.Row == FamilyPrecedenceRowComparison {
-		return FamilyAgreementComparisonTermCount
+		return FamilyAgreementPrecedenceComparisonRow
 	}
 	// The ORGANIZATION route, keyed on the frame's own TOPOLOGY.
 	//

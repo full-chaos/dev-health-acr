@@ -70,7 +70,7 @@ func TestEveryAgreementClassHasAFixtureThatLandsInIt(t *testing.T) {
 			sample: FamilySample{Shape: ShapeSingleSubject, SubjectTerms: []string{"a"}},
 		},
 		{
-			class:  FamilyAgreementComparisonTermCount,
+			class:  FamilyAgreementPrecedenceComparisonRow,
 			why:    "BEHAVIOUR CHANGE B6, and the reason this counter exists: a grouped question whose interpretation happened to emit two distinct subject terms is TAKEN by the precedence comparison row before Shape is ever read. Both Q-A typo replicates are this case",
 			frame:  agreementFrame(t, []InvestigationGoal{GoalAssessState}, grouped, TemporalIntentCurrent),
 			sample: FamilySample{Shape: ShapeDiscoveredCohort, SubjectTerms: []string{"each team", "project statuses"}},
@@ -418,7 +418,7 @@ func TestEveryAgreementArmHasANegativeControl(t *testing.T) {
 			expected: FamilyAgreementUnexplained,
 		},
 		{
-			arm:     FamilyAgreementComparisonTermCount,
+			arm:     FamilyAgreementPrecedenceComparisonRow,
 			control: "only ONE distinct subject term, so the precedence comparison row never fires; the arm must not claim a comparison theft that did not happen",
 			frame:   agreementFrame(t, []InvestigationGoal{GoalAssessState}, grouped, TemporalIntentCurrent),
 			sample:  FamilySample{Shape: ShapeDiscoveredCohort, SubjectTerms: []string{"only-one"}},

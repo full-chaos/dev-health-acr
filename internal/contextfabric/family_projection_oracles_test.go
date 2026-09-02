@@ -779,6 +779,164 @@ func TestEveryProjectionLossIsDeclared(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------
+// THE SUBJECT-AXIS SWEEP — every topology loss, enumerated
+// -----------------------------------------------------------------------
+
+// topologyLoss is one (family, condition) pair where the projected family's
+// registry SubjectAxis misdescribes how many subjects the frame names, or
+// how they were obtained.
+type topologyLoss struct {
+	family QuestionFamily
+	// condition names the frame-side property that makes the axis wrong.
+	condition string
+	why       string
+}
+
+// declaredTopologyLosses is EVERY such pair. The sweep below asserts the
+// distinct set is exactly this and no larger.
+//
+// THIS TABLE REPLACED A SINGLE BOOLEAN CONSTANT, and the replacement is the
+// finding. The first version declared ONE topology loss -- an explicit set
+// of scoped operands landing on a many_named family -- as a named constant.
+// The very next review round found a SECOND instance of the same class in a
+// different variant: a `named_subject` expression naming TWO subjects
+// projects to a single-subject family with a single-subject budget, and
+// neither the operand-shape check (which reads the explicit set's inner
+// union) nor O10 (which quantifies over IsCohortVariant, excluding named
+// expressions by construction) could see it.
+//
+// A second constant would have been the per-instance fix for the third
+// instance to find. The property is now stated over the thing all of them
+// have in common: **what the registry axis says about subject multiplicity
+// versus what the frame's expression actually names.**
+//
+// None of these is re-routed. Design row order keys on the discriminator,
+// and changing which family a question reaches is a routing decision that
+// belongs to the slice performing the flip. What this slice owes is that
+// every one is visible and counted rather than found by the next reviewer.
+var declaredTopologyLosses = []topologyLoss{
+	{
+		family: QuestionFamilyExplicitComparison, condition: "scoped operand under a many_named axis",
+		why: "an explicit set may contain SCOPED operands -- that is how 'team A's projects versus team B's projects' is expressed -- but the family declares many_named, a subject fact-role and a matched-pair budget. Two populations planned as two named subjects under-authorizes the reads both need.",
+	},
+	{
+		family: QuestionFamilySubjectInvestigation, condition: "multiple named subjects under a single-subject axis",
+		why: "`named_subject` is defined as ONE OR MORE directly named subjects and its invariant requires only non-blank terms, so a two-term expression is legal and is two subjects. It lands on SubjectAxisOne with a single-subject budget and single-subject clarification axes.",
+	},
+	{
+		family: QuestionFamilyTrend, condition: "multiple named subjects under a single-subject axis",
+		why: "the same multi-term named expression carrying a trend goal reaches the trend row first; that row is also single-subject.",
+	},
+	{
+		family: QuestionFamilyInvestmentAllocation, condition: "multiple named subjects under a single-subject axis",
+		why: "the same, with an investment goal reaching the investment row first.",
+	},
+}
+
+// TestEveryTopologyLossIsDeclared sweeps the corpus for frames whose
+// projected family's registry axis misdescribes the subject multiplicity
+// the expression actually names.
+//
+// The predicate is deliberately about MULTIPLICITY rather than about any
+// one variant's internals, because the two instances review found were in
+// two different variants and a per-variant check missed each other's.
+func TestEveryTopologyLossIsDeclared(t *testing.T) {
+	t.Parallel()
+	frames := generateFramesWithMultiTermNamedSubjects(t)
+	reach := &reachCounter{name: "topology-loss sweep"}
+
+	type key struct {
+		family    QuestionFamily
+		condition string
+	}
+	declared := map[key]topologyLoss{}
+	for _, loss := range declaredTopologyLosses {
+		declared[key{loss.family, loss.condition}] = loss
+	}
+
+	found := map[key][]string{}
+	for _, generated := range frames {
+		projection := DeriveQuestionFamily(generated.frame)
+		definition, ok := LookupQuestionFamily(projection.Family)
+		if !ok {
+			t.Fatalf("projected family %q has no registry row", projection.Family)
+		}
+		reach.reach()
+
+		// A single-subject axis against an expression naming more than one.
+		if definition.SubjectAxis == SubjectAxisOne && projection.NamedSubjectCount > 1 {
+			k := key{projection.Family, "multiple named subjects under a single-subject axis"}
+			found[k] = append(found[k], generated.String())
+		}
+		// A many_named axis against an operand that names a SCOPE.
+		if definition.SubjectAxis == SubjectAxisManyNamed {
+			for _, kind := range projection.OperandKinds {
+				if kind == SubjectOperandScoped {
+					k := key{projection.Family, "scoped operand under a many_named axis"}
+					found[k] = append(found[k], generated.String())
+					break
+				}
+			}
+		}
+	}
+
+	for k, witnesses := range found {
+		if _, isDeclared := declared[k]; !isDeclared {
+			t.Errorf("UNDECLARED topology loss: %q frames project to %q, whose registry axis misdescribes them.\n  %d witnesses, first: %s\n  Either declare it with the reason it is acceptable, or the projection routes this question to the wrong family.",
+				k.condition, k.family, len(witnesses), witnesses[0])
+		}
+	}
+	for k, loss := range declared {
+		if len(found[k]) == 0 {
+			t.Errorf("declaredTopologyLosses claims %q / %q occurs, but NO frame exhibits it -- a declared loss nothing reaches is a claim nobody can check.\n  It says: %s", k.family, k.condition, loss.why)
+		}
+	}
+	reach.require(t, len(frames))
+	t.Logf("topology-loss sweep: %d frames, %d distinct topology losses, all declared", reach.reached, len(found))
+}
+
+// generateFramesWithMultiTermNamedSubjects is the corpus plus a multi-term
+// named variant of every named frame.
+//
+// The base corpus builds named expressions with ONE term, so it cannot
+// exhibit the multi-subject case at all -- the same blindness the
+// declared-loss sweep had against multi-goal frames, in a different axis.
+// A sweep that cannot reach the case it was written for is the failure this
+// branch has now produced twice; it is guarded here by a count that must be
+// non-zero.
+func generateFramesWithMultiTermNamedSubjects(t *testing.T) []generatedFrame {
+	t.Helper()
+	base := generateFrames(t)
+	out := make([]generatedFrame, 0, len(base)*2)
+	out = append(out, base...)
+	multi := 0
+	for _, generated := range base {
+		if generated.frame.SubjectExpression.Kind != SubjectExpressionNamed || generated.frame.SubjectExpression.Named == nil {
+			continue
+		}
+		widened := generated.frame
+		named := *generated.frame.SubjectExpression.Named
+		named.Terms = []string{"team-a", "team-b"}
+		expression := generated.frame.SubjectExpression
+		expression.Named = &named
+		widened.SubjectExpression = expression
+
+		result := ValidateFrame(widened, nil, "")
+		if result.Outcome != FrameValidationOutcomeValid {
+			continue
+		}
+		extended := generated
+		extended.frame = result.Frame
+		out = append(out, extended)
+		multi++
+	}
+	if multi == 0 {
+		t.Fatal("no multi-term named frame validated, so the topology sweep cannot exhibit the multi-subject case it exists for")
+	}
+	return out
+}
+
+// -----------------------------------------------------------------------
 // O10, STRENGTHENED — a cohort axis is not enough
 // -----------------------------------------------------------------------
 

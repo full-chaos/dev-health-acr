@@ -152,6 +152,33 @@ type FamilyProjection struct {
 	// being invisible inside "it is a cohort family". It is declared as a
 	// topology loss and swept, rather than discovered again later.
 	OperandKinds []SubjectOperandKind
+
+	// NamedSubjectCount is how many subjects a `named_subject` expression
+	// actually names. Zero for every other variant.
+	//
+	// THE THIRD INSTANCE OF ONE CLASS, and the reason this field exists
+	// rather than a third special case. `named_subject` is defined as ONE
+	// OR MORE directly named subjects, and its invariant requires only that
+	// the terms be non-blank -- so a two-term named expression is legal and
+	// is TWO subjects. It projects to a single-subject family whose registry
+	// row declares SubjectAxisOne and a single-subject budget.
+	//
+	// Neither earlier check could see it: the operand-shape check reads the
+	// explicit set's inner union, and O10 quantifies over IsCohortVariant,
+	// which excludes named expressions by construction. Reviews found the
+	// same shape at the explicit set's operands and here; the sweep below
+	// now quantifies over the SUBJECT COUNT the expression implies rather
+	// than over any one variant's internals.
+	NamedSubjectCount int
+}
+
+// projectionNamedSubjectCount reports how many subjects a named expression
+// names, after the blank terms an invariant already rejects.
+func projectionNamedSubjectCount(expression SubjectExpression) int {
+	if expression.Kind != SubjectExpressionNamed || expression.Named == nil {
+		return 0
+	}
+	return len(nonEmptyTerms(expression.Named.Terms))
 }
 
 // projectionOperandKinds reads the arms an explicit set actually carries.
@@ -235,13 +262,13 @@ func DeriveQuestionFamily(frame QuestionFrame) FamilyProjection {
 	// Rows 1-4 -- TOPOLOGY. The discriminator alone decides; no goal, no
 	// temporal, no dimension is read.
 	case SubjectExpressionGroupedMembers:
-		return FamilyProjection{Family: QuestionFamilyGroupedCohortStatus, Row: FamilyProjectionRowGrouped, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
+		return FamilyProjection{Family: QuestionFamilyGroupedCohortStatus, Row: FamilyProjectionRowGrouped, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression), NamedSubjectCount: projectionNamedSubjectCount(frame.SubjectExpression)}
 	case SubjectExpressionChildrenOfScope:
-		return FamilyProjection{Family: QuestionFamilyScopedCohortStatus, Row: FamilyProjectionRowScoped, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
+		return FamilyProjection{Family: QuestionFamilyScopedCohortStatus, Row: FamilyProjectionRowScoped, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression), NamedSubjectCount: projectionNamedSubjectCount(frame.SubjectExpression)}
 	case SubjectExpressionExplicitSet:
-		return FamilyProjection{Family: QuestionFamilyExplicitComparison, Row: FamilyProjectionRowExplicit, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
+		return FamilyProjection{Family: QuestionFamilyExplicitComparison, Row: FamilyProjectionRowExplicit, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression), NamedSubjectCount: projectionNamedSubjectCount(frame.SubjectExpression)}
 	case SubjectExpressionDiscoveredKind:
-		return FamilyProjection{Family: QuestionFamilyDiscoveredCohortRanking, Row: FamilyProjectionRowDiscovered, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
+		return FamilyProjection{Family: QuestionFamilyDiscoveredCohortRanking, Row: FamilyProjectionRowDiscovered, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression), NamedSubjectCount: projectionNamedSubjectCount(frame.SubjectExpression)}
 
 	// Rows 5-7 -- a SINGLE SUBJECT. Only here do goals decide, and the row
 	// order is their precedence.
@@ -259,11 +286,11 @@ func DeriveQuestionFamily(frame QuestionFrame) FamilyProjection {
 	case SubjectExpressionNamed, SubjectExpressionOrganizationScope:
 		switch {
 		case frame.HasGoal(GoalAllocateInvestment):
-			return FamilyProjection{Family: QuestionFamilyInvestmentAllocation, Row: FamilyProjectionRowInvestment, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
+			return FamilyProjection{Family: QuestionFamilyInvestmentAllocation, Row: FamilyProjectionRowInvestment, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression), NamedSubjectCount: projectionNamedSubjectCount(frame.SubjectExpression)}
 		case frame.HasGoal(GoalDescribeTrend):
-			return FamilyProjection{Family: QuestionFamilyTrend, Row: FamilyProjectionRowTrend, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
+			return FamilyProjection{Family: QuestionFamilyTrend, Row: FamilyProjectionRowTrend, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression), NamedSubjectCount: projectionNamedSubjectCount(frame.SubjectExpression)}
 		default:
-			return FamilyProjection{Family: QuestionFamilySubjectInvestigation, Row: FamilyProjectionRowSubject, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
+			return FamilyProjection{Family: QuestionFamilySubjectInvestigation, Row: FamilyProjectionRowSubject, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression), NamedSubjectCount: projectionNamedSubjectCount(frame.SubjectExpression)}
 		}
 
 	// Row 8 -- the discriminator is not a vocabulary member. A refused or
@@ -276,6 +303,6 @@ func DeriveQuestionFamily(frame QuestionFrame) FamilyProjection {
 	// cannot silently vanish into row 7. This row catches the frames that
 	// never became valid at all.
 	default:
-		return FamilyProjection{Family: QuestionFamilyUnclassified, Row: FamilyProjectionRowNone, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression)}
+		return FamilyProjection{Family: QuestionFamilyUnclassified, Row: FamilyProjectionRowNone, Topology: frame.SubjectExpression.Kind, OperandKinds: projectionOperandKinds(frame.SubjectExpression), NamedSubjectCount: projectionNamedSubjectCount(frame.SubjectExpression)}
 	}
 }

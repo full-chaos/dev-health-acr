@@ -26,8 +26,26 @@ func oneFact() []contractsv1.ContextFabricClaimedFact {
 
 // baselineObligations demands nothing the bases below check, so a fixture
 // aimed at one basis is not accidentally caught by another.
+//
+// EVERY MEMBER MUST BE OBSERVABLE. It previously included `state`, which is
+// declared unobservable, so once the unobservable arm landed every fixture
+// using this baseline fell into it -- including the `served` fixture. The
+// arm was right and the helper was wrong. Asserted rather than assumed by
+// TestTheBaselineObligationsAreAllObservable, so this cannot silently
+// regress and quietly move every fixture into one basis again.
 func baselineObligations() []AnswerObligation {
-	return []AnswerObligation{ObligationState, ObligationEvidence, ObligationCoverage}
+	return []AnswerObligation{ObligationEvidence, ObligationCoverage}
+}
+
+// TestTheBaselineObligationsAreAllObservable guards the helper above.
+func TestTheBaselineObligationsAreAllObservable(t *testing.T) {
+	t.Parallel()
+	for _, obligation := range baselineObligations() {
+		observation, declared := obligationObservations[obligation]
+		if !declared || !observation.observed {
+			t.Fatalf("baselineObligations includes %q, which this derivation cannot observe -- every fixture built on it would land on the unobservable basis regardless of what it was aiming at", obligation)
+		}
+	}
 }
 
 func withDriverObligation() []AnswerObligation {
@@ -85,6 +103,24 @@ func TestEveryServerStatusBasisHasAFixtureThatLandsInIt(t *testing.T) {
 			why:              "the FRAME derives ranking and there is no cohort to have ranked; again with the plan flag false",
 			result:           withPlan(func(plan *AnswerPlan) { plan.RequireRanking = false }, InvestigationResult{Status: InvestigationComplete, ClaimedFacts: oneFact()}),
 			frameObligations: append(baselineObligations(), ObligationRanking),
+		},
+		{
+			basis:            ServerStatusBasisRemainingWorkAbsent,
+			why:              "the FRAME derives remaining_work and the answer lists none",
+			result:           withPlan(nil, InvestigationResult{Status: InvestigationComplete, ClaimedFacts: oneFact()}),
+			frameObligations: append(baselineObligations(), ObligationRemainingWork),
+		},
+		{
+			basis:            ServerStatusBasisReadinessAbsent,
+			why:              "the FRAME derives readiness and the answer lists no readiness gap",
+			result:           withPlan(nil, InvestigationResult{Status: InvestigationComplete, ClaimedFacts: oneFact()}),
+			frameObligations: append(baselineObligations(), ObligationReadiness),
+		},
+		{
+			basis:            ServerStatusBasisUnobservable,
+			why:              "the frame requires `count`, which this derivation cannot observe in a served result. Review found this reported as `served` -- the shadow asserting an answer complete on the strength of not having looked",
+			result:           withPlan(nil, InvestigationResult{Status: InvestigationComplete, ClaimedFacts: oneFact()}),
+			frameObligations: []AnswerObligation{ObligationCount, ObligationEvidence, ObligationCoverage},
 		},
 		{
 			basis: ServerStatusBasisCoverageDegraded,
@@ -357,4 +393,169 @@ func TestTheEmptyRequiredDriverSetIsCountedOverTheCorpus(t *testing.T) {
 	}
 	t.Logf("EMPTY REQUIRED DRIVER SET over the corpus: %d of %d frames derive principal_drivers; ALL %d are flagged by the shadow on a served answer carrying none; %d of those sit on a family whose PLAN FLAG says drivers are not required -- those %d are the ones the previous version of this gate reported as `served`",
 		framesRequiringDrivers, len(frames), flagged, flagWouldHaveMissed, flagWouldHaveMissed)
+}
+
+// TestEveryObligationDeclaresWhetherTheShadowObservesIt is the totality
+// gate on the observation declaration.
+//
+// The derivation checked two obligations by name out of thirteen, and every
+// other one fell through to `served` -- so eleven could be required by a
+// frame, absent from the answer, and reported complete. Review found one of
+// them. Adding an arm for that one would have left the other ten.
+//
+// The declaration must cover the CLOSED VOCABULARY, so an obligation added
+// later cannot default into "silently served": this fails until someone
+// says which it is.
+func TestEveryObligationDeclaresWhetherTheShadowObservesIt(t *testing.T) {
+	t.Parallel()
+	observed, unobservable := 0, 0
+	for _, obligation := range AnswerObligationVocabulary() {
+		observation, declared := obligationObservations[obligation]
+		if !declared {
+			t.Errorf("obligation %q has no observation declaration -- it would default into `served` without anyone deciding that", obligation)
+			continue
+		}
+		if observation.field == "" {
+			t.Errorf("obligation %q declares neither a result field nor a reason there is none", obligation)
+		}
+		if observation.observed {
+			observed++
+		} else {
+			unobservable++
+		}
+	}
+	for obligation := range obligationObservations {
+		if !ValidAnswerObligation(obligation) {
+			t.Errorf("obligationObservations declares %q, which is not a vocabulary member -- a stale entry reads like a covered obligation", obligation)
+		}
+	}
+	if observed+unobservable != AnswerObligationCount {
+		t.Fatalf("%d observed + %d unobservable != %d obligations", observed, unobservable, AnswerObligationCount)
+	}
+	// Both partitions must be non-empty, or the declaration is decorative:
+	// all-observed would mean the unobservable basis is dead, and
+	// all-unobservable would mean the gate never measures anything.
+	if observed == 0 || unobservable == 0 {
+		t.Fatalf("declaration is one-sided: %d observed, %d unobservable", observed, unobservable)
+	}
+	t.Logf("OBSERVATION DECLARATION: %d of %d obligations observed, %d REPORTED as unobservable by this instrument", observed, AnswerObligationCount, unobservable)
+}
+
+// TestAnUnobservableRequiredObligationIsNeverCalledServed is review finding
+// R3-b, pinned.
+//
+// A frame requiring `count` has no arm to fall into, so every predicate
+// reached the end and the shadow claimed `served` -- asserting an answer
+// complete on the strength of not having looked.
+func TestAnUnobservableRequiredObligationIsNeverCalledServed(t *testing.T) {
+	t.Parallel()
+	plan := AnswerPlan{Family: QuestionFamilyDiscoveredCohortRanking}
+	result := InvestigationResult{
+		Status: InvestigationComplete, AnswerPlan: &plan, ClaimedFacts: oneFact(),
+	}
+
+	shadow := DeriveServerStatus(result, []AnswerObligation{ObligationCount, ObligationEvidence, ObligationCoverage})
+	if shadow.Basis == ServerStatusBasisServed {
+		t.Fatal("a frame requiring `count` -- which this derivation cannot observe -- was reported `served`")
+	}
+	if shadow.Basis != ServerStatusBasisUnobservable {
+		t.Fatalf("basis %q, want %q", shadow.Basis, ServerStatusBasisUnobservable)
+	}
+	if shadow.Derived {
+		t.Fatal("an unobservable obligation produced a DERIVED verdict; it is a limit of the instrument, not a judgement about the answer")
+	}
+	if shadow.Disagreed {
+		t.Fatal("an unobservable obligation was counted as a disagreement")
+	}
+
+	// The control: with only observable obligations, the same answer IS
+	// served. Without it, a derivation that declined on everything would
+	// pass the assertions above while measuring nothing.
+	served := DeriveServerStatus(result, []AnswerObligation{ObligationEvidence, ObligationCoverage})
+	if served.Basis != ServerStatusBasisServed {
+		t.Fatalf("control basis %q; with only observable obligations the same answer must be `served`", served.Basis)
+	}
+}
+
+// TestNewlyObservableObligationsOverTheDriverPopulation reports the number
+// the ruling asked for.
+func TestNewlyObservableObligationsOverTheDriverPopulation(t *testing.T) {
+	t.Parallel()
+	frames := generateFrames(t)
+	driverFrames, gainedAnObservable := 0, 0
+	newlyObservable := []AnswerObligation{
+		ObligationRemainingWork, ObligationReadiness, ObligationEvidence, ObligationCoverage,
+	}
+	perObligation := map[AnswerObligation]int{}
+
+	for _, generated := range frames {
+		if !generated.frame.HasObligation(ObligationPrincipalDrivers) {
+			continue
+		}
+		driverFrames++
+		gained := false
+		for _, obligation := range newlyObservable {
+			if generated.frame.HasObligation(obligation) {
+				perObligation[obligation]++
+				gained = true
+			}
+		}
+		if gained {
+			gainedAnObservable++
+		}
+	}
+	if driverFrames == 0 {
+		t.Fatal("no driver-requiring frames; the measurement is empty")
+	}
+	t.Logf("NEWLY OBSERVABLE over the %d driver-requiring frames: %d gain at least one newly observed obligation. Per obligation: remaining_work=%d readiness=%d evidence=%d coverage=%d",
+		driverFrames, gainedAnObservable,
+		perObligation[ObligationRemainingWork], perObligation[ObligationReadiness],
+		perObligation[ObligationEvidence], perObligation[ObligationCoverage])
+}
+
+// TestEnforcedVersusReportedIsStated is the table the stop rule requires.
+//
+// Round 3 found a classifier arm over-claiming for the third time across
+// three rounds. The ruling was: do not patch it a fourth time -- narrow the
+// classifier to what its negative controls prove, and LIST the over-claims.
+// This is that list, as an executable statement rather than a paragraph, so
+// a claim added later without an entry fails.
+func TestEnforcedVersusReportedIsStated(t *testing.T) {
+	t.Parallel()
+	type claim struct {
+		subject  string
+		enforced string
+		reported string
+	}
+	claims := []claim{
+		{
+			subject:  "precedence_comparison_row",
+			enforced: "the precedence comparison row fired and the projection read the topology instead",
+			reported: "WHICH of the row's two conditions fired -- a >=2 distinct-subject-term count (behaviour change B6) or a single non-empty comparison term -- is NOT distinguished. Distinguishing them needs the sample's terms, which are free-text model output and never reach a telemetry field, so this is a permanent limit of the class rather than an unfixed defect.",
+		},
+		{
+			subject:  "status shadow obligation coverage",
+			enforced: "six of the thirteen obligations are checked against a named result field",
+			reported: "the other seven are declared unobservable and reported as such; a frame requiring one of them yields `unobservable_obligation`, never `served`.",
+		},
+		{
+			subject:  "projection topology losses",
+			enforced: "every (family, condition) topology mismatch in the corpus is enumerated and declared",
+			reported: "none is re-routed. Changing which family a question reaches is a routing decision belonging to the slice that performs the flip.",
+		},
+		{
+			subject:  "laws L7 and L8",
+			enforced: "asserted over the surfaces this change adds, where they hold because those surfaces recompute no completeness flag and validate no model-emitted reference",
+			reported: "their real counterexamples live in files this change does not touch and are owned by other work; the reported table names each site.",
+		},
+	}
+	if len(claims) == 0 {
+		t.Fatal("the enforced-versus-reported table is empty")
+	}
+	for _, c := range claims {
+		if c.enforced == "" || c.reported == "" {
+			t.Errorf("claim %q states only one side; a claim with no reported limit is the over-claim this table exists to prevent", c.subject)
+		}
+	}
+	t.Logf("enforced-versus-reported: %d claims, each stating both what is proven and what is only reported", len(claims))
 }
