@@ -126,8 +126,23 @@ jobs:
     # anything useful.
     if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
     steps:
-      # CHAOS-4889: a manual dispatch names the ref to resolve pins from
-      # (default "main", matching every non-dispatch trigger's own ref);
+      # CHAOS-4889 R2 (codex round 1, executed): GitHub Actions expressions
+      # treat an explicit empty-string input as falsy, so `-f ref=` (an
+      # explicitly empty override, e.g. from a misconstructed automation
+      # variable) would silently fall through to `github.ref` -- mirroring
+      # whatever ref dispatched the workflow (in practice: main) instead of
+      # failing loudly on the caller's mistake. Omitting `ref` entirely
+      # already resolves the declared default ("main") before this step
+      # ever runs, so this guard only fires on an explicit empty override.
+      - name: Reject an explicitly empty ref input
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.ref == ''
+        run: |
+          printf '::error::workflow_dispatch ref input was explicitly set to empty -- omit -f ref entirely to mirror the default (main), or pass a real branch/tag/commit\n' >&2
+          exit 1
+
+      # A manual dispatch names the ref to resolve pins from (default
+      # "main", matching every non-dispatch trigger's own ref, and the
+      # guard above rejects an explicit empty override before this runs);
       # schedule/push/pull_request continue to check out whatever ref
       # triggered them via the github.ref fallback.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
