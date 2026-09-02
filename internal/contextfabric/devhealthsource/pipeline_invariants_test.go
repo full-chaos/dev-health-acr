@@ -147,6 +147,38 @@ func generateCandidates(rng *rand.Rand) generatedCase {
 		}
 		out.candidates = append(out.candidates, candidate{observedAt: at, sortKey: "wi:" + source, entity: &canonical})
 
+		// The OTHER cross-table endpoint kind, and the most common one in
+		// production: every belongsToRepository edge points at a Repository
+		// entity supplied by the `repos` table, whose label is the repo slug
+		// and so varies independently of any edge naming it. Round 4's finding
+		// was the work_item form of exactly this shape; generating only that
+		// form would leave the repository form unasserted for the same reason
+		// the ref-stub-only invariant left the work_item form unasserted.
+		repoSlug := fmt.Sprintf("acme/repo-%d", rng.Intn(2))
+		repoLabel := repoSlug
+		if rng.Intn(6) == 0 {
+			repoLabel += " " // untrimmed: the contract refuses it
+		}
+		repoValidFrom := valid
+		repoEntity := contractsv1.ContextFabricEntityProjection{
+			Subject:        contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository:" + repoSlug, Label: repoLabel},
+			Authorization:  scope,
+			EvidenceRefIDs: []string{"acr:v1:gen:repo:" + repoSlug},
+			ObservedAt:     at, ValidFrom: &repoValidFrom, SourceVersion: "v1",
+		}
+		out.candidates = append(out.candidates, candidate{observedAt: at, sortKey: "repo:" + repoSlug, entity: &repoEntity})
+		out.candidates = append(out.candidates, candidate{observedAt: at, sortKey: "wi:" + source,
+			relationship: &contractsv1.ContextFabricRelationshipProjection{
+				RelationshipID:  "relationship.v2:gen:btr:" + source + ":" + repoSlug,
+				Type:            contractsv1.ContextFabricRelationshipBelongsToRepository,
+				From:            contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + source, Label: source},
+				To:              contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectRepository, CanonicalID: "repository:" + repoSlug, Label: repoSlug},
+				Derivation:      contractsv1.ContextFabricDerivationCanonicalStructured,
+				EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
+				Authorization:   scope, EvidenceRefIDs: []string{"acr:v1:gen:btr:" + source},
+				ObservedAt: at, ValidFrom: &repoValidFrom, SourceVersion: "v1",
+			}})
+
 		// Resolved: the real edge, plus the healing tombstones that retire the
 		// ref-form ids this row WOULD have minted. The asserted id and the
 		// tombstoned id are different by construction, exactly as in tables.go.
