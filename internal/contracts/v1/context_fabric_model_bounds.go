@@ -257,7 +257,7 @@ const (
 	// x 32 = 262,144 bytes: >=16x the largest fact ever produced against
 	// real data (16,246 bytes, so no observed shape is at risk), while
 	// staying far below the 1 MiB response ceiling so ONE fact can never
-	// consume it alone. Measured against claimedFactRowContentBytes'
+	// consume it alone. Measured against ClaimedFactRowContentBytes'
 	// ACTUAL json.Marshal size of each row (validate_context_fabric_
 	// helpers.go), the same basis the 16,246-byte real-data measurement
 	// used (Postgres octet_length of the stored serialized JSON) -- not

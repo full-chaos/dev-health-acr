@@ -2,11 +2,9 @@ package devhealthfacts
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -467,35 +465,38 @@ func capFactValueRows(rows []contextfabric.FactValueRow) (capped []contextfabric
 	return rows[:contextfabric.MaxFactValueRows], len(rows) - contextfabric.MaxFactValueRows
 }
 
-// factValueRowContentBytes approximates one FactValueRow's content weight
-// in bytes, the SAME method internal/contracts/v1's
-// claimedFactRowContentBytes uses on the wire type -- so a producer's
-// pre-check here and the write-path validator
-// (ContextFabricClaimedFactCombinedContentBytesMax) can never disagree
-// about what "too big" means.
+// factValueRowContentBytes converts row to the wire row type and delegates
+// to contracts/v1's ClaimedFactRowContentBytes -- the ONE json.Marshal-based
+// measurement in the repository, per chris's ruling (via team-lead) on
+// codex terra xhigh round 2's finding: an earlier version of this function
+// carried its OWN copy of the measurement (first a raw-string-length sum,
+// round-1-fixed only in contracts/v1's sibling; then briefly a second
+// json.Marshal call here), and "two copies is the defect class, not the
+// bug" -- a second implementation can drift out of sync with the first
+// again regardless of how correct it is today. This function converts
+// (never re-measures) so there is structurally only one place the
+// arithmetic can be wrong.
 func factValueRowContentBytes(row contextfabric.FactValueRow) int {
-	// codex terra xhigh round 2, P2, EXECUTED: an earlier version summed
-	// raw string lengths, exactly the class contracts/v1's
-	// claimedFactRowContentBytes was already fixed for in round 1 (see its
-	// own doc comment) -- this sibling copy was missed by that fix. A
-	// value containing '<'/'>'/'&' (e.g. an unbounded LowCardinality(String)
-	// source column, codex's repro used work_scope_id) is undercounted by
-	// up to 6x here, so the producer pre-check could report "under bound"
-	// for a fact the contracts/v1 write-path validator then correctly
-	// rejects outright -- turning what should be a disclosed, degraded
-	// answer into a whole-result ErrInvalidResult failure (engine.go:1895),
-	// exactly the failure mode this producer-side check exists to avoid.
-	// json.Marshal must be the ONE measure both sides use, or they can
-	// disagree about what "too big" means.
-	encoded, err := json.Marshal(row)
-	if err != nil {
-		// contextfabric.FactValue's leaf variants (string/int64/float64/
-		// bool/null) always marshal successfully; if this is ever reached
-		// anyway, undercounting is the one failure mode this fix exists to
-		// close, so treat it as maximally oversized rather than as zero.
-		return math.MaxInt32
+	return contractsv1.ClaimedFactRowContentBytes(claimedFactRowFromFactValueRow(row))
+}
+
+// claimedFactRowFromFactValueRow converts devhealthfacts' domain row type to
+// the wire row type contracts/v1 measures -- a value-only conversion, never
+// a re-implementation of any bound/measurement logic. contextfabric.
+// FactValue and ContextFabricScalarValue share the identical leaf-variant
+// shape (String/Integer/Number/Boolean/Null); Rows/Table are deliberately
+// NOT copied here because a row's own Fields entries are always leaves
+// (contextfabric.FactValueRow's own doc comment: "A row field must never
+// itself carry Rows").
+func claimedFactRowFromFactValueRow(row contextfabric.FactValueRow) contractsv1.ContextFabricClaimedFactRow {
+	fields := make(map[string]contractsv1.ContextFabricScalarValue, len(row.Fields))
+	for key, value := range row.Fields {
+		fields[key] = contractsv1.ContextFabricScalarValue{
+			String: value.String, Integer: value.Integer, Number: value.Number,
+			Boolean: value.Boolean, Null: value.Null,
+		}
 	}
-	return len(encoded)
+	return contractsv1.ContextFabricClaimedFactRow{Fields: fields}
 }
 
 // combinedRowsExceedBytesBound reports whether legacyRows (a producer's

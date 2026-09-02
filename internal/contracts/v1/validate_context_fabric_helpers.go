@@ -41,12 +41,26 @@ func validateClaimedFactRows(rows []ContextFabricClaimedFactRow) error {
 	return nil
 }
 
-// claimedFactRowContentBytes is one claimed/projected fact row's ACTUAL
+// ClaimedFactRowContentBytes is one claimed/projected fact row's ACTUAL
 // json.Marshal size -- the same measure MaxSerializedBytes itself is
-// checked against (context_fabric_routes.go marshals the whole response
-// and compares the byte count), and the same basis CHAOS-4785's Phase 1
-// real-data measurement used (Postgres octet_length(payload::text) on the
-// stored, already-serialized JSON).
+// checked against (context_fabric_routes.go's MeasureContextFabricResponse
+// marshals the whole response and compares the byte count; this file's own
+// mcp_federation_validate.go packetContentSerializedBytes follows the
+// identical discipline), and the same basis CHAOS-4785's Phase 1 real-data
+// measurement used (Postgres octet_length(payload::text) on the stored,
+// already-serialized JSON).
+//
+// EXPORTED (chris's ruling via team-lead, codex terra xhigh round 2's
+// finding): this must be the ONLY implementation of this measurement in
+// the repository. An earlier version had two -- this one and a raw-
+// string-length copy in internal/contextfabric/devhealthfacts/shared.go's
+// factValueRowContentBytes -- and round 1 fixed only this one (see below),
+// leaving the sibling to fail the identical way in round 2. "Two copies
+// is the defect class, not the bug": devhealthfacts now converts its own
+// domain row type to ContextFabricClaimedFactRow and calls this function
+// directly rather than maintaining a second implementation that can drift
+// again. Measure with the serializer that enforces the ceiling, never a
+// proxy for it.
 //
 // An earlier version of this function summed raw string lengths instead
 // (codex terra xhigh round 1, P2, EXECUTED): Go's encoding/json escapes
@@ -58,7 +72,7 @@ func validateClaimedFactRows(rows []ContextFabricClaimedFactRow) error {
 // bytes, defeating the guard entirely. json.Marshal is the only measure
 // that cannot be defeated this way, because it is not an approximation of
 // the wire size -- it computes it.
-func claimedFactRowContentBytes(row ContextFabricClaimedFactRow) int {
+func ClaimedFactRowContentBytes(row ContextFabricClaimedFactRow) int {
 	encoded, err := json.Marshal(row)
 	if err != nil {
 		// ContextFabricClaimedFactRow's Fields are all
@@ -102,11 +116,11 @@ func validateClaimedFactRowsCombined(rows, timeSeriesRows []ContextFabricClaimed
 	cells, contentBytes := 0, 0
 	for _, row := range rows {
 		cells += len(row.Fields)
-		contentBytes += claimedFactRowContentBytes(row)
+		contentBytes += ClaimedFactRowContentBytes(row)
 	}
 	for _, row := range timeSeriesRows {
 		cells += len(row.Fields)
-		contentBytes += claimedFactRowContentBytes(row)
+		contentBytes += ClaimedFactRowContentBytes(row)
 	}
 	if cells > ContextFabricClaimedFactCombinedCellsMax {
 		return fmt.Errorf("claimed fact rows+time_series_rows combined cell count violates v1 bounds")
