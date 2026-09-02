@@ -48,6 +48,7 @@ package contextfabric_test
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -640,6 +641,20 @@ func TestDimensionsNarrowingEmptiesCellsThatAreOtherwiseServed(t *testing.T) {
 	}
 
 	t.Logf("cells the Dimensions clause empties that the un-narrowed set would SERVE: %d%s", narrowed, report.String())
+
+	// ASSERTED, not merely logged. Round 1 (P3) was right that the
+	// surrounding prose claims "exactly one" while the test established
+	// only "one, on this run" -- a second such cell would have appeared in
+	// the log and left the test green, so the durable claim had no guard.
+	// The number is small and specific on purpose: if it moves, the rig
+	// pass for the dimension-narrowing question is aimed at the wrong set
+	// and needs re-deriving before it is run.
+	const wantNarrowed = 1
+	if narrowed != wantNarrowed {
+		t.Errorf("the Dimensions clause empties %d otherwise-served cell(s); the measured baseline is %d. "+
+			"This is the named target the live pass examines -- re-derive it from the log above before running that pass.",
+			narrowed, wantNarrowed)
+	}
 	t.Logf("decision rule fixed BEFORE the rig pass: if narrowing empties a cell the un-narrowed set fills, " +
 		"the pinned behaviour is fall back to the un-narrowed set with a disclosed not_applicable on the dimension -- never a silent empty set.")
 }
@@ -682,6 +697,105 @@ func declaresShape(capability contextfabric.FactCapability, subject contextfabri
 // ---------------------------------------------------------------------------
 // Assertion 1 -- the transcription is faithful
 // ---------------------------------------------------------------------------
+
+// recordedTraceArtifact is the INDEPENDENT reference: the design's own
+// recorded trace output, transcribed into testdata and checked in.
+//
+// WHY IT EXISTS, and this is a review finding applied rather than noted.
+// Round 1 showed the transcription assertion was SELF-REFERENTIAL: its
+// expectations came from `traceCases`, the same table the trace reads, so
+// it proved internal consistency and nothing else. The reviewer deleted a
+// real cell (Q-A's group-role `state`), edited the two count constants
+// from 22/14 to 21/13, and every test passed while the run logged "EMPTY
+// FactKinds cells across 13 frames: 21". Re-executed and CONFIRMED by this
+// lane before being accepted.
+//
+// The fix is not another in-file assertion — that would have the same
+// defect. The recorded trace moves OUT of the test into an artifact whose
+// authority is the design document, the expectations are read FROM it, and
+// the empty count is DERIVED from it rather than declared beside it. A
+// cell cannot now be dropped without the artifact disagreeing, and the
+// count cannot be edited to match a changed table because nothing declares
+// it.
+const recordedTraceArtifact = "testdata/recorded_trace.txt"
+
+type recordedCell struct {
+	frame      string
+	obligation string
+	role       string
+	subject    string
+	literal    string
+	charitable string
+}
+
+func loadRecordedTrace(t *testing.T) map[string]recordedCell {
+	t.Helper()
+	raw, err := os.ReadFile(recordedTraceArtifact)
+	if err != nil {
+		t.Fatalf("reading the recorded-trace artifact: %v", err)
+	}
+	cells := map[string]recordedCell{}
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		if len(parts) != 6 {
+			t.Fatalf("malformed artifact line (want 6 tab-separated fields, got %d): %q", len(parts), line)
+		}
+		cell := recordedCell{frame: parts[0], obligation: parts[1], role: parts[2], subject: parts[3], literal: parts[4], charitable: parts[5]}
+		key := cell.frame + "|" + cell.obligation + "|" + cell.role + "|" + cell.subject
+		if _, duplicate := cells[key]; duplicate {
+			t.Fatalf("artifact declares %q twice", key)
+		}
+		cells[key] = cell
+	}
+	if len(cells) == 0 {
+		t.Fatal("the recorded-trace artifact is empty; every assertion built on it would be vacuous")
+	}
+	return cells
+}
+
+// TestTraceCasesMatchTheRecordedArtifactExactly is what closes the
+// self-referential hole: the in-file table and the independent artifact
+// must agree CELL FOR CELL, in both directions.
+//
+// Both directions matter and for different reasons. A cell present in the
+// artifact and missing from the table is the deletion the reviewer
+// exploited. A cell present in the table and missing from the artifact is
+// an invented measurement — a row that looks like recorded evidence and
+// never was.
+func TestTraceCasesMatchTheRecordedArtifactExactly(t *testing.T) {
+	recorded := loadRecordedTrace(t)
+
+	inTable := map[string]bool{}
+	for _, testCase := range traceCases() {
+		for _, cell := range testCase.cells {
+			key := testCase.id + "|" + string(cell.obligation) + "|" + cell.role + "|" + string(cell.subject)
+			if inTable[key] {
+				t.Errorf("the trace table declares %q twice", key)
+			}
+			inTable[key] = true
+
+			want, found := recorded[key]
+			if !found {
+				t.Errorf("the trace table has cell %q, which the recorded artifact does NOT — an invented measurement, or an artifact that needs updating with the design's own output", key)
+				continue
+			}
+			if got := format(cell.wantLiteral); got != want.literal {
+				t.Errorf("%s literal: table says %s, recorded artifact says %s", key, got, want.literal)
+			}
+			if got := format(cell.wantCharitable); got != want.charitable {
+				t.Errorf("%s charitable: table says %s, recorded artifact says %s", key, got, want.charitable)
+			}
+		}
+	}
+	for key := range recorded {
+		if !inTable[key] {
+			t.Errorf("the recorded artifact has cell %q and the trace table does NOT — a cell was dropped, which is exactly how a measurement gets quietly reduced", key)
+		}
+	}
+}
 
 // TestFrozenRuleTranscriptionReproducesTheRecordedTrace is the
 // salted-positive check that makes the gate's redness mean something.
@@ -783,8 +897,28 @@ func TestEveryTracedFrameDerivesTheObligationsItsCellsAssume(t *testing.T) {
 func TestFrozenRuleLeavesTwentyTwoRequirementCellsUnserved(t *testing.T) {
 	capabilities := liveCapabilities(t)
 
-	// The measured baseline at acr origin/main 5ee334a2, by obligation and
-	// first failing clause of the intersection rule.
+	// The empty count is DERIVED from the independent artifact, never
+	// declared here. Round 1's reviewer edited a declared 22 down to 21 to
+	// match a table he had just shortened, and nothing objected. Counting
+	// the artifact's own empty cells removes the constant he edited: to
+	// change this number you must change the recorded trace, which
+	// TestTraceCasesMatchTheRecordedArtifactExactly then rejects unless
+	// the table changes too, and which shows up in review as "the recorded
+	// measurement changed" rather than as a digit.
+	wantEmpty := 0
+	for _, cell := range loadRecordedTrace(t) {
+		if cell.charitable == "[]" {
+			wantEmpty++
+		}
+	}
+	if wantEmpty == 0 {
+		t.Fatal("the artifact records no empty cells; this gate would be vacuous")
+	}
+
+	// The cause distribution stays pinned here because it is a property of
+	// the REGISTRY, not of the recorded trace: the artifact says a cell was
+	// empty, this says why. Both are needed -- 22 can stay 22 while its
+	// causes move.
 	wantCauses := map[string]int{
 		"state/" + string(causeSubjectKind):          14,
 		"count/" + string(causeSubjectKind):          2,
@@ -793,7 +927,6 @@ func TestFrozenRuleLeavesTwentyTwoRequirementCellsUnserved(t *testing.T) {
 		"ranking/" + string(causeShape):              2,
 		"trend_series/" + string(causeShape):         1,
 	}
-	const wantEmpty = 22
 
 	gotCauses := map[string]int{}
 

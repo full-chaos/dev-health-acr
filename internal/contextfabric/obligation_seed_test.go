@@ -132,6 +132,17 @@ func TestObligationSeedSnapshotIsRegenerated(t *testing.T) {
 // the design names team and project because those are the acceptance
 // questions' subjects, but a repository divergence would be just as real
 // and is free to check.
+//
+// WHAT THIS TEST DOES NOT PROVE, stated because round 1 showed the name
+// invites the stronger reading: it audits `state` for the subject kinds
+// the shipped composition covers, and NOTHING ELSE. A wrong declaration on
+// another obligation or another subject kind passes it untouched -- the
+// reviewer declared `readiness@pull_request` on a state-only provider and
+// every oracle here stayed green. That gap is not closable by a test,
+// because no reference exists for those cells the way the composition is a
+// reference for `state`; the control is review, and
+// TestEveryDeclaredCellIsVisibleInTheSnapshot is what guarantees review can
+// see them.
 func TestGeneratedSeedMatchesTheStatusCategoryComposition(t *testing.T) {
 	seed := contextfabric.GenerateObligationSeed(liveCapabilityList(t))
 	composition := contextfabric.StatusCategoryCompositionForTest()
@@ -280,6 +291,110 @@ func TestCapabilitiesDoesNotShareItsDeclarationMapsWithTheRegistry(t *testing.T)
 			}
 		}
 	}
+}
+
+// TestGenerateObligationSeedDeduplicatesFactKinds closes round 1's second
+// finding at the level the defect actually lives.
+//
+// Cardinality() is documented as the source of the completion quantifier,
+// so a duplicated fact kind reports two independent producers where there
+// is one. Every existing oracle was blind to it: Render() and the parity
+// property both compare SETS, so a duplicate normalized away in rendering
+// left the snapshot, the parity assertion and the cardinality test all
+// green while the underlying seed carried a doubled cell.
+//
+// The input is two capabilities sharing a Kind — the shape the exported
+// generator cannot refuse, since Validate guards a single declaration and
+// the registry's duplicate check runs somewhere else entirely.
+func TestGenerateObligationSeedDeduplicatesFactKinds(t *testing.T) {
+	twin := func(name string) contextfabric.FactCapability {
+		return contextfabric.FactCapability{
+			Kind: contextfabric.FactHealth, Name: name, Version: "v",
+			SupportedSubjectKinds: []contextfabric.SubjectKind{contextfabric.SubjectTeam},
+			Dimension:             contextfabric.HealthDimensionCodeOwnershipRisk,
+			SubjectRoles:          []contextfabric.FactRole{contextfabric.FactRoleSubject},
+			Obligations: map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
+				contextfabric.SubjectTeam: {contextfabric.ObligationState},
+			},
+		}
+	}
+
+	seed := contextfabric.GenerateObligationSeed([]contextfabric.FactCapability{twin("a"), twin("b")})
+	kinds := seed.KindsFor(contextfabric.ObligationState, contextfabric.SubjectTeam)
+	if len(kinds) != 1 {
+		t.Errorf("KindsFor returned %v (len %d), want exactly one entry: a duplicated fact kind inflates Cardinality, which sets the completion quantifier", render(kinds), len(kinds))
+	}
+	if got := seed.Cardinality(contextfabric.ObligationState, contextfabric.SubjectTeam); got != 1 {
+		t.Errorf("Cardinality = %d, want 1 — the plan would demand corroboration across producers that do not exist", got)
+	}
+}
+
+// TestGeneratedSeedHasNoDuplicateKindInAnyCell is the same property
+// asserted over the LIVE registry rather than a constructed pair, so a
+// future producer change cannot reintroduce it anywhere.
+func TestGeneratedSeedHasNoDuplicateKindInAnyCell(t *testing.T) {
+	seed := contextfabric.GenerateObligationSeed(liveCapabilityList(t))
+	for _, obligation := range contextfabric.AnswerObligationVocabulary() {
+		for _, subject := range seed.ServedSubjectKinds(obligation) {
+			seen := map[contextfabric.FactKind]bool{}
+			for _, kind := range seed.KindsFor(obligation, subject) {
+				if seen[kind] {
+					t.Errorf("%s@%s lists fact kind %q more than once", obligation, subject, kind)
+				}
+				seen[kind] = true
+			}
+		}
+	}
+}
+
+// TestEveryDeclaredCellIsVisibleInTheSnapshot bounds round 1's first
+// finding rather than pretending to close it.
+//
+// THE FINDING, STATED HONESTLY: the parity property proves `state` for the
+// three composition subject kinds and `work_item`. It says nothing about
+// any other obligation/subject cell, and the reviewer showed it — he
+// declared `readiness@pull_request` on a provider that reads pull-request
+// state only, and every oracle stayed green. Re-executed and CONFIRMED by
+// this lane.
+//
+// NO TEST CAN CLOSE THAT, and saying so is more useful than a guard that
+// pretends otherwise: whether `readiness` is a meaningful question about a
+// pull request is a semantic judgement, not a property of the registry.
+// There is no shipped reference for it the way the status composition is a
+// reference for `state`.
+//
+// So the control is REVIEW, and what a test can guarantee is that review
+// is possible: every declared cell must appear in the committed snapshot,
+// so no declaration can be added invisibly. A declaration that reaches the
+// seed without appearing in the diff would defeat the only control there
+// is.
+func TestEveryDeclaredCellIsVisibleInTheSnapshot(t *testing.T) {
+	committed, err := os.ReadFile(seedSnapshotPath)
+	if err != nil {
+		t.Fatalf("reading the committed snapshot: %v", err)
+	}
+	rendered := string(committed)
+
+	seed := contextfabric.GenerateObligationSeed(liveCapabilityList(t))
+	checked := 0
+	for _, obligation := range contextfabric.AnswerObligationVocabulary() {
+		for _, subject := range seed.ServedSubjectKinds(obligation) {
+			if !strings.Contains(rendered, "\n"+string(obligation)+"\n") {
+				t.Errorf("obligation %q is served but has no block in the snapshot", obligation)
+				continue
+			}
+			for _, kind := range seed.KindsFor(obligation, subject) {
+				checked++
+				if !strings.Contains(rendered, string(kind)) {
+					t.Errorf("%s@%s is served by %q, which appears nowhere in the snapshot", obligation, subject, kind)
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no served cells were checked; this guard would be vacuous")
+	}
+	t.Logf("every one of %d served (obligation, subject, kind) entries is visible in the review snapshot", checked)
 }
 
 func diffKinds(got, want []contextfabric.FactKind) (missing, extra []contextfabric.FactKind) {

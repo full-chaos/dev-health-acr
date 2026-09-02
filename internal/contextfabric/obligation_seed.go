@@ -86,6 +86,19 @@ type ObligationSeed map[AnswerObligation]map[SubjectKind][]FactKind
 // generated artifact is a function of the registry alone and a diff in the
 // artifact is always attributable to a declaration change.
 func GenerateObligationSeed(capabilities []FactCapability) ObligationSeed {
+	// Deduplicated by construction, and this is a correctness requirement
+	// rather than tidiness. Cardinality() counts what lands in these
+	// slices and Cardinality SETS THE COMPLETION QUANTIFIER (law L3), so a
+	// fact kind appearing twice in one cell would report two independent
+	// producers where there is one and demand corroboration that cannot
+	// exist. Round 1 found the unguarded version: two capabilities sharing
+	// a Kind produced `[health health]` with Cardinality 2, and every
+	// oracle stayed green because Render() and the parity property both
+	// compare SETS. The generator is the only place that can prevent it --
+	// FactCapability.Validate rejects a duplicate WITHIN one declaration
+	// but says nothing about two capabilities, and this function is
+	// exported and takes a raw slice.
+	seen := map[AnswerObligation]map[SubjectKind]map[FactKind]bool{}
 	seed := ObligationSeed{}
 	for _, capability := range capabilities {
 		for subject, obligations := range capability.Obligations {
@@ -93,11 +106,19 @@ func GenerateObligationSeed(capabilities []FactCapability) ObligationSeed {
 				if shape, required := obligationRequiredTableShape[obligation]; required && !capabilityDeclaresShape(capability, subject, shape) {
 					continue
 				}
-				bySubject, seen := seed[obligation]
-				if !seen {
+				bySubject, known := seed[obligation]
+				if !known {
 					bySubject = map[SubjectKind][]FactKind{}
 					seed[obligation] = bySubject
+					seen[obligation] = map[SubjectKind]map[FactKind]bool{}
 				}
+				if seen[obligation][subject] == nil {
+					seen[obligation][subject] = map[FactKind]bool{}
+				}
+				if seen[obligation][subject][capability.Kind] {
+					continue
+				}
+				seen[obligation][subject][capability.Kind] = true
 				bySubject[subject] = append(bySubject[subject], capability.Kind)
 			}
 		}
