@@ -1892,6 +1892,23 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if fallbacks := applyCoverageDisplayLabels(&result); fallbacks > 0 && e.telemetry != nil {
 		e.telemetry.RecordEvidenceLabelFallback(ctx, principal, fallbacks)
 	}
+	// Y3: the FINAL budget assertion. fitAssembledResult above measured the
+	// result BEFORE the plan re-stamp and before applyCoverageDisplayLabels,
+	// and both of those add bytes to the document the route will serialize --
+	// so the thing measured there was not the thing served. This is the point
+	// at which the document is final, and it is the point four successive
+	// revisions of the minimal-answer-floor specification failed to reach.
+	//
+	// plan.Budget already carries the EFFECTIVE budget (effectiveResponseBudget
+	// mirrors the route's own min(config, request) exactly), so it is passed
+	// explicitly rather than re-derived -- projected into ResponseBudget the
+	// same way fitAssembledResult projects it, so both measurements are taken
+	// against the same two numbers -- and deliberately NOT folded into
+	// Validate(), which takes no budget parameter and would have to grow a
+	// contract-wide signature change for one caller. See budget_assertion.go.
+	if err := e.assertFitsBudget(ctx, principal, BudgetAssertDecisive, result, ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes}); err != nil {
+		return InvestigationResult{}, err
+	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}

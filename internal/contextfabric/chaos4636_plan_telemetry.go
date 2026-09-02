@@ -234,6 +234,19 @@ type PlanTelemetry interface {
 	// every artifact; this is what makes it countable. Closed
 	// enums/counts only, fired once per grouped answer.
 	RecordGroupedCohortCompleteness(ctx context.Context, principal storage.Principal, event GroupedCohortCompletenessEvent)
+	// RecordBudgetAssertion reports the FINAL budget assertion at one fresh
+	// result exit -- the measurement taken on the document the route will
+	// actually serialize, after every composer. It fires on a FIT as well as
+	// an overrun, because an event that only fired on failure would leave
+	// "how often does the final document fit" unanswerable from the
+	// artifacts; that is the same finding a prior round made against the
+	// stage-3 fit, applied to this event before it can be made again.
+	//
+	// Embedded here rather than offered as an optional interface, for the
+	// CHAOS-4085 reason PlanTelemetry's own doc comment gives: a telemetry
+	// implementation that cannot report this must be a COMPILE ERROR, never
+	// a silently empty stream.
+	RecordBudgetAssertion(ctx context.Context, principal storage.Principal, event BudgetAssertionEvent)
 }
 
 // GroupedCohortCompletenessEvent (CHAOS-4733) is CLOSED ENUMS AND COUNTS

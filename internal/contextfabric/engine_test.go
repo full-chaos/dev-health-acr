@@ -313,6 +313,11 @@ type recordingTelemetry struct {
 	priorSubjectReceiptsSkipped []int
 	answerReuseOutcomes         []AnswerReuseOutcome
 
+	// budgetAssertions (Y3) records every FINAL budget assertion verbatim --
+	// list, not count, so a test asserts the exact stage and the exact
+	// measurement, per the same discipline the fields around it hold.
+	budgetAssertions []BudgetAssertionEvent
+
 	// subjectlessTerminalReasons, priorSubjectReceiptSkipReasons, and
 	// answerReuseServedRequestIDs (CHAOS-3888) record every call's
 	// arguments verbatim, mirroring falkorgraph's own recordingTelemetry
@@ -556,6 +561,13 @@ func (r *recordingTelemetry) RecordPlanNarrowing(_ context.Context, _ storage.Pr
 // list-not-count discipline as RecordPlanNarrowing above.
 func (r *recordingTelemetry) RecordGroupedCohortCompleteness(_ context.Context, _ storage.Principal, event GroupedCohortCompletenessEvent) {
 	r.groupedCohortCompletenesses = append(r.groupedCohortCompletenesses, event)
+}
+
+// RecordBudgetAssertion (Y3) records the whole event, same list-not-count
+// discipline: a test must be able to assert WHICH exit asserted and what it
+// measured, not merely that something was recorded.
+func (r *recordingTelemetry) RecordBudgetAssertion(_ context.Context, _ storage.Principal, event BudgetAssertionEvent) {
+	r.budgetAssertions = append(r.budgetAssertions, event)
 }
 
 // RecordCommitAffirmationRetraction (CHAOS-4085) is COUNTED here so a retry

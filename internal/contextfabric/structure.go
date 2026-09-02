@@ -1314,6 +1314,15 @@ func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Prin
 	if fallbacks := applyCoverageDisplayLabels(&result); fallbacks > 0 && e.telemetry != nil {
 		e.telemetry.RecordEvidenceLabelFallback(ctx, principal, fallbacks)
 	}
+	// Y3: the FINAL budget assertion, on the document the route will
+	// serialize, immediately before Validate -- the same "own independent
+	// exit, immediately before its own Validate" placement rule the
+	// Completeness and display-label stamps above already follow. Those two
+	// sweeps enumerated these exits and neither added the budget stage, so
+	// this exit served an unmeasured document. See budget_assertion.go.
+	if err := e.assertFitsBudget(ctx, principal, BudgetAssertStructureVeto, result, e.effectiveResponseBudget(request)); err != nil {
+		return InvestigationResult{}, err
+	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
