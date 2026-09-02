@@ -4,7 +4,7 @@
 // header comment names this exact gap under "WHAT THIS DOES NOT CATCH":
 // "anything reached through a function boundary or a struct field, where
 // the family and the text are in different scopes." Not production code;
-// loaded standalone by TestChaos4782CatchesHistoricalConstructions.
+// loaded standalone by TestFamilyTextGateCatchesHistoricalConstructions.
 //
 // The construction: one function derives the family's ordinal position (the
 // R3 shape) and stores it in a struct FIELD; a SEPARATE function, given only

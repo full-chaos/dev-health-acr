@@ -1,7 +1,7 @@
 // Package r2alias is a committed RED fixture for CHAOS-4782: the R2
 // construction that defeated the second version of the CHAOS-4735 heuristic
 // sweep (codex round 2, ARGUED then reproduced by the lane). Not production
-// code; loaded standalone by TestChaos4782CatchesHistoricalConstructions.
+// code; loaded standalone by TestFamilyTextGateCatchesHistoricalConstructions.
 //
 // The construction: a named type `phrase` whose underlying type is
 // `string` stands in for the map's value type. Matching textual types by

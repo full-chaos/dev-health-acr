@@ -3,7 +3,7 @@
 // sweep (codex round 3, EXECUTED) and is the reason CHAOS-4782 exists at
 // all -- the sweep's own header comment says so: "R3 IS NOT [closed], and
 // saying so is the point." Not production code; loaded standalone by
-// TestChaos4782CatchesHistoricalConstructions.
+// TestFamilyTextGateCatchesHistoricalConstructions.
 //
 // The construction: no switch, no map, no comparison to a string literal.
 // The family's ordinal POSITION in the closed vocabulary is found by

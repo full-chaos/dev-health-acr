@@ -106,19 +106,19 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// chaos4782SweptImportPaths are the four production roots this sweep
+// familyGateSweptImportPaths are the four production roots this sweep
 // analyzes, as Go import paths (not file paths) so golang.org/x/tools/go/packages
 // resolves them with full type information, recursively, in one
 // type-checking session -- required for go/types object identity to be
 // comparable across the four packages at all.
-var chaos4782SweptImportPaths = []string{
+var familyGateSweptImportPaths = []string{
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/...",
 	"github.com/full-chaos/dev-health-acr/internal/api/...",
 	"github.com/full-chaos/dev-health-acr/internal/contracts/v1/...",
 	"github.com/full-chaos/dev-health-acr/internal/mcp/...",
 }
 
-// chaos4782SanctionedFiles are the four purpose files whose TOP-LEVEL
+// familyGateSanctionedFiles are the four purpose files whose TOP-LEVEL
 // DECLARATIONS bootstrap the sanctioned-object set. This is still an
 // anchor into the source (the four purposes have to start somewhere), but
 // unlike chaos4735_family_language_sweep_test.go's sanctionedFamilyReadSites,
@@ -127,7 +127,7 @@ var chaos4782SweptImportPaths = []string{
 // resolved go/types.Object against the set of objects declared in these
 // files. A new, unrelated function added to one of these files is not
 // sanctioned merely by proximity.
-var chaos4782SanctionedFiles = []string{
+var familyGateSanctionedFiles = []string{
 	// Purpose 1: the precedence table that PRODUCES the family.
 	"internal/contextfabric/chaos4632_question_family_precedence.go",
 	// Purpose 2: the registry -- LookupQuestionFamily, which is also
@@ -140,29 +140,29 @@ var chaos4782SanctionedFiles = []string{
 	"internal/contracts/v1/context_fabric_answer_plan.go",
 }
 
-// chaos4782ContractsPurposeFile is purpose 4 alone, used by
-// TestChaos4782CatchesHistoricalConstructions, whose fixture loads never
+// familyGateContractsPurposeFile is purpose 4 alone, used by
+// TestFamilyTextGateCatchesHistoricalConstructions, whose fixture loads never
 // include internal/contextfabric (purposes 1-3).
-var chaos4782ContractsPurposeFile = []string{
+var familyGateContractsPurposeFile = []string{
 	"internal/contracts/v1/context_fabric_answer_plan.go",
 }
 
-// chaos4782Violation is one finding: a file:line plus a human message.
-type chaos4782Violation struct {
+// familyGateViolation is one finding: a file:line plus a human message.
+type familyGateViolation struct {
 	pos     token.Position
 	message string
 }
 
-func (v chaos4782Violation) String() string {
+func (v familyGateViolation) String() string {
 	return fmt.Sprintf("%s (%s)", v.pos, v.message)
 }
 
-// chaos4782Facts is everything the analysis resolves ONCE from a loaded
+// familyGateFacts is everything the analysis resolves ONCE from a loaded
 // program before walking it: the family type itself, its constants (both
 // spellings, matching chaos4735's non-vacuity discipline), the closed
 // vocabulary's wire-value string literals (for the raw-keyed-table rule,
 // which needs no type information at all), and the sanctioned object set.
-type chaos4782Facts struct {
+type familyGateFacts struct {
 	fset               *token.FileSet
 	familyType         types.Type
 	discriminating     map[types.Object]bool // family constants EXCLUDING the unclassified sentinel
@@ -171,12 +171,12 @@ type chaos4782Facts struct {
 	sanctioned         map[types.Object]bool // sanctioned readers, by declared object
 }
 
-// chaos4782ResolveFacts derives chaos4782Facts from a single loaded
+// familyGateResolveFacts derives familyGateFacts from a single loaded
 // program. It must be called on the SAME *packages.Package slice that will
 // be walked, and on that slice ONLY -- go/types object identity (used
 // throughout via pointer equality) is only meaningful within one
 // type-checking session.
-func chaos4782ResolveFacts(t *testing.T, pkgs []*packages.Package, sanctionedFiles []string) chaos4782Facts {
+func familyGateResolveFacts(t *testing.T, pkgs []*packages.Package, sanctionedFiles []string) familyGateFacts {
 	t.Helper()
 
 	var contractsPkg *packages.Package
@@ -220,7 +220,7 @@ func chaos4782ResolveFacts(t *testing.T, pkgs []*packages.Package, sanctionedFil
 	// wire spelling plus the contextfabric package-local alias spelling),
 	// so it wants exactly 2*Count. A fixture load carries only the
 	// contracts.v1 spelling (fixtures do not load internal/contextfabric
-	// -- see TestChaos4782CatchesHistoricalConstructions), so it wants
+	// -- see TestFamilyTextGateCatchesHistoricalConstructions), so it wants
 	// exactly 1*Count. Any OTHER count means the needle set is broken
 	// (some spelling silently missing or duplicated), not that a
 	// different swept-package combination is fine to shrug at.
@@ -239,9 +239,9 @@ func chaos4782ResolveFacts(t *testing.T, pkgs []*packages.Package, sanctionedFil
 		t.Fatalf("expected the closed vocabulary to carry exactly one unclassified sentinel per loaded spelling (%d spellings); discriminating=%d of %d", spellings, len(discriminating), len(allConstants))
 	}
 
-	sanctioned := chaos4782ResolveSanctionedObjects(t, pkgs, sanctionedFiles)
+	sanctioned := familyGateResolveSanctionedObjects(t, pkgs, sanctionedFiles)
 
-	return chaos4782Facts{
+	return familyGateFacts{
 		familyType:         familyType,
 		discriminating:     discriminating,
 		allFamilyConstants: allConstants,
@@ -250,19 +250,19 @@ func chaos4782ResolveFacts(t *testing.T, pkgs []*packages.Package, sanctionedFil
 	}
 }
 
-// chaos4782ResolveSanctionedObjects walks the top-level declarations of
+// familyGateResolveSanctionedObjects walks the top-level declarations of
 // the named files (matched by suffix against each package's
 // CompiledGoFiles, so it works regardless of which loaded package a file
 // belongs to) and returns the *types.Object each one declares: every
 // function's object, and every name in every var/const spec. A read is
 // sanctioned iff its enclosing declaration resolves to one of these
 // objects.
-func chaos4782ResolveSanctionedObjects(t *testing.T, pkgs []*packages.Package, sanctionedFiles []string) map[types.Object]bool {
+func familyGateResolveSanctionedObjects(t *testing.T, pkgs []*packages.Package, sanctionedFiles []string) map[types.Object]bool {
 	t.Helper()
 	sanctioned := map[types.Object]bool{}
 	if len(sanctionedFiles) == 0 {
 		// Historical-construction fixtures are loaded standalone (see
-		// TestChaos4782CatchesHistoricalConstructions): they never
+		// TestFamilyTextGateCatchesHistoricalConstructions): they never
 		// contain a sanctioned declaration, and loading the whole of
 		// internal/contextfabric just to resolve an empty exemption set
 		// would triple each fixture's load cost for no signal. An empty
@@ -322,12 +322,12 @@ func chaos4782ResolveSanctionedObjects(t *testing.T, pkgs []*packages.Package, s
 	return sanctioned
 }
 
-// chaos4782MayHoldText fails CLOSED: everything can hold text unless it is
+// familyGateMayHoldText fails CLOSED: everything can hold text unless it is
 // one of a small set of builtins that provably cannot. Carried over from
 // chaos4735_family_language_sweep_test.go's mayHoldText (found by codex
 // round 2): matching textual types by NAME was the mistake; inverting the
 // default is what survives a renamed textual type.
-func chaos4782MayHoldText(t types.Type) bool {
+func familyGateMayHoldText(t types.Type) bool {
 	basic, ok := t.Underlying().(*types.Basic)
 	if !ok {
 		return true // struct, interface, pointer, slice, map: not provably non-textual.
@@ -340,27 +340,27 @@ func chaos4782MayHoldText(t types.Type) bool {
 	}
 }
 
-// chaos4782FuncScope is the function or file-level declaration currently
+// familyGateFuncScope is the function or file-level declaration currently
 // being walked, used both to seed per-declaration local taint state and to
 // decide whether violations found inside it are exempt.
-type chaos4782FuncScope struct {
+type familyGateFuncScope struct {
 	pkg        *packages.Package
 	enclosing  types.Object // the top-level object this code lives inside (nil for none resolvable)
 	sanctioned bool
 }
 
-// chaos4782Analyzer runs the two-pass, field-sensitive taint walk over a
+// familyGateAnalyzer runs the two-pass, field-sensitive taint walk over a
 // loaded program and reports violations. It is reusable across the main
 // production-roots run and each historical-construction fixture: callers
 // supply the facts (family type/constants/sanctioned set) resolved from
 // THEIR OWN load, since go/types object identity does not survive across
 // separate packages.Load calls.
-type chaos4782Analyzer struct {
-	facts      chaos4782Facts
+type familyGateAnalyzer struct {
+	facts      familyGateFacts
 	fieldTaint map[types.Object]bool // struct FIELD objects known to carry family-derived data
 }
 
-// chaos4782TaintKind distinguishes "this expression's value is exactly a
+// familyGateTaintKind distinguishes "this expression's value is exactly a
 // family-typed value" (raw) from "this expression is derived from one, but
 // is not itself family-typed" (derived -- the ordinal/converted case). The
 // distinction matters for exactly one rule: the raw-map-key rule (mirrors
@@ -372,43 +372,43 @@ type chaos4782Analyzer struct {
 // are not flagged; a map keyed by a derived int is covered by the
 // index-derives-text rule instead, which fires on any tainted index,
 // raw or derived).
-type chaos4782TaintKind int
+type familyGateTaintKind int
 
 const (
-	chaos4782NotTainted chaos4782TaintKind = iota
-	chaos4782TaintRaw
-	chaos4782TaintDerived
+	familyGateNotTainted familyGateTaintKind = iota
+	familyGateTaintRaw
+	familyGateTaintDerived
 )
 
-func (k chaos4782TaintKind) tainted() bool { return k != chaos4782NotTainted }
+func (k familyGateTaintKind) tainted() bool { return k != familyGateNotTainted }
 
-// chaos4782Local is the per-function taint state: which local objects
+// familyGateLocal is the per-function taint state: which local objects
 // (params, `:=`-declared vars) are currently tainted, and at which kind.
-type chaos4782Local map[types.Object]chaos4782TaintKind
+type familyGateLocal map[types.Object]familyGateTaintKind
 
-// chaos4782Walker carries the state for one pass over one function body.
-type chaos4782Walker struct {
-	an          *chaos4782Analyzer
+// familyGateWalker carries the state for one pass over one function body.
+type familyGateWalker struct {
+	an          *familyGateAnalyzer
 	pkg         *packages.Package
-	scope       chaos4782FuncScope
-	local       chaos4782Local
+	scope       familyGateFuncScope
+	local       familyGateLocal
 	collect     bool // pass 1: record field-taint facts instead of reporting
 	newFields   map[types.Object]bool
-	violations  []chaos4782Violation
-	returnTaint chaos4782TaintKind
+	violations  []familyGateViolation
+	returnTaint familyGateTaintKind
 }
 
-func (w *chaos4782Walker) report(pos token.Pos, message string) {
+func (w *familyGateWalker) report(pos token.Pos, message string) {
 	if w.scope.sanctioned || w.collect {
 		return
 	}
-	w.violations = append(w.violations, chaos4782Violation{pos: w.pkg.Fset.Position(pos), message: message})
+	w.violations = append(w.violations, familyGateViolation{pos: w.pkg.Fset.Position(pos), message: message})
 }
 
 // isConversion reports whether call is a type conversion (as opposed to a
 // function call) by asking whether its Fun names a TYPE, not a value --
 // this is what lets taint survive `string(family)` / `SomeAlias(family)`.
-func (w *chaos4782Walker) isConversion(call *ast.CallExpr) bool {
+func (w *familyGateWalker) isConversion(call *ast.CallExpr) bool {
 	if len(call.Args) != 1 {
 		return false
 	}
@@ -434,10 +434,10 @@ func (w *chaos4782Walker) isConversion(call *ast.CallExpr) bool {
 // recursing into subexpressions. It has no side effects other than
 // (optionally) recording field-taint facts when w.collect is set -- taint
 // facts about ASSIGNMENTS are recorded by the statement walker, not here.
-func (w *chaos4782Walker) eval(expr ast.Expr) chaos4782TaintKind {
+func (w *familyGateWalker) eval(expr ast.Expr) familyGateTaintKind {
 	switch e := expr.(type) {
 	case nil:
-		return chaos4782NotTainted
+		return familyGateNotTainted
 	case *ast.ParenExpr:
 		return w.eval(e.X)
 	case *ast.Ident:
@@ -446,7 +446,7 @@ func (w *chaos4782Walker) eval(expr ast.Expr) chaos4782TaintKind {
 				return k
 			}
 			if w.an.fieldTaint[obj] {
-				return chaos4782TaintDerived
+				return familyGateTaintDerived
 			}
 		}
 		return w.rawIfFamilyTyped(e)
@@ -460,7 +460,7 @@ func (w *chaos4782Walker) eval(expr ast.Expr) chaos4782TaintKind {
 		// does, which is the field-sensitivity contract this analysis
 		// documents).
 		if obj := w.pkg.TypesInfo.Uses[e.Sel]; obj != nil && w.an.fieldTaint[obj] {
-			return chaos4782TaintDerived
+			return familyGateTaintDerived
 		}
 		return w.rawIfFamilyTyped(e)
 	case *ast.CallExpr:
@@ -483,37 +483,37 @@ func (w *chaos4782Walker) eval(expr ast.Expr) chaos4782TaintKind {
 		for _, arg := range e.Args {
 			w.eval(arg)
 		}
-		return chaos4782NotTainted
+		return familyGateNotTainted
 	case *ast.IndexExpr:
 		containerT := w.pkg.TypesInfo.TypeOf(e.X)
 		indexKind := w.eval(e.Index)
 		w.eval(e.X)
 		if indexKind.tainted() && containerT != nil {
-			elem := chaos4782ElemType(containerT)
-			if elem != nil && chaos4782MayHoldText(elem) {
+			elem := familyGateElemType(containerT)
+			if elem != nil && familyGateMayHoldText(elem) {
 				w.report(e.Pos(), fmt.Sprintf(
 					"index/key into %s is derived from a question-family value and the container can hold text -- this is the R3/R5 class: a family value's position or identity selects a text-yielding entry outside a sanctioned reader",
 					containerT.String()))
 			}
 		}
-		return chaos4782NotTainted
+		return familyGateNotTainted
 	case *ast.BinaryExpr:
 		lk := w.eval(e.X)
 		rk := w.eval(e.Y)
 		if (e.Op == token.EQL || e.Op == token.NEQ) && (lk.tainted() || rk.tainted()) {
-			if lit, litSide := chaos4782StringLiteral(e.X); litSide {
+			if lit, litSide := familyGateStringLiteral(e.X); litSide {
 				w.checkLiteralCompare(e, lit)
 			}
-			if lit, litSide := chaos4782StringLiteral(e.Y); litSide {
+			if lit, litSide := familyGateStringLiteral(e.Y); litSide {
 				w.checkLiteralCompare(e, lit)
 			}
 		}
-		return chaos4782NotTainted
+		return familyGateNotTainted
 	case *ast.UnaryExpr:
 		return w.eval(e.X)
 	case *ast.CompositeLit:
 		w.evalCompositeLit(e)
-		return chaos4782NotTainted
+		return familyGateNotTainted
 	default:
 		return w.rawIfFamilyTyped(expr)
 	}
@@ -523,19 +523,19 @@ func (w *chaos4782Walker) eval(expr ast.Expr) chaos4782TaintKind {
 // type is identical to the family type is tainted, raw, regardless of how
 // it is spelled -- this is what makes seeding type-based rather than
 // name-based.
-func (w *chaos4782Walker) rawIfFamilyTyped(expr ast.Expr) chaos4782TaintKind {
+func (w *familyGateWalker) rawIfFamilyTyped(expr ast.Expr) familyGateTaintKind {
 	t := w.pkg.TypesInfo.TypeOf(expr)
 	if t != nil && types.Identical(t, w.an.facts.familyType) {
-		return chaos4782TaintRaw
+		return familyGateTaintRaw
 	}
-	return chaos4782NotTainted
+	return familyGateNotTainted
 }
 
 // checkLiteralCompare implements the R1 rule: a tainted value compared to a
 // non-empty string literal. The empty-string literal is excluded on the
 // same reasoning chaos4735 uses: `Family == ""` is an emptiness test, not a
 // discriminating read.
-func (w *chaos4782Walker) checkLiteralCompare(e *ast.BinaryExpr, lit *ast.BasicLit) {
+func (w *familyGateWalker) checkLiteralCompare(e *ast.BinaryExpr, lit *ast.BasicLit) {
 	if lit.Value == `""` {
 		return
 	}
@@ -543,22 +543,22 @@ func (w *chaos4782Walker) checkLiteralCompare(e *ast.BinaryExpr, lit *ast.BasicL
 		"a question-family-derived value is compared to the string literal %s instead of a closed-vocabulary constant -- the R1 class (codex round 1)", lit.Value))
 }
 
-func chaos4782StringLiteral(expr ast.Expr) (*ast.BasicLit, bool) {
+func familyGateStringLiteral(expr ast.Expr) (*ast.BasicLit, bool) {
 	switch e := expr.(type) {
 	case *ast.BasicLit:
 		if e.Kind == token.STRING {
 			return e, true
 		}
 	case *ast.ParenExpr:
-		return chaos4782StringLiteral(e.X)
+		return familyGateStringLiteral(e.X)
 	}
 	return nil, false
 }
 
-// chaos4782ElemType returns the element type of an array/slice/map, or nil
+// familyGateElemType returns the element type of an array/slice/map, or nil
 // if t is none of those (the analysis only reasons about index/key
 // containers).
-func chaos4782ElemType(t types.Type) types.Type {
+func familyGateElemType(t types.Type) types.Type {
 	switch u := t.Underlying().(type) {
 	case *types.Array:
 		return u.Elem()
@@ -580,7 +580,7 @@ func chaos4782ElemType(t types.Type) types.Type {
 // (no family-typed expression appears at all, so the type/dataflow rules
 // above cannot see it -- this one stays purely textual, same as chaos4735
 // rule 2).
-func (w *chaos4782Walker) evalCompositeLit(lit *ast.CompositeLit) {
+func (w *familyGateWalker) evalCompositeLit(lit *ast.CompositeLit) {
 	t := w.pkg.TypesInfo.TypeOf(lit)
 	if t == nil {
 		for _, elt := range lit.Elts {
@@ -600,7 +600,7 @@ func (w *chaos4782Walker) evalCompositeLit(lit *ast.CompositeLit) {
 	}
 }
 
-func (w *chaos4782Walker) evalStructLit(lit *ast.CompositeLit, structT *types.Struct, named types.Type) {
+func (w *familyGateWalker) evalStructLit(lit *ast.CompositeLit, structT *types.Struct, named types.Type) {
 	for i, elt := range lit.Elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
 		if !ok {
@@ -633,9 +633,9 @@ func (w *chaos4782Walker) evalStructLit(lit *ast.CompositeLit, structT *types.St
 	_ = named
 }
 
-func (w *chaos4782Walker) evalMapLit(lit *ast.CompositeLit, mapT *types.Map, named types.Type) {
+func (w *familyGateWalker) evalMapLit(lit *ast.CompositeLit, mapT *types.Map, named types.Type) {
 	familyKeyed := types.Identical(mapT.Key(), w.an.facts.familyType)
-	textual := chaos4782MayHoldText(mapT.Elem())
+	textual := familyGateMayHoldText(mapT.Elem())
 	if familyKeyed && textual {
 		w.report(lit.Lbrace, fmt.Sprintf(
 			"map literal of type %s: key type is the question-family type and the value type can hold text -- the R2 class (codex round 2)", named.String()))
@@ -647,7 +647,7 @@ func (w *chaos4782Walker) evalMapLit(lit *ast.CompositeLit, mapT *types.Map, nam
 			continue
 		}
 		w.eval(kv.Value)
-		if lit2, ok := chaos4782StringLiteral(kv.Key); ok && textual {
+		if lit2, ok := familyGateStringLiteral(kv.Key); ok && textual {
 			if w.an.facts.wireValueLiterals[lit2.Value] {
 				w.report(lit2.Pos(), fmt.Sprintf(
 					"map literal of type %s: key %s is one of the family's raw wire values written as a string literal, and the value type can hold text", named.String(), lit2.Value))
@@ -658,7 +658,7 @@ func (w *chaos4782Walker) evalMapLit(lit *ast.CompositeLit, mapT *types.Map, nam
 	}
 }
 
-func (w *chaos4782Walker) evalCompositeElt(elt ast.Expr, _ types.Type) {
+func (w *familyGateWalker) evalCompositeElt(elt ast.Expr, _ types.Type) {
 	if kv, ok := elt.(*ast.KeyValueExpr); ok {
 		w.eval(kv.Key)
 		w.eval(kv.Value)
@@ -670,7 +670,7 @@ func (w *chaos4782Walker) evalCompositeElt(elt ast.Expr, _ types.Type) {
 // assign updates local taint state for one LHS/RHS pair of an assignment
 // or `:=`, and (in collect mode) records field-taint facts for `x.Field =
 // taintedExpr`.
-func (w *chaos4782Walker) assign(lhs, rhs ast.Expr) {
+func (w *familyGateWalker) assign(lhs, rhs ast.Expr) {
 	kind := w.eval(rhs)
 	switch l := lhs.(type) {
 	case *ast.Ident:
@@ -711,7 +711,7 @@ func (w *chaos4782Walker) assign(lhs, rhs ast.Expr) {
 // conservatively (a var tainted in either arm is treated as tainted after)
 // rather than fully merged per-path, which is a deliberate
 // over-approximation matching this analysis's fail-closed posture.
-func (w *chaos4782Walker) walkStmt(stmt ast.Stmt) {
+func (w *familyGateWalker) walkStmt(stmt ast.Stmt) {
 	switch s := stmt.(type) {
 	case nil:
 		return
@@ -813,11 +813,11 @@ func (w *chaos4782Walker) walkStmt(stmt ast.Stmt) {
 	}
 }
 
-func (w *chaos4782Walker) walkSwitch(s *ast.SwitchStmt) {
+func (w *familyGateWalker) walkSwitch(s *ast.SwitchStmt) {
 	w.walkStmt(s.Init)
 	tagKind := w.eval(s.Tag)
 	before := w.snapshotLocal()
-	var union chaos4782Local
+	var union familyGateLocal
 	for _, clause := range s.Body.List {
 		cc := clause.(*ast.CaseClause)
 		w.restoreLocal(before)
@@ -826,13 +826,13 @@ func (w *chaos4782Walker) walkSwitch(s *ast.SwitchStmt) {
 		}
 		if tagKind.tainted() {
 			for _, sub := range cc.Body {
-				chaos4782CheckYieldsLiteral(w, sub)
+				familyGateCheckYieldsLiteral(w, sub)
 			}
 		}
 		for _, sub := range cc.Body {
 			w.walkStmt(sub)
 		}
-		union = chaos4782MergeLocal(union, w.local)
+		union = familyGateMergeLocal(union, w.local)
 	}
 	w.restoreLocal(before)
 	if union != nil {
@@ -840,22 +840,22 @@ func (w *chaos4782Walker) walkSwitch(s *ast.SwitchStmt) {
 	}
 }
 
-// chaos4782CheckYieldsLiteral flags a family-keyed switch arm that returns
+// familyGateCheckYieldsLiteral flags a family-keyed switch arm that returns
 // or assigns a string literal -- the family-keyed-prose shape, carried
 // over from chaos4735 essentially unchanged (it needs no type resolution
 // beyond knowing the tag is tainted, established by the caller).
-func chaos4782CheckYieldsLiteral(w *chaos4782Walker, stmt ast.Stmt) {
+func familyGateCheckYieldsLiteral(w *familyGateWalker, stmt ast.Stmt) {
 	var lit *ast.BasicLit
 	switch s := stmt.(type) {
 	case *ast.ReturnStmt:
 		for _, r := range s.Results {
-			if l, ok := chaos4782StringLiteral(chaos4782Unwrap(r)); ok {
+			if l, ok := familyGateStringLiteral(familyGateUnwrap(r)); ok {
 				lit = l
 			}
 		}
 	case *ast.AssignStmt:
 		for _, r := range s.Rhs {
-			if l, ok := chaos4782StringLiteral(chaos4782Unwrap(r)); ok {
+			if l, ok := familyGateStringLiteral(familyGateUnwrap(r)); ok {
 				lit = l
 			}
 		}
@@ -866,15 +866,15 @@ func chaos4782CheckYieldsLiteral(w *chaos4782Walker, stmt ast.Stmt) {
 	}
 }
 
-// chaos4782Unwrap sees through a single conversion call
+// familyGateUnwrap sees through a single conversion call
 // (`SomeType("literal")`) to the literal beneath it, so a converted
 // literal is still recognized as one.
-func chaos4782Unwrap(expr ast.Expr) ast.Expr {
+func familyGateUnwrap(expr ast.Expr) ast.Expr {
 	if call, ok := expr.(*ast.CallExpr); ok && len(call.Args) == 1 {
-		return chaos4782Unwrap(call.Args[0])
+		return familyGateUnwrap(call.Args[0])
 	}
 	if p, ok := expr.(*ast.ParenExpr); ok {
-		return chaos4782Unwrap(p.X)
+		return familyGateUnwrap(p.X)
 	}
 	return expr
 }
@@ -884,12 +884,12 @@ func chaos4782Unwrap(expr ast.Expr) ast.Expr {
 // rule that closes R3 -- the position of a family value within the closed
 // vocabulary is family-derived information even though no assignment
 // chain literally copies the family value into the index.
-func (w *chaos4782Walker) walkRange(s *ast.RangeStmt) {
+func (w *familyGateWalker) walkRange(s *ast.RangeStmt) {
 	xT := w.pkg.TypesInfo.TypeOf(s.X)
 	w.eval(s.X)
 	elemIsFamily := false
 	if xT != nil {
-		if elem := chaos4782ElemType(xT); elem != nil && types.Identical(elem, w.an.facts.familyType) {
+		if elem := familyGateElemType(xT); elem != nil && types.Identical(elem, w.an.facts.familyType) {
 			elemIsFamily = true
 		}
 	}
@@ -897,7 +897,7 @@ func (w *chaos4782Walker) walkRange(s *ast.RangeStmt) {
 		if id, ok := s.Key.(*ast.Ident); ok && id.Name != "_" {
 			if obj := w.pkg.TypesInfo.Defs[id]; obj != nil {
 				if elemIsFamily {
-					w.local[obj] = chaos4782TaintDerived
+					w.local[obj] = familyGateTaintDerived
 				} else {
 					delete(w.local, obj)
 				}
@@ -908,7 +908,7 @@ func (w *chaos4782Walker) walkRange(s *ast.RangeStmt) {
 		if id, ok := s.Value.(*ast.Ident); ok && id.Name != "_" {
 			if obj := w.pkg.TypesInfo.Defs[id]; obj != nil {
 				if elemIsFamily {
-					w.local[obj] = chaos4782TaintRaw
+					w.local[obj] = familyGateTaintRaw
 				} else {
 					delete(w.local, obj)
 				}
@@ -918,22 +918,22 @@ func (w *chaos4782Walker) walkRange(s *ast.RangeStmt) {
 	w.walkStmt(s.Body)
 }
 
-func (w *chaos4782Walker) snapshotLocal() chaos4782Local {
-	c := make(chaos4782Local, len(w.local))
+func (w *familyGateWalker) snapshotLocal() familyGateLocal {
+	c := make(familyGateLocal, len(w.local))
 	for k, v := range w.local {
 		c[k] = v
 	}
 	return c
 }
 
-func (w *chaos4782Walker) restoreLocal(saved chaos4782Local) {
-	w.local = make(chaos4782Local, len(saved))
+func (w *familyGateWalker) restoreLocal(saved familyGateLocal) {
+	w.local = make(familyGateLocal, len(saved))
 	for k, v := range saved {
 		w.local[k] = v
 	}
 }
 
-func (w *chaos4782Walker) unionLocal(other chaos4782Local) {
+func (w *familyGateWalker) unionLocal(other familyGateLocal) {
 	for k, v := range other {
 		if cur, ok := w.local[k]; !ok || v > cur {
 			w.local[k] = v
@@ -941,9 +941,9 @@ func (w *chaos4782Walker) unionLocal(other chaos4782Local) {
 	}
 }
 
-func chaos4782MergeLocal(a, b chaos4782Local) chaos4782Local {
+func familyGateMergeLocal(a, b familyGateLocal) familyGateLocal {
 	if a == nil {
-		out := make(chaos4782Local, len(b))
+		out := make(familyGateLocal, len(b))
 		for k, v := range b {
 			out[k] = v
 		}
@@ -957,7 +957,7 @@ func chaos4782MergeLocal(a, b chaos4782Local) chaos4782Local {
 	return a
 }
 
-// chaos4782Run executes one full pass (field-taint collection, then a
+// familyGateRun executes one full pass (field-taint collection, then a
 // second pass consuming those facts) over every production .go file in
 // pkgs, using facts already resolved from THIS SAME load. It iterates the
 // two-pass cycle until no NEW field-taint facts appear, and fails the test
@@ -965,14 +965,14 @@ func chaos4782MergeLocal(a, b chaos4782Local) chaos4782Local {
 // "a measurement that did not happen must FAIL, loudly": silently capping
 // iterations and reporting whatever partial result it has would be exactly
 // the false-clean shape this repository's own review discipline forbids.
-func chaos4782Run(t *testing.T, pkgs []*packages.Package, facts chaos4782Facts) []chaos4782Violation {
+func familyGateRun(t *testing.T, pkgs []*packages.Package, facts familyGateFacts) []familyGateViolation {
 	t.Helper()
-	an := &chaos4782Analyzer{facts: facts, fieldTaint: map[types.Object]bool{}}
+	an := &familyGateAnalyzer{facts: facts, fieldTaint: map[types.Object]bool{}}
 
 	const maxIterations = 12
 	converged := false
 	for iter := 0; iter < maxIterations; iter++ {
-		newFields := chaos4782OnePass(an, pkgs, true, nil)
+		newFields := familyGateOnePass(an, pkgs, true, nil)
 		grew := false
 		for f := range newFields {
 			if !an.fieldTaint[f] {
@@ -986,11 +986,11 @@ func chaos4782Run(t *testing.T, pkgs []*packages.Package, facts chaos4782Facts) 
 		}
 	}
 	if !converged {
-		t.Fatalf("chaos4782: field-taint pass did not converge within %d iterations -- refusing to report a partial result", maxIterations)
+		t.Fatalf("familyGate: field-taint pass did not converge within %d iterations -- refusing to report a partial result", maxIterations)
 	}
 
-	var violations []chaos4782Violation
-	chaos4782OnePass(an, pkgs, false, &violations)
+	var violations []familyGateViolation
+	familyGateOnePass(an, pkgs, false, &violations)
 	sort.Slice(violations, func(i, j int) bool {
 		if violations[i].pos.Filename != violations[j].pos.Filename {
 			return violations[i].pos.Filename < violations[j].pos.Filename
@@ -1000,12 +1000,12 @@ func chaos4782Run(t *testing.T, pkgs []*packages.Package, facts chaos4782Facts) 
 	return violations
 }
 
-// chaos4782OnePass walks every function body and every package-level
+// familyGateOnePass walks every function body and every package-level
 // var/const initializer in pkgs once. In collect mode it returns the
 // field-taint facts newly observed (using the CURRENT an.fieldTaint as
 // input, so successive calls see prior iterations' facts); otherwise it
 // appends violations into *out.
-func chaos4782OnePass(an *chaos4782Analyzer, pkgs []*packages.Package, collect bool, out *[]chaos4782Violation) map[types.Object]bool {
+func familyGateOnePass(an *familyGateAnalyzer, pkgs []*packages.Package, collect bool, out *[]familyGateViolation) map[types.Object]bool {
 	newFields := map[types.Object]bool{}
 	for _, pkg := range pkgs {
 		for _, file := range pkg.Syntax {
@@ -1019,11 +1019,11 @@ func chaos4782OnePass(an *chaos4782Analyzer, pkgs []*packages.Package, collect b
 					if obj := pkg.TypesInfo.Defs[d.Name]; obj != nil {
 						enclosing = obj
 					}
-					w := &chaos4782Walker{
+					w := &familyGateWalker{
 						an:      an,
 						pkg:     pkg,
-						scope:   chaos4782FuncScope{pkg: pkg, enclosing: enclosing, sanctioned: an.facts.sanctioned[enclosing]},
-						local:   chaos4782Local{},
+						scope:   familyGateFuncScope{pkg: pkg, enclosing: enclosing, sanctioned: an.facts.sanctioned[enclosing]},
+						local:   familyGateLocal{},
 						collect: collect,
 					}
 					if collect {
@@ -1038,7 +1038,7 @@ func chaos4782OnePass(an *chaos4782Analyzer, pkgs []*packages.Package, collect b
 						for _, name := range field.Names {
 							if obj := pkg.TypesInfo.Defs[name]; obj != nil {
 								if t := obj.Type(); t != nil && types.Identical(t, an.facts.familyType) {
-									w.local[obj] = chaos4782TaintRaw
+									w.local[obj] = familyGateTaintRaw
 								}
 							}
 						}
@@ -1065,11 +1065,11 @@ func chaos4782OnePass(an *chaos4782Analyzer, pkgs []*packages.Package, collect b
 						if len(vs.Names) > 0 {
 							enclosing = pkg.TypesInfo.Defs[vs.Names[0]]
 						}
-						w := &chaos4782Walker{
+						w := &familyGateWalker{
 							an:      an,
 							pkg:     pkg,
-							scope:   chaos4782FuncScope{pkg: pkg, enclosing: enclosing, sanctioned: an.facts.sanctioned[enclosing]},
-							local:   chaos4782Local{},
+							scope:   familyGateFuncScope{pkg: pkg, enclosing: enclosing, sanctioned: an.facts.sanctioned[enclosing]},
+							local:   familyGateLocal{},
 							collect: collect,
 						}
 						if collect {
@@ -1092,7 +1092,7 @@ func chaos4782OnePass(an *chaos4782Analyzer, pkgs []*packages.Package, collect b
 				}
 			}
 			if out != nil {
-				chaos4782AssertionA(an, pkg, file, out)
+				familyGateAssertionA(an, pkg, file, out)
 			}
 		}
 	}
@@ -1100,18 +1100,18 @@ func chaos4782OnePass(an *chaos4782Analyzer, pkgs []*packages.Package, collect b
 		return newFields
 	}
 	if out != nil {
-		chaos4782DedupeViolations(out)
+		familyGateDedupeViolations(out)
 	}
 	return nil
 }
 
-// chaos4782AssertionA is the closed-four-purpose-read-list check: any
+// familyGateAssertionA is the closed-four-purpose-read-list check: any
 // reference to a discriminating family CONSTANT whose enclosing
 // declaration is not sanctioned by object identity is a violation. Run
 // once per file (not per function) since it walks the whole file looking
 // for Ident/SelectorExpr uses, tracking which top-level declaration each
 // one falls under via a position-ordered scan of d.Decls.
-func chaos4782AssertionA(an *chaos4782Analyzer, pkg *packages.Package, file *ast.File, out *[]chaos4782Violation) bool {
+func familyGateAssertionA(an *familyGateAnalyzer, pkg *packages.Package, file *ast.File, out *[]familyGateViolation) bool {
 	if out == nil {
 		return false
 	}
@@ -1152,7 +1152,7 @@ func chaos4782AssertionA(an *chaos4782Analyzer, pkg *packages.Package, file *ast
 			if obj == nil || !an.facts.discriminating[obj] {
 				return true
 			}
-			*out = append(*out, chaos4782Violation{
+			*out = append(*out, familyGateViolation{
 				pos: pkg.Fset.Position(ident.Pos()),
 				message: fmt.Sprintf(
 					"unsanctioned reference to the discriminating family constant %s.%s outside the closed four-purpose read list -- a new purpose for reading the family needs a ruling before it ships, not a wider allowlist",
@@ -1165,9 +1165,9 @@ func chaos4782AssertionA(an *chaos4782Analyzer, pkg *packages.Package, file *ast
 	return reported
 }
 
-func chaos4782DedupeViolations(out *[]chaos4782Violation) {
+func familyGateDedupeViolations(out *[]familyGateViolation) {
 	seen := map[string]bool{}
-	var deduped []chaos4782Violation
+	var deduped []familyGateViolation
 	for _, v := range *out {
 		key := v.String()
 		if seen[key] {
@@ -1179,11 +1179,11 @@ func chaos4782DedupeViolations(out *[]chaos4782Violation) {
 	*out = deduped
 }
 
-// chaos4782LoadRoot walks up from the current test's working directory to
+// familyGateLoadRoot walks up from the current test's working directory to
 // the module root -- same technique as chaos4735's
 // repositoryRootForFamilySweep, needed so package loading works
 // regardless of which package `go test` happens to invoke this from.
-func chaos4782LoadRoot(t *testing.T) string {
+func familyGateLoadRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
 	if err != nil {
@@ -1201,7 +1201,7 @@ func chaos4782LoadRoot(t *testing.T) string {
 	}
 }
 
-func chaos4782LoadPackages(t *testing.T, dir string, patterns ...string) []*packages.Package {
+func familyGateLoadPackages(t *testing.T, dir string, patterns ...string) []*packages.Package {
 	t.Helper()
 	cfg := &packages.Config{
 		Dir: dir,
@@ -1230,17 +1230,17 @@ func chaos4782LoadPackages(t *testing.T, dir string, patterns ...string) []*pack
 	return pkgs
 }
 
-// TestChaos4782TypeAwareFamilyLanguageSweep is the production gate: it
+// TestNoServedTextIsDerivedFromQuestionFamily is the production gate: it
 // loads the four swept roots with full type information and asserts zero
 // violations. This is the test CHAOS-4782 exists to add; the mutation
 // proofs in the lane handoff reintroduce each historical construction in a
 // throwaway commit and confirm THIS test turns red, then restore and
 // confirm green again.
-func TestChaos4782TypeAwareFamilyLanguageSweep(t *testing.T) {
-	root := chaos4782LoadRoot(t)
-	pkgs := chaos4782LoadPackages(t, root, chaos4782SweptImportPaths...)
-	facts := chaos4782ResolveFacts(t, pkgs, chaos4782SanctionedFiles)
-	violations := chaos4782Run(t, pkgs, facts)
+func TestNoServedTextIsDerivedFromQuestionFamily(t *testing.T) {
+	root := familyGateLoadRoot(t)
+	pkgs := familyGateLoadPackages(t, root, familyGateSweptImportPaths...)
+	facts := familyGateResolveFacts(t, pkgs, familyGateSanctionedFiles)
+	violations := familyGateRun(t, pkgs, facts)
 
 	// False-positive guard (CHAOS-4782 acceptance): the vote-tally maps
 	// keyed by the family type with an int value must never be flagged.
@@ -1264,56 +1264,56 @@ func TestChaos4782TypeAwareFamilyLanguageSweep(t *testing.T) {
 	}
 }
 
-// chaos4782Fixture names one historical/novel construction fixture and
+// familyGateFixture names one historical/novel construction fixture and
 // what the sweep must say about it.
-type chaos4782Fixture struct {
+type familyGateFixture struct {
 	name        string
 	importPath  string
 	description string
 }
 
-var chaos4782Fixtures = []chaos4782Fixture{
+var familyGateFixtures = []familyGateFixture{
 	{
 		name:        "R1_raw_string_literal_after_conversion",
-		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/chaos4782/r1_raw_literal",
+		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r1_raw_literal",
 		description: "codex round 1: string(family) == \"subject_investigation\"",
 	},
 	{
 		name:        "R2_named_string_underlying_map_value",
-		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/chaos4782/r2_named_alias",
+		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r2_named_alias",
 		description: "codex round 2: map[QuestionFamily]phrase, phrase a named string type",
 	},
 	{
 		name:        "R3_ordinal_indirection_into_text_table",
-		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/chaos4782/r3_ordinal_index",
+		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r3_ordinal_index",
 		description: "codex round 3, and the reason this ticket exists: family -> vocabulary position -> []string index",
 	},
 	{
 		name:        "R4_struct_field_relay_across_function_boundary",
-		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/chaos4782/r4_struct_field_relay",
+		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r4_struct_field_relay",
 		description: "not caught by the CHAOS-4735 heuristic (its own doc names this gap): ordinal computed in one function, stored on a struct field, consumed by a different function",
 	},
 }
 
-// TestChaos4782CatchesHistoricalConstructions loads each fixture as its
+// TestFamilyTextGateCatchesHistoricalConstructions loads each fixture as its
 // OWN program (packages.Load call) -- go/types object identity is only
 // comparable within one load, so facts are re-resolved per fixture rather
 // than reused from the production-roots load. Each fixture is asserted to
 // produce AT LEAST ONE violation; the fixture's own doc comment states
 // which class it is, so a human reviewing a future failure here has the
 // history without re-deriving it.
-func TestChaos4782CatchesHistoricalConstructions(t *testing.T) {
-	root := chaos4782LoadRoot(t)
-	for _, fx := range chaos4782Fixtures {
+func TestFamilyTextGateCatchesHistoricalConstructions(t *testing.T) {
+	root := familyGateLoadRoot(t)
+	for _, fx := range familyGateFixtures {
 		fx := fx
 		t.Run(fx.name, func(t *testing.T) {
 			patterns := []string{
 				fx.importPath,
 				"github.com/full-chaos/dev-health-acr/internal/contracts/v1/...",
 			}
-			pkgs := chaos4782LoadPackages(t, root, patterns...)
+			pkgs := familyGateLoadPackages(t, root, patterns...)
 			// Only the contracts/v1 purpose file, not the full
-			// chaos4782SanctionedFiles: the other three sanctioned files
+			// familyGateSanctionedFiles: the other three sanctioned files
 			// live in internal/contextfabric, which these standalone
 			// fixtures do not import and this test does not load (paying
 			// the full production-roots load cost per fixture would not
@@ -1323,8 +1323,8 @@ func TestChaos4782CatchesHistoricalConstructions(t *testing.T) {
 			// discriminating constant's own declaration in
 			// context_fabric_answer_plan.go would itself read as an
 			// "unsanctioned reference".
-			facts := chaos4782ResolveFacts(t, pkgs, chaos4782ContractsPurposeFile)
-			violations := chaos4782Run(t, pkgs, facts)
+			facts := familyGateResolveFacts(t, pkgs, familyGateContractsPurposeFile)
+			violations := familyGateRun(t, pkgs, facts)
 			if len(violations) == 0 {
 				t.Fatalf("RED-FIRST FAILURE: fixture %s (%s) produced ZERO violations -- the gate does not catch this historical construction", fx.name, fx.description)
 			}

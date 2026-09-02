@@ -1,7 +1,7 @@
 // Package r1raw is a committed RED fixture for CHAOS-4782: the R1
 // construction that defeated the first version of the CHAOS-4735 heuristic
 // sweep (codex round 1, EXECUTED). It is never imported by production code
-// and is not itself production code -- TestChaos4782CatchesHistoricalConstructions
+// and is not itself production code -- TestFamilyTextGateCatchesHistoricalConstructions
 // loads it standalone and asserts the type-aware gate flags it.
 //
 // The construction: the family value is converted with `string(...)` before
