@@ -57,4 +57,14 @@ package v1
 // 4.7x too small, which a review caught. The design paper's own provisional
 // 32768 was also too small, by half. Neither number survived measurement, which
 // is the argument for measuring.
+// THE MARGIN THIS LEAVES, named because it is thin. The MCP sidecar's default
+// answer budget is 65,536 and this minimum is 64,166: they are 1,370 bytes
+// apart. Both shipped consumers clear it today, so nothing breaks -- but the
+// minimum is dominated by the worst-case echoed question, so any growth in a
+// bounded envelope field moves it toward that default. If it crosses, every MCP
+// caller who omits a budget is forwarded a value the hosted validator rejects,
+// for a budget they never chose. internal/mcp carries the guard that fails at
+// the moment it crosses; it lives there because contracts/v1 cannot import
+// internal/mcp, and it compares two CONSTANTS rather than a constant and a
+// copied literal.
 const ContextFabricMinimumAnswerBytes = 64166
