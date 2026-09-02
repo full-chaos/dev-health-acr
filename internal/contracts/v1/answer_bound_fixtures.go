@@ -323,3 +323,74 @@ func distinctSubject(i int) ContextFabricSubjectRef {
 	ref.CanonicalID = uniqueID("sub", i, ContextFabricModelMintedIDMinLength)
 	return ref
 }
+
+// --- the six formerly under-specified fields, closed with real maxima ---
+
+const (
+	// Literal bounds the validators spell inline rather than via a named
+	// constant, mirrored here so the fixture tracks what is ENFORCED.
+	subjectCandidatesMaxCount = 50  // validate_context_fabric_result.go:54
+	committedSubjectsMaxCount = 250 // same predicate
+	coverageEntriesMaxCount   = 100 // contextFabricWriteBounds.coverageEntries
+	sourceNameMaxRunes        = 128 // validate_context_fabric_result.go:970
+	watermarkMaxRunes         = 512 // same predicate
+	matchedTermsMaxCount      = 32  // contextFabricWriteBounds.matchedTerms
+	matchReasonsMaxCount      = 32  // contextFabricWriteBounds.matchReasons
+	matchReasonMaxRunes       = 1000
+)
+
+func maximalCandidate(i int) ContextFabricSubjectCandidate {
+	return ContextFabricSubjectCandidate{
+		ReceiptID:    uniqueID("rcpt", i, 32),
+		State:        ContextFabricResolutionCommitted,
+		Confidence:   1,
+		Subject:      distinctSubject(i),
+		MatchedTerms: repeatStrings(matchedTermsMaxCount, ContextFabricSubjectOrComparisonTermMaxLength),
+		MatchReasons: repeatStrings(matchReasonsMaxCount, matchReasonMaxRunes),
+	}
+}
+
+func maximalResolution() ContextFabricSubjectResolution {
+	candidates := make([]ContextFabricSubjectCandidate, subjectCandidatesMaxCount)
+	for i := range candidates {
+		candidates[i] = maximalCandidate(i)
+	}
+	committed := make([]ContextFabricSubjectRef, committedSubjectsMaxCount)
+	for i := range committed {
+		committed[i] = distinctSubject(i)
+	}
+	return ContextFabricSubjectResolution{Candidates: candidates, Committed: committed}
+}
+
+// maximalSource keeps State available on purpose: a non-available source
+// REQUIRES a reason, so state and reason are coupled. Available plus a
+// max-length reason is the larger document, and it is legal.
+func maximalSource(i int) ContextFabricSourceObservation {
+	return ContextFabricSourceObservation{
+		Source:     uniqueID("src", i, sourceNameMaxRunes),
+		State:      ContextFabricSourceAvailable,
+		Watermark:  escaped(watermarkMaxRunes),
+		Reason:     escaped(ContextFabricSourceObservationReasonMaxLength),
+		Label:      escaped(ContextFabricCoverageDetailLabelMaxLength),
+		StateLabel: escaped(ContextFabricCoverageDetailLabelMaxLength),
+	}
+}
+
+func maximalCoverage() ContextFabricCoverage {
+	sources := make([]ContextFabricSourceObservation, coverageEntriesMaxCount)
+	for i := range sources {
+		sources[i] = maximalSource(i)
+	}
+	return ContextFabricCoverage{
+		Sources:         sources,
+		DegradedReasons: repeatStrings(coverageEntriesMaxCount, ContextFabricCoverageDegradedReasonMaxLength),
+	}
+}
+
+// pastMaxPlan breaches ContextFabricPlanNarrowingMaxCount, the plan's own
+// count bound, by exactly one step.
+func pastMaxPlan() *ContextFabricAnswerPlan {
+	plan := maximalPlan()
+	plan.Narrowing = append(plan.Narrowing, plan.Narrowing[0])
+	return plan
+}

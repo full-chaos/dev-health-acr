@@ -143,34 +143,60 @@ func answerBoundTable() []answerBound {
 			PastMax: func(r *ContextFabricInvestigationResult) {
 				r.Conflicts = repeatFindings(ContextFabricConflictsMaxCount+1, minimalFinding)
 			}},
-		{Field: "ClaimedFacts", Why: "bounded by the claimed-fact validator; content bytes additionally capped by ContextFabricClaimedFactCombinedContentBytesMax",
+		{Field: "ClaimedFacts", Why: "0..ContextFabricClaimedFactsMaxCount, ids unique. A NIL slice is rejected outright (validate_context_fabric_helpers.go:173), so the minimum is an EMPTY slice, not an absent one. COUPLED: combined fact content may not exceed ContextFabricClaimedFactCombinedContentBytesMax, which is why the maximal carries many small facts rather than few large ones",
 			Min: func(r *ContextFabricInvestigationResult) { r.ClaimedFacts = []ContextFabricClaimedFact{} },
-			Max: func(r *ContextFabricInvestigationResult) { r.ClaimedFacts = repeatClaimedFacts(2) }},
+			Max: func(r *ContextFabricInvestigationResult) {
+				r.ClaimedFacts = repeatClaimedFacts(ContextFabricClaimedFactsMaxCount)
+			},
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				r.ClaimedFacts = repeatClaimedFacts(ContextFabricClaimedFactsMaxCount + 1)
+			}},
 		{Field: "Paths", Why: "relationship paths; excluded from the item budget by the 4523 rule but present in the document",
 			Min: func(r *ContextFabricInvestigationResult) { r.Paths = []ContextFabricRelationshipPath{} },
 			Max: func(r *ContextFabricInvestigationResult) { r.Paths = []ContextFabricRelationshipPath{} }},
 		{Field: "EvidenceRefIDs", Why: "ContextFabricEvidenceRefIDsMaxCount ids of ContextFabricEvidenceRefIDMaxLength runes",
 			Min: func(r *ContextFabricInvestigationResult) { r.EvidenceRefIDs = []string{} },
-			Max: func(r *ContextFabricInvestigationResult) { r.EvidenceRefIDs = []string{} }},
+			Max: func(r *ContextFabricInvestigationResult) {
+				r.EvidenceRefIDs = repeatEvidenceRefs(ContextFabricEvidenceRefIDsMaxCount, ContextFabricEvidenceRefIDMaxLength)
+			},
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				r.EvidenceRefIDs = repeatEvidenceRefs(ContextFabricEvidenceRefIDsMaxCount+1, 8)
+			}},
 
 		// --- nested structures ---
-		{Field: "SubjectResolution", Why: "Candidates 0..50, Committed 0..250",
+		{Field: "SubjectResolution", Why: "Candidates 0..50 and Committed 0..250 (both LITERALS in validate_context_fabric_result.go:54, not named constants); both slices must be non-nil, candidate receipt ids unique, committed subjects unique",
 			Min: func(r *ContextFabricInvestigationResult) { r.SubjectResolution = minimalResolution() },
-			Max: func(r *ContextFabricInvestigationResult) { r.SubjectResolution = minimalResolution() }},
-		{Field: "Coverage", Why: "sources and details bounded by the coverage validator; Partial is a flag",
+			Max: func(r *ContextFabricInvestigationResult) { r.SubjectResolution = maximalResolution() },
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				res := maximalResolution()
+				res.Committed = append(res.Committed, distinctSubject(committedSubjectsMaxCount))
+				r.SubjectResolution = res
+			}},
+		{Field: "Coverage", Why: "Sources must be non-nil and 0..100; DegradedReasons 0..100 at ContextFabricCoverageDegradedReasonMaxLength, unique and trimmed. COUPLED: a source whose State is not available REQUIRES a reason, so state and reason cannot be maximized independently",
 			Min: func(r *ContextFabricInvestigationResult) { r.Coverage = minimalCoverage() },
-			Max: func(r *ContextFabricInvestigationResult) { r.Coverage = minimalCoverage() }},
-		{Field: "Versions", Why: "eight version strings at validVersion 1..256; BackendVersion 0..256",
+			Max: func(r *ContextFabricInvestigationResult) { r.Coverage = maximalCoverage() },
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				cov := maximalCoverage()
+				cov.DegradedReasons = repeatStrings(coverageEntriesMaxCount+1, 8)
+				r.Coverage = cov
+			}},
+		{Field: "Versions", Why: "eight required version strings at validVersion 1..256, plus an optional BackendVersion; every one is bounded, so any of them stepping past 256 must reject",
 			Min: func(r *ContextFabricInvestigationResult) { r.Versions = minimalVersions() },
-			Max: func(r *ContextFabricInvestigationResult) { r.Versions = maximalVersions() }},
+			Max: func(r *ContextFabricInvestigationResult) { r.Versions = maximalVersions() },
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				v := maximalVersions()
+				v.ServiceVersion = escaped(257)
+				r.Versions = v
+			}},
 		{Field: "Completeness", Why: "a census of the document; its counts must equal what the document carries, so it is derived rather than bounded",
 			Min: deriveCompleteness,
 			Max: deriveCompleteness},
 
 		// --- optional pointers and collections: absent is the byte minimum ---
-		{Field: "AnswerPlan", Why: "optional pointer; absent is the byte minimum. Maximal carries every fact kind and ContextFabricPlanNarrowingMaxCount steps",
-			Min: func(r *ContextFabricInvestigationResult) { r.AnswerPlan = nil },
-			Max: func(r *ContextFabricInvestigationResult) { r.AnswerPlan = maximalPlan() }},
+		{Field: "AnswerPlan", Why: "optional pointer, so absent is the byte minimum; when present it carries every fact kind and up to ContextFabricPlanNarrowingMaxCount narrowing steps",
+			Min:     func(r *ContextFabricInvestigationResult) { r.AnswerPlan = nil },
+			Max:     func(r *ContextFabricInvestigationResult) { r.AnswerPlan = maximalPlan() },
+			PastMax: func(r *ContextFabricInvestigationResult) { r.AnswerPlan = pastMaxPlan() }},
 		{Field: "Cohort", Why: "optional pointer; absent is the byte minimum",
 			Min: func(r *ContextFabricInvestigationResult) { r.Cohort = nil },
 			Max: func(r *ContextFabricInvestigationResult) { r.Cohort = nil }},
