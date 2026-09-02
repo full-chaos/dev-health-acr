@@ -35,6 +35,14 @@ import (
 // migration). The check only asserts the two sides agree, and says exactly
 // where they do not.
 //
+// What "agree" means here, bounded: the set of JSON KEYS a Go type emits
+// equals the set of properties its schema publishes, and closed
+// vocabularies match their published enums. It does NOT compare the wire
+// TYPE of each value against the schema's "type"/"format" -- that is a
+// larger assertion, tracked as its own ticket. The one tag option that
+// changes a wire type without changing a key, `,string`, fails closed here
+// rather than passing silently.
+//
 // Anchoring the CANONICAL schema is sufficient by the ticket's own ruling:
 // the existing artifact-to-artifact tests (TestEmbeddedSchemasMatchCanonical
 // Source in internal/mcp, validateMCPSchemaDefsSync in contractcheck) then
@@ -298,11 +306,24 @@ type jsonField struct {
 	fieldTyp types.Type
 	// goName is the declaring field's Go name, for failure messages.
 	goName string
+	// stringOpt is the `,string` tag option: the field keeps its key but is
+	// encoded as a JSON STRING regardless of its Go kind, so an int field
+	// tagged `json:"total,string"` emits "7", not 7, against a published
+	// "type": "integer". This file compares key SETS and does not model wire
+	// types, so it cannot judge that -- it fails closed on it instead.
+	stringOpt bool
 }
 
-// jsonKeySet computes the wire key set of a struct type exactly as
-// encoding/json would, so the anchor compares what the producer ACTUALLY
-// emits rather than an approximation of it.
+// jsonKeySet computes the wire KEY SET of a struct type exactly as
+// encoding/json would.
+//
+// Scope, stated precisely because an inaccurate coverage claim is worse
+// than an admitted gap: this models which KEYS reach the wire. It does NOT
+// model the wire TYPE of the values behind them. A `,string` field keeps
+// its key and changes its encoding, so a key-set comparison is blind to it
+// by construction -- the anchor fails closed on that option instead of
+// pretending to judge it, and full type/format parity is tracked
+// separately.
 //
 // The rules, each of which has a mutation proving it is load-bearing:
 //
@@ -339,50 +360,63 @@ func jsonKeySet(named *types.Named) (map[string]jsonField, error) {
 	walk = func(st *types.Struct, depth int, seen map[string]bool) error {
 		for i := 0; i < st.NumFields(); i++ {
 			field := st.Field(i)
-			tag, hasTag := lookupJSONTag(st.Tag(i))
+			tag, _ := lookupJSONTag(st.Tag(i))
+			embedded, isStructEmbed := underlyingNamedStruct(field.Type())
 
-			// Rule 1: unexported fields never reach the wire. An embedded
-			// unexported struct type can still promote exported fields, but
-			// this package has none and admitting that case silently would
-			// widen the rule beyond what is proven here.
-			if !field.Exported() {
+			// Rule 1, in encoding/json's actual order. An ANONYMOUS field is
+			// judged before exportedness, because an embedded struct whose
+			// TYPE is unexported still promotes its own exported fields onto
+			// the wire. Only an embedded unexported NON-struct is ignored.
+			//
+			// The earlier version of this rule dropped every unexported field
+			// first and justified it with "this package has none" -- a
+			// reachability argument standing in for a quantifier, and a false
+			// negative on exactly the class this file exists to catch. A
+			// review round constructed it and the anchor stayed green.
+			if field.Anonymous() {
+				if !field.Exported() && !isStructEmbed {
+					continue
+				}
+			} else if !field.Exported() {
 				continue
 			}
 			// Rule 2: an explicit "-" with no trailing comma is skipped.
-			if hasTag && tag.name == "-" && !tag.dashWithComma {
+			if tag.name == "-" && !tag.dashWithComma {
 				continue
 			}
 
-			// Rules 6 and 7: promotion happens only for an anonymous field
-			// with no json tag whose type is (a pointer to) a struct.
-			if field.Anonymous() && !hasTag {
-				if embedded, ok := underlyingNamedStruct(field.Type()); ok {
-					key := embedded.Obj().Pkg().Path() + "." + embedded.Obj().Name()
-					if seen[key] {
-						continue // defensive: recursive embedding
-					}
-					seen[key] = true
-					if err := walk(embedded.Underlying().(*types.Struct), depth+1, seen); err != nil {
-						return err
-					}
-					delete(seen, key)
-					continue
+			// Rules 6 and 7: promotion is keyed on the tag NAME being empty,
+			// not on the absence of a tag. `json:",omitempty"` on an embedded
+			// struct still promotes -- the tag carries options but gives the
+			// embedded value no key of its own. Keying on "has a tag" instead
+			// was the second half of the same false negative.
+			if tag.name == "" && field.Anonymous() && isStructEmbed {
+				key := embedded.Obj().Pkg().Path() + "." + embedded.Obj().Name()
+				if seen[key] {
+					continue // defensive: recursive embedding
 				}
+				seen[key] = true
+				if err := walk(embedded.Underlying().(*types.Struct), depth+1, seen); err != nil {
+					return err
+				}
+				delete(seen, key)
+				continue
 			}
 
 			// Rules 3, 4, 5: determine the key.
 			key := field.Name()
 			tagged := false
-			if hasTag && tag.name != "" {
+			if tag.name != "" {
 				key = tag.name
 				tagged = true
 			}
 			candidates[key] = append(candidates[key], jsonField{
-				key:      key,
-				depth:    depth,
-				tagged:   tagged,
-				fieldTyp: field.Type(),
-				goName:   field.Name(),
+				key:       key,
+				depth:     depth,
+				tagged:    tagged,
+				fieldTyp:  field.Type(),
+				goName:    field.Name(),
+				stringOpt: tag.stringOpt,
 			})
 		}
 		return nil
@@ -429,6 +463,9 @@ func jsonKeySet(named *types.Named) (map[string]jsonField, error) {
 type jsonTag struct {
 	name          string
 	dashWithComma bool
+	// stringOpt records the `,string` option, which changes a field's wire
+	// TYPE without changing its key. See jsonField.stringOpt.
+	stringOpt bool
 }
 
 func lookupJSONTag(raw string) (jsonTag, bool) {
@@ -437,8 +474,13 @@ func lookupJSONTag(raw string) (jsonTag, bool) {
 		return jsonTag{}, false
 	}
 	name, rest, hasComma := strings.Cut(value, ",")
-	_ = rest
-	return jsonTag{name: name, dashWithComma: name == "-" && hasComma}, true
+	stringOpt := false
+	for _, option := range strings.Split(rest, ",") {
+		if option == "string" {
+			stringOpt = true
+		}
+	}
+	return jsonTag{name: name, dashWithComma: name == "-" && hasComma, stringOpt: stringOpt}, true
 }
 
 // structTagLookup is reflect.StructTag.Get over a raw tag string.
@@ -901,6 +943,23 @@ func TestPublishedSchemaPropertiesMatchGoWireFields(t *testing.T) {
 			continue
 		}
 		checked++
+
+		// FAIL CLOSED on any tag option that changes the wire TYPE.
+		//
+		// `,string` keeps the key and changes the encoding, so a key-set
+		// comparison cannot see it: an int tagged `json:"total,string"`
+		// emits "7" against a published "type": "integer" and every key
+		// still matches. Rather than let that gap widen silently, a bound
+		// field carrying the option is RED here.
+		//
+		// There are ZERO occurrences of `,string` in this package today
+		// (measured, not assumed), so this guard fires on nothing on main --
+		// it exists so the first one cannot arrive unnoticed.
+		for key, field := range keys {
+			if field.stringOpt {
+				t.Errorf("%s: Go field %s carries the `,string` tag option on wire key %q, which changes the encoded TYPE without changing the key. This check compares key SETS and does not model wire types, so it cannot verify the published type is still correct. Type parity is not implemented -- see the child ticket. Either drop the option or extend this anchor to compare types.", b.label, field.goName, key)
+			}
+		}
 
 		var goOnly, schemaOnly []string
 		for key := range keys {
