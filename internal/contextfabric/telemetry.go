@@ -622,6 +622,42 @@ func (t SlogEngineTelemetry) RecordQuestionFamilyResolution(ctx context.Context,
 	t.logger.InfoContext(ctx, "context fabric question family resolution", args...)
 }
 
+// RecordFrameValidation (CHAOS-4452 stage 2, §13.6) logs at Info, once per
+// frame that reaches validation -- INCLUDING VALID ONES, because the
+// denominator has to be countable. An event that fires only on failure
+// makes "the validator never rejects anything" indistinguishable from
+// "the validator never ran".
+//
+// EVERY field on the event reaches this line, per the CHAOS-4085 sink
+// discipline: a field populated on a struct and never logged is not
+// telemetry, it is a field. That bar is why `failed_invariant` and
+// `failed_phase` are both here -- the same invariant id failing in a1
+// versus a2 is two different investigations.
+//
+// There are no repair fields, because this slice has no repair path: a
+// frame that fails validation is refused. They land with the bounded
+// repair itself, so an operator never sees a `repair_attempted` key that
+// could only ever read false.
+func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principal storage.Principal, event FrameValidationEvent) {
+	args := []any{
+		"org_id", principal.OrgID,
+		"outcome", string(event.Outcome),
+		"failed_invariant", string(event.FailedInvariant),
+		"failed_phase", string(event.FailedPhase),
+		"failure_detail", string(event.FailureDetail),
+		"proposed_kind", string(event.ProposedKind),
+		"proposed_goals", goalsLogValue(event.ProposedGoals),
+		"derived_obligation_count", event.DerivedObligationCount,
+		"widened_obligation_count", event.WidenedObligationCount,
+		"shape_diverged", event.ShapeDiverged,
+		"emitted_shape", string(event.EmittedShape),
+		"derived_shape", string(event.DerivedShape),
+		"frame_version", event.FrameVersion,
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric frame validation", args...)
+}
+
 // RecordPlanNarrowing (CHAOS-4636) emits one plan-narrowing decision.
 //
 // Closed enums and counts only -- no question text, no subject identifier,

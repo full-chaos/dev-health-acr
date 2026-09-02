@@ -191,6 +191,34 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	"RequestedSubjectKind":             {reason: "per-call model-emitted structure signal captured receipt-only (shadow), not a version identity -- same reasoning as QuestionFamily"},
 	"ScopeAnchorKindUnrecognized":      {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 	"RequestedSubjectKindUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	// CHAOS-4452 stage 2's frame capture is classified on exactly the
+	// CHAOS-4632 precedent above, and for one shared reason worth stating
+	// once: in phase 1 the frame is SHADOW. It is derived, validated,
+	// persisted on this receipt and telemetered, and NOTHING DOWNSTREAM
+	// READS IT -- the shipped §4.2 precedence table still decides the
+	// family. A field that cannot change an answer cannot make a reused
+	// answer wrong, so binding reuse to any of these would cost reuse
+	// hit-rate and buy nothing. Verified by grep, not assumed: no
+	// non-test site reads any of these eight fields.
+	//
+	// THE ONE THAT WILL CHANGE, named here so the change is not
+	// rediscovered by hand -- which is the entire point of this file.
+	// QuestionFrame.Version carries QuestionFrameVersion, the
+	// derivation-table version, and design §13.2 says it "joins ReuseKey".
+	// It does not join it YET because it fences nothing yet. When the
+	// frame is promoted (phase 2: an optional wire field behind the
+	// consumer pin) and the derivation replaces the precedence table, a
+	// ReuseKey.QuestionFrameVersion member is OWED -- exactly the way
+	// QuestionFamilyTableVersion became ReuseKey.QuestionFamilyVersion
+	// once the family began fencing anything. That promotion must
+	// reclassify this entry as a member, and this test is what will stop
+	// it shipping without one.
+	"QuestionFrame":         {reason: "per-call shadow capture of the compositional frame (receipt-only, phase 1), not a version identity -- nothing downstream reads it, so it cannot make a reused answer wrong. Its embedded Version field is a package constant (QuestionFrameVersion), and design §13.2 makes it a ReuseKey member only at promotion, when the derivation replaces the precedence table; until then there is nothing for it to fence"},
+	"FrameOutcome":          {reason: "per-call validation-outcome echo (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"FrameFailedInvariant":  {reason: "per-call validation-outcome echo (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"FrameGoalsDropped":     {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"FrameTermsTruncated":   {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"FrameKindUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 }
 
 // TestReuseKeyClassifiesEveryVersionSetField is the class-oracle sweep over
