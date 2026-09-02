@@ -828,7 +828,54 @@ func probeResult() ContextFabricInvestigationResult {
 // wrappers are constrained by the schema alone, and duplicating their
 // numbers in Go would create a second source of truth to drift against --
 // the very problem this file exists to prevent.
+// requestSideDeferredBounds lists exact schema paths under request-side
+// shapes where a Go Validate DOES numerically check the field (see each
+// entry's citation) but this file does not yet map it declaratively into
+// goBoundsByPath. See schemaOnlyBoundReason's own comment for why this
+// exists and why it is temporary. A path here that stops matching any
+// discovered schema bound (the field renamed or removed) describes
+// nothing and should be deleted, not left behind.
+var requestSideDeferredBounds = map[string]string{
+	"common#$defs.ConsumerInfo.properties.name.minLength":                     "deferred (CHAOS-4867 follow-up): ContextFabricConsumerInfo.Validate, validate_context_fabric_request.go:293 -- stringLengthBetween(c.Name, 1, 200)",
+	"common#$defs.ConsumerInfo.properties.name.maxLength":                     "deferred (CHAOS-4867 follow-up): ContextFabricConsumerInfo.Validate, validate_context_fabric_request.go:293 -- stringLengthBetween(c.Name, 1, 200)",
+	"common#$defs.ConsumerInfo.properties.surface.minLength":                  "deferred (CHAOS-4867 follow-up): ContextFabricConsumerInfo.Validate, validate_context_fabric_request.go:293 -- stringLengthBetween(c.Surface, 1, 200)",
+	"common#$defs.ConsumerInfo.properties.surface.maxLength":                  "deferred (CHAOS-4867 follow-up): ContextFabricConsumerInfo.Validate, validate_context_fabric_request.go:293 -- stringLengthBetween(c.Surface, 1, 200)",
+	"common#$defs.ConversationTurn.properties.content.minLength":              "deferred (CHAOS-4867 follow-up): ContextFabricConversationTurn.Validate, validate_context_fabric_request.go:118 -- stringLengthBetween(strings.TrimSpace(t.Content), 1, 12000)",
+	"common#$defs.ConversationTurn.properties.content.maxLength":              "deferred (CHAOS-4867 follow-up): ContextFabricConversationTurn.Validate, validate_context_fabric_request.go:118 -- stringLengthBetween(strings.TrimSpace(t.Content), 1, 12000)",
+	"common#$defs.RequestedScope.properties.repository_slugs.maxItems":        "deferred (CHAOS-4867 follow-up): ContextFabricRequestedScope.Validate, validate_context_fabric_request.go:151 -- len(s.RepositorySlugs) > 200",
+	"common#$defs.RequestedScope.properties.repository_slugs.items.minLength": "deferred (CHAOS-4867 follow-up): ContextFabricRequestedScope.Validate, validate_context_fabric_request.go:154 -> uniqueTrimmedStrings, validate_context_fabric_helpers.go:464 -- floor of 1",
+	"common#$defs.RequestedScope.properties.repository_slugs.items.maxLength": "deferred (CHAOS-4867 follow-up): ContextFabricRequestedScope.Validate, validate_context_fabric_request.go:154 -> uniqueTrimmedStrings(s.RepositorySlugs, 512)",
+	"common#$defs.RequestedScope.properties.subject_hints.maxItems":           "deferred (CHAOS-4867 follow-up): ContextFabricRequestedScope.Validate, validate_context_fabric_request.go:151 -- len(s.SubjectHints) > 50",
+	"common#$defs.SubjectHint.properties.id.maxLength":                        "deferred (CHAOS-4867 follow-up): ContextFabricSubjectHint.Validate, validate_context_fabric_request.go:166 -- stringLengthBetween(h.ID, 0, 256)",
+	"common#$defs.SubjectHint.properties.label.maxLength":                     "deferred (CHAOS-4867 follow-up): ContextFabricSubjectHint.Validate, validate_context_fabric_request.go:166 -- stringLengthBetween(h.Label, 0, 512)",
+	"common#$defs.SubjectHint.properties.source.minLength":                    "deferred (CHAOS-4867 follow-up): ContextFabricSubjectHint.Validate, validate_context_fabric_request.go:166 -- stringLengthBetween(h.Source, 1, 64)",
+	"common#$defs.SubjectHint.properties.source.maxLength":                    "deferred (CHAOS-4867 follow-up): ContextFabricSubjectHint.Validate, validate_context_fabric_request.go:166 -- stringLengthBetween(h.Source, 1, 64)",
+}
+
 func schemaOnlyBoundReason(path string) string {
+	// CHAOS-4867: this used to be one substring case matching
+	// RequestedScope/SubjectHint/ConversationTurn/BoundSubjectReceipt/
+	// ConsumerInfo/TimeContext, all excused with the SAME blanket claim --
+	// "bounded by the request contract, not by result validation". That
+	// claim was false for InvestigationOptions (fixed above, mapped into
+	// goBoundsByPath) and an audit (ruled by main 2026-09-02) found it is
+	// ALSO false for ConsumerInfo, ConversationTurn, RequestedScope, and
+	// SubjectHint: a Go Validate numerically checks every one of their
+	// fourteen bounds below, and every one already agrees with the
+	// published schema. Those four are deliberately NOT reconciled here
+	// (main files a follow-up ticket to do it the CHAOS-4867 way, same as
+	// InvestigationOptions) -- but this file no longer describes them as
+	// schema-only, because they are not. Each entry names the Go check
+	// that would fail if the two sides ever drifted, so this is an
+	// honest, temporary deferral, not a second copy of the same false
+	// claim. BoundSubjectReceipt and TimeContext are absent from the map
+	// on purpose: the schema declares no numeric bound under either
+	// today, so there is nothing to defer -- and a bound added to either
+	// one later has no entry here and fails by name, exactly like any
+	// other unmapped path.
+	if reason, deferred := requestSideDeferredBounds[path]; deferred {
+		return reason
+	}
 	leaf := path[strings.LastIndex(path, ".")+1:]
 	switch leaf {
 	case "maxLength":
@@ -849,11 +896,6 @@ func schemaOnlyBoundReason(path string) string {
 		strings.Contains(path, "EpisodeProjection") || strings.Contains(path, "ProjectionTombstone") ||
 		strings.Contains(path, "AuthorizationScope") || strings.Contains(path, "ScalarValue"):
 		return "projection-batch ingest shape: not part of the answer surface, validated by its own contract"
-	case strings.Contains(path, "RequestedScope") || strings.Contains(path, "SubjectHint") ||
-		strings.Contains(path, "ConversationTurn") || strings.Contains(path, "BoundSubjectReceipt") ||
-		strings.Contains(path, "ConsumerInfo") ||
-		strings.Contains(path, "TimeContext"):
-		return "request-side shape: bounded by the request contract, not by result validation"
 	case strings.Contains(path, "SubjectRef") || strings.Contains(path, "label") ||
 		// CHAOS-4171 PR2: phrasing is the SAME situation as label on the
 		// same four option types (KindOption/AnchorOption/AnchorOptionV2/
