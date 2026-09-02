@@ -40,6 +40,33 @@ Do not move or reuse an immutable version tag, `main-<full-sha>` GitHub
 Release tag, or full-SHA GHCR image tag. Versioned recovery always runs the
 current workflow against the existing tag and original source commit.
 
+### Re-releasing an older tag (CHAOS-4889)
+
+`release.yml`'s `mirror-preflight` job (see "The ghcr.io/full-chaos/dev-
+health-acr mirror" in [`container-images.md`](container-images.md)) validates
+the Docker Hub image inventory of the exact commit entry point 3 above
+resolves to -- not current `main`. `mirror-images.yml` only ever mirrors the
+pins of whatever ref it last ran against, which for its `schedule` and `push`
+triggers is always `main`. An older tag's Dockerfile or testcontainers pins
+can differ from `main`'s (a different `golang` base digest, for example), so
+a `workflow_dispatch` release against a tag whose pins were never mirrored
+fails `mirror-preflight` with those images reported `MISSING`, even though
+the same re-release would have worked, unmirrored, before CHAOS-4855.
+
+`mirror-preflight`'s failure message names the exact fix: it prints a
+`gh workflow run mirror-images.yml -f ref=<commit>` command for the resolved
+release commit. The recovery is two dispatches, in order:
+
+1. Mirror the old ref's pins: **Actions → Mirror images → Run workflow**,
+   setting `ref` to the tag or commit being re-released (or the equivalent
+   `gh workflow run mirror-images.yml -f ref=<tag-or-sha>`), and wait for it
+   to complete.
+2. Re-run **Actions → Release → Run workflow** with the same tag (entry
+   point 3 above).
+
+`mirror-images.yml`'s `ref` input defaults to `main`, so an ordinary manual
+mirror refresh (no old-tag re-release involved) needs no input at all.
+
 ## Main publication identity
 
 A `main` build uses the full lowercase commit SHA as its immutable source
