@@ -80,7 +80,7 @@ func TestDisclosedDualTableDropNeverSilent(t *testing.T) {
 	legacyRows := maxLegalFactValueRows(contractsv1.ContextFabricClaimedFactMaxRows)
 	timeSeriesRows := maxLegalFactValueRows(contractsv1.ContextFabricClaimedFactMaxRows)
 
-	drop, dropped, reason := disclosedDualTableDrop("flow", contextfabric.FactFlow, legacyRows, timeSeriesRows)
+	drop, dropped, reason := disclosedDualTableDrop("flow", contextfabric.FactFlow, legacyRows, timeSeriesRows, 0)
 	if !drop {
 		t.Fatal("disclosedDualTableDrop() drop = false, want true: both tables at their own legal max combined must exceed the joint bound")
 	}
@@ -100,8 +100,33 @@ func TestDisclosedDualTableDropFalseUnderTheBound(t *testing.T) {
 	legacyRows := []contextfabric.FactValueRow{{Fields: map[string]contextfabric.FactValue{"team_id": {String: &day}}}}
 	timeSeriesRows := []contextfabric.FactValueRow{{Fields: map[string]contextfabric.FactValue{"day": {String: &day}}}}
 
-	drop, dropped, reason := disclosedDualTableDrop("flow", contextfabric.FactFlow, legacyRows, timeSeriesRows)
+	drop, dropped, reason := disclosedDualTableDrop("flow", contextfabric.FactFlow, legacyRows, timeSeriesRows, 3)
 	if drop || dropped != 0 || reason != "" {
-		t.Fatalf("disclosedDualTableDrop() = (%v, %d, %q), want (false, 0, \"\") for a small real-shaped dual-table fact under the bound", drop, dropped, reason)
+		t.Fatalf("disclosedDualTableDrop() = (%v, %d, %q), want (false, 0, \"\") for a small real-shaped dual-table fact under the bound (preCapOmitted must not matter when nothing was dropped)", drop, dropped, reason)
+	}
+}
+
+// TestDisclosedDualTableDropFoldsPreCapOmission pins codex terra xhigh
+// round-1 finding P2 (EXECUTED): a caller's own earlier row-cap
+// (capFactValueRows, inside e.g. flowDailyTable) can already have removed
+// rows from timeSeriesRows BEFORE it is ever passed here -- those rows
+// never appear in len(timeSeriesRows), so a caller that reported only
+// len(timeSeriesRows) as the drop count would UNDER-report the true
+// omission whenever both the row cap and the CHAOS-4785 joint bound fire
+// on the same fact (repro: 70 real days capped to 64 by the earlier cap,
+// then the 64 retained rows combined with a maximal legacy table trip the
+// joint bound -- the true omission is 70, not 64).
+func TestDisclosedDualTableDropFoldsPreCapOmission(t *testing.T) {
+	legacyRows := maxLegalFactValueRows(contractsv1.ContextFabricClaimedFactMaxRows)
+	timeSeriesRows := maxLegalFactValueRows(contractsv1.ContextFabricClaimedFactMaxRows) // the 64 rows that SURVIVED an earlier cap
+	const preCapOmitted = 6                                                              // the 6 rows the earlier cap already removed
+
+	drop, dropped, _ := disclosedDualTableDrop("flow", contextfabric.FactFlow, legacyRows, timeSeriesRows, preCapOmitted)
+	if !drop {
+		t.Fatal("disclosedDualTableDrop() drop = false, want true")
+	}
+	want := len(timeSeriesRows) + preCapOmitted
+	if dropped != want {
+		t.Fatalf("disclosedDualTableDrop() droppedRows = %d, want %d (len(timeSeriesRows)=%d retained-then-dropped rows PLUS the %d rows an earlier cap already omitted) -- undercounting here means FactProviderResult.OmittedCount understates what was actually removed from the served answer", dropped, want, len(timeSeriesRows), preCapOmitted)
 	}
 }

@@ -558,12 +558,26 @@ const factBytesBoundExceededReason = "fact_bytes_bound_exceeded"
 // ordinary row-cap truncation. drop=false (the bound is not exceeded, or
 // either table is empty -- see combinedRowsExceedBytesBound) means the
 // caller proceeds exactly as before this ticket.
-func disclosedDualTableDrop(producer string, kind contextfabric.FactKind, legacyRows, timeSeriesRows []contextfabric.FactValueRow) (drop bool, droppedRows int, reason string) {
+//
+// preCapOmitted is the count of rows a caller's OWN earlier cap (e.g.
+// capFactValueRows, inside flowDailyTable/healthDailyTable/etc.) already
+// removed from timeSeriesRows BEFORE it was even passed in here -- those
+// rows never appear in len(timeSeriesRows), so droppedRows must add them
+// back in, not just count what survived the earlier cap (codex terra
+// xhigh round 1, P2, EXECUTED: an earlier version of this function took
+// no preCapOmitted parameter, and both flow.go call sites forgot to add
+// their own dailyOmitted in separately -- a 70-row series capped to 64
+// then fully dropped here reported OmittedCount contribution 64, not the
+// true 70). Folding it into THIS function's own return value, rather than
+// leaving it to every call site to remember, is deliberate: a caller
+// cannot construct the reason string without also supplying the count it
+// belongs with.
+func disclosedDualTableDrop(producer string, kind contextfabric.FactKind, legacyRows, timeSeriesRows []contextfabric.FactValueRow, preCapOmitted int) (drop bool, droppedRows int, reason string) {
 	if !combinedRowsExceedBytesBound(legacyRows, timeSeriesRows) {
 		return false, 0, ""
 	}
 	recordFactBytesBoundExceeded(producer, kind)
-	return true, len(timeSeriesRows), factBytesBoundExceededReason
+	return true, len(timeSeriesRows) + preCapOmitted, factBytesBoundExceededReason
 }
 
 func stringOrNull(value string) contextfabric.FactValue {

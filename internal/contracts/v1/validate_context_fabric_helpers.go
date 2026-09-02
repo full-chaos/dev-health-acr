@@ -1,7 +1,9 @@
 package v1
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -39,27 +41,36 @@ func validateClaimedFactRows(rows []ContextFabricClaimedFactRow) error {
 	return nil
 }
 
-// claimedFactRowContentBytes approximates one claimed/projected fact row's
-// content weight in bytes: each field's key plus its scalar value's own
-// content (a String variant's raw bytes; a flat, conservative estimate for
-// every other variant, none of which carries a length bound of its own --
-// ContextFabricScalarValue.Validate). This mirrors the content-only
-// counting CHAOS-4785 itself used to derive the ~8.19M-byte single-table
-// figure -- before JSON keys' quotes/punctuation, which only adds to the
-// real wire size -- so this is a conservative LOWER bound on the actual
-// serialized size, never an over-estimate.
+// claimedFactRowContentBytes is one claimed/projected fact row's ACTUAL
+// json.Marshal size -- the same measure MaxSerializedBytes itself is
+// checked against (context_fabric_routes.go marshals the whole response
+// and compares the byte count), and the same basis CHAOS-4785's Phase 1
+// real-data measurement used (Postgres octet_length(payload::text) on the
+// stored, already-serialized JSON).
+//
+// An earlier version of this function summed raw string lengths instead
+// (codex terra xhigh round 1, P2, EXECUTED): Go's encoding/json escapes
+// '<', '>', '&' to "<" etc. by default (html-safety), a 1-byte-to-
+// 6-byte inflation nothing in the raw-length sum accounted for, so a row
+// full of those characters could pass this check while its actual
+// marshaled size exceeded the bound it was supposed to enforce -- 251,904
+// counted bytes accepted a fact whose real combined size was 1,516,708
+// bytes, defeating the guard entirely. json.Marshal is the only measure
+// that cannot be defeated this way, because it is not an approximation of
+// the wire size -- it computes it.
 func claimedFactRowContentBytes(row ContextFabricClaimedFactRow) int {
-	const nonStringValueBytes = 8
-	total := 0
-	for key, value := range row.Fields {
-		total += len(key)
-		if value.String != nil {
-			total += len(*value.String)
-		} else {
-			total += nonStringValueBytes
-		}
+	encoded, err := json.Marshal(row)
+	if err != nil {
+		// ContextFabricClaimedFactRow's Fields are all
+		// ContextFabricScalarValue -- string/int64/float64/bool/null, every
+		// one of which encoding/json always marshals successfully -- so
+		// this is unreachable in practice. If it is ever reached anyway,
+		// a computation this validator cannot trust must never UNDER-count
+		// (the exact failure class this fix exists to close), so it counts
+		// as maximally oversized rather than as zero.
+		return math.MaxInt32
 	}
-	return total
+	return len(encoded)
 }
 
 // validateClaimedFactRowsCombined bounds Rows and TimeSeriesRows TOGETHER

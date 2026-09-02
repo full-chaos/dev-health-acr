@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -130,5 +131,85 @@ func TestContextFabricAnswerProjectionValidateRejectsMaxLegalDualTableCombinatio
 	}
 	if err := projection.Validate(); err == nil {
 		t.Fatal("Validate() = nil, want an error: projected key fact Rows+TimeSeriesRows combined exceed the CHAOS-4785 joint bound")
+	}
+}
+
+// htmlEscapedClaimedFactRows builds rowCount rows of fieldCount fields each,
+// every value a run of '<' -- a character Go's encoding/json escapes to
+// "<" (1 raw byte -> 6 encoded bytes) unless SetEscapeHTML(false) is
+// used, which nothing in this contract's write path does.
+func htmlEscapedClaimedFactRows(rowCount, fieldCount, valueRunLength int) []ContextFabricClaimedFactRow {
+	value := strings.Repeat("<", valueRunLength)
+	rows := make([]ContextFabricClaimedFactRow, rowCount)
+	for i := range rows {
+		fields := make(map[string]ContextFabricScalarValue, fieldCount)
+		for f := 0; f < fieldCount; f++ {
+			fields[fmt.Sprintf("k%d", f)] = ContextFabricScalarValue{String: &value}
+		}
+		rows[i] = ContextFabricClaimedFactRow{Fields: fields}
+	}
+	return rows
+}
+
+// TestContextFabricClaimedFactValidateRejectsHTMLEscapeInflatedCombination
+// pins codex terra xhigh round-1 finding P1 (EXECUTED): an earlier version
+// of claimedFactRowContentBytes summed raw string lengths, which Go's
+// encoding/json does NOT preserve for '<'/'>'/'&' (escaped to \uXXXX,
+// 1 byte -> 6 bytes). A dual-table fact built almost entirely of those
+// characters could stay UNDER the 262,144-byte combined bound by raw
+// count while its ACTUAL json.Marshal size blew past the 1 MiB service
+// ceiling by more than 40% -- the exact guard this bound exists to
+// provide, defeated by the one measurement method that could not see its
+// own blind spot. The fix (json.Marshal instead of a raw-length sum)
+// closes it: this fact must be REJECTED, not accepted.
+func TestContextFabricClaimedFactValidateRejectsHTMLEscapeInflatedCombination(t *testing.T) {
+	const rows, fields, valueRunLength = 32, 32, 120
+	legacyRows := htmlEscapedClaimedFactRows(rows, fields, valueRunLength)
+	timeSeriesRows := htmlEscapedClaimedFactRows(rows, fields, valueRunLength)
+
+	// Ground the repro: the RAW content sum (key+value byte lengths, no
+	// JSON punctuation/escaping) is UNDER the bound, but the ACTUAL
+	// marshaled size of the two tables together is well over the 1 MiB
+	// service ceiling -- proving this is exactly the class the raw-sum
+	// method could not see.
+	rawContentSum := 0
+	for _, row := range append(append([]ContextFabricClaimedFactRow{}, legacyRows...), timeSeriesRows...) {
+		for key, value := range row.Fields {
+			rawContentSum += len(key)
+			if value.String != nil {
+				rawContentSum += len(*value.String)
+			}
+		}
+	}
+	if rawContentSum >= ContextFabricClaimedFactCombinedContentBytesMax {
+		t.Fatalf("test construction error: rawContentSum=%d must be UNDER the %d bound to demonstrate the defeat -- adjust rows/fields/valueRunLength", rawContentSum, ContextFabricClaimedFactCombinedContentBytesMax)
+	}
+	marshaledLegacy, err := json.Marshal(legacyRows)
+	if err != nil {
+		t.Fatalf("json.Marshal(legacyRows) error = %v", err)
+	}
+	marshaledSeries, err := json.Marshal(timeSeriesRows)
+	if err != nil {
+		t.Fatalf("json.Marshal(timeSeriesRows) error = %v", err)
+	}
+	actualCombinedBytes := len(marshaledLegacy) + len(marshaledSeries)
+	if actualCombinedBytes <= ContextFabricSerializedBytesMax {
+		t.Fatalf("test construction error: actualCombinedBytes=%d must EXCEED the 1 MiB service ceiling (%d) to demonstrate the defeat", actualCombinedBytes, ContextFabricSerializedBytesMax)
+	}
+	t.Logf("EXECUTED repro: rawContentSum=%d (under combined bound %d) but actualCombinedBytes=%d (over service ceiling %d)", rawContentSum, ContextFabricClaimedFactCombinedContentBytesMax, actualCombinedBytes, ContextFabricSerializedBytesMax)
+
+	fact := validClaimedFactWithLegacyTable()
+	fact.Rows = legacyRows
+	fact.Table = &ContextFabricClaimedFactTable{
+		Field: "backlog_size", Shape: ContextFabricFactTableShapeBreakdown,
+		Key: []string{"k0"},
+	}
+	fact.TimeSeriesRows = timeSeriesRows
+	fact.TimeSeriesTable = &ContextFabricClaimedFactTable{
+		Field: "daily_workload", Shape: ContextFabricFactTableShapeTimeSeries,
+		Key: []string{"k0"},
+	}
+	if err := fact.Validate(); err == nil {
+		t.Fatal("Validate() = nil, want an error: raw content bytes understate this fact's actual marshaled size past the joint bound")
 	}
 }

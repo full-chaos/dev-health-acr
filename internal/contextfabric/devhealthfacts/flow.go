@@ -410,7 +410,7 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 			// FactProviderResult.Truncated/OmittedCount, degrading served
 			// coverage exactly as capFactValueRows' own row-cap truncation
 			// already does) and named on the fact with a closed reason.
-			if drop, dropped, reason := disclosedDualTableDrop("flow", contextfabric.FactFlow, valueRows, dailyTable.Rows); drop {
+			if drop, dropped, reason := disclosedDualTableDrop("flow", contextfabric.FactFlow, valueRows, dailyTable.Rows, dailyOmitted); drop {
 				totalOmitted += dropped
 				fields["daily_flow_omitted_count"] = contextfabric.IntegerFactValue(int64(dropped))
 				fields["daily_flow_omitted_reason"] = contextfabric.StringFactValue(reason)
@@ -666,7 +666,7 @@ ORDER BY p.id, wm.team_id`)
 		}
 		if dailyTable, ok, dailyOmitted := flowDailyTable(dailyByProject[projectKey], timeBound.effectiveGrain(grainDaily)); ok {
 			// CHAOS-4785: see the matching note in readTeamFlow.
-			if drop, dropped, reason := disclosedDualTableDrop("flow", contextfabric.FactFlow, teamRows, dailyTable.Rows); drop {
+			if drop, dropped, reason := disclosedDualTableDrop("flow", contextfabric.FactFlow, teamRows, dailyTable.Rows, dailyOmitted); drop {
 				totalOmitted += dropped
 				fields["daily_flow_omitted_count"] = contextfabric.IntegerFactValue(int64(dropped))
 				fields["daily_flow_omitted_reason"] = contextfabric.StringFactValue(reason)
