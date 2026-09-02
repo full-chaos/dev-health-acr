@@ -254,7 +254,17 @@ func (c reuseStripCounts) Total() int {
 	return c.Refs + c.DroppedCandidates + c.DroppedMembers + c.DroppedDrivers + c.DroppedFindings + c.DroppedPaths + c.StrippedLabels
 }
 
-func (c reuseStripCounts) empty() bool { return c.Total() == 0 }
+// empty reports whether NOTHING was removed. Deliberately checked
+// component by component rather than as `Total() == 0`: a sum can be zero
+// because two terms cancelled, and the one thing this predicate gates --
+// whether the caller is told the answer was narrowed -- must never turn on
+// arithmetic that can cancel. Every component is non-negative by
+// construction; this makes it not matter if one day one is not.
+func (c reuseStripCounts) empty() bool {
+	return c.Refs == 0 &&
+		c.DroppedCandidates == 0 && c.DroppedMembers == 0 && c.DroppedDrivers == 0 &&
+		c.DroppedFindings == 0 && c.DroppedPaths == 0 && c.StrippedLabels == 0
+}
 
 // keepRefs returns ids minus missing, and how many were removed. It always
 // returns a NEW slice when anything changed, so a stored result's own
@@ -453,7 +463,20 @@ func stripUnverifiedEvidenceRefs(result InvestigationResult, missing map[string]
 			label, _ := contractsv1.ContextFabricEvidenceRefLabel(ref)
 			rebuilt[ref] = label
 		}
-		counts.StrippedLabels = len(result.EvidenceRefLabels) - len(rebuilt)
+		// Count the keys that were actually REMOVED, never a difference of
+		// lengths. The rebuild can legitimately GROW the map: a stored row
+		// may be under-labelled (stored validation does not enforce exact
+		// label/closure equality, only writes do), and the rebuild supplies
+		// the missing labels. A signed length difference then goes
+		// NEGATIVE, and a negative removal count is not merely a wrong
+		// number -- summed into the total it CANCELS a real reference
+		// removal, and a genuinely narrowed answer is served with no
+		// disclosure at all. Counting removals directly cannot do that.
+		for ref := range result.EvidenceRefLabels {
+			if _, kept := rebuilt[ref]; !kept {
+				counts.StrippedLabels++
+			}
+		}
 		result.EvidenceRefLabels = rebuilt
 	}
 

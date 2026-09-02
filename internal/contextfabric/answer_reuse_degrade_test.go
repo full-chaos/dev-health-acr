@@ -242,7 +242,27 @@ func TestReuseRefusesWhenATopLevelCitationIsNoLongerVisible(t *testing.T) {
 func TestServedReusedPayloadNeverCarriesARefThatFailedTheRecheck(t *testing.T) {
 	t.Parallel()
 
-	stored := storedResultWithEveryRefSite(t)
+	// TWO label shapes, not one. The first version of this test always
+	// built a COMPLETE label map, so it never drove an under-labelled
+	// stored row -- which stored validation legitimately accepts -- through
+	// a partial recheck, and a reviewer found a real defect in exactly that
+	// gap. A property that samples only well-formed inputs is a property
+	// about well-formed inputs.
+	for _, shape := range []struct {
+		name  string
+		build func(*testing.T) InvestigationResult
+	}{
+		{"complete label map", storedResultWithEveryRefSite},
+		{"under-labelled legacy label map", storedResultWithUnderLabelledMap},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			servedReusedPayloadNeverCarriesAFailedRef(t, shape.build(t))
+		})
+	}
+}
+
+func servedReusedPayloadNeverCarriesAFailedRef(t *testing.T, stored InvestigationResult) {
+	t.Helper()
 	auxiliary := auxiliaryRefsOf(stored)
 	if len(auxiliary) < 4 {
 		t.Fatalf("fixture carries only %d auxiliary refs; the property needs a set worth sampling from", len(auxiliary))
@@ -279,8 +299,31 @@ func TestServedReusedPayloadNeverCarriesARefThatFailedTheRecheck(t *testing.T) {
 				t.Fatalf("trial %d: served payload carries %q, which failed the recheck (missing set %v)", trial, ref, sortedRefs(missing))
 			}
 		}
-		if counts.Total() == 0 {
+		if counts.empty() {
 			t.Fatalf("trial %d: %d refs were missing but nothing was reported as removed", trial, len(missing))
+		}
+		// Every component is a COUNT OF REMOVALS and can never be
+		// negative. A negative one would cancel a real removal inside any
+		// aggregate and silently suppress the disclosure below.
+		for label, value := range map[string]int{
+			"Refs": counts.Refs, "DroppedCandidates": counts.DroppedCandidates,
+			"DroppedMembers": counts.DroppedMembers, "DroppedDrivers": counts.DroppedDrivers,
+			"DroppedFindings": counts.DroppedFindings, "DroppedPaths": counts.DroppedPaths,
+			"StrippedLabels": counts.StrippedLabels,
+		} {
+			if value < 0 {
+				t.Fatalf("trial %d: %s = %d; a removal count must never be negative", trial, label, value)
+			}
+		}
+		// Anything removed MUST be disclosed. This is the caller-facing
+		// half of the invariant: an answer narrower than the one stored,
+		// served as whole, is its own defect even when nothing unproven
+		// is served.
+		if !degraded.Coverage.Partial {
+			t.Fatalf("trial %d: %d removals were made and coverage.partial is false; the narrowing was not disclosed", trial, counts.Total())
+		}
+		if len(degraded.Coverage.DegradedReasons) == 0 {
+			t.Fatalf("trial %d: %d removals were made and degraded_reasons is empty", trial, counts.Total())
 		}
 		if err := ValidateStoredResult(degraded); err != nil {
 			t.Fatalf("trial %d: degraded payload does not validate: %v", trial, err)
@@ -820,5 +863,155 @@ func TestDegradeRefusesRatherThanServeALabelMapWiderThanItsClosure(t *testing.T)
 	underLabelled.EvidenceRefLabels = map[string]string{reuseCitationRef: "Citation"}
 	if !servedLabelsAreWithinTheClosure(underLabelled) {
 		t.Error("guard refused an under-labelled payload; a missing label is not a leak")
+	}
+}
+
+// storedResultWithUnderLabelledMap is a stored row whose label map covers
+// only the top-level citation, leaving every auxiliary reference
+// unlabelled.
+//
+// This is a LEGAL stored shape, not a corrupt one: exact label/closure
+// equality is enforced on writes, and stored reads deliberately do not
+// re-enforce it, because stored results are immutable and an older binary
+// may have written a narrower map. So this is what a real legacy row looks
+// like, and the degrade has to behave correctly on it.
+func storedResultWithUnderLabelledMap(t *testing.T) InvestigationResult {
+	t.Helper()
+	result := storedResultWithEveryRefSite(t)
+	labels := map[string]string{}
+	for _, ref := range result.EvidenceRefIDs {
+		label, _ := contractsv1.ContextFabricEvidenceRefLabel(ref)
+		labels[ref] = label
+	}
+	result.EvidenceRefLabels = labels
+	if err := ValidateStoredResult(result); err != nil {
+		t.Fatalf("an under-labelled stored row must be a legal stored shape, but: %v", err)
+	}
+	return result
+}
+
+// TestAnUnderLabelledStoredRowStillDisclosesItsNarrowing is the permanent
+// form of the second review finding.
+//
+// The label-map rebuild can legitimately GROW the map: an under-labelled
+// legacy row gets its missing labels supplied. The removal count was
+// computed as a difference of map lengths, so on that input it went
+// NEGATIVE — and the negative did not stay confined to telemetry. Summed
+// into the total, it CANCELLED a real reference removal, the total read as
+// zero, the disclosure branch returned early, and a genuinely narrowed
+// answer was served as a degraded hit with `coverage.partial` false and no
+// degraded reason at all.
+//
+// That is the shape worth remembering: an aggregate that can cancel, gating
+// a disclosure. The count now counts removals directly and can only be
+// non-negative, and emptiness is decided component by component so no
+// future signed field can cancel one either.
+func TestAnUnderLabelledStoredRowStillDisclosesItsNarrowing(t *testing.T) {
+	t.Parallel()
+
+	stored := storedResultWithUnderLabelledMap(t)
+	// Exactly one auxiliary reference goes missing. The old arithmetic
+	// scored this as Refs=1, StrippedLabels=-1, total 0.
+	auxiliary := auxiliaryRefsOf(stored)
+	if len(auxiliary) == 0 {
+		t.Fatal("fixture carries no auxiliary refs")
+	}
+	missing := map[string]struct{}{auxiliary[0]: {}}
+
+	degraded, counts, _, ok := degradeReusedResult(stored, missing)
+	if !ok {
+		t.Fatal("degrade refused; an under-labelled stored row is legal and must still degrade")
+	}
+	if counts.StrippedLabels < 0 {
+		t.Errorf("StrippedLabels = %d; a removal count must never be negative", counts.StrippedLabels)
+	}
+	if counts.Refs != 1 {
+		t.Errorf("Refs = %d, want 1", counts.Refs)
+	}
+	if counts.empty() {
+		t.Fatalf("a reference was removed but the counts read as empty: %+v", counts)
+	}
+	if !degraded.Coverage.Partial {
+		t.Error("coverage.partial = false; a narrowed answer served as whole is its own defect, even when nothing unproven is served")
+	}
+	if len(degraded.Coverage.DegradedReasons) == 0 {
+		t.Error("degraded_reasons is empty; the caller is not told the answer was narrowed")
+	}
+	if !hasCoverageDetailCode(degraded.Coverage, contractsv1.ContextFabricCoverageDetailReuseAuxiliaryRefsStripped) {
+		t.Error("no structured coverage detail for the narrowing")
+	}
+	// And the rebuild did what it is for: the map now covers the served
+	// closure rather than staying stuck at its legacy width.
+	if _, present := degraded.EvidenceRefLabels[auxiliary[0]]; present {
+		t.Errorf("the removed ref %q is still labelled", auxiliary[0])
+	}
+	if !servedLabelsAreWithinTheClosure(degraded) {
+		t.Error("the rebuilt label map is not within the served closure")
+	}
+}
+
+// TestTheExactCancellingCaseStillDiscloses pins the HARM rather than its
+// proxy.
+//
+// The sibling test above catches a negative removal count, which is the
+// symptom. The defect was what the negative did downstream: summed into an
+// aggregate it cancelled a real reference removal to exactly zero, the
+// disclosure branch read that as "nothing was removed", and a narrowed
+// answer was served with `coverage.partial` false and no reason.
+//
+// Cancellation to exactly zero needs the numbers to line up, so this builds
+// them deliberately: ONE reference removed, and a label map whose rebuild
+// grows by exactly one. A fixture that merely happens to be under-labelled
+// produces a large negative that does not cancel, and would let the real
+// defect through while looking like coverage of it.
+func TestTheExactCancellingCaseStillDiscloses(t *testing.T) {
+	t.Parallel()
+
+	stillVisible := "evidence_candidate_a"
+	nowMissing := "evidence_candidate_b"
+
+	stored := storedResultWithEveryRefSite(t)
+	// Trim to exactly the shape that cancels: two candidate refs, and a
+	// label map covering only the citation, so the rebuild supplies one
+	// missing label while one reference is removed.
+	stored.Drivers = []DriverJudgment{}
+	stored.RemainingWork = []Finding{}
+	stored.Paths = []RelationshipPath{}
+	stored.SubjectResolution.Candidates = []SubjectCandidate{
+		reuseDegradeCandidateNamed("receipt_degrade_a1", stillVisible),
+		reuseDegradeCandidateNamed("receipt_degrade_b1", nowMissing),
+	}
+	citation := stored.EvidenceRefIDs[0]
+	label, _ := contractsv1.ContextFabricEvidenceRefLabel(citation)
+	stored.EvidenceRefLabels = map[string]string{citation: label}
+	stored.Completeness = ComputeAnswerCompleteness(stored)
+	if err := ValidateStoredResult(stored); err != nil {
+		t.Fatalf("fixture is not a legal stored row: %v", err)
+	}
+
+	degraded, counts, _, ok := degradeReusedResult(stored, map[string]struct{}{nowMissing: {}})
+	if !ok {
+		t.Fatal("degrade refused; this fixture is meant to degrade")
+	}
+
+	// The harm, asserted directly.
+	if !degraded.Coverage.Partial {
+		t.Errorf("coverage.partial = false after removing a reference; counts = %+v", counts)
+	}
+	if len(degraded.Coverage.DegradedReasons) == 0 {
+		t.Errorf("degraded_reasons is empty after removing a reference; counts = %+v", counts)
+	}
+	if !hasCoverageDetailCode(degraded.Coverage, contractsv1.ContextFabricCoverageDetailReuseAuxiliaryRefsStripped) {
+		t.Errorf("no structured coverage detail after removing a reference; counts = %+v", counts)
+	}
+	// And the numbers that produced the cancellation.
+	if counts.Refs != 1 {
+		t.Errorf("Refs = %d, want 1", counts.Refs)
+	}
+	if counts.StrippedLabels != 0 {
+		t.Errorf("StrippedLabels = %d, want 0 -- the removed ref was never labelled, so nothing was removed FROM the map", counts.StrippedLabels)
+	}
+	if counts.empty() {
+		t.Error("counts read as empty after a real removal; this is the cancellation the disclosure branch used to trust")
 	}
 }
