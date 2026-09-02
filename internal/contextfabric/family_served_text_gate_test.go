@@ -37,9 +37,10 @@ package contextfabric
 //     and a switched-off gate holds nothing.
 //
 //   - TestFamilyTextGateCatchesHistoricalConstructions is the acceptance
-//     corpus: nine fixtures, each a construction that defeated some
+//     corpus: eleven fixtures, each a construction that defeated some
 //     earlier version of this gate or that probes a weak joint of the
-//     current one. Each must produce at least one finding of EITHER tier.
+//     current one. Each must produce at least one finding, and the table
+//     records WHICH TIER it must land in.
 //     A standalone fixture package serves nothing of its own, so its
 //     Result/Details struct is a documented stand-in for a served field;
 //     what the corpus proves is that the ANALYSIS REACHES the
@@ -47,13 +48,14 @@ package contextfabric
 //
 // WHAT GREEN DOES NOT MEAN. The limits of the analysis are stated in
 // family_taint_ssa_test.go's header -- flow-insensitive memory, CHA for
-// dynamic dispatch, no reflection, implicit flow narrowed to non-empty
-// text constants, and a plain string parameter that is family-derived at
+// dynamic dispatch, no reflection, implicit flow at full strength only
+// under a DIRECTLY family-derived branch and narrowed to non-empty text
+// constants otherwise, and a plain string parameter that is family-derived at
 // only some call sites reported at the call site rather than inside the
 // callee. Green means no enforced finding under those limits. It is not a
 // nonexistence proof, and this comment exists so nobody reads it as one.
 //
-// The CHAOS-4735 heuristic sweep still coexists with this gate; retiring
+// The earlier heuristic language sweep still coexists with this gate; retiring
 // it is tracked as residue, not done here.
 
 import (
@@ -489,6 +491,18 @@ type familyGateFixture struct {
 	name        string
 	importPath  string
 	description string
+	// wantEnforced states which TIER this construction must land in when
+	// the fixture is loaded standalone, so the corpus records the
+	// distinction rather than only that "something was found".
+	//
+	// Only a construction that crosses a boundary INSIDE the fixture --
+	// R11 writes its prose straight to an http.ResponseWriter -- is
+	// enforced standalone. The rest store into a struct that stands in
+	// for a served field but is not itself reachable from an encoder in a
+	// package that serves nothing, so they land in the reported tier
+	// here and would be enforced in production, where the equivalent
+	// field IS reachable.
+	wantEnforced bool
 }
 
 var familyGateFixtures = []familyGateFixture{
@@ -496,6 +510,17 @@ var familyGateFixtures = []familyGateFixture{
 		name:        "R7_ordinary_call_result_laundering",
 		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r7_ordinary_call_sprintf",
 		description: "codex round 3, P1, EXECUTED, re-executed by the lane: fmt.Sprintf(\"...%s...\", family) assigned to a served field. the acceptance case that ended the syntax-walker approach and the reason this gate is an SSA value-flow analysis: a walker is never closed under an arbitrary call boundary. Caught here by the uniform per-call-site rule, with no knowledge of fmt.Sprintf.",
+	},
+	{
+		name:        "R10_control_selected_nonconstant_text",
+		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r10_control_nonconstant",
+		description: "codex round 1 P1: prose selected by a family test but produced by a no-argument helper, so the implicit-flow rule's non-empty-text-CONSTANT restriction does not see it",
+	},
+	{
+		name:         "R11_direct_bytes_write",
+		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r11_direct_bytes_write",
+		description:  "codex round 1 P1: family-derived prose written straight to http.ResponseWriter.Write, bypassing the encoding/json boundary the served set is derived from",
+		wantEnforced: true,
 	},
 	{
 		name:        "R8_global_map_relay_between_functions",
@@ -571,6 +596,18 @@ func TestFamilyTextGateCatchesHistoricalConstructions(t *testing.T) {
 			findings := familySSAAnalyze(t, pkgs, facts, false)
 			if len(findings) == 0 {
 				t.Fatalf("RED-FIRST FAILURE: fixture %s (%s) produced ZERO violations -- the gate does not catch this historical construction", fx.name, fx.description)
+			}
+			var enforced int
+			for _, f := range findings {
+				if f.enforced {
+					enforced++
+				}
+			}
+			if fx.wantEnforced && enforced == 0 {
+				t.Errorf("fixture %s crosses a serialization boundary inside the fixture, so it must land in the ENFORCED tier; got %d finding(s), none enforced", fx.name, len(findings))
+			}
+			if !fx.wantEnforced && enforced > 0 {
+				t.Errorf("fixture %s serves nothing of its own, so every finding should be REPORTED; got %d enforced -- the served-type derivation reached further than expected and the tier split needs re-reading", fx.name, enforced)
 			}
 			t.Logf("%s: %d finding(s):", fx.name, len(findings))
 			for _, f := range findings {

@@ -48,11 +48,15 @@ package contextfabric
 //     -- false positives are possible, false negatives through aliasing
 //     are not the expected failure.
 //   - Implicit (control-dependence) flow is modelled through the
-//     post-dominance frontier, but a sink that fires ONLY through control
-//     dependence additionally requires the served value to be a non-empty
-//     text constant. Without that restriction implicit-flow taint creeps
-//     over every branch downstream of a family test. The restriction is a
-//     deliberate calibration, and it is where a future evasion would go.
+//     post-dominance frontier, in two strengths. Under a branch whose
+//     condition is DIRECTLY family-derived, any text-typed value served
+//     inside the guarded region counts. Under a branch that is merely
+//     tainted, only a non-empty text CONSTANT counts. The weaker rule
+//     exists because an ungated implicit-flow rule creeps over every
+//     branch downstream of a family test; the stronger one exists because
+//     the constant-only version was defeated (fixture R10: prose returned
+//     by a no-argument helper, selected by `if family == X`). Where the
+//     next evasion goes is now the DIRECTNESS test, not the constant test.
 //   - Dynamic dispatch is resolved with CHA, which is sound but
 //     imprecise: every method with a matching signature on a type in the
 //     program is a candidate.
@@ -187,6 +191,15 @@ type familySSA struct {
 	// ctrl marks blocks that execute only under a family-dependent
 	// branch (implicit flow).
 	ctrl map[*ssa.BasicBlock]familyTaint
+	// writerShape memoizes familySSAIsWriterShaped. Method-set
+	// construction is not cheap and the boundary question is asked for
+	// every call, on every fixed-point round; uncached it cost more wall
+	// time than the entire rest of the analysis.
+	writerShape map[string]bool
+	// ctrlDirect marks the stricter case: the guarding condition was
+	// DIRECTLY family-derived (the family value itself, or text derived
+	// from it), not merely tainted. See sinkValueTaint.
+	ctrlDirect map[*ssa.BasicBlock]bool
 
 	// why records, for each value whose taint was raised, the value it was
 	// raised FROM, plus a one-line description of the rule that did it.
@@ -231,18 +244,20 @@ func familySSAAnalyze(t *testing.T, pkgs []*packages.Package, facts familyGateFa
 	prog.Build()
 
 	a := &familySSA{
-		t:         t,
-		facts:     facts,
-		prog:      prog,
-		fset:      prog.Fset,
-		owned:     map[*ssa.Function]bool{},
-		val:       map[ssa.Value]familyTaint{},
-		mem:       map[ssa.Value]familyTaint{},
-		memDirect: map[ssa.Value]bool{},
-		objField:  map[ssa.Value]familyTaint{},
-		field:     map[*types.Var]familyTaint{},
-		ctrl:      map[*ssa.BasicBlock]familyTaint{},
-		why:       map[ssa.Value]familyTaintEdge{},
+		t:           t,
+		facts:       facts,
+		prog:        prog,
+		fset:        prog.Fset,
+		owned:       map[*ssa.Function]bool{},
+		val:         map[ssa.Value]familyTaint{},
+		mem:         map[ssa.Value]familyTaint{},
+		memDirect:   map[ssa.Value]bool{},
+		objField:    map[ssa.Value]familyTaint{},
+		field:       map[*types.Var]familyTaint{},
+		ctrl:        map[*ssa.BasicBlock]familyTaint{},
+		ctrlDirect:  map[*ssa.BasicBlock]bool{},
+		writerShape: map[string]bool{},
+		why:         map[ssa.Value]familyTaintEdge{},
 	}
 
 	if named, ok := types.Unalias(facts.familyType).(*types.Named); ok {
@@ -530,9 +545,6 @@ func (a *familySSA) computeControlFunc(fn *ssa.Function) {
 	// common case by far, and this runs every fixed-point round.
 	var branchers []*ssa.BasicBlock
 	for _, b := range blocks {
-		if len(b.Succs) < 2 && !familySSAIsTaintedIf(a, b) {
-			continue
-		}
 		if familySSAIsTaintedIf(a, b) {
 			branchers = append(branchers, b)
 		}
@@ -596,18 +608,43 @@ func (a *familySSA) computeControlFunc(fn *ssa.Function) {
 				if bi != ai && postdom[ai][bi] {
 					continue
 				}
-				a.markCtrl(blocks[bi])
+				a.markCtrl(blocks[bi], a.branchIsDirect(aBlk))
 			}
 		}
 	}
 }
 
-func (a *familySSA) markCtrl(b *ssa.BasicBlock) {
-	if a.ctrl[b] >= familyTaintDerived {
-		return
+func (a *familySSA) markCtrl(b *ssa.BasicBlock, direct bool) {
+	if a.ctrl[b] < familyTaintDerived {
+		a.ctrl[b] = familyTaintDerived
+		a.changed = true
 	}
-	a.ctrl[b] = familyTaintDerived
-	a.changed = true
+	if direct && !a.ctrlDirect[b] {
+		a.ctrlDirect[b] = true
+		a.changed = true
+	}
+}
+
+// branchIsDirect reports whether the block's terminating If tests
+// something DIRECTLY family-derived, as opposed to a value that merely
+// carries the taint.
+func (a *familySSA) branchIsDirect(b *ssa.BasicBlock) bool {
+	if len(b.Instrs) == 0 {
+		return false
+	}
+	iff, ok := b.Instrs[len(b.Instrs)-1].(*ssa.If)
+	if !ok {
+		return false
+	}
+	if a.isDirect(iff.Cond) {
+		return true
+	}
+	// `family == X` is a BinOp: the comparison result is derived, but
+	// directness lives in its operands.
+	if bin, ok := iff.Cond.(*ssa.BinOp); ok {
+		return a.isDirect(bin.X) || a.isDirect(bin.Y)
+	}
+	return false
 }
 
 func familySSAIsTaintedIf(a *familySSA, b *ssa.BasicBlock) bool {
@@ -1066,6 +1103,34 @@ func (a *familySSA) sinkValueTaint(b *ssa.BasicBlock, v ssa.Value) familyTaint {
 	if !a.ctrl[b].tainted() {
 		return familyTaintNone
 	}
+	// CODEX ROUND 1, P1 (FIRST FINDING), EXECUTED AND RE-EXECUTED BY THE
+	// LANE. The rule below used to require an ssa.Const, and this was
+	// documented in the file header as the calibration a future evasion
+	// would aim at. It was aimed at:
+	//
+	//	if family == SubjectInvestigation { d.NarrowerHint = hint() }
+	//
+	// where hint() takes NO arguments. Nothing carries a data dependence
+	// on the family; the prose is selected purely by the branch; and the
+	// selected value is not a constant, so the constant restriction saw
+	// nothing at all.
+	//
+	// The widening is gated on ctrlDirect rather than ctrl: the guarding
+	// condition must test the family ITSELF (or text directly derived
+	// from it), not merely something that carries the taint. Under that
+	// stricter guard ANY text-typed value counts, constant or not.
+	// Ungated -- "everything under any tainted branch is derived" -- is
+	// the label creep that took an earlier draft of this analysis to
+	// thousands of findings on a tree with no defect in it.
+	if a.ctrlDirect[b] && familySSAIsServableText(v.Type()) {
+		if c, ok := v.(*ssa.Const); ok {
+			if familySSANonEmptyText(c) {
+				return familyTaintDerived
+			}
+			return familyTaintNone
+		}
+		return familyTaintDerived
+	}
 	if c, ok := v.(*ssa.Const); ok && familySSANonEmptyText(c) {
 		return familyTaintDerived
 	}
@@ -1194,6 +1259,14 @@ func familySSAIsTextType(t types.Type, depth int) bool {
 		// surface on the error envelope.
 		return true
 	case *types.Slice:
+		// []byte IS text: it is what every byte-writing boundary takes,
+		// and `w.Write([]byte(prose))` is the most direct way prose
+		// reaches the wire. Missing this made the R11 fix a no-op on its
+		// first attempt -- the boundary was recognised and the value
+		// arriving at it was then judged non-textual.
+		if b, ok := u.Elem().Underlying().(*types.Basic); ok && b.Kind() == types.Byte {
+			return true
+		}
 		return familySSAIsTextType(u.Elem(), depth+1)
 	case *types.Array:
 		return familySSAIsTextType(u.Elem(), depth+1)
@@ -1327,6 +1400,10 @@ func (a *familySSA) checkServingPositionSinks() {
 // the struct type the field belongs to, or the type of the value returned
 // or stored -- against the set derived from the encoder boundary.
 func (a *familySSA) recordServed(r familySSARecord) bool {
+	if r.rule == "serving-position" {
+		// By construction: this value WAS handed to a boundary.
+		return true
+	}
 	if r.field != nil {
 		if st, ok := familySSADerefStructType(r.typ); ok {
 			return a.servedTypes[st]
@@ -1458,10 +1535,7 @@ func (a *familySSA) computeServed() {
 					continue
 				}
 				common := call.Common()
-				if !familySSAIsJSONBoundary(common) {
-					continue
-				}
-				for _, arg := range common.Args {
+				for _, arg := range a.servingArgs(common) {
 					push(arg)
 				}
 			}
@@ -1544,26 +1618,122 @@ func (a *familySSA) assertServedSetIsRealistic() {
 	}
 }
 
-func familySSAIsJSONBoundary(common *ssa.CallCommon) bool {
-	fn := common.StaticCallee()
-	if fn == nil {
-		if common.Method != nil {
-			return common.Method.Name() == "Encode" &&
-				common.Method.Pkg() != nil && common.Method.Pkg().Path() == "encoding/json"
+// familySSAServingArgs returns the arguments of a call that CROSS THE
+// WIRE, or nil if the call is not a boundary.
+//
+// There are exactly TWO boundary families, and they are named as families
+// rather than as lists of types:
+//
+//  1. ENCODING. encoding/json's Marshal, MarshalIndent and Encoder.Encode:
+//     the value handed in becomes the served document.
+//  2. BYTE WRITING. Anything io.Writer-shaped -- a Write([]byte) method on
+//     a writer, or a function whose FIRST parameter is a writer, which is
+//     the Go convention that covers io.WriteString, fmt.Fprintf, fmt.Fprint,
+//     fmt.Fprintln and any hand-written helper with the same shape.
+//
+// CODEX ROUND 1, P1 (SECOND FINDING), EXECUTED AND RE-EXECUTED BY THE LANE:
+// the first version of this function knew only family 1. A handler that
+// did `w.Write([]byte(fmt.Sprintf("...%s...", family)))` was invisible --
+// not because the taint was wrong (the Sprintf result IS derived, and the
+// same value stored into a served struct field WAS enforced) but because
+// http.ResponseWriter.Write was not a boundary this gate had heard of.
+// That is not an under-enforcement, it is a FALSE CLAIM: a raw byte write
+// is the wire. The failure is the same shape as the one that stopped an
+// earlier lane -- the gate validated the surface its author had thought
+// of, and the claim written above it was wider than the check beneath it.
+//
+// Writer-shape is decided STRUCTURALLY (a Write method taking []byte and
+// returning (int, error)), never by naming io.Writer or net/http, so a
+// domain-specific writer interface is a boundary on the same terms.
+func (a *familySSA) servingArgs(common *ssa.CallCommon) []ssa.Value {
+	args := common.Args
+	if fn := common.StaticCallee(); fn != nil {
+		if obj := fn.Object(); obj != nil && obj.Pkg() != nil && obj.Pkg().Path() == "encoding/json" {
+			switch obj.Name() {
+			case "Marshal", "MarshalIndent", "Encode":
+				if len(args) > 0 {
+					return args[:1]
+				}
+			}
 		}
+	}
+	if common.Method != nil && common.Method.Pkg() != nil &&
+		common.Method.Pkg().Path() == "encoding/json" && common.Method.Name() == "Encode" {
+		if len(args) > 0 {
+			return args[:1]
+		}
+	}
+
+	// Family 2: a Write([]byte) method on a writer-shaped receiver.
+	if common.Method != nil && common.Method.Name() == "Write" && len(args) == 1 {
+		if a.isWriterShaped(common.Value.Type()) {
+			return args
+		}
+	}
+	if fn := common.StaticCallee(); fn != nil && fn.Signature != nil {
+		if params := fn.Signature.Params(); params.Len() > 0 &&
+			a.isWriterShaped(params.At(0).Type()) {
+			// Everything after the writer is what gets written.
+			if len(args) > 1 {
+				return args[1:]
+			}
+		}
+	}
+	return nil
+}
+
+// familySSAIsWriterShaped reports whether a type has a Write([]byte)
+// (int, error) method -- io.Writer's shape, decided by structure so that
+// any writer, standard or domain-specific, is a boundary.
+func (a *familySSA) isWriterShaped(t types.Type) bool {
+	if t == nil {
 		return false
 	}
-	obj := fn.Object()
-	if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != "encoding/json" {
+	key := t.String()
+	if cached, ok := a.writerShape[key]; ok {
+		return cached
+	}
+	shaped := familySSAIsWriterShaped(t)
+	a.writerShape[key] = shaped
+	return shaped
+}
+
+func familySSAIsWriterShaped(t types.Type) bool {
+	if t == nil {
 		return false
 	}
-	switch obj.Name() {
-	case "Marshal", "MarshalIndent":
+	ms := types.NewMethodSet(t)
+	if m := familySSALookupWrite(ms); m != nil {
 		return true
-	case "Encode":
-		return true
+	}
+	if p, ok := t.Underlying().(*types.Pointer); ok {
+		return familySSALookupWrite(types.NewMethodSet(p.Elem())) != nil
 	}
 	return false
+}
+
+func familySSALookupWrite(ms *types.MethodSet) *types.Func {
+	for i := 0; i < ms.Len(); i++ {
+		sel := ms.At(i)
+		fn, ok := sel.Obj().(*types.Func)
+		if !ok || fn.Name() != "Write" {
+			continue
+		}
+		sig, ok := fn.Type().(*types.Signature)
+		if !ok || sig.Params().Len() != 1 || sig.Results().Len() != 2 {
+			continue
+		}
+		sl, ok := sig.Params().At(0).Type().Underlying().(*types.Slice)
+		if !ok {
+			continue
+		}
+		b, ok := sl.Elem().Underlying().(*types.Basic)
+		if !ok || b.Kind() != types.Byte {
+			continue
+		}
+		return fn
+	}
+	return nil
 }
 
 func (a *familySSA) markServedType(t types.Type) {
