@@ -163,6 +163,13 @@ contract-write:
 
 contract-test:
 	go run ./cmd/contractcheck
+# The Go-struct-to-schema anchor lives in a Go test rather than in
+# contractcheck, because it needs go/types over internal/contracts/v1 and
+# contractcheck is a dependency-light offline binary. It runs here too so the
+# target humans run covers the whole parity chain, not just the
+# artifact-to-artifact half of it -- the half that reported OK while a Go wire
+# field had no published property at all.
+	go test ./internal/contracts/v1/ -run 'TestEverySchemaDocumentAndDefIsBoundOrExempt|TestPublishedSchemaPropertiesMatchGoWireFields|TestPublishedEnumsMatchGoVocabularies|TestReportOrphanSchemaDefs' -count=1
 
 codegraph-contract:
 	bash scripts/codegraph/verify-contract.sh --fixtures testdata/codegraph/v1.2.0
