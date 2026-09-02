@@ -859,6 +859,15 @@ func TestMaximalIsSaturated(t *testing.T) {
 		}
 		t.Errorf("NOT SATURATED: %s can still grow and the document stays valid, and it is not a disclosed lower-bound axis", name)
 	}
+
+	// The other direction, which is what keeps the disclosure list honest: an
+	// entry that is no longer unsaturated is STALE and must be deleted, or the
+	// list slowly becomes a place to hide fields that were since fixed.
+	for name, reason := range unsaturatedByDesign {
+		if !seen[name] {
+			t.Errorf("STALE DISCLOSURE: %s is listed as a lower-bound axis (%q) but the probe no longer finds it unsaturated -- delete the entry", name, reason)
+		}
+	}
 }
 
 // isDerivedTopLevel reports whether a probe path sits under a derived field.
@@ -893,11 +902,9 @@ var unsaturatedByDesign = map[string]string{
 	"result.Versions.ContractVersion":                   "must stay the real schema identifier to mean anything; the validator bounds only its length, so a padded value would validate while making the document nonsense",
 }
 
-// TestDisclosedLowerBoundAxesAreStillUnsaturated fails if a disclosed axis has
-// since been saturated, so a stale disclosure cannot outlive its reason.
-func TestDisclosedLowerBoundAxesAreStillUnsaturated(t *testing.T) {
-	if len(unsaturatedByDesign) == 0 {
-		t.Skip("nothing disclosed")
-	}
+// TestDisclosedLowerBoundAxesAreNamed only reports the count. The ENFORCEMENT
+// of staleness lives in TestMaximalIsSaturated, which is the only place that
+// knows which disclosed axes the probe actually reached.
+func TestDisclosedLowerBoundAxesAreNamed(t *testing.T) {
 	t.Logf("%d disclosed lower-bound axes", len(unsaturatedByDesign))
 }
