@@ -271,6 +271,28 @@ type ModelExecutionReceipt struct {
 	// member_kind -- the variant's own field, and every ExplicitSet
 	// operand's -- OR into ONE flag per axis name rather than one field
 	// per call site.
+	// RequirementCellsDerived / RequirementCellsUnserved /
+	// RequirementDerivationVersion are the obligation -> requirement
+	// layer's per-call measurement, durably captured for the same reason
+	// the frame itself is: a persisted receipt must be replayable against
+	// the table that produced it, and the derivation table is versioned.
+	//
+	// COUNTS AND A VERSION, never the rows. The rows carry subject KINDS,
+	// which are closed vocabulary, but writing them here would put a
+	// growing per-call structure on every interpret receipt to answer a
+	// question the counts plus the version already answer -- and the
+	// per-cell detail belongs to the regenerated trace artifact, which is
+	// a review surface rather than a runtime record.
+	//
+	// All three are classified in reuse_key_completeness_test.go as
+	// EXCLUDED from ReuseKey, on the same ground QuestionFrame itself is:
+	// nothing downstream reads the requirement rows in the shadow phase,
+	// so they cannot make a reused answer wrong. The exclusion is owed a
+	// revisit at promotion, when the rows start driving assembly.
+	RequirementCellsDerived      int    `json:"requirement_cells_derived,omitempty"`
+	RequirementCellsUnserved     int    `json:"requirement_cells_unserved,omitempty"`
+	RequirementDerivationVersion string `json:"requirement_derivation_version,omitempty"`
+
 	FrameTemporalUnrecognized   bool `json:"frame_temporal_unrecognized,omitempty"`
 	FrameEmphasisDropped        int  `json:"frame_emphasis_dropped,omitempty"`
 	FrameDimensionsDropped      int  `json:"frame_dimensions_dropped,omitempty"`
@@ -1370,6 +1392,17 @@ type RuntimeQuestionInterpreter struct {
 	// is one: a nil here means an operator sees nothing, and the whole
 	// point of this slice is the measurement.
 	FrameTelemetry FrameValidationTelemetry
+	// Requirements (SHADOW ONLY) derives the obligation -> requirement
+	// rows for a validated frame against the live fact registry's own
+	// declarations.
+	//
+	// Wired in hosted/open.go from the *FactCapabilityRegistry it already
+	// builds, and explicitly rather than by type assertion for the reason
+	// recorded on the two telemetry fields above. A nil here means the
+	// requirement summary is absent from the event, which is
+	// distinguishable from a derivation that ran and produced no rows --
+	// see RequirementDerivationSummaryFrom.
+	Requirements RequirementDeriver
 }
 
 // resolveFrame validates the frame a receipt proposed, records the outcome
@@ -1414,6 +1447,21 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 
 	receipt.FrameOutcome = result.Outcome
 	receipt.FrameFailedInvariant = result.Failure.Invariant
+
+	// The requirement rows are derived from the VALIDATED frame, so this
+	// runs before the receipt switch below writes it. A refused frame
+	// derives none: its obligation set was never accepted, and crossing an
+	// unaccepted set with the registry would count cells for a question
+	// the server declined to act on.
+	var requirements []DerivedRequirement
+	if r.Requirements != nil && result.Outcome == FrameValidationOutcomeValid {
+		requirements = r.Requirements.DeriveRequirements(result.Frame)
+		summary := RequirementDerivationSummaryFrom(requirements)
+		receipt.RequirementCellsDerived = summary.Derived
+		receipt.RequirementCellsUnserved = summary.Unserved
+		receipt.RequirementDerivationVersion = summary.Version
+	}
+
 	switch result.Outcome {
 	case FrameValidationOutcomeValid:
 		// The receipt carries the VALIDATED, normalized frame -- the one
@@ -1430,7 +1478,7 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 	}
 
 	if r.FrameTelemetry != nil {
-		r.FrameTelemetry.RecordFrameValidation(ctx, principal, FrameValidationEventFrom(proposed, result, emittedShape))
+		r.FrameTelemetry.RecordFrameValidation(ctx, principal, FrameValidationEventFrom(proposed, result, emittedShape, requirements))
 	}
 }
 

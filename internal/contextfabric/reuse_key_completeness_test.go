@@ -225,6 +225,21 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	// signal for Temporal, Emphasis, Dimensions, and every MemberKind/
 	// GroupKind site. Same exclusion reasoning as their siblings: per-call
 	// sanitize-outcome telemetry, not a version identity.
+	// The obligation -> requirement layer's per-call measurement. The two
+	// counts are per-call outcomes on the same footing as the sanitize
+	// counts above. RequirementDerivationVersion IS a version authority --
+	// it names the role/completion table the rows were derived under --
+	// and it is excluded on exactly the ground QuestionFrame's embedded
+	// Version is: in the shadow phase nothing downstream reads the
+	// requirement rows, so a table change cannot make a reused answer
+	// wrong. A ReuseKey.RequirementDerivationVersion member is OWED at
+	// promotion, when the rows start driving assembly, and it is named
+	// here so the debt is a written classification rather than a gap a
+	// future review has to rediscover.
+	"RequirementCellsDerived":      {reason: "per-call cell count (telemetry and replay only), not a version identity -- same reasoning as FrameGoalsDropped"},
+	"RequirementCellsUnserved":     {reason: "per-call cell count (telemetry and replay only), not a version identity -- same reasoning as FrameGoalsDropped"},
+	"RequirementDerivationVersion": {reason: "package constant (RequirementDerivationVersion) naming the role/completion table the rows were derived under. A real version authority, but the rows are shadow-only in this phase -- nothing downstream reads them, so a table change cannot make a reused answer wrong. A ReuseKey member is OWED at promotion, on the same schedule as QuestionFrame's embedded Version"},
+
 	"FrameTemporalUnrecognized":   {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as FrameKindUnrecognized"},
 	"FrameEmphasisDropped":        {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as FrameGoalsDropped"},
 	"FrameDimensionsDropped":      {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as FrameGoalsDropped"},

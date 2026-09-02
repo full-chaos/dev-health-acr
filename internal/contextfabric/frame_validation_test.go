@@ -146,7 +146,7 @@ func TestValidFrameEmitsTelemetryWithNoFailure(t *testing.T) {
 	if result.Outcome != FrameValidationOutcomeValid {
 		t.Fatalf("outcome = %q, want valid", result.Outcome)
 	}
-	event := FrameValidationEventFrom(proposed, result, "")
+	event := FrameValidationEventFrom(proposed, result, "", nil)
 	if event.Outcome != FrameValidationOutcomeValid {
 		t.Fatalf("event outcome = %q, want valid", event.Outcome)
 	}
@@ -243,7 +243,7 @@ func TestFrameVersionIsAlwaysTheServerConstant(t *testing.T) {
 		t.Fatalf("validated frame version = %q, want %q -- the version is SERVER-DERIVED and stamped unconditionally, never defaulted",
 			result.Frame.Version, QuestionFrameVersion)
 	}
-	event := FrameValidationEventFrom(proposed, result, "")
+	event := FrameValidationEventFrom(proposed, result, "", nil)
 	if event.FrameVersion != QuestionFrameVersion {
 		t.Fatalf("event frame_version = %q, want %q", event.FrameVersion, QuestionFrameVersion)
 	}
@@ -286,7 +286,7 @@ func TestGoalsAreCanonicalizedIntoASet(t *testing.T) {
 	// duplicates -- found by adversarial review. A canonicalization test
 	// that checks the object but not what is recorded about it covers half
 	// the property and reads as covering all of it.
-	event := FrameValidationEventFrom(proposed, result, "")
+	event := FrameValidationEventFrom(proposed, result, "", nil)
 	assertExactGoals(t, event.ProposedGoals, []InvestigationGoal{GoalAssessState, GoalRankOrSurvey})
 
 	// Two orderings of one goal set must produce the identical frame --
