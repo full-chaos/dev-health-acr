@@ -206,7 +206,21 @@ func classifyFamilyAgreement(projection FamilyProjection, precedence FamilySampl
 	if precedence.Row == FamilyPrecedenceRowComparison {
 		return FamilyAgreementComparisonTermCount
 	}
-	if precedence.Row == FamilyPrecedenceRowCohortShape && projection.Row == FamilyProjectionRowSubject {
+	// The ORGANIZATION route, keyed on the frame's own TOPOLOGY.
+	//
+	// It was keyed on the projection ROW, which is wrong and was found by
+	// review: row 7 covers a named subject and the organization scope
+	// alike, so every named-subject frame whose interpretation emitted an
+	// open shape was counted as a B5 organization route. That corrupts the
+	// exact number the flip decision reads -- inflating the one class whose
+	// improvement claim the design has already withdrawn.
+	//
+	// Keying on the discriminator the projection actually read makes the
+	// class say what its name says. A named-subject frame in the same
+	// situation now falls through to shape_divergence, which is what it is.
+	if precedence.Row == FamilyPrecedenceRowCohortShape &&
+		projection.Row == FamilyProjectionRowSubject &&
+		projection.Topology == SubjectExpressionOrganizationScope {
 		return FamilyAgreementOrganizationRoute
 	}
 	if precedence.Row == FamilyPrecedenceRowCohortShape || precedence.Row == FamilyPrecedenceRowSingleSubject {

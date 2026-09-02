@@ -112,6 +112,26 @@ type FamilyProjection struct {
 	Family QuestionFamily
 	// Row names which rule fired.
 	Row FamilyProjectionRow
+	// Topology is the union discriminator the projection read.
+	//
+	// CARRIED SEPARATELY FROM THE ROW, and the separation is a fix rather
+	// than a convenience. Rows 1-4 name their topology and rows 5-6 name
+	// their goal, but row 7 fires on topology alone and named NEITHER --
+	// it covers a named subject and the organization scope alike. A
+	// downstream classifier keyed on that row therefore could not tell the
+	// two apart, and one of them silently did: the organization-route
+	// agreement class read row 7 as "this frame is organization-scoped"
+	// and counted every named-subject frame whose interpretation emitted
+	// an open shape as a B5 organization route.
+	//
+	// The narrow fix was to split row 7 in two. This is the general one:
+	// the discriminator the projection actually read travels WITH the
+	// verdict, so any classifier -- including ones not yet written -- can
+	// key on the topology precisely instead of inferring it from a row
+	// name that may or may not encode it. A row vocabulary that had to
+	// carry every distinction a future consumer might need would grow one
+	// member per consumer.
+	Topology SubjectExpressionKind
 }
 
 // DeriveQuestionFamily projects a frame onto the shipped eight-member
@@ -169,13 +189,13 @@ func DeriveQuestionFamily(frame QuestionFrame) FamilyProjection {
 	// Rows 1-4 -- TOPOLOGY. The discriminator alone decides; no goal, no
 	// temporal, no dimension is read.
 	case SubjectExpressionGroupedMembers:
-		return FamilyProjection{QuestionFamilyGroupedCohortStatus, FamilyProjectionRowGrouped}
+		return FamilyProjection{Family: QuestionFamilyGroupedCohortStatus, Row: FamilyProjectionRowGrouped, Topology: frame.SubjectExpression.Kind}
 	case SubjectExpressionChildrenOfScope:
-		return FamilyProjection{QuestionFamilyScopedCohortStatus, FamilyProjectionRowScoped}
+		return FamilyProjection{Family: QuestionFamilyScopedCohortStatus, Row: FamilyProjectionRowScoped, Topology: frame.SubjectExpression.Kind}
 	case SubjectExpressionExplicitSet:
-		return FamilyProjection{QuestionFamilyExplicitComparison, FamilyProjectionRowExplicit}
+		return FamilyProjection{Family: QuestionFamilyExplicitComparison, Row: FamilyProjectionRowExplicit, Topology: frame.SubjectExpression.Kind}
 	case SubjectExpressionDiscoveredKind:
-		return FamilyProjection{QuestionFamilyDiscoveredCohortRanking, FamilyProjectionRowDiscovered}
+		return FamilyProjection{Family: QuestionFamilyDiscoveredCohortRanking, Row: FamilyProjectionRowDiscovered, Topology: frame.SubjectExpression.Kind}
 
 	// Rows 5-7 -- a SINGLE SUBJECT. Only here do goals decide, and the row
 	// order is their precedence.
@@ -193,11 +213,11 @@ func DeriveQuestionFamily(frame QuestionFrame) FamilyProjection {
 	case SubjectExpressionNamed, SubjectExpressionOrganizationScope:
 		switch {
 		case frame.HasGoal(GoalAllocateInvestment):
-			return FamilyProjection{QuestionFamilyInvestmentAllocation, FamilyProjectionRowInvestment}
+			return FamilyProjection{Family: QuestionFamilyInvestmentAllocation, Row: FamilyProjectionRowInvestment, Topology: frame.SubjectExpression.Kind}
 		case frame.HasGoal(GoalDescribeTrend):
-			return FamilyProjection{QuestionFamilyTrend, FamilyProjectionRowTrend}
+			return FamilyProjection{Family: QuestionFamilyTrend, Row: FamilyProjectionRowTrend, Topology: frame.SubjectExpression.Kind}
 		default:
-			return FamilyProjection{QuestionFamilySubjectInvestigation, FamilyProjectionRowSubject}
+			return FamilyProjection{Family: QuestionFamilySubjectInvestigation, Row: FamilyProjectionRowSubject, Topology: frame.SubjectExpression.Kind}
 		}
 
 	// Row 8 -- the discriminator is not a vocabulary member. A refused or
@@ -210,6 +230,6 @@ func DeriveQuestionFamily(frame QuestionFrame) FamilyProjection {
 	// cannot silently vanish into row 7. This row catches the frames that
 	// never became valid at all.
 	default:
-		return FamilyProjection{QuestionFamilyUnclassified, FamilyProjectionRowNone}
+		return FamilyProjection{Family: QuestionFamilyUnclassified, Row: FamilyProjectionRowNone, Topology: frame.SubjectExpression.Kind}
 	}
 }

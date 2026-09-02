@@ -548,3 +548,212 @@ func TestO5AWidenedObligationChangesNothingThatDecides(t *testing.T) {
 	reach.require(t, len(frames))
 	t.Logf("O5: %d frames compared, %d of them carrying a non-empty widened set", reach.reached, widenedSeen)
 }
+
+// -----------------------------------------------------------------------
+// THE DECLARED LOSSES, ENUMERATED RATHER THAN EXHIBITED
+// -----------------------------------------------------------------------
+
+// declaredLoss is one (family, obligation) pair where the projection lands
+// a frame on a family whose registry row does NOT require an operation the
+// frame's own obligations DO require.
+type declaredLoss struct {
+	family     QuestionFamily
+	obligation AnswerObligation
+	why        string
+}
+
+// declaredLosses is EVERY such pair, and the sweep below asserts the set is
+// exactly this and no larger.
+//
+// WHY AN ENUMERATION AND NOT AN EXAMPLE. The first version of this slice
+// declared ONE loss -- a count over a discovered kind landing on a family
+// whose name says ranking -- and asserted it with a test that exhibited
+// that one case. Review found a SECOND, undeclared instance immediately: a
+// legal explicit set with {rank_or_survey, explain_drivers} projects to
+// explicit_comparison, whose registry row says neither ranking nor drivers
+// is required, while the frame requires both.
+//
+// The narrow fix would have been to add a second example. That is the
+// per-instance fix this branch's history is a catalogue of -- a class found
+// at five successive depths because each fix closed the instance in front
+// of it. So the property is stated over ALL of them instead: sweep every
+// legal frame, collect every (family, obligation) mismatch, and assert the
+// DISTINCT SET equals this table. A new one -- from a new goal, a new
+// variant, or a registry edit -- fails here without anyone remembering to
+// look for it.
+//
+// WHAT A ROW HERE MEANS, precisely: the family NAME and its registry flags
+// understate the question. The OPERATION is not lost, because the frame's
+// obligations carry it and the plan reads those. What a row records is that
+// a stage reading `RequireRanking`/`RequireDrivers` off the family -- which
+// the design forbids any NEW stage from doing, and which the compatibility
+// contract schedules for removal -- would understate this question.
+var declaredLosses = []declaredLoss{
+	{
+		family: QuestionFamilyDiscoveredCohortRanking, obligation: ObligationCount,
+		why: "a count over a discovered kind: the family NAME says ranking and the frame derives none. The eight-member vocabulary has no count member, so a count question must project onto a topology family. This is behaviour change B7, and here the registry OVERSTATES rather than understates -- it is in this table because the sweep quantifies over both directions.",
+	},
+	{
+		family: QuestionFamilyExplicitComparison, obligation: ObligationRanking,
+		why: "an explicit set with a ranking goal. Nothing makes `compare` the only goal an explicit set may carry -- invariant I7 constrains `compare` to explicit sets, not explicit sets to `compare` -- so 'rank these two named teams' is legal and lands on a family whose row says ranking is not required.",
+	},
+	{
+		family: QuestionFamilyExplicitComparison, obligation: ObligationPrincipalDrivers,
+		why: "the same explicit set with an explain-drivers goal, for the same reason. Found by review as one finding with the row above; they are two table rows because they are two independent flags.",
+	},
+	{
+		family: QuestionFamilyScopedCohortStatus, obligation: ObligationRanking,
+		why: "a scoped cohort asked to be ranked or surveyed. Its registry row requires no ranking because a scope is not an ordering.",
+	},
+	{
+		family: QuestionFamilyScopedCohortStatus, obligation: ObligationPrincipalDrivers,
+		why: "a scoped cohort asked why. Drivers are attempted, never required, on this family's row.",
+	},
+	{
+		family: QuestionFamilyGroupedCohortStatus, obligation: ObligationRanking,
+		why: "a grouped cohort asked to be ranked. Ranking within groups is a later slice's question; the row does not require it.",
+	},
+	{
+		family: QuestionFamilySubjectInvestigation, obligation: ObligationRanking,
+		why: "a single subject with a survey goal -- degenerate (a population of one) but legal, and the row requires no ranking.",
+	},
+	{
+		family: QuestionFamilySubjectInvestigation, obligation: ObligationPrincipalDrivers,
+		why: "a why-phrased single-subject question. This is decision D1's ACCEPTED COST, already recorded in the registry row's own comment: drivers are always ATTEMPTED and never required on this family, so the North Star bar (never a bare score) is enforced by an acceptance case rather than by this column. Found by this sweep with 231 witnesses -- it is the largest loss in the table and the one a per-instance test would never have surfaced, because nobody was looking at the family that carries it.",
+	},
+	{
+		family: QuestionFamilyTrend, obligation: ObligationRanking,
+		why: "a single-subject trend question that also carries a survey goal; the trend row is reached first and requires no ranking.",
+	},
+	{
+		family: QuestionFamilyTrend, obligation: ObligationPrincipalDrivers,
+		why: "the same, with an explain-drivers goal.",
+	},
+	{
+		family: QuestionFamilyInvestmentAllocation, obligation: ObligationRanking,
+		why: "an investment question that also surveys; the investment row is reached first.",
+	},
+	{
+		family: QuestionFamilyInvestmentAllocation, obligation: ObligationPrincipalDrivers,
+		why: "the same, with an explain-drivers goal.",
+	},
+}
+
+// TestEveryProjectionLossIsDeclared sweeps the corpus for mismatches
+// between what a frame's obligations REQUIRE and what its projected
+// family's registry row DECLARES, and asserts the distinct set is exactly
+// the declared table.
+//
+// Both directions are swept. A family whose row requires an operation the
+// frame does not derive OVERSTATES the question (B7's case); one whose row
+// does not require an operation the frame derives UNDERSTATES it (the case
+// review found). Sweeping one direction would have missed the other, which
+// is how the first version of this property missed the finding.
+func TestEveryProjectionLossIsDeclared(t *testing.T) {
+	t.Parallel()
+	frames := generateFrames(t)
+	reach := &reachCounter{name: "declared-loss sweep"}
+
+	type key struct {
+		family     QuestionFamily
+		obligation AnswerObligation
+	}
+	declared := map[key]declaredLoss{}
+	for _, loss := range declaredLosses {
+		k := key{loss.family, loss.obligation}
+		if _, dup := declared[k]; dup {
+			t.Errorf("declaredLosses lists %s/%s twice", loss.family, loss.obligation)
+		}
+		declared[k] = loss
+	}
+
+	// The two registry flags that can disagree with an obligation.
+	flags := []struct {
+		obligation AnswerObligation
+		declaredBy func(QuestionFamilyDefinition) bool
+	}{
+		{ObligationRanking, func(d QuestionFamilyDefinition) bool { return d.RequireRanking }},
+		{ObligationPrincipalDrivers, func(d QuestionFamilyDefinition) bool { return d.RequireDrivers }},
+		// B7's direction: the family's name/row promises a ranking the
+		// frame never asked for. Detected as `count` present WITH
+		// RequireRanking set, since that is the shape B7 describes.
+		{ObligationCount, nil},
+	}
+
+	// THE SWEEP POPULATION IS BASE FRAMES PLUS THEIR LEGAL SINGLE-GOAL
+	// EXTENSIONS, and that is not an embellishment -- it is what makes this
+	// property able to see the defect that prompted it.
+	//
+	// The generated corpus is single-goal by construction. The frame review
+	// found is {rank_or_survey, explain_drivers} on an explicit set: TWO
+	// goals. A sweep over the base corpus alone would have been written to
+	// close a finding it structurally could not observe, and would have
+	// reported "all declared" while the reported frame sailed past. Four
+	// rows of the declared table are likewise reachable only here.
+	population := make([]generatedFrame, 0, len(frames)*2)
+	population = append(population, frames...)
+	for _, base := range frames {
+		for _, extension := range extensionsOf(base) {
+			if extension.axis != "goals" {
+				continue
+			}
+			result := ValidateFrame(extension.frame, nil, "")
+			if result.Outcome != FrameValidationOutcomeValid {
+				continue
+			}
+			extended := base
+			extended.frame = result.Frame
+			extended.goals = result.Frame.Goals
+			population = append(population, extended)
+		}
+	}
+	multiGoal := 0
+	for _, member := range population {
+		if len(member.frame.Goals) > 1 {
+			multiGoal++
+		}
+	}
+	if multiGoal == 0 {
+		t.Fatal("the sweep population contains NO multi-goal frame, so it cannot observe the class this property exists for")
+	}
+
+	found := map[key][]string{}
+	for _, generated := range population {
+		projection := DeriveQuestionFamily(generated.frame)
+		definition, ok := LookupQuestionFamily(projection.Family)
+		if !ok {
+			t.Fatalf("projected family %q has no registry row", projection.Family)
+		}
+		reach.reach()
+		for _, flag := range flags {
+			has := generated.frame.HasObligation(flag.obligation)
+			if flag.declaredBy == nil {
+				// B7 direction: the frame derives `count` and the family
+				// nonetheless declares a ranking requirement.
+				if has && definition.RequireRanking {
+					k := key{projection.Family, flag.obligation}
+					found[k] = append(found[k], generated.String())
+				}
+				continue
+			}
+			if has && !flag.declaredBy(definition) {
+				k := key{projection.Family, flag.obligation}
+				found[k] = append(found[k], generated.String())
+			}
+		}
+	}
+
+	for k, witnesses := range found {
+		if _, isDeclared := declared[k]; !isDeclared {
+			t.Errorf("UNDECLARED projection loss: a frame requiring %q projects to %q, whose registry row does not.\n  %d witnesses, first: %s\n  Either declare it in declaredLosses with the reason it is acceptable, or the projection is routing this question to the wrong family.",
+				k.obligation, k.family, len(witnesses), witnesses[0])
+		}
+	}
+	for k, loss := range declared {
+		if len(found[k]) == 0 {
+			t.Errorf("declaredLosses claims %s/%s occurs, but NO frame in the corpus exhibits it -- a declared loss nothing reaches is a claim nobody can check.\n  It says: %s", k.family, k.obligation, loss.why)
+		}
+	}
+	reach.require(t, len(frames))
+	t.Logf("declared-loss sweep: %d frames (%d multi-goal), %d distinct (family, obligation) losses, all declared", reach.reached, multiGoal, len(found))
+}

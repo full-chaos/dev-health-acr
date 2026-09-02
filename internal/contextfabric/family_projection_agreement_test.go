@@ -241,3 +241,72 @@ func TestShadowComparesAgainstTheROUTEDFamilyNotTheWinningSample(t *testing.T) {
 		t.Fatalf("class %q, want precedence_unclassified", shadow.Agreement.Class)
 	}
 }
+
+// TestOrganizationRouteDoesNotCoverANamedSubject is the NEGATIVE CONTROL for
+// the organization-route class, and it exists because that class silently
+// over-covered.
+//
+// The class was keyed on the projection ROW, and row 7 covers a named
+// subject and the organization scope alike. So a plain named-subject frame
+// whose interpretation happened to emit an open shape -- a combination the
+// contract permits -- was counted as a B5 organization route. It inflated
+// the one class whose improvement claim the design has already withdrawn,
+// in the very number a later flip decision reads.
+//
+// The positive fixture in the table above passed throughout, because it
+// used an organization frame. A class fixture proves a class is REACHABLE;
+// only a negative control proves it does not reach FURTHER than its name.
+// That is the same shape as the leak canary planted in one field while a
+// different field leaked, recorded on the previous slice as a retro item.
+func TestOrganizationRouteDoesNotCoverANamedSubject(t *testing.T) {
+	t.Parallel()
+	frame := agreementFrame(t, []InvestigationGoal{GoalAssessState}, labelNamed("team-a", SubjectTeam), TemporalIntentCurrent)
+	projection := DeriveQuestionFamily(frame)
+
+	// The same precedence situation the organization fixture uses: an open
+	// shape sends the precedence table to its cohort row.
+	precedence := ResolveFamilyForSample(FamilySample{Shape: ShapeOpen, SubjectTerms: []string{"team-a"}})
+	agreement := ClassifyFamilyAgreement(projection, precedence)
+
+	if projection.Row != FamilyProjectionRowSubject {
+		t.Fatalf("fixture no longer fires row 7 (got %q), so it cannot exercise the over-coverage it exists to catch", projection.Row)
+	}
+	if precedence.Row != FamilyPrecedenceRowCohortShape {
+		t.Fatalf("fixture no longer fires the precedence cohort row (got %q)", precedence.Row)
+	}
+	if agreement.Class == FamilyAgreementOrganizationRoute {
+		t.Fatalf("a NAMED-SUBJECT frame is classified %q. The class must key on the frame's own topology, not on a row that covers two topologies.", agreement.Class)
+	}
+	if agreement.Class != FamilyAgreementShapeDivergence {
+		t.Fatalf("class %q; a named-subject frame against an open-shape sample is a shape divergence", agreement.Class)
+	}
+
+	// The positive case must still land, or the fix disabled the class
+	// rather than narrowing it -- a mutation that turns nothing red is a
+	// finding, and so is a narrowing that empties a tier.
+	orgFrame := agreementFrame(t, []InvestigationGoal{GoalAssessState},
+		SubjectExpression{Kind: SubjectExpressionOrganizationScope, Org: &OrganizationScopeExpression{}}, TemporalIntentCurrent)
+	orgAgreement := ClassifyFamilyAgreement(DeriveQuestionFamily(orgFrame), precedence)
+	if orgAgreement.Class != FamilyAgreementOrganizationRoute {
+		t.Fatalf("the ORGANIZATION frame no longer classifies as organization_route (got %q) -- the class was disabled, not narrowed", orgAgreement.Class)
+	}
+}
+
+// TestProjectionTopologyIsAlwaysTheFramesOwnDiscriminator pins the field the
+// class now keys on.
+//
+// A topology that could drift from the frame's own Kind would MOVE the
+// defect rather than fix it: the classifier would then be reading a second
+// authority for the same fact, which is what law L6 forbids.
+func TestProjectionTopologyIsAlwaysTheFramesOwnDiscriminator(t *testing.T) {
+	t.Parallel()
+	frames := generateFrames(t)
+	for _, generated := range frames {
+		projection := DeriveQuestionFamily(generated.frame)
+		if projection.Topology != generated.frame.SubjectExpression.Kind {
+			t.Fatalf("projection reported topology %q for a frame whose discriminator is %q (%s)",
+				projection.Topology, generated.frame.SubjectExpression.Kind, generated)
+		}
+	}
+	t.Logf("%d frames: the projection's topology is the frame's own discriminator on every one", len(frames))
+}
