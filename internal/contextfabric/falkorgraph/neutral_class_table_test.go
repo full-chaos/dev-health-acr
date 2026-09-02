@@ -43,6 +43,21 @@ func TestSentinelsCarryTheirDeclaredNeutralClass(t *testing.T) {
 	}
 	positive, negative := 0, 0
 	for sentinel, neutral := range neutralClass {
+		// The pairing loop below quantifies over neutralUniverse, so a
+		// value OUTSIDE it would be silently unchecked in both directions
+		// -- a sweep keyed on the wrong population. Close that first.
+		if neutral != nil {
+			member := false
+			for _, candidate := range neutralUniverse {
+				if candidate == neutral {
+					member = true
+				}
+			}
+			if !member {
+				t.Fatalf("neutralClass names %v for %v, but it is not in neutralUniverse: "+
+					"add it there or this row is never actually asserted", neutral, sentinel)
+			}
+		}
 		for _, candidate := range neutralUniverse {
 			want := neutral != nil && errors.Is(candidate, neutral)
 			got := errors.Is(sentinel, candidate)
