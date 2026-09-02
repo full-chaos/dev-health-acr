@@ -257,3 +257,78 @@ func (c *FamilyAgreementCounters) Observe(agreement FamilyAgreement) {
 // from Total and Agreed rather than accumulated separately, so the three
 // numbers cannot drift apart.
 func (c *FamilyAgreementCounters) Disagreed() int { return c.Total - c.Agreed }
+
+// FamilyAgreementShadow is the event the production comparison reports.
+//
+// CLOSED ENUMS ONLY, on the same rule the family-resolution event follows:
+// no question text, no subject identifier, no anchor term. Every field here
+// is a vocabulary member or a boolean.
+type FamilyAgreementShadow struct {
+	// FrameObserved is whether a VALIDATED frame existed for this
+	// interpretation at all.
+	//
+	// This is the denominator, and it is a separate fact from agreement.
+	// "The model emitted no frame", "the frame was refused" and "the two
+	// tables disagreed" are three different states, and an event that
+	// reported only the last would make the first two invisible -- the
+	// exact countability gap the frame-validation event was widened to
+	// close for its own axes.
+	FrameObserved bool
+	// FrameOutcome is the frame's validation outcome, so a run can tell a
+	// missing frame from a refused one.
+	FrameOutcome FrameValidationOutcome
+	// Agreement is the comparison, valid only when FrameObserved.
+	Agreement FamilyAgreement
+	// ProjectionVersion is the frame version the projection ran against,
+	// so a persisted disagreement can be replayed against the table that
+	// produced it.
+	ProjectionVersion string
+}
+
+// ShadowFamilyAgreement builds the production comparison from one
+// interpretation's receipt and the family resolution that same call
+// produced.
+//
+// BOTH SIDES COME FROM THE SAME INTERPRETATION. The frame is the one this
+// call's receipt carries and the resolution is the one this call's resolver
+// produced, so the comparison is of two readings of ONE model output rather
+// than of two calls. A comparison across calls would measure the sampler's
+// variance, which is a real thing and a different thing.
+//
+// IT COMPARES AGAINST WHAT IS ACTUALLY ROUTED -- outcome.Family -- not
+// against the winning sample's own verdict. At N=1 they are the same value.
+// Above N=1 they are not: a plurality with no strict majority routes
+// `unclassified` while every individual sample resolved to something, and a
+// shadow keyed on the winner would then report agreement with a family the
+// engine did not use. Reading outcome.Family means this counter keeps
+// measuring the right thing when the ensemble is turned on, rather than
+// becoming quietly wrong at the moment N changes.
+//
+// TOTAL AND NIL-SAFE. A receipt with no frame, or with a refused one,
+// produces an event that says so rather than a zero value that reads like
+// agreement.
+func ShadowFamilyAgreement(receipt ModelExecutionReceipt, outcome QuestionFamilyOutcome) FamilyAgreementShadow {
+	shadow := FamilyAgreementShadow{FrameOutcome: receipt.FrameOutcome}
+	if receipt.QuestionFrame == nil || receipt.FrameOutcome != FrameValidationOutcomeValid {
+		// No validated frame: there is nothing to project. Deliberately
+		// NOT reported as a disagreement -- counting "the model emitted no
+		// frame" as the projection disagreeing would inflate the
+		// disagreement rate with a fact about emission, and the flip
+		// decision reads that rate.
+		return shadow
+	}
+	frame := *receipt.QuestionFrame
+	shadow.FrameObserved = true
+	shadow.ProjectionVersion = frame.Version
+
+	// The ROUTED family, with the row that produced it. On a rejected
+	// plurality no row fired at all, and `no_row_matched` is the honest
+	// name for that rather than the winning sample's row -- which would
+	// attribute the routing to a rule the engine did not act on.
+	routed := FamilySampleOutcome{Family: outcome.Family, Row: outcome.Winner.Row}
+	if outcome.WinningSampleIndex < 0 {
+		routed.Row = FamilyPrecedenceRowNone
+	}
+	shadow.Agreement = ClassifyFamilyAgreement(DeriveQuestionFamily(frame), routed)
+	return shadow
+}

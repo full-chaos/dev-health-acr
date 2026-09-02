@@ -178,6 +178,17 @@ func TestQuestionFamilyTelemetryLeaksNoContent(t *testing.T) {
 		"sample_0_resolved_family": true, "sample_0_row": true,
 		"sample_0_incompatibility_reason": true,
 		"sample_0_group_kind_set":         true, "sample_0_scope_anchor_set": true,
+		// The CHAOS-4452 shadow comparison. Every one of these is a
+		// closed-vocabulary member or a boolean: two families, two rows,
+		// one agreement class, one outcome, one server-authored version
+		// constant, two booleans. No term, no anchor, no question text --
+		// which is why the projection is allowed to reach a log line at
+		// all while the frame's own subject terms never do.
+		"shadow_frame_observed": true, "shadow_frame_outcome": true,
+		"shadow_projection_version": true,
+		"shadow_projected_family":   true, "shadow_projected_row": true,
+		"shadow_precedence_family": true, "shadow_precedence_row": true,
+		"shadow_agreement_class": true, "shadow_agreed": true,
 	}
 	for key := range records[0] {
 		if !allowed[key] {

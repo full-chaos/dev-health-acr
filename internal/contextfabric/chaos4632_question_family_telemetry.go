@@ -75,6 +75,20 @@ type QuestionFamilyResolutionEvent struct {
 	EnsembleSize int
 	// FamilyVersion is the definition-table version.
 	FamilyVersion string
+	// Shadow is the frame-projection comparison (CHAOS-4452 stage 2,
+	// design 13.4.1), carried on THIS event rather than on one of its own.
+	//
+	// ONE LINE PER DECISION, because the two halves are only meaningful
+	// together. A separate event would make an operator join two streams
+	// to answer "what did we route, what would the frame have routed, and
+	// why did they differ" -- and a join that can fail is a diagnosis that
+	// can fail, which is the artifact-diagnosability bar this event was
+	// widened once already to meet.
+	//
+	// Zero value when no frame reached validation on this interpretation,
+	// and Shadow.FrameObserved is what says so. It is NOT the same state
+	// as a comparison that ran and agreed.
+	Shadow FamilyAgreementShadow
 }
 
 // QuestionFamilyResolutionEventFrom projects a resolver outcome into the
