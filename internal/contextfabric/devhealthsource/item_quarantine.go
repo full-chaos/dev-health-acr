@@ -20,6 +20,12 @@ const (
 	quarantineOversizeScalar          = "oversize_scalar"
 	quarantineUnrepresentableInstant  = "unrepresentable_instant"
 	quarantineContractBoundViolation  = "contract_bound_violation"
+	// quarantineOrphanedDependent marks an item that was VALID on its own
+	// but existed solely to support another item that was quarantined.
+	// Distinct from every other token: nothing is wrong with this item, and
+	// counting it as a bound violation would misreport a healthy row shape
+	// as bad data.
+	quarantineOrphanedDependent = "orphaned_dependent"
 )
 
 // maxQuarantineDetailRunes bounds the offending value carried alongside a
@@ -181,11 +187,15 @@ func oversizeScalarMap(properties map[string]contractsv1.ContextFabricScalarValu
 // every subsequent tick.
 func partitionProjectableCandidates(all []candidate, observe func(quarantineObservation)) []candidate {
 	kept := make([]candidate, 0, len(all))
+	quarantinedRelationships := make(map[string]struct{})
 	for _, c := range all {
 		kind, err := validateCandidateItem(c)
 		if err == nil {
 			kept = append(kept, c)
 			continue
+		}
+		if c.relationship != nil {
+			quarantinedRelationships[c.relationship.RelationshipID] = struct{}{}
 		}
 		if observe != nil {
 			observe(quarantineObservation{
@@ -195,7 +205,28 @@ func partitionProjectableCandidates(all []candidate, observe func(quarantineObse
 			})
 		}
 	}
-	return kept
+	if len(quarantinedRelationships) == 0 {
+		return kept
+	}
+	// Second pass: an item is not projectable just because it is VALID. A
+	// candidate that exists only to support a quarantined item is an
+	// unreachable orphan, and emitting it would turn a clean drop into
+	// silent graph litter. Runs only when something was actually dropped,
+	// so the common path stays a single walk.
+	survivors := kept[:0]
+	for _, c := range kept {
+		if c.supports != "" {
+			if _, dropped := quarantinedRelationships[c.supports]; dropped {
+				if observe != nil {
+					kind, _ := validateCandidateItem(c)
+					observe(quarantineObservation{Reason: quarantineOrphanedDependent, Kind: kind})
+				}
+				continue
+			}
+		}
+		survivors = append(survivors, c)
+	}
+	return survivors
 }
 
 // quarantineDetail returns the bounded offending value when this package can

@@ -41,6 +41,15 @@ func dependencyRow(sourceID, targetID, relationshipType string, at, created time
 		created, uint8(0), zeroTime, uint8(1), created, uint8(0), zeroTime, "repo-1"}
 }
 
+// unresolvedDependencyRow is dependencyRow with targetHasCreated = 0: the
+// target does not resolve to a work_items row, so queryWorkItemDependencies
+// takes its ref-form branch and mints a work_item_ref stub entity beside the
+// edge. Every external issue key has this shape by construction.
+func unresolvedDependencyRow(sourceID, targetID, relationshipType string, at, created time.Time) []any {
+	return []any{sourceID, targetID, relationshipType, "repo-1", "example-org/widget-service", at,
+		created, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, ""}
+}
+
 // projectWithQuarantineLog projects one batch with a captured logger and
 // returns the batch plus every quarantine observation the source reported.
 func projectWithQuarantineLog(t *testing.T, tables []fakeTable, cursor string) (contextfabric.ProjectionBatch, bool, error, []map[string]any) {
@@ -158,7 +167,12 @@ func TestProdShapedPageProjectsTheLegalRowsAndCountsTheRest(t *testing.T) {
 	const illegal, legal = 105, 96
 	rows := make([][]any, 0, illegal+legal)
 	for i := 0; i < illegal; i++ {
-		rows = append(rows, dependencyRow(fmt.Sprintf("WI-X%03d", i), fmt.Sprintf("EXT-%03d", i), "EXTERNAL_ISSUE_KEY", at.Add(time.Duration(i)*time.Second), created))
+		// UNRESOLVED targets, which is what an external issue key always is:
+		// it names an issue in another system, never a work_items row. These
+		// rows take the ref-form branch and emit a stub entity alongside the
+		// edge -- the shape that produced the orphan-node defect, so the
+		// entity assertion below is load-bearing, not vacuously zero.
+		rows = append(rows, unresolvedDependencyRow(fmt.Sprintf("WI-X%03d", i), fmt.Sprintf("EXT-%03d", i), "EXTERNAL_ISSUE_KEY", at.Add(time.Duration(i)*time.Second), created))
 	}
 	for i := 0; i < legal; i++ {
 		rows = append(rows, dependencyRow(fmt.Sprintf("WI-G%03d", i), fmt.Sprintf("WI-H%03d", i), "RELATES_TO", at.Add(time.Duration(illegal+i)*time.Second), created))
@@ -181,13 +195,27 @@ func TestProdShapedPageProjectsTheLegalRowsAndCountsTheRest(t *testing.T) {
 		t.Fatalf("relationships on page 1 = %d, want %d (%d legal less the one row deferred past the %d-row cap)",
 			len(batch.Relationships), projectedOnFirstPage, legal, illegal+projectedOnFirstPage)
 	}
-	if len(observations) != illegal {
-		t.Fatalf("quarantine observations = %d, want %d", len(observations), illegal)
+	// NOT ONE work_item_ref stub may reach the graph: each quarantined edge
+	// takes its stub with it. Without the dependent sweep this is 105
+	// unreachable orphan nodes -- and on the real organization, 1,296.
+	if len(batch.Entities) != 0 {
+		t.Fatalf("entities = %d, want 0: every stub belonged to a quarantined edge and must have been dropped with it", len(batch.Entities))
 	}
+	reasons := make(map[string]int)
 	for _, entry := range observations {
-		if entry["quarantine_reason"] != "unknown_relationship_type" {
-			t.Fatalf("unexpected quarantine reason: %v", entry["quarantine_reason"])
-		}
+		reasons[fmt.Sprint(entry["quarantine_reason"])]++
+	}
+	// Two drops per illegal row: the edge for its unknown type, and the stub
+	// that existed only to be that edge's endpoint. Both counted, neither
+	// silent.
+	if reasons["unknown_relationship_type"] != illegal {
+		t.Fatalf("unknown_relationship_type = %d, want %d: %v", reasons["unknown_relationship_type"], illegal, reasons)
+	}
+	if reasons["orphaned_dependent"] != illegal {
+		t.Fatalf("orphaned_dependent = %d, want %d: %v", reasons["orphaned_dependent"], illegal, reasons)
+	}
+	if len(observations) != 2*illegal {
+		t.Fatalf("total quarantine observations = %d, want %d: %v", len(observations), 2*illegal, reasons)
 	}
 
 	// The deferred row must project on the NEXT page. Quarantining items
@@ -382,4 +410,82 @@ func TestQuarantiningEveryItemOfTheLastRowStillAdvancesTheCursorPastIt(t *testin
 		t.Fatalf("the fully-quarantined row was re-read and re-quarantined on page 2 (%d observations) -- NextCursor was derived from the SURVIVING items instead of every consumed candidate, so the walk can never pass it",
 			len(nextObservations))
 	}
+}
+
+// TestQuarantiningAnEdgeAlsoDropsTheStubThatOnlyExistedToBeItsEndpoint is the
+// regression for a defect the FIX itself introduced -- the standing lesson
+// that a repair is new code with its own attack surface, not a patch that
+// only needs re-checking against the original bug.
+//
+// queryWorkItemDependencies' ref-form branch emits two candidates for one
+// row: a work_item_ref STUB entity, and the edge that is the stub's entire
+// reason to exist. Per-item quarantine judges items individually, so an edge
+// dropped for an unknown relationship type left the stub behind: a node with
+// nothing pointing at it, unreachable by any traversal.
+//
+// This is exactly the production shape. An EXTERNAL_ISSUE_KEY row's target is
+// an external issue key, which by construction is not a work item, so every
+// one of those rows takes this branch -- 1,296 of them on the affected
+// organization, and before the quarantine existed none of it projected at all
+// because the batch wedged. The repair made the class newly reachable.
+//
+// The RESOLVED branch was checked for the same hazard and does NOT have it,
+// recorded here so the next reader need not re-derive it. When a resolved
+// row's edge is quarantined its two healing tombstones still apply:
+// (1) the EDGE tombstone targets a ref-form relationship id derived under the
+// same rejected spelling, and an edge under a type the contract refuses could
+// never have been written, so the delete matches nothing -- a genuine no-op,
+// exactly as applyTombstone's idempotency contract intends; (2) the NODE
+// tombstone keys only on the target, never on relationship_type, and stays
+// correct because the target genuinely resolved -- the stub it retires is
+// obsolete regardless of why this particular edge was dropped. Neither can
+// remove a valid prior edge, so no dependent link is needed there.
+func TestQuarantiningAnEdgeAlsoDropsTheStubThatOnlyExistedToBeItsEndpoint(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// targetHasCreated = 0 -> the ref-form branch: the target does not
+	// resolve to a work item, which is what an external issue key always is.
+	unresolved := func(sourceID, targetID, relType string, observedAt time.Time) []any {
+		return []any{sourceID, targetID, relType, "repo-1", "example-org/widget-service", observedAt,
+			created, uint8(0), zeroTime, uint8(0), zeroTime, uint8(0), zeroTime, ""}
+	}
+
+	t.Run("unknown type drops the edge AND its stub", func(t *testing.T) {
+		rows := [][]any{unresolved("WI-1", "EXT-ABC-123", "EXTERNAL_ISSUE_KEY", at)}
+		batch, available, err, observations := projectWithQuarantineLog(t, dependencyTablesOnly(t, at, rows), testCursor(t, at.Add(-time.Hour), ""))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		// Nothing projectable is left, so this page yields no batch at all.
+		if available && len(batch.Entities) > 0 {
+			t.Fatalf("a work_item_ref stub was projected with no edge pointing at it: %+v -- an orphan node, unreachable by any traversal", batch.Entities)
+		}
+		reasons := make(map[string]int)
+		for _, entry := range observations {
+			reasons[fmt.Sprint(entry["quarantine_reason"])]++
+		}
+		if reasons["unknown_relationship_type"] != 1 {
+			t.Fatalf("want exactly 1 unknown_relationship_type quarantine, got %v", reasons)
+		}
+		if reasons["orphaned_dependent"] != 1 {
+			t.Fatalf("the stub entity must be dropped as an orphaned dependent and COUNTED, never silently: got %v", reasons)
+		}
+	})
+
+	t.Run("a legal type keeps both the edge and its stub", func(t *testing.T) {
+		rows := [][]any{unresolved("WI-1", "EXT-ABC-123", "RELATES_TO", at)}
+		batch, available, err, observations := projectWithQuarantineLog(t, dependencyTablesOnly(t, at, rows), testCursor(t, at.Add(-time.Hour), ""))
+		if err != nil || !available {
+			t.Fatalf("legal ref-form row was not projected: err=%v available=%v", err, available)
+		}
+		if len(observations) != 0 {
+			t.Fatalf("a legal row must quarantine nothing: %+v", observations)
+		}
+		if len(batch.Entities) != 1 || len(batch.Relationships) != 1 {
+			t.Fatalf("entities=%d relationships=%d, want 1 and 1 -- the dependent sweep must not touch a healthy pair",
+				len(batch.Entities), len(batch.Relationships))
+		}
+	})
 }

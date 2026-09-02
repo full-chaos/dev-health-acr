@@ -177,6 +177,21 @@ type candidate struct {
 	relationship *contractsv1.ContextFabricRelationshipProjection
 	episode      *contractsv1.ContextFabricEpisodeProjection
 	tombstone    *contractsv1.ContextFabricProjectionTombstone
+
+	// supports names the RelationshipID this candidate exists SOLELY to
+	// serve, and is empty for a candidate that stands on its own.
+	//
+	// Only one producer sets it today: queryWorkItemDependencies' ref-form
+	// branch mints a work_item_ref STUB entity whose entire reason to exist
+	// is to be the endpoint of the edge emitted beside it. Per-item
+	// quarantine judges items one at a time, so an edge dropped for an
+	// unknown relationship type would otherwise leave that stub behind as a
+	// node nothing points at -- unreachable by any traversal, and at
+	// four-figure scale on a real organization. Declaring the dependency
+	// here keeps quarantine GENERIC: it never needs to know which bound
+	// fired or which producer emitted the pair, only that one item was the
+	// reason for another.
+	supports string
 }
 
 func (s *ClickHouseProjectionSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {

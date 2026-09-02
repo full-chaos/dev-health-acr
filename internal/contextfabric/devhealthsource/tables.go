@@ -619,7 +619,10 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 				ObservedAt: observedAt, ValidFrom: stubValidFrom, ValidTo: stubValidTo, SourceVersion: ClickHouseSourceVersion,
 			}
 			return []candidate{
-				{observedAt: observedAt, sortKey: rowSortKey, entity: &stubEntity},
+				// The stub exists only to be refRelationship's endpoint, so
+				// it must not outlive it: if the edge is quarantined the
+				// stub is an unreachable orphan node, not a partial success.
+				{observedAt: observedAt, sortKey: rowSortKey, entity: &stubEntity, supports: refRelationshipID},
 				{observedAt: observedAt, sortKey: rowSortKey, relationship: &refRelationship},
 			}, nil
 		}
