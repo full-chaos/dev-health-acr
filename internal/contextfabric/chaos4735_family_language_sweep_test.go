@@ -358,7 +358,7 @@ func familyDispatchesWithoutConstants(fileSet *token.FileSet, file *ast.File, re
 			}
 		case *ast.CompositeLit:
 			mapType, ok := typed.Type.(*ast.MapType)
-			if !ok || !textualTypeExpr(mapType.Value) {
+			if !ok || !mayHoldText(mapType.Value) {
 				return true
 			}
 			for _, element := range typed.Elts {
@@ -391,20 +391,51 @@ func familyWireValueLiterals() map[string]bool {
 	return values
 }
 
-// textualTypeExpr reports whether a type expression is one a sentence can be
-// stored in: `string`, or a named type whose underlying type is a string.
-// Named types are matched by NAME rather than resolved, because the sweep
-// parses without type information -- so this is deliberately generous, and
-// generous is the right direction for a gate.
-func textualTypeExpr(expr ast.Expr) bool {
-	switch typed := expr.(type) {
-	case *ast.Ident:
-		return typed.Name == "string" || strings.HasSuffix(typed.Name, "String") ||
-			strings.HasSuffix(typed.Name, "Text") || strings.HasSuffix(typed.Name, "Message")
-	case *ast.SelectorExpr:
-		return textualTypeExpr(typed.Sel)
+// mayHoldText reports whether a sentence could be stored in this type. It
+// FAILS CLOSED: everything is assumed to hold text unless it is a builtin
+// that provably cannot.
+//
+// FOUND BY ADVERSARIAL REVIEW (codex round 2, P1; argued by the reviewer under
+// read-only, then EXECUTED by this lane before fixing). The first version
+// matched textual types by NAME -- `string`, or an identifier ending String /
+// Text / Message. The reviewer defeated it in one line:
+//
+//	type phrase string
+//	var budgetRefusalMessage = map[contextfabric.QuestionFamily]phrase{ ... }
+//
+// `phrase` matches no name rule, so the table was invisible. The lane
+// reproduced it: the construction compiles and the sweep printed `ok`.
+//
+// Matching textual types by name was the mistake, and it was the same mistake
+// as round 1's in a different costume -- an ALLOWLIST OF SHAPES I had thought
+// of, guarding against an author who thinks of a different one. The sweep
+// parses without type information, so it cannot resolve `phrase` to its
+// underlying type. What it CAN do is invert the default: a family-keyed map
+// is suspect unless its value type is one of a small, closed set of builtins
+// that cannot hold a sentence. Named types resolve to nothing here, so they
+// are suspect, which is the correct direction for a gate.
+//
+// Cost of failing closed, measured rather than assumed: the only family-keyed
+// maps in production today are `map[QuestionFamily]int` vote tallies
+// (chaos4632_question_family_consensus.go, chaos4632_question_family_telemetry.go).
+// `int` is in the non-textual set, so this costs zero false positives now, and
+// a future `map[QuestionFamily]SomeStruct` SHOULD be looked at by a human --
+// a struct can carry a string field.
+func mayHoldText(expr ast.Expr) bool {
+	ident, ok := expr.(*ast.Ident)
+	if !ok {
+		// Selectors (pkg.Type), pointers, slices, maps, interfaces: not
+		// provably non-textual from syntax alone.
+		return true
 	}
-	return false
+	switch ident.Name {
+	case "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
+		"float32", "float64", "complex64", "complex128",
+		"bool", "byte", "rune":
+		return false
+	}
+	return true
 }
 
 // familyKeyedStringLiterals finds every place a family-keyed switch or map
@@ -444,10 +475,12 @@ func familyKeyedStringLiterals(fileSet *token.FileSet, file *ast.File, relative 
 			if !ok || !exprNamesFamily(mapType.Key, constants, true) {
 				return true
 			}
-			if value, ok := mapType.Value.(*ast.Ident); !ok || value.Name != "string" {
+			// mayHoldText, not `== "string"`: codex round 2 defeated the
+			// exact-name check with `type phrase string`. Fails closed.
+			if !mayHoldText(mapType.Value) {
 				return true
 			}
-			report(typed.Lbrace, "map from question family to string")
+			report(typed.Lbrace, "map from question family to a type that can hold text")
 		}
 		return true
 	})

@@ -177,6 +177,61 @@ func TestChaos4735BudgetRefusal413CarriesNoServerAuthoredProse(t *testing.T) {
 	}
 }
 
+// TestChaos4735BudgetRefusalMessageIsFamilyIndependent closes the OTHER route
+// to served, family-keyed text: `error.message`.
+//
+// FOUND BY ADVERSARIAL REVIEW (codex round 2, P1). The body test above
+// deliberately scopes itself to `details`, and the earlier version of this
+// change justified that in a comment: `error.message` is "fixed,
+// family-independent, schema-required, and never read by the consumer". The
+// reviewer's observation is sharp and correct -- **the exemption holds only
+// BECAUSE the message is family-independent, and nothing was enforcing that.**
+// A one-line change at the `writeContextFabricFailure` call site could pass a
+// family-keyed message and every test here would still be green.
+//
+// A justification in a comment is not a control. This turns it into one, and
+// it does so without banning the field: the message may be any sentence it
+// likes, as long as it is the SAME sentence for every family. That is exactly
+// the property the exemption assumed.
+func TestChaos4735BudgetRefusalMessageIsFamilyIndependent(t *testing.T) {
+	t.Parallel()
+
+	messages := map[string][]string{}
+	for _, family := range contractsv1.ContextFabricQuestionFamilyVocabulary() {
+		definition, found := contextfabric.LookupQuestionFamily(family)
+		if !found {
+			t.Fatalf("family %q has no registry row", family)
+		}
+		refusal := contextfabric.AnswerBudgetRefusal{
+			Overrun: contractsv1.ContextFabricBudgetOverrunItems, MeasuredItems: 41, MaxItems: 30,
+			MaxSerializedBytes: 1 << 20, Family: family,
+			NarrowerContinuationAxis: definition.NarrowerContinuationAxis, RetryAttempted: true,
+		}
+		app, token, _ := newContextFabricTestAppWithLogs(t, investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
+			return contextfabric.InvestigationResult{}, refusal
+		}))
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, investigationRequest(t, token))
+
+		var body struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode for %q: %v", family, err)
+		}
+		if body.Error.Message == "" {
+			t.Fatalf("family %q produced an empty error.message; error.v1 requires one", family)
+		}
+		messages[body.Error.Message] = append(messages[body.Error.Message], string(family))
+	}
+
+	if len(messages) != 1 {
+		t.Errorf("error.message varies by question family across %d distinct messages: %v\nThe engine does not author user language keyed on a vocabulary value (chris rulings 2026-08-31 13:35/13:40). The refusal's message is exempt from the prose rules ONLY because it is the same sentence for every family; the moment it varies, it is the phrase table again, one field over.", len(messages), messages)
+	}
+}
+
 // assertNoProse walks a decoded JSON value and fails on any string that is
 // not a single closed token. It recurses, so a sentence hidden one level
 // down inside a nested object is caught too -- which matters here, because
