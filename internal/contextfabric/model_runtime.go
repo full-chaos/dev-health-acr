@@ -1347,21 +1347,17 @@ type RuntimeQuestionInterpreter struct {
 	// is one: a nil here means an operator sees nothing, and the whole
 	// point of this slice is the measurement.
 	FrameTelemetry FrameValidationTelemetry
-	// FrameRepairer (CHAOS-4452 stage 2, §13.6) performs the ONE bounded
-	// repair attempt on a frame that fails validation.
-	//
-	// OPTIONAL, and its absence is a designed state rather than a
-	// degraded one: with no repairer an invalid frame is refused and
-	// recorded as refused_invalid, which is the honest outcome and is
-	// exactly what phase 1 wants while the repair's own cost is still
-	// being measured. It is NOT a silent pass-through -- see
-	// ValidateAndRepairFrame.
-	FrameRepairer FrameRepairer
 }
 
-// resolveFrame runs the §13.6 validate-repair-revalidate sequence over the
-// frame a receipt proposed, records the outcome on the receipt, and emits
-// the telemetry event.
+// resolveFrame validates the frame a receipt proposed, records the outcome
+// on the receipt, and emits the telemetry event.
+//
+// THERE IS NO REPAIR HERE. §13.6 admits one bounded repair attempt on an
+// invalid frame, and the bound that makes it safe is deferred to its own
+// change -- so an invalid frame is REFUSED, which is the design's own
+// fallback reached immediately rather than after an attempt. What that
+// costs is measurable and is exactly what this slice measures: the
+// refusal rate and the first-failed-invariant histogram.
 //
 // WHERE THIS SITS IN THE DESIGN'S FLOW, because the placement is the
 // substantive decision and not an implementation detail. §13.1's order is
@@ -1391,14 +1387,12 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 		return
 	}
 	proposed := *receipt.QuestionFrame
-	result := ValidateAndRepairFrame(ctx, principal, r.FrameRepairer, proposed, nil, emittedShape, nil)
+	result := ValidateFrame(proposed, nil, emittedShape)
 
 	receipt.FrameOutcome = result.Outcome
 	receipt.FrameFailedInvariant = result.Failure.Invariant
-	receipt.FrameRepairAttempted = result.RepairAttempted
-	receipt.FrameRepairLatencyMS = result.RepairLatency.Milliseconds()
 	switch result.Outcome {
-	case FrameValidationOutcomeValid, FrameValidationOutcomeRepaired:
+	case FrameValidationOutcomeValid:
 		// The receipt carries the VALIDATED, normalized frame -- the one
 		// that would be acted on -- rather than the raw proposal, so a
 		// persisted receipt can be replayed against the table that

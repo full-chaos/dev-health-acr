@@ -764,10 +764,10 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// assertion, for the reason FamilyTelemetry beside it is: an
 		// optional telemetry interface that nothing implements in
 		// production is how an entire signal disappeared once already
-		// while every test passed. FrameRepairer is deliberately left
-		// nil in phase 1 -- an invalid frame is REFUSED and recorded as
-		// such, which is the honest outcome while the repair's own cost
-		// is still being measured, and is never a silent pass-through.
+		// while every test passed. There is no repairer to wire: the
+		// bounded repair and its bound are deferred to their own change,
+		// so an invalid frame is REFUSED and recorded as such -- the
+		// honest outcome, and never a silent pass-through.
 		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, Sink: receiptSink, FamilyTelemetry: engineTelemetry, FrameTelemetry: engineTelemetry},
 		Graph:       graphReader,
 		Facts:       factRegistry,
