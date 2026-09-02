@@ -238,8 +238,13 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", rowKe
 		// A work item is valid from creation until it completed or
 		// closed, whichever the source recorded; an open item has no end.
 		validFrom, validTo := requiredTime(createdAt), optionalTime(hasEnded, endedAt)
-		label := title
-		if strings.TrimSpace(label) == "" {
+		// Trimmed at the row, not left to item_normalization.go's pass, so a
+		// reader of this producer sees the contract's trim rule where the
+		// label is minted. The pass is still the authority and still covers
+		// every OTHER label site in this package; it simply finds nothing to
+		// do here.
+		label := strings.TrimSpace(title)
+		if label == "" {
 			label = workItemID
 		}
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: canonicalID, Label: label}
@@ -312,8 +317,8 @@ WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowK
 		validFrom, validTo := requiredTime(createdAt), optionalTime(hasEnded, endedAt)
 		canonicalID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
 		rowSortKey := fmt.Sprintf("%s:%d", repoID, number)
-		label := title
-		if strings.TrimSpace(label) == "" {
+		label := strings.TrimSpace(title)
+		if label == "" {
 			label = fmt.Sprintf("PR #%d", number)
 		}
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: canonicalID, Label: label}
@@ -442,8 +447,8 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id"
 			}
 			return []candidate{{observedAt: observedAt, sortKey: incidentID, tombstone: &tombstone}}, nil
 		}
-		label := title
-		if strings.TrimSpace(label) == "" {
+		label := strings.TrimSpace(title)
+		if label == "" {
 			label = incidentID
 		}
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectIncident, CanonicalID: canonicalID, Label: label}

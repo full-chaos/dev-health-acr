@@ -309,10 +309,11 @@ func (s *ClickHouseProjectionSource) plan(fromCursor string) sourcePlan {
 			// every real Dev Health timestamp we ever project.
 			return []candidate{organizationCandidate(orgID, organizationAnchorTime)}
 		},
-		observe:           s.logOrphanedWorkItems,
-		observeQuarantine: quarantineLogger(s.logger, SourceName),
-		recordConsumed:    s.recordConsumed(fromCursor),
-		dropConsumed:      s.forgetConsumed,
+		observe:              s.logOrphanedWorkItems,
+		observeQuarantine:    quarantineLogger(s.logger, SourceName),
+		observeNormalization: normalizationLogger(s.logger, SourceName),
+		recordConsumed:       s.recordConsumed(fromCursor),
+		dropConsumed:         s.forgetConsumed,
 	}
 }
 

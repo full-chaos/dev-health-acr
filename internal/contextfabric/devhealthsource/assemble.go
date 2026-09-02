@@ -64,6 +64,12 @@ type sourcePlan struct {
 	// observeQuarantine is called once per item dropped by per-item
 	// quarantine (item_quarantine.go), with a closed reason token. Optional.
 	observeQuarantine func(quarantineObservation)
+
+	// observeNormalization is called once per token per item repaired by
+	// producer-side normalization (item_normalization.go), with a closed
+	// reason token from a vocabulary DISJOINT from observeQuarantine's.
+	// Optional.
+	observeNormalization func(normalizationObservation)
 }
 
 // logTableReadFailure names WHY a dependency read failed, in a closed form.
@@ -174,6 +180,10 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	sortCandidates(all)
+	// Normalize BEFORE quarantine: an item repaired to a contract bound is
+	// never offered to quarantine at all, which is what makes the quarantine
+	// counters for these bounds read zero instead of merely smaller.
+	normalizeCandidates(all, p.observeNormalization)
 	items := partitionProjectableCandidates(all, p.observeQuarantine)
 	if !carriesPayload(items) {
 		// Everything this snapshot read was quarantined, so there is nothing
@@ -239,6 +249,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		// whose every item is quarantined is indistinguishable, from here
 		// on, from a page whose every row was omitted -- both take the skip
 		// path below, which advances past them and keeps looking.
+		normalizeCandidates(all, p.observeNormalization)
 		items := partitionProjectableCandidates(all, p.observeQuarantine)
 		if carriesPayload(items) {
 			batch, err := buildBatch(orgID, p.source, p.version, cursor, all, items, false, false, p.clock())
