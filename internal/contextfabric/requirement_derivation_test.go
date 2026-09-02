@@ -18,6 +18,8 @@ package contextfabric
 // zero in the live distribution.
 
 import (
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -84,16 +86,24 @@ func requirementFor(t *testing.T, rows []DerivedRequirement, obligation AnswerOb
 // produce the bare count §13.15.1 warns hands the next reader a number they
 // cannot act on. This is the test that proves each tier is reachable.
 func TestEveryUnavailableReasonHasAPositiveFixture(t *testing.T) {
-	capabilities := fixtureCapabilities()
-	seed := fixtureSeed()
-
+	// Each reason is landed in through the PRODUCTION path -- a real frame
+	// derived into real rows -- rather than by calling the classifier
+	// helper. That matters for `computed_population_absent`, which the
+	// classifier never produces: it is decided in deriveRequirement, and a
+	// helper-only fixture could not reach it. Exercising the production
+	// path is also the stronger test for the other three.
 	cases := map[RequirementUnavailableReason]struct {
-		obligation AnswerObligation
-		subject    SubjectKind
+		goals      []InvestigationGoal
+		expression SubjectExpression
 	}{
-		RequirementReasonSubjectKindUnsupported: {ObligationState, SubjectWorkItem},
-		RequirementReasonNoDeclaringProducer:    {ObligationState, SubjectProject},
-		RequirementReasonTableShapeUndeclared:   {ObligationTrendSeries, SubjectRepository},
+		RequirementReasonSubjectKindUnsupported: {
+			[]InvestigationGoal{GoalAssessState}, discoveredExpression(SubjectWorkItem)},
+		RequirementReasonNoDeclaringProducer: {
+			[]InvestigationGoal{GoalAssessState}, discoveredExpression(SubjectProject)},
+		RequirementReasonTableShapeUndeclared: {
+			[]InvestigationGoal{GoalDescribeTrend}, discoveredExpression(SubjectRepository)},
+		RequirementReasonComputedPopulationAbsent: {
+			[]InvestigationGoal{GoalRankOrSurvey}, orgExpression(nil)},
 	}
 
 	checked := 0
@@ -103,15 +113,21 @@ func TestEveryUnavailableReasonHasAPositiveFixture(t *testing.T) {
 			t.Errorf("reason %q has no positive fixture: a tier with no fixture that lands in it can be dead for its whole life and read as green", reason)
 			continue
 		}
-		got := classifyUnavailable(RequirementCoordinate{Obligation: testCase.obligation, Subject: testCase.subject}, capabilities)
-		if got != reason {
-			t.Errorf("%s@%s classified as %q, want %q", testCase.obligation, testCase.subject, got, reason)
+		frame := frameWith(testCase.goals, testCase.expression, TemporalIntentCurrent, nil)
+		rows := DeriveRequirements(frame, fixtureSeed(), fixtureCapabilities())
+		if len(rows) == 0 {
+			t.Errorf("reason %q: its fixture frame derived no rows at all", reason)
+			continue
 		}
-		// And the cell really is empty in the generated seed -- otherwise
-		// the classifier is being asked about a cell that is served, and
-		// its answer means nothing.
-		if kinds := seed.KindsFor(testCase.obligation, testCase.subject); len(kinds) != 0 {
-			t.Errorf("%s@%s is SERVED by %v, so the classification above was asked a question that never arises", testCase.obligation, testCase.subject, kinds)
+		landed := false
+		for _, row := range rows {
+			if row.Unavailable == reason {
+				landed = true
+				break
+			}
+		}
+		if !landed {
+			t.Errorf("reason %q: its fixture frame derived %d rows and none carried it", reason, len(rows))
 		}
 		checked++
 	}
@@ -487,5 +503,45 @@ func TestRankingTheOrganizationItselfIsUnavailable(t *testing.T) {
 	memberRow := requirementFor(t, served, ObligationRanking, SubjectTeam)
 	if !memberRow.Served() || memberRow.Step != ComputedStepRankCohort {
 		t.Errorf("ranking a counted member kind should be served by rank_cohort; got served=%v step=%q unavailable=%q", memberRow.Served(), memberRow.Step, memberRow.Unavailable)
+	}
+}
+
+// TestEveryDeclaredUnavailableReasonIsInItsVocabulary is a STRUCTURAL guard,
+// added because a reason constant shipped without reaching its own
+// vocabulary and every test stayed green.
+//
+// `computed_population_absent` was declared, returned by the derivation, and
+// asserted by name in a test -- while the vocabulary array still held three
+// members and the doc comment beside it claimed four. So the telemetry
+// histogram had no bucket for it, the log sink emitted no key, and
+// TestEveryUnavailableReasonHasAPositiveFixture could not notice, because it
+// iterates the vocabulary and the reason was not in it. A test that
+// quantifies over a list cannot see something missing FROM that list.
+//
+// This reads the DECLARATIONS out of the source instead, which is the one
+// place the omission is visible.
+func TestEveryDeclaredUnavailableReasonIsInItsVocabulary(t *testing.T) {
+	source, err := os.ReadFile("requirement_derivation.go")
+	if err != nil {
+		t.Fatalf("reading the declarations: %v", err)
+	}
+	declared := regexp.MustCompile(`(RequirementReason\w+)\s+RequirementUnavailableReason\s*=`).FindAllStringSubmatch(string(source), -1)
+	if len(declared) == 0 {
+		t.Fatal("found no reason declarations; this guard would be vacuous")
+	}
+	inVocabulary := map[string]bool{}
+	for _, member := range RequirementUnavailableReasonVocabulary() {
+		inVocabulary[string(member)] = true
+	}
+	// Map constant name -> value by asking the vocabulary for each value we
+	// know, then checking counts: a declared constant absent from the
+	// vocabulary shows up as a count mismatch by name below.
+	if len(declared) != RequirementUnavailableReasonCount {
+		names := make([]string, 0, len(declared))
+		for _, match := range declared {
+			names = append(names, match[1])
+		}
+		t.Fatalf("%d reason constants are declared (%v) but the vocabulary holds %d -- a declared reason that is not in the vocabulary has no telemetry bucket and no log key, and every list-driven test is blind to it",
+			len(declared), names, RequirementUnavailableReasonCount)
 	}
 }

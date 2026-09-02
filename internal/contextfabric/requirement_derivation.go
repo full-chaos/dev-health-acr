@@ -177,6 +177,7 @@ var requirementUnavailableReasons = [...]RequirementUnavailableReason{
 	RequirementReasonSubjectKindUnsupported,
 	RequirementReasonNoDeclaringProducer,
 	RequirementReasonTableShapeUndeclared,
+	RequirementReasonComputedPopulationAbsent,
 }
 
 // RequirementUnavailableReasonCount is four.
