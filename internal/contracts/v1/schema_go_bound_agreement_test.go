@@ -1239,6 +1239,21 @@ type discoveredBound struct {
 // context_fabric_common.v1.schema.json:4008) invisible to this entire
 // mechanism, not merely misclassified -- the exact failure mode this
 // keyword list exists to close, found again in the keyword list itself.
+//
+// REPORTED LIMIT, not enforced (CHAOS-4867 round-3 finding, codex,
+// deferred per the guard-layer stop rule rather than fixed a fourth time):
+// "const" is NOT in this list. The canonical schema uses numeric `const`
+// inside allOf/if/then to pin CohortMemberDriver.weight per signal (e.g.
+// investment_mix -> 30, health.compounding_risk -> 25;
+// context_fabric_common.v1.schema.json's CohortMemberDriver $def), and Go
+// independently enforces the identical five-value map
+// (contextFabricCohortMemberDriverWeights, validate_context_fabric_helpers.go,
+// compared in ContextFabricCohortMemberDriver.validate,
+// validate_context_fabric_result.go). A schema `const` changing without a
+// matching Go change is INVISIBLE to this walk: `const` never reaches the
+// classification/comparison loop below. This is a known, stated gap in
+// what this file enforces, not a silent one -- see the PR body's
+// enforced-vs-reported table for the full accounting.
 var boundKeywords = []string{"maxItems", "maxLength", "maxProperties", "maximum", "minItems", "minLength", "minimum", "minProperties"}
 
 // schemaBounds enumerates every maxItems/maxLength in both canonical
