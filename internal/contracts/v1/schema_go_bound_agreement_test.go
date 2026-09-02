@@ -68,6 +68,53 @@ var asymmetricBounds = map[string]goBound{
 	},
 }
 
+// knownDisagreement records a schema bound that genuinely does NOT equal
+// what the Go write path enforces -- a real defect this file exists to
+// surface, not something it can quietly resolve by picking a side.
+// CHAOS-4867's full-population audit (main's ruling, 2026-09-02) found
+// these fourteen. Which side moves is chris's call, filed as each
+// disagreement's own producer-side ticket -- not fixed in this PR. Both
+// numbers are pinned: a schema-side drift fails HERE (the walk compares
+// bound.value against schemaValue, same as any other declarative entry);
+// a Go-side drift fails in
+// TestKnownDisagreementsGoSideStillMatchesRecordedValue below, which
+// exercises the actual Validate call site (or, where the Go value comes
+// from a named constant rather than a literal, the constant itself) at
+// the recorded value.
+type knownDisagreement struct {
+	schemaValue int
+	goValue     int
+	why         string
+}
+
+var knownDisagreements = map[string]knownDisagreement{
+	// Root cause: uniqueTrimmedStrings (validate_context_fabric_helpers.go)
+	// hardcodes stringLengthBetween(value, 1, maximum) -- the floor is
+	// never parameterized, so every caller gets floor 1 regardless of what
+	// its own schema declares. Three callers declare a floor of 8.
+	"common#$defs.CohortMemberDriver.properties.source_claimed_fact_ids.items.minLength": {8, 1, "uniqueTrimmedStrings hardcodes floor 1, validate_context_fabric_helpers.go:464; filed as its own producer-side ticket"},
+	"common#$defs.DriverJudgment.properties.claimed_fact_ids.items.minLength":            {8, 1, "uniqueTrimmedStrings hardcodes floor 1, validate_context_fabric_helpers.go:464; filed as its own producer-side ticket"},
+	"common#$defs.Finding.properties.claimed_fact_ids.items.minLength":                   {8, 1, "uniqueTrimmedStrings hardcodes floor 1, validate_context_fabric_helpers.go:464; filed as its own producer-side ticket"},
+	// Root cause: boundedEvidenceRefs(x, 500, false) -- the ceiling is a
+	// literal repeated at each of these four ingest-projection call sites
+	// (validate_context_fabric_projection.go), every one 500, none 200.
+	"common#$defs.ContentProjection.properties.evidence_ref_ids.maxItems":      {200, 500, "boundedEvidenceRefs(c.EvidenceRefIDs,500,false), validate_context_fabric_projection.go:168; filed as its own producer-side ticket (CHAOS-4895 family)"},
+	"common#$defs.EntityProjection.properties.evidence_ref_ids.maxItems":       {200, 500, "boundedEvidenceRefs(e.EvidenceRefIDs,500,false), validate_context_fabric_projection.go:108; filed as its own producer-side ticket (CHAOS-4895 family)"},
+	"common#$defs.EpisodeProjection.properties.evidence_ref_ids.maxItems":      {200, 500, "boundedEvidenceRefs(e.EvidenceRefIDs,500,false), validate_context_fabric_projection.go:178; filed as its own producer-side ticket (CHAOS-4895 family)"},
+	"common#$defs.RelationshipProjection.properties.evidence_ref_ids.maxItems": {200, 500, "boundedEvidenceRefs(r.EvidenceRefIDs,500,false), validate_context_fabric_projection.go:137; filed as its own producer-side ticket (CHAOS-4895)"},
+	// Independent per-field literals, one ingest Validate call site each.
+	"common#$defs.ContentProjection.properties.body.minLength":           {1, 0, "stringLengthBetween(c.Body,0,100000), validate_context_fabric_projection.go:168; filed as its own producer-side ticket"},
+	"common#$defs.ContentProjection.properties.content_digest.minLength": {16, 8, "stringLengthBetween(c.ContentDigest,8,256), validate_context_fabric_projection.go:168; filed as its own producer-side ticket"},
+	"common#$defs.EpisodeProjection.properties.summary.maxLength":        {12000, 8000, "stringLengthBetween(TrimSpace(e.Summary),1,8000), validate_context_fabric_projection.go:178; filed as its own producer-side ticket"},
+	"common#$defs.ProjectionTombstone.properties.kind.maxLength":         {128, 64, "stringLengthBetween(TrimSpace(t.Kind),1,64), validate_context_fabric_projection.go:205; filed as its own producer-side ticket"},
+	"common#$defs.ProjectionTombstone.properties.reason.maxLength":       {1000, 2000, "stringLengthBetween(TrimSpace(t.Reason),1,2000), validate_context_fabric_projection.go:205; filed as its own producer-side ticket"},
+	// Root cause: both derive from the closed structure-need-kind
+	// vocabulary (ContextFabricStructureNeedKindCount = 5, see
+	// context_fabric_structure_types.go), not from the schema's numbers.
+	"result#properties.confirmed_structure.maxItems":      {4, 5, "len(r.ConfirmedStructure) > ContextFabricStructureNeedKindCount, validate_context_fabric_result.go:1531; filed as its own producer-side ticket"},
+	"result#properties.structure_offer_snapshot.maxItems": {80, 100, "len(r.StructureOfferSnapshot) > ContextFabricStructureNeedKindCount*contextFabricStructureNeedsMaxOptions (5*20), validate_context_fabric_result.go:1549; filed as its own producer-side ticket"},
+}
+
 // TestSchemaAndGoBoundsAgree proves the write-path Go bounds match the
 // published schema for every bound the answer surface depends on.
 //
@@ -384,6 +431,299 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.SubjectHint.properties.label.maxLength":  512,
 		"common#$defs.SubjectHint.properties.source.minLength": 1,
 		"common#$defs.SubjectHint.properties.source.maxLength": 64,
+		// CHAOS-4867 (main's ruling, option A, full audit): the schema-only
+		// classifier's remaining substring cases (opaque identifier, nested
+		// shape, answer-surface shared helper, projection-batch ingest,
+		// service-issued version, conditional restatement) are GONE -- every
+		// path any of them used to match was individually audited against
+		// its Go Validate (five parallel audits, cross-checked, zero gaps
+		// against the population dump). These 283 entries are the ones a Go
+		// Validate numerically checks; the values below already agree with
+		// Go today. A genuine schema/Go value disagreement found during the
+		// audit is NOT here -- see knownDisagreements below.
+		"common#$defs.AcceptedGrammar.properties.pattern_id.maxLength":                            128,
+		"common#$defs.AcceptedGrammar.properties.pattern_id.minLength":                            1,
+		"common#$defs.AnchorBoundReceipt.properties.receipt_id.maxLength":                         256,
+		"common#$defs.AnchorBoundReceipt.properties.receipt_id.minLength":                         8,
+		"common#$defs.AnchorBoundReceipt.properties.result_id.maxLength":                          256,
+		"common#$defs.AnchorBoundReceipt.properties.result_id.minLength":                          8,
+		"common#$defs.AnchorOption.properties.canonical_id.maxLength":                             256,
+		"common#$defs.AnchorOption.properties.canonical_id.minLength":                             1,
+		"common#$defs.AnchorOption.properties.label.maxLength":                                    200,
+		"common#$defs.AnchorOption.properties.label.minLength":                                    1,
+		"common#$defs.AnchorOption.properties.option_id.maxLength":                                256,
+		"common#$defs.AnchorOption.properties.option_id.minLength":                                1,
+		"common#$defs.AnchorOption.properties.phrasing.maxLength":                                 200,
+		"common#$defs.AnchorOption.properties.phrasing.minLength":                                 1,
+		"common#$defs.AnchorOption.properties.prior_entry_id.maxLength":                           256,
+		"common#$defs.AnchorOption.properties.prior_entry_id.minLength":                           1,
+		"common#$defs.AnchorOption.properties.prior_version_id.maxLength":                         256,
+		"common#$defs.AnchorOption.properties.prior_version_id.minLength":                         1,
+		"common#$defs.AnchorOption.properties.receipt_id.maxLength":                               256,
+		"common#$defs.AnchorOption.properties.receipt_id.minLength":                               8,
+		"common#$defs.AnchorOptionV2.properties.canonical_id.maxLength":                           256,
+		"common#$defs.AnchorOptionV2.properties.canonical_id.minLength":                           1,
+		"common#$defs.AnchorOptionV2.properties.label.maxLength":                                  200,
+		"common#$defs.AnchorOptionV2.properties.label.minLength":                                  1,
+		"common#$defs.AnchorOptionV2.properties.option_id.maxLength":                              256,
+		"common#$defs.AnchorOptionV2.properties.option_id.minLength":                              1,
+		"common#$defs.AnchorOptionV2.properties.phrasing.maxLength":                               200,
+		"common#$defs.AnchorOptionV2.properties.phrasing.minLength":                               1,
+		"common#$defs.AnchorOptionV2.properties.prior_entry_id.maxLength":                         256,
+		"common#$defs.AnchorOptionV2.properties.prior_entry_id.minLength":                         1,
+		"common#$defs.AnchorOptionV2.properties.prior_version_id.maxLength":                       256,
+		"common#$defs.AnchorOptionV2.properties.prior_version_id.minLength":                       1,
+		"common#$defs.AnchorOptionV2.properties.receipt_id.maxLength":                             256,
+		"common#$defs.AnchorOptionV2.properties.receipt_id.minLength":                             8,
+		"common#$defs.AnswerPlan.properties.family_version.maxLength":                             64,
+		"common#$defs.AnswerPlan.properties.family_version.minLength":                             1,
+		"common#$defs.AuthorizationScope.anyOf.0.properties.repository_slugs.minItems":            1,
+		"common#$defs.AuthorizationScope.anyOf.1.properties.project_ids.minItems":                 1,
+		"common#$defs.AuthorizationScope.anyOf.2.properties.team_ids.minItems":                    1,
+		"common#$defs.AuthorizationScope.properties.project_ids.items.maxLength":                  256,
+		"common#$defs.AuthorizationScope.properties.project_ids.items.minLength":                  1,
+		"common#$defs.AuthorizationScope.properties.project_ids.maxItems":                         200,
+		"common#$defs.AuthorizationScope.properties.repository_slugs.items.maxLength":             512,
+		"common#$defs.AuthorizationScope.properties.repository_slugs.items.minLength":             1,
+		"common#$defs.AuthorizationScope.properties.repository_slugs.maxItems":                    200,
+		"common#$defs.AuthorizationScope.properties.team_ids.items.maxLength":                     256,
+		"common#$defs.AuthorizationScope.properties.team_ids.items.minLength":                     1,
+		"common#$defs.AuthorizationScope.properties.team_ids.maxItems":                            200,
+		"common#$defs.BoundSubjectReceipt.properties.receipt_id.maxLength":                        256,
+		"common#$defs.BoundSubjectReceipt.properties.receipt_id.minLength":                        8,
+		"common#$defs.BoundSubjectReceipt.properties.result_id.maxLength":                         256,
+		"common#$defs.BoundSubjectReceipt.properties.result_id.minLength":                         8,
+		"common#$defs.CandidateBoundReceipt.properties.receipt_id.maxLength":                      256,
+		"common#$defs.CandidateBoundReceipt.properties.receipt_id.minLength":                      8,
+		"common#$defs.CandidateBoundReceipt.properties.result_id.maxLength":                       256,
+		"common#$defs.CandidateBoundReceipt.properties.result_id.minLength":                       8,
+		"common#$defs.CandidateOption.properties.canonical_id.maxLength":                          256,
+		"common#$defs.CandidateOption.properties.canonical_id.minLength":                          1,
+		"common#$defs.CandidateOption.properties.label.maxLength":                                 200,
+		"common#$defs.CandidateOption.properties.label.minLength":                                 1,
+		"common#$defs.CandidateOption.properties.option_id.maxLength":                             256,
+		"common#$defs.CandidateOption.properties.option_id.minLength":                             1,
+		"common#$defs.CandidateOption.properties.phrasing.maxLength":                              200,
+		"common#$defs.CandidateOption.properties.phrasing.minLength":                              1,
+		"common#$defs.CandidateOption.properties.prior_entry_id.maxLength":                        256,
+		"common#$defs.CandidateOption.properties.prior_entry_id.minLength":                        1,
+		"common#$defs.CandidateOption.properties.prior_version_id.maxLength":                      256,
+		"common#$defs.CandidateOption.properties.prior_version_id.minLength":                      1,
+		"common#$defs.CandidateOption.properties.receipt_id.maxLength":                            256,
+		"common#$defs.CandidateOption.properties.receipt_id.minLength":                            8,
+		"common#$defs.ClaimedFact.properties.claim_id.maxLength":                                  256,
+		"common#$defs.ClaimedFact.properties.claim_id.minLength":                                  8,
+		"common#$defs.ClaimedFact.properties.rows.maxItems":                                       64,
+		"common#$defs.ClaimedFact.properties.time_series_rows.maxItems":                           64,
+		"common#$defs.ClaimedFactRow.properties.fields.maxProperties":                             32,
+		"common#$defs.Cohort.properties.groups.maxItems":                                          250,
+		"common#$defs.Cohort.properties.members.maxItems":                                         250,
+		"common#$defs.CohortGroup.properties.member_canonical_ids.items.minLength":                1,
+		"common#$defs.CohortMember.allOf.0.then.properties.drivers.maxItems":                      5,
+		"common#$defs.CohortMember.allOf.0.then.properties.drivers.minItems":                      5,
+		"common#$defs.CohortMember.allOf.1.then.properties.drivers.maxItems":                      4,
+		"common#$defs.CohortMember.allOf.1.then.properties.drivers.minItems":                      3,
+		"common#$defs.CohortMember.allOf.2.then.properties.drivers.maxItems":                      2,
+		"common#$defs.CohortMember.properties.attention_rank.minimum":                             1,
+		"common#$defs.CohortMember.properties.drivers.maxItems":                                   5,
+		"common#$defs.CohortMember.properties.inclusion_reasons.minItems":                         1,
+		"common#$defs.CohortMember.properties.missing_signals.maxItems":                           5,
+		"common#$defs.CohortMember.properties.missing_signals.minItems":                           1,
+		"common#$defs.CohortMember.properties.rank.minimum":                                       1,
+		"common#$defs.CohortMember.properties.ranking_basis.items.maxLength":                      128,
+		"common#$defs.CohortMember.properties.ranking_basis.items.minLength":                      1,
+		"common#$defs.CohortMember.properties.ranking_basis.maxItems":                             16,
+		"common#$defs.CohortMember.properties.score.maximum":                                      100,
+		"common#$defs.CohortMember.properties.score.minimum":                                      0,
+		"common#$defs.CohortMemberDriver.properties.source_claimed_fact_ids.items.maxLength":      256,
+		"common#$defs.CohortMemberDriver.properties.source_claimed_fact_ids.maxItems":             250,
+		"common#$defs.CohortMemberDriver.properties.threshold_labels.items.maxLength":             128,
+		"common#$defs.CohortMemberDriver.properties.threshold_labels.items.minLength":             1,
+		"common#$defs.CohortMemberDriver.properties.threshold_labels.maxItems":                    4,
+		"common#$defs.ConfirmedStructureEntry.properties.prior_entry_id.maxLength":                256,
+		"common#$defs.ConfirmedStructureEntry.properties.prior_entry_id.minLength":                1,
+		"common#$defs.ConfirmedStructureEntry.properties.prior_result_id.maxLength":               256,
+		"common#$defs.ConfirmedStructureEntry.properties.prior_result_id.minLength":               8,
+		"common#$defs.ConfirmedStructureEntry.properties.prior_version_id.maxLength":              256,
+		"common#$defs.ConfirmedStructureEntry.properties.prior_version_id.minLength":              1,
+		"common#$defs.ConfirmedStructureEntry.properties.receipt_id.maxLength":                    256,
+		"common#$defs.ConfirmedStructureEntry.properties.receipt_id.minLength":                    8,
+		"common#$defs.ConsumerInfo.properties.version.maxLength":                                  200,
+		"common#$defs.ConsumerInfo.properties.version.minLength":                                  1,
+		"common#$defs.ContentProjection.properties.body.maxLength":                                100000,
+		"common#$defs.ContentProjection.properties.content_digest.maxLength":                      256,
+		"common#$defs.ContentProjection.properties.content_id.maxLength":                          256,
+		"common#$defs.ContentProjection.properties.content_id.minLength":                          8,
+		"common#$defs.ContentProjection.properties.evidence_ref_ids.items.maxLength":              256,
+		"common#$defs.ContentProjection.properties.evidence_ref_ids.items.minLength":              8,
+		"common#$defs.ContentProjection.properties.evidence_ref_ids.minItems":                     1,
+		"common#$defs.ContentProjection.properties.source_version.maxLength":                      256,
+		"common#$defs.ContentProjection.properties.source_version.minLength":                      1,
+		"common#$defs.ConversationTurn.properties.turn_id.maxLength":                              256,
+		"common#$defs.ConversationTurn.properties.turn_id.minLength":                              1,
+		"common#$defs.Coverage.properties.details.maxItems":                                       100,
+		"common#$defs.CoverageDetail.properties.detail_id.maxLength":                              64,
+		"common#$defs.CoverageDetail.properties.detail_id.minLength":                              1,
+		"common#$defs.CoverageDetail.properties.label.maxLength":                                  160,
+		"common#$defs.CoverageDetail.properties.label.minLength":                                  1,
+		"common#$defs.CoverageDetail.properties.phrasing.maxLength":                               400,
+		"common#$defs.DriverJudgment.allOf.0.then.anyOf.0.properties.path_ids.minItems":           1,
+		"common#$defs.DriverJudgment.allOf.0.then.anyOf.1.properties.evidence_ref_ids.minItems":   1,
+		"common#$defs.DriverJudgment.properties.affected_subjects.minItems":                       1,
+		"common#$defs.DriverJudgment.properties.claimed_fact_ids.items.maxLength":                 256,
+		"common#$defs.DriverJudgment.properties.claimed_fact_ids.maxItems":                        250,
+		"common#$defs.DriverJudgment.properties.confidence.maximum":                               1,
+		"common#$defs.DriverJudgment.properties.confidence.minimum":                               0,
+		"common#$defs.EntityProjection.properties.aliases.items.maxLength":                        512,
+		"common#$defs.EntityProjection.properties.aliases.items.minLength":                        1,
+		"common#$defs.EntityProjection.properties.aliases.maxItems":                               100,
+		"common#$defs.EntityProjection.properties.evidence_ref_ids.items.maxLength":               256,
+		"common#$defs.EntityProjection.properties.evidence_ref_ids.items.minLength":               8,
+		"common#$defs.EntityProjection.properties.evidence_ref_ids.minItems":                      1,
+		"common#$defs.EntityProjection.properties.previous_names.items.maxLength":                 512,
+		"common#$defs.EntityProjection.properties.previous_names.items.minLength":                 1,
+		"common#$defs.EntityProjection.properties.previous_names.maxItems":                        100,
+		"common#$defs.EntityProjection.properties.properties.maxProperties":                       100,
+		"common#$defs.EntityProjection.properties.provider_aliases.items.maxLength":               512,
+		"common#$defs.EntityProjection.properties.provider_aliases.items.minLength":               1,
+		"common#$defs.EntityProjection.properties.provider_aliases.maxItems":                      100,
+		"common#$defs.EntityProjection.properties.provider_ids.additionalProperties.maxLength":    512,
+		"common#$defs.EntityProjection.properties.provider_ids.additionalProperties.minLength":    1,
+		"common#$defs.EntityProjection.properties.provider_ids.maxProperties":                     50,
+		"common#$defs.EntityProjection.properties.source_version.maxLength":                       256,
+		"common#$defs.EntityProjection.properties.source_version.minLength":                       1,
+		"common#$defs.EpisodeProjection.properties.episode_id.maxLength":                          256,
+		"common#$defs.EpisodeProjection.properties.episode_id.minLength":                          8,
+		"common#$defs.EpisodeProjection.properties.evidence_ref_ids.items.maxLength":              256,
+		"common#$defs.EpisodeProjection.properties.evidence_ref_ids.items.minLength":              8,
+		"common#$defs.EpisodeProjection.properties.evidence_ref_ids.minItems":                     1,
+		"common#$defs.EpisodeProjection.properties.goal.maxLength":                                4000,
+		"common#$defs.EpisodeProjection.properties.goal.minLength":                                1,
+		"common#$defs.EpisodeProjection.properties.outcome.maxLength":                             128,
+		"common#$defs.EpisodeProjection.properties.outcome.minLength":                             1,
+		"common#$defs.EpisodeProjection.properties.source_version.maxLength":                      256,
+		"common#$defs.EpisodeProjection.properties.source_version.minLength":                      1,
+		"common#$defs.EpisodeProjection.properties.summary.minLength":                             1,
+		"common#$defs.Finding.properties.claimed_fact_ids.items.maxLength":                        256,
+		"common#$defs.Finding.properties.claimed_fact_ids.maxItems":                               250,
+		"common#$defs.Finding.properties.evidence_ref_ids.minItems":                               1,
+		"common#$defs.Finding.properties.kind.minLength":                                          1,
+		"common#$defs.HandleBoundReceipt.properties.receipt_id.maxLength":                         256,
+		"common#$defs.HandleBoundReceipt.properties.receipt_id.minLength":                         8,
+		"common#$defs.HandleBoundReceipt.properties.result_id.maxLength":                          256,
+		"common#$defs.HandleBoundReceipt.properties.result_id.minLength":                          8,
+		"common#$defs.HandleOption.properties.label.maxLength":                                    200,
+		"common#$defs.HandleOption.properties.label.minLength":                                    1,
+		"common#$defs.HandleOption.properties.option_id.maxLength":                                256,
+		"common#$defs.HandleOption.properties.option_id.minLength":                                1,
+		"common#$defs.HandleOption.properties.pattern_id.maxLength":                               128,
+		"common#$defs.HandleOption.properties.pattern_id.minLength":                               1,
+		"common#$defs.HandleOption.properties.phrasing.maxLength":                                 200,
+		"common#$defs.HandleOption.properties.phrasing.minLength":                                 1,
+		"common#$defs.HandleOption.properties.prior_entry_id.maxLength":                           256,
+		"common#$defs.HandleOption.properties.prior_entry_id.minLength":                           1,
+		"common#$defs.HandleOption.properties.prior_version_id.maxLength":                         256,
+		"common#$defs.HandleOption.properties.prior_version_id.minLength":                         1,
+		"common#$defs.HandleOption.properties.receipt_id.maxLength":                               256,
+		"common#$defs.HandleOption.properties.receipt_id.minLength":                               8,
+		"common#$defs.InterpretedQuestion.allOf.0.then.properties.clarification_reason.maxLength": 2000,
+		"common#$defs.InterpretedQuestion.allOf.0.then.properties.clarification_reason.minLength": 1,
+		"common#$defs.KindBoundReceipt.properties.receipt_id.maxLength":                           256,
+		"common#$defs.KindBoundReceipt.properties.receipt_id.minLength":                           8,
+		"common#$defs.KindBoundReceipt.properties.result_id.maxLength":                            256,
+		"common#$defs.KindBoundReceipt.properties.result_id.minLength":                            8,
+		"common#$defs.KindOption.properties.label.maxLength":                                      200,
+		"common#$defs.KindOption.properties.label.minLength":                                      1,
+		"common#$defs.KindOption.properties.option_id.maxLength":                                  256,
+		"common#$defs.KindOption.properties.option_id.minLength":                                  1,
+		"common#$defs.KindOption.properties.phrasing.maxLength":                                   200,
+		"common#$defs.KindOption.properties.phrasing.minLength":                                   1,
+		"common#$defs.KindOption.properties.prior_entry_id.maxLength":                             256,
+		"common#$defs.KindOption.properties.prior_entry_id.minLength":                             1,
+		"common#$defs.KindOption.properties.prior_version_id.maxLength":                           256,
+		"common#$defs.KindOption.properties.prior_version_id.minLength":                           1,
+		"common#$defs.KindOption.properties.receipt_id.maxLength":                                 256,
+		"common#$defs.KindOption.properties.receipt_id.minLength":                                 8,
+		"common#$defs.PriorSubjectReceiptDispositionEntry.properties.prior_result_id.maxLength":   256,
+		"common#$defs.PriorSubjectReceiptDispositionEntry.properties.prior_result_id.minLength":   8,
+		"common#$defs.PriorSubjectReceiptDispositionEntry.properties.receipt_id.maxLength":        256,
+		"common#$defs.PriorSubjectReceiptDispositionEntry.properties.receipt_id.minLength":        8,
+		"common#$defs.ProjectionTombstone.properties.canonical_id.maxLength":                      256,
+		"common#$defs.ProjectionTombstone.properties.canonical_id.minLength":                      1,
+		"common#$defs.ProjectionTombstone.properties.kind.minLength":                              1,
+		"common#$defs.ProjectionTombstone.properties.reason.minLength":                            1,
+		"common#$defs.ProjectionTombstone.properties.source_version.maxLength":                    256,
+		"common#$defs.ProjectionTombstone.properties.source_version.minLength":                    1,
+		"common#$defs.RelationshipEdge.properties.evidence_ref_ids.minItems":                      1,
+		"common#$defs.RelationshipPath.properties.edges.minItems":                                 1,
+		"common#$defs.RelationshipPath.properties.evidence_ref_ids.minItems":                      1,
+		"common#$defs.RelationshipPath.properties.nodes.minItems":                                 2,
+		"common#$defs.RelationshipProjection.properties.evidence_ref_ids.items.maxLength":         256,
+		"common#$defs.RelationshipProjection.properties.evidence_ref_ids.items.minLength":         8,
+		"common#$defs.RelationshipProjection.properties.evidence_ref_ids.minItems":                1,
+		"common#$defs.RelationshipProjection.properties.properties.maxProperties":                 100,
+		"common#$defs.RelationshipProjection.properties.relationship_id.maxLength":                256,
+		"common#$defs.RelationshipProjection.properties.relationship_id.minLength":                8,
+		"common#$defs.RelationshipProjection.properties.source_version.maxLength":                 256,
+		"common#$defs.RelationshipProjection.properties.source_version.minLength":                 1,
+		"common#$defs.RenderPoint.properties.label.maxLength":                                     256,
+		"common#$defs.RenderPoint.properties.label.minLength":                                     1,
+		"common#$defs.RenderPointSource.properties.claim_id.maxLength":                            256,
+		"common#$defs.RenderPointSource.properties.claim_id.minLength":                            8,
+		"common#$defs.RenderPointSource.properties.subject_canonical_id.maxLength":                256,
+		"common#$defs.RenderPointSource.properties.subject_canonical_id.minLength":                1,
+		"common#$defs.RenderSeries.properties.label.maxLength":                                    256,
+		"common#$defs.RenderSeries.properties.label.minLength":                                    1,
+		"common#$defs.RenderShape.properties.axis_label.maxLength":                                256,
+		"common#$defs.RenderShape.properties.axis_label.minLength":                                1,
+		"common#$defs.RenderShape.properties.shape_id.maxLength":                                  256,
+		"common#$defs.RenderShape.properties.shape_id.minLength":                                  1,
+		"common#$defs.RenderShape.properties.value_label.maxLength":                               256,
+		"common#$defs.RenderShape.properties.value_label.minLength":                               1,
+		"common#$defs.RequestedHandle.properties.pattern_id.maxLength":                            128,
+		"common#$defs.RequestedHandle.properties.pattern_id.minLength":                            1,
+		"common#$defs.RequestedScope.properties.project_ids.items.maxLength":                      256,
+		"common#$defs.RequestedScope.properties.project_ids.items.minLength":                      1,
+		"common#$defs.RequestedScope.properties.project_ids.maxItems":                             200,
+		"common#$defs.RequestedScope.properties.team_ids.items.maxLength":                         256,
+		"common#$defs.RequestedScope.properties.team_ids.items.minLength":                         1,
+		"common#$defs.RequestedScope.properties.team_ids.maxItems":                                200,
+		"common#$defs.ScalarValue.properties.string.maxLength":                                    4000,
+		"common#$defs.StructureOfferSnapshotEntry.properties.offer_id.maxLength":                  256,
+		"common#$defs.StructureOfferSnapshotEntry.properties.offer_id.minLength":                  1,
+		"common#$defs.StructureOfferSnapshotEntry.properties.prior_entry_id.maxLength":            256,
+		"common#$defs.StructureOfferSnapshotEntry.properties.prior_entry_id.minLength":            1,
+		"common#$defs.StructureOfferSnapshotEntry.properties.prior_version_id.maxLength":          256,
+		"common#$defs.StructureOfferSnapshotEntry.properties.prior_version_id.minLength":          1,
+		"common#$defs.SubjectCandidate.properties.confidence.maximum":                             1,
+		"common#$defs.SubjectCandidate.properties.confidence.minimum":                             0,
+		"common#$defs.SubjectCandidate.properties.match_mechanisms.maxItems":                      6,
+		"common#$defs.SubjectCandidate.properties.match_reasons.minItems":                         1,
+		"common#$defs.SubjectResolution.properties.commit_decision_digests.maxItems":              250,
+		"common#$defs.SubjectResolution.properties.prior_subject_receipt_dispositions.maxItems":   20,
+		"common#$defs.WindowBoundReceipt.properties.receipt_id.maxLength":                         256,
+		"common#$defs.WindowBoundReceipt.properties.receipt_id.minLength":                         8,
+		"common#$defs.WindowBoundReceipt.properties.result_id.maxLength":                          256,
+		"common#$defs.WindowBoundReceipt.properties.result_id.minLength":                          8,
+		"common#$defs.WindowExpandOption.properties.candidate_label.maxLength":                    200,
+		"common#$defs.WindowExpandOption.properties.candidate_label.minLength":                    1,
+		"common#$defs.WindowExpandOption.properties.label.maxLength":                              200,
+		"common#$defs.WindowExpandOption.properties.label.minLength":                              1,
+		"common#$defs.WindowExpandOption.properties.option_id.maxLength":                          256,
+		"common#$defs.WindowExpandOption.properties.option_id.minLength":                          1,
+		"common#$defs.WindowExpandOption.properties.receipt_id.maxLength":                         256,
+		"common#$defs.WindowExpandOption.properties.receipt_id.minLength":                         8,
+		"common#$defs.WindowOption.properties.label.maxLength":                                    200,
+		"common#$defs.WindowOption.properties.label.minLength":                                    1,
+		"common#$defs.WindowOption.properties.option_id.maxLength":                                256,
+		"common#$defs.WindowOption.properties.option_id.minLength":                                1,
+		"common#$defs.WindowOption.properties.receipt_id.maxLength":                               256,
+		"common#$defs.WindowOption.properties.receipt_id.minLength":                               8,
+		"result#allOf.0.then.properties.direct_judgment.maxLength":                                4000,
+		"result#allOf.0.then.properties.direct_judgment.minLength":                                1,
+		"result#properties.evidence_ref_labels.additionalProperties.maxLength":                    160,
+		"result#properties.evidence_ref_labels.additionalProperties.minLength":                    1,
+		"result#properties.render_shapes.maxItems":                                                8,
 	}
 
 	discovered := schemaBounds(t, documents)
@@ -391,8 +731,9 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		t.Fatal("no schema bounds discovered; the enumeration is not working")
 	}
 
-	checked, proved := 0, 0
+	checked, proved, disagreed := 0, 0, 0
 	exempted := make(map[string]bool, len(asymmetricBounds))
+	disagreedSeen := make(map[string]bool, len(knownDisagreements))
 	unmapped := make([]string, 0, len(discovered))
 	for _, bound := range discovered {
 		// PREFERRED: prove agreement behaviourally. A probe that accepts a
@@ -466,6 +807,23 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 				// declarative checks rather than claiming either result.
 			}
 		}
+		// A KNOWN DISAGREEMENT is checked before goBoundsByPath because it
+		// is the opposite claim: goBoundsByPath asserts the two sides
+		// agree, this asserts they are known to disagree by a recorded
+		// amount, on both sides, at once. Consulted before the probe stage
+		// above would matter if either fell into "Go accepts beyond the
+		// schema" -- confirmed by construction (see the CHAOS-4867 audit
+		// notes) that none of these fourteen do; every one is either
+		// unreachable to the generic probe or blocked by a cross-field
+		// invariant, so it falls through here regardless of order.
+		if entry, known := knownDisagreements[bound.path]; known {
+			disagreedSeen[bound.path] = true
+			disagreed++
+			if bound.value != entry.schemaValue {
+				t.Errorf("%s: knownDisagreements records the schema side as %d, the schema now says %d; the entry was written against a different bound (if this is a deliberate fix, update or remove the entry and say so)", bound.path, entry.schemaValue, bound.value)
+			}
+			continue
+		}
 		expected, mapped := goBoundsByPath[bound.path]
 		if mapped {
 			checked++
@@ -497,8 +855,223 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 			t.Errorf("asymmetricBounds lists %q, which matches no schema bound; remove it rather than leaving an exemption that describes nothing", path)
 		}
 	}
-	t.Logf("%d schema bounds: %d proved behaviourally, %d compared declaratively, %d classified by pattern",
-		len(discovered), proved, checked, len(discovered)-proved-checked)
+	// Same discipline for knownDisagreements: an entry matching no
+	// discovered bound is describing a disagreement that no longer exists
+	// (the schema or the Go check moved, or the field was removed) and
+	// must be updated or deleted, not left to silently stop checking
+	// anything.
+	for path := range knownDisagreements {
+		if !disagreedSeen[path] {
+			t.Errorf("knownDisagreements lists %q, which matches no schema bound; remove or update it rather than leaving a disagreement that describes nothing", path)
+		}
+	}
+	t.Logf("%d schema bounds: %d proved behaviourally, %d compared declaratively, %d known disagreements, %d classified as schema-only",
+		len(discovered), proved, checked, disagreed, len(discovered)-proved-checked-disagreed)
+}
+
+// chaos4867ProbeEvidenceRefIDs returns n distinct, valid evidence-ref-id
+// strings (>=8 chars, trimmed, no "|") for driving boundedEvidenceRefs at
+// an exact size.
+func chaos4867ProbeEvidenceRefIDs(n int) []string {
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("chaos4867evref%08d", i)
+	}
+	return ids
+}
+
+// TestKnownDisagreementsGoSideStillMatchesRecordedValue is the Go-side half
+// of the knownDisagreements proof (see that map's own doc comment above):
+// the main walk in TestSchemaAndGoBoundsAgree pins the SCHEMA side (a
+// mismatch between bound.value and entry.schemaValue fails there); this
+// test pins the GO side, by exercising the actual Validate call site at
+// the recorded goValue (or, where the value derives from a named constant
+// rather than a literal, asserting the constant directly). A change to
+// either side without updating the recorded pair fails one of the two
+// tests by name -- that is the whole point of recording both.
+func TestKnownDisagreementsGoSideStillMatchesRecordedValue(t *testing.T) {
+	t.Parallel()
+
+	// Root cause: uniqueTrimmedStrings (validate_context_fabric_helpers.go)
+	// hardcodes stringLengthBetween(value, 1, maximum) -- covers three of
+	// the fourteen disagreements (CohortMemberDriver, DriverJudgment,
+	// Finding claimed/source_claimed_fact_ids item minLength).
+	t.Run("uniqueTrimmedStrings floor is 1", func(t *testing.T) {
+		if !uniqueTrimmedStrings([]string{"x"}, 256) {
+			t.Fatal("a 1-character element was rejected; the recorded goValue=1 floor no longer holds")
+		}
+		if uniqueTrimmedStrings([]string{""}, 256) {
+			t.Fatal("an empty element was accepted; sanity check on the floor probe itself failed")
+		}
+	})
+
+	// Root cause: both derive from the closed structure-need-kind
+	// vocabulary's size, not a magic literal.
+	t.Run("confirmed_structure and structure_offer_snapshot bounds derive from the vocabulary", func(t *testing.T) {
+		if ContextFabricStructureNeedKindCount != 5 {
+			t.Fatalf("ContextFabricStructureNeedKindCount = %d; recorded goValue for confirmed_structure.maxItems is 5", ContextFabricStructureNeedKindCount)
+		}
+		if ContextFabricStructureNeedKindCount*contextFabricStructureNeedsMaxOptions != 100 {
+			t.Fatalf("ContextFabricStructureNeedKindCount*contextFabricStructureNeedsMaxOptions = %d; recorded goValue for structure_offer_snapshot.maxItems is 100", ContextFabricStructureNeedKindCount*contextFabricStructureNeedsMaxOptions)
+		}
+	})
+
+	t.Run("RelationshipProjection.evidence_ref_ids maxItems is 500", func(t *testing.T) {
+		build := func(n int) ContextFabricRelationshipProjection {
+			return ContextFabricRelationshipProjection{
+				RelationshipID:  "chaos4867_relationship_probe",
+				Type:            ContextFabricRelationshipRelatedTo,
+				From:            ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "chaos4867_from", Label: "From"},
+				To:              ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "chaos4867_to", Label: "To"},
+				Derivation:      ContextFabricDerivationCanonicalStructured,
+				EpistemicStatus: ContextFabricEpistemicObserved,
+				Authorization:   ContextFabricAuthorizationScope{ProjectIDs: []string{"chaos4867_project"}},
+				EvidenceRefIDs:  chaos4867ProbeEvidenceRefIDs(n),
+				ObservedAt:      time.Now().UTC(),
+				SourceVersion:   "chaos4867-probe-v1",
+			}
+		}
+		if err := build(500).Validate(); err != nil {
+			t.Fatalf("500 evidence refs rejected; recorded goValue is 500: %v", err)
+		}
+		if err := build(501).Validate(); err == nil {
+			t.Fatal("501 evidence refs accepted; the recorded goValue=500 ceiling no longer holds")
+		}
+	})
+
+	t.Run("EntityProjection.evidence_ref_ids maxItems is 500", func(t *testing.T) {
+		build := func(n int) ContextFabricEntityProjection {
+			return ContextFabricEntityProjection{
+				Subject:        ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "chaos4867_entity_subject", Label: "Subject"},
+				Authorization:  ContextFabricAuthorizationScope{ProjectIDs: []string{"chaos4867_project"}},
+				EvidenceRefIDs: chaos4867ProbeEvidenceRefIDs(n),
+				ObservedAt:     time.Now().UTC(),
+				SourceVersion:  "chaos4867-probe-v1",
+			}
+		}
+		if err := build(500).Validate(); err != nil {
+			t.Fatalf("500 evidence refs rejected; recorded goValue is 500: %v", err)
+		}
+		if err := build(501).Validate(); err == nil {
+			t.Fatal("501 evidence refs accepted; the recorded goValue=500 ceiling no longer holds")
+		}
+	})
+
+	t.Run("ContentProjection body/content_digest/evidence_ref_ids", func(t *testing.T) {
+		build := func(bodyLen, digestLen, evidenceCount int) ContextFabricContentProjection {
+			return ContextFabricContentProjection{
+				ContentID:      "chaos4867_content_probe",
+				Subject:        ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "chaos4867_content_subject", Label: "Subject"},
+				Title:          "Probe Title",
+				Body:           strings.Repeat("x", bodyLen),
+				ContentDigest:  strings.Repeat("d", digestLen),
+				Authorization:  ContextFabricAuthorizationScope{ProjectIDs: []string{"chaos4867_project"}},
+				EvidenceRefIDs: chaos4867ProbeEvidenceRefIDs(evidenceCount),
+				ObservedAt:     time.Now().UTC(),
+				SourceVersion:  "chaos4867-probe-v1",
+				Untrusted:      true,
+			}
+		}
+		if err := build(0, 8, 1).Validate(); err != nil {
+			t.Fatalf("body length 0 (recorded goValue floor) rejected: %v", err)
+		}
+		if err := build(0, 7, 1).Validate(); err == nil {
+			t.Fatal("content_digest length 7 accepted; recorded goValue floor for content_digest is 8")
+		}
+		if err := build(0, 8, 1).Validate(); err != nil {
+			t.Fatalf("content_digest length 8 (recorded goValue floor) rejected: %v", err)
+		}
+		if err := build(0, 8, 500).Validate(); err != nil {
+			t.Fatalf("500 evidence refs rejected; recorded goValue is 500: %v", err)
+		}
+		if err := build(0, 8, 501).Validate(); err == nil {
+			t.Fatal("501 evidence refs accepted; the recorded goValue=500 ceiling no longer holds")
+		}
+	})
+
+	t.Run("EpisodeProjection summary/evidence_ref_ids", func(t *testing.T) {
+		started := time.Now().UTC()
+		build := func(summaryLen, evidenceCount int) ContextFabricEpisodeProjection {
+			return ContextFabricEpisodeProjection{
+				EpisodeID:      "chaos4867_episode_probe",
+				Subject:        ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "chaos4867_episode_subject", Label: "Subject"},
+				Goal:           "Probe goal",
+				Outcome:        "Probe outcome",
+				Summary:        strings.Repeat("s", summaryLen),
+				Authorization:  ContextFabricAuthorizationScope{ProjectIDs: []string{"chaos4867_project"}},
+				EvidenceRefIDs: chaos4867ProbeEvidenceRefIDs(evidenceCount),
+				StartedAt:      started,
+				EndedAt:        started.Add(time.Hour),
+				SourceVersion:  "chaos4867-probe-v1",
+			}
+		}
+		if err := build(8000, 1).Validate(); err != nil {
+			t.Fatalf("summary length 8000 (recorded goValue ceiling) rejected: %v", err)
+		}
+		if err := build(8001, 1).Validate(); err == nil {
+			t.Fatal("summary length 8001 accepted; the recorded goValue=8000 ceiling no longer holds")
+		}
+		if err := build(100, 500).Validate(); err != nil {
+			t.Fatalf("500 evidence refs rejected; recorded goValue is 500: %v", err)
+		}
+		if err := build(100, 501).Validate(); err == nil {
+			t.Fatal("501 evidence refs accepted; the recorded goValue=500 ceiling no longer holds")
+		}
+	})
+
+	t.Run("ProjectionTombstone kind/reason", func(t *testing.T) {
+		build := func(kindLen, reasonLen int) ContextFabricProjectionTombstone {
+			return ContextFabricProjectionTombstone{
+				Kind:          strings.Repeat("k", kindLen),
+				CanonicalID:   "chaos4867_tombstone_probe",
+				Reason:        strings.Repeat("r", reasonLen),
+				EffectiveAt:   time.Now().UTC(),
+				SourceVersion: "chaos4867-probe-v1",
+			}
+		}
+		if err := build(64, 1).Validate(); err != nil {
+			t.Fatalf("kind length 64 (recorded goValue ceiling) rejected: %v", err)
+		}
+		if err := build(65, 1).Validate(); err == nil {
+			t.Fatal("kind length 65 accepted; the recorded goValue=64 ceiling no longer holds")
+		}
+		if err := build(1, 2000).Validate(); err != nil {
+			t.Fatalf("reason length 2000 (recorded goValue ceiling) rejected: %v", err)
+		}
+		if err := build(1, 2001).Validate(); err == nil {
+			t.Fatal("reason length 2001 accepted; the recorded goValue=2000 ceiling no longer holds")
+		}
+	})
+
+	// Cross-check: every path recorded in knownDisagreements above must be
+	// exercised by one of the subtests here. A disagreement pinned on the
+	// schema side but never re-derived on the Go side is only half proved.
+	covered := map[string]bool{
+		"common#$defs.CohortMemberDriver.properties.source_claimed_fact_ids.items.minLength": true,
+		"common#$defs.DriverJudgment.properties.claimed_fact_ids.items.minLength":            true,
+		"common#$defs.Finding.properties.claimed_fact_ids.items.minLength":                   true,
+		"common#$defs.ContentProjection.properties.evidence_ref_ids.maxItems":                true,
+		"common#$defs.EntityProjection.properties.evidence_ref_ids.maxItems":                 true,
+		"common#$defs.EpisodeProjection.properties.evidence_ref_ids.maxItems":                true,
+		"common#$defs.RelationshipProjection.properties.evidence_ref_ids.maxItems":           true,
+		"common#$defs.ContentProjection.properties.body.minLength":                           true,
+		"common#$defs.ContentProjection.properties.content_digest.minLength":                 true,
+		"common#$defs.EpisodeProjection.properties.summary.maxLength":                        true,
+		"common#$defs.ProjectionTombstone.properties.kind.maxLength":                         true,
+		"common#$defs.ProjectionTombstone.properties.reason.maxLength":                       true,
+		"result#properties.confirmed_structure.maxItems":                                     true,
+		"result#properties.structure_offer_snapshot.maxItems":                                true,
+	}
+	for path := range knownDisagreements {
+		if !covered[path] {
+			t.Errorf("knownDisagreements[%q] has no Go-side re-derivation subtest in this file; add one or the Go side of this disagreement is unguarded", path)
+		}
+	}
+	for path := range covered {
+		if _, known := knownDisagreements[path]; !known {
+			t.Errorf("this file's coverage map claims %q but knownDisagreements does not list it; remove the stale coverage entry", path)
+		}
+	}
 }
 
 // TestFactRequirementsBoundDerivesFromTheVocabulary pins the derivation
@@ -872,87 +1445,45 @@ func probeResult() ContextFabricInvestigationResult {
 // deleted, not left behind.
 var requestSideDeferredBounds = map[string]string{}
 
+// schemaOnlyBounds lists the paths a Go Validate genuinely does NOT
+// numerically check -- confirmed by POSITIVE CONTROL, not asserted: each
+// reason cites the site where Go READS the field (proving the search
+// actually reached it) and the absence of a length/count check there. A
+// disposition with no reading site is "unreachable in Go", a different and
+// stronger claim this map does not make (main's ruling, 2026-09-02).
+//
+// This is the entire population: CHAOS-4867's full audit (five parallel
+// passes over the 301 paths that used to fall through the old substring
+// classifier below, cross-checked, zero gaps against the walk's own
+// count) found these four and NO others. Every other path the substring
+// cases used to excuse is either Go-checked (registered in goBoundsByPath)
+// or a genuine schema/Go value disagreement (knownDisagreements, above).
+var schemaOnlyBounds = map[string]string{
+	"common#$defs.CohortGroup.properties.member_canonical_ids.items.maxLength":          "Go reads every member id (context_fabric_grouped_cohort.go:112 `for _, id := range g.MemberCanonicalIDs`) but only checks it non-empty and unique (:114-120); it never measures length against 512",
+	"common#$defs.CohortGroup.properties.member_canonical_ids.maxItems":                 "Go reads len(g.MemberCanonicalIDs) at context_fabric_grouped_cohort.go:107 (`g.Total < len(...)`) and :119 (loop bound) but never compares the count itself to 250 -- the full Validate method (:96-123) has no such check",
+	"common#$defs.CohortMemberDriver.allOf.6.then.properties.threshold_labels.maxItems": "Go reads d.ThresholdLabels at validate_context_fabric_result.go:738 (`len(d.ThresholdLabels) > bounds.cohortMemberDriverThresholdLabels`, a real cap of 4, not 0) and :741 (`strings.HasPrefix(label, d.Signal+\".\")` per label); this allOf branch's maxItems:0 is a structural CONSEQUENCE of the prefix check for a non-investment_mix signal (no label in the closed vocabulary can match a non-investment_mix prefix), not something Go compares to 0 directly",
+	"result#properties.evidence_ref_labels.maxProperties":                               "Go reads len(r.EvidenceRefLabels) at context_fabric_coverage_detail.go:483 but requires EXACT equality with len(closure), not an independent ceiling -- 8192 is never compared against",
+}
+
 func schemaOnlyBoundReason(path string) string {
-	// CHAOS-4867: this used to be one substring case matching
-	// RequestedScope/SubjectHint/ConversationTurn/BoundSubjectReceipt/
-	// ConsumerInfo/TimeContext, all excused with the SAME blanket claim --
-	// "bounded by the request contract, not by result validation". That
-	// claim was false for InvestigationOptions (mapped into goBoundsByPath)
-	// and an audit (ruled by main 2026-09-02) found it ALSO false for
-	// ConsumerInfo, ConversationTurn, RequestedScope, and SubjectHint: a Go
-	// Validate numerically checks every one of their fourteen bounds, and
-	// every one already agreed with the published schema -- so all
-	// fourteen are registered in goBoundsByPath instead (main's ruling:
-	// option A, fold them in rather than defer). No path in this case
-	// survives with a false reason. BoundSubjectReceipt and TimeContext
-	// needed no entry anywhere: the schema declares no numeric bound under
-	// either, so a bound added to one later has no entry here or in
-	// goBoundsByPath and fails by name, exactly like any other unmapped
-	// path. requestSideDeferredBounds (below the switch's helper maps,
-	// checked first) stays as the mechanism for the next genuinely-blocked
-	// case -- it is empty, not deleted.
+	// CHAOS-4867 (main's ruling, 2026-09-02, full population audit): this
+	// function used to classify by NAME SUBSTRING -- eight cases, each
+	// excusing every path containing a fragment like "_id." or "version."
+	// with one blanket claim, none of it verified per path. That is
+	// exactly the defect class this whole file exists to close: the
+	// InvestigationOptions case excused a Go-checked bound this way, and
+	// the audit that followed found the SAME failure in every other
+	// substring case here too. All eight are gone. What replaces them:
+	// requestSideDeferredBounds (a mechanism, currently empty) and
+	// schemaOnlyBounds (below) are the ONLY schema-only exemptions, one
+	// entry per exact path, each with a positive-control citation. A path
+	// with no entry in either map, and no registration in goBoundsByPath
+	// or knownDisagreements above, fails the test by name -- there is no
+	// remaining way for an unaudited bound to pass silently.
 	if reason, deferred := requestSideDeferredBounds[path]; deferred {
 		return reason
 	}
-	leaf := path[strings.LastIndex(path, ".")+1:]
-	switch leaf {
-	case "maxLength":
-		// Fall through to the identifier/timestamp checks below.
-	case "maxItems":
-	}
-	switch {
-	case strings.Contains(path, "_id.") || strings.Contains(path, "_ids.") ||
-		strings.Contains(path, "receipt_id") || strings.Contains(path, "claim_id") ||
-		strings.Contains(path, "path_id") || strings.Contains(path, "driver_id") ||
-		strings.Contains(path, "finding_id") || strings.Contains(path, "canonical_id") ||
-		strings.Contains(path, "turn_id") || strings.Contains(path, "batch_id"):
-		return "opaque identifier: the schema bounds its length; Go treats it as an opaque handle"
-	case strings.Contains(path, "_version") || strings.Contains(path, "version."):
-		return "service-issued version token bounded by the schema alone"
-	case strings.Contains(path, "ProjectionBatch") || strings.Contains(path, "EntityProjection") ||
-		strings.Contains(path, "RelationshipProjection") || strings.Contains(path, "ContentProjection") ||
-		strings.Contains(path, "EpisodeProjection") || strings.Contains(path, "ProjectionTombstone") ||
-		strings.Contains(path, "AuthorizationScope") || strings.Contains(path, "ScalarValue"):
-		return "projection-batch ingest shape: not part of the answer surface, validated by its own contract"
-	case strings.Contains(path, "SubjectRef") || strings.Contains(path, "label") ||
-		// CHAOS-4171 PR2: phrasing is the SAME situation as label on the
-		// same four option types (KindOption/AnchorOption/AnchorOptionV2/
-		// CandidateOption/HandleOption) -- a nested, optional string whose
-		// own Validate() enforces optionalStringBetween(o.Phrasing, 1,
-		// ContextFabricStructureOfferPhrasingMaxLength), structurally
-		// identical to how label's own bound is enforced, just optional.
-		strings.Contains(path, "phrasing") ||
-		strings.Contains(path, "Coverage.properties.sources.items") ||
-		strings.Contains(path, "SourceObservation") || strings.Contains(path, "RelationshipEdge") ||
-		strings.Contains(path, "FactRequirement.properties.parameters.propertyNames"):
-		return "nested shape whose own validator enforces the same bound structurally"
-	case strings.Contains(path, "properties.question") || strings.Contains(path, "properties.result_id") ||
-		strings.Contains(path, "properties.request_id") || strings.Contains(path, "schema_version"):
-		return "identity or question text bounded identically by the schema and the shared identity check"
-	case strings.Contains(path, "InterpretedQuestion") || strings.Contains(path, "Finding.properties") ||
-		strings.Contains(path, "DriverJudgment.properties") || strings.Contains(path, "Cohort.properties") ||
-		strings.Contains(path, "CohortMember.properties") || strings.Contains(path, "SubjectCandidate.properties") ||
-		strings.Contains(path, "SubjectResolution.properties") || strings.Contains(path, "RelationshipPath.properties") ||
-		strings.Contains(path, "ClaimedFact.properties") || strings.Contains(path, "Coverage.properties") ||
-		// CHAOS-4347: ClaimedFactRow/ProjectedFactRow's own maxProperties
-		// (fields per row) is enforced by the SAME shared helper
-		// (validateClaimedFactRows -> validateScalarMap), not a
-		// path-specific constant -- same reasoning as ClaimedFact.properties
-		// just above; "ClaimedFactRow"/"ProjectedFactRow" don't match that
-		// substring themselves (the literal is "ClaimedFact.properties",
-		// and "Row" sits between "ClaimedFact" and ".properties" here).
-		strings.Contains(path, "ClaimedFactRow") || strings.Contains(path, "ProjectedFactRow"):
-		return "answer-surface field bounded by a shared helper rather than a distinct numeric constant"
-	case strings.HasPrefix(path, "result#properties."):
-		return "result-level field bounded by the shared identity or collection helpers"
-	case strings.Contains(path, "FactRequirement.properties.subjects"):
-		return "fact-requirement subject list bounded structurally by uniqueSubjects and the 250 literal beside it"
-	case strings.Contains(path, "VersionSet.properties"):
-		return "service-issued version metadata: validVersion enforces the shape, the schema the length"
-	case strings.Contains(path, "allOf") || strings.Contains(path, ".then.") || strings.Contains(path, ".else."):
-		return "conditional restatement of a bound already mapped on the unconditional branch"
-	}
-	return ""
+	return schemaOnlyBounds[path]
 }
 
 // TestFactKindVocabularyCannotBeMutatedByCallers closes codex round-10 F2.

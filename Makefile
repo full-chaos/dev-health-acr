@@ -174,7 +174,7 @@ contract-test:
 # suite -- which is where a schema minimum changed ahead of its Go
 # constant and `make contract-test` still passed, because the test that
 # would have caught it never ran here.
-	go test ./internal/contracts/v1/ -run 'TestEverySchemaDocumentAndDefIsBoundOrExempt|TestPublishedSchemaPropertiesMatchGoWireFields|TestPublishedEnumsMatchGoVocabularies|TestReportOrphanSchemaDefs|TestSchemaAndGoBoundsAgree' -count=1
+	go test ./internal/contracts/v1/ -run 'TestEverySchemaDocumentAndDefIsBoundOrExempt|TestPublishedSchemaPropertiesMatchGoWireFields|TestPublishedEnumsMatchGoVocabularies|TestReportOrphanSchemaDefs|TestSchemaAndGoBoundsAgree|TestKnownDisagreementsGoSideStillMatchesRecordedValue' -count=1
 
 codegraph-contract:
 	bash scripts/codegraph/verify-contract.sh --fixtures testdata/codegraph/v1.2.0
