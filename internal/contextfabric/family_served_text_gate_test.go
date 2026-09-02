@@ -601,31 +601,99 @@ var familyGateFixtures = []familyGateFixture{
 // produce AT LEAST ONE violation; the fixture's own doc comment states
 // which class it is, so a human reviewing a future failure here has the
 // history without re-deriving it.
+// familyGateFixtureDir is the testdata directory a fixture's findings must
+// fall inside. Attribution is by PATH, which is what makes the one-program
+// load below safe to read.
+func familyGateFixtureDir(fx familyGateFixture) string {
+	idx := strings.LastIndex(fx.importPath, "/")
+	return "/family_served_text_gate/" + fx.importPath[idx+1:] + "/"
+}
+
+// TestFamilyTextGateCatchesHistoricalConstructions loads EVERY fixture as
+// ONE program and runs the analysis once, then attributes findings to
+// fixtures by file path.
+//
+// It used to load each fixture separately -- sixteen packages.Load calls,
+// sixteen SSA builds, each pulling its own copy of contracts/v1 and, for
+// the byte-egress fixtures, net/http and html/template. That is a real
+// cost (it was the larger half of this package's wall time) but the reason
+// it changed is not speed: under `-race` it is sixteen unbounded
+// type-checking thread pools, and on 2026-09-02 this corpus was part of
+// what pinned a shared 16-CPU host badly enough that every agent's work
+// was killed. A test that cannot run beside its neighbours is a test that
+// gets moved to a nightly job and then stops being read.
+//
+// The one-program load is also STRICTER, which is the part worth keeping
+// even if the host had infinite cores. Under the old shape a finding
+// anywhere in the loaded program counted for whichever fixture was being
+// loaded -- including a finding in contracts/v1, which every fixture load
+// carried. A fixture could therefore have "passed" on a finding that had
+// nothing to do with its own construction, and nothing in the harness
+// would have said so. Now each fixture is credited only with findings
+// inside its OWN directory, and anything landing elsewhere is reported
+// separately instead of being silently absorbed.
+//
+// go/types object identity is only meaningful within one load, which is
+// exactly why this works: one load means one identity space for all
+// sixteen, so the facts are resolved once rather than sixteen times.
 func TestFamilyTextGateCatchesHistoricalConstructions(t *testing.T) {
 	root := familyGateLoadRoot(t)
+
+	patterns := make([]string, 0, len(familyGateFixtures)+1)
+	for _, fx := range familyGateFixtures {
+		patterns = append(patterns, fx.importPath)
+	}
+	// Only the contracts/v1 purpose file is sanctioned, not the full
+	// familyGateSanctionedSymbols: the other three sanctioned files live in
+	// internal/contextfabric, which these standalone fixtures do not import
+	// and this test does not load. Omitting the contracts/v1 exemption
+	// entirely would bury every fixture's real finding in noise, since each
+	// discriminating constant's own declaration in
+	// context_fabric_answer_plan.go would read as an unsanctioned
+	// reference.
+	patterns = append(patterns, "github.com/full-chaos/dev-health-acr/internal/contracts/v1/...")
+
+	pkgs := familyGateLoadPackages(t, root, patterns...)
+	facts := familyGateResolveFacts(t, pkgs, familyGateContractsPurposeSymbols)
+	all := familySSAAnalyze(t, pkgs, facts, false)
+
+	byFixture := make(map[string][]familyTaintFinding, len(familyGateFixtures))
+	var unattributed []familyTaintFinding
+	for _, f := range all {
+		name := ""
+		file := filepath.ToSlash(f.pos.Filename)
+		for _, fx := range familyGateFixtures {
+			if strings.Contains(file, familyGateFixtureDir(fx)) {
+				name = fx.name
+				break
+			}
+		}
+		if name == "" {
+			unattributed = append(unattributed, f)
+			continue
+		}
+		byFixture[name] = append(byFixture[name], f)
+	}
+
+	// A finding outside every fixture directory is in contracts/v1 -- real
+	// production code. The old per-fixture harness could not see these at
+	// all; they were counted toward whichever fixture happened to be
+	// loaded. Report them, and fail if one is ENFORCED, which would mean
+	// the wire contract itself derives served text from a family.
+	for _, f := range unattributed {
+		if f.enforced {
+			t.Errorf("ENFORCED finding in production code carried by the fixture load, outside every fixture: %s", f)
+			continue
+		}
+		t.Logf("finding outside every fixture directory (production code in the fixture load, reported only): %s", f)
+	}
+
 	for _, fx := range familyGateFixtures {
 		fx := fx
 		t.Run(fx.name, func(t *testing.T) {
-			patterns := []string{
-				fx.importPath,
-				"github.com/full-chaos/dev-health-acr/internal/contracts/v1/...",
-			}
-			pkgs := familyGateLoadPackages(t, root, patterns...)
-			// Only the contracts/v1 purpose file, not the full
-			// familyGateSanctionedSymbols: the other three sanctioned files
-			// live in internal/contextfabric, which these standalone
-			// fixtures do not import and this test does not load (paying
-			// the full production-roots load cost per fixture would not
-			// change which violation the fixture is meant to exercise).
-			// Omitting the contracts/v1 file's own exemption entirely
-			// would bury each fixture's real finding in noise: EVERY
-			// discriminating constant's own declaration in
-			// context_fabric_answer_plan.go would itself read as an
-			// "unsanctioned reference".
-			facts := familyGateResolveFacts(t, pkgs, familyGateContractsPurposeSymbols)
-			findings := familySSAAnalyze(t, pkgs, facts, false)
+			findings := byFixture[fx.name]
 			if len(findings) == 0 {
-				t.Fatalf("RED-FIRST FAILURE: fixture %s (%s) produced ZERO violations -- the gate does not catch this historical construction", fx.name, fx.description)
+				t.Fatalf("RED-FIRST FAILURE: fixture %s (%s) produced ZERO violations IN ITS OWN PACKAGE -- the gate does not catch this historical construction", fx.name, fx.description)
 			}
 			var enforced int
 			for _, f := range findings {

@@ -1347,6 +1347,56 @@ func (a *familySSA) checkReturnSink(fn *ssa.Function, b *ssa.BasicBlock, x *ssa.
 	}
 }
 
+// familySSAValuePos resolves a source position for a value, falling back
+// through the value's own operands to its enclosing function.
+//
+// NOT COSMETIC. Several SSA instructions carry no position at all --
+// MakeInterface, in particular, which is what a variadic or interface-typed
+// argument compiles to, and therefore what sits at a boundary in half the
+// byte-egress fixtures. A finding built on token.NoPos formats as "-",
+// which means: it cannot be attributed to a file, and TWO such findings
+// from different packages are byte-identical and collapse into one in
+// collectFindings' dedupe.
+//
+// That is exactly what happened the first time the sixteen fixtures were
+// analysed as ONE program: R12a's io.Copy finding and R12c's
+// template.Execute finding both had no position, deduped into a single
+// unattributable finding, and both fixtures read as producing ZERO
+// findings in their own package. The old harness could not see it --
+// each fixture was its own program, so there was never a second
+// position-less finding to collide with. One program made a latent bug
+// in this analysis observable, which is the better reason for the change
+// than the wall time was.
+func familySSAValuePos(v ssa.Value, fn *ssa.Function) token.Pos {
+	if v != nil && v.Pos().IsValid() {
+		return v.Pos()
+	}
+	// Boxing and conversions are the usual position-less wrappers; their
+	// operand is the expression a reader actually wrote.
+	switch x := v.(type) {
+	case *ssa.MakeInterface:
+		if x.X.Pos().IsValid() {
+			return x.X.Pos()
+		}
+	case *ssa.ChangeType:
+		if x.X.Pos().IsValid() {
+			return x.X.Pos()
+		}
+	case *ssa.Convert:
+		if x.X.Pos().IsValid() {
+			return x.X.Pos()
+		}
+	case *ssa.Slice:
+		if x.X.Pos().IsValid() {
+			return x.X.Pos()
+		}
+	}
+	if fn != nil {
+		return fn.Pos()
+	}
+	return token.NoPos
+}
+
 func familySSAIsGlobal(v ssa.Value) bool {
 	_, ok := familySSAOrigin(v).(*ssa.Global)
 	return ok
@@ -1408,7 +1458,7 @@ func (a *familySSA) checkServingPositionSinks() {
 		if fn == nil || a.isSanctionedFunc(fn) {
 			continue
 		}
-		a.record(v.Pos(), fn, v, "serving-position",
+		a.record(familySSAValuePos(v, fn), fn, v, "serving-position",
 			"family-derived text handed directly to the serialization boundary", nil, v.Type())
 	}
 }
