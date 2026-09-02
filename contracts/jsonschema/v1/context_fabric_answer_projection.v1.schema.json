@@ -1069,6 +1069,16 @@
           "type": "integer",
           "minimum": 0
         },
+        "cohort_member_selection_basis": {
+          "description": "The order the group-aware clamp took cohort members in when it chose which of them survived the member budget (CHAOS-4809). ABSENT whenever the clamp ran no group-aware selection at all -- every flat cohort, and every grouped cohort that fitted its budget -- so it never names an order that did not execute. The counters beside it say HOW MUCH was dropped; this says by WHAT ORDER the survivors were chosen, which is the one thing about a squeezed grouped cohort a reader could not recover from this document. The selection's before is cohort.total, its after is the length of cohort.members, and the kept member ids are those members' own canonical ids.",
+          "type": "string",
+          "enum": [
+            "canonical_id_lexical",
+            "largest_group_round_robin",
+            "attention_rank",
+            "overlap_aware_set_cover"
+          ]
+        },
         "facts_omitted": {
           "type": "integer",
           "minimum": 0

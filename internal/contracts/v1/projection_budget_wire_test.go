@@ -56,6 +56,34 @@ var optionalBudgetCounters = []string{
 	"cohort_groups_omitted",
 }
 
+// optionalBudgetNonCounters are the schema-optional ProjectionBudget fields
+// that are NOT counters, and therefore do NOT follow the rule above.
+//
+// There is exactly one, and it is the deliberate exception rather than the
+// beginning of a drift. cohort_member_selection_basis (CHAOS-4809) is a
+// closed ENUM naming the order the group-aware clamp chose surviving members
+// by, and it carries `omitempty` for two reasons the counters do not share:
+//
+//  1. Its absence is a CLAIM, not a silence. A counter at zero says "nothing
+//     was dropped", which a reader needs told explicitly -- that is the whole
+//     argument for the non-omitempty rule above. This field's absence says
+//     "no group-aware selection ran at all", which is a different and equally
+//     explicit statement, and it is the true one for every flat cohort and
+//     every grouped cohort that fitted its budget. Emitting a value there
+//     would name an order that never executed, which is the CHAOS-4809 defect
+//     inverted.
+//  2. There is no honest zero to emit. The counters have one; this field's
+//     Go zero value is the empty string, which is not a member of the
+//     narrowing-basis vocabulary, so a non-omitempty field would put a value
+//     on the wire that the schema's own enum rejects.
+//
+// It is listed separately rather than folded into optionalBudgetCounters so
+// that the distinction is stated where a future reader meets it, instead of
+// this field silently widening the counters' rule into "omitempty is fine".
+var optionalBudgetNonCounters = []string{
+	"cohort_member_selection_basis",
+}
+
 func TestProjectionBudgetWirePayloadIsPinned(t *testing.T) {
 	encoded, err := json.Marshal(ContextFabricProjectionBudget{})
 	if err != nil {
@@ -147,7 +175,7 @@ func TestOptionalBudgetCountersMatchTheSchema(t *testing.T) {
 		}
 	}
 	sort.Strings(optional)
-	want := append([]string(nil), optionalBudgetCounters...)
+	want := append(append([]string(nil), optionalBudgetCounters...), optionalBudgetNonCounters...)
 	sort.Strings(want)
 	if !reflect.DeepEqual(optional, want) {
 		t.Errorf("the schema's optional ProjectionBudget fields have changed:\n  schema: %v\n  pinned: %v\nUpdate optionalBudgetCounters and the wire fixture together, deliberately.",
@@ -164,8 +192,20 @@ func TestOptionalBudgetCountersMatchTheSchema(t *testing.T) {
 	if err := json.Unmarshal(encoded, &payload); err != nil {
 		t.Fatal(err)
 	}
+	// The non-counters are exempt from "must reach the wire at zero" BY
+	// CONSTRUCTION, for the reasons recorded on optionalBudgetNonCounters --
+	// their absence is the statement. Exempting them by name, from that
+	// explicit list, keeps the check binding on every other field: a counter
+	// that silently gained `omitempty` still fails here.
+	exempt := make(map[string]struct{}, len(optionalBudgetNonCounters))
+	for _, name := range optionalBudgetNonCounters {
+		exempt[name] = struct{}{}
+	}
 	missing := make([]string, 0, len(properties))
 	for name := range properties {
+		if _, isExempt := exempt[name]; isExempt {
+			continue
+		}
 		if _, present := payload[name]; !present {
 			missing = append(missing, name)
 		}
@@ -173,5 +213,61 @@ func TestOptionalBudgetCountersMatchTheSchema(t *testing.T) {
 	sort.Strings(missing)
 	if len(missing) > 0 {
 		t.Errorf("the schema declares ProjectionBudget fields the zero payload never emits: %s", strings.Join(missing, ", "))
+	}
+}
+
+// TestBudgetSelectionBasisIsAbsentRatherThanEmpty states the property
+// optionalBudgetNonCounters records, in the terms a future change would
+// violate: the basis reaches the wire when a selection ran, and is ABSENT --
+// never present-and-empty -- when none did.
+//
+// Present-and-empty is the specific failure this pins. Dropping `omitempty`
+// would emit "cohort_member_selection_basis": "", which is not a member of
+// the narrowing-basis enum, so every projection of a flat cohort would stop
+// validating against the published schema while every Go-side test kept
+// passing.
+func TestBudgetSelectionBasisIsAbsentRatherThanEmpty(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		budget  ContextFabricProjectionBudget
+		want    any
+		present bool
+	}{
+		{
+			name:    "no selection ran",
+			budget:  ContextFabricProjectionBudget{},
+			present: false,
+		},
+		{
+			name: "a selection ran and named its order",
+			budget: ContextFabricProjectionBudget{
+				Truncated:                  true,
+				CohortMembersOmitted:       2,
+				CohortMemberSelectionBasis: ContextFabricNarrowingBasisOverlapAwareSetCover,
+			},
+			want:    "overlap_aware_set_cover",
+			present: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			encoded, err := json.Marshal(testCase.budget)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(encoded, &payload); err != nil {
+				t.Fatal(err)
+			}
+			got, present := payload["cohort_member_selection_basis"]
+			if present != testCase.present {
+				t.Fatalf("cohort_member_selection_basis present = %v, want %v (payload=%s)", present, testCase.present, encoded)
+			}
+			if present && got != testCase.want {
+				t.Fatalf("cohort_member_selection_basis = %#v, want %#v", got, testCase.want)
+			}
+			if err := testCase.budget.Validate(); err != nil {
+				t.Fatalf("Validate() = %v", err)
+			}
+		})
 	}
 }

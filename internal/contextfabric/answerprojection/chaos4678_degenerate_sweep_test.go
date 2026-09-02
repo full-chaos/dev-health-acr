@@ -155,15 +155,34 @@ func TestGroupAwareMemberAllowanceDegenerateInputSweep(t *testing.T) {
 			}
 
 			var first map[string]struct{}
+			var firstBasis contractsv1.ContextFabricNarrowingBasis
 			for i := 0; i < 5; i++ {
-				got := groupAwareMemberAllowance(cohort, row.maxMembers)
+				got, basis := groupAwareMemberAllowance(cohort, row.maxMembers)
 				if i == 0 {
-					first = got
+					first, firstBasis = got, basis
 					continue
 				}
 				if !sameStringSet(got, first) {
 					t.Fatalf("run %d: got %v, want %v -- identical requests must select identical members", i, got, first)
 				}
+				// CHAOS-4809: the basis is now DISCLOSED, so it is subject
+				// to the same determinism bar as the selection it describes.
+				// A basis that varied between identical requests would be
+				// worse than none: a reader would attribute two different
+				// member sets to two different orders when the order never
+				// changed.
+				if basis != firstBasis {
+					t.Fatalf("run %d: basis = %q, want %q -- identical requests must report an identical basis", i, basis, firstBasis)
+				}
+			}
+			// A selection that RAN must name its order, and one that did not
+			// run must name none. This pairing is what stops the disclosure
+			// from drifting into a default that survives the nil case.
+			if (first == nil) != (firstBasis == "") {
+				t.Fatalf("allowance %v and basis %q disagree about whether a selection ran", first, firstBasis)
+			}
+			if firstBasis != "" && !contractsv1.ValidContextFabricNarrowingBasis(firstBasis) {
+				t.Fatalf("basis = %q is not a narrowing-basis vocabulary member", firstBasis)
 			}
 			if !row.checkFloor {
 				return

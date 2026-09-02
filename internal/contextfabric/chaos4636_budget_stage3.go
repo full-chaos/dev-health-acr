@@ -144,7 +144,13 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		declined = RetryDeclinedInsufficientDeadline
 	}
 	if declined != RetryDeclinedNotApplicable {
-		return InvestigationResult{}, assemblyTelemetry{}, e.planRefusal(ctx, principal, plan, measurement, overrun, false, grouped, narrowed.Basis, before, declined)
+		// CHAOS-4809 PATH 2: BOTH counts, as narrowSynthesisInput actually
+		// computed them. This used to pass `before` for both, so a refusal
+		// that had already run a real overlap-aware set-cover selection
+		// published it as a no-op -- the basis field naming an order and the
+		// count pair denying that anything happened, with no way for a
+		// reader to tell which to believe.
+		return InvestigationResult{}, assemblyTelemetry{}, e.planRefusal(ctx, principal, plan, measurement, overrun, false, grouped, narrowed.Basis, before, after, declined)
 	}
 
 	e.recordPlanNarrowingStep(plan, PlanNarrowing{
@@ -177,7 +183,12 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// The over-budget measurement is not lost -- it is recorded on the
 		// event below -- but the ERROR the caller sees is the one that
 		// actually stopped the answer.
-		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, before, grouped, false, overrun, narrowed.Basis)
+		// CHAOS-4809 PATH 3: `before, after`, not `before, before`. This is
+		// the path where the narrowed cohort was actually USED -- synthesis
+		// ran against the selected members and then the model call failed --
+		// so it was the one path publishing a selection as a no-op while a
+		// real answer had genuinely been attempted over the narrowed set.
+		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, narrowed.Basis)
 		event.MeasuredItems = measurement.Items.Budgeted()
 		event.MeasuredBytes = measurement.Bytes
 		event.RetryAttempted = true
@@ -361,11 +372,27 @@ func (e *Engine) retryDeadlineAvailable(ctx context.Context) bool {
 
 // planRefusal emits the telemetry and builds the refusal.
 //
-// members is the cohort size the refusal could not narrow, carried so the
-// event says WHAT could not be reduced rather than reporting 0 -> 0, which is
-// what it did before the rig showed how uninformative that is.
-func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members int, declined RetryDeclinedReason) error {
-	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, members, grouped, false, overrun, basis)
+// members is the cohort the refusal was given, and selected is what the
+// grouped selection actually admitted out of it. They were ONE parameter
+// until CHAOS-4809, emitted as (members, members), which is where this path
+// lost the selection's effect: narrowSynthesisInput has already run by the
+// time this is called, so on a declined retry a real set-cover selection had
+// computed a genuinely smaller cohort and the event reported it as a no-op.
+// Two parameters make that state unrepresentable, the same way
+// PlanNarrowingEventFrom's groupAxis/groupsNarrowed split does.
+//
+// They are EQUAL, legitimately, when the retry was declined because there
+// was nothing left to narrow -- and that case must stay equal. Publishing a
+// narrowing that did not happen is the same defect as suppressing one that
+// did.
+//
+// Whether the selected cohort was ever SERVED is a separate fact and is not
+// folded in here: RetryAttempted already carries it. On this path it is
+// false -- the selection was computed and then discarded -- and a reader
+// needs both halves, because "we would have narrowed to four" and "we
+// answered over four" are different statements about the run.
+func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason) error {
+	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, selected, grouped, false, overrun, basis)
 	event.MeasuredItems = measurement.Items.Budgeted()
 	event.MeasuredBytes = measurement.Bytes
 	event.RetryAttempted = retryAttempted

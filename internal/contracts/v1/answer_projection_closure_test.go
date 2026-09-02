@@ -295,7 +295,15 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// classified identically and for the identical reason: a dual-table
 		// fact's second table is producer-issued content, exactly as
 		// untrusted as its first.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 214},
+		// CHAOS-4809: 214 -> 215 -- the projection budget's
+		// cohort_member_selection_basis contributed one string leaf,
+		// trusted-because-closed for the same reason the plan's "basis"
+		// leaf is (the identical ContextFabricNarrowingBasis vocabulary,
+		// selected by deterministic code). The investigation_result
+		// surface below gains NOTHING: the canonical result carries no
+		// projection budget, since the budget describes what a PROJECTION
+		// dropped and the canonical result is what it was projected from.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 215},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -512,7 +520,18 @@ func trustedBecauseClosed(path string) bool {
 		// The detail's DISPLAY text (label/phrasing/raw) is deliberately
 		// NOT here — declared untrusted in both lists.
 		"code", "fact_kind", "scope_outcome", "policy", "origin_kind",
-		"supported_kinds", "skipped_kinds":
+		"supported_kinds", "skipped_kinds",
+		// CHAOS-4809: "cohort_member_selection_basis" is
+		// ContextFabricProjectionBudget's disclosure of the order the
+		// group-aware clamp chose surviving members by. It is the SAME
+		// closed ContextFabricNarrowingBasis vocabulary the "basis" and
+		// "narrowing_basis" cases above already trust, named apart only
+		// because it is the PROJECTION's own selection rather than the
+		// plan's. It is chosen by contractsv1.SelectGroupCoverMembers --
+		// deterministic code, never a model -- and rejected by
+		// ContextFabricProjectionBudget.Validate when it is not a
+		// vocabulary member, so it cannot carry prose.
+		"cohort_member_selection_basis":
 		return true
 	// Opaque identifiers and digests: frozen handles, never prose.
 	case "detail_id", // CHAOS-4690: engine-minted ordinal coverage-detail handle.

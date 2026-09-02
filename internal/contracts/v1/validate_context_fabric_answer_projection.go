@@ -519,5 +519,26 @@ func (b ContextFabricProjectionBudget) Validate() error {
 	if b.Truncated != dropped {
 		return fmt.Errorf("answer projection budget truncated flag must match the declared drops")
 	}
+	// CHAOS-4809. Deliberately NOT part of the `dropped` disjunction above:
+	// this field is not a count of anything dropped, it is the order the
+	// drop was decided by, so folding it in would let a basis alone set
+	// Truncated and break the if-and-only-if the disjunction enforces.
+	//
+	// The two checks it does get are the two ways a producer can lie with
+	// it. An unrecognised value would put a reader in exactly the position
+	// this ticket removed them from -- holding a token they cannot resolve
+	// to an order. And a basis on a projection that dropped no member names
+	// a selection that did not happen, which is the same defect pointing the
+	// other way: the group-aware allowance only runs when the budget is
+	// smaller than the cohort, so a basis without a member drop is
+	// unreachable from the producer and can only be a hand-built payload.
+	if b.CohortMemberSelectionBasis != "" {
+		if !ValidContextFabricNarrowingBasis(b.CohortMemberSelectionBasis) {
+			return fmt.Errorf("answer projection budget cohort member selection basis %q is not a narrowing basis", b.CohortMemberSelectionBasis)
+		}
+		if b.CohortMembersOmitted == 0 {
+			return fmt.Errorf("answer projection budget declares a cohort member selection basis but omitted no members")
+		}
+	}
 	return nil
 }
