@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -119,6 +120,11 @@ const (
 	// FrameRepairBoundUnnamedFieldChanged: the candidate changed a field
 	// the violated invariant does not read at all.
 	FrameRepairBoundUnnamedFieldChanged FrameRepairBoundViolation = "unnamed_field_changed"
+	// FrameRepairBoundSubjectRetargeted: the candidate introduced a
+	// retrieval pointer the proposal did not carry. A repair may re-type
+	// the question's structure; it may never point it at a different
+	// subject.
+	FrameRepairBoundSubjectRetargeted FrameRepairBoundViolation = "subject_retargeted"
 )
 
 // invariantNamedGoals declares, per invariant, WHICH goals that
@@ -227,6 +233,33 @@ func CheckFrameRepairBound(proposed, repaired QuestionFrame, failure FrameValida
 		!sameSubjectExpression(proposed.SubjectExpression, repaired.SubjectExpression) {
 		return FrameRepairBoundUnnamedFieldChanged
 	}
+	// WHEN THE KIND DOES MOVE, the repair may RE-TYPE the question's
+	// structure but may never RE-TARGET it: every retrieval pointer in the
+	// repaired expression must already have been in the proposed one.
+	//
+	// Skipping the variant comparison entirely on a permitted Kind move
+	// was too permissive, and adversarial review built the counterexample:
+	// a count over `named_subject("team a")` fails I9, and the repair came
+	// back as `children_of_scope(anchor_terms=["platform team"],
+	// member_kind=project)` -- ACCEPTED, because the Kind move excused the
+	// whole payload. I9 names Goals and the Kind; it does not name the
+	// terms, and "which team are we counting for" is not something a
+	// repair for "a count needs a set-valued kind" has any business
+	// deciding.
+	//
+	// Subset rather than equality, because a Kind move legitimately
+	// REDISTRIBUTES pointers -- a named subject's Terms become a scoped
+	// set's AnchorTerms -- and legitimately supplies a member or group
+	// KIND the old variant had nowhere to put. What it may not do is
+	// introduce a pointer the user never wrote.
+	if kindMoved {
+		proposedTerms := retrievalPointers(proposed.SubjectExpression)
+		for term := range retrievalPointers(repaired.SubjectExpression) {
+			if !proposedTerms[term] {
+				return FrameRepairBoundSubjectRetargeted
+			}
+		}
+	}
 
 	// GOALS.
 	proposedGoals := goalSet(proposed.Goals)
@@ -297,6 +330,40 @@ func CheckFrameRepairBound(proposed, repaired QuestionFrame, failure FrameValida
 // so the encoding already exists and is deterministic (Go marshals struct
 // fields in declaration order, and every collection here is an ordered
 // slice, never a map).
+// retrievalPointers collects every free-string pointer an expression
+// carries -- a named subject's terms, a scoped set's anchor terms, and
+// both for every operand -- as a set, so a Kind move can be checked for
+// re-targeting without caring HOW the pointers were redistributed between
+// variants.
+func retrievalPointers(expression SubjectExpression) map[string]bool {
+	pointers := map[string]bool{}
+	add := func(terms []string) {
+		for _, term := range terms {
+			trimmed := strings.TrimSpace(term)
+			if trimmed != "" {
+				pointers[trimmed] = true
+			}
+		}
+	}
+	if expression.Named != nil {
+		add(expression.Named.Terms)
+	}
+	if expression.Scoped != nil {
+		add(expression.Scoped.AnchorTerms)
+	}
+	if expression.Explicit != nil {
+		for _, operand := range expression.Explicit.Operands {
+			if operand.Named != nil {
+				add(operand.Named.Terms)
+			}
+			if operand.Scoped != nil {
+				add(operand.Scoped.AnchorTerms)
+			}
+		}
+	}
+	return pointers
+}
+
 func sameSubjectExpression(a, b SubjectExpression) bool {
 	left, leftErr := json.Marshal(a)
 	right, rightErr := json.Marshal(b)
@@ -506,10 +573,62 @@ func NormalizeFrame(frame QuestionFrame) QuestionFrame {
 	}
 	frame.Emphasis = validEmphasisOnly(frame.Emphasis)
 	frame.Dimensions = validDimensionsOnly(frame.Dimensions)
-	if frame.Version == "" {
-		frame.Version = QuestionFrameVersion
-	}
+	// Version is SERVER-DERIVED and is stamped UNCONDITIONALLY, never
+	// merely defaulted when absent.
+	//
+	// Preserving a non-empty proposed version let a value the server did
+	// not author survive into the receipt and into the `frame_version` log
+	// field -- found by adversarial review, which put
+	// "zzz-confidential-frame-version" through validation, the event and
+	// the real slog line untouched. Two things wrong at once: free text
+	// reached a closed-vocabulary telemetry field, and a model or a
+	// repairer could FALSIFY which derivation table produced a frame,
+	// which is the one claim the version exists to make.
+	frame.Version = QuestionFrameVersion
+
+	// Goals are canonicalized here for the same reason Emphasis and
+	// Dimensions are: they are documented as a SET, normalized into
+	// vocabulary order, and a frame built directly rather than through
+	// SanitizeInvestigationGoals kept duplicates and emission order.
+	// `[rank_or_survey, assess_state, rank_or_survey]` validated as `valid`
+	// and was persisted and logged verbatim, so two semantically identical
+	// frames produced different representations. That matters beyond
+	// tidiness: the family derivation is specified as a PURE FUNCTION of
+	// the frame, and a function whose input can differ by order is not one.
+	frame.Goals = canonicalGoals(frame.Goals)
 	return frame
+}
+
+// canonicalGoals deduplicates and returns the goal set in vocabulary
+// order. Membership is NOT filtered here -- an out-of-vocabulary goal is a
+// phase-A1 failure under I15, and silently dropping one in normalization
+// would take that failure away from the invariant that names it.
+func canonicalGoals(in []InvestigationGoal) []InvestigationGoal {
+	if len(in) == 0 {
+		return in
+	}
+	seen := make(map[InvestigationGoal]bool, len(in))
+	for _, goal := range in {
+		seen[goal] = true
+	}
+	out := make([]InvestigationGoal, 0, len(seen))
+	for _, member := range investigationGoals {
+		if seen[member] {
+			out = append(out, member)
+			delete(seen, member)
+		}
+	}
+	// Any member left is outside the vocabulary. It is APPENDED rather
+	// than dropped, in its own stable order, so I15 still sees it and
+	// fails by name.
+	remaining := make([]InvestigationGoal, 0, len(seen))
+	for _, goal := range in {
+		if seen[goal] {
+			remaining = append(remaining, goal)
+			delete(seen, goal)
+		}
+	}
+	return append(out, remaining...)
 }
 
 func validEmphasisOnly(in []AnswerEmphasis) []AnswerEmphasis {

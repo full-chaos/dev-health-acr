@@ -616,3 +616,139 @@ func TestWidenedObligationsAreAdvisoryAndNeverNarrow(t *testing.T) {
 		t.Fatal("HasObligation returned true for a model-widened obligation")
 	}
 }
+
+// TestRepairBoundRefusesARetargetedSubjectOnAPermittedKindMove is codex
+// round 2's first finding, reproduced and closed.
+//
+// The previous rule skipped the variant comparison entirely whenever the
+// Kind move itself was permitted, on the (correct) ground that changing
+// the discriminator necessarily rewrites the variant. Correct, and too
+// broad: it excused the whole payload. The executed counterexample was a
+// count over `named_subject("team a")` failing I9 and coming back as
+// `children_of_scope(anchor_terms=["platform team"], member_kind=project)`
+// -- ACCEPTED. I9's condition is "a count needs a set-valued kind"; it
+// names Goals and the Kind and says nothing about WHICH subject, so
+// deciding that is not a repair, it is a different question.
+//
+// The rule now: a repair may RE-TYPE the structure, never RE-TARGET it.
+// Every retrieval pointer in the repaired expression must already have
+// been in the proposed one.
+func TestRepairBoundRefusesARetargetedSubjectOnAPermittedKindMove(t *testing.T) {
+	proposed := QuestionFrame{
+		Goals: []InvestigationGoal{GoalCountOrAggregate},
+		SubjectExpression: SubjectExpression{
+			Kind:  SubjectExpressionNamed,
+			Named: &NamedSubjectExpression{Terms: []string{"team a"}},
+		},
+	}
+	failure, bad := ValidateFramePhaseA1(proposed)
+	if !bad || failure.Invariant != FrameInvariantI9 {
+		t.Fatalf("precondition: want an I9 failure, got %q/%v", failure.Invariant, bad)
+	}
+
+	retargeted := QuestionFrame{
+		Goals: []InvestigationGoal{GoalCountOrAggregate},
+		SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionChildrenOfScope,
+			Scoped: &ScopedSetExpression{
+				AnchorTerms: []string{"platform team"},
+				MemberKind:  contractsv1.ContextFabricSubjectProject,
+			},
+		},
+	}
+	if violation := CheckFrameRepairBound(proposed, retargeted, failure); violation != FrameRepairBoundSubjectRetargeted {
+		t.Fatalf("bound violation = %q, want %q -- a repair for \"a count needs a set-valued kind\" may not decide WHICH subject is counted",
+			violation, FrameRepairBoundSubjectRetargeted)
+	}
+
+	// The legitimate repair REDISTRIBUTES the pointer it was given: the
+	// named subject's term becomes the scoped set's anchor, and the new
+	// variant supplies the member kind the old one had nowhere to put.
+	// Subset, not equality, is what keeps this reachable.
+	redistributed := QuestionFrame{
+		Goals: []InvestigationGoal{GoalCountOrAggregate},
+		SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionChildrenOfScope,
+			Scoped: &ScopedSetExpression{
+				AnchorTerms: []string{"team a"},
+				MemberKind:  contractsv1.ContextFabricSubjectProject,
+			},
+		},
+	}
+	if violation := CheckFrameRepairBound(proposed, redistributed, failure); violation != FrameRepairBoundNone {
+		t.Fatalf("bound violation = %q on the legitimate redistribution, want none -- pinning this too tight is how round 2 made I7 and I9 repairs unreachable", violation)
+	}
+	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"},
+		&stubRepairer{candidate: redistributed}, proposed, nil, "", nil)
+	if result.Outcome != FrameValidationOutcomeRepaired {
+		t.Fatalf("outcome = %q (bound %q), want repaired", result.Outcome, result.ViolatedBound)
+	}
+}
+
+// TestFrameVersionIsAlwaysTheServerConstant is codex round 2's second
+// finding.
+//
+// NormalizeFrame defaulted the version only when absent, so a non-empty
+// proposed version survived into the validated frame, the receipt and the
+// `frame_version` log field. Two things wrong at once: free text reached a
+// closed telemetry field, and a model or repairer could FALSIFY which
+// derivation table produced a frame -- the one claim the version exists to
+// make.
+func TestFrameVersionIsAlwaysTheServerConstant(t *testing.T) {
+	const forged = "zzz-confidential-frame-version"
+	proposed := namedFrame(GoalAssessState)
+	proposed.Version = forged
+
+	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"}, nil, proposed, nil, "", nil)
+	if result.Outcome != FrameValidationOutcomeValid {
+		t.Fatalf("outcome = %q, want valid", result.Outcome)
+	}
+	if result.Frame.Version != QuestionFrameVersion {
+		t.Fatalf("validated frame version = %q, want %q -- the version is SERVER-DERIVED and stamped unconditionally, never defaulted",
+			result.Frame.Version, QuestionFrameVersion)
+	}
+	event := FrameValidationEventFrom(proposed, result, "")
+	if event.FrameVersion != QuestionFrameVersion {
+		t.Fatalf("event frame_version = %q, want %q", event.FrameVersion, QuestionFrameVersion)
+	}
+}
+
+// TestGoalsAreCanonicalizedIntoASet is codex round 2's third finding.
+//
+// Goals are documented as a SET in vocabulary order, but only the emission
+// boundary's sanitizer produced that shape: a frame built directly kept
+// duplicates and emission order, validated as `valid`, and was persisted
+// and logged verbatim. Beyond the representation inconsistency, the family
+// derivation of the NEXT slice is specified as a pure function of the
+// frame, and a function whose input can differ by order is not one.
+func TestGoalsAreCanonicalizedIntoASet(t *testing.T) {
+	proposed := QuestionFrame{
+		Goals: []InvestigationGoal{GoalRankOrSurvey, GoalAssessState, GoalRankOrSurvey},
+		SubjectExpression: SubjectExpression{
+			Kind:       SubjectExpressionDiscoveredKind,
+			Discovered: &DiscoveredSetExpression{MemberKind: contractsv1.ContextFabricSubjectTeam},
+		},
+	}
+	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"}, nil, proposed, nil, "", nil)
+	if result.Outcome != FrameValidationOutcomeValid {
+		t.Fatalf("outcome = %q, want valid", result.Outcome)
+	}
+	assertExactGoals(t, result.Frame.Goals, []InvestigationGoal{GoalAssessState, GoalRankOrSurvey})
+
+	// Two orderings of one goal set must produce the identical frame --
+	// this is the property the family derivation will rest on.
+	other := proposed
+	other.Goals = []InvestigationGoal{GoalAssessState, GoalRankOrSurvey}
+	otherResult := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"}, nil, other, nil, "", nil)
+	assertExactGoals(t, otherResult.Frame.Goals, result.Frame.Goals)
+
+	// Canonicalization must NOT swallow an out-of-vocabulary member --
+	// that is I15's failure to name, and dropping it here would take the
+	// failure away from the invariant that reports it.
+	invalid := proposed
+	invalid.Goals = []InvestigationGoal{GoalAssessState, InvestigationGoal("zzz-not-a-goal")}
+	failure, bad := ValidateFramePhaseA1(NormalizeFrame(invalid))
+	if !bad || failure.Invariant != FrameInvariantI15 {
+		t.Fatalf("canonicalization hid an out-of-vocabulary goal: failure = %q/%v", failure.Invariant, bad)
+	}
+}
