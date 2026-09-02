@@ -287,15 +287,42 @@ check_endpoint_profile_gate_step() {
     printf 'the endpoint-profile gate step does not run go test ./ci/checkendpointprofiles/ -- it sets the environment for a proof it never invokes\n' >&2
     return 1
   fi
+
+  # Running the gate is not enough: its FAILURE has to reach the job.
+  # Merge-gate round 4 (EXECUTED): with only the text check above,
+  # `go test ./ci/checkendpointprofiles/... || true` made a failing contract
+  # gate exit 0 and this script still printed both PASS lines. Asserting the
+  # command is PRESENT is not asserting the property HOLDS.
+  if printf '%s' "$block" | grep -Eq '\|\|[[:space:]]*true|continue-on-error:[[:space:]]*true|;[[:space:]]*exit[[:space:]]+0|\|\|[[:space:]]*:'; then
+    printf 'the endpoint-profile gate step swallows its own failure (|| true, continue-on-error, or an unconditional exit 0) -- a failing gate would leave the job green\n' >&2
+    return 1
+  fi
 }
 
 # A pin that accepts a branch name is not a pin: the sparse checkout would
 # follow ops's moving default branch with no acr commit recording it. The
 # workflow must reject the shape BEFORE resolving the ref.
 check_pin_requires_full_sha() {
-  local file="$1"
-  if ! grep -qF '[0-9a-f]{40}' "$file"; then
-    printf 'the workflow does not require ci/ops-contract.pin to be a full 40-hex commit SHA -- a branch name would resolve and silently float\n' >&2
+  local file="$1" block
+  # Anchored to the pin-validation STEP, not grepped from the whole document.
+  # Merge-gate round 4 (EXECUTED): a document-wide grep was satisfied by a
+  # decoy `# [0-9a-f]{40}` comment while the real command was loosened to
+  # `^[a-z0-9]+$`, so the pin check passed and `main` in ci/ops-contract.pin
+  # would have been accepted, fetched and checked out. The regex has to be
+  # where the validation happens.
+  block="$(awk '
+    /Verify the pin names an immutable commit/ { grab=1 }
+    grab && /^      - name: / && !/Verify the pin names an immutable commit/ { grab=0 }
+    grab { print }
+  ' "$file")"
+
+  if [ -z "$block" ]; then
+    printf 'no pin-shape validation step ("Verify the pin names an immutable commit") found in %s\n' "$file" >&2
+    return 1
+  fi
+  # Strip comments so a decoy in a comment cannot satisfy the check.
+  if ! printf '%s' "$block" | sed 's/#.*$//' | grep -qF '[0-9a-f]{40}'; then
+    printf 'the pin-validation step does not require a full 40-hex commit SHA in its own command (a comment does not count) -- a branch name would resolve and silently float\n' >&2
     return 1
   fi
 }
@@ -487,5 +514,21 @@ checkout_floating_ref="$tmpdir/checkout-floating-ref.yml"
 sed 's/ref: ${{ steps.ops-pin.outputs.sha }}/ref: main/' "$workflow" > "$checkout_floating_ref"
 assert_check_fails 'pointed the ops-contract checkout at a floating ref while keeping the pin regex' \
   check_pin_binds_checkout_ref "$checkout_floating_ref"
+
+# (q) keep the gate step but swallow its failure, so a failing contract gate
+# leaves the job green.
+gate_swallows_failure="$tmpdir/gate-swallows-failure.yml"
+sed 's|run: go test ./ci/checkendpointprofiles/...|run: go test ./ci/checkendpointprofiles/... \|\| true|' \
+  "$workflow" > "$gate_swallows_failure"
+assert_check_fails 'made the gate step swallow its own failure with || true' \
+  check_endpoint_profile_gate_step "$gate_swallows_failure"
+
+# (r) loosen the real pin regex but leave a decoy in a comment, which is what
+# defeated the document-wide grep.
+pin_decoy_comment="$tmpdir/pin-decoy-comment.yml"
+sed "s|grep -Eq '\^\[0-9a-f\]{40}\$'|grep -Eq '^[a-z0-9]+\$' # [0-9a-f]{40}|" \
+  "$workflow" > "$pin_decoy_comment"
+assert_check_fails 'loosened the pin regex while leaving a decoy [0-9a-f]{40} in a comment' \
+  check_pin_requires_full_sha "$pin_decoy_comment"
 
 printf 'PASS: all negative controls correctly failed their check\n'
