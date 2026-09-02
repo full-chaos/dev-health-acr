@@ -42,6 +42,154 @@ var frameValidationEventLogKeys = map[string]string{
 	"EmittedShape":           "emitted_shape",
 	"DerivedShape":           "derived_shape",
 	"FrameVersion":           "frame_version",
+	// RequirementDerivation is a STRUCT flattened across many keys, so this
+	// entry names the one key that is always present and
+	// requirementDerivationLogKeys below carries the rest. Mapping it to a
+	// single key here would let a sub-field be added and never logged --
+	// the very gap this map exists to close -- so the companion test
+	// enforces the same exhaustiveness one level down.
+	"RequirementDerivation": "requirement_derivation_version",
+}
+
+// requirementDerivationLogKeys is the same explicit field -> key map, one
+// level down, for the requirement summary flattened onto the same line.
+//
+// The three histogram fields map to a key PREFIX rather than a key: each
+// expands to one key per closed-vocabulary member, and the test below
+// checks every member's key is present. That is what makes an OBSERVED
+// ZERO visible -- a tier that counted nothing still has its key, so "0" and
+// "the classifier never reached this tier" do not look alike.
+var requirementDerivationLogKeys = map[string]string{
+	"Derived":          "requirement_cells_derived",
+	"Served":           "requirement_cells_served",
+	"Unserved":         "requirement_cells_unserved",
+	"Version":          "requirement_derivation_version",
+	"UnavailableCells": "requirement_unavailable_",
+	"Quantifiers":      "requirement_quantifier_",
+	"Roles":            "requirement_role_",
+}
+
+// TestEveryRequirementSummaryFieldReachesTheLogLine is the structural half
+// for the requirement summary: struct and key map must agree in both
+// directions, so a field added to the summary and never logged fails here
+// rather than becoming a field nobody can grep for.
+func TestEveryRequirementSummaryFieldReachesTheLogLine(t *testing.T) {
+	summaryType := reflect.TypeOf(RequirementDerivationSummary{})
+	seen := map[string]bool{}
+	for i := 0; i < summaryType.NumField(); i++ {
+		name := summaryType.Field(i).Name
+		seen[name] = true
+		if _, ok := requirementDerivationLogKeys[name]; !ok {
+			t.Errorf("RequirementDerivationSummary.%s has no log key -- a field that is never logged is not telemetry, it is a field", name)
+		}
+	}
+	for name := range requirementDerivationLogKeys {
+		if !seen[name] {
+			t.Errorf("log key map names %q, which is not a field on RequirementDerivationSummary", name)
+		}
+	}
+}
+
+// TestRequirementTelemetryEmitsEveryClosedTokenIncludingZeroes drives the
+// PRODUCTION sink and asserts the emitted record's own bytes.
+//
+// It asserts the ZEROES as hard as the counts. A histogram that omits its
+// empty buckets is the same failure as a gate tier with no positive
+// fixture: an operator seeing no `requirement_unavailable_table_shape_
+// undeclared` key cannot tell whether no cell hit that cause or whether the
+// classifier never reached it.
+func TestRequirementTelemetryEmitsEveryClosedTokenIncludingZeroes(t *testing.T) {
+	summary := RequirementDerivationSummaryFrom([]DerivedRequirement{
+		{
+			RequirementCoordinate: RequirementCoordinate{Obligation: ObligationState, Role: SubjectRoleMember, Subject: SubjectTeam},
+			Kind:                  ObligationKindRead,
+			FactKinds:             []FactKind{FactHealth},
+			Scope:                 CompletionScopeEachMember,
+			Quantifier:            CompletionQuantifierAtLeastOne,
+		},
+		{
+			RequirementCoordinate: RequirementCoordinate{Obligation: ObligationState, Role: SubjectRoleGroup, Subject: SubjectWorkItem},
+			Kind:                  ObligationKindRead,
+			Scope:                 CompletionScopeEachGroup,
+			Quantifier:            CompletionQuantifierNone,
+			Unavailable:           RequirementReasonSubjectKindUnsupported,
+		},
+	})
+	event := FrameValidationEvent{Outcome: FrameValidationOutcomeValid, RequirementDerivation: summary}
+
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordFrameValidation(context.Background(), storage.Principal{OrgID: "org_sink_test"}, event)
+	})
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1", len(records))
+	}
+	record := records[0]
+
+	checked := 0
+	for _, reason := range RequirementUnavailableReasonVocabulary() {
+		key := "requirement_unavailable_" + string(reason)
+		if _, ok := record[key]; !ok {
+			t.Errorf("record is missing %q -- an omitted zero is indistinguishable from a tier that never ran", key)
+		}
+		checked++
+	}
+	for _, quantifier := range CompletionQuantifierVocabulary() {
+		key := "requirement_quantifier_" + string(quantifier)
+		if _, ok := record[key]; !ok {
+			t.Errorf("record is missing %q", key)
+		}
+		checked++
+	}
+	for _, role := range SubjectRoleVocabulary() {
+		key := "requirement_role_" + string(role)
+		if _, ok := record[key]; !ok {
+			t.Errorf("record is missing %q", key)
+		}
+		checked++
+	}
+	want := RequirementUnavailableReasonCount + CompletionQuantifierCount + SubjectRoleCount
+	if checked != want {
+		t.Fatalf("checked %d histogram keys, want %d", checked, want)
+	}
+
+	if record["requirement_cells_derived"] != float64(2) {
+		t.Errorf("requirement_cells_derived = %v, want 2", record["requirement_cells_derived"])
+	}
+	if record["requirement_cells_unserved"] != float64(1) {
+		t.Errorf("requirement_cells_unserved = %v, want 1", record["requirement_cells_unserved"])
+	}
+	if record["requirement_unavailable_subject_kind_unsupported"] != float64(1) {
+		t.Errorf("the reason histogram did not count the unserved cell: %v", record["requirement_unavailable_subject_kind_unsupported"])
+	}
+	if record["requirement_unavailable_table_shape_undeclared"] != float64(0) {
+		t.Errorf("an untouched tier reports %v, want an OBSERVED zero", record["requirement_unavailable_table_shape_undeclared"])
+	}
+	if record["requirement_accounting"] != "ok" {
+		t.Errorf("requirement_accounting = %v, want the positive statement \"ok\"", record["requirement_accounting"])
+	}
+	if record["requirement_derivation_version"] != RequirementDerivationVersion {
+		t.Errorf("requirement_derivation_version = %v, want %q", record["requirement_derivation_version"], RequirementDerivationVersion)
+	}
+}
+
+// TestRequirementAccountingReportsAViolation: the accounting field is only
+// worth logging if it can say "violated". A summary whose parts do not add
+// up must say so rather than reading healthy.
+func TestRequirementAccountingReportsAViolation(t *testing.T) {
+	broken := RequirementDerivationSummary{Derived: 5, Served: 1, Unserved: 1, Version: RequirementDerivationVersion}
+	if broken.Balanced() {
+		t.Fatal("a summary whose served + unserved is less than derived reports as balanced")
+	}
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordFrameValidation(context.Background(), storage.Principal{OrgID: "org_sink_test"},
+			FrameValidationEvent{Outcome: FrameValidationOutcomeValid, RequirementDerivation: broken})
+	})
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1", len(records))
+	}
+	if records[0]["requirement_accounting"] != "violated" {
+		t.Errorf("requirement_accounting = %v, want \"violated\"", records[0]["requirement_accounting"])
+	}
 }
 
 // TestEveryFrameValidationEventFieldReachesTheLogLine is the structural
@@ -77,7 +225,7 @@ func TestFrameValidationTelemetryEmitsEveryFieldOnARefusal(t *testing.T) {
 	if result.Outcome != FrameValidationOutcomeRefusedInvalid {
 		t.Fatalf("precondition: outcome = %q, want refused_invalid", result.Outcome)
 	}
-	event := FrameValidationEventFrom(proposed, result, "")
+	event := FrameValidationEventFrom(proposed, result, "", nil)
 
 	records := captureSlogJSON(t, func(logger *slog.Logger) {
 		NewSlogEngineTelemetry(logger).RecordFrameValidation(context.Background(), storage.Principal{OrgID: "org_sink_test"}, event)
@@ -114,7 +262,7 @@ func TestFrameValidationTelemetryEmitsEveryFieldOnARefusal(t *testing.T) {
 func TestFrameValidationTelemetryFiresOnValidFramesToo(t *testing.T) {
 	proposed := namedFrame(GoalAssessState)
 	result := ValidateFrame(proposed, nil, "")
-	event := FrameValidationEventFrom(proposed, result, "")
+	event := FrameValidationEventFrom(proposed, result, "", nil)
 
 	records := captureSlogJSON(t, func(logger *slog.Logger) {
 		NewSlogEngineTelemetry(logger).RecordFrameValidation(context.Background(), storage.Principal{OrgID: "org_sink_test"}, event)
@@ -165,7 +313,7 @@ func TestFrameValidationTelemetryLeaksNoQuestionContent(t *testing.T) {
 		Emphasis: []AnswerEmphasis{EmphasisNegativeOutliers},
 	}
 	result := ValidateFrame(proposed, nil, "")
-	event := FrameValidationEventFrom(proposed, result, "")
+	event := FrameValidationEventFrom(proposed, result, "", nil)
 
 	records := captureSlogJSON(t, func(logger *slog.Logger) {
 		NewSlogEngineTelemetry(logger).RecordFrameValidation(context.Background(), storage.Principal{OrgID: "org_sink_test"}, event)
@@ -177,6 +325,26 @@ func TestFrameValidationTelemetryLeaksNoQuestionContent(t *testing.T) {
 	allowed := map[string]bool{"time": true, "level": true, "msg": true, "org_id": true, "request_id": true}
 	for _, key := range frameValidationEventLogKeys {
 		allowed[key] = true
+	}
+	// The requirement summary's keys, DERIVED FROM THE VOCABULARIES rather
+	// than typed out. A hand-typed needle set inherits the author's blind
+	// spot -- the census that missed three files because someone listed
+	// five family constants when the vocabulary has eight -- and here it
+	// would also silently widen the allowlist if a member were renamed.
+	// Deriving them means a new vocabulary member is allowed here for the
+	// same reason it is logged there: because it is in the vocabulary.
+	for _, key := range requirementDerivationLogKeys {
+		allowed[key] = true
+	}
+	allowed["requirement_accounting"] = true
+	for _, reason := range RequirementUnavailableReasonVocabulary() {
+		allowed["requirement_unavailable_"+string(reason)] = true
+	}
+	for _, quantifier := range CompletionQuantifierVocabulary() {
+		allowed["requirement_quantifier_"+string(quantifier)] = true
+	}
+	for _, role := range SubjectRoleVocabulary() {
+		allowed["requirement_role_"+string(role)] = true
 	}
 	for key := range records[0] {
 		if !allowed[key] {
@@ -247,7 +415,7 @@ func TestUnrecognizedGoalIsRejectedAndNeverReachesTelemetry(t *testing.T) {
 	}
 
 	// HALF THREE -- and even so, nothing free-text reaches the log line.
-	event := FrameValidationEventFrom(proposed, result, "")
+	event := FrameValidationEventFrom(proposed, result, "", nil)
 	records := captureSlogJSON(t, func(logger *slog.Logger) {
 		NewSlogEngineTelemetry(logger).RecordFrameValidation(context.Background(), storage.Principal{OrgID: "org_sink_test"}, event)
 	})
@@ -421,8 +589,8 @@ func TestEverySetValuedFieldIsCanonicalOnTheFrameAndInTheEvent(t *testing.T) {
 			baseResult.Frame, permResult.Frame)
 	}
 
-	baseEvent := FrameValidationEventFrom(base, baseResult, "")
-	permEvent := FrameValidationEventFrom(permuted, permResult, "")
+	baseEvent := FrameValidationEventFrom(base, baseResult, "", nil)
+	permEvent := FrameValidationEventFrom(permuted, permResult, "", nil)
 	if !reflect.DeepEqual(baseEvent, permEvent) {
 		t.Errorf("two orderings of one set-valued frame produced DIFFERENT events -- the record must be canonical, not only the object:\n  %+v\n  %+v",
 			baseEvent, permEvent)

@@ -238,6 +238,14 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", rowKe
 		// A work item is valid from creation until it completed or
 		// closed, whichever the source recorded; an open item has no end.
 		validFrom, validTo := requiredTime(createdAt), optionalTime(hasEnded, endedAt)
+		// Deliberately assigns the RAW title: item_normalization.go's pass
+		// trims every label in this package, and it is the only place that
+		// counts the repair. An earlier revision of that change trimmed here
+		// as well, which repaired the row just as well and made it INVISIBLE
+		// -- the three title sites are the ones an operator most wants on the
+		// label_trimmed counter, and a repair applied before the counter is a
+		// silent rewrite. The emptiness fallback still tests the TRIMMED
+		// value, so a whitespace-only title falls back exactly as before.
 		label := title
 		if strings.TrimSpace(label) == "" {
 			label = workItemID
@@ -312,6 +320,8 @@ WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowK
 		validFrom, validTo := requiredTime(createdAt), optionalTime(hasEnded, endedAt)
 		canonicalID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
 		rowSortKey := fmt.Sprintf("%s:%d", repoID, number)
+		// Raw title, trimmed and counted by item_normalization.go -- see
+		// queryWorkItems' note on why the trim does not happen here.
 		label := title
 		if strings.TrimSpace(label) == "" {
 			label = fmt.Sprintf("PR #%d", number)
@@ -442,6 +452,8 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id"
 			}
 			return []candidate{{observedAt: observedAt, sortKey: incidentID, tombstone: &tombstone}}, nil
 		}
+		// Raw title, trimmed and counted by item_normalization.go -- see
+		// queryWorkItems' note on why the trim does not happen here.
 		label := title
 		if strings.TrimSpace(label) == "" {
 			label = incidentID
@@ -602,16 +614,27 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 				EvidenceRefIDs: []string{evidenceRefID},
 				ObservedAt:     observedAt, ValidFrom: stubValidFrom, ValidTo: stubValidTo, SourceVersion: ClickHouseSourceVersion,
 			}
-			refRelationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, sourceCanonicalID, refID, relationshipType)
+			// CHAOS-4874: translate the source spelling before it becomes a
+			// wire type. An inverted spelling (BLOCKED_BY) emits its
+			// vocabulary member with the endpoints exchanged, so it converges
+			// on the same edge as the equivalent forward row; anything the
+			// vocabulary does not know passes through and is quarantined
+			// per-item rather than rejecting the whole batch.
+			refType, refSwap, refSpelling := dependencyRelationshipType(relationshipType)
+			refFrom, refTo := orientDependencyEndpoints(sourceSubject, refSubject, refSwap)
+			refRelationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, refFrom.CanonicalID, refTo.CanonicalID, refSpelling)
 			refRelationship := contractsv1.ContextFabricRelationshipProjection{
-				RelationshipID: refRelationshipID, Type: contractsv1.ContextFabricRelationshipType(strings.ToUpper(relationshipType)),
-				From: sourceSubject, To: refSubject,
+				RelationshipID: refRelationshipID, Type: refType,
+				From: refFrom, To: refTo,
 				Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
 				Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{evidenceRefID},
 				ObservedAt: observedAt, ValidFrom: stubValidFrom, ValidTo: stubValidTo, SourceVersion: ClickHouseSourceVersion,
 			}
 			return []candidate{
-				{observedAt: observedAt, sortKey: rowSortKey, entity: &stubEntity},
+				// The stub exists only to be refRelationship's endpoint, so
+				// it must not outlive it: if the edge is quarantined the
+				// stub is an unreachable orphan node, not a partial success.
+				{observedAt: observedAt, sortKey: rowSortKey, entity: &stubEntity, supports: refRelationshipID},
 				{observedAt: observedAt, sortKey: rowSortKey, relationship: &refRelationship},
 			}, nil
 		}
@@ -632,11 +655,16 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 		validFrom, validTo := edgeValidity(
 			sourceValidFrom, sourceValidTo,
 			optionalTime(targetHasCreated, targetCreatedAt), optionalTime(targetHasEnded, targetEndedAt))
-		relationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, sourceCanonicalID, targetCanonicalID, relationshipType)
+		// CHAOS-4874: see the ref-form branch above for why the source
+		// spelling is translated here rather than cast straight through.
+		edgeType, edgeSwap, edgeSpelling := dependencyRelationshipType(relationshipType)
+		targetSubject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: targetCanonicalID, Label: targetID}
+		edgeFrom, edgeTo := orientDependencyEndpoints(sourceSubject, targetSubject, edgeSwap)
+		relationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, edgeFrom.CanonicalID, edgeTo.CanonicalID, edgeSpelling)
 		relationship := contractsv1.ContextFabricRelationshipProjection{
-			RelationshipID: relationshipID, Type: contractsv1.ContextFabricRelationshipType(strings.ToUpper(relationshipType)),
-			From:       sourceSubject,
-			To:         contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: targetCanonicalID, Label: targetID},
+			RelationshipID: relationshipID, Type: edgeType,
+			From:       edgeFrom,
+			To:         edgeTo,
 			Derivation: contractsv1.ContextFabricDerivationCanonicalStructured, EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
 			Authorization: workItemAuthorization(repoID, repoSlug), EvidenceRefIDs: []string{evidenceRefID},
 			ObservedAt: observedAt, ValidFrom: validFrom, ValidTo: validTo, SourceVersion: ClickHouseSourceVersion,
@@ -650,7 +678,15 @@ WHERE d.org_id = {org_id:String}` + sincePredicate(cursor, "d.last_synced", rowK
 		// rows against a key that was never written). No cross-row state
 		// is needed to know whether healing is "necessary".
 		if refID, refOmitted := identity.DeriveWorkItemRef(targetID, nil); !refOmitted {
-			refRelationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, sourceCanonicalID, refID, relationshipType)
+			// Must mint the SAME id the ref-form branch above would have,
+			// including the CHAOS-4874 translation -- a healing tombstone
+			// derived under a different spelling or endpoint order would
+			// match nothing and silently leave the stale edge behind.
+			healFrom, healTo := orientDependencyEndpoints(
+				sourceSubject,
+				contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItemRef, CanonicalID: refID},
+				edgeSwap)
+			refRelationshipID := identity.DeriveRelationship(identity.RelationshipFamilyWorkItemDependency, healFrom.CanonicalID, healTo.CanonicalID, edgeSpelling)
 			edgeTombstone := contractsv1.ContextFabricProjectionTombstone{
 				Kind: "relationship", CanonicalID: refRelationshipID,
 				Reason:      "work_item target resolved: healing the ref-form work_item_dependency edge",

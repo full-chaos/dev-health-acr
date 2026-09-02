@@ -21,8 +21,13 @@ source "${repo_root}/scripts/container/lib/prune-stale-attempt-dirs.sh"
 # shellcheck source=scripts/container/lib/trivy-db-provenance.sh
 source "${repo_root}/scripts/container/lib/trivy-db-provenance.sh"
 
-trivy_image='aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c'
-syft_image='anchore/syft:v1.46.0@sha256:473a60e3a58e29aca3aedb3e99e787bb4ef273917e44d10fcbea4330a07320bb'
+# CHAOS-4855: ACR_IMAGE_MIRROR_PREFIX redirects both scanner images at the
+# ghcr.io/full-chaos mirror in CI; empty by default so a local run still
+# pulls straight from Docker Hub, unchanged. Both stay digest-pinned either
+# way -- the mirror is required to serve the identical manifest. See
+# docs/container-images.md.
+trivy_image="${ACR_IMAGE_MIRROR_PREFIX:-}aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c"
+syft_image="${ACR_IMAGE_MIRROR_PREFIX:-}anchore/syft:v1.46.0@sha256:473a60e3a58e29aca3aedb3e99e787bb4ef273917e44d10fcbea4330a07320bb"
 # CHAOS-3772: the vulnerability DB is deliberately NOT pinned by digest in
 # source. It is resolved fresh from this moving mirror tag on every run
 # below, so no committed value can ever go stale by wall-clock alone -- only

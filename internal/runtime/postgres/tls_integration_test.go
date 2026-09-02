@@ -92,7 +92,15 @@ func newTLSPostgresFixture(t *testing.T, ctx context.Context) tlsPostgresFixture
 		"exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.crt -c ssl_key_file=/var/lib/postgresql/server.key"
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "postgres:18-alpine",
+			// CHAOS-4855: pinned by digest like every other testcontainers
+			// postgres:18-alpine pull in this module (cli_test.go,
+			// credentials_integration_test.go, runtime_integration_test.go,
+			// pooler_integration_test.go, pool_test.go), so
+			// TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this one to the
+			// SAME ghcr.io/full-chaos mirror digest as the rest -- an
+			// unpinned tag here would have been the one pull left resolving
+			// to whatever "18-alpine" floats to upstream.
+			Image:        "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
 			ExposedPorts: []string{"5432/tcp"},
 			Env:          map[string]string{"POSTGRES_USER": user, "POSTGRES_PASSWORD": password, "POSTGRES_DB": database},
 			Cmd:          []string{"sh", "-c", startCmd},

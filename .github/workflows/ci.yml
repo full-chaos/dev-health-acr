@@ -8,12 +8,49 @@ name: ci
 
 permissions:
   contents: read
+  # CHAOS-4855: pull the ghcr.io/full-chaos mirror of every Docker Hub test
+  # dependency and build/tooling image. Works whether the mirrored packages
+  # are public or private, so CI does not depend on their visibility.
+  packages: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # CHAOS-4855 R2: ci.yml and mirror-images.yml are independent workflows
+  # triggered by the SAME push, with no cross-workflow `needs` (GitHub
+  # Actions has none). The introducing PR hit this directly: mirror-images.yml
+  # was still pushing acr's newly-mirrored images when this workflow's `unit`
+  # job reached its first testcontainers pull, which failed `manifest
+  # unknown` -- and five other jobs failed the identical way in the same run,
+  # reading as six unrelated defects instead of one race.
+  #
+  # This job runs FIRST and resolves every mirrored image's manifest (read
+  # only, no push) before any job that pulls one is allowed to start, so that
+  # exact race now fails as ONE named error here ("run Mirror images first")
+  # instead of scattering across every consuming job. It does not eliminate
+  # the race -- mirror-images.yml still runs on its own schedule independent
+  # of this workflow -- it makes the failure legible and immediate rather
+  # than nine confusing ones.
+  mirror-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # docker/login-action v4.5.1. Read-only use here (imagetools inspect),
+      # but the mirrored packages' visibility is not guaranteed public, so
+      # this authenticates the same way every pulling job below does.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify every mirrored image is resolvable before any job pulls one
+        run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
+
   scripts:
     runs-on: ubuntu-latest
     steps:
@@ -78,6 +115,17 @@ jobs:
             --fixtures testdata/release-approvals
       - name: Verify CI workflow contract
         run: scripts/ci/test-workflow-contract.sh
+      # CHAOS-4855 R3: mirror-preflight and resolve-mirrored-images.sh only
+      # verify the images this list's author already knew to add -- neither
+      # notices a NEW or reintroduced bare-tag testcontainers image
+      # reference anywhere else in the module (the exact gap that produced
+      # 20 unpinned postgres:18-alpine call sites and one unpinned
+      # edoburu/pgbouncer:latest call site, invisible until each one hit
+      # `manifest unknown` in CI). This enumerates every such reference in
+      # the module via `git grep` and fails naming the file:line if it is
+      # not both digest-pinned and present in the mirror list.
+      - name: Verify every testcontainers image is pinned and mirrored
+        run: scripts/ci/test-testcontainers-image-pins.sh
 
   lint:
     runs-on: ubuntu-latest
@@ -113,6 +161,22 @@ jobs:
 
   unit:
     runs-on: ubuntu-latest
+    needs: mirror-preflight
+    env:
+      # CHAOS-4855: redirect every registry-less Docker Hub pull this suite
+      # makes (postgres, clickhouse, falkordb, and testcontainers-go's own
+      # hardcoded reaper) at the ghcr.io/full-chaos mirror. `go test ./...`
+      # here runs testcontainers-backed fixtures with no build tag or skip
+      # guard (chfixture, falkorgraph, the postgres fixtures), so this job
+      # needs both the prefix and the ghcr login below.
+      # CHAOS-4855 R1 (learned the hard way): ghcr.io/full-chaos is NOT a
+      # writable-shared namespace -- GHCR ties package write access to
+      # whichever repo's token created it. Mirroring acr's postgres digest
+      # under ops's existing ghcr.io/full-chaos/postgres package 403'd
+      # ("permission_denied: write_package") the first time this ran. acr
+      # mirrors everything (including its own copy of the reaper) under its
+      # own repo-scoped path instead -- see mirror-images.yml.
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -122,6 +186,15 @@ jobs:
         with:
           go-version: '1.27.0'
           cache: true
+      # docker/login-action v4.5.1. No Docker Hub credentials exist in this
+      # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
+      # GITHUB_TOKEN already has read access to.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       # CHAOS-3859 sol review F1: deploy/compose/acr_db_init_integration_test.go
       # shells out to psql/pg_isready to prove acr-db-init.sh's runtime-acl
       # grants against a real Postgres. Without this, that test's own
@@ -200,12 +273,19 @@ jobs:
           retention-days: 90
 
   race:
+    needs: mirror-preflight
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
     name: race (shard ${{ matrix.shard }} of 4)
     runs-on: ubuntu-latest
+    env:
+      # CHAOS-4855: see the identical env on the unit job above -- the race
+      # shards run the same testcontainers-backed suite, partitioned.
+      # CHAOS-4855 R1: see the unit job's env above for why this is
+      # ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner>.
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -215,6 +295,15 @@ jobs:
         with:
           go-version: '1.27.0'
           cache: true
+      # docker/login-action v4.5.1. No Docker Hub credentials exist in this
+      # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
+      # GITHUB_TOKEN already has read access to.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       # CHAOS-3859 sol review F1: deploy/compose/acr_db_init_integration_test.go
       # shells out to psql/pg_isready to prove acr-db-init.sh's runtime-acl
       # grants against a real Postgres. Without this, that test's own
@@ -293,6 +382,15 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    needs: mirror-preflight
+    env:
+      # CHAOS-4855: `make hosted-integration` below sets ACR_HOSTED_INTEGRATION=1,
+      # which starts real postgres/clickhouse testcontainers fixtures
+      # (cmd/acr-api/hosted_real_integration_test.go) -- same mirror redirect
+      # as the unit/race jobs.
+      # CHAOS-4855 R1: see the unit job's env above for why this is
+      # ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner>.
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -302,6 +400,15 @@ jobs:
         with:
           go-version: '1.27.0'
           cache: true
+      # docker/login-action v4.5.1. No Docker Hub credentials exist in this
+      # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
+      # GITHUB_TOKEN already has read access to.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Cross-compile supported targets
         run: make crosscompile
       - name: Build all shipped commands
@@ -475,15 +582,40 @@ jobs:
 
   container-contract-smoke:
     runs-on: ubuntu-24.04
+    needs: mirror-preflight
+    env:
+      # CHAOS-4855: golang (Dockerfile), tonistiigi/binfmt, moby/buildkit,
+      # aquasec/trivy, anchore/syft, and the verify.sh postgres probe all
+      # redirect at the ghcr.io/full-chaos mirror -- see docs/container-images.md.
+      # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
+      # see the unit job's TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX comment above
+      # for why (GHCR package write access is per-creating-repo, not shared
+      # org-wide; the flat path 403'd against an existing ops-owned package).
+      ACR_IMAGE_MIRROR_PREFIX: ghcr.io/${{ github.repository }}/
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
+      # docker/login-action v4.5.1. No Docker Hub credentials exist in this
+      # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
+      # GITHUB_TOKEN already has read access to. Login persists to this job's
+      # docker credential store, so every subsequent docker pull in this job
+      # (setup-qemu-action, setup-buildx-action's driver image, the
+      # Dockerfile's golang FROM during the build, and scan.sh/verify.sh's
+      # trivy/syft/postgres pulls) resolves against ghcr with no further
+      # per-step auth -- works whether the mirrored package is public or
+      # private.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       # docker/setup-qemu-action v3.6.0
       - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
         with:
           # yamllint disable rule:line-length
-          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          image: ${{ env.ACR_IMAGE_MIRROR_PREFIX }}tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
           # yamllint enable rule:line-length
           cache-image: false
       - name: Install checksum-verified Docker Buildx
@@ -509,7 +641,7 @@ jobs:
       - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435  # yamllint disable-line rule:line-length
         with:
           # yamllint disable rule:line-length
-          driver-opts: image=moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1
+          driver-opts: image=${{ env.ACR_IMAGE_MIRROR_PREFIX }}moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1
           # yamllint enable rule:line-length
           cache-binary: false
       # `make container-pins` is deliberately not run here. It resolved each reviewed tag over
@@ -527,15 +659,38 @@ jobs:
 
   container-reproducible:
     runs-on: ubuntu-24.04
+    needs: mirror-preflight
+    env:
+      # CHAOS-4855: see container-contract-smoke above.
+      # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
+      # see the unit job's TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX comment above
+      # for why (GHCR package write access is per-creating-repo, not shared
+      # org-wide; the flat path 403'd against an existing ops-owned package).
+      ACR_IMAGE_MIRROR_PREFIX: ghcr.io/${{ github.repository }}/
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
+      # docker/login-action v4.5.1. No Docker Hub credentials exist in this
+      # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
+      # GITHUB_TOKEN already has read access to. Login persists to this job's
+      # docker credential store, so every subsequent docker pull in this job
+      # (setup-qemu-action, setup-buildx-action's driver image, the
+      # Dockerfile's golang FROM during the build, and scan.sh/verify.sh's
+      # trivy/syft/postgres pulls) resolves against ghcr with no further
+      # per-step auth -- works whether the mirrored package is public or
+      # private.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       # docker/setup-qemu-action v3.6.0
       - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
         with:
           # yamllint disable rule:line-length
-          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          image: ${{ env.ACR_IMAGE_MIRROR_PREFIX }}tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
           # yamllint enable rule:line-length
           cache-image: false
       - name: Install checksum-verified Docker Buildx
@@ -561,7 +716,7 @@ jobs:
       - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435  # yamllint disable-line rule:line-length
         with:
           # yamllint disable rule:line-length
-          driver-opts: image=moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1
+          driver-opts: image=${{ env.ACR_IMAGE_MIRROR_PREFIX }}moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1
           # yamllint enable rule:line-length
           cache-binary: false
       - name: Rebuild the clean commit reproducibly
@@ -569,15 +724,38 @@ jobs:
 
   container-oci-scan:
     runs-on: ubuntu-24.04
+    needs: mirror-preflight
+    env:
+      # CHAOS-4855: see container-contract-smoke above.
+      # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
+      # see the unit job's TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX comment above
+      # for why (GHCR package write access is per-creating-repo, not shared
+      # org-wide; the flat path 403'd against an existing ops-owned package).
+      ACR_IMAGE_MIRROR_PREFIX: ghcr.io/${{ github.repository }}/
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
+      # docker/login-action v4.5.1. No Docker Hub credentials exist in this
+      # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
+      # GITHUB_TOKEN already has read access to. Login persists to this job's
+      # docker credential store, so every subsequent docker pull in this job
+      # (setup-qemu-action, setup-buildx-action's driver image, the
+      # Dockerfile's golang FROM during the build, and scan.sh/verify.sh's
+      # trivy/syft/postgres pulls) resolves against ghcr with no further
+      # per-step auth -- works whether the mirrored package is public or
+      # private.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       # docker/setup-qemu-action v3.6.0
       - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
         with:
           # yamllint disable rule:line-length
-          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          image: ${{ env.ACR_IMAGE_MIRROR_PREFIX }}tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
           # yamllint enable rule:line-length
           cache-image: false
       - name: Install checksum-verified Docker Buildx
@@ -603,7 +781,7 @@ jobs:
       - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435  # yamllint disable-line rule:line-length
         with:
           # yamllint disable rule:line-length
-          driver-opts: image=moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1
+          driver-opts: image=${{ env.ACR_IMAGE_MIRROR_PREFIX }}moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1
           # yamllint enable rule:line-length
           cache-binary: false
       # oci and scan must stay in one job: scan reads the `.tmp/container-oci/*.tar`
@@ -649,6 +827,7 @@ jobs:
     # every job is listed here, so adding a lane cannot silently escape it.
     if: always()
     needs:
+      - mirror-preflight
       - scripts
       - lint
       - unit

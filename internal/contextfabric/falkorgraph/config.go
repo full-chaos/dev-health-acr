@@ -43,22 +43,86 @@ const (
 	SDKVersion = "v2.1.0"
 )
 
+// CHAOS-4874: every sentinel below that HAS a backend-neutral meaning is
+// declared WRAPPING the contextfabric sentinel that names it, so one error
+// satisfies errors.Is against both this package's vendor-specific sentinel
+// (which this package's own callers check) and the vendor-neutral one every
+// CONSUMING seam classifies on.
+//
+// Why the wrap lives at the declaration and not at the wrap sites: the
+// consuming seams -- projectionrun.classifyOutcomeError and the
+// investigation route's writeContextFabricError -- classify ONLY on
+// contextfabric.Err*/context.*, so before this change errors.Is(err,
+// contextfabric.ErrRateLimited) was FALSE for a falkorgraph.ErrRateLimited
+// and every FalkorDB write failure logged failure_class=unclassified while
+// every read failure answered a generic 500. Attaching the class in
+// classifyFalkorError's arms instead would have been erased on the second
+// pass: safeDependencyError REBUILDS an already-classified error from the
+// bare sentinel (fmt.Errorf("%s: %w", operation, sentinel)), which is a
+// documented and deliberate part of its contract. Declaring the pairing
+// once, on the sentinel itself, makes it survive every construction site --
+// including a caller that returns a sentinel bare -- and makes it
+// impossible to flatten.
+//
+// neutralClass (client.go) is the SPECIFICATION of these pairings and
+// TestSentinelsCarryTheirDeclaredNeutralClass proves the declarations here
+// agree with it. Same defect and same remedy as pgmodelreceipts.sanitizeError.
 var (
-	ErrNotFound     = errors.New("context fabric graph record not found")
-	ErrUnauthorized = errors.New("context fabric graph request unauthorized")
-	ErrRateLimited  = errors.New("context fabric graph request rate limited")
+	// ErrNotFound is deliberately NOT given a neutral class. A confirmed
+	// ABSENCE is not a dependency failure, and it already has two
+	// backend-neutral translations that say what it really means:
+	// reader.go's graphNotProjectedError ->
+	// contextfabric.ErrGraphNotProjected and projection.go's
+	// notFoundWatermarkErr -> contextfabric.ErrProjectionWatermarkNotFound.
+	// Wrapping contextfabric.ErrUnavailable here as well would make a
+	// never-projected organization -- which Engine degrades to a clean
+	// empty answer -- classify as a dependency outage and answer 503.
+	// ErrGraphNotProjected's own doc comment (contextfabric/ports.go)
+	// states the symmetric rule in the other direction: a rate limit, a
+	// timeout or a real outage must NOT satisfy errors.Is(err,
+	// ErrGraphNotProjected). Do not "fix" this to ErrUnavailable.
+	ErrNotFound = errors.New("context fabric graph record not found")
+	// ErrUnauthorized means ACR's OWN service credential was refused, so
+	// its neutral class is ErrUnavailable, never anything the caller could
+	// read as "you are unauthorized" -- internal/api/context_fabric_routes.go
+	// makes exactly this argument at its ErrUnavailable branch.
+	ErrUnauthorized = fmt.Errorf("%w: context fabric graph request unauthorized", contextfabric.ErrUnavailable)
+	// ErrRateLimited carries contextfabric.ErrRateLimited so the route's
+	// 429 branch and projectionrun's rate_limited class both fire.
+	//
+	// REPORTED LIMIT: NOTHING IN THIS PACKAGE PRODUCES IT at this commit.
+	// classifyFalkorError has no rate-limit arm because no FalkorDB
+	// rate-limit message has been verified live, and every other text in
+	// that switch has been. This declaration makes the classification
+	// correct if such an error is ever produced or passed in by a caller;
+	// it does not by itself make a FalkorDB rate limit observable. Adding
+	// the producing arm is a separate, evidence-bearing change.
+	ErrRateLimited = fmt.Errorf("%w: context fabric graph request rate limited", contextfabric.ErrRateLimited)
 	// ErrConstraintViolation classifies a FalkorDB unique-constraint
 	// rejection (verified error text: "unique constraint violation on node
 	// of type X"). FalkorDB's constraint violation messages carry no
 	// property name or value, so the adapter must already know which
 	// constraint it created to say anything more specific.
-	ErrConstraintViolation = errors.New("context fabric graph unique constraint violation")
+	//
+	// Its neutral class is ErrInvalidResult, not ErrUnavailable: the store
+	// REJECTED the write as contract-invalid, and ErrUnavailable is
+	// documented (contextfabric/ports.go) as a RETRYABLE degraded outcome,
+	// while retrying an identical constraint-violating write fails
+	// identically forever. This is the same argument projectionrun already
+	// made for ErrQueryBudgetExceeded sitting beside, not inside,
+	// ErrUnavailable.
+	ErrConstraintViolation = fmt.Errorf("%w: context fabric graph unique constraint violation", contextfabric.ErrInvalidResult)
 	// errAlreadyExists classifies FalkorDB's "already indexed" /
 	// "already exists" schema-object errors -- index and constraint
 	// creation are NOT idempotent server-side (verified), so bootstrap
 	// treats this as success for the concurrent-bootstrap race rather than
 	// as a failure.
-	errAlreadyExists = errors.New("context fabric graph schema object already exists")
+	// Neutral class ErrInvalidResult for the same reason as
+	// ErrConstraintViolation: a schema-object state the server rejected,
+	// not a retryable outage. Both this and errIndexNotFound are
+	// success-treated by every caller in this package, so reaching a
+	// classifier at all means a path nobody expected.
+	errAlreadyExists = fmt.Errorf("%w: context fabric graph schema object already exists", contextfabric.ErrInvalidResult)
 	// errIndexNotFound classifies FalkorDB's "no such index" rejection from a
 	// DROP INDEX / DROP VECTOR INDEX against a property that was never
 	// indexed (verified live: "Unable to drop index on :Subject(embedding):
@@ -66,9 +130,11 @@ var (
 	// already-absent index is treated as success by callers (CHAOS-3832's
 	// index recreate), the same idempotent posture createVectorIndex already
 	// takes on an already-indexed property.
-	errIndexNotFound               = errors.New("context fabric graph schema object does not exist")
-	errConstraintBootstrapFailed   = errors.New("context fabric graph constraint bootstrap failed")
-	errConstraintBootstrapTimedOut = errors.New("context fabric graph constraint bootstrap timed out waiting for OPERATIONAL status")
+	errIndexNotFound = fmt.Errorf("%w: context fabric graph schema object does not exist", contextfabric.ErrInvalidResult)
+	// Bootstrap could not complete: transient and retryable, so these two
+	// are genuine ErrUnavailable.
+	errConstraintBootstrapFailed   = fmt.Errorf("%w: context fabric graph constraint bootstrap failed", contextfabric.ErrUnavailable)
+	errConstraintBootstrapTimedOut = fmt.Errorf("%w: context fabric graph constraint bootstrap timed out waiting for OPERATIONAL status", contextfabric.ErrUnavailable)
 	errAdapterRequiresConn         = errors.New("falkordb graph connection is required")
 )
 

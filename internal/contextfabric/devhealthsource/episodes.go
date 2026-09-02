@@ -103,7 +103,13 @@ func (s *EpisodesProjectionSource) NextProjectionBatch(ctx context.Context, chec
 	// A batch may only claim FullSnapshot+CompleteEnumeration when it
 	// genuinely enumerated everything: fromScratch AND not truncated.
 	complete := fromScratch && !truncated
-	batch, err := buildBatch(orgID, EpisodesSourceName, EpisodesSourceVersion, checkpoint.Cursor, all, complete, complete, s.clock())
+	// cursorSource and items are the same slice here: EpisodesProjectionSource
+	// is a separate source with its own assembly path and no quarantine
+	// telemetry hook, so CHAOS-4874's per-item quarantine is deliberately NOT
+	// applied to it in this change -- adding a drop with nowhere to report it
+	// would trade a visible wedge for a silent loss. Its own quarantine is
+	// tracked as follow-up work, not left implicit here.
+	batch, err := buildBatch(orgID, EpisodesSourceName, EpisodesSourceVersion, checkpoint.Cursor, all, all, complete, complete, s.clock())
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}

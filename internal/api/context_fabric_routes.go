@@ -331,21 +331,40 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 		return
 	}
 	// Rate limiting: contextfabric.ErrRateLimited is the vendor-neutral
-	// classification every graph backend adapter wraps its own
-	// rate-limit error into (see falkorgraph.safeDependencyError);
-	// ErrModelRateLimited is the pre-existing, distinct classification
-	// for the model runtime (ADR 0008). Both mean the same thing to a
-	// caller: back off and retry later.
+	// classification a graph backend adapter wraps its own rate-limit
+	// error into -- falkorgraph.ErrRateLimited is DECLARED wrapping this
+	// sentinel (falkorgraph/config.go), so it carries the pair however it
+	// is constructed, and falkorgraph/client.go's neutralClass table is the
+	// specification that declaration is tested against.
+	// ErrModelRateLimited is the pre-existing, distinct classification for
+	// the model runtime (ADR 0008). Both mean the same thing to a caller:
+	// back off and retry later.
+	//
+	// REPORTED LIMIT, so this comment stays true (CHAOS-4874): the MAPPING
+	// exists, but at this commit NOTHING IN falkorgraph PRODUCES a
+	// rate-limit error -- classifyFalkorError has no rate-limit arm,
+	// because no FalkorDB rate-limit message has been verified live and
+	// every other text in that switch has been. So this branch is reachable
+	// for the model runtime and for a caller-supplied
+	// falkorgraph.ErrRateLimited, and NOT yet by a real FalkorDB
+	// backpressure response. Before CHAOS-4874 this comment claimed the
+	// wrap already happened; it did not, and a graph rate limit would have
+	// answered 500.
 	if errors.Is(err, contextfabric.ErrRateLimited) || errors.Is(err, contextfabric.ErrModelRateLimited) {
 		a.writeContextFabricFailure(w, r, err, contextFabricClassRateLimited, http.StatusTooManyRequests, "rate_limited", "Context Fabric is rate limited; retry later", true, nil)
 		return
 	}
 	// contextfabric.ErrUnavailable already covers both a graph/model
 	// dependency being down AND a graph backend rejecting ACR's own
-	// service credential (falkorgraph.safeDependencyError wraps that case
-	// into ErrUnavailable too -- see its comment: an ACR-side credential
-	// problem is never presented to the caller as "you are unauthorized").
-	// ErrModelUnavailable joins the same bucket for the model runtime.
+	// service credential: falkorgraph's neutralClass table pairs
+	// falkorgraph.ErrUnauthorized (its WRONGPASS/NOAUTH classification)
+	// with ErrUnavailable, so an ACR-side credential problem is never
+	// presented to the caller as "you are unauthorized". The same table
+	// puts falkorgraph's genuinely UNCLASSIFIED residual here too -- a
+	// connection refused, a mid-handshake EOF, a TLS alert -- which before
+	// CHAOS-4874 carried no sentinel at all and fell through to the generic
+	// 500 below. ErrModelUnavailable joins the same bucket for the model
+	// runtime.
 	if errors.Is(err, contextfabric.ErrUnavailable) || errors.Is(err, contextfabric.ErrModelUnavailable) {
 		a.writeContextFabricFailure(w, r, err, contextFabricClassUnavailable, http.StatusServiceUnavailable, "upstream_unavailable", "Context Fabric is temporarily unavailable", true, nil)
 		return

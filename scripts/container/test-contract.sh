@@ -68,9 +68,45 @@ while IFS= read -r action_ref; do
     exit 1
   }
 done < <(awk '/^[[:space:]]*- uses:/ { print $3 }' "$ci_workflow")
-grep -Eq 'image: docker\.io/tonistiigi/binfmt:[^[:space:]]+@sha256:[0-9a-f]{64}' "$ci_workflow"
+# CHAOS-4855: both are consumed through ACR_IMAGE_MIRROR_PREFIX (ghcr.io/
+# full-chaos/ in CI, empty -- i.e. straight from Docker Hub -- locally), so
+# the literal ref appears with an optional `${{ env.ACR_IMAGE_MIRROR_PREFIX }}`
+# in front rather than a bare `docker.io/` host; either way the pin itself
+# must still be a full sha256 digest.
+grep -Eq 'image: (\$\{\{ env\.ACR_IMAGE_MIRROR_PREFIX \}\})?tonistiigi/binfmt:[^[:space:]]+@sha256:[0-9a-f]{64}' "$ci_workflow"
 grep -q 'd41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda' "$ci_workflow"
-grep -Eq 'driver-opts: image=moby/buildkit:v0\.31\.0@sha256:[0-9a-f]{64}' "$ci_workflow"
+grep -Eq 'driver-opts: image=(\$\{\{ env\.ACR_IMAGE_MIRROR_PREFIX \}\})?moby/buildkit:v0\.31\.0@sha256:[0-9a-f]{64}' "$ci_workflow"
+
+# 1b. release.yml's container job duplicates the same two pulls (CHAOS-4855);
+# neither may drift from ci.yml's pin or lose the mirror-prefix plumbing.
+release_workflow="${repo_root}/.github/workflows/release.yml"
+grep -Eq 'image: (\$\{\{ env\.ACR_IMAGE_MIRROR_PREFIX \}\})?tonistiigi/binfmt:[^[:space:]]+@sha256:[0-9a-f]{64}' "$release_workflow"
+grep -Eq 'driver-opts: image=(\$\{\{ env\.ACR_IMAGE_MIRROR_PREFIX \}\})?moby/buildkit:v0\.31\.0@sha256:[0-9a-f]{64}' "$release_workflow"
+
+# 1c. No workflow may authenticate to Docker Hub, and no DOCKERHUB_* secret
+# may be referenced anywhere. CHAOS-4855: acr CI pulled Docker Hub images
+# ANONYMOUSLY (no login step ever existed) and hit the per-runner-IP quota;
+# the fix moves every pull to the ghcr.io/full-chaos mirror. This asserts the
+# absence so a Docker Hub credential is never quietly reintroduced later --
+# same guard ops's #2111 added for its own (previously authenticated) account.
+for workflow_file in "${repo_root}"/.github/workflows/*.yml "${repo_root}"/.github/workflows/*.yaml; do
+  [ -e "$workflow_file" ] || continue
+  if grep -q 'DOCKERHUB_' "$workflow_file"; then
+    printf '%s references a DOCKERHUB_* secret; acr CI must not authenticate to Docker Hub\n' "$workflow_file" >&2
+    exit 1
+  fi
+  # docker/login-action with the registry key omitted, or set to anything
+  # other than ghcr.io, either targets Docker Hub directly or defaults to it.
+  while IFS=: read -r line_no _; do
+    [ -n "$line_no" ] || continue
+    registry="$(sed -n "${line_no},+8p" "$workflow_file" | awk -F': *' '/^[[:space:]]*registry:/ { gsub(/"/, "", $2); print $2; exit }')"
+    if [ "$registry" != 'ghcr.io' ]; then
+      printf '%s:%s: docker/login-action has registry=%s (want ghcr.io; unset or docker.io means Docker Hub)\n' \
+        "$workflow_file" "$line_no" "${registry:-<unset>}" >&2
+      exit 1
+    fi
+  done < <(grep -n 'uses: docker/login-action' "$workflow_file")
+done
 
 # 2. The Dockerfile build-time frontend must be pinned by immutable digest,
 # not a mutable tag alone.
@@ -270,7 +306,12 @@ fi
 # synthetic evasion fixtures further down, so the checks' own logic is
 # tested, not just today's scan.sh content (CHAOS-3772 F3).
 scan_script="${repo_root}/scripts/container/scan.sh"
-trivy_scanner_pin_pattern="^trivy_image='aquasec/trivy:[^'\"]+@sha256:[0-9a-f]{64}'"
+# CHAOS-4855: the live assignment is now double-quoted and carries the
+# ACR_IMAGE_MIRROR_PREFIX redirect (ghcr.io/full-chaos/ in CI, empty --
+# straight from Docker Hub -- locally); the digest pin itself is unchanged
+# either way, so the anchored shape below still requires exactly one and
+# still cannot be satisfied by a decorative comment.
+trivy_scanner_pin_pattern='^trivy_image="\$\{ACR_IMAGE_MIRROR_PREFIX:-\}aquasec/trivy:[^"]+@sha256:[0-9a-f]{64}"$'
 trivy_db_static_pin_pattern='trivy-db[^@]*@sha256:[0-9a-f]{64}|sha256:[0-9a-f]{64}[^@]*trivy-db'
 
 # CHAOS-3772 R2-2 / R3 F3 / R4-1: a pinned assignment followed by a

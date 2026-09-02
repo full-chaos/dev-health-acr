@@ -154,6 +154,20 @@ type FrameValidationEvent struct {
 	// FrameVersion is the derivation-table version, so an event can be
 	// read against the table that produced it.
 	FrameVersion string
+
+	// RequirementDerivation is the obligation -> requirement layer's row:
+	// how many requirement cells the validated frame demanded, how many
+	// the registry can serve, and the closed reason token for each one it
+	// cannot.
+	//
+	// EMBEDDED BY VALUE, NEVER A POINTER. A pointer would make "the
+	// derivation did not run" and "the derivation ran and found nothing"
+	// the same observation at the call site, and the whole reason this
+	// event records valid frames as well as invalid ones is that the
+	// denominator has to be countable. The zero value is distinguishable
+	// on its own terms: a summary that ran carries Version, and one that
+	// did not is empty.
+	RequirementDerivation RequirementDerivationSummary
 }
 
 // FrameValidationEventFrom projects a repair result into the telemetry
@@ -162,7 +176,14 @@ type FrameValidationEvent struct {
 // proposed is the frame as the model proposed it, BEFORE normalization, so
 // ProposedKind and ProposedGoals report what the model actually said
 // rather than what the server made of it.
-func FrameValidationEventFrom(proposed QuestionFrame, result FrameValidationResult, emittedShape InvestigationShape) FrameValidationEvent {
+//
+// requirements are the rows derived from the VALIDATED frame against the
+// live registry, or nil when no deriver was wired. It is a REQUIRED
+// PARAMETER rather than an optional setter, so a build in which the
+// requirement layer runs and nothing telemeters it does not compile --
+// the same reason FrameValidationTelemetry is an explicit interface rather
+// than one discovered by type assertion.
+func FrameValidationEventFrom(proposed QuestionFrame, result FrameValidationResult, emittedShape InvestigationShape, requirements []DerivedRequirement) FrameValidationEvent {
 	event := FrameValidationEvent{
 		Outcome:         result.Outcome,
 		FailedInvariant: result.Failure.Invariant,
@@ -176,6 +197,13 @@ func FrameValidationEventFrom(proposed QuestionFrame, result FrameValidationResu
 		event.DerivedObligationCount = len(result.Frame.Obligations)
 		event.WidenedObligationCount = len(result.Frame.WidenedObligations)
 		event.FrameVersion = result.Frame.Version
+		// Requirement rows are derived from the VALIDATED frame only. A
+		// refused frame has no derived obligation set to cross with the
+		// registry, and summarising one would report cells for a question
+		// the server declined to act on.
+		if requirements != nil {
+			event.RequirementDerivation = RequirementDerivationSummaryFrom(requirements)
+		}
 		if divergence, diverged := ShapeAgreement(emittedShape, result.Frame.SubjectExpression); diverged {
 			event.ShapeDiverged = true
 			event.EmittedShape = divergence.Emitted
