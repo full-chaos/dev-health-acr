@@ -503,6 +503,11 @@ type familyGateFixture struct {
 	// here and would be enforced in production, where the equivalent
 	// field IS reachable.
 	wantEnforced bool
+	// wantBlind marks a construction this gate is KNOWN NOT to catch. The
+	// fixture asserts ZERO findings, so that a future improvement to the
+	// boundary rule fails this test and forces the enforced claim to be
+	// re-read instead of drifting silently wider than what is proven.
+	wantBlind bool
 }
 
 var familyGateFixtures = []familyGateFixture{
@@ -515,31 +520,49 @@ var familyGateFixtures = []familyGateFixture{
 		name:         "R12a_io_copy_reader_boundary_bypass",
 		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r12_io_copy_reader",
 		description:  "codex round 2 P1: prose wrapped in a strings.Reader and io.Copy'd to the response -- the value at the boundary is not text-typed",
-		wantEnforced: true,
+		wantEnforced: false, // byte-egress: REPORTED, not enforced -- see familyTaintFinding.enforced
 	},
 	{
 		name:         "R12b_bufio_write_string_boundary_bypass",
 		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r12_bufio_write_string",
 		description:  "codex round 2 P1: prose written via bufio.Writer.WriteString -- a writer method not named exactly Write",
+		wantEnforced: false, // byte-egress: REPORTED, not enforced -- see familyTaintFinding.enforced
+	},
+	{
+		name:         "R14_served_field_on_encoded_struct",
+		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r14_served_field_encoded",
+		description:  "the ENFORCED-TIER PROOF: prose derived from the family, stored on a struct that this fixture itself marshals, so the served-type derivation reaches it. Without this the enforced tier -- the only tier that fails the build -- has no fixture coverage at all",
 		wantEnforced: true,
+	},
+	{
+		name:         "R15_control_only_taint_on_a_served_field",
+		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r15_control_only_on_served",
+		description:  "PINS THE TIER BOUNDARY: identical to R14 -- same struct, same encoder-reachability, same served field -- except the text is a hand-authored constant SELECTED by a family test rather than COMPUTED from the family. Implicit flow only, so it must be REPORTED and never ENFORCED. If a future change makes implicit flow enforceable this fixture fails and the claim must be re-read",
+		wantEnforced: false,
+	},
+	{
+		name:        "R13_writerto_receiver_payload",
+		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r13_writerto",
+		description: "codex round 4 P1, re-executed by the lane: (*strings.Reader).WriteTo(w) -- a static method whose RECEIVER carries the payload and whose first explicit PARAMETER is the writer. KNOWN BLIND and pinned as such: it is the third consecutive round to find a byte-egress shape, which is why the enforced claim is narrowed to encoder-reachable field stores rather than patched a fourth time.",
+		wantBlind:   true,
 	},
 	{
 		name:         "R12e_concrete_reader_at_egress",
 		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r12_concrete_reader_egress",
 		description:  "pins the no-text-type-test-at-egress rule: the payload reaches the boundary as a CONCRETE *strings.Reader, so no structural text test can see it -- R12a does not pin this, because io.Copy's parameter is an interface and the text predicate accepts every interface",
-		wantEnforced: true,
+		wantEnforced: false, // byte-egress: REPORTED, not enforced -- see familyTaintFinding.enforced
 	},
 	{
 		name:         "R12c_template_execute_writer_param",
 		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r12_template_execute",
 		description:  "byte egress where the writer is the first PARAMETER of a method on a non-writer receiver (html/template Execute)",
-		wantEnforced: true,
+		wantEnforced: false, // byte-egress: REPORTED, not enforced -- see familyTaintFinding.enforced
 	},
 	{
 		name:         "R12d_custom_marshaller_results",
 		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r12_custom_marshaller",
 		description:  "encoder family from the other side: a MarshalJSON whose bytes reach the wire without this package ever calling it, so its RESULTS are the boundary",
-		wantEnforced: true,
+		wantEnforced: false, // byte-egress: REPORTED, not enforced -- see familyTaintFinding.enforced
 	},
 	{
 		name:        "R10_control_selected_nonconstant_text",
@@ -550,7 +573,7 @@ var familyGateFixtures = []familyGateFixture{
 		name:         "R11_direct_bytes_write",
 		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r11_direct_bytes_write",
 		description:  "codex round 1 P1: family-derived prose written straight to http.ResponseWriter.Write, bypassing the encoding/json boundary the served set is derived from",
-		wantEnforced: true,
+		wantEnforced: false, // byte-egress: REPORTED, not enforced -- see familyTaintFinding.enforced
 	},
 	{
 		name:        "R8_global_map_relay_between_functions",
@@ -692,6 +715,14 @@ func TestFamilyTextGateCatchesHistoricalConstructions(t *testing.T) {
 		fx := fx
 		t.Run(fx.name, func(t *testing.T) {
 			findings := byFixture[fx.name]
+			if fx.wantBlind {
+				if len(findings) > 0 {
+					t.Errorf("fixture %s is pinned as KNOWN BLIND (%s) but the gate now produces %d finding(s) -- the boundary rule improved, so the enforced claim in the gate header and the PR body must be re-read and widened deliberately, not left to drift:\n  %v",
+						fx.name, fx.description, len(findings), findings)
+				}
+				t.Logf("%s: 0 findings, as pinned (known blind)", fx.name)
+				return
+			}
 			if len(findings) == 0 {
 				t.Fatalf("RED-FIRST FAILURE: fixture %s (%s) produced ZERO violations IN ITS OWN PACKAGE -- the gate does not catch this historical construction", fx.name, fx.description)
 			}

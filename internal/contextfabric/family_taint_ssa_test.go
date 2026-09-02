@@ -115,6 +115,34 @@ type familyTaintFinding struct {
 	served bool
 	// enforced is what turns a finding into a FAILURE rather than a note.
 	//
+	// NARROWED, DELIBERATELY, AFTER THREE ROUNDS. Enforcement is a store
+	// into a field of a type reachable from the encoder -- and NOT a value
+	// handed to a byte-writing boundary, even though those are still
+	// detected and reported.
+	//
+	// The reason is an empirical result about this analysis, not a
+	// preference. Three consecutive adversarial rounds each found a
+	// byte-egress path the boundary rule missed: round 1, it knew only
+	// encoding/json; round 2, the byte family it gained matched only a
+	// method named exactly `Write`; round 4, a static method whose
+	// RECEIVER carries the payload and whose first explicit PARAMETER is
+	// the writer -- `strings.NewReader(prose).WriteTo(w)` -- which the
+	// arity check silently skipped. Each fix was more structural than the
+	// last and the next round still found a shape. "Every way bytes leave
+	// a Go process" is not a set this analysis can close, and a gate whose
+	// FAILING claim rests on an open set is a claim that will be false
+	// again next month.
+	//
+	// So the enforced claim is narrowed to the part that IS closed: the
+	// served-type set is DERIVED from the encoder by reachability, and a
+	// store into one of those fields is a fact this analysis can actually
+	// establish. Byte-egress findings stay in the reported tier with their
+	// full provenance, and the limitation is stated in the PR body and in
+	// the gate's own header rather than left for a reader to discover.
+	// Fixture R13 pins the known-blind shape so that a future improvement
+	// to the boundary rule FAILS this test and forces the claim to be
+	// re-read rather than silently drifting.
+	//
 	// A gate that fails on everything it can see gets switched off; a gate
 	// that fails on what actually reaches the wire is one people keep. The
 	// enforced tier is the claim CHAOS-4782 makes -- no family-derived
@@ -1100,11 +1128,33 @@ func (a *familySSA) isSanctionedTarget(addr ssa.Value) bool {
 //     implicit-flow rule that DOES propagate is the phi rule, and it is
 //     bounded: it taints one merged value per join, not a region.
 func (a *familySSA) sinkValueTaint(b *ssa.BasicBlock, v ssa.Value) familyTaint {
+	t, _ := a.sinkValueTaintKind(b, v)
+	return t
+}
+
+// sinkValueTaintKind also reports whether the taint came ONLY from
+// control dependence, with no data flow from the family to the value.
+//
+// That distinction decides ENFORCEMENT. Implicit flow is an
+// over-approximation with a stated calibration: it says "which value gets
+// served depended on a family test", which is a real signal but not a
+// claim that the served value was COMPUTED from the family. Data flow
+// says the latter, and only the latter is a fact solid enough to fail a
+// build on.
+//
+// The case that forced this: chaos4636_plan_carry.go:215 stores
+// `carry.GroupKind` -- a closed token copied from the carried plan, with
+// no data dependence on the family anywhere -- inside a branch guarded by
+// `outcome.Family != ""`. Correct code, doing exactly what its comment
+// says. Under implicit flow alone it was ENFORCED and failed the build.
+// A gate that fails on correct code gets switched off, and then it
+// protects nothing.
+func (a *familySSA) sinkValueTaintKind(b *ssa.BasicBlock, v ssa.Value) (familyTaint, bool) {
 	if t := a.val[v]; t.tainted() {
-		return t
+		return t, false
 	}
 	if !a.ctrl[b].tainted() {
-		return familyTaintNone
+		return familyTaintNone, false
 	}
 	// CODEX ROUND 1, P1 (FIRST FINDING), EXECUTED AND RE-EXECUTED BY THE
 	// LANE. The rule below used to require an ssa.Const, and this was
@@ -1128,16 +1178,16 @@ func (a *familySSA) sinkValueTaint(b *ssa.BasicBlock, v ssa.Value) familyTaint {
 	if a.ctrlDirect[b] && familySSAIsServableText(v.Type()) {
 		if c, ok := v.(*ssa.Const); ok {
 			if familySSANonEmptyText(c) {
-				return familyTaintDerived
+				return familyTaintDerived, true
 			}
-			return familyTaintNone
+			return familyTaintNone, false
 		}
-		return familyTaintDerived
+		return familyTaintDerived, true
 	}
 	if c, ok := v.(*ssa.Const); ok && familySSANonEmptyText(c) {
-		return familyTaintDerived
+		return familyTaintDerived, true
 	}
-	return familyTaintNone
+	return familyTaintNone, false
 }
 
 func familySSANonEmptyText(c *ssa.Const) bool {
@@ -1284,7 +1334,7 @@ func (a *familySSA) checkStoreSink(fn *ssa.Function, b *ssa.BasicBlock, x *ssa.S
 	if a.isSanctionedFunc(fn) || a.isSanctionedTarget(x.Addr) {
 		return
 	}
-	t := a.sinkValueTaint(b, x.Val)
+	t, viaControlOnly := a.sinkValueTaintKind(b, x.Val)
 	if t != familyTaintDerived {
 		return
 	}
@@ -1294,9 +1344,22 @@ func (a *familySSA) checkStoreSink(fn *ssa.Function, b *ssa.BasicBlock, x *ssa.S
 	field := familySSAFieldOf(x.Addr)
 	switch {
 	case field != nil:
-		a.record(x.Pos(), fn, x.Val, "store-into-field",
+		// The OWNER's type, not x.Addr.Type(). A FieldAddr's own type is a
+		// pointer to the FIELD (`*string` here), and served-reachability
+		// is a question about the struct the field belongs to.
+		//
+		// This was wrong from the first version and nothing caught it,
+		// because it fails in the quiet direction: familySSADerefStructType
+		// simply returns false for `*string`, so EVERY store-into-field
+		// finding was classified "not served-reachable" and the enforced
+		// tier never fired for its own primary rule. Production reading
+		// "0 enforced" was consistent with that bug and with a clean tree
+		// alike -- the two were indistinguishable. It surfaced only when a
+		// fixture was added that asserts the ENFORCED tier positively
+		// (R14), which is the fixture the tier had been missing all along.
+		a.recordCtrl(x.Pos(), fn, x.Val, "store-into-field",
 			fmt.Sprintf("family-derived text stored into field %s of %s", field.Name(), familySSAOwnerName(x.Addr)),
-			field, x.Addr.Type())
+			field, familySSAOwnerType(x.Addr), viaControlOnly)
 	case familySSAIsGlobal(x.Addr):
 		a.record(x.Pos(), fn, x.Val, "store-into-global",
 			fmt.Sprintf("family-derived text stored into package-level %s", familySSAOrigin(x.Addr).Name()),
@@ -1402,6 +1465,18 @@ func familySSAIsGlobal(v ssa.Value) bool {
 	return ok
 }
 
+// familySSAOwnerType is the type of the aggregate a field address selects
+// into -- the struct, not the field.
+func familySSAOwnerType(addr ssa.Value) types.Type {
+	switch x := addr.(type) {
+	case *ssa.FieldAddr:
+		return x.X.Type()
+	case *ssa.Field:
+		return x.X.Type()
+	}
+	return addr.Type()
+}
+
 func familySSAOwnerName(addr ssa.Value) string {
 	if fa, ok := addr.(*ssa.FieldAddr); ok {
 		return fa.X.Type().String()
@@ -1422,10 +1497,17 @@ type familySSARecord struct {
 	// still running always decided `false`.
 	field *types.Var
 	typ   types.Type
+	// viaControlOnly: the taint came from control dependence alone, with
+	// no data flow. Reported, never enforced.
+	viaControlOnly bool
 }
 
 func (a *familySSA) record(pos token.Pos, fn *ssa.Function, v ssa.Value, rule, detail string, field *types.Var, typ types.Type) {
 	a.records = append(a.records, familySSARecord{pos: pos, fn: fn, val: v, rule: rule, detail: detail, field: field, typ: typ})
+}
+
+func (a *familySSA) recordCtrl(pos token.Pos, fn *ssa.Function, v ssa.Value, rule, detail string, field *types.Var, typ types.Type, viaControlOnly bool) {
+	a.records = append(a.records, familySSARecord{pos: pos, fn: fn, val: v, rule: rule, detail: detail, field: field, typ: typ, viaControlOnly: viaControlOnly})
 }
 
 // checkServingPositionSinks catches derived text handed straight to the
@@ -1503,7 +1585,7 @@ func (a *familySSA) collectFindings() []familyTaintFinding {
 			rule:     r.rule,
 			detail:   r.detail,
 			served:   a.recordServed(r),
-			enforced: a.recordServed(r) && (r.rule == "store-into-field" || r.rule == "serving-position"),
+			enforced: a.recordServed(r) && r.rule == "store-into-field" && !r.viaControlOnly,
 			path:     a.provenance(r.val),
 		}
 		key := f.pos.String() + "|" + f.rule + "|" + f.detail
