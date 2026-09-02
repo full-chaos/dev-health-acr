@@ -329,6 +329,7 @@ type recordingTelemetry struct {
 	// resolution event verbatim, same list-not-count discipline as the
 	// fields around it.
 	questionFamilyResolutions []QuestionFamilyResolutionEvent
+	frameValidations          []FrameValidationEvent
 	planNarrowings            []PlanNarrowingEvent
 	// groupedCohortCompletenesses (CHAOS-4733) records every grouped-cohort
 	// completeness fold verbatim, same list-not-count discipline.
@@ -542,6 +543,15 @@ type cohortStructureGateRecord struct {
 // the kind of test that cannot observe them going missing.
 func (r *recordingTelemetry) RecordQuestionFamilyResolution(_ context.Context, _ storage.Principal, event QuestionFamilyResolutionEvent) {
 	r.questionFamilyResolutions = append(r.questionFamilyResolutions, event)
+}
+
+// RecordFrameValidation (CHAOS-4452 stage 2) records the whole event for
+// the same reason the family resolution above does: the failed invariant,
+// its phase, the repair outcome and the goal sets are what make an invalid
+// frame diagnosable, and a double that kept only the outcome could not
+// observe any of them going missing.
+func (r *recordingTelemetry) RecordFrameValidation(_ context.Context, _ storage.Principal, event FrameValidationEvent) {
+	r.frameValidations = append(r.frameValidations, event)
 }
 
 // RecordPlanNarrowing (CHAOS-4636) records the whole event for the same
