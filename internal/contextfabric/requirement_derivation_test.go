@@ -396,3 +396,53 @@ func TestSummaryCountsEveryClosedTokenIncludingZeroes(t *testing.T) {
 		t.Errorf("%d reason slots are zero, want %d", zeroes, RequirementUnavailableReasonCount-1)
 	}
 }
+
+// TestComputedQuantifiersAreExactForCountAndAllForRanking pins a rule the
+// tests read past, found by an adversarial review round.
+//
+// TestQuantifierTracksTheMeasuredCardinality deliberately SKIPS computed
+// rows, and the computed-row test asserted only the server step, the served
+// status and the absence of fact kinds. So nothing checked which quantifier a
+// computed obligation gets: collapsing `quantifierForComputed` to always
+// return `all` left the whole suite green once the artifact was regenerated,
+// and the regeneration is exactly what a well-behaved contributor would do.
+//
+// The distinction is not cosmetic. A cardinality that is approximately right
+// is wrong -- `exact` is the whole content of a count -- while an ordering
+// must cover its population, which is `all`. Two obligations, two meanings,
+// and the frozen design's mistake was carrying one constant for a rule that
+// has two answers.
+func TestComputedQuantifiersAreExactForCountAndAllForRanking(t *testing.T) {
+	frame := frameWith(
+		[]InvestigationGoal{GoalCountOrAggregate, GoalRankOrSurvey},
+		discoveredExpression(SubjectTeam),
+		TemporalIntentCurrent,
+		nil,
+	)
+	rows := DeriveRequirements(frame, fixtureSeed(), fixtureCapabilities())
+
+	want := map[AnswerObligation]CompletionQuantifier{
+		ObligationCount:   CompletionQuantifierExact,
+		ObligationRanking: CompletionQuantifierAll,
+	}
+	checked := 0
+	for obligation, quantifier := range want {
+		row := requirementFor(t, rows, obligation, SubjectTeam)
+		if row.Kind != ObligationKindComputed {
+			t.Fatalf("%s is not classified computed, so this test is checking the wrong rule", obligation)
+		}
+		if row.Quantifier != quantifier {
+			t.Errorf("%s derived quantifier %q, want %q", obligation, row.Quantifier, quantifier)
+		}
+		checked++
+	}
+	if checked != len(want) {
+		t.Fatalf("checked %d computed obligations, want %d", checked, len(want))
+	}
+	// The two must DIFFER. A future edit collapsing both to one constant is
+	// the mutation that survived; asserting them separately above would still
+	// pass if the vocabulary itself were reduced to a single member.
+	if want[ObligationCount] == want[ObligationRanking] {
+		t.Fatal("the two expected quantifiers are equal, so this test cannot detect a collapse")
+	}
+}

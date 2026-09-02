@@ -420,3 +420,50 @@ func TestSubjectRoleVocabularyIsClosedAndTotal(t *testing.T) {
 		t.Error("the empty value is a vocabulary member")
 	}
 }
+
+// TestRankingAttachesToEachOperandOfAnExplicitSet pins a rule that had NO
+// positive fixture, found by an adversarial review round.
+//
+// `attachesToRole` says `ranking` attaches to each operand when the frame has
+// no member slot. Nothing exercised it: every explicit set in the corpus and
+// in this file carries the `compare` goal, which derives no `ranking`
+// obligation at all, so the operand arm of that rule was unreachable in every
+// test. The reviewer's mutation -- return only `subject` for `ranking` --
+// left the regenerated artifact byte-identical and the whole suite green.
+//
+// That is the same failure this package already guards against elsewhere: a
+// rule no input reaches is untested code, and "0 cells" is indistinguishable
+// from "the rule always answers no". The question is real -- rank the
+// operands of an explicit comparison -- so the rule stays and gains the
+// fixture that isolates it, rather than being removed as subsumed.
+func TestRankingAttachesToEachOperandOfAnExplicitSet(t *testing.T) {
+	frame := frameWith(
+		[]InvestigationGoal{GoalRankOrSurvey},
+		SubjectExpression{
+			Kind: SubjectExpressionExplicitSet,
+			Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+				{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"a"}, ExpectedKind: kindPointer(SubjectTeam)}},
+				{Kind: SubjectOperandScoped, Scoped: &ScopedSetExpression{AnchorTerms: []string{"b"}, MemberKind: SubjectProject}},
+			}},
+		},
+		TemporalIntentCurrent,
+		nil,
+	)
+	if !frame.HasObligation(ObligationRanking) {
+		t.Fatalf("the frame derives no ranking obligation, so this test cannot see the rule: %v", frame.Obligations)
+	}
+
+	subjects := map[SubjectKind]bool{}
+	for _, coordinate := range DeriveRequirementCoordinates(frame) {
+		if coordinate.Obligation != ObligationRanking {
+			continue
+		}
+		if coordinate.Role != SubjectRoleOperand {
+			t.Errorf("ranking attached to role %q on an explicit set; the operands are the population being ordered", coordinate.Role)
+		}
+		subjects[coordinate.Subject] = true
+	}
+	if !subjects[SubjectTeam] || !subjects[SubjectProject] {
+		t.Fatalf("ranking reached operands %v, want BOTH -- an ordering over a comparison must cover every operand, and both operand variants must contribute", subjects)
+	}
+}

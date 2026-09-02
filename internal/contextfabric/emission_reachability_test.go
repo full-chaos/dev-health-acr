@@ -70,6 +70,14 @@ type reachableEmission struct {
 	// walk could not resolve to a string. See the header: this is the
 	// residual, made countable.
 	dynamicKeySites int
+	// unresolvedCallSites counts calls whose callee this walk could not
+	// resolve to a package-local function: a function value supplied by a
+	// parameter or a field, an interface method, a closure from elsewhere.
+	// Those are edges the walk cannot follow, so a field written behind one
+	// is invisible -- and it is COUNTED for the same reason dynamicKeySites
+	// is, because a limit that is not counted is indistinguishable from an
+	// absence.
+	unresolvedCallSites int
 	// reachedFuncs is how many package-local functions the walk visited
 	// from this provider's methods. A provider whose helpers were somehow
 	// not followed would show a suspiciously small number, so the walk's
@@ -79,9 +87,10 @@ type reachableEmission struct {
 
 // funcFacts is what one function does, independent of who calls it.
 type funcFacts struct {
-	writes          map[string]bool
-	dynamicKeySites int
-	calls           map[*types.Func]bool
+	writes              map[string]bool
+	dynamicKeySites     int
+	unresolvedCallSites int
+	calls               map[*types.Func]bool
 }
 
 // loadProviderPackage type-checks devhealthfacts.
@@ -175,6 +184,87 @@ func stringValuesOfRangeVars(info *types.Info, fn ast.Node) map[types.Object][]s
 	return values
 }
 
+// packageFuncsBoundToLocals maps each local assigned a PACKAGE-LEVEL
+// FUNCTION to that function, so a call through the variable is followed as
+// an ordinary call-graph edge. It resolves the shape a review round
+// constructed and nothing more; a value arriving from a parameter or a field
+// is counted at the call site instead.
+func packageFuncsBoundToLocals(info *types.Info, fn ast.Node) map[types.Object]*types.Func {
+	bound := map[types.Object]*types.Func{}
+	ast.Inspect(fn, func(node ast.Node) bool {
+		assign, isAssign := node.(*ast.AssignStmt)
+		if !isAssign {
+			return true
+		}
+		for index, rhs := range assign.Rhs {
+			if index >= len(assign.Lhs) {
+				break
+			}
+			ident, isIdent := rhs.(*ast.Ident)
+			if !isIdent {
+				continue
+			}
+			callee, isFunc := info.Uses[ident].(*types.Func)
+			if !isFunc {
+				continue
+			}
+			target, isTarget := assign.Lhs[index].(*ast.Ident)
+			if !isTarget {
+				continue
+			}
+			object := info.Defs[target]
+			if object == nil {
+				object = info.Uses[target]
+			}
+			if object != nil {
+				bound[object] = callee
+			}
+		}
+		return true
+	})
+	return bound
+}
+
+// localsBoundToFuncLiterals collects the locals assigned a function LITERAL
+// in this same function. They are not edges: the literal's body is lexically
+// inside the function being walked, so its writes are already collected.
+// Recognising them keeps the residual counter honest -- the distinction
+// between "the walk did not see this" and "the walk saw it by another route".
+func localsBoundToFuncLiterals(info *types.Info, fn ast.Node) map[types.Object]bool {
+	bound := map[types.Object]bool{}
+	record := func(target ast.Expr) {
+		ident, isIdent := target.(*ast.Ident)
+		if !isIdent {
+			return
+		}
+		object := info.Defs[ident]
+		if object == nil {
+			object = info.Uses[ident]
+		}
+		if object != nil {
+			bound[object] = true
+		}
+	}
+	ast.Inspect(fn, func(node ast.Node) bool {
+		switch typed := node.(type) {
+		case *ast.AssignStmt:
+			for index, rhs := range typed.Rhs {
+				if _, isLit := rhs.(*ast.FuncLit); isLit && index < len(typed.Lhs) {
+					record(typed.Lhs[index])
+				}
+			}
+		case *ast.ValueSpec:
+			for index, value := range typed.Values {
+				if _, isLit := value.(*ast.FuncLit); isLit && index < len(typed.Names) {
+					record(typed.Names[index])
+				}
+			}
+		}
+		return true
+	})
+	return bound
+}
+
 // constantString returns an expression's value when the type checker knows
 // it is a constant string. That covers a literal, a named const, and a
 // constant expression -- without this walk having to recognise each form.
@@ -191,6 +281,8 @@ func analyseFunction(pkg *packages.Package, fn *ast.FuncDecl) funcFacts {
 	facts := funcFacts{writes: map[string]bool{}, calls: map[*types.Func]bool{}}
 	info := pkg.TypesInfo
 	rangeValues := stringValuesOfRangeVars(info, fn)
+	funcValues := packageFuncsBoundToLocals(info, fn)
+	localClosures := localsBoundToFuncLiterals(info, fn)
 
 	resolveKey := func(expr ast.Expr) ([]string, bool) {
 		if value, known := constantString(info, expr); known {
@@ -251,9 +343,6 @@ func analyseFunction(pkg *packages.Package, fn *ast.FuncDecl) funcFacts {
 				}
 			}
 		case *ast.CallExpr:
-			// The call graph. Resolved through the type checker, so a
-			// method call on any receiver expression lands on the right
-			// *types.Func rather than on a name that happens to match.
 			var ident *ast.Ident
 			switch fun := typed.Fun.(type) {
 			case *ast.Ident:
@@ -262,23 +351,72 @@ func analyseFunction(pkg *packages.Package, fn *ast.FuncDecl) funcFacts {
 				ident = fun.Sel
 			}
 			if ident == nil {
+				facts.unresolvedCallSites++
 				return true
 			}
-			callee, isFunc := info.Uses[ident].(*types.Func)
-			if !isFunc || callee.Pkg() == nil || callee.Pkg() != pkg.Types {
-				// Not a package-local function. A cross-package helper is
-				// the named residual in the artifact header.
+
+			// BUILTINS FIRST. `delete` is a *types.Builtin, not a
+			// *types.Func, so an earlier version's *types.Func assertion
+			// returned before ever reaching the delete check -- a counter
+			// documented as a residual measure that could never fire. A
+			// review round constructed it: a provider that wrote a field and
+			// then deleted it still reported the field as emitted with the
+			// counter at zero. Ordering the checks is the fix.
+			if _, isBuiltin := info.Uses[ident].(*types.Builtin); isBuiltin {
+				if ident.Name == "delete" && len(typed.Args) > 0 && isFactFieldMap(info.TypeOf(typed.Args[0])) {
+					// A delete makes the recorded field set an OVERSTATEMENT.
+					// Counted rather than resolved: knowing which key
+					// survives needs flow analysis this walk does not do.
+					facts.dynamicKeySites++
+				}
 				return true
 			}
-			facts.calls[callee] = true
-			// A delete() from a fact-field map is a write in the sense
-			// that matters: it changes what the provider emits. It is
-			// counted as a dynamic site rather than resolved, because
-			// removing a key the walk already recorded would need flow
-			// analysis this walk deliberately does not do.
-			if ident.Name == "delete" && len(typed.Args) > 0 && isFactFieldMap(info.TypeOf(typed.Args[0])) {
-				facts.dynamicKeySites++
+
+			if callee, isFunc := info.Uses[ident].(*types.Func); isFunc {
+				if callee.Pkg() != nil && callee.Pkg() == pkg.Types {
+					facts.calls[callee] = true
+				}
+				// A cross-package helper is the named residual in the
+				// artifact header, not a countable site: the walk cannot see
+				// into it at all, and counting every stdlib call would drown
+				// the signal.
+				return true
 			}
+
+			// A TYPE CONVERSION IS NOT A CALL. `int64(x)` parses as a
+			// CallExpr whose Fun names a *types.TypeName. Counting those as
+			// unfollowable calls put a dozen fabricated residual sites on
+			// every provider -- a counter that OVERSTATES its residual, which
+			// is worse than one that cannot fire: it manufactures doubt and
+			// buries the real signal in noise.
+			if _, isConversion := info.Uses[ident].(*types.TypeName); isConversion {
+				return true
+			}
+
+			// A CALL THROUGH A VALUE. `emit := writeHidden; emit(fields)`
+			// resolves the callee to a *types.Var, so an earlier version
+			// queued no edge AND counted nothing -- the provider reported
+			// "emits nothing" while emitting. Found by a review round.
+			if object, isVar := info.Uses[ident].(*types.Var); isVar {
+				// Bound to a package-level function: a followable edge.
+				if callee, bound := funcValues[object]; bound {
+					facts.calls[callee] = true
+					return true
+				}
+				// A LOCAL CLOSURE NEEDS NO EDGE. `helper := func(...){...}`
+				// declares its body INSIDE the function being walked, and
+				// ast.Inspect already descends into it, so whatever it writes
+				// is recorded under this function. Counting the call site
+				// would report an unfollowable edge for a body that was in
+				// fact fully read -- the second overstatement found in this
+				// counter, after type conversions.
+				if localClosures[object] {
+					return true
+				}
+				facts.unresolvedCallSites++
+				return true
+			}
+			facts.unresolvedCallSites++
 		}
 		return true
 	})
@@ -289,7 +427,15 @@ func analyseFunction(pkg *packages.Package, fn *ast.FuncDecl) funcFacts {
 // methods and unions what every reachable function writes.
 func collectReachableEmissions(t *testing.T) map[string]*reachableEmission {
 	t.Helper()
-	pkg := loadProviderPackage(t)
+	return collectFrom(t, loadProviderPackage(t))
+}
+
+// collectFrom is the walk proper, pointed at a loaded package, so the same
+// logic runs against the real provider package and against the probe
+// fixture. One implementation, two subjects: a fixture that exercised a COPY
+// of the walk would pin the copy.
+func collectFrom(t *testing.T, pkg *packages.Package) map[string]*reachableEmission {
+	t.Helper()
 	info := pkg.TypesInfo
 
 	factsOf := map[*types.Func]funcFacts{}
@@ -362,6 +508,7 @@ func collectReachableEmissions(t *testing.T) map[string]*reachableEmission {
 				fields[key] = true
 			}
 			emission.dynamicKeySites += facts.dynamicKeySites
+			emission.unresolvedCallSites += facts.unresolvedCallSites
 			for callee := range facts.calls {
 				if !visited[callee] {
 					queue = append(queue, callee)
@@ -403,12 +550,26 @@ func renderReachableEmissions(t *testing.T) string {
 	out.WriteString("# HAND: the test regenerates this file and fails on any difference.\n")
 	out.WriteString("#\n")
 	out.WriteString("# What each provider EMITS, collected by walking the call graph from its own\n")
-	out.WriteString("# methods through every package-local function it reaches, to any depth, and\n")
+	out.WriteString("# methods through the package-local functions it reaches, to any depth, and\n")
 	out.WriteString("# recording every statically resolvable key written into anything of the\n")
 	out.WriteString("# fact-field map type. Matched by TYPE, so a local, a parameter, a struct\n")
 	out.WriteString("# field and a returned map are one case rather than four.\n")
 	out.WriteString("#\n")
 	out.WriteString("# THE RESIDUAL, NAMED. Three things this walk does not reach:\n")
+	out.WriteString("# \"the functions it reaches\" is deliberately narrower than \"every function\".\n")
+	out.WriteString("# A direct call is followed; so is a call through a local bound to a\n")
+	out.WriteString("# package-level function, and a local closure needs no edge because its body\n")
+	out.WriteString("# is already walked. A call whose callee is not statically knowable -- a\n")
+	out.WriteString("# function value from a parameter or a field, an interface method -- is NOT\n")
+	out.WriteString("# followed and is counted in unresolved_call_sites. An earlier header claimed\n")
+	out.WriteString("# EVERY reachable function and was wrong: a review round constructed a\n")
+	out.WriteString("# provider emitting through a function value and this file reported it as\n")
+	out.WriteString("# emitting nothing. A coverage claim that overclaims is itself a defect.\n")
+	out.WriteString("#\n")
+	out.WriteString("#   0. a call whose callee is not statically knowable. COUNTED in\n")
+	out.WriteString("#      unresolved_call_sites. A `delete` from a fact-field map counts under\n")
+	out.WriteString("#      dynamic_key_sites instead: it makes the recorded set an OVERSTATEMENT\n")
+	out.WriteString("#      rather than an understatement.\n")
 	out.WriteString("#   1. a key that is not statically determined -- built from a variable, a\n")
 	out.WriteString("#      format string, or a value read from a row. COUNTED, per provider, in\n")
 	out.WriteString("#      the dynamic_key_sites column. A zero there is an OBSERVED zero, and a\n")
@@ -423,7 +584,8 @@ func renderReachableEmissions(t *testing.T) string {
 	out.WriteString("# in coverage is visible here rather than showing up as a provider that\n")
 	out.WriteString("# quietly emits less.\n")
 	out.WriteString("#\n")
-	out.WriteString("# fact kind / reached_funcs / dynamic_key_sites / emitted field keys\n")
+	out.WriteString("# fact kind / reached_funcs / dynamic_key_sites / unresolved_call_sites /\n")
+	out.WriteString("# emitted field keys\n")
 
 	kinds := make([]string, 0, len(emissions))
 	for kind := range emissions {
@@ -436,8 +598,8 @@ func renderReachableEmissions(t *testing.T) string {
 		if len(emission.fields) > 0 {
 			rendered = strings.Join(emission.fields, " ")
 		}
-		fmt.Fprintf(&out, "\n%s\n  reached_funcs      %d\n  dynamic_key_sites  %d\n  fields             %s\n",
-			kind, emission.reachedFuncs, emission.dynamicKeySites, rendered)
+		fmt.Fprintf(&out, "\n%s\n  reached_funcs         %d\n  dynamic_key_sites     %d\n  unresolved_call_sites %d\n  fields                %s\n",
+			kind, emission.reachedFuncs, emission.dynamicKeySites, emission.unresolvedCallSites, rendered)
 	}
 	return out.String()
 }
@@ -548,4 +710,120 @@ func TestEveryProviderIsReachedByTheWalk(t *testing.T) {
 	if checked != len(capabilities) {
 		t.Fatalf("checked %d of %d registered capabilities", checked, len(capabilities))
 	}
+}
+
+// The fixture package the walk is pinned against. Every shape in it is one a
+// review round constructed and the walk got wrong; see its package comment.
+const emissionProbePackage = "./testdata/emissionprobe"
+
+// walkProbeFixture runs the same collection logic against the fixture package
+// instead of the provider package.
+//
+// It exists because the REAL registry cannot exhibit these shapes on demand:
+// pinning the walk's behaviour against production alone means the pin
+// disappears the day a provider is refactored. The fixture is where the
+// shapes live permanently.
+func walkProbeFixture(t *testing.T) map[string]*reachableEmission {
+	t.Helper()
+	loaded, err := packages.Load(&packages.Config{
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedDeps | packages.NeedImports,
+	}, emissionProbePackage)
+	if err != nil || len(loaded) != 1 || len(loaded[0].Errors) > 0 {
+		t.Fatalf("loading the probe fixture: err=%v pkgs=%d", err, len(loaded))
+	}
+	return collectFrom(t, loaded[0])
+}
+
+// TestTheWalkFollowsACallThroughAFunctionValue pins the first defect a review
+// round found in this walk.
+//
+// `emit := writeViaFuncValue; emit(fields)` resolves the callee to a
+// *types.Var, so the original walk queued no edge, and because the helper has
+// no receiver it was not a root either. The provider emitted a field and this
+// file reported it as emitting NOTHING -- the worst possible direction for an
+// oracle, since an empty set reads exactly like a substrate producer.
+func TestTheWalkFollowsACallThroughAFunctionValue(t *testing.T) {
+	probes := walkProbeFixture(t)
+
+	direct, walked := probes["ProbeDirect"]
+	if !walked {
+		t.Fatal("the fixture's direct-call provider was not walked at all")
+	}
+	if !containsField(direct.fields, "direct_field") {
+		t.Errorf("the direct call was not followed: %v -- the control case is broken, so the case below proves nothing", direct.fields)
+	}
+
+	viaValue, walked := probes["ProbeFuncValue"]
+	if !walked {
+		t.Fatal("the fixture's function-value provider was not walked at all")
+	}
+	if !containsField(viaValue.fields, "func_value_field") {
+		t.Errorf("a field emitted through a function value bound to a package-level function was NOT recorded: %v", viaValue.fields)
+	}
+}
+
+// TestTheWalkCountsACallItCannotResolve pins the honest half.
+//
+// A function value that arrives as a PARAMETER is not statically knowable and
+// no static walk can follow it. The requirement is not that the walk follow it
+// -- it is that the walk SAY SO. An uncounted limit is indistinguishable from
+// an absence, which is the whole reason this file carries counters rather than
+// prose.
+func TestTheWalkCountsACallItCannotResolve(t *testing.T) {
+	probes := walkProbeFixture(t)
+	indirect, walked := probes["ProbeIndirect"]
+	if !walked {
+		t.Fatal("the fixture's indirect provider was not walked at all")
+	}
+	if indirect.unresolvedCallSites == 0 {
+		t.Errorf("a call through a parameter-supplied function value was neither followed nor counted -- the walk passed over it silently, reporting fields %v", indirect.fields)
+	}
+}
+
+// TestTheWalkCountsADeleteFromAFactFieldMap pins the second defect.
+//
+// `delete` is a *types.Builtin, and the original code asserted *types.Func
+// first, so the delete branch it documented as a residual measure could never
+// execute. A provider that wrote a field and then deleted it reported the
+// field as emitted with the counter at zero: a claim that was not merely
+// incomplete but WRONG, and a counter that could not fire.
+func TestTheWalkCountsADeleteFromAFactFieldMap(t *testing.T) {
+	probes := walkProbeFixture(t)
+	deleted, walked := probes["ProbeDeleted"]
+	if !walked {
+		t.Fatal("the fixture's delete provider was not walked at all")
+	}
+	if deleted.dynamicKeySites == 0 {
+		t.Error("a delete from a fact-field map was not counted -- the recorded field set overstates what the provider emits and nothing says so")
+	}
+}
+
+// TestALocalClosureCallIsNotCountedAsUnresolved guards the counter against
+// OVERSTATING, which is the failure mode the residual columns are most prone
+// to and the one that is hardest to notice.
+//
+// A local closure's body is walked already, so its call site is fully
+// accounted for. An earlier version counted it, putting a dozen fabricated
+// residual sites on every provider -- a number that reads as doubt about
+// coverage that does not exist. The live registry's true count is small and
+// the fixture is what keeps the tier reachable.
+func TestALocalClosureCallIsNotCountedAsUnresolved(t *testing.T) {
+	probes := walkProbeFixture(t)
+	direct, walked := probes["ProbeDirect"]
+	if !walked {
+		t.Fatal("the fixture's direct provider was not walked at all")
+	}
+	if direct.unresolvedCallSites != 0 {
+		t.Errorf("the direct-call provider reports %d unresolved call sites; it has none, so the counter is overstating", direct.unresolvedCallSites)
+	}
+}
+
+func containsField(fields []string, want string) bool {
+	for _, field := range fields {
+		if field == want {
+			return true
+		}
+	}
+	return false
 }
