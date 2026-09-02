@@ -62,9 +62,16 @@ type providerEmission struct {
 // needs no data -- only the code.
 func collectProviderEmissions(t *testing.T) map[string]*providerEmission {
 	t.Helper()
+	return collectEmissionsFrom(t, providerSourceDir, ".go")
+}
+
+// collectEmissionsFrom is the collector proper, pointed at a directory, so
+// it can be exercised against a fixture as well as the real package.
+func collectEmissionsFrom(t *testing.T, dir, suffix string) map[string]*providerEmission {
+	t.Helper()
 
 	fset := token.NewFileSet()
-	entries, err := os.ReadDir(providerSourceDir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("reading provider source dir: %v", err)
 	}
@@ -74,10 +81,10 @@ func collectProviderEmissions(t *testing.T) map[string]*providerEmission {
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+		if !strings.HasSuffix(name, suffix) || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		file, parseErr := parser.ParseFile(fset, filepath.Join(providerSourceDir, name), nil, parser.ParseComments)
+		file, parseErr := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.ParseComments)
 		if parseErr != nil {
 			t.Fatalf("parsing %s: %v", name, parseErr)
 		}
@@ -90,12 +97,63 @@ func collectProviderEmissions(t *testing.T) map[string]*providerEmission {
 			if receiver == "" {
 				continue
 			}
+			// PASS 1: which locals in this function hold the fact-field
+			// map? Round 3 found the guard reading map LITERALS only, so
+			// every field written AFTERWARDS was invisible -- flow.go
+			// writes 26 that way, readiness.go 6 (estimate_coverage_ratio,
+			// daily_readiness and friends), and the artifact under-reported
+			// most providers while claiming to record what they emit. A
+			// guard that reads emissions differently from how the code
+			// writes them is the third instance of this file's own class.
+			factValueVars := map[string]bool{}
+			ast.Inspect(fn, func(node ast.Node) bool {
+				assign, isAssign := node.(*ast.AssignStmt)
+				if !isAssign {
+					return true
+				}
+				for index, rhs := range assign.Rhs {
+					composite, isComposite := rhs.(*ast.CompositeLit)
+					if !isComposite || !isFactValueMap(composite.Type) || index >= len(assign.Lhs) {
+						continue
+					}
+					if name := identName(assign.Lhs[index]); name != "" && name != "_" {
+						factValueVars[name] = true
+					}
+				}
+				return true
+			})
+
 			ast.Inspect(fn, func(node ast.Node) bool {
 				if call, isCall := node.(*ast.CallExpr); isCall {
 					if identName(call.Fun) == "newCapability" && len(call.Args) > 0 {
 						if kind := selectorName(call.Args[0]); kind != "" {
 							kindOfType[receiver] = kind
 						}
+					}
+				}
+
+				// PASS 2: fields written after initialisation --
+				// fields["estimate_coverage_ratio"] = ... -- scoped to the
+				// locals pass 1 proved hold a fact-field map, so an
+				// unrelated string-keyed map cannot leak in.
+				if assign, isAssign := node.(*ast.AssignStmt); isAssign {
+					for _, lhs := range assign.Lhs {
+						index, isIndex := lhs.(*ast.IndexExpr)
+						if !isIndex || !factValueVars[identName(index.X)] {
+							continue
+						}
+						lit, isLit := index.Index.(*ast.BasicLit)
+						if !isLit || lit.Kind != token.STRING {
+							continue
+						}
+						key, unquoteErr := strconv.Unquote(lit.Value)
+						if unquoteErr != nil {
+							continue
+						}
+						if fieldsOfType[receiver] == nil {
+							fieldsOfType[receiver] = map[string]bool{}
+						}
+						fieldsOfType[receiver][key] = true
 					}
 				}
 				// Match the fact-field map by its TYPE, not by the
@@ -297,6 +355,35 @@ func TestDeclaredObligationsAreRecordedBesideWhatTheProviderEmits(t *testing.T) 
 			"A producer's declarations or its emitted fields changed. This is not automatically wrong -- "+
 			"it is the thing review must SEE. Regenerate %s and read the diff.\n\n--- got ---\n%s",
 			emissionArtifact, rendered.String())
+	}
+}
+
+// TestEmissionCollectorSeesFieldsWrittenAfterInitialisation is round 3's
+// second finding as an executed assertion, against a fixture rather than
+// the shipped package.
+//
+// The collector read map LITERALS only. flow.go writes 26 fields after
+// initialisation and readiness.go 6 (estimate_coverage_ratio,
+// daily_readiness...), so the artifact under-reported most providers while
+// its own header claimed to record what they emit.
+func TestEmissionCollectorSeesFieldsWrittenAfterInitialisation(t *testing.T) {
+	emissions := collectEmissionsFrom(t, "testdata/emissionfixture", ".go.txt")
+
+	synthetic, found := emissions["FactSynthetic"]
+	if !found {
+		t.Fatalf("the fixture provider was not collected at all (got %v); this assertion would be vacuous", emissions)
+	}
+
+	got := map[string]bool{}
+	for _, field := range synthetic.fields {
+		got[field] = true
+	}
+	for _, want := range []string{"in_literal_one", "in_literal_two", "written_after_init", "written_in_a_branch"} {
+		if !got[want] {
+			t.Errorf("the collector missed emitted field %q (collected: %v) -- "+
+				"a field written after initialisation is emitted exactly as much as one in the literal",
+				want, synthetic.fields)
+		}
 	}
 }
 

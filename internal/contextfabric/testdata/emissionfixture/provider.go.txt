@@ -1,0 +1,24 @@
+package emissionfixture
+
+// A synthetic provider whose fields are written BOTH ways: two in the map
+// literal and two afterwards. It exists so the emission collector is tested
+// against the shape round 3 found it blind to, without adding a fake
+// provider to the shipped package.
+
+type SyntheticProvider struct{}
+
+func (p *SyntheticProvider) Capability() contextfabric.FactCapability {
+	return newCapability(contextfabric.FactSynthetic, "devhealthfacts.synthetic", nil)
+}
+
+func (p *SyntheticProvider) Read() {
+	fields := map[string]contextfabric.FactValue{
+		"in_literal_one": nil,
+		"in_literal_two": nil,
+	}
+	fields["written_after_init"] = nil
+	if true {
+		fields["written_in_a_branch"] = nil
+	}
+	_ = fields
+}

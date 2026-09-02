@@ -254,6 +254,65 @@ func kinds(values ...contextfabric.FactKind) []contextfabric.FactKind { return v
 
 // traceCases is §13.15.1's table, frame for frame, with each recorded cell
 // transcribed from the trace output the design reproduces verbatim.
+
+// TestDerivedCellsCoverScopedOperands is round 3's finding as an executed
+// assertion, and it is the reviewer's own construction.
+//
+// SubjectOperand carries Named OR Scoped. derivedCells handled only Named,
+// so an explicit set whose second operand is scoped produced coordinates
+// for the first operand alone -- and because the recorded artifact is
+// rendered by the same function, the artifact agreed and all nineteen
+// tests passed while a valid operand was missing from the trace.
+//
+// The construction: an explicit set comparing a named team against a
+// scoped project. Both operands must appear.
+func TestDerivedCellsCoverScopedOperands(t *testing.T) {
+	team := contextfabric.SubjectTeam
+	expression := contextfabric.SubjectExpression{
+		Kind: contextfabric.SubjectExpressionExplicitSet,
+		Explicit: &contextfabric.ExplicitSetExpression{
+			Operands: []contextfabric.SubjectOperand{
+				{
+					Kind:  contextfabric.SubjectOperandNamed,
+					Named: &contextfabric.NamedSubjectExpression{Terms: []string{"a"}, ExpectedKind: &team},
+				},
+				{
+					Kind:   contextfabric.SubjectOperandScoped,
+					Scoped: &contextfabric.ScopedSetExpression{AnchorTerms: []string{"b"}, MemberKind: contextfabric.SubjectProject},
+				},
+			},
+		},
+	}
+	frame := buildFrame([]contextfabric.InvestigationGoal{contextfabric.GoalCompare}, expression, contextfabric.TemporalIntentCurrent, nil, nil)
+
+	cells := derivedCells(frame)
+	if len(cells) == 0 {
+		t.Fatal("the frame derived no cells at all; this assertion would be vacuous")
+	}
+
+	subjects := map[contextfabric.SubjectKind]int{}
+	for _, cell := range cells {
+		subjects[cell.subject]++
+	}
+	for _, want := range []contextfabric.SubjectKind{contextfabric.SubjectTeam, contextfabric.SubjectProject} {
+		if subjects[want] == 0 {
+			t.Errorf("no cell was derived for operand subject kind %q (derived: %v) -- "+
+				"an operand variant that is dropped here vanishes from the recorded trace too, "+
+				"because the artifact is rendered by this same function",
+				want, subjects)
+		}
+	}
+
+	// The coverage guard must agree, or an operand could be derived and
+	// then rejected as "outside what the frame covers".
+	covered := frameSubjectKinds(frame.SubjectExpression)
+	for _, want := range []contextfabric.SubjectKind{contextfabric.SubjectTeam, contextfabric.SubjectProject} {
+		if !covered[want] {
+			t.Errorf("frameSubjectKinds omits operand subject kind %q", want)
+		}
+	}
+}
+
 // derivedCells builds the traced coordinates FROM THE FRAME instead of from
 // a hand table.
 //
@@ -299,8 +358,18 @@ func derivedCells(frame contextfabric.QuestionFrame) []traceCell {
 	}
 	if explicit := expression.Explicit; explicit != nil {
 		for _, operand := range explicit.Operands {
+			// BOTH operand variants. Round 3 found this handling only the
+			// named one: SubjectOperand carries Named OR Scoped
+			// (frame.go), a scoped operand is valid in an explicit set and
+			// carries its own MemberKind, and dropping it removed a real
+			// operand's cells from the trace while every test stayed green
+			// -- the artifact regenerates from this same function, so both
+			// sides agreed about a coordinate that was never derived.
 			if operand.Named != nil && operand.Named.ExpectedKind != nil {
 				pairs = append(pairs, roleSubject{"subject(operand)", *operand.Named.ExpectedKind})
+			}
+			if operand.Scoped != nil {
+				pairs = append(pairs, roleSubject{"subject(operand)", operand.Scoped.MemberKind})
 			}
 		}
 	}
@@ -893,6 +962,9 @@ func frameSubjectKinds(expression contextfabric.SubjectExpression) map[contextfa
 		for _, operand := range explicit.Operands {
 			if operand.Named != nil && operand.Named.ExpectedKind != nil {
 				kinds[*operand.Named.ExpectedKind] = true
+			}
+			if operand.Scoped != nil {
+				kinds[operand.Scoped.MemberKind] = true
 			}
 		}
 	}
