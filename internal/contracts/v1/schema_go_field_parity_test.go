@@ -2,11 +2,11 @@ package v1
 
 import (
 	"encoding/json"
-	"fmt"
 	"go/constant"
 	"go/types"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -298,253 +298,13 @@ var enumNarrowings = map[string]enumNarrowing{
 // JSON key set, by encoding/json's own rules
 // ---------------------------------------------------------------------------
 
-// jsonField is one wire key contributed by a Go struct field.
-type jsonField struct {
-	key      string
-	depth    int
-	tagged   bool
-	fieldTyp types.Type
-	// goName is the declaring field's Go name, for failure messages.
-	goName string
-	// stringOpt is the `,string` tag option: the field keeps its key but is
-	// encoded as a JSON STRING regardless of its Go kind, so an int field
-	// tagged `json:"total,string"` emits "7", not 7, against a published
-	// "type": "integer". This file compares key SETS and does not model wire
-	// types, so it cannot judge that -- it fails closed on it instead.
-	stringOpt bool
-}
-
-// jsonKeySet computes the wire KEY SET of a struct type exactly as
-// encoding/json would.
-//
-// Scope, stated precisely because an inaccurate coverage claim is worse
-// than an admitted gap: this models which KEYS reach the wire. It does NOT
-// model the wire TYPE of the values behind them. A `,string` field keeps
-// its key and changes its encoding, so a key-set comparison is blind to it
-// by construction -- the anchor fails closed on that option instead of
-// pretending to judge it, and full type/format parity is tracked
-// separately.
-//
-// The rules, each of which has a mutation proving it is load-bearing:
-//
-//  1. An unexported field contributes nothing.
-//  2. `json:"-"` contributes nothing.
-//  3. `json:"name,opts"` contributes "name". omitempty and ,string change
-//     requiredness or representation, never the KEY, so they never change
-//     this set.
-//  4. An exported field with NO json tag contributes its Go FIELD NAME
-//     verbatim -- it is a wire key like any other and demands a property.
-//  5. `json:"-,"` contributes the literal key "-". Handled explicitly so it
-//     can never collapse into rule 2.
-//  6. An anonymous embedded struct with no json tag is PROMOTED: its own
-//     keys merge into the parent's set. AgentEpisode embedding
-//     AgentEpisodeCreate is the live instance.
-//  7. An anonymous embedded struct WITH a json tag is NOT promoted; it is
-//     one nested key like any named field.
-//  8. Conflicts follow Go's depth rule: shallowest depth wins; at equal
-//     depth a single tagged field wins; otherwise the key is dropped
-//     entirely.
-//
-// A text or line-window approximation of this is not admissible. While
-// preparing this change a line-window probe crossed a struct boundary and
-// reported a field of EpisodeScope as a missing property of
-// AgentEpisodeCreate -- a false drift finding that only went away once the
-// same question was asked through go/types.
-func jsonKeySet(named *types.Named) (map[string]jsonField, error) {
-	structType, ok := named.Underlying().(*types.Struct)
-	if !ok {
-		return nil, fmt.Errorf("%s is not a struct", named.Obj().Name())
-	}
-	candidates := map[string][]jsonField{}
-	var walk func(st *types.Struct, depth int, seen map[string]bool) error
-	walk = func(st *types.Struct, depth int, seen map[string]bool) error {
-		for i := 0; i < st.NumFields(); i++ {
-			field := st.Field(i)
-			tag, _ := lookupJSONTag(st.Tag(i))
-			embedded, isStructEmbed := underlyingNamedStruct(field.Type())
-
-			// Rule 1, in encoding/json's actual order. An ANONYMOUS field is
-			// judged before exportedness, because an embedded struct whose
-			// TYPE is unexported still promotes its own exported fields onto
-			// the wire. Only an embedded unexported NON-struct is ignored.
-			//
-			// The earlier version of this rule dropped every unexported field
-			// first and justified it with "this package has none" -- a
-			// reachability argument standing in for a quantifier, and a false
-			// negative on exactly the class this file exists to catch. A
-			// review round constructed it and the anchor stayed green.
-			if field.Anonymous() {
-				if !field.Exported() && !isStructEmbed {
-					continue
-				}
-			} else if !field.Exported() {
-				continue
-			}
-			// Rule 2: an explicit "-" with no trailing comma is skipped.
-			if tag.name == "-" && !tag.dashWithComma {
-				continue
-			}
-
-			// Rules 6 and 7: promotion is keyed on the tag NAME being empty,
-			// not on the absence of a tag. `json:",omitempty"` on an embedded
-			// struct still promotes -- the tag carries options but gives the
-			// embedded value no key of its own. Keying on "has a tag" instead
-			// was the second half of the same false negative.
-			if tag.name == "" && field.Anonymous() && isStructEmbed {
-				key := embedded.Obj().Pkg().Path() + "." + embedded.Obj().Name()
-				if seen[key] {
-					continue // defensive: recursive embedding
-				}
-				seen[key] = true
-				if err := walk(embedded.Underlying().(*types.Struct), depth+1, seen); err != nil {
-					return err
-				}
-				delete(seen, key)
-				continue
-			}
-
-			// Rules 3, 4, 5: determine the key.
-			key := field.Name()
-			tagged := false
-			if tag.name != "" {
-				key = tag.name
-				tagged = true
-			}
-			candidates[key] = append(candidates[key], jsonField{
-				key:       key,
-				depth:     depth,
-				tagged:    tagged,
-				fieldTyp:  field.Type(),
-				goName:    field.Name(),
-				stringOpt: tag.stringOpt,
-			})
-		}
-		return nil
-	}
-	if err := walk(structType, 0, map[string]bool{}); err != nil {
-		return nil, err
-	}
-
-	// Rule 8: resolve conflicts the way encoding/json does.
-	resolved := map[string]jsonField{}
-	for key, fields := range candidates {
-		if len(fields) == 1 {
-			resolved[key] = fields[0]
-			continue
-		}
-		sort.Slice(fields, func(a, b int) bool { return fields[a].depth < fields[b].depth })
-		shallowest := fields[0].depth
-		var atDepth []jsonField
-		for _, f := range fields {
-			if f.depth == shallowest {
-				atDepth = append(atDepth, f)
-			}
-		}
-		if len(atDepth) == 1 {
-			resolved[key] = atDepth[0]
-			continue
-		}
-		var tagged []jsonField
-		for _, f := range atDepth {
-			if f.tagged {
-				tagged = append(tagged, f)
-			}
-		}
-		if len(tagged) == 1 {
-			resolved[key] = tagged[0]
-			continue
-		}
-		// Ambiguous at the shallowest depth: encoding/json drops the field
-		// entirely, so it is not a wire key and must not demand a property.
-	}
-	return resolved, nil
-}
-
-type jsonTag struct {
-	name          string
-	dashWithComma bool
-	// stringOpt records the `,string` option, which changes a field's wire
-	// TYPE without changing its key. See jsonField.stringOpt.
-	stringOpt bool
-}
-
-func lookupJSONTag(raw string) (jsonTag, bool) {
-	value, ok := structTagLookup(raw, "json")
-	if !ok {
-		return jsonTag{}, false
-	}
-	name, rest, hasComma := strings.Cut(value, ",")
-	stringOpt := false
-	for _, option := range strings.Split(rest, ",") {
-		if option == "string" {
-			stringOpt = true
-		}
-	}
-	return jsonTag{name: name, dashWithComma: name == "-" && hasComma, stringOpt: stringOpt}, true
-}
-
-// structTagLookup is reflect.StructTag.Get over a raw tag string.
-func structTagLookup(raw, key string) (string, bool) {
-	for raw != "" {
-		i := 0
-		for i < len(raw) && raw[i] == ' ' {
-			i++
-		}
-		raw = raw[i:]
-		if raw == "" {
-			break
-		}
-		i = 0
-		for i < len(raw) && raw[i] > ' ' && raw[i] != ':' && raw[i] != '"' && raw[i] != 0x7f {
-			i++
-		}
-		if i == 0 || i+1 >= len(raw) || raw[i] != ':' || raw[i+1] != '"' {
-			break
-		}
-		name := raw[:i]
-		raw = raw[i+1:]
-		i = 1
-		for i < len(raw) && raw[i] != '"' {
-			if raw[i] == '\\' {
-				i++
-			}
-			i++
-		}
-		if i >= len(raw) {
-			break
-		}
-		quoted := raw[:i+1]
-		raw = raw[i+1:]
-		if name == key {
-			unquoted, err := strconvUnquote(quoted)
-			if err != nil {
-				return "", false
-			}
-			return unquoted, true
-		}
-	}
-	return "", false
-}
-
-// underlyingNamedStruct unwraps pointers and returns the named struct type,
-// if the type is one.
-func underlyingNamedStruct(t types.Type) (*types.Named, bool) {
-	for {
-		if ptr, ok := t.(*types.Pointer); ok {
-			t = ptr.Elem()
-			continue
-		}
-		break
-	}
-	named, ok := t.(*types.Named)
-	if !ok {
-		return nil, false
-	}
-	if _, ok := named.Underlying().(*types.Struct); !ok {
-		return nil, false
-	}
-	return named, true
-}
+// The hand-written encoding/json field-resolution model that used to live
+// here is GONE. It was re-derived by hand and two review rounds found four
+// separate defects in it (promotion from an unexported embedded struct,
+// promotion from an empty tag name, invalid-tag-name truncation, and type
+// aliases). The key set now comes from encoding/json itself -- see
+// json_wire_key_oracle_test.go. Nothing in this file models what the
+// encoder would do any more.
 
 // ---------------------------------------------------------------------------
 // Go closed vocabularies
@@ -906,6 +666,9 @@ func TestPublishedSchemaPropertiesMatchGoWireFields(t *testing.T) {
 	schemas := loadCanonicalSchemas(t, root)
 	pkg := loadContractsPackage(t, root)
 
+	runtimeTypes := runtimeTypeIndex()
+	populationIssues := 0
+
 	bindings, _ := resolveBindings(t, schemas, pkg.Types.Scope())
 	if len(bindings) == 0 {
 		t.Fatal("no schema/Go bindings resolved -- the anchor would vacuously pass")
@@ -937,11 +700,21 @@ func TestPublishedSchemaPropertiesMatchGoWireFields(t *testing.T) {
 			continue
 		}
 
-		keys, err := jsonKeySet(b.named)
-		if err != nil {
-			t.Errorf("%s: %v", b.label, err)
+		rt, ok := runtimeTypes[b.named.Obj().Name()]
+		if !ok {
+			t.Errorf("%s is bound to Go type %s, which is not reachable from any document root in contractRootExemplars -- the oracle cannot build a value for it, so this pair is UNCHECKED. Add the document root that reaches it, or exempt the $def with a reason.", b.label, b.named.Obj().Name())
 			continue
 		}
+		keys, issues, err := wireKeysOf(rt)
+		if err != nil {
+			t.Errorf("%s: oracle could not derive wire keys for %s: %v", b.label, b.named.Obj().Name(), err)
+			continue
+		}
+		populationIssues += len(issues)
+		for _, issue := range issues {
+			t.Errorf("%s: oracle could not populate %s (%s) -- an unpopulated field with `omitempty` would silently drop a key and read as a schema-only property. Give the type a populatable shape or exempt it with a reason.", b.label, issue.path, issue.reason)
+		}
+		fields := visibleFieldsByWireKey(rt)
 		checked++
 
 		// FAIL CLOSED on any tag option that changes the wire TYPE.
@@ -955,9 +728,18 @@ func TestPublishedSchemaPropertiesMatchGoWireFields(t *testing.T) {
 		// There are ZERO occurrences of `,string` in this package today
 		// (measured, not assumed), so this guard fires on nothing on main --
 		// it exists so the first one cannot arrive unnoticed.
-		for key, field := range keys {
-			if field.stringOpt {
-				t.Errorf("%s: Go field %s carries the `,string` tag option on wire key %q, which changes the encoded TYPE without changing the key. This check compares key SETS and does not model wire types, so it cannot verify the published type is still correct. Type parity is not implemented -- see the child ticket. Either drop the option or extend this anchor to compare types.", b.label, field.goName, key)
+		for key := range keys {
+			field, ok := fields[key]
+			if !ok {
+				continue
+			}
+			if tag, has := field.Tag.Lookup("json"); has {
+				_, options, _ := strings.Cut(tag, ",")
+				for _, option := range strings.Split(options, ",") {
+					if option == "string" {
+						t.Errorf("%s: Go field %s carries the `,string` tag option on wire key %q, which changes the encoded TYPE without changing the key. This check compares key SETS and does not model wire types, so it cannot verify the published type is still correct. Type parity is not implemented -- see CHAOS-4844. Either drop the option or extend this anchor to compare types.", b.label, field.Name, key)
+					}
+				}
 			}
 		}
 
@@ -980,9 +762,8 @@ func TestPublishedSchemaPropertiesMatchGoWireFields(t *testing.T) {
 		sort.Strings(schemaOnly)
 
 		for _, key := range goOnly {
-			field := keys[key]
-			t.Errorf("%s: Go type %s emits wire key %q (field %s) but the published schema has no such property. With additionalProperties:false every document carrying it is INVALID for a schema-validating consumer, while the Go tests and `make contract-test` stay green -- this is CHAOS-4825's defect class. Add the property to the canonical schema, or stop emitting the field.",
-				b.label, b.named.Obj().Name(), key, field.goName)
+			t.Errorf("%s: Go type %s emits wire key %q but the published schema has no such property. With additionalProperties:false every document carrying it is INVALID for a schema-validating consumer, while the Go tests and `make contract-test` stay green -- this is CHAOS-4825's defect class. Add the property to the canonical schema, or stop emitting the field.",
+				b.label, b.named.Obj().Name(), key)
 		}
 		for _, key := range schemaOnly {
 			t.Errorf("%s: the published schema declares property %q but Go type %s never emits it. The contract promises a field no producer can satisfy. Add the Go field, remove the property, or mark the property \"deprecated\": true if consumers may still see it from an older producer.",
@@ -993,6 +774,12 @@ func TestPublishedSchemaPropertiesMatchGoWireFields(t *testing.T) {
 		t.Fatal("no bound pair was actually compared -- the anchor proved nothing")
 	}
 	t.Logf("anchored %d schema/Go pairs across %d canonical documents", checked, len(schemas.documents))
+	// Reported so the oracle's own blind spots are visible rather than
+	// assumed away. A field the populator cannot fill would leave an
+	// `omitempty` key out of the oracle's answer, which reads as "the schema
+	// publishes a property Go never emits" -- a false finding pointing at
+	// the schema instead of at the instrument.
+	t.Logf("oracle population issues across all bound types: %d", populationIssues)
 }
 
 // TestPublishedEnumsMatchGoVocabularies anchors the closed vocabularies.
@@ -1025,6 +812,7 @@ func TestPublishedEnumsMatchGoVocabularies(t *testing.T) {
 	schemas := loadCanonicalSchemas(t, root)
 	pkg := loadContractsPackage(t, root)
 	scope := pkg.Types.Scope()
+	runtimeTypes := runtimeTypeIndex()
 
 	bindings, _ := resolveBindings(t, schemas, scope)
 	checked := 0
@@ -1037,7 +825,7 @@ func TestPublishedEnumsMatchGoVocabularies(t *testing.T) {
 		if _, isStruct := b.named.Underlying().(*types.Struct); isStruct {
 			// Struct defs carry their enums on individual PROPERTIES, which
 			// are checked below by walking the struct's own fields.
-			checkStructPropertyEnums(t, schemas, scope, b, node)
+			checkStructPropertyEnums(t, schemas, scope, runtimeTypes, b, node)
 			continue
 		}
 		// A vocabulary $def: the whole node is the enum.
@@ -1061,20 +849,29 @@ func TestPublishedEnumsMatchGoVocabularies(t *testing.T) {
 // checkStructPropertyEnums walks a bound struct's fields and, for each field
 // whose Go type is a named vocabulary and whose published property carries an
 // enum, applies the same per-field rule.
-func checkStructPropertyEnums(t *testing.T, schemas schemaSet, scope *types.Scope, b binding, node map[string]any) {
+func checkStructPropertyEnums(t *testing.T, schemas schemaSet, scope *types.Scope, runtimeTypes map[string]reflect.Type, b binding, node map[string]any) {
 	t.Helper()
-	keys, err := jsonKeySet(b.named)
-	if err != nil {
+	rt, ok := runtimeTypes[b.named.Obj().Name()]
+	if !ok {
 		return
 	}
+	fields := visibleFieldsByWireKey(rt)
 	properties := propertyKeys(node)
-	for key, field := range keys {
+	for key, field := range fields {
 		propertyNode, ok := properties[key]
 		if !ok {
 			continue
 		}
-		named := namedVocabularyType(field.fieldTyp)
-		if named == nil {
+		// The vocabulary is identified from the RUNTIME field type's name and
+		// then resolved through go/types to read its constants. Association
+		// uses reflect.VisibleFields -- the standard library's own promotion
+		// and shadowing logic -- never a reimplementation of it.
+		vocabularyName := namedStringTypeName(field.Type)
+		if vocabularyName == "" {
+			continue
+		}
+		named, resolvedOK := resolveNamedType(scope, vocabularyName)
+		if !resolvedOK {
 			continue
 		}
 		vocabulary := goVocabulary(scope, named)
@@ -1188,31 +985,22 @@ func compareEnum(t *testing.T, label, goTypeName string, vocabulary, published [
 	}
 }
 
-// namedVocabularyType returns the named type behind a field if it is a named
-// non-struct (a closed vocabulary), unwrapping pointers and slices.
-func namedVocabularyType(t types.Type) *types.Named {
-	for {
-		switch typed := t.(type) {
-		case *types.Pointer:
-			t = typed.Elem()
-			continue
-		case *types.Slice:
-			t = typed.Elem()
-			continue
-		}
-		break
+// namedStringTypeName returns the NAME of a named string type behind a
+// field, unwrapping pointers and slices, or "" if the field is not one.
+//
+// It reports only the name; the constants come from go/types, which is the
+// only place a package-level vocabulary can be enumerated.
+func namedStringTypeName(rt reflect.Type) string {
+	for rt.Kind() == reflect.Pointer || rt.Kind() == reflect.Slice {
+		rt = rt.Elem()
 	}
-	named, ok := t.(*types.Named)
-	if !ok {
-		return nil
+	if rt.Kind() != reflect.String {
+		return ""
 	}
-	if _, isStruct := named.Underlying().(*types.Struct); isStruct {
-		return nil
+	if rt.PkgPath() == "" {
+		return ""
 	}
-	if basic, ok := named.Underlying().(*types.Basic); !ok || basic.Kind() != types.String {
-		return nil
-	}
-	return named
+	return rt.Name()
 }
 
 func schemaEnumValues(node map[string]any) []string {
