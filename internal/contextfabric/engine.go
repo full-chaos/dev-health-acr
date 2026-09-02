@@ -298,6 +298,28 @@ type EngineTelemetry interface {
 	// operator only ever seeing "reuse rarely happens" with no way to
 	// tell why.
 	RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome)
+	// RecordAnswerReuseContainment reports the condition-6 containment
+	// MEASUREMENT for one reuse attempt whose evidence leg actually ran
+	// (CHAOS-4831; the differentiation half of the sibling telemetry
+	// ticket): how many distinct references the stored payload would
+	// serve, how many a fresh discovery proved this caller can still see,
+	// how many could not be proven, whether any of those was a top-level
+	// citation, and -- when the attempt degraded rather than refused --
+	// exactly what was removed from the served copy.
+	//
+	// Why a measurement and not another label: an outcome label answers
+	// "did reuse happen", never "how close was it". A reuse rate that is
+	// low because the recheck demands references a fresh discovery
+	// structurally cannot return looks IDENTICAL, in a label-only stream,
+	// to one that is low because authorization genuinely narrowed. That
+	// ambiguity hid a total (0/8) failure on real data behind a value
+	// whose own name suggested staleness. These counts are what make the
+	// difference readable from the run's own artifacts.
+	//
+	// Emitted only when the containment leg ran -- never as zeros for an
+	// attempt that refused earlier, which would be indistinguishable from
+	// a genuine "demanded nothing".
+	RecordAnswerReuseContainment(ctx context.Context, principal storage.Principal, event AnswerReuseContainmentEvent)
 	// RecordSubjectlessTerminal (CHAOS-3888) reports WHY one Investigate
 	// call reached its own subjectless terminal path (terminalResult,
 	// unresolved.go) as a closed reason string -- "empty_pool",

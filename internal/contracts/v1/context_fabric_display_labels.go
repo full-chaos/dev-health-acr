@@ -240,6 +240,8 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		label = countPhrase(d.Count, "relationship edge", "relationship edges") + " of an unrecognized type dropped"
 	case ContextFabricCoverageDetailGraphValidityUnbounded:
 		label = countPhrase(d.Count, "undated element", "undated elements") + " included at the requested time"
+	case ContextFabricCoverageDetailReuseAuxiliaryRefsStripped:
+		label = countPhrase(d.Count, "supporting item is", "supporting items are") + " no longer visible to you and were removed"
 	default:
 		label = "Coverage was limited"
 	}

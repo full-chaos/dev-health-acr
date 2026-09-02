@@ -134,6 +134,74 @@ func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal st
 	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", args...)
 }
 
+// AnswerReuseContainmentEvent is one reuse attempt's containment
+// measurement -- see EngineTelemetry.RecordAnswerReuseContainment for why
+// this is a measurement rather than another outcome label. Every field is
+// a COUNT or a closed label; no reference ids, subject labels or question
+// text ever ride here, matching this file's standing rule that telemetry
+// is corpus-safe by construction.
+type AnswerReuseContainmentEvent struct {
+	// DemandedCount is how many distinct references the stored payload
+	// would serve, and therefore how many the recheck had to prove.
+	DemandedCount int
+	// VisibleCount is how many distinct references the fresh discovery
+	// proved this caller can see right now.
+	VisibleCount int
+	// MissingCount is how many demanded references were not proven.
+	MissingCount int
+	// MissingCitation reports whether any unproven reference was a
+	// TOP-LEVEL citation -- the one condition that refuses reuse outright
+	// rather than degrading it.
+	MissingCitation bool
+	// StrippedRefs is how many references the degrade removed from the
+	// served copy. Zero on a clean hit and on a refusal.
+	StrippedRefs int
+	// StrippedLabels is how many display-label entries the degrade's
+	// rebuild dropped. Reported separately because a label entry is a
+	// second way the same reference reaches a caller -- a strip that
+	// cleared every list and left the labels behind removed nothing.
+	StrippedLabels int
+	// The Dropped* counts are whole entries removed because stripping
+	// their references left them invalid under the contract.
+	DroppedCandidates int
+	DroppedMembers    int
+	DroppedDrivers    int
+	DroppedFindings   int
+	DroppedPaths      int
+	// Disclosure names which form the coverage disclosure took
+	// ("structured" or "reason_only"); empty when nothing was stripped.
+	// A legacy payload that can only carry the composed string is a real
+	// difference in what a consumer can key on, so it is reported rather
+	// than silently taken.
+	Disclosure string
+}
+
+// RecordAnswerReuseContainment logs at Info. A degraded serve is an
+// ORDINARY outcome under the ruled remedy, not a fault -- but it is never
+// silent: an answer narrower than the one stored is exactly the thing an
+// operator must be able to see without reading response bodies.
+func (t SlogEngineTelemetry) RecordAnswerReuseContainment(ctx context.Context, principal storage.Principal, event AnswerReuseContainmentEvent) {
+	args := []any{
+		"org_id", principal.OrgID,
+		"demanded_refs", event.DemandedCount,
+		"visible_refs", event.VisibleCount,
+		"missing_refs", event.MissingCount,
+		"missing_citation", event.MissingCitation,
+		"stripped_refs", event.StrippedRefs,
+		"stripped_labels", event.StrippedLabels,
+		"dropped_candidates", event.DroppedCandidates,
+		"dropped_members", event.DroppedMembers,
+		"dropped_drivers", event.DroppedDrivers,
+		"dropped_findings", event.DroppedFindings,
+		"dropped_paths", event.DroppedPaths,
+	}
+	if event.Disclosure != "" {
+		args = append(args, "disclosure", event.Disclosure)
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric answer reuse containment", args...)
+}
+
 // RecordSubjectlessTerminal logs at Info: the classification itself
 // (empty_pool/authz_filtered_to_empty/ambiguous) is diagnostic detail about
 // an already-ordinary outcome (no_match/clarification_required), never a

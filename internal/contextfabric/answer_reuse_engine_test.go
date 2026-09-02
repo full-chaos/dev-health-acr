@@ -174,12 +174,12 @@ func TestCHAOS4077_GraphNotProjectedCandidateAlwaysMissesReuseWithoutReadingTheG
 	candidate.SubjectResolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, GraphNotProjected: true}
 	candidate.EvidenceRefIDs = []string{}
 
-	holds, outcome := engine.reuseAuthorizationStillHolds(context.Background(), reusePrincipal(), validInvestigationRequest(), candidate, ResolvedGraphBinding{GraphKey: "some-key", Epoch: 0})
-	if holds {
-		t.Fatal("reuseAuthorizationStillHolds() = true, want false: a graph-not-projected candidate must never be trivially reused")
+	verdict := engine.reuseAuthorizationStillHolds(context.Background(), reusePrincipal(), validInvestigationRequest(), candidate, ResolvedGraphBinding{GraphKey: "some-key", Epoch: 0})
+	if !verdict.Refused {
+		t.Fatal("reuseAuthorizationStillHolds() did not refuse, want refused: a graph-not-projected candidate must never be trivially reused")
 	}
-	if outcome != AnswerReuseMissGraphNotProjected {
-		t.Fatalf("outcome = %q, want %q", outcome, AnswerReuseMissGraphNotProjected)
+	if verdict.Outcome != AnswerReuseMissGraphNotProjected {
+		t.Fatalf("outcome = %q, want %q", verdict.Outcome, AnswerReuseMissGraphNotProjected)
 	}
 }
 
