@@ -43,9 +43,18 @@ package v1
 // tighten a budget. The two quantities are unrelated and now say so.
 //
 // THE PROOF THIS EXISTS FOR. Request validation bounds the echoed question at
-// 8000 characters while ContextFabricSerializedBytesMin is 8192. The maximal
-// envelope measures 12,791 bytes carrying ZERO budgeted items -- no driver, no
-// fact, no candidate, no member. So a caller may today legally configure a
-// service, or request a budget, at a size in which no answer can exist. The
-// floor paper argued this on paper; the accompanying test executes it.
-const ContextFabricMinimumAnswerBytes = 13606
+// 8000 CHARACTERS -- runes, not bytes -- while ContextFabricSerializedBytesMin
+// is 8192. The maximal envelope measures 63,351 bytes carrying ZERO budgeted
+// items: no driver, no fact, no candidate, no member. So a caller may today
+// legally configure a service, or request a budget, at a size roughly EIGHT
+// TIMES too small to hold any answer at all.
+//
+// THE FACTOR THAT MAKES IT THAT LARGE, and it was got wrong once. Bounds here
+// are counted in RUNES, and the worst-case rune is not the widest UTF-8
+// encoding but the one Go's JSON encoder ESCAPES: "<", "&" and the line
+// separators cost SIX bytes each, against four for a non-BMP emoji. A first
+// version of the measurement padded with ASCII and produced 13,606 -- a minimum
+// 4.7x too small, which a review caught. The design paper's own provisional
+// 32768 was also too small, by half. Neither number survived measurement, which
+// is the argument for measuring.
+const ContextFabricMinimumAnswerBytes = 64166

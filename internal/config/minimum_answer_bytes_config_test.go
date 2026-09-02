@@ -41,7 +41,11 @@ func TestConfigBelowTheMinimumAnswerSizeFailsToStart(t *testing.T) {
 	// The refusal must NAME the bound and the minimum. An operator who has
 	// just been refused a boot needs the number to set, not "invalid config".
 	msg := err.Error()
-	for _, want := range []string{"ACR_MAX_SERIALIZED_BYTES", "13606"} {
+	// Derived from the constant, never restated: a hardcoded number here
+	// would have to be edited every time the measurement moves, and the
+	// edit is exactly the moment someone stops checking whether the message
+	// still names the right value.
+	for _, want := range []string{"ACR_MAX_SERIALIZED_BYTES", strconv.Itoa(contractsv1.ContextFabricMinimumAnswerBytes)} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("startup refusal %q does not mention %q: an operator cannot act on it", msg, want)
 		}

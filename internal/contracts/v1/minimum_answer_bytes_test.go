@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,54 @@ import (
 // run through Validate() before measurement: a measurement of a document the
 // contract would reject is not a bound on anything.
 
+// worstCaseRune is the single character that costs the most SERIALIZED BYTES
+// per rune of a length-bounded field.
+//
+// It is not the widest UTF-8 encoding. Go's JSON encoder HTML-escapes "<", ">"
+// and "&", and escapes the line separators, to a six-byte \uXXXX form -- more
+// than the four bytes a non-BMP emoji costs raw. Bounds in this contract are
+// counted in RUNES, so the byte cost of a maximal field is the rune bound times
+// this factor.
+const worstCaseRune = "<"
+
+// worstCaseBytesPerRune is what the encoder actually charges for it, proven by
+// TestWorstCaseRuneIsTheOneTheEncoderEscapes rather than assumed here.
+const worstCaseBytesPerRune = 6
+
+// TestWorstCaseRuneIsTheOneTheEncoderEscapes proves the padding choice instead
+// of asserting it. If a future encoder change makes some other character more
+// expensive, the measurement above stops being a worst case -- and this fails
+// rather than letting the minimum quietly become too small again, which is
+// exactly what happened when the fixture assumed ASCII.
+func TestWorstCaseRuneIsTheOneTheEncoderEscapes(t *testing.T) {
+	t.Parallel()
+	const runes = 1000
+	candidates := []string{"q", "<", "&", ">", "\"", "\\", "\u4e16", "\U0001F600", "\u2028", "\u2029", "\t"}
+	worst, worstCost := "", 0
+	for _, candidate := range candidates {
+		encoded, err := json.Marshal(strings.Repeat(candidate, runes))
+		if err != nil {
+			t.Fatalf("marshal %q: %v", candidate, err)
+		}
+		// Subtract the two surrounding quotes.
+		cost := (len(encoded) - 2) / runes
+		if cost > worstCost {
+			worst, worstCost = candidate, cost
+		}
+	}
+	if worstCost != worstCaseBytesPerRune {
+		t.Fatalf("the worst candidate costs %d bytes/rune but worstCaseBytesPerRune says %d: the envelope measurement is no longer a worst case", worstCost, worstCaseBytesPerRune)
+	}
+	encoded, err := json.Marshal(strings.Repeat(worstCaseRune, runes))
+	if err != nil {
+		t.Fatalf("marshal padding rune: %v", err)
+	}
+	if got := (len(encoded) - 2) / runes; got != worstCost {
+		t.Fatalf("the padding rune %q costs %d bytes/rune but the worst candidate %q costs %d: the fixture is not padding with the worst case",
+			worstCaseRune, got, worst, worstCost)
+	}
+}
+
 // maxEnvelopeResult returns the smallest valid answer-capable result carrying
 // the largest legal envelope.
 func maxEnvelopeResult(t *testing.T) ContextFabricInvestigationResult {
@@ -38,14 +87,24 @@ func maxEnvelopeResult(t *testing.T) ContextFabricInvestigationResult {
 	result := validContextFabricContractResult()
 
 	// The dominant term, and the one the paper's proof turns on: request
-	// validation bounds Question at 8000 characters.
-	result.Question = strings.Repeat("q", 8000)
+	// validation bounds Question at 8000 CHARACTERS -- and characters are
+	// RUNES, not bytes (stringLengthBetween uses utf8.RuneCountInString).
+	//
+	// An earlier version of this fixture used 8000 ASCII bytes and measured a
+	// minimum FOUR TIMES too small. A review found it, and the correction is
+	// the whole reason this fixture now derives its padding rune by
+	// measurement instead of assuming one: the worst case is not the widest
+	// UTF-8 encoding but the one Go's JSON encoder ESCAPES, which costs six
+	// bytes per rune against a 4-byte emoji's four. See
+	// TestWorstCaseRuneIsTheOneTheEncoderEscapes, which proves the choice
+	// rather than asserting it.
+	result.Question = strings.Repeat(worstCaseRune, 8000)
 
 	// Version metadata: every sibling is bounded at 256 by validVersion, and
 	// BackendVersion at 256 by its own check. ContractVersion is NOT filled
 	// with padding -- it must remain the real schema identifier or the
 	// document stops being the thing being measured.
-	pad := strings.Repeat("v", 256)
+	pad := strings.Repeat(worstCaseRune, 256)
 	result.Versions.ServiceVersion = pad
 	result.Versions.Backend = pad
 	result.Versions.ProjectionVersion = pad
@@ -65,7 +124,7 @@ func maxEnvelopeResult(t *testing.T) ContextFabricInvestigationResult {
 		// FamilyVersion is bounded at 64, not 256 -- the validator caught an
 		// earlier draft padding it to the version-string bound. Maximizing a
 		// field past its OWN bound measures a document the contract rejects.
-		FamilyVersion:  strings.Repeat("f", 64),
+		FamilyVersion:  strings.Repeat(worstCaseRune, 64),
 		RequireDrivers: true,
 		RequireRanking: true,
 		Budget:         ContextFabricAnswerPlanBudget{MaxItems: 30, MaxSerializedBytes: 1 << 20},

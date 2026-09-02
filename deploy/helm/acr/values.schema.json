@@ -198,7 +198,7 @@
         "postgresConnectionKind": { "type": "string", "enum": ["direct", "pgbouncer"] },
         "maxItems": { "type": "integer", "minimum": 1, "maximum": 50 },
         "maxOutputTokens": { "type": "integer", "minimum": 500, "maximum": 16000 },
-        "maxSerializedBytes": { "type": "integer", "minimum": 8192, "maximum": 1048576 },
+        "maxSerializedBytes": { "type": "integer", "minimum": 64166, "maximum": 1048576 },
         "requestsPerMinute": { "type": "integer", "minimum": 1 },
         "enableEpisodeWriteback": { "type": "boolean" },
         "deviceVerificationUrl": { "type": "string" },

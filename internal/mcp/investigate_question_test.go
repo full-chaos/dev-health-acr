@@ -452,11 +452,24 @@ func TestInvestigateQuestionProjectsStructureAndWindowDisclosure(t *testing.T) {
 // partial document.
 func TestIncludeFullResultDropsWholeResultWhenOverBudget(t *testing.T) {
 	result := parityResult()
+	// The canonical result must genuinely EXCEED the budget for this test to
+	// be about anything, and the smallest legal budget is now the contract's
+	// measured minimum -- far above this fixture's natural ~5 KB. The question
+	// is padded to its own bound of 8000 RUNES using the rune Go's JSON
+	// encoder escapes, which costs six bytes each: the same lever that
+	// dominates the minimum itself. Padding rather than lowering the budget is
+	// deliberate -- a sub-minimum budget is no longer a legal contract value,
+	// and a test using one would assert behaviour the contract forbids.
+	result.Question = strings.Repeat("<", 8000)
 	boot := answerFixtureBootstrap(t, result, nil)
 
 	// A budget far too small for the canonical result to fit beside the
-	// projection, but still a legal contract value.
-	tight := contractsv1.MCPInvestigationBudget{MaxSerializedBytes: 8192}
+	// projection, but still a legal contract value -- DERIVED from the
+	// contract's own minimum rather than restating a number. It was a
+	// hardcoded 8192, which stopped being legal when the minimum was
+	// measured, and this test then failed for a reason that had nothing to
+	// do with what it is about.
+	tight := contractsv1.MCPInvestigationBudget{MaxSerializedBytes: contractsv1.ContextFabricMinimumAnswerBytes}
 	response := callInvestigateQuestion(t, boot, contractsv1.MCPInvestigateQuestionRequest{
 		Question:          result.Question,
 		IncludeFullResult: true,
