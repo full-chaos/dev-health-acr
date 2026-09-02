@@ -1170,3 +1170,131 @@ func schemaEnumValues(node map[string]any) []string {
 	sort.Strings(values)
 	return values
 }
+
+// TestReportOrphanSchemaDefs REPORTS $defs that nothing references. It never
+// fails.
+//
+// It exists because the CHAOS-4825 drift this file was written for lived in
+// exactly such a definition: context_fabric_common.v1's $defs.SourceObservation
+// had gone stale against its Go producer while the shape actually validated on
+// the wire was a second, INLINE copy under Coverage.properties.sources.items.
+// Two representations of one shape in one document, only one of them
+// maintained, and no consumer impact until somebody $refs the stale one.
+//
+// This is deliberately a report and not a gate. An unreferenced definition is
+// not wrong -- it can be published for consumers to reference, or staged ahead
+// of the code that will use it -- so failing on it would be a false-positive
+// generator. What it is, reliably, is a place where drift can hide, and the
+// list belongs in front of whoever is changing these files.
+//
+// What this keys on, stated so the next reader knows what it cannot see: a
+// definition counts as REFERENCED if any "$ref" anywhere in the canonical
+// schemas, the binary-embedded copies, or the canonical OpenAPI document ends
+// with "/$defs/<name>". That is deliberately generous -- it matches across
+// documents and cannot distinguish two same-named defs in different files --
+// so it under-reports orphans rather than inventing them. Tracked for
+// consolidation as its own low-priority ticket.
+func TestReportOrphanSchemaDefs(t *testing.T) {
+	root := moduleRootForParity(t)
+	schemas := loadCanonicalSchemas(t, root)
+
+	referenced := map[string]bool{}
+	collect := func(node any) {
+		var walk func(any)
+		walk = func(n any) {
+			switch value := n.(type) {
+			case map[string]any:
+				for key, child := range value {
+					if key == "$ref" {
+						if ref, ok := child.(string); ok {
+							if index := strings.LastIndex(ref, "/$defs/"); index >= 0 {
+								referenced[ref[index+len("/$defs/"):]] = true
+							}
+						}
+					}
+					walk(child)
+				}
+			case []any:
+				for _, child := range value {
+					walk(child)
+				}
+			}
+		}
+		walk(node)
+	}
+	for _, document := range schemas.documents {
+		collect(document)
+	}
+	// The embedded and OpenAPI copies are separate reference surfaces: a def
+	// referenced only from the shipped binary's schema is still referenced.
+	for _, extra := range []string{
+		filepath.Join(root, "internal", "mcp", "schemas"),
+		filepath.Join(root, "contracts", "openapi"),
+	} {
+		entries, err := os.ReadDir(extra)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(extra, entry.Name()))
+			if err != nil {
+				continue
+			}
+			var document any
+			if json.Unmarshal(raw, &document) == nil {
+				collect(document)
+			}
+		}
+	}
+
+	var orphans []string
+	documents := make([]string, 0, len(schemas.documents))
+	for name := range schemas.documents {
+		documents = append(documents, name)
+	}
+	sort.Strings(documents)
+	for _, name := range documents {
+		defs, _ := schemas.documents[name]["$defs"].(map[string]any)
+		defNames := make([]string, 0, len(defs))
+		for defName := range defs {
+			defNames = append(defNames, defName)
+		}
+		sort.Strings(defNames)
+		for _, defName := range defNames {
+			if referenced[defName] {
+				continue
+			}
+			// A definition that is itself a CONTAINER of referenced defs --
+			// the embedded whole-document copies in the MCP response schemas
+			// are the case -- is reached through its children, not by a $ref
+			// to itself. Reporting it as an orphan would be crying wolf.
+			if node, ok := defs[defName].(map[string]any); ok {
+				if inner, ok := node["$defs"].(map[string]any); ok && len(inner) > 0 {
+					container := false
+					for innerName := range inner {
+						if referenced[innerName] {
+							container = true
+							break
+						}
+					}
+					if container {
+						continue
+					}
+				}
+			}
+			orphans = append(orphans, name+"#$defs."+defName)
+		}
+	}
+
+	if len(orphans) == 0 {
+		t.Log("orphan $defs: none -- every published definition is referenced somewhere")
+		return
+	}
+	t.Logf("orphan $defs (%d): definitions no $ref reaches, across canonical schemas, internal/mcp/schemas and contracts/openapi. Not a failure -- a place drift can hide, because nothing validates through them. Consolidate with the shape they duplicate, or delete:", len(orphans))
+	for _, orphan := range orphans {
+		t.Logf("  %s", orphan)
+	}
+}

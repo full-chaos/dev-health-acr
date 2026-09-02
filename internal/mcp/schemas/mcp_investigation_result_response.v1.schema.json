@@ -4008,6 +4008,14 @@
             "watermark": {
               "maxLength": 512,
               "type": "string"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 160
+            },
+            "state_label": {
+              "type": "string",
+              "maxLength": 160
             }
           },
           "required": [
