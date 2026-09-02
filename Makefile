@@ -169,7 +169,12 @@ contract-test:
 # target humans run covers the whole parity chain, not just the
 # artifact-to-artifact half of it -- the half that reported OK while a Go wire
 # field had no published property at all.
-	go test ./internal/contracts/v1/ -run 'TestEverySchemaDocumentAndDefIsBoundOrExempt|TestPublishedSchemaPropertiesMatchGoWireFields|TestPublishedEnumsMatchGoVocabularies|TestReportOrphanSchemaDefs' -count=1
+# CHAOS-4867: TestSchemaAndGoBoundsAgree joined this list because it was
+# previously reachable only via the full `internal/contracts/v1` package
+# suite -- which is where a schema minimum changed ahead of its Go
+# constant and `make contract-test` still passed, because the test that
+# would have caught it never ran here.
+	go test ./internal/contracts/v1/ -run 'TestEverySchemaDocumentAndDefIsBoundOrExempt|TestPublishedSchemaPropertiesMatchGoWireFields|TestPublishedEnumsMatchGoVocabularies|TestReportOrphanSchemaDefs|TestSchemaAndGoBoundsAgree' -count=1
 
 codegraph-contract:
 	bash scripts/codegraph/verify-contract.sh --fixtures testdata/codegraph/v1.2.0

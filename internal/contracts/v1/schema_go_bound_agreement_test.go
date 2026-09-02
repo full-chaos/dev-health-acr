@@ -331,6 +331,32 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// as HandleOption.value above (mapped explicitly, not probed).
 		"common#$defs.RequestedHandle.properties.value.minLength": 1,
 		"common#$defs.RequestedHandle.properties.value.maxLength": 256,
+		// CHAOS-4867: InvestigationOptions was previously matched by
+		// schemaOnlyBoundReason's "request-side shape" case, which excused
+		// EVERY numeric bound on this shape as "bounded by the request
+		// contract, not by result validation" -- a claim that is false for
+		// this shape specifically: ContextFabricInvestigationOptions.Validate
+		// (validate_context_fabric_request.go) numerically checks every one
+		// of these six fields on the write path. That blanket exemption is
+		// exactly how max_serialized_bytes.minimum went unchecked while a
+		// same-named but different field, AnswerPlanBudget's own
+		// max_serialized_bytes.minimum above, stayed mapped -- two fields
+		// sharing a JSON name, one enumerated, one silently excused. Mapped
+		// explicitly here instead, one entry per field the validator checks;
+		// every value below is transcribed from the validator's own literals/
+		// named constants, not chosen to make the schema agree with it.
+		"common#$defs.InvestigationOptions.properties.max_subject_candidates.minimum": 1,
+		"common#$defs.InvestigationOptions.properties.max_subject_candidates.maximum": 50,
+		"common#$defs.InvestigationOptions.properties.max_cohort_members.minimum":     1,
+		"common#$defs.InvestigationOptions.properties.max_cohort_members.maximum":     ContextFabricMaxCohortMembersLimit,
+		"common#$defs.InvestigationOptions.properties.max_relationship_paths.minimum": 1,
+		"common#$defs.InvestigationOptions.properties.max_relationship_paths.maximum": 250,
+		"common#$defs.InvestigationOptions.properties.max_drivers.minimum":            1,
+		"common#$defs.InvestigationOptions.properties.max_drivers.maximum":            50,
+		"common#$defs.InvestigationOptions.properties.max_evidence_refs.minimum":      1,
+		"common#$defs.InvestigationOptions.properties.max_evidence_refs.maximum":      500,
+		"common#$defs.InvestigationOptions.properties.max_serialized_bytes.minimum":   ContextFabricSerializedBytesMin,
+		"common#$defs.InvestigationOptions.properties.max_serialized_bytes.maximum":   ContextFabricSerializedBytesMax,
 	}
 
 	discovered := schemaBounds(t, documents)
@@ -825,7 +851,7 @@ func schemaOnlyBoundReason(path string) string {
 		return "projection-batch ingest shape: not part of the answer surface, validated by its own contract"
 	case strings.Contains(path, "RequestedScope") || strings.Contains(path, "SubjectHint") ||
 		strings.Contains(path, "ConversationTurn") || strings.Contains(path, "BoundSubjectReceipt") ||
-		strings.Contains(path, "InvestigationOptions") || strings.Contains(path, "ConsumerInfo") ||
+		strings.Contains(path, "ConsumerInfo") ||
 		strings.Contains(path, "TimeContext"):
 		return "request-side shape: bounded by the request contract, not by result validation"
 	case strings.Contains(path, "SubjectRef") || strings.Contains(path, "label") ||
