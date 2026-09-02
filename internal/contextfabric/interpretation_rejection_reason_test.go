@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -266,4 +267,56 @@ func TestReceiptValidateRejectsANonVocabularyRejectionReason(t *testing.T) {
 			t.Fatalf("Validate() = %v for a receipt with no rejection to describe", err)
 		}
 	})
+}
+
+// TestReceiptSinkPersistsTheTableConstantNotTheCallerString closes the gap a
+// third review round found: `Validate()` proves MEMBERSHIP but cannot
+// replace the value, so a caller could assemble a string with the same TEXT
+// as a vocabulary member out of model output, pass the membership check, and
+// have its own string persisted verbatim.
+//
+// The earlier receipt test does not catch this — it only rejects a
+// non-member and accepts a package constant, which is the equal-by-content
+// but caller-owned case falling exactly between them. Comparing backing DATA
+// POINTERS is what settles it, the same technique the contracts/v1 canonical
+// table test uses and for the same reason: Go string equality cannot
+// distinguish "the table's constant" from "an equal-valued heap string".
+func TestReceiptSinkPersistsTheTableConstantNotTheCallerString(t *testing.T) {
+	t.Parallel()
+	// Assembled at runtime so it cannot BE the constant, while carrying
+	// byte-identical text to a real member — the reviewer's construction.
+	callerBuilt := InterpretationRejectionReason(strings.Join([]string{"shape", "invalid"}, "_"))
+	if callerBuilt != contractsv1.ContextFabricInterpretationRejectionShapeInvalid {
+		t.Fatalf("fixture is wrong: %q must equal the member's text", callerBuilt)
+	}
+	if unsafe.StringData(string(callerBuilt)) == unsafe.StringData(string(contractsv1.ContextFabricInterpretationRejectionShapeInvalid)) {
+		t.Skip("the compiler interned the runtime-built string; this test cannot distinguish the two here")
+	}
+
+	started := time.Now().UTC()
+	receipt := ModelExecutionReceipt{
+		Operation: ModelOperationInterpret, Provider: "openai", Model: "m", ModelVersion: "v1",
+		PromptVersion: "p1", SchemaVersion: "s1", EvaluatorVersion: "e1",
+		InputDigest: strings.Repeat("a", 64), Outcome: "invalid_output",
+		StartedAt: started, CompletedAt: started.Add(time.Second), Attempts: 1,
+		InterpretationRejectionReason: callerBuilt,
+	}
+
+	sink := &capturingReceiptSink{}
+	if err := recordModelReceipt(context.Background(), storage.Principal{OrgID: "org_1"}, sink, receipt); err != nil {
+		t.Fatalf("recordModelReceipt() error = %v", err)
+	}
+	if sink.got.InterpretationRejectionReason != contractsv1.ContextFabricInterpretationRejectionShapeInvalid {
+		t.Fatalf("sink received %q, want the member text", sink.got.InterpretationRejectionReason)
+	}
+	if unsafe.StringData(string(sink.got.InterpretationRejectionReason)) == unsafe.StringData(string(callerBuilt)) {
+		t.Fatal("the receipt sink persisted the CALLER's string rather than the canonical-table constant -- a value that merely passed the membership check reached the durable artifact verbatim")
+	}
+}
+
+type capturingReceiptSink struct{ got ModelExecutionReceipt }
+
+func (s *capturingReceiptSink) RecordModelExecution(_ context.Context, _ storage.Principal, receipt ModelExecutionReceipt) error {
+	s.got = receipt
+	return nil
 }

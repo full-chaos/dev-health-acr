@@ -2130,6 +2130,30 @@ func recordModelReceipt(ctx context.Context, principal storage.Principal, sink M
 	if err := receipt.Validate(); err != nil {
 		return fmt.Errorf("model receipt: %w", err)
 	}
+	// Canonicalize the closed-vocabulary field at the SINK, not merely
+	// validate it. Validate() above proves membership; it cannot replace
+	// the value, because it takes a value receiver and its job is to
+	// accept or reject. Without this line a caller could assemble a string
+	// with the same TEXT as a vocabulary member out of model output,
+	// assign it to the exported field, pass the membership check, and have
+	// its own string persisted verbatim -- validating a tainted value and
+	// then using the tainted value, which is precisely the shape the
+	// canonical table's own doc comment says is a real distinction rather
+	// than a cosmetic one. Assigning the table's constant makes "the
+	// durable artifact holds a compile-time constant" a property the
+	// compiler and CodeQL can both see, instead of one that holds only as
+	// long as the check and the use stay in sync.
+	//
+	// Sink-side and unconditional, the same defence-in-depth posture
+	// safeLogRequestID takes on the decision line: the production path
+	// already assigns from the canonicalizing accessor, so this changes
+	// nothing today and costs nothing, and it protects any future caller
+	// that reaches this sink without going through that path. Empty stays
+	// empty -- CanonicalContextFabric... maps a non-member to
+	// "unclassified", so the guard is applied only when a value is present.
+	if receipt.InterpretationRejectionReason != "" {
+		receipt.InterpretationRejectionReason = contractsv1.CanonicalContextFabricInterpretationRejectionReason(receipt.InterpretationRejectionReason)
+	}
 	if sink == nil {
 		return nil
 	}
