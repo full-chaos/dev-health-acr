@@ -219,6 +219,17 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	"FrameGoalsDropped":     {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 	"FrameTermsTruncated":   {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 	"FrameKindUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	// The five entries below close the same countability gap the two
+	// above already closed for Goals/Terms/Kind -- found by merge-gate
+	// round 3: sanitizeFrameOutput discarded the unrecognized/dropped
+	// signal for Temporal, Emphasis, Dimensions, and every MemberKind/
+	// GroupKind site. Same exclusion reasoning as their siblings: per-call
+	// sanitize-outcome telemetry, not a version identity.
+	"FrameTemporalUnrecognized":   {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as FrameKindUnrecognized"},
+	"FrameEmphasisDropped":        {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as FrameGoalsDropped"},
+	"FrameDimensionsDropped":      {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as FrameGoalsDropped"},
+	"FrameMemberKindUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as FrameKindUnrecognized"},
+	"FrameGroupKindUnrecognized":  {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as FrameKindUnrecognized"},
 	// InterpretationRejectionReason names WHICH validator rule rejected one
 	// interpretation. It is a per-call diagnostic, not a version authority,
 	// and the exclusion is stronger than "it merely seems unimportant": a

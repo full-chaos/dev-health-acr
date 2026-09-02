@@ -253,6 +253,29 @@ type ModelExecutionReceipt struct {
 	FrameGoalsDropped     int            `json:"frame_goals_dropped,omitempty"`
 	FrameTermsTruncated   int            `json:"frame_terms_truncated,omitempty"`
 	FrameKindUnrecognized bool           `json:"frame_kind_unrecognized,omitempty"`
+	// FrameTemporalUnrecognized / FrameEmphasisDropped / FrameDimensionsDropped /
+	// FrameMemberKindUnrecognized / FrameGroupKindUnrecognized close the
+	// same countability gap the three fields above already closed for
+	// Goals/Terms/Kind -- found by this PR's own merge-gate round 3:
+	// sanitizeFrameOutput discarded the unrecognized/dropped signal for
+	// every OTHER sanitized axis (Temporal, Emphasis, Dimensions, and
+	// every MemberKind/GroupKind site across every subject-expression
+	// variant, INCLUDING operands), so a model emitting an
+	// out-of-vocabulary value on any of those axes was silently
+	// indistinguishable from a model emitting nothing -- exactly the
+	// violation FrameKindUnrecognized exists to prevent for the
+	// discriminator, just missed for its siblings. MemberKind/GroupKind
+	// are single flags rather than per-site counts because
+	// SanitizeSubjectKind's signal is a bool, not a count, and (like
+	// TermsTruncated above) the several call sites that can each supply a
+	// member_kind -- the variant's own field, and every ExplicitSet
+	// operand's -- OR into ONE flag per axis name rather than one field
+	// per call site.
+	FrameTemporalUnrecognized   bool `json:"frame_temporal_unrecognized,omitempty"`
+	FrameEmphasisDropped        int  `json:"frame_emphasis_dropped,omitempty"`
+	FrameDimensionsDropped      int  `json:"frame_dimensions_dropped,omitempty"`
+	FrameMemberKindUnrecognized bool `json:"frame_member_kind_unrecognized,omitempty"`
+	FrameGroupKindUnrecognized  bool `json:"frame_group_kind_unrecognized,omitempty"`
 	// InterpretationRejectionReason names WHICH rule in
 	// InterpretedQuestion.Validate() rejected this interpretation -- the
 	// interpret-side counterpart of the synthesis decision line's own
@@ -1338,6 +1361,77 @@ type RuntimeQuestionInterpreter struct {
 	// TestSlogEngineTelemetryLogsQuestionFamilyResolution asserts the
 	// PRODUCTION sink's own bytes rather than a struct field.
 	FamilyTelemetry QuestionFamilyTelemetry
+	// FrameTelemetry (CHAOS-4452 stage 2, SHADOW ONLY) receives one
+	// FrameValidationEvent per Interpret call whose receipt carried a
+	// frame proposal -- including the ones that validate cleanly, because
+	// the denominator has to be countable.
+	//
+	// An explicitly-wired field for the identical reason FamilyTelemetry
+	// is one: a nil here means an operator sees nothing, and the whole
+	// point of this slice is the measurement.
+	FrameTelemetry FrameValidationTelemetry
+}
+
+// resolveFrame validates the frame a receipt proposed, records the outcome
+// on the receipt, and emits the telemetry event.
+//
+// THERE IS NO REPAIR HERE. §13.6 admits one bounded repair attempt on an
+// invalid frame, and the bound that makes it safe is deferred to its own
+// change -- so an invalid frame is REFUSED, which is the design's own
+// fallback reached immediately rather than after an attempt. What that
+// costs is measurable and is exactly what this slice measures: the
+// refusal rate and the first-failed-invariant histogram.
+//
+// WHERE THIS SITS IN THE DESIGN'S FLOW, because the placement is the
+// substantive decision and not an implementation detail. §13.1's order is
+// "consensus -> winning sample WHOLE -> A1 -> normalize/derive -> A2 ->
+// repair once -> FRAME IMMUTABLE". This interpreter runs at N=1, where the
+// single interpret call IS the winning sample, so validating here --
+// immediately after the sanitized proposal lands on the receipt and before
+// anything downstream sees it -- is that order exactly. When an ensemble
+// is turned on, this call moves to just after the winner is selected; it
+// does not change shape, because it already takes ONE whole proposed frame
+// rather than a field-wise merge.
+//
+// NOTHING IS GATED ON THE RESULT in phase 1. The validated frame is
+// persisted on the receipt and telemetered; the shipped precedence table
+// still decides the family; no answer, plan, offer, render selection or
+// clarification changes because of any of it. Zero behaviour change is a
+// required, provable property of this slice.
+func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal storage.Principal, receipt *ModelExecutionReceipt, emittedShape InvestigationShape) {
+	if receipt == nil || receipt.QuestionFrame == nil {
+		// No proposal is NOT a validation failure and must not be
+		// recorded as one: a model that emitted no frame at all and a
+		// model that emitted a malformed one are different states, and
+		// CHAOS-4674 measured the first happening on a field far older
+		// than this one. The absence is visible as a receipt with no
+		// frame; inventing a refusal for it would put a phantom failure
+		// into the invariant histogram this slice exists to read.
+		return
+	}
+	proposed := *receipt.QuestionFrame
+	result := ValidateFrame(proposed, nil, emittedShape)
+
+	receipt.FrameOutcome = result.Outcome
+	receipt.FrameFailedInvariant = result.Failure.Invariant
+	switch result.Outcome {
+	case FrameValidationOutcomeValid:
+		// The receipt carries the VALIDATED, normalized frame -- the one
+		// that would be acted on -- rather than the raw proposal, so a
+		// persisted receipt can be replayed against the table that
+		// produced it.
+		validated := result.Frame
+		receipt.QuestionFrame = &validated
+	default:
+		// On a refusal the receipt keeps the PROPOSAL, which is what the
+		// measurement needs: "what did the model emit that we could not
+		// use" is the question the invariant histogram is answering, and
+		// blanking it would leave the failure uncounted and undiagnosable.
+	}
+
+	if r.FrameTelemetry != nil {
+		r.FrameTelemetry.RecordFrameValidation(ctx, principal, FrameValidationEventFrom(proposed, result, emittedShape))
+	}
 }
 
 // THE ENSEMBLE SIZE IS DELIBERATELY NOT A FIELD HERE, and the absence is
@@ -1400,6 +1494,20 @@ func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal sto
 			receipt.InterpretationRejectionReason = InterpretationRejectionReasonOf(err)
 		} else if receipt.Outcome == "pending_validation" {
 			receipt.Outcome = "success"
+		} else {
+			// no-op: an already-classified outcome is left alone.
+			_ = receipt.Outcome
+		}
+		// The frame is resolved ONLY after the interpretation itself has
+		// validated, which is the same control-flow rule the window and
+		// family captures follow (runtime.go's own F5 note):
+		// question.Validate() runs first, so a shadow capture can never be
+		// the reason a sound interpretation is rejected -- and equally,
+		// a frame is never validated for an interpretation that was
+		// already rejected, which would put a phantom row into the
+		// invariant histogram.
+		if err == nil {
+			r.resolveFrame(ctx, principal, &receipt, question.Shape)
 		}
 	}
 	if sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt); sinkErr != nil {

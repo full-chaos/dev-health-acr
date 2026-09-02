@@ -150,6 +150,40 @@ func SynthesisOutputSchema() ([]byte, error) {
 // InterpretationOutputFamily is the CHAOS-4632 shadow capture
 // ParseInterpretationOutputFamily returns alongside the domain
 // InterpretedQuestion.
+// InterpretationOutputFrame is the CHAOS-4452 stage-2 shadow capture a
+// non-genkit transport gets as the third field of InterpretationOutputCapture,
+// built by the SAME sanitizeFrameOutput the genkit path calls.
+//
+// It exists for the identical reason InterpretationOutputFamily does: a
+// transport-specific reimplementation would diverge silently, and the
+// divergence would land inside the labelled semantic-correctness
+// measurement this slice exists to make, where it would be
+// indistinguishable from the model behaving differently.
+//
+// Deliberately NOT its own ParseInterpretationOutputFrame entry point --
+// InterpretationOutputCapture's own doc comment explains why: this
+// package already paid for that mistake twice (window-only, then
+// family-only), and a frame-only parser would be the identical trap a
+// third time, one call site away from a transport that copies the frame
+// and forgets whatever joins it next.
+type InterpretationOutputFrame struct {
+	Frame            contextfabric.QuestionFrame
+	Present          bool
+	GoalsDropped     int
+	TermsTruncated   int
+	KindUnrecognized bool
+	// The five fields below mirror interpretationFrameCapture's own
+	// (runtime.go) -- added alongside it in the same merge-gate-round-3
+	// fix, so the file-exchange transport's capture stays the byte-
+	// identical mirror this struct's own doc comment promises rather than
+	// falling one field behind again.
+	TemporalUnrecognized   bool
+	EmphasisDropped        int
+	DimensionsDropped      int
+	MemberKindUnrecognized bool
+	GroupKindUnrecognized  bool
+}
+
 type InterpretationOutputFamily struct {
 	Family                      contextfabric.QuestionFamily
 	FamilyUnrecognized          bool
@@ -207,27 +241,29 @@ func ParseInterpretationOutputFamily(raw []byte, defaultTime contextfabric.TimeC
 }
 
 // InterpretationOutputCapture is the WHOLE shadow capture from one raw
-// interpretation output -- window (CHAOS-3900 W0) and family (CHAOS-4632)
-// together.
+// interpretation output -- window (CHAOS-3900 W0), family (CHAOS-4632) and
+// frame (CHAOS-4452 stage 2) together.
 //
-// This exists because the two were added one slice apart and each got its
-// own parser, which meant a transport had to remember to call BOTH. It did
-// not: the file-exchange transport called only the window parser, so every
-// CHAOS-4632 signal arrived empty and a shadow-harness measurement over a
-// live corpus would have read transport loss as the model never emitting
-// them. That is the SAME defect ParseInterpretationOutputWindow's own call
-// site was created to fix for the window fields one slice earlier -- so
-// the fix is not another parallel function but ONE parser that cannot be
-// half-called, with the two originals delegating to it.
+// This exists because the three were added one slice apart each and each
+// got its own parser, which meant a transport had to remember to call
+// every one of them. It did not: the file-exchange transport called only
+// the window parser, so every CHAOS-4632 signal arrived empty and a
+// shadow-harness measurement over a live corpus would have read transport
+// loss as the model never emitting them. Frame joined this struct instead
+// of getting a fourth standalone parser for the SAME reason family joined
+// window rather than getting its own: the fix is not another parallel
+// function but ONE parser that cannot be half-called, with every signal
+// delegating to it.
 type InterpretationOutputCapture struct {
 	Window InterpretationOutputWindow
 	Family InterpretationOutputFamily
+	Frame  InterpretationOutputFrame
 }
 
 // ParseInterpretationOutputSignals decodes raw once and returns the domain
 // interpretation plus the COMPLETE shadow capture. Any transport that is
-// not genkit should call THIS, not one of the two narrower parsers, so a
-// future shadow signal is picked up without touching the transport again.
+// not genkit should call THIS, not a narrower parser, so a future shadow
+// signal is picked up without touching the transport again.
 func ParseInterpretationOutputSignals(raw []byte, defaultTime contextfabric.TimeContext) (contextfabric.InterpretedQuestion, InterpretationOutputCapture, error) {
 	var output interpretationOutput
 	if err := json.Unmarshal(raw, &output); err != nil {
@@ -239,6 +275,7 @@ func ParseInterpretationOutputSignals(raw []byte, defaultTime contextfabric.Time
 	}
 	class, confidence, unrecognized := sanitizeWindowOutput(output)
 	family := sanitizeFamilyOutput(output)
+	frame := sanitizeFrameOutput(output)
 	return interpreted, InterpretationOutputCapture{
 		Window: InterpretationOutputWindow{Class: class, Confidence: confidence, ClassUnrecognized: unrecognized},
 		Family: InterpretationOutputFamily{
@@ -253,6 +290,18 @@ func ParseInterpretationOutputSignals(raw []byte, defaultTime contextfabric.Time
 			RequestedKind:               family.RequestedKind,
 			RequestedKindUnrecognized:   family.RequestedKindUnrecognized,
 		},
+		Frame: InterpretationOutputFrame{
+			Frame:                  frame.Frame,
+			Present:                frame.Present,
+			GoalsDropped:           frame.GoalsDropped,
+			TermsTruncated:         frame.TermsTruncated,
+			KindUnrecognized:       frame.KindUnrecognized,
+			TemporalUnrecognized:   frame.TemporalUnrecognized,
+			EmphasisDropped:        frame.EmphasisDropped,
+			DimensionsDropped:      frame.DimensionsDropped,
+			MemberKindUnrecognized: frame.MemberKindUnrecognized,
+			GroupKindUnrecognized:  frame.GroupKindUnrecognized,
+		},
 	}, nil
 }
 
@@ -260,7 +309,13 @@ func ParseInterpretationOutputSignals(raw []byte, defaultTime contextfabric.Time
 // the one place a non-genkit transport needs, so it cannot copy some
 // fields and forget others (which is exactly what happened when the
 // file-exchange transport copied the three window fields and none of the
-// family ones).
+// family ones, and would have happened again for frame had this diff given
+// frame its own parser instead of joining this one).
+//
+// The frame fields mirror applyFrameCapture's (runtime.go) own guard: a
+// receipt with no frame in the capture must stay frame-absent, not
+// zero-valued-and-therefore-indistinguishable-from-absent -- Present is
+// what lets resolveFrame tell "no proposal" from "an empty one".
 func ApplyInterpretationCapture(receipt *contextfabric.ModelExecutionReceipt, capture InterpretationOutputCapture) {
 	receipt.WindowClass = capture.Window.Class
 	receipt.WindowConfidence = capture.Window.Confidence
@@ -275,4 +330,16 @@ func ApplyInterpretationCapture(receipt *contextfabric.ModelExecutionReceipt, ca
 	receipt.ScopeAnchorKindUnrecognized = capture.Family.ScopeAnchorKindUnrecognized
 	receipt.RequestedSubjectKind = capture.Family.RequestedKind
 	receipt.RequestedSubjectKindUnrecognized = capture.Family.RequestedKindUnrecognized
+	if capture.Frame.Present {
+		frame := capture.Frame.Frame
+		receipt.QuestionFrame = &frame
+		receipt.FrameGoalsDropped = capture.Frame.GoalsDropped
+		receipt.FrameTermsTruncated = capture.Frame.TermsTruncated
+		receipt.FrameKindUnrecognized = capture.Frame.KindUnrecognized
+		receipt.FrameTemporalUnrecognized = capture.Frame.TemporalUnrecognized
+		receipt.FrameEmphasisDropped = capture.Frame.EmphasisDropped
+		receipt.FrameDimensionsDropped = capture.Frame.DimensionsDropped
+		receipt.FrameMemberKindUnrecognized = capture.Frame.MemberKindUnrecognized
+		receipt.FrameGroupKindUnrecognized = capture.Frame.GroupKindUnrecognized
+	}
 }

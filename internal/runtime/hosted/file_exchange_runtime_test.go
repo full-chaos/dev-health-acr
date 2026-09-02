@@ -606,11 +606,18 @@ func TestFileExchangeRoundTrip(t *testing.T) {
 // the receipt THAT method returns. Reverting the transport to the
 // window-only parser now fails it.
 //
-// The transport has lost shadow signals twice, one slice apart -- the
-// CHAOS-3900 window fields, then CHAOS-4632's family fields -- and it is the
-// ONLY transport the live trial and shadow harnesses use, so the loss reads
-// as the model never emitting the signal and corrupts the measured number
-// rather than breaking anything visibly.
+// The transport has lost shadow signals three times now, one slice apart
+// each -- the CHAOS-3900 window fields, then CHAOS-4632's family fields,
+// then (merge-gate round 2 on CHAOS-4452 stage 2, this fixture's original
+// version) the frame: it omitted question_frame entirely, so the fixture
+// could not have failed even though the transport gave frame its own
+// ParseInterpretationOutputFrame parser and never called it -- the fix
+// joined frame onto InterpretationOutputCapture/ApplyInterpretationCapture
+// instead, and this fixture now includes question_frame so a regression
+// back to a frame-only parser (or any other half-called seam) fails here.
+// It is the ONLY transport the live trial and shadow harnesses use, so a
+// dropped signal reads as the model never emitting it and corrupts the
+// measured number rather than breaking anything visibly.
 func TestFileExchangeInterpretCarriesEveryShadowSignal(t *testing.T) {
 	dir := t.TempDir()
 	runtime, err := newFileExchangeRuntime(dir, "test-model", 10*time.Second)
@@ -634,7 +641,12 @@ func TestFileExchangeInterpretCarriesEveryShadowSignal(t *testing.T) {
 		"group_kind": "team",
 		"scope_anchor_term": "fullchaos",
 		"scope_anchor_kind": "repository",
-		"requested_subject_kind": "project"
+		"requested_subject_kind": "project",
+		"question_frame": {
+			"goals": ["assess_state"],
+			"subject_expression": {"kind": "named_subject", "terms": ["team a"]},
+			"temporal": "current"
+		}
 	}`
 
 	done := make(chan struct{})
@@ -668,6 +680,19 @@ func TestFileExchangeInterpretCarriesEveryShadowSignal(t *testing.T) {
 		if field.got != field.want {
 			t.Errorf("receipt.%s = %q, want %q -- this transport is the only one the live trial and shadow harnesses use, so a dropped signal is scored as the MODEL never emitting it", field.name, field.got, field.want)
 		}
+	}
+
+	if receipt.QuestionFrame == nil {
+		t.Fatal("receipt.QuestionFrame = nil, want a proposal carrying the responder's frame -- the file-exchange transport dropped it (either it never reached ApplyInterpretationCapture, or ApplyInterpretationCapture never stamped it)")
+	}
+	if len(receipt.QuestionFrame.Goals) != 1 || receipt.QuestionFrame.Goals[0] != contextfabric.GoalAssessState {
+		t.Errorf("receipt.QuestionFrame.Goals = %v, want [assess_state]", receipt.QuestionFrame.Goals)
+	}
+	if receipt.QuestionFrame.Temporal != contextfabric.TemporalIntentCurrent {
+		t.Errorf("receipt.QuestionFrame.Temporal = %q, want current", receipt.QuestionFrame.Temporal)
+	}
+	if receipt.QuestionFrame.SubjectExpression.Kind != contextfabric.SubjectExpressionNamed {
+		t.Errorf("receipt.QuestionFrame.SubjectExpression.Kind = %q, want named_subject", receipt.QuestionFrame.SubjectExpression.Kind)
 	}
 }
 
