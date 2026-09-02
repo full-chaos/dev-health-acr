@@ -298,3 +298,55 @@ func TestR5_SelfFound_ClassifierKeysOnIdentityNotErrorText(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-4874. The identity probe above is the NEGATIVE half of the
+// table-derived contract: it proves an impostor does not classify. Nothing
+// proved the POSITIVE half -- that each arm actually reaches its own class --
+// so an arm shadowed by an earlier entry (the hazard failureClasses' own
+// ordering comment names, and which ErrQueryBudgetExceeded sitting before
+// ErrUnavailable exists to avoid) would classify as the wrong class with every
+// existing probe still green.
+//
+// Derived from the same table for the same reason: an arm added to
+// failureClasses is probed here automatically, so a new arm cannot ship
+// without a probe in either direction.
+func TestClassifierReachesEveryClassItDeclares(t *testing.T) {
+	if len(failureClasses) == 0 {
+		t.Fatal("failureClasses is empty; this test would be vacuous")
+	}
+	reached := 0
+	for _, entry := range failureClasses {
+		if entry.class == "" || entry.class == failureClassUnclassified {
+			t.Fatalf("sentinel %v declares class %q; the table must name a real class", entry.sentinel, entry.class)
+		}
+		// Wrapped, not bare: the classifier's job is to see through the
+		// operation context every real call site adds.
+		wrapped := fmt.Errorf("tick org-1 source-a: %w", entry.sentinel)
+		if got := classifyOutcomeError(wrapped); got != entry.class {
+			t.Fatalf("classifyOutcomeError(%v) = %q, want %q -- an arm shadowed by an "+
+				"earlier entry, or a class that cannot be reached at all", entry.sentinel, got, entry.class)
+		}
+		reached++
+	}
+	if reached != len(failureClasses) {
+		t.Fatalf("assertion reach: %d of %d arms reached their assertions", reached, len(failureClasses))
+	}
+
+	// REPORTED LIMIT, measured rather than assumed. A mutation that swaps
+	// two rows of failureClasses SURVIVES this test today, and that is
+	// correct rather than a hole: at this commit no entry's sentinel
+	// satisfies another's, so first-match cannot pick a wrong row and the
+	// order is genuinely inert. devhealthsource's tableReadError -- the one
+	// producer whose Unwrap could make ErrQueryBudgetExceeded and
+	// ErrUnavailable overlap -- returns one or the other, never both.
+	//
+	// A separate pairwise "no sentinel shadows an earlier one" assertion was
+	// written here and then REMOVED as subsumed, because two mutations
+	// showed the loop above already covers it: with ErrQueryBudgetExceeded
+	// mutated to wrap ErrUnavailable and the table order left correct, this
+	// test stays green; with the same wrap AND the two rows swapped, it
+	// fails with "an arm shadowed by an earlier entry". So the day a real
+	// overlap appears, the reordering hazard the failureClasses comment
+	// describes is caught here -- by this loop, with no second guard to keep
+	// in step.
+}
