@@ -525,23 +525,45 @@ func TestEveryDeclaredUnavailableReasonIsInItsVocabulary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the declarations: %v", err)
 	}
-	declared := regexp.MustCompile(`(RequirementReason\w+)\s+RequirementUnavailableReason\s*=`).FindAllStringSubmatch(string(source), -1)
+	declared := regexp.MustCompile(`(RequirementReason\w+)\s+RequirementUnavailableReason\s*=\s*"([a-z_]+)"`).
+		FindAllStringSubmatch(string(source), -1)
 	if len(declared) == 0 {
 		t.Fatal("found no reason declarations; this guard would be vacuous")
 	}
+
+	// MEMBERSHIP, NOT CARDINALITY. The first version of this guard built
+	// exactly this set and then compared only the two LENGTHS -- so
+	// replacing a vocabulary member with a DUPLICATE of another kept the
+	// count at four and the guard passed, with the reason still returned by
+	// the derivation and still absent from every histogram and log key. The
+	// merge-gate round constructed that mutation; I ran it and the whole
+	// suite stayed green.
+	//
+	// A guard written to catch "declared but not in the list" that checks
+	// only how long the list is has the same defect as the bug it was
+	// written for: it asserts something adjacent to what its name claims.
 	inVocabulary := map[string]bool{}
 	for _, member := range RequirementUnavailableReasonVocabulary() {
 		inVocabulary[string(member)] = true
 	}
-	// Map constant name -> value by asking the vocabulary for each value we
-	// know, then checking counts: a declared constant absent from the
-	// vocabulary shows up as a count mismatch by name below.
-	if len(declared) != RequirementUnavailableReasonCount {
-		names := make([]string, 0, len(declared))
-		for _, match := range declared {
-			names = append(names, match[1])
+	checked := 0
+	for _, match := range declared {
+		name, value := match[1], match[2]
+		if !inVocabulary[value] {
+			t.Errorf("%s is declared as %q but is not in RequirementUnavailableReasonVocabulary -- it has no telemetry bucket and no log key, and every list-driven test is blind to it", name, value)
 		}
-		t.Fatalf("%d reason constants are declared (%v) but the vocabulary holds %d -- a declared reason that is not in the vocabulary has no telemetry bucket and no log key, and every list-driven test is blind to it",
-			len(declared), names, RequirementUnavailableReasonCount)
+		checked++
+	}
+	if checked != len(declared) {
+		t.Fatalf("checked %d of %d declarations", checked, len(declared))
+	}
+	// And no duplicates: a duplicated member is how a missing one hides
+	// while the count still matches.
+	seen := map[RequirementUnavailableReason]bool{}
+	for _, member := range RequirementUnavailableReasonVocabulary() {
+		if seen[member] {
+			t.Errorf("vocabulary member %q appears twice; a duplicate masks an omission from the count", member)
+		}
+		seen[member] = true
 	}
 }
