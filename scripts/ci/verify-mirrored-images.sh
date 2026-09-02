@@ -37,9 +37,14 @@ repo="${1:?usage: verify-mirrored-images.sh <owner/repo, e.g. \$GITHUB_REPOSITOR
 # "run Mirror images" hint that defaults to mirroring main's pins, which do
 # not help an old tag whose pins were never mirrored. ci.yml's call passes
 # no second arg and keeps the generic hint unchanged.
+# The script has no way to tell whether dispatch_ref is an old tag's commit
+# or simply the current main tip (release.yml passes the resolved release
+# commit unconditionally, including on an ordinary main push) -- so the
+# hint is worded conditionally rather than asserting "this is a re-release"
+# outright.
 dispatch_ref="${2:-}"
 if [ -n "$dispatch_ref" ]; then
-  dispatch_hint="run \`gh workflow run mirror-images.yml -f ref=${dispatch_ref}\` and wait for it to complete, then re-run this job"
+  dispatch_hint="if this is a re-release of an older ref, run \`gh workflow run mirror-images.yml -f ref=${dispatch_ref}\`; otherwise dispatch \"Mirror images\" (workflow_dispatch) for main -- then wait for it to complete and re-run this job"
 else
   dispatch_hint='run "Mirror images" (workflow_dispatch) and wait for it to complete, then re-run this job'
 fi
