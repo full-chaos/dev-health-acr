@@ -33,6 +33,16 @@ import (
 
 // answerBound is one field of ContextFabricInvestigationResult and the limits
 // its own validator places on it.
+// answerBreach is one extra proof for a field whose bound is COMPOSITE. Round 1
+// finding 2: a single PastMax on Interpretation tested only RequestedJudgment,
+// so the entry's other claimed bounds (term counts, fact requirements,
+// clarification reason) had no proof at all.
+type answerBreach struct {
+	Name   string
+	Mutate func(*ContextFabricInvestigationResult)
+	Expect string
+}
+
 type answerBound struct {
 	// Field is the Go field name. The reflection guard requires every field
 	// of the result struct to appear here exactly once -- that is what makes
@@ -52,6 +62,9 @@ type answerBound struct {
 	// test can breach (a fixed enum, a bool, a required identifier), and the
 	// guard requires a reason in Why rather than accepting a bare nil.
 	PastMax func(r *ContextFabricInvestigationResult)
+	// Breaches are additional per-inner-bound proofs, run with the same
+	// reason-and-attribution oracle as PastMax.
+	Breaches []answerBreach
 }
 
 // fixedAnswerInstant pins the one input that is otherwise a live clock. A zero
@@ -181,6 +194,17 @@ func maximalInterpretation() ContextFabricInterpretedQuestion {
 	q.SubjectTerms = repeatStrings(ContextFabricSubjectTermsMaxCount, ContextFabricSubjectOrComparisonTermMaxLength)
 	q.ComparisonTerms = repeatStrings(ContextFabricComparisonTermsMaxCount, ContextFabricSubjectOrComparisonTermMaxLength)
 	q.ClarificationReason = escaped(ContextFabricClarificationReasonMaxLength)
+	// Round 1 finding 2: this was EMPTY while the table entry claimed its
+	// 0..ContextFabricFactRequirementsMaxCount bound. The bound equals the
+	// fact-kind vocabulary size, and each requirement must name a distinct
+	// kind, so the vocabulary is what fills it.
+	kinds := ContextFabricFactKindVocabulary()
+	for i, kind := range kinds {
+		q.FactRequirements = append(q.FactRequirements, ContextFabricFactRequirement{
+			Kind:     kind,
+			Subjects: distinctSubjects(ContextFabricFindingSubjectsMaxCount, i*ContextFabricFindingSubjectsMaxCount),
+		})
+	}
 	return q
 }
 
@@ -191,15 +215,20 @@ func repeatDrivers(n int) []ContextFabricDriverJudgment {
 			DriverID:         uniqueID("d", i, 16),
 			Standing:         ContextFabricDriverPrincipal,
 			Category:         string(maximalDriverCategory),
-			Title:            oneRune,
-			Summary:          oneRune,
-			AffectedSubjects: []ContextFabricSubjectRef{minimalSubject()},
-			EvidenceRefIDs:   repeatEvidenceRefs(1, 8),
-			ClaimedFactIDs:   []string{maximalClaimedFactID},
-			Derivation:       ContextFabricDerivationCanonicalStructured,
-			EpistemicStatus:  ContextFabricEpistemicObserved,
-			Confidence:       0.9,
-			Current:          true,
+			Title:            escaped(ContextFabricDriverTitleMaxLength),
+			Summary:          escaped(ContextFabricDriverSummaryMaxLength),
+			Qualification:    escaped(ContextFabricDriverQualificationMaxLength),
+			AffectedSubjects: distinctSubjects(ContextFabricDriverAffectedSubjectsMaxCount, i*ContextFabricDriverAffectedSubjectsMaxCount),
+			PathIDs:          repeatStrings(ContextFabricDriverPathIDsMaxCount, ContextFabricIdentifierRefMaxLength),
+			EvidenceRefIDs:   repeatEvidenceRefs(ContextFabricNestedEvidenceRefIDsMaxCount, ContextFabricEvidenceRefIDMaxLength),
+			// Every cited id must RESOLVE in the claimed-fact map, so this
+			// cannot simply be padded to ContextFabricDriverClaimedFactIDsMaxCount:
+			// it is capped by how many facts the document actually carries.
+			ClaimedFactIDs:  claimedFactIDs(minInt(ContextFabricDriverClaimedFactIDsMaxCount, ContextFabricClaimedFactsMaxCount)),
+			Derivation:      ContextFabricDerivationCanonicalStructured,
+			EpistemicStatus: ContextFabricEpistemicObserved,
+			Confidence:      0.9,
+			Current:         true,
 		})
 	}
 	return out
@@ -235,6 +264,11 @@ func claimedFactID(i int) string { return uniqueID("c", i, 16) }
 
 var maximalClaimedFactID = claimedFactID(0)
 
+// repeatClaimedFacts maximizes each fact's SCALAR fields. Rows are left empty
+// on purpose and are a declared lower-bound axis, like path edges: the combined
+// Rows/TimeSeriesRows cap applies only when BOTH tables are non-empty, so a
+// single-table fact is governed by its own ~8.45M content-byte bound instead --
+// 250 facts at that size is ~2GB, which cannot be marshaled in memory.
 func repeatClaimedFacts(n int) []ContextFabricClaimedFact {
 	value := oneRune
 	out := make([]ContextFabricClaimedFact, 0, n)
@@ -243,17 +277,21 @@ func repeatClaimedFacts(n int) []ContextFabricClaimedFact {
 			ClaimID: claimedFactID(i),
 			Kind:    maximalDriverFactKind,
 			Subject: minimalSubject(),
-			Field:   oneRune,
+			Field:   escaped(ContextFabricClaimedFieldMaxLength),
 			Value:   ContextFabricScalarValue{String: &value},
 		})
 	}
 	return out
 }
 
+// minimalResolution commits NOTHING. Round 1 finding 1: the validator requires
+// only that both slices be non-nil, so a committed subject is 49 bytes the
+// irreducible answer does not have to carry. An answer with no committed
+// subject is still a valid answer.
 func minimalResolution() ContextFabricSubjectResolution {
 	return ContextFabricSubjectResolution{
 		Candidates: []ContextFabricSubjectCandidate{},
-		Committed:  []ContextFabricSubjectRef{minimalSubject()},
+		Committed:  []ContextFabricSubjectRef{},
 	}
 }
 
@@ -656,4 +694,31 @@ func maximalStructureNeeds() *ContextFabricStructureNeeds {
 		})
 	}
 	return needs
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// distinctSubjects builds n subject refs with distinct canonical ids, offset so
+// that separate collections do not collide when uniqueness spans them.
+func distinctSubjects(n, offset int) []ContextFabricSubjectRef {
+	out := make([]ContextFabricSubjectRef, n)
+	for i := range out {
+		out[i] = distinctSubject(offset + i)
+	}
+	return out
+}
+
+// claimedFactIDs names the first n claimed facts the maximal document carries,
+// so every driver citation resolves.
+func claimedFactIDs(n int) []string {
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, claimedFactID(i))
+	}
+	return out
 }

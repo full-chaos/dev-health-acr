@@ -49,13 +49,39 @@ func answerBoundTable() []answerBound {
 			Min:     func(r *ContextFabricInvestigationResult) { r.Question = oneRune },
 			Max:     func(r *ContextFabricInvestigationResult) { r.Question = escaped(8000) },
 			PastMax: func(r *ContextFabricInvestigationResult) { r.Question = escaped(8001) }},
-		{Field: "Interpretation", Why: "RequestedJudgment 1..256; SubjectTerms/ComparisonTerms 50 each at 512 runes; FactRequirements 0..ContextFabricFactRequirementsMaxCount",
+		{Field: "Interpretation", Why: "COMPOSITE: RequestedJudgment 1..256; SubjectTerms/ComparisonTerms 50 each at 512 runes; FactRequirements 0..ContextFabricFactRequirementsMaxCount (which equals the fact-kind vocabulary size); ClarificationReason 0..2000. One PastMax cannot prove five bounds, so each inner bound has its own breach below",
 			Min: func(r *ContextFabricInvestigationResult) { r.Interpretation = minimalInterpretation() },
 			Max: func(r *ContextFabricInvestigationResult) { r.Interpretation = maximalInterpretation() },
 			PastMax: func(r *ContextFabricInvestigationResult) {
 				i := maximalInterpretation()
 				i.RequestedJudgment = escaped(ContextFabricRequestedJudgmentMaxLength + 1)
 				r.Interpretation = i
+			},
+			Breaches: []answerBreach{
+				{Name: "SubjectTerms count", Expect: "interpreted question violates v1 bounds",
+					Mutate: func(r *ContextFabricInvestigationResult) {
+						i := maximalInterpretation()
+						i.SubjectTerms = repeatStrings(ContextFabricSubjectTermsMaxCount+1, 8)
+						r.Interpretation = i
+					}},
+				{Name: "ComparisonTerms count", Expect: "interpreted question violates v1 bounds",
+					Mutate: func(r *ContextFabricInvestigationResult) {
+						i := maximalInterpretation()
+						i.ComparisonTerms = repeatStrings(ContextFabricComparisonTermsMaxCount+1, 8)
+						r.Interpretation = i
+					}},
+				{Name: "FactRequirements count", Expect: "interpreted question violates v1 bounds",
+					Mutate: func(r *ContextFabricInvestigationResult) {
+						i := maximalInterpretation()
+						i.FactRequirements = append(i.FactRequirements, i.FactRequirements[0])
+						r.Interpretation = i
+					}},
+				{Name: "ClarificationReason length", Expect: "interpreted question violates v1 bounds",
+					Mutate: func(r *ContextFabricInvestigationResult) {
+						i := maximalInterpretation()
+						i.ClarificationReason = escaped(ContextFabricClarificationReasonMaxLength + 1)
+						r.Interpretation = i
+					}},
 			}},
 
 		// --- answer content ---
@@ -67,8 +93,8 @@ func answerBoundTable() []answerBound {
 			PastMax: func(r *ContextFabricInvestigationResult) {
 				r.DirectJudgment = escaped(ContextFabricDirectJudgmentMaxLength + 1)
 			}},
-		{Field: "CurrentState", Why: "boundedText 1..ContextFabricCurrentStateMaxLength",
-			Min: func(r *ContextFabricInvestigationResult) { r.CurrentState = oneRune },
+		{Field: "CurrentState", Why: "boundedText 1..ContextFabricCurrentStateMaxLength WHEN PRESENT, but the field is optional -- only DirectJudgment is required for an answer-capable status, so the empty string is the true minimum (round 1 finding 1)",
+			Min: func(r *ContextFabricInvestigationResult) { r.CurrentState = "" },
 			Max: func(r *ContextFabricInvestigationResult) {
 				r.CurrentState = escaped(ContextFabricCurrentStateMaxLength)
 			},
@@ -216,6 +242,13 @@ func answerBoundTable() []answerBound {
 			},
 			PastMax: func(r *ContextFabricInvestigationResult) {
 				deriveEvidenceRefLabels(r, escaped(ContextFabricCoverageDetailLabelMaxLength))
+				// Replace a key rather than ADD one: adding changes the map
+				// SIZE, and the count check fires before the membership
+				// check, so the proof would pass on the wrong predicate.
+				for ref := range r.EvidenceRefLabels {
+					delete(r.EvidenceRefLabels, ref)
+					break
+				}
 				r.EvidenceRefLabels["cf_not_on_this_result"] = "x"
 			}},
 		{Field: "Temporal", Why: "MUTUALLY EXCLUSIVE with EffectiveEvidenceWindow, which is the real finding here: a temporal label is legal ONLY on a non-current axis, and an effective evidence window is legal ONLY on the current axis, so no valid document can carry both. The maximal interprets on the current axis and therefore cannot carry a temporal label at all -- structurally unreachable, not merely omitted. The PastMax proof is the coupling itself: attaching a label on the current axis rejects",
@@ -260,7 +293,7 @@ func answerBoundTable() []answerBound {
 				entries := maximalOfferSnapshot()
 				r.StructureOfferSnapshot = append(entries, entries[0])
 			}},
-		{Field: "RenderShapes", Why: "STRUCTURALLY UNREACHABLE on this document. Every number a render shape plots must resolve, inside the SAME result, to a cohort member score, a driver weight, or a claimed-fact row cell (validateRenderShapes, CHAOS-4415). The maximal cohort is unranked, so no member carries a Score, and its claimed facts carry no Rows -- so the document offers nothing plottable and the empty list is the only valid value. A shape here would fail on its unresolvable point, not on a count bound",
+		{Field: "RenderShapes", Why: "THIRD DECLARED LOWER-BOUND AXIS, not a structural skip -- round 1 finding 3 corrected this. The contract DOES bound the list: ContextFabricRenderShapesMaxCount at validate_context_fabric_render_shapes.go:127. A valid result can carry shapes when its claimed facts provide numeric rows or its cohort is ranked and the plan authorizes the kind. This fixture carries neither (unranked cohort, no fact rows), so no shape here could resolve its plotted points and the empty list is the only value THIS document can hold. The bound is reachable; this construction just does not reach it",
 			Min: func(r *ContextFabricInvestigationResult) { r.RenderShapes = nil },
 			Max: func(r *ContextFabricInvestigationResult) { r.RenderShapes = nil }},
 	}
@@ -339,13 +372,28 @@ func buildFromTable(t *testing.T, pick func(answerBound) func(*ContextFabricInve
 	return r
 }
 
+// irreducibleAnswerBytes is the measured size of the smallest document the
+// validators accept, built from answerBoundTable() with every field at its Min.
+//
+// It is ASSERTED, not logged. Round 1 finding 1: the earlier test only printed
+// this number, so a Min that was not actually minimal could not fail anything --
+// and two of them were not. The contract constant PR-a pins is derived from
+// this value, so a silent drift here would ship a wrong floor.
+const irreducibleAnswerBytes = 1004
+
+// maximalAnswerBytes is the largest document this table can construct. It is a
+// LOWER bound on the true maximum -- see the lower-bound axes named in the
+// table entries -- which is all the no-static-constant conclusion needs.
+const maximalAnswerBytes = 491394514
+
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
 		name string
+		want int
 		pick func(answerBound) func(*ContextFabricInvestigationResult)
 	}{
-		{"irreducible", func(b answerBound) func(*ContextFabricInvestigationResult) { return b.Min }},
-		{"maximal", func(b answerBound) func(*ContextFabricInvestigationResult) { return b.Max }},
+		{"irreducible", irreducibleAnswerBytes, func(b answerBound) func(*ContextFabricInvestigationResult) { return b.Min }},
+		{"maximal", maximalAnswerBytes, func(b answerBound) func(*ContextFabricInvestigationResult) { return b.Max }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := buildFromTable(t, tc.pick)
@@ -357,6 +405,10 @@ func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 				t.Fatalf("marshal %s: %v", tc.name, err)
 			}
 			t.Logf("%s fixture: %d serialized bytes", tc.name, len(encoded))
+			if len(encoded) != tc.want {
+				t.Fatalf("%s fixture is %d bytes, pinned at %d. If a bound in the table changed on purpose, update the pin in the same commit and say so; if not, a Min or Max just drifted.",
+					tc.name, len(encoded), tc.want)
+			}
 		})
 	}
 }
@@ -379,8 +431,64 @@ func TestEveryBoundIsBreachable(t *testing.T) {
 				t.Fatalf("baseline maximal fixture must be valid first, got: %v", err)
 			}
 			b.PastMax(&r)
-			if err := r.Validate(); err == nil {
+			err := r.Validate()
+			if err == nil {
 				t.Fatalf("stepping %s past its bound must be rejected, but Validate accepted it", b.Field)
+			}
+
+			// Oracle part 1 -- THE REASON. Round 1 finding 4: accepting any
+			// non-nil error proves only that something rejected, not that
+			// THIS bound did. A mutation caught by an unrelated closure,
+			// enum or coupling rule would have passed the old check.
+			want := expectedRejection[b.Field]
+			if want == "" {
+				t.Fatalf("%s has no expected rejection predicate", b.Field)
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s rejected for the WRONG reason:\n  got:  %v\n  want a message containing: %q",
+					b.Field, err, want)
+			}
+
+			// Oracle part 2 -- ATTRIBUTION. Several validator predicates are
+			// compound: one message covers a whole group of fields, so the
+			// message alone cannot say WHICH clause fired. Restoring only
+			// this field's Max must make the document valid again. If it
+			// does not, the rejection was not attributable to this field.
+			restore := b.Max
+			restore(&r)
+			for _, other := range answerBoundTable() {
+				if isDerivedField(other.Field) {
+					other.Max(&r)
+				}
+			}
+			if err := r.Validate(); err != nil {
+				t.Fatalf("restoring %s's Max must make the document valid again, so the rejection is attributable to %s alone; got: %v",
+					b.Field, b.Field, err)
+			}
+
+			// Composite bounds get one proof per inner bound.
+			for _, br := range b.Breaches {
+				t.Run(br.Name, func(t *testing.T) {
+					r := buildFromTable(t, func(x answerBound) func(*ContextFabricInvestigationResult) { return x.Max })
+					br.Mutate(&r)
+					err := r.Validate()
+					if err == nil {
+						t.Fatalf("breaching %s must be rejected, but Validate accepted it", br.Name)
+					}
+					if !strings.Contains(err.Error(), br.Expect) {
+						t.Fatalf("%s rejected for the WRONG reason:\n  got:  %v\n  want a message containing: %q",
+							br.Name, err, br.Expect)
+					}
+					b.Max(&r)
+					for _, other := range answerBoundTable() {
+						if isDerivedField(other.Field) {
+							other.Max(&r)
+						}
+					}
+					if err := r.Validate(); err != nil {
+						t.Fatalf("restoring %s's Max must make the document valid again; got: %v", b.Field, err)
+					}
+				})
 			}
 		})
 	}
@@ -407,5 +515,69 @@ func deriveCompleteness(r *ContextFabricInvestigationResult) {
 		TerminalReason:    expectedTerminalReason(*r),
 		ClaimedFactsCount: len(r.ClaimedFacts),
 		RowsCount:         rows,
+	}
+}
+
+// expectedRejection is the oracle finding 4 of round 1 said was missing: a
+// mutation must be rejected BY ITS OWN BOUND, not by some unrelated closure,
+// enum or coupling rule. Each entry is the fragment the validator emits for
+// that bound. Several validator predicates are COMPOUND (one message covers a
+// whole group of fields), which is why the message check alone is not enough
+// and TestEveryBoundIsBreachable also runs an attribution check.
+var expectedRejection = map[string]string{
+	"ResultID":                "result identity or status violates v1 bounds",
+	"RequestID":               "result identity or status violates v1 bounds",
+	"Question":                "result identity or status violates v1 bounds",
+	"Interpretation":          "interpreted question violates v1 bounds",
+	"DirectJudgment":          "result answer fields violate v1 bounds",
+	"CurrentState":            "result answer fields violate v1 bounds",
+	"DeterministicAnswer":     "result answer fields violate v1 bounds",
+	"StrongestPressures":      "result answer fields violate v1 bounds",
+	"Limitations":             "result answer fields violate v1 bounds",
+	"Warnings":                "result answer fields violate v1 bounds",
+	"LimitationsDisplaced":    "result displaced-limitation count violates v1 bounds",
+	"Drivers":                 "result answer fields violate v1 bounds",
+	"RemainingWork":           "result answer fields violate v1 bounds",
+	"ReadinessGaps":           "result answer fields violate v1 bounds",
+	"Conflicts":               "result answer fields violate v1 bounds",
+	"ClaimedFacts":            "claimed facts violate v1 bounds",
+	"Paths":                   "result answer fields violate v1 bounds",
+	"EvidenceRefIDs":          "result answer fields violate v1 bounds",
+	"SubjectResolution":       "subject resolution arrays violate v1 bounds",
+	"Coverage":                "coverage violates v1 bounds",
+	"Versions":                "version metadata violates v1 bounds",
+	"AnswerPlan":              "narrowing steps",
+	"Cohort":                  "cohort violates v1 bounds",
+	"EvidenceRefLabels":       "names no evidence ref on the result",
+	"Temporal":                "temporal label is only meaningful",
+	"EffectiveEvidenceWindow": "all_time must not carry explicit bounds",
+	"WindowClarification":     "window clarification options violate v1 bounds",
+	"StructureNeeds":          "structure needs offer lists violate v1 bounds",
+	"ConfirmedStructure":      "confirmed_structure exceeds v1 bounds",
+	"StructureOfferSnapshot":  "structure_offer_snapshot exceeds v1 bounds",
+}
+
+// TestEveryPastMaxHasAnExpectedRejection keeps the oracle honest: a new
+// PastMax with no expected predicate cannot silently fall back to "any error
+// will do", which is exactly what round 1 caught.
+func TestEveryPastMaxHasAnExpectedRejection(t *testing.T) {
+	for _, b := range answerBoundTable() {
+		if b.PastMax == nil {
+			continue
+		}
+		if _, ok := expectedRejection[b.Field]; !ok {
+			t.Errorf("%s has a PastMax but no expected rejection predicate", b.Field)
+		}
+	}
+	for field := range expectedRejection {
+		found := false
+		for _, b := range answerBoundTable() {
+			if b.Field == field && b.PastMax != nil {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expectedRejection names %q, which has no PastMax", field)
+		}
 	}
 }
