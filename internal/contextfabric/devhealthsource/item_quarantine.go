@@ -26,6 +26,12 @@ const (
 	// counting it as a bound violation would misreport a healthy row shape
 	// as bad data.
 	quarantineOrphanedDependent = "orphaned_dependent"
+	// quarantineDuplicateWithinBatch marks a second item carrying an
+	// identity another item in the SAME batch already used. Like
+	// orphaned_dependent, nothing is wrong with the item: it is a redundant
+	// restatement of a fact already present, and the contract rejects the
+	// batch rather than the item, so the duplicate must be resolved here.
+	quarantineDuplicateWithinBatch = "duplicate_within_batch"
 )
 
 // maxQuarantineDetailRunes bounds the offending value carried alongside a
@@ -205,6 +211,7 @@ func partitionProjectableCandidates(all []candidate, observe func(quarantineObse
 			})
 		}
 	}
+	kept = dropDuplicateIdentities(kept, observe)
 	if len(quarantinedRelationships) == 0 {
 		return kept
 	}
@@ -239,4 +246,58 @@ func quarantineDetail(c candidate) string {
 		return ""
 	}
 	return headRunes(strings.ToUpper(strings.TrimSpace(string(c.relationship.Type))), maxQuarantineDetailRunes)
+}
+
+// dropDuplicateIdentities enforces the v1 contract's BATCH-level uniqueness
+// rules, which per-item validation structurally cannot see: every item here is
+// individually valid, and only their COMBINATION is rejected
+// (validate_context_fabric_helpers.go:261, :277, :293, :363 -- relationship
+// IDs, content IDs, episode IDs, and tombstone kind+canonical ID).
+//
+// CHAOS-4874: this became reachable through the relationship mapping. Mapping
+// BLOCKED_BY onto BLOCKS with exchanged endpoints is deliberate convergence --
+// "A is blocked by B" and "B blocks A" state one fact and must become one
+// edge -- but when BOTH spellings for the same pair land on ONE page, that
+// convergence produces two items sharing one identity, and the contract
+// rejects the whole batch. Without this pass the mapping re-creates the exact
+// wedge it was written to remove, for the same organization, just further
+// along: the affected org carries 1,310 BLOCKS rows alongside 16 inverted
+// ones, so a collision on some page is a matter of when, not if.
+//
+// The FIRST occurrence wins, and that is deterministic because candidates are
+// sorted before this runs. The choice is real and worth naming: the duplicate
+// carries its own evidence ref and observed-at, which are dropped with it. A
+// second row asserting an identical fact adds no edge the graph does not
+// already have, so losing its evidence ref is a smaller cost than losing the
+// page -- but it IS a cost, which is why it is counted rather than silent.
+func dropDuplicateIdentities(all []candidate, observe func(quarantineObservation)) []candidate {
+	seenRelationships := make(map[string]struct{}, len(all))
+	seenEpisodes := make(map[string]struct{}, len(all))
+	seenTombstones := make(map[string]struct{}, len(all))
+	kept := all[:0]
+	for _, c := range all {
+		var key string
+		var seen map[string]struct{}
+		var kind string
+		switch {
+		case c.relationship != nil:
+			key, seen, kind = c.relationship.RelationshipID, seenRelationships, "relationship"
+		case c.episode != nil:
+			key, seen, kind = c.episode.EpisodeID, seenEpisodes, "episode"
+		case c.tombstone != nil:
+			key, seen, kind = string(c.tombstone.Kind)+"\x00"+c.tombstone.CanonicalID, seenTombstones, "tombstone"
+		default:
+			kept = append(kept, c)
+			continue
+		}
+		if _, duplicate := seen[key]; duplicate {
+			if observe != nil {
+				observe(quarantineObservation{Reason: quarantineDuplicateWithinBatch, Kind: kind, Detail: quarantineDetail(c)})
+			}
+			continue
+		}
+		seen[key] = struct{}{}
+		kept = append(kept, c)
+	}
+	return kept
 }

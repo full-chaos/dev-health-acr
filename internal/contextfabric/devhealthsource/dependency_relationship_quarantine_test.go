@@ -605,3 +605,62 @@ func TestStaleConsumedMemoIsRefusedAndLeavesTheCursorWhereItWas(t *testing.T) {
 		t.Fatalf("a refused memo must offer no cursor at all, got %q", progress.NextCursor)
 	}
 }
+
+// TestBothEquivalentSpellingsOnOnePageCollapseToOneEdge closes the gap the
+// convergence test left: it proved BLOCKED_BY and BLOCKS derive the same id
+// when projected SEPARATELY, which does not show what happens when both
+// spellings for the same pair land in ONE batch. They must collapse to a
+// single edge -- two rows stating the same fact, one relationship.
+func TestBothEquivalentSpellingsOnOnePageCollapseToOneEdge(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// "WI-A is blocked by WI-B" and "WI-B blocks WI-A" -- the same fact.
+	rows := [][]any{
+		dependencyRow("WI-A", "WI-B", "BLOCKED_BY", at, created),
+		dependencyRow("WI-B", "WI-A", "BLOCKS", at.Add(time.Second), created),
+	}
+	batch, available, err, observations := projectWithQuarantineLog(t, dependencyTablesOnly(t, at, rows), testCursor(t, at.Add(-time.Hour), ""))
+	if err != nil || !available {
+		t.Fatalf("err=%v available=%v", err, available)
+	}
+	// EXACTLY ONE edge survives. Convergence is the point -- two rows
+	// stating one fact become one relationship -- but the contract enforces
+	// unique relationship IDs per batch, so the redundant restatement has to
+	// be resolved by the producer or the batch is rejected outright.
+	if len(batch.Relationships) != 1 {
+		t.Fatalf("relationships = %d, want exactly 1: %+v", len(batch.Relationships), batch.Relationships)
+	}
+	edge := batch.Relationships[0]
+	if edge.Type != contractsv1.ContextFabricRelationshipBlocks {
+		t.Fatalf("relationship type = %q, want BLOCKS", edge.Type)
+	}
+	// Direction must be the forward one: WI-B blocks WI-A.
+	if !strings.Contains(edge.From.CanonicalID, "WI-B") || !strings.Contains(edge.To.CanonicalID, "WI-A") {
+		t.Fatalf("edge direction is %s -> %s, want WI-B -> WI-A", edge.From.CanonicalID, edge.To.CanonicalID)
+	}
+	// The redundant row is dropped and COUNTED, never silent.
+	reasons := map[string]int{}
+	for _, entry := range observations {
+		reasons[fmt.Sprint(entry["quarantine_reason"])]++
+	}
+	if reasons["duplicate_within_batch"] != 1 {
+		t.Fatalf("want exactly 1 duplicate_within_batch observation, got %v", reasons)
+	}
+	if len(observations) != 1 {
+		t.Fatalf("the only drop may be the duplicate; got %+v", observations)
+	}
+	// Its healing tombstone converges on one identity too, or the batch is
+	// rejected for duplicate tombstones instead -- the same defect one field
+	// over.
+	tombstoneKeys := map[string]int{}
+	for _, tomb := range batch.Tombstones {
+		tombstoneKeys[string(tomb.Kind)+"|"+tomb.CanonicalID]++
+	}
+	for key, count := range tombstoneKeys {
+		if count != 1 {
+			t.Fatalf("tombstone %s appears %d times; kind+canonical_id must be unique within a batch", key, count)
+		}
+	}
+}
