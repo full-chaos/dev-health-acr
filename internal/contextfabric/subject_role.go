@@ -185,7 +185,7 @@ func frameRoleSlots(expression SubjectExpression) []roleSlot {
 // where a group is not a thing health is read of, and it multiplies a
 // cardinality across every role in the frame.
 //
-// Keyed on (role, obligation). Two rules carry the entire difference:
+// Keyed on (variant, role, obligation). Three rules carry the difference:
 //
 //  1. THE GROUP RULE. Only `state` attaches to SubjectRoleGroup. §13.15.2
 //     records why the group role exists at all -- the frozen table carried
@@ -205,12 +205,38 @@ func frameRoleSlots(expression SubjectExpression) []roleSlot {
 //     precisely so "how many teams" and "how many repositories" do not
 //     collapse to the same frame.
 //
+//  3. THE ORGANIZATION MEMBER RULE, above: that slot serves only the
+//     population obligations, because naming a counted entity kind is the
+//     whole reason the field exists.
+//
 // `ranking` follows the same population rule as `count` for the same
 // reason: RankCohort orders a member set, and a comparison ranks its
 // operands. It is stated separately rather than folded in, because the two
 // obligations are unavailable for different reasons and a future edit to
 // one must not silently move the other.
-func attachesToRole(role SubjectRole, obligation AnswerObligation, hasPopulationSlot bool) bool {
+func attachesToRole(variant SubjectExpressionKind, role SubjectRole, obligation AnswerObligation, hasPopulationSlot bool) bool {
+	// THE ORGANIZATION'S MEMBER SLOT NAMES A COUNTED POPULATION, NOTHING
+	// ELSE. OrganizationScopeExpression.MemberKind is defined as "the entity
+	// kind being COUNTED, when the goal set contains count_or_aggregate;
+	// optional otherwise" -- so it exists to name what a cardinality runs
+	// over, and invariant I17 is what makes it required for that case.
+	//
+	// Keying on the field's PRESENCE instead of on its meaning derived a
+	// per-member READ requirement from an organization-level question:
+	// {assess_state, organization_scope{member_kind: repository}} produced
+	// `state / member / repository`, a read for every repository in answer
+	// to a question about the organization. A review round constructed it,
+	// and the justification for the slot was already written in this file --
+	// the code simply did not follow it.
+	//
+	// This is why the table is keyed on the VARIANT as well as the role and
+	// the obligation: what a role means is a joint property of the topology
+	// and the obligation, the same way a producer's obligations turned out
+	// to be a joint property of the producer and the subject kind.
+	if variant == SubjectExpressionOrganizationScope && role == SubjectRoleMember {
+		return obligation == ObligationCount || obligation == ObligationRanking
+	}
+
 	switch obligation {
 	case ObligationCount, ObligationRanking:
 		// The population is the member slot when the frame has one;
@@ -263,7 +289,7 @@ func DeriveRequirementCoordinates(frame QuestionFrame) []RequirementCoordinate {
 			continue
 		}
 		for _, slot := range slots {
-			if !attachesToRole(slot.Role, obligation, hasPopulationSlot) {
+			if !attachesToRole(frame.SubjectExpression.Kind, slot.Role, obligation, hasPopulationSlot) {
 				continue
 			}
 			coordinate := RequirementCoordinate{Obligation: obligation, Role: slot.Role, Subject: slot.Subject}
