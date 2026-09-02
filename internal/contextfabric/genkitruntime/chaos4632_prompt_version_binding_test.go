@@ -69,7 +69,7 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			name:    "interpretation system prompt",
 			version: DefaultInterpretationPromptVersion,
 			content: interpretationSystemPrompt,
-			digest:  "88d4d0d6503ab428214597600ed91e72856e453a79e6083b68fdde53eeb10e65",
+			digest:  "8aa150bad4a6ec166ce332ab33a29c4aca252fdff9fd817d0f91cc3b29dafe11",
 		},
 		{
 			name:    "synthesis system prompt",
@@ -84,7 +84,7 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			name:    "interpretation model-output schema",
 			version: DefaultSchemaVersion,
 			content: string(schema),
-			digest:  "6e80b8559aad90836256efb2302c5de321bf31b7faeaff33fcc2a99b71f12d86",
+			digest:  "977762f6d58e86b4be973582095cd496f3ace6accfd6471234e5e38c2701ef28",
 		},
 	} {
 		t.Run(binding.name, func(t *testing.T) {

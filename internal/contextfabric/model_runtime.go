@@ -1338,6 +1338,83 @@ type RuntimeQuestionInterpreter struct {
 	// TestSlogEngineTelemetryLogsQuestionFamilyResolution asserts the
 	// PRODUCTION sink's own bytes rather than a struct field.
 	FamilyTelemetry QuestionFamilyTelemetry
+	// FrameTelemetry (CHAOS-4452 stage 2, SHADOW ONLY) receives one
+	// FrameValidationEvent per Interpret call whose receipt carried a
+	// frame proposal -- including the ones that validate cleanly, because
+	// the denominator has to be countable.
+	//
+	// An explicitly-wired field for the identical reason FamilyTelemetry
+	// is one: a nil here means an operator sees nothing, and the whole
+	// point of this slice is the measurement.
+	FrameTelemetry FrameValidationTelemetry
+	// FrameRepairer (CHAOS-4452 stage 2, §13.6) performs the ONE bounded
+	// repair attempt on a frame that fails validation.
+	//
+	// OPTIONAL, and its absence is a designed state rather than a
+	// degraded one: with no repairer an invalid frame is refused and
+	// recorded as refused_invalid, which is the honest outcome and is
+	// exactly what phase 1 wants while the repair's own cost is still
+	// being measured. It is NOT a silent pass-through -- see
+	// ValidateAndRepairFrame.
+	FrameRepairer FrameRepairer
+}
+
+// resolveFrame runs the §13.6 validate-repair-revalidate sequence over the
+// frame a receipt proposed, records the outcome on the receipt, and emits
+// the telemetry event.
+//
+// WHERE THIS SITS IN THE DESIGN'S FLOW, because the placement is the
+// substantive decision and not an implementation detail. §13.1's order is
+// "consensus -> winning sample WHOLE -> A1 -> normalize/derive -> A2 ->
+// repair once -> FRAME IMMUTABLE". This interpreter runs at N=1, where the
+// single interpret call IS the winning sample, so validating here --
+// immediately after the sanitized proposal lands on the receipt and before
+// anything downstream sees it -- is that order exactly. When an ensemble
+// is turned on, this call moves to just after the winner is selected; it
+// does not change shape, because it already takes ONE whole proposed frame
+// rather than a field-wise merge.
+//
+// NOTHING IS GATED ON THE RESULT in phase 1. The validated frame is
+// persisted on the receipt and telemetered; the shipped precedence table
+// still decides the family; no answer, plan, offer, render selection or
+// clarification changes because of any of it. Zero behaviour change is a
+// required, provable property of this slice.
+func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal storage.Principal, receipt *ModelExecutionReceipt, emittedShape InvestigationShape) {
+	if receipt == nil || receipt.QuestionFrame == nil {
+		// No proposal is NOT a validation failure and must not be
+		// recorded as one: a model that emitted no frame at all and a
+		// model that emitted a malformed one are different states, and
+		// CHAOS-4674 measured the first happening on a field far older
+		// than this one. The absence is visible as a receipt with no
+		// frame; inventing a refusal for it would put a phantom failure
+		// into the invariant histogram this slice exists to read.
+		return
+	}
+	proposed := *receipt.QuestionFrame
+	result := ValidateAndRepairFrame(ctx, principal, r.FrameRepairer, proposed, nil, emittedShape, nil)
+
+	receipt.FrameOutcome = result.Outcome
+	receipt.FrameFailedInvariant = result.Failure.Invariant
+	receipt.FrameRepairAttempted = result.RepairAttempted
+	receipt.FrameRepairLatencyMS = result.RepairLatency.Milliseconds()
+	switch result.Outcome {
+	case FrameValidationOutcomeValid, FrameValidationOutcomeRepaired:
+		// The receipt carries the VALIDATED, normalized frame -- the one
+		// that would be acted on -- rather than the raw proposal, so a
+		// persisted receipt can be replayed against the table that
+		// produced it.
+		validated := result.Frame
+		receipt.QuestionFrame = &validated
+	default:
+		// On a refusal the receipt keeps the PROPOSAL, which is what the
+		// measurement needs: "what did the model emit that we could not
+		// use" is the question the invariant histogram is answering, and
+		// blanking it would leave the failure uncounted and undiagnosable.
+	}
+
+	if r.FrameTelemetry != nil {
+		r.FrameTelemetry.RecordFrameValidation(ctx, principal, FrameValidationEventFrom(proposed, result, emittedShape))
+	}
 }
 
 // THE ENSEMBLE SIZE IS DELIBERATELY NOT A FIELD HERE, and the absence is
@@ -1400,6 +1477,20 @@ func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal sto
 			receipt.InterpretationRejectionReason = InterpretationRejectionReasonOf(err)
 		} else if receipt.Outcome == "pending_validation" {
 			receipt.Outcome = "success"
+		} else {
+			// no-op: an already-classified outcome is left alone.
+			_ = receipt.Outcome
+		}
+		// The frame is resolved ONLY after the interpretation itself has
+		// validated, which is the same control-flow rule the window and
+		// family captures follow (runtime.go's own F5 note):
+		// question.Validate() runs first, so a shadow capture can never be
+		// the reason a sound interpretation is rejected -- and equally,
+		// a frame is never validated for an interpretation that was
+		// already rejected, which would put a phantom row into the
+		// invariant histogram.
+		if err == nil {
+			r.resolveFrame(ctx, principal, &receipt, question.Shape)
 		}
 	}
 	if sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt); sinkErr != nil {

@@ -142,7 +142,31 @@ const (
 	// ranking_formula_version each closed for their own decision, and the
 	// same rule CHAOS-3862 pinned with
 	// TestCHAOS3862_PromptVersionChangeInvalidatesStoredAnswerReuse.
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v10"
+	// v11 (CHAOS-4452 stage 2): interpretationSystemPrompt gained six
+	// paragraphs instructing the model on question_frame -- its goals
+	// LIST, its subject_expression union and per-variant fields, its
+	// temporal axis, and the optional emphasis and dimension sets. The
+	// prompt bytes changed, and the governing rule stated at v9 and
+	// re-stated at v10 applies unchanged: ANY change to the prompt's
+	// content is a prompt content change and must bump this version.
+	//
+	// REQUIRED for the identical reason v10's own note gives, and the
+	// reasoning has not weakened by being repeated. The frame is shadow
+	// -- nothing is gated on it. But this constant is a conjunctive
+	// ReuseKey dimension and the reuse lookup runs BEFORE Interpret, so
+	// without the bump a stored answer produced under the OLD prompt
+	// keeps being served after deployment, and the questions whose
+	// INTERPRETATION these new instructions could change would be
+	// answered from a cache that predates them. A reuse-decision change
+	// is a behaviour change however shadow the frame itself is.
+	//
+	// The frame instructions can change interpretation in a way the
+	// family instructions could not, which is why this is not a
+	// belt-and-braces bump: the prompt now asks for a goals LIST on every
+	// question, and asking a model for more structure changes what it
+	// attends to in the question text. That is measured on the rig
+	// before this ships, not assumed.
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v11"
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
@@ -350,7 +374,21 @@ const (
 	// serve such a result as though it came from the same contract as a
 	// v3 call, which is exactly the version-drift class this field exists
 	// to prevent (its own doc comment above).
-	DefaultSchemaVersion    = "context-fabric-model-output.v3"
+	// v4 (CHAOS-4452 stage 2): interpretationOutput gained one optional
+	// nested object, question_frame, carrying the goals list, the subject
+	// expression with its per-variant fields and its operand list, the
+	// temporal axis, and the optional emphasis and dimension sets. The
+	// schema genkit infers and sends to the provider is therefore a
+	// DIFFERENT model-output contract than v3's.
+	//
+	// Like v3 and unlike v2 this is a WIDENING -- every v3-valid output is
+	// still v4-valid -- and the same reasoning applies unchanged: the
+	// version says which contract a stored result was produced UNDER, not
+	// merely whether the old one would still validate. A v3-era result was
+	// interpreted by a model that was never offered a frame and could not
+	// have emitted one, so serving it through reuse as though it came from
+	// a v4 call is exactly the version-drift this field exists to prevent.
+	DefaultSchemaVersion    = "context-fabric-model-output.v4"
 	defaultEvaluatorVersion = "context-fabric-grounding.v1"
 	// DefaultPhrasingPromptVersion is v1 (CHAOS-4171 PR2): the SECOND
 	// bounded model call's own prompt, versioned independently of
@@ -946,6 +984,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	// with ParseInterpretationOutputFamily (exchange_support.go) so an
 	// alternate transport's receipt carries an IDENTICAL capture.
 	applyFamilyCapture(&receipt, sanitizeFamilyOutput(output))
+	applyFrameCapture(&receipt, sanitizeFrameOutput(output))
 	return interpreted, receipt, nil
 }
 
@@ -987,6 +1026,168 @@ type interpretationFamilyCapture struct {
 // responder capture byte-identical values, never a transport-specific
 // reimplementation that could silently drift. Exactly the arrangement
 // sanitizeWindowOutput's own doc comment defends.
+// subjectOperandOutput and subjectExpressionOutput are the model-facing
+// shape of the CHAOS-4452 stage-2 subject expression.
+//
+// FLAT-ISH BY DESIGN, and the server ASSEMBLES the union. The domain type
+// is a discriminated union with six variant pointers; asking a model to
+// emit that shape reliably is a bet against the one thing this codebase
+// has actually measured about interpreters -- CHAOS-4674 found the model
+// dropping `subject_terms`, a field that has been on the contract for
+// months, in 3 of 14 replicates. So the model emits a KIND plus the flat
+// fields that kind uses, and sanitizeFrameOutput builds the union from the
+// pick. That is the authorship rule working exactly as §13.2.1 states it:
+// the model picks from closed vocabularies, the server validates the pick
+// and owns the structure.
+//
+// NO jsonschema enum tags anywhere below, for the reason the subject-kind
+// fields already carry: a schema enum makes the provider reject the WHOLE
+// response for an out-of-set value, which turns a shadow capture into a
+// new way to fail a real investigation. The vocabularies are stated in the
+// prompt and enforced by the sanitizer.
+type subjectOperandOutput struct {
+	Kind        string   `json:"kind,omitempty"`
+	Terms       []string `json:"terms,omitempty"`
+	AnchorTerms []string `json:"anchor_terms,omitempty"`
+	MemberKind  string   `json:"member_kind,omitempty"`
+}
+
+type subjectExpressionOutput struct {
+	Kind        string                 `json:"kind,omitempty"`
+	Terms       []string               `json:"terms,omitempty"`
+	AnchorTerms []string               `json:"anchor_terms,omitempty"`
+	MemberKind  string                 `json:"member_kind,omitempty"`
+	GroupKind   string                 `json:"group_kind,omitempty"`
+	Operands    []subjectOperandOutput `json:"operands,omitempty"`
+}
+
+type questionFrameOutput struct {
+	Goals             []string                 `json:"goals,omitempty"`
+	SubjectExpression *subjectExpressionOutput `json:"subject_expression,omitempty"`
+	Temporal          string                   `json:"temporal,omitempty"`
+	Emphasis          []string                 `json:"emphasis,omitempty"`
+	Dimensions        []string                 `json:"dimensions,omitempty"`
+}
+
+// interpretationFrameCapture is what one interpret call produced for the
+// frame, before validation. The counters are sanitize OUTCOMES and exist
+// for the same reason the family capture's unrecognized flags do: a model
+// inventing vocabulary members must be COUNTABLE, or the gating
+// measurement cannot tell a model emitting nothing from a model emitting
+// nonsense.
+type interpretationFrameCapture struct {
+	Frame            contextfabric.QuestionFrame
+	Present          bool
+	GoalsDropped     int
+	TermsTruncated   int
+	KindUnrecognized bool
+}
+
+// sanitizeFrameOutput is THE ONE PLACE the stage-2 frame is built from raw
+// model output.
+//
+// SOLE SITE, exactly as sanitizeWindowOutput and sanitizeFamilyOutput are
+// sole sites, and for a reason that has already bitten once: both
+// Runtime.InterpretQuestion and the file-exchange transport
+// (exchange_support.go) call this, so a genkit call and a non-genkit
+// responder produce a BYTE-IDENTICAL capture from identical raw output. A
+// transport-specific reimplementation would diverge silently, and the
+// divergence would land in the very measurement this slice exists to make
+// -- labelled semantic correctness of the whole expression -- where it
+// would be indistinguishable from the model behaving differently.
+//
+// It never fails. Every unknown member is dropped and counted, every term
+// is bounded and truncation counted, and an unrecognized expression kind
+// leaves the union's discriminator empty for invariant I1 to reject by
+// name. This runs strictly AFTER interpreted.Validate() has succeeded, and
+// a shadow capture must never become a new way for a sound interpretation
+// to fail.
+func sanitizeFrameOutput(output interpretationOutput) interpretationFrameCapture {
+	if output.QuestionFrame == nil {
+		return interpretationFrameCapture{}
+	}
+	raw := *output.QuestionFrame
+	capture := interpretationFrameCapture{Present: true}
+
+	capture.Frame.Goals, capture.GoalsDropped = contextfabric.SanitizeInvestigationGoals(raw.Goals)
+	capture.Frame.Temporal, _ = contextfabric.SanitizeTemporalIntent(raw.Temporal)
+	capture.Frame.Emphasis, _ = contextfabric.SanitizeAnswerEmphasis(raw.Emphasis)
+	capture.Frame.Dimensions, _ = contextfabric.SanitizeHealthDimensions(raw.Dimensions)
+
+	if raw.SubjectExpression == nil {
+		return capture
+	}
+	expression := *raw.SubjectExpression
+	kind, unrecognized := contextfabric.SanitizeSubjectExpressionKind(expression.Kind)
+	capture.KindUnrecognized = unrecognized
+	capture.Frame.SubjectExpression.Kind = kind
+
+	terms, truncated := contextfabric.SanitizeSubjectTerms(expression.Terms)
+	capture.TermsTruncated += truncated
+	anchors, anchorTruncated := contextfabric.SanitizeSubjectTerms(expression.AnchorTerms)
+	capture.TermsTruncated += anchorTruncated
+	memberKind, _ := contextfabric.SanitizeSubjectKind(expression.MemberKind)
+	groupKind, _ := contextfabric.SanitizeSubjectKind(expression.GroupKind)
+
+	// ONLY the variant the sanitized Kind names is populated. Building the
+	// variant the model's own fields suggest instead would make the
+	// pointer set disagree with the discriminator, which is exactly the
+	// state invariant I1 exists to reject -- and a validator that never
+	// sees the state it guards is a validator that cannot fail.
+	switch kind {
+	case contextfabric.SubjectExpressionNamed:
+		capture.Frame.SubjectExpression.Named = &contextfabric.NamedSubjectExpression{Terms: terms}
+	case contextfabric.SubjectExpressionDiscoveredKind:
+		capture.Frame.SubjectExpression.Discovered = &contextfabric.DiscoveredSetExpression{MemberKind: memberKind}
+	case contextfabric.SubjectExpressionChildrenOfScope:
+		capture.Frame.SubjectExpression.Scoped = &contextfabric.ScopedSetExpression{AnchorTerms: anchors, MemberKind: memberKind}
+	case contextfabric.SubjectExpressionGroupedMembers:
+		capture.Frame.SubjectExpression.Grouped = &contextfabric.GroupedSetExpression{GroupKind: groupKind, MemberKind: memberKind}
+	case contextfabric.SubjectExpressionOrganizationScope:
+		org := &contextfabric.OrganizationScopeExpression{}
+		if memberKind != "" {
+			org.MemberKind = &memberKind
+		}
+		capture.Frame.SubjectExpression.Org = org
+	case contextfabric.SubjectExpressionExplicitSet:
+		operands := make([]contextfabric.SubjectOperand, 0, len(expression.Operands))
+		for _, rawOperand := range expression.Operands {
+			operand, operandTruncated := sanitizeOperandOutput(rawOperand)
+			capture.TermsTruncated += operandTruncated
+			operands = append(operands, operand)
+		}
+		capture.Frame.SubjectExpression.Explicit = &contextfabric.ExplicitSetExpression{Operands: operands}
+	}
+	return capture
+}
+
+func sanitizeOperandOutput(raw subjectOperandOutput) (contextfabric.SubjectOperand, int) {
+	operand := contextfabric.SubjectOperand{}
+	trimmed := strings.TrimSpace(raw.Kind)
+	switch contextfabric.SubjectOperandKind(trimmed) {
+	case contextfabric.SubjectOperandNamed:
+		operand.Kind = contextfabric.SubjectOperandNamed
+	case contextfabric.SubjectOperandScoped:
+		operand.Kind = contextfabric.SubjectOperandScoped
+	default:
+		// An unrecognized operand kind leaves the discriminator empty and
+		// both pointers nil, which invariant I19 rejects BY NAME. Guessing
+		// a variant from whichever fields happen to be populated would
+		// repair a malformed operand into a well-formed different one.
+		return operand, 0
+	}
+	terms, truncated := contextfabric.SanitizeSubjectTerms(raw.Terms)
+	anchors, anchorTruncated := contextfabric.SanitizeSubjectTerms(raw.AnchorTerms)
+	memberKind, _ := contextfabric.SanitizeSubjectKind(raw.MemberKind)
+	switch operand.Kind {
+	case contextfabric.SubjectOperandNamed:
+		operand.Named = &contextfabric.NamedSubjectExpression{Terms: terms}
+	case contextfabric.SubjectOperandScoped:
+		operand.Scoped = &contextfabric.ScopedSetExpression{AnchorTerms: anchors, MemberKind: memberKind}
+	}
+	return operand, truncated + anchorTruncated
+}
+
 func sanitizeFamilyOutput(output interpretationOutput) interpretationFamilyCapture {
 	capture := interpretationFamilyCapture{}
 	capture.Family, capture.FamilyUnrecognized = contextfabric.SanitizeQuestionFamily(output.QuestionFamily)
@@ -1011,6 +1212,25 @@ func applyFamilyCapture(receipt *contextfabric.ModelExecutionReceipt, capture in
 	receipt.ScopeAnchorKindUnrecognized = capture.ScopeAnchorKindUnrecognized
 	receipt.RequestedSubjectKind = capture.RequestedKind
 	receipt.RequestedSubjectKindUnrecognized = capture.RequestedKindUnrecognized
+}
+
+// applyFrameCapture stamps the raw, sanitized, NOT-YET-VALIDATED frame and
+// its sanitize counters onto the receipt.
+//
+// The frame here is the model's PROPOSAL. Validation, normalization and
+// the one bounded repair happen a layer up, where the telemetry port lives
+// and where a refusal can be recorded -- see RuntimeQuestionInterpreter.
+// Keeping the two apart is what lets the transport seam produce an
+// identical proposal while only the engine decides what to do with it.
+func applyFrameCapture(receipt *contextfabric.ModelExecutionReceipt, capture interpretationFrameCapture) {
+	if !capture.Present {
+		return
+	}
+	frame := capture.Frame
+	receipt.QuestionFrame = &frame
+	receipt.FrameGoalsDropped = capture.GoalsDropped
+	receipt.FrameTermsTruncated = capture.TermsTruncated
+	receipt.FrameKindUnrecognized = capture.KindUnrecognized
 }
 
 // sanitizeWindowOutput applies the CHAOS-3900 W0 sanitize-before-validate
@@ -1798,6 +2018,14 @@ type interpretationOutput struct {
 	// labelled measurement as group_kind and the anchor, where its
 	// correctness is checked rather than assumed.
 	RequestedSubjectKind string `json:"requested_subject_kind,omitempty"`
+	// QuestionFrame (CHAOS-4452 stage 2, SHADOW ONLY) is the
+	// compositional frame -- what the user is asking the system to
+	// ESTABLISH. Same discipline as the two blocks above and for the
+	// same reason: NOT part of contextfabric.InterpretedQuestion/toDomain,
+	// sanitized directly onto ModelExecutionReceipt, so an
+	// out-of-vocabulary pick can never be the reason an otherwise sound
+	// interpretation is rejected.
+	QuestionFrame *questionFrameOutput `json:"question_frame,omitempty"`
 }
 
 type outputTimeContext struct {
