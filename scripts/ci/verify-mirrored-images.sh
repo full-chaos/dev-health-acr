@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# verify-mirrored-images.sh (CHAOS-4855 R2, hardened R4): resolves every
+# verify-mirrored-images.sh (CHAOS-4855 R2, hardened R4, R5): resolves every
 # entry from scripts/ci/resolve-mirrored-images.sh against the ghcr mirror
 # (read-only `docker buildx imagetools inspect`) BEFORE any job that pulls
 # one is allowed to start, so the ci.yml/mirror-images.yml bootstrap race
@@ -9,6 +9,10 @@ set -euo pipefail
 # as ONE named error here instead of scattering across every pulling job.
 # Shared by ci.yml's and release.yml's `mirror-preflight` jobs so the two
 # workflows cannot silently diverge on what "the mirror is ready" means.
+#
+# For every digest-pinned entry this also compares the mirrored manifest's
+# actual digest against the one the source ref names (not just "does the tag
+# exist") -- see the MISMATCH branch below for why that distinction matters.
 #
 # CHAOS-4855 R4 (codex round 2, executed): the first version of this check
 # was inlined per-workflow as `while ... done < <(bash resolve-mirrored-
@@ -40,13 +44,42 @@ while IFS=$'\t' read -r image dest_tag; do
   ref_repo="${image%%@*}"
   ref_repo="${ref_repo%%:*}"
   dest="ghcr.io/${repo}/${ref_repo}:${dest_tag}"
-  if docker buildx imagetools inspect "$dest" >/dev/null 2>&1; then
-    printf 'OK      %-40s -> %s\n' "$image" "$dest"
-  else
+  mirrored="$(docker buildx imagetools inspect "$dest" --format '{{ .Manifest.Digest }}' 2>/dev/null || true)"
+  if [ -z "$mirrored" ]; then
     printf '::error::MISSING %-40s -> %s -- run "Mirror images" (workflow_dispatch) and wait for it to complete, then re-run this job\n' \
       "$image" "$dest"
     missing=1
+    continue
   fi
+  case "$image" in
+    *@sha256:*)
+      # CHAOS-4855 R5 (codex round 3, executed): mirror-images.yml tags every
+      # digest-pinned image `mirror-<first-12-of-the-sha256>` (see that
+      # workflow's own header for why), so two upstream digests that happen
+      # to share a 12-hex prefix would collide on the SAME destination tag.
+      # mirror-images.yml's own verify step catches that WITHIN the run that
+      # caused it (the run fails), but does not undo the already-rewritten
+      # tag -- an existence-only check here (the previous version) would
+      # then print OK for a tag now pointing at the WRONG image on every
+      # later run, forever, with no further signal. Comparing the resolved
+      # digest against the one the source ref actually names closes that:
+      # a rebound tag now fails HERE too, not just inside the mirror
+      # workflow's own single run.
+      want="${image##*@}"
+      if [ "$mirrored" = "$want" ]; then
+        printf 'OK      %-40s -> %s\n' "$image" "$dest"
+      else
+        printf '::error::MISMATCH %-40s -> %s has digest %s, want %s -- the mirror tag has been overwritten by a different image (see docs/container-images.md); do not just re-run the mirror workflow, the destination tag needs a fix\n' \
+          "$image" "$dest" "$mirrored" "$want"
+        missing=1
+      fi
+      ;;
+    *)
+      # Tag-pinned upstream (clickhouse, ryuk): no digest to compare
+      # against; existence is all this can assert.
+      printf 'OK      %-40s -> %s (tag-pinned upstream, digest %s)\n' "$image" "$dest" "$mirrored"
+      ;;
+  esac
 done < "$images_file"
 
 exit "$missing"

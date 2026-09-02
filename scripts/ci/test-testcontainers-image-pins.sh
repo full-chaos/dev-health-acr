@@ -59,16 +59,40 @@ is_mirrored_exact_ref() {
 }
 
 # resolve_identifier looks up `const <ident> = "<value>"` or
-# `<ident> = "<value>"` (bare package-level var, same shape minus `const`)
-# anywhere in the Go files of the identifier's OWN PACKAGE DIRECTORY -- Go
-# consts are package-scoped, not file-scoped, so a reference in one file can
-# be declared in a sibling file of the same directory. A qualified
-# reference like `chfixture.Image` looks in that package's directory
-# instead of the referencing file's.
+# `<ident> = "<value>"` (bare package-level var, same shape minus `const`).
+#
+# CHAOS-4855 R5 (codex round 3, executed): the first version searched the
+# whole package directory and took the FIRST match found by `git grep`,
+# with no regard for which declaration is actually in scope at the
+# reference site. Repro: a package-level `const testImage = "<pinned>"`
+# alongside a function-LOCAL `const testImage = "postgres:18-alpine"` that
+# shadows it within the very function containing the `Image: testImage`
+# reference -- valid Go (an inner scope may shadow an outer one) -- left the
+# gate green while the actual runtime reference resolved to the unpinned
+# local shadow.
+#
+# This does not implement real Go scope resolution, but narrows the gap to
+# the one shape that matters here: if $file (optional; the file containing
+# the reference) and $refline (its line number) are given, prefer the
+# CLOSEST matching declaration in THAT SAME FILE at or before $refline --
+# Go requires a local declaration to precede its use textually, so the
+# nearest preceding same-file declaration is always at least as specific as
+# any cross-file package-level one, and correctly picks up a local shadow
+# instead of skipping past it. Falls back to the old directory-wide search
+# (for the legitimate cross-file package-level case, e.g. falkordbImage
+# referenced from a sibling file) only when the file has no match at all.
 resolve_identifier() {
-  local dir="$1" ident="$2" value
-  value="$(git grep -hoE "(const|var)[[:space:]]+${ident}[[:space:]]*=[[:space:]]*\"[^\"]+\"" -- "${dir}"'/*.go' 2>/dev/null \
-    | sed -E 's/.*"(.*)"/\1/' | head -n1)"
+  local dir="$1" ident="$2" file="${3:-}" refline="${4:-}" value=""
+  if [ -n "$file" ] && [ -n "$refline" ]; then
+    value="$(git grep -nE "(const|var)[[:space:]]+${ident}[[:space:]]*=[[:space:]]*\"[^\"]+\"" -- "$file" 2>/dev/null \
+      | awk -F: -v maxline="$refline" '$2 <= maxline { print }' \
+      | sort -t: -k2 -n | tail -n1 \
+      | sed -E 's/.*"(.*)"/\1/')"
+  fi
+  if [ -z "$value" ]; then
+    value="$(git grep -hoE "(const|var)[[:space:]]+${ident}[[:space:]]*=[[:space:]]*\"[^\"]+\"" -- "${dir}"'/*.go' 2>/dev/null \
+      | sed -E 's/.*"(.*)"/\1/' | head -n1)"
+  fi
   printf '%s' "$value"
 }
 
@@ -108,7 +132,7 @@ while IFS=: read -r file line rest; do
   ident="$(printf '%s' "$rest" | sed -E 's/.*tcpostgres\.Run\([^,]+,[[:space:]]*([A-Za-z_][A-Za-z0-9_.]*)[,)].*/\1/')"
   if [ -n "$ident" ] && [ "$ident" != "$rest" ]; then
     dir="$(dirname "$file")"
-    value="$(resolve_identifier "$dir" "$ident")"
+    value="$(resolve_identifier "$dir" "$ident" "$file" "$line")"
     if [ -z "$value" ]; then
       offenders+=("${file}:${line}: could not resolve identifier \"${ident}\" passed to tcpostgres.Run to a const/var string in ${dir} -- investigate manually")
       continue
@@ -148,7 +172,7 @@ while IFS=: read -r file line rest; do
       ;;
     *)
       dir="$(dirname "$file")"
-      value="$(resolve_identifier "$dir" "$ident")"
+      value="$(resolve_identifier "$dir" "$ident" "$file" "$line")"
       if [ -z "$value" ]; then
         offenders+=("${file}:${line}: could not resolve identifier \"${ident}\" to a const/var string in ${dir} -- investigate manually (a new reference shape this gate does not recognise is exactly what it exists to catch)")
         continue

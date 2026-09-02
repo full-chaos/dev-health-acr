@@ -134,6 +134,18 @@ jobs:
   # scripts/ci/verify-mirrored-images.sh so the two workflows cannot
   # silently diverge on what "the mirror is ready" means.
   mirror-preflight:
+    # CHAOS-4855 R5 (codex round 3, confirmed by inspection): without this,
+    # the job checked out whatever ref triggered the workflow -- current
+    # main on a plain push, but NOT the resolved release commit on a
+    # workflow_dispatch against an older existing tag (preflight's own
+    # `commit` output, which `build`/`container` below explicitly check
+    # out). An older tagged commit can pin a different Dockerfile/mirror-
+    # list entirely (verified: tag v0.1.0 resolves to a commit whose
+    # Dockerfile pins a different golang digest with no mirror-prefix
+    # handling), so this job could validate main's inventory while the
+    # actual build pulls an unmirrored image from an old tag with no
+    # preflight coverage at all.
+    needs: preflight
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -141,7 +153,9 @@ jobs:
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with: {persist-credentials: false}
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
       # docker/login-action v4.5.1. No Docker Hub credentials exist in this
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
       # GITHUB_TOKEN already has read access to.
