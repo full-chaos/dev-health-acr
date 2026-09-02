@@ -61,7 +61,24 @@ if grep -aFRq "$sentinel" "$prepared_context"; then
   fail 'sentinel reached prepared BuildKit context content'
 fi
 
+# CHAOS-4855 R5 (codex round 3, executed): this raw `docker buildx build`
+# bypasses scripts/container/build.sh entirely -- it existed to smoke-test
+# the prepared BuildKit context in isolation, before build.sh's own image
+# tag/version/cache plumbing is involved. Because it is raw, it was never
+# passing ACR_IMAGE_MIRROR_PREFIX (a job-level env var container-contract-
+# smoke already sets, but env vars are not Docker build-args -- the golang
+# FROM's ARG substitution never saw it) or BUILDKIT_SYNTAX (the "# syntax="
+# frontend override; see build.sh's own comment for why ARG substitution
+# cannot reach that directive at all). Confirmed: this smoke build pulled
+# both docker/dockerfile and golang from Docker Hub directly even on a run
+# where mirror-preflight had already passed. Read from "$snapshot" (the
+# build's own git-archived source), not the live tree, matching what is
+# actually built here.
+raw_syntax_ref="$(grep -oE '^# syntax=(.+)$' "${snapshot}/Dockerfile" | sed -E 's/^# syntax=//')"
+[[ -n "$raw_syntax_ref" ]] || fail 'could not resolve the "# syntax=" directive from the smoke build snapshot'
 if ! docker buildx build --target build --tag "$raw_context_image" --load \
+  --build-arg "ACR_IMAGE_MIRROR_PREFIX=${ACR_IMAGE_MIRROR_PREFIX:-}" \
+  --build-arg "BUILDKIT_SYNTAX=${ACR_IMAGE_MIRROR_PREFIX:-}${raw_syntax_ref}" \
   --provenance=false --sbom=false "$snapshot" >"$raw_build_log" 2>&1; then
   cat "$raw_build_log" >&2
   fail 'Dockerfile-specific BuildKit context failed to build'

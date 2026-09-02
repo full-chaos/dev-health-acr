@@ -92,6 +92,105 @@ The Trivy **vulnerability database** is the deliberate exception: it carries
 no pin anywhere in source. See "Vulnerability scanning" below for why, and
 for how a scan failure is triaged.
 
+## The ghcr.io/full-chaos/dev-health-acr mirror (CHAOS-4855)
+
+Every image above except the two already-non-Docker-Hub runtimes
+(`gcr.io/distroless`, `cgr.dev/chainguard`) is pulled from Docker Hub, and
+until CHAOS-4855, CI did so **anonymously** -- acr has never held Docker Hub
+credentials, so every pull drew on the shared per-runner-IP anonymous quota.
+That quota ran out on 2026-09-02 and failed a `container-contract-smoke` run
+mid-pull. dev-health-ops hit the same class of failure against its own
+(authenticated) account and fixed it by mirroring every Docker Hub pull to
+`ghcr.io/full-chaos` (#2111); `.github/workflows/mirror-images.yml` copies
+that pattern here, adjusted for where acr's own pulls are -- and for one
+thing #2111 didn't have to deal with (next paragraph).
+
+The destination is `ghcr.io/full-chaos/dev-health-acr/<repo>`, i.e.
+`ghcr.io/<owner>/<repo>` (acr's own), **not** the flat `ghcr.io/full-chaos`
+ops's #2111 mirror uses, and that is load-bearing rather than a style choice:
+`ghcr.io/full-chaos` looks like a shared org-level namespace (ops's mirror
+already publishes `postgres`, `clickhouse/clickhouse-server`,
+`testcontainers/ryuk`, and `edoburu/pgbouncer` there), but GHCR package
+**write** access is scoped to whichever repo's token created the package, not
+shared org-wide -- confirmed the hard way: the first version of this mirror
+tried to publish acr's postgres digest under ops's existing
+`ghcr.io/full-chaos/postgres` package (a different tag, same flat path) and
+got `403 Forbidden, denied: permission_denied: write_package`. Reads of those
+PUBLIC packages still work from any repo -- so `testcontainers/ryuk` and
+`edoburu/pgbouncer` remain readable via ops's copies wherever a pull happens
+to reach them -- but this workflow cannot ADD anything to a package it did
+not create. So every image this workflow **writes** lands under acr's own
+path, including its own copy of the reaper (`testcontainers/ryuk`):
+`TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX` is one prefix applied uniformly to
+every testcontainers pull, so it cannot resolve the reaper from a different
+namespace than postgres/clickhouse/falkordb.
+
+Every pull is redirected through one of two mechanisms, chosen entirely by
+what does the pulling -- neither touches a pinned digest:
+
+- **testcontainers-go's own `TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX`** (set to
+  `ghcr.io/full-chaos/dev-health-acr` in the `unit`, `race`, and `build` CI
+  jobs): covers every `postgres`/`clickhouse`/`falkordb` testcontainers
+  fixture and the library's own hardcoded reaper (`testcontainers/ryuk`),
+  with zero Go source changes -- the library prepends the registry to
+  whatever ref the code already declares.
+- **`ACR_IMAGE_MIRROR_PREFIX`** (set to `ghcr.io/full-chaos/dev-health-acr/`,
+  trailing slash included, in the `container-contract-smoke`,
+  `container-reproducible`, `container-oci-scan`, and release.yml
+  `container` jobs): covers everything that mechanism can't reach -- the
+  Dockerfile's `golang` base image (via a build ARG), the QEMU binfmt and
+  BuildKit driver images `docker/setup-qemu-action`/`docker/setup-buildx-
+  action` pull, and the `aquasec/trivy` / `anchore/syft` / migration-smoke
+  `postgres` pulls in `scripts/container/scan.sh` and `verify.sh`. Empty by
+  default, so a local build or script run still pulls straight from Docker
+  Hub, unchanged.
+
+Every digest-pinned image is mirrored under a synthetic
+`mirror-<first-12-of-the-sha256>` tag rather than the upstream tag: every
+consumer above requests the ref by full digest, which Docker resolves
+regardless of what tag(s) exist, so the tag is purely cosmetic bookkeeping
+for this now-acr-owned path. The one exception is `clickhouse/clickhouse-
+server`: its pin (`internal/chfixture.Image`, CHAOS-4549) is a bare tag with
+no digest, by design, so `TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX` requests it
+by that literal tag and the mirror must publish under the same literal tag --
+there is no digest to derive a synthetic one from. `testcontainers/ryuk` is
+the other tag-only entry, restated in the workflow rather than read from any
+file in this repo (testcontainers-go's own hardcoded reaper default). See
+`mirror-images.yml`'s own header comment for the full reasoning.
+
+Compose-only pulls (the root `compose.yml`'s ClickHouse/PgBouncer/Valkey/
+Mailpit/nginx helpers, and this repo's own `deploy/compose/acr.compose.yml`
+overlay) are out of scope: neither runs in GitHub Actions CI, and per the
+Context Fabric lane brief, Compose is not the supported way to run acr or
+Ask Dev locally any more.
+
+### Adding or re-pinning a mirrored image: the bootstrap race
+
+`.github/workflows/mirror-images.yml` and `ci.yml` are independent
+workflows triggered by the same push, with no cross-workflow `needs` (GitHub
+Actions has none). If a change adds a new image to `scripts/ci/resolve-
+mirrored-images.sh`'s list or re-pins an existing one to a digest the mirror
+has never published, the FIRST push carrying that change races: `ci.yml`'s
+jobs can reach their pull before `mirror-images.yml`'s push lands, and every
+one of them fails `manifest unknown` at once (this happened on CHAOS-4855's
+own introducing PR -- six jobs, one root cause).
+
+`ci.yml`'s `mirror-preflight` job (which every image-pulling job `needs`)
+turns that race into ONE named failure instead of six: it resolves every
+entry from `resolve-mirrored-images.sh` against ghcr before anything else
+runs, and fails with `MISSING <image> -- run "Mirror images" (workflow_dispatch)
+and wait for it to complete, then re-run this job` naming exactly what is not
+there yet. It does not eliminate the race, only makes it legible. **The
+fix, when `mirror-preflight` fails this way:** manually dispatch `Mirror
+images` (Actions tab or `gh workflow run mirror-images.yml`), wait for it to
+complete, then re-run the failed `ci` jobs on the same commit -- do not
+push again, and do not treat the failure as a defect in the change itself
+unless `Mirror images` also fails (in which case see that workflow's own
+run log; a `403 permission_denied: write_package` there means something
+tried to write into a package acr's token cannot write to -- see this
+document's own mirror-namespace note above for why that happens and how it
+was fixed for CHAOS-4855's own introducing set).
+
 ## Build context and verification
 
 Local builds that select the canonical `Dockerfile` use

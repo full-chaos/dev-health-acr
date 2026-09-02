@@ -107,7 +107,11 @@ func newPgBouncerDSNsWithModes(t *testing.T, ctx context.Context, modes pgBounce
 	require.NoError(t, err)
 	t.Cleanup(func() { removeTestNetwork(t, dockerNetwork) })
 
-	postgres, err := tcpostgres.Run(ctx, "postgres:18-alpine",
+	// CHAOS-4855: pinned by digest (was a bare tag) so
+	// TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the ghcr.io
+	// mirror by digest, same as every other postgres:18-alpine pull in
+	// this module.
+	postgres, err := tcpostgres.Run(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
 		tcpostgres.WithDatabase("acr"),
 		tcpostgres.WithUsername("acr"),
 		tcpostgres.WithPassword("acr"),
@@ -120,7 +124,11 @@ func newPgBouncerDSNsWithModes(t *testing.T, ctx context.Context, modes pgBounce
 	configPath, userListPath := writePgBouncerConfig(t, modes)
 	pooler, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "edoburu/pgbouncer:latest",
+			// CHAOS-4855: pinned by digest (was the floating "latest" tag)
+			// so TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the
+			// ghcr.io mirror by digest. Same reviewed digest ops's own
+			// river-compatibility compose pins (edoburu/pgbouncer:1.25.2).
+			Image:        "edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd",
 			ExposedPorts: []string{"5432/tcp"},
 			Cmd:          []string{"pgbouncer", "/etc/pgbouncer/pgbouncer.ini"},
 			Networks:     []string{dockerNetwork.Name},

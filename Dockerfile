@@ -1,7 +1,17 @@
 # syntax=docker/dockerfile:1.20@sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d
 
+# CHAOS-4855: ACR_IMAGE_MIRROR_PREFIX redirects the one Docker Hub base image
+# (golang) at the ghcr.io/full-chaos mirror in CI, so a Docker Hub outage or
+# quota exhaustion cannot fail a build. Empty by default (a local `docker
+# build` still pulls straight from Docker Hub, unchanged), and the digest is
+# unaffected either way -- the mirror is required to serve the identical
+# manifest, so this ARG only chooses which registry answers the pull, never
+# what gets built. Must be declared before the first FROM to be usable there.
+# See docs/container-images.md for how the mirror is populated and verified.
+ARG ACR_IMAGE_MIRROR_PREFIX=
+
 # Digest update and verification instructions are in docs/container-images.md.
-FROM --platform=$BUILDPLATFORM golang:1.27.0-alpine3.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395 AS build
+FROM --platform=$BUILDPLATFORM ${ACR_IMAGE_MIRROR_PREFIX}golang:1.27.0-alpine3.23@sha256:3747dcba41c8b0db3211fda4db61638b980e17ac5bb3c94460a975a9cfe19395 AS build
 
 ARG TARGETOS
 ARG TARGETARCH

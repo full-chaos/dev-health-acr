@@ -1,0 +1,190 @@
+# Mirror acr's Docker Hub build/tooling and test-dependency images to ghcr.io.
+#
+# WHY (CHAOS-4855, CHAOS-4778): acr CI pulls Docker Hub images ANONYMOUSLY --
+# unlike dev-health-ops, this repo has never held Docker Hub credentials, so
+# every pull draws on the shared per-runner-IP anonymous quota. That quota ran
+# out on 2026-09-02 (429s from 14:17Z) and failed a container-contract-smoke
+# run mid-pull (`0B / 1.46MB` into the 900s build cap -- the quota's
+# leading-edge signature, not a test failure). ops landed the same fix for its
+# own Docker Hub account exhaustion as #2111 (fcfd683b0120ab1328fdf42c909085ae32ad1829);
+# this workflow copies that pattern for acr's own image set, adjusted for
+# where acr's pulls actually are (see docs/container-images.md and the
+# CHAOS-4855 PR body for the full inventory: Dockerfile FROM, buildx/qemu
+# tooling, the trivy/syft scanners, and testcontainers-go's postgres/
+# clickhouse/falkordb fixtures).
+#
+# DIGESTS ARE PRESERVED, and that is the whole point: `docker buildx imagetools
+# create` copies the manifest verbatim, so the mirrored ref carries the SAME
+# sha256 as the upstream one and every digest pin in the repository stays a
+# literal. A naive `docker pull && docker tag && docker push` would NOT do
+# this -- for a multi-arch image it extracts one platform and republishes a
+# different manifest, silently changing the digest. The verify step below
+# fails the run if the digests ever diverge, so this cannot rot quietly.
+#
+# DESTINATION NAMESPACE is ghcr.io/<owner>/<repo> (i.e.
+# ghcr.io/full-chaos/dev-health-acr), NOT the flat ghcr.io/<owner> ops's own
+# #2111 mirror uses -- and that is not a style choice, it is load-bearing.
+# ghcr.io/full-chaos looks like a shared org-level namespace (confirmed via
+# `gh api /orgs/full-chaos/packages?package_type=container`: ops's mirror
+# already publishes `postgres`, `clickhouse/clickhouse-server`,
+# `testcontainers/ryuk`, `edoburu/pgbouncer` there), but package WRITE access
+# on GHCR is scoped to whichever repo's token created the package, not shared
+# org-wide -- a first attempt at mirroring acr's postgres digest under ops's
+# existing `ghcr.io/full-chaos/postgres` (a different tag, same flat path)
+# 403'd: `unexpected status from POST .../blobs/uploads/: 403 Forbidden,
+# denied: permission_denied: write_package`. Reads of those PUBLIC packages
+# still work from any repo (that is how ryuk below is a pull-only reuse, not
+# a mirror entry) -- only writes are repo-scoped. So every image this
+# workflow WRITES lands under acr's own path, including the reaper (acr does
+# not attempt to write into ops's existing ryuk package either).
+#
+# Because of that, every digest-pinned image here is tagged
+# `mirror-<first-12-of-the-sha256>` rather than the upstream tag: every
+# consumer resolves the ref by full digest (Docker looks the manifest up by
+# digest regardless of what tag(s) exist), so the destination tag is
+# never actually looked up, and this workflow never has to worry about
+# colliding with a tag on a path it now exclusively owns.
+#
+# THE ONE EXCEPTION is clickhouse/clickhouse-server: acr's pin
+# (internal/chfixture.Image, CHAOS-4549) is a TAG, "26.7.5.10", with no
+# digest -- deliberately, per that file's own doc comment, so it can be
+# bumped by hand as prod's floor advances. TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX
+# prepends the registry to whatever ref the Go code declares UNCHANGED; it
+# cannot rename the tag. So for this one image, and only this one, the
+# destination tag must be the literal upstream tag "26.7.5.10".
+#
+# NO setup-buildx-action, and NO Docker Hub login -- both deliberate, same
+# reasoning as ops's #2111: setup-buildx-action's default driver pulls
+# moby/buildkit:buildx-stable-1 FROM DOCKER HUB before anything here has
+# logged in anywhere, which would deadlock this workflow against the very
+# quota it exists to stop depending on (and that image is not in the mirror
+# set either). `docker buildx imagetools` needs no builder: it is a
+# registry-to-registry manifest operation on the CLI's built-in `docker`
+# driver.
+name: Mirror images
+
+"on":
+  workflow_dispatch:
+  schedule:
+    # Weekly. Every entry below except clickhouse is pinned by digest, so this
+    # only refreshes the mirror's own retention; it is not chasing upstream
+    # changes. clickhouse's tag-pinned entry DOES track upstream at that exact
+    # tag, same as today's already-tag-pinned local/CI behavior.
+    - cron: '32 4 * * 1'
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - internal/chfixture/chfixture.go
+      - scripts/container/scan.sh
+      - scripts/container/verify.sh
+      # CHAOS-4855 R4 (codex round 2, executed): this is the actual inventory
+      # source of truth -- omitting it here meant an edit to ONLY this file
+      # (e.g. adding a new image) never triggered a mirror run, while
+      # ci.yml's mirror-preflight (which also reads it) would immediately
+      # expect the new image to already exist. Every prior edit to this file
+      # happened to land in the same commit as a change to an already-listed
+      # path, which is exactly why this went unnoticed.
+      - scripts/ci/resolve-mirrored-images.sh
+      - .github/workflows/mirror-images.yml
+      - .github/workflows/ci.yml
+      - .github/workflows/release.yml
+  pull_request:
+    paths:
+      - Dockerfile
+      - internal/chfixture/chfixture.go
+      - scripts/container/scan.sh
+      - scripts/container/verify.sh
+      - scripts/ci/resolve-mirrored-images.sh
+      - .github/workflows/mirror-images.yml
+      - .github/workflows/ci.yml
+      - .github/workflows/release.yml
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: mirror-images
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Forks get neither packages:write nor (on a private mirror) read access
+    # to a private source, so the job would fail at push rather than do
+    # anything useful.
+    if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # scripts/ci/resolve-mirrored-images.sh is the single source of truth
+      # for this list -- also read by ci.yml's mirror-preflight job, so the
+      # two cannot silently drift apart. See that script's own header for the
+      # full reasoning (sourced from Dockerfile/chfixture.go/scan.sh/
+      # verify.sh/ci.yml, fails closed if any pattern stops matching).
+      - name: Resolve every image acr CI pulls from Docker Hub
+        id: images
+        run: |
+          set -euo pipefail
+          bash scripts/ci/resolve-mirrored-images.sh > images.tsv
+          echo "--- images to mirror (upstream ref / dest tag) ---"
+          cat images.tsv
+
+      - name: Mirror each image to ghcr.io, preserving its digest
+        env:
+          # ghcr.io/<owner>/<repo> -- see the file header for why this is
+          # NOT the flat ghcr.io/<owner> ops's own mirror uses.
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          while IFS=$'\t' read -r image dest_tag; do
+            [ -n "$image" ] || continue
+            repo="${image%%@*}"
+            repo="${repo%%:*}"
+            dest="ghcr.io/${REPO}/${repo}:${dest_tag}"
+            printf '\n=== from %s\n    to   %s\n' "$image" "$dest"
+            docker buildx imagetools create --tag "$dest" "$image"
+          done < images.tsv
+
+      - name: Verify every mirrored digest matches upstream
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          failed=0
+          while IFS=$'\t' read -r image dest_tag; do
+            [ -n "$image" ] || continue
+            repo="${image%%@*}"
+            repo="${repo%%:*}"
+            dest="ghcr.io/${REPO}/${repo}:${dest_tag}"
+            mirrored="$(docker buildx imagetools inspect "$dest" --format '{{ .Manifest.Digest }}')"
+            case "$image" in
+              *@sha256:*)
+                want="${image##*@}"
+                if [ "$mirrored" = "$want" ]; then
+                  printf 'OK   %-40s %s\n' "$repo" "$mirrored"
+                else
+                  printf 'FAIL %-40s mirrored=%s want=%s\n' "$repo" "$mirrored" "$want" >&2
+                  failed=1
+                fi
+                ;;
+              *)
+                # Tag-pinned upstream (clickhouse and ryuk -- see the file
+                # header and the ryuk_ref comment above). Nothing to assert a
+                # digest against; record what the mirror now serves.
+                printf 'NOTE %-40s tag-pinned upstream (%s), mirrored digest %s\n' \
+                  "$repo" "${image##*:}" "$mirrored"
+                ;;
+            esac
+          done < images.tsv
+          exit "$failed"

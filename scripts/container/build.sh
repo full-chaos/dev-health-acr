@@ -200,6 +200,10 @@ run_with_timeout() {
 trap 'handle_signal 130' INT
 trap 'handle_signal 143' TERM
 
+# CHAOS-4855: empty by default, so a local build still pulls the golang base
+# image straight from Docker Hub unchanged; CI sets this to ghcr.io/full-chaos/
+# so the one Docker Hub base image in Dockerfile resolves against the mirror
+# instead. See docs/container-images.md.
 args=(
   docker buildx build
   --file "${build_context}/Dockerfile"
@@ -210,9 +214,25 @@ args=(
   --build-arg "BUILD_DATE=${build_date}"
   --build-arg "SOURCE_DATE_EPOCH=${source_date_epoch}"
   --build-arg "BUILD_CACHE_ID=${build_cache_id}"
+  --build-arg "ACR_IMAGE_MIRROR_PREFIX=${ACR_IMAGE_MIRROR_PREFIX:-}"
   --provenance=false
   --sbom=false
 )
+
+# CHAOS-4855 R4 (codex round 2, executed): the `# syntax=` parser directive
+# at the top of the Dockerfile is a SEPARATE Docker Hub pull from the `FROM`
+# lines -- BuildKit fetches it before Dockerfile parsing even starts, and
+# ARG substitution does not apply inside that comment (it must be a literal
+# string), so ACR_IMAGE_MIRROR_PREFIX above cannot redirect it the way it
+# redirects `FROM`. The `BUILDKIT_SYNTAX` build-arg is buildx's own
+# documented override for exactly this: it takes precedence over the
+# `# syntax=` comment. Read the digest from the Dockerfile itself (never
+# restated as a bare string here) so the two can never drift; empty prefix
+# reproduces the exact ref the comment already declares, so this is safe to
+# always pass.
+syntax_ref="$(grep -oE '^# syntax=(.+)$' "${source_root}/Dockerfile" | sed -E 's/^# syntax=//')"
+[[ -n "$syntax_ref" ]] || { printf 'could not resolve the "# syntax=" directive from Dockerfile\n' >&2; exit 1; }
+args+=(--build-arg "BUILDKIT_SYNTAX=${ACR_IMAGE_MIRROR_PREFIX:-}${syntax_ref}")
 
 if [[ -n "$platforms" ]]; then
   args+=(--platform "$platforms")
