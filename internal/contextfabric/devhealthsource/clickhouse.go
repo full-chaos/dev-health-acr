@@ -217,8 +217,42 @@ func (s *ClickHouseProjectionSource) plan() sourcePlan {
 			// every real Dev Health timestamp we ever project.
 			return []candidate{organizationCandidate(orgID, organizationAnchorTime)}
 		},
-		observe: s.logOrphanedWorkItems,
+		observe:           s.logOrphanedWorkItems,
+		observeQuarantine: s.logQuarantinedItem,
 	}
+}
+
+// logQuarantinedItem is the operational signal for CHAOS-4874's per-item
+// quarantine: an item this producer built and the v1 contract refused.
+//
+// Emitted at WARN, one line per dropped item. It is deliberately NOT silent
+// and deliberately NOT an error: dropping the item is the CORRECT outcome
+// (the alternative, which shipped before this, was rejecting the whole page
+// and wedging the organization forever), but a source producing
+// unprojectable rows is still something an operator must be able to see and
+// count. A sustained non-zero rate for one reason token is the signal that
+// either the source data changed or this producer needs a mapping it does
+// not have.
+//
+// Content-safe on the same terms as logTableReadFailure: a closed reason
+// token, a fixed item-kind label, and -- only for a relationship -- the
+// offending TYPE, which is a bounded, low-cardinality enum value capped at
+// maxQuarantineDetailRunes. Never row data, never free text, never the
+// validator's own message.
+func (s *ClickHouseProjectionSource) logQuarantinedItem(observation quarantineObservation) {
+	logger := s.logger
+	if logger == nil {
+		return
+	}
+	attrs := []any{
+		"source", SourceName,
+		"quarantine_reason", observation.Reason,
+		"item_kind", observation.Kind,
+	}
+	if observation.Detail != "" {
+		attrs = append(attrs, "relationship_type", observation.Detail)
+	}
+	logger.Warn("context_fabric: projection item quarantined; the item is dropped and the batch continues", attrs...)
 }
 
 // candidateCounts tallies candidates by kind -- CHAOS-3753 codex round-2
@@ -360,8 +394,18 @@ func truncateToCompleteRows(all []candidate, maxRows int) []candidate {
 	return all
 }
 
-func buildBatch(orgID, source, version, cursor string, all []candidate, fullSnapshot, completeEnumeration bool, generatedAt time.Time) (contextfabric.ProjectionBatch, error) {
-	last := all[len(all)-1]
+// buildBatch assembles one batch.
+//
+// cursorSource and items are deliberately SEPARATE slices. cursorSource is
+// every candidate this page consumed, and is the sole authority for
+// NextCursor; items is the subset that survived per-item quarantine
+// (item_quarantine.go) and is what actually gets projected. Deriving the
+// cursor from items instead would move the watermark backwards whenever the
+// last row on a page was quarantined, so those rows would be re-read and
+// re-dropped on every later tick -- progress would stall exactly where the
+// bad data is, which is the failure this quarantine exists to end.
+func buildBatch(orgID, source, version, cursor string, cursorSource, items []candidate, fullSnapshot, completeEnumeration bool, generatedAt time.Time) (contextfabric.ProjectionBatch, error) {
+	last := cursorSource[len(cursorSource)-1]
 	nextCursor, err := encodeCursor(cursorState{Since: last.observedAt, After: last.sortKey})
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, err
@@ -374,7 +418,7 @@ func buildBatch(orgID, source, version, cursor string, all []candidate, fullSnap
 		Contents: []contractsv1.ContextFabricContentProjection{}, Episodes: []contractsv1.ContextFabricEpisodeProjection{},
 		Tombstones: []contractsv1.ContextFabricProjectionTombstone{},
 	}
-	for _, c := range all {
+	for _, c := range items {
 		switch {
 		case c.entity != nil:
 			batch.Entities = append(batch.Entities, *c.entity)
@@ -388,7 +432,14 @@ func buildBatch(orgID, source, version, cursor string, all []candidate, fullSnap
 	}
 	batch.BatchID = deterministicBatchID(orgID, source, cursor, nextCursor)
 	if err := batch.Validate(); err != nil {
-		return contextfabric.ProjectionBatch{}, fmt.Errorf("devhealthsource: built an invalid projection batch: %w", err)
+		// CHAOS-4874: carry contextfabric.ErrInvalidResult so this reaches
+		// projectionrun.classifyOutcomeError as failure_class=invalid_result
+		// instead of "unclassified". Per-item quarantine above should make
+		// this unreachable for a bound quarantine understands; anything that
+		// still arrives here is a genuine contract defect in this producer,
+		// and an operator must be able to tell those apart from a
+		// vocabulary gap. Same idiom as engine.go's validation stage.
+		return contextfabric.ProjectionBatch{}, fmt.Errorf("%w: devhealthsource: built an invalid projection batch: %w", contextfabric.ErrInvalidResult, err)
 	}
 	return batch, nil
 }

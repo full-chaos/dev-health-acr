@@ -60,6 +60,10 @@ type sourcePlan struct {
 
 	// logger receives the sanitized cause of a table read failure. Optional.
 	logger *slog.Logger
+
+	// observeQuarantine is called once per item dropped by per-item
+	// quarantine (item_quarantine.go), with a closed reason token. Optional.
+	observeQuarantine func(quarantineObservation)
 }
 
 // logTableReadFailure names WHY a dependency read failed, in a closed form.
@@ -166,11 +170,15 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 	all = append(all, seeded...)
 	// An organization whose only rows are omitted has nothing to enumerate;
 	// an empty batch is not a valid full snapshot (Validate rejects it).
-	if len(all) == 0 || !carriesPayload(all) {
+	if len(all) == 0 {
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	sortCandidates(all)
-	batch, err := buildBatch(orgID, p.source, p.version, "", all, true, true, p.clock())
+	items := partitionProjectableCandidates(all, p.observeQuarantine)
+	if !carriesPayload(items) {
+		return contextfabric.ProjectionBatch{}, false, nil
+	}
+	batch, err := buildBatch(orgID, p.source, p.version, "", all, items, true, true, p.clock())
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
@@ -213,8 +221,14 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		if len(all) == 0 {
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
-		if carriesPayload(all) {
-			batch, err := buildBatch(orgID, p.source, p.version, cursor, all, false, false, p.clock())
+		// Per-item quarantine BEFORE the payload check: an item the
+		// contract validator rejects must not reach buildBatch, and a page
+		// whose every item is quarantined is indistinguishable, from here
+		// on, from a page whose every row was omitted -- both take the skip
+		// path below, which advances past them and keeps looking.
+		items := partitionProjectableCandidates(all, p.observeQuarantine)
+		if carriesPayload(items) {
+			batch, err := buildBatch(orgID, p.source, p.version, cursor, all, items, false, false, p.clock())
 			if err != nil {
 				return contextfabric.ProjectionBatch{}, false, err
 			}
@@ -225,8 +239,9 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 			p.observeBatch(ctx, batch, all)
 			return batch, true, nil
 		}
-		// Every row on this page was consumed but emitted nothing (today:
-		// ownership rows omitted for an ambiguous project_key). A batch built
+		// Every row on this page was consumed but emitted nothing --
+		// omitted for an ambiguous project_key, or every item quarantined as
+		// unprojectable. A batch built
 		// from them would be empty, and ContextFabricProjectionBatch.Validate
 		// rejects an empty batch outright -- so the page cannot be published
 		// to carry its own cursor. Skip past it in-process instead and keep
