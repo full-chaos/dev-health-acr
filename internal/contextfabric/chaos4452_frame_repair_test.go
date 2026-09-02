@@ -1124,3 +1124,46 @@ func TestRepairMayNotRewriteAWellFormedOperand(t *testing.T) {
 		t.Fatalf("bound violation = %q on I19's legitimate repair, want none -- the malformed operand is precisely what may be corrected", violation)
 	}
 }
+
+// TestOrganizationMemberKindIsValidatedWhenSupplied is round 5's P2.
+//
+// "Optional" and "unvalidated" are easy to conflate, and I17 conflated
+// them: it checked Org.MemberKind only when the goal was a count, so
+// `organization_scope{member_kind:"squad"}` with `Goals=[assess_state]`
+// passed BOTH phases and `MemberKind()` returned `("squad", true)` to the
+// retrieval seam — an out-of-vocabulary kind reaching the substrate
+// through a frame the server had declared valid. The seam-7 slice calls
+// that accessor on frames it assumes were validated, so this would have
+// surfaced there as a retrieval mystery rather than a validation gap.
+func TestOrganizationMemberKindIsValidatedWhenSupplied(t *testing.T) {
+	squad := SubjectKind("squad")
+	invalid := QuestionFrame{
+		Goals: []InvestigationGoal{GoalAssessState},
+		SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionOrganizationScope,
+			Org:  &OrganizationScopeExpression{MemberKind: &squad},
+		},
+	}
+	failure, bad := ValidateFramePhaseA1(invalid)
+	if !bad {
+		t.Fatal("a supplied but out-of-vocabulary Org.MemberKind must fail A1 -- optionality exempts absence, never nonsense")
+	}
+	if failure.Invariant != FrameInvariantI17 || failure.Detail != FrameFailureMemberKindInvalid {
+		t.Fatalf("failure = %q/%q, want i17/%q", failure.Invariant, failure.Detail, FrameFailureMemberKindInvalid)
+	}
+
+	// ABSENT is still fine for a non-counting goal: the org itself is the
+	// subject and there is nothing to enumerate.
+	absent := invalid
+	absent.SubjectExpression.Org = &OrganizationScopeExpression{}
+	if failure, bad := ValidateFramePhaseA1(absent); bad {
+		t.Fatalf("an ABSENT Org.MemberKind must stay legal for a non-counting goal; failed on %q/%q", failure.Invariant, failure.Detail)
+	}
+	// And a VALID supplied kind passes.
+	repo := contractsv1.ContextFabricSubjectRepository
+	valid := invalid
+	valid.SubjectExpression.Org = &OrganizationScopeExpression{MemberKind: &repo}
+	if failure, bad := ValidateFramePhaseA1(valid); bad {
+		t.Fatalf("a valid supplied Org.MemberKind must pass; failed on %q/%q", failure.Invariant, failure.Detail)
+	}
+}

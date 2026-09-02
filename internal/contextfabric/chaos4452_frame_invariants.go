@@ -577,13 +577,26 @@ func checkI17(frame QuestionFrame) (FrameValidationFailure, bool) {
 	if frame.SubjectExpression.Kind != SubjectExpressionOrganizationScope {
 		return FrameValidationFailure{}, false
 	}
+	org := frame.SubjectExpression.Org
+	// OPTIONAL IS NOT UNVALIDATED, and the two are easy to conflate.
+	//
+	// MemberKind is optional for a non-counting goal, where the org itself
+	// is the subject and there is nothing to enumerate. But "may be
+	// absent" is not "may be anything": a SUPPLIED value must still be a
+	// member of the closed subject-kind vocabulary. Checking it only on
+	// the counting path let `organization_scope{member_kind:"squad"}` with
+	// `Goals=[assess_state]` pass BOTH phases, and `MemberKind()` then
+	// handed `("squad", true)` to the retrieval seam -- which the seam-7
+	// slice will call on frames it assumes were validated. Found by
+	// adversarial review; the optionality is the exemption, the
+	// vocabulary is not.
+	if org != nil && org.MemberKind != nil && !contractsv1.ValidContextFabricSubjectKind(*org.MemberKind) {
+		return FrameValidationFailure{Invariant: FrameInvariantI17, Phase: FrameValidationPhaseA1, Detail: FrameFailureMemberKindInvalid}, true
+	}
 	if !frame.HasGoal(GoalCountOrAggregate) {
-		// MemberKind is OPTIONAL for non-counting goals, where the org
-		// itself is the subject and there is nothing to enumerate.
 		return FrameValidationFailure{}, false
 	}
-	org := frame.SubjectExpression.Org
-	if org == nil || org.MemberKind == nil || !contractsv1.ValidContextFabricSubjectKind(*org.MemberKind) {
+	if org == nil || org.MemberKind == nil {
 		return FrameValidationFailure{Invariant: FrameInvariantI17, Phase: FrameValidationPhaseA1, Detail: FrameFailureOrgCountNeedsMember}, true
 	}
 	return FrameValidationFailure{}, false
