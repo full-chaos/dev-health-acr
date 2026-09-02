@@ -541,6 +541,30 @@ var familyGateFixtures = []familyGateFixture{
 		wantEnforced: false,
 	},
 	{
+		name:        "R16_param_relay_into_served_field",
+		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r16_param_relay",
+		description: "round 5 P1, re-executed by the lane: derived text passed as an ordinary string PARAMETER to an owned callee that assigns it to an encoder-reachable field. KNOWN BLIND and pinned as such. This is the deliberate cost of the per-call-site rule: argument-to-parameter binding was removed because, without calling context, one caller passing derived text to a general-purpose helper marks that helper derived for EVERY caller (990 findings on a clean tree, provenance reading `argument bound to parameter` through functions that never see a family). The documented mitigation -- 'reported at the CALL SITE instead' -- does NOT hold here: the value is passed, not stored, so there is no call-site sink either. Closing this needs call-site sensitivity or a summary that distinguishes a parameter's callers, which is a different analysis, not a patch",
+		wantBlind:   true,
+	},
+	{
+		name:         "R17_channel_relay_into_served_field",
+		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r17_channel_relay",
+		description:  "round 5 P1: derived text sent on a channel and received back, then assigned to an encoder-reachable field",
+		wantEnforced: true,
+	},
+	{
+		name:         "R18_range_relay_into_served_field",
+		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r18_range_relay",
+		description:  "round 5 P1: derived text recovered by ranging over a local map, then assigned to an encoder-reachable field",
+		wantEnforced: true,
+	},
+	{
+		name:         "R19_encoder_receiver_offset",
+		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r19_encoder_receiver",
+		description:  "round 5 P1: json.NewEncoder(w).Encode(v) -- production's writeJSON shape, where a STATIC Encode call puts the encoder in args[0] and the encoded value in args[1]",
+		wantEnforced: true,
+	},
+	{
 		name:        "R13_writerto_receiver_payload",
 		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r13_writerto",
 		description: "codex round 4 P1, re-executed by the lane: (*strings.Reader).WriteTo(w) -- a static method whose RECEIVER carries the payload and whose first explicit PARAMETER is the writer. KNOWN BLIND and pinned as such: it is the third consecutive round to find a byte-egress shape, which is why the enforced claim is narrowed to encoder-reachable field stores rather than patched a fourth time.",

@@ -61,6 +61,14 @@ package contextfabric
 //     imprecise: every method with a matching signature on a type in the
 //     program is a candidate.
 //   - Reflection and runtime struct-tag interpretation are not modelled.
+//   - A plain `string` parameter that is family-derived at only some call
+//     sites is NOT tracked into the callee's body (fixture R16, pinned).
+//     Argument-to-parameter binding was removed because a
+//     context-insensitive summary lets one caller poison a helper for
+//     every caller. An earlier draft of this header claimed such a value
+//     is "reported at the CALL SITE instead"; that is FALSE when the
+//     value is passed rather than stored, and R16 is exactly that case.
+//     Closing it needs call-site sensitivity, not a patch.
 //   - Coverage is exactly the four swept roots. A callee outside them is
 //     opaque: a tainted argument yields a derived result and its body is
 //     not searched for sinks (this is what keeps log/telemetry calls that
@@ -778,6 +786,12 @@ func (a *familySSA) transfer(fn *ssa.Function, b *ssa.BasicBlock, instr ssa.Inst
 	case *ssa.UnOp:
 		if x.Op == token.MUL {
 			a.setVal(x, a.readMem(x.X), x.X, "load from family-derived memory")
+		} else if x.Op == token.ARROW {
+			// ROUND 5 P1: a channel receive is a memory read. Send already
+			// records into the channel's memory; without this the value
+			// came back clean and `ch <- derived; text := <-ch` laundered
+			// taint through a two-line detour.
+			a.setVal(x, a.readMem(x.X).join(a.val[x.X]), x.X, "receive from a family-derived channel")
 		} else if a.val[x.X].tainted() {
 			a.setVal(x, familyTaintDerived, x.X, "unary operation on a family-derived operand")
 		}
@@ -833,6 +847,13 @@ func (a *familySSA) transfer(fn *ssa.Function, b *ssa.BasicBlock, instr ssa.Inst
 		a.setVal(x, t, x.X, "value from a family-derived map")
 	case *ssa.Slice:
 		a.setVal(x, a.val[x.X].join(a.mem[familySSAOrigin(x.X)]), x.X, "slice of a family-derived aggregate")
+	case *ssa.Range:
+		// ROUND 5 P1: Next was handled but Range itself never carried the
+		// taint of the container being ranged over, so the iterator handed
+		// Next a clean value and every `for _, v := range table` dropped it.
+		if t := a.val[x.X].join(a.mem[familySSAOrigin(x.X)]).join(a.objField[familySSAOrigin(x.X)]); t.tainted() {
+			a.setVal(x, t, x.X, "range over a family-derived container")
+		}
 	case *ssa.Next:
 		// range: the tuple carries (ok, key, value) from the iterator.
 		if t := a.val[x.Iter].join(a.mem[familySSAOrigin(x.Iter)]); t.tainted() {
@@ -1841,7 +1862,29 @@ func (a *familySSA) servingArgs(common *ssa.CallCommon) []ssa.Value {
 	if fn := common.StaticCallee(); fn != nil {
 		if obj := fn.Object(); obj != nil && obj.Pkg() != nil && obj.Pkg().Path() == "encoding/json" {
 			switch obj.Name() {
-			case "Marshal", "MarshalIndent", "Encode":
+			case "Marshal", "MarshalIndent":
+				if len(args) > 0 {
+					return args[:1]
+				}
+			case "Encode":
+				// ROUND 5 P1. Encode is a METHOD, so a static call puts the
+				// *json.Encoder in args[0] and the encoded value in args[1].
+				// Taking args[:1] read the ENCODER as the served value.
+				//
+				// This was not a corner: internal/api/response.go's
+				// writeJSON is literally `json.NewEncoder(w).Encode(value)`,
+				// the primary API serving path, so any type served only
+				// through it was downgraded from enforced to reported. The
+				// non-vacuity assertion still passed because the three
+				// anchor types are reachable by other paths -- it proved
+				// the served set was non-empty, not that it was right,
+				// which is the trap it was written to prevent.
+				if fn.Signature.Recv() != nil {
+					if len(args) > 1 {
+						return args[1:2]
+					}
+					return nil
+				}
 				if len(args) > 0 {
 					return args[:1]
 				}
