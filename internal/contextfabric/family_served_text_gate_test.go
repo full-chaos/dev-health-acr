@@ -1453,6 +1453,11 @@ type familyGateFixture struct {
 
 var familyGateFixtures = []familyGateFixture{
 	{
+		name:        "R7_ordinary_call_result_laundering",
+		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r7_ordinary_call_sprintf",
+		description: "codex round 3, P1, EXECUTED, re-executed by the lane: fmt.Sprintf(\"...%s...\", family) assigned to a served field. INTENTIONALLY STILL RED as of the 2026-09-02 handoff -- this is the acceptance case the SSA re-shape (see the handoff) must satisfy, not yet fixed in the syntax walker; chris ruled against a fourth walker patch. `go test` on this package currently FAILS on this subtest ALONE; that failure is the documented, expected state of this WIP branch.",
+	},
+	{
 		name:        "R6_tagless_switch_comparison_hidden_in_call",
 		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/p2_repro_tagless_switch",
 		description: "codex round 2, P1, EXECUTED against this gate: tagless switch, the comparison against family hidden inside strings.EqualFold -- a NEW class, not a re-find",
