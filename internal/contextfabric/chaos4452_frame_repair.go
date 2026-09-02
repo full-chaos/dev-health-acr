@@ -125,6 +125,12 @@ const (
 	// the question's structure; it may never point it at a different
 	// subject.
 	FrameRepairBoundSubjectRetargeted FrameRepairBoundViolation = "subject_retargeted"
+	// FrameRepairBoundSubjectPointerDropped: the candidate DELETED a
+	// retrieval pointer the proposal carried. Distinct from retargeting
+	// because it is the more dangerous direction -- a repair that empties
+	// the subject entirely leaves a structurally valid frame pointing at
+	// nothing, and a subset check alone accepts it.
+	FrameRepairBoundSubjectPointerDropped FrameRepairBoundViolation = "subject_pointer_dropped"
 )
 
 // invariantNamedGoals declares, per invariant, WHICH goals that
@@ -197,67 +203,69 @@ func invariantReads(id FrameInvariant) map[FrameField]bool {
 // So every axis is compared, and an axis the invariant does not name may
 // not move at all.
 func CheckFrameRepairBound(proposed, repaired QuestionFrame, failure FrameValidationFailure) FrameRepairBoundViolation {
-	reads := invariantReads(failure.Invariant)
-	namesGoals := reads[FrameFieldGoals]
+	constrains := invariantConstrains(failure.Invariant)
 
-	// KIND. Only an invariant that reads the DISCRIMINATOR licenses a Kind
-	// change -- reading the VARIANT does not.
-	//
-	// The distinction is load-bearing and an earlier revision of this
-	// function got it wrong by treating the two as one. I6's condition is
-	// about `GroupKind` and `MemberKind`, fields INSIDE the grouped
-	// variant; it says nothing about which variant the frame is. Letting
-	// an I6 failure license a wholesale Kind change would mean "you
-	// grouped a kind by itself" could be repaired into an entirely
-	// different topology -- the reinterpretation the bound exists to
-	// forbid. The invariants that genuinely name the discriminator are I1
-	// (the discriminator itself is inconsistent), I7 and I9 (whose
-	// conditions are literally about which Kind a goal requires) and I17.
-	if repaired.SubjectExpression.Kind != proposed.SubjectExpression.Kind && !reads[FrameFieldSubjectExpressionKind] {
+	// KIND. Only an invariant whose CONDITION is about the discriminator
+	// licenses moving it -- I1 (the discriminator is itself inconsistent),
+	// I7 and I9 (whose conditions are literally about which Kind a goal
+	// requires).
+	kindMoved := repaired.SubjectExpression.Kind != proposed.SubjectExpression.Kind
+	if kindMoved && !constrains[FrameFieldSubjectExpressionKind] {
 		return FrameRepairBoundKindChanged
 	}
 
-	// VARIANT CONTENTS. Compared structurally, so a rewritten term, anchor
-	// or member kind is caught rather than only a changed discriminator.
+	// RETRIEVAL POINTERS -- terms and anchor terms, wherever they live.
 	//
-	// Checked ONLY WHEN THE KIND DID NOT MOVE. A permitted Kind change
-	// necessarily rewrites the variant -- you cannot switch the
-	// discriminator without setting a different pointer -- so applying the
-	// variant check to a legal Kind repair would make I7 and I9 repairs
-	// unreachable again, which is precisely the too-tight bound round 2
-	// (P2-1) rejected. When the Kind is unchanged there is no such excuse:
-	// a repair for an invariant that does not read the variant may not
-	// touch its fields.
-	kindMoved := repaired.SubjectExpression.Kind != proposed.SubjectExpression.Kind
-	if !kindMoved && !reads[FrameFieldSubjectExpressionVariant] &&
-		!sameSubjectExpression(proposed.SubjectExpression, repaired.SubjectExpression) {
-		return FrameRepairBoundUnnamedFieldChanged
+	// ONE RULE, and it replaces three per-instance patches that each
+	// closed one hole and left the next:
+	//
+	//   a pointer may NEVER be removed, and may be ADDED only when the
+	//   failed invariant constrains a field that carries pointers.
+	//
+	// Every instance review found falls out of it. Introducing
+	// "platform team" on an I9 failure: I9 constrains neither terms nor
+	// anchor terms, so the addition is refused. DELETING every pointer on
+	// an I9 failure and returning a subject-less grouped set: removal is
+	// refused outright. Replacing `team a` with `platform` on an I2
+	// failure: I2 does constrain the operands, so the ADDITION is legal --
+	// and the REMOVAL of `team a` is not, which is what makes a
+	// "replacement" refusable while a genuine second operand stays
+	// reachable. The legitimate I9 redistribution (a named subject's term
+	// becoming a scoped set's anchor) moves a pointer between fields
+	// without adding or removing one, so it passes untouched.
+	proposedPointers := retrievalPointers(proposed.SubjectExpression)
+	repairedPointers := retrievalPointers(repaired.SubjectExpression)
+	for pointer := range proposedPointers {
+		if !repairedPointers[pointer] {
+			return FrameRepairBoundSubjectPointerDropped
+		}
 	}
-	// WHEN THE KIND DOES MOVE, the repair may RE-TYPE the question's
-	// structure but may never RE-TARGET it: every retrieval pointer in the
-	// repaired expression must already have been in the proposed one.
-	//
-	// Skipping the variant comparison entirely on a permitted Kind move
-	// was too permissive, and adversarial review built the counterexample:
-	// a count over `named_subject("team a")` fails I9, and the repair came
-	// back as `children_of_scope(anchor_terms=["platform team"],
-	// member_kind=project)` -- ACCEPTED, because the Kind move excused the
-	// whole payload. I9 names Goals and the Kind; it does not name the
-	// terms, and "which team are we counting for" is not something a
-	// repair for "a count needs a set-valued kind" has any business
-	// deciding.
-	//
-	// Subset rather than equality, because a Kind move legitimately
-	// REDISTRIBUTES pointers -- a named subject's Terms become a scoped
-	// set's AnchorTerms -- and legitimately supplies a member or group
-	// KIND the old variant had nowhere to put. What it may not do is
-	// introduce a pointer the user never wrote.
-	if kindMoved {
-		proposedTerms := retrievalPointers(proposed.SubjectExpression)
-		for term := range retrievalPointers(repaired.SubjectExpression) {
-			if !proposedTerms[term] {
+	if !constrains[FrameFieldSubjectTerms] && !constrains[FrameFieldAnchorTerms] && !constrains[FrameFieldOperands] {
+		for pointer := range repairedPointers {
+			if !proposedPointers[pointer] {
 				return FrameRepairBoundSubjectRetargeted
 			}
+		}
+	}
+
+	// KIND-VALUED VARIANT FIELDS. Each needs its own permission, EXCEPT on
+	// a legitimate Kind move -- the variant being moved TO demands its own
+	// member or group kind, and the old variant had nowhere to carry one.
+	// That exception is scoped to the kind-valued fields alone; the
+	// pointer rule above still applies across the move, which is what
+	// stops "the Kind changed" from excusing the whole payload.
+	if !kindMoved {
+		if memberKindOf(repaired.SubjectExpression) != memberKindOf(proposed.SubjectExpression) && !constrains[FrameFieldMemberKind] {
+			return FrameRepairBoundUnnamedFieldChanged
+		}
+		if groupKindOf(repaired.SubjectExpression) != groupKindOf(proposed.SubjectExpression) && !constrains[FrameFieldGroupKind] {
+			return FrameRepairBoundUnnamedFieldChanged
+		}
+		if expectedKindOf(repaired.SubjectExpression) != expectedKindOf(proposed.SubjectExpression) && !constrains[FrameFieldExpectedKind] {
+			return FrameRepairBoundUnnamedFieldChanged
+		}
+		if operandCount(repaired.SubjectExpression) != operandCount(proposed.SubjectExpression) && !constrains[FrameFieldOperands] {
+			return FrameRepairBoundUnnamedFieldChanged
 		}
 	}
 
@@ -266,7 +274,7 @@ func CheckFrameRepairBound(proposed, repaired QuestionFrame, failure FrameValida
 	repairedGoals := goalSet(repaired.Goals)
 	named := invariantNamedGoals[failure.Invariant]
 	for goal := range repairedGoals {
-		if !proposedGoals[goal] && !namesGoals {
+		if !proposedGoals[goal] && !constrains[FrameFieldGoals] {
 			return FrameRepairBoundGoalAdded
 		}
 	}
@@ -274,62 +282,82 @@ func CheckFrameRepairBound(proposed, repaired QuestionFrame, failure FrameValida
 		if repairedGoals[goal] {
 			continue
 		}
-		// A removal needs BOTH: the invariant reads the goal axis, and
-		// it names this particular goal.
-		if !namesGoals || !named[goal] {
+		// A removal needs BOTH: the invariant constrains the goal axis,
+		// and it names this particular goal.
+		if !constrains[FrameFieldGoals] || !named[goal] {
 			return FrameRepairBoundGoalRemoved
 		}
 	}
 
 	// EMPHASIS and DIMENSIONS. Narrowing is refused UNCONDITIONALLY --
-	// even for an invariant that reads the axis -- because narrowing is
-	// the failure mode the whole bound exists to prevent, and there is no
-	// invariant whose repair requires discarding something the user asked
-	// for.
-	//
-	// R9's scenario is exactly this: a sampler emits Goals={assess_state}
-	// with Emphasis=[negative,positive], I14 fails because no ranking
-	// obligation derives, and under a drop-only repair the options were
-	// "silently discard Emphasis" (narrowing the answer the 12:42 08-31
-	// ruling says must be given) or "refuse" -- with WHICH one happening
-	// depending on the sampler's goal pick, reintroducing exactly the
-	// instability this design exists to remove. Because Goals is a SET the
-	// repair instead ADDS rank_or_survey, a monotone widening under law L1
-	// that satisfies I14 without discarding anything.
+	// there is no invariant whose repair requires discarding something the
+	// user asked for -- and a widening still needs the axis constrained.
 	if narrowed(emphasisSet(proposed.Emphasis), emphasisSet(repaired.Emphasis)) {
 		return FrameRepairBoundEmphasisNarrowed
 	}
 	if narrowed(dimensionSet(proposed.Dimensions), dimensionSet(repaired.Dimensions)) {
 		return FrameRepairBoundDimensionsNarrowed
 	}
-	// A WIDENING of either axis still needs the invariant to name it. A
-	// repair that adds a dimension nobody asked about is not narrowing,
-	// but it is still answering a question the user did not ask.
-	if !reads[FrameFieldEmphasis] && len(emphasisSet(repaired.Emphasis)) != len(emphasisSet(proposed.Emphasis)) {
+	if !constrains[FrameFieldEmphasis] && len(emphasisSet(repaired.Emphasis)) != len(emphasisSet(proposed.Emphasis)) {
 		return FrameRepairBoundUnnamedFieldChanged
 	}
-	if !reads[FrameFieldDimensions] && len(dimensionSet(repaired.Dimensions)) != len(dimensionSet(proposed.Dimensions)) {
+	if !constrains[FrameFieldDimensions] && len(dimensionSet(repaired.Dimensions)) != len(dimensionSet(proposed.Dimensions)) {
 		return FrameRepairBoundUnnamedFieldChanged
 	}
 
-	// TEMPORAL. Only I8 reads it.
-	if repaired.Temporal != proposed.Temporal && !reads[FrameFieldTemporal] {
+	// TEMPORAL.
+	if repaired.Temporal != proposed.Temporal && !constrains[FrameFieldTemporal] {
 		return FrameRepairBoundUnnamedFieldChanged
 	}
 
 	return FrameRepairBoundNone
 }
 
-// sameSubjectExpression compares two expressions structurally, including
-// every variant's own fields.
-//
-// Marshalled rather than hand-compared: a hand-written comparison has one
-// branch per variant and grows a hole the day a variant gains a field,
-// which is the same drift class law L6 bans at a larger scale. The types
-// carry json tags precisely because the frame is persisted on the receipt,
-// so the encoding already exists and is deterministic (Go marshals struct
-// fields in declaration order, and every collection here is an ordered
-// slice, never a map).
+// memberKindOf, groupKindOf, expectedKindOf and operandCount read the
+// kind-valued parts of whichever variant is set, so the bound can compare
+// them without a switch per call site.
+func memberKindOf(e SubjectExpression) SubjectKind {
+	kind, _ := e.MemberKind()
+	return kind
+}
+
+func groupKindOf(e SubjectExpression) SubjectKind {
+	kind, _ := e.GroupKind()
+	return kind
+}
+
+func expectedKindOf(e SubjectExpression) SubjectKind {
+	if e.Named == nil || e.Named.ExpectedKind == nil {
+		return ""
+	}
+	return *e.Named.ExpectedKind
+}
+
+func operandCount(e SubjectExpression) int {
+	if e.Explicit == nil {
+		return 0
+	}
+	return len(e.Explicit.Operands)
+}
+
+// invariantConstrains returns the declared Constrains list for an
+// invariant, as a set. Sourced from the SAME spec table the validator and
+// law L4's property test use -- a second table here would be the parallel
+// authority law L6 bans, and it is how this bound went wrong three times.
+func invariantConstrains(id FrameInvariant) map[FrameField]bool {
+	for _, spec := range frameInvariantSpecs {
+		if spec.ID != id {
+			continue
+		}
+		out := make(map[FrameField]bool, len(spec.Constrains))
+		for _, field := range spec.Constrains {
+			out[field] = true
+		}
+		return out
+	}
+	return nil
+}
+
 // retrievalPointers collects every free-string pointer an expression
 // carries -- a named subject's terms, a scoped set's anchor terms, and
 // both for every operand -- as a set, so a Kind move can be checked for
@@ -631,26 +659,48 @@ func canonicalGoals(in []InvestigationGoal) []InvestigationGoal {
 	return append(out, remaining...)
 }
 
+// validEmphasisOnly filters AND canonicalizes: deduplicated, in
+// vocabulary order. Filtering alone left `[positive, negative, positive]`
+// validating as a set that is not one -- the same defect the goal axis
+// had, one field over, which is why all three set-valued axes are
+// canonicalized here rather than each where it happened to be noticed.
 func validEmphasisOnly(in []AnswerEmphasis) []AnswerEmphasis {
 	if len(in) == 0 {
 		return in
 	}
-	out := make([]AnswerEmphasis, 0, len(in))
+	seen := make(map[AnswerEmphasis]bool, len(in))
 	for _, member := range in {
 		if ValidAnswerEmphasis(member) {
+			seen[member] = true
+		}
+	}
+	out := make([]AnswerEmphasis, 0, len(seen))
+	for _, member := range answerEmphases {
+		if seen[member] {
 			out = append(out, member)
 		}
 	}
 	return out
 }
 
+// validDimensionsOnly filters AND canonicalizes, in published order, for
+// the reason validEmphasisOnly above gives. A duplicate dimension also
+// produced a duplicate axis discharge, so the set property is not merely
+// cosmetic here.
 func validDimensionsOnly(in []HealthDimension) []HealthDimension {
 	if len(in) == 0 {
 		return in
 	}
-	out := make([]HealthDimension, 0, len(in))
+	seen := make(map[HealthDimension]bool, len(in))
 	for _, member := range in {
 		if ValidHealthDimension(member) {
+			seen[member] = true
+		}
+	}
+	published := HealthDimensionVocabulary()
+	out := make([]HealthDimension, 0, len(seen))
+	for _, member := range published {
+		if seen[member] {
 			out = append(out, member)
 		}
 	}

@@ -452,9 +452,29 @@ func TestRepairBoundRefusesAnUnnamedVariantRewrite(t *testing.T) {
 			MemberKind:  contractsv1.ContextFabricSubjectRepository,
 		},
 	}
-	if violation := CheckFrameRepairBound(proposed, rewritten, failure); violation != FrameRepairBoundUnnamedFieldChanged {
-		t.Fatalf("bound violation = %q, want %q -- I14 does not read the subject expression, so its repair may not rewrite the anchor or the member kind",
-			violation, FrameRepairBoundUnnamedFieldChanged)
+	// The candidate both DROPS "fullchaos team" and ADDS "platform team".
+	// The drop is reported, because it is the more serious direction and
+	// is checked first: a repair that empties the subject leaves a
+	// structurally valid frame pointing at nothing.
+	if violation := CheckFrameRepairBound(proposed, rewritten, failure); violation != FrameRepairBoundSubjectPointerDropped {
+		t.Fatalf("bound violation = %q, want %q -- rewriting an anchor drops the pointer the user actually wrote",
+			violation, FrameRepairBoundSubjectPointerDropped)
+	}
+
+	// The same class with the pointers left ALONE, so the kind-valued
+	// check is the one under test rather than the pointer rule: I14
+	// constrains only the goal axis, so it may not touch the member kind.
+	memberKindOnly := proposed
+	memberKindOnly.Goals = []InvestigationGoal{GoalAssessState, GoalRankOrSurvey}
+	memberKindOnly.SubjectExpression = SubjectExpression{
+		Kind: SubjectExpressionChildrenOfScope,
+		Scoped: &ScopedSetExpression{
+			AnchorTerms: []string{"fullchaos team"},
+			MemberKind:  contractsv1.ContextFabricSubjectRepository,
+		},
+	}
+	if violation := CheckFrameRepairBound(proposed, memberKindOnly, failure); violation != FrameRepairBoundUnnamedFieldChanged {
+		t.Fatalf("bound violation = %q, want %q -- I14 constrains the goal axis alone", violation, FrameRepairBoundUnnamedFieldChanged)
 	}
 
 	// The legitimate I14 repair -- add the goal, touch nothing else -- is
@@ -656,9 +676,48 @@ func TestRepairBoundRefusesARetargetedSubjectOnAPermittedKindMove(t *testing.T) 
 			},
 		},
 	}
-	if violation := CheckFrameRepairBound(proposed, retargeted, failure); violation != FrameRepairBoundSubjectRetargeted {
+	// This candidate both DROPS "team a" and ADDS "platform team"; the
+	// drop is the reported violation, and it is the one that matters most
+	// -- review's executed repro for the deletion case returned a usable
+	// repaired frame with no subject pointers at all.
+	if violation := CheckFrameRepairBound(proposed, retargeted, failure); violation != FrameRepairBoundSubjectPointerDropped {
+		t.Fatalf("bound violation = %q, want %q", violation, FrameRepairBoundSubjectPointerDropped)
+	}
+
+	// PURE ADDITION, so retargeting is isolated from dropping: the
+	// original pointer is KEPT and a second one appears. I9 constrains the
+	// goal axis and the Kind, neither of which carries pointers, so the
+	// addition is refused.
+	augmented := QuestionFrame{
+		Goals: []InvestigationGoal{GoalCountOrAggregate},
+		SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionExplicitSet,
+			Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+				{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"team a"}}},
+				{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"platform team"}}},
+			}},
+		},
+	}
+	if violation := CheckFrameRepairBound(proposed, augmented, failure); violation != FrameRepairBoundSubjectRetargeted {
 		t.Fatalf("bound violation = %q, want %q -- a repair for \"a count needs a set-valued kind\" may not decide WHICH subject is counted",
 			violation, FrameRepairBoundSubjectRetargeted)
+	}
+
+	// And the DELETION case review executed: every pointer gone, returning
+	// a structurally valid frame that points at nothing. A subset check
+	// alone accepted this.
+	emptied := QuestionFrame{
+		Goals: []InvestigationGoal{GoalCountOrAggregate},
+		SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionGroupedMembers,
+			Grouped: &GroupedSetExpression{
+				GroupKind:  contractsv1.ContextFabricSubjectTeam,
+				MemberKind: contractsv1.ContextFabricSubjectProject,
+			},
+		},
+	}
+	if violation := CheckFrameRepairBound(proposed, emptied, failure); violation != FrameRepairBoundSubjectPointerDropped {
+		t.Fatalf("bound violation = %q, want %q -- a repair may not empty the subject", violation, FrameRepairBoundSubjectPointerDropped)
 	}
 
 	// The legitimate repair REDISTRIBUTES the pointer it was given: the
@@ -750,5 +809,195 @@ func TestGoalsAreCanonicalizedIntoASet(t *testing.T) {
 	failure, bad := ValidateFramePhaseA1(NormalizeFrame(invalid))
 	if !bad || failure.Invariant != FrameInvariantI15 {
 		t.Fatalf("canonicalization hid an out-of-vocabulary goal: failure = %q/%v", failure.Invariant, bad)
+	}
+}
+
+// TestRoundThreeShapeSweep is the SHAPE SWEEP the review skill's standing
+// remedy requires after a re-find, executed as a test rather than written
+// as a table nobody runs.
+//
+// THE CLASS, stated once: "the repair bound permits rewriting subject
+// payload the failed invariant does not actually constrain." It was found
+// three times in three disguises -- by the lane (a variant read licensing
+// a discriminator change), by review round 2 (a permitted Kind move
+// excusing the whole payload), and by review round 3 (I2 and I3 declaring
+// the whole variant as read while constraining only the operand count and
+// the terms). Every previous fix was per-instance, which is exactly the
+// pattern that produces re-finds.
+//
+// The general fix is the Reads/Constrains split: the bound now quantifies
+// over what each invariant's CONDITION constrains, not over what it reads.
+// This test sweeps EVERY phase-A invariant against EVERY axis a repair
+// could touch, so a future edit that widens one Constrains list has to
+// justify itself here.
+func TestRoundThreeShapeSweep(t *testing.T) {
+	named := func(terms ...string) SubjectExpression {
+		return SubjectExpression{Kind: SubjectExpressionNamed, Named: &NamedSubjectExpression{Terms: terms}}
+	}
+
+	for _, testCase := range []struct {
+		name      string
+		invariant FrameInvariant
+		proposed  QuestionFrame
+		repaired  QuestionFrame
+		want      FrameRepairBoundViolation
+	}{
+		{
+			// Round 3, finding 1a. I2's condition is len(Operands) >= 2 --
+			// a COUNT. It may not license replacing an operand's subject.
+			name:      "I2 may add an operand but not replace one",
+			invariant: FrameInvariantI2,
+			proposed: QuestionFrame{Goals: []InvestigationGoal{GoalCompare}, SubjectExpression: SubjectExpression{
+				Kind:     SubjectExpressionExplicitSet,
+				Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"team a"}}}}},
+			}},
+			repaired: QuestionFrame{Goals: []InvestigationGoal{GoalCompare}, SubjectExpression: SubjectExpression{
+				Kind: SubjectExpressionExplicitSet,
+				Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+					{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"platform"}}},
+					{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"team b"}}},
+				}},
+			}},
+			want: FrameRepairBoundSubjectPointerDropped,
+		},
+		{
+			name:      "I2's legitimate repair adds a second operand and keeps the first",
+			invariant: FrameInvariantI2,
+			proposed: QuestionFrame{Goals: []InvestigationGoal{GoalCompare}, SubjectExpression: SubjectExpression{
+				Kind:     SubjectExpressionExplicitSet,
+				Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"team a"}}}}},
+			}},
+			repaired: QuestionFrame{Goals: []InvestigationGoal{GoalCompare}, SubjectExpression: SubjectExpression{
+				Kind: SubjectExpressionExplicitSet,
+				Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+					{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"team a"}}},
+					{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"team b"}}},
+				}},
+			}},
+			want: FrameRepairBoundNone,
+		},
+		{
+			// Round 3, finding 1b. I3's condition is "the named subject has
+			// terms". It says nothing about the expected KIND.
+			name:      "I3 may supply terms but not change ExpectedKind",
+			invariant: FrameInvariantI3,
+			proposed: QuestionFrame{Goals: []InvestigationGoal{GoalAssessState}, SubjectExpression: SubjectExpression{
+				Kind: SubjectExpressionNamed, Named: &NamedSubjectExpression{ExpectedKind: kindPtr(contractsv1.ContextFabricSubjectTeam)},
+			}},
+			repaired: QuestionFrame{Goals: []InvestigationGoal{GoalAssessState}, SubjectExpression: SubjectExpression{
+				Kind: SubjectExpressionNamed, Named: &NamedSubjectExpression{
+					Terms: []string{"dev health ops"}, ExpectedKind: kindPtr(contractsv1.ContextFabricSubjectProject),
+				},
+			}},
+			want: FrameRepairBoundUnnamedFieldChanged,
+		},
+		{
+			name:      "I3's legitimate repair supplies the missing terms and nothing else",
+			invariant: FrameInvariantI3,
+			proposed: QuestionFrame{Goals: []InvestigationGoal{GoalAssessState}, SubjectExpression: SubjectExpression{
+				Kind: SubjectExpressionNamed, Named: &NamedSubjectExpression{ExpectedKind: kindPtr(contractsv1.ContextFabricSubjectTeam)},
+			}},
+			repaired: QuestionFrame{Goals: []InvestigationGoal{GoalAssessState}, SubjectExpression: SubjectExpression{
+				Kind: SubjectExpressionNamed, Named: &NamedSubjectExpression{
+					Terms: []string{"dev health ops"}, ExpectedKind: kindPtr(contractsv1.ContextFabricSubjectTeam),
+				},
+			}},
+			want: FrameRepairBoundNone,
+		},
+		{
+			name:      "I4 constrains the member kind alone, not the terms",
+			invariant: FrameInvariantI4,
+			proposed:  QuestionFrame{Goals: []InvestigationGoal{GoalAssessState}, SubjectExpression: named("team a")},
+			repaired:  QuestionFrame{Goals: []InvestigationGoal{GoalAssessState}, SubjectExpression: named("team a", "platform")},
+			want:      FrameRepairBoundSubjectRetargeted,
+		},
+		{
+			name:      "I15 constrains the goal axis alone, not the subject",
+			invariant: FrameInvariantI15,
+			proposed:  QuestionFrame{SubjectExpression: named("team a")},
+			repaired:  QuestionFrame{Goals: []InvestigationGoal{GoalAssessState}, SubjectExpression: named("platform")},
+			want:      FrameRepairBoundSubjectPointerDropped,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			failure := FrameValidationFailure{Invariant: testCase.invariant, Phase: FrameValidationPhaseA1}
+			if violation := CheckFrameRepairBound(testCase.proposed, testCase.repaired, failure); violation != testCase.want {
+				t.Fatalf("bound violation = %q, want %q", violation, testCase.want)
+			}
+		})
+	}
+}
+
+// TestEveryInvariantConstrainsOnlyWhatItReads is the structural guard on
+// the split itself.
+//
+// An invariant cannot constrain something it never looked at, so
+// Constrains must be a SUBSET of Reads. And the derived-value and
+// resolution-phase invariants must constrain NOTHING: an obligation set is
+// an outcome of the frame rather than a field of it, and repair is never
+// invoked for a phase-B or phase-C failure at all. Asserting the empty list
+// makes that rule structural instead of a comment.
+func TestEveryInvariantConstrainsOnlyWhatItReads(t *testing.T) {
+	for _, spec := range FrameInvariantSpecs() {
+		reads := map[FrameField]bool{}
+		for _, field := range spec.Reads {
+			reads[field] = true
+		}
+		for _, field := range spec.Constrains {
+			if !reads[field] {
+				t.Errorf("invariant %q constrains %q without reading it", spec.ID, field)
+			}
+		}
+		switch spec.Phase {
+		case FrameValidationPhaseB, FrameValidationPhaseC:
+			if len(spec.Constrains) != 0 {
+				t.Errorf("phase-%s invariant %q constrains %v -- repair is never invoked for a resolution or evidence failure", spec.Phase, spec.ID, spec.Constrains)
+			}
+		}
+		// No invariant may constrain a DERIVED value: a repair writes
+		// fields, and a derived value is not one.
+		for _, field := range spec.Constrains {
+			if derivedFrameFields[field] {
+				t.Errorf("invariant %q constrains derived value %q", spec.ID, field)
+			}
+		}
+	}
+}
+
+// TestEmphasisAndDimensionsAreCanonicalizedIntoSets is round 3's finding 3
+// -- the same defect the goal axis had, one field over. All three
+// set-valued axes are canonicalized in one place now, rather than each
+// where it happened to be noticed.
+func TestEmphasisAndDimensionsAreCanonicalizedIntoSets(t *testing.T) {
+	frame := QuestionFrame{
+		Goals: []InvestigationGoal{GoalRankOrSurvey},
+		SubjectExpression: SubjectExpression{
+			Kind:       SubjectExpressionDiscoveredKind,
+			Discovered: &DiscoveredSetExpression{MemberKind: contractsv1.ContextFabricSubjectTeam},
+		},
+		Emphasis:   []AnswerEmphasis{EmphasisPositiveOutliers, EmphasisNegativeOutliers, EmphasisPositiveOutliers},
+		Dimensions: []HealthDimension{HealthDimensionInvestmentBalance, HealthDimensionExecutionCompletion, HealthDimensionInvestmentBalance},
+	}
+	normalized := NormalizeFrame(frame)
+
+	if len(normalized.Emphasis) != 2 || normalized.Emphasis[0] != EmphasisPositiveOutliers || normalized.Emphasis[1] != EmphasisNegativeOutliers {
+		t.Errorf("emphasis = %v, want the deduplicated pair in vocabulary order", normalized.Emphasis)
+	}
+	if len(normalized.Dimensions) != 2 || normalized.Dimensions[0] != HealthDimensionExecutionCompletion || normalized.Dimensions[1] != HealthDimensionInvestmentBalance {
+		t.Errorf("dimensions = %v, want the deduplicated pair in published order", normalized.Dimensions)
+	}
+	// A duplicate dimension produced a DUPLICATE AXIS DISCHARGE, so the
+	// set property is not cosmetic here.
+	discharges := FrameAxisDischarges(DeriveFrameObligations(normalized, nil))
+	seen := map[string]int{}
+	for _, discharge := range discharges {
+		if discharge.Axis == AxisDimension {
+			seen[discharge.Value]++
+		}
+	}
+	for value, count := range seen {
+		if count != 1 {
+			t.Errorf("dimension %q produced %d discharges, want 1", value, count)
+		}
 	}
 }
