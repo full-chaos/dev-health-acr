@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 
 	falkordb "github.com/FalkorDB/falkordb-go/v2"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
 // sdkAPI is the real conn: a compact-protocol result decoder over the
@@ -517,6 +519,44 @@ var knownSentinels = []error{
 	context.Canceled, context.DeadlineExceeded,
 }
 
+// neutralClass is the SPECIFICATION of this package's sentinel-to-neutral-class
+// pairings: for each sentinel this package can attach, the backend-neutral
+// contextfabric sentinel naming the same condition, or nil for a deliberate
+// "this condition has no neutral class".
+//
+// The pairing is IMPLEMENTED at the sentinel declarations in config.go (each
+// is declared wrapping its neutral sentinel); this table is what those
+// declarations are checked against, so the two cannot drift --
+// TestSentinelsCarryTheirDeclaredNeutralClass asserts every row by errors.Is
+// in BOTH directions (present where a class is named, ABSENT where nil).
+// Read config.go's own block comment for why the wrap lives at the
+// declaration rather than at classifyFalkorError's arms.
+//
+// Every member of knownSentinels must appear as a KEY here --
+// TestNeutralClassCoversEveryKnownSentinel enforces it -- so adding a
+// sentinel forces a decision instead of silently re-opening the
+// failure_class=unclassified hole this table closed (CHAOS-4874). A nil
+// value is that decision recorded, never an omission.
+var neutralClass = map[error]error{
+	// See ErrNotFound's declaration: a confirmed absence already has two
+	// neutral translations (ErrGraphNotProjected,
+	// ErrProjectionWatermarkNotFound) and must not also read as an outage.
+	ErrNotFound:     nil,
+	ErrUnauthorized: contextfabric.ErrUnavailable,
+	// Mapped, but no producer exists at this commit -- see its declaration.
+	ErrRateLimited:                 contextfabric.ErrRateLimited,
+	ErrConstraintViolation:         contextfabric.ErrInvalidResult,
+	errAlreadyExists:               contextfabric.ErrInvalidResult,
+	errIndexNotFound:               contextfabric.ErrInvalidResult,
+	errConstraintBootstrapFailed:   contextfabric.ErrUnavailable,
+	errConstraintBootstrapTimedOut: contextfabric.ErrUnavailable,
+	// Already classified in their own right by projectionrun.failureClasses
+	// and by the route; wrapping them further would blur cancellation into
+	// a dependency outage.
+	context.Canceled:         nil,
+	context.DeadlineExceeded: nil,
+}
+
 func safeDependencyError(operation string, err error) error {
 	if err == nil {
 		return nil
@@ -529,5 +569,14 @@ func safeDependencyError(operation string, err error) error {
 			return fmt.Errorf("%s: %w", operation, sentinel)
 		}
 	}
-	return fmt.Errorf("context fabric graph dependency error during %s", operation)
+	// CHAOS-4874: the unclassified residual is the arm that eats a genuine
+	// connection-refused, a dropped-mid-handshake EOF and a TLS alert (see
+	// classifyConnError's own doc comment above). Before this wrap it
+	// carried NO sentinel at all, so every one of them reached
+	// projectionrun.classifyOutcomeError as failure_class=unclassified and
+	// the investigation route as a generic 500. contextfabric.ErrUnavailable
+	// is the honest neutral class: a bounded dependency failure a caller may
+	// retry. Only the sentinel's own text joins the message -- the driver's
+	// text is still never included, which is this function's whole purpose.
+	return fmt.Errorf("context fabric graph dependency error during %s: %w", operation, contextfabric.ErrUnavailable)
 }

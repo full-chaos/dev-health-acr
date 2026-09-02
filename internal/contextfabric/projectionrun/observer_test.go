@@ -298,3 +298,37 @@ func TestR5_SelfFound_ClassifierKeysOnIdentityNotErrorText(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-4874. The identity probe above is the NEGATIVE half of the
+// table-derived contract: it proves an impostor does not classify. Nothing
+// proved the POSITIVE half -- that each arm actually reaches its own class --
+// so an arm shadowed by an earlier entry (the hazard failureClasses' own
+// ordering comment names, and which ErrQueryBudgetExceeded sitting before
+// ErrUnavailable exists to avoid) would classify as the wrong class with every
+// existing probe still green.
+//
+// Derived from the same table for the same reason: an arm added to
+// failureClasses is probed here automatically, so a new arm cannot ship
+// without a probe in either direction.
+func TestClassifierReachesEveryClassItDeclares(t *testing.T) {
+	if len(failureClasses) == 0 {
+		t.Fatal("failureClasses is empty; this test would be vacuous")
+	}
+	reached := 0
+	for _, entry := range failureClasses {
+		if entry.class == "" || entry.class == failureClassUnclassified {
+			t.Fatalf("sentinel %v declares class %q; the table must name a real class", entry.sentinel, entry.class)
+		}
+		// Wrapped, not bare: the classifier's job is to see through the
+		// operation context every real call site adds.
+		wrapped := fmt.Errorf("tick org-1 source-a: %w", entry.sentinel)
+		if got := classifyOutcomeError(wrapped); got != entry.class {
+			t.Fatalf("classifyOutcomeError(%v) = %q, want %q -- an arm shadowed by an "+
+				"earlier entry, or a class that cannot be reached at all", entry.sentinel, got, entry.class)
+		}
+		reached++
+	}
+	if reached != len(failureClasses) {
+		t.Fatalf("assertion reach: %d of %d arms reached their assertions", reached, len(failureClasses))
+	}
+}
