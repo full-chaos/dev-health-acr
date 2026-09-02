@@ -278,3 +278,45 @@ func (RebindProvider) build() map[string]contextfabric.FactValue {
 	_ = emit
 	return fields
 }
+
+// ProbeVarDecl and ProbeRemake are the merge-gate round's two constructions.
+const (
+	// ProbeVarDecl: a `var` declaration followed by ONE real binding. The
+	// declaration is not an assignment, and counting it made the single
+	// binding look like a rebinding -- so the walk leaked a call whose
+	// target it knew and lost the field behind it.
+	ProbeVarDecl contextfabric.FactKind = "zz_probe_var_decl"
+	// ProbeRemake: the fact-field map is REPLACED. Every recorded key is
+	// destroyed by an ordinary assignment rather than by a named builtin.
+	ProbeRemake contextfabric.FactKind = "zz_probe_remake"
+)
+
+func writeAfterDeclaration(fields map[string]contextfabric.FactValue) {
+	fields["var_decl_field"] = contextfabric.FactValue{}
+}
+
+type VarDeclProvider struct{}
+
+func (VarDeclProvider) Capability() contextfabric.FactCapability {
+	return newCapability(ProbeVarDecl)
+}
+
+func (VarDeclProvider) build() map[string]contextfabric.FactValue {
+	fields := map[string]contextfabric.FactValue{}
+	var emit func(map[string]contextfabric.FactValue)
+	emit = writeAfterDeclaration
+	emit(fields)
+	return fields
+}
+
+type RemakeProvider struct{}
+
+func (RemakeProvider) Capability() contextfabric.FactCapability {
+	return newCapability(ProbeRemake)
+}
+
+func (RemakeProvider) build() map[string]contextfabric.FactValue {
+	fields := map[string]contextfabric.FactValue{"replaced_away": contextfabric.FactValue{}}
+	fields = make(map[string]contextfabric.FactValue)
+	return fields
+}

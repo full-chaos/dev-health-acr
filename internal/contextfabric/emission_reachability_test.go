@@ -48,6 +48,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/constant"
+	"go/token"
 	"go/types"
 	"os"
 	"sort"
@@ -237,6 +238,15 @@ func loadProviderPackage(t *testing.T) *packages.Package {
 // collector had to recognise each spelling separately and therefore had a
 // hole per spelling it had not met.
 func isFactFieldMap(typ types.Type) bool {
+	// NIL IS A REAL ANSWER FROM types.Info.TypeOf -- a blank identifier, an
+	// unresolvable expression. The guard belongs here rather than at each
+	// call site: this helper is now consulted from five places, and a nil
+	// check that has to be remembered at every one of them is a nil check
+	// that will be forgotten at the next one. Found by this file's own new
+	// test, which panicked rather than failing.
+	if typ == nil {
+		return false
+	}
 	mapType, isMap := typ.Underlying().(*types.Map)
 	if !isMap {
 		return false
@@ -495,6 +505,15 @@ func reboundLocals(info *types.Info, fn ast.Node) map[types.Object]bool {
 				note(lhs)
 			}
 		case *ast.ValueSpec:
+			// A DECLARATION IS NOT AN ASSIGNMENT. `var emit func(...)`
+			// binds nothing; counting it made the single real assignment
+			// that follows look like a REBINDING, so the walk leaked a call
+			// whose target it knew perfectly well and lost the field behind
+			// it. Found by the merge-gate round: a guard against guessing
+			// became a guess in the other direction.
+			if len(typed.Values) == 0 {
+				return true
+			}
 			for _, name := range typed.Names {
 				note(name)
 			}
@@ -610,6 +629,25 @@ func analyseFunction(pkg *packages.Package, fn *ast.FuncDecl, bodied map[*types.
 				}
 			}
 		case *ast.AssignStmt:
+			// REPLACING THE MAP DESTROYS EVERY KEY RECORDED SO FAR, and it
+			// is an ordinary assignment rather than a named builtin.
+			// `fields = make(...)`, `fields = other`, `fields = nil` all do
+			// it. The previous guard recognised `delete` and then `clear`
+			// -- two names -- and the merge-gate round simply reached for a
+			// third operation. Naming operations one at a time is how this
+			// walk failed five times; the test here is the EFFECT: a
+			// variable of the fact-field map type is re-assigned (`=`, not
+			// `:=`, which creates rather than replaces).
+			if typed.Tok == token.ASSIGN {
+				for _, lhs := range typed.Lhs {
+					if _, isIndex := lhs.(*ast.IndexExpr); isIndex {
+						continue // an indexed write ADDS a key
+					}
+					if isFactFieldMap(info.TypeOf(lhs)) {
+						facts.dynamicKeySites++
+					}
+				}
+			}
 			// A string-keyed write into ANYTHING of the fact-field map
 			// type: a local, a parameter, a struct field, a map returned by
 			// a call. The merged collector could only see a local it had
@@ -1377,5 +1415,65 @@ func TestAReboundFunctionValueLeaksRatherThanGuessing(t *testing.T) {
 	}
 	if !containsField(single.fields, "func_value_field") {
 		t.Errorf("a singly-bound function value is no longer followed: %v", single.fields)
+	}
+}
+
+// TestADeclarationIsNotARebinding pins the merge-gate round's second finding.
+//
+// `var emit func(...); emit = write; emit(fields)` has ONE binding. Counting
+// the declaration as an assignment made it look like two, so the walk leaked
+// a call whose package-level target it knew perfectly well and dropped the
+// field behind it. A guard written to stop the walk guessing became a guess
+// in the opposite direction — the fourth time on this walk that a repair
+// produced the next defect.
+func TestADeclarationIsNotARebinding(t *testing.T) {
+	probes := walkProbeFixture(t)
+	declared, walked := probes["ProbeVarDecl"]
+	if !walked {
+		t.Fatal("the var-declaration fixture provider was not walked at all")
+	}
+	if !containsField(declared.fields, "var_decl_field") {
+		t.Errorf("a field behind a singly-bound function value declared with `var` was lost: fields=%v leaks=%v", declared.fields, declared.leaksByCause)
+	}
+	index, _ := leakCauseIndex(leakReboundFuncValue)
+	if declared.leaksByCause[index] != 0 {
+		t.Errorf("a declaration plus one assignment was counted as a rebinding (%d) -- the residual is overstating again", declared.leaksByCause[index])
+	}
+	// The genuine rebinding must STILL leak, or the fix has simply disabled
+	// the guard.
+	rebound, walked := probes["ProbeRebind"]
+	if !walked {
+		t.Fatal("the rebind fixture was not walked")
+	}
+	if rebound.leaksByCause[index] == 0 {
+		t.Error("a real rebinding is no longer counted; the fix disabled the guard rather than correcting it")
+	}
+}
+
+// TestReplacingAFactFieldMapIsCountedLikeADestruction pins the third
+// merge-gate finding, and the class behind it.
+//
+// The guard recognised `delete`, then `clear` — two names — and the round
+// reached for a third operation: `fields = make(...)`. Naming operations one
+// at a time is how this walk failed five times. The test is now the EFFECT:
+// a variable of the fact-field map type is RE-assigned, which destroys every
+// key recorded before it, whatever expression is on the right.
+func TestReplacingAFactFieldMapIsCountedLikeADestruction(t *testing.T) {
+	probes := walkProbeFixture(t)
+	remade, walked := probes["ProbeRemake"]
+	if !walked {
+		t.Fatal("the remake fixture provider was not walked at all")
+	}
+	if remade.dynamicKeySites == 0 {
+		t.Errorf("replacing the fact-field map was not counted; the walk reports %v as emitted when the provider returns an empty map, and nothing says the set is an overstatement", remade.fields)
+	}
+	// Creation must NOT be counted, or every provider would report a
+	// spurious overstatement on its first line.
+	direct, walked := probes["ProbeDirect"]
+	if !walked {
+		t.Fatal("the direct fixture was not walked")
+	}
+	if direct.dynamicKeySites != 0 {
+		t.Errorf("creating a fact-field map was counted as destroying one (%d); `:=` creates, `=` replaces", direct.dynamicKeySites)
 	}
 }
