@@ -193,42 +193,23 @@ var derivedFrameFields = map[FrameField]bool{
 	FrameFieldGroupMembership:       true,
 }
 
-// FrameInvariantSpec declares one invariant's phase, the fields it READS,
-// and the fields its condition CONSTRAINS.
+// FrameInvariantSpec declares one invariant's phase and the fields it
+// READS.
 //
-// READS AND CONSTRAINS ARE DIFFERENT THINGS, and conflating them is the
-// single defect that survived three adversarial rounds in three disguises.
-// The repair bound asks "what may this repair change?", and the first
-// three implementations answered it with the Reads list, which is the
-// answer to a different question. I3 READS the subject variant in order to
-// check that its terms exist; it CONSTRAINS only the terms. I2 READS the
-// operands to count them; it CONSTRAINS only how many there are. Using
-// Reads as the proxy gave an I3 repair authority over ExpectedKind and the
-// operands, and an I2 repair authority to replace the comparison's
-// subjects outright -- both executed by review, both accepted.
+// The Reads list exists FOR law L4's property test: "every invariant
+// declares the fields it reads; assert no A1 invariant names a derived
+// field." Without the declaration L4 is unfalsifiable -- you can read the
+// code and believe it, which is what happened to the design twice.
 //
-// So: law L4 quantifies over READS (an invariant may not be evaluated
-// before its inputs exist). The repair bound quantifies over CONSTRAINS
-// (a repair may only correct what the server has proven inconsistent).
-// Neither list is derived from the other, and the registry test asserts
-// Constrains is a subset of Reads -- an invariant cannot constrain
-// something it never looked at.
+// A SECOND declaration -- what each invariant's condition CONSTRAINS, which
+// is what a bounded repair may change -- lives with the repair bound in its
+// own change. Reads and Constrains are different questions and conflating
+// them was a defect that survived several review rounds, so they are kept
+// apart rather than one being derived from the other.
 type FrameInvariantSpec struct {
 	ID    FrameInvariant
 	Phase FrameValidationPhase
 	Reads []FrameField
-	// Constrains is empty for every invariant a repair can never target:
-	// the derived-value invariants (I10, I16, I18), which are outcomes of
-	// the frame rather than fields of it, and every phase-B and phase-C
-	// invariant, which §13.6 rule 6 says repair is never invoked for.
-	//
-	// PATHS, not field tokens. A token names a level; a path names a
-	// place in the tree, and prefix semantics let an invariant constrain
-	// a LIST (`...operands`) distinctly from its ELEMENTS
-	// (`...operands[]`). That distinction is the one four review rounds
-	// kept finding missing, and as a path it is a property of the grammar
-	// rather than a rule anyone has to remember.
-	Constrains []FramePath
 }
 
 // frameInvariantSpecs is the invariant table IN EVALUATION ORDER.
@@ -242,64 +223,39 @@ type FrameInvariantSpec struct {
 // I6, I7, I8, I9, I15), then A2's (I10, I14, I18, I16), then B, then C.
 var frameInvariantSpecs = []FrameInvariantSpec{
 	{ID: FrameInvariantI1, Phase: FrameValidationPhaseA1,
-		Reads:      []FrameField{FrameFieldSubjectExpressionKind, FrameFieldSubjectTerms, FrameFieldAnchorTerms, FrameFieldOperands, FrameFieldMemberKind, FrameFieldGroupKind},
-		Constrains: []FramePath{"subject_expression.kind"}},
+		Reads: []FrameField{FrameFieldSubjectExpressionKind, FrameFieldSubjectTerms, FrameFieldAnchorTerms, FrameFieldOperands, FrameFieldMemberKind, FrameFieldGroupKind}},
 	{ID: FrameInvariantI17, Phase: FrameValidationPhaseA1,
-		Reads:      []FrameField{FrameFieldGoals, FrameFieldSubjectExpressionKind, FrameFieldMemberKind},
-		Constrains: []FramePath{"subject_expression.org.member_kind"}},
+		Reads: []FrameField{FrameFieldGoals, FrameFieldSubjectExpressionKind, FrameFieldMemberKind}},
 	{ID: FrameInvariantI2, Phase: FrameValidationPhaseA1,
-		Reads: []FrameField{FrameFieldOperands},
-		// The LIST, with no `[]` marker: I2's condition is a COUNT, so it
-		// may change how many operands there are and never what one IS.
-		Constrains: []FramePath{"subject_expression.explicit.operands"}},
+		Reads: []FrameField{FrameFieldOperands}},
 	{ID: FrameInvariantI3, Phase: FrameValidationPhaseA1,
-		Reads:      []FrameField{FrameFieldSubjectTerms},
-		Constrains: []FramePath{"subject_expression.named.terms"}},
+		Reads: []FrameField{FrameFieldSubjectTerms}},
 	{ID: FrameInvariantI19, Phase: FrameValidationPhaseA1,
-		Reads: []FrameField{FrameFieldOperands},
-		// The ELEMENTS, with the marker: a malformed operand is exactly
-		// what I19 exists to have corrected.
-		Constrains: []FramePath{"subject_expression.explicit.operands[]"}},
+		Reads: []FrameField{FrameFieldOperands}},
 	{ID: FrameInvariantI4, Phase: FrameValidationPhaseA1,
-		Reads:      []FrameField{FrameFieldMemberKind},
-		Constrains: []FramePath{"subject_expression.discovered.member_kind"}},
+		Reads: []FrameField{FrameFieldMemberKind}},
 	{ID: FrameInvariantI5, Phase: FrameValidationPhaseA1,
-		Reads:      []FrameField{FrameFieldAnchorTerms, FrameFieldMemberKind},
-		Constrains: []FramePath{"subject_expression.scoped.anchor_terms", "subject_expression.scoped.member_kind"}},
+		Reads: []FrameField{FrameFieldAnchorTerms, FrameFieldMemberKind}},
 	{ID: FrameInvariantI6, Phase: FrameValidationPhaseA1,
-		Reads:      []FrameField{FrameFieldGroupKind, FrameFieldMemberKind},
-		Constrains: []FramePath{"subject_expression.grouped.group_kind", "subject_expression.grouped.member_kind"}},
+		Reads: []FrameField{FrameFieldGroupKind, FrameFieldMemberKind}},
 	{ID: FrameInvariantI7, Phase: FrameValidationPhaseA1,
-		Reads:      []FrameField{FrameFieldGoals, FrameFieldSubjectExpressionKind},
-		Constrains: []FramePath{"goals", "subject_expression.kind"}},
+		Reads: []FrameField{FrameFieldGoals, FrameFieldSubjectExpressionKind}},
 	{ID: FrameInvariantI8, Phase: FrameValidationPhaseA1,
-		Reads:      []FrameField{FrameFieldGoals, FrameFieldTemporal},
-		Constrains: []FramePath{"goals", "temporal"}},
+		Reads: []FrameField{FrameFieldGoals, FrameFieldTemporal}},
 	{ID: FrameInvariantI9, Phase: FrameValidationPhaseA1,
-		Reads:      []FrameField{FrameFieldGoals, FrameFieldSubjectExpressionKind},
-		Constrains: []FramePath{"goals", "subject_expression.kind"}},
+		Reads: []FrameField{FrameFieldGoals, FrameFieldSubjectExpressionKind}},
 	{ID: FrameInvariantI15, Phase: FrameValidationPhaseA1,
-		Reads:      []FrameField{FrameFieldGoals},
-		Constrains: []FramePath{"goals"}},
+		Reads: []FrameField{FrameFieldGoals}},
 
-	// The A2 invariants read DERIVED values and constrain NOTHING: an
-	// obligation set is an outcome of the frame, not a field of it, so
-	// there is nothing for a repair to write. I14 is the exception that
-	// proves the rule -- it is discharged by ADDING a goal, so it
-	// constrains the goal axis and not the obligations it reads.
 	{ID: FrameInvariantI10, Phase: FrameValidationPhaseA2,
 		Reads: []FrameField{FrameFieldObligations}},
 	{ID: FrameInvariantI14, Phase: FrameValidationPhaseA2,
-		Reads:      []FrameField{FrameFieldObligations, FrameFieldEmphasis, FrameFieldGoals},
-		Constrains: []FramePath{"goals"}},
+		Reads: []FrameField{FrameFieldObligations, FrameFieldEmphasis, FrameFieldGoals}},
 	{ID: FrameInvariantI18, Phase: FrameValidationPhaseA2,
 		Reads: []FrameField{FrameFieldSubjectExpressionKind, FrameFieldEmittedShape, FrameFieldDerivedShape}},
 	{ID: FrameInvariantI16, Phase: FrameValidationPhaseA2,
 		Reads: []FrameField{FrameFieldObligations, FrameFieldAxisDischarges}},
 
-	// Phase B and C constrain NOTHING because repair is never invoked for
-	// them (§13.6 rule 6). An empty Constrains list is what makes that
-	// rule structural rather than a comment.
 	{ID: FrameInvariantI11, Phase: FrameValidationPhaseB,
 		Reads: []FrameField{FrameFieldAnchorTerms, FrameFieldMemberKind, FrameFieldResolvedAnchorKind}},
 	{ID: FrameInvariantI12, Phase: FrameValidationPhaseB,
@@ -307,18 +263,6 @@ var frameInvariantSpecs = []FrameInvariantSpec{
 
 	{ID: FrameInvariantI13, Phase: FrameValidationPhaseC,
 		Reads: []FrameField{FrameFieldGroupKind, FrameFieldMemberKind, FrameFieldGroupMembership}},
-}
-
-// FrameInvariantConstrainsPath reports whether an invariant's condition
-// permits a repair to change path, using the path grammar's prefix
-// semantics.
-func FrameInvariantConstrainsPath(spec FrameInvariantSpec, path FramePath) bool {
-	for _, constrained := range spec.Constrains {
-		if PathConstrainedBy(constrained, path) {
-			return true
-		}
-	}
-	return false
 }
 
 // FrameInvariantCount is nineteen.

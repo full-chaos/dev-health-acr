@@ -216,8 +216,6 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	"QuestionFrame":         {reason: "per-call shadow capture of the compositional frame (receipt-only, phase 1), not a version identity -- nothing downstream reads it, so it cannot make a reused answer wrong. Its embedded Version field is a package constant (QuestionFrameVersion), and design §13.2 makes it a ReuseKey member only at promotion, when the derivation replaces the precedence table; until then there is nothing for it to fence"},
 	"FrameOutcome":          {reason: "per-call validation-outcome echo (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 	"FrameFailedInvariant":  {reason: "per-call validation-outcome echo (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
-	"FrameRepairAttempted":  {reason: "per-call repair-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
-	"FrameRepairLatencyMS":  {reason: "per-call latency measurement (telemetry only), not a version identity -- a duration could never be a reuse dimension in any case"},
 	"FrameGoalsDropped":     {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 	"FrameTermsTruncated":   {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 	"FrameKindUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},

@@ -1,11 +1,9 @@
 package contextfabric
 
 import (
-	"context"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
-	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // ORACLE O3 (design §13.11a) -- structural mutation.
@@ -390,7 +388,7 @@ func TestO3MutationsRefuseAndNeverCommit(t *testing.T) {
 		},
 	}
 	for i, frame := range mutations {
-		result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"}, nil, frame, nil, "", nil)
+		result := ValidateFrame(frame, nil, "")
 		if result.Outcome != FrameValidationOutcomeRefusedInvalid {
 			t.Fatalf("mutation %d: outcome = %q, want %q", i, result.Outcome, FrameValidationOutcomeRefusedInvalid)
 		}
@@ -482,7 +480,7 @@ func TestValidFramesPassBothPhases(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_test"}, nil, testCase.frame, nil, "", nil)
+			result := ValidateFrame(testCase.frame, nil, "")
 			if result.Outcome != FrameValidationOutcomeValid {
 				t.Fatalf("outcome = %q (invariant %q, detail %q), want valid",
 					result.Outcome, result.Failure.Invariant, result.Failure.Detail)

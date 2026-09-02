@@ -18,6 +18,11 @@ import (
 // production implemented it, every event failed a type assertion, and the
 // whole signal disappeared with tests passing throughout.
 //
+// There are no repair keys here: this slice REFUSES an invalid frame
+// rather than repairing it, and a log key nothing can populate is a key an
+// operator would wait forever to see. They land with the bounded repair,
+// in the change that can actually emit them.
+//
 // frameValidationEventLogKeys is the field -> log-key map, declared
 // EXPLICITLY rather than derived by snake-casing. That is deliberate: an
 // explicit map plus the exhaustiveness check below means ADDING A FIELD TO
@@ -29,13 +34,8 @@ var frameValidationEventLogKeys = map[string]string{
 	"FailedInvariant":        "failed_invariant",
 	"FailedPhase":            "failed_phase",
 	"FailureDetail":          "failure_detail",
-	"RepairAttempted":        "repair_attempted",
-	"RepairLatencyMS":        "repair_latency_ms",
-	"RepairBoundViolation":   "repair_bound_violation",
 	"ProposedKind":           "proposed_kind",
-	"RepairedKind":           "repaired_kind",
 	"ProposedGoals":          "proposed_goals",
-	"RepairedGoals":          "repaired_goals",
 	"DerivedObligationCount": "derived_obligation_count",
 	"WidenedObligationCount": "widened_obligation_count",
 	"ShapeDiverged":          "shape_diverged",
@@ -73,7 +73,7 @@ func TestEveryFrameValidationEventFieldReachesTheLogLine(t *testing.T) {
 // regression would quietly empty.
 func TestFrameValidationTelemetryEmitsEveryFieldOnARefusal(t *testing.T) {
 	proposed := discoveredTeamsEmphasisFrame(GoalAssessState)
-	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_sink_test"}, nil, proposed, nil, "", nil)
+	result := ValidateFrame(proposed, nil, "")
 	if result.Outcome != FrameValidationOutcomeRefusedInvalid {
 		t.Fatalf("precondition: outcome = %q, want refused_invalid", result.Outcome)
 	}
@@ -113,7 +113,7 @@ func TestFrameValidationTelemetryEmitsEveryFieldOnARefusal(t *testing.T) {
 // lesson lane-4579 wrote up and §4.3 already applies to family resolution.
 func TestFrameValidationTelemetryFiresOnValidFramesToo(t *testing.T) {
 	proposed := namedFrame(GoalAssessState)
-	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_sink_test"}, nil, proposed, nil, "", nil)
+	result := ValidateFrame(proposed, nil, "")
 	event := FrameValidationEventFrom(proposed, result, "")
 
 	records := captureSlogJSON(t, func(logger *slog.Logger) {
@@ -128,8 +128,8 @@ func TestFrameValidationTelemetryFiresOnValidFramesToo(t *testing.T) {
 	if records[0]["failed_invariant"] != "" {
 		t.Errorf("failed_invariant = %v on a valid frame, want empty", records[0]["failed_invariant"])
 	}
-	if records[0]["repair_attempted"] != false {
-		t.Errorf("repair_attempted = %v, want false -- a present false is countable, an absent key is not", records[0]["repair_attempted"])
+	if records[0]["derived_obligation_count"] == nil {
+		t.Error("derived_obligation_count is absent on a valid frame -- a present zero is countable, an absent key is not")
 	}
 }
 
@@ -164,7 +164,7 @@ func TestFrameValidationTelemetryLeaksNoQuestionContent(t *testing.T) {
 		},
 		Emphasis: []AnswerEmphasis{EmphasisNegativeOutliers},
 	}
-	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_sink_test"}, nil, proposed, nil, "", nil)
+	result := ValidateFrame(proposed, nil, "")
 	event := FrameValidationEventFrom(proposed, result, "")
 
 	records := captureSlogJSON(t, func(logger *slog.Logger) {
@@ -241,7 +241,7 @@ func TestUnrecognizedGoalIsRejectedAndNeverReachesTelemetry(t *testing.T) {
 	}
 
 	// HALF TWO -- the whole flow refuses, rather than returning usable.
-	result := ValidateAndRepairFrame(context.Background(), storage.Principal{OrgID: "org_sink_test"}, nil, proposed, nil, "", nil)
+	result := ValidateFrame(proposed, nil, "")
 	if result.Outcome != FrameValidationOutcomeRefusedInvalid {
 		t.Fatalf("outcome = %q, want %q", result.Outcome, FrameValidationOutcomeRefusedInvalid)
 	}

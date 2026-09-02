@@ -632,9 +632,12 @@ func (t SlogEngineTelemetry) RecordQuestionFamilyResolution(ctx context.Context,
 // discipline: a field populated on a struct and never logged is not
 // telemetry, it is a field. That bar is why `failed_invariant` and
 // `failed_phase` are both here -- the same invariant id failing in a1
-// versus a2 is two different investigations -- and why the repair fields
-// are present on every row rather than only on repaired ones, so
-// `repair_attempted:false` is a countable state rather than an absent key.
+// versus a2 is two different investigations.
+//
+// There are no repair fields, because this slice has no repair path: a
+// frame that fails validation is refused. They land with the bounded
+// repair itself, so an operator never sees a `repair_attempted` key that
+// could only ever read false.
 func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principal storage.Principal, event FrameValidationEvent) {
 	args := []any{
 		"org_id", principal.OrgID,
@@ -642,13 +645,8 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		"failed_invariant", string(event.FailedInvariant),
 		"failed_phase", string(event.FailedPhase),
 		"failure_detail", string(event.FailureDetail),
-		"repair_attempted", event.RepairAttempted,
-		"repair_latency_ms", event.RepairLatencyMS,
-		"repair_bound_violation", string(event.RepairBoundViolation),
 		"proposed_kind", string(event.ProposedKind),
-		"repaired_kind", string(event.RepairedKind),
 		"proposed_goals", goalsLogValue(event.ProposedGoals),
-		"repaired_goals", goalsLogValue(event.RepairedGoals),
 		"derived_obligation_count", event.DerivedObligationCount,
 		"widened_obligation_count", event.WidenedObligationCount,
 		"shape_diverged", event.ShapeDiverged,
