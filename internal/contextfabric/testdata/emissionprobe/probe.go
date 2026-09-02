@@ -251,3 +251,30 @@ func (ClearedProvider) build() map[string]contextfabric.FactValue {
 	clear(fields)
 	return fields
 }
+
+// ProbeRebind exercises the `rebound_func_value` leak: a local holding a
+// function value, assigned twice. A review round constructed it and the walk
+// reported the provider as emitting NOTHING with zero leaks -- it followed
+// the LAST binding regardless of where the call sat.
+const ProbeRebind contextfabric.FactKind = "zz_probe_rebind"
+
+func writeEarly(fields map[string]contextfabric.FactValue) {
+	fields["early_field"] = contextfabric.FactValue{}
+}
+
+func writeNothing(map[string]contextfabric.FactValue) {}
+
+type RebindProvider struct{}
+
+func (RebindProvider) Capability() contextfabric.FactCapability {
+	return newCapability(ProbeRebind)
+}
+
+func (RebindProvider) build() map[string]contextfabric.FactValue {
+	fields := map[string]contextfabric.FactValue{}
+	emit := writeEarly
+	emit(fields) // reaches writeEarly, which the last binding does not say
+	emit = writeNothing
+	_ = emit
+	return fields
+}

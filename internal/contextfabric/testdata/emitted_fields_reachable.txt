@@ -47,6 +47,7 @@ FactActualCompletion
   leaked_call_sites  0
     leak interface_method     0
     leak external_func_value  0
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            15
@@ -62,6 +63,7 @@ FactBlockers
   leaked_call_sites  6
     leak interface_method     5
     leak external_func_value  1
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            14
@@ -77,6 +79,7 @@ FactContinuousIntegration
   leaked_call_sites  0
     leak interface_method     0
     leak external_func_value  0
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            24
@@ -92,6 +95,7 @@ FactDeployments
   leaked_call_sites  0
     leak interface_method     0
     leak external_func_value  0
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            24
@@ -107,6 +111,7 @@ FactFlow
   leaked_call_sites  10
     leak interface_method     9
     leak external_func_value  1
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            74
@@ -122,6 +127,7 @@ FactHealth
   leaked_call_sites  9
     leak interface_method     8
     leak external_func_value  1
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            74
@@ -137,6 +143,7 @@ FactIdentity
   leaked_call_sites  0
     leak interface_method     0
     leak external_func_value  0
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            19
@@ -152,6 +159,7 @@ FactIncidents
   leaked_call_sites  0
     leak interface_method     0
     leak external_func_value  0
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            16
@@ -167,6 +175,7 @@ FactInvestment
   leaked_call_sites  0
     leak interface_method     0
     leak external_func_value  0
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            42
@@ -182,6 +191,7 @@ FactLandscape
   leaked_call_sites  7
     leak interface_method     6
     leak external_func_value  1
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            39
@@ -197,6 +207,7 @@ FactMembership
   leaked_call_sites  0
     leak interface_method     0
     leak external_func_value  0
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            18
@@ -212,6 +223,7 @@ FactMetrics
   leaked_call_sites  1
     leak interface_method     1
     leak external_func_value  0
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            35
@@ -227,6 +239,7 @@ FactOperationalDeficiencies
   leaked_call_sites  6
     leak interface_method     5
     leak external_func_value  1
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            25
@@ -242,6 +255,7 @@ FactPullRequests
   leaked_call_sites  0
     leak interface_method     0
     leak external_func_value  0
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            18
@@ -257,6 +271,7 @@ FactReadiness
   leaked_call_sites  7
     leak interface_method     6
     leak external_func_value  1
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            54
@@ -272,6 +287,7 @@ FactRequiredChildren
   leaked_call_sites  6
     leak interface_method     5
     leak external_func_value  1
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            14
@@ -287,6 +303,7 @@ FactReviews
   leaked_call_sites  0
     leak interface_method     0
     leak external_func_value  0
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            16
@@ -302,6 +319,7 @@ FactSourceHealth
   leaked_call_sites  0
     leak interface_method     0
     leak external_func_value  0
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            19
@@ -317,6 +335,7 @@ FactStatus
   leaked_call_sites  0
     leak interface_method     0
     leak external_func_value  0
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            13
@@ -332,6 +351,7 @@ FactWork
   leaked_call_sites  0
     leak interface_method     0
     leak external_func_value  0
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            13
@@ -347,6 +367,7 @@ FactWorkload
   leaked_call_sites  7
     leak interface_method     6
     leak external_func_value  1
+    leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
     calls followed            51

@@ -135,6 +135,13 @@ const (
 	// leakNoBody: a package-local function with no inspectable declaration
 	// (an assembly or linkname stub).
 	leakNoBody leakCause = "no_body"
+	// leakReboundFuncValue: a local that holds a function value and is
+	// ASSIGNED MORE THAN ONCE in the same body. Which function a given call
+	// site reaches then depends on flow order, which this walk does not
+	// compute -- so it is not knowable here, and guessing the last binding
+	// is how a review round got the walk to report a provider as emitting
+	// nothing while it emitted.
+	leakReboundFuncValue leakCause = "rebound_func_value"
 	// leakUnresolvable: no identifier at all, or an object kind this
 	// vocabulary does not name. The catch-all that keeps the
 	// classification TOTAL.
@@ -142,10 +149,10 @@ const (
 )
 
 var leakCauses = [...]leakCause{
-	leakInterfaceMethod, leakExternalFuncValue, leakNoBody, leakUnresolvable,
+	leakInterfaceMethod, leakExternalFuncValue, leakReboundFuncValue, leakNoBody, leakUnresolvable,
 }
 
-// LeakCauseCount is four.
+// LeakCauseCount is five.
 const LeakCauseCount = len(leakCauses)
 
 // callSite is one classified call.
@@ -295,7 +302,7 @@ func stringValuesOfRangeVars(info *types.Info, fn ast.Node) map[types.Object][]s
 // return and is COUNTED. There is no path out of this function that neither
 // follows an edge nor records a leak, which is what the totality assertion
 // checks.
-func classifyCall(pkg *packages.Package, call *ast.CallExpr, funcValues map[types.Object]*types.Func, localClosures map[types.Object]bool, bodied map[*types.Func]bool) callSite {
+func classifyCall(pkg *packages.Package, call *ast.CallExpr, funcValues map[types.Object]*types.Func, localClosures map[types.Object]bool, rebound map[types.Object]bool, bodied map[*types.Func]bool) callSite {
 	info := pkg.TypesInfo
 
 	// An immediately-invoked literal: its body is a child of this one and
@@ -346,6 +353,14 @@ func classifyCall(pkg *packages.Package, call *ast.CallExpr, funcValues map[type
 		}
 		return callSite{disposition: callFollowed, callee: object}
 	case *types.Var:
+		// REBINDING FIRST. A local assigned more than once has no single
+		// statically-knowable value at this call site, whatever the last
+		// assignment happened to be. Checked before the two resolving arms
+		// below, because both of them would otherwise answer confidently
+		// from a binding that may not be the live one.
+		if rebound[object] {
+			return callSite{disposition: callLeaked, cause: leakReboundFuncValue}
+		}
 		// A local bound to a package-level function: a followable edge.
 		if callee, bound := funcValues[object]; bound {
 			if !bodied[callee] {
@@ -447,6 +462,54 @@ func packageFuncsBoundToLocals(info *types.Info, fn ast.Node) map[types.Object]*
 	return bound
 }
 
+// reboundLocals collects the locals that are ASSIGNED MORE THAN ONCE in one
+// body.
+//
+// A single binding is statically knowable and can be followed. A REBINDING
+// is not: which function a call site reaches then depends on where the call
+// sits relative to the assignments, and this walk deliberately does no flow
+// analysis. A review round proved the cost of guessing -- `emit :=
+// writeEarly; emit(fields); emit = noop` was classified as following `noop`,
+// so the walk recorded no field AND no leak, reporting an emitting provider
+// as emitting nothing. Silence is the one outcome the closure rule exists to
+// prevent, so a rebound local leaks and is counted.
+func reboundLocals(info *types.Info, fn ast.Node) map[types.Object]bool {
+	counts := map[types.Object]int{}
+	note := func(target ast.Expr) {
+		ident, isIdent := target.(*ast.Ident)
+		if !isIdent {
+			return
+		}
+		object := info.Defs[ident]
+		if object == nil {
+			object = info.Uses[ident]
+		}
+		if object != nil {
+			counts[object]++
+		}
+	}
+	ast.Inspect(fn, func(node ast.Node) bool {
+		switch typed := node.(type) {
+		case *ast.AssignStmt:
+			for _, lhs := range typed.Lhs {
+				note(lhs)
+			}
+		case *ast.ValueSpec:
+			for _, name := range typed.Names {
+				note(name)
+			}
+		}
+		return true
+	})
+	rebound := map[types.Object]bool{}
+	for object, count := range counts {
+		if count > 1 {
+			rebound[object] = true
+		}
+	}
+	return rebound
+}
+
 // localsBoundToFuncLiterals collects the locals assigned a function LITERAL
 // in this same function. They are not edges: the literal's body is lexically
 // inside the function being walked, so its writes are already collected.
@@ -505,6 +568,7 @@ func analyseFunction(pkg *packages.Package, fn *ast.FuncDecl, bodied map[*types.
 	rangeValues := stringValuesOfRangeVars(info, fn)
 	funcValues := packageFuncsBoundToLocals(info, fn)
 	localClosures := localsBoundToFuncLiterals(info, fn)
+	rebound := reboundLocals(info, fn)
 
 	resolveKey := func(expr ast.Expr) ([]string, bool) {
 		if value, known := constantString(info, expr); known {
@@ -568,7 +632,7 @@ func analyseFunction(pkg *packages.Package, fn *ast.FuncDecl, bodied map[*types.
 			// ONE classification, no ladder. Every call site leaves here
 			// with exactly one disposition; classifyCall is where the rule
 			// lives and the only place a new case may be added.
-			site := classifyCall(pkg, typed, funcValues, localClosures, bodied)
+			site := classifyCall(pkg, typed, funcValues, localClosures, rebound, bodied)
 			facts.sites = append(facts.sites, site)
 			switch site.disposition {
 			case callFollowed:
@@ -1201,6 +1265,7 @@ func TestEveryNonLeakDispositionRecoversItsSaltedField(t *testing.T) {
 var leakCauseFixtures = map[leakCause]string{
 	leakInterfaceMethod:   "ProbeInterface",
 	leakExternalFuncValue: "ProbeIndirect",
+	leakReboundFuncValue:  "ProbeRebind",
 	leakUnresolvable:      "ProbeIndexedCall",
 }
 
@@ -1281,5 +1346,36 @@ func TestClearingAFactFieldMapIsCountedLikeADelete(t *testing.T) {
 	}
 	if cleared.dynamicKeySites == 0 {
 		t.Errorf("a clear() of a fact-field map was not counted; the walk reports %v as emitted when the provider returns an empty map, and nothing says the set is an overstatement", cleared.fields)
+	}
+}
+
+// TestAReboundFunctionValueLeaksRatherThanGuessing pins the defect a review
+// round found in the re-derived walk itself.
+//
+// `emit := writeEarly; emit(fields); emit = writeNothing` was classified as
+// FOLLOWING `writeNothing`, because the binding map was built by a pre-scan
+// with last-write-wins and no flow order. The walk recorded no field and no
+// leak: an emitting provider reported as emitting nothing, in silence. That
+// is the one outcome the closure rule exists to prevent, and it was
+// reintroduced by the resolution arm that closes a DIFFERENT leak.
+func TestAReboundFunctionValueLeaksRatherThanGuessing(t *testing.T) {
+	probes := walkProbeFixture(t)
+	rebound, walked := probes["ProbeRebind"]
+	if !walked {
+		t.Fatal("the rebind fixture provider was not walked at all")
+	}
+	index, _ := leakCauseIndex(leakReboundFuncValue)
+	if rebound.leaksByCause[index] == 0 {
+		t.Errorf("a rebound function value was followed on a guess instead of counted; fields=%v leaks=%v", rebound.fields, rebound.leaksByCause)
+	}
+	// The single-binding case must still be FOLLOWED, or the fix has simply
+	// stopped following function values at all -- a different defect wearing
+	// the same green.
+	single, walked := probes["ProbeFuncValue"]
+	if !walked {
+		t.Fatal("the single-binding fixture was not walked")
+	}
+	if !containsField(single.fields, "func_value_field") {
+		t.Errorf("a singly-bound function value is no longer followed: %v", single.fields)
 	}
 }
