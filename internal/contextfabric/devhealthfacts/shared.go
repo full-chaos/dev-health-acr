@@ -539,6 +539,33 @@ func recordFactBytesBoundExceeded(producer string, kind contextfabric.FactKind) 
 	)
 }
 
+// factBytesBoundExceededReason is the CLOSED-vocabulary token a caller
+// discloses on a fact whose additive time series was dropped for
+// CHAOS-4785 -- the SAME token recordFactBytesBoundExceeded's telemetry
+// event uses, so a log line and a served answer name the identical cause.
+const factBytesBoundExceededReason = "fact_bytes_bound_exceeded"
+
+// disclosedDualTableDrop is CHAOS-4785's disclosure contract: a producer
+// dropping timeSeriesRows because it combined with legacyRows past the
+// joint bound must NEVER do so silently (chris's ruling: fail-closed means
+// the fact is reported as unavailable-class coverage, never silently
+// dropped -- a log line alone is not disclosure). drop=true means the
+// caller must (1) fold droppedRows into ITS OWN omitted-rows accounting,
+// which flows to FactProviderResult.Truncated/OmittedCount -- the SAME
+// existing mechanism capFactValueRows' row-cap truncation already degrades
+// coverage through -- and (2) set a closed-vocabulary reason field on the
+// fact using reason, so a reader can tell THIS cause apart from an
+// ordinary row-cap truncation. drop=false (the bound is not exceeded, or
+// either table is empty -- see combinedRowsExceedBytesBound) means the
+// caller proceeds exactly as before this ticket.
+func disclosedDualTableDrop(producer string, kind contextfabric.FactKind, legacyRows, timeSeriesRows []contextfabric.FactValueRow) (drop bool, droppedRows int, reason string) {
+	if !combinedRowsExceedBytesBound(legacyRows, timeSeriesRows) {
+		return false, 0, ""
+	}
+	recordFactBytesBoundExceeded(producer, kind)
+	return true, len(timeSeriesRows), factBytesBoundExceededReason
+}
+
 func stringOrNull(value string) contextfabric.FactValue {
 	if value == "" {
 		return contextfabric.NullFactValue()

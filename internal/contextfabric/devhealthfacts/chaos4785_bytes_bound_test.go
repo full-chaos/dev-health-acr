@@ -66,3 +66,42 @@ func TestCombinedRowsExceedBytesBoundFalseForRealShapedDualTable(t *testing.T) {
 		t.Fatal("combinedRowsExceedBytesBound() = true, want false: a small real-shaped dual-table fact must stay under the joint bound")
 	}
 }
+
+// TestDisclosedDualTableDropNeverSilent pins chris's disclosure ruling: a
+// dropped additive time series must be reported as unavailable-class
+// coverage, never silently dropped -- a log line alone is not disclosure.
+// disclosedDualTableDrop is the one seam every producer call site routes
+// through, so this is the single test that keeps that promise true for all
+// of them: drop=true must ALWAYS carry a non-zero droppedRows count (which
+// the caller folds into FactProviderResult.Truncated/OmittedCount) and the
+// SAME closed-vocabulary reason recordFactBytesBoundExceeded's telemetry
+// event uses.
+func TestDisclosedDualTableDropNeverSilent(t *testing.T) {
+	legacyRows := maxLegalFactValueRows(contractsv1.ContextFabricClaimedFactMaxRows)
+	timeSeriesRows := maxLegalFactValueRows(contractsv1.ContextFabricClaimedFactMaxRows)
+
+	drop, dropped, reason := disclosedDualTableDrop("flow", contextfabric.FactFlow, legacyRows, timeSeriesRows)
+	if !drop {
+		t.Fatal("disclosedDualTableDrop() drop = false, want true: both tables at their own legal max combined must exceed the joint bound")
+	}
+	if dropped != len(timeSeriesRows) {
+		t.Fatalf("disclosedDualTableDrop() droppedRows = %d, want %d (the WHOLE dropped series, not the row-cap overflow): a caller must fold this into its own omitted-rows accounting so FactProviderResult.Truncated/OmittedCount discloses the drop -- an undisclosed drop is exactly what chris's ruling forbids", dropped, len(timeSeriesRows))
+	}
+	if reason != factBytesBoundExceededReason {
+		t.Fatalf("disclosedDualTableDrop() reason = %q, want %q: the served fact's reason field must match the telemetry token so a reader can tell this cause apart from an ordinary row-cap truncation", reason, factBytesBoundExceededReason)
+	}
+}
+
+// TestDisclosedDualTableDropFalseUnderTheBound proves the disclosure
+// contract does not fire when nothing was dropped -- an ordinary
+// dual-table fact must keep behaving exactly as before this ticket.
+func TestDisclosedDualTableDropFalseUnderTheBound(t *testing.T) {
+	day := "2026-08-30"
+	legacyRows := []contextfabric.FactValueRow{{Fields: map[string]contextfabric.FactValue{"team_id": {String: &day}}}}
+	timeSeriesRows := []contextfabric.FactValueRow{{Fields: map[string]contextfabric.FactValue{"day": {String: &day}}}}
+
+	drop, dropped, reason := disclosedDualTableDrop("flow", contextfabric.FactFlow, legacyRows, timeSeriesRows)
+	if drop || dropped != 0 || reason != "" {
+		t.Fatalf("disclosedDualTableDrop() = (%v, %d, %q), want (false, 0, \"\") for a small real-shaped dual-table fact under the bound", drop, dropped, reason)
+	}
+}
