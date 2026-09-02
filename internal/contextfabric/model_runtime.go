@@ -253,6 +253,37 @@ type ModelExecutionReceipt struct {
 	FrameGoalsDropped     int            `json:"frame_goals_dropped,omitempty"`
 	FrameTermsTruncated   int            `json:"frame_terms_truncated,omitempty"`
 	FrameKindUnrecognized bool           `json:"frame_kind_unrecognized,omitempty"`
+	// InterpretationRejectionReason names WHICH rule in
+	// InterpretedQuestion.Validate() rejected this interpretation -- the
+	// interpret-side counterpart of the synthesis decision line's own
+	// rejection_reason, which has named the synthesis rule since
+	// CHAOS-4522. Before this field, an interpretation rejection was
+	// recorded ONLY as Outcome="invalid_output", which is the same value a
+	// malformed model response produces; the durable receipt could not
+	// distinguish "the model returned something unparseable" from "the
+	// model returned a well-formed interpretation that violated a specific
+	// named rule".
+	//
+	// It is on the RECEIPT and not only on the log line because the
+	// receipt is the durable artifact: a rejection rate broken down by
+	// rule, over a real question corpus, is answerable by querying stored
+	// receipts and is not answerable from logs that have rotated. That is
+	// the same reasoning ScopeAnchorKind's own comment above gives for
+	// capturing a signal rather than re-deriving it.
+	//
+	// Set on the interpret path ONLY, and only on a rejection -- never on
+	// success, and never on a synthesize or phrase_offers receipt. Note it
+	// IS set when the primary's own generation failed and a configured
+	// fallback then produced an interpretation that was itself rejected:
+	// the fallback's error is what the caller receives, so the fallback's
+	// rule is the one to name.
+	// omitempty for the identical asymmetry-avoidance reason WindowClass
+	// and QuestionFamily both give: absent, not present-and-empty, on
+	// every receipt that has no rejection to describe.
+	//
+	// SHADOW ONLY, like every field above it: no wire surface, no schema,
+	// no OpenAPI, no MCP, no migration.
+	InterpretationRejectionReason InterpretationRejectionReason `json:"interpretation_rejection_reason,omitempty"`
 }
 
 func (r ModelExecutionReceipt) Validate() error {
@@ -299,6 +330,24 @@ func (r ModelExecutionReceipt) Validate() error {
 	}
 	if r.WindowConfidence != "" && !ValidWindowConfidence(r.WindowConfidence) {
 		return fmt.Errorf("model receipt window_confidence is invalid")
+	}
+	// The SAME rule as WindowClass immediately above, and it belongs here
+	// for the identical reason: the closed-vocabulary guarantee on
+	// InterpretationRejectionReason must live at the receipt's own
+	// PERSISTENCE boundary, not only inside the one path that happens to
+	// set it correctly today.
+	//
+	// This was a real hole, not a hypothetical one: the field is exported
+	// on an exported struct, ModelExecutionReceipt.Validate() did not check
+	// it, and recordModelReceipt forwards the receipt to the sink
+	// unchanged -- so a caller assigning
+	// InterpretationRejectionReason(rawModelString) landed corpus text,
+	// newlines included, verbatim in a durable artifact. Canonicalizing in
+	// NewInterpretationRejection and InterpretationRejectionReasonOf
+	// protects the error path only; it is a property of those functions,
+	// never of this struct. Empty stays legal (genuinely "no rejection").
+	if r.InterpretationRejectionReason != "" && !contractsv1.ValidContextFabricInterpretationRejectionReason(r.InterpretationRejectionReason) {
+		return fmt.Errorf("model receipt interpretation_rejection_reason is invalid")
 	}
 	return nil
 }
@@ -1333,6 +1382,22 @@ func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal sto
 		if validateErr := question.Validate(); validateErr != nil {
 			receipt.Outcome = "invalid_output"
 			err = ClassifyInterpretationRejection(question, validateErr)
+			// The reason rides the RECEIPT here too, not only the error.
+			// This adapter builds and mutates its OWN receipt and then
+			// persists it below, so leaving the field empty meant a
+			// rejection whose error named the rule was recorded durably
+			// with nothing naming it -- the same artifact/error
+			// disagreement the two genkitruntime rejection paths already
+			// close, at a third site that a sweep scoped to
+			// "functions that canonicalize" did not reach.
+			//
+			// This is the DEFENSIVE re-validation path: it fires only for
+			// a ModelRuntime that returns an invalid question with a nil
+			// error, which no production implementation does today. That
+			// makes it unreachable in practice, not exempt -- an
+			// unguarded surface is a surface, and reachability is exactly
+			// the case-by-case argument the sweep exists to stop having.
+			receipt.InterpretationRejectionReason = InterpretationRejectionReasonOf(err)
 		} else if receipt.Outcome == "pending_validation" {
 			receipt.Outcome = "success"
 		}
@@ -2080,6 +2145,30 @@ func recordModelReceipt(ctx context.Context, principal storage.Principal, sink M
 	}
 	if err := receipt.Validate(); err != nil {
 		return fmt.Errorf("model receipt: %w", err)
+	}
+	// Canonicalize the closed-vocabulary field at the SINK, not merely
+	// validate it. Validate() above proves membership; it cannot replace
+	// the value, because it takes a value receiver and its job is to
+	// accept or reject. Without this line a caller could assemble a string
+	// with the same TEXT as a vocabulary member out of model output,
+	// assign it to the exported field, pass the membership check, and have
+	// its own string persisted verbatim -- validating a tainted value and
+	// then using the tainted value, which is precisely the shape the
+	// canonical table's own doc comment says is a real distinction rather
+	// than a cosmetic one. Assigning the table's constant makes "the
+	// durable artifact holds a compile-time constant" a property the
+	// compiler and CodeQL can both see, instead of one that holds only as
+	// long as the check and the use stay in sync.
+	//
+	// Sink-side and unconditional, the same defence-in-depth posture
+	// safeLogRequestID takes on the decision line: the production path
+	// already assigns from the canonicalizing accessor, so this changes
+	// nothing today and costs nothing, and it protects any future caller
+	// that reaches this sink without going through that path. Empty stays
+	// empty -- CanonicalContextFabric... maps a non-member to
+	// "unclassified", so the guard is applied only when a value is present.
+	if receipt.InterpretationRejectionReason != "" {
+		receipt.InterpretationRejectionReason = contractsv1.CanonicalContextFabricInterpretationRejectionReason(receipt.InterpretationRejectionReason)
 	}
 	if sink == nil {
 		return nil

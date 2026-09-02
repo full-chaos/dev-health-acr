@@ -219,6 +219,24 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	"FrameGoalsDropped":     {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 	"FrameTermsTruncated":   {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 	"FrameKindUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	// InterpretationRejectionReason names WHICH validator rule rejected one
+	// interpretation. It is a per-call diagnostic, not a version authority,
+	// and the exclusion is stronger than "it merely seems unimportant": a
+	// receipt carrying this field describes a call that produced NO
+	// interpretation and therefore no answer, so no InvestigationResult was
+	// ever saved from it and there is nothing for reuse to key on. Verified
+	// against the composition code rather than assumed from the field's doc
+	// comment: genkitruntime.Runtime.InterpretQuestionForSample sets it only
+	// on the rejecting return path, which returns a zero InterpretedQuestion
+	// and an error, and pginvestigation.Store.Save is never reached for that
+	// request at all.
+	//
+	// The version authority that DOES fence reuse when the rules themselves
+	// change is the model-output schema version (ReuseKey.ModelOutputSchemaVersion,
+	// already a member via InterpretationVersion) together with
+	// InterpretationPromptVersion -- both deployment-wide constants this
+	// per-call field never carries.
+	"InterpretationRejectionReason": {reason: "per-call rejection classification (telemetry only), not a version identity -- and a receipt carrying it describes a call that produced no interpretation and therefore no saved result, so there is nothing for reuse to key on; the real authorities for a rules change are ModelOutputSchemaVersion and InterpretationPromptVersion, both already members"},
 }
 
 // TestReuseKeyClassifiesEveryVersionSetField is the class-oracle sweep over

@@ -496,7 +496,22 @@ func (r *FactCapabilityRegistry) ReadFacts(ctx context.Context, principal storag
 				// facts.Scope before it checks err, so a rejected request
 				// still reports why its fact families were or were not
 				// reachable.
-				return bundle, fmt.Errorf("%w: fact capability %s: parameter %q is not allowed", ErrInterpretationRejected, requirement.Kind, key)
+				// The closed-vocabulary reason rides along for the same
+				// reason the sentinel does: this rejection reaches the
+				// SAME 422 and the same decision-event field as one the
+				// contracts/v1 validator produced, so it must be able to
+				// name its own rule there. Without it, the one rejection
+				// class that is invisible to InterpretedQuestion.Validate()
+				// would also be the one class the telemetry could only
+				// report as "unclassified" -- precisely inverted, since
+				// this is the rejection whose cause (provider wiring, not
+				// a static bound) is hardest to reconstruct after the fact.
+				// Wrapping preserves the sentinel: errors.Is(err,
+				// ErrInterpretationRejected) still answers true.
+				return bundle, NewInterpretationRejection(
+					contractsv1.ContextFabricInterpretationRejectionFactCapabilityParameterNotAllowed,
+					fmt.Errorf("%w: fact capability %s: parameter %q is not allowed", ErrInterpretationRejected, requirement.Kind, key),
+				)
 			}
 		}
 	}
@@ -874,7 +889,16 @@ func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, c
 			// function's doc comment); kept as the same defense-in-depth
 			// invariant, wrapping the SAME sentinel so it stays correct if
 			// the pre-pass is ever narrowed or bypassed.
-			return FactQuery{}, fmt.Errorf("%w: parameter %q is not allowed", ErrInterpretationRejected, key)
+			// The reason rides along here for the same reason the sentinel
+			// does, and for the same defense-in-depth purpose this branch
+			// exists at all: if the pre-pass is ever narrowed or bypassed,
+			// this becomes the reachable site, and a rejection that
+			// reaches telemetry unnamed here would be indistinguishable
+			// from one this vocabulary genuinely cannot classify.
+			return FactQuery{}, NewInterpretationRejection(
+				contractsv1.ContextFabricInterpretationRejectionFactCapabilityParameterNotAllowed,
+				fmt.Errorf("%w: parameter %q is not allowed", ErrInterpretationRejected, key),
+			)
 		}
 	}
 	parameters := make(map[string]string, len(requirement.Parameters))
