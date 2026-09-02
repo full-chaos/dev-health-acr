@@ -60,6 +60,10 @@ type sourcePlan struct {
 
 	// logger receives the sanitized cause of a table read failure. Optional.
 	logger *slog.Logger
+
+	// observeQuarantine is called once per item dropped by per-item
+	// quarantine (item_quarantine.go), with a closed reason token. Optional.
+	observeQuarantine func(quarantineObservation)
 }
 
 // logTableReadFailure names WHY a dependency read failed, in a closed form.
@@ -166,11 +170,28 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 	all = append(all, seeded...)
 	// An organization whose only rows are omitted has nothing to enumerate;
 	// an empty batch is not a valid full snapshot (Validate rejects it).
-	if len(all) == 0 || !carriesPayload(all) {
+	if len(all) == 0 {
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	sortCandidates(all)
-	batch, err := buildBatch(orgID, p.source, p.version, "", all, true, true, p.clock())
+	items := partitionProjectableCandidates(all, p.observeQuarantine)
+	if !carriesPayload(items) {
+		// Everything this snapshot read was quarantined, so there is nothing
+		// to publish -- but the rows WERE consumed, and without recording
+		// that the checkpoint never moves. A from-scratch projection whose
+		// first snapshot is entirely unprojectable would otherwise re-read
+		// and re-drop the same rows on every tick, forever, with no batch
+		// and no error: the wedge with its diagnosis removed.
+		//
+		// pagedBatch's skip path already does exactly this; the full-snapshot
+		// path did not, which mattered the moment per-item quarantine made an
+		// all-unprojectable candidate set reachable. It bites hardest on a
+		// source with no seed candidate (TeamsProjectsSource), where nothing
+		// guarantees at least one valid item.
+		noteConsumedFrom(p, orgID, all)
+		return contextfabric.ProjectionBatch{}, false, nil
+	}
+	batch, err := buildBatch(orgID, p.source, p.version, "", all, items, true, true, p.clock())
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, false, err
 	}
@@ -213,8 +234,14 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		if len(all) == 0 {
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
-		if carriesPayload(all) {
-			batch, err := buildBatch(orgID, p.source, p.version, cursor, all, false, false, p.clock())
+		// Per-item quarantine BEFORE the payload check: an item the
+		// contract validator rejects must not reach buildBatch, and a page
+		// whose every item is quarantined is indistinguishable, from here
+		// on, from a page whose every row was omitted -- both take the skip
+		// path below, which advances past them and keeps looking.
+		items := partitionProjectableCandidates(all, p.observeQuarantine)
+		if carriesPayload(items) {
+			batch, err := buildBatch(orgID, p.source, p.version, cursor, all, items, false, false, p.clock())
 			if err != nil {
 				return contextfabric.ProjectionBatch{}, false, err
 			}
@@ -225,20 +252,33 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 			p.observeBatch(ctx, batch, all)
 			return batch, true, nil
 		}
-		// Every row on this page was consumed but emitted nothing (today:
-		// ownership rows omitted for an ambiguous project_key). A batch built
+		// Every row on this page was consumed but emitted nothing --
+		// omitted for an ambiguous project_key, or every item quarantined as
+		// unprojectable. A batch built
 		// from them would be empty, and ContextFabricProjectionBatch.Validate
 		// rejects an empty batch outright -- so the page cannot be published
 		// to carry its own cursor. Skip past it in-process instead and keep
 		// looking for real content, bounded so one tick cannot spin.
 		last := all[len(all)-1]
 		state = cursorState{Since: last.observedAt, After: last.sortKey}
-		if encoded, err := encodeCursor(state); err == nil {
-			p.noteConsumed(orgID, encoded)
-		}
+		noteConsumedFrom(p, orgID, all)
 		if skips >= maxOmittedPageSkips {
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
+	}
+}
+
+// noteConsumedFrom records the furthest position a call proved holds nothing
+// publishable, derived from the LAST candidate the call consumed. Shared by
+// the full-snapshot and paging paths so the two cannot drift: a cursor
+// recorded one way and not the other is how a stall hides.
+func noteConsumedFrom(p sourcePlan, orgID string, consumed []candidate) {
+	if len(consumed) == 0 {
+		return
+	}
+	last := consumed[len(consumed)-1]
+	if encoded, err := encodeCursor(cursorState{Since: last.observedAt, After: last.sortKey}); err == nil {
+		p.noteConsumed(orgID, encoded)
 	}
 }
 

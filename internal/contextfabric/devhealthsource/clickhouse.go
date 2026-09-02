@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -141,6 +143,75 @@ type ClickHouseProjectionSource struct {
 	client contextpacket.ClickHouseQueryClient
 	now    func() time.Time
 	logger *slog.Logger
+
+	// consumedMu guards consumed, which memoises the furthest cursor a
+	// NextProjectionBatch call proved holds nothing publishable, per
+	// organization. ConsumedWithoutPublishing hands it to the worker.
+	//
+	// CHAOS-4874: this source did not need the memo before per-item
+	// quarantine existed, because it could never omit a WHOLE page -- every
+	// row it read produced something projectable. Quarantine makes a fully
+	// unprojectable page reachable for the first time, and without a durable
+	// way to record "this range holds nothing", a quarantined TAIL is
+	// re-read, re-quarantined and re-logged on every tick forever while the
+	// checkpoint never moves. That is the original wedge with the error
+	// removed, which is worse: it no longer announces itself.
+	// TeamsProjectsSource has carried this mechanism since CHAOS-3802; this
+	// mirrors it rather than inventing a second convention.
+	consumedMu sync.Mutex
+	consumed   map[string]consumedProgress
+}
+
+// ConsumedWithoutPublishing implements contextfabric.ProjectionProgress.
+//
+// The memo comes from the immediately preceding NextProjectionBatch call for
+// this organization, which is safe because the coordinator holds a
+// single-flight advisory lock per organization. The from-cursor check makes
+// that safety explicit rather than assumed: a memo recorded against a
+// different checkpoint is discarded, so the worst case is a lost
+// optimisation, never a skipped row.
+//
+// The memo is consumed on read. If the worker's CAS then fails, the next tick
+// re-derives the same progress by re-reading the same rows.
+func (s *ClickHouseProjectionSource) ConsumedWithoutPublishing(_ context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ConsumedProgress, bool, error) {
+	if s == nil {
+		return contextfabric.ConsumedProgress{}, false, nil
+	}
+	orgID := strings.TrimSpace(checkpoint.OrgID)
+	s.consumedMu.Lock()
+	defer s.consumedMu.Unlock()
+	progress, ok := s.consumed[orgID]
+	if !ok {
+		return contextfabric.ConsumedProgress{}, false, nil
+	}
+	delete(s.consumed, orgID)
+	if progress.from != checkpoint.Cursor || progress.to == "" || progress.to == checkpoint.Cursor {
+		return contextfabric.ConsumedProgress{}, false, nil
+	}
+	return contextfabric.ConsumedProgress{NextCursor: progress.to, SourceVersion: ClickHouseSourceVersion}, true, nil
+}
+
+// forgetConsumed drops any memo for this organization. Called at the START of
+// a from-scratch call and whenever a call returns a batch, which together
+// enforce the memo's whole invariant: a memo may exist ONLY for a call that
+// published nothing from the checkpoint it names. See TeamsProjectsSource's
+// own forgetConsumed for why both halves are load-bearing (a later iteration
+// of the same paging loop can publish, and Rebuild resets the cursor to "").
+func (s *ClickHouseProjectionSource) forgetConsumed(orgID string) {
+	s.consumedMu.Lock()
+	defer s.consumedMu.Unlock()
+	delete(s.consumed, strings.TrimSpace(orgID))
+}
+
+func (s *ClickHouseProjectionSource) recordConsumed(fromCursor string) func(orgID, cursor string) {
+	return func(orgID, cursor string) {
+		s.consumedMu.Lock()
+		defer s.consumedMu.Unlock()
+		if s.consumed == nil {
+			s.consumed = map[string]consumedProgress{}
+		}
+		s.consumed[strings.TrimSpace(orgID)] = consumedProgress{from: fromCursor, to: cursor}
+	}
 }
 
 func NewClickHouseProjectionSource(client contextpacket.ClickHouseQueryClient) (*ClickHouseProjectionSource, error) {
@@ -177,13 +248,34 @@ type candidate struct {
 	relationship *contractsv1.ContextFabricRelationshipProjection
 	episode      *contractsv1.ContextFabricEpisodeProjection
 	tombstone    *contractsv1.ContextFabricProjectionTombstone
+
+	// supports names the RelationshipID this candidate exists SOLELY to
+	// serve, and is empty for a candidate that stands on its own.
+	//
+	// Only one producer sets it today: queryWorkItemDependencies' ref-form
+	// branch mints a work_item_ref STUB entity whose entire reason to exist
+	// is to be the endpoint of the edge emitted beside it. Per-item
+	// quarantine judges items one at a time, so an edge dropped for an
+	// unknown relationship type would otherwise leave that stub behind as a
+	// node nothing points at -- unreachable by any traversal, and at
+	// four-figure scale on a real organization. Declaring the dependency
+	// here keeps quarantine GENERIC: it never needs to know which bound
+	// fired or which producer emitted the pair, only that one item was the
+	// reason for another.
+	supports string
 }
 
 func (s *ClickHouseProjectionSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
 	if s == nil {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("devhealthsource: source is not configured")
 	}
-	return s.plan().nextBatch(ctx, checkpoint)
+	if checkpoint.Cursor == "" {
+		// A reset (first run, or what Coordinator.Rebuild leaves behind)
+		// invalidates any memo: it was derived from a cursor space that no
+		// longer describes what still needs projecting.
+		s.forgetConsumed(checkpoint.OrgID)
+	}
+	return s.plan(checkpoint.Cursor).nextBatch(ctx, checkpoint)
 }
 
 // CurrentProjectionSourceVersion implements contextfabric.ProjectionSourceVersion
@@ -201,7 +293,7 @@ func (s *ClickHouseProjectionSource) CurrentProjectionSourceVersion() string {
 // rules themselves live there and are shared verbatim with
 // TeamsProjectsSource -- see sourcePlan's doc comment for why they are not
 // re-derived per source.
-func (s *ClickHouseProjectionSource) plan() sourcePlan {
+func (s *ClickHouseProjectionSource) plan(fromCursor string) sourcePlan {
 	return sourcePlan{
 		client:  s.client,
 		source:  SourceName,
@@ -217,7 +309,10 @@ func (s *ClickHouseProjectionSource) plan() sourcePlan {
 			// every real Dev Health timestamp we ever project.
 			return []candidate{organizationCandidate(orgID, organizationAnchorTime)}
 		},
-		observe: s.logOrphanedWorkItems,
+		observe:           s.logOrphanedWorkItems,
+		observeQuarantine: quarantineLogger(s.logger, SourceName),
+		recordConsumed:    s.recordConsumed(fromCursor),
+		dropConsumed:      s.forgetConsumed,
 	}
 }
 
@@ -360,8 +455,18 @@ func truncateToCompleteRows(all []candidate, maxRows int) []candidate {
 	return all
 }
 
-func buildBatch(orgID, source, version, cursor string, all []candidate, fullSnapshot, completeEnumeration bool, generatedAt time.Time) (contextfabric.ProjectionBatch, error) {
-	last := all[len(all)-1]
+// buildBatch assembles one batch.
+//
+// cursorSource and items are deliberately SEPARATE slices. cursorSource is
+// every candidate this page consumed, and is the sole authority for
+// NextCursor; items is the subset that survived per-item quarantine
+// (item_quarantine.go) and is what actually gets projected. Deriving the
+// cursor from items instead would move the watermark backwards whenever the
+// last row on a page was quarantined, so those rows would be re-read and
+// re-dropped on every later tick -- progress would stall exactly where the
+// bad data is, which is the failure this quarantine exists to end.
+func buildBatch(orgID, source, version, cursor string, cursorSource, items []candidate, fullSnapshot, completeEnumeration bool, generatedAt time.Time) (contextfabric.ProjectionBatch, error) {
+	last := cursorSource[len(cursorSource)-1]
 	nextCursor, err := encodeCursor(cursorState{Since: last.observedAt, After: last.sortKey})
 	if err != nil {
 		return contextfabric.ProjectionBatch{}, err
@@ -374,7 +479,7 @@ func buildBatch(orgID, source, version, cursor string, all []candidate, fullSnap
 		Contents: []contractsv1.ContextFabricContentProjection{}, Episodes: []contractsv1.ContextFabricEpisodeProjection{},
 		Tombstones: []contractsv1.ContextFabricProjectionTombstone{},
 	}
-	for _, c := range all {
+	for _, c := range items {
 		switch {
 		case c.entity != nil:
 			batch.Entities = append(batch.Entities, *c.entity)
@@ -388,7 +493,14 @@ func buildBatch(orgID, source, version, cursor string, all []candidate, fullSnap
 	}
 	batch.BatchID = deterministicBatchID(orgID, source, cursor, nextCursor)
 	if err := batch.Validate(); err != nil {
-		return contextfabric.ProjectionBatch{}, fmt.Errorf("devhealthsource: built an invalid projection batch: %w", err)
+		// CHAOS-4874: carry contextfabric.ErrInvalidResult so this reaches
+		// projectionrun.classifyOutcomeError as failure_class=invalid_result
+		// instead of "unclassified". Per-item quarantine above should make
+		// this unreachable for a bound quarantine understands; anything that
+		// still arrives here is a genuine contract defect in this producer,
+		// and an operator must be able to tell those apart from a
+		// vocabulary gap. Same idiom as engine.go's validation stage.
+		return contextfabric.ProjectionBatch{}, fmt.Errorf("%w: devhealthsource: built an invalid projection batch: %w", contextfabric.ErrInvalidResult, err)
 	}
 	return batch, nil
 }
