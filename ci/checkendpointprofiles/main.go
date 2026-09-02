@@ -38,6 +38,20 @@
 //     line is the validator.
 //   - The inventory's declared source_commit and credential_class_source are
 //     NOT verified by this gate: CHAOS-4765.
+//   - Two registrations on one line cannot both be profiled, because a row
+//     addresses a surface as file:line. They fail closed rather than one being
+//     dropped: CHAOS-4774.
+//   - ★ THE BIGGEST ONE, and the one most likely to be misread: this gate does
+//     NOT reconcile a row's SECURITY CLAIM with the code. It checks that a row
+//     exists for every surface, that the row is well-formed and internally
+//     consistent, and that its anchors resolve to content matching what the row
+//     says. It does not check that a route this inventory calls "protected"
+//     really is, nor that a "public" one really is. A guarded route relabelled
+//     public, or left claiming primary_validator: null, passes today.
+//     CHAOS-4780. Guardrail G-1 ("an unregistered route fails CI") is enforced;
+//     "the inventory's security claims are true" is not.
+//   - Two checks in scripts/ci/test-workflow-contract.sh assert a guard is
+//     PRESENT rather than that its property HOLDS: CHAOS-4781.
 //
 // Usage:
 //
