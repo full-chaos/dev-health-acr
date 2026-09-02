@@ -185,6 +185,9 @@ func minimalInterpretation() ContextFabricInterpretedQuestion {
 		Shape:             ContextFabricShapeOpen,
 		RequestedJudgment: oneRune,
 		TimeContext:       ContextFabricTimeContext{Axis: ContextFabricTemporalCurrent},
+		// A NIL slice marshals to `null` (4 bytes); a non-nil empty one to
+		// `[]` (2 bytes). nil is the larger encoding, not the smaller.
+		FactRequirements: []ContextFabricFactRequirement{},
 	}
 }
 
@@ -200,9 +203,14 @@ func maximalInterpretation() ContextFabricInterpretedQuestion {
 	// kind, so the vocabulary is what fills it.
 	kinds := ContextFabricFactKindVocabulary()
 	for i, kind := range kinds {
+		params := map[string]string{}
+		for k := 0; k < factRequirementParametersMaxCount; k++ {
+			params[uniqueID("p", k, 16)] = escaped(256)
+		}
 		q.FactRequirements = append(q.FactRequirements, ContextFabricFactRequirement{
-			Kind:     kind,
-			Subjects: distinctSubjects(ContextFabricFindingSubjectsMaxCount, i*ContextFabricFindingSubjectsMaxCount),
+			Kind:       kind,
+			Subjects:   distinctSubjects(ContextFabricFindingSubjectsMaxCount, i*ContextFabricFindingSubjectsMaxCount),
+			Parameters: params,
 		})
 	}
 	return q
@@ -212,7 +220,7 @@ func repeatDrivers(n int) []ContextFabricDriverJudgment {
 	out := make([]ContextFabricDriverJudgment, 0, n)
 	for i := 0; i < n; i++ {
 		out = append(out, ContextFabricDriverJudgment{
-			DriverID:         uniqueID("d", i, 16),
+			DriverID:         uniqueID("d", i, ContextFabricModelMintedIDMaxLength),
 			Standing:         ContextFabricDriverPrincipal,
 			Category:         string(maximalDriverCategory),
 			Title:            escaped(ContextFabricDriverTitleMaxLength),
@@ -260,7 +268,7 @@ func longestDriverCategory() ContextFabricDriverCategory {
 
 var maximalDriverFactKind, _ = ContextFabricDriverCategoryRequiresClaimedFact(maximalDriverCategory)
 
-func claimedFactID(i int) string { return uniqueID("c", i, 16) }
+func claimedFactID(i int) string { return uniqueID("c", i, ContextFabricModelMintedIDMaxLength) }
 
 var maximalClaimedFactID = claimedFactID(0)
 
@@ -295,8 +303,15 @@ func minimalResolution() ContextFabricSubjectResolution {
 	}
 }
 
+// minimalCoverage sets Partial TRUE: `true` is one byte shorter than `false`,
+// so the zero value is not the byte minimum. Same rule as Reused. The recursive
+// encoding sweep found this one; round 2 did not name it.
 func minimalCoverage() ContextFabricCoverage {
-	return ContextFabricCoverage{Sources: []ContextFabricSourceObservation{}, DegradedReasons: []string{}}
+	return ContextFabricCoverage{
+		Sources:         []ContextFabricSourceObservation{},
+		DegradedReasons: []string{},
+		Partial:         true,
+	}
 }
 
 func minimalVersions() ContextFabricVersionSet {
@@ -313,6 +328,9 @@ func maximalVersions() ContextFabricVersionSet {
 	v.ServiceVersion, v.Backend, v.ProjectionVersion = pad, pad, pad
 	v.QueryVersion, v.InterpretationVersion, v.SynthesisVersion, v.CanonicalServiceVersion = pad, pad, pad, pad
 	v.BackendVersion = pad
+	// ModelIdentity has its OWN bound, wider than the version bound the
+	// other fields share.
+	v.ModelIdentity = escaped(ContextFabricModelIdentityMaxLength)
 	return v
 }
 
@@ -380,12 +398,15 @@ const (
 
 func maximalCandidate(i int) ContextFabricSubjectCandidate {
 	return ContextFabricSubjectCandidate{
-		ReceiptID:    uniqueID("rcpt", i, 32),
-		State:        ContextFabricResolutionCommitted,
-		Confidence:   1,
-		Subject:      distinctSubject(i),
-		MatchedTerms: repeatStrings(matchedTermsMaxCount, ContextFabricSubjectOrComparisonTermMaxLength),
-		MatchReasons: repeatStrings(matchReasonsMaxCount, matchReasonMaxRunes),
+		ReceiptID: uniqueID("rcpt", i, resultIDMaxRunes),
+		// Candidates have their OWN evidence-ref bound (contextFabricWriteBounds.candidateEvidenceRefs = 100),
+		// not the nested bound the rest of the document uses.
+		EvidenceRefIDs: repeatEvidenceRefs(candidateEvidenceRefsMaxCount, ContextFabricEvidenceRefIDMaxLength),
+		State:          ContextFabricResolutionCommitted,
+		Confidence:     1,
+		Subject:        distinctSubject(i),
+		MatchedTerms:   repeatStrings(matchedTermsMaxCount, ContextFabricSubjectOrComparisonTermMaxLength),
+		MatchReasons:   repeatStrings(matchReasonsMaxCount, matchReasonMaxRunes),
 	}
 }
 
@@ -398,7 +419,11 @@ func maximalResolution() ContextFabricSubjectResolution {
 	for i := range committed {
 		committed[i] = distinctSubject(i)
 	}
-	return ContextFabricSubjectResolution{Candidates: candidates, Committed: committed}
+	return ContextFabricSubjectResolution{
+		Candidates:          candidates,
+		Committed:           committed,
+		ClarificationPrompt: escaped(clarificationPromptMaxRunes),
+	}
 }
 
 // maximalSource keeps State available on purpose: a non-available source
@@ -477,7 +502,7 @@ func maximalPath(index int) ContextFabricRelationshipPath {
 		})
 	}
 	return ContextFabricRelationshipPath{
-		PathID:         uniqueID("path", index, resultIDMinRunes),
+		PathID:         uniqueID("path", index, resultIDMaxRunes),
 		Nodes:          nodes,
 		Edges:          edges,
 		WhyRelevant:    escaped(pathWhyRelevantMaxRunes),
@@ -569,8 +594,8 @@ func maximalConfirmedStructure() []ContextFabricConfirmedStructureEntry {
 			Member:         kind,
 			AppliedValue:   escaped(256),
 			Source:         ContextFabricStructureSourceReceipt,
-			PriorResultID:  uniqueID("prior", i, resultIDMinRunes),
-			ReceiptID:      uniqueID("rcpt", i, resultIDMinRunes),
+			PriorResultID:  uniqueID("prior", i, resultIDMaxRunes),
+			ReceiptID:      uniqueID("rcpt", i, resultIDMaxRunes),
 			OfferSource:    ContextFabricStructureOfferEngine,
 			PriorVersionID: escaped(256),
 			PriorEntryID:   escaped(256),
@@ -626,7 +651,7 @@ func maximalWindowClarification() *ContextFabricWindowClarification {
 	options := make([]ContextFabricWindowOption, 0, contextFabricWindowClarificationMaxOptions)
 	for i := 0; i < contextFabricWindowClarificationMaxOptions; i++ {
 		options = append(options, ContextFabricWindowOption{
-			ReceiptID: ContextFabricWindowOptionReceiptPrefix + uniqueID("w", i, resultIDMinRunes),
+			ReceiptID: ContextFabricWindowOptionReceiptPrefix + uniqueID("w", i, resultIDMaxRunes-len(ContextFabricWindowOptionReceiptPrefix)),
 			// OptionID must be UNIQUE within the result as well as bounded,
 			// so it cannot simply be padded to the maximum like a free string.
 			OptionID:   uniqueID("opt", i, 256),
@@ -661,7 +686,7 @@ func maximalStructureNeeds() *ContextFabricStructureNeeds {
 	next := 0
 	ids := func(prefix string) (string, string) {
 		next++
-		return prefix + uniqueID("r", next, resultIDMinRunes), uniqueID("so", next, resultIDMinRunes)
+		return prefix + uniqueID("r", next, resultIDMaxRunes-len(prefix)), uniqueID("so", next, resultIDMaxRunes)
 	}
 	needs := &ContextFabricStructureNeeds{}
 	needs.Missing = append(needs.Missing, contextFabricStructureNeedKinds[:]...)
@@ -670,27 +695,31 @@ func maximalStructureNeeds() *ContextFabricStructureNeeds {
 		needs.KindOptions = append(needs.KindOptions, ContextFabricKindOption{
 			ReceiptID: rid, OptionID: oid, Label: escaped(200),
 			Kind: ContextFabricSubjectProject, OfferSource: ContextFabricStructureOfferEngine,
+			PriorVersionID: escaped(256), PriorEntryID: escaped(256), Phrasing: escaped(200),
 		})
 		rid, oid = ids(ContextFabricAnchorOptionReceiptPrefix)
 		needs.AnchorOptions = append(needs.AnchorOptions, ContextFabricAnchorOption{
 			ReceiptID: rid, OptionID: oid, Label: escaped(200),
-			Kind: ContextFabricSubjectProject, CanonicalID: uniqueID("anc", i, resultIDMinRunes),
+			Kind: ContextFabricSubjectProject, CanonicalID: uniqueID("anc", i, ContextFabricSubjectRefCanonicalIDMaxLength),
 			// MatchedTermHash is a fixed-shape 24-character lowercase hex
 			// digest, not a free string: it has no maximum to pad to.
 			MatchedTermHash: fmt.Sprintf("%024x", i),
 			OfferSource:     ContextFabricStructureOfferEngine,
+			PriorVersionID:  escaped(256), PriorEntryID: escaped(256), Phrasing: escaped(200),
 		})
 		rid, oid = ids(ContextFabricHandleOptionReceiptPrefix)
 		needs.HandleOptions = append(needs.HandleOptions, ContextFabricHandleOption{
 			ReceiptID: rid, OptionID: oid, Label: escaped(200),
-			Kind: ContextFabricSubjectProject, PatternID: uniqueID("pat", i, resultIDMinRunes),
-			Value: oneRune, SourceColumn: oneRune, OfferSource: ContextFabricStructureOfferEngine,
+			Kind: ContextFabricSubjectProject, PatternID: uniqueID("pat", i, 128),
+			Value: escaped(256), SourceColumn: escaped(128), OfferSource: ContextFabricStructureOfferEngine,
+			PriorVersionID: escaped(256), PriorEntryID: escaped(256), Phrasing: escaped(200),
 		})
 		rid, oid = ids(ContextFabricCandidateOptionReceiptPrefix)
 		needs.CandidateOptions = append(needs.CandidateOptions, ContextFabricCandidateOption{
 			ReceiptID: rid, OptionID: oid, Label: escaped(200),
-			Kind: ContextFabricSubjectProject, CanonicalID: uniqueID("cnd", i, resultIDMinRunes),
-			OfferSource: ContextFabricStructureOfferEngine,
+			Kind: ContextFabricSubjectProject, CanonicalID: uniqueID("cnd", i, ContextFabricSubjectRefCanonicalIDMaxLength),
+			OfferSource:    ContextFabricStructureOfferEngine,
+			PriorVersionID: escaped(256), PriorEntryID: escaped(256), Phrasing: escaped(200),
 		})
 	}
 	return needs
@@ -722,3 +751,11 @@ func claimedFactIDs(n int) []string {
 	}
 	return out
 }
+
+const (
+	// Bounds the saturation probe proved reachable but that no named constant
+	// exposes: both are literals inside the validators.
+	factRequirementParametersMaxCount = 32
+	clarificationPromptMaxRunes       = 2000 // validate_context_fabric_result.go:108
+	candidateEvidenceRefsMaxCount     = 100  // contextFabricWriteBounds.candidateEvidenceRefs
+)
