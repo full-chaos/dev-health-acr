@@ -170,6 +170,10 @@ contract-test:
 # artifact-to-artifact half of it -- the half that reported OK while a Go wire
 # field had no published property at all.
 	go test ./internal/contracts/v1/ -run 'TestEverySchemaDocumentAndDefIsBoundOrExempt|TestPublishedSchemaPropertiesMatchGoWireFields|TestPublishedEnumsMatchGoVocabularies|TestReportOrphanSchemaDefs' -count=1
+# The measured answer fixtures. TestMaximalIsSaturated rebuilds a ~520MB
+# document once per probed field and takes ~90s, so it skips under -short;
+# this target is the explicit opt-in that pays that cost deliberately.
+	go test ./internal/contracts/v1/ -run 'TestEveryResultFieldIsInTheBoundTable|TestIrreducibleAndMaximalFixturesAreValid|TestEveryBoundIsBreachable|TestIrreducibleUsesTheByteMinimalEncoding|TestMaximalIsSaturated' -count=1
 
 codegraph-contract:
 	bash scripts/codegraph/verify-contract.sh --fixtures testdata/codegraph/v1.2.0

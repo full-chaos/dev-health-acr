@@ -817,6 +817,9 @@ func navigateBoundPath(root reflect.Value, path []boundPathStep) (reflect.Value,
 }
 
 func TestMaximalIsSaturated(t *testing.T) {
+	if testing.Short() {
+		t.Skip("rebuilds the ~520MB maximal fixture once per probed field (~90s); `make contract-test` runs it without -short")
+	}
 	base := buildFromTable(t, func(x answerBound) func(*ContextFabricInvestigationResult) { return x.Max })
 	if err := base.Validate(); err != nil {
 		t.Fatalf("baseline maximal must be valid: %v", err)
