@@ -818,3 +818,57 @@ func checkI15(frame QuestionFrame) (FrameValidationFailure, bool) {
 	}
 	return FrameValidationFailure{}, false
 }
+
+// subjectOperandWellFormed is I19's per-operand predicate, exposed so the
+// repair bound can ask the question I19 asks.
+//
+// IT EXISTS BECAUSE THE BOUND NEEDS TO TELL "correct the operand the
+// server proved inconsistent" FROM "rewrite an operand that was already
+// fine". Adversarial review round 4 found the gap: I2's condition is
+// `len(Operands) >= 2`, a COUNT, and the bound let an I2 repair change an
+// EXISTING, well-formed operand from `named_subject("team a")` into
+// `children_of_scope(anchor "team a", member project)` -- preserving the
+// term string, and so slipping past the pointer rule, while turning "how
+// is team A doing" into "how are team A's projects doing".
+//
+// Sharing the predicate rather than restating it is the point: a second
+// copy of "what makes an operand well-formed" is the parallel authority
+// law L6 bans, and it is how the outer union's rules drifted from the
+// operand's in the first place.
+func subjectOperandWellFormed(operand SubjectOperand) bool {
+	if operand.Kind == "" || !ValidSubjectOperandKind(operand.Kind) {
+		return false
+	}
+	set := 0
+	var named SubjectOperandKind
+	if operand.Named != nil {
+		set++
+		named = SubjectOperandNamed
+	}
+	if operand.Scoped != nil {
+		set++
+		named = SubjectOperandScoped
+	}
+	if set != 1 || named != operand.Kind {
+		return false
+	}
+	switch operand.Kind {
+	case SubjectOperandNamed:
+		if _, bad := namedTermsFailure(operand.Named, FrameInvariantI19, FrameFailureOperandNoTerms, FrameFailureOperandNoTerms); bad {
+			return false
+		}
+	case SubjectOperandScoped:
+		if len(operand.Scoped.AnchorTerms) == 0 {
+			return false
+		}
+		for _, term := range operand.Scoped.AnchorTerms {
+			if strings.TrimSpace(term) == "" {
+				return false
+			}
+		}
+		if !contractsv1.ValidContextFabricSubjectKind(operand.Scoped.MemberKind) {
+			return false
+		}
+	}
+	return true
+}

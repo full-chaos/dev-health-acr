@@ -131,6 +131,12 @@ const (
 	// the subject entirely leaves a structurally valid frame pointing at
 	// nothing, and a subset check alone accepts it.
 	FrameRepairBoundSubjectPointerDropped FrameRepairBoundViolation = "subject_pointer_dropped"
+	// FrameRepairBoundOperandRewritten: the candidate altered an operand
+	// that was already well-formed. Distinct from retargeting because the
+	// pointer text can be preserved while the operand's TOPOLOGY changes
+	// -- "team a" as a named subject and "team a" as a scope anchor carry
+	// the same string and ask different questions.
+	FrameRepairBoundOperandRewritten FrameRepairBoundViolation = "operand_rewritten"
 )
 
 // invariantNamedGoals declares, per invariant, WHICH goals that
@@ -269,6 +275,30 @@ func CheckFrameRepairBound(proposed, repaired QuestionFrame, failure FrameValida
 		}
 	}
 
+	// OPERANDS, one level DOWN from the outer variant -- and the level
+	// round 4 found the bound was still too coarse at.
+	//
+	// `FrameFieldOperands` was the same blunt token the outer
+	// `subject_expression_variant` had been: I2's condition is
+	// `len(Operands) >= 2`, a COUNT, but the token also covered every
+	// operand's discriminator, member kind and expected kind. Review's
+	// executed repro changed an EXISTING, well-formed operand from
+	// `named_subject("team a")` into `children_of_scope(anchor "team a",
+	// member project)` -- the term string preserved, so the pointer rule
+	// let it through, while the question turned from "how is team A doing"
+	// into "how are team A's projects doing".
+	//
+	// The rule, and it is the same principle the whole bound rests on
+	// applied one level down: A REPAIR MAY CORRECT AN OPERAND THE SERVER
+	// PROVED INCONSISTENT, AND MAY ADD NEW ONES; AN OPERAND THAT WAS
+	// ALREADY WELL-FORMED IS FROZEN. I19's own predicate decides
+	// "well-formed", shared rather than restated. Both legitimate repairs
+	// stay reachable: I2's adds an operand and leaves the existing one
+	// alone, and I19's corrects precisely the operand that was malformed.
+	if frozen, ok := frozenOperandViolation(proposed.SubjectExpression, repaired.SubjectExpression); !ok {
+		return frozen
+	}
+
 	// GOALS.
 	proposedGoals := goalSet(proposed.Goals)
 	repairedGoals := goalSet(repaired.Goals)
@@ -311,6 +341,39 @@ func CheckFrameRepairBound(proposed, repaired QuestionFrame, failure FrameValida
 	}
 
 	return FrameRepairBoundNone
+}
+
+// frozenOperandViolation reports whether every WELL-FORMED operand of the
+// proposal survives structurally in the repair. It returns ok=false plus
+// the violation when one does not.
+//
+// Structural comparison is by the operand's own JSON, for the reason
+// sameSubjectExpression uses it: a hand-written per-variant comparison
+// grows a hole the day an operand gains a field, which is the drift class
+// law L6 bans and precisely how this bound went wrong at the outer level.
+func frozenOperandViolation(proposed, repaired SubjectExpression) (FrameRepairBoundViolation, bool) {
+	if proposed.Explicit == nil {
+		return FrameRepairBoundNone, true
+	}
+	survivors := map[string]bool{}
+	if repaired.Explicit != nil {
+		for _, operand := range repaired.Explicit.Operands {
+			if encoded, err := json.Marshal(operand); err == nil {
+				survivors[string(encoded)] = true
+			}
+		}
+	}
+	for _, operand := range proposed.Explicit.Operands {
+		if !subjectOperandWellFormed(operand) {
+			// The malformed operand is exactly what a repair is for.
+			continue
+		}
+		encoded, err := json.Marshal(operand)
+		if err != nil || !survivors[string(encoded)] {
+			return FrameRepairBoundOperandRewritten, false
+		}
+	}
+	return FrameRepairBoundNone, true
 }
 
 // memberKindOf, groupKindOf, expectedKindOf and operandCount read the

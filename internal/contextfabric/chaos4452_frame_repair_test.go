@@ -1001,3 +1001,117 @@ func TestEmphasisAndDimensionsAreCanonicalizedIntoSets(t *testing.T) {
 		}
 	}
 }
+
+// TestRepairMayNotRewriteAWellFormedOperand is round 4's finding, and it
+// is the SAME CLASS as rounds 2 and 3 one level further down: a blunt
+// field token covering more than the invariant's condition does.
+//
+// `FrameFieldOperands` covered the operand COUNT (which I2 constrains) and
+// every operand's discriminator, member kind and expected kind (which it
+// does not). Review's executed repro changed an existing, well-formed
+// `named_subject("team a")` operand into
+// `children_of_scope(anchor "team a", member project)`. The TERM STRING is
+// preserved, so the pointer rule let it through — and the question turned
+// from "how is team A doing" into "how are team A's projects doing".
+//
+// Review also answered the sweep question the prompt asked: the sweep's I2
+// rows exercised only term replacement and addition, never a nested
+// discriminator change. That gap is closed by the rows below.
+func TestRepairMayNotRewriteAWellFormedOperand(t *testing.T) {
+	wellFormed := SubjectOperand{
+		Kind:  SubjectOperandNamed,
+		Named: &NamedSubjectExpression{Terms: []string{"team a"}, ExpectedKind: kindPtr(contractsv1.ContextFabricSubjectTeam)},
+	}
+	proposed := QuestionFrame{
+		Goals: []InvestigationGoal{GoalCompare},
+		SubjectExpression: SubjectExpression{
+			Kind:     SubjectExpressionExplicitSet,
+			Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{wellFormed}},
+		},
+	}
+	failure, bad := ValidateFramePhaseA1(proposed)
+	if !bad || failure.Invariant != FrameInvariantI2 {
+		t.Fatalf("precondition: want an I2 failure, got %q/%v", failure.Invariant, bad)
+	}
+
+	// THE DEFECT: the existing operand's TOPOLOGY changes while its term
+	// survives, so the pointer rule is satisfied and the question is not.
+	retyped := QuestionFrame{
+		Goals: []InvestigationGoal{GoalCompare},
+		SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionExplicitSet,
+			Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+				{Kind: SubjectOperandScoped, Scoped: &ScopedSetExpression{AnchorTerms: []string{"team a"}, MemberKind: contractsv1.ContextFabricSubjectProject}},
+				{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"team b"}}},
+			}},
+		},
+	}
+	if violation := CheckFrameRepairBound(proposed, retyped, failure); violation != FrameRepairBoundOperandRewritten {
+		t.Fatalf("bound violation = %q, want %q -- I2 constrains how MANY operands there are, never what an existing one IS",
+			violation, FrameRepairBoundOperandRewritten)
+	}
+
+	// Changing only the expected KIND of an existing operand is the same
+	// class with the discriminator left alone.
+	kindSwapped := QuestionFrame{
+		Goals: []InvestigationGoal{GoalCompare},
+		SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionExplicitSet,
+			Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+				{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"team a"}, ExpectedKind: kindPtr(contractsv1.ContextFabricSubjectProject)}},
+				{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"team b"}}},
+			}},
+		},
+	}
+	if violation := CheckFrameRepairBound(proposed, kindSwapped, failure); violation != FrameRepairBoundOperandRewritten {
+		t.Fatalf("bound violation = %q, want %q", violation, FrameRepairBoundOperandRewritten)
+	}
+
+	// I2's LEGITIMATE repair: the existing operand is untouched and a
+	// second one appears. Both must stay reachable, or the bound is too
+	// tight again.
+	augmented := QuestionFrame{
+		Goals: []InvestigationGoal{GoalCompare},
+		SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionExplicitSet,
+			Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+				wellFormed,
+				{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"team b"}}},
+			}},
+		},
+	}
+	if violation := CheckFrameRepairBound(proposed, augmented, failure); violation != FrameRepairBoundNone {
+		t.Fatalf("bound violation = %q on I2's legitimate repair, want none", violation)
+	}
+
+	// I19's LEGITIMATE repair: the MALFORMED operand is corrected, which
+	// is exactly what a repair is for. A frozen-operand rule that also
+	// froze the broken one would make I19 unrepairable.
+	malformed := QuestionFrame{
+		Goals: []InvestigationGoal{GoalCompare},
+		SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionExplicitSet,
+			Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+				wellFormed,
+				{Kind: SubjectOperandScoped, Scoped: &ScopedSetExpression{AnchorTerms: []string{"team b"}}}, // no member kind
+			}},
+		},
+	}
+	i19Failure, bad := ValidateFramePhaseA1(malformed)
+	if !bad || i19Failure.Invariant != FrameInvariantI19 {
+		t.Fatalf("precondition: want an I19 failure, got %q/%v", i19Failure.Invariant, bad)
+	}
+	corrected := QuestionFrame{
+		Goals: []InvestigationGoal{GoalCompare},
+		SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionExplicitSet,
+			Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+				wellFormed,
+				{Kind: SubjectOperandScoped, Scoped: &ScopedSetExpression{AnchorTerms: []string{"team b"}, MemberKind: contractsv1.ContextFabricSubjectProject}},
+			}},
+		},
+	}
+	if violation := CheckFrameRepairBound(malformed, corrected, i19Failure); violation != FrameRepairBoundNone {
+		t.Fatalf("bound violation = %q on I19's legitimate repair, want none -- the malformed operand is precisely what may be corrected", violation)
+	}
+}
