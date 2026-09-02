@@ -916,10 +916,43 @@ func (w *familyGateWalker) walkStmt(stmt ast.Stmt) {
 	}
 }
 
+// walkSwitch decides ONCE, over the WHOLE switch, whether the arm the
+// caller ends up in was selected using a family-derived value -- then
+// applies that single decision to every arm's body, default included.
+//
+// CODEX ROUND 2, P1, EXECUTED: the tag-only check (`tagKind.tainted()`)
+// missed a TAGLESS `switch { case cond: ... }`, whose case "tag" is nil
+// and therefore never tainted by construction -- and separately missed a
+// case CONDITION that reaches a family value through an ORDINARY function
+// call (`strings.EqualFold(string(family), "subject_investigation")`)
+// rather than a direct `==`. Enumerating comparison-shaped stdlib calls by
+// name (EqualFold, Contains, reflect.DeepEqual, a regexp match, ...) would
+// be exactly the allowlist-of-shapes anti-pattern this ticket exists to
+// retire. The fix widens the QUANTIFIER instead: exprTreeIsTainted asks,
+// structurally, "does ANY leaf identifier/selector anywhere in this
+// expression's syntax tree resolve to a tainted value" -- true regardless
+// of which function wraps it, because it walks down to the tainted LEAF
+// rather than trying to recognize the wrapping call.
+//
+// DEFAULT IS INCLUDED once any OTHER arm's selection is family-derived:
+// a binary partition (family-matches / everything else) makes the default
+// arm's text just as family-driven as the matched arm's -- which side of
+// the split you land on is decided by the family value either way.
 func (w *familyGateWalker) walkSwitch(s *ast.SwitchStmt) {
 	w.walkStmt(s.Init)
 	tagKind := w.eval(s.Tag)
 	before := w.snapshotLocal()
+
+	switchTainted := tagKind.tainted()
+	for _, clause := range s.Body.List {
+		cc := clause.(*ast.CaseClause)
+		for _, expr := range cc.List {
+			if w.exprTreeIsTainted(expr) {
+				switchTainted = true
+			}
+		}
+	}
+
 	var union familyGateLocal
 	for _, clause := range s.Body.List {
 		cc := clause.(*ast.CaseClause)
@@ -927,7 +960,7 @@ func (w *familyGateWalker) walkSwitch(s *ast.SwitchStmt) {
 		for _, expr := range cc.List {
 			w.eval(expr)
 		}
-		if tagKind.tainted() {
+		if switchTainted {
 			for _, sub := range cc.Body {
 				familyGateCheckYieldsLiteral(w, sub)
 			}
@@ -941,6 +974,30 @@ func (w *familyGateWalker) walkSwitch(s *ast.SwitchStmt) {
 	if union != nil {
 		w.unionLocal(union)
 	}
+}
+
+// exprTreeIsTainted reports whether ANY identifier or selector anywhere in
+// expr's syntax tree currently evaluates tainted -- a structural
+// "does this expression depend on a family value at all", independent of
+// which functions or operators sit between the leaf and the root. Used to
+// decide whether a switch's SELECTION (not just its literal tag) is
+// family-derived, so an ordinary function call wrapping the comparison
+// (codex R2 P1) is seen the same way a direct `==` is.
+func (w *familyGateWalker) exprTreeIsTainted(expr ast.Expr) bool {
+	tainted := false
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if tainted {
+			return false
+		}
+		switch e := n.(type) {
+		case *ast.Ident, *ast.SelectorExpr:
+			if w.eval(e.(ast.Expr)).tainted() {
+				tainted = true
+			}
+		}
+		return true
+	})
+	return tainted
 }
 
 // familyGateCheckYieldsLiteral flags a family-keyed switch arm that returns
@@ -1395,6 +1452,11 @@ type familyGateFixture struct {
 }
 
 var familyGateFixtures = []familyGateFixture{
+	{
+		name:        "R6_tagless_switch_comparison_hidden_in_call",
+		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/p2_repro_tagless_switch",
+		description: "codex round 2, P1, EXECUTED against this gate: tagless switch, the comparison against family hidden inside strings.EqualFold -- a NEW class, not a re-find",
+	},
 	{
 		name:        "R5b_composite_literal_wrapped_family_key",
 		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/p1_repro_composite_key",
