@@ -535,8 +535,8 @@ var knownSentinels = []error{
 // Every member of knownSentinels must appear as a KEY here --
 // TestNeutralClassCoversEveryKnownSentinel enforces it -- so adding a
 // sentinel forces a decision instead of silently re-opening the
-// failure_class=unclassified hole this table closed (CHAOS-4874). A nil
-// value is that decision recorded, never an omission.
+// failure_class=unclassified hole CHAOS-4874 closed. A nil value is that
+// decision recorded, never an omission.
 var neutralClass = map[error]error{
 	// See ErrNotFound's declaration: a confirmed absence already has two
 	// neutral translations (ErrGraphNotProjected,

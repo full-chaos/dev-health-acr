@@ -332,9 +332,10 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	}
 	// Rate limiting: contextfabric.ErrRateLimited is the vendor-neutral
 	// classification a graph backend adapter wraps its own rate-limit
-	// error into -- falkorgraph's neutralClass table (falkorgraph/client.go)
-	// pairs falkorgraph.ErrRateLimited with this sentinel, and both
-	// classifyFalkorError and safeDependencyError emit the pair.
+	// error into -- falkorgraph.ErrRateLimited is DECLARED wrapping this
+	// sentinel (falkorgraph/config.go), so it carries the pair however it
+	// is constructed, and falkorgraph/client.go's neutralClass table is the
+	// specification that declaration is tested against.
 	// ErrModelRateLimited is the pre-existing, distinct classification for
 	// the model runtime (ADR 0008). Both mean the same thing to a caller:
 	// back off and retry later.
