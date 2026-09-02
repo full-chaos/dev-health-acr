@@ -512,6 +512,36 @@ var familyGateFixtures = []familyGateFixture{
 		description: "codex round 3, P1, EXECUTED, re-executed by the lane: fmt.Sprintf(\"...%s...\", family) assigned to a served field. the acceptance case that ended the syntax-walker approach and the reason this gate is an SSA value-flow analysis: a walker is never closed under an arbitrary call boundary. Caught here by the uniform per-call-site rule, with no knowledge of fmt.Sprintf.",
 	},
 	{
+		name:         "R12a_io_copy_reader_boundary_bypass",
+		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r12_io_copy_reader",
+		description:  "codex round 2 P1: prose wrapped in a strings.Reader and io.Copy'd to the response -- the value at the boundary is not text-typed",
+		wantEnforced: true,
+	},
+	{
+		name:         "R12b_bufio_write_string_boundary_bypass",
+		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r12_bufio_write_string",
+		description:  "codex round 2 P1: prose written via bufio.Writer.WriteString -- a writer method not named exactly Write",
+		wantEnforced: true,
+	},
+	{
+		name:         "R12e_concrete_reader_at_egress",
+		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r12_concrete_reader_egress",
+		description:  "pins the no-text-type-test-at-egress rule: the payload reaches the boundary as a CONCRETE *strings.Reader, so no structural text test can see it -- R12a does not pin this, because io.Copy's parameter is an interface and the text predicate accepts every interface",
+		wantEnforced: true,
+	},
+	{
+		name:         "R12c_template_execute_writer_param",
+		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r12_template_execute",
+		description:  "byte egress where the writer is the first PARAMETER of a method on a non-writer receiver (html/template Execute)",
+		wantEnforced: true,
+	},
+	{
+		name:         "R12d_custom_marshaller_results",
+		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r12_custom_marshaller",
+		description:  "encoder family from the other side: a MarshalJSON whose bytes reach the wire without this package ever calling it, so its RESULTS are the boundary",
+		wantEnforced: true,
+	},
+	{
 		name:        "R10_control_selected_nonconstant_text",
 		importPath:  "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r10_control_nonconstant",
 		description: "codex round 1 P1: prose selected by a family test but produced by a no-argument helper, so the implicit-flow rule's non-empty-text-CONSTANT restriction does not see it",

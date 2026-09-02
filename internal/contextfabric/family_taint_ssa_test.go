@@ -212,7 +212,10 @@ type familySSA struct {
 
 	// served state, computed once after the fixed point.
 	servingValues map[ssa.Value]bool
-	servedTypes   map[string]bool
+	// egressValues are the strict subset of serving values at which bytes
+	// actually LEAVE. See computeServed.
+	egressValues map[ssa.Value]bool
+	servedTypes  map[string]bool
 }
 
 type familyTaintEdge struct {
@@ -1379,8 +1382,22 @@ func (a *familySSA) record(pos token.Pos, fn *ssa.Function, v ssa.Value, rule, d
 // serialization boundary, with no struct field in between --
 // json.Marshal(phrase) rather than json.Marshal(struct{F: phrase}).
 func (a *familySSA) checkServingPositionSinks() {
-	for v := range a.servingValues {
-		if a.val[v] != familyTaintDerived || !familySSAIsServableText(v.Type()) {
+	for v := range a.egressValues {
+		// NO TEXT-TYPE TEST. Anything family-derived that arrives at a
+		// boundary is a defect whatever its Go type -- the boundary exists
+		// to turn it into bytes.
+		//
+		// A correction worth keeping, because the first version of this
+		// comment was wrong about its own example. It claimed the text
+		// test was "the only thing discarding" R12a's
+		// `io.Copy(w, strings.NewReader(prose))`. It was not: io.Copy's
+		// parameter is io.Reader, so the value arrives interface-typed and
+		// the text predicate accepts every interface. A mutation that
+		// restored the text test turned NO fixture green -- which is how
+		// the bad reasoning was caught. Fixture R12e now pins the rule
+		// properly, with the payload arriving as a concrete
+		// *strings.Reader that no structural text test can see.
+		if a.val[v] != familyTaintDerived {
 			continue
 		}
 		instr, ok := v.(ssa.Instruction)
@@ -1508,6 +1525,7 @@ func familySSAValueLabel(a *familySSA, v ssa.Value) string {
 func (a *familySSA) computeServed() {
 	a.servedTypes = map[string]bool{}
 	a.servingValues = map[ssa.Value]bool{}
+	a.egressValues = map[ssa.Value]bool{}
 
 	// The backward walk is deliberately SHORT: through interface boxing,
 	// and through a parameter to its call sites. It does NOT chase a
@@ -1528,8 +1546,15 @@ func (a *familySSA) computeServed() {
 	}
 
 	for _, fn := range a.funcs {
+		marshaller := familySSAIsMarshalMethod(fn)
 		for _, b := range fn.Blocks {
 			for _, instr := range b.Instrs {
+				if marshaller {
+					if ret, ok := instr.(*ssa.Return); ok && len(ret.Results) > 0 {
+						push(ret.Results[0])
+						a.egressValues[ret.Results[0]] = true
+					}
+				}
 				call, ok := instr.(ssa.CallInstruction)
 				if !ok {
 					continue
@@ -1537,6 +1562,22 @@ func (a *familySSA) computeServed() {
 				common := call.Common()
 				for _, arg := range a.servingArgs(common) {
 					push(arg)
+				}
+				// EGRESS is the strict subset where bytes LEAVE.
+				//
+				// encoding/json.Marshal PRODUCES bytes; it does not send
+				// them anywhere. Treating it as egress reported
+				// `canonicalSampleKey`, which json.Marshals a sample to
+				// build an internal sort key, as text reaching the wire --
+				// a false positive on one of the two files the acceptance
+				// criteria name as known-clean. A writer is where bytes
+				// leave; a marshaller's results leave by contract, since
+				// encoding/json emits them wherever the type is encoded.
+				// The encoding family still seeds the served TYPE set: it
+				// says what SHAPE is served, which is a different question
+				// from where bytes go.
+				for _, arg := range a.egressArgs(common) {
+					a.egressValues[arg] = true
 				}
 			}
 		}
@@ -1618,35 +1659,45 @@ func (a *familySSA) assertServedSetIsRealistic() {
 	}
 }
 
-// familySSAServingArgs returns the arguments of a call that CROSS THE
-// WIRE, or nil if the call is not a boundary.
+// servingArgs returns the arguments of a call that CROSS THE WIRE, or nil
+// if the call is not a boundary.
 //
-// There are exactly TWO boundary families, and they are named as families
-// rather than as lists of types:
+// A boundary is a PROPERTY, not a list. Two families:
 //
-//  1. ENCODING. encoding/json's Marshal, MarshalIndent and Encoder.Encode:
-//     the value handed in becomes the served document.
-//  2. BYTE WRITING. Anything io.Writer-shaped -- a Write([]byte) method on
-//     a writer, or a function whose FIRST parameter is a writer, which is
-//     the Go convention that covers io.WriteString, fmt.Fprintf, fmt.Fprint,
-//     fmt.Fprintln and any hand-written helper with the same shape.
+//  1. ENCODING — encoding/json's Marshal, MarshalIndent and Encoder.Encode,
+//     plus any MarshalJSON/MarshalText method, whose RESULTS are what the
+//     encoder puts on the wire even though our own code never calls it.
+//  2. BYTE WRITING — ANY method call whose receiver is writer-shaped, and
+//     any function whose first parameter is writer-shaped. Writer-shape is
+//     structural: a Write([]byte) (int, error) method.
 //
-// CODEX ROUND 1, P1 (SECOND FINDING), EXECUTED AND RE-EXECUTED BY THE LANE:
-// the first version of this function knew only family 1. A handler that
-// did `w.Write([]byte(fmt.Sprintf("...%s...", family)))` was invisible --
-// not because the taint was wrong (the Sprintf result IS derived, and the
-// same value stored into a served struct field WAS enforced) but because
-// http.ResponseWriter.Write was not a boundary this gate had heard of.
-// That is not an under-enforcement, it is a FALSE CLAIM: a raw byte write
-// is the wire. The failure is the same shape as the one that stopped an
-// earlier lane -- the gate validated the surface its author had thought
-// of, and the claim written above it was wider than the check beneath it.
+// THE HISTORY HERE IS THE POINT, AND IT IS THIS LANE'S OWN MISTAKE.
+// Round 1 found that this function knew only `encoding/json`, so a plain
+// `w.Write([]byte(prose))` was invisible. It was fixed by adding a byte
+// family that matched a method named exactly `Write`. Round 2 then found
+// TWO more members of that same family: `io.Copy(w, strings.NewReader(p))`
+// and `bufio.Writer.WriteString(p)`. Same class, consecutive rounds, the
+// previous fix being where the next defect landed.
 //
-// Writer-shape is decided STRUCTURALLY (a Write method taking []byte and
-// returning (int, error)), never by naming io.Writer or net/http, so a
-// domain-specific writer interface is a boundary on the same terms.
+// The diagnosis was not "two cases missed". The propagation half of this
+// analysis was moved off per-shape enumeration and onto a uniform IR rule
+// -- that was the whole ticket -- but the SINK SURFACE was left as an
+// enumeration, and "every way bytes leave a Go process" is not a closed
+// set: Write, WriteString, ReadFrom, io.Copy, Fprintf, template.Execute,
+// ServeContent, a custom marshaller. That is the walker's failure mode
+// reproduced one level up, inside the fix for it.
+//
+// So the rules below were written by DELETING conditions, not adding
+// cases: no method-name test (any method on a writer writes), and no
+// text-type test at the sink (see checkServingPositionSinks). Both
+// deletions make the surface a property. If a future round still finds a
+// byte-egress path, the surface is genuinely unbounded and the enforced
+// claim should be narrowed to encoder-reachable field stores rather than
+// patched a third time.
 func (a *familySSA) servingArgs(common *ssa.CallCommon) []ssa.Value {
 	args := common.Args
+
+	// Family 1: encoding.
 	if fn := common.StaticCallee(); fn != nil {
 		if obj := fn.Object(); obj != nil && obj.Pkg() != nil && obj.Pkg().Path() == "encoding/json" {
 			switch obj.Name() {
@@ -1664,22 +1715,85 @@ func (a *familySSA) servingArgs(common *ssa.CallCommon) []ssa.Value {
 		}
 	}
 
-	// Family 2: a Write([]byte) method on a writer-shaped receiver.
-	if common.Method != nil && common.Method.Name() == "Write" && len(args) == 1 {
-		if a.isWriterShaped(common.Value.Type()) {
-			return args
+	// Family 2: byte writing. ANY method on a writer-shaped receiver.
+	if common.Method != nil && a.isWriterShaped(common.Value.Type()) {
+		return args
+	}
+	fn := common.StaticCallee()
+	if fn == nil || fn.Signature == nil {
+		return nil
+	}
+	// A method on a CONCRETE writer (bufio.Writer.WriteString, and every
+	// other write-ish method on it) arrives as a static call whose args[0]
+	// is the receiver.
+	recvOffset := 0
+	if fn.Signature.Recv() != nil {
+		recvOffset = 1
+		if len(args) > 0 && a.isWriterShaped(args[0].Type()) {
+			return args[1:]
 		}
 	}
-	if fn := common.StaticCallee(); fn != nil && fn.Signature != nil {
-		if params := fn.Signature.Params(); params.Len() > 0 &&
-			a.isWriterShaped(params.At(0).Type()) {
-			// Everything after the writer is what gets written.
-			if len(args) > 1 {
-				return args[1:]
-			}
+	// A function whose FIRST PARAMETER is a writer: io.Copy, io.WriteString,
+	// fmt.Fprintf, template.Execute, and any helper of that shape.
+	if params := fn.Signature.Params(); params.Len() > 0 &&
+		a.isWriterShaped(params.At(0).Type()) {
+		if len(args) > recvOffset+1 {
+			return args[recvOffset+1:]
 		}
 	}
 	return nil
+}
+
+// egressArgs returns the arguments at which bytes actually LEAVE: the
+// byte-writing family only. It is deliberately the writer half of
+// servingArgs and nothing else.
+func (a *familySSA) egressArgs(common *ssa.CallCommon) []ssa.Value {
+	args := common.Args
+	if common.Method != nil {
+		if a.isWriterShaped(common.Value.Type()) {
+			return args
+		}
+		if common.Method.Pkg() != nil && common.Method.Pkg().Path() == "encoding/json" &&
+			common.Method.Name() == "Encode" && len(args) > 0 {
+			// Encoder.Encode writes to the writer it was built with.
+			return args[:1]
+		}
+		return nil
+	}
+	fn := common.StaticCallee()
+	if fn == nil || fn.Signature == nil {
+		return nil
+	}
+	recvOffset := 0
+	if fn.Signature.Recv() != nil {
+		recvOffset = 1
+		if len(args) > 0 && a.isWriterShaped(args[0].Type()) {
+			return args[1:]
+		}
+	}
+	if params := fn.Signature.Params(); params.Len() > 0 &&
+		a.isWriterShaped(params.At(0).Type()) {
+		if len(args) > recvOffset+1 {
+			return args[recvOffset+1:]
+		}
+	}
+	return nil
+}
+
+// familySSAIsMarshalMethod reports whether fn is a custom marshaller whose
+// RESULTS go to the wire. Our code never calls it -- encoding/json does --
+// so its returns are a boundary in their own right.
+func familySSAIsMarshalMethod(fn *ssa.Function) bool {
+	obj := fn.Object()
+	if obj == nil || fn.Signature == nil || fn.Signature.Recv() == nil {
+		return false
+	}
+	switch obj.Name() {
+	case "MarshalJSON", "MarshalText":
+	default:
+		return false
+	}
+	return fn.Signature.Params().Len() == 0 && fn.Signature.Results().Len() == 2
 }
 
 // familySSAIsWriterShaped reports whether a type has a Write([]byte)
