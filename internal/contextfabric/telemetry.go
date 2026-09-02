@@ -710,6 +710,33 @@ func (t SlogEngineTelemetry) RecordQuestionFamilyResolution(ctx context.Context,
 	t.logger.InfoContext(ctx, "context fabric question family resolution", args...)
 }
 
+// RecordServerStatusShadow (CHAOS-4452 stage 2, B8) logs at Info, once per
+// investigation that reaches assembly with a plan.
+//
+// EVERY field on the event reaches this line, per the CHAOS-4085 sink
+// discipline. `derived` in particular is logged even though it is false
+// only on the no_plan basis: without it, "the server declined to derive a
+// status" and "the server derived one and agreed" both render as
+// disagreed=false, and the flip decision reads exactly that difference.
+//
+// `version` is on every line because this derivation is explicitly a
+// placeholder for T6's requirement-outcome rule. Two disagreement rates
+// measured under different rules must never be spliced into one series,
+// and the version is what makes the splice visible.
+func (t SlogEngineTelemetry) RecordServerStatusShadow(ctx context.Context, principal storage.Principal, event ServerStatusShadow) {
+	args := []any{
+		"org_id", principal.OrgID,
+		"model_status", string(event.ModelStatus),
+		"server_status", string(event.ServerStatus),
+		"basis", string(event.Basis),
+		"derived", event.Derived,
+		"disagreed", event.Disagreed,
+		"version", event.Version,
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric server status shadow", args...)
+}
+
 // RecordFrameValidation (CHAOS-4452 stage 2, §13.6) logs at Info, once per
 // frame that reaches validation -- INCLUDING VALID ONES, because the
 // denominator has to be countable. An event that fires only on failure

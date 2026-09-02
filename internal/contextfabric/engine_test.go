@@ -398,6 +398,7 @@ type recordingTelemetry struct {
 	modelRowsStripped []int
 	// cohortRanked (CHAOS-4398) mirrors the SAME list-not-count discipline.
 	renderShapeSelections []RenderShapeSelectionEvent
+	serverStatusShadows   []ServerStatusShadow
 	cohortRanked          []CohortRankedEvent
 	// cohortDriverNarrations (CHAOS-4398 PR3b) mirrors the SAME
 	// list-not-count discipline.
@@ -648,6 +649,10 @@ func (r *recordingTelemetry) RecordModelRowsStripped(_ context.Context, _ storag
 
 func (r *recordingTelemetry) RecordRenderShapeSelection(_ context.Context, _ storage.Principal, event RenderShapeSelectionEvent) {
 	r.renderShapeSelections = append(r.renderShapeSelections, event)
+}
+
+func (r *recordingTelemetry) RecordServerStatusShadow(_ context.Context, _ storage.Principal, event ServerStatusShadow) {
+	r.serverStatusShadows = append(r.serverStatusShadows, event)
 }
 
 func (r *recordingTelemetry) RecordCohortRanked(_ context.Context, _ storage.Principal, event CohortRankedEvent) {
