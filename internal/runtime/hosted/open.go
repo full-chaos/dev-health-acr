@@ -768,7 +768,15 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// bounded repair and its bound are deferred to their own change,
 		// so an invalid frame is REFUSED and recorded as such -- the
 		// honest outcome, and never a silent pass-through.
-		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, Sink: receiptSink, FamilyTelemetry: engineTelemetry, FrameTelemetry: engineTelemetry},
+		// Requirements is the SAME factRegistry wired as Facts below. It
+		// is passed for its DECLARATIONS, not for reading: the obligation
+		// -> requirement derivation crosses a validated frame with what
+		// each producer declares it can serve, and reads nothing. Wiring
+		// it here is what makes the requirement telemetry a live signal
+		// rather than a counter on an unreachable function -- the
+		// disposition recorded when the declaration slice shipped without
+		// telemetry.
+		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, Sink: receiptSink, FamilyTelemetry: engineTelemetry, FrameTelemetry: engineTelemetry, Requirements: factRegistry},
 		Graph:       graphReader,
 		Facts:       factRegistry,
 		Synthesizer: contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry},

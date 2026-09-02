@@ -722,8 +722,47 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		"derived_shape", string(event.DerivedShape),
 		"frame_version", event.FrameVersion,
 	}
+	args = append(args, requirementDerivationLogAttrs(event.RequirementDerivation)...)
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric frame validation", args...)
+}
+
+// requirementDerivationLogAttrs flattens the requirement summary onto the
+// frame-validation line.
+//
+// EVERY CLOSED TOKEN GETS A KEY ON EVERY EVENT, including the ones that
+// counted zero. An omitted zero is indistinguishable from a classifier
+// that never reached that tier, which is the same failure as a gate tier
+// with no positive fixture: "0" and "never ran" must not look alike to an
+// operator reading the log. The keys are derived from the vocabularies
+// themselves, so a member added to one appears here without an edit.
+//
+// requirement_accounting is the positive statement, on the pattern
+// render_shape_accounting already set: "ok" when served + unserved
+// accounts for every derived row, so a healthy derivation SAYS so rather
+// than merely not complaining.
+func requirementDerivationLogAttrs(summary RequirementDerivationSummary) []any {
+	accounting := "ok"
+	if !summary.Balanced() {
+		accounting = "violated"
+	}
+	args := []any{
+		"requirement_derivation_version", summary.Version,
+		"requirement_cells_derived", summary.Derived,
+		"requirement_cells_served", summary.Served,
+		"requirement_cells_unserved", summary.Unserved,
+		"requirement_accounting", accounting,
+	}
+	for index, reason := range RequirementUnavailableReasonVocabulary() {
+		args = append(args, "requirement_unavailable_"+string(reason), summary.UnavailableCells[index])
+	}
+	for index, quantifier := range CompletionQuantifierVocabulary() {
+		args = append(args, "requirement_quantifier_"+string(quantifier), summary.Quantifiers[index])
+	}
+	for index, role := range SubjectRoleVocabulary() {
+		args = append(args, "requirement_role_"+string(role), summary.Roles[index])
+	}
+	return args
 }
 
 // RecordPlanNarrowing (CHAOS-4636) emits one plan-narrowing decision.
