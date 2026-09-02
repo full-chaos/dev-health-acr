@@ -310,43 +310,10 @@ func (s *ClickHouseProjectionSource) plan(fromCursor string) sourcePlan {
 			return []candidate{organizationCandidate(orgID, organizationAnchorTime)}
 		},
 		observe:           s.logOrphanedWorkItems,
-		observeQuarantine: s.logQuarantinedItem,
+		observeQuarantine: quarantineLogger(s.logger, SourceName),
 		recordConsumed:    s.recordConsumed(fromCursor),
 		dropConsumed:      s.forgetConsumed,
 	}
-}
-
-// logQuarantinedItem is the operational signal for CHAOS-4874's per-item
-// quarantine: an item this producer built and the v1 contract refused.
-//
-// Emitted at WARN, one line per dropped item. It is deliberately NOT silent
-// and deliberately NOT an error: dropping the item is the CORRECT outcome
-// (the alternative, which shipped before this, was rejecting the whole page
-// and wedging the organization forever), but a source producing
-// unprojectable rows is still something an operator must be able to see and
-// count. A sustained non-zero rate for one reason token is the signal that
-// either the source data changed or this producer needs a mapping it does
-// not have.
-//
-// Content-safe on the same terms as logTableReadFailure: a closed reason
-// token, a fixed item-kind label, and -- only for a relationship -- the
-// offending TYPE, which is a bounded, low-cardinality enum value capped at
-// maxQuarantineDetailRunes. Never row data, never free text, never the
-// validator's own message.
-func (s *ClickHouseProjectionSource) logQuarantinedItem(observation quarantineObservation) {
-	logger := s.logger
-	if logger == nil {
-		return
-	}
-	attrs := []any{
-		"source", SourceName,
-		"quarantine_reason", observation.Reason,
-		"item_kind", observation.Kind,
-	}
-	if observation.Detail != "" {
-		attrs = append(attrs, "relationship_type", observation.Detail)
-	}
-	logger.Warn("context_fabric: projection item quarantined; the item is dropped and the batch continues", attrs...)
 }
 
 // candidateCounts tallies candidates by kind -- CHAOS-3753 codex round-2

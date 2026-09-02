@@ -176,6 +176,19 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 	sortCandidates(all)
 	items := partitionProjectableCandidates(all, p.observeQuarantine)
 	if !carriesPayload(items) {
+		// Everything this snapshot read was quarantined, so there is nothing
+		// to publish -- but the rows WERE consumed, and without recording
+		// that the checkpoint never moves. A from-scratch projection whose
+		// first snapshot is entirely unprojectable would otherwise re-read
+		// and re-drop the same rows on every tick, forever, with no batch
+		// and no error: the wedge with its diagnosis removed.
+		//
+		// pagedBatch's skip path already does exactly this; the full-snapshot
+		// path did not, which mattered the moment per-item quarantine made an
+		// all-unprojectable candidate set reachable. It bites hardest on a
+		// source with no seed candidate (TeamsProjectsSource), where nothing
+		// guarantees at least one valid item.
+		noteConsumedFrom(p, orgID, all)
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
 	batch, err := buildBatch(orgID, p.source, p.version, "", all, items, true, true, p.clock())
@@ -248,12 +261,24 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		// looking for real content, bounded so one tick cannot spin.
 		last := all[len(all)-1]
 		state = cursorState{Since: last.observedAt, After: last.sortKey}
-		if encoded, err := encodeCursor(state); err == nil {
-			p.noteConsumed(orgID, encoded)
-		}
+		noteConsumedFrom(p, orgID, all)
 		if skips >= maxOmittedPageSkips {
 			return contextfabric.ProjectionBatch{}, false, nil
 		}
+	}
+}
+
+// noteConsumedFrom records the furthest position a call proved holds nothing
+// publishable, derived from the LAST candidate the call consumed. Shared by
+// the full-snapshot and paging paths so the two cannot drift: a cursor
+// recorded one way and not the other is how a stall hides.
+func noteConsumedFrom(p sourcePlan, orgID string, consumed []candidate) {
+	if len(consumed) == 0 {
+		return
+	}
+	last := consumed[len(consumed)-1]
+	if encoded, err := encodeCursor(cursorState{Since: last.observedAt, After: last.sortKey}); err == nil {
+		p.noteConsumed(orgID, encoded)
 	}
 }
 

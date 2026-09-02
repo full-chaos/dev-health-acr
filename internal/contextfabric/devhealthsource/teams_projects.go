@@ -921,6 +921,12 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		now:            s.now,
 		recordConsumed: s.recordConsumed(checkpoint.Cursor),
 		dropConsumed:   s.forgetConsumed,
+		// Without this the shared engine's per-item quarantine drops items
+		// on THIS source with no signal at all -- a silent loss, which the
+		// standing ruling forbids outright. The ClickHouse source got the
+		// observer when quarantine was added; this one shares the same
+		// engine and must not be the quiet exception.
+		observeQuarantine: quarantineLogger(s.logger, TeamsProjectsSourceName),
 		// No seed: the synthesized Organization entity belongs to
 		// ClickHouseProjectionSource's full snapshot and must be projected
 		// exactly once per organization, not once per source.

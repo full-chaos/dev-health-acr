@@ -664,3 +664,102 @@ func TestBothEquivalentSpellingsOnOnePageCollapseToOneEdge(t *testing.T) {
 		}
 	}
 }
+
+// TestAllQuarantinedFullSnapshotIsCountedAndAdvances executes round 1's
+// second P1, which the reviewer could only ARGUE (its fixture would have
+// needed a container). Both halves are real and both were introduced by
+// per-item quarantine, which is wired into the SHARED assembly engine and so
+// changed every source at once -- not only the one this change set out to fix.
+//
+// Half 1, the silent loss: TeamsProjectsSource's plan() did not pass an
+// observeQuarantine hook, so every item the engine dropped on that source was
+// dropped with NO signal whatsoever. That violates the standing ruling that a
+// drop is always counted, and it is strictly worse than the wedge it replaced:
+// a wedge announces itself.
+//
+// Half 2, the stall: fullSnapshot returned on an all-quarantined candidate set
+// without recording consumed progress, so a from-scratch projection whose
+// first snapshot is entirely unprojectable re-read and re-dropped the same
+// rows on every tick forever, with no batch and no error. This source has no
+// seed candidate, so nothing guarantees it a surviving item -- which is
+// exactly why it, and not the ClickHouse source, is where this bites.
+//
+// The fixture uses timestamps past the epoch-nanosecond range Go can
+// represent (DateTime64 reaches 2299; Go stops at 2262-04-11), which the
+// contract rejects regardless of which field a producer maps where -- so the
+// test does not depend on the teams producer's own field choices.
+func TestAllQuarantinedFullSnapshotIsCountedAndAdvances(t *testing.T) {
+	t.Parallel()
+	beyondGo := time.Date(2299, 12, 31, 0, 0, 0, 0, time.UTC)
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM teams AS tm FINAL", rows: [][]any{
+			teamRow("gh:ops-team", "Ops Team", "Ops Team", "github", "ops-team", 1, beyondGo, nil, nil),
+		}},
+		{match: "FROM projects FINAL\nWHERE", rows: [][]any{
+			projectRow("70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891", "chaos-ops", "full.chaos/chaos-ops", "gitlab", "", "https://gitlab.com/full.chaos/chaos-ops", 1, beyondGo),
+		}},
+	}}
+
+	var buf bytes.Buffer
+	source := enabledTeamsProjectsSource(t, client).
+		WithLogger(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName}
+
+	_, available, err := source.NextProjectionBatch(context.Background(), checkpoint)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if available {
+		t.Fatal("expected no batch: every candidate is unprojectable")
+	}
+
+	// Half 1: the drops must be COUNTED, never silent.
+	drops := strings.Count(buf.String(), quarantineLine)
+	if drops == 0 {
+		t.Fatal("TeamsProjectsSource dropped every candidate with NO quarantine signal at all -- a silent loss, which is worse than the wedge it replaced")
+	}
+	if !strings.Contains(buf.String(), devhealthsource.TeamsProjectsSourceName) {
+		t.Fatalf("quarantine lines must name their own source, got: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "unrepresentable_instant") {
+		t.Fatalf("want the specific reason token, not a generic one: %s", buf.String())
+	}
+
+	// Half 2: the checkpoint must be able to move, or the same rows are
+	// re-read and re-dropped on every tick forever.
+	progress, ok, err := source.ConsumedWithoutPublishing(context.Background(), checkpoint)
+	if err != nil {
+		t.Fatalf("consumed progress: %v", err)
+	}
+	if !ok || progress.NextCursor == "" {
+		t.Fatal("an all-quarantined FULL SNAPSHOT offered no consumed progress: the cursor cannot advance, so this organization never projects and never errors")
+	}
+}
+
+// TestQuarantinedTombstoneReportsItsOwnBound is round 1's P3. A dependency
+// row's healing tombstones derive EffectiveAt from the SAME observedAt as the
+// relationship, so an out-of-range source timestamp produced three drops with
+// one cause -- reported as unrepresentable_instant for the relationship and
+// the generic contract_bound_violation for both tombstones, leaving two thirds
+// of the signal unattributable to the defect that caused it.
+func TestQuarantinedTombstoneReportsItsOwnBound(t *testing.T) {
+	t.Parallel()
+	beyondGo := time.Date(2299, 12, 31, 0, 0, 0, 0, time.UTC)
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	rows := [][]any{dependencyRow("WI-1", "WI-2", "RELATES_TO", beyondGo, created)}
+
+	_, _, _, observations := projectWithQuarantineLog(t, dependencyTablesOnly(t, beyondGo, rows), testCursor(t, created, ""))
+	if len(observations) == 0 {
+		t.Fatal("expected quarantines")
+	}
+	byKind := map[string]string{}
+	for _, entry := range observations {
+		byKind[fmt.Sprint(entry["item_kind"])] = fmt.Sprint(entry["quarantine_reason"])
+	}
+	if got, ok := byKind["tombstone"]; !ok {
+		t.Fatalf("expected a tombstone drop among %v", observations)
+	} else if got != "unrepresentable_instant" {
+		t.Fatalf("tombstone quarantine_reason = %q, want %q -- a tombstone derived from the same out-of-range timestamp as its relationship must name the same cause, not fall through to the generic token",
+			got, "unrepresentable_instant")
+	}
+}

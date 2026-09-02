@@ -2,6 +2,7 @@ package devhealthsource
 
 import (
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -101,6 +102,19 @@ func quarantineReason(c candidate, err error) string {
 		return entityQuarantineReason(*c.entity)
 	case c.relationship != nil:
 		return relationshipQuarantineReason(*c.relationship)
+	case c.tombstone != nil:
+		// Round-1 P3: tombstones used to fall straight through to the
+		// generic token, so a dependency row whose last_synced is outside
+		// the representable range reported unrepresentable_instant for its
+		// relationship and contract_bound_violation for the two healing
+		// tombstones derived from that SAME timestamp -- three drops, one
+		// cause, two of them unattributable. EffectiveAt carries the same
+		// bound (validate_context_fabric_projection.go), so it derives the
+		// same way.
+		if reason := instantReason(&c.tombstone.EffectiveAt, nil, nil); reason != "" {
+			return reason
+		}
+		return quarantineContractBoundViolation
 	}
 	return quarantineContractBoundViolation
 }
@@ -300,4 +314,40 @@ func dropDuplicateIdentities(all []candidate, observe func(quarantineObservation
 		kept = append(kept, c)
 	}
 	return kept
+}
+
+// quarantineLogger builds the observer both sources hand to the shared
+// assembly engine. ONE implementation on purpose: the ClickHouse source got
+// this signal when quarantine was added and TeamsProjectsSource did not, so
+// every item the engine dropped on that source was dropped silently --
+// against the standing rule that a drop is always counted. A second copy of
+// the log line is how that gap would come back.
+//
+// Emitted at WARN, one line per dropped item. Deliberately NOT an error:
+// dropping the item is the CORRECT outcome (the alternative, which shipped
+// before this, was rejecting the whole page and wedging the organization),
+// but a source producing unprojectable rows is still something an operator
+// must see and count. A sustained non-zero rate for one reason token means
+// either the source data changed or this producer needs a mapping it lacks.
+//
+// Content-safe on the same terms as logTableReadFailure: a closed reason
+// token, a fixed item-kind label, and -- only for a relationship -- the
+// offending TYPE, a bounded low-cardinality enum capped at
+// maxQuarantineDetailRunes. Never row data, never free text, never the
+// validator's own message.
+func quarantineLogger(logger *slog.Logger, sourceName string) func(quarantineObservation) {
+	if logger == nil {
+		return nil
+	}
+	return func(observation quarantineObservation) {
+		attrs := []any{
+			"source", sourceName,
+			"quarantine_reason", observation.Reason,
+			"item_kind", observation.Kind,
+		}
+		if observation.Detail != "" {
+			attrs = append(attrs, "relationship_type", observation.Detail)
+		}
+		logger.Warn("context_fabric: projection item quarantined; the item is dropped and the batch continues", attrs...)
+	}
 }
