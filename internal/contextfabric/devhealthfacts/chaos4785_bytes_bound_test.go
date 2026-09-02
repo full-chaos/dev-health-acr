@@ -1,6 +1,7 @@
 package devhealthfacts
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -128,5 +129,43 @@ func TestDisclosedDualTableDropFoldsPreCapOmission(t *testing.T) {
 	want := len(timeSeriesRows) + preCapOmitted
 	if dropped != want {
 		t.Fatalf("disclosedDualTableDrop() droppedRows = %d, want %d (len(timeSeriesRows)=%d retained-then-dropped rows PLUS the %d rows an earlier cap already omitted) -- undercounting here means FactProviderResult.OmittedCount understates what was actually removed from the served answer", dropped, want, len(timeSeriesRows), preCapOmitted)
+	}
+}
+
+// htmlEscapedFactValueRows mirrors contracts/v1's htmlEscapedClaimedFactRows
+// for the devhealthfacts-side domain type: a value dominated by '<', which
+// encoding/json escapes 1 raw byte -> 6 encoded bytes.
+func htmlEscapedFactValueRows(rowCount, fieldCount, valueRunLength int) []contextfabric.FactValueRow {
+	value := strings.Repeat("<", valueRunLength)
+	rows := make([]contextfabric.FactValueRow, rowCount)
+	for i := range rows {
+		fields := make(map[string]contextfabric.FactValue, fieldCount)
+		for f := 0; f < fieldCount; f++ {
+			fields[fmt.Sprintf("k%d", f)] = contextfabric.FactValue{String: &value}
+		}
+		rows[i] = contextfabric.FactValueRow{Fields: fields}
+	}
+	return rows
+}
+
+// TestCombinedRowsExceedBytesBoundTrueForHTMLEscapeInflatedCombination pins
+// codex terra xhigh round-2 finding P2 (EXECUTED): the producer-side
+// pre-check (combinedRowsExceedBytesBound/factValueRowContentBytes) had its
+// OWN raw-string-length copy of the exact bug round 1 fixed in
+// contracts/v1 -- round 1's fix was not swept to this sibling. A fact whose
+// values are dominated by '<'/'>'/'&' (codex's repro: 1,024-'<'
+// work_scope_id values, an unbounded LowCardinality(String) ClickHouse
+// column) could report "under bound" here while the contracts/v1 write-path
+// validator correctly rejected it -- turning a disclosed, gracefully
+// degraded answer into a whole-result ErrInvalidResult failure
+// (engine.go:1895), exactly the failure mode this producer-side check
+// exists to prevent.
+func TestCombinedRowsExceedBytesBoundTrueForHTMLEscapeInflatedCombination(t *testing.T) {
+	const rows, fields, valueRunLength = 32, 32, 120
+	legacyRows := htmlEscapedFactValueRows(rows, fields, valueRunLength)
+	timeSeriesRows := htmlEscapedFactValueRows(rows, fields, valueRunLength)
+
+	if !combinedRowsExceedBytesBound(legacyRows, timeSeriesRows) {
+		t.Fatal("combinedRowsExceedBytesBound() = false, want true: raw content bytes understate this pair's actual marshaled size past the joint bound -- the producer pre-check must agree with the contracts/v1 write-path validator, or a fact it waves through gets rejected outright downstream instead of gracefully degraded")
 	}
 }

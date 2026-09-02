@@ -2,9 +2,11 @@ package devhealthfacts
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -472,17 +474,28 @@ func capFactValueRows(rows []contextfabric.FactValueRow) (capped []contextfabric
 // (ContextFabricClaimedFactCombinedContentBytesMax) can never disagree
 // about what "too big" means.
 func factValueRowContentBytes(row contextfabric.FactValueRow) int {
-	const nonStringValueBytes = 8
-	total := 0
-	for key, value := range row.Fields {
-		total += len(key)
-		if value.String != nil {
-			total += len(*value.String)
-		} else {
-			total += nonStringValueBytes
-		}
+	// codex terra xhigh round 2, P2, EXECUTED: an earlier version summed
+	// raw string lengths, exactly the class contracts/v1's
+	// claimedFactRowContentBytes was already fixed for in round 1 (see its
+	// own doc comment) -- this sibling copy was missed by that fix. A
+	// value containing '<'/'>'/'&' (e.g. an unbounded LowCardinality(String)
+	// source column, codex's repro used work_scope_id) is undercounted by
+	// up to 6x here, so the producer pre-check could report "under bound"
+	// for a fact the contracts/v1 write-path validator then correctly
+	// rejects outright -- turning what should be a disclosed, degraded
+	// answer into a whole-result ErrInvalidResult failure (engine.go:1895),
+	// exactly the failure mode this producer-side check exists to avoid.
+	// json.Marshal must be the ONE measure both sides use, or they can
+	// disagree about what "too big" means.
+	encoded, err := json.Marshal(row)
+	if err != nil {
+		// contextfabric.FactValue's leaf variants (string/int64/float64/
+		// bool/null) always marshal successfully; if this is ever reached
+		// anyway, undercounting is the one failure mode this fix exists to
+		// close, so treat it as maximally oversized rather than as zero.
+		return math.MaxInt32
 	}
-	return total
+	return len(encoded)
 }
 
 // combinedRowsExceedBytesBound reports whether legacyRows (a producer's
