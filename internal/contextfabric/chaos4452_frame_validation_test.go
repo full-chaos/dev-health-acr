@@ -280,6 +280,15 @@ func TestGoalsAreCanonicalizedIntoASet(t *testing.T) {
 	}
 	assertExactGoals(t, result.Frame.Goals, []InvestigationGoal{GoalAssessState, GoalRankOrSurvey})
 
+	// AND THE EMITTED EVENT, not only the frame. The first version of this
+	// test asserted `result.Frame.Goals` alone and passed while the
+	// telemetry projection kept the model's emission order and its
+	// duplicates -- found by adversarial review. A canonicalization test
+	// that checks the object but not what is recorded about it covers half
+	// the property and reads as covering all of it.
+	event := FrameValidationEventFrom(proposed, result, "")
+	assertExactGoals(t, event.ProposedGoals, []InvestigationGoal{GoalAssessState, GoalRankOrSurvey})
+
 	// Two orderings of one goal set must produce the identical frame --
 	// this is the property the family derivation will rest on.
 	other := proposed

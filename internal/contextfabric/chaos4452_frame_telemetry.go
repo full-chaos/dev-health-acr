@@ -223,6 +223,27 @@ type FrameValidationTelemetry interface {
 // and a defence that is only correct while an upstream check holds is a
 // defence that fails the day someone adds a second caller.
 func vocabularyGoalsOnly(goals []InvestigationGoal) []InvestigationGoal {
+	// CANONICALIZED, not merely filtered -- deduplicated and in vocabulary
+	// order, which is what this field's own doc comment claims and what it
+	// did not do.
+	//
+	// Filtering alone let the model's emission ORDER and its DUPLICATES
+	// reach the log line: `[rank_or_survey, assess_state, rank_or_survey]`
+	// normalized to `[assess_state, rank_or_survey]` on the frame while
+	// the event kept all three in the original order. Two semantically
+	// identical questions then produce different telemetry rows, and the
+	// per-sample goal set is precisely the field §13.2.4 rule 3 leans on
+	// to make a split countable -- a row that varies by emission order
+	// cannot be counted against another.
+	//
+	// Nothing is lost by canonicalizing. Goals is a SET: which goals the
+	// model proposed is the semantic content, and the order it happened to
+	// list them in is not. Membership -- the thing the governance actually
+	// reads -- survives untouched.
+	return canonicalGoals(vocabularyMembersOnly(goals))
+}
+
+func vocabularyMembersOnly(goals []InvestigationGoal) []InvestigationGoal {
 	out := make([]InvestigationGoal, 0, len(goals))
 	for _, goal := range goals {
 		if ValidInvestigationGoal(goal) {
