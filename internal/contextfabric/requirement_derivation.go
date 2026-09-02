@@ -213,6 +213,34 @@ type DerivedRequirement struct {
 	// a computed obligation and for an unavailable one.
 	FactKinds []FactKind
 
+	// Dimensions is what this requirement's EVIDENCE COVERS: the health
+	// dimensions its serving fact kinds declare, deduplicated and in
+	// vocabulary order. Empty for a computed obligation and for an
+	// unavailable one, because neither reads a fact.
+	//
+	// THIS IS NOT QuestionFrame.Dimensions, AND THE DISTINCTION IS
+	// DESIGN §13.3 -- two different things stage 1 called one. The frame's
+	// Dimensions are WHAT THE QUESTION IS ABOUT ("how is delivery flow for
+	// team X" names one; "how is team X doing" names none), model-proposed
+	// and additive-only. This field is WHAT THE PLANNED EVIDENCE ACTUALLY
+	// COVERS, derived by the SERVER from the producers' own
+	// FactCapability.Dimension declarations and never model-authored.
+	//
+	// They must not be collapsed, and pluralizing one field would have
+	// preserved stage 1's error with a slice. The first ADDS obligations
+	// and constrains which fact kinds serve them; the second describes
+	// what a planned requirement reads. A model that could write this
+	// field could narrow the evidence its own answer is checked against,
+	// which is the narrowing power round-1 F3 took away from the frame's
+	// Dimensions and which must not reappear on the requirement.
+	//
+	// QuestionFamilyDefinition.Dimension -- the singular scalar on the
+	// family registry row -- is untouched and stays a compatibility and
+	// telemetry value. Nothing new reads it. §13.3 rules the intermediate
+	// registry amendment SKIPPED rather than deferred, so the requirement
+	// row is where per-requirement dimensions land, once.
+	Dimensions []HealthDimension
+
 	// Step is the server step that satisfies a computed obligation.
 	// Empty for a read obligation.
 	Step ComputedObligationStep
@@ -296,8 +324,58 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 		return row
 	}
 	row.FactKinds = kinds
+	row.Dimensions = dimensionsOfFactKinds(kinds, capabilities)
 	row.Quantifier = quantifierForCardinality(len(kinds))
 	return row
+}
+
+// dimensionsOfFactKinds reads the §13.3 requirement dimension off the
+// producers' own declarations: the set of FactCapability.Dimension values
+// carried by the kinds that actually serve this cell.
+//
+// SERVER-DERIVED, from declarations only. It consults no frame field, so a
+// model emission cannot reach it -- which is the whole point of separating
+// it from QuestionFrame.Dimensions.
+//
+// Deduplicated and returned in HealthDimension VOCABULARY order rather than
+// in the order the kinds happen to arrive. A set whose order depends on its
+// input's order is not a set, and the frame layer already paid for that
+// lesson twice: a duplicate dimension produced a duplicate axis discharge,
+// and a telemetry projection that kept the model's emission order made a
+// "the frame is canonical" test pass while the recorded event was not.
+func dimensionsOfFactKinds(kinds []FactKind, capabilities []FactCapability) []HealthDimension {
+	if len(kinds) == 0 {
+		return nil
+	}
+	serving := make(map[FactKind]bool, len(kinds))
+	for _, kind := range kinds {
+		serving[kind] = true
+	}
+	present := map[HealthDimension]bool{}
+	for _, capability := range capabilities {
+		if !serving[capability.Kind] {
+			continue
+		}
+		if !ValidHealthDimension(capability.Dimension) {
+			// A capability declaring a dimension outside the closed
+			// vocabulary is DROPPED rather than propagated, on the same
+			// rule the frame sanitizers follow: an unknown member is not
+			// an error anywhere in this design, but carrying it would put
+			// an unvalidated value into a closed field a reader trusts.
+			continue
+		}
+		present[capability.Dimension] = true
+	}
+	if len(present) == 0 {
+		return nil
+	}
+	out := make([]HealthDimension, 0, len(present))
+	for _, dimension := range HealthDimensionVocabulary() {
+		if present[dimension] {
+			out = append(out, dimension)
+		}
+	}
+	return out
 }
 
 // coordinateNamesAPopulation reports whether a coordinate names a set a
