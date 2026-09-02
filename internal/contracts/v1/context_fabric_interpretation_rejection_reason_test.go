@@ -17,11 +17,17 @@ type rejectionCase struct {
 	// field names the struct field this mutation REPLACES wholesale. The
 	// pairwise order test composes one case on top of another, which is
 	// only meaningful when the two write different fields -- composing two
-	// mutations that both replace FactRequirements silently discards the
+	// mutations that both replace the same field silently discards the
 	// first, and the "earlier clause wins" assertion would then be testing
-	// a question that never violated the earlier clause at all. Same-field
-	// pairs are skipped there and covered instead by
-	// TestDiagnoseContextFabricInterpretedQuestionRejectionOrdersWithinTheFactRequirementsLoop,
+	// a question that never violated the earlier clause at all.
+	//
+	// THREE groups share a field this way, not one: SubjectTerms (count +
+	// content), ComparisonTerms (count + content) and FactRequirements
+	// (kind + subjects + parameters-count + parameter + duplicate). An
+	// earlier version of this comment claimed the fact-requirement clauses
+	// were the only such group; a review round showed that was wrong. All
+	// three are skipped here and covered by
+	// TestDiagnoseContextFabricInterpretedQuestionRejectionOrdersWithinASingleField,
 	// which composes them properly.
 	field string
 }
@@ -432,15 +438,75 @@ func TestDiagnoseContextFabricInterpretedQuestionRejectionIsTotalOverRejections(
 	}
 }
 
-// TestDiagnoseContextFabricInterpretedQuestionRejectionOrdersWithinTheFactRequirementsLoop
-// covers the ordering the pairwise test above must skip, because all three
-// of these clauses live on the same field and composing them by overwriting
-// the slice would erase the earlier violation instead of stacking it.
+// TestDiagnoseContextFabricInterpretedQuestionRejectionOrdersWithinASingleField
+// covers every same-field clause GROUP the pairwise test above must skip.
+//
+// A review round observed that the earlier version of this test covered only
+// the fact-requirement group, and that the ledger's claim "the
+// fact-requirement clauses are the only such group" was therefore wrong:
+// SubjectTerms has a count clause AND a content clause, and so does
+// ComparisonTerms. The claim is corrected here and the two missing groups
+// are covered.
+//
+// One nuance worth recording, because it changes what this test is FOR.
+// The round predicted that reversing the mirror's SubjectTerms count/content
+// order would leave every existing fixture green. Executed, that is FALSE:
+// the pairwise test catches it transitively, because the adjacent pair
+// (comparison_terms count, subject_terms content) stops agreeing. So this
+// test is not closing a hole through which a defect could actually escape
+// today — it is making the coverage DIRECT instead of incidental, so that a
+// later edit to the pairwise table cannot silently remove the only thing
+// checking these orders.
+//
+// The fact-requirement group is different and genuinely needs this test:
+// those clauses live on one slice, and composing them by overwriting it
+// would erase the earlier violation instead of stacking it.
 //
 // Here the violations are stacked on ONE requirement (or one slice) so both
 // clauses are genuinely violated at once, and the mirror must name the one
 // validate() actually short-circuits on.
-func TestDiagnoseContextFabricInterpretedQuestionRejectionOrdersWithinTheFactRequirementsLoop(t *testing.T) {
+func TestDiagnoseContextFabricInterpretedQuestionRejectionOrdersWithinASingleField(t *testing.T) {
+	longTerm := strings.Repeat("t", ContextFabricSubjectOrComparisonTermMaxLength+1)
+
+	// SubjectTerms and ComparisonTerms each carry a COUNT clause and a
+	// CONTENT clause, and validate() checks both counts before either
+	// content. A question that violates count AND content on the same
+	// field must name the count.
+	for _, termCase := range []struct {
+		name  string
+		apply func(*ContextFabricInterpretedQuestion, []string)
+		want  ContextFabricInterpretationRejectionReason
+	}{
+		{
+			name:  "subject_terms count wins over subject_terms content",
+			apply: func(q *ContextFabricInterpretedQuestion, v []string) { q.SubjectTerms = v },
+			want:  ContextFabricInterpretationRejectionSubjectTermsMaxCount,
+		},
+		{
+			name:  "comparison_terms count wins over comparison_terms content",
+			apply: func(q *ContextFabricInterpretedQuestion, v []string) { q.ComparisonTerms = v },
+			want:  ContextFabricInterpretationRejectionComparisonTermsMaxCount,
+		},
+	} {
+		t.Run(termCase.name, func(t *testing.T) {
+			// Over the count bound AND carrying an overlong entry, so both
+			// clauses on that one field are violated at once.
+			terms := append(distinctTerms(ContextFabricSubjectTermsMaxCount+1), longTerm)
+			q := validDiagnosisInterpretedQuestion()
+			termCase.apply(&q, terms)
+			if err := q.Validate(); err == nil {
+				t.Fatalf("Validate() = nil -- the case is vacuous")
+			}
+			reason, ok := DiagnoseContextFabricInterpretedQuestionRejection(q)
+			if !ok {
+				t.Fatalf("ok = false for a rejected question")
+			}
+			if reason != termCase.want {
+				t.Fatalf("reason = %q, want %q -- validate() checks the count clause before any content clause", reason, termCase.want)
+			}
+		})
+	}
+
 	badParameters := map[string]string{" untrimmed": "value"}
 	for _, testCase := range []struct {
 		name         string
