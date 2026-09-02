@@ -762,7 +762,7 @@ type boundPathStep struct {
 }
 
 func saturationPaths(v reflect.Value, prefix []boundPathStep, name string, depth int, out map[string][]boundPathStep) {
-	if depth > 4 || !v.IsValid() {
+	if depth > saturationProbeMaxDepth || !v.IsValid() {
 		return
 	}
 	switch v.Kind() {
@@ -816,6 +816,16 @@ func navigateBoundPath(root reflect.Value, path []boundPathStep) (reflect.Value,
 	return v, v.IsValid()
 }
 
+// saturationProbeMaxDepth is a DISCLOSED limit of the probe, not an incidental
+// constant. Round 3 found the earlier value of 4 stopping the walk short of
+// result.RemainingWork[0].Subjects[0].CanonicalID, which sits at depth 5: the
+// probe reported success over a region it had never visited, which is the same
+// failure class as an oracle that accepts any error -- it passes without having
+// looked. The cap still exists (the type graph is cyclic through subject refs
+// and would not terminate otherwise), so the depth it stops at is stated here,
+// in the probe's log line, and in the PR body.
+const saturationProbeMaxDepth = 8
+
 func TestMaximalIsSaturated(t *testing.T) {
 	if testing.Short() {
 		t.Skip("rebuilds the ~520MB maximal fixture once per probed field (~90s); `make contract-test` runs it without -short")
@@ -832,7 +842,7 @@ func TestMaximalIsSaturated(t *testing.T) {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	t.Logf("probing %d reachable fields for further growth", len(names))
+	t.Logf("probing %d reachable fields for further growth (walk depth capped at %d)", len(names), saturationProbeMaxDepth)
 	seen := map[string]bool{}
 
 	for seed, name := range names {
@@ -891,18 +901,42 @@ func isDerivedTopLevel(path string) bool {
 // below its bound, with the reason. The saturation probe FAILS on anything
 // unsaturated that is not listed here, and fails on a listed entry that has
 // become saturated, so this list cannot rot in either direction.
+// sharedSubjectWidth is one reason shared by every subject reference in the
+// document. distinctSubject builds them all, so widening it to the validator's
+// 256-rune canonical id and 512-rune label multiplies across roughly 187,500
+// subjects inside findings alone -- about a gigabyte, which cannot be marshaled
+// here. Round 3: these were invisible to the probe at depth 4, so they were
+// neither fixed nor disclosed. The disclosure was accurate about the fields it
+// named and silently incomplete about the rest.
+const sharedSubjectWidth = "shared subject-ref width: distinctSubject builds every subject in the document; widening it adds ~1GB across ~187,500 subjects"
+
 var unsaturatedByDesign = map[string]string{
-	"result.AnswerPlan.Budget.MaxItems":                 "int with no upper bound in the contract: there is no maximum to sit at",
-	"result.AnswerPlan.Budget.MaxMembers":               "int with no upper bound in the contract",
-	"result.AnswerPlan.Budget.SynthesisHeadroom":        "int with no upper bound in the contract",
-	"result.AnswerPlan.Narrowing[0].Before":             "int with no upper bound in the contract",
-	"result.AnswerPlan.Narrowing[0].After":              "int with no upper bound in the contract",
-	"result.StructureOfferSnapshot[0].Rank":             "int bounded only from below (>= 0)",
-	"result.ClaimedFacts[0].Subject.CanonicalID":        "subject-ref width: distinctSubject is shared by every subject in the document, including ~187,500 inside findings; widening it to 256 runes adds roughly a gigabyte and cannot be marshaled here",
-	"result.ClaimedFacts[0].Subject.Label":              "subject-ref width, same shared builder",
-	"result.SubjectResolution.Committed[0].CanonicalID": "subject-ref width, same shared builder",
-	"result.SubjectResolution.Committed[0].Label":       "subject-ref width, same shared builder",
-	"result.Versions.ContractVersion":                   "must stay the real schema identifier to mean anything; the validator bounds only its length, so a padded value would validate while making the document nonsense",
+	"result.Cohort.Members[0].Subject.CanonicalID":                      sharedSubjectWidth,
+	"result.Cohort.Members[0].Subject.Label":                            sharedSubjectWidth,
+	"result.Conflicts[0].Subjects[0].CanonicalID":                       sharedSubjectWidth,
+	"result.Conflicts[0].Subjects[0].Label":                             sharedSubjectWidth,
+	"result.Drivers[0].AffectedSubjects[0].CanonicalID":                 sharedSubjectWidth,
+	"result.Drivers[0].AffectedSubjects[0].Label":                       sharedSubjectWidth,
+	"result.Interpretation.FactRequirements[0].Subjects[0].CanonicalID": sharedSubjectWidth,
+	"result.Interpretation.FactRequirements[0].Subjects[0].Label":       sharedSubjectWidth,
+	"result.ReadinessGaps[0].Subjects[0].CanonicalID":                   sharedSubjectWidth,
+	"result.ReadinessGaps[0].Subjects[0].Label":                         sharedSubjectWidth,
+	"result.RemainingWork[0].Subjects[0].CanonicalID":                   sharedSubjectWidth,
+	"result.RemainingWork[0].Subjects[0].Label":                         sharedSubjectWidth,
+	"result.SubjectResolution.Candidates[0].Subject.CanonicalID":        sharedSubjectWidth,
+	"result.SubjectResolution.Candidates[0].Subject.Label":              sharedSubjectWidth,
+	"result.Paths[0].Edges[0].EvidenceRefIDs":                           "path-edge evidence refs: 250 paths x 50 edges x 100 refs x 256 runes is ~320M runes of ids alone, which cannot be marshaled here. Disclosed in maximalPath's comment since it was written; round 3 showed the comment was not ENFORCED, because the probe never walked deep enough to reach it",
+	"result.AnswerPlan.Budget.MaxItems":                                 "int with no upper bound in the contract: there is no maximum to sit at",
+	"result.AnswerPlan.Budget.MaxMembers":                               "int with no upper bound in the contract",
+	"result.AnswerPlan.Budget.SynthesisHeadroom":                        "int with no upper bound in the contract",
+	"result.AnswerPlan.Narrowing[0].Before":                             "int with no upper bound in the contract",
+	"result.AnswerPlan.Narrowing[0].After":                              "int with no upper bound in the contract",
+	"result.StructureOfferSnapshot[0].Rank":                             "int bounded only from below (>= 0)",
+	"result.ClaimedFacts[0].Subject.CanonicalID":                        "subject-ref width: distinctSubject is shared by every subject in the document, including ~187,500 inside findings; widening it to 256 runes adds roughly a gigabyte and cannot be marshaled here",
+	"result.ClaimedFacts[0].Subject.Label":                              "subject-ref width, same shared builder",
+	"result.SubjectResolution.Committed[0].CanonicalID":                 "subject-ref width, same shared builder",
+	"result.SubjectResolution.Committed[0].Label":                       "subject-ref width, same shared builder",
+	"result.Versions.ContractVersion":                                   "must stay the real schema identifier to mean anything; the validator bounds only its length, so a padded value would validate while making the document nonsense",
 }
 
 // TestDisclosedLowerBoundAxesAreNamed only reports the count. The ENFORCEMENT
