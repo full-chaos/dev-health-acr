@@ -374,6 +374,32 @@ func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOpt
 	return registry, nil
 }
 
+// copyTableDeclarations and copyObligationDeclarations deep-copy the two
+// map-valued declaration fields: the map AND each value slice, since
+// copying only the map would still let a caller's append or sort reach the
+// registry's own slice.
+func copyTableDeclarations(tables map[SubjectKind][]FactTableShape) map[SubjectKind][]FactTableShape {
+	if tables == nil {
+		return nil
+	}
+	out := make(map[SubjectKind][]FactTableShape, len(tables))
+	for subject, shapes := range tables {
+		out[subject] = append([]FactTableShape(nil), shapes...)
+	}
+	return out
+}
+
+func copyObligationDeclarations(obligations map[SubjectKind][]AnswerObligation) map[SubjectKind][]AnswerObligation {
+	if obligations == nil {
+		return nil
+	}
+	out := make(map[SubjectKind][]AnswerObligation, len(obligations))
+	for subject, declared := range obligations {
+		out[subject] = append([]AnswerObligation(nil), declared...)
+	}
+	return out
+}
+
 func (r *FactCapabilityRegistry) Capabilities() []FactCapability {
 	if r == nil {
 		return nil
@@ -383,6 +409,21 @@ func (r *FactCapabilityRegistry) Capabilities() []FactCapability {
 		capability := registered.capability
 		capability.SupportedSubjectKinds = append([]SubjectKind(nil), capability.SupportedSubjectKinds...)
 		capability.AllowedParameters = append([]string(nil), capability.AllowedParameters...)
+		// The MAP fields need the same defence the slice fields above
+		// already get, and for a sharper reason: a struct copy duplicates
+		// the header but shares the backing map, so a caller writing
+		// through capability.Tables or capability.Obligations mutates the
+		// REGISTRY's own declaration for every later caller -- and the
+		// resulting failure surfaces wherever that declaration is next
+		// read, never here.
+		//
+		// Tables carried this hazard before this change and had no
+		// reachable caller exploiting it. Obligations would have doubled
+		// it, so both are copied rather than only the new one: leaving the
+		// sibling map aliased next to a defended one is an invitation to
+		// read the asymmetry as intent.
+		capability.Tables = copyTableDeclarations(capability.Tables)
+		capability.Obligations = copyObligationDeclarations(capability.Obligations)
 		capabilities = append(capabilities, capability)
 	}
 	sort.Slice(capabilities, func(i, j int) bool { return factKindOrder(capabilities[i].Kind) < factKindOrder(capabilities[j].Kind) })

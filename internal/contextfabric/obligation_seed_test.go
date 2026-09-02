@@ -211,6 +211,77 @@ func TestQuantifierSourceIsTheMeasuredCardinality(t *testing.T) {
 	t.Logf("measured seed cardinality per served cell (the quantifier's source):%s", report.String())
 }
 
+// TestCapabilitiesDoesNotShareItsDeclarationMapsWithTheRegistry proves the
+// aliasing fix rather than asserting it.
+//
+// A struct copy duplicates the map HEADER and shares the backing store, so
+// before this change a caller writing through the returned capability's
+// Tables or Obligations would have mutated the registry's own declaration
+// for every later caller -- and the failure would surface wherever that
+// declaration was next read, never at the mutation.
+//
+// The test plants the mutation and re-reads, which is the only shape that
+// can fail in the interesting direction: asserting "a copy is made" by
+// comparing pointers would pass on a shallow copy that still shares the
+// value slices.
+func TestCapabilitiesDoesNotShareItsDeclarationMapsWithTheRegistry(t *testing.T) {
+	registry, err := contextfabric.NewFactCapabilityRegistry(devhealthfacts.NewProviders(nil), contextfabric.FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("building the registry: %v", err)
+	}
+
+	before := registry.Capabilities()
+	if len(before) == 0 {
+		t.Fatal("registry returned no capabilities; the mutation below would prove nothing")
+	}
+
+	// Find a capability that actually declares both map fields, so the
+	// mutation has something to corrupt. Picking blindly could land on a
+	// provider with neither and pass vacuously.
+	var target contextfabric.FactKind
+	for _, capability := range before {
+		if len(capability.Tables) > 0 && len(capability.Obligations) > 0 {
+			target = capability.Kind
+			break
+		}
+	}
+	if target == "" {
+		t.Fatal("no capability declares both Tables and Obligations; this test cannot detect the aliasing it exists for")
+	}
+
+	for _, capability := range before {
+		if capability.Kind != target {
+			continue
+		}
+		for subject := range capability.Tables {
+			capability.Tables[subject] = append(capability.Tables[subject], contextfabric.FactTableRanking)
+		}
+		for subject := range capability.Obligations {
+			capability.Obligations[subject] = append(capability.Obligations[subject], contextfabric.ObligationRemainingWork)
+		}
+	}
+
+	for _, capability := range registry.Capabilities() {
+		if capability.Kind != target {
+			continue
+		}
+		for subject, shapes := range capability.Tables {
+			for _, shape := range shapes {
+				if shape == contextfabric.FactTableRanking {
+					t.Errorf("%s: a caller's write to Tables[%s] reached the registry's declaration", target, subject)
+				}
+			}
+		}
+		for subject, declared := range capability.Obligations {
+			for _, obligation := range declared {
+				if obligation == contextfabric.ObligationRemainingWork {
+					t.Errorf("%s: a caller's write to Obligations[%s] reached the registry's declaration", target, subject)
+				}
+			}
+		}
+	}
+}
+
 func diffKinds(got, want []contextfabric.FactKind) (missing, extra []contextfabric.FactKind) {
 	inGot := make(map[contextfabric.FactKind]bool, len(got))
 	for _, kind := range got {
