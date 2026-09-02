@@ -249,6 +249,7 @@ func TestServedReusedPayloadNeverCarriesARefThatFailedTheRecheck(t *testing.T) {
 	}
 
 	random := rand.New(rand.NewSource(0xC4A05_4831))
+	served, refused := 0, 0
 	for trial := 0; trial < 200; trial++ {
 		missing := map[string]struct{}{}
 		for _, ref := range auxiliary {
@@ -262,11 +263,17 @@ func TestServedReusedPayloadNeverCarriesARefThatFailedTheRecheck(t *testing.T) {
 
 		degraded, counts, _, ok := degradeReusedResult(stored, missing)
 		if !ok {
-			// A refusal is always invariant-safe: nothing is served at
-			// all. It is only interesting if it happens for EVERY subset,
-			// which would mean the degrade never actually degrades.
+			// A refusal is invariant-safe on its own -- nothing is served
+			// at all -- so it is not a failure here. It is counted,
+			// because a version of this code that refused EVERY subset
+			// would make every assertion below unreachable and this test
+			// would pass while proving nothing. That is not hypothetical:
+			// removing the display-label rebuild sends every trial down
+			// this branch.
+			refused++
 			continue
 		}
+		served++
 		for _, ref := range collectEvidenceRefs(resultEvidenceSurface(degraded)) {
 			if _, gone := missing[ref]; gone {
 				t.Fatalf("trial %d: served payload carries %q, which failed the recheck (missing set %v)", trial, ref, sortedRefs(missing))
@@ -278,6 +285,12 @@ func TestServedReusedPayloadNeverCarriesARefThatFailedTheRecheck(t *testing.T) {
 		if err := ValidateStoredResult(degraded); err != nil {
 			t.Fatalf("trial %d: degraded payload does not validate: %v", trial, err)
 		}
+	}
+	if served == 0 {
+		t.Fatalf("every one of %d trials refused; the invariant assertions above never ran, so this test proved nothing about what gets served", refused)
+	}
+	if served*4 < refused {
+		t.Errorf("only %d of %d trials degraded (%d refused); the degrade is meant to be the ORDINARY outcome of a partial miss, and a refusal rate this high means the assertions are sampling a narrow corner", served, served+refused, refused)
 	}
 }
 
@@ -427,25 +440,48 @@ var censusCoveredRefPaths = map[string]string{
 	"InvestigationResult.Conflicts[].EvidenceRefIDs":                    "collected",
 	"InvestigationResult.Paths[].EvidenceRefIDs":                        "collected",
 	"InvestigationResult.Paths[].Edges[].EvidenceRefIDs":                "collected (a path may cite evidence ONLY at edge level)",
+	"InvestigationResult.EvidenceRefLabels":                             "collected, and REBUILT from the served closure after the strip",
 }
 
-// evidenceRefFieldPaths walks a type and returns a dotted path for every
-// []string field named EvidenceRefIDs it can reach, with []T rendered as
-// [] and pointers followed.
-func evidenceRefFieldPaths(t reflect.Type, prefix string, seen map[reflect.Type]bool) []string {
+// refCarrierCensus is what a walk of a type reports: the evidence-ref
+// CARRIERS it found, and every composite reflect.Kind it declined to
+// descend into.
+//
+// SkippedKinds is the part that matters. The first version of this walker
+// handled structs, pointers and slices and silently ignored maps -- so it
+// reported "every carrier accounted for" while a map[string]string keyed by
+// evidence ref sat one field away, and a reviewer constructed the leak
+// through it. A census that cannot report its own blind spots is not a
+// census; it is a claim. Recording skipped kinds is what makes the blind
+// spot assertable.
+type refCarrierCensus struct {
+	Paths        []string
+	SkippedKinds map[reflect.Kind]string
+}
+
+// evidenceRefCarrierCensus walks a type and reports every field that can
+// CARRY evidence reference strings -- a []string, a map keyed or valued by
+// string, or a bare string -- whose name marks it as an evidence-ref field,
+// descending through structs, pointers, slices, arrays and maps.
+//
+// Detection is by field NAME (any field mentioning "EvidenceRef") rather
+// than by type, deliberately: the question this test asks is "is there a
+// place a reference can reach a caller that the collector does not walk",
+// and the type alone cannot answer it -- map[string]string is both a
+// label map keyed by references and a perfectly ordinary dictionary.
+func evidenceRefCarrierCensus(t reflect.Type, prefix string, seen map[reflect.Type]bool, census *refCarrierCensus) {
 	for t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
-		return nil
+		return
 	}
 	if seen[t] {
-		return nil
+		return
 	}
 	seen[t] = true
 	defer delete(seen, t)
 
-	var found []string
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		if field.PkgPath != "" {
@@ -456,19 +492,48 @@ func evidenceRefFieldPaths(t reflect.Type, prefix string, seen map[reflect.Type]
 		for fieldType.Kind() == reflect.Ptr {
 			fieldType = fieldType.Elem()
 		}
-		if fieldType.Kind() == reflect.Slice && fieldType.Elem().Kind() == reflect.String {
-			if field.Name == "EvidenceRefIDs" {
-				found = append(found, path)
-			}
+		if strings.Contains(field.Name, "EvidenceRef") && carriesRefStrings(fieldType) {
+			census.Paths = append(census.Paths, path)
 			continue
 		}
-		if fieldType.Kind() == reflect.Slice {
-			found = append(found, evidenceRefFieldPaths(fieldType.Elem(), path+"[]", seen)...)
-			continue
+		switch fieldType.Kind() {
+		case reflect.Slice, reflect.Array:
+			evidenceRefCarrierCensus(fieldType.Elem(), path+"[]", seen, census)
+		case reflect.Map:
+			// Keys cannot be structs worth walking in this contract, but
+			// values can be, and BOTH are reachable by a caller.
+			evidenceRefCarrierCensus(fieldType.Key(), path+"{key}", seen, census)
+			evidenceRefCarrierCensus(fieldType.Elem(), path+"{}", seen, census)
+		case reflect.Struct:
+			evidenceRefCarrierCensus(fieldType, path, seen, census)
+		case reflect.Interface, reflect.Chan, reflect.Func, reflect.UnsafePointer:
+			// Genuinely opaque to a static walk. Recorded, not ignored:
+			// if the contract ever grows one of these, this census must
+			// stop claiming completeness until someone rules on it.
+			census.SkippedKinds[fieldType.Kind()] = path
 		}
-		found = append(found, evidenceRefFieldPaths(fieldType, path, seen)...)
 	}
-	return found
+}
+
+// carriesRefStrings reports whether a type can hold evidence reference
+// strings in any position a caller can read.
+func carriesRefStrings(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.String:
+		return true
+	case reflect.Slice, reflect.Array:
+		return t.Elem().Kind() == reflect.String
+	case reflect.Map:
+		return t.Key().Kind() == reflect.String || t.Elem().Kind() == reflect.String
+	default:
+		return false
+	}
+}
+
+func evidenceRefFieldPaths(t reflect.Type, prefix string, seen map[reflect.Type]bool) []string {
+	census := refCarrierCensus{SkippedKinds: map[reflect.Kind]string{}}
+	evidenceRefCarrierCensus(t, prefix, seen, &census)
+	return census.Paths
 }
 
 // --- fixtures and small helpers -------------------------------------------
@@ -516,6 +581,14 @@ func storedResultWithEveryRefSite(t *testing.T) InvestigationResult {
 		WhyRelevant:    "The project contains the repository the question is about.",
 		EvidenceRefIDs: []string{"evidence_path_a"},
 	}}
+	// The display-label map, keyed by the result's own closure exactly as a
+	// fresh result carries it. Without this the property test would never
+	// exercise the carrier that leaked.
+	result.EvidenceRefLabels = map[string]string{}
+	for ref := range contractsv1.ContextFabricEvidenceRefClosure(result) {
+		label, _ := contractsv1.ContextFabricEvidenceRefLabel(ref)
+		result.EvidenceRefLabels[ref] = label
+	}
 	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := ValidateStoredResult(result); err != nil {
 		t.Fatalf("fixture does not validate as a stored result: %v", err)
@@ -576,4 +649,176 @@ func sortedRefs(set map[string]struct{}) string {
 	}
 	sort.Strings(keys)
 	return strings.Join(keys, ",")
+}
+
+// --- the census's own completeness, and the closure parity it rests on ---
+
+// censusProbeNested is reached only through a POINTER field, so a walker
+// that does not dereference pointers reports nothing for it.
+type censusProbeNested struct {
+	NestedEvidenceRefIDs []string
+}
+
+// censusProbe carries an evidence reference in each of the three shapes a
+// walker can plausibly miss: a map (the shape that actually leaked), a
+// slice, and a struct reached through a pointer.
+type censusProbe struct {
+	EvidenceRefLabels map[string]string
+	EvidenceRefIDs    []string
+	Nested            *censusProbeNested
+	Unrelated         map[string]int
+}
+
+// TestCensusWalkerReportsEveryCarrierShapeAndAdmitsWhatItSkips is the guard
+// on the guard.
+//
+// The census exists so the invariant property test stays as complete as the
+// result type. That only holds if the census itself is complete, and the
+// first version was not: it walked structs, pointers and slices, ignored
+// maps without saying so, and therefore reported full coverage of a type
+// whose label map it had never looked at. A reviewer built the leak through
+// exactly that gap.
+//
+// So this test does two things a "does it find the fields" test would not.
+// It drives all three carrier shapes through a synthetic type, and it
+// asserts the walker reports NOTHING as skipped for a type built only from
+// kinds it claims to handle. A future walker that quietly stops descending
+// into some kind fails here rather than going on to under-report in
+// silence.
+func TestCensusWalkerReportsEveryCarrierShapeAndAdmitsWhatItSkips(t *testing.T) {
+	t.Parallel()
+
+	census := refCarrierCensus{SkippedKinds: map[reflect.Kind]string{}}
+	evidenceRefCarrierCensus(reflect.TypeOf(censusProbe{}), "censusProbe", map[reflect.Type]bool{}, &census)
+
+	want := []string{
+		"censusProbe.EvidenceRefLabels",
+		"censusProbe.EvidenceRefIDs",
+		"censusProbe.Nested.NestedEvidenceRefIDs",
+	}
+	for _, path := range want {
+		if !containsRef(census.Paths, path) {
+			t.Errorf("census missed the carrier %s; found %v", path, census.Paths)
+		}
+	}
+	if len(census.Paths) != len(want) {
+		t.Errorf("census reported %v, want exactly %v -- an unrelated map must not be counted as a carrier", census.Paths, want)
+	}
+	if len(census.SkippedKinds) != 0 {
+		t.Errorf("census skipped %v on a type built only from kinds it claims to handle", census.SkippedKinds)
+	}
+
+	// And the same admission for the type that actually matters.
+	real := refCarrierCensus{SkippedKinds: map[reflect.Kind]string{}}
+	evidenceRefCarrierCensus(reflect.TypeOf(InvestigationResult{}), "InvestigationResult", map[reflect.Type]bool{}, &real)
+	if len(real.SkippedKinds) != 0 {
+		t.Fatalf("the census cannot see %v on the result type; the invariant property test is only as complete as this walk, so resolve it rather than leaving the census claiming coverage it lacks", real.SkippedKinds)
+	}
+}
+
+// TestCollectorAgreesWithTheContractsEvidenceRefClosure keeps two walks of
+// the same thing from drifting.
+//
+// The contract already owns a canonical evidence-ref closure, and it is
+// what the display-label map and the write-path validator are built from.
+// collectEvidenceRefs is necessarily a second walk -- it also has to run
+// over a GraphContext, which the contract's function cannot take -- and two
+// copies of one traversal is the shape that produced this whole defect in
+// the first place. Rather than leave them to drift, this pins them equal on
+// a result carrying a reference at every site.
+func TestCollectorAgreesWithTheContractsEvidenceRefClosure(t *testing.T) {
+	t.Parallel()
+
+	result := storedResultWithEveryRefSite(t)
+	closure := contractsv1.ContextFabricEvidenceRefClosure(result)
+
+	collected := map[string]struct{}{}
+	for _, ref := range collectEvidenceRefs(resultEvidenceSurface(result)) {
+		collected[ref] = struct{}{}
+	}
+	// The collector is a SUPERSET by design: it also walks the label map,
+	// which the contract closure does not (the closure is what the label
+	// map is derived FROM). Every contract-closure ref must be collected.
+	for ref := range closure {
+		if _, ok := collected[ref]; !ok {
+			t.Errorf("the contract's closure carries %q and the collector does not; the recheck would never demand it and the strip would never remove it", ref)
+		}
+	}
+	for ref := range collected {
+		if _, ok := closure[ref]; ok {
+			continue
+		}
+		if _, labelled := result.EvidenceRefLabels[ref]; !labelled {
+			t.Errorf("the collector carries %q, which is neither in the contract's closure nor in the label map; one of the two walks has grown a site the other has not", ref)
+		}
+	}
+}
+
+// TestAStrippedRefIsNeverLeftBehindInTheDisplayLabelMap is the permanent
+// form of a review finding: the first version of this change removed a
+// reference from every list that carried it and left it as a KEY in
+// `evidence_ref_labels`, with its human-readable label attached. The caller
+// was served both the identifier and a description of a reference the
+// recheck had refused.
+//
+// It is written against the map specifically, rather than folded into the
+// property test, because the property test would have caught it only once
+// the collector walked maps -- and the whole point is that it did not.
+func TestAStrippedRefIsNeverLeftBehindInTheDisplayLabelMap(t *testing.T) {
+	t.Parallel()
+
+	stored := storedResultWithCandidateEvidence()
+	stored.EvidenceRefLabels = map[string]string{
+		reuseCitationRef: "Citation",
+		reuseNodeRef:     "Candidate evidence",
+	}
+
+	degraded, counts, _, ok := degradeReusedResult(stored, map[string]struct{}{reuseNodeRef: {}})
+	if !ok {
+		t.Fatal("degrade refused; this fixture is meant to degrade")
+	}
+	if label, present := degraded.EvidenceRefLabels[reuseNodeRef]; present {
+		t.Fatalf("served payload still exposes the stripped ref %q through evidence_ref_labels (label %q)", reuseNodeRef, label)
+	}
+	if _, present := degraded.EvidenceRefLabels[reuseCitationRef]; !present {
+		t.Error("the still-visible citation lost its label; the rebuild must keep everything the served closure carries")
+	}
+	if counts.StrippedLabels != 1 {
+		t.Errorf("StrippedLabels = %d, want 1 -- a label removal the caller is not told about is an undisclosed narrowing", counts.StrippedLabels)
+	}
+}
+
+// TestDegradeRefusesRatherThanServeALabelMapWiderThanItsClosure pins the
+// serve-path enforcement of a rule the contract enforces only on writes.
+//
+// Stored results are immutable and read back under looser bounds, so the
+// shared stored validator cannot be tightened without rejecting legacy rows
+// that are nobody's leak. The degrade is the only thing that can turn a
+// well-formed stored payload into one whose label map outruns its closure,
+// so the obligation lives with the degrade. If the rebuild is ever changed
+// in a way that leaves an orphan key, reuse refuses instead of serving it.
+func TestDegradeRefusesRatherThanServeALabelMapWiderThanItsClosure(t *testing.T) {
+	t.Parallel()
+
+	// A payload in the exact state a broken rebuild would leave: the
+	// candidate's reference is gone from every list, and its label key is
+	// still there.
+	served := storedResultWithCandidateEvidence()
+	served.SubjectResolution.Candidates = []SubjectCandidate{reuseDegradeCandidate()}
+	served.EvidenceRefLabels = map[string]string{
+		reuseCitationRef: "Citation",
+		reuseNodeRef:     "Candidate evidence",
+	}
+	if servedLabelsAreWithinTheClosure(served) {
+		t.Fatal("guard accepted a label map naming a ref the payload does not carry; it would not have caught the leak it exists for")
+	}
+
+	// And the ordinary direction is explicitly NOT refused: an
+	// under-labelled legacy row discloses less than it could, which is not
+	// an authorization problem and must not cost the caller a reuse.
+	underLabelled := storedResultWithCandidateEvidence()
+	underLabelled.EvidenceRefLabels = map[string]string{reuseCitationRef: "Citation"}
+	if !servedLabelsAreWithinTheClosure(underLabelled) {
+		t.Error("guard refused an under-labelled payload; a missing label is not a leak")
+	}
 }

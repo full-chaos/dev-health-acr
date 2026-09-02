@@ -728,6 +728,7 @@ func (e *Engine) recordReuseContainment(ctx context.Context, principal storage.P
 		MissingCount:      len(verdict.Partition.Missing),
 		MissingCitation:   verdict.Partition.MissingCitation,
 		StrippedRefs:      counts.Refs,
+		StrippedLabels:    counts.StrippedLabels,
 		DroppedCandidates: counts.DroppedCandidates,
 		DroppedMembers:    counts.DroppedMembers,
 		DroppedDrivers:    counts.DroppedDrivers,

@@ -156,6 +156,11 @@ type AnswerReuseContainmentEvent struct {
 	// StrippedRefs is how many references the degrade removed from the
 	// served copy. Zero on a clean hit and on a refusal.
 	StrippedRefs int
+	// StrippedLabels is how many display-label entries the degrade's
+	// rebuild dropped. Reported separately because a label entry is a
+	// second way the same reference reaches a caller -- a strip that
+	// cleared every list and left the labels behind removed nothing.
+	StrippedLabels int
 	// The Dropped* counts are whole entries removed because stripping
 	// their references left them invalid under the contract.
 	DroppedCandidates int
@@ -183,6 +188,7 @@ func (t SlogEngineTelemetry) RecordAnswerReuseContainment(ctx context.Context, p
 		"missing_refs", event.MissingCount,
 		"missing_citation", event.MissingCitation,
 		"stripped_refs", event.StrippedRefs,
+		"stripped_labels", event.StrippedLabels,
 		"dropped_candidates", event.DroppedCandidates,
 		"dropped_members", event.DroppedMembers,
 		"dropped_drivers", event.DroppedDrivers,

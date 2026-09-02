@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"fmt"
+	"sort"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -59,6 +60,14 @@ type evidenceRefSurface struct {
 	// drift apart.
 	Findings [][]Finding
 	Paths    []RelationshipPath
+	// RefLabels is the served display-label map, keyed by evidence ref id.
+	// It is a CARRIER, not decoration: a caller reads its keys, so a key
+	// naming a ref the recheck could not prove is exactly the leak this
+	// whole file exists to prevent. It was missed on the first pass --
+	// the collector walked []string fields and a map is not one -- and a
+	// reviewer constructed the leak. Present here so the map can never be
+	// forgotten again by the same reasoning.
+	RefLabels map[string]string
 }
 
 // resultEvidenceSurface projects a stored result onto the shared surface.
@@ -71,6 +80,7 @@ func resultEvidenceSurface(result InvestigationResult) evidenceRefSurface {
 		Drivers:    result.Drivers,
 		Findings:   [][]Finding{result.RemainingWork, result.ReadinessGaps, result.Conflicts},
 		Paths:      result.Paths,
+		RefLabels:  result.EvidenceRefLabels,
 	}
 	return surface
 }
@@ -151,6 +161,19 @@ func collectEvidenceRefs(surface evidenceRefSurface) []string {
 			add(edge.EvidenceRefIDs)
 		}
 	}
+	// Map keys LAST and SORTED. Sorted because Go randomizes map iteration
+	// and this function's output order is asserted to be stable; last
+	// because on a well-formed payload every key is already present from a
+	// site above, so this only ever contributes a ref the map alone
+	// carries -- which is precisely the case worth catching.
+	if len(surface.RefLabels) > 0 {
+		labelled := make([]string, 0, len(surface.RefLabels))
+		for ref := range surface.RefLabels {
+			labelled = append(labelled, ref)
+		}
+		sort.Strings(labelled)
+		add(labelled)
+	}
 	return refs
 }
 
@@ -218,11 +241,17 @@ type reuseStripCounts struct {
 	DroppedDrivers    int
 	DroppedFindings   int
 	DroppedPaths      int
+	// StrippedLabels is how many display-label entries the rebuild
+	// dropped. Counted separately from Refs because a label entry is a
+	// SECOND way the same reference reaches a caller: a strip that removed
+	// a reference from every list and left its label behind removed
+	// nothing at all, and a single total would have hidden that.
+	StrippedLabels int
 }
 
 // Total is every removal the caller should be told about.
 func (c reuseStripCounts) Total() int {
-	return c.Refs + c.DroppedCandidates + c.DroppedMembers + c.DroppedDrivers + c.DroppedFindings + c.DroppedPaths
+	return c.Refs + c.DroppedCandidates + c.DroppedMembers + c.DroppedDrivers + c.DroppedFindings + c.DroppedPaths + c.StrippedLabels
 }
 
 func (c reuseStripCounts) empty() bool { return c.Total() == 0 }
@@ -397,6 +426,37 @@ func stripUnverifiedEvidenceRefs(result InvestigationResult, missing map[string]
 		result.Paths = kept
 	}
 
+	// The display-label map is REBUILT from the served closure, never
+	// subtracted from. Subtracting would remove the keys this strip knows
+	// about and leave anything else the map happened to carry -- which is
+	// how the leak got in: the map was simply not walked, and "remove what
+	// we removed" repeats that mistake one level up. Rebuilding makes the
+	// map a FUNCTION of what is actually served, so a key the served
+	// closure does not contain is unrepresentable rather than merely
+	// unlikely.
+	//
+	// nil stays nil: a legacy stored row that predates this field is the
+	// ruled exception, and inventing a map for it would change the shape
+	// of what that caller has always been served.
+	if result.EvidenceRefLabels != nil {
+		served := contractsv1.ContextFabricEvidenceRefClosure(result)
+		rebuilt := make(map[string]string, len(served))
+		for ref := range served {
+			if label, known := result.EvidenceRefLabels[ref]; known {
+				rebuilt[ref] = label
+				continue
+			}
+			// The stored map was already missing a label this closure
+			// needs (an under-labelled legacy row). Compose the same
+			// deterministic label a fresh result would have carried
+			// rather than serve a closure the map cannot describe.
+			label, _ := contractsv1.ContextFabricEvidenceRefLabel(ref)
+			rebuilt[ref] = label
+		}
+		counts.StrippedLabels = len(result.EvidenceRefLabels) - len(rebuilt)
+		result.EvidenceRefLabels = rebuilt
+	}
+
 	// Top-level citations are NEVER stripped: a missing citation refuses
 	// the whole reuse before this function is reached, so by construction
 	// no top-level ref is in the missing set here. Asserted by the
@@ -480,7 +540,7 @@ func discloseReuseNarrowing(result InvestigationResult, counts reuseStripCounts)
 // quantity and the cause in the engine's own deterministic words -- the
 // fail-closed floor, never model-authored.
 func composeReuseNarrowingReason(counts reuseStripCounts) string {
-	if counts.Refs > 0 && counts.Total() == counts.Refs {
+	if counts.Refs > 0 && counts.Total() == counts.Refs+counts.StrippedLabels {
 		return fmt.Sprintf(
 			"reused answer narrowed: %d evidence reference(s) are no longer visible to you and were removed",
 			counts.Refs,
@@ -507,5 +567,39 @@ func degradeReusedResult(result InvestigationResult, missing map[string]struct{}
 	if err := ValidateStoredResult(degraded); err != nil {
 		return InvestigationResult{}, counts, disclosure, false
 	}
+	if !servedLabelsAreWithinTheClosure(degraded) {
+		return InvestigationResult{}, counts, disclosure, false
+	}
 	return degraded, counts, disclosure, true
+}
+
+// servedLabelsAreWithinTheClosure enforces, ON THE SERVE PATH, the rule the
+// contract enforces only on writes: a display-label key must name a
+// reference the result actually carries.
+//
+// It is checked here rather than inside ValidateStored for two reasons.
+// First, stored results are immutable and read back under deliberately
+// looser bounds, so tightening the shared stored validator would reject
+// legacy rows that were correct when written and are nobody's leak.
+// Second, the degrade is the ONLY thing that can turn a well-formed stored
+// payload into one whose label map outruns its closure -- so this is where
+// the obligation belongs, and keeping it here keeps the invariant in one
+// place instead of two.
+//
+// Deliberately one-directional. An UNDER-labelled map (a closure ref with
+// no label) is an old row that discloses less than it could; that is not an
+// authorization leak and must not refuse a reuse. An OVER-labelled map is a
+// reference reaching a caller that the recheck never proved, which is
+// exactly what must never be served.
+func servedLabelsAreWithinTheClosure(result InvestigationResult) bool {
+	if len(result.EvidenceRefLabels) == 0 {
+		return true
+	}
+	closure := contractsv1.ContextFabricEvidenceRefClosure(result)
+	for ref := range result.EvidenceRefLabels {
+		if _, present := closure[ref]; !present {
+			return false
+		}
+	}
+	return true
 }
