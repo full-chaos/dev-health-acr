@@ -85,15 +85,15 @@ type normalizationObservation struct {
 // that an item repaired here is never offered to quarantine at all.
 func normalizeCandidates(all []candidate, observe func(normalizationObservation)) {
 	for _, c := range all {
+		var n itemNormalizer
 		switch {
 		case c.entity != nil:
-			n := itemNormalizer{kind: "entity"}
+			n = itemNormalizer{kind: "entity"}
 			n.label(&c.entity.Subject)
 			n.properties(c.entity.Properties)
 			n.window(&c.entity.ValidFrom, &c.entity.ValidTo)
-			n.report(observe)
 		case c.relationship != nil:
-			n := itemNormalizer{kind: "relationship"}
+			n = itemNormalizer{kind: "relationship"}
 			// Both endpoints: an edge labels its endpoints itself, and a
 			// relationship whose To label is oversize is rejected exactly as
 			// hard as one whose From label is.
@@ -101,7 +101,9 @@ func normalizeCandidates(all []candidate, observe func(normalizationObservation)
 			n.label(&c.relationship.To)
 			n.properties(c.relationship.Properties)
 			n.window(&c.relationship.ValidFrom, &c.relationship.ValidTo)
-			n.report(observe)
+		}
+		if n.fired() {
+			n.report(c, observe)
 		}
 		// Episodes and tombstones are deliberately untouched. A tombstone
 		// carries no label, no properties and no window -- only an
@@ -207,8 +209,39 @@ func (n *itemNormalizer) window(validFrom, validTo **time.Time) {
 	n.collapse = true
 }
 
-func (n *itemNormalizer) report(observe func(normalizationObservation)) {
+// fired reports whether this item earned any token at all, so the validation
+// probe below costs nothing on the overwhelming majority of items, which need
+// no repair.
+func (n *itemNormalizer) fired() bool {
+	return n.trimmed || n.capped || n.scalar || n.collapse
+}
+
+// report announces the repairs -- but ONLY if the item is now projectable.
+//
+// A repair that does not keep the row must not be counted as one. A
+// work_item_ref stub labels itself with the raw target id AND derives its
+// canonical id from that same string, so trimming the label leaves the
+// identity untrimmed and the contract still refuses it: the row is
+// quarantined, and a label_trimmed line beside that drop would claim a save
+// that did not happen. The log line says "the item is kept", and it has to be
+// true.
+//
+// The item is deliberately left NORMALIZED rather than reverted. It is dropped
+// either way, and the repaired copy is what quarantineReason then inspects, so
+// the quarantine token names the bound that ACTUALLY still blocks the row
+// rather than the one this pass already handled -- strictly better diagnosis
+// for the operator reading both counters.
+//
+// Judged by the contract's own validator, never by a second opinion about what
+// "projectable" means. An item can still be dropped afterwards by a
+// BATCH-level pass (duplicate identity, orphaned dependent, quarantined
+// endpoint); those are not this bound's business and the repair genuinely
+// happened, so they do not suppress the count.
+func (n *itemNormalizer) report(c candidate, observe func(normalizationObservation)) {
 	if observe == nil {
+		return
+	}
+	if _, err := validateCandidateItem(c); err != nil {
 		return
 	}
 	for _, entry := range []struct {

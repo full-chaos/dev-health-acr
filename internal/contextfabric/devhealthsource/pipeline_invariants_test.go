@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -84,7 +85,13 @@ func generateCandidates(rng *rand.Rand) generatedCase {
 
 		label := "item " + target
 		if rng.Intn(6) == 0 {
-			label += " " // untrimmed: the contract refuses it
+			label += " " // untrimmed: normalization trims it
+		}
+		if rng.Intn(9) == 0 {
+			// Oversize: normalization caps it. Distinct from untrimmed on
+			// purpose -- they are different tokens and one can hide the other
+			// if the generator only ever produces the pair together.
+			label = strings.Repeat("l", contractsv1.ContextFabricSubjectRefLabelMaxLength+30)
 		}
 		// The ref-form producer builds the stub entity and its edge from the
 		// SAME refSubject, observedAt, window, evidence and authorization
@@ -97,6 +104,28 @@ func generateCandidates(rng *rand.Rand) generatedCase {
 			observedForPair = beyondGo // unrepresentable instant, for BOTH
 		}
 		validFrom := valid
+		// The producer hands the ref stub and its edge the SAME window, so an
+		// inverted pair inverts BOTH -- generating it on one side only would
+		// be an input this producer cannot emit.
+		var pairValidTo *time.Time
+		if rng.Intn(8) == 0 {
+			inverted := valid.Add(-24 * time.Hour) // end BEFORE start
+			pairValidTo = &inverted
+		}
+		// The third normalizable bound, an oversize free-text property, is
+		// generated on the CANONICAL work_items entity below rather than here.
+		//
+		// A first version put it on the ref stub and seed 32 immediately
+		// failed invariant (a): the stub carried a property its edge did not,
+		// so the two stopped sharing a validation fate, and a batch appeared
+		// in which an edge outlived the endpoint entity nothing else supplied.
+		// The PRODUCER CANNOT EMIT THAT. tables.go's ref-form branch builds
+		// the stub and its edge from one refSubject, one window, one evidence
+		// ref and no properties at all -- the coupling
+		// TestRefStubAndItsEdgeShareAValidationFate exists to pin. So the
+		// GENERATOR was wrong, not the production sweep; this is the third
+		// time on this branch that a generated input has argued for a guard
+		// against something that cannot happen.
 
 		refID := "work_item_ref:" + target
 		refRelID := "relationship.v2:gen:ref:" + source + ":" + target + ":" + string(relType)
@@ -111,7 +140,7 @@ func generateCandidates(rng *rand.Rand) generatedCase {
 				Derivation:      contractsv1.ContextFabricDerivationCanonicalStructured,
 				EpistemicStatus: contractsv1.ContextFabricEpistemicObserved,
 				Authorization:   scope, EvidenceRefIDs: []string{"acr:v1:gen:" + source + ":" + target},
-				ObservedAt: observedForPair, ValidFrom: &validFrom, SourceVersion: "v1",
+				ObservedAt: observedForPair, ValidFrom: &validFrom, ValidTo: pairValidTo, SourceVersion: "v1",
 			}
 		}
 
@@ -120,7 +149,7 @@ func generateCandidates(rng *rand.Rand) generatedCase {
 			stub := contractsv1.ContextFabricEntityProjection{
 				Subject: refSubject, Authorization: scope,
 				EvidenceRefIDs: []string{"acr:v1:gen:" + source + ":" + target},
-				ObservedAt:     observedForPair, ValidFrom: &validFrom, SourceVersion: "v1",
+				ObservedAt:     observedForPair, ValidFrom: &validFrom, ValidTo: pairValidTo, SourceVersion: "v1",
 			}
 			out.candidates = append(out.candidates,
 				candidate{observedAt: at, sortKey: sortKey, entity: &stub, supports: refRelID},
@@ -136,14 +165,33 @@ func generateCandidates(rng *rand.Rand) generatedCase {
 		// failing independently, which no `supports` link can express.
 		canonicalLabel := "title " + source
 		if rng.Intn(6) == 0 {
-			canonicalLabel += " " // untrimmed: the contract refuses it
+			canonicalLabel += " " // untrimmed: normalization trims it
+		}
+		if rng.Intn(9) == 0 {
+			canonicalLabel = strings.Repeat("c", contractsv1.ContextFabricSubjectRefLabelMaxLength+30)
 		}
 		canonicalValidFrom := valid
+		// The work_items entity is where an oversize free-text property really
+		// lives (type, native_team_key, project_name, status ...), and it is
+		// the CROSS-TABLE shape: this entity can fail while the dependency
+		// edge naming the same work item stays valid, because that edge labels
+		// its endpoints by id. No coupling to break.
+		var canonicalProperties map[string]contractsv1.ContextFabricScalarValue
+		if rng.Intn(9) == 0 {
+			canonicalProperties = map[string]contractsv1.ContextFabricScalarValue{
+				"free_text": stringScalar(strings.Repeat("s", contractsv1.ContextFabricClaimedFactValueMaxLength+30)),
+			}
+		}
+		var canonicalValidTo *time.Time
+		if rng.Intn(8) == 0 {
+			inverted := valid.Add(-24 * time.Hour) // end BEFORE start
+			canonicalValidTo = &inverted
+		}
 		canonical := contractsv1.ContextFabricEntityProjection{
-			Subject:        contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + source, Label: canonicalLabel},
-			Authorization:  scope,
+			Subject:       contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + source, Label: canonicalLabel},
+			Authorization: scope, Properties: canonicalProperties,
 			EvidenceRefIDs: []string{"acr:v1:gen:wi:" + source},
-			ObservedAt:     at, ValidFrom: &canonicalValidFrom, SourceVersion: "v1",
+			ObservedAt:     at, ValidFrom: &canonicalValidFrom, ValidTo: canonicalValidTo, SourceVersion: "v1",
 		}
 		out.candidates = append(out.candidates, candidate{observedAt: at, sortKey: "wi:" + source, entity: &canonical})
 
@@ -157,7 +205,10 @@ func generateCandidates(rng *rand.Rand) generatedCase {
 		repoSlug := fmt.Sprintf("acme/repo-%d", rng.Intn(2))
 		repoLabel := repoSlug
 		if rng.Intn(6) == 0 {
-			repoLabel += " " // untrimmed: the contract refuses it
+			repoLabel += " " // untrimmed: normalization trims it
+		}
+		if rng.Intn(9) == 0 {
+			repoLabel = strings.Repeat("r", contractsv1.ContextFabricSubjectRefLabelMaxLength+30)
 		}
 		repoValidFrom := valid
 		repoEntity := contractsv1.ContextFabricEntityProjection{
@@ -337,6 +388,154 @@ func TestPipelineInvariantsOverGeneratedCandidates(t *testing.T) {
 	}
 }
 
+// TestNormalizationInvariantFOverGeneratedCandidates is invariant (f), the one
+// this change adds to the five the quarantine passes already carry:
+//
+//	a row whose ONLY defect is one of the three normalizable bounds is
+//	PROJECTED, never dropped.
+//
+// Stated over the same generated candidate sets as the invariants above, and
+// for the same reason: the three bounds interact with three existing passes
+// (endpoint sweep, orphan sweep, identity dedup), and an interaction is
+// exactly what a hand-built fixture aimed at one bound cannot see. The first
+// version of the generator extension proved the point immediately by
+// producing an input the producer cannot emit -- see the note beside
+// canonicalProperties.
+//
+// Checked DIFFERENTIALLY: the same seed is generated twice, run once through
+// the pipeline as it was before this change and once as production now runs
+// it. Two separate generations because normalizeCandidates mutates in place,
+// and one copy cannot be both the control and the subject.
+func TestNormalizationInvariantFOverGeneratedCandidates(t *testing.T) {
+	t.Parallel()
+	// The tokens that mean "this row was LOST to a bound". None may appear in
+	// a run that normalizes first; that is invariant (f) in counter form.
+	normalized := map[string]bool{
+		quarantineUntrimmedLabel: true,
+		quarantineOversizeScalar: true,
+		quarantineInvertedWindow: true,
+	}
+	// Everything a normalized run may still legitimately report. A row can
+	// still be dropped -- for a bound this pass does not own (an
+	// unrepresentable instant, an unknown relationship type) or by a
+	// BATCH-level pass -- and those drops are not this change's business.
+	permitted := map[string]bool{
+		quarantineUnknownRelationshipType:   true,
+		quarantineUnrepresentableInstant:    true,
+		quarantineContractBoundViolation:    true,
+		quarantineOrphanedDependent:         true,
+		quarantineDuplicateWithinBatch:      true,
+		quarantineEndpointEntityQuarantined: true,
+	}
+
+	repairedTotal, keptDelta := 0, 0
+	for i := 0; i < pipelineInvariantCases; i++ {
+		seed := int64(i)
+		control := generateCandidates(rand.New(rand.NewSource(seed)))
+		subject := generateCandidates(rand.New(rand.NewSource(seed)))
+		fail := func(format string, args ...any) {
+			t.Fatalf("SEED=%d: "+format, append([]any{seed}, args...)...)
+		}
+		if len(control.candidates) != len(subject.candidates) {
+			fail("the generator is not deterministic for one seed (%d vs %d), so the differential below compares two different inputs",
+				len(control.candidates), len(subject.candidates))
+		}
+
+		// How many items were refused ONLY for a bound this pass repairs:
+		// invalid before, valid after. Computed from the inputs themselves,
+		// never by asking the pass under test what it thinks it fixed.
+		repairedHere := 0
+		invalidBefore := make([]bool, len(control.candidates))
+		for index, c := range control.candidates {
+			_, err := validateCandidateItem(c)
+			invalidBefore[index] = err != nil
+		}
+		normalizeCandidates(subject.candidates, nil)
+		for index, c := range subject.candidates {
+			if _, err := validateCandidateItem(c); invalidBefore[index] && err == nil {
+				repairedHere++
+			}
+		}
+		repairedTotal += repairedHere
+
+		controlKept := partitionProjectableCandidates(control.candidates, nil)
+		var observations []quarantineObservation
+		subjectKept := partitionProjectableCandidates(subject.candidates, func(o quarantineObservation) {
+			observations = append(observations, o)
+		})
+
+		// (f.1) NO drop is attributed to one of the three bounds any more.
+		for _, o := range observations {
+			if normalized[o.Reason] {
+				fail("a row was still quarantined as %q after normalization: the bound is supposed to cost no rows at all", o.Reason)
+			}
+			if !permitted[o.Reason] {
+				fail("quarantine reason %q is outside the vocabulary a normalized run may report", o.Reason)
+			}
+		}
+
+		// (f.2) MONOTONICITY, stated over IDENTITIES SUPPLIED rather than over
+		// individual candidates.
+		//
+		// DROPPED IS NOT NO SURVIVOR, in its mirror form -- the fourth time
+		// this branch has had to state that rule. A stricter pointer-level
+		// version of this invariant ("no candidate that survived may now be
+		// dropped") fails on seed 3, and correctly: candidate 14 is a
+		// work_item_ref:T-1 stub, and its untrimmed twin used to be
+		// quarantined. Normalization makes BOTH twins valid, so they collide,
+		// and dropDuplicateIdentities drops the second under the documented
+		// first-occurrence-wins rule -- while the identity stays supplied by
+		// the survivor and the total kept RISES (8 -> 12 on that seed). No
+		// node or edge is lost; one duplicate's evidence ref is, which is the
+		// cost that pass already documents and counts.
+		//
+		// So the property worth pinning is that the BATCH still supplies every
+		// identity it supplied before. That is what a consumer of the graph
+		// can observe, and it is what a repair must never take away.
+		suppliedBefore := suppliedIdentities(controlKept)
+		suppliedAfter := suppliedIdentities(subjectKept)
+		for key := range suppliedBefore {
+			if !suppliedAfter[key] {
+				fail("identity %q was supplied by the pipeline WITHOUT normalization and is unsupplied WITH it -- a repair must never cost the graph a node or an edge", key)
+			}
+		}
+		keptDelta += len(subjectKept) - len(controlKept)
+	}
+
+	// Non-vacuity, both halves. Without repairs there is nothing to be
+	// invariant about, and without a kept-count delta the repairs could all
+	// have been on rows some other pass dropped anyway.
+	if repairedTotal == 0 {
+		t.Fatalf("the generator produced ZERO rows whose only defect is a normalizable bound across %d cases: invariant (f) never ran", pipelineInvariantCases)
+	}
+	if keptDelta <= 0 {
+		t.Fatalf("normalization kept no additional rows across %d cases (delta %d): the repairs are not reaching the batch", pipelineInvariantCases, keptDelta)
+	}
+	t.Logf("invariant (f) reach: %d rows repaired, %d more rows kept than without normalization, over %d cases", repairedTotal, keptDelta, pipelineInvariantCases)
+}
+
+// suppliedIdentities is the set of node and edge identities a kept candidate
+// set actually puts into the graph. Keyed the way the backend keys them -- an
+// entity by kind + canonical id, a relationship by its relationship id -- so
+// two candidates that mint one identity count once, which is the whole point
+// at the call site.
+func suppliedIdentities(kept []candidate) map[string]bool {
+	supplied := map[string]bool{}
+	for _, c := range kept {
+		switch {
+		case c.entity != nil:
+			supplied["entity\x00"+subjectIdentityKey(c.entity.Subject)] = true
+		case c.relationship != nil:
+			supplied["relationship\x00"+c.relationship.RelationshipID] = true
+		case c.episode != nil:
+			supplied["episode\x00"+c.episode.EpisodeID] = true
+		case c.tombstone != nil:
+			supplied["tombstone\x00"+string(c.tombstone.Kind)+"\x00"+c.tombstone.CanonicalID] = true
+		}
+	}
+	return supplied
+}
+
 // TestPipelineInvariantsReachTheirAssertions guards the property test itself:
 // a generator that stopped producing quarantinable or colliding inputs would
 // leave every assertion above trivially satisfied and the suite would stay
@@ -345,8 +544,33 @@ func TestPipelineInvariantsOverGeneratedCandidates(t *testing.T) {
 func TestPipelineInvariantsReachTheirAssertions(t *testing.T) {
 	t.Parallel()
 	var dropped, duplicates, orphans, stubs, published, endpointDrops int
+	var untrimmedLabels, oversizeLabels, oversizeScalars, invertedWindows int
 	for i := 0; i < pipelineInvariantCases; i++ {
 		gen := generateCandidates(rand.New(rand.NewSource(int64(i))))
+		// The three normalizable shapes, counted on the RAW generated input
+		// rather than on what any pass reports about it -- an expectation must
+		// never be computed by the thing it checks.
+		for _, c := range gen.candidates {
+			for _, s := range subjectsOf(c) {
+				if strings.TrimSpace(s.Label) != s.Label {
+					untrimmedLabels++
+				}
+				if utf8.RuneCountInString(s.Label) > contractsv1.ContextFabricSubjectRefLabelMaxLength {
+					oversizeLabels++
+				}
+			}
+			for _, properties := range propertiesOf(c) {
+				for _, value := range properties {
+					if value.String != nil && utf8.RuneCountInString(*value.String) > contractsv1.ContextFabricClaimedFactValueMaxLength {
+						oversizeScalars++
+					}
+				}
+			}
+			from, to := windowOf(c)
+			if from != nil && to != nil && to.Before(*from) {
+				invertedWindows++
+			}
+		}
 		var obs []quarantineObservation
 		kept := partitionProjectableCandidates(gen.candidates, func(o quarantineObservation) { obs = append(obs, o) })
 		dropped += len(obs)
@@ -373,6 +597,12 @@ func TestPipelineInvariantsReachTheirAssertions(t *testing.T) {
 		"dropped items": dropped, "duplicate_within_batch": duplicates,
 		"orphaned_dependent": orphans, "surviving ref stubs": stubs, "publishable sets": published,
 		"endpoint_entity_quarantined": endpointDrops,
+		// The three normalizable shapes. Each is counted separately because
+		// they are separate tokens and a generator that produced only the
+		// untrimmed one would leave the other two invariants unexercised while
+		// every assertion stayed green.
+		"untrimmed labels": untrimmedLabels, "oversize labels": oversizeLabels,
+		"oversize scalars": oversizeScalars, "inverted windows": invertedWindows,
 	} {
 		if count == 0 {
 			t.Fatalf("the generator produced ZERO %s across %d cases: the invariant assertions never exercised that path and are proving nothing", name, pipelineInvariantCases)
@@ -380,6 +610,42 @@ func TestPipelineInvariantsReachTheirAssertions(t *testing.T) {
 	}
 	t.Logf("reach: dropped=%d duplicates=%d orphans=%d stubs=%d publishable=%d endpointDrops=%d over %d cases",
 		dropped, duplicates, orphans, stubs, published, endpointDrops, pipelineInvariantCases)
+	t.Logf("normalizable reach: untrimmedLabels=%d oversizeLabels=%d oversizeScalars=%d invertedWindows=%d",
+		untrimmedLabels, oversizeLabels, oversizeScalars, invertedWindows)
+}
+
+// subjectsOf, propertiesOf and windowOf read the fields the normalization pass
+// touches, for the reach counters above. Deliberately a SECOND reader rather
+// than a call into itemNormalizer: a non-vacuity check that asks the code under
+// test what it repaired is decided by the very mutation it exists to catch.
+func subjectsOf(c candidate) []contractsv1.ContextFabricSubjectRef {
+	switch {
+	case c.entity != nil:
+		return []contractsv1.ContextFabricSubjectRef{c.entity.Subject}
+	case c.relationship != nil:
+		return []contractsv1.ContextFabricSubjectRef{c.relationship.From, c.relationship.To}
+	}
+	return nil
+}
+
+func propertiesOf(c candidate) []map[string]contractsv1.ContextFabricScalarValue {
+	switch {
+	case c.entity != nil:
+		return []map[string]contractsv1.ContextFabricScalarValue{c.entity.Properties}
+	case c.relationship != nil:
+		return []map[string]contractsv1.ContextFabricScalarValue{c.relationship.Properties}
+	}
+	return nil
+}
+
+func windowOf(c candidate) (*time.Time, *time.Time) {
+	switch {
+	case c.entity != nil:
+		return c.entity.ValidFrom, c.entity.ValidTo
+	case c.relationship != nil:
+		return c.relationship.ValidFrom, c.relationship.ValidTo
+	}
+	return nil, nil
 }
 
 // TestRefStubAndItsEdgeShareAValidationFate pins the coupling the property
