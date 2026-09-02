@@ -657,6 +657,96 @@ func TestGateCatchesADuplicateCredentialClassID(t *testing.T) {
 	mustContain(t, errs, "DUPLICATE CREDENTIAL CLASS", "acr_client_credential")
 }
 
+// --- merge-gate round 2 on 889bef89: three more EXECUTED classes ----------
+
+func TestGateCatchesAnAnchorThatEscapesTheRepository(t *testing.T) {
+	// THE CLASS: the anchor path was joined to root with no containment
+	// check, so a row could cite a file outside the repository entirely --
+	// "../../../../../../etc/hosts" -- as its authentication validator and
+	// the gate returned OK. The schema defines anchor paths as relative to
+	// the owning repository; an anchor that leaves it is a claim about a
+	// different codebase, which no amount of anchor-content checking here
+	// can verify.
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{
+		"classification":              "protected",
+		"public_rationale":            nil,
+		"accepted_credential_classes": []any{"acr_client_credential"},
+		"primary_validator": map[string]any{
+			"description": "claims an out-of-repo file as the validator",
+			"anchor":      map[string]any{"path": "../../../../../../etc/hosts", "line": float64(1)},
+		},
+	})})
+	errs := f.check(t)
+	mustContain(t, errs, "ANCHOR ESCAPES REPO")
+}
+
+func TestGateCatchesAnAbsoluteAnchorPath(t *testing.T) {
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{
+		"classification":              "protected",
+		"public_rationale":            nil,
+		"accepted_credential_classes": []any{"acr_client_credential"},
+		"primary_validator": map[string]any{
+			"description": "absolute path",
+			"anchor":      map[string]any{"path": "/etc/hosts", "line": float64(1)},
+		},
+	})})
+	errs := f.check(t)
+	mustContain(t, errs, "ANCHOR ESCAPES REPO")
+}
+
+func TestGateCatchesAReversedAnchorRange(t *testing.T) {
+	// THE CLASS, and it was not hypothetical: the shipped inventory carried
+	// TWO of these (line=158 line_end=157, line=185 line_end=184), both
+	// produced by a re-anchoring edit that bumped `line` and left `line_end`
+	// behind. Only the start line was validated, and the issued-credential
+	// reader silently clamped the reversed range -- so the rows read as
+	// verified while describing a range that does not exist. A range the
+	// gate silently repairs is a range nobody is told is wrong.
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{
+		"classification":              "protected",
+		"public_rationale":            nil,
+		"accepted_credential_classes": []any{"acr_client_credential"},
+		"primary_validator": map[string]any{
+			"description": "reversed range",
+			"anchor": map[string]any{
+				"path": fixtureAppFile, "line": float64(7), "line_end": float64(6),
+			},
+		},
+	})})
+	errs := f.check(t)
+	mustContain(t, errs, "INVALID ANCHOR RANGE", "line_end=6", "line=7")
+}
+
+func TestDiscoveryReportsAMultilineRegistrationRatherThanDroppingIt(t *testing.T) {
+	// THE CLASS: the discovery regex reads one physical line, so a wrapped
+	// mux.Handle( call matched nothing and was skipped -- neither discovered
+	// nor listed as unresolved. Invisible, in the one file the script scans.
+	// "Cannot parse" must never mean "cannot see".
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, fixtureAppFile),
+		"package api\n"+
+			"\n"+
+			"import \"net/http\"\n"+
+			"\n"+
+			"func (a *App) Handler() http.Handler {\n"+
+			"\tmux := http.NewServeMux()\n"+
+			"\tmux.Handle(\n"+
+			"\t\t\"GET /wrapped\",\n"+
+			"\t\thttp.HandlerFunc(healthzHandler),\n"+
+			"\t)\n"+
+			"\treturn mux\n"+
+			"}\n"+
+			"\n"+
+			"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n")
+	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
+	inventoryPath := writeInventory(t, root, nil)
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, errs, "UNRESOLVED REGISTRATION", "spans multiple lines")
+}
+
 func TestGateCatchesAProtectedRowWithNoAcceptedCredentialClasses(t *testing.T) {
 	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{
 		"classification":              "protected",

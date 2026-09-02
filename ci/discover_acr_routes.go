@@ -84,6 +84,13 @@ type Report struct {
 // resolvePatternExpr and land in `unresolved` rather than being guessed.
 var muxHandleRE = regexp.MustCompile(`mux\.(?:Handle|HandleFunc)\(\s*([^,]+?)\s*,`)
 
+// muxCallStartRE matches the START of a mux.Handle/mux.HandleFunc call
+// regardless of whether its arguments fit on the line. It exists to catch
+// what muxHandleRE misses: a registration whose pattern argument is not on
+// the same physical line still gets REPORTED as unresolved rather than
+// silently dropped.
+var muxCallStartRE = regexp.MustCompile(`mux\.(?:Handle|HandleFunc)\(`)
+
 // stringLiteralRE matches a single double-quoted Go string literal.
 var stringLiteralRE = regexp.MustCompile(`"([^"]*)"`)
 
@@ -200,6 +207,26 @@ func discoverRoutes(file string, consts map[string]string) ([]Route, []string, e
 	for i, line := range lines {
 		matches := muxHandleRE.FindStringSubmatch(line)
 		if matches == nil {
+			// Merge-gate round 2 (CHAOS-3273, EXECUTED): muxHandleRE reads
+			// ONE physical line, so a registration wrapped across lines --
+			// `mux.Handle(\n    "GET /x",\n    handler,\n)` -- matched
+			// nothing and was skipped by this `continue`. It was neither
+			// discovered NOR reported as unresolved: invisible, in the one
+			// file this script claims to scan, while the gate reported the
+			// inventory consistent with discovery.
+			//
+			// That is NOT the waived source-text limitation (CHAOS-4761,
+			// which is about surfaces this script never looks at). This is a
+			// static registration in a file it does look at, and the whole
+			// point of `unresolved` is that "cannot parse" must never mean
+			// "cannot see". Fail closed instead.
+			if muxCallStartRE.MatchString(line) {
+				unresolved = append(unresolved, fmt.Sprintf(
+					"%s:%d: %s (registration spans multiple lines or has an unrecognised shape -- "+
+						"this script parses one physical line per registration)",
+					file, i+1, strings.TrimSpace(line),
+				))
+			}
 			continue
 		}
 		pattern, ok := resolvePatternExpr(matches[1], consts)

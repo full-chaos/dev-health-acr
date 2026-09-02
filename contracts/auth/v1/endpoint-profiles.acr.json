@@ -303,7 +303,7 @@
         "anchor": {
           "path": "internal/api/context_fabric_routes.go",
           "line": 158,
-          "line_end": 157
+          "line_end": 158
         }
       },
       "token_shape": {
@@ -357,7 +357,7 @@
         "anchor": {
           "path": "internal/api/context_fabric_result_routes.go",
           "line": 185,
-          "line_end": 184
+          "line_end": 185
         }
       },
       "token_shape": {

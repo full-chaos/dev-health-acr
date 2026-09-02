@@ -627,6 +627,20 @@ func checkAnchorExists(root, rowID string, anchor map[string]any, errs *[]string
 		*errs = append(*errs, fmt.Sprintf("STALE ANCHOR: row %q %s has no path", rowID, label))
 		return
 	}
+	// Merge-gate round 2 (CHAOS-3273, EXECUTED): the path was joined to root
+	// with no containment check, so a row could name
+	// "../../../../../../etc/hosts" as its authentication validator and the
+	// gate returned OK. The schema's anchor path is defined as relative to
+	// the owning repository; an anchor that leaves the repository is not a
+	// stale claim about this codebase, it is a claim about a different one.
+	if !anchorPathWithinRoot(root, path) {
+		*errs = append(*errs, fmt.Sprintf(
+			"ANCHOR ESCAPES REPO: row %q %s references %q, which is absolute or resolves outside the repository root -- "+
+				"anchor paths are repo-relative by schema, and a validator anchored outside this repo cannot be verified by this gate",
+			rowID, label, path,
+		))
+		return
+	}
 	full := filepath.Join(root, path)
 	raw, err := os.ReadFile(full)
 	if err != nil {
@@ -639,12 +653,50 @@ func checkAnchorExists(root, rowID string, anchor map[string]any, errs *[]string
 		*errs = append(*errs, fmt.Sprintf("STALE ANCHOR: row %q %s references %s:%d but the file only has %d lines", rowID, label, path, line, len(lines)))
 		return
 	}
+	// Merge-gate round 2 (EXECUTED): only the START line was validated, and
+	// the issued-credential path silently CLAMPED a reversed range. The
+	// shipped inventory already carried two of them (line=158 line_end=157,
+	// line=185 line_end=184) -- both produced by a re-anchoring edit that
+	// bumped `line` and left `line_end` behind. A range the gate silently
+	// repairs is a range nobody is told is wrong.
+	if raw, ok := anchor["line_end"]; ok && raw != nil {
+		endF, isNum := raw.(float64)
+		switch {
+		case !isNum:
+			*errs = append(*errs, fmt.Sprintf("SCHEMA VIOLATION: row %q %s line_end must be a number", rowID, label))
+		case int(endF) < line:
+			*errs = append(*errs, fmt.Sprintf(
+				"INVALID ANCHOR RANGE: row %q %s has line_end=%d before line=%d in %s -- "+
+					"a reversed range is silently clamped by readers, so it reads as verified while describing nothing",
+				rowID, label, int(endF), line, path,
+			))
+		case int(endF) > len(lines):
+			*errs = append(*errs, fmt.Sprintf(
+				"INVALID ANCHOR RANGE: row %q %s has line_end=%d but %s only has %d lines",
+				rowID, label, int(endF), path, len(lines),
+			))
+		}
+	}
 	if isTrivialAnchorLine(lines[line-1]) {
 		*errs = append(*errs, fmt.Sprintf(
 			"TRIVIAL ANCHOR: row %q %s references %s:%d, which is a placeholder/no-op line, not a real validator or mint site",
 			rowID, label, path, line,
 		))
 	}
+}
+
+// anchorPathWithinRoot reports whether a repo-relative anchor path stays
+// inside root once cleaned. Absolute paths are rejected outright; so is any
+// path whose cleaned form starts with "..".
+func anchorPathWithinRoot(root, path string) bool {
+	if filepath.IsAbs(path) {
+		return false
+	}
+	rel, err := filepath.Rel(root, filepath.Join(root, path))
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // goFuncDeclRE matches a Go function or method declaration line and
