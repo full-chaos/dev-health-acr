@@ -306,3 +306,57 @@ func TestClickHouseSourceVersionStaysV6ForReplay(t *testing.T) {
 			devhealthsource.ClickHouseSourceVersion, "devhealthsource.clickhouse.v6")
 	}
 }
+
+// TestQuarantiningTheLastRowStillAdvancesTheCursorPastIt isolates the
+// cursorSource/items separation in buildBatch, which no other test pinned
+// (found by mutation: replacing cursorSource with items in buildBatch's
+// NextCursor derivation left the whole suite green).
+//
+// The rule: NextCursor comes from every candidate the page CONSUMED, not
+// from the subset that survived quarantine. Derive it from the survivors
+// instead and a page whose LAST row is quarantined reports a watermark
+// BEHIND that row -- so the next tick re-reads it, re-quarantines it,
+// re-reports it, and the cursor never passes it. That is the original wedge
+// wearing a different mask: the organization stops making progress at
+// exactly the bad row, and now it does so while logging a quarantine every
+// tick forever instead of an error.
+//
+// Seeds two legal rows followed by an illegal one at the LATEST timestamp,
+// so the quarantined row is unambiguously last.
+func TestQuarantiningTheLastRowStillAdvancesTheCursorPastIt(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	rows := [][]any{
+		dependencyRow("WI-1", "WI-2", "RELATES_TO", at, created),
+		dependencyRow("WI-3", "WI-4", "RELATES_TO", at.Add(time.Second), created),
+		dependencyRow("WI-5", "EXT-9", "EXTERNAL_ISSUE_KEY", at.Add(2*time.Second), created), // LAST, and quarantined
+	}
+	tables := dependencyTablesOnly(t, at, rows)
+
+	batch, available, err, observations := projectWithQuarantineLog(t, tables, testCursor(t, at.Add(-time.Hour), ""))
+	if err != nil || !available {
+		t.Fatalf("page 1: err=%v available=%v", err, available)
+	}
+	if len(batch.Relationships) != 2 {
+		t.Fatalf("page 1 relationships = %d, want 2", len(batch.Relationships))
+	}
+	if len(observations) != 1 {
+		t.Fatalf("page 1 quarantines = %d, want 1", len(observations))
+	}
+
+	// The decisive assertion: the cursor must be PAST the quarantined row,
+	// so the next tick finds nothing and never sees that row again.
+	_, nextAvailable, nextErr, nextObservations := projectWithQuarantineLog(t, tables, batch.NextCursor)
+	if nextErr != nil {
+		t.Fatalf("page 2: %v", nextErr)
+	}
+	if nextAvailable {
+		t.Fatal("page 2 returned a batch: the cursor did not advance past the quarantined last row")
+	}
+	if len(nextObservations) != 0 {
+		t.Fatalf("the quarantined row was re-read and re-quarantined on page 2 (%d observations) -- the cursor was derived from the SURVIVING items instead of every consumed candidate, so the walk can never pass it",
+			len(nextObservations))
+	}
+}
