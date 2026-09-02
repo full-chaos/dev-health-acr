@@ -761,6 +761,16 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		receipt                      contextfabric.ModelExecutionReceipt
 		axisSource                   string
 		primaryFailureClassification string
+		// rejectionReason names WHICH validator rule rejected this
+		// interpretation, mutated in place at the rejecting return exactly
+		// as receipt/axisSource/primaryFailureClassification are, and read
+		// by the deferred telemetry call below. Empty on every path that
+		// is not a rejection -- success, generation failure, and fallback
+		// success all leave it empty, and logInterpretDecision appends the
+		// field only when it is non-empty. This mirrors
+		// SynthesizeAnswer's own rejectionReason variable one function
+		// down; see it for the CHAOS-4522 precedent this completes.
+		rejectionReason string
 	)
 	// CHAOS-4631: the derived seed is a pure function of the question text
 	// and the sample index, known before the call is even attempted -- so
@@ -770,7 +780,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	questionHash := contextfabric.QuestionHash(request.Question)
 	decodingSeed := chaos4631InterpretSeedFor(questionHash, sample)
 	defer func() {
-		r.logInterpretDecision(ctx, principal.OrgID, request.RequestID, receipt, primaryFailureClassification, axisSource, decodingSeed, sample)
+		r.logInterpretDecision(ctx, principal.OrgID, request.RequestID, receipt, primaryFailureClassification, axisSource, decodingSeed, sample, rejectionReason)
 	}()
 
 	started := r.now().UTC()
@@ -872,7 +882,18 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		// ErrInterpretationRejected/ModelBoundViolation classification, or
 		// every real bound violation reaches the route as an
 		// indistinguishable bare ErrModelOutput.
-		return contextfabric.InterpretedQuestion{}, receipt, contextfabric.ClassifyInterpretationRejection(interpreted, err)
+		rejection := contextfabric.ClassifyInterpretationRejection(interpreted, err)
+		// Read the reason back OFF the classified error rather than
+		// deriving it a second time here. One derivation, one source of
+		// truth: a second call to the diagnosis mirror could drift from
+		// what the error itself carries, and the value that reaches the
+		// route (and any future consumer that inspects the error) would
+		// then disagree with the value in the telemetry that is supposed
+		// to explain it.
+		reason := contextfabric.InterpretationRejectionReasonOf(rejection)
+		rejectionReason = string(reason)
+		receipt.InterpretationRejectionReason = reason
+		return contextfabric.InterpretedQuestion{}, receipt, rejection
 	}
 	outputBytes, _ := json.Marshal(output)
 	receipt.OutputDigest = contextfabric.DigestModelValue(outputBytes)
@@ -1382,8 +1403,8 @@ func safeLogRequestID(requestID string) string {
 	return string(sanitized)
 }
 
-func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string, decodingSeed int64, sample int) {
-	r.config.Logger.InfoContext(ctx, decisionEventMessage,
+func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string, decodingSeed int64, sample int, rejectionReason string) {
+	fields := []any{
 		"request_id", safeLogRequestID(requestID),
 		"org_id_hash", decisionOrgIDHash(orgID),
 		"operation", string(receipt.Operation),
@@ -1414,7 +1435,24 @@ func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID str
 		"model_id", receipt.Model,
 		"model_version", receipt.ModelVersion,
 		"prompt_version", receipt.PromptVersion,
-	)
+	}
+	// Appended only when a rejection actually happened, exactly as
+	// logSynthesizeDecision does with its own rejection_reason: an
+	// unconditional field would put rejection_reason="" on every
+	// successful interpretation, which reads as "rejected for no reason"
+	// in aggregation and makes a count of rejections by rule impossible
+	// to write without also filtering the empty case.
+	//
+	// The value is a closed-vocabulary constant returned by the
+	// contracts/v1 canonical table, never model- or question-derived text
+	// -- see that table's doc comment for why the table returns its own
+	// constant rather than the caller's input, and
+	// TestDecisionEventNeverCarriesCorpusText for the standing assertion
+	// that this whole line stays corpus-free.
+	if rejectionReason != "" {
+		fields = append(fields, "rejection_reason", rejectionReason)
+	}
+	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
 }
 
 // synthesisGroundingCounts is H8's fix: how many of the synthesis draft's

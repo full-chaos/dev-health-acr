@@ -253,6 +253,37 @@ type ModelExecutionReceipt struct {
 	FrameGoalsDropped     int            `json:"frame_goals_dropped,omitempty"`
 	FrameTermsTruncated   int            `json:"frame_terms_truncated,omitempty"`
 	FrameKindUnrecognized bool           `json:"frame_kind_unrecognized,omitempty"`
+	// InterpretationRejectionReason names WHICH rule in
+	// InterpretedQuestion.Validate() rejected this interpretation -- the
+	// interpret-side counterpart of the synthesis decision line's own
+	// rejection_reason, which has named the synthesis rule since
+	// CHAOS-4522. Before this field, an interpretation rejection was
+	// recorded ONLY as Outcome="invalid_output", which is the same value a
+	// malformed model response produces; the durable receipt could not
+	// distinguish "the model returned something unparseable" from "the
+	// model returned a well-formed interpretation that violated a specific
+	// named rule".
+	//
+	// It is on the RECEIPT and not only on the log line because the
+	// receipt is the durable artifact: a rejection rate broken down by
+	// rule, over a real question corpus, is answerable by querying stored
+	// receipts and is not answerable from logs that have rotated. That is
+	// the same reasoning ScopeAnchorKind's own comment above gives for
+	// capturing a signal rather than re-deriving it.
+	//
+	// Set on the interpret path ONLY, and only on a rejection -- never on
+	// success, and never on a synthesize or phrase_offers receipt. Note it
+	// IS set when the primary's own generation failed and a configured
+	// fallback then produced an interpretation that was itself rejected:
+	// the fallback's error is what the caller receives, so the fallback's
+	// rule is the one to name.
+	// omitempty for the identical asymmetry-avoidance reason WindowClass
+	// and QuestionFamily both give: absent, not present-and-empty, on
+	// every receipt that has no rejection to describe.
+	//
+	// SHADOW ONLY, like every field above it: no wire surface, no schema,
+	// no OpenAPI, no MCP, no migration.
+	InterpretationRejectionReason InterpretationRejectionReason `json:"interpretation_rejection_reason,omitempty"`
 }
 
 func (r ModelExecutionReceipt) Validate() error {
