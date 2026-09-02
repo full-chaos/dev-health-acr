@@ -205,43 +205,53 @@ func discoverRoutes(file string, consts map[string]string) ([]Route, []string, e
 	var routes []Route
 	var unresolved []string
 	for i, line := range lines {
-		matches := muxHandleRE.FindStringSubmatch(line)
-		if matches == nil {
-			// Merge-gate round 2 (CHAOS-3273, EXECUTED): muxHandleRE reads
-			// ONE physical line, so a registration wrapped across lines --
-			// `mux.Handle(\n    "GET /x",\n    handler,\n)` -- matched
-			// nothing and was skipped by this `continue`. It was neither
-			// discovered NOR reported as unresolved: invisible, in the one
-			// file this script claims to scan, while the gate reported the
-			// inventory consistent with discovery.
-			//
-			// That is NOT the waived source-text limitation (CHAOS-4761,
-			// which is about surfaces this script never looks at). This is a
-			// static registration in a file it does look at, and the whole
-			// point of `unresolved` is that "cannot parse" must never mean
-			// "cannot see". Fail closed instead.
-			if muxCallStartRE.MatchString(line) {
-				unresolved = append(unresolved, fmt.Sprintf(
-					"%s:%d: %s (registration spans multiple lines or has an unrecognised shape -- "+
-						"this script parses one physical line per registration)",
-					file, i+1, strings.TrimSpace(line),
-				))
+		// Count the registration CALLS on this line, then parse as many as
+		// the pattern regex can resolve, and reconcile the two. Anything the
+		// count says is there but the parse did not produce is REPORTED.
+		//
+		// Two merge-gate rounds landed on this loop, and the pair is worth
+		// keeping together because it is one class approached twice:
+		//   - round 2: a registration WRAPPED across lines matched nothing
+		//     and hit `continue` -- invisible, not unresolved.
+		//   - round 3: two registrations on ONE line matched once, because
+		//     this used FindStringSubmatch. The second was invisible too,
+		//     and round 2's fix did not help, since the line matches.
+		// The lesson is in the shape of the second miss: round 2 keyed the
+		// fix to "the line parsed to nothing" -- the shape of the reported
+		// symptom -- rather than to the class, "a registration in this file
+		// is not accounted for". A count-and-reconcile answers the class.
+		//
+		// Not the waived CHAOS-4761 limitation, which covers surfaces this
+		// script never looks at. These are static registrations in the one
+		// file it does scan, and the whole point of `unresolved` is that
+		// "cannot parse" must never mean "cannot see".
+		calls := len(muxCallStartRE.FindAllString(line, -1))
+		if calls == 0 {
+			continue
+		}
+		allMatches := muxHandleRE.FindAllStringSubmatch(line, -1)
+		if len(allMatches) < calls {
+			unresolved = append(unresolved, fmt.Sprintf(
+				"%s:%d: %s (line holds %d mux registration call(s) but only %d could be parsed -- "+
+					"a registration wrapped across lines, or in an unrecognised shape, is reported rather than dropped)",
+				file, i+1, strings.TrimSpace(line), calls, len(allMatches),
+			))
+		}
+		for _, matches := range allMatches {
+			pattern, ok := resolvePatternExpr(matches[1], consts)
+			if !ok {
+				unresolved = append(unresolved, fmt.Sprintf("%s:%d: %s", file, i+1, strings.TrimSpace(line)))
+				continue
 			}
-			continue
+			method, path, ok := strings.Cut(pattern, " ")
+			if !ok {
+				// A bare pattern (no method prefix) matches every method in
+				// Go 1.22 ServeMux syntax -- not used in this repo today, but
+				// reported precisely rather than mis-split.
+				method, path = "ANY", pattern
+			}
+			routes = append(routes, Route{Method: method, Path: path, File: relPath(file), Line: i + 1, Service: deployedService})
 		}
-		pattern, ok := resolvePatternExpr(matches[1], consts)
-		if !ok {
-			unresolved = append(unresolved, fmt.Sprintf("%s:%d: %s", file, i+1, strings.TrimSpace(line)))
-			continue
-		}
-		method, path, ok := strings.Cut(pattern, " ")
-		if !ok {
-			// A bare pattern (no method prefix) matches every method in
-			// Go 1.22 ServeMux syntax -- not used in this repo today, but
-			// reported precisely rather than mis-split.
-			method, path = "ANY", pattern
-		}
-		routes = append(routes, Route{Method: method, Path: path, File: relPath(file), Line: i + 1, Service: deployedService})
 	}
 	return routes, unresolved, nil
 }

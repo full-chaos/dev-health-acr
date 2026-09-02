@@ -300,6 +300,34 @@ check_pin_requires_full_sha() {
   fi
 }
 
+# Enforcing the pin's SHAPE is worthless if the checkout does not USE it.
+# Merge-gate round 3 (EXECUTED): check_pin_requires_full_sha only greps the
+# workflow for the regex, so changing the sparse-checkout ref to `main` left
+# BOTH workflow-contract PASS lines intact while CI would have validated
+# against ops's moving default branch. The pin was enforced and bypassed at
+# the same time.
+#
+# That is the same mistake as the check above it: keying on the presence of
+# the guard rather than on the property the guard exists to deliver. Bind the
+# ref to the validated pin output explicitly.
+check_pin_binds_checkout_ref() {
+  local file="$1" block
+  block="$(awk '
+    /repository: full-chaos\/dev-health-ops/ { grab=1 }
+    grab && /^      - / { grab=0 }
+    grab { print }
+  ' "$file")"
+
+  if [ -z "$block" ]; then
+    printf 'no checkout step for full-chaos/dev-health-ops found in %s\n' "$file" >&2
+    return 1
+  fi
+  if ! printf '%s' "$block" | grep -qF 'ref: ${{ steps.ops-pin.outputs.sha }}'; then
+    printf 'the ops-contract checkout does not use the validated pin (expected ref: ${{ steps.ops-pin.outputs.sha }}) -- the full-SHA check would pass while CI followed a floating ref\n' >&2
+    return 1
+  fi
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -312,6 +340,7 @@ run_all_checks() {
   check_isolated_devhealthschema_job "$file"
   check_endpoint_profile_gate_step "$file"
   check_pin_requires_full_sha "$file"
+  check_pin_binds_checkout_ref "$file"
 }
 
 # ---- positive run -------------------------------------------------------
@@ -444,5 +473,12 @@ pin_regex_removed="$tmpdir/pin-regex-removed.yml"
 grep -vF '[0-9a-f]{40}' "$workflow" > "$pin_regex_removed"
 assert_check_fails 'removed the full-SHA requirement on ci/ops-contract.pin' \
   check_pin_requires_full_sha "$pin_regex_removed"
+
+# (p) keep the pin regex but point the checkout at a floating ref. The
+# shape check still passes; the checkout no longer uses the thing it checked.
+checkout_floating_ref="$tmpdir/checkout-floating-ref.yml"
+sed 's/ref: ${{ steps.ops-pin.outputs.sha }}/ref: main/' "$workflow" > "$checkout_floating_ref"
+assert_check_fails 'pointed the ops-contract checkout at a floating ref while keeping the pin regex' \
+  check_pin_binds_checkout_ref "$checkout_floating_ref"
 
 printf 'PASS: all negative controls correctly failed their check\n'

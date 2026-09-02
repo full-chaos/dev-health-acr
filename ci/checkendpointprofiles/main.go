@@ -337,9 +337,35 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 		return nil, err
 	}
 
+	// A row's `source` and its anchors address a surface as file:line -- that
+	// granularity comes from the ops-owned schema, not from this gate. So two
+	// registrations written on ONE line collide here, and only one of them
+	// could ever be owned by a row.
+	//
+	// Merge-gate round 3 (EXECUTED) found the silent half of this: discovery
+	// matched once per line, so the second registration was invisible and an
+	// unprofiled route passed. Discovery now returns both. What is left is a
+	// real, narrow limitation of the ADDRESSING SCHEME rather than of this
+	// parser, and it is reported explicitly: without this, the collision
+	// surfaced as a baffling "content drift" against whichever registration
+	// happened to be written second. Fails closed either way; the difference
+	// is whether the message tells you what is actually wrong.
+	//
+	// Fixing it properly means giving anchors a column, which is a change to
+	// a contract shared by three repos -- CHAOS-4774, not this PR.
 	discoveredKeys := map[surfaceKey]discoveredRoute{}
 	for _, r := range report.Routes {
-		discoveredKeys[surfaceKey{r.File, r.Line}] = r
+		key := surfaceKey{r.File, r.Line}
+		if prev, clash := discoveredKeys[key]; clash {
+			errs = append(errs, fmt.Sprintf(
+				"MULTIPLE REGISTRATIONS ON ONE LINE: %s:%d registers both %s %s and %s %s -- "+
+					"a row addresses a surface as file:line, so these cannot both be profiled. "+
+					"Put each registration on its own line (see CHAOS-4774)",
+				r.File, r.Line, prev.Method, prev.Path, r.Method, r.Path,
+			))
+			continue
+		}
+		discoveredKeys[key] = r
 	}
 
 	// Codex-verified gap (round 1): discovery's Unresolved field -- lines

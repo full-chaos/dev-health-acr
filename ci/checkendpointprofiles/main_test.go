@@ -744,7 +744,40 @@ func TestDiscoveryReportsAMultilineRegistrationRatherThanDroppingIt(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, errs, "UNRESOLVED REGISTRATION", "spans multiple lines")
+	mustContain(t, errs, "UNRESOLVED REGISTRATION", "but only 0 could be parsed")
+}
+
+func TestDiscoveryReportsBothRegistrationsWrittenOnOneLine(t *testing.T) {
+	// Merge-gate round 3 (EXECUTED): discovery used FindStringSubmatch, one
+	// match per line, so the SECOND registration on a line was silently
+	// dropped -- an unprofiled route in source with the gate reporting the
+	// inventory consistent with discovery. Round 2's fix (report lines that
+	// match NOTHING) did not help, because this line matches once.
+	//
+	// The fixture profiles the FIRST registration and leaves the second
+	// unowned, which is the construction that actually exposes the hole: with
+	// both unprofiled the gate failed anyway, on the first one, and that
+	// coincidence reads as a catch.
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, fixtureAppFile),
+		"package api\n"+
+			"\n"+
+			"import \"net/http\"\n"+
+			"\n"+
+			"func (a *App) Handler() http.Handler {\n"+
+			"\tmux := http.NewServeMux()\n"+
+			"\tmux.HandleFunc(\"GET /healthz\", healthzHandler); mux.HandleFunc(\"GET /unprofiled\", healthzHandler)\n"+
+			"\treturn mux\n"+
+			"}\n"+
+			"\n"+
+			"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n")
+	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
+	inventoryPath := writeInventory(t, root, []map[string]any{minimalValidRow(nil)})
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, errs, "MULTIPLE REGISTRATIONS ON ONE LINE", "/unprofiled")
 }
 
 func TestGateCatchesAProtectedRowWithNoAcceptedCredentialClasses(t *testing.T) {
