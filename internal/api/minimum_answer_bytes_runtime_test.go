@@ -1,7 +1,6 @@
 package api
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +17,16 @@ import (
 // the process reads its environment, and this runs when a caller composes the
 // runtime bundle programmatically. A composed bundle never passes through the
 // loader, so the loader's check does not cover it.
+// boundsRejection is the EXACT error NewApp's limits guard returns
+// (evidence_dependencies.go). Matching it exactly is the whole point: an
+// earlier version of this test accepted any non-nil error and probed for the
+// substrings "bounds" or "serialized", neither of which this message contains.
+// It therefore passed with the guard reverted to the old floor -- proven by
+// mutation, not argued -- because both calls fell through to the
+// missing-capabilities error instead. A test that accepts any error from a
+// constructor with many failure modes asserts nothing about the one it names.
+const boundsRejection = "hosted read limits are invalid"
+
 func TestNewAppRejectsSerializedBudgetBelowTheMinimumAnswerSize(t *testing.T) {
 	t.Parallel()
 
@@ -38,29 +47,26 @@ func TestNewAppRejectsSerializedBudgetBelowTheMinimumAnswerSize(t *testing.T) {
 
 	below := base
 	below.MaxSerializedBytes = oldFloor
-	if _, err := NewApp(below, Dependencies{}, testLogger(nil)); err == nil {
+	_, err := NewApp(below, Dependencies{}, testLogger(nil))
+	if err == nil {
 		t.Fatalf("NewApp accepted a %d-byte serialized budget: no answer can be serialized in that, so every investigation on the resulting app fails at the route blaming the caller's question", oldFloor)
 	}
+	if err.Error() != boundsRejection {
+		t.Fatalf("NewApp rejected the sub-minimum budget with %q, not the limits guard's %q.\n"+
+			"This test must fail when the GUARD is removed, and it can only do that by matching the guard's own error -- "+
+			"any other message means it fell through to a different failure mode and proves nothing about the bound.",
+			err.Error(), boundsRejection)
+	}
 
-	// The boundary is accepted, or the documented minimum is a lie. This must
-	// fail for a reason OTHER than the byte budget -- Dependencies{} is
-	// deliberately empty, so any remaining error is about something else.
+	// The boundary is accepted, or the documented minimum is a lie. Dependencies{}
+	// is empty, so this still errors -- but it must error for a DIFFERENT reason.
+	// Asserting the message is not the bounds one is what makes this meaningful:
+	// "some error occurred" would be true whether or not the boundary is accepted.
 	at := base
 	at.MaxSerializedBytes = contractsv1.ContextFabricMinimumAnswerBytes
-	if _, err := NewApp(at, Dependencies{}, testLogger(nil)); err != nil && isBoundsError(err) {
-		t.Fatalf("NewApp rejected exactly the documented minimum (%d) on bounds grounds: %v", contractsv1.ContextFabricMinimumAnswerBytes, err)
+	_, atErr := NewApp(at, Dependencies{}, testLogger(nil))
+	if atErr != nil && atErr.Error() == boundsRejection {
+		t.Fatalf("NewApp rejected exactly the documented minimum (%d) on limits grounds: the guard is off by one and the published minimum is unusable",
+			contractsv1.ContextFabricMinimumAnswerBytes)
 	}
-}
-
-// isBoundsError reports whether err is NewApp's own bounds rejection rather
-// than one of its many other composition failures. Matching the bounds message
-// specifically is what stops the boundary assertion above passing for the wrong
-// reason -- an empty Dependencies{} fails for several reasons, and a test that
-// accepted any error would prove nothing.
-func isBoundsError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "bounds") || strings.Contains(msg, "serialized")
 }
