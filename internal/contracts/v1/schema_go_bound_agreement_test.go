@@ -72,7 +72,9 @@ var asymmetricBounds = map[string]goBound{
 // what the Go write path enforces -- a real defect this file exists to
 // surface, not something it can quietly resolve by picking a side.
 // CHAOS-4867's full-population audit (main's ruling, 2026-09-02) found
-// these fourteen. Which side moves is chris's call, filed as each
+// fourteen of these fifteen; round 2 of the merge-gate review (codex,
+// EXECUTED) found the fifteenth, a wrong schema-only classification this
+// map absorbed instead. Which side moves is chris's call, filed as each
 // disagreement's own producer-side ticket -- not fixed in this PR. Both
 // numbers are pinned: a schema-side drift fails HERE (the walk compares
 // bound.value against schemaValue, same as any other declarative entry);
@@ -93,8 +95,17 @@ var knownDisagreements = map[string]knownDisagreement{
 	// never parameterized, so every caller gets floor 1 regardless of what
 	// its own schema declares. Three callers declare a floor of 8.
 	"common#$defs.CohortMemberDriver.properties.source_claimed_fact_ids.items.minLength": {8, 1, "uniqueTrimmedStrings hardcodes floor 1, validate_context_fabric_helpers.go:464; filed as its own producer-side ticket"},
-	"common#$defs.DriverJudgment.properties.claimed_fact_ids.items.minLength":            {8, 1, "uniqueTrimmedStrings hardcodes floor 1, validate_context_fabric_helpers.go:464; filed as its own producer-side ticket"},
-	"common#$defs.Finding.properties.claimed_fact_ids.items.minLength":                   {8, 1, "uniqueTrimmedStrings hardcodes floor 1, validate_context_fabric_helpers.go:464; filed as its own producer-side ticket"},
+	// Root cause: ValidateCohortGroups cross-checks every
+	// member_canonical_ids entry against the cohort's own member set
+	// (context_fabric_grouped_cohort.go:165-167) -- a string that cannot
+	// match a known member's Subject.CanonicalID is rejected regardless of
+	// its own length, and SubjectRef.Validate caps CanonicalID at 256
+	// (validate_context_fabric_result.go:13), never 512. The count
+	// SIBLING of this bound (maxItems) derives from the same cross-check
+	// and DOES agree with the schema (250) -- see goBoundsByPath instead.
+	"common#$defs.CohortGroup.properties.member_canonical_ids.items.maxLength": {512, 256, "ValidateCohortGroups, context_fabric_grouped_cohort.go:165-167 -> SubjectRef.Validate, validate_context_fabric_result.go:13; filed as its own producer-side ticket"},
+	"common#$defs.DriverJudgment.properties.claimed_fact_ids.items.minLength":  {8, 1, "uniqueTrimmedStrings hardcodes floor 1, validate_context_fabric_helpers.go:464; filed as its own producer-side ticket"},
+	"common#$defs.Finding.properties.claimed_fact_ids.items.minLength":         {8, 1, "uniqueTrimmedStrings hardcodes floor 1, validate_context_fabric_helpers.go:464; filed as its own producer-side ticket"},
 	// Root cause: boundedEvidenceRefs(x, 500, false) -- the ceiling is a
 	// literal repeated at each of these four ingest-projection call sites
 	// (validate_context_fabric_projection.go), every one 500, none 200.
@@ -441,83 +452,103 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// Validate numerically checks; the values below already agree with
 		// Go today. A genuine schema/Go value disagreement found during the
 		// audit is NOT here -- see knownDisagreements below.
-		"common#$defs.AcceptedGrammar.properties.pattern_id.maxLength":                            128,
-		"common#$defs.AcceptedGrammar.properties.pattern_id.minLength":                            1,
-		"common#$defs.AnchorBoundReceipt.properties.receipt_id.maxLength":                         256,
-		"common#$defs.AnchorBoundReceipt.properties.receipt_id.minLength":                         8,
-		"common#$defs.AnchorBoundReceipt.properties.result_id.maxLength":                          256,
-		"common#$defs.AnchorBoundReceipt.properties.result_id.minLength":                          8,
-		"common#$defs.AnchorOption.properties.canonical_id.maxLength":                             256,
-		"common#$defs.AnchorOption.properties.canonical_id.minLength":                             1,
-		"common#$defs.AnchorOption.properties.label.maxLength":                                    200,
-		"common#$defs.AnchorOption.properties.label.minLength":                                    1,
-		"common#$defs.AnchorOption.properties.option_id.maxLength":                                256,
-		"common#$defs.AnchorOption.properties.option_id.minLength":                                1,
-		"common#$defs.AnchorOption.properties.phrasing.maxLength":                                 200,
-		"common#$defs.AnchorOption.properties.phrasing.minLength":                                 1,
-		"common#$defs.AnchorOption.properties.prior_entry_id.maxLength":                           256,
-		"common#$defs.AnchorOption.properties.prior_entry_id.minLength":                           1,
-		"common#$defs.AnchorOption.properties.prior_version_id.maxLength":                         256,
-		"common#$defs.AnchorOption.properties.prior_version_id.minLength":                         1,
-		"common#$defs.AnchorOption.properties.receipt_id.maxLength":                               256,
-		"common#$defs.AnchorOption.properties.receipt_id.minLength":                               8,
-		"common#$defs.AnchorOptionV2.properties.canonical_id.maxLength":                           256,
-		"common#$defs.AnchorOptionV2.properties.canonical_id.minLength":                           1,
-		"common#$defs.AnchorOptionV2.properties.label.maxLength":                                  200,
-		"common#$defs.AnchorOptionV2.properties.label.minLength":                                  1,
-		"common#$defs.AnchorOptionV2.properties.option_id.maxLength":                              256,
-		"common#$defs.AnchorOptionV2.properties.option_id.minLength":                              1,
-		"common#$defs.AnchorOptionV2.properties.phrasing.maxLength":                               200,
-		"common#$defs.AnchorOptionV2.properties.phrasing.minLength":                               1,
-		"common#$defs.AnchorOptionV2.properties.prior_entry_id.maxLength":                         256,
-		"common#$defs.AnchorOptionV2.properties.prior_entry_id.minLength":                         1,
-		"common#$defs.AnchorOptionV2.properties.prior_version_id.maxLength":                       256,
-		"common#$defs.AnchorOptionV2.properties.prior_version_id.minLength":                       1,
-		"common#$defs.AnchorOptionV2.properties.receipt_id.maxLength":                             256,
-		"common#$defs.AnchorOptionV2.properties.receipt_id.minLength":                             8,
-		"common#$defs.AnswerPlan.properties.family_version.maxLength":                             64,
-		"common#$defs.AnswerPlan.properties.family_version.minLength":                             1,
-		"common#$defs.AuthorizationScope.anyOf.0.properties.repository_slugs.minItems":            1,
-		"common#$defs.AuthorizationScope.anyOf.1.properties.project_ids.minItems":                 1,
-		"common#$defs.AuthorizationScope.anyOf.2.properties.team_ids.minItems":                    1,
-		"common#$defs.AuthorizationScope.properties.project_ids.items.maxLength":                  256,
-		"common#$defs.AuthorizationScope.properties.project_ids.items.minLength":                  1,
-		"common#$defs.AuthorizationScope.properties.project_ids.maxItems":                         200,
-		"common#$defs.AuthorizationScope.properties.repository_slugs.items.maxLength":             512,
-		"common#$defs.AuthorizationScope.properties.repository_slugs.items.minLength":             1,
-		"common#$defs.AuthorizationScope.properties.repository_slugs.maxItems":                    200,
-		"common#$defs.AuthorizationScope.properties.team_ids.items.maxLength":                     256,
-		"common#$defs.AuthorizationScope.properties.team_ids.items.minLength":                     1,
-		"common#$defs.AuthorizationScope.properties.team_ids.maxItems":                            200,
-		"common#$defs.BoundSubjectReceipt.properties.receipt_id.maxLength":                        256,
-		"common#$defs.BoundSubjectReceipt.properties.receipt_id.minLength":                        8,
-		"common#$defs.BoundSubjectReceipt.properties.result_id.maxLength":                         256,
-		"common#$defs.BoundSubjectReceipt.properties.result_id.minLength":                         8,
-		"common#$defs.CandidateBoundReceipt.properties.receipt_id.maxLength":                      256,
-		"common#$defs.CandidateBoundReceipt.properties.receipt_id.minLength":                      8,
-		"common#$defs.CandidateBoundReceipt.properties.result_id.maxLength":                       256,
-		"common#$defs.CandidateBoundReceipt.properties.result_id.minLength":                       8,
-		"common#$defs.CandidateOption.properties.canonical_id.maxLength":                          256,
-		"common#$defs.CandidateOption.properties.canonical_id.minLength":                          1,
-		"common#$defs.CandidateOption.properties.label.maxLength":                                 200,
-		"common#$defs.CandidateOption.properties.label.minLength":                                 1,
-		"common#$defs.CandidateOption.properties.option_id.maxLength":                             256,
-		"common#$defs.CandidateOption.properties.option_id.minLength":                             1,
-		"common#$defs.CandidateOption.properties.phrasing.maxLength":                              200,
-		"common#$defs.CandidateOption.properties.phrasing.minLength":                              1,
-		"common#$defs.CandidateOption.properties.prior_entry_id.maxLength":                        256,
-		"common#$defs.CandidateOption.properties.prior_entry_id.minLength":                        1,
-		"common#$defs.CandidateOption.properties.prior_version_id.maxLength":                      256,
-		"common#$defs.CandidateOption.properties.prior_version_id.minLength":                      1,
-		"common#$defs.CandidateOption.properties.receipt_id.maxLength":                            256,
-		"common#$defs.CandidateOption.properties.receipt_id.minLength":                            8,
-		"common#$defs.ClaimedFact.properties.claim_id.maxLength":                                  256,
-		"common#$defs.ClaimedFact.properties.claim_id.minLength":                                  8,
-		"common#$defs.ClaimedFact.properties.rows.maxItems":                                       64,
-		"common#$defs.ClaimedFact.properties.time_series_rows.maxItems":                           64,
-		"common#$defs.ClaimedFactRow.properties.fields.maxProperties":                             32,
-		"common#$defs.Cohort.properties.groups.maxItems":                                          250,
-		"common#$defs.Cohort.properties.members.maxItems":                                         250,
+		"common#$defs.AcceptedGrammar.properties.pattern_id.maxLength":                 128,
+		"common#$defs.AcceptedGrammar.properties.pattern_id.minLength":                 1,
+		"common#$defs.AnchorBoundReceipt.properties.receipt_id.maxLength":              256,
+		"common#$defs.AnchorBoundReceipt.properties.receipt_id.minLength":              8,
+		"common#$defs.AnchorBoundReceipt.properties.result_id.maxLength":               256,
+		"common#$defs.AnchorBoundReceipt.properties.result_id.minLength":               8,
+		"common#$defs.AnchorOption.properties.canonical_id.maxLength":                  256,
+		"common#$defs.AnchorOption.properties.canonical_id.minLength":                  1,
+		"common#$defs.AnchorOption.properties.label.maxLength":                         200,
+		"common#$defs.AnchorOption.properties.label.minLength":                         1,
+		"common#$defs.AnchorOption.properties.option_id.maxLength":                     256,
+		"common#$defs.AnchorOption.properties.option_id.minLength":                     1,
+		"common#$defs.AnchorOption.properties.phrasing.maxLength":                      200,
+		"common#$defs.AnchorOption.properties.phrasing.minLength":                      1,
+		"common#$defs.AnchorOption.properties.prior_entry_id.maxLength":                256,
+		"common#$defs.AnchorOption.properties.prior_entry_id.minLength":                1,
+		"common#$defs.AnchorOption.properties.prior_version_id.maxLength":              256,
+		"common#$defs.AnchorOption.properties.prior_version_id.minLength":              1,
+		"common#$defs.AnchorOption.properties.receipt_id.maxLength":                    256,
+		"common#$defs.AnchorOption.properties.receipt_id.minLength":                    8,
+		"common#$defs.AnchorOptionV2.properties.canonical_id.maxLength":                256,
+		"common#$defs.AnchorOptionV2.properties.canonical_id.minLength":                1,
+		"common#$defs.AnchorOptionV2.properties.label.maxLength":                       200,
+		"common#$defs.AnchorOptionV2.properties.label.minLength":                       1,
+		"common#$defs.AnchorOptionV2.properties.option_id.maxLength":                   256,
+		"common#$defs.AnchorOptionV2.properties.option_id.minLength":                   1,
+		"common#$defs.AnchorOptionV2.properties.phrasing.maxLength":                    200,
+		"common#$defs.AnchorOptionV2.properties.phrasing.minLength":                    1,
+		"common#$defs.AnchorOptionV2.properties.prior_entry_id.maxLength":              256,
+		"common#$defs.AnchorOptionV2.properties.prior_entry_id.minLength":              1,
+		"common#$defs.AnchorOptionV2.properties.prior_version_id.maxLength":            256,
+		"common#$defs.AnchorOptionV2.properties.prior_version_id.minLength":            1,
+		"common#$defs.AnchorOptionV2.properties.receipt_id.maxLength":                  256,
+		"common#$defs.AnchorOptionV2.properties.receipt_id.minLength":                  8,
+		"common#$defs.AnswerPlan.properties.family_version.maxLength":                  64,
+		"common#$defs.AnswerPlan.properties.family_version.minLength":                  1,
+		"common#$defs.AuthorizationScope.anyOf.0.properties.repository_slugs.minItems": 1,
+		"common#$defs.AuthorizationScope.anyOf.1.properties.project_ids.minItems":      1,
+		"common#$defs.AuthorizationScope.anyOf.2.properties.team_ids.minItems":         1,
+		"common#$defs.AuthorizationScope.properties.project_ids.items.maxLength":       256,
+		"common#$defs.AuthorizationScope.properties.project_ids.items.minLength":       1,
+		"common#$defs.AuthorizationScope.properties.project_ids.maxItems":              200,
+		"common#$defs.AuthorizationScope.properties.repository_slugs.items.maxLength":  512,
+		"common#$defs.AuthorizationScope.properties.repository_slugs.items.minLength":  1,
+		"common#$defs.AuthorizationScope.properties.repository_slugs.maxItems":         200,
+		"common#$defs.AuthorizationScope.properties.team_ids.items.maxLength":          256,
+		"common#$defs.AuthorizationScope.properties.team_ids.items.minLength":          1,
+		"common#$defs.AuthorizationScope.properties.team_ids.maxItems":                 200,
+		"common#$defs.BoundSubjectReceipt.properties.receipt_id.maxLength":             256,
+		"common#$defs.BoundSubjectReceipt.properties.receipt_id.minLength":             8,
+		"common#$defs.BoundSubjectReceipt.properties.result_id.maxLength":              256,
+		"common#$defs.BoundSubjectReceipt.properties.result_id.minLength":              8,
+		"common#$defs.CandidateBoundReceipt.properties.receipt_id.maxLength":           256,
+		"common#$defs.CandidateBoundReceipt.properties.receipt_id.minLength":           8,
+		"common#$defs.CandidateBoundReceipt.properties.result_id.maxLength":            256,
+		"common#$defs.CandidateBoundReceipt.properties.result_id.minLength":            8,
+		"common#$defs.CandidateOption.properties.canonical_id.maxLength":               256,
+		"common#$defs.CandidateOption.properties.canonical_id.minLength":               1,
+		"common#$defs.CandidateOption.properties.label.maxLength":                      200,
+		"common#$defs.CandidateOption.properties.label.minLength":                      1,
+		"common#$defs.CandidateOption.properties.option_id.maxLength":                  256,
+		"common#$defs.CandidateOption.properties.option_id.minLength":                  1,
+		"common#$defs.CandidateOption.properties.phrasing.maxLength":                   200,
+		"common#$defs.CandidateOption.properties.phrasing.minLength":                   1,
+		"common#$defs.CandidateOption.properties.prior_entry_id.maxLength":             256,
+		"common#$defs.CandidateOption.properties.prior_entry_id.minLength":             1,
+		"common#$defs.CandidateOption.properties.prior_version_id.maxLength":           256,
+		"common#$defs.CandidateOption.properties.prior_version_id.minLength":           1,
+		"common#$defs.CandidateOption.properties.receipt_id.maxLength":                 256,
+		"common#$defs.CandidateOption.properties.receipt_id.minLength":                 8,
+		"common#$defs.ClaimedFact.properties.claim_id.maxLength":                       256,
+		"common#$defs.ClaimedFact.properties.claim_id.minLength":                       8,
+		"common#$defs.ClaimedFact.properties.rows.maxItems":                            64,
+		"common#$defs.ClaimedFact.properties.time_series_rows.maxItems":                64,
+		"common#$defs.ClaimedFactRow.properties.fields.maxProperties":                  32,
+		// CHAOS-4867 round-2 finding (codex, EXECUTED): boundKeywords was
+		// missing "minProperties" entirely -- this bound was invisible to
+		// the walk, not merely misclassified. See boundKeywords' own
+		// comment below. It shares ClaimedFactRow.fields.maxProperties'
+		// citation: the same len(row.Fields) check enforces both ends.
+		"common#$defs.ClaimedFactRow.properties.fields.minProperties": 1,
+		"common#$defs.Cohort.properties.groups.maxItems":              250,
+		"common#$defs.Cohort.properties.members.maxItems":             250,
+		// CHAOS-4867 round-2 finding (codex, EXECUTED): this was wrongly
+		// classified schema-only. ValidateCohortGroups (context_fabric_
+		// grouped_cohort.go:165-167) requires every member_canonical_ids
+		// entry to equal some cohort member's Subject.CanonicalID, and
+		// CohortGroup.Validate (:114-120) rejects a duplicate within the
+		// group's own list -- so the list can never hold more DISTINCT
+		// entries than there are known members, itself capped at 250
+		// (Cohort.validate, "len(c.Members) > 250"). Indirect, same shape
+		// as the AuthorizationScope disjunction entries above, but the
+		// derived ceiling (250) agrees with the schema, so it registers
+		// here rather than in knownDisagreements. See that map for the
+		// SIBLING bound this same audit found (items.maxLength) -- there
+		// the derived ceiling does NOT agree.
+		"common#$defs.CohortGroup.properties.member_canonical_ids.maxItems":                       250,
 		"common#$defs.CohortGroup.properties.member_canonical_ids.items.minLength":                1,
 		"common#$defs.CohortMember.allOf.0.then.properties.drivers.maxItems":                      5,
 		"common#$defs.CohortMember.allOf.0.then.properties.drivers.minItems":                      5,
@@ -1043,6 +1074,59 @@ func TestKnownDisagreementsGoSideStillMatchesRecordedValue(t *testing.T) {
 		}
 	})
 
+	// CHAOS-4867 round-2 finding (codex, EXECUTED): CohortGroup.Validate
+	// itself never measures member_canonical_ids item length -- the
+	// effective ceiling comes from ValidateCohortGroups' cross-check
+	// against the cohort's own member set, whose Subject.CanonicalID is
+	// capped at 256 by SubjectRef.Validate. A string that cannot match any
+	// known member (which a >256-char string never can, since no member's
+	// own CanonicalID can be that long) is rejected regardless of ITS OWN
+	// length -- so a 257-char id is rejected for the right structural
+	// reason, not measured directly.
+	t.Run("CohortGroup.member_canonical_ids items are indirectly capped at 256 via SubjectRef.CanonicalID", func(t *testing.T) {
+		// The claim is COMPOUND (same discipline as the InvestigationOptions
+		// family's attribution checks): (a) no member can carry a
+		// CanonicalID over 256, and (b) ValidateCohortGroups rejects any
+		// member_canonical_ids entry that fails to match a known member.
+		// Both halves are asserted; a mutation to EITHER one must fail the
+		// matching assertion, or the compound claim is only half-proved.
+		validID := strings.Repeat("m", 256)
+		tooLong := strings.Repeat("m", 257)
+
+		// (a) SubjectRef.Validate is the actual source of the 256 ceiling --
+		// this is what the full Cohort.validate() chain runs, via each
+		// member's own validate(), BEFORE ValidateCohortGroups ever sees
+		// the member set (validate_context_fabric_result.go: member.validate
+		// precedes the ValidateCohortGroups call in Cohort.validate).
+		if err := (ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: validID, Label: "Member"}).Validate(); err != nil {
+			t.Fatalf("a 256-char CanonicalID (recorded goValue ceiling) rejected by SubjectRef.Validate: %v", err)
+		}
+		if err := (ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: tooLong, Label: "Member"}).Validate(); err == nil {
+			t.Fatal("a 257-char CanonicalID was accepted by SubjectRef.Validate; no member could ever carry the recorded goValue=256 ceiling this bound depends on")
+		}
+
+		// (b) ValidateCohortGroups rejects a member_canonical_ids entry
+		// that does not match a known member -- which is the ONLY reason a
+		// too-long id (which (a) proves can never BE a member) is refused
+		// here, not a length comparison of its own.
+		members := []ContextFabricCohortMember{
+			{Subject: ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: validID, Label: "Member"}},
+		}
+		group := ContextFabricCohortGroup{
+			Subject:            ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "chaos4867_group_probe", Label: "Group"},
+			MemberCanonicalIDs: []string{validID},
+			Total:              1,
+		}
+		if err := ValidateCohortGroups([]ContextFabricCohortGroup{group}, members); err != nil {
+			t.Fatalf("a member_canonical_ids entry matching a real member was rejected: %v", err)
+		}
+		overGroup := group
+		overGroup.MemberCanonicalIDs = []string{tooLong}
+		if err := ValidateCohortGroups([]ContextFabricCohortGroup{overGroup}, members); err == nil {
+			t.Fatal("a member_canonical_ids entry matching no known member was accepted; ValidateCohortGroups' referential check no longer holds")
+		}
+	})
+
 	// Cross-check: every path recorded in knownDisagreements above must be
 	// exercised by one of the subtests here. A disagreement pinned on the
 	// schema side but never re-derived on the Go side is only half proved.
@@ -1061,6 +1145,7 @@ func TestKnownDisagreementsGoSideStillMatchesRecordedValue(t *testing.T) {
 		"common#$defs.ProjectionTombstone.properties.reason.maxLength":                       true,
 		"result#properties.confirmed_structure.maxItems":                                     true,
 		"result#properties.structure_offer_snapshot.maxItems":                                true,
+		"common#$defs.CohortGroup.properties.member_canonical_ids.items.maxLength":           true,
 	}
 	for path := range knownDisagreements {
 		if !covered[path] {
@@ -1149,7 +1234,12 @@ type discoveredBound struct {
 // while the Go write path enforced 100, past a guard written precisely to
 // catch that. A keyword this file does not know about is a bound nothing
 // checks.
-var boundKeywords = []string{"maxItems", "maxLength", "maxProperties", "maximum", "minItems", "minLength", "minimum"}
+// "minProperties" joins them for the CHAOS-4867 round-2 finding (codex,
+// EXECUTED): its absence made ClaimedFactRow.fields.minProperties (1,
+// context_fabric_common.v1.schema.json:4008) invisible to this entire
+// mechanism, not merely misclassified -- the exact failure mode this
+// keyword list exists to close, found again in the keyword list itself.
+var boundKeywords = []string{"maxItems", "maxLength", "maxProperties", "maximum", "minItems", "minLength", "minimum", "minProperties"}
 
 // schemaBounds enumerates every maxItems/maxLength in both canonical
 // documents, as "<document>#<dotted path>.<keyword>".
@@ -1172,7 +1262,7 @@ func schemaBounds(t *testing.T, documents map[string]map[string]any) []discovere
 			for key, child := range value {
 				switch key {
 				case "maxItems", "maxLength", "maxProperties", "maximum",
-					"minItems", "minLength", "minimum",
+					"minItems", "minLength", "minimum", "minProperties",
 					"description", "title", "$comment", "$schema", "$id":
 					continue
 				}
@@ -1459,8 +1549,12 @@ var requestSideDeferredBounds = map[string]string{}
 // cases used to excuse is either Go-checked (registered in goBoundsByPath)
 // or a genuine schema/Go value disagreement (knownDisagreements, above).
 var schemaOnlyBounds = map[string]string{
-	"common#$defs.CohortGroup.properties.member_canonical_ids.items.maxLength":          "Go reads every member id (context_fabric_grouped_cohort.go:112 `for _, id := range g.MemberCanonicalIDs`) but only checks it non-empty and unique (:114-120); it never measures length against 512",
-	"common#$defs.CohortGroup.properties.member_canonical_ids.maxItems":                 "Go reads len(g.MemberCanonicalIDs) at context_fabric_grouped_cohort.go:107 (`g.Total < len(...)`) and :119 (loop bound) but never compares the count itself to 250 -- the full Validate method (:96-123) has no such check",
+	// CHAOS-4867 round-2 finding (codex, EXECUTED): the two
+	// CohortGroup.member_canonical_ids entries this map used to carry are
+	// GONE -- both were wrong. Go does not validate MemberCanonicalIDs in
+	// isolation, but ValidateCohortGroups cross-checks every entry against
+	// the cohort's own member set, and that indirect path DOES bound both
+	// (see knownDisagreements and goBoundsByPath for where they moved).
 	"common#$defs.CohortMemberDriver.allOf.6.then.properties.threshold_labels.maxItems": "Go reads d.ThresholdLabels at validate_context_fabric_result.go:738 (`len(d.ThresholdLabels) > bounds.cohortMemberDriverThresholdLabels`, a real cap of 4, not 0) and :741 (`strings.HasPrefix(label, d.Signal+\".\")` per label); this allOf branch's maxItems:0 is a structural CONSEQUENCE of the prefix check for a non-investment_mix signal (no label in the closed vocabulary can match a non-investment_mix prefix), not something Go compares to 0 directly",
 	"result#properties.evidence_ref_labels.maxProperties":                               "Go reads len(r.EvidenceRefLabels) at context_fabric_coverage_detail.go:483 but requires EXACT equality with len(closure), not an independent ceiling -- 8192 is never compared against",
 }
