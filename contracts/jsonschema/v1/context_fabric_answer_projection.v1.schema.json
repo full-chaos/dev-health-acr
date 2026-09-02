@@ -1070,12 +1070,10 @@
           "minimum": 0
         },
         "cohort_member_selection_basis": {
-          "description": "The order the group-aware clamp took cohort members in when it chose which of them survived the member budget (CHAOS-4809). ABSENT whenever the clamp ran no group-aware selection at all -- every flat cohort, and every grouped cohort that fitted its budget -- so it never names an order that did not execute. The counters beside it say HOW MUCH was dropped; this says by WHAT ORDER the survivors were chosen, which is the one thing about a squeezed grouped cohort a reader could not recover from this document. The selection's before is cohort.total, its after is the length of cohort.members, and the kept member ids are those members' own canonical ids.",
+          "description": "The order the group-aware clamp took cohort members in when it chose which of them survived the member budget (CHAOS-4809). ABSENT whenever the clamp ran no group-aware selection at all -- every flat cohort, and every grouped cohort that fitted its budget -- so it never names an order that did not execute. Only the two orders the group-aware selection can actually run are admitted: the exact overlap-aware cover within the group-count guard, and the round-robin fallback beyond it. The other two narrowing bases are deliberately NOT accepted here -- canonical_id_lexical is the flat narrowing's order, which runs only where there is no group axis, and attention_rank exists only after the fact read -- so a document cannot claim a grouped clamp selected by an order that has no code path. The counters beside it say HOW MUCH was dropped; this says by WHAT ORDER the survivors were chosen. The selection's before is cohort.total, its after is the length of cohort.members, and the kept member ids are those members' own canonical ids.",
           "type": "string",
           "enum": [
-            "canonical_id_lexical",
             "largest_group_round_robin",
-            "attention_rank",
             "overlap_aware_set_cover"
           ]
         },

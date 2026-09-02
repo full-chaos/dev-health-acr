@@ -271,3 +271,96 @@ func TestBudgetSelectionBasisIsAbsentRatherThanEmpty(t *testing.T) {
 		})
 	}
 }
+
+// TestBudgetSelectionBasisRejectsOrdersTheClampCannotRun closes the inverse of
+// the defect the selection-basis field was added for.
+//
+// The field exists so an artifact can state which order chose a squeezed
+// grouped cohort's survivors. Validating it against the FULL four-member
+// narrowing vocabulary let a document state an order that has no code path:
+// SelectGroupCoverMembers -- the only producer -- returns exactly two of the
+// four. canonical_id_lexical belongs to the FLAT narrowing, which runs only
+// where there is no group axis to select over; attention_rank exists only
+// after the fact read, later than any clamp. Accepting either is the same
+// class this ticket closes, pointing the other way: an artifact making a
+// claim about the selection that cannot be true.
+//
+// A closed vocabulary wider than its producer is not a closed vocabulary.
+func TestBudgetSelectionBasisRejectsOrdersTheClampCannotRun(t *testing.T) {
+	for _, testCase := range []struct {
+		basis      ContextFabricNarrowingBasis
+		producible bool
+		why        string
+	}{
+		{ContextFabricNarrowingBasisOverlapAwareSetCover, true, "the exact cover, within the group-count guard"},
+		{ContextFabricNarrowingBasisLargestGroupRoundRobin, true, "the fallback, beyond the guard"},
+		{ContextFabricNarrowingBasisCanonicalIDLexical, false, "the FLAT narrowing's order; no group axis is present when it runs"},
+		{ContextFabricNarrowingBasisAttentionRank, false, "exists only after the fact read, later than any clamp"},
+	} {
+		t.Run(string(testCase.basis), func(t *testing.T) {
+			budget := ContextFabricProjectionBudget{
+				Truncated:                  true,
+				CohortMembersOmitted:       2,
+				CohortMemberSelectionBasis: testCase.basis,
+			}
+			err := budget.Validate()
+			if testCase.producible && err != nil {
+				t.Fatalf("Validate() = %v, want nil -- %s is %s", err, testCase.basis, testCase.why)
+			}
+			if !testCase.producible && err == nil {
+				t.Fatalf("Validate() accepted %q, which no selection can produce (%s) -- a document could claim a grouped clamp selected by an order that has no code path", testCase.basis, testCase.why)
+			}
+		})
+	}
+}
+
+// TestPublishedSelectionBasisEnumMatchesWhatTheClampCanProduce holds the same
+// property on the WIRE side, where the Go validator has no reach.
+//
+// The schema is hand-maintained, so the Go check above and the published enum
+// can drift apart silently -- and a consumer validating against the published
+// document sees only the enum. Deriving the expectation from the producer's
+// own reachable set, rather than restating a literal pair, means widening
+// SelectGroupCoverMembers without widening the enum fails here.
+func TestPublishedSelectionBasisEnumMatchesWhatTheClampCanProduce(t *testing.T) {
+	documents := schemaDocuments(t)
+	node := schemaNodeAt(t, documents, "answer#$defs.ProjectionBudget")
+	properties, ok := node["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("ProjectionBudget declares no properties")
+	}
+	field, ok := properties["cohort_member_selection_basis"].(map[string]any)
+	if !ok {
+		t.Fatal("the published schema declares no cohort_member_selection_basis")
+	}
+	raw, ok := field["enum"].([]any)
+	if !ok {
+		t.Fatal("cohort_member_selection_basis declares no enum")
+	}
+	published := make([]string, 0, len(raw))
+	for _, value := range raw {
+		name, ok := value.(string)
+		if !ok {
+			t.Fatalf("enum member %#v is not a string", value)
+		}
+		published = append(published, name)
+	}
+	sort.Strings(published)
+
+	producible := make([]string, 0, 4)
+	for _, basis := range []ContextFabricNarrowingBasis{
+		ContextFabricNarrowingBasisCanonicalIDLexical,
+		ContextFabricNarrowingBasisLargestGroupRoundRobin,
+		ContextFabricNarrowingBasisAttentionRank,
+		ContextFabricNarrowingBasisOverlapAwareSetCover,
+	} {
+		if ValidContextFabricCohortMemberSelectionBasis(basis) {
+			producible = append(producible, string(basis))
+		}
+	}
+	sort.Strings(producible)
+
+	if !reflect.DeepEqual(published, producible) {
+		t.Fatalf("the published enum and the producible set disagree:\n  published:  %v\n  producible: %v\nA published enum wider than the producer lets a document claim an order with no code path; narrower rejects one the service really emits.", published, producible)
+	}
+}

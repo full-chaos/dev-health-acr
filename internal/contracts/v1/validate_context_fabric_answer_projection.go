@@ -533,8 +533,8 @@ func (b ContextFabricProjectionBudget) Validate() error {
 	// smaller than the cohort, so a basis without a member drop is
 	// unreachable from the producer and can only be a hand-built payload.
 	if b.CohortMemberSelectionBasis != "" {
-		if !ValidContextFabricNarrowingBasis(b.CohortMemberSelectionBasis) {
-			return fmt.Errorf("answer projection budget cohort member selection basis %q is not a narrowing basis", b.CohortMemberSelectionBasis)
+		if !ValidContextFabricCohortMemberSelectionBasis(b.CohortMemberSelectionBasis) {
+			return fmt.Errorf("answer projection budget cohort member selection basis %q is not one of the two orders the group-aware clamp can select by", b.CohortMemberSelectionBasis)
 		}
 		if b.CohortMembersOmitted == 0 {
 			return fmt.Errorf("answer projection budget declares a cohort member selection basis but omitted no members")
