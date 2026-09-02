@@ -504,6 +504,27 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 		})
 		retained = append(retained, member)
 	}
+	// CHAOS-4809: the allowance is NOT the last cut in this function, so it
+	// does not automatically get to name the order the survivors were chosen
+	// by. Two later rules can still drop a member it admitted: the
+	// MaxCohortMembers break at the top of the loop -- reachable because
+	// SelectGroupCoverMembers computes its group floor UNCONDITIONALLY and
+	// can come back OVER budget rather than drop a group (its own doc
+	// comment) -- and the evidence-index rule that drops a citing member
+	// whole.
+	//
+	// When either fires, the survivor set is a canonical-order prefix of
+	// what the selection admitted, not the selection's own choice, and
+	// publishing the selection's basis would state that an order chose these
+	// members when a different rule did. That is precisely the defect this
+	// field was added to remove, one boundary further down.
+	//
+	// So the basis travels only when EVERY admitted member survived. The
+	// field's absence already means "no group-aware selection chose this
+	// set", which covers this case exactly as it covers a flat cohort.
+	if selectionBasis != "" && len(members) != len(admissible) {
+		selectionBasis = ""
+	}
 	groups, groupsOmitted := projectCohortGroups(canonical, members)
 	return &contractsv1.ContextFabricProjectedCohort{
 		Kind:      canonical.Kind,

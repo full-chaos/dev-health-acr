@@ -2,6 +2,7 @@ package answerprojection
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -226,5 +227,97 @@ func TestCHAOS4809ProjectedBasisValidatesAgainstThePublishedSchema(t *testing.T)
 			t.Errorf("schema violation: %s", failure)
 		}
 		t.Fatal("the projection this producer emits does not validate against the published schema")
+	}
+}
+
+// chaos4809DisjointSingletonCohort is the fixture for the case where the
+// group-aware selection does NOT get the last word.
+//
+// Twelve groups, each holding one member of its own, nothing shared. The
+// minimum cover of twelve disjoint groups is all twelve members -- overlap
+// can only ever LOWER what the floor costs, and there is none here -- and
+// SelectGroupCoverMembers computes that floor UNCONDITIONALLY, ignoring the
+// budget on purpose (its own doc comment: "a budget too small even for the
+// floor comes back OVER budget rather than dropping a group"). Twelve is
+// exactly ContextFabricSetCoverGroupGuard, so the exact solve runs and the
+// basis reported is overlap_aware_set_cover.
+//
+// Against a six-member budget the allowance therefore admits twelve, and the
+// projection's own cap then takes the first six in canonical order.
+func chaos4809DisjointSingletonCohort() *contractsv1.ContextFabricCohort {
+	cohort := &contractsv1.ContextFabricCohort{
+		Kind:      contractsv1.ContextFabricSubjectProject,
+		Rationale: "disjoint singleton groups",
+		Complete:  true,
+	}
+	for index := 0; index < 12; index++ {
+		id := fmt.Sprintf("project_%02d", index)
+		cohort.Members = append(cohort.Members, contractsv1.ContextFabricCohortMember{
+			Subject:          subject(contractsv1.ContextFabricSubjectProject, id, id),
+			Rank:             index + 1,
+			InclusionReasons: []string{"Graph retrieval associated this subject with the requested condition."},
+		})
+		cohort.Groups = append(cohort.Groups, contractsv1.ContextFabricCohortGroup{
+			Subject:            subject(contractsv1.ContextFabricSubjectTeam, fmt.Sprintf("team_%02d", index), fmt.Sprintf("team_%02d", index)),
+			MemberCanonicalIDs: []string{id},
+			Complete:           true,
+			Total:              1,
+		})
+	}
+	return cohort
+}
+
+// TestCHAOS4809BasisIsAbsentWhenTheCapChoseTheSurvivors pins the last way
+// this field can lie, and it is the same lie the ticket exists to remove,
+// one boundary further down.
+//
+// The group-aware allowance is NOT the last cut in this function. Its
+// unconditional floor can admit MORE members than the budget, and the loop
+// below it then stops at the first MaxCohortMembers in canonical order. When
+// that happens the survivors were chosen by a canonical-order prefix, not by
+// the overlap-aware cover -- so publishing overlap_aware_set_cover states
+// that an order chose these members when a different rule did.
+//
+// A basis is a claim about WHICH MEMBERS SURVIVED, not about which function
+// ran. When the selection did not determine the survivor set, no order can
+// honestly be named, and the field's own contract already gives absence a
+// meaning that covers it: no group-aware selection chose this set.
+func TestCHAOS4809BasisIsAbsentWhenTheCapChoseTheSurvivors(t *testing.T) {
+	t.Parallel()
+	result := richResult()
+	result.Cohort = chaos4809DisjointSingletonCohort()
+	bounds := DefaultBudget
+	bounds.MaxCohortMembers = 6
+
+	projection := Project(result, bounds)
+	if projection.Cohort == nil {
+		t.Fatal("projection dropped the cohort entirely")
+	}
+	if err := projection.Validate(); err != nil {
+		t.Fatalf("projection.Validate() = %v", err)
+	}
+
+	// Confirm the fixture really reaches the branch under test: the cap, not
+	// the selection, is what cut the cohort to six. Without this the test
+	// could pass against a projection that never exceeded its budget.
+	if len(projection.Cohort.Members) != 6 {
+		t.Fatalf("projected %d members, want the 6 the cap admits", len(projection.Cohort.Members))
+	}
+	admissible, basis := groupAwareMemberAllowance(*result.Cohort, bounds.MaxCohortMembers)
+	if len(admissible) <= bounds.MaxCohortMembers {
+		t.Fatalf("the allowance admitted %d members, which fits the %d budget -- this fixture no longer exercises the post-selection cap",
+			len(admissible), bounds.MaxCohortMembers)
+	}
+	if basis != contractsv1.ContextFabricNarrowingBasisOverlapAwareSetCover {
+		t.Fatalf("the selection reported %q, want overlap_aware_set_cover -- the fixture must reach the exact solve", basis)
+	}
+
+	// THE DEFECT. The survivors are a canonical-order prefix of the twelve
+	// the cover admitted; naming the cover as the order that chose them is
+	// false.
+	budget := chaos4809ProjectionBudgetJSON(t, projection)
+	if got, present := budget["cohort_member_selection_basis"]; present {
+		t.Fatalf("cohort_member_selection_basis = %#v, want the key ABSENT -- the overlap-aware cover admitted %d members and the projection's own cap then kept the first %d in canonical order, so the cover did not choose this survivor set",
+			got, len(admissible), len(projection.Cohort.Members))
 	}
 }
