@@ -54,7 +54,15 @@ func TestChaos4521b_ProjectFlowKeysOnTheProjectsOwnWorkScope(t *testing.T) {
 	if !strings.Contains(statement, "work_scope_id = p.scope") {
 		t.Errorf("project flow does not match work_scope_id against the resolved identity scope\n%s", statement)
 	}
-	if !strings.Contains(statement, "id AS scope") || !strings.Contains(statement, "project_key AS scope") {
+	// RESPELLED for dev-health-go v0.6.3 (CHAOS-4751), not relaxed. The two
+	// scope rows used to be two UNION ALL branches ("id AS scope",
+	// "project_key AS scope"); the expansion now reads its row source once
+	// and fans them out with ARRAY JOIN, so the pair of substrings becomes
+	// one literal naming both. It is STRONGER: it also pins that the id
+	// value is unconditional while the key value appears only in the
+	// guarded arm, which two independent Contains checks could not tell
+	// apart.
+	if !strings.Contains(statement, "if(key_scope_emitted, [id, project_key], [id]) AS scope") {
 		t.Errorf("the identity resolution does not expand BOTH the canonical id and the project key into scope rows\n%s", statement)
 	}
 	// The aggregation must be per (project, team), not per team alone --
@@ -208,12 +216,23 @@ func TestChaos4521b_ThePseudoProjectOwnershipRowAttributesToNothing(t *testing.T
 	//    its own copy of the identity expansion -- true of the OLD
 	//    two-arm shape, not the new one, where the arms union on the
 	//    OWNERSHIP side instead and there is only ONE top-level join
-	//    against `projects`. Two is dev-health-go's own pinned count
-	//    (readers/ownership_test.go's TestChaos4552_OwnershipJoinScansProjectsOnce)
-	//    for readers.ProjectOwnershipJoinSQL's rendered SQL alone; nothing
-	//    in ReadProjectInvestment's own wrapping adds another.
-	if projectsReads := strings.Count(statement, "FROM projects FINAL"); projectsReads != 2 {
-		t.Errorf("not every read resolves through `projects` the expected number of times: got %d, want 2\n%s", projectsReads, statement)
+	//    against `projects`.
+	//
+	//    ONE is dev-health-go's own pinned count for
+	//    readers.ProjectOwnershipJoinSQL's rendered SQL alone
+	//    (readers/ownership_test.go's TestChaos4552_OwnershipJoinScansProjectsOnce,
+	//    plus TestChaos4751_IdentityExpansionScansProjectsOnce for the
+	//    expansion's own half); nothing in ReadProjectInvestment's own
+	//    wrapping adds another. It was TWO until dev-health-go v0.6.3
+	//    (CHAOS-4751): the identity expansion used to spell its row source
+	//    twice, once per UNION ALL branch of its own id-row/key-row
+	//    expansion, and now reads it once and fans the scope rows out with
+	//    ARRAY JOIN. That change was proven byte-identical against the
+	//    v0.6.2 rendering on real ClickHouse 24.8 and 26.7, so this literal
+	//    moves with the upstream shape and nothing about what the statement
+	//    MEANS changed here.
+	if projectsReads := strings.Count(statement, "FROM projects FINAL"); projectsReads != 1 {
+		t.Errorf("not every read resolves through `projects` the expected number of times: got %d, want 1\n%s", projectsReads, statement)
 	}
 	if strings.Contains(statement, "LEFT JOIN (\n\tSELECT provider") {
 		t.Errorf("an ownership arm is a LEFT JOIN; a missing projects row would no longer drop it\n%s", statement)

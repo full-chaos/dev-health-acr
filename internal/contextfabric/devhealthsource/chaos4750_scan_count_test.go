@@ -25,19 +25,37 @@ import (
 // per reference, not materialized once, so it does not help either).
 //
 // projectTeamsAssertingArm and projectTeamsRetractionArm collapse this to
-// TWO arms, each embedding its shared project source exactly once: 2 * 3 = 6.
-// Not one -- reaching one needs the project source's OWN internal doubling
-// restructured (readers.ProjectIdentityCatalogSQL's id/key union), which is
-// out of scope here and filed as a follow-up, the same shape CHAOS-4552
-// shipped its own 4->2 (not 4->1) reduction under and filed as CHAOS-4751.
+// TWO arms, each embedding its shared project source exactly once. That was
+// 2 * 3 = 6 when this test was written, because the project source was
+// itself worth three scans.
 //
-// RED on origin/main at 12, GREEN here at 6 -- a real reduction, proved by a
-// test that would catch a regression back toward per-arm embedding, not by
-// counting arms (which stayed meaningful, just fewer of them).
-func TestCHAOS4750_ProjectTeamsScansProjectsSixTimesNotTwelve(t *testing.T) {
+// It is now 2 * 2 = 4. The follow-up this test's original comment named as
+// out of scope -- restructuring the project source's OWN internal doubling,
+// readers.ProjectIdentityCatalogSQL's id/key union -- landed in
+// dev-health-go v0.6.3 (CHAOS-4751). That expansion now reads its row
+// source ONCE and fans the two scope rows out with ARRAY JOIN, so each
+// arm's project source drops from 3 scans to 2: one for the identity
+// expansion (was two) plus the one the watermark join's own separate
+// `FROM projects FINAL` still contributes. Two arms * 2 = 4.
+//
+// The upstream change was proven byte-identical against the v0.6.2
+// rendering on real ClickHouse 24.8 and 26.7, so this number moves with the
+// upstream shape while what the statement MEANS is unchanged. The remaining
+// four are two arms * (one identity read + one watermark read); reducing
+// them further is a question about the watermark join, not about identity.
+//
+// RED on origin/main at 12, then 6 once the arms collapsed, and 4 on the
+// v0.6.3 pin -- a real reduction at each step, proved by a test that would
+// catch a regression back toward per-arm embedding, not by counting arms
+// (which stayed meaningful, just fewer of them).
+//
+// The name says Four rather than Six as of the v0.6.3 pin: a test whose
+// name states a number it no longer asserts reads as coverage of something
+// it does not cover.
+func TestCHAOS4750_ProjectTeamsScansProjectsFourTimesNotTwelve(t *testing.T) {
 	t.Parallel()
 	statement := projectTeamsStatement(cursorState{})
-	if got, want := strings.Count(statement, "FROM projects FINAL"), 6; got != want {
+	if got, want := strings.Count(statement, "FROM projects FINAL"), 4; got != want {
 		t.Errorf("`projects FINAL` scanned %d times, want %d -- see this test's doc comment for the accounting\n%s", got, want, statement)
 	}
 }
