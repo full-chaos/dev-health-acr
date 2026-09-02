@@ -830,6 +830,13 @@ func TestMaximalIsSaturated(t *testing.T) {
 	if testing.Short() {
 		t.Skip("rebuilds the ~520MB maximal fixture once per probed field (~90s); `make contract-test` runs it without -short")
 	}
+	if raceDetectorEnabled {
+		// Race instrumentation makes each rebuild about an order of magnitude
+		// slower, which overruns the package timeout. The probe finds no data
+		// races to detect -- it is single-goroutine -- so running it here buys
+		// nothing and costs the whole shard.
+		t.Skip("skipped under -race: 270 rebuilds of a ~520MB fixture overruns the package timeout, and the probe is single-goroutine so -race has nothing to find")
+	}
 	base := buildFromTable(t, func(x answerBound) func(*ContextFabricInvestigationResult) { return x.Max })
 	if err := base.Validate(); err != nil {
 		t.Fatalf("baseline maximal must be valid: %v", err)
