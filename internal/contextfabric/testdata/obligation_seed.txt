@@ -12,7 +12,7 @@ allocation_breakdown
   project              investment
 
 completion
-  work_item            actual_completion work
+  work_item            actual_completion
 
 health
   project              health
@@ -21,7 +21,7 @@ health
 
 period_delta
   project              flow health investment landscape metrics readiness workload
-  repository           health metrics
+  repository           flow health metrics
   team                 flow health investment landscape metrics readiness workload
 
 principal_drivers
@@ -31,7 +31,7 @@ principal_drivers
   project              flow health investment landscape metrics readiness workload
   pull_request         pull_requests
   pull_request_review  reviews
-  repository           continuous_integration deployments health metrics
+  repository           continuous_integration deployments flow health metrics
   team                 flow health investment landscape metrics operational_deficiencies readiness workload
 
 readiness
@@ -40,7 +40,7 @@ readiness
   team                 readiness
 
 remaining_work
-  work_item            blockers required_children work
+  work_item            blockers required_children
 
 state
   project              flow health investment landscape readiness workload

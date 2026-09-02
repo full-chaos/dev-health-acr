@@ -517,11 +517,18 @@ func factKindObligations(kind contextfabric.FactKind) map[contextfabric.SubjectK
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
 			contextfabric.SubjectWorkItem: {contextfabric.ObligationCompletion},
 		}
-	// Raw work counts answer both how much landed and how much is left.
+	// WorkProvider emits a TITLE and nothing else (workitems.go: Fields is
+	// {"title": ...} off readers.ReadWorkItemTitle). A title cannot
+	// establish how much work landed or how much is left, so this producer
+	// declares nothing.
+	//
+	// The obligations it used to claim are served, correctly, by its
+	// siblings: ActualCompletionProvider emits {"completed"} for
+	// `completion`, and Blockers/RequiredChildren carry `remaining_work`.
+	// Round 2 found this: the comment that stood here said "raw work counts
+	// answer both", and there are no raw work counts in this provider.
 	case contextfabric.FactWork:
-		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
-			contextfabric.SubjectWorkItem: {contextfabric.ObligationCompletion, contextfabric.ObligationRemainingWork},
-		}
+		return nil
 	// Blockers and unmet required children ARE the remaining work in the
 	// dependencies_and_blockers sense (design table 3's own row).
 	case contextfabric.FactBlockers, contextfabric.FactRequiredChildren:
@@ -599,15 +606,29 @@ func factKindObligations(kind contextfabric.FactKind) map[contextfabric.SubjectK
 			contextfabric.SubjectTeam:    compositionMember(),
 			contextfabric.SubjectProject: compositionMember(),
 		}
-	// flow.go supports repository but is a team/project composition member
-	// ONLY. It emits no repository table at all, and CHAOS-4347's
-	// repository row excludes it: a repository's "state" is served by
-	// metrics/health/identity, not by an item-flow series it never emits
-	// for that kind.
+	// flow.go DOES read repositories: readRepositoryFlow reads
+	// repo_metrics_daily's PR pickup/review-timing columns. What it does
+	// not emit for a repository is a TABLE.
+	//
+	// Round 2 found the error in the reasoning that stood here. "No
+	// repository table" is a reason to withhold the obligations that
+	// REQUIRE a table -- obligationRequiredTableShape names exactly two,
+	// trend_series and allocation_breakdown -- and no reason at all to
+	// withhold principal_drivers or period_delta, which require none. It is
+	// also a filter the SEED GENERATOR already applies from Tables, so
+	// withholding here duplicated it and over-withheld.
+	//
+	// CHAOS-4347's repository row governs `state`, which is why `state` is
+	// still not declared for a repository: that row is metrics/health/
+	// identity. Drivers and period-over-period deltas are not that row.
 	case contextfabric.FactFlow:
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
 			contextfabric.SubjectTeam:    compositionMember(),
 			contextfabric.SubjectProject: compositionMember(),
+			contextfabric.SubjectRepository: {
+				contextfabric.ObligationPrincipalDrivers,
+				contextfabric.ObligationPeriodDelta,
+			},
 		}
 	// readiness.go measures estimate coverage -- "how much of this team's
 	// backlog is estimated" -- so it serves the readiness obligation by

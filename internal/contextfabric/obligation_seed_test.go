@@ -54,6 +54,13 @@ func TestEveryRegisteredProviderDeclaresItsObligations(t *testing.T) {
 	declaredSubstrate := map[contextfabric.FactKind]bool{
 		contextfabric.FactMembership:   true,
 		contextfabric.FactSourceHealth: true,
+		// FactWork emits a TITLE and nothing else. Round 2 found it
+		// declaring {completion, remaining_work} under a comment claiming
+		// "raw work counts", which the provider does not read. Its
+		// obligations are served by its siblings: ActualCompletion emits
+		// {"completed"}, Blockers and RequiredChildren carry remaining
+		// work. A descriptor producer is substrate.
+		contextfabric.FactWork: true,
 	}
 
 	for _, capability := range capabilities {
@@ -147,11 +154,31 @@ func TestGeneratedSeedMatchesTheStatusCategoryComposition(t *testing.T) {
 	seed := contextfabric.GenerateObligationSeed(liveCapabilityList(t))
 	composition := contextfabric.StatusCategoryCompositionForTest()
 
+	// ROUND 2, EXECUTED: this loop is keyed on the AUTHORITY, so emptying
+	// the composition to {} ran zero subtests, made zero assertions and
+	// left every one of the eighteen tests green -- an oracle that reports
+	// parity it never checked. Red-on-parent shows a test CAN fail and a
+	// mutation kill shows it fails for the right reason; neither shows the
+	// assertions EXECUTED. So the input is quantified before it is used.
+	//
+	// The number is pinned, not merely non-zero: the composition covers
+	// repository, team and project, and a composition that silently lost
+	// one would otherwise still "pass parity" on the two that remain.
+	const wantCompositionSubjects = 3
+	if len(composition) != wantCompositionSubjects {
+		t.Fatalf("the status-category composition carries %d subject kinds, want %d -- "+
+			"this test derives its whole input from that map, so a shrunken authority would "+
+			"silently reduce what parity means rather than failing",
+			len(composition), wantCompositionSubjects)
+	}
+
 	subjects := make([]string, 0, len(composition))
 	for subject := range composition {
 		subjects = append(subjects, string(subject))
 	}
 	sort.Strings(subjects)
+
+	compared := 0
 
 	for _, name := range subjects {
 		subject := contextfabric.SubjectKind(name)
@@ -160,6 +187,12 @@ func TestGeneratedSeedMatchesTheStatusCategoryComposition(t *testing.T) {
 			sort.Slice(want, func(i, j int) bool { return want[i] < want[j] })
 			got := seed.KindsFor(contextfabric.ObligationState, subject)
 
+			if len(want) == 0 {
+				t.Fatalf("state@%s: the composition names no fact kinds for this subject kind; "+
+					"comparing against an empty set would pass for any seed", subject)
+			}
+			compared++
+
 			missing, extra := diffKinds(got, want)
 			if len(missing) == 0 && len(extra) == 0 {
 				return
@@ -167,6 +200,12 @@ func TestGeneratedSeedMatchesTheStatusCategoryComposition(t *testing.T) {
 			t.Errorf("state@%s: generated seed = %v, CHAOS-4347 composition = %v\n  missing (composition has, seed does not): %v\n  extra (seed has, composition does not): %v",
 				subject, render(got), render(want), render(missing), render(extra))
 		})
+	}
+
+	if compared != wantCompositionSubjects {
+		t.Errorf("only %d of %d composition subject kinds reached the parity assertion; "+
+			"a subtest that returns early proves nothing about the cells it skipped",
+			compared, wantCompositionSubjects)
 	}
 
 	// work_item is the one subject kind the composition deliberately does
