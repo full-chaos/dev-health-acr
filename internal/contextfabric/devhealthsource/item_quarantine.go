@@ -225,6 +225,28 @@ func partitionProjectableCandidates(all []candidate, observe func(quarantineObse
 			})
 		}
 	}
+	// A quarantined relationship id does NOT mean that id has no surviving
+	// carrier. Two source rows can derive the SAME relationship id -- that is
+	// the whole point of the inverted-spelling mapping, which makes
+	// `A BLOCKED_BY B` and `B BLOCKS A` converge -- so one row's edge can be
+	// quarantined for a bound the other's edge does not breach. Treating the
+	// id as dropped would then orphan the SURVIVING row's stub, deleting a
+	// valid endpoint because an unrelated duplicate failed. Found by the
+	// generated-input property test, which produced exactly that pair; every
+	// hand-built fixture had missed it because it requires one id, two rows
+	// and divergent validity at once.
+	for _, c := range all {
+		if c.relationship == nil {
+			continue
+		}
+		if _, quarantined := quarantinedRelationships[c.relationship.RelationshipID]; !quarantined {
+			continue
+		}
+		if kind, err := validateCandidateItem(c); err == nil && kind == "relationship" {
+			delete(quarantinedRelationships, c.relationship.RelationshipID)
+		}
+	}
+
 	// ORDER IS LOAD-BEARING: the dependent sweep runs BEFORE identity
 	// deduplication, never after.
 	//

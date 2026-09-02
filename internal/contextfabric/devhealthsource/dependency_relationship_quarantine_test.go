@@ -877,3 +877,59 @@ func TestValidRowKeepsItsStubWhenAQuarantinedRowSharesTheTarget(t *testing.T) {
 		t.Fatalf("want the quarantined row's own stub dropped as an orphan and counted: %v", reasons)
 	}
 }
+
+// TestQuarantinedDuplicateEdgeDoesNotOrphanTheSurvivingRowsStub is defect six,
+// found by the generated-input property test rather than by inspection.
+//
+// The inverted-spelling mapping makes `A BLOCKED_BY B` and `B BLOCKS A`
+// converge on ONE relationship id -- deliberately, so the two spellings become
+// one edge. But the orphan sweep recorded quarantined relationships BY ID, and
+// a quarantined id is not the same thing as an id with no surviving carrier:
+// when one row's edge breaches a bound the other's does not, the sweep would
+// orphan the SURVIVING row's stub, deleting a valid endpoint because an
+// unrelated duplicate failed.
+//
+// Every hand-built fixture missed this because it needs three things at once:
+// one shared id, two source rows, and validity that diverges between them.
+// That combination is what a generator produces and a fixture author does not.
+func TestQuarantinedDuplicateEdgeDoesNotOrphanTheSurvivingRowsStub(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Past Go's epoch-nanosecond range: the contract refuses it, so this
+	// row's edge AND stub are quarantined while the other row's are fine.
+	beyondGo := time.Date(2299, 12, 31, 0, 0, 0, 0, time.UTC)
+
+	rows := [][]any{
+		// Healthy row: A is blocked by B -> emitted as B BLOCKS A.
+		unresolvedDependencyRow("WI-A", "EXT-1", "BLOCKED_BY", at, created),
+		// Same pair, same converged id, but unprojectable on its own bound.
+		unresolvedDependencyRow("WI-A", "EXT-1", "IS_BLOCKED_BY", beyondGo, created),
+	}
+	batch, available, err, observations := projectWithQuarantineLog(t, dependencyTablesOnly(t, at, rows), testCursor(t, created, ""))
+	if err != nil || !available {
+		t.Fatalf("err=%v available=%v", err, available)
+	}
+	if len(batch.Relationships) != 1 {
+		t.Fatalf("relationships = %d, want the 1 healthy converged edge", len(batch.Relationships))
+	}
+	edge := batch.Relationships[0]
+	if len(batch.Entities) != 1 {
+		t.Fatalf("entities = %d, want the healthy row's stub kept -- a quarantined DUPLICATE of an edge must not orphan the surviving row's endpoint: %+v",
+			len(batch.Entities), batch.Entities)
+	}
+	// The inverted spelling exchanges endpoints, so the ref stub is the
+	// edge's FROM here, not its TO -- assert it is an endpoint, not which one.
+	stub := batch.Entities[0].Subject.CanonicalID
+	if stub != edge.From.CanonicalID && stub != edge.To.CanonicalID {
+		t.Fatalf("kept stub %q is not an endpoint of the surviving edge (%s -> %s)",
+			stub, edge.From.CanonicalID, edge.To.CanonicalID)
+	}
+	reasons := map[string]int{}
+	for _, entry := range observations {
+		reasons[fmt.Sprint(entry["quarantine_reason"])]++
+	}
+	if reasons["orphaned_dependent"] != 0 {
+		t.Fatalf("no stub may be orphaned here: the shared id still has a surviving carrier: %v", reasons)
+	}
+}
