@@ -238,6 +238,14 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", rowKe
 		// A work item is valid from creation until it completed or
 		// closed, whichever the source recorded; an open item has no end.
 		validFrom, validTo := requiredTime(createdAt), optionalTime(hasEnded, endedAt)
+		// Deliberately assigns the RAW title: item_normalization.go's pass
+		// trims every label in this package, and it is the only place that
+		// counts the repair. An earlier revision of that change trimmed here
+		// as well, which repaired the row just as well and made it INVISIBLE
+		// -- the three title sites are the ones an operator most wants on the
+		// label_trimmed counter, and a repair applied before the counter is a
+		// silent rewrite. The emptiness fallback still tests the TRIMMED
+		// value, so a whitespace-only title falls back exactly as before.
 		label := title
 		if strings.TrimSpace(label) == "" {
 			label = workItemID
@@ -312,6 +320,8 @@ WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowK
 		validFrom, validTo := requiredTime(createdAt), optionalTime(hasEnded, endedAt)
 		canonicalID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
 		rowSortKey := fmt.Sprintf("%s:%d", repoID, number)
+		// Raw title, trimmed and counted by item_normalization.go -- see
+		// queryWorkItems' note on why the trim does not happen here.
 		label := title
 		if strings.TrimSpace(label) == "" {
 			label = fmt.Sprintf("PR #%d", number)
@@ -442,6 +452,8 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id"
 			}
 			return []candidate{{observedAt: observedAt, sortKey: incidentID, tombstone: &tombstone}}, nil
 		}
+		// Raw title, trimmed and counted by item_normalization.go -- see
+		// queryWorkItems' note on why the trim does not happen here.
 		label := title
 		if strings.TrimSpace(label) == "" {
 			label = incidentID

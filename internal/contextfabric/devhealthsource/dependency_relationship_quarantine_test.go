@@ -32,7 +32,24 @@ import (
 const (
 	dependencyTable = "FROM work_item_dependencies AS d"
 	quarantineLine  = "context_fabric: projection item quarantined"
+	// normalizationLine is the INFO counterpart quarantineLine is the WARN of:
+	// a row KEPT after producer-side repair rather than dropped
+	// (item_normalization.go). Two distinct lines on purpose -- a single line
+	// with a mode field would let a test that means to assert "kept" pass on a
+	// "dropped".
+	normalizationLine = "context_fabric: projection item normalized"
 )
+
+// beyondGoInstantRange is past the maximum instant Go can represent as epoch
+// nanoseconds (2262-04-11), so contractsv1.RepresentableInstant refuses it.
+//
+// This is the fixtures' standard vehicle for "unprojectable and STAYS
+// unprojectable". Producer-side normalization repairs labels, free-text
+// scalars and inverted windows; it deliberately repairs no timestamp, because
+// there is no value it could invent that the source did not assert. A test
+// that needs a durable quarantine uses this rather than a bound some later
+// change might legitimately start repairing.
+var beyondGoInstantRange = time.Date(2299, 12, 31, 0, 0, 0, 0, time.UTC)
 
 // dependencyRow builds one work_item_dependencies fixture row in the column
 // order queryWorkItemDependencies scans.
@@ -351,15 +368,21 @@ func TestClickHouseSourceVersionStaysV6ForReplay(t *testing.T) {
 // row is the wrong instrument here: its illegal edge is accompanied by a
 // healing tombstone that is perfectly valid and shares the row's sort key, so
 // the surviving item lands on the same cursor position and the two
-// derivations agree by accident. A work_items row with an untrimmed title
-// fails on BOTH of its candidates -- the entity's Subject.Label and the
-// BELONGS_TO_REPOSITORY edge's From, which is that same subject -- leaving
-// the row with no representative at all.
+// derivations agree by accident.
 //
-// (The untrimmed title is itself a real producer defect: tables.go's
-// `label := title; if strings.TrimSpace(label) == ""` trims to TEST the
-// value but assigns it UNTRIMMED. Normalizing it is follow-up work; this
-// test only relies on such a row being unprojectable, which it is.)
+// The VEHICLE CHANGED with producer-side normalization
+// (item_normalization.go). This test used to seed a work_items row with an
+// untrimmed title, which failed on both of that row's candidates -- the
+// entity's Subject.Label and the BELONGS_TO_REPOSITORY edge's From, which is
+// that same subject. That title is now TRIMMED and the row projects, which is
+// the whole point of the change and is what this test's old fixture proved by
+// failing. The property under test here is the cursorSource/items separation,
+// not the untrimmed label, so the fixture moves to a bound normalization
+// deliberately does NOT repair: an observed_at outside Go's representable
+// epoch-nanosecond range. That value is shared by the entity and its
+// BELONGS_TO_REPOSITORY edge exactly as the label was, so the row still has
+// no representative at all -- and a timestamp is something this producer must
+// never invent a replacement for, so it will stay unprojectable.
 func TestQuarantiningEveryItemOfTheLastRowStillAdvancesTheCursorPastIt(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
@@ -373,8 +396,10 @@ func TestQuarantiningEveryItemOfTheLastRowStillAdvancesTheCursorPastIt(t *testin
 			tables[index].rows = [][]any{
 				row("WI-1", "Investigate checkout flake", at),
 				row("WI-2", "Fix the retry budget", at.Add(time.Second)),
-				// LAST, and every one of its candidates is unprojectable.
-				row("WI-3", "Trailing whitespace survives the guard ", at.Add(2*time.Second)),
+				// LAST (year 2299 sorts after both), and every one of its
+				// candidates is unprojectable: the unrepresentable observed_at
+				// reaches the entity AND its BELONGS_TO_REPOSITORY edge.
+				row("WI-3", "Beyond the representable instant range", beyondGoInstantRange),
 			}
 			tables[index].cursorOf = workItemCursorOf
 			continue
@@ -393,8 +418,8 @@ func TestQuarantiningEveryItemOfTheLastRowStillAdvancesTheCursorPastIt(t *testin
 		t.Fatalf("page 1 quarantines = %d, want 2 (the bad row's entity AND its BELONGS_TO_REPOSITORY edge): %+v", len(observations), observations)
 	}
 	for _, entry := range observations {
-		if entry["quarantine_reason"] != "untrimmed_label" {
-			t.Fatalf("quarantine_reason = %v, want %q", entry["quarantine_reason"], "untrimmed_label")
+		if entry["quarantine_reason"] != "unrepresentable_instant" {
+			t.Fatalf("quarantine_reason = %v, want %q", entry["quarantine_reason"], "unrepresentable_instant")
 		}
 	}
 
@@ -937,11 +962,21 @@ func TestQuarantinedDuplicateEdgeDoesNotOrphanTheSurvivingRowsStub(t *testing.T)
 // TestQuarantinedEntityDoesNotLeaveItsEdgeBehind is round 4's finding, and
 // the CROSS-TABLE form of a class the branch had only closed within one row.
 //
-// A work_items row with an untrimmed title loses its entity to quarantine.
-// The work_item_dependencies row naming that same work item stays valid,
-// because a dependency edge labels its endpoint with the work item ID rather
-// than the title -- so the two fail independently, which the `supports` link
-// cannot express: it only ties together candidates emitted by ONE row.
+// A work_items row whose observed_at is outside Go's representable
+// epoch-nanosecond range loses its entity to quarantine. The
+// work_item_dependencies row naming that same work item stays valid, because
+// it carries its OWN observed_at -- so the two fail independently, which the
+// `supports` link cannot express: it only ties together candidates emitted by
+// ONE row.
+//
+// The VEHICLE CHANGED with producer-side normalization
+// (item_normalization.go): this used to be an untrimmed title, which is now
+// trimmed and projects. The cross-table independence being pinned here is a
+// property of the PIPELINE, not of any one bound, so the fixture moves to a
+// bound normalization deliberately does not repair. The dependency edge
+// labels its endpoint with the work item ID rather than the title, so it was
+// never going to fail with its endpoint under either vehicle -- which is the
+// whole shape.
 //
 // The edge then survived with no entity behind it, and the backend merges an
 // unknown endpoint as a referenced stub with NIL validity, admitted at every
@@ -953,16 +988,19 @@ func TestQuarantinedEntityDoesNotLeaveItsEdgeBehind(t *testing.T) {
 	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	workItem := func(id, title string) []any {
-		return []any{id, "repo-1", "example-org/widget-service", title, "in_progress", "", at, created, uint8(0), zeroTime, "", "", "", []string{}}
+	workItem := func(id, title string, observedAt time.Time) []any {
+		return []any{id, "repo-1", "example-org/widget-service", title, "in_progress", "", observedAt, created, uint8(0), zeroTime, "", "", "", []string{}}
 	}
 	tables := baseTables(at)
 	for i, tb := range tables {
 		switch tb.match {
 		case "FROM work_items AS w":
 			tables[i].rows = [][]any{
-				workItem("WI-1", "Fix deploy "), // untrimmed: entity quarantined
-				workItem("WI-2", "Other item"),
+				// Unrepresentable observed_at: the entity is quarantined and
+				// normalization cannot repair it (a timestamp is not something
+				// this producer may invent).
+				workItem("WI-1", "Fix deploy", beyondGoInstantRange),
+				workItem("WI-2", "Other item", at),
 			}
 			tables[i].cursorOf = workItemCursorOf
 		case dependencyTable:

@@ -926,7 +926,8 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		// standing ruling forbids outright. The ClickHouse source got the
 		// observer when quarantine was added; this one shares the same
 		// engine and must not be the quiet exception.
-		observeQuarantine: quarantineLogger(s.logger, TeamsProjectsSourceName),
+		observeQuarantine:    quarantineLogger(s.logger, TeamsProjectsSourceName),
+		observeNormalization: normalizationLogger(s.logger, TeamsProjectsSourceName),
 		// No seed: the synthesized Organization entity belongs to
 		// ClickHouseProjectionSource's full snapshot and must be projected
 		// exactly once per organization, not once per source.
