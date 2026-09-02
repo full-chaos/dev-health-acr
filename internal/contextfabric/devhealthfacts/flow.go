@@ -403,10 +403,23 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 			fields["scope_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 		}
 		if dailyTable, ok, dailyOmitted := flowDailyTable(dailyByTeam[teamID], timeBound.effectiveGrain(grainDaily)); ok {
-			fields["daily_flow"] = dailyTable
-			totalOmitted += dailyOmitted
-			if dailyOmitted > 0 {
-				fields["daily_flow_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+			// CHAOS-4785: never hand the write-path validator a dual-table
+			// fact it must reject outright -- check the SAME joint bound
+			// here and drop the additive time series instead, DISCLOSED:
+			// the drop is folded into totalOmitted (which flows to
+			// FactProviderResult.Truncated/OmittedCount, degrading served
+			// coverage exactly as capFactValueRows' own row-cap truncation
+			// already does) and named on the fact with a closed reason.
+			if drop, dropped, reason := disclosedDualTableDrop("flow", contextfabric.FactFlow, valueRows, dailyTable.Rows, dailyOmitted); drop {
+				totalOmitted += dropped
+				fields["daily_flow_omitted_count"] = contextfabric.IntegerFactValue(int64(dropped))
+				fields["daily_flow_omitted_reason"] = contextfabric.StringFactValue(reason)
+			} else {
+				fields["daily_flow"] = dailyTable
+				totalOmitted += dailyOmitted
+				if dailyOmitted > 0 {
+					fields["daily_flow_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+				}
 			}
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
@@ -652,10 +665,17 @@ ORDER BY p.id, wm.team_id`)
 			fields["team_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 		}
 		if dailyTable, ok, dailyOmitted := flowDailyTable(dailyByProject[projectKey], timeBound.effectiveGrain(grainDaily)); ok {
-			fields["daily_flow"] = dailyTable
-			totalOmitted += dailyOmitted
-			if dailyOmitted > 0 {
-				fields["daily_flow_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+			// CHAOS-4785: see the matching note in readTeamFlow.
+			if drop, dropped, reason := disclosedDualTableDrop("flow", contextfabric.FactFlow, teamRows, dailyTable.Rows, dailyOmitted); drop {
+				totalOmitted += dropped
+				fields["daily_flow_omitted_count"] = contextfabric.IntegerFactValue(int64(dropped))
+				fields["daily_flow_omitted_reason"] = contextfabric.StringFactValue(reason)
+			} else {
+				fields["daily_flow"] = dailyTable
+				totalOmitted += dailyOmitted
+				if dailyOmitted > 0 {
+					fields["daily_flow_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+				}
 			}
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{

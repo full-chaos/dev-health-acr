@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -462,6 +463,135 @@ func capFactValueRows(rows []contextfabric.FactValueRow) (capped []contextfabric
 		return rows, 0
 	}
 	return rows[:contextfabric.MaxFactValueRows], len(rows) - contextfabric.MaxFactValueRows
+}
+
+// factValueRowContentBytes converts row to the wire row type and delegates
+// to contracts/v1's ClaimedFactRowContentBytes -- the ONE json.Marshal-based
+// measurement in the repository, per chris's ruling (via team-lead) on
+// codex terra xhigh round 2's finding: an earlier version of this function
+// carried its OWN copy of the measurement (first a raw-string-length sum,
+// round-1-fixed only in contracts/v1's sibling; then briefly a second
+// json.Marshal call here), and "two copies is the defect class, not the
+// bug" -- a second implementation can drift out of sync with the first
+// again regardless of how correct it is today. This function converts
+// (never re-measures) so there is structurally only one place the
+// arithmetic can be wrong.
+func factValueRowContentBytes(row contextfabric.FactValueRow) int {
+	return contractsv1.ClaimedFactRowContentBytes(claimedFactRowFromFactValueRow(row))
+}
+
+// claimedFactRowFromFactValueRow converts devhealthfacts' domain row type to
+// the wire row type contracts/v1 measures -- a value-only conversion, never
+// a re-implementation of any bound/measurement logic. contextfabric.
+// FactValue and ContextFabricScalarValue share the identical leaf-variant
+// shape (String/Integer/Number/Boolean/Null); Rows/Table are deliberately
+// NOT copied here because a row's own Fields entries are always leaves
+// (contextfabric.FactValueRow's own doc comment: "A row field must never
+// itself carry Rows").
+func claimedFactRowFromFactValueRow(row contextfabric.FactValueRow) contractsv1.ContextFabricClaimedFactRow {
+	fields := make(map[string]contractsv1.ContextFabricScalarValue, len(row.Fields))
+	for key, value := range row.Fields {
+		fields[key] = contractsv1.ContextFabricScalarValue{
+			String: value.String, Integer: value.Integer, Number: value.Number,
+			Boolean: value.Boolean, Null: value.Null,
+		}
+	}
+	return contractsv1.ContextFabricClaimedFactRow{Fields: fields}
+}
+
+// combinedRowsExceedBytesBound reports whether legacyRows (a producer's
+// existing breakdown/ranking table, already destined for a fact's Fields
+// map) COMBINED with timeSeriesRows (the CHAOS-4645/4682 additive time
+// series about to be attached to the SAME fact) would violate CHAOS-4785's
+// joint Rows+TimeSeriesRows bound -- the identical arithmetic
+// internal/contracts/v1's validateClaimedFactRowsCombined enforces at the
+// write path (contractsv1.ContextFabricClaimedFactCombinedCellsMax /
+// ContextFabricClaimedFactCombinedContentBytesMax), checked here BEFORE
+// construction so a producer can degrade (drop the additive time series,
+// disclose why via recordFactBytesBoundExceeded) instead of ever handing
+// the validator a fact it must reject outright.
+//
+// No producer has come close in measured real data (kiac/dh_0830 org
+// 70d529e0, 2026-09-02: largest observed combined fact 16,246 bytes,
+// against a 262,144-byte bound) -- this is deliberate defense in depth,
+// not a response to an observed failure.
+func combinedRowsExceedBytesBound(legacyRows, timeSeriesRows []contextfabric.FactValueRow) bool {
+	if len(legacyRows) == 0 || len(timeSeriesRows) == 0 {
+		// Mirrors internal/contracts/v1's validateClaimedFactRowsCombined
+		// gate: the bound applies to the COMBINATION only. A single table
+		// alone -- however large -- stays governed by capFactValueRows'
+		// own pre-existing per-table cap, unchanged.
+		return false
+	}
+	cells, contentBytes := 0, 0
+	for _, row := range legacyRows {
+		cells += len(row.Fields)
+		contentBytes += factValueRowContentBytes(row)
+	}
+	for _, row := range timeSeriesRows {
+		cells += len(row.Fields)
+		contentBytes += factValueRowContentBytes(row)
+	}
+	return cells > contractsv1.ContextFabricClaimedFactCombinedCellsMax ||
+		contentBytes > contractsv1.ContextFabricClaimedFactCombinedContentBytesMax
+}
+
+// recordFactBytesBoundExceeded emits the CHAOS-4785 decision-basis
+// telemetry line for a producer that dropped an additive time series
+// rather than hand the write-path validator an over-bound dual-table fact.
+// producer and kind are both closed, low-cardinality vocabulary (this
+// package's own domain name -- "flow", "health", "readiness", "workload",
+// "metrics" -- and the fact's contextfabric.FactKind), matching this
+// repository's telemetry convention (AGENTS.md: "Structured logging uses
+// log/slog"); never a request id, subject label, or row content.
+func recordFactBytesBoundExceeded(producer string, kind contextfabric.FactKind) {
+	slog.Warn("context_fabric_fact_bytes_bound_exceeded",
+		"producer", producer,
+		"kind", string(kind),
+		"combined_cells_max", contractsv1.ContextFabricClaimedFactCombinedCellsMax,
+		"combined_bytes_max", contractsv1.ContextFabricClaimedFactCombinedContentBytesMax,
+	)
+}
+
+// factBytesBoundExceededReason is the CLOSED-vocabulary token a caller
+// discloses on a fact whose additive time series was dropped for
+// CHAOS-4785 -- the SAME token recordFactBytesBoundExceeded's telemetry
+// event uses, so a log line and a served answer name the identical cause.
+const factBytesBoundExceededReason = "fact_bytes_bound_exceeded"
+
+// disclosedDualTableDrop is CHAOS-4785's disclosure contract: a producer
+// dropping timeSeriesRows because it combined with legacyRows past the
+// joint bound must NEVER do so silently (chris's ruling: fail-closed means
+// the fact is reported as unavailable-class coverage, never silently
+// dropped -- a log line alone is not disclosure). drop=true means the
+// caller must (1) fold droppedRows into ITS OWN omitted-rows accounting,
+// which flows to FactProviderResult.Truncated/OmittedCount -- the SAME
+// existing mechanism capFactValueRows' row-cap truncation already degrades
+// coverage through -- and (2) set a closed-vocabulary reason field on the
+// fact using reason, so a reader can tell THIS cause apart from an
+// ordinary row-cap truncation. drop=false (the bound is not exceeded, or
+// either table is empty -- see combinedRowsExceedBytesBound) means the
+// caller proceeds exactly as before this ticket.
+//
+// preCapOmitted is the count of rows a caller's OWN earlier cap (e.g.
+// capFactValueRows, inside flowDailyTable/healthDailyTable/etc.) already
+// removed from timeSeriesRows BEFORE it was even passed in here -- those
+// rows never appear in len(timeSeriesRows), so droppedRows must add them
+// back in, not just count what survived the earlier cap (codex terra
+// xhigh round 1, P2, EXECUTED: an earlier version of this function took
+// no preCapOmitted parameter, and both flow.go call sites forgot to add
+// their own dailyOmitted in separately -- a 70-row series capped to 64
+// then fully dropped here reported OmittedCount contribution 64, not the
+// true 70). Folding it into THIS function's own return value, rather than
+// leaving it to every call site to remember, is deliberate: a caller
+// cannot construct the reason string without also supplying the count it
+// belongs with.
+func disclosedDualTableDrop(producer string, kind contextfabric.FactKind, legacyRows, timeSeriesRows []contextfabric.FactValueRow, preCapOmitted int) (drop bool, droppedRows int, reason string) {
+	if !combinedRowsExceedBytesBound(legacyRows, timeSeriesRows) {
+		return false, 0, ""
+	}
+	recordFactBytesBoundExceeded(producer, kind)
+	return true, len(timeSeriesRows) + preCapOmitted, factBytesBoundExceededReason
 }
 
 func stringOrNull(value string) contextfabric.FactValue {

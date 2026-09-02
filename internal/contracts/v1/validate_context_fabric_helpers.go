@@ -1,7 +1,9 @@
 package v1
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -35,6 +37,96 @@ func validateClaimedFactRows(rows []ContextFabricClaimedFactRow) error {
 		if err := validateScalarMap(row.Fields); err != nil {
 			return fmt.Errorf("claimed fact row: %w", err)
 		}
+	}
+	return nil
+}
+
+// ClaimedFactRowContentBytes is one claimed/projected fact row's ACTUAL
+// json.Marshal size -- the same measure MaxSerializedBytes itself is
+// checked against (context_fabric_routes.go's MeasureContextFabricResponse
+// marshals the whole response and compares the byte count; this file's own
+// mcp_federation_validate.go packetContentSerializedBytes follows the
+// identical discipline), and the same basis CHAOS-4785's Phase 1 real-data
+// measurement used (Postgres octet_length(payload::text) on the stored,
+// already-serialized JSON).
+//
+// EXPORTED (chris's ruling via team-lead, codex terra xhigh round 2's
+// finding): this must be the ONLY implementation of this measurement in
+// the repository. An earlier version had two -- this one and a raw-
+// string-length copy in internal/contextfabric/devhealthfacts/shared.go's
+// factValueRowContentBytes -- and round 1 fixed only this one (see below),
+// leaving the sibling to fail the identical way in round 2. "Two copies
+// is the defect class, not the bug": devhealthfacts now converts its own
+// domain row type to ContextFabricClaimedFactRow and calls this function
+// directly rather than maintaining a second implementation that can drift
+// again. Measure with the serializer that enforces the ceiling, never a
+// proxy for it.
+//
+// An earlier version of this function summed raw string lengths instead
+// (codex terra xhigh round 1, P2, EXECUTED): Go's encoding/json escapes
+// '<', '>', '&' to "<" etc. by default (html-safety), a 1-byte-to-
+// 6-byte inflation nothing in the raw-length sum accounted for, so a row
+// full of those characters could pass this check while its actual
+// marshaled size exceeded the bound it was supposed to enforce -- 251,904
+// counted bytes accepted a fact whose real combined size was 1,516,708
+// bytes, defeating the guard entirely. json.Marshal is the only measure
+// that cannot be defeated this way, because it is not an approximation of
+// the wire size -- it computes it.
+func ClaimedFactRowContentBytes(row ContextFabricClaimedFactRow) int {
+	encoded, err := json.Marshal(row)
+	if err != nil {
+		// ContextFabricClaimedFactRow's Fields are all
+		// ContextFabricScalarValue -- string/int64/float64/bool/null, every
+		// one of which encoding/json always marshals successfully -- so
+		// this is unreachable in practice. If it is ever reached anyway,
+		// a computation this validator cannot trust must never UNDER-count
+		// (the exact failure class this fix exists to close), so it counts
+		// as maximally oversized rather than as zero.
+		return math.MaxInt32
+	}
+	return len(encoded)
+}
+
+// validateClaimedFactRowsCombined bounds Rows and TimeSeriesRows TOGETHER
+// (CHAOS-4785). validateClaimedFactRows above already bounds each
+// collection on its own, but nothing bounded their SUM, so a fact could
+// legally carry two independently-legal tables (a legacy breakdown/ranking
+// alongside a CHAOS-4682 time series) that together serialize far past the
+// service's MaxSerializedBytes ceiling. See
+// ContextFabricClaimedFactCombinedCellsMax /
+// ContextFabricClaimedFactCombinedContentBytesMax's own doc comment
+// (context_fabric_model_bounds.go) for the arithmetic and the real-data
+// measurement behind the chosen values.
+//
+// Applies ONLY when BOTH collections are non-empty: this ticket's own gap
+// is specifically the unbounded PRODUCT/COMBINATION of two tables on one
+// fact, not either table alone -- a single-table fact (Rows-only, or
+// TimeSeriesRows-only, CHAOS-4347's pre-existing shape) stays governed
+// exclusively by validateClaimedFactRows' own per-table bound, unchanged.
+// Without this gate, ContextFabricClaimedFactCombinedContentBytesMax
+// (262,144 bytes, sized off REAL dual-table data) would be far smaller
+// than one table's own legal maximum (~8.45M content bytes) and would
+// newly reject single-table facts that were legal before this ticket --
+// a regression caught by TestCHAOS4785RegressionSingleTableAloneAtMax
+// MustNotBeRejected before this gate was added.
+func validateClaimedFactRowsCombined(rows, timeSeriesRows []ContextFabricClaimedFactRow) error {
+	if len(rows) == 0 || len(timeSeriesRows) == 0 {
+		return nil
+	}
+	cells, contentBytes := 0, 0
+	for _, row := range rows {
+		cells += len(row.Fields)
+		contentBytes += ClaimedFactRowContentBytes(row)
+	}
+	for _, row := range timeSeriesRows {
+		cells += len(row.Fields)
+		contentBytes += ClaimedFactRowContentBytes(row)
+	}
+	if cells > ContextFabricClaimedFactCombinedCellsMax {
+		return fmt.Errorf("claimed fact rows+time_series_rows combined cell count violates v1 bounds")
+	}
+	if contentBytes > ContextFabricClaimedFactCombinedContentBytesMax {
+		return fmt.Errorf("claimed fact rows+time_series_rows combined content size violates v1 bounds")
 	}
 	return nil
 }
