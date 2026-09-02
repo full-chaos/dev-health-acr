@@ -1678,15 +1678,8 @@ func (a *familySSA) computeServed() {
 	}
 
 	for _, fn := range a.funcs {
-		marshaller := familySSAIsMarshalMethod(fn)
 		for _, b := range fn.Blocks {
 			for _, instr := range b.Instrs {
-				if marshaller {
-					if ret, ok := instr.(*ssa.Return); ok && len(ret.Results) > 0 {
-						push(ret.Results[0])
-						a.egressValues[ret.Results[0]] = true
-					}
-				}
 				call, ok := instr.(ssa.CallInstruction)
 				if !ok {
 					continue
@@ -1796,9 +1789,24 @@ func (a *familySSA) assertServedSetIsRealistic() {
 //
 // A boundary is a PROPERTY, not a list. Two families:
 //
-//  1. ENCODING — encoding/json's Marshal, MarshalIndent and Encoder.Encode,
-//     plus any MarshalJSON/MarshalText method, whose RESULTS are what the
-//     encoder puts on the wire even though our own code never calls it.
+//  1. ENCODING — encoding/json's Marshal, MarshalIndent and Encoder.Encode.
+//
+//     There WAS a third member here: a rule treating any
+//     MarshalJSON/MarshalText method's results as egress, on the reasoning
+//     that encoding/json emits them wherever the type is encoded and this
+//     code never calls them. It is REMOVED as subsumed, and the proof is a
+//     mutation that killed nothing: deleting the rule turned no fixture
+//     red. The reason is structural rather than accidental -- such a
+//     method returns ([]byte, error) by signature, []byte is text, and the
+//     rule fired only on data-flow taint, which is exactly the condition
+//     under which the ordinary return-text sink fires on the same value.
+//     No construction can be red through the marshaller rule alone.
+//
+//     Kept as a note because an unpinned rule is untested code, and
+//     "keeping it for precision" is the same shape as the served-type
+//     check that silently answered "no" for every store and made a whole
+//     tier vacuous.
+//
 //  2. BYTE WRITING — ANY method call whose receiver is writer-shaped, and
 //     any function whose first parameter is writer-shaped. Writer-shape is
 //     structural: a Write([]byte) (int, error) method.
@@ -1910,22 +1918,6 @@ func (a *familySSA) egressArgs(common *ssa.CallCommon) []ssa.Value {
 		}
 	}
 	return nil
-}
-
-// familySSAIsMarshalMethod reports whether fn is a custom marshaller whose
-// RESULTS go to the wire. Our code never calls it -- encoding/json does --
-// so its returns are a boundary in their own right.
-func familySSAIsMarshalMethod(fn *ssa.Function) bool {
-	obj := fn.Object()
-	if obj == nil || fn.Signature == nil || fn.Signature.Recv() == nil {
-		return false
-	}
-	switch obj.Name() {
-	case "MarshalJSON", "MarshalText":
-	default:
-		return false
-	}
-	return fn.Signature.Params().Len() == 0 && fn.Signature.Results().Len() == 2
 }
 
 // familySSAIsWriterShaped reports whether a type has a Write([]byte)

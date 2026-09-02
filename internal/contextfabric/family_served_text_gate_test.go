@@ -561,7 +561,7 @@ var familyGateFixtures = []familyGateFixture{
 	{
 		name:         "R12d_custom_marshaller_results",
 		importPath:   "github.com/full-chaos/dev-health-acr/internal/contextfabric/testdata/family_served_text_gate/r12_custom_marshaller",
-		description:  "encoder family from the other side: a MarshalJSON whose bytes reach the wire without this package ever calling it, so its RESULTS are the boundary",
+		description:  "a MarshalJSON whose bytes reach the wire without this package ever calling it. NOTE: this is caught by the ordinary return-text sink, not by a marshaller-specific rule -- there WAS such a rule and it was removed as subsumed when a mutation deleting it turned no fixture red. The fixture is kept because the construction is real; the claim it pins is return-text, not a boundary",
 		wantEnforced: false, // byte-egress: REPORTED, not enforced -- see familyTaintFinding.enforced
 	},
 	{
