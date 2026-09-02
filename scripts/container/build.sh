@@ -200,6 +200,10 @@ run_with_timeout() {
 trap 'handle_signal 130' INT
 trap 'handle_signal 143' TERM
 
+# CHAOS-4855: empty by default, so a local build still pulls the golang base
+# image straight from Docker Hub unchanged; CI sets this to ghcr.io/full-chaos/
+# so the one Docker Hub base image in Dockerfile resolves against the mirror
+# instead. See docs/container-images.md.
 args=(
   docker buildx build
   --file "${build_context}/Dockerfile"
@@ -210,6 +214,7 @@ args=(
   --build-arg "BUILD_DATE=${build_date}"
   --build-arg "SOURCE_DATE_EPOCH=${source_date_epoch}"
   --build-arg "BUILD_CACHE_ID=${build_cache_id}"
+  --build-arg "ACR_IMAGE_MIRROR_PREFIX=${ACR_IMAGE_MIRROR_PREFIX:-}"
   --provenance=false
   --sbom=false
 )
