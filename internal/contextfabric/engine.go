@@ -978,7 +978,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// extra (structureCanon itself, which DOES need the store for a
 		// receipt-carrying request, still has not run and is not attempted
 		// here).
-		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, nil, windowCanon.StaleEntry, binding, nil, e.preInterpretExplicitStructure(request))
+		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, nil, windowCanon.StaleEntry, binding, nil, e.preInterpretExplicitStructure(request), nil)
 	}
 	// CHAOS-4040 (sol-max ruling 2026-08-21, "GATE ALL INFERRED WINDOWS
 	// out of decisive terminals"): an MCP bare explicit evidence_window
@@ -1004,7 +1004,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// "unavailable"; the tier-ordering fact composeWindowExpandOption
 		// needs (pickWindowExpandTarget) is available from windowCanon.Effective
 		// alone, unlike gate 2's own offers-only read.
-		return e.windowConfirmationRequiredResult(ctx, principal, request, nil, *windowCanon.Effective, nil, WindowCanonicalizationGatedExplicitUnconfirmed, binding, StructureOfferMaterial{}, false, nil)
+		return e.windowConfirmationRequiredResult(ctx, principal, request, nil, *windowCanon.Effective, nil, WindowCanonicalizationGatedExplicitUnconfirmed, binding, StructureOfferMaterial{}, false, nil, nil)
 	}
 
 	// CHAOS-3900 P1 (pivot-intent design brief §2.1): canonicalize
@@ -1054,7 +1054,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// resolvePriorSubjectHints (this call site's own ordering), the
 		// same "nothing attempted yet" convention every other
 		// pre-receipt-resolution veto in this file uses.
-		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, echoEntries, binding, nil)
+		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, echoEntries, binding, nil, nil)
 	}
 
 	// CHAOS-3782 answer reuse. This MUST run before Interpret -- that
@@ -1110,6 +1110,23 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// required-field validation a brand-new answer must pass,
 			// instead of 500ing the moment a bounded consumer projects it.
 			reused.Completeness = ComputeAnswerCompleteness(reused)
+			// chris's promise of record, verbatim: "reuse and stored reads
+			// are re-validated against the current budget and refuse if they
+			// no longer fit." A stored row keyed WITHOUT the response budget
+			// can be served under a budget it no longer fits -- the route
+			// then refuses it with no engine-side measurement at all. This
+			// re-validates against the CURRENT effective budget.
+			//
+			// Nothing is stamped (the stored document already carries whatever
+			// plan it was saved with) and NOTHING IS PERSISTED -- the stored
+			// row is left exactly as it was; only the decision to serve it is
+			// made here. The REMEDY when it no longer fits (budget-keyed reuse
+			// vs re-investigation) is floor paper C2 and is ticketed
+			// separately; refusing is the interim answer, not the final one.
+			reused, reuseBudgetErr := e.finalizeServed(ctx, principal, BudgetAssertReuse, reused, nil, e.effectiveResponseBudget(request))
+			if reuseBudgetErr != nil {
+				return InvestigationResult{}, reuseBudgetErr
+			}
 			return reused, nil
 		}
 	}
@@ -1316,8 +1333,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// a confirmed window receipt whose interpretation moves the axis to
 		// historical lands here -- and the result is SAVED, so a plan
 		// omitted here is missing from a persisted answer permanently.
-		veto, vetoErr := e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions, structureCanon.Explicit)
-		return stampAnswerPlan(veto, plan), vetoErr
+		veto, vetoErr := e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions, structureCanon.Explicit, &plan)
+		return veto, vetoErr
 	}
 	// CHAOS-3977 P5 (design brief §3.4): ONE prior consult per Investigate
 	// call, shared by BOTH DP4(a) sites (the offer-builder merge below,
@@ -1392,8 +1409,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if len(gatedDispositions) > 0 {
 			e.recordPriorSubjectReceiptSkips(ctx, principal, gatedDispositions, priorHintsStaleGraphEpochDelta)
 		}
-		gated, gatedErr := e.windowConfirmationRequiredResult(ctx, principal, request, &interpretation, *effectiveWindow, &structureCanon, WindowCanonicalizationGatedClassDefault, binding, gatedMaterial, gatedMaterialWindowExpandUnavailable, gatedDispositions)
-		return stampAnswerPlan(gated, plan), gatedErr
+		gated, gatedErr := e.windowConfirmationRequiredResult(ctx, principal, request, &interpretation, *effectiveWindow, &structureCanon, WindowCanonicalizationGatedClassDefault, binding, gatedMaterial, gatedMaterialWindowExpandUnavailable, gatedDispositions, &plan)
+		return gated, gatedErr
 	}
 	// CHAOS-3782 Codex round-1 F1: capture the reuse watermark snapshot
 	// HERE, immediately before the graph is read for this fresh
@@ -1495,8 +1512,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				emptyResolution.PriorSubjectReceiptDispositions = composePriorSubjectReceiptDispositions(priorOutcomes, emptyResolution)
 				e.recordPriorSubjectReceiptSkips(ctx, principal, emptyResolution.PriorSubjectReceiptDispositions, priorHintsStaleGraphEpochDelta)
 			}
-			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, emptyResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntry)
-			return stampAnswerPlan(terminal, plan), terminalErr
+			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, emptyResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntry, &plan)
+			return terminal, terminalErr
 		}
 		// CHAOS-4088: StageSubjectResolution, not StageResolution -- the
 		// binding above already succeeded, so this is the distinct
@@ -1586,8 +1603,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// read facts for, and it must keep running.
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if len(subjects) == 0 {
-		terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntry)
-		return stampAnswerPlan(terminal, plan), terminalErr
+		terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntry, &plan)
+		return terminal, terminalErr
 	}
 
 	// CHAOS-4347: expand a bare "status" category requirement (the model's
@@ -1926,6 +1943,28 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if fallbacks := applyCoverageDisplayLabels(&result); fallbacks > 0 && e.telemetry != nil {
 		e.telemetry.RecordEvidenceLabelFallback(ctx, principal, fallbacks)
 	}
+	// Y3: the FINAL budget assertion. fitAssembledResult above measured the
+	// result BEFORE the plan re-stamp and before applyCoverageDisplayLabels,
+	// and both of those add bytes to the document the route will serialize --
+	// so the thing measured there was not the thing served. This is the point
+	// at which the document is final, and it is the point four successive
+	// revisions of the minimal-answer-floor specification failed to reach.
+	//
+	// plan.Budget already carries the EFFECTIVE budget (effectiveResponseBudget
+	// mirrors the route's own min(config, request) exactly), so it is passed
+	// explicitly rather than re-derived -- projected into ResponseBudget the
+	// same way fitAssembledResult projects it, so both measurements are taken
+	// against the same two numbers -- and deliberately NOT folded into
+	// Validate(), which takes no budget parameter and would have to grow a
+	// contract-wide signature change for one caller. See budget_assertion.go.
+	// plan is nil here, and that is not an omission: this path re-stamps the
+	// plan itself a few lines above (the narrowing steps stage 3 appended must
+	// reach the served document), so there is nothing left for finalizeServed
+	// to stamp. It still measures, which is the half that matters.
+	result, budgetErr := e.finalizeServed(ctx, principal, BudgetAssertDecisive, result, nil, ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes})
+	if budgetErr != nil {
+		return InvestigationResult{}, budgetErr
+	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
@@ -1966,8 +2005,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// Investigate rather than by fixing the two that were
 				// reported -- which is the whole point of doing this as a
 				// sweep: the class was "post-plan exits", never "this exit".
-				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions)
-				return stampAnswerPlan(superseding, plan), supersededErr
+				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, &plan)
+				return superseding, supersededErr
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}

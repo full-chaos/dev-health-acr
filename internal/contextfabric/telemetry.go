@@ -790,3 +790,26 @@ func (t SlogEngineTelemetry) RecordGroupedCohortCompleteness(ctx context.Context
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric grouped cohort completeness", args...)
 }
+
+// RecordBudgetAssertion emits the FINAL budget assertion for one fresh result
+// exit. Closed enums and counts only.
+//
+// measured_bytes_post_label is named for what it IS rather than for where it is
+// taken: the decisive path also emits measured_bytes on its narrowing event,
+// taken BEFORE the plan re-stamp and label composition, and the two fields
+// existing side by side is what makes the delta those composers add observable
+// in production instead of inferred from a listing.
+func (t SlogEngineTelemetry) RecordBudgetAssertion(ctx context.Context, principal storage.Principal, event BudgetAssertionEvent) {
+	args := []any{
+		"org_id", principal.OrgID,
+		"assert_stage", string(event.Stage),
+		"fits", event.Fits,
+		"overrun", string(event.Overrun),
+		"measured_items", event.MeasuredItems,
+		"measured_bytes_post_label", event.MeasuredBytesPostLabel,
+		"max_items", event.MaxItems,
+		"max_serialized_bytes", event.MaxSerializedBytes,
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric budget assertion", args...)
+}

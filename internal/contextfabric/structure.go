@@ -886,7 +886,7 @@ func (e *Engine) recordStructureConfirmationOutcome(ctx context.Context, princip
 // window-only claim loss at Save time must echo exactly like a
 // kind/anchor/handle one does, via the SAME staleConfirmedStructureEntries
 // call below.
-func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, confirmed []confirmedStructureMember, superseded *ErrStructureOfferSuperseded, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry) (InvestigationResult, error) {
+func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, confirmed []confirmedStructureMember, superseded *ErrStructureOfferSuperseded, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry, plan *AnswerPlan) (InvestigationResult, error) {
 	// CHAOS-3972 P3: cf_structure_explicit{member,outcome} -- the SAME
 	// synthetic Veto:structureVetoStaleSupersededOffer canonicalization
 	// recordStructureReceiptTelemetry's own call above uses, so an
@@ -894,7 +894,7 @@ func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal 
 	// non-applied too, never silently left unrecorded or misreported as
 	// "applied" against a round that was actually discarded.
 	recordStructureExplicitTelemetry(ctx, e.telemetry, principal, request, requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer})
-	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, staleConfirmedStructureEntries(confirmed, superseded.Members), binding, priorSubjectReceiptDispositions)
+	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, staleConfirmedStructureEntries(confirmed, superseded.Members), binding, priorSubjectReceiptDispositions, plan)
 }
 
 // resolveExplicitStructure implements design brief §2.5's "explicit
@@ -1261,7 +1261,7 @@ func structureVetoLimitation(veto structureVetoReason) string {
 // paths -- StaleMembers and VetoedEntries are mutually exclusive by
 // construction (each is populated by different veto reasons), so callers
 // pass whichever one the veto reason actually populated.
-func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto structureVetoReason, echoEntries []contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry) (InvestigationResult, error) {
+func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto structureVetoReason, echoEntries []contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry, plan *AnswerPlan) (InvestigationResult, error) {
 	limitation := structureVetoLimitation(veto)
 	resolvedInterpretation := InterpretedQuestion{
 		Shape:             ShapeOpen,
@@ -1313,6 +1313,16 @@ func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Prin
 	// own Validate" placement rule as Completeness above.
 	if fallbacks := applyCoverageDisplayLabels(&result); fallbacks > 0 && e.telemetry != nil {
 		e.telemetry.RecordEvidenceLabelFallback(ctx, principal, fallbacks)
+	}
+	// Y3: the FINAL budget assertion, on the document the route will
+	// serialize, immediately before Validate -- the same "own independent
+	// exit, immediately before its own Validate" placement rule the
+	// Completeness and display-label stamps above already follow. Those two
+	// sweeps enumerated these exits and neither added the budget stage, so
+	// this exit served an unmeasured document. See budget_assertion.go.
+	result, err := e.finalizeServed(ctx, principal, BudgetAssertStructureVeto, result, plan, e.effectiveResponseBudget(request))
+	if err != nil {
+		return InvestigationResult{}, err
 	}
 	if err := result.Validate(); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
