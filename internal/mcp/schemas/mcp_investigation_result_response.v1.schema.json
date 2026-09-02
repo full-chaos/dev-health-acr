@@ -3067,7 +3067,7 @@
             },
             "max_serialized_bytes": {
               "maximum": 1048576,
-              "minimum": 13606,
+              "minimum": 16384,
               "type": "integer"
             },
             "max_subject_candidates": {

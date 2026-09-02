@@ -214,7 +214,7 @@
         },
         "max_serialized_bytes": {
           "type": "integer",
-          "minimum": 13606,
+          "minimum": 16384,
           "maximum": 1048576
         }
       }

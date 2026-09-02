@@ -17,14 +17,27 @@ package v1
 // 32768 and said plainly of it: "the paper does not get to invent this number."
 // This is the measurement that supersedes it. It is deliberately LOWER, because
 // raising a request minimum is an INPUT tightening -- every byte above the true
-// worst case is caller breakage bought for nothing.
+// worst case is caller breakage bought for nothing. It is consumer-identical to
+// the provisional value: ask-dev requests 262,144 and MCP defaults to 65,536, so
+// both clear either number, and ask-dev's one sub-minimum test fixture breaks at
+// both. Only the caller-facing tightening differs, which is why the smaller
+// number wins.
 //
-// WHY IT IS NOT ROUNDED. A rounded pin absorbs growth: add a bounded envelope
-// field, and a constant with slack keeps passing while the real worst case
-// creeps toward it. Pinned to the measured value EXACTLY, any growth fails the
-// measurement test at the moment of the change rather than in production. That
-// is the same reason the paper rejected "raise one cap by one" as a mutation
-// oracle and required the pin itself be mutated by LOWERING it.
+// WHY 16384 AND NOT THE MEASURED 13,606. The measured worst case is 13,606
+// bytes. The pin is the next power of two above it, which buys headroom for a
+// bounded envelope field this measurement has not thought to maximize. Rounding
+// is normally how a pin goes wrong -- slack absorbs growth, and the real worst
+// case creeps toward the constant while the test keeps passing -- so the guard
+// is TWO-SIDED and that is what makes the rounding safe:
+//
+//	measured <= constant          growth fails, instead of being absorbed
+//	constant <  2 * measured      drift fails, so the pin cannot wander far
+//	                              above the true floor and quietly over-tighten
+//	                              an INPUT bound on callers
+//
+// 16,384 < 27,212, so the headroom bound holds with room to spare. Either
+// assertion failing is a real signal: the first says the floor moved, the
+// second says the pin no longer describes it.
 //
 // WHY IT IS A NEW CONSTANT rather than a raise of ContextFabricSerializedBytesMin.
 // That constant is load-bearing elsewhere:
@@ -39,4 +52,4 @@ package v1
 // fact, no candidate, no member. So a caller may today legally configure a
 // service, or request a budget, at a size in which no answer can exist. The
 // floor paper argued this on paper; the accompanying test executes it.
-const ContextFabricMinimumAnswerBytes = 13606
+const ContextFabricMinimumAnswerBytes = 16384

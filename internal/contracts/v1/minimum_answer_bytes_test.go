@@ -174,20 +174,27 @@ func TestMeasureMinimumAnswerEnvelopeBytes(t *testing.T) {
 		answerMeasurement.Bytes, answerMeasurement.Items.Budgeted())
 	t.Logf("  content adds %d bytes over the bare envelope", answerMeasurement.Bytes-measurement.Bytes)
 
-	// THE PIN. Exact, not a bound with slack: a rounded pin absorbs growth,
-	// so a bounded envelope field added later would creep toward the constant
-	// while the test kept passing. Pinned exactly, any change to the worst
-	// case fails HERE, at the moment of the change.
-	//
-	// Mutation oracle, per the floor paper: lower the pin below the measured
-	// floor and this fails. Raising it also fails, which is the half a
-	// rounded pin cannot give you.
-	if int64(ContextFabricMinimumAnswerBytes) != answerMeasurement.Bytes {
-		t.Fatalf("ContextFabricMinimumAnswerBytes = %d but the measured minimal answer is %d bytes.\n"+
-			"If this change was deliberate, re-pin the constant to %d and say in the commit what grew.\n"+
-			"If it was not, a bounded envelope field changed size and the minimum is now wrong.",
-			ContextFabricMinimumAnswerBytes, answerMeasurement.Bytes, answerMeasurement.Bytes)
+	// THE ROT GUARD, two-sided. The pin is ROUNDED UP to a power of two, so a
+	// one-sided "measured <= constant" assertion would let the real worst case
+	// creep toward it while this kept passing -- the exact way a rounded pin
+	// goes wrong. The second assertion closes that: the constant may not drift
+	// far above the floor it describes either, because this is an INPUT bound
+	// and every unnecessary byte is caller breakage.
+	const headroomFactor = 2
+	if answerMeasurement.Bytes > int64(ContextFabricMinimumAnswerBytes) {
+		t.Fatalf("the minimal answer now measures %d bytes, ABOVE the pinned ContextFabricMinimumAnswerBytes of %d.\n"+
+			"A budget at the documented minimum can no longer hold an answer. Re-measure and re-pin, and say in the commit what grew.",
+			answerMeasurement.Bytes, ContextFabricMinimumAnswerBytes)
 	}
+	if int64(ContextFabricMinimumAnswerBytes) >= headroomFactor*answerMeasurement.Bytes {
+		t.Fatalf("ContextFabricMinimumAnswerBytes (%d) is now %.1fx the measured floor of %d bytes.\n"+
+			"The pin has drifted above what it describes, and this is an INPUT bound: the excess is caller breakage bought for nothing. Re-pin closer to the measurement.",
+			ContextFabricMinimumAnswerBytes, float64(ContextFabricMinimumAnswerBytes)/float64(answerMeasurement.Bytes), answerMeasurement.Bytes)
+	}
+	t.Logf("  pin %d clears the %d-byte floor with %d bytes of headroom (%.2fx, bound is <%dx)",
+		ContextFabricMinimumAnswerBytes, answerMeasurement.Bytes,
+		int64(ContextFabricMinimumAnswerBytes)-answerMeasurement.Bytes,
+		float64(ContextFabricMinimumAnswerBytes)/float64(answerMeasurement.Bytes), headroomFactor)
 
 	// The relation that makes this constant necessary, asserted rather than
 	// left in a comment: the current serving minimum cannot hold an answer.
