@@ -1,70 +1,52 @@
 package v1
 
 // ContextFabricMinimumAnswerBytes is the smallest serialized-byte budget under
-// which an answer can exist at all. It is MEASURED, not chosen, and
+// which an answer can exist FOR ANY REQUEST. It is MEASURED, not chosen, and
 // minimum_answer_bytes_test.go is where it is measured.
 //
-// WHAT IT MEASURES. The smallest document that is still an ANSWER rather than an
-// envelope: every envelope field at its own validated maximum -- an 8000-byte
-// question, maximal version metadata, a plan carrying every fact kind and the
-// full ContextFabricPlanNarrowingMaxCount narrowing steps -- plus the
-// irreducible answer content of one committed subject, one driver, and the two
-// facts that driver cites. The document is run through Validate() BEFORE being
-// measured: a measurement of a document the contract would reject bounds
-// nothing.
+// IT IS HALF OF A TWO-PART RULE, and the split is the substance of this row.
 //
-// THE NUMBER IT REPLACES. The minimal-answer-floor paper carried a provisional
-// 32768 and said plainly of it: "the paper does not get to invent this number."
-// This is the measurement that supersedes it. It is deliberately LOWER, because
-// raising a request minimum is an INPUT tightening -- every byte above the true
-// worst case is caller breakage bought for nothing. It is consumer-identical to
-// the provisional value: ask-dev requests 262,144 and MCP defaults to 65,536, so
-// both clear either number, and ask-dev's one sub-minimum test fixture breaks at
-// both. Only the caller-facing tightening differs, which is why the smaller
-// number wins.
+// A first attempt pinned this constant to the MAXIMAL valid answer. That was
+// wrong, and measurably so: the maximal answer is 369,705 bytes, which is above
+// every budget any shipped consumer asks for -- the web client sends 262,144
+// and the MCP default is 65,536 -- so enforcing it would refuse both rather
+// than tighten anything.
+//
+// The reason is structural. The maximal answer is dominated by two
+// request-shaped fields: the echoed question (bounded at 8000 RUNES, and the
+// worst-case rune costs six serialized bytes because Go's JSON encoder escapes
+// it, so up to 48,002 bytes) and the interpretation's subject and comparison
+// terms (50 each at 512 runes, up to ~306,000 bytes). BOTH ARE FIXED: no
+// narrowing or degradation path reduces them, because narrowing reaches only
+// cohort members and facts, and the budget assertion measures without reducing.
+//
+// So the smallest answer a request can have is a FUNCTION OF THAT REQUEST, and
+// no static constant expresses it. Pinned at the maximum it refuses everyone;
+// pinned lower it is not a floor for every request.
+//
+// THIS CONSTANT IS THEREFORE THE REQUEST-INDEPENDENT HALF: the irreducible
+// envelope (a one-rune question, one one-rune term) plus the irreducible answer
+// content (one committed subject, one driver, the two facts it cites). It is
+// what a DEPLOYMENT can be checked against, because a deployment cannot know
+// what questions it will be asked. The request-dependent half is a runtime
+// check that measures the minimal answer for the request in hand.
+//
+// The measured document is run through Validate() BEFORE being measured. That
+// gate caught three bad fixtures while this was written -- a version field
+// padded past its own bound, a driver citing evidence the result did not carry,
+// and a stale completeness census. A measurement of a document the contract
+// rejects bounds nothing.
 //
 // WHY IT IS NOT ROUNDED. A rounded pin absorbs growth: add a bounded envelope
-// field, and a constant with slack keeps passing while the real worst case
-// creeps toward it -- a 16 KiB pin over this floor would have hidden 2,778
-// bytes of creep. Pinned to the measured value EXACTLY, any change to the worst
-// case fails at the moment it is made, and the mutation kills in BOTH
-// directions without needing a second assertion to say so.
+// field and a constant with slack keeps passing while the real floor creeps
+// toward it. Pinned exactly, any change fails at the moment it is made and the
+// mutation kills in both directions. The cost is accepted and disclosed: this
+// constant is published in the request schema, so any growth is a wire-visible
+// change and a consumer pin bump.
 //
-// The cost is accepted and is disclosure rather than churn: because this
-// constant is published in the request schema, any envelope growth becomes a
-// wire-visible minimum change and a consumer pin bump. That is the honest
-// consequence of a bound that callers are held to.
-//
-// WHY IT IS A NEW CONSTANT rather than a raise of ContextFabricSerializedBytesMin.
-// That constant is load-bearing elsewhere:
-// ContextFabricClaimedFactCombinedContentBytesMax derives from it, so raising it
-// in place would silently multiply CHAOS-4785's dual-table fact bound -- a
-// model-authorable output bound -- inside a change whose whole purpose is to
-// tighten a budget. The two quantities are unrelated and now say so.
-//
-// THE PROOF THIS EXISTS FOR. Request validation bounds the echoed question at
-// 8000 CHARACTERS -- runes, not bytes -- while ContextFabricSerializedBytesMin
-// is 8192. The maximal envelope measures 63,351 bytes carrying ZERO budgeted
-// items: no driver, no fact, no candidate, no member. So a caller may today
-// legally configure a service, or request a budget, at a size roughly EIGHT
-// TIMES too small to hold any answer at all.
-//
-// THE FACTOR THAT MAKES IT THAT LARGE, and it was got wrong once. Bounds here
-// are counted in RUNES, and the worst-case rune is not the widest UTF-8
-// encoding but the one Go's JSON encoder ESCAPES: "<", "&" and the line
-// separators cost SIX bytes each, against four for a non-BMP emoji. A first
-// version of the measurement padded with ASCII and produced 13,606 -- a minimum
-// 4.7x too small, which a review caught. The design paper's own provisional
-// 32768 was also too small, by half. Neither number survived measurement, which
-// is the argument for measuring.
-// THE MARGIN THIS LEAVES, named because it is thin. The MCP sidecar's default
-// answer budget is 65,536 and this minimum is 64,166: they are 1,370 bytes
-// apart. Both shipped consumers clear it today, so nothing breaks -- but the
-// minimum is dominated by the worst-case echoed question, so any growth in a
-// bounded envelope field moves it toward that default. If it crosses, every MCP
-// caller who omits a budget is forwarded a value the hosted validator rejects,
-// for a budget they never chose. internal/mcp carries the guard that fails at
-// the moment it crosses; it lives there because contracts/v1 cannot import
-// internal/mcp, and it compares two CONSTANTS rather than a constant and a
-// copied literal.
-const ContextFabricMinimumAnswerBytes = 64166
+// WHY IT IS A NEW CONSTANT rather than a raise of ContextFabricSerializedBytesMin:
+// ContextFabricClaimedFactCombinedContentBytesMax used to derive from that one
+// by arithmetic, so raising it in place would have multiplied a
+// model-authorable output bound inside a change meant to tighten a budget. That
+// derivation is re-anchored to its own real-data measurement.
+const ContextFabricMinimumAnswerBytes = 2160

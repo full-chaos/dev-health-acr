@@ -233,20 +233,52 @@ func TestMeasureMinimumAnswerEnvelopeBytes(t *testing.T) {
 		answerMeasurement.Bytes, answerMeasurement.Items.Budgeted())
 	t.Logf("  content adds %d bytes over the bare envelope", answerMeasurement.Bytes-measurement.Bytes)
 
-	// THE PIN, exact. Not a bound with slack: a rounded pin absorbs growth, so
-	// a bounded envelope field added later would creep toward the constant
-	// while this kept passing. Pinned exactly, the assertion kills in BOTH
-	// directions -- a floor that moved up OR a pin that drifted above what it
-	// describes -- without needing a second headroom assertion to say so.
+	// THE IRREDUCIBLE ANSWER -- the request-INDEPENDENT floor, and what the
+	// static constant is pinned to.
 	//
-	// Cost, accepted deliberately: this constant is published in the request
-	// schema, so any envelope growth is a wire-visible minimum change and a
-	// consumer pin bump. That is disclosure, not churn.
-	if int64(ContextFabricMinimumAnswerBytes) != answerMeasurement.Bytes {
-		t.Fatalf("ContextFabricMinimumAnswerBytes = %d but the measured minimal answer is %d bytes.\n"+
-			"Re-pin the constant to %d and say in the commit what grew. Because this bound is published in the\n"+
-			"request schema, the re-pin is a wire-visible change and needs the consumer pin bump with it.",
-			ContextFabricMinimumAnswerBytes, answerMeasurement.Bytes, answerMeasurement.Bytes)
+	// The maximal measurement above is NOT the pin, and the difference is the
+	// whole shape of this row. Question echo and interpretation terms are
+	// request-shaped and FIXED -- no narrowing or degradation path reduces them
+	// (narrowing reaches only cohort members and facts) -- so the smallest answer
+	// a given request can have is a function of THAT request. A static constant
+	// cannot express that: pinned to the maximum it exceeds every shipped
+	// consumer's budget, and pinned lower it is not a floor for every request.
+	//
+	// So the static constant is the floor that holds for ANY request -- the
+	// irreducible envelope plus minimal content -- and the request-dependent part
+	// is a runtime check. This measures the static half.
+	irreducible := validContextFabricContractResult()
+	irreducible.Question = "q"
+	irreducible.Interpretation.SubjectTerms = []string{"s"}
+	irreducible.Interpretation.ComparisonTerms = nil
+	irreducibleAnswer := withMinimalAnswerContent(t, irreducible)
+	if err := irreducibleAnswer.Validate(); err != nil {
+		t.Fatalf("the irreducible answer does not VALIDATE, so it bounds nothing: %v", err)
+	}
+	floor, err := MeasureContextFabricResponse(irreducibleAnswer)
+	if err != nil {
+		t.Fatalf("measure irreducible answer: %v", err)
+	}
+	t.Logf("MEASURED IRREDUCIBLE answer (question 1 rune, 1 term, + minimal content): %d bytes, %d budgeted items",
+		floor.Bytes, floor.Items.Budgeted())
+	t.Logf("  the request-shaped spread between irreducible and maximal is %d bytes -- this is what the runtime check covers",
+		answerMeasurement.Bytes-floor.Bytes)
+
+	// THE PIN, exact, on the request-INDEPENDENT floor. Not rounded: slack
+	// absorbs growth, and pinned exactly the assertion kills in both directions.
+	if int64(ContextFabricMinimumAnswerBytes) != floor.Bytes {
+		t.Fatalf("ContextFabricMinimumAnswerBytes = %d but the measured irreducible answer is %d bytes.\n"+
+			"Re-pin to %d and say in the commit what grew. This bound is published in the request schema, so the\n"+
+			"re-pin is a wire-visible change and needs the consumer pin bump with it.",
+			ContextFabricMinimumAnswerBytes, floor.Bytes, floor.Bytes)
+	}
+
+	// The maximal answer must stay FAR above the static floor, or the premise
+	// that a runtime check is needed at all has changed and this row should be
+	// reconsidered rather than quietly simplified.
+	if answerMeasurement.Bytes <= floor.Bytes*2 {
+		t.Fatalf("the maximal answer (%d) is no longer far above the irreducible floor (%d): the request-shaped spread this row exists for has collapsed, and the two-property split may no longer be justified",
+			answerMeasurement.Bytes, floor.Bytes)
 	}
 
 	// The relation that makes this constant necessary, asserted rather than
@@ -279,17 +311,22 @@ func TestMeasureMinimumAnswerEnvelopeBytes(t *testing.T) {
 func TestMCPInvestigationBudgetRefusesBelowTheMinimumAnswerSize(t *testing.T) {
 	t.Parallel()
 
-	const oldFloor = 8192
-	if oldFloor >= ContextFabricMinimumAnswerBytes {
-		t.Fatalf("premise gone: old floor %d is no longer below the minimum %d", oldFloor, ContextFabricMinimumAnswerBytes)
-	}
+	// The probe value is one byte below the static floor, not the old 8192.
+	// 8192 is now LEGAL against this constant, and that is not an oversight:
+	// the static floor is the request-INDEPENDENT one, and a service at 8192
+	// can serve a small question perfectly well. What 8192 cannot serve is a
+	// LARGE question -- and catching that is the per-request runtime check's
+	// job, not this one's. Testing the boundary directly is also the stronger
+	// assertion: an off-by-one in the guard fails here and would not fail
+	// against a value four times away from it.
+	const belowFloor = ContextFabricMinimumAnswerBytes - 1
 	if MCPInvestigationBudgetMinBytes != ContextFabricMinimumAnswerBytes {
 		t.Fatalf("MCPInvestigationBudgetMinBytes = %d but the hosted minimum is %d: the two surfaces can now disagree, which is the whole defect this pins",
 			MCPInvestigationBudgetMinBytes, ContextFabricMinimumAnswerBytes)
 	}
 
-	if err := (MCPInvestigationBudget{MaxSerializedBytes: oldFloor}).Validate(); err == nil {
-		t.Fatalf("the MCP surface accepted a %d-byte budget: it clears here and is then refused by the hosted validator, so the caller sees a generic upstream failure instead of the reason at the surface they are using", oldFloor)
+	if err := (MCPInvestigationBudget{MaxSerializedBytes: belowFloor}).Validate(); err == nil {
+		t.Fatalf("the MCP surface accepted a %d-byte budget, one below the floor: it clears here and is then refused by the hosted validator, so the caller sees a generic upstream failure instead of the reason at the surface they are using", belowFloor)
 	}
 
 	// The boundary is accepted, or the documented minimum is a lie.
@@ -310,14 +347,22 @@ func TestMCPInvestigationBudgetRefusesBelowTheMinimumAnswerSize(t *testing.T) {
 func TestInvestigationOptionsRefuseBelowTheMinimumAnswerSize(t *testing.T) {
 	t.Parallel()
 
-	const oldFloor = 8192
+	// The probe value is one byte below the static floor, not the old 8192.
+	// 8192 is now LEGAL against this constant, and that is not an oversight:
+	// the static floor is the request-INDEPENDENT one, and a service at 8192
+	// can serve a small question perfectly well. What 8192 cannot serve is a
+	// LARGE question -- and catching that is the per-request runtime check's
+	// job, not this one's. Testing the boundary directly is also the stronger
+	// assertion: an off-by-one in the guard fails here and would not fail
+	// against a value four times away from it.
+	const belowFloor = ContextFabricMinimumAnswerBytes - 1
 	options := ContextFabricInvestigationOptions{
 		MaxSubjectCandidates: 10, MaxCohortMembers: 20, MaxRelationshipPaths: 25,
-		MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: oldFloor,
+		MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: belowFloor,
 	}
 	if err := options.Validate(); err == nil {
-		t.Fatalf("a request asking for %d bytes validated, but no answer can be serialized in %d bytes (minimum %d): the caller would be told at the ROUTE that their answer was too large, which blames the question for a budget that could never have held one",
-			oldFloor, oldFloor, ContextFabricMinimumAnswerBytes)
+		t.Fatalf("a request asking for %d bytes validated, but not even the irreducible answer fits in %d bytes (floor %d)",
+			belowFloor, belowFloor, ContextFabricMinimumAnswerBytes)
 	}
 
 	options.MaxSerializedBytes = ContextFabricMinimumAnswerBytes

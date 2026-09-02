@@ -25,18 +25,22 @@ func TestConfigBelowTheMinimumAnswerSizeFailsToStart(t *testing.T) {
 
 	// The OLD floor, which was the contract's own minimum until this change
 	// and is provably too small to serialize any answer.
-	const oldFloor = 8192
-	if oldFloor >= contractsv1.ContextFabricMinimumAnswerBytes {
-		t.Fatalf("premise gone: the old floor %d is no longer below the minimum %d, so this test proves nothing",
-			oldFloor, contractsv1.ContextFabricMinimumAnswerBytes)
-	}
+	// The probe value is one byte below the static floor, not the old 8192.
+	// 8192 is now LEGAL against this constant, and that is not an oversight:
+	// the static floor is the request-INDEPENDENT one, and a service at 8192
+	// can serve a small question perfectly well. What 8192 cannot serve is a
+	// LARGE question -- and catching that is the per-request runtime check's
+	// job, not this one's. Testing the boundary directly is also the stronger
+	// assertion: an off-by-one in the guard fails here and would not fail
+	// against a value four times away from it.
+	const belowFloor = contractsv1.ContextFabricMinimumAnswerBytes - 1
 
 	// Driven through load() with the real environment variable, so this
 	// exercises the actual startup path rather than a hand-built struct.
-	_, err := load(mapLookup(map[string]string{"ACR_MAX_SERIALIZED_BYTES": strconv.Itoa(oldFloor)}))
+	_, err := load(mapLookup(map[string]string{"ACR_MAX_SERIALIZED_BYTES": strconv.Itoa(belowFloor)}))
 	if err == nil {
-		t.Fatalf("a deployment configured at %d bytes started successfully, but no answer can be serialized in %d bytes (the minimum is %d): every investigation on it will fail at the route, blaming the caller's question for a misconfiguration",
-			oldFloor, oldFloor, contractsv1.ContextFabricMinimumAnswerBytes)
+		t.Fatalf("a deployment configured at %d bytes started successfully, one below the floor of %d: not even the irreducible answer fits, so every investigation on it fails",
+			belowFloor, contractsv1.ContextFabricMinimumAnswerBytes)
 	}
 	// The refusal must NAME the bound and the minimum. An operator who has
 	// just been refused a boot needs the number to set, not "invalid config".

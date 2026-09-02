@@ -30,10 +30,15 @@ const boundsRejection = "hosted read limits are invalid"
 func TestNewAppRejectsSerializedBudgetBelowTheMinimumAnswerSize(t *testing.T) {
 	t.Parallel()
 
-	const oldFloor = 8192
-	if oldFloor >= contractsv1.ContextFabricMinimumAnswerBytes {
-		t.Fatalf("premise gone: %d is no longer below the minimum %d", oldFloor, contractsv1.ContextFabricMinimumAnswerBytes)
-	}
+	// The probe value is one byte below the static floor, not the old 8192.
+	// 8192 is now LEGAL against this constant, and that is not an oversight:
+	// the static floor is the request-INDEPENDENT one, and a service at 8192
+	// can serve a small question perfectly well. What 8192 cannot serve is a
+	// LARGE question -- and catching that is the per-request runtime check's
+	// job, not this one's. Testing the boundary directly is also the stronger
+	// assertion: an off-by-one in the guard fails here and would not fail
+	// against a value four times away from it.
+	const belowFloor = contractsv1.ContextFabricMinimumAnswerBytes - 1
 
 	base := AppConfig{
 		ServiceName:              "dev-health-acr",
@@ -46,10 +51,10 @@ func TestNewAppRejectsSerializedBudgetBelowTheMinimumAnswerSize(t *testing.T) {
 	}
 
 	below := base
-	below.MaxSerializedBytes = oldFloor
+	below.MaxSerializedBytes = belowFloor
 	_, err := NewApp(below, Dependencies{}, testLogger(nil))
 	if err == nil {
-		t.Fatalf("NewApp accepted a %d-byte serialized budget: no answer can be serialized in that, so every investigation on the resulting app fails at the route blaming the caller's question", oldFloor)
+		t.Fatalf("NewApp accepted a %d-byte serialized budget, one below the floor: not even the irreducible answer fits", belowFloor)
 	}
 	if err.Error() != boundsRejection {
 		t.Fatalf("NewApp rejected the sub-minimum budget with %q, not the limits guard's %q.\n"+
