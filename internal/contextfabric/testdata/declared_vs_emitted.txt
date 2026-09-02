@@ -1,0 +1,29 @@
+# GENERATED. Each row pairs a producer's DECLARED obligations with the
+# field keys its provider actually emits, parsed from the provider
+# source. DO NOT EDIT BY HAND: a test regenerates and diffs this.
+#
+# A row whose declarations do not look supportable by its emitted
+# fields is a REVIEW question, not an automatic failure -- sufficiency
+# is a semantic judgement. What this artifact removes is the case
+# where nobody can see the pair at all.
+actual_completion	declares=work_item:[completion]	emits=[completed completed_at]
+blockers	declares=work_item:[remaining_work]	emits=[blocked_by_work_item_id]
+continuous_integration	declares=ci_pipeline_run:[principal_drivers],repository:[principal_drivers]	emits=[avg_duration_minutes avg_queue_minutes day p90_duration_minutes pipelines_count status success_rate]
+deployments	declares=deployment:[principal_drivers],repository:[principal_drivers readiness]	emits=[day deploy_time_p50_hours deployments_count environment failed_deployments_count lead_time_p50_hours status]
+flow	declares=project:[period_delta principal_drivers state trend_series],repository:[period_delta principal_drivers],team:[period_delta principal_drivers state trend_series]	emits=[daily_flow daily_flow_omitted_count daily_flow_omitted_reason day items_completed items_started pr_first_review_p50_hours pr_first_review_p90_hours pr_pickup_time_p50_hours pr_review_time_p50_hours prs_merged prs_with_first_review rollup_basis scope_breakdown scope_breakdown_omitted_count scope_count team_breakdown team_breakdown_omitted_count team_count]
+health	declares=project:[health period_delta principal_drivers state trend_series],repository:[health period_delta principal_drivers state trend_series],team:[health period_delta principal_drivers state trend_series]	emits=[compounding_risk computed_at daily_health daily_health_omitted_count norm_value repo_count risk_breakdown risk_rules rollup_basis scope scope_id scope_name severity signal team_count weight weighted_contribution]
+identity	declares=repository:[state]	emits=[id name provider title]
+incidents	declares=incident:[principal_drivers]	emits=[severity status]
+investment	declares=project:[allocation_breakdown period_delta principal_drivers state trend_series],team:[allocation_breakdown period_delta principal_drivers state trend_series]	emits=[churn_loc cycle_p50_hours day delivery_units investment_area project_stream prs_merged rollup_basis team_breakdown team_count team_id team_name work_items_completed]
+landscape	declares=project:[period_delta principal_drivers state],team:[period_delta principal_drivers state]	emits=[area_breakdown area_breakdown_omitted_count area_count rollup_basis team_breakdown team_breakdown_omitted_count team_count]
+membership	declares=(none)	emits=[organization_id repository_id repository_name]
+metrics	declares=project:[period_delta principal_drivers trend_series],repository:[period_delta principal_drivers state trend_series],team:[period_delta principal_drivers trend_series]	emits=[after_hours_commit_ratio after_hours_commits_count bus_factor change_failure_rate code_ownership_gini commits_count daily_metrics day day_count median_pr_cycle_hours mttr_hours prs_merged rollup_basis team_breakdown team_count team_id team_name weekend_commit_ratio weekend_commits_count]
+operational_deficiencies	declares=team:[principal_drivers]	emits=[rationale rule_id rule_version severity success_criterion title window_end window_start]
+pull_requests	declares=pull_request:[principal_drivers]	emits=[state]
+readiness	declares=project:[period_delta principal_drivers readiness state trend_series],team:[period_delta principal_drivers readiness state trend_series]	emits=[backlog_size basis daily_readiness daily_readiness_omitted_count day estimate_coverage_ratio estimated_count provider rollup_basis team_breakdown team_count team_id team_name unestimated_count work_scope_id]
+required_children	declares=work_item:[remaining_work]	emits=[relationship_type required_child_work_item_id]
+reviews	declares=pull_request_review:[principal_drivers]	emits=[state]
+source_health	declares=(none)	emits=[duration_ms error_message items_synced last_synced_at provider status]
+status	declares=work_item:[state]	emits=[status]
+work	declares=(none)	emits=[title]
+workload	declares=project:[period_delta principal_drivers state trend_series],team:[period_delta principal_drivers state trend_series]	emits=[backlog_size basis computed_at daily_workload daily_workload_omitted_count forecast_p50_days high_variance insufficient_history rollup_basis team_breakdown team_count team_id team_name throughput_mean throughput_stddev work_scope_id]
