@@ -253,6 +253,29 @@ type ModelExecutionReceipt struct {
 	FrameGoalsDropped     int            `json:"frame_goals_dropped,omitempty"`
 	FrameTermsTruncated   int            `json:"frame_terms_truncated,omitempty"`
 	FrameKindUnrecognized bool           `json:"frame_kind_unrecognized,omitempty"`
+	// FrameTemporalUnrecognized / FrameEmphasisDropped / FrameDimensionsDropped /
+	// FrameMemberKindUnrecognized / FrameGroupKindUnrecognized close the
+	// same countability gap the three fields above already closed for
+	// Goals/Terms/Kind -- found by this PR's own merge-gate round 3:
+	// sanitizeFrameOutput discarded the unrecognized/dropped signal for
+	// every OTHER sanitized axis (Temporal, Emphasis, Dimensions, and
+	// every MemberKind/GroupKind site across every subject-expression
+	// variant, INCLUDING operands), so a model emitting an
+	// out-of-vocabulary value on any of those axes was silently
+	// indistinguishable from a model emitting nothing -- exactly the
+	// violation FrameKindUnrecognized exists to prevent for the
+	// discriminator, just missed for its siblings. MemberKind/GroupKind
+	// are single flags rather than per-site counts because
+	// SanitizeSubjectKind's signal is a bool, not a count, and (like
+	// TermsTruncated above) the several call sites that can each supply a
+	// member_kind -- the variant's own field, and every ExplicitSet
+	// operand's -- OR into ONE flag per axis name rather than one field
+	// per call site.
+	FrameTemporalUnrecognized   bool `json:"frame_temporal_unrecognized,omitempty"`
+	FrameEmphasisDropped        int  `json:"frame_emphasis_dropped,omitempty"`
+	FrameDimensionsDropped      int  `json:"frame_dimensions_dropped,omitempty"`
+	FrameMemberKindUnrecognized bool `json:"frame_member_kind_unrecognized,omitempty"`
+	FrameGroupKindUnrecognized  bool `json:"frame_group_kind_unrecognized,omitempty"`
 	// InterpretationRejectionReason names WHICH rule in
 	// InterpretedQuestion.Validate() rejected this interpretation -- the
 	// interpret-side counterpart of the synthesis decision line's own

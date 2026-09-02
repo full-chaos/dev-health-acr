@@ -172,6 +172,16 @@ type InterpretationOutputFrame struct {
 	GoalsDropped     int
 	TermsTruncated   int
 	KindUnrecognized bool
+	// The five fields below mirror interpretationFrameCapture's own
+	// (runtime.go) -- added alongside it in the same merge-gate-round-3
+	// fix, so the file-exchange transport's capture stays the byte-
+	// identical mirror this struct's own doc comment promises rather than
+	// falling one field behind again.
+	TemporalUnrecognized   bool
+	EmphasisDropped        int
+	DimensionsDropped      int
+	MemberKindUnrecognized bool
+	GroupKindUnrecognized  bool
 }
 
 type InterpretationOutputFamily struct {
@@ -281,11 +291,16 @@ func ParseInterpretationOutputSignals(raw []byte, defaultTime contextfabric.Time
 			RequestedKindUnrecognized:   family.RequestedKindUnrecognized,
 		},
 		Frame: InterpretationOutputFrame{
-			Frame:            frame.Frame,
-			Present:          frame.Present,
-			GoalsDropped:     frame.GoalsDropped,
-			TermsTruncated:   frame.TermsTruncated,
-			KindUnrecognized: frame.KindUnrecognized,
+			Frame:                  frame.Frame,
+			Present:                frame.Present,
+			GoalsDropped:           frame.GoalsDropped,
+			TermsTruncated:         frame.TermsTruncated,
+			KindUnrecognized:       frame.KindUnrecognized,
+			TemporalUnrecognized:   frame.TemporalUnrecognized,
+			EmphasisDropped:        frame.EmphasisDropped,
+			DimensionsDropped:      frame.DimensionsDropped,
+			MemberKindUnrecognized: frame.MemberKindUnrecognized,
+			GroupKindUnrecognized:  frame.GroupKindUnrecognized,
 		},
 	}, nil
 }
@@ -321,5 +336,10 @@ func ApplyInterpretationCapture(receipt *contextfabric.ModelExecutionReceipt, ca
 		receipt.FrameGoalsDropped = capture.Frame.GoalsDropped
 		receipt.FrameTermsTruncated = capture.Frame.TermsTruncated
 		receipt.FrameKindUnrecognized = capture.Frame.KindUnrecognized
+		receipt.FrameTemporalUnrecognized = capture.Frame.TemporalUnrecognized
+		receipt.FrameEmphasisDropped = capture.Frame.EmphasisDropped
+		receipt.FrameDimensionsDropped = capture.Frame.DimensionsDropped
+		receipt.FrameMemberKindUnrecognized = capture.Frame.MemberKindUnrecognized
+		receipt.FrameGroupKindUnrecognized = capture.Frame.GroupKindUnrecognized
 	}
 }

@@ -1081,6 +1081,16 @@ type interpretationFrameCapture struct {
 	GoalsDropped     int
 	TermsTruncated   int
 	KindUnrecognized bool
+	// TemporalUnrecognized/EmphasisDropped/DimensionsDropped/
+	// MemberKindUnrecognized/GroupKindUnrecognized close the same
+	// countability gap the five fields above already closed for
+	// Goals/Terms/Kind -- see ModelExecutionReceipt's matching fields'
+	// doc comment for the full account (found by merge-gate round 3).
+	TemporalUnrecognized   bool
+	EmphasisDropped        int
+	DimensionsDropped      int
+	MemberKindUnrecognized bool
+	GroupKindUnrecognized  bool
 }
 
 // sanitizeFrameOutput is THE ONE PLACE the stage-2 frame is built from raw
@@ -1110,9 +1120,9 @@ func sanitizeFrameOutput(output interpretationOutput) interpretationFrameCapture
 	capture := interpretationFrameCapture{Present: true}
 
 	capture.Frame.Goals, capture.GoalsDropped = contextfabric.SanitizeInvestigationGoals(raw.Goals)
-	capture.Frame.Temporal, _ = contextfabric.SanitizeTemporalIntent(raw.Temporal)
-	capture.Frame.Emphasis, _ = contextfabric.SanitizeAnswerEmphasis(raw.Emphasis)
-	capture.Frame.Dimensions, _ = contextfabric.SanitizeHealthDimensions(raw.Dimensions)
+	capture.Frame.Temporal, capture.TemporalUnrecognized = contextfabric.SanitizeTemporalIntent(raw.Temporal)
+	capture.Frame.Emphasis, capture.EmphasisDropped = contextfabric.SanitizeAnswerEmphasis(raw.Emphasis)
+	capture.Frame.Dimensions, capture.DimensionsDropped = contextfabric.SanitizeHealthDimensions(raw.Dimensions)
 
 	if raw.SubjectExpression == nil {
 		return capture
@@ -1126,8 +1136,18 @@ func sanitizeFrameOutput(output interpretationOutput) interpretationFrameCapture
 	capture.TermsTruncated += truncated
 	anchors, anchorTruncated := contextfabric.SanitizeSubjectTerms(expression.AnchorTerms)
 	capture.TermsTruncated += anchorTruncated
-	memberKind, _ := contextfabric.SanitizeSubjectKind(expression.MemberKind)
-	groupKind, _ := contextfabric.SanitizeSubjectKind(expression.GroupKind)
+	// The unrecognized bool from each of these is ORed into ONE flag per
+	// axis name (MemberKindUnrecognized / GroupKindUnrecognized) rather
+	// than kept per call site, matching TermsTruncated's own += style
+	// immediately above -- see the receipt field's doc comment for why.
+	memberKind, memberKindUnrecognized := contextfabric.SanitizeSubjectKind(expression.MemberKind)
+	if memberKindUnrecognized {
+		capture.MemberKindUnrecognized = true
+	}
+	groupKind, groupKindUnrecognized := contextfabric.SanitizeSubjectKind(expression.GroupKind)
+	if groupKindUnrecognized {
+		capture.GroupKindUnrecognized = true
+	}
 
 	// ONLY the variant the sanitized Kind names is populated. Building the
 	// variant the model's own fields suggest instead would make the
@@ -1152,8 +1172,11 @@ func sanitizeFrameOutput(output interpretationOutput) interpretationFrameCapture
 	case contextfabric.SubjectExpressionExplicitSet:
 		operands := make([]contextfabric.SubjectOperand, 0, len(expression.Operands))
 		for _, rawOperand := range expression.Operands {
-			operand, operandTruncated := sanitizeOperandOutput(rawOperand)
+			operand, operandTruncated, operandMemberKindUnrecognized := sanitizeOperandOutput(rawOperand)
 			capture.TermsTruncated += operandTruncated
+			if operandMemberKindUnrecognized {
+				capture.MemberKindUnrecognized = true
+			}
 			operands = append(operands, operand)
 		}
 		capture.Frame.SubjectExpression.Explicit = &contextfabric.ExplicitSetExpression{Operands: operands}
@@ -1161,7 +1184,13 @@ func sanitizeFrameOutput(output interpretationOutput) interpretationFrameCapture
 	return capture
 }
 
-func sanitizeOperandOutput(raw subjectOperandOutput) (contextfabric.SubjectOperand, int) {
+// sanitizeOperandOutput returns the sanitized operand, the terms-truncated
+// count, and whether the operand's own member_kind was supplied but
+// unrecognized -- the third return exists so the caller can OR it into
+// interpretationFrameCapture.MemberKindUnrecognized alongside the
+// variant-level member_kind's own signal (merge-gate round 3: this was
+// the third of three sites silently discarding that bool).
+func sanitizeOperandOutput(raw subjectOperandOutput) (contextfabric.SubjectOperand, int, bool) {
 	operand := contextfabric.SubjectOperand{}
 	trimmed := strings.TrimSpace(raw.Kind)
 	switch contextfabric.SubjectOperandKind(trimmed) {
@@ -1174,18 +1203,18 @@ func sanitizeOperandOutput(raw subjectOperandOutput) (contextfabric.SubjectOpera
 		// both pointers nil, which invariant I19 rejects BY NAME. Guessing
 		// a variant from whichever fields happen to be populated would
 		// repair a malformed operand into a well-formed different one.
-		return operand, 0
+		return operand, 0, false
 	}
 	terms, truncated := contextfabric.SanitizeSubjectTerms(raw.Terms)
 	anchors, anchorTruncated := contextfabric.SanitizeSubjectTerms(raw.AnchorTerms)
-	memberKind, _ := contextfabric.SanitizeSubjectKind(raw.MemberKind)
+	memberKind, memberKindUnrecognized := contextfabric.SanitizeSubjectKind(raw.MemberKind)
 	switch operand.Kind {
 	case contextfabric.SubjectOperandNamed:
 		operand.Named = &contextfabric.NamedSubjectExpression{Terms: terms}
 	case contextfabric.SubjectOperandScoped:
 		operand.Scoped = &contextfabric.ScopedSetExpression{AnchorTerms: anchors, MemberKind: memberKind}
 	}
-	return operand, truncated + anchorTruncated
+	return operand, truncated + anchorTruncated, memberKindUnrecognized
 }
 
 func sanitizeFamilyOutput(output interpretationOutput) interpretationFamilyCapture {
@@ -1231,6 +1260,11 @@ func applyFrameCapture(receipt *contextfabric.ModelExecutionReceipt, capture int
 	receipt.FrameGoalsDropped = capture.GoalsDropped
 	receipt.FrameTermsTruncated = capture.TermsTruncated
 	receipt.FrameKindUnrecognized = capture.KindUnrecognized
+	receipt.FrameTemporalUnrecognized = capture.TemporalUnrecognized
+	receipt.FrameEmphasisDropped = capture.EmphasisDropped
+	receipt.FrameDimensionsDropped = capture.DimensionsDropped
+	receipt.FrameMemberKindUnrecognized = capture.MemberKindUnrecognized
+	receipt.FrameGroupKindUnrecognized = capture.GroupKindUnrecognized
 }
 
 // sanitizeWindowOutput applies the CHAOS-3900 W0 sanitize-before-validate
