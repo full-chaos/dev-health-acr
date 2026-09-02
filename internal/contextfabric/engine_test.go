@@ -312,6 +312,7 @@ func TestNewEngineRequiresAllCoreCapabilities(t *testing.T) {
 type recordingTelemetry struct {
 	priorSubjectReceiptsSkipped []int
 	answerReuseOutcomes         []AnswerReuseOutcome
+	answerReuseContainment      []AnswerReuseContainmentEvent
 
 	// subjectlessTerminalReasons, priorSubjectReceiptSkipReasons, and
 	// answerReuseServedRequestIDs (CHAOS-3888) record every call's
@@ -471,6 +472,10 @@ type dualTableFactsRecord struct {
 
 func (r *recordingTelemetry) RecordAnswerReuse(_ context.Context, _ storage.Principal, outcome AnswerReuseOutcome) {
 	r.answerReuseOutcomes = append(r.answerReuseOutcomes, outcome)
+}
+
+func (r *recordingTelemetry) RecordAnswerReuseContainment(_ context.Context, _ storage.Principal, event AnswerReuseContainmentEvent) {
+	r.answerReuseContainment = append(r.answerReuseContainment, event)
 }
 
 func (r *recordingTelemetry) RecordPriorSubjectReceiptsSkipped(_ context.Context, _ storage.Principal, skipped int) {

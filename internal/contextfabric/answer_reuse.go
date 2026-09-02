@@ -263,6 +263,31 @@ const (
 	// finally runs, rather than serving the same cached "no match"
 	// indefinitely.
 	AnswerReuseMissGraphNotProjected AnswerReuseOutcome = "graph_not_projected"
+	// AnswerReuseHitDegraded (CHAOS-4831): a stored result was served,
+	// but the authorization recheck could not prove every reference the
+	// stored payload carried is still visible, so the unprovable ones
+	// were REMOVED from the served copy and the narrowing was disclosed
+	// on coverage. Still a hit -- zero model calls -- and deliberately
+	// NOT reported as one: a degraded serve routinely removes more
+	// references than the answer itself cites, and a dashboard that
+	// counted it as a clean hit would hide that entirely.
+	AnswerReuseHitDegraded AnswerReuseOutcome = "hit_degraded"
+	// AnswerReuseMissRecheckUnavailable (CHAOS-4831, CHAOS-4822 class):
+	// the containment recheck could not be COMPLETED -- the fresh
+	// discovery errored -- so nothing was proven either way. Split out of
+	// miss_evidence_containment, which used to carry both this and a
+	// genuine refusal; they mean opposite things (one is "we looked and
+	// the evidence is gone", the other is "we could not look"), and
+	// conflating them is exactly the undifferentiated-miss defect the
+	// sibling telemetry ticket exists for.
+	AnswerReuseMissRecheckUnavailable AnswerReuseOutcome = "miss_recheck_unavailable"
+	// AnswerReuseMissDegradeInvalid (CHAOS-4831): a partial miss was
+	// degradable in principle, but the stripped payload no longer
+	// satisfies the stored-result contract, so reuse refused rather than
+	// serve a malformed answer. A narrowed answer is useful; an invalid
+	// one is a 500 for the caller and a silent contract break for every
+	// consumer.
+	AnswerReuseMissDegradeInvalid AnswerReuseOutcome = "miss_degrade_invalid"
 )
 
 // tryReuse implements CHAOS-3782 (TRD §19.7). It is called from
@@ -484,17 +509,43 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 			return InvestigationResult{}, false
 		}
 	}
-	if holds, missReason := e.reuseAuthorizationStillHolds(ctx, principal, request, candidate, binding); !holds {
-		e.recordReuseOutcome(ctx, principal, missReason)
+	verdict := e.reuseAuthorizationStillHolds(ctx, principal, request, candidate, binding)
+	if verdict.Refused {
+		e.recordReuseOutcome(ctx, principal, verdict.Outcome)
+		e.recordReuseContainment(ctx, principal, verdict, reuseStripCounts{}, "")
 		return InvestigationResult{}, false
 	}
+	// CHAOS-4831 (chris's ruling R1): the recheck covers everything a
+	// reused response will SERVE, and a PARTIAL miss degrades instead of
+	// refusing. Refusal is reserved for a missing TOP-LEVEL citation,
+	// which verdict.Refused already carries. Everything still unproven
+	// here is auxiliary, and it is REMOVED before the answer is served --
+	// never served unchecked. That is the invariant, enforced by
+	// construction rather than by remembering to strip: see
+	// answer_reuse_degrade.go's file comment.
+	reuseOutcome := AnswerReuseHit
+	stripCounts := reuseStripCounts{}
+	disclosure := reuseDegradeDisclosure("")
+	if len(verdict.Partition.Missing) > 0 {
+		degraded, counts, degradeDisclosure, ok := degradeReusedResult(candidate, verdict.Partition.Missing)
+		if !ok {
+			e.recordReuseOutcome(ctx, principal, AnswerReuseMissDegradeInvalid)
+			e.recordReuseContainment(ctx, principal, verdict, counts, degradeDisclosure)
+			return InvestigationResult{}, false
+		}
+		candidate = degraded
+		stripCounts = counts
+		disclosure = degradeDisclosure
+		reuseOutcome = AnswerReuseHitDegraded
+	}
+	e.recordReuseContainment(ctx, principal, verdict, stripCounts, disclosure)
 	// The candidate is served EXACTLY as stored -- same ResultID,
 	// RequestID, and GeneratedAt (AC-3782-2: those name the reused
 	// result's own identifier and generation time, not this call's).
 	// Reused is per-serving metadata, set only on this in-memory copy;
 	// nothing about the stored row is touched.
 	candidate.Reused = true
-	e.recordReuseOutcome(ctx, principal, AnswerReuseHit)
+	e.recordReuseOutcome(ctx, principal, reuseOutcome)
 	// CHAOS-3888: telemetry-only -- candidate.RequestID (served to the
 	// caller, unchanged, per AC-3782-2 above) is deliberately NOT touched
 	// here; this only reports whether it differs from request.RequestID,
@@ -547,17 +598,17 @@ func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Princ
 // (would this candidate be served) and the graph these calls read from must
 // agree, or a recheck could pass against an epoch the candidate itself was
 // never generated under.
-func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal storage.Principal, request InvestigationRequest, candidate InvestigationResult, binding ResolvedGraphBinding) (bool, AnswerReuseOutcome) {
+func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal storage.Principal, request InvestigationRequest, candidate InvestigationResult, binding ResolvedGraphBinding) reuseRecheckVerdict {
 	// CHAOS-4077: checked FIRST, before subjects/evidenceRefs are even
 	// collected -- see AnswerReuseMissGraphNotProjected's own doc comment
 	// for why the zero-subjects/zero-evidence shortcut below is unsafe
 	// specifically for this candidate shape.
 	if candidate.SubjectResolution.GraphNotProjected {
-		return false, AnswerReuseMissGraphNotProjected
+		return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissGraphNotProjected}
 	}
 	subjects := reuseSubjectsToRecheck(candidate)
 	if len(subjects) > maxReuseSubjectRecheckCount {
-		return false, AnswerReuseMissAuthorization
+		return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization}
 	}
 	recheckRequest := request
 	recheckRequest.Options = reuseRecheckOptions
@@ -601,7 +652,7 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// reproduce it.
 	resolution, _, _, _, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding, nil, nil)
 	if err != nil {
-		return false, AnswerReuseMissAuthorization
+		return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization}
 	}
 	committed := make(map[string]struct{}, len(resolution.Committed))
 	for _, subject := range resolution.Committed {
@@ -609,30 +660,81 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	}
 	for _, subject := range subjects {
 		if _, ok := committed[subjectKeyForModel(subject)]; !ok {
-			return false, AnswerReuseMissAuthorization
+			return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization}
 		}
 	}
 
 	evidenceRefs := reuseEvidenceRefsToRecheck(candidate)
 	if len(evidenceRefs) == 0 {
-		return true, AnswerReuseHit
+		return reuseRecheckVerdict{Outcome: AnswerReuseHit}
 	}
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
 		Request: recheckRequest, Interpretation: candidate.Interpretation, Resolution: resolution, Binding: binding,
 	})
 	if err != nil {
-		return false, AnswerReuseMissEvidenceContainment
+		// Nothing was proven either way -- see
+		// AnswerReuseMissRecheckUnavailable's own doc comment for why
+		// this is no longer folded into the containment refusal.
+		return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissRecheckUnavailable}
 	}
-	visible := make(map[string]struct{}, len(graphContext.EvidenceRefIDs))
-	for _, ref := range graphContext.EvidenceRefIDs {
-		visible[ref] = struct{}{}
+	// CHAOS-4831: the visible set is collected from the fresh discovery
+	// with the SAME traversal that collected the demanded set. It used to
+	// be GraphContext.EvidenceRefIDs alone, which is the EDGE-attribute
+	// closure -- so a subject candidate's NODE-attribute refs could never
+	// be contained in it and containment failed with certainty for any
+	// stored answer carrying candidates. See graphContextEvidenceSurface.
+	partition := partitionMissingRefs(candidate, graphContext)
+	verdict := reuseRecheckVerdict{ContainmentRan: true, Partition: partition, Outcome: AnswerReuseHit}
+	if partition.MissingCitation {
+		// A missing TOP-LEVEL citation is not a narrowing to disclose --
+		// the answer's own cited evidence is gone, which makes it a
+		// different answer. Refuse, exactly as before this ticket.
+		verdict.Refused = true
+		verdict.Outcome = AnswerReuseMissEvidenceContainment
 	}
-	for _, ref := range evidenceRefs {
-		if _, ok := visible[ref]; !ok {
-			return false, AnswerReuseMissEvidenceContainment
-		}
+	return verdict
+}
+
+// reuseRecheckVerdict is what the condition-6 recheck reports. It states
+// FACTS (what was proven visible, what was not, whether a citation was
+// among the unproven) and leaves the serve/degrade/refuse decision to
+// tryReuse, so the policy lives at one call site instead of being spread
+// through the recheck's early returns.
+type reuseRecheckVerdict struct {
+	// Refused is set when reuse must not happen at all.
+	Refused bool
+	// Outcome is the telemetry value for this verdict.
+	Outcome AnswerReuseOutcome
+	// ContainmentRan reports whether the evidence leg executed. False
+	// means Partition is meaningless (the subject leg refused first, or
+	// there was nothing to recheck) -- not that containment passed.
+	ContainmentRan bool
+	Partition      reuseContainmentPartition
+}
+
+// recordReuseContainment emits the containment measurement: how many refs
+// the stored payload demanded, how many the fresh discovery proved, how
+// many could not be proven, and what the degrade removed. This is the
+// instrument that lets a low reuse rate be ATTRIBUTED rather than guessed
+// at -- the defect this ticket fixes was invisible for exactly as long as
+// the only signal was one undifferentiated miss value.
+func (e *Engine) recordReuseContainment(ctx context.Context, principal storage.Principal, verdict reuseRecheckVerdict, counts reuseStripCounts, disclosure reuseDegradeDisclosure) {
+	if e.telemetry == nil || !verdict.ContainmentRan {
+		return
 	}
-	return true, AnswerReuseHit
+	e.telemetry.RecordAnswerReuseContainment(ctx, principal, AnswerReuseContainmentEvent{
+		DemandedCount:     len(verdict.Partition.Demanded),
+		VisibleCount:      verdict.Partition.VisibleCount,
+		MissingCount:      len(verdict.Partition.Missing),
+		MissingCitation:   verdict.Partition.MissingCitation,
+		StrippedRefs:      counts.Refs,
+		DroppedCandidates: counts.DroppedCandidates,
+		DroppedMembers:    counts.DroppedMembers,
+		DroppedDrivers:    counts.DroppedDrivers,
+		DroppedFindings:   counts.DroppedFindings,
+		DroppedPaths:      counts.DroppedPaths,
+		Disclosure:        string(disclosure),
+	})
 }
 
 // reuseSubjectsToRecheck collects every distinct subject named anywhere in
@@ -690,48 +792,17 @@ func reuseSubjectsToRecheck(candidate InvestigationResult) []SubjectRef {
 }
 
 // reuseEvidenceRefsToRecheck collects every distinct evidence reference ID
-// named anywhere in candidate -- the top-level closure set plus every
+// named anywhere in candidate -- the top-level citation set plus every
 // nested occurrence (subject candidates, cohort members, drivers,
-// findings, paths). Deduplicated so DiscoverContext's fresh evidence set
-// only needs one containment check per unique ID.
+// findings, paths and their edges). This is the DEMANDED set: everything a
+// reused payload would serve, and therefore everything the recheck is
+// obliged to prove still visible.
+//
+// CHAOS-4831: the walk itself now lives in collectEvidenceRefs, shared
+// with the VISIBLE side of the same check. It was previously duplicated,
+// and the two copies covered different surfaces -- which is what made the
+// containment check unsatisfiable on real data. A shared traversal makes
+// that class of divergence unrepresentable rather than merely fixed.
 func reuseEvidenceRefsToRecheck(candidate InvestigationResult) []string {
-	seen := make(map[string]struct{}, len(candidate.EvidenceRefIDs))
-	refs := make([]string, 0, len(candidate.EvidenceRefIDs))
-	add := func(ids []string) {
-		for _, id := range ids {
-			if _, exists := seen[id]; exists {
-				continue
-			}
-			seen[id] = struct{}{}
-			refs = append(refs, id)
-		}
-	}
-	add(candidate.EvidenceRefIDs)
-	for _, sc := range candidate.SubjectResolution.Candidates {
-		add(sc.EvidenceRefIDs)
-	}
-	if candidate.Cohort != nil {
-		for _, member := range candidate.Cohort.Members {
-			add(member.EvidenceRefIDs)
-		}
-	}
-	for _, driver := range candidate.Drivers {
-		add(driver.EvidenceRefIDs)
-	}
-	for _, findings := range [][]Finding{candidate.RemainingWork, candidate.ReadinessGaps, candidate.Conflicts} {
-		for _, finding := range findings {
-			add(finding.EvidenceRefIDs)
-		}
-	}
-	for _, path := range candidate.Paths {
-		add(path.EvidenceRefIDs)
-		// Codex round-1 F4: a path's own EvidenceRefIDs is not
-		// guaranteed to be a superset of its edges' -- a stored result
-		// with evidence cited ONLY at edge level would otherwise skip
-		// the containment recheck for those refs entirely.
-		for _, edge := range path.Edges {
-			add(edge.EvidenceRefIDs)
-		}
-	}
-	return refs
+	return collectEvidenceRefs(resultEvidenceSurface(candidate))
 }
