@@ -124,7 +124,11 @@ func newPgBouncerDSNsWithModes(t *testing.T, ctx context.Context, modes pgBounce
 	configPath, userListPath := writePgBouncerConfig(t, modes)
 	pooler, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:        "edoburu/pgbouncer:latest",
+			// CHAOS-4855: pinned by digest (was the floating "latest" tag)
+			// so TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the
+			// ghcr.io mirror by digest. Same reviewed digest ops's own
+			// river-compatibility compose pins (edoburu/pgbouncer:1.25.2).
+			Image:        "edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd",
 			ExposedPorts: []string{"5432/tcp"},
 			Cmd:          []string{"pgbouncer", "/etc/pgbouncer/pgbouncer.ini"},
 			Networks:     []string{dockerNetwork.Name},

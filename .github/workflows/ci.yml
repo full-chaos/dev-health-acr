@@ -133,6 +133,17 @@ jobs:
             --fixtures testdata/release-approvals
       - name: Verify CI workflow contract
         run: scripts/ci/test-workflow-contract.sh
+      # CHAOS-4855 R3: mirror-preflight and resolve-mirrored-images.sh only
+      # verify the images this list's author already knew to add -- neither
+      # notices a NEW or reintroduced bare-tag testcontainers image
+      # reference anywhere else in the module (the exact gap that produced
+      # 20 unpinned postgres:18-alpine call sites and one unpinned
+      # edoburu/pgbouncer:latest call site, invisible until each one hit
+      # `manifest unknown` in CI). This enumerates every such reference in
+      # the module via `git grep` and fails naming the file:line if it is
+      # not both digest-pinned and present in the mirror list.
+      - name: Verify every testcontainers image is pinned and mirrored
+        run: scripts/ci/test-testcontainers-image-pins.sh
 
   lint:
     runs-on: ubuntu-latest

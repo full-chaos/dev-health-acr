@@ -43,6 +43,10 @@ syft_ref="$(grep -oE "anchore/syft:[^\"']+@sha256:[0-9a-f]{64}" scripts/containe
   || die "could not resolve the syft image from scripts/container/scan.sh"
 postgres_ref="$(grep -oE 'postgres:[^[:space:]"]+@sha256:[0-9a-f]{64}' scripts/container/verify.sh | head -n1)" \
   || die "could not resolve the postgres image from scripts/container/verify.sh"
+# pgbouncer has no chfixture-style constant either (one call site); read it
+# directly from the one file that declares it.
+pgbouncer_ref="$(grep -oE 'edoburu/pgbouncer:[^"]+@sha256:[0-9a-f]{64}' internal/runtime/postgres/pooler_integration_test.go | head -n1)" \
+  || die "could not resolve the pgbouncer image from internal/runtime/postgres/pooler_integration_test.go"
 binfmt_ref="$(grep -oE 'tonistiigi/binfmt:[^[:space:]]+@sha256:[0-9a-f]{64}' .github/workflows/ci.yml | head -n1)" \
   || die "could not resolve the tonistiigi/binfmt image from ci.yml"
 buildkit_ref="$(grep -oE 'moby/buildkit:[^[:space:]]+@sha256:[0-9a-f]{64}' .github/workflows/ci.yml | head -n1)" \
@@ -71,6 +75,6 @@ dest_tag() {
 
 for image in \
   "$golang_ref" "$clickhouse_ref" "$trivy_ref" "$syft_ref" "$postgres_ref" \
-  "$binfmt_ref" "$buildkit_ref" "$falkordb_ref" "$ryuk_ref"; do
+  "$pgbouncer_ref" "$binfmt_ref" "$buildkit_ref" "$falkordb_ref" "$ryuk_ref"; do
   printf '%s\t%s\n' "$image" "$(dest_tag "$image")"
 done
