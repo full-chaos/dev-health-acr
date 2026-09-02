@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"testing"
 
@@ -180,4 +181,62 @@ func TestInterpretRejectionReasonIsNeverModelAuthoredText(t *testing.T) {
 	if bytes.Contains([]byte(receipt.InterpretationRejectionReason), []byte(marker)) {
 		t.Fatalf("receipt.InterpretationRejectionReason leaked model-authored text: %q", receipt.InterpretationRejectionReason)
 	}
+}
+
+// TestFallbackSemanticRejectionCarriesItsReasonToTheOuterArtifacts closes a
+// gap an adversarial review round found: when the primary's interpretation
+// is rejected AND a configured fallback also fails semantically, the
+// FALLBACK's error is what the caller receives — so the fallback's reason is
+// the one the receipt and the decision line must report.
+//
+// Before this, the returned error was still correctly classifiable but both
+// outer artifacts were silent. That is precisely the artifact/error
+// disagreement this whole ticket exists to remove: an operator reading the
+// telemetry would see a rejection with no rule while the error object in
+// flight knew exactly which rule it was.
+func TestFallbackSemanticRejectionCarriesItsReasonToTheOuterArtifacts(t *testing.T) {
+	t.Parallel()
+	// The fallback rejects for a rule of its own, distinct from anything
+	// the primary's output would produce, so the assertion cannot pass by
+	// accidentally reading the primary's reason.
+	fallbackRejected := contextfabric.NewInterpretationRejection(
+		contractsv1.ContextFabricInterpretationRejectionShapeInvalid,
+		fmt.Errorf("%w: %w: shape is invalid", contextfabric.ErrInterpretationRejected, contextfabric.ErrModelOutput),
+	)
+
+	primary := validInterpretationOutput()
+	primary.Shape = "not_a_real_shape"
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	runtime := mustRuntime(t, &generatorStub{interpretation: primary}, Config{
+		Logger:   logger,
+		Fallback: erroringFallbackRuntime{err: fallbackRejected},
+	})
+
+	_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+	if err == nil {
+		t.Fatal("InterpretQuestion() = nil error, want the fallback's rejection")
+	}
+	want := contractsv1.ContextFabricInterpretationRejectionShapeInvalid
+	if got := contextfabric.InterpretationRejectionReasonOf(err); got != want {
+		t.Fatalf("the RETURNED error's reason = %q, want %q -- fixture is wrong", got, want)
+	}
+	if receipt.InterpretationRejectionReason != want {
+		t.Fatalf("receipt.InterpretationRejectionReason = %q, want %q -- the receipt must not stay silent while the error it accompanies names the rule", receipt.InterpretationRejectionReason, want)
+	}
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		fields := map[string]any{}
+		if json.Unmarshal(line, &fields) != nil {
+			continue
+		}
+		if fields["operation"] != string(contextfabric.ModelOperationInterpret) {
+			continue
+		}
+		if got := fields["rejection_reason"]; got != string(want) {
+			t.Fatalf("decision line rejection_reason = %v, want %q", got, want)
+		}
+		return
+	}
+	t.Fatal("no interpret decision line was emitted")
 }

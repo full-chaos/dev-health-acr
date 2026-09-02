@@ -331,6 +331,24 @@ func (r ModelExecutionReceipt) Validate() error {
 	if r.WindowConfidence != "" && !ValidWindowConfidence(r.WindowConfidence) {
 		return fmt.Errorf("model receipt window_confidence is invalid")
 	}
+	// The SAME rule as WindowClass immediately above, and it belongs here
+	// for the identical reason: the closed-vocabulary guarantee on
+	// InterpretationRejectionReason must live at the receipt's own
+	// PERSISTENCE boundary, not only inside the one path that happens to
+	// set it correctly today.
+	//
+	// This was a real hole, not a hypothetical one: the field is exported
+	// on an exported struct, ModelExecutionReceipt.Validate() did not check
+	// it, and recordModelReceipt forwards the receipt to the sink
+	// unchanged -- so a caller assigning
+	// InterpretationRejectionReason(rawModelString) landed corpus text,
+	// newlines included, verbatim in a durable artifact. Canonicalizing in
+	// NewInterpretationRejection and InterpretationRejectionReasonOf
+	// protects the error path only; it is a property of those functions,
+	// never of this struct. Empty stays legal (genuinely "no rejection").
+	if r.InterpretationRejectionReason != "" && !contractsv1.ValidContextFabricInterpretationRejectionReason(r.InterpretationRejectionReason) {
+		return fmt.Errorf("model receipt interpretation_rejection_reason is invalid")
+	}
 	return nil
 }
 

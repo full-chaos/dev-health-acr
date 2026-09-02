@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -211,6 +212,58 @@ func TestFactCapabilityParameterRejectionNamesItsRuleOnBothRealSites(t *testing.
 		}
 		if got := InterpretationRejectionReasonOf(err); got != want {
 			t.Fatalf("InterpretationRejectionReasonOf() = %q, want %q", got, want)
+		}
+	})
+}
+
+// TestReceiptValidateRejectsANonVocabularyRejectionReason pins the
+// closed-vocabulary guarantee at the receipt's own PERSISTENCE boundary,
+// where WindowClass's identical guard already lives.
+//
+// Found by an adversarial review round, and it was a real hole rather than a
+// hypothetical one: the field is exported on an exported struct, Validate()
+// did not check it, and the receipt sink forwards what it is given. So a
+// caller assigning a raw model string landed corpus text -- newlines
+// included -- verbatim in a durable artifact. Canonicalizing in the error
+// constructors protects the error path only; that is a property of those
+// functions, never of this struct.
+func TestReceiptValidateRejectsANonVocabularyRejectionReason(t *testing.T) {
+	t.Parallel()
+	base := func() ModelExecutionReceipt {
+		started := time.Now().UTC()
+		return ModelExecutionReceipt{
+			Operation: ModelOperationInterpret, Provider: "openai", Model: "m", ModelVersion: "v1",
+			PromptVersion: "p1", SchemaVersion: "s1", EvaluatorVersion: "e1",
+			InputDigest: strings.Repeat("a", 64), Outcome: "invalid_output",
+			StartedAt: started, CompletedAt: started.Add(time.Second), Attempts: 1,
+		}
+	}
+	if err := base().Validate(); err != nil {
+		t.Fatalf("the fixture must be valid before the field is set: %v", err)
+	}
+
+	t.Run("a non-member is refused", func(t *testing.T) {
+		t.Parallel()
+		r := base()
+		r.InterpretationRejectionReason = "MODEL_OUTPUT_MARKER_4821\nlog-shaped-content"
+		if err := r.Validate(); err == nil {
+			t.Fatal("Validate() = nil for a receipt carrying non-vocabulary text; corpus content would reach the durable sink verbatim")
+		}
+	})
+	t.Run("a member is accepted", func(t *testing.T) {
+		t.Parallel()
+		r := base()
+		r.InterpretationRejectionReason = contractsv1.ContextFabricInterpretationRejectionShapeInvalid
+		if err := r.Validate(); err != nil {
+			t.Fatalf("Validate() = %v for a legitimate vocabulary member", err)
+		}
+	})
+	t.Run("empty stays legal", func(t *testing.T) {
+		t.Parallel()
+		r := base()
+		r.InterpretationRejectionReason = ""
+		if err := r.Validate(); err != nil {
+			t.Fatalf("Validate() = %v for a receipt with no rejection to describe", err)
 		}
 	})
 }

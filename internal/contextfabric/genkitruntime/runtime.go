@@ -873,6 +873,20 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 			// comment: report the fallback's own outcome/classification,
 			// not the primary's stale invalid_output/ErrModelOutput.
 			receipt.Outcome = fallbackReceipt.Outcome
+			// The FALLBACK's error is the one the caller receives here, so
+			// its reason is the one the receipt and the decision line must
+			// report. A fallback that fails semantically (its own
+			// interpretation violated a rule) carries a reason exactly like
+			// a primary rejection does; without this the outer artifacts
+			// were silent while the returned error was still correctly
+			// classifiable -- the artifact/error disagreement this ticket
+			// exists to remove. Empty when the fallback failed for a
+			// non-semantic reason, which is correct: there is no rule to
+			// name for a transport or rate-limit failure.
+			if reason := contextfabric.InterpretationRejectionReasonOf(fallbackErr); reason != contextfabric.InterpretationRejectionUnclassified {
+				rejectionReason = string(reason)
+				receipt.InterpretationRejectionReason = reason
+			}
 			return contextfabric.InterpretedQuestion{}, receipt, fallbackErr
 		}
 		// CHAOS-3784 F1: this is the production ModelRuntime's OWN

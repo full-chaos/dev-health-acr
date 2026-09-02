@@ -1,10 +1,10 @@
 package v1
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 // rejectionCase names one clause of ContextFabricInterpretedQuestion.validate()
@@ -310,22 +310,40 @@ func TestContextFabricInterpretationRejectionReasonVocabularyIsClosed(t *testing
 	}
 }
 
-// TestCanonicalInterpretationRejectionReasonReturnsTheTableConstant is the
-// CodeQL-relevant assertion spelled out: the returned value must be the
-// TABLE's own copy, not the caller's input. Compared by string value AND by
-// confirming the input was a distinct backing array, since Go string
-// equality alone cannot tell the two apart.
+// TestCanonicalInterpretationRejectionReasonReturnsTheTableConstant proves
+// the property the canonical table exists for: the returned value is the
+// TABLE's own constant, not the caller's string.
+//
+// The first version of this test compared string CONTENTS, which is
+// vacuous -- Go string equality cannot distinguish "returned the constant"
+// from "returned an equal-valued heap string", and a codex round disproved
+// it by mutating Canonical... to return the caller's own dynamically
+// allocated string and watching the test stay green. Comparing the backing
+// DATA POINTER is what actually settles it: a package constant's bytes live
+// in read-only static storage, so a returned value sharing that pointer
+// cannot be the runtime-built input.
+//
+// This is the assertion that makes the CodeQL go/log-injection posture real
+// rather than conventional: validating a tainted value and then logging the
+// tainted value is a different thing from validating it and logging the
+// matched constant, and only the second survives this test.
 func TestCanonicalInterpretationRejectionReasonReturnsTheTableConstant(t *testing.T) {
-	// A caller-built value with the same text as a member, assembled at
-	// runtime so it cannot be the constant itself.
+	// Built at runtime from parts so it cannot be the constant, while
+	// carrying byte-identical text to a real member.
 	callerBuilt := ContextFabricInterpretationRejectionReason(strings.Join([]string{"shape", "invalid"}, "_"))
+	if callerBuilt != ContextFabricInterpretationRejectionShapeInvalid {
+		t.Fatalf("fixture is wrong: %q must equal the member's text", callerBuilt)
+	}
+	if unsafe.StringData(string(callerBuilt)) == unsafe.StringData(string(ContextFabricInterpretationRejectionShapeInvalid)) {
+		t.Skip("the compiler interned the runtime-built string; this test cannot distinguish the two here")
+	}
+
 	got := CanonicalContextFabricInterpretationRejectionReason(callerBuilt)
 	if got != ContextFabricInterpretationRejectionShapeInvalid {
 		t.Fatalf("got %q, want %q", got, ContextFabricInterpretationRejectionShapeInvalid)
 	}
-	gotHeader := reflect.ValueOf(&got).Elem().String()
-	if gotHeader != string(ContextFabricInterpretationRejectionShapeInvalid) {
-		t.Fatalf("returned value %q is not the table's constant", gotHeader)
+	if unsafe.StringData(string(got)) == unsafe.StringData(string(callerBuilt)) {
+		t.Fatalf("CanonicalContextFabricInterpretationRejectionReason returned the CALLER's string, not the table's constant -- a tainted value that merely passes the membership check would reach a log field verbatim")
 	}
 }
 
