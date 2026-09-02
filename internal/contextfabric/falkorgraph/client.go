@@ -550,6 +550,11 @@ var neutralClass = map[error]error{
 	errIndexNotFound:               contextfabric.ErrInvalidResult,
 	errConstraintBootstrapFailed:   contextfabric.ErrUnavailable,
 	errConstraintBootstrapTimedOut: contextfabric.ErrUnavailable,
+	// Returned straight from a projection batch rather than through
+	// classifyFalkorError, which is why keying the exhaustiveness guard on
+	// knownSentinels missed it -- see sentinel_population_test.go. Retryable:
+	// the checkpoint holds and the next tick tries again.
+	errVectorIndexNotReady: contextfabric.ErrUnavailable,
 	// Already classified in their own right by projectionrun.failureClasses
 	// and by the route; wrapping them further would blur cancellation into
 	// a dependency outage.

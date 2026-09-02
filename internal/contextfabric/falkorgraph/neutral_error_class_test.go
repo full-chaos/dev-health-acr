@@ -207,3 +207,36 @@ func TestRateLimitedSentinelReachesTheRateLimitedClass(t *testing.T) {
 		t.Fatalf("after safeDependencyError ClassifyFailure = %q, want %q", got, "dependency_rate_limited")
 	}
 }
+
+// TestVectorIndexNotReadyClassifiesAsRetryable covers the round-1 finding. The
+// vector index existing but not yet OPERATIONAL is a REPLAYABLE condition --
+// the batch fails, the checkpoint holds, the next tick retries once the index
+// settles (see the sentinel's own declaration). It is returned straight from a
+// projection batch, so it reaches projectionrun.classifyOutcomeError directly,
+// and before this it logged failure_class=unclassified: an operator watching an
+// org stall during a vector-index build was told the vocabulary was missing,
+// not that the backend was still catching up.
+func TestVectorIndexNotReadyClassifiesAsRetryable(t *testing.T) {
+	// Both real construction sites: the bare return and the wrapped one.
+	cases := map[string]error{
+		"bare":    errVectorIndexNotReady,
+		"wrapped": fmt.Errorf("%w: vector index did not become operational for key %q", errVectorIndexNotReady, "acr-cf-org"),
+	}
+	reached := 0
+	for name, err := range cases {
+		t.Run(name, func(t *testing.T) {
+			// The batch path wraps once more before the coordinator sees it.
+			asTickSees := fmt.Errorf("apply projection batch: %w", err)
+			if !errors.Is(asTickSees, errVectorIndexNotReady) {
+				t.Fatal("the sentinel no longer survives its own wrapping; the case is vacuous")
+			}
+			if got := projectionrun.ClassifyFailure(asTickSees); got != "dependency_unavailable" {
+				t.Fatalf("ClassifyFailure = %q, want %q", got, "dependency_unavailable")
+			}
+			reached++
+		})
+	}
+	if reached != len(cases) {
+		t.Fatalf("assertion reach: %d of %d cases reached their assertions", reached, len(cases))
+	}
+}

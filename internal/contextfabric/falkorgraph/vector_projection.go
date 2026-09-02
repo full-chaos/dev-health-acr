@@ -2,7 +2,6 @@ package falkorgraph
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -17,7 +16,16 @@ import (
 // reporting a status this adapter does not recognize). It is a REPLAYABLE
 // condition: the batch fails, the checkpoint holds, and the next tick tries
 // again once the index settles.
-var errVectorIndexNotReady = errors.New("context fabric vector index is not ready for embedding")
+//
+// CHAOS-4874: it is declared carrying contextfabric.ErrUnavailable, the neutral
+// class for a retryable dependency condition, because it is returned STRAIGHT
+// from a projection batch and so reaches projectionrun.classifyOutcomeError
+// with nothing else attached. Without the wrap an organization stalled behind a
+// building vector index logged failure_class=unclassified -- "the vocabulary
+// does not name this" -- when the honest answer is "the backend is still
+// catching up, the checkpoint is held, the next tick retries". See
+// neutralClass in client.go for the table this pairing is specified in.
+var errVectorIndexNotReady = fmt.Errorf("%w: context fabric vector index is not ready for embedding", contextfabric.ErrUnavailable)
 
 // embedTarget is one node whose search text needs a vector.
 type embedTarget struct {
