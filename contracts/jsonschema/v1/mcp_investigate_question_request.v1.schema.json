@@ -214,7 +214,7 @@
         },
         "max_serialized_bytes": {
           "type": "integer",
-          "minimum": 8192,
+          "minimum": 13606,
           "maximum": 1048576
         }
       }
@@ -458,7 +458,7 @@
       }
     },
     "RelativeWindowID": {
-      "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 \u00a75.1).",
+      "description": "CHAOS-3900 W1: the closed, server-owned relative-window identifier registry (design brief v5.2 §5.1).",
       "type": "string",
       "enum": [
         "trailing_30d",

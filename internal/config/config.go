@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
@@ -363,8 +364,14 @@ func (c Config) Validate() error {
 	if c.MaxOutputTokens < 500 || c.MaxOutputTokens > 16000 {
 		return errors.New("ACR_MAX_OUTPUT_TOKENS must be between 500 and 16000")
 	}
-	if c.MaxSerializedBytes < 8192 || c.MaxSerializedBytes > 1048576 {
-		return errors.New("ACR_MAX_SERIALIZED_BYTES must be between 8192 and 1048576")
+	// The floor is the CONSTANT, not a literal. It was a hand-written 8192 in
+	// two independent places (here and internal/api's NewApp), neither of
+	// which tracked the contract it was mirroring -- "a relation between two
+	// literals is not checkable; a relation between two constants is", which
+	// is this repository's own rule for exactly this shape.
+	if c.MaxSerializedBytes < contractsv1.ContextFabricMinimumAnswerBytes || c.MaxSerializedBytes > contractsv1.ContextFabricSerializedBytesMax {
+		return fmt.Errorf("ACR_MAX_SERIALIZED_BYTES must be between %d and %d: below the minimum no answer can be serialized at all, because the echoed question alone may be 8000 bytes",
+			contractsv1.ContextFabricMinimumAnswerBytes, contractsv1.ContextFabricSerializedBytesMax)
 	}
 	if c.RequestsPerMinute < 1 {
 		return errors.New("ACR_REQUESTS_PER_MINUTE must be positive")

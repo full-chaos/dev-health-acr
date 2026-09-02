@@ -13,8 +13,12 @@ const (
 	MCPInvestigationConversationMaxTurn = 50
 	MCPInvestigationReceiptsMaxCount    = 20
 	MCPInvestigationScopeMaxCount       = 200
-	MCPInvestigationBudgetMinBytes      = 8192
-	MCPInvestigationBudgetMaxBytes      = 1048576
+	// MCPInvestigationBudgetMinBytes tracks the hosted minimum rather than
+	// restating it. Left at 8192 it would accept a budget the hosted
+	// validator then rejects, so an MCP caller would get a generic downstream
+	// failure instead of the closed reason at the surface it is actually using.
+	MCPInvestigationBudgetMinBytes = ContextFabricMinimumAnswerBytes
+	MCPInvestigationBudgetMaxBytes = 1048576
 )
 
 // Validate checks the investigate_question tool input.

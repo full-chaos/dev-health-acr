@@ -261,7 +261,7 @@ func (o ContextFabricInvestigationOptions) Validate() error {
 		o.MaxRelationshipPaths < 1 || o.MaxRelationshipPaths > 250 ||
 		o.MaxDrivers < 1 || o.MaxDrivers > 50 ||
 		o.MaxEvidenceRefs < 1 || o.MaxEvidenceRefs > 500 ||
-		o.MaxSerializedBytes < ContextFabricSerializedBytesMin || o.MaxSerializedBytes > ContextFabricSerializedBytesMax {
+		o.MaxSerializedBytes < ContextFabricMinimumAnswerBytes || o.MaxSerializedBytes > ContextFabricSerializedBytesMax {
 		return fmt.Errorf("investigation options violate v1 bounds")
 	}
 	if !ValidContextFabricWindowConfirmationMode(o.WindowConfirmationMode) {

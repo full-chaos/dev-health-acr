@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -86,7 +87,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 	if cfg.MaxSerializedBytes == 0 {
 		cfg.MaxSerializedBytes = 1 << 20
 	}
-	if cfg.MaxRequestBodyBytes < 1 || cfg.MaxEvidenceResponseBytes < 1 || cfg.MaxItems < 1 || cfg.MaxItems > 50 || cfg.MaxOutputTokens < 500 || cfg.MaxOutputTokens > 16_000 || cfg.MaxSerializedBytes < 8_192 || cfg.MaxSerializedBytes > 1<<20 {
+	if cfg.MaxRequestBodyBytes < 1 || cfg.MaxEvidenceResponseBytes < 1 || cfg.MaxItems < 1 || cfg.MaxItems > 50 || cfg.MaxOutputTokens < 500 || cfg.MaxOutputTokens > 16_000 || cfg.MaxSerializedBytes < contractsv1.ContextFabricMinimumAnswerBytes || cfg.MaxSerializedBytes > contractsv1.ContextFabricSerializedBytesMax {
 		return nil, errors.New("hosted read limits are invalid")
 	}
 	if deps.Capabilities == nil {

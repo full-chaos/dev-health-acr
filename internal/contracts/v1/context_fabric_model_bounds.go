@@ -252,9 +252,8 @@ const (
 	// SAME total cell budget a single legacy table always could, never
 	// double it.
 	//
-	// CombinedContentBytesMax is ContextFabricSerializedBytesMin (8192,
-	// the smallest a caller may ever configure MaxSerializedBytes to)
-	// x 32 = 262,144 bytes: >=16x the largest fact ever produced against
+	// CombinedContentBytesMax is 262,144 bytes: >=16x the largest fact
+	// ever produced against
 	// real data (16,246 bytes, so no observed shape is at risk), while
 	// staying far below the 1 MiB response ceiling so ONE fact can never
 	// consume it alone. Measured against ClaimedFactRowContentBytes'
@@ -263,8 +262,18 @@ const (
 	// used (Postgres octet_length of the stored serialized JSON) -- not
 	// an approximation of raw string content, which a codex round proved
 	// defeatable (HTML-escaped characters inflate up to 6x on the wire).
+	//
+	// RE-ANCHORED (Y4): this was written as ContextFabricSerializedBytesMin * 32.
+	// That made a MODEL-AUTHORABLE output bound derive from an unrelated
+	// serving-budget floor -- so raising the serving minimum, which is exactly
+	// what the minimum-budget-pair work does, would have silently multiplied
+	// this bound and undone CHAOS-4785's defence inside a change whose stated
+	// purpose was to TIGHTEN a budget. The value is unchanged at 262,144; only
+	// its provenance is. A bound justified by a real-data measurement must be
+	// written as that measurement, not as arithmetic on a number that happens
+	// to divide into it. Encode provenance, not coincidence.
 	ContextFabricClaimedFactCombinedCellsMax        = ContextFabricClaimedFactMaxRows * ContextFabricClaimedFactRowMaxFields
-	ContextFabricClaimedFactCombinedContentBytesMax = ContextFabricSerializedBytesMin * 32
+	ContextFabricClaimedFactCombinedContentBytesMax = 262144
 
 	// Synthesis: top-level synthesis draft / result collections the model
 	// itself populates.
