@@ -164,6 +164,33 @@ overlay) are out of scope: neither runs in GitHub Actions CI, and per the
 Context Fabric lane brief, Compose is not the supported way to run acr or
 Ask Dev locally any more.
 
+### Adding or re-pinning a mirrored image: the bootstrap race
+
+`.github/workflows/mirror-images.yml` and `ci.yml` are independent
+workflows triggered by the same push, with no cross-workflow `needs` (GitHub
+Actions has none). If a change adds a new image to `scripts/ci/resolve-
+mirrored-images.sh`'s list or re-pins an existing one to a digest the mirror
+has never published, the FIRST push carrying that change races: `ci.yml`'s
+jobs can reach their pull before `mirror-images.yml`'s push lands, and every
+one of them fails `manifest unknown` at once (this happened on CHAOS-4855's
+own introducing PR -- six jobs, one root cause).
+
+`ci.yml`'s `mirror-preflight` job (which every image-pulling job `needs`)
+turns that race into ONE named failure instead of six: it resolves every
+entry from `resolve-mirrored-images.sh` against ghcr before anything else
+runs, and fails with `MISSING <image> -- run "Mirror images" (workflow_dispatch)
+and wait for it to complete, then re-run this job` naming exactly what is not
+there yet. It does not eliminate the race, only makes it legible. **The
+fix, when `mirror-preflight` fails this way:** manually dispatch `Mirror
+images` (Actions tab or `gh workflow run mirror-images.yml`), wait for it to
+complete, then re-run the failed `ci` jobs on the same commit -- do not
+push again, and do not treat the failure as a defect in the change itself
+unless `Mirror images` also fails (in which case see that workflow's own
+run log; a `403 permission_denied: write_package` there means something
+tried to write into a package acr's token cannot write to -- see this
+document's own mirror-namespace note above for why that happens and how it
+was fixed for CHAOS-4855's own introducing set).
+
 ## Build context and verification
 
 Local builds that select the canonical `Dockerfile` use

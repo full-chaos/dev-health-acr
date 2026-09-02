@@ -118,81 +118,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # One line per image: "<upstream ref>\t<dest tag>". The dest tag is
-      # `mirror-<sha12>` for every digest-pinned ref (tag is never looked up
-      # for those -- see the file header) and the literal upstream tag for
-      # clickhouse and ryuk, which have none.
-      #
-      # Sourced from the same files the consumers read (Dockerfile,
-      # chfixture.go, scan.sh, verify.sh) rather than restated as bare
-      # strings, so this list cannot silently drift from what CI actually
-      # pulls -- the extraction fails closed (`|| die`) if any pattern stops
-      # matching. ryuk_ref is the one deliberate exception (see its own
-      # comment below): it is restated because testcontainers-go's reaper
-      # default is not declared anywhere in this repo's source.
+      # scripts/ci/resolve-mirrored-images.sh is the single source of truth
+      # for this list -- also read by ci.yml's mirror-preflight job, so the
+      # two cannot silently drift apart. See that script's own header for the
+      # full reasoning (sourced from Dockerfile/chfixture.go/scan.sh/
+      # verify.sh/ci.yml, fails closed if any pattern stops matching).
       - name: Resolve every image acr CI pulls from Docker Hub
         id: images
         run: |
           set -euo pipefail
-          die() { printf '::error::%s\n' "$*" >&2; exit 1; }
-
-          golang_ref="$(grep -oE 'golang:[^[:space:]]+@sha256:[0-9a-f]{64}' Dockerfile | head -n1)" \
-            || die "could not resolve the golang base image from Dockerfile"
-          clickhouse_ref="$(grep -oE 'const Image = "clickhouse/clickhouse-server:[^"]+"' internal/chfixture/chfixture.go \
-            | sed -E 's/.*"(.*)"/\1/')"
-          [ -n "$clickhouse_ref" ] || die "could not resolve ClickHouseImage from internal/chfixture/chfixture.go"
-          trivy_ref="$(grep -oE "aquasec/trivy:[^\"']+@sha256:[0-9a-f]{64}" scripts/container/scan.sh | head -n1)" \
-            || die "could not resolve the trivy image from scripts/container/scan.sh"
-          syft_ref="$(grep -oE "anchore/syft:[^\"']+@sha256:[0-9a-f]{64}" scripts/container/scan.sh | head -n1)" \
-            || die "could not resolve the syft image from scripts/container/scan.sh"
-          postgres_ref="$(grep -oE 'postgres:[^[:space:]"]+@sha256:[0-9a-f]{64}' scripts/container/verify.sh | head -n1)" \
-            || die "could not resolve the postgres image from scripts/container/verify.sh"
-          binfmt_ref="$(grep -oE 'tonistiigi/binfmt:[^[:space:]]+@sha256:[0-9a-f]{64}' .github/workflows/ci.yml | head -n1)" \
-            || die "could not resolve the tonistiigi/binfmt image from ci.yml"
-          buildkit_ref="$(grep -oE 'moby/buildkit:[^[:space:]]+@sha256:[0-9a-f]{64}' .github/workflows/ci.yml | head -n1)" \
-            || die "could not resolve the moby/buildkit image from ci.yml"
-          # falkordb has no chfixture-style single constant (CHAOS-4855 PR
-          # body: six call sites all pin the same digest); read the first one
-          # and let the digest-agreement contract test
-          # (scripts/ci/test-workflow-contract.sh) keep the rest honest.
-          falkordb_ref="$(grep -rhoE 'falkordb/falkordb@sha256:[0-9a-f]{64}' \
-            cmd/acr-projector internal/contextfabric/falkorgraph deploy/compose | sort -u | head -n1)" \
-            || die "could not resolve the falkordb image from any test/compose source"
-          # testcontainers-go's own hardcoded reaper default (internal/config.
-          # ReaperDefaultImage in the pinned module version) -- not declared
-          # anywhere in this repo's source, so it is restated here rather than
-          # extracted. ops already mirrors this exact tag, but only under its
-          # OWN repo's ghcr path (see the file header): this workflow writes
-          # its own copy under acr's path since TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX
-          # is one prefix applied uniformly to every testcontainers pull,
-          # postgres/clickhouse/falkordb included, so it cannot resolve the
-          # reaper from a different namespace than the rest.
-          ryuk_ref='testcontainers/ryuk:0.14.0'
-
-          # dest_tag prints "mirror-<first-12-of-the-sha256>" for a
-          # digest-pinned ref, or the bare upstream tag if there is no
-          # digest (clickhouse only -- see the file header for why that one
-          # case cannot use a synthetic tag).
-          dest_tag() {
-            case "$1" in
-              *@sha256:*) printf 'mirror-%s\n' "${1##*sha256:}" | cut -c1-19 ;;
-              *:*) printf '%s\n' "${1##*:}" ;;
-              *) die "image has neither a digest nor a tag: $1" ;;
-            esac
-          }
-
-          {
-            printf '%s\t%s\n' "$golang_ref" "$(dest_tag "$golang_ref")"
-            printf '%s\t%s\n' "$clickhouse_ref" "$(dest_tag "$clickhouse_ref")"
-            printf '%s\t%s\n' "$trivy_ref" "$(dest_tag "$trivy_ref")"
-            printf '%s\t%s\n' "$syft_ref" "$(dest_tag "$syft_ref")"
-            printf '%s\t%s\n' "$postgres_ref" "$(dest_tag "$postgres_ref")"
-            printf '%s\t%s\n' "$binfmt_ref" "$(dest_tag "$binfmt_ref")"
-            printf '%s\t%s\n' "$buildkit_ref" "$(dest_tag "$buildkit_ref")"
-            printf '%s\t%s\n' "$falkordb_ref" "$(dest_tag "$falkordb_ref")"
-            printf '%s\t%s\n' "$ryuk_ref" "$(dest_tag "$ryuk_ref")"
-          } > images.tsv
-
+          bash scripts/ci/resolve-mirrored-images.sh > images.tsv
           echo "--- images to mirror (upstream ref / dest tag) ---"
           cat images.tsv
 

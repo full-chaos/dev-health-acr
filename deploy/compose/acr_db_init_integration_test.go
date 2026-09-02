@@ -94,7 +94,11 @@ func bootstrapACRDBInit(t *testing.T) acrDBInitHarness {
 	requirePostgresClientTools(t)
 	ctx := context.Background()
 
-	container, err := tcpostgres.Run(ctx, "postgres:18-alpine",
+	// CHAOS-4855: pinned by digest (was a bare tag) so
+	// TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the ghcr.io
+	// mirror by digest, same as every other postgres:18-alpine pull in
+	// this module.
+	container, err := tcpostgres.Run(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
 		tcpostgres.WithUsername("postgres"), tcpostgres.WithPassword("postgres"), tcpostgres.WithDatabase("postgres"),
 		tcpostgres.BasicWaitStrategies(),
 	)

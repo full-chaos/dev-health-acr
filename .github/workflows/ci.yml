@@ -18,6 +18,57 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # CHAOS-4855 R2: ci.yml and mirror-images.yml are independent workflows
+  # triggered by the SAME push, with no cross-workflow `needs` (GitHub
+  # Actions has none). The introducing PR hit this directly: mirror-images.yml
+  # was still pushing acr's newly-mirrored images when this workflow's `unit`
+  # job reached its first testcontainers pull, which failed `manifest
+  # unknown` -- and five other jobs failed the identical way in the same run,
+  # reading as six unrelated defects instead of one race.
+  #
+  # This job runs FIRST and resolves every mirrored image's manifest (read
+  # only, no push) before any job that pulls one is allowed to start, so that
+  # exact race now fails as ONE named error here ("run Mirror images first")
+  # instead of scattering across every consuming job. It does not eliminate
+  # the race -- mirror-images.yml still runs on its own schedule independent
+  # of this workflow -- it makes the failure legible and immediate rather
+  # than nine confusing ones.
+  mirror-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # docker/login-action v4.5.1. Read-only use here (imagetools inspect),
+      # but the mirrored packages' visibility is not guaranteed public, so
+      # this authenticates the same way every pulling job below does.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify every mirrored image is resolvable before any job pulls one
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          missing=0
+          while IFS=$'\t' read -r image dest_tag; do
+            [ -n "$image" ] || continue
+            repo="${image%%@*}"
+            repo="${repo%%:*}"
+            dest="ghcr.io/${REPO}/${repo}:${dest_tag}"
+            if docker buildx imagetools inspect "$dest" >/dev/null 2>&1; then
+              printf 'OK      %-40s -> %s\n' "$image" "$dest"
+            else
+              printf '::error::MISSING %-40s -> %s -- run "Mirror images" (workflow_dispatch) and wait for it to complete, then re-run this job\n' \
+                "$image" "$dest"
+              missing=1
+            fi
+          done < <(bash scripts/ci/resolve-mirrored-images.sh)
+          exit "$missing"
+
   scripts:
     runs-on: ubuntu-latest
     steps:
@@ -117,6 +168,7 @@ jobs:
 
   unit:
     runs-on: ubuntu-latest
+    needs: mirror-preflight
     env:
       # CHAOS-4855: redirect every registry-less Docker Hub pull this suite
       # makes (postgres, clickhouse, falkordb, and testcontainers-go's own
@@ -228,6 +280,7 @@ jobs:
           retention-days: 90
 
   race:
+    needs: mirror-preflight
     strategy:
       fail-fast: false
       matrix:
@@ -336,6 +389,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    needs: mirror-preflight
     env:
       # CHAOS-4855: `make hosted-integration` below sets ACR_HOSTED_INTEGRATION=1,
       # which starts real postgres/clickhouse testcontainers fixtures
@@ -535,6 +589,7 @@ jobs:
 
   container-contract-smoke:
     runs-on: ubuntu-24.04
+    needs: mirror-preflight
     env:
       # CHAOS-4855: golang (Dockerfile), tonistiigi/binfmt, moby/buildkit,
       # aquasec/trivy, anchore/syft, and the verify.sh postgres probe all
@@ -611,6 +666,7 @@ jobs:
 
   container-reproducible:
     runs-on: ubuntu-24.04
+    needs: mirror-preflight
     env:
       # CHAOS-4855: see container-contract-smoke above.
       # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
@@ -675,6 +731,7 @@ jobs:
 
   container-oci-scan:
     runs-on: ubuntu-24.04
+    needs: mirror-preflight
     env:
       # CHAOS-4855: see container-contract-smoke above.
       # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
@@ -777,6 +834,7 @@ jobs:
     # every job is listed here, so adding a lane cannot silently escape it.
     if: always()
     needs:
+      - mirror-preflight
       - scripts
       - lint
       - unit
