@@ -87,13 +87,37 @@ check_literal() {
   esac
 }
 
-# (a) tcpostgres.Run(ctx, "<image>", ...)
+# (a) tcpostgres.Run(<any first-arg expression>, "<image>" | <identifier>, ...)
+# CHAOS-4855 R4 (codex round 2): the earlier pattern hardcoded the literal
+# variable name "ctx" and a literal string as the SECOND argument -- a call
+# spelled tcpostgres.Run(context.Background(), barePostgres) (a different
+# context expression, an identifier instead of an inline literal) matched
+# neither this pattern nor pattern (c) below (which only looks at `Image:`
+# struct fields, not tcpostgres.Run's positional args) and was invisible to
+# the gate entirely. Executed: injecting exactly that call into a scratch
+# file left the gate green. Fixed by matching any first-argument expression
+# with no embedded comma, then trying a literal extraction first and an
+# identifier resolution second.
 while IFS=: read -r file line rest; do
   [ -n "$file" ] || continue
-  image="$(printf '%s' "$rest" | sed -E 's/.*tcpostgres\.Run\(ctx, "([^"]+)".*/\1/')"
-  [ -n "$image" ] || { offenders+=("${file}:${line}: could not extract the image literal from a tcpostgres.Run(ctx, ...) call -- investigate manually"); continue; }
-  check_literal "$file" "$line" "$image"
-done < <(git grep -nE 'tcpostgres\.Run\(ctx, "' -- '*.go')
+  image="$(printf '%s' "$rest" | sed -E 's/.*tcpostgres\.Run\([^,]+,[[:space:]]*"([^"]+)".*/\1/')"
+  if [ -n "$image" ] && [ "$image" != "$rest" ]; then
+    check_literal "$file" "$line" "$image"
+    continue
+  fi
+  ident="$(printf '%s' "$rest" | sed -E 's/.*tcpostgres\.Run\([^,]+,[[:space:]]*([A-Za-z_][A-Za-z0-9_.]*)[,)].*/\1/')"
+  if [ -n "$ident" ] && [ "$ident" != "$rest" ]; then
+    dir="$(dirname "$file")"
+    value="$(resolve_identifier "$dir" "$ident")"
+    if [ -z "$value" ]; then
+      offenders+=("${file}:${line}: could not resolve identifier \"${ident}\" passed to tcpostgres.Run to a const/var string in ${dir} -- investigate manually")
+      continue
+    fi
+    check_literal "$file" "$line" "$value"
+    continue
+  fi
+  offenders+=("${file}:${line}: could not extract the image argument from a tcpostgres.Run(...) call -- investigate manually (a new call shape this gate does not recognise is exactly what it exists to catch)")
+done < <(git grep -nE 'tcpostgres\.Run\(' -- '*.go')
 
 # (b) Image: "<image>" -- direct string literal
 while IFS=: read -r file line rest; do

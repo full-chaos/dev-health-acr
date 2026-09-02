@@ -49,25 +49,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify every mirrored image is resolvable before any job pulls one
-        env:
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          missing=0
-          while IFS=$'\t' read -r image dest_tag; do
-            [ -n "$image" ] || continue
-            repo="${image%%@*}"
-            repo="${repo%%:*}"
-            dest="ghcr.io/${REPO}/${repo}:${dest_tag}"
-            if docker buildx imagetools inspect "$dest" >/dev/null 2>&1; then
-              printf 'OK      %-40s -> %s\n' "$image" "$dest"
-            else
-              printf '::error::MISSING %-40s -> %s -- run "Mirror images" (workflow_dispatch) and wait for it to complete, then re-run this job\n' \
-                "$image" "$dest"
-              missing=1
-            fi
-          done < <(bash scripts/ci/resolve-mirrored-images.sh)
-          exit "$missing"
+        run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
 
   scripts:
     runs-on: ubuntu-latest

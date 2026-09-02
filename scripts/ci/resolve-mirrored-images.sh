@@ -34,6 +34,14 @@ die() { printf '::error::%s\n' "$*" >&2; exit 1; }
 
 golang_ref="$(grep -oE 'golang:[^[:space:]]+@sha256:[0-9a-f]{64}' Dockerfile | head -n1)" \
   || die "could not resolve the golang base image from Dockerfile"
+# CHAOS-4855 R4 (codex round 2, executed): the "# syntax=" parser directive
+# is a SEPARATE Docker Hub pull from the golang FROM line above -- BuildKit
+# fetches it before Dockerfile parsing starts, and it was invisible to this
+# list and to mirror-preflight entirely until this round found it. See
+# scripts/container/build.sh's BUILDKIT_SYNTAX comment for how it is
+# actually redirected (ARG substitution does not reach a parser directive).
+syntax_ref="$(grep -oE '^# syntax=docker/dockerfile:[^[:space:]]+@sha256:[0-9a-f]{64}$' Dockerfile | sed -E 's/^# syntax=//')" \
+  || die "could not resolve the # syntax= directive from Dockerfile"
 clickhouse_ref="$(grep -oE 'const Image = "clickhouse/clickhouse-server:[^"]+"' internal/chfixture/chfixture.go \
   | sed -E 's/.*"(.*)"/\1/')"
 [ -n "$clickhouse_ref" ] || die "could not resolve ClickHouseImage from internal/chfixture/chfixture.go"
@@ -74,7 +82,7 @@ dest_tag() {
 }
 
 for image in \
-  "$golang_ref" "$clickhouse_ref" "$trivy_ref" "$syft_ref" "$postgres_ref" \
+  "$golang_ref" "$syntax_ref" "$clickhouse_ref" "$trivy_ref" "$syft_ref" "$postgres_ref" \
   "$pgbouncer_ref" "$binfmt_ref" "$buildkit_ref" "$falkordb_ref" "$ryuk_ref"; do
   printf '%s\t%s\n' "$image" "$(dest_tag "$image")"
 done

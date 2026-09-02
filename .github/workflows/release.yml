@@ -127,9 +127,47 @@ jobs:
             printf 'date=%s\n' "$(date -u -d "$(git show -s --format=%cI "$commit")" +'%Y-%m-%dT%H:%M:%SZ')"
           } >> "$GITHUB_OUTPUT"
 
-  build:
-    needs: preflight
+  # CHAOS-4855 R4 (codex round 2): Release and Mirror images both trigger on
+  # the same `push`, with no cross-workflow `needs` (GitHub Actions has
+  # none) -- the same bootstrap race ci.yml's own mirror-preflight job
+  # exists to catch. This is release's copy of that job; both read the same
+  # scripts/ci/verify-mirrored-images.sh so the two workflows cannot
+  # silently diverge on what "the mirror is ready" means.
+  mirror-preflight:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # docker/login-action v4.5.1. No Docker Hub credentials exist in this
+      # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
+      # GITHUB_TOKEN already has read access to.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify every mirrored image is resolvable before any job pulls one
+        run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
+
+  build:
+    needs: [preflight, mirror-preflight]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # CHAOS-4855 R4 (codex round 2, executed): `make verify` below runs
+      # `go test ./...` (via test-race-split), and this module's
+      # testcontainers-backed tests carry no build tag or skip guard --
+      # release's own build job was pulling postgres/clickhouse/falkordb/
+      # pgbouncer/ryuk from Docker Hub anonymously, unmirrored, same as
+      # ci.yml's unit/race/build jobs before they were fixed.
+      packages: read
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -142,6 +180,15 @@ jobs:
           go-version: "1.27.0"
           check-latest: false
           cache: false
+      # docker/login-action v4.5.1. No Docker Hub credentials exist in this
+      # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
+      # GITHUB_TOKEN already has read access to.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify source and dependencies
         run: |
           set -euo pipefail
@@ -190,7 +237,11 @@ jobs:
         with: {name: binary-release, path: release/, if-no-files-found: error, retention-days: 7}
 
   container:
-    needs: preflight
+    # CHAOS-4855 R4 (codex round 2): mirror-preflight closes the same
+    # bootstrap race here that ci.yml's own mirror-preflight closes for the
+    # ci workflow -- Release and Mirror images both trigger on the same
+    # `push`, with no cross-workflow `needs`.
+    needs: [preflight, mirror-preflight]
     runs-on: ubuntu-24.04
     permissions:
       contents: read

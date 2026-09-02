@@ -78,6 +78,14 @@ name: Mirror images
       - internal/chfixture/chfixture.go
       - scripts/container/scan.sh
       - scripts/container/verify.sh
+      # CHAOS-4855 R4 (codex round 2, executed): this is the actual inventory
+      # source of truth -- omitting it here meant an edit to ONLY this file
+      # (e.g. adding a new image) never triggered a mirror run, while
+      # ci.yml's mirror-preflight (which also reads it) would immediately
+      # expect the new image to already exist. Every prior edit to this file
+      # happened to land in the same commit as a change to an already-listed
+      # path, which is exactly why this went unnoticed.
+      - scripts/ci/resolve-mirrored-images.sh
       - .github/workflows/mirror-images.yml
       - .github/workflows/ci.yml
       - .github/workflows/release.yml
@@ -87,6 +95,7 @@ name: Mirror images
       - internal/chfixture/chfixture.go
       - scripts/container/scan.sh
       - scripts/container/verify.sh
+      - scripts/ci/resolve-mirrored-images.sh
       - .github/workflows/mirror-images.yml
       - .github/workflows/ci.yml
       - .github/workflows/release.yml
