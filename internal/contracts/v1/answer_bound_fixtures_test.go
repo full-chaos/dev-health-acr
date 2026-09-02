@@ -151,9 +151,13 @@ func answerBoundTable() []answerBound {
 			PastMax: func(r *ContextFabricInvestigationResult) {
 				r.ClaimedFacts = repeatClaimedFacts(ContextFabricClaimedFactsMaxCount + 1)
 			}},
-		{Field: "Paths", Why: "relationship paths; excluded from the item budget by the 4523 rule but present in the document",
+		{Field: "Paths", Why: "must be NON-NIL and 0..250; each path 2..51 unique nodes with WhyRelevant at 2000 runes and 200 evidence refs. COUPLED: len(Edges) must equal len(Nodes)-1 AND edge i must run exactly Nodes[i]->Nodes[i+1], so the edge list is determined by the nodes, not independently maximizable. Excluded from the ITEM budget by the 4523 rule, but it is bytes on the wire",
 			Min: func(r *ContextFabricInvestigationResult) { r.Paths = []ContextFabricRelationshipPath{} },
-			Max: func(r *ContextFabricInvestigationResult) { r.Paths = []ContextFabricRelationshipPath{} }},
+			Max: func(r *ContextFabricInvestigationResult) { r.Paths = maximalPaths() },
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				paths := maximalPaths()
+				r.Paths = append(paths, maximalPath(pathsMaxCount))
+			}},
 		{Field: "EvidenceRefIDs", Why: "ContextFabricEvidenceRefIDsMaxCount ids of ContextFabricEvidenceRefIDMaxLength runes",
 			Min: func(r *ContextFabricInvestigationResult) { r.EvidenceRefIDs = []string{} },
 			Max: func(r *ContextFabricInvestigationResult) {
@@ -197,31 +201,66 @@ func answerBoundTable() []answerBound {
 			Min:     func(r *ContextFabricInvestigationResult) { r.AnswerPlan = nil },
 			Max:     func(r *ContextFabricInvestigationResult) { r.AnswerPlan = maximalPlan() },
 			PastMax: func(r *ContextFabricInvestigationResult) { r.AnswerPlan = pastMaxPlan() }},
-		{Field: "Cohort", Why: "optional pointer; absent is the byte minimum",
+		{Field: "Cohort", Why: "optional pointer; absent is the byte minimum. Kind must be team or project, Members non-nil and 0..250, Rationale 1..4000, and Complete/Truncated are mutually exclusive. COUPLED: a member with RankingComputed false must carry NO ranking fields at all, so the ranked member variant is a different shape -- see maximalCohortMember; this max is a lower bound on a ranked cohort",
 			Min: func(r *ContextFabricInvestigationResult) { r.Cohort = nil },
-			Max: func(r *ContextFabricInvestigationResult) { r.Cohort = nil }},
-		{Field: "EvidenceRefLabels", Why: "optional map, composed after synthesis; absent is the byte minimum",
+			Max: func(r *ContextFabricInvestigationResult) { r.Cohort = maximalCohort() },
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				c := maximalCohort()
+				c.Members = append(c.Members, maximalCohortMember(cohortMembersMaxCount))
+				r.Cohort = c
+			}},
+		{Field: "EvidenceRefLabels", Why: "DERIVED, like Completeness: the map must hold exactly one entry per member of the result's own evidence-ref closure, each label trimmed and 1..ContextFabricCoverageDetailLabelMaxLength. It is therefore applied in the second pass, once every evidence ref on the document is final",
 			Min: func(r *ContextFabricInvestigationResult) { r.EvidenceRefLabels = nil },
-			Max: func(r *ContextFabricInvestigationResult) { r.EvidenceRefLabels = nil }},
-		{Field: "Temporal", Why: "optional pointer",
-			Min: func(r *ContextFabricInvestigationResult) { r.Temporal = nil },
-			Max: func(r *ContextFabricInvestigationResult) { r.Temporal = nil }},
-		{Field: "EffectiveEvidenceWindow", Why: "optional pointer",
+			Max: func(r *ContextFabricInvestigationResult) {
+				deriveEvidenceRefLabels(r, escaped(ContextFabricCoverageDetailLabelMaxLength))
+			},
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				deriveEvidenceRefLabels(r, escaped(ContextFabricCoverageDetailLabelMaxLength))
+				r.EvidenceRefLabels["cf_not_on_this_result"] = "x"
+			}},
+		{Field: "Temporal", Why: "MUTUALLY EXCLUSIVE with EffectiveEvidenceWindow, which is the real finding here: a temporal label is legal ONLY on a non-current axis, and an effective evidence window is legal ONLY on the current axis, so no valid document can carry both. The maximal interprets on the current axis and therefore cannot carry a temporal label at all -- structurally unreachable, not merely omitted. The PastMax proof is the coupling itself: attaching a label on the current axis rejects",
+			Min:     func(r *ContextFabricInvestigationResult) { r.Temporal = nil },
+			Max:     func(r *ContextFabricInvestigationResult) { r.Temporal = nil },
+			PastMax: func(r *ContextFabricInvestigationResult) { r.Temporal = maximalTemporal(r.Interpretation.TimeContext) }},
+		{Field: "EffectiveEvidenceWindow", Why: "optional pointer, legal ONLY on the current time axis -- the mirror of Temporal's rule, and the reason the two can never appear on the same document. COUPLED: the all_time sentinel must NOT carry explicit bounds, so the widest option uses a non-all_time relative id",
 			Min: func(r *ContextFabricInvestigationResult) { r.EffectiveEvidenceWindow = nil },
-			Max: func(r *ContextFabricInvestigationResult) { r.EffectiveEvidenceWindow = nil }},
-		{Field: "WindowClarification", Why: "optional pointer",
+			Max: func(r *ContextFabricInvestigationResult) { r.EffectiveEvidenceWindow = maximalEffectiveWindow() },
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				w := maximalEffectiveWindow()
+				w.RelativeID = ContextFabricRelativeWindowAllTime
+				r.EffectiveEvidenceWindow = w
+			}},
+		{Field: "WindowClarification", Why: "optional pointer, but a PRESENT one may not be empty: options are 1..contextFabricWindowClarificationMaxOptions, receipt ids must carry the winr_ namespace prefix, and both receipt and option ids are unique within the result",
 			Min: func(r *ContextFabricInvestigationResult) { r.WindowClarification = nil },
-			Max: func(r *ContextFabricInvestigationResult) { r.WindowClarification = nil }},
-		{Field: "StructureNeeds", Why: "optional pointer",
+			Max: func(r *ContextFabricInvestigationResult) { r.WindowClarification = maximalWindowClarification() },
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				c := maximalWindowClarification()
+				c.Options = append(c.Options, c.Options[0])
+				r.WindowClarification = c
+			}},
+		{Field: "StructureNeeds", Why: "optional pointer, but a PRESENT one must name at least one missing member: Missing is 1..ContextFabricStructureNeedKindCount and unique. Each of the six offer lists is capped at contextFabricStructureNeedsMaxOptions, and receipt/option ids must be unique ACROSS every list, not merely within one",
 			Min: func(r *ContextFabricInvestigationResult) { r.StructureNeeds = nil },
-			Max: func(r *ContextFabricInvestigationResult) { r.StructureNeeds = nil }},
-		{Field: "ConfirmedStructure", Why: "optional slice; absent is the byte minimum",
+			Max: func(r *ContextFabricInvestigationResult) { r.StructureNeeds = maximalStructureNeeds() },
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				n := maximalStructureNeeds()
+				n.KindOptions = append(n.KindOptions, n.KindOptions[0])
+				r.StructureNeeds = n
+			}},
+		{Field: "ConfirmedStructure", Why: "0..ContextFabricStructureNeedKindCount with ONE entry per member -- the closed need-kind vocabulary caps this list, not a separate count. COUPLED: only source=receipt carries both a prior result id and a receipt id (carried forbids the receipt, every other source forbids both), so receipt is the widest legal entry",
 			Min: func(r *ContextFabricInvestigationResult) { r.ConfirmedStructure = nil },
-			Max: func(r *ContextFabricInvestigationResult) { r.ConfirmedStructure = nil }},
-		{Field: "StructureOfferSnapshot", Why: "optional slice",
+			Max: func(r *ContextFabricInvestigationResult) { r.ConfirmedStructure = maximalConfirmedStructure() },
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				entries := maximalConfirmedStructure()
+				r.ConfirmedStructure = append(entries, entries[0])
+			}},
+		{Field: "StructureOfferSnapshot", Why: "bounded PER MEMBER rather than by a flat cap: ContextFabricStructureNeedKindCount times each member's own mint-time offer cap (contextFabricStructureNeedsMaxOptions)",
 			Min: func(r *ContextFabricInvestigationResult) { r.StructureOfferSnapshot = nil },
-			Max: func(r *ContextFabricInvestigationResult) { r.StructureOfferSnapshot = nil }},
-		{Field: "RenderShapes", Why: "optional slice, authorized by the plan",
+			Max: func(r *ContextFabricInvestigationResult) { r.StructureOfferSnapshot = maximalOfferSnapshot() },
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				entries := maximalOfferSnapshot()
+				r.StructureOfferSnapshot = append(entries, entries[0])
+			}},
+		{Field: "RenderShapes", Why: "STRUCTURALLY UNREACHABLE on this document. Every number a render shape plots must resolve, inside the SAME result, to a cohort member score, a driver weight, or a claimed-fact row cell (validateRenderShapes, CHAOS-4415). The maximal cohort is unranked, so no member carries a Score, and its claimed facts carry no Rows -- so the document offers nothing plottable and the empty list is the only valid value. A shape here would fail on its unresolvable point, not on a count bound",
 			Min: func(r *ContextFabricInvestigationResult) { r.RenderShapes = nil },
 			Max: func(r *ContextFabricInvestigationResult) { r.RenderShapes = nil }},
 	}
@@ -293,7 +332,7 @@ func buildFromTable(t *testing.T, pick func(answerBound) func(*ContextFabricInve
 	// pass, once every other field is final. It stays IN the table (and so
 	// stays covered by the field guard); only its timing is special.
 	for _, b := range table {
-		if b.Field == completenessField {
+		if isDerivedField(b.Field) {
 			pick(b)(&r)
 		}
 	}
@@ -347,7 +386,13 @@ func TestEveryBoundIsBreachable(t *testing.T) {
 	}
 }
 
-const completenessField = "Completeness"
+// Two fields are DERIVED rather than bounded: each is a function of the rest
+// of the finished document, so neither can be built in table order. They stay
+// in the table (and so stay covered by the field guard); only their timing
+// differs.
+func isDerivedField(field string) bool {
+	return field == "Completeness" || field == "EvidenceRefLabels"
+}
 
 // deriveCompleteness recomputes the census from the document itself, matching
 // validateCompleteness exactly: the status, the terminal reason the document's
