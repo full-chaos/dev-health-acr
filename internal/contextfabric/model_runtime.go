@@ -1382,6 +1382,22 @@ func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal sto
 		if validateErr := question.Validate(); validateErr != nil {
 			receipt.Outcome = "invalid_output"
 			err = ClassifyInterpretationRejection(question, validateErr)
+			// The reason rides the RECEIPT here too, not only the error.
+			// This adapter builds and mutates its OWN receipt and then
+			// persists it below, so leaving the field empty meant a
+			// rejection whose error named the rule was recorded durably
+			// with nothing naming it -- the same artifact/error
+			// disagreement the two genkitruntime rejection paths already
+			// close, at a third site that a sweep scoped to
+			// "functions that canonicalize" did not reach.
+			//
+			// This is the DEFENSIVE re-validation path: it fires only for
+			// a ModelRuntime that returns an invalid question with a nil
+			// error, which no production implementation does today. That
+			// makes it unreachable in practice, not exempt -- an
+			// unguarded surface is a surface, and reachability is exactly
+			// the case-by-case argument the sweep exists to stop having.
+			receipt.InterpretationRejectionReason = InterpretationRejectionReasonOf(err)
 		} else if receipt.Outcome == "pending_validation" {
 			receipt.Outcome = "success"
 		}
