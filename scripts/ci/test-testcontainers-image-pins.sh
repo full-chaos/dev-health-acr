@@ -27,14 +27,42 @@ set -euo pipefail
 #
 # Three reference shapes are enumerated, matching every shape found in this
 # module today:
-#   (a) tcpostgres.Run(ctx, "<image>", ...)               -- direct literal
+#   (a) (tcpostgres|testcontainers).Run(<any-expr>, "<image>"|<identifier>, ...)
 #   (b) Image: "<image>"                                  -- direct literal
 #   (c) Image: <identifier>                               -- resolved via a
-#       `const/var <identifier> = "<image>"` declaration somewhere in the
-#       same package directory
+#       `const/var <identifier> = "<image>"` declaration, or a bare
+#       `identifier = "<image>"` line inside a `const (...)`/`var (...)`
+#       block, in the same file (preferred) or the same package directory
 # A reference this script cannot resolve to a literal string FAILS CLOSED
 # (reported as unresolved, not silently skipped) -- an unrecognised shape is
 # exactly the case a mirror-list edit could miss.
+#
+# ENFORCED vs REPORTED (CHAOS-4855 R6 ruling, main): this is a hand-built
+# `git grep` pattern matcher, not a Go-aware scope/type resolver, and four
+# consecutive rounds each found a new evasion of the previous round's fix
+# (R5's shadowing fix itself still missed a grouped const block; a second,
+# differently-named Run function; a same-digest-different-repo-path
+# mismatch). That is a signal about the APPROACH, not a bug to keep
+# patching: a rebuild on go/ast + go/packages (every call to a
+# testcontainers Run function found by TYPE, not by name string; the image
+# argument resolved through Go's actual constant/scope semantics, not text
+# proximity) is tracked as its own follow-up and will retire this file.
+# Until then, this script is a BOUNDED guard, not a proof of exhaustive
+# coverage:
+#   ENFORCED (this script asserts on these, today): the three call/
+#   declaration shapes above, wherever `git grep` finds them verbatim in a
+#   TRACKED .go file.
+#   REPORTED, not enforced (a defect here is invisible to this script,
+#   full stop -- no failure-closed path catches these): an image reference
+#   built at runtime (string concatenation, `fmt.Sprintf`, a value read
+#   from a config/env/flag); a testcontainers Run call reached through an
+#   import alias other than `tcpostgres`/`testcontainers` (e.g.
+#   `pg "…/modules/postgres"`); a const/var declared via `iota`, a type
+#   conversion, or any non-string-literal RHS; a reference inside a
+#   generated file; anything this script's own extraction `sed`/`awk`
+#   cannot parse and is not already listed above as an offender (a defect
+#   in the EXTRACTION regex itself, as three of round 4's four findings
+#   were, is by definition not self-detecting).
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
