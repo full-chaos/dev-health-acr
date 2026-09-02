@@ -159,6 +159,18 @@ const (
 	// obligation for this subject kind, but the obligation demands a table
 	// shape it does not declare there.
 	RequirementReasonTableShapeUndeclared RequirementUnavailableReason = "table_shape_undeclared"
+	// RequirementReasonComputedPopulationAbsent: a COMPUTED obligation whose
+	// server step has nothing to run over.
+	//
+	// frame_vocab.go already says it: "a computed obligation has NO
+	// FactKinds of its own and is unavailable only when ITS INPUTS ARE".
+	// This is that sentence implemented. `ranking` orders a member set and
+	// `count` counts one; the organization as a single subject is not a
+	// population, so a frame asking to rank the organization asks for an
+	// ordering with nothing to order. Reporting `rank_cohort` as the server
+	// there would be a confident answer to an impossible question -- the
+	// same mis-typing round 4 recorded as N3, in the other direction.
+	RequirementReasonComputedPopulationAbsent RequirementUnavailableReason = "computed_population_absent"
 )
 
 var requirementUnavailableReasons = [...]RequirementUnavailableReason{
@@ -167,7 +179,7 @@ var requirementUnavailableReasons = [...]RequirementUnavailableReason{
 	RequirementReasonTableShapeUndeclared,
 }
 
-// RequirementUnavailableReasonCount is three.
+// RequirementUnavailableReasonCount is four.
 const RequirementUnavailableReasonCount = len(requirementUnavailableReasons)
 
 // RequirementUnavailableReasonVocabulary returns the closed vocabulary in
@@ -248,6 +260,13 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 	}
 
 	if kind == ObligationKindComputed {
+		// A computed obligation needs a POPULATION to run over. The
+		// organization as a single subject is not one.
+		if !coordinateNamesAPopulation(coordinate) {
+			row.Quantifier = CompletionQuantifierNone
+			row.Unavailable = RequirementReasonComputedPopulationAbsent
+			return row
+		}
 		// A computed obligation names its SERVER STEP and reads no fact
 		// kind of its own: "a computed obligation has NO FactKinds of its
 		// own and is unavailable only when its inputs are"
@@ -278,6 +297,24 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 	row.FactKinds = kinds
 	row.Quantifier = quantifierForCardinality(len(kinds))
 	return row
+}
+
+// coordinateNamesAPopulation reports whether a coordinate names a set a
+// server step can run over.
+//
+// A member set and a comparison's operands are populations. A NAMED subject
+// is a population of one, which is degenerate but well defined -- counting
+// it gives one, ordering it gives that one. The ORGANIZATION as a subject is
+// not: it is the container, not the things in it, and invariant I17 exists
+// precisely so "how many teams" and "how many repositories" do not collapse
+// into the same organization-scoped frame. A frame that reaches here with
+// the organization and no member kind has asked to order or count the
+// container itself.
+func coordinateNamesAPopulation(coordinate RequirementCoordinate) bool {
+	if coordinate.Role == SubjectRoleSubject && coordinate.Subject == SubjectOrganization {
+		return false
+	}
+	return coordinate.Role != SubjectRoleGroup
 }
 
 // quantifierForComputed maps a computed obligation to its quantifier.

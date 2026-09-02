@@ -446,3 +446,46 @@ func TestComputedQuantifiersAreExactForCountAndAllForRanking(t *testing.T) {
 		t.Fatal("the two expected quantifiers are equal, so this test cannot detect a collapse")
 	}
 }
+
+// TestRankingTheOrganizationItselfIsUnavailable pins a real DERIVATION
+// defect -- the first one a review round found in this layer rather than in
+// its oracles.
+//
+// `organization_scope` with no member kind and the rank_or_survey goal
+// derived `ranking / subject / organization` and reported `rank_cohort` as
+// its server. That is a confident answer to an impossible question: ranking
+// orders a member set, and the organization is the container, not the things
+// in it. frame_vocab.go already said what should happen -- "a computed
+// obligation is unavailable only when ITS INPUTS are" -- and the derivation
+// did not implement it.
+func TestRankingTheOrganizationItselfIsUnavailable(t *testing.T) {
+	frame := frameWith([]InvestigationGoal{GoalRankOrSurvey}, orgExpression(nil), TemporalIntentCurrent, nil)
+	if !frame.HasObligation(ObligationRanking) {
+		t.Fatalf("the frame derives no ranking obligation, so this test cannot see the rule: %v", frame.Obligations)
+	}
+	rows := DeriveRequirements(frame, fixtureSeed(), fixtureCapabilities())
+
+	row := requirementFor(t, rows, ObligationRanking, SubjectOrganization)
+	if row.Served() {
+		t.Errorf("ranking the organization itself reports server %q; there is no population to order", row.Step)
+	}
+	if row.Unavailable != RequirementReasonComputedPopulationAbsent {
+		t.Errorf("unavailable reason is %q, want %q", row.Unavailable, RequirementReasonComputedPopulationAbsent)
+	}
+	if row.Quantifier != CompletionQuantifierNone {
+		t.Errorf("an unavailable row carries quantifier %q", row.Quantifier)
+	}
+
+	// The counterpart must still WORK: with a counted member kind (invariant
+	// I17's own case) the population exists and ranking is served. Without
+	// this, the fix above could be "never rank under organization scope",
+	// which would be a different defect.
+	kind := SubjectTeam
+	served := DeriveRequirements(
+		frameWith([]InvestigationGoal{GoalRankOrSurvey}, orgExpression(&kind), TemporalIntentCurrent, nil),
+		fixtureSeed(), fixtureCapabilities())
+	memberRow := requirementFor(t, served, ObligationRanking, SubjectTeam)
+	if !memberRow.Served() || memberRow.Step != ComputedStepRankCohort {
+		t.Errorf("ranking a counted member kind should be served by rank_cohort; got served=%v step=%q unavailable=%q", memberRow.Served(), memberRow.Step, memberRow.Unavailable)
+	}
+}

@@ -365,10 +365,21 @@ func classifyCall(pkg *packages.Package, call *ast.CallExpr, funcValues map[type
 	return callSite{disposition: callLeaked, cause: leakUnresolvable}
 }
 
-// isFactFieldDelete reports a `delete` whose target is a fact-field map.
-func isFactFieldDelete(info *types.Info, call *ast.CallExpr) bool {
+// isFactFieldDestruction reports a builtin that REMOVES recorded keys from a
+// fact-field map: `delete` for one key, `clear` for all of them.
+//
+// BOTH, because they are one class and only one was handled. A review round
+// constructed `clear(fields)`: the walk reported the wiped field as emitted
+// with the counter at zero -- the identical defect the `delete` ordering fix
+// had just closed, in its sibling builtin. Enumerating one member of a pair
+// is how the previous walk failed five times; the guard is keyed on the
+// EFFECT (recorded keys destroyed) rather than on a name.
+func isFactFieldDestruction(info *types.Info, call *ast.CallExpr) bool {
 	ident, isIdent := call.Fun.(*ast.Ident)
-	if !isIdent || ident.Name != "delete" || len(call.Args) == 0 {
+	if !isIdent || len(call.Args) == 0 {
+		return false
+	}
+	if ident.Name != "delete" && ident.Name != "clear" {
 		return false
 	}
 	if _, isBuiltin := info.Uses[ident].(*types.Builtin); !isBuiltin {
@@ -566,8 +577,8 @@ func analyseFunction(pkg *packages.Package, fn *ast.FuncDecl, bodied map[*types.
 				// Nothing to queue. A `delete` from a fact-field map is a
 				// WRITE-side effect, not an edge, and is counted below.
 			}
-			if isFactFieldDelete(pkg.TypesInfo, typed) {
-				// A delete makes the recorded field set an OVERSTATEMENT.
+			if isFactFieldDestruction(pkg.TypesInfo, typed) {
+				// Destroying recorded keys makes the field set an OVERSTATEMENT.
 				// Counted rather than resolved: knowing which key survives
 				// needs flow analysis this walk does not do.
 				facts.dynamicKeySites++
@@ -1251,5 +1262,24 @@ func TestTheInterfaceDispositionLeaksAndIsCounted(t *testing.T) {
 	index, _ := leakCauseIndex(leakInterfaceMethod)
 	if emission.leaksByCause[index] == 0 {
 		t.Error("an interface-method call was neither followed nor counted as a leak -- the field is silently missing, which is the defect this rule exists to prevent")
+	}
+}
+
+// TestClearingAFactFieldMapIsCountedLikeADelete pins the sibling of a defect
+// already fixed once.
+//
+// `delete` and `clear` are ONE class -- both destroy recorded keys and both
+// make the walk's field list an overstatement -- and only `delete` was
+// handled. A review round constructed the other half. The guard is keyed on
+// the effect rather than on a name, and this fixture is what keeps the
+// second name from being forgotten again.
+func TestClearingAFactFieldMapIsCountedLikeADelete(t *testing.T) {
+	probes := walkProbeFixture(t)
+	cleared, walked := probes["ProbeCleared"]
+	if !walked {
+		t.Fatal("the clear fixture provider was not walked at all")
+	}
+	if cleared.dynamicKeySites == 0 {
+		t.Errorf("a clear() of a fact-field map was not counted; the walk reports %v as emitted when the provider returns an empty map, and nothing says the set is an overstatement", cleared.fields)
 	}
 }

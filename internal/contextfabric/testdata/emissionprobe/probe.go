@@ -231,3 +231,23 @@ func (IndexedCallProvider) build() map[string]contextfabric.FactValue {
 	handlers[0](fields)
 	return fields
 }
+
+// ProbeCleared exercises the `clear` half of key destruction. A review round
+// constructed it after the `delete` half was fixed: enumerating one member
+// of a pair is how the previous walk failed five times.
+const ProbeCleared contextfabric.FactKind = "zz_probe_cleared"
+
+type ClearedProvider struct{}
+
+func (ClearedProvider) Capability() contextfabric.FactCapability {
+	return newCapability(ProbeCleared)
+}
+
+func (ClearedProvider) build() map[string]contextfabric.FactValue {
+	fields := map[string]contextfabric.FactValue{"wiped_field": contextfabric.FactValue{}}
+	// Everything recorded above is destroyed. The walk cannot know the map
+	// is empty at return, so it must at least SAY the recorded set is an
+	// overstatement.
+	clear(fields)
+	return fields
+}
