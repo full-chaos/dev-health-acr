@@ -837,6 +837,21 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 			// keeps the outcome vocabulary consistent with a direct call to
 			// that same fallback.
 			receipt.Outcome = fallbackReceipt.Outcome
+			// The SECOND fallback-failure branch, and it needs the same
+			// derivation as the one further down for the same reason. The
+			// two differ only in why the PRIMARY failed -- here the primary
+			// call itself failed to generate, there the primary produced
+			// output that was semantically invalid -- but in both the
+			// FALLBACK's error is what the caller receives, so the
+			// fallback's rule is what the receipt and decision line must
+			// name. Fixing only the lower branch left this one silent: a
+			// review round constructed exactly this path (primary
+			// generation failure + a fallback rejected for shape_invalid)
+			// and observed receipt="" with no decision-line reason.
+			if reason := contextfabric.InterpretationRejectionReasonOf(fallbackErr); reason != contextfabric.InterpretationRejectionUnclassified {
+				rejectionReason = string(reason)
+				receipt.InterpretationRejectionReason = reason
+			}
 			return contextfabric.InterpretedQuestion{}, receipt, fallbackErr
 		}
 		return contextfabric.InterpretedQuestion{}, receipt, classifiedErr

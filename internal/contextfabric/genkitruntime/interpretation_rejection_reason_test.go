@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"testing"
@@ -196,6 +197,12 @@ func TestInterpretRejectionReasonIsNeverModelAuthoredText(t *testing.T) {
 // flight knew exactly which rule it was.
 func TestFallbackSemanticRejectionCarriesItsReasonToTheOuterArtifacts(t *testing.T) {
 	t.Parallel()
+	// There are TWO fallback-failure branches, differing only in why the
+	// PRIMARY failed: the primary's own GENERATION failed (runtime.go:808),
+	// or the primary generated output that was semantically invalid
+	// (runtime.go:860). A review round found the first fix covered only the
+	// second branch, so both are driven here. `primaryGenerationFails`
+	// selects which one the case exercises.
 	// The fallback rejects for a rule of its own, distinct from anything
 	// the primary's output would produce, so the assertion cannot pass by
 	// accidentally reading the primary's reason.
@@ -204,39 +211,65 @@ func TestFallbackSemanticRejectionCarriesItsReasonToTheOuterArtifacts(t *testing
 		fmt.Errorf("%w: %w: shape is invalid", contextfabric.ErrInterpretationRejected, contextfabric.ErrModelOutput),
 	)
 
-	primary := validInterpretationOutput()
-	primary.Shape = "not_a_real_shape"
+	for _, testCase := range []struct {
+		name                   string
+		primaryGenerationFails bool
+		branch                 string
+	}{
+		{
+			name:                   "the primary generated semantically invalid output",
+			primaryGenerationFails: false,
+			branch:                 "runtime.go:860",
+		},
+		{
+			name:                   "the primary call itself failed to generate",
+			primaryGenerationFails: true,
+			branch:                 "runtime.go:808",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			stub := &generatorStub{}
+			if testCase.primaryGenerationFails {
+				stub.interpretErr = errors.New("primary generation exploded")
+			} else {
+				primary := validInterpretationOutput()
+				primary.Shape = "not_a_real_shape"
+				stub.interpretation = primary
+			}
 
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	runtime := mustRuntime(t, &generatorStub{interpretation: primary}, Config{
-		Logger:   logger,
-		Fallback: erroringFallbackRuntime{err: fallbackRejected},
-	})
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			runtime := mustRuntime(t, stub, Config{
+				Logger:   logger,
+				Fallback: erroringFallbackRuntime{err: fallbackRejected},
+			})
 
-	_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
-	if err == nil {
-		t.Fatal("InterpretQuestion() = nil error, want the fallback's rejection")
+			_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+			if err == nil {
+				t.Fatal("InterpretQuestion() = nil error, want the fallback's rejection")
+			}
+			want := contractsv1.ContextFabricInterpretationRejectionShapeInvalid
+			if got := contextfabric.InterpretationRejectionReasonOf(err); got != want {
+				t.Fatalf("the RETURNED error's reason = %q, want %q -- fixture is wrong", got, want)
+			}
+			if receipt.InterpretationRejectionReason != want {
+				t.Fatalf("receipt.InterpretationRejectionReason = %q, want %q -- %s must not stay silent while the error it accompanies names the rule", receipt.InterpretationRejectionReason, want, testCase.branch)
+			}
+			for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+				fields := map[string]any{}
+				if json.Unmarshal(line, &fields) != nil {
+					continue
+				}
+				if fields["operation"] != string(contextfabric.ModelOperationInterpret) {
+					continue
+				}
+				if got := fields["rejection_reason"]; got != string(want) {
+					t.Fatalf("decision line rejection_reason = %v, want %q (%s)", got, want, testCase.branch)
+				}
+				return
+			}
+			t.Fatal("no interpret decision line was emitted")
+		})
 	}
-	want := contractsv1.ContextFabricInterpretationRejectionShapeInvalid
-	if got := contextfabric.InterpretationRejectionReasonOf(err); got != want {
-		t.Fatalf("the RETURNED error's reason = %q, want %q -- fixture is wrong", got, want)
-	}
-	if receipt.InterpretationRejectionReason != want {
-		t.Fatalf("receipt.InterpretationRejectionReason = %q, want %q -- the receipt must not stay silent while the error it accompanies names the rule", receipt.InterpretationRejectionReason, want)
-	}
-	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
-		fields := map[string]any{}
-		if json.Unmarshal(line, &fields) != nil {
-			continue
-		}
-		if fields["operation"] != string(contextfabric.ModelOperationInterpret) {
-			continue
-		}
-		if got := fields["rejection_reason"]; got != string(want) {
-			t.Fatalf("decision line rejection_reason = %v, want %q", got, want)
-		}
-		return
-	}
-	t.Fatal("no interpret decision line was emitted")
 }

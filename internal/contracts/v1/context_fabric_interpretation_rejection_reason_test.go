@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -120,6 +121,39 @@ func interpretationRejectionCases() []rejectionCase {
 				return q
 			},
 			want:  ContextFabricInterpretationRejectionFactRequirementKindInvalid,
+			field: "FactRequirements",
+		},
+		{
+			// Structurally unreachable from the MODEL (there is no wire
+			// field for Subjects), but validate() checks it, so the mirror
+			// must too -- and a review round proved the omission was not
+			// harmless: mutating this branch to unclassified left every
+			// mirror, vocabulary and order test green.
+			name: "fact_requirement subjects",
+			mutate: func(q ContextFabricInterpretedQuestion) ContextFabricInterpretedQuestion {
+				subjects := make([]ContextFabricSubjectRef, 0, 251)
+				for i := 0; i < 251; i++ {
+					subjects = append(subjects, ContextFabricSubjectRef{
+						Kind: ContextFabricSubjectProject, CanonicalID: fmt.Sprintf("project_%d", i), Label: "P",
+					})
+				}
+				q.FactRequirements = []ContextFabricFactRequirement{{Kind: ContextFabricFactStatus, Subjects: subjects}}
+				return q
+			},
+			want:  ContextFabricInterpretationRejectionFactRequirementSubjectsInvalid,
+			field: "FactRequirements",
+		},
+		{
+			name: "fact_requirement parameters count",
+			mutate: func(q ContextFabricInterpretedQuestion) ContextFabricInterpretedQuestion {
+				params := make(map[string]string, ContextFabricFactRequirementParametersMaxCount+1)
+				for i := 0; i <= ContextFabricFactRequirementParametersMaxCount; i++ {
+					params[fmt.Sprintf("k%02d", i)] = "v"
+				}
+				q.FactRequirements = []ContextFabricFactRequirement{{Kind: ContextFabricFactStatus, Parameters: params}}
+				return q
+			},
+			want:  ContextFabricInterpretationRejectionFactRequirementParamsMaxCount,
 			field: "FactRequirements",
 		},
 		{
