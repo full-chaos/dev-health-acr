@@ -436,6 +436,9 @@ func TestEveryDeclaredCellIsVisibleInTheSnapshot(t *testing.T) {
 	t.Logf("every one of %d served (obligation, subject, kind) entries is visible in the review snapshot", checked)
 }
 
+// kinds is a terse literal builder for expected fact-kind sets.
+func kinds(values ...contextfabric.FactKind) []contextfabric.FactKind { return values }
+
 func diffKinds(got, want []contextfabric.FactKind) (missing, extra []contextfabric.FactKind) {
 	inGot := make(map[contextfabric.FactKind]bool, len(got))
 	for _, kind := range got {
