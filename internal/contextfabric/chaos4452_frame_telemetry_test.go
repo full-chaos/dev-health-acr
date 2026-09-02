@@ -360,11 +360,38 @@ func contains(haystack, needle string) bool {
 //     them, and reordering them would change which candidate a tie
 //     resolves to.
 //
-//  2. NO DUPLICATES in any slice field of the event, found by REFLECTION
-//     rather than by naming them. Today that is `ProposedGoals` alone; the
-//     point is that a second slice field added tomorrow is covered without
-//     anyone remembering to cover it.
+//  2. NO DUPLICATES in any slice field of the event OR of the validated
+//     frame, found by REFLECTION rather than by naming them. Today that
+//     covers the goal set, both obligation sets, emphasis and dimensions;
+//     the point is that a field added tomorrow is covered without anyone
+//     remembering to cover it.
+//
+//  3. EVERY INPUT AXIS that populates a set-valued field is VARIED. The
+//     first version of this test quantified over the FIELDS and then fed
+//     both cases `nil` model obligations, so `WidenedObligations` -- an
+//     independent, non-empty set field -- was never exercised at all. A
+//     regression that stopped canonicalizing the widened set would have
+//     passed. That is the same defect this test exists to generalize,
+//     committed inside the generalization: asserting the property over
+//     the outputs while leaving an input constant is still checking the
+//     case the author had in mind.
 func TestEverySetValuedFieldIsCanonicalOnTheFrameAndInTheEvent(t *testing.T) {
+	// Model obligations chosen so they SURVIVE widening: a member the
+	// frame already DERIVES is dropped from the widened set by design, so
+	// picking one would leave the widened set too small to have an order
+	// or a duplicate at all.
+	//
+	// The first attempt at this used `ranking`, which this frame's
+	// rank_or_survey goal derives -- so the widened set came out as a
+	// single element and the property went unexercised while a
+	// non-emptiness guard reported success. That is the same
+	// green-but-vacuous failure this whole test exists to generalize,
+	// committed twice in the generalization itself. The guard below now
+	// checks that the input actually STRESSES the property rather than
+	// merely populating the field.
+	modelObligations := []AnswerObligation{ObligationPeriodDelta, ObligationCompletion, ObligationPeriodDelta}
+	permutedObligations := []AnswerObligation{ObligationCompletion, ObligationPeriodDelta}
+
 	base := QuestionFrame{
 		Goals: []InvestigationGoal{GoalRankOrSurvey, GoalAssessState, GoalRankOrSurvey},
 		SubjectExpression: SubjectExpression{
@@ -384,8 +411,8 @@ func TestEverySetValuedFieldIsCanonicalOnTheFrameAndInTheEvent(t *testing.T) {
 		Dimensions: []HealthDimension{HealthDimensionDeliveryFlow, HealthDimensionInvestmentBalance},
 	}
 
-	baseResult := ValidateFrame(base, nil, "")
-	permResult := ValidateFrame(permuted, nil, "")
+	baseResult := ValidateFrame(base, modelObligations, "")
+	permResult := ValidateFrame(permuted, permutedObligations, "")
 	if baseResult.Outcome != FrameValidationOutcomeValid || permResult.Outcome != FrameValidationOutcomeValid {
 		t.Fatalf("both frames must validate; got %q and %q", baseResult.Outcome, permResult.Outcome)
 	}
@@ -401,13 +428,34 @@ func TestEverySetValuedFieldIsCanonicalOnTheFrameAndInTheEvent(t *testing.T) {
 			baseEvent, permEvent)
 	}
 
-	// The dedup half, quantified over the event's slice fields by
-	// reflection so a field added later is covered without being named.
-	eventValue := reflect.ValueOf(baseEvent)
-	eventType := eventValue.Type()
+	// THE INPUT MUST STRESS THE PROPERTY, not merely populate the field.
+	// A set of one has no order to get wrong and no duplicate to drop, so
+	// a single-element widened set would let a canonicalization
+	// regression pass while this test reported success -- which is what
+	// happened on the first attempt.
+	if len(baseResult.Frame.WidenedObligations) < 2 {
+		t.Fatalf("the widened obligation set is %v -- fewer than two members cannot exercise ordering or deduplication, so this test would be vacuous",
+			baseResult.Frame.WidenedObligations)
+	}
+
+	// The dedup half, quantified by REFLECTION over the slice fields of
+	// BOTH the event and the validated frame, so a field added later is
+	// covered without being named. The frame is included because
+	// WidenedObligations lives there and never reaches the event, which is
+	// exactly how it escaped the first version.
+	assertNoDuplicateSliceFields(t, "event", reflect.ValueOf(baseEvent))
+	assertNoDuplicateSliceFields(t, "frame", reflect.ValueOf(baseResult.Frame))
+}
+
+// assertNoDuplicateSliceFields walks every slice field of a struct and
+// asserts it carries no repeats. Named nowhere: it takes whatever the type
+// has.
+func assertNoDuplicateSliceFields(t *testing.T, label string, value reflect.Value) {
+	t.Helper()
+	typ := value.Type()
 	checked := 0
-	for i := 0; i < eventType.NumField(); i++ {
-		field := eventValue.Field(i)
+	for i := 0; i < typ.NumField(); i++ {
+		field := value.Field(i)
 		if field.Kind() != reflect.Slice {
 			continue
 		}
@@ -415,13 +463,16 @@ func TestEverySetValuedFieldIsCanonicalOnTheFrameAndInTheEvent(t *testing.T) {
 		seen := map[any]bool{}
 		for j := 0; j < field.Len(); j++ {
 			element := field.Index(j).Interface()
+			if !reflect.TypeOf(element).Comparable() {
+				continue
+			}
 			if seen[element] {
-				t.Errorf("event field %s carries duplicate %v -- a set-valued field must be canonical in the record", eventType.Field(i).Name, element)
+				t.Errorf("%s field %s carries duplicate %v -- a set-valued field must be canonical wherever it is carried", label, typ.Field(i).Name, element)
 			}
 			seen[element] = true
 		}
 	}
 	if checked == 0 {
-		t.Fatal("no slice fields found on the event -- this test would be vacuous, so the reflection is wrong")
+		t.Fatalf("no slice fields found on the %s -- this assertion would be vacuous, so the reflection is wrong", label)
 	}
 }
