@@ -150,6 +150,23 @@ func SynthesisOutputSchema() ([]byte, error) {
 // InterpretationOutputFamily is the CHAOS-4632 shadow capture
 // ParseInterpretationOutputFamily returns alongside the domain
 // InterpretedQuestion.
+// InterpretationOutputFrame is the CHAOS-4452 stage-2 shadow capture the
+// file-exchange transport gets alongside the family one, built by the SAME
+// sanitizeFrameOutput the genkit path calls.
+//
+// It exists for the identical reason InterpretationOutputFamily does: a
+// transport-specific reimplementation would diverge silently, and the
+// divergence would land inside the labelled semantic-correctness
+// measurement this slice exists to make, where it would be
+// indistinguishable from the model behaving differently.
+type InterpretationOutputFrame struct {
+	Frame            contextfabric.QuestionFrame
+	Present          bool
+	GoalsDropped     int
+	TermsTruncated   int
+	KindUnrecognized bool
+}
+
 type InterpretationOutputFamily struct {
 	Family                      contextfabric.QuestionFamily
 	FamilyUnrecognized          bool
@@ -275,4 +292,31 @@ func ApplyInterpretationCapture(receipt *contextfabric.ModelExecutionReceipt, ca
 	receipt.ScopeAnchorKindUnrecognized = capture.Family.ScopeAnchorKindUnrecognized
 	receipt.RequestedSubjectKind = capture.Family.RequestedKind
 	receipt.RequestedSubjectKindUnrecognized = capture.Family.RequestedKindUnrecognized
+}
+
+// ParseInterpretationOutputFrame decodes raw exactly like
+// ParseInterpretationOutput and additionally returns the SAME sanitized
+// CHAOS-4452 stage-2 frame capture Runtime.InterpretQuestion applies to a
+// genkit-returned interpretationOutput.
+//
+// Only sanitized on a SUCCESSFUL toDomain, mirroring both
+// Runtime.InterpretQuestion's ordering and its sibling parsers': on a
+// toDomain/Validate failure the returned capture is the zero value.
+func ParseInterpretationOutputFrame(raw []byte, defaultTime contextfabric.TimeContext) (contextfabric.InterpretedQuestion, InterpretationOutputFrame, error) {
+	var output interpretationOutput
+	if err := json.Unmarshal(raw, &output); err != nil {
+		return contextfabric.InterpretedQuestion{}, InterpretationOutputFrame{}, err
+	}
+	interpreted, err := output.toDomain(defaultTime)
+	if err != nil {
+		return interpreted, InterpretationOutputFrame{}, err
+	}
+	capture := sanitizeFrameOutput(output)
+	return interpreted, InterpretationOutputFrame{
+		Frame:            capture.Frame,
+		Present:          capture.Present,
+		GoalsDropped:     capture.GoalsDropped,
+		TermsTruncated:   capture.TermsTruncated,
+		KindUnrecognized: capture.KindUnrecognized,
+	}, nil
 }
