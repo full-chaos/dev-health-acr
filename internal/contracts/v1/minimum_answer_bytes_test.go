@@ -203,3 +203,66 @@ func TestMeasureMinimumAnswerEnvelopeBytes(t *testing.T) {
 		ContextFabricSerializedBytesMin,
 		map[bool]string{true: "EXCEEDS", false: "fits under"}[measurement.Bytes > int64(ContextFabricSerializedBytesMin)])
 }
+
+// RED C: the MCP surface must refuse a sub-minimum budget AT ITS OWN BOUNDARY.
+//
+// This is the surface the governing paper does not name, and leaving it behind
+// is a specific, diagnosable harm rather than an inconsistency. MCP forwards its
+// budget to the hosted investigation options; if the MCP validator kept the old
+// floor, a caller passing a sub-minimum budget would clear MCP validation and be
+// refused DOWNSTREAM by the hosted validator. The MCP tool would surface that as
+// a generic upstream failure, so the caller would never see the closed reason at
+// the surface they are actually using -- the diagnosis would exist and be
+// unreachable.
+//
+// Tracking the hosted constant, rather than restating a number, is what makes
+// the two surfaces incapable of disagreeing.
+func TestMCPInvestigationBudgetRefusesBelowTheMinimumAnswerSize(t *testing.T) {
+	t.Parallel()
+
+	const oldFloor = 8192
+	if oldFloor >= ContextFabricMinimumAnswerBytes {
+		t.Fatalf("premise gone: old floor %d is no longer below the minimum %d", oldFloor, ContextFabricMinimumAnswerBytes)
+	}
+	if MCPInvestigationBudgetMinBytes != ContextFabricMinimumAnswerBytes {
+		t.Fatalf("MCPInvestigationBudgetMinBytes = %d but the hosted minimum is %d: the two surfaces can now disagree, which is the whole defect this pins",
+			MCPInvestigationBudgetMinBytes, ContextFabricMinimumAnswerBytes)
+	}
+
+	if err := (MCPInvestigationBudget{MaxSerializedBytes: oldFloor}).Validate(); err == nil {
+		t.Fatalf("the MCP surface accepted a %d-byte budget: it clears here and is then refused by the hosted validator, so the caller sees a generic upstream failure instead of the reason at the surface they are using", oldFloor)
+	}
+
+	// The boundary is accepted, or the documented minimum is a lie.
+	if err := (MCPInvestigationBudget{MaxSerializedBytes: ContextFabricMinimumAnswerBytes}).Validate(); err != nil {
+		t.Fatalf("the MCP surface refused exactly the documented minimum (%d): %v", ContextFabricMinimumAnswerBytes, err)
+	}
+
+	// Zero still means "unset, use the default" and must remain accepted --
+	// this change tightens a floor, it does not make the field required.
+	if err := (MCPInvestigationBudget{}).Validate(); err != nil {
+		t.Fatalf("an unset budget was refused, so this change made an optional field required: %v", err)
+	}
+}
+
+// RED A's request half, on the surface the contract owns. The route's closed
+// reason code is a separate wire concern; what the CONTRACT must guarantee is
+// that a sub-minimum request is invalid at all.
+func TestInvestigationOptionsRefuseBelowTheMinimumAnswerSize(t *testing.T) {
+	t.Parallel()
+
+	const oldFloor = 8192
+	options := ContextFabricInvestigationOptions{
+		MaxSubjectCandidates: 10, MaxCohortMembers: 20, MaxRelationshipPaths: 25,
+		MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: oldFloor,
+	}
+	if err := options.Validate(); err == nil {
+		t.Fatalf("a request asking for %d bytes validated, but no answer can be serialized in %d bytes (minimum %d): the caller would be told at the ROUTE that their answer was too large, which blames the question for a budget that could never have held one",
+			oldFloor, oldFloor, ContextFabricMinimumAnswerBytes)
+	}
+
+	options.MaxSerializedBytes = ContextFabricMinimumAnswerBytes
+	if err := options.Validate(); err != nil {
+		t.Fatalf("a request at exactly the documented minimum (%d) was refused: %v", ContextFabricMinimumAnswerBytes, err)
+	}
+}
