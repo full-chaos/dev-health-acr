@@ -23,21 +23,17 @@ package v1
 // both. Only the caller-facing tightening differs, which is why the smaller
 // number wins.
 //
-// WHY 16384 AND NOT THE MEASURED 13,606. The measured worst case is 13,606
-// bytes. The pin is the next power of two above it, which buys headroom for a
-// bounded envelope field this measurement has not thought to maximize. Rounding
-// is normally how a pin goes wrong -- slack absorbs growth, and the real worst
-// case creeps toward the constant while the test keeps passing -- so the guard
-// is TWO-SIDED and that is what makes the rounding safe:
+// WHY IT IS NOT ROUNDED. A rounded pin absorbs growth: add a bounded envelope
+// field, and a constant with slack keeps passing while the real worst case
+// creeps toward it -- a 16 KiB pin over this floor would have hidden 2,778
+// bytes of creep. Pinned to the measured value EXACTLY, any change to the worst
+// case fails at the moment it is made, and the mutation kills in BOTH
+// directions without needing a second assertion to say so.
 //
-//	measured <= constant          growth fails, instead of being absorbed
-//	constant <  2 * measured      drift fails, so the pin cannot wander far
-//	                              above the true floor and quietly over-tighten
-//	                              an INPUT bound on callers
-//
-// 16,384 < 27,212, so the headroom bound holds with room to spare. Either
-// assertion failing is a real signal: the first says the floor moved, the
-// second says the pin no longer describes it.
+// The cost is accepted and is disclosure rather than churn: because this
+// constant is published in the request schema, any envelope growth becomes a
+// wire-visible minimum change and a consumer pin bump. That is the honest
+// consequence of a bound that callers are held to.
 //
 // WHY IT IS A NEW CONSTANT rather than a raise of ContextFabricSerializedBytesMin.
 // That constant is load-bearing elsewhere:
@@ -52,4 +48,4 @@ package v1
 // fact, no candidate, no member. So a caller may today legally configure a
 // service, or request a budget, at a size in which no answer can exist. The
 // floor paper argued this on paper; the accompanying test executes it.
-const ContextFabricMinimumAnswerBytes = 16384
+const ContextFabricMinimumAnswerBytes = 13606
