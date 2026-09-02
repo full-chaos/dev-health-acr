@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -412,16 +413,25 @@ func TestLawL5EveryRequirementFieldNamesADerivationRule(t *testing.T) {
 // TestLawL3ScopeAndQuantifierCannotConflict is law L3's applied form.
 //
 // The structural half (one source per field) is the map above. This is the
-// BEHAVIOURAL half, and it is the one that would catch a regression: if
-// Scope really derives from SubjectExpression.Kind alone, then across every
-// frame in the corpus a given Kind must yield ONE Scope regardless of which
-// obligation the row is for. A field that started reading the obligation as
-// well would show up here as one Kind carrying two Scopes -- which is
-// precisely the two-sources-no-precedence state L3 forbids, observed rather
-// than asserted.
+// BEHAVIOURAL half, and it is the one that would catch a regression:
+// CompletionScope derives from the subject expression's variant THROUGH the
+// role slot, and from nothing else. So across the whole corpus, one ROLE
+// must yield exactly one Scope -- whatever obligation the row is for, and
+// whatever variant produced the role. A field that started reading the
+// obligation as well shows up here as one role carrying two scopes, which
+// is the two-sources-no-precedence state L3 forbids, observed rather than
+// asserted.
 //
-// The expectation is the PARTITION induced by the frames' own Kind field.
-// Nothing asks the derivation what the scope should be.
+// THE KEY IS THE ROLE, AND THE FIRST VERSION OF THIS TEST HAD IT WRONG.
+// It grouped by (variant, obligation, role) and asked whether that triple
+// ever carried two scopes -- which a deterministic function can never do,
+// so the property was VACUOUS. Mutation M3 gave CompletionScope a second
+// source keyed on the obligation and this test stayed green. The mutation
+// found a hole in the test, not in the code; the key is now the population
+// the law is about (every role) rather than the coordinate that happened to
+// be convenient. This is the same defect shape the sweep rule names: a
+// sweep's key is the population you must cover, never the helper you
+// happened to call.
 func TestLawL3ScopeAndQuantifierCannotConflict(t *testing.T) {
 	t.Parallel()
 	frames := generateFrames(t)
@@ -432,43 +442,64 @@ func TestLawL3ScopeAndQuantifierCannotConflict(t *testing.T) {
 	seed, capabilities := fixtureSeed(), fixtureCapabilities()
 	reach := &reachCounter{name: "L3"}
 
-	scopeByKind := map[SubjectExpressionKind]map[CompletionScope][]string{}
+	// Role -> the scopes observed for it, each with a witness naming the
+	// input that produced it.
+	scopeByRole := map[SubjectRole]map[CompletionScope]string{}
+	// (obligation, subject kind) -> quantifiers observed. The quantifier's
+	// declared source is the obligation and its measured serving
+	// cardinality -- NOT the topology -- so a fixed pair must yield one
+	// quantifier however the variant varies.
+	quantifierByCell := map[string]map[CompletionQuantifier]string{}
+
 	for _, generated := range frames {
-		kind := generated.frame.SubjectExpression.Kind
 		for _, row := range DeriveRequirements(generated.frame, seed, capabilities) {
 			reach.reach()
-			if scopeByKind[kind] == nil {
-				scopeByKind[kind] = map[CompletionScope][]string{}
+			if scopeByRole[row.Role] == nil {
+				scopeByRole[row.Role] = map[CompletionScope]string{}
 			}
-			scopeByKind[kind][row.Scope] = append(scopeByKind[kind][row.Scope], string(row.Obligation)+"@"+string(row.Role))
+			scopeByRole[row.Role][row.Scope] = fmt.Sprintf("%s obligation=%s", generated, row.Obligation)
+
+			cell := string(row.Obligation) + "@" + string(row.Subject)
+			if quantifierByCell[cell] == nil {
+				quantifierByCell[cell] = map[CompletionQuantifier]string{}
+			}
+			quantifierByCell[cell][row.Quantifier] = fmt.Sprintf("%s role=%s", generated, row.Role)
 		}
 	}
 
-	for kind, scopes := range scopeByKind {
-		if len(scopes) <= 1 {
-			continue
-		}
-		// More than one scope for one variant is only legal when the
-		// variant offers more than one ROLE (a grouped expression has a
-		// group role and a member role, and each_group and each_member are
-		// different scopes for different roles -- not a conflict on one
-		// field). A conflict is two scopes for the SAME (kind, role).
-		byRole := map[string]map[CompletionScope]bool{}
-		for scope, rows := range scopes {
-			for _, row := range rows {
-				if byRole[row] == nil {
-					byRole[row] = map[CompletionScope]bool{}
-				}
-				byRole[row][scope] = true
-			}
-		}
-		for row, distinct := range byRole {
-			if len(distinct) > 1 {
-				t.Errorf("L3 VIOLATED: variant %q row %q carries %d distinct CompletionScope values %v -- a scalar derivable from two sources with no precedence", kind, row, len(distinct), distinct)
-			}
+	for role, scopes := range scopeByRole {
+		if len(scopes) > 1 {
+			t.Errorf("L3 VIOLATED: role %q carries %d distinct CompletionScope values -- a scalar derivable from two sources with no precedence.\n  witnesses: %v", role, len(scopes), scopes)
 		}
 	}
+	for cell, quantifiers := range quantifierByCell {
+		if len(quantifiers) > 1 {
+			t.Errorf("L3 VIOLATED: cell %q carries %d distinct CompletionQuantifier values -- the quantifier derives from the obligation and its measured cardinality, so the topology must not reach it.\n  witnesses: %v", cell, len(quantifiers), quantifiers)
+		}
+	}
+
+	// NON-VACUITY, because this test's whole failure mode was proving
+	// nothing. A property "one X per Y" is trivially satisfied when only
+	// one Y was ever observed, so both partitions must be genuinely
+	// populated -- and more than one SCOPE must appear across the corpus,
+	// or a derivation that returned a constant would pass.
+	if len(scopeByRole) < 2 {
+		t.Fatalf("L3: only %d role(s) observed; a one-per-role property over one role proves nothing", len(scopeByRole))
+	}
+	distinctScopes := map[CompletionScope]bool{}
+	for _, scopes := range scopeByRole {
+		for scope := range scopes {
+			distinctScopes[scope] = true
+		}
+	}
+	if len(distinctScopes) < 2 {
+		t.Fatalf("L3: every row carried the same scope (%v); a constant satisfies a one-per-role property without deriving anything", distinctScopes)
+	}
+	if len(quantifierByCell) < 2 {
+		t.Fatalf("L3: only %d (obligation, subject) cell(s) observed", len(quantifierByCell))
+	}
 	reach.require(t, len(frames))
+	t.Logf("L3: %d rows over %d roles (%d distinct scopes) and %d (obligation, subject) cells", reach.reached, len(scopeByRole), len(distinctScopes), len(quantifierByCell))
 }
 
 // -----------------------------------------------------------------------
