@@ -298,6 +298,18 @@ func TestShadowAgreementOnTheLabelledCorpus(t *testing.T) {
 		// expectation. If it does not, the signals this test feeds it are
 		// wrong and every disagreement it reports is an artefact of this
 		// test rather than a difference between the two tables.
+		//
+		// HOW MUCH THIS CHECK IS WORTH, stated exactly. For the seven
+		// questions the precedence table decides by rows 1-3 (grouped,
+		// scoped, comparison) it is INDEPENDENT: those rows never read
+		// Shape, so the signals come from the shipped set's own recorded
+		// fields and this assertion can genuinely fail. For the remaining
+		// five -- the ones rows 4 and 5 decide by Shape -- the Shape is
+		// RECONSTRUCTED from the set's expected family (labelledShapeFor),
+		// so the assertion is a consistency check on that reconstruction
+		// and not independent evidence. Saying otherwise would be the
+		// inaccurate-coverage failure: a reader who sees a check stops
+		// verifying.
 		if got, want := string(precedence.Family), question.ExpectFamily; got != want {
 			t.Errorf("%s: the precedence table produced %q from the shipped signal labels, but the set expects %q -- this test is feeding it the wrong signals and its agreement numbers mean nothing", label.id, got, want)
 		}
@@ -337,11 +349,19 @@ func TestShadowAgreementOnTheLabelledCorpus(t *testing.T) {
 // question to row 7 and manufacture `precedence_unclassified` on questions
 // the shipped table classifies perfectly well.
 //
-// It is derived from the set's OWN expected family -- the family the set
-// says the precedence table must produce -- and the derivation is checked:
-// the test above asserts the precedence table, fed these signals, returns
-// exactly the family the set expects. A wrong Shape here therefore fails
-// loudly rather than quietly shifting the agreement number.
+// It is derived from the set's OWN expected family, which is CIRCULAR for
+// the two families that read Shape and is named as such rather than dressed
+// up: picking the Shape that produces the expected family and then checking
+// that the expected family is produced establishes nothing about those five
+// rows. What it does establish is that the reconstruction is SELF-CONSISTENT
+// and, for the seven questions rows 1-3 decide, that the shipped signals are
+// being fed correctly -- those rows never read Shape at all.
+//
+// The circularity is a property of the CORPUS, not of this test: the shipped
+// set records no Shape, so there is no non-circular value to use. The fix is
+// a corpus that records one, and until then the production counter -- which
+// reads the Shape a real interpretation actually emitted -- is the only
+// non-circular measurement of those five rows.
 func labelledShapeFor(question labelledQuestion) InvestigationShape {
 	switch QuestionFamily(question.ExpectFamily) {
 	case QuestionFamilyDiscoveredCohortRanking:
