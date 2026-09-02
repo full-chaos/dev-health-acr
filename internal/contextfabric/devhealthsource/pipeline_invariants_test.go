@@ -129,6 +129,24 @@ func generateCandidates(rng *rand.Rand) generatedCase {
 			continue
 		}
 
+		// The work_items table's OWN entity for the source, whose label comes
+		// from the row title and so can breach a bound the dependency edge
+		// does not -- that edge labels its endpoints by work item ID. This is
+		// the CROSS-TABLE shape: entity and edge from different producers,
+		// failing independently, which no `supports` link can express.
+		canonicalLabel := "title " + source
+		if rng.Intn(6) == 0 {
+			canonicalLabel += " " // untrimmed: the contract refuses it
+		}
+		canonicalValidFrom := valid
+		canonical := contractsv1.ContextFabricEntityProjection{
+			Subject:        contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: "work_item:" + source, Label: canonicalLabel},
+			Authorization:  scope,
+			EvidenceRefIDs: []string{"acr:v1:gen:wi:" + source},
+			ObservedAt:     at, ValidFrom: &canonicalValidFrom, SourceVersion: "v1",
+		}
+		out.candidates = append(out.candidates, candidate{observedAt: at, sortKey: "wi:" + source, entity: &canonical})
+
 		// Resolved: the real edge, plus the healing tombstones that retire the
 		// ref-form ids this row WOULD have minted. The asserted id and the
 		// tombstoned id are different by construction, exactly as in tables.go.
@@ -176,6 +194,7 @@ func TestPipelineInvariantsOverGeneratedCandidates(t *testing.T) {
 			quarantineInvertedWindow: true, quarantineOversizeScalar: true,
 			quarantineUnrepresentableInstant: true, quarantineContractBoundViolation: true,
 			quarantineOrphanedDependent: true, quarantineDuplicateWithinBatch: true,
+			quarantineEndpointEntityQuarantined: true,
 		}
 		for _, o := range observations {
 			if !closed[o.Reason] {
@@ -188,12 +207,14 @@ func TestPipelineInvariantsOverGeneratedCandidates(t *testing.T) {
 
 		keptRelIDs := map[string]struct{}{}
 		keptEntityIDs := map[string]struct{}{}
+		keptEntityKeys := map[string]struct{}{}
 		for _, c := range kept {
 			switch {
 			case c.relationship != nil:
 				keptRelIDs[c.relationship.RelationshipID] = struct{}{}
 			case c.entity != nil:
 				keptEntityIDs[c.entity.Subject.CanonicalID] = struct{}{}
+				keptEntityKeys[subjectIdentityKey(c.entity.Subject)] = struct{}{}
 			}
 		}
 
@@ -207,17 +228,55 @@ func TestPipelineInvariantsOverGeneratedCandidates(t *testing.T) {
 			}
 		}
 
-		// (a) every surviving relationship pointing at a ref-stub subject has
-		// that subject projected as a REAL entity carrying its validity
-		// window -- not left to the backend's implicit stub, which asserts no
-		// window and is admitted at every requested time.
-		for _, c := range kept {
-			if c.relationship == nil || c.relationship.To.Kind != contractsv1.ContextFabricSubjectWorkItemRef {
+		// (a) no surviving relationship may name an endpoint whose
+		// AUTHORITATIVE entity this same consumed set refused -- otherwise the
+		// backend mints an implicit stub with NO validity window, admitted at
+		// every requested time, and the cursor advances past the rejection so
+		// the corruption is durable and silent.
+		//
+		// Stated over EVERY endpoint of EVERY surviving relationship, not just
+		// ref-stub `To` endpoints. The narrower earlier form missed the
+		// cross-table case where a work_items entity and a
+		// work_item_dependencies edge fail independently, which is exactly the
+		// gap a review found: an invariant scoped to one shape proves nothing
+		// about the population.
+		quarantinedSubjects := map[string]struct{}{}
+		for _, c := range gen.candidates {
+			if c.entity == nil {
 				continue
 			}
-			if _, ok := keptEntityIDs[c.relationship.To.CanonicalID]; !ok {
-				fail("relationship %q survived but its ref-stub endpoint %q was not projected",
-					c.relationship.RelationshipID, c.relationship.To.CanonicalID)
+			if _, err := validateCandidateItem(c); err != nil {
+				quarantinedSubjects[subjectIdentityKey(c.entity.Subject)] = struct{}{}
+			}
+		}
+		for _, c := range kept {
+			if c.relationship == nil {
+				continue
+			}
+			for _, endpoint := range []contractsv1.ContextFabricSubjectRef{c.relationship.From, c.relationship.To} {
+				key := subjectIdentityKey(endpoint)
+				if _, refused := quarantinedSubjects[key]; !refused {
+					continue
+				}
+				// A refused entity is only a problem when NOTHING supplies
+				// that subject: two rows can mint the same subject and one
+				// survive, in which case the endpoint is genuinely backed.
+				// Stating it as "was refused" rather than "is unsupplied"
+				// would forbid a correct batch -- the same dropped-is-not-
+				// no-survivor confusion the production passes had to unlearn.
+				if _, supplied := keptEntityKeys[key]; supplied {
+					continue
+				}
+				fail("relationship %q survived while the entity for its endpoint %q was refused and nothing else supplied it -- the backend would mint an unbounded implicit stub",
+					c.relationship.RelationshipID, endpoint.CanonicalID)
+			}
+			// A ref-stub endpoint must additionally be PRESENT, since nothing
+			// else in the batch can supply it.
+			if c.relationship.To.Kind == contractsv1.ContextFabricSubjectWorkItemRef {
+				if _, ok := keptEntityIDs[c.relationship.To.CanonicalID]; !ok {
+					fail("relationship %q survived but its ref-stub endpoint %q was not projected",
+						c.relationship.RelationshipID, c.relationship.To.CanonicalID)
+				}
 			}
 		}
 
@@ -253,7 +312,7 @@ func TestPipelineInvariantsOverGeneratedCandidates(t *testing.T) {
 // already bit this lane once.
 func TestPipelineInvariantsReachTheirAssertions(t *testing.T) {
 	t.Parallel()
-	var dropped, duplicates, orphans, stubs, published int
+	var dropped, duplicates, orphans, stubs, published, endpointDrops int
 	for i := 0; i < pipelineInvariantCases; i++ {
 		gen := generateCandidates(rand.New(rand.NewSource(int64(i))))
 		var obs []quarantineObservation
@@ -265,6 +324,8 @@ func TestPipelineInvariantsReachTheirAssertions(t *testing.T) {
 				duplicates++
 			case quarantineOrphanedDependent:
 				orphans++
+			case quarantineEndpointEntityQuarantined:
+				endpointDrops++
 			}
 		}
 		for _, c := range kept {
@@ -279,13 +340,14 @@ func TestPipelineInvariantsReachTheirAssertions(t *testing.T) {
 	for name, count := range map[string]int{
 		"dropped items": dropped, "duplicate_within_batch": duplicates,
 		"orphaned_dependent": orphans, "surviving ref stubs": stubs, "publishable sets": published,
+		"endpoint_entity_quarantined": endpointDrops,
 	} {
 		if count == 0 {
 			t.Fatalf("the generator produced ZERO %s across %d cases: the invariant assertions never exercised that path and are proving nothing", name, pipelineInvariantCases)
 		}
 	}
-	t.Logf("reach: dropped=%d duplicates=%d orphans=%d stubs=%d publishable=%d over %d cases",
-		dropped, duplicates, orphans, stubs, published, pipelineInvariantCases)
+	t.Logf("reach: dropped=%d duplicates=%d orphans=%d stubs=%d publishable=%d endpointDrops=%d over %d cases",
+		dropped, duplicates, orphans, stubs, published, endpointDrops, pipelineInvariantCases)
 }
 
 // TestRefStubAndItsEdgeShareAValidationFate pins the coupling the property

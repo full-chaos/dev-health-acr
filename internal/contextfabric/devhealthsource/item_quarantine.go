@@ -33,6 +33,13 @@ const (
 	// restatement of a fact already present, and the contract rejects the
 	// batch rather than the item, so the duplicate must be resolved here.
 	quarantineDuplicateWithinBatch = "duplicate_within_batch"
+	// quarantineEndpointEntityQuarantined marks a relationship dropped
+	// because the authoritative entity for one of its endpoints was itself
+	// quarantined in the same consumed set. The relationship is individually
+	// valid; emitting it would leave the backend to mint an implicit stub for
+	// that endpoint, with no validity window and therefore admitted at every
+	// requested time.
+	quarantineEndpointEntityQuarantined = "endpoint_entity_quarantined"
 )
 
 // maxQuarantineDetailRunes bounds the offending value carried alongside a
@@ -208,6 +215,7 @@ func oversizeScalarMap(properties map[string]contractsv1.ContextFabricScalarValu
 func partitionProjectableCandidates(all []candidate, observe func(quarantineObservation)) []candidate {
 	kept := make([]candidate, 0, len(all))
 	quarantinedRelationships := make(map[string]struct{})
+	quarantinedEntities := make(map[string]struct{})
 	for _, c := range all {
 		kind, err := validateCandidateItem(c)
 		if err == nil {
@@ -217,6 +225,9 @@ func partitionProjectableCandidates(all []candidate, observe func(quarantineObse
 		if c.relationship != nil {
 			quarantinedRelationships[c.relationship.RelationshipID] = struct{}{}
 		}
+		if c.entity != nil {
+			quarantinedEntities[subjectIdentityKey(c.entity.Subject)] = struct{}{}
+		}
 		if observe != nil {
 			observe(quarantineObservation{
 				Reason: quarantineReason(c, err),
@@ -225,25 +236,91 @@ func partitionProjectableCandidates(all []candidate, observe func(quarantineObse
 			})
 		}
 	}
+	// An endpoint whose AUTHORITATIVE entity was quarantined must not be left
+	// for the backend to invent.
+	//
+	// A relationship and the entity for one of its endpoints can come from
+	// DIFFERENT tables, so they fail independently: a work_items row with an
+	// untrimmed title loses its entity, while the work_item_dependencies row
+	// naming it stays valid because that edge labels the endpoint with the
+	// work item ID rather than the title. The edge then survives with no
+	// entity behind it, and the backend merges the endpoint as a referenced
+	// stub with NIL validity -- admitted at every historical time. The cursor
+	// advances past the rejected entity, so it is durable and silent.
+	//
+	// This is the cross-TABLE form of the same class as the ref-stub sweep
+	// below, which only covers pairs emitted by one row through `supports`.
+	// Dropping the edge costs one relationship; keeping it corrupts the
+	// subject's temporal admission for as long as the graph lives.
+	//
+	// Deliberately keyed on entities that were CONSUMED AND QUARANTINED, never
+	// on entities merely absent from the batch: most endpoints legitimately
+	// have their entity on another page or from another table, and dropping
+	// those would delete most of the graph.
+	// DROPPED IS NOT THE SAME AS NO SURVIVOR -- the third time this branch has
+	// had to learn it, and the reason both this sweep and the carrier
+	// correction below are keyed on survivors rather than on drops. Two rows
+	// can mint the SAME subject: one quarantined, one valid. Keying on "an
+	// entity with this subject was quarantined" then drops edges whose
+	// endpoint is in fact supplied by the surviving twin, cascading to its
+	// dependents and emptying the page. Caught by the existing duplicate-stub
+	// regression the moment this sweep was added.
+	if len(quarantinedEntities) > 0 {
+		for _, c := range kept {
+			if c.entity != nil {
+				delete(quarantinedEntities, subjectIdentityKey(c.entity.Subject))
+			}
+		}
+	}
+	if len(quarantinedEntities) > 0 {
+		survivors := kept[:0]
+		for _, c := range kept {
+			if c.relationship != nil {
+				_, fromDropped := quarantinedEntities[subjectIdentityKey(c.relationship.From)]
+				_, toDropped := quarantinedEntities[subjectIdentityKey(c.relationship.To)]
+				if fromDropped || toDropped {
+					quarantinedRelationships[c.relationship.RelationshipID] = struct{}{}
+					if observe != nil {
+						observe(quarantineObservation{
+							Reason: quarantineEndpointEntityQuarantined,
+							Kind:   "relationship",
+							Detail: quarantineDetail(c),
+						})
+					}
+					continue
+				}
+			}
+			survivors = append(survivors, c)
+		}
+		kept = survivors
+	}
+
 	// A quarantined relationship id does NOT mean that id has no surviving
 	// carrier. Two source rows can derive the SAME relationship id -- that is
 	// the whole point of the inverted-spelling mapping, which makes
 	// `A BLOCKED_BY B` and `B BLOCKS A` converge -- so one row's edge can be
-	// quarantined for a bound the other's edge does not breach. Treating the
-	// id as dropped would then orphan the SURVIVING row's stub, deleting a
-	// valid endpoint because an unrelated duplicate failed. Found by the
-	// generated-input property test, which produced exactly that pair; every
-	// hand-built fixture had missed it because it requires one id, two rows
-	// and divergent validity at once.
-	for _, c := range all {
-		if c.relationship == nil {
-			continue
+	// dropped while another row's edge under that same id survives. Treating
+	// the id as gone would then orphan the SURVIVING row's stub, deleting a
+	// valid endpoint because an unrelated duplicate failed.
+	//
+	// Keyed on what actually SURVIVED, never on individual validity. An
+	// earlier form asked whether any candidate carrying the id was
+	// individually valid, which was wrong the moment a pass could drop an
+	// individually-valid item: the endpoint sweep above does exactly that, so
+	// a relationship it removed was still counted as a surviving carrier and
+	// its dependents escaped the orphan sweep. Found by the generated-input
+	// property test on the run that introduced the endpoint sweep.
+	if len(quarantinedRelationships) > 0 {
+		surviving := make(map[string]struct{}, len(kept))
+		for _, c := range kept {
+			if c.relationship != nil {
+				surviving[c.relationship.RelationshipID] = struct{}{}
+			}
 		}
-		if _, quarantined := quarantinedRelationships[c.relationship.RelationshipID]; !quarantined {
-			continue
-		}
-		if kind, err := validateCandidateItem(c); err == nil && kind == "relationship" {
-			delete(quarantinedRelationships, c.relationship.RelationshipID)
+		for id := range quarantinedRelationships {
+			if _, alive := surviving[id]; alive {
+				delete(quarantinedRelationships, id)
+			}
 		}
 	}
 
@@ -300,6 +377,14 @@ func dropOrphanedDependents(all []candidate, quarantinedRelationships map[string
 // low-cardinality enum column, and naming it is what lets an operator tell
 // "one unmapped vocabulary value, 105 rows" from "105 different problems"
 // without a diagnostic build.
+// subjectIdentityKey is the batch-level identity of a subject: kind plus
+// canonical ID, the same pair the contract's own entity-uniqueness rule uses.
+// One definition, used by both the dedup pass and the endpoint sweep, so the
+// two cannot disagree about what "the same subject" means.
+func subjectIdentityKey(s contractsv1.ContextFabricSubjectRef) string {
+	return string(s.Kind) + "\x00" + s.CanonicalID
+}
+
 func quarantineDetail(c candidate) string {
 	if c.relationship == nil {
 		return ""
@@ -349,7 +434,7 @@ func dropDuplicateIdentities(all []candidate, observe func(quarantineObservation
 			// under different spellings that MAP to one type emit the same
 			// ref-stub subject twice; deduplicating only the edges leaves
 			// both stubs and the batch is rejected anyway.
-			key, seen, kind = string(c.entity.Subject.Kind)+"\x00"+c.entity.Subject.CanonicalID, seenEntities, "entity"
+			key, seen, kind = subjectIdentityKey(c.entity.Subject), seenEntities, "entity"
 		case c.relationship != nil:
 			key, seen, kind = c.relationship.RelationshipID, seenRelationships, "relationship"
 		case c.episode != nil:

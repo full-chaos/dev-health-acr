@@ -933,3 +933,77 @@ func TestQuarantinedDuplicateEdgeDoesNotOrphanTheSurvivingRowsStub(t *testing.T)
 		t.Fatalf("no stub may be orphaned here: the shared id still has a surviving carrier: %v", reasons)
 	}
 }
+
+// TestQuarantinedEntityDoesNotLeaveItsEdgeBehind is round 4's finding, and
+// the CROSS-TABLE form of a class the branch had only closed within one row.
+//
+// A work_items row with an untrimmed title loses its entity to quarantine.
+// The work_item_dependencies row naming that same work item stays valid,
+// because a dependency edge labels its endpoint with the work item ID rather
+// than the title -- so the two fail independently, which the `supports` link
+// cannot express: it only ties together candidates emitted by ONE row.
+//
+// The edge then survived with no entity behind it, and the backend merges an
+// unknown endpoint as a referenced stub with NIL validity, admitted at every
+// requested time. The cursor advances past the rejected entity, so the
+// organization is left with a subject whose temporal admission is silently
+// wrong, permanently -- worse than the loud batch rejection this replaced.
+func TestQuarantinedEntityDoesNotLeaveItsEdgeBehind(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	workItem := func(id, title string) []any {
+		return []any{id, "repo-1", "example-org/widget-service", title, "in_progress", "", at, created, uint8(0), zeroTime, "", "", "", []string{}}
+	}
+	tables := baseTables(at)
+	for i, tb := range tables {
+		switch tb.match {
+		case "FROM work_items AS w":
+			tables[i].rows = [][]any{
+				workItem("WI-1", "Fix deploy "), // untrimmed: entity quarantined
+				workItem("WI-2", "Other item"),
+			}
+			tables[i].cursorOf = workItemCursorOf
+		case dependencyTable:
+			tables[i].rows = [][]any{dependencyRow("WI-1", "WI-2", "BLOCKS", at.Add(time.Second), created)}
+		default:
+			tables[i].rows = nil
+		}
+	}
+
+	batch, available, err, observations := projectWithQuarantineLog(t, tables, testCursor(t, created, ""))
+	if err != nil || !available {
+		t.Fatalf("err=%v available=%v", err, available)
+	}
+
+	projected := map[string]struct{}{}
+	for _, e := range batch.Entities {
+		projected[e.Subject.CanonicalID] = struct{}{}
+	}
+	// The decisive assertion: no surviving edge may name an endpoint whose
+	// authoritative entity this same batch refused.
+	for _, r := range batch.Relationships {
+		for _, endpoint := range []string{r.From.CanonicalID, r.To.CanonicalID} {
+			if !strings.Contains(endpoint, "WI-1") {
+				continue
+			}
+			if _, ok := projected[endpoint]; !ok {
+				t.Fatalf("relationship %s (%s -> %s) survived while the entity for %s was quarantined -- the backend will mint an implicit stub with NO validity window, admitted at every requested time",
+					r.Type, r.From.CanonicalID, r.To.CanonicalID, endpoint)
+			}
+		}
+	}
+
+	reasons := map[string]int{}
+	for _, entry := range observations {
+		reasons[fmt.Sprint(entry["quarantine_reason"])]++
+	}
+	if reasons["endpoint_entity_quarantined"] == 0 {
+		t.Fatalf("the dependency edge must be dropped under its own reason and COUNTED, never silently: %v", reasons)
+	}
+	// The healthy work item is untouched.
+	if _, ok := projected["work_item.v2:repo-1:WI-2"]; !ok {
+		t.Fatalf("the healthy work item must still project: %+v", batch.Entities)
+	}
+}
