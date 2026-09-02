@@ -29,7 +29,25 @@ func ClassifyInterpretationRejection(question InterpretedQuestion, cause error) 
 	// the route instead of being flattened into prose here.
 	wrapped := fmt.Errorf("%w: %w: %w", ErrInterpretationRejected, ErrModelOutput, cause)
 	bound, diagnosed := contractsv1.DiagnoseContextFabricInterpretedQuestionBound(question)
-	return withBoundViolation(wrapped, bound, diagnosed)
+	classified := withBoundViolation(wrapped, bound, diagnosed)
+	// The rejection reason is attached OUTSIDE the bound violation, never
+	// instead of it. The two answer different questions and a rejection
+	// routinely has one without the other: the bound names a registered
+	// numeric limit (and by CHAOS-3784 round-4's soundness rule is absent
+	// for every enum/min-length/duplicate/business-rule clause), while the
+	// reason names the rule. Wrapping outward keeps every existing
+	// errors.As(&ModelBoundViolation{}) and errors.Is(ErrModelOutput)
+	// caller working unchanged -- InterpretationRejection.Unwrap returns
+	// exactly what this function used to return.
+	//
+	// diagnoseOK is deliberately discarded: it distinguishes "validate()
+	// would ACCEPT this question" from "a clause rejected it", and by this
+	// function's own precondition (question is the value Validate() just
+	// failed on) the accept case is unreachable. If it were ever reached,
+	// the reason is Unclassified, which is the correct thing to report --
+	// never a fabricated clause name.
+	reason, _ := contractsv1.DiagnoseContextFabricInterpretedQuestionRejection(question)
+	return NewInterpretationRejection(reason, classified)
 }
 
 // ClassifySynthesisRejection is ClassifyInterpretationRejection's

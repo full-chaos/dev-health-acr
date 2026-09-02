@@ -509,6 +509,23 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 	if errors.As(err, &rejection) {
 		fields = append(fields, "rejection_reason", string(contextfabric.SynthesisRejectionReasonOf(err)))
 	}
+	// The INTERPRET-side half of the same field, on the same line, for the
+	// same reason. Without it a 422 interpretation_rejected reaching this
+	// sink says only failure_classification=interpretation_rejected and
+	// nothing more -- which is the exact complaint that produced this
+	// ticket, one layer further out than the model decision line.
+	//
+	// It matters most for the two fact_registry producers: those rejections
+	// never pass through genkitruntime at all, so the model decision line
+	// (which is where the interpret reason otherwise appears) is not even
+	// emitted for them. This event is their ONLY telemetry surface.
+	//
+	// Mutually exclusive with the synthesis branch above in practice -- one
+	// error is not both -- so the two never write the same key twice.
+	var interpretationRejection *contextfabric.InterpretationRejection
+	if errors.As(err, &interpretationRejection) {
+		fields = append(fields, "rejection_reason", string(contextfabric.InterpretationRejectionReasonOf(err)))
+	}
 	// CHAOS-4726: a rejected synthesis never reaches stage 3, so
 	// RecordPlanNarrowing's "context fabric plan narrowing" assembled_result
 	// line -- the only place the narrowing basis was previously visible --
