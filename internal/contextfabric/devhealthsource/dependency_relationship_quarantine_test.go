@@ -763,3 +763,50 @@ func TestQuarantinedTombstoneReportsItsOwnBound(t *testing.T) {
 			got, "unrepresentable_instant")
 	}
 }
+
+// TestMappedUnresolvedPairDoesNotDuplicateItsStubSubject is round 2's P1.
+//
+// Two unresolved rows for the same pair under the two inverted spellings both
+// map to BLOCKS, so the relationship dedup collapses them to one edge -- but
+// each row also mints the SAME work_item_ref stub subject, and entities carry
+// their own batch-level uniqueness rule ("subject must appear at most once per
+// batch", keyed on kind + canonical ID). Deduplicating only edges therefore
+// left both stubs, the contract rejected the batch, and the checkpoint was
+// held: the wedge again, reached through the dedup pass that was written to
+// prevent it.
+//
+// Worth recording WHY this was missed rather than only that it was: the
+// entity rule is worded differently from the other three, so the search that
+// enumerated "must be unique within a batch" did not match it and the lane
+// concluded entities had no uniqueness constraint. A negative search is only
+// evidence when the term is proven to match the thing sought.
+func TestMappedUnresolvedPairDoesNotDuplicateItsStubSubject(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	rows := [][]any{
+		unresolvedDependencyRow("WI-1", "EXT-1", "BLOCKED_BY", at, created),
+		unresolvedDependencyRow("WI-1", "EXT-1", "IS_BLOCKED_BY", at.Add(time.Second), created),
+	}
+	batch, available, err, observations := projectWithQuarantineLog(t, dependencyTablesOnly(t, at, rows), testCursor(t, at.Add(-time.Hour), ""))
+	if err != nil {
+		t.Fatalf("the batch was rejected instead of collapsing the duplicate stub: %v", err)
+	}
+	if !available {
+		t.Fatal("expected a batch")
+	}
+	if len(batch.Entities) != 1 {
+		t.Fatalf("entities = %d, want exactly 1 stub for the one unresolved target: %+v", len(batch.Entities), batch.Entities)
+	}
+	if len(batch.Relationships) != 1 {
+		t.Fatalf("relationships = %d, want exactly 1 converged edge", len(batch.Relationships))
+	}
+	reasons := map[string]int{}
+	for _, entry := range observations {
+		reasons[fmt.Sprint(entry["quarantine_reason"])]++
+	}
+	if reasons["duplicate_within_batch"] == 0 {
+		t.Fatalf("the redundant stub and edge must be dropped as duplicates and COUNTED: %v", reasons)
+	}
+}

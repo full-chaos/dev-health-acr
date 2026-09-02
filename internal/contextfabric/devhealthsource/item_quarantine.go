@@ -264,9 +264,9 @@ func quarantineDetail(c candidate) string {
 
 // dropDuplicateIdentities enforces the v1 contract's BATCH-level uniqueness
 // rules, which per-item validation structurally cannot see: every item here is
-// individually valid, and only their COMBINATION is rejected
-// (validate_context_fabric_helpers.go:261, :277, :293, :363 -- relationship
-// IDs, content IDs, episode IDs, and tombstone kind+canonical ID).
+// individually valid, and only their COMBINATION is rejected -- entity
+// subjects (kind + canonical ID), relationship IDs, episode IDs, and tombstone
+// kind + canonical ID.
 //
 // CHAOS-4874: this became reachable through the relationship mapping. Mapping
 // BLOCKED_BY onto BLOCKS with exchanged endpoints is deliberate convergence --
@@ -285,6 +285,7 @@ func quarantineDetail(c candidate) string {
 // already have, so losing its evidence ref is a smaller cost than losing the
 // page -- but it IS a cost, which is why it is counted rather than silent.
 func dropDuplicateIdentities(all []candidate, observe func(quarantineObservation)) []candidate {
+	seenEntities := make(map[string]struct{}, len(all))
 	seenRelationships := make(map[string]struct{}, len(all))
 	seenEpisodes := make(map[string]struct{}, len(all))
 	seenTombstones := make(map[string]struct{}, len(all))
@@ -294,6 +295,16 @@ func dropDuplicateIdentities(all []candidate, observe func(quarantineObservation
 		var seen map[string]struct{}
 		var kind string
 		switch {
+		case c.entity != nil:
+			// Entities carry a uniqueness rule too, worded differently from
+			// the others ("subject must appear at most once per batch",
+			// keyed on kind + canonical ID) -- which is exactly how it was
+			// missed: a search for the other three rules' phrasing does not
+			// match it. Two unresolved dependency rows for the same pair
+			// under different spellings that MAP to one type emit the same
+			// ref-stub subject twice; deduplicating only the edges leaves
+			// both stubs and the batch is rejected anyway.
+			key, seen, kind = string(c.entity.Subject.Kind)+"\x00"+c.entity.Subject.CanonicalID, seenEntities, "entity"
 		case c.relationship != nil:
 			key, seen, kind = c.relationship.RelationshipID, seenRelationships, "relationship"
 		case c.episode != nil:
