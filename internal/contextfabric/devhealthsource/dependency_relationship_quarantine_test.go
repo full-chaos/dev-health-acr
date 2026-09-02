@@ -489,3 +489,119 @@ func TestQuarantiningAnEdgeAlsoDropsTheStubThatOnlyExistedToBeItsEndpoint(t *tes
 		}
 	})
 }
+
+// TestAllQuarantinedTailAdvancesTheDurableCursorExactlyOnce is the regression
+// for the second defect the fix itself introduced, and the more dangerous of
+// the two.
+//
+// Per-item quarantine made a fully-unprojectable PAGE reachable for this
+// source for the first time. `pagedBatch`'s skip loop advances past such
+// pages IN-PROCESS only; the DURABLE checkpoint moves when a batch publishes,
+// or through `persistConsumedProgress`, which requires the source to
+// implement contextfabric.ProjectionProgress. This source did not implement
+// it -- only TeamsProjectsSource did -- so an all-quarantined TAIL left the
+// checkpoint exactly where it was. Every tick then re-read the same rows,
+// re-quarantined them and re-logged every drop, forever, with no error and no
+// progress: the original wedge with the diagnosis removed.
+//
+// On the affected organization that is 1,296 EXTERNAL_ISSUE_KEY rows, each
+// costing two quarantine lines (the edge and the stub that existed only to be
+// its endpoint) -- roughly 2,592 WARN lines per tick, indefinitely.
+//
+// The assertion that matters is the SECOND tick's quarantine count: each row
+// must be judged exactly ONCE across both ticks. A test that only checked the
+// cursor value would pass against a memo that advanced the cursor but still
+// re-read the rows.
+func TestAllQuarantinedTailAdvancesTheDurableCursorExactlyOnce(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// The whole tail is unprojectable: nothing publishable after it.
+	rows := [][]any{
+		unresolvedDependencyRow("WI-1", "EXT-1", "EXTERNAL_ISSUE_KEY", at, created),
+		unresolvedDependencyRow("WI-2", "EXT-2", "EXTERNAL_ISSUE_KEY", at.Add(time.Second), created),
+	}
+	tables := dependencyTablesOnly(t, at, rows)
+	start := testCursor(t, at.Add(-time.Hour), "")
+
+	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: tables})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	var buf bytes.Buffer
+	source = source.WithLogger(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName, Cursor: start}
+
+	// Tick 1: nothing publishable, so no batch.
+	if _, available, err := source.NextProjectionBatch(context.Background(), checkpoint); err != nil || available {
+		t.Fatalf("tick 1: err=%v available=%v, want no batch and no error", err, available)
+	}
+	firstTickDrops := strings.Count(buf.String(), quarantineLine)
+	if firstTickDrops != 4 {
+		t.Fatalf("tick 1 quarantines = %d, want 4 (2 rows x edge+stub)", firstTickDrops)
+	}
+
+	// The worker asks for consumed-without-publishing progress. Without this
+	// the checkpoint cannot move at all.
+	progress, ok, err := source.ConsumedWithoutPublishing(context.Background(), checkpoint)
+	if err != nil {
+		t.Fatalf("consumed progress: %v", err)
+	}
+	if !ok {
+		t.Fatal("the source offered NO consumed progress for an all-quarantined tail: the checkpoint cannot advance, so these rows are re-read and re-logged on every tick forever")
+	}
+	if progress.NextCursor == "" || progress.NextCursor == checkpoint.Cursor {
+		t.Fatalf("consumed NextCursor = %q, want a cursor strictly past the quarantined rows", progress.NextCursor)
+	}
+	if progress.SourceVersion != devhealthsource.ClickHouseSourceVersion {
+		t.Fatalf("consumed SourceVersion = %q, want %q -- progress must be bound to the producer identity that derived it",
+			progress.SourceVersion, devhealthsource.ClickHouseSourceVersion)
+	}
+
+	// Tick 2 from the advanced checkpoint, exactly as the worker would.
+	buf.Reset()
+	advanced := contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName, Cursor: progress.NextCursor}
+	if _, available, err := source.NextProjectionBatch(context.Background(), advanced); err != nil || available {
+		t.Fatalf("tick 2: err=%v available=%v, want no batch and no error", err, available)
+	}
+	if second := strings.Count(buf.String(), quarantineLine); second != 0 {
+		t.Fatalf("tick 2 re-quarantined %d items: the rows were read a second time, so the cursor did not really pass them and the log flood is unbounded", second)
+	}
+}
+
+// TestStaleConsumedMemoIsRefusedAndLeavesTheCursorWhereItWas pins the memo's
+// safety guard. A memo records the cursor it advanced TO and the checkpoint it
+// started FROM; asked about a different checkpoint it must refuse, because a
+// memo derived from another cursor space says nothing about this one. The
+// worst case is then a lost optimisation, never a skipped row.
+func TestStaleConsumedMemoIsRefusedAndLeavesTheCursorWhereItWas(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	rows := [][]any{unresolvedDependencyRow("WI-1", "EXT-1", "EXTERNAL_ISSUE_KEY", at, created)}
+	tables := dependencyTablesOnly(t, at, rows)
+
+	source, err := devhealthsource.NewClickHouseProjectionSource(&fakeClient{tables: tables})
+	if err != nil {
+		t.Fatalf("new source: %v", err)
+	}
+	recordedAt := testCursor(t, at.Add(-time.Hour), "")
+	if _, _, err := source.NextProjectionBatch(context.Background(),
+		contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName, Cursor: recordedAt}); err != nil {
+		t.Fatalf("seed call: %v", err)
+	}
+
+	// Ask about a DIFFERENT checkpoint than the memo was recorded against.
+	other := contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.SourceName, Cursor: testCursor(t, at.Add(-2*time.Hour), "")}
+	progress, ok, err := source.ConsumedWithoutPublishing(context.Background(), other)
+	if err != nil {
+		t.Fatalf("consumed progress: %v", err)
+	}
+	if ok {
+		t.Fatalf("a memo recorded against a different checkpoint was ACCEPTED (NextCursor=%q): it would move a cursor over rows it never examined", progress.NextCursor)
+	}
+	if progress.NextCursor != "" {
+		t.Fatalf("a refused memo must offer no cursor at all, got %q", progress.NextCursor)
+	}
+}
