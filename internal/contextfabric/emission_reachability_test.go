@@ -1180,6 +1180,58 @@ func TestEveryNonLeakDispositionRecoversItsSaltedField(t *testing.T) {
 	}
 }
 
+// leakCauseFixtures maps each leak cause to the fixture that lands in it.
+//
+// `no_body` is DELIBERATELY ABSENT and the absence is asserted, not implied:
+// constructing it needs an assembly or linkname stub, which does not belong
+// in a test fixture. Naming it here as the one unfixtured cause means a
+// FOURTH unfixtured cause fails this test by name, rather than quietly
+// joining a list of things nobody covers.
+var leakCauseFixtures = map[leakCause]string{
+	leakInterfaceMethod:   "ProbeInterface",
+	leakExternalFuncValue: "ProbeIndirect",
+	leakUnresolvable:      "ProbeIndexedCall",
+}
+
+// TestEveryLeakCauseHasAFixtureOrIsDeclaredUnfixturable quantifies over the
+// leak vocabulary the way the disposition test quantifies over dispositions.
+//
+// A leak cause nothing lands in is the same dead tier as a disposition
+// nothing lands in: the counter reads a healthy zero whether the cause never
+// occurs or the classifier can never produce it.
+func TestEveryLeakCauseHasAFixtureOrIsDeclaredUnfixturable(t *testing.T) {
+	probes := walkProbeFixture(t)
+	unfixtured := []leakCause{}
+	checked := 0
+	for _, cause := range leakCauses {
+		provider, declared := leakCauseFixtures[cause]
+		if !declared {
+			unfixtured = append(unfixtured, cause)
+			continue
+		}
+		emission, walked := probes[provider]
+		if !walked {
+			t.Errorf("leak cause %q names fixture %q, which the walk did not find", cause, provider)
+			continue
+		}
+		index, known := leakCauseIndex(cause)
+		if !known {
+			t.Errorf("leak cause %q is not in its own vocabulary", cause)
+			continue
+		}
+		if emission.leaksByCause[index] == 0 {
+			t.Errorf("fixture %q was supposed to land in leak cause %q and did not", provider, cause)
+		}
+		checked++
+	}
+	if len(unfixtured) != 1 || unfixtured[0] != leakNoBody {
+		t.Errorf("leak causes with no fixture are %v; exactly one (%q) is declared unfixturable, so anything else here is an uncovered tier", unfixtured, leakNoBody)
+	}
+	if checked != LeakCauseCount-1 {
+		t.Fatalf("exercised %d leak causes, want %d", checked, LeakCauseCount-1)
+	}
+}
+
 // TestTheInterfaceDispositionLeaksAndIsCounted pins the defect the
 // re-derivation exists to make structural.
 //

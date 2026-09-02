@@ -202,3 +202,32 @@ func (p InterfaceProvider) build() map[string]contextfabric.FactValue {
 // Keep the concrete implementation referenced so it is not dead code; the
 // walk must still refuse to follow the interface call above.
 var _ fieldEmitter = concreteEmitter{}
+
+// ProbeIndexedCall exercises the `unresolvable` leak cause: a call whose
+// callee expression has no identifier at all.
+//
+// It exists because a mutation SURVIVED without it. Making that branch
+// return an out-of-vocabulary disposition changed nothing, because no call
+// in the real provider package reaches it -- so the totality assertion,
+// which quantifies over the population it is given, had no population for
+// this case. An assertion is only as strong as the inputs that reach it.
+const ProbeIndexedCall contextfabric.FactKind = "zz_probe_indexed_call"
+
+type IndexedCallProvider struct{}
+
+func (IndexedCallProvider) Capability() contextfabric.FactCapability {
+	return newCapability(ProbeIndexedCall)
+}
+
+func (IndexedCallProvider) build() map[string]contextfabric.FactValue {
+	fields := map[string]contextfabric.FactValue{}
+	handlers := []func(map[string]contextfabric.FactValue){
+		func(target map[string]contextfabric.FactValue) {
+			target["indexed_field"] = contextfabric.FactValue{}
+		},
+	}
+	// The callee is an index expression: no identifier, so which function
+	// runs is not knowable from the source.
+	handlers[0](fields)
+	return fields
+}
