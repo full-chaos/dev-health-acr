@@ -43,6 +43,8 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		d.Source = "context-fabric:graph"
 	case ContextFabricCoverageDetailGraphValidityUnbounded:
 		d.Source, d.Count = "context-fabric:graph-validity-windows", intPtr(1)
+	case ContextFabricCoverageDetailReuseAuxiliaryRefsStripped:
+		d.Source, d.Count, d.Degrading = "context-fabric:answer-reuse", intPtr(4), true
 	}
 	return d
 }

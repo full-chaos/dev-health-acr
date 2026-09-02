@@ -559,6 +559,42 @@ carries `credential_masked` only (last 4 characters, e.g. `********wxyz`).
 | --- | --- | --- |
 | `ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE` | *(unset — disabled)* | Staleness window (1m–24h when set). A stored investigation result older than this is never reused, regardless of whether every other reuse condition holds. Leaving this unset disables answer reuse entirely: every Investigate call runs fresh, exactly as if `pginvestigation.WithAnswerReuse` were never passed. |
 
+**What a reuse hit is rechecked against, and when it degrades.** Before a
+stored answer is served, every subject it names is re-resolved and every
+evidence reference it would serve is re-proved against a fresh graph
+discovery for the CURRENT caller. The rule the recheck enforces is *never
+serve a reference the caller can no longer see*, and it covers the whole
+payload, not only the answer's own citations -- a reused result is served
+whole.
+
+The outcome is one of three, and they are distinguishable in telemetry:
+
+- **`hit`** -- everything the stored payload would serve is still visible.
+  Served unchanged, zero model calls.
+- **`hit_degraded`** -- some references could not be proved visible, but
+  none of them was one of the answer's own citations. The unprovable
+  references (and any item they left without evidence) are REMOVED before
+  the answer is served, `coverage.partial` becomes true, and the narrowing
+  is disclosed both as a structured coverage detail
+  (`reuse_auxiliary_refs_stripped`, carrying the count) and as a
+  `degraded_reasons[]` string. **Read this as a narrowed answer, not as a
+  clean cache hit** -- a reuse rate that folds the two together hides how
+  much a caller is losing.
+- **a miss** -- reuse did not happen and the call ran fresh.
+  `miss_evidence_containment` now means specifically that one of the
+  answer's own CITATIONS is no longer visible;
+  `miss_recheck_unavailable` means the fresh discovery failed, so nothing
+  was proved either way; `miss_degrade_invalid` means a narrowing was
+  possible in principle but the stripped payload would not have satisfied
+  the result contract, so it was refused rather than served malformed.
+
+The `context fabric answer reuse containment` log line carries the
+measurement behind all of this per attempt -- references demanded, proved
+visible, and missing, plus what a degrade removed. A low reuse rate is
+diagnosed from those counts, not from the outcome label alone: "demanded
+far more than was visible" and "authorization genuinely narrowed" are
+different problems that the label cannot separate.
+
 **Retrieval discriminators (CHAOS-3833).** Every reuse-participating row
 additionally persists two conjunctive equality dimensions (migration `0014`):
 the **embed retrieval identity** (`<provider>/<model>#<composition tag>`, or

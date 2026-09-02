@@ -68,6 +68,22 @@ const (
 	// at a requested historical time carrying no validity window (the
 	// context-fabric:graph-validity-windows source row). Never degrading.
 	ContextFabricCoverageDetailGraphValidityUnbounded ContextFabricCoverageDetailCode = "graph_validity_unbounded"
+
+	// ContextFabricCoverageDetailReuseAuxiliaryRefsStripped: this answer
+	// was served from the stored-result reuse path, and the authorization
+	// recheck could not prove every evidence reference the stored payload
+	// carried is still visible to this caller. The unprovable ones were
+	// REMOVED before the answer was served, together with any item they
+	// left without evidence; Count is the total number of removals.
+	//
+	// Always degrading. It is not a fact-read or graph-read limitation --
+	// it is this answer being narrower than the one originally stored, and
+	// a caller who is not told that would reasonably read the reused answer
+	// as the whole of what was found. The alternative to disclosing it is
+	// refusing the reuse outright, which is what a missing TOP-LEVEL
+	// citation still does: a narrowed answer is useful, an answer whose own
+	// cited evidence vanished is a different answer.
+	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped ContextFabricCoverageDetailCode = "reuse_auxiliary_refs_stripped"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -84,6 +100,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailGraphCohortDeniedByAuthorization,
 	ContextFabricCoverageDetailGraphUnknownRelationshipType,
 	ContextFabricCoverageDetailGraphValidityUnbounded,
+	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -262,6 +279,7 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	ContextFabricCoverageDetailGraphCohortDeniedByAuthorization:  {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailGraphUnknownRelationshipType:      {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailGraphValidityUnbounded:            {requireCount: true, allowCount: true},
+	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped:        {requireCount: true, allowCount: true},
 }
 
 // coverageDetailCodeDegrades declares, per the settled design, which codes
