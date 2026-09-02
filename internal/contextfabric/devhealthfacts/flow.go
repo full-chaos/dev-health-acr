@@ -403,10 +403,18 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 			fields["scope_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 		}
 		if dailyTable, ok, dailyOmitted := flowDailyTable(dailyByTeam[teamID], timeBound.effectiveGrain(grainDaily)); ok {
-			fields["daily_flow"] = dailyTable
-			totalOmitted += dailyOmitted
-			if dailyOmitted > 0 {
-				fields["daily_flow_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+			// CHAOS-4785: never hand the write-path validator a dual-table
+			// fact it must reject outright -- check the SAME joint bound
+			// here and drop (disclosed) the additive time series instead.
+			if combinedRowsExceedBytesBound(valueRows, dailyTable.Rows) {
+				recordFactBytesBoundExceeded("flow", contextfabric.FactFlow)
+				fields["daily_flow_dropped_bytes_bound"] = contextfabric.BooleanFactValue(true)
+			} else {
+				fields["daily_flow"] = dailyTable
+				totalOmitted += dailyOmitted
+				if dailyOmitted > 0 {
+					fields["daily_flow_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+				}
 			}
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
@@ -652,10 +660,16 @@ ORDER BY p.id, wm.team_id`)
 			fields["team_breakdown_omitted_count"] = contextfabric.IntegerFactValue(int64(omitted))
 		}
 		if dailyTable, ok, dailyOmitted := flowDailyTable(dailyByProject[projectKey], timeBound.effectiveGrain(grainDaily)); ok {
-			fields["daily_flow"] = dailyTable
-			totalOmitted += dailyOmitted
-			if dailyOmitted > 0 {
-				fields["daily_flow_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+			// CHAOS-4785: see the matching note in readTeamFlow.
+			if combinedRowsExceedBytesBound(teamRows, dailyTable.Rows) {
+				recordFactBytesBoundExceeded("flow", contextfabric.FactFlow)
+				fields["daily_flow_dropped_bytes_bound"] = contextfabric.BooleanFactValue(true)
+			} else {
+				fields["daily_flow"] = dailyTable
+				totalOmitted += dailyOmitted
+				if dailyOmitted > 0 {
+					fields["daily_flow_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
+				}
 			}
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{

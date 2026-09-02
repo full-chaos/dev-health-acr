@@ -39,6 +39,73 @@ func validateClaimedFactRows(rows []ContextFabricClaimedFactRow) error {
 	return nil
 }
 
+// claimedFactRowContentBytes approximates one claimed/projected fact row's
+// content weight in bytes: each field's key plus its scalar value's own
+// content (a String variant's raw bytes; a flat, conservative estimate for
+// every other variant, none of which carries a length bound of its own --
+// ContextFabricScalarValue.Validate). This mirrors the content-only
+// counting CHAOS-4785 itself used to derive the ~8.19M-byte single-table
+// figure -- before JSON keys' quotes/punctuation, which only adds to the
+// real wire size -- so this is a conservative LOWER bound on the actual
+// serialized size, never an over-estimate.
+func claimedFactRowContentBytes(row ContextFabricClaimedFactRow) int {
+	const nonStringValueBytes = 8
+	total := 0
+	for key, value := range row.Fields {
+		total += len(key)
+		if value.String != nil {
+			total += len(*value.String)
+		} else {
+			total += nonStringValueBytes
+		}
+	}
+	return total
+}
+
+// validateClaimedFactRowsCombined bounds Rows and TimeSeriesRows TOGETHER
+// (CHAOS-4785). validateClaimedFactRows above already bounds each
+// collection on its own, but nothing bounded their SUM, so a fact could
+// legally carry two independently-legal tables (a legacy breakdown/ranking
+// alongside a CHAOS-4682 time series) that together serialize far past the
+// service's MaxSerializedBytes ceiling. See
+// ContextFabricClaimedFactCombinedCellsMax /
+// ContextFabricClaimedFactCombinedContentBytesMax's own doc comment
+// (context_fabric_model_bounds.go) for the arithmetic and the real-data
+// measurement behind the chosen values.
+//
+// Applies ONLY when BOTH collections are non-empty: this ticket's own gap
+// is specifically the unbounded PRODUCT/COMBINATION of two tables on one
+// fact, not either table alone -- a single-table fact (Rows-only, or
+// TimeSeriesRows-only, CHAOS-4347's pre-existing shape) stays governed
+// exclusively by validateClaimedFactRows' own per-table bound, unchanged.
+// Without this gate, ContextFabricClaimedFactCombinedContentBytesMax
+// (262,144 bytes, sized off REAL dual-table data) would be far smaller
+// than one table's own legal maximum (~8.45M content bytes) and would
+// newly reject single-table facts that were legal before this ticket --
+// a regression caught by TestCHAOS4785RegressionSingleTableAloneAtMax
+// MustNotBeRejected before this gate was added.
+func validateClaimedFactRowsCombined(rows, timeSeriesRows []ContextFabricClaimedFactRow) error {
+	if len(rows) == 0 || len(timeSeriesRows) == 0 {
+		return nil
+	}
+	cells, contentBytes := 0, 0
+	for _, row := range rows {
+		cells += len(row.Fields)
+		contentBytes += claimedFactRowContentBytes(row)
+	}
+	for _, row := range timeSeriesRows {
+		cells += len(row.Fields)
+		contentBytes += claimedFactRowContentBytes(row)
+	}
+	if cells > ContextFabricClaimedFactCombinedCellsMax {
+		return fmt.Errorf("claimed fact rows+time_series_rows combined cell count violates v1 bounds")
+	}
+	if contentBytes > ContextFabricClaimedFactCombinedContentBytesMax {
+		return fmt.Errorf("claimed fact rows+time_series_rows combined content size violates v1 bounds")
+	}
+	return nil
+}
+
 func validateDrivers(values []ContextFabricDriverJudgment, claimed map[string]ContextFabricClaimedFact, bounds contextFabricBounds) error {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {

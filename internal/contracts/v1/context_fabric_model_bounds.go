@@ -229,6 +229,38 @@ const (
 	ContextFabricClaimedFactMaxRows      = 64
 	ContextFabricClaimedFactRowMaxFields = 32
 
+	// ContextFabricClaimedFactCombinedCellsMax and
+	// ContextFabricClaimedFactCombinedContentBytesMax bound Rows and
+	// TimeSeriesRows TOGETHER (CHAOS-4785). Each collection is
+	// independently bounded at ContextFabricClaimedFactMaxRows x
+	// ContextFabricClaimedFactRowMaxFields cells, so a fact populating
+	// BOTH at their legal per-table maximum -- a real, producible shape
+	// since CHAOS-4682 (§5.1 P2): ContextFabricClaimedFact's own doc
+	// comment on TimeSeriesRows says a dual-table fact carries a legacy
+	// table AND a time_series table at once -- reaches roughly
+	// 2 x 64 x 32 x (128+4000) =~ 16.9M content bytes against a service
+	// ceiling of 1 MiB (ContextFabricSerializedBytesMax). Verified
+	// UNPRODUCED by any of today's five TimeSeriesRows producers
+	// (devhealthfacts health/flow/readiness/workload/metrics): the
+	// largest ClaimedFact actually observed in real data
+	// (kiac/dh_0830, org 70d529e0, 2026-09-02) is 16,246 serialized
+	// bytes -- so these bounds are additive defense in depth, not a
+	// response to an active failure.
+	//
+	// CombinedCellsMax is set to exactly ONE table's own legal cell
+	// budget (MaxRows x RowMaxFields): a dual-table fact may spend the
+	// SAME total cell budget a single legacy table always could, never
+	// double it.
+	//
+	// CombinedContentBytesMax is ContextFabricSerializedBytesMin (8192,
+	// the smallest a caller may ever configure MaxSerializedBytes to)
+	// x 32 = 262,144 bytes: >=16x the largest fact ever produced against
+	// real data (16,246 bytes, so no observed shape is at risk), while
+	// staying far below the 1 MiB response ceiling so ONE fact can never
+	// consume it alone.
+	ContextFabricClaimedFactCombinedCellsMax        = ContextFabricClaimedFactMaxRows * ContextFabricClaimedFactRowMaxFields
+	ContextFabricClaimedFactCombinedContentBytesMax = ContextFabricSerializedBytesMin * 32
+
 	// Synthesis: top-level synthesis draft / result collections the model
 	// itself populates.
 	ContextFabricStrongestPressuresMaxCount = 50

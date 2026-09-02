@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -462,6 +463,80 @@ func capFactValueRows(rows []contextfabric.FactValueRow) (capped []contextfabric
 		return rows, 0
 	}
 	return rows[:contextfabric.MaxFactValueRows], len(rows) - contextfabric.MaxFactValueRows
+}
+
+// factValueRowContentBytes approximates one FactValueRow's content weight
+// in bytes, the SAME method internal/contracts/v1's
+// claimedFactRowContentBytes uses on the wire type -- so a producer's
+// pre-check here and the write-path validator
+// (ContextFabricClaimedFactCombinedContentBytesMax) can never disagree
+// about what "too big" means.
+func factValueRowContentBytes(row contextfabric.FactValueRow) int {
+	const nonStringValueBytes = 8
+	total := 0
+	for key, value := range row.Fields {
+		total += len(key)
+		if value.String != nil {
+			total += len(*value.String)
+		} else {
+			total += nonStringValueBytes
+		}
+	}
+	return total
+}
+
+// combinedRowsExceedBytesBound reports whether legacyRows (a producer's
+// existing breakdown/ranking table, already destined for a fact's Fields
+// map) COMBINED with timeSeriesRows (the CHAOS-4645/4682 additive time
+// series about to be attached to the SAME fact) would violate CHAOS-4785's
+// joint Rows+TimeSeriesRows bound -- the identical arithmetic
+// internal/contracts/v1's validateClaimedFactRowsCombined enforces at the
+// write path (contractsv1.ContextFabricClaimedFactCombinedCellsMax /
+// ContextFabricClaimedFactCombinedContentBytesMax), checked here BEFORE
+// construction so a producer can degrade (drop the additive time series,
+// disclose why via recordFactBytesBoundExceeded) instead of ever handing
+// the validator a fact it must reject outright.
+//
+// No producer has come close in measured real data (kiac/dh_0830 org
+// 70d529e0, 2026-09-02: largest observed combined fact 16,246 bytes,
+// against a 262,144-byte bound) -- this is deliberate defense in depth,
+// not a response to an observed failure.
+func combinedRowsExceedBytesBound(legacyRows, timeSeriesRows []contextfabric.FactValueRow) bool {
+	if len(legacyRows) == 0 || len(timeSeriesRows) == 0 {
+		// Mirrors internal/contracts/v1's validateClaimedFactRowsCombined
+		// gate: the bound applies to the COMBINATION only. A single table
+		// alone -- however large -- stays governed by capFactValueRows'
+		// own pre-existing per-table cap, unchanged.
+		return false
+	}
+	cells, contentBytes := 0, 0
+	for _, row := range legacyRows {
+		cells += len(row.Fields)
+		contentBytes += factValueRowContentBytes(row)
+	}
+	for _, row := range timeSeriesRows {
+		cells += len(row.Fields)
+		contentBytes += factValueRowContentBytes(row)
+	}
+	return cells > contractsv1.ContextFabricClaimedFactCombinedCellsMax ||
+		contentBytes > contractsv1.ContextFabricClaimedFactCombinedContentBytesMax
+}
+
+// recordFactBytesBoundExceeded emits the CHAOS-4785 decision-basis
+// telemetry line for a producer that dropped an additive time series
+// rather than hand the write-path validator an over-bound dual-table fact.
+// producer and kind are both closed, low-cardinality vocabulary (this
+// package's own domain name -- "flow", "health", "readiness", "workload",
+// "metrics" -- and the fact's contextfabric.FactKind), matching this
+// repository's telemetry convention (AGENTS.md: "Structured logging uses
+// log/slog"); never a request id, subject label, or row content.
+func recordFactBytesBoundExceeded(producer string, kind contextfabric.FactKind) {
+	slog.Warn("context_fabric_fact_bytes_bound_exceeded",
+		"producer", producer,
+		"kind", string(kind),
+		"combined_cells_max", contractsv1.ContextFabricClaimedFactCombinedCellsMax,
+		"combined_bytes_max", contractsv1.ContextFabricClaimedFactCombinedContentBytesMax,
+	)
 }
 
 func stringOrNull(value string) contextfabric.FactValue {

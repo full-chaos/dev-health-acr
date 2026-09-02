@@ -942,6 +942,9 @@ func (c ContextFabricClaimedFact) Validate() error {
 	if err := validateTimeSeriesTable(c.TimeSeriesTable, c.TimeSeriesRows); err != nil {
 		return fmt.Errorf("time_series_table: %w", err)
 	}
+	if err := validateClaimedFactRowsCombined(c.Rows, c.TimeSeriesRows); err != nil {
+		return fmt.Errorf("rows+time_series_rows: %w", err)
+	}
 	return nil
 }
 
