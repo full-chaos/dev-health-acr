@@ -728,18 +728,27 @@ func TestPublishedSchemaPropertiesMatchGoWireFields(t *testing.T) {
 		// There are ZERO occurrences of `,string` in this package today
 		// (measured, not assumed), so this guard fires on nothing on main --
 		// it exists so the first one cannot arrive unnoticed.
+		// FAIL CLOSED, scanning the STRUCT GRAPH rather than the key-to-field
+		// association. A review round evaded the association-based version
+		// with an invalid tag name whose key Go truncates, so the field was
+		// never associated and the guard never fired while the value went out
+		// as a string against an integer contract. A guard on a wire-TYPE
+		// property must not depend on knowing which KEY the field lands under.
+		for _, path := range stringOptionFields(rt) {
+			t.Errorf("%s: Go field %s carries the `,string` tag option, which changes the encoded TYPE without changing the key. This check compares key SETS and does not model wire types, so it cannot verify the published type is still correct. Type parity is not implemented -- see CHAOS-4844. Either drop the option or extend this anchor to compare types.", b.label, path)
+		}
+		// FAIL CLOSED on custom marshallers: the oracle observes ONE value,
+		// which is exhaustive for an ordinary struct and proves nothing for a
+		// type whose MarshalJSON can emit different keys for different values.
+		for _, path := range customMarshalerTypes(rt) {
+			t.Errorf("%s: %s implements json.Marshaler, so its wire key set depends on the VALUE and cannot be derived from the single sample this oracle marshals. Model it explicitly (as time.Time is) or exempt the $def with a reason.", b.label, path)
+		}
+		// An emitted key the association cannot explain is REPORTED, never
+		// silently skipped: the enum check below would otherwise pass by
+		// examining nothing.
 		for key := range keys {
-			field, ok := fields[key]
-			if !ok {
-				continue
-			}
-			if tag, has := field.Tag.Lookup("json"); has {
-				_, options, _ := strings.Cut(tag, ",")
-				for _, option := range strings.Split(options, ",") {
-					if option == "string" {
-						t.Errorf("%s: Go field %s carries the `,string` tag option on wire key %q, which changes the encoded TYPE without changing the key. This check compares key SETS and does not model wire types, so it cannot verify the published type is still correct. Type parity is not implemented -- see CHAOS-4844. Either drop the option or extend this anchor to compare types.", b.label, field.Name, key)
-					}
-				}
+			if _, ok := fields[key]; !ok {
+				t.Errorf("%s: wire key %q is emitted but could not be associated with a Go field, so the enum and option checks cannot examine it. Report rather than skip -- an unexaminable key is an unchecked key.", b.label, key)
 			}
 		}
 
