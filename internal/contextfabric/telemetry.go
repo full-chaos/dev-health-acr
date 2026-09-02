@@ -652,6 +652,11 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"refusal_planned", event.RefusalPlanned,
 		"deadline_reserved", event.DeadlineReserved,
 		"retry_declined", string(event.RetryDeclined),
+		// CHAOS-4735 criterion 6: the continuation the refusal offered, as a
+		// closed token. Empty unless a refusal was planned. Never free text
+		// -- the field it replaces held an English sentence, which could not
+		// be a log dimension without becoming unbounded-cardinality prose.
+		"narrower_continuation_axis", string(event.NarrowerContinuationAxis),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric plan narrowing", args...)

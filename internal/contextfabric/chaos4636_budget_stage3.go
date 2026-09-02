@@ -24,8 +24,13 @@ import (
 // finding, claim or member, however small the synthesis input was.
 //
 // So this ships the PLANNED, EXPLAINED refusal instead: it names what was too
-// large and the narrower question that would fit. That is strictly better
-// than the status quo, which is the same refusal with no explanation at all.
+// large and the axis along which a narrower question would fit. That is
+// strictly better than the status quo, which is the same refusal with no
+// explanation at all.
+//
+// CHAOS-4735 corrected HOW it names that axis. The first version returned a
+// fixed English sentence per family; it now returns a closed token that the
+// family registry declares, because the engine does not author user language.
 
 // ErrAnswerExceedsBudget is the planned refusal. It is a distinct sentinel
 // rather than a generic failure so the route can classify it as the DESIGNED
@@ -46,10 +51,28 @@ type AnswerBudgetRefusal struct {
 	MeasuredBytes      int64
 	MaxItems           int
 	MaxSerializedBytes int64
-	// Family is what was being answered, and NarrowerQuestion is the
-	// concrete suggestion.
-	Family           QuestionFamily
-	NarrowerQuestion string
+	// Family is what was being answered.
+	Family QuestionFamily
+	// NarrowerContinuationAxis names the structural dimension a caller
+	// could reduce, as a CLOSED TOKEN.
+	//
+	// CHAOS-4735 replaced a `NarrowerQuestion string` here. That field held
+	// one of five fixed English sentences chosen by a switch on Family, and
+	// the route served it verbatim as error.details.narrower_question --
+	// engine-authored user language from a vocabulary table, on a
+	// user-facing wire, which chris's rulings of 2026-08-31 13:35 and 13:40
+	// ban outright rather than deprecate.
+	//
+	// The token is the half of that sentence the engine actually knows. It
+	// is LOOKED UP from the family registry, never decided here, so this
+	// file no longer reads a family constant at all -- see
+	// chaos4735_family_language_sweep_test.go, which fails if it starts
+	// again.
+	//
+	// NarrowingContinuationNone means no axis could be named; the route
+	// omits the continuation entirely rather than serving "none" as if it
+	// were advice.
+	NarrowerContinuationAxis NarrowingContinuationAxis
 	// RetryAttempted records whether the one bounded re-synthesis ran. It
 	// is false when there was nothing left to narrow, and false when the
 	// remaining deadline could not safely hold a second model call -- two
@@ -186,6 +209,12 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	event.RetryFit = retryOverrun == contractsv1.ContextFabricBudgetFits
 	event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 	event.RefusalPlanned = !event.RetryFit
+	if event.RefusalPlanned {
+		// Only when a refusal is actually planned. Recording the axis on a
+		// fitting retry would make the counter say the caller was given
+		// advice they never received.
+		event.NarrowerContinuationAxis = narrowerContinuationAxisFor(*plan)
+	}
 	e.recordPlanNarrowing(ctx, principal, event)
 
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
@@ -344,40 +373,50 @@ func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, p
 	event.RefusalPlanned = true
 	event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 	event.RetryDeclined = declined
+	event.NarrowerContinuationAxis = narrowerContinuationAxisFor(*plan)
 	e.recordPlanNarrowing(ctx, principal, event)
 	return e.refusalFrom(plan, measurement, overrun, retryAttempted)
 }
 
 func (e *Engine) refusalFrom(plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted bool) error {
 	return AnswerBudgetRefusal{
-		Overrun:            overrun,
-		MeasuredItems:      measurement.Items.Budgeted(),
-		MeasuredBytes:      measurement.Bytes,
-		MaxItems:           plan.Budget.MaxItems,
-		MaxSerializedBytes: plan.Budget.MaxSerializedBytes,
-		Family:             plan.Family,
-		NarrowerQuestion:   narrowerQuestionFor(*plan),
-		RetryAttempted:     retryAttempted,
+		Overrun:                  overrun,
+		MeasuredItems:            measurement.Items.Budgeted(),
+		MeasuredBytes:            measurement.Bytes,
+		MaxItems:                 plan.Budget.MaxItems,
+		MaxSerializedBytes:       plan.Budget.MaxSerializedBytes,
+		Family:                   plan.Family,
+		NarrowerContinuationAxis: narrowerContinuationAxisFor(*plan),
+		RetryAttempted:           retryAttempted,
 	}
 }
 
-// narrowerQuestionFor names a question that WOULD fit. It is derived from the
-// family, so the suggestion is a property of what was asked rather than a
-// generic apology.
+// narrowerContinuationAxisFor LOOKS UP the family's declared narrowing axis.
 //
-// Deliberately not the question text: the engine does not rewrite a caller's
-// words. It names the SHAPE of a narrower question, which is what the caller
-// needs in order to ask one.
-func narrowerQuestionFor(plan AnswerPlan) string {
-	switch plan.Family {
-	case QuestionFamilyGroupedCohortStatus:
-		return "ask about one group at a time, or name the groups you care about, so the answer covers fewer members per group"
-	case QuestionFamilyScopedCohortStatus:
-		return "narrow the scope to a single owner, or name the specific members you care about"
-	case QuestionFamilyDiscoveredCohortRanking:
-		return "ask for the top few subjects rather than the whole discovered cohort"
-	case QuestionFamilyExplicitComparison:
-		return "compare two subjects at a time rather than the full set"
+// CHAOS-4735 replaced `narrowerQuestionFor` -- a switch on plan.Family
+// returning one of five fixed English sentences -- with this lookup. Read the
+// difference carefully, because it is the whole point of the ticket and not a
+// rename: there is no switch and no family constant here. The axis is a
+// COLUMN on the family registry row (chaos4632_question_family_registry.go),
+// so adding a family means declaring its axis in the table the registry test
+// already enumerates, rather than adding an arm to a function nobody re-reads.
+//
+// A switch returning a closed token instead of a sentence would have passed
+// the letter of the ticket and failed its purpose: it is one edit away from
+// being the phrase table again, and it would still be a fifth family-read
+// site outside the closed four-purpose list (design §13.4.3). The sweep in
+// chaos4735_family_language_sweep_test.go enforces both halves.
+//
+// An unknown family -- which SanitizeQuestionFamily and plan construction should
+// already have turned into `unclassified`, but this function does not get to
+// assume -- yields `none`, and the route then omits the continuation
+// altogether. Failing to `none` rather than to some default axis matters:
+// naming the wrong axis is worse advice than naming none, because the caller
+// acts on it.
+func narrowerContinuationAxisFor(plan AnswerPlan) NarrowingContinuationAxis {
+	definition, found := LookupQuestionFamily(plan.Family)
+	if !found {
+		return NarrowingContinuationNone
 	}
-	return "ask about a single subject, or a shorter evidence window"
+	return definition.NarrowerContinuationAxis
 }

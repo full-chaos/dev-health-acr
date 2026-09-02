@@ -92,6 +92,19 @@ type PlanNarrowingEvent struct {
 	// three it was without re-reading source, which is exactly the bar
 	// AGENTS.md's diagnosis-in-artifacts rule sets.
 	RetryDeclined RetryDeclinedReason
+	// NarrowerContinuationAxis is the closed token the refusal offered the
+	// caller, empty when no refusal was planned.
+	//
+	// CHAOS-4735 criterion 6. The refusal telemetry kept question_family and
+	// the overrun numbers but said nothing about the continuation, so "what
+	// did we actually tell callers to do, and does that advice track the
+	// families that refuse most" was unanswerable from the artifacts -- and
+	// the field it would have had to record was free English, which is not a
+	// telemetry value at all. A closed token is countable: it can be a
+	// dimension on the refusal counter without becoming high-cardinality
+	// text, which is the same rule this repository applies to every other
+	// decision-basis field.
+	NarrowerContinuationAxis NarrowingContinuationAxis
 }
 
 // RetryDeclinedReason is the CLOSED vocabulary of why the re-synthesis did

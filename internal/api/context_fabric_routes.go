@@ -260,20 +260,47 @@ func (a *App) writeContextFabricError(w http.ResponseWriter, r *http.Request, er
 	//
 	// Still a 413, and still not retryable: the same question asked again
 	// produces the same oversized answer. What is new is that the response
-	// says which ceiling was exceeded, by how much, and what narrower
-	// question would fit -- instead of today's bare acr_rejected_request.
+	// says which ceiling was exceeded, by how much, and along which axis a
+	// narrower question would fit -- instead of a bare acr_rejected_request.
+	//
+	// CHAOS-4735: `narrower_question` -- a fixed English sentence the engine
+	// picked by switching on the question family -- is GONE from this body,
+	// replaced by `narrower_continuation`, an object of closed tokens. The
+	// engine does not author user language (chris, 2026-08-31 13:35/13:40);
+	// naming the axis is a structural claim it can make, phrasing it is not.
+	//
+	// The shape change is safe for the deployed consumer and that was
+	// verified rather than assumed: ask-dev's parseUpstreamError reads only
+	// `request_id`, `error.code` and `error.retryable`, and `error.message`
+	// is deliberately absent from its UpstreamError type -- it never reads
+	// `error.details` at all. error.v1 types `details` as an open object
+	// (additionalProperties: true), so this is not a schema change either
+	// and needs no pin bump.
 	var budgetRefusal contextfabric.AnswerBudgetRefusal
 	if errors.As(err, &budgetRefusal) {
-		a.writeContextFabricFailure(w, r, err, contextFabricClassBudgetRefusal, http.StatusRequestEntityTooLarge, "invalid_request", "The Context Fabric answer did not fit the response budget", false, map[string]any{
+		details := map[string]any{
 			"overrun":              string(budgetRefusal.Overrun),
 			"measured_items":       budgetRefusal.MeasuredItems,
 			"measured_bytes":       budgetRefusal.MeasuredBytes,
 			"max_items":            budgetRefusal.MaxItems,
 			"max_serialized_bytes": budgetRefusal.MaxSerializedBytes,
 			"question_family":      string(budgetRefusal.Family),
-			"narrower_question":    budgetRefusal.NarrowerQuestion,
 			"retry_attempted":      budgetRefusal.RetryAttempted,
-		})
+		}
+		// OMITTED, not served as "none". A continuation is advice; when no
+		// axis could be named there is no advice, and an object saying
+		// `{"axis": "none"}` invites a consumer to render "narrow by: none".
+		// Absence is the honest encoding of "we have nothing to suggest",
+		// and it is the same discipline the answer contract uses elsewhere:
+		// missing is not a value.
+		if budgetRefusal.NarrowerContinuationAxis != contextfabric.NarrowingContinuationNone &&
+			budgetRefusal.NarrowerContinuationAxis != "" {
+			details["narrower_continuation"] = map[string]any{
+				"family": string(budgetRefusal.Family),
+				"axis":   string(budgetRefusal.NarrowerContinuationAxis),
+			}
+		}
+		a.writeContextFabricFailure(w, r, err, contextFabricClassBudgetRefusal, http.StatusRequestEntityTooLarge, "invalid_request", "The Context Fabric answer did not fit the response budget", false, details)
 		return
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded) {
