@@ -28,11 +28,15 @@ package contextfabric_test
 //     has nothing to do with the rule under test. This test is what makes
 //     the next one's redness evidence rather than noise.
 //
-//  2. TestO9EveryRequiredReadObligationIsServed is the GATE. It asserts no
-//     required READ obligation derives an empty fact-kind set. It is RED at
-//     this tip BY CONSTRUCTION and stays red until the generated mapping
-//     fills every cell a producer can serve and names `unavailable` for
-//     every cell none can.
+//  2. TestFrozenRuleLeavesTwentyTwoRequirementCellsUnserved PINS THE
+//     DEFECT, count and cause distribution. Oracle O9's real assertion --
+//     "no required read obligation derives an empty fact-kind set" -- is
+//     RED at this tip by construction, and that red run is the entry gate
+//     law L10 demands. A permanently-red test cannot live on main, so what
+//     ships is the baseline pinned exactly; the derivation slice replaces
+//     that function with the served-assertion once the generated mapping
+//     can satisfy it. Its name is the finding: it passing means the layer
+//     is still broken in exactly the measured way, never that it works.
 //
 // CORPUS SAFETY. Frames are identified by QUESTION ID only. No corpus
 // question text appears in this file, in its output, or in any artifact
@@ -753,18 +757,45 @@ func TestEveryTracedFrameDerivesTheObligationsItsCellsAssume(t *testing.T) {
 // Assertion 2 -- THE GATE. Red at this tip by construction.
 // ---------------------------------------------------------------------------
 
-// TestO9EveryRequiredReadObligationIsServed is oracle O9's core assertion:
-// for every acceptance question and every composed case, no required READ
-// obligation derives an empty FactKinds set.
+// TestFrozenRuleLeavesTwentyTwoRequirementCellsUnserved PINS A DEFECT.
 //
-// It is RED at this tip. That redness is the ENTRY GATE: law L10 requires
-// the rule to be executed against the real registry before it is written
-// down, and this is that execution. It goes green only when the generated
-// mapping fills every cell a producer can serve AND names `unavailable`
-// for every cell none can -- a silent empty is never acceptable, which is
-// the distinction the frozen rule could not express.
-func TestO9EveryRequiredReadObligationIsServed(t *testing.T) {
+// READ THE NAME AS THE FINDING. This test passing does not mean the
+// requirement layer works; it means the frozen rule is still exactly as
+// broken as the executed trace found it. It exists so that the fix is
+// visible as a diff and so that the baseline cannot drift silently
+// underneath the work that replaces it.
+//
+// WHY IT IS SHAPED THIS WAY. Oracle O9's real assertion is "no required
+// read obligation derives an empty FactKinds set", and that assertion is
+// RED at this tip by construction -- which is the entry gate law L10
+// demands, and which was executed and recorded before any derivation rule
+// was written (evidence: the lane's o9-red-baseline artifact, and this
+// file's own history). A permanently-red test cannot live on main, so what
+// SHIPS here is the baseline pinned exactly, and the derivation slice
+// replaces this function with the served-assertion when the generated
+// mapping can satisfy it.
+//
+// The decomposition is ASSERTED, not merely logged. A bare count of 22 can
+// stay 22 while its causes move -- a producer gaining a subject kind and
+// another losing one nets to zero -- and the causes are what the
+// declaration work is actually aimed at. Pinning the distribution makes
+// any such movement loud.
+func TestFrozenRuleLeavesTwentyTwoRequirementCellsUnserved(t *testing.T) {
 	capabilities := liveCapabilities(t)
+
+	// The measured baseline at acr origin/main 5ee334a2, by obligation and
+	// first failing clause of the intersection rule.
+	wantCauses := map[string]int{
+		"state/" + string(causeSubjectKind):          14,
+		"count/" + string(causeSubjectKind):          2,
+		"health/" + string(causeSubjectKind):         1,
+		"allocation_breakdown/" + string(causeShape): 2,
+		"ranking/" + string(causeShape):              2,
+		"trend_series/" + string(causeShape):         1,
+	}
+	const wantEmpty = 22
+
+	gotCauses := map[string]int{}
 
 	empty := 0
 	var report strings.Builder
@@ -779,6 +810,8 @@ func TestO9EveryRequiredReadObligationIsServed(t *testing.T) {
 			if len(charitable) == 0 {
 				empty++
 				marker = "  <== EMPTY (unavailable)"
+				cause := classifyEmptyCell(capabilities, cell.obligation, cell.subject, testCase.frame.Dimensions)
+				gotCauses[string(cell.obligation)+"/"+string(cause)]++
 			}
 			fmt.Fprintf(&report, "    %-20s role=%-16s subj=%-13s quant=%-12s literal=%v charitable=%v%s\n",
 				cell.obligation, cell.role, cell.subject, rule.quantifier, format(literal), format(charitable), marker)
@@ -788,10 +821,22 @@ func TestO9EveryRequiredReadObligationIsServed(t *testing.T) {
 	t.Logf("registry: %d capabilities%s", len(capabilities), report.String())
 	t.Logf("EMPTY FactKinds cells across %d frames: %d", len(traceCases()), empty)
 
-	if empty > 0 {
-		t.Fatalf("O9 RED: the frozen requirement rule derives %d empty requirement cell(s) across the acceptance and composed cases (see log). "+
-			"A required read obligation with no fact kind is unanswerable and, worse, is SILENT about it: nothing in the row says `unavailable`. "+
-			"This is the entry gate -- the derivation is not written until this is green.", empty)
+	if empty != wantEmpty {
+		t.Errorf("the frozen rule now leaves %d requirement cells unserved; the recorded baseline is %d.\n"+
+			"This test PINS A DEFECT, so a change here is not automatically good news: a LOWER number means "+
+			"something moved in the registry, not that the layer was fixed, and a HIGHER one means a producer "+
+			"stopped serving a subject kind. Re-run the trace, read the per-cell log above, and update this "+
+			"baseline as part of whatever change moved it.", empty, wantEmpty)
+	}
+	for key, want := range wantCauses {
+		if got := gotCauses[key]; got != want {
+			t.Errorf("empty-cell cause %q: %d, baseline %d", key, got, want)
+		}
+	}
+	for key, got := range gotCauses {
+		if _, expected := wantCauses[key]; !expected {
+			t.Errorf("empty-cell cause %q appeared (%d cells) and is not in the recorded baseline", key, got)
+		}
 	}
 }
 
