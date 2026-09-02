@@ -59,6 +59,104 @@ import (
 
 const emissionReachabilityArtifact = "testdata/emitted_fields_reachable.txt"
 
+// THE CLOSURE RULE, stated before the code that implements it.
+//
+// A provider's emitted-field set is the union of the resolved field-key
+// writes over the LEAST FIXED POINT of:
+//
+//	(1) the provider type's own methods;
+//	(2) for every reached function, every callee that resolves to a
+//	    package-local function whose BODY THIS WALK CAN INSPECT.
+//
+// Everything else is a LEAK, and every leak is counted.
+//
+// WHY THE RULE IS WRITTEN DOWN AND THE WALK DERIVED FROM IT. Three review
+// rounds each found a defect in this walk, and each fix seeded the next:
+// map literals only, then a missing function-value edge, then a delete
+// counter that could not fire, then two counters that overstated, then an
+// interface method silently dropped. Every one of those was a MISSING ARM in
+// a hand-written ladder of syntactic cases, which is a structure that can
+// only ever be as complete as the author's imagination. So the ladder is
+// replaced by a CLASSIFICATION over a closed vocabulary: every call site
+// gets exactly one disposition, the totality and exclusivity of that is
+// asserted, and each disposition owes a fixture that lands in it. A case
+// nobody thought of now falls into `leaked` and is COUNTED, instead of
+// falling through a ladder and being silently lost.
+
+// callDisposition is what the walk did with one call site. Closed, total and
+// mutually exclusive over every *ast.CallExpr in a walked body.
+type callDisposition string
+
+const (
+	// callFollowed: a package-local function or method whose body the walk
+	// can inspect, reached through a concrete receiver. The edge is taken.
+	callFollowed callDisposition = "followed"
+	// callAccounted: a closure literal whose body is traversed lexically as
+	// a child of a followed body, so its writes are ALREADY recorded and no
+	// edge is needed. A closure defined locally and passed OUT to another
+	// package is still `accounted` FOR ITS OWN BODY -- what it writes here
+	// is visible here, whoever ends up calling it.
+	callAccounted callDisposition = "accounted"
+	// callNotACall: a type conversion. `int64(x)` parses as a CallExpr and
+	// is not a call at all.
+	callNotACall callDisposition = "not_a_call"
+	// callExcludedByDesign: a function in ANOTHER package. The walk cannot
+	// see into it and says so in the header; counting every stdlib call
+	// would drown the signal.
+	callExcludedByDesign callDisposition = "excluded_by_design"
+	// callLeaked: everything else. A field written behind one of these is
+	// invisible to the walk, so the count is the honest measure of how much
+	// of a provider was not seen.
+	callLeaked callDisposition = "leaked"
+)
+
+var callDispositions = [...]callDisposition{
+	callFollowed, callAccounted, callNotACall, callExcludedByDesign, callLeaked,
+}
+
+// CallDispositionCount is five.
+const CallDispositionCount = len(callDispositions)
+
+// leakCause names WHY a call leaked. One `leaked` counter carries the total,
+// and this breaks it down -- the same shape the requirement layer uses for
+// its unavailable reasons, and for the same reason: a bare count is a number
+// the next reader cannot act on.
+type leakCause string
+
+const (
+	// leakInterfaceMethod: the static receiver type is an interface, so
+	// which body runs is not knowable here. This is a leak EVEN WHEN only
+	// one local implementation exists -- a "single implementation" shortcut
+	// is a guess that silently becomes wrong the day a second one lands.
+	leakInterfaceMethod leakCause = "interface_method"
+	// leakExternalFuncValue: a function value that ARRIVES from outside the
+	// function -- a parameter, a struct field, a map, a global.
+	leakExternalFuncValue leakCause = "external_func_value"
+	// leakNoBody: a package-local function with no inspectable declaration
+	// (an assembly or linkname stub).
+	leakNoBody leakCause = "no_body"
+	// leakUnresolvable: no identifier at all, or an object kind this
+	// vocabulary does not name. The catch-all that keeps the
+	// classification TOTAL.
+	leakUnresolvable leakCause = "unresolvable"
+)
+
+var leakCauses = [...]leakCause{
+	leakInterfaceMethod, leakExternalFuncValue, leakNoBody, leakUnresolvable,
+}
+
+// LeakCauseCount is four.
+const LeakCauseCount = len(leakCauses)
+
+// callSite is one classified call.
+type callSite struct {
+	disposition callDisposition
+	// cause is set only when disposition is callLeaked.
+	cause leakCause
+	// callee is set only when disposition is callFollowed.
+	callee *types.Func
+}
+
 // reachableEmission is one provider's emitted-field picture.
 type reachableEmission struct {
 	// kind is the FactKind constant name the provider's newCapability call
@@ -70,14 +168,18 @@ type reachableEmission struct {
 	// walk could not resolve to a string. See the header: this is the
 	// residual, made countable.
 	dynamicKeySites int
-	// unresolvedCallSites counts calls whose callee this walk could not
-	// resolve to a package-local function: a function value supplied by a
-	// parameter or a field, an interface method, a closure from elsewhere.
-	// Those are edges the walk cannot follow, so a field written behind one
-	// is invisible -- and it is COUNTED for the same reason dynamicKeySites
-	// is, because a limit that is not counted is indistinguishable from an
-	// absence.
-	unresolvedCallSites int
+	// leakedCallSites is the total of the `leaked` disposition: edges the
+	// walk could not follow, so a field written behind one is invisible.
+	// COUNTED for the same reason dynamicKeySites is -- a limit that is not
+	// counted is indistinguishable from an absence.
+	leakedCallSites int
+	// leaksByCause breaks that total down, indexed by leakCauses position.
+	leaksByCause [LeakCauseCount]int
+	// dispositions counts every call site by disposition, indexed by
+	// callDispositions position. Reported so the classification's own
+	// coverage is visible: a walk that suddenly follows nothing shows up
+	// here rather than as a provider that quietly emits less.
+	dispositions [CallDispositionCount]int
 	// reachedFuncs is how many package-local functions the walk visited
 	// from this provider's methods. A provider whose helpers were somehow
 	// not followed would show a suspiciously small number, so the walk's
@@ -87,10 +189,12 @@ type reachableEmission struct {
 
 // funcFacts is what one function does, independent of who calls it.
 type funcFacts struct {
-	writes              map[string]bool
-	dynamicKeySites     int
-	unresolvedCallSites int
-	calls               map[*types.Func]bool
+	writes          map[string]bool
+	dynamicKeySites int
+	// sites is every classified call in this body, in source order. Kept
+	// whole rather than pre-summed so the totality assertion can count them.
+	sites []callSite
+	calls map[*types.Func]bool
 }
 
 // loadProviderPackage type-checks devhealthfacts.
@@ -182,6 +286,113 @@ func stringValuesOfRangeVars(info *types.Info, fn ast.Node) map[types.Object][]s
 		return true
 	})
 	return values
+}
+
+// classifyCall assigns exactly ONE disposition to a call site.
+//
+// THE ORDER OF THESE TESTS IS THE RULE, and each step is written so that
+// falling past it is safe: anything unrecognised reaches the final `leaked`
+// return and is COUNTED. There is no path out of this function that neither
+// follows an edge nor records a leak, which is what the totality assertion
+// checks.
+func classifyCall(pkg *packages.Package, call *ast.CallExpr, funcValues map[types.Object]*types.Func, localClosures map[types.Object]bool, bodied map[*types.Func]bool) callSite {
+	info := pkg.TypesInfo
+
+	// An immediately-invoked literal: its body is a child of this one and
+	// ast.Inspect has already read it.
+	if _, isLiteral := call.Fun.(*ast.FuncLit); isLiteral {
+		return callSite{disposition: callAccounted}
+	}
+
+	var ident *ast.Ident
+	selector, isSelector := call.Fun.(*ast.SelectorExpr)
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		ident = fun
+	case *ast.SelectorExpr:
+		ident = fun.Sel
+	}
+	if ident == nil {
+		return callSite{disposition: callLeaked, cause: leakUnresolvable}
+	}
+
+	// A METHOD ON AN INTERFACE IS A LEAK, always. The selection's receiver
+	// type decides, not the callee object: an interface method resolves to a
+	// perfectly good *types.Func, which is exactly how the previous version
+	// queued it as followable and then dropped it for having no body --
+	// silently, with the counter at zero. No "only one implementation
+	// exists" shortcut: that is a guess that becomes wrong the day a second
+	// implementation lands, and it would become wrong quietly.
+	if isSelector {
+		if selection := info.Selections[selector]; selection != nil && types.IsInterface(selection.Recv()) {
+			return callSite{disposition: callLeaked, cause: leakInterfaceMethod}
+		}
+	}
+
+	switch object := info.Uses[ident].(type) {
+	case *types.Builtin:
+		// Builtins have no body to follow. `delete`'s effect on the field
+		// set is recorded by the caller, not here.
+		return callSite{disposition: callExcludedByDesign}
+	case *types.TypeName:
+		// A conversion is not a call.
+		return callSite{disposition: callNotACall}
+	case *types.Func:
+		if object.Pkg() == nil || object.Pkg() != pkg.Types {
+			return callSite{disposition: callExcludedByDesign}
+		}
+		if !bodied[object] {
+			return callSite{disposition: callLeaked, cause: leakNoBody}
+		}
+		return callSite{disposition: callFollowed, callee: object}
+	case *types.Var:
+		// A local bound to a package-level function: a followable edge.
+		if callee, bound := funcValues[object]; bound {
+			if !bodied[callee] {
+				return callSite{disposition: callLeaked, cause: leakNoBody}
+			}
+			return callSite{disposition: callFollowed, callee: callee}
+		}
+		// A closure literal declared HERE: its body is walked lexically, so
+		// its writes are already recorded and no edge is needed.
+		if localClosures[object] {
+			return callSite{disposition: callAccounted}
+		}
+		// A function value that ARRIVED from outside -- a parameter, a
+		// struct field, a map, a global. Which body runs is not knowable.
+		return callSite{disposition: callLeaked, cause: leakExternalFuncValue}
+	}
+	return callSite{disposition: callLeaked, cause: leakUnresolvable}
+}
+
+// isFactFieldDelete reports a `delete` whose target is a fact-field map.
+func isFactFieldDelete(info *types.Info, call *ast.CallExpr) bool {
+	ident, isIdent := call.Fun.(*ast.Ident)
+	if !isIdent || ident.Name != "delete" || len(call.Args) == 0 {
+		return false
+	}
+	if _, isBuiltin := info.Uses[ident].(*types.Builtin); !isBuiltin {
+		return false
+	}
+	return isFactFieldMap(info.TypeOf(call.Args[0]))
+}
+
+func dispositionIndex(value callDisposition) (int, bool) {
+	for index, member := range callDispositions {
+		if member == value {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+func leakCauseIndex(value leakCause) (int, bool) {
+	for index, member := range leakCauses {
+		if member == value {
+			return index, true
+		}
+	}
+	return 0, false
 }
 
 // packageFuncsBoundToLocals maps each local assigned a PACKAGE-LEVEL
@@ -277,7 +488,7 @@ func constantString(info *types.Info, expr ast.Expr) (string, bool) {
 }
 
 // analyseFunction records what one function body writes and whom it calls.
-func analyseFunction(pkg *packages.Package, fn *ast.FuncDecl) funcFacts {
+func analyseFunction(pkg *packages.Package, fn *ast.FuncDecl, bodied map[*types.Func]bool) funcFacts {
 	facts := funcFacts{writes: map[string]bool{}, calls: map[*types.Func]bool{}}
 	info := pkg.TypesInfo
 	rangeValues := stringValuesOfRangeVars(info, fn)
@@ -343,80 +554,24 @@ func analyseFunction(pkg *packages.Package, fn *ast.FuncDecl) funcFacts {
 				}
 			}
 		case *ast.CallExpr:
-			var ident *ast.Ident
-			switch fun := typed.Fun.(type) {
-			case *ast.Ident:
-				ident = fun
-			case *ast.SelectorExpr:
-				ident = fun.Sel
+			// ONE classification, no ladder. Every call site leaves here
+			// with exactly one disposition; classifyCall is where the rule
+			// lives and the only place a new case may be added.
+			site := classifyCall(pkg, typed, funcValues, localClosures, bodied)
+			facts.sites = append(facts.sites, site)
+			switch site.disposition {
+			case callFollowed:
+				facts.calls[site.callee] = true
+			case callNotACall, callAccounted, callExcludedByDesign, callLeaked:
+				// Nothing to queue. A `delete` from a fact-field map is a
+				// WRITE-side effect, not an edge, and is counted below.
 			}
-			if ident == nil {
-				facts.unresolvedCallSites++
-				return true
+			if isFactFieldDelete(pkg.TypesInfo, typed) {
+				// A delete makes the recorded field set an OVERSTATEMENT.
+				// Counted rather than resolved: knowing which key survives
+				// needs flow analysis this walk does not do.
+				facts.dynamicKeySites++
 			}
-
-			// BUILTINS FIRST. `delete` is a *types.Builtin, not a
-			// *types.Func, so an earlier version's *types.Func assertion
-			// returned before ever reaching the delete check -- a counter
-			// documented as a residual measure that could never fire. A
-			// review round constructed it: a provider that wrote a field and
-			// then deleted it still reported the field as emitted with the
-			// counter at zero. Ordering the checks is the fix.
-			if _, isBuiltin := info.Uses[ident].(*types.Builtin); isBuiltin {
-				if ident.Name == "delete" && len(typed.Args) > 0 && isFactFieldMap(info.TypeOf(typed.Args[0])) {
-					// A delete makes the recorded field set an OVERSTATEMENT.
-					// Counted rather than resolved: knowing which key
-					// survives needs flow analysis this walk does not do.
-					facts.dynamicKeySites++
-				}
-				return true
-			}
-
-			if callee, isFunc := info.Uses[ident].(*types.Func); isFunc {
-				if callee.Pkg() != nil && callee.Pkg() == pkg.Types {
-					facts.calls[callee] = true
-				}
-				// A cross-package helper is the named residual in the
-				// artifact header, not a countable site: the walk cannot see
-				// into it at all, and counting every stdlib call would drown
-				// the signal.
-				return true
-			}
-
-			// A TYPE CONVERSION IS NOT A CALL. `int64(x)` parses as a
-			// CallExpr whose Fun names a *types.TypeName. Counting those as
-			// unfollowable calls put a dozen fabricated residual sites on
-			// every provider -- a counter that OVERSTATES its residual, which
-			// is worse than one that cannot fire: it manufactures doubt and
-			// buries the real signal in noise.
-			if _, isConversion := info.Uses[ident].(*types.TypeName); isConversion {
-				return true
-			}
-
-			// A CALL THROUGH A VALUE. `emit := writeHidden; emit(fields)`
-			// resolves the callee to a *types.Var, so an earlier version
-			// queued no edge AND counted nothing -- the provider reported
-			// "emits nothing" while emitting. Found by a review round.
-			if object, isVar := info.Uses[ident].(*types.Var); isVar {
-				// Bound to a package-level function: a followable edge.
-				if callee, bound := funcValues[object]; bound {
-					facts.calls[callee] = true
-					return true
-				}
-				// A LOCAL CLOSURE NEEDS NO EDGE. `helper := func(...){...}`
-				// declares its body INSIDE the function being walked, and
-				// ast.Inspect already descends into it, so whatever it writes
-				// is recorded under this function. Counting the call site
-				// would report an unfollowable edge for a body that was in
-				// fact fully read -- the second overstatement found in this
-				// counter, after type conversions.
-				if localClosures[object] {
-					return true
-				}
-				facts.unresolvedCallSites++
-				return true
-			}
-			facts.unresolvedCallSites++
 		}
 		return true
 	})
@@ -442,6 +597,23 @@ func collectFrom(t *testing.T, pkg *packages.Package) map[string]*reachableEmiss
 	methodsOfType := map[string][]*types.Func{}
 	kindOfType := map[string]string{}
 
+	// PASS 1: which package-local functions have a body this walk can
+	// inspect? The classification needs this to tell `followed` from a
+	// `no_body` leak, so it cannot be discovered while classifying.
+	bodied := map[*types.Func]bool{}
+	for _, file := range pkg.Syntax {
+		for _, decl := range file.Decls {
+			fn, isFunc := decl.(*ast.FuncDecl)
+			if !isFunc || fn.Body == nil {
+				continue
+			}
+			if object, isFuncObject := info.Defs[fn.Name].(*types.Func); isFuncObject {
+				bodied[object] = true
+			}
+		}
+	}
+
+	// PASS 2: classify and collect.
 	for _, file := range pkg.Syntax {
 		for _, decl := range file.Decls {
 			fn, isFunc := decl.(*ast.FuncDecl)
@@ -452,7 +624,7 @@ func collectFrom(t *testing.T, pkg *packages.Package) map[string]*reachableEmiss
 			if !isFuncObject {
 				continue
 			}
-			factsOf[object] = analyseFunction(pkg, fn)
+			factsOf[object] = analyseFunction(pkg, fn, bodied)
 
 			if fn.Recv == nil || len(fn.Recv.List) == 0 {
 				continue
@@ -508,7 +680,18 @@ func collectFrom(t *testing.T, pkg *packages.Package) map[string]*reachableEmiss
 				fields[key] = true
 			}
 			emission.dynamicKeySites += facts.dynamicKeySites
-			emission.unresolvedCallSites += facts.unresolvedCallSites
+			for _, site := range facts.sites {
+				if index, known := dispositionIndex(site.disposition); known {
+					emission.dispositions[index]++
+				}
+				if site.disposition != callLeaked {
+					continue
+				}
+				emission.leakedCallSites++
+				if index, known := leakCauseIndex(site.cause); known {
+					emission.leaksByCause[index]++
+				}
+			}
 			for callee := range facts.calls {
 				if !visited[callee] {
 					queue = append(queue, callee)
@@ -549,44 +732,45 @@ func renderReachableEmissions(t *testing.T) string {
 	out.WriteString("# GENERATED by TestReachableEmissionArtifactIsRegenerated. DO NOT EDIT BY\n")
 	out.WriteString("# HAND: the test regenerates this file and fails on any difference.\n")
 	out.WriteString("#\n")
-	out.WriteString("# What each provider EMITS, collected by walking the call graph from its own\n")
-	out.WriteString("# methods through the package-local functions it reaches, to any depth, and\n")
-	out.WriteString("# recording every statically resolvable key written into anything of the\n")
-	out.WriteString("# fact-field map type. Matched by TYPE, so a local, a parameter, a struct\n")
-	out.WriteString("# field and a returned map are one case rather than four.\n")
+	out.WriteString("# THE CLOSURE RULE. A provider's emitted-field set is the union of the\n")
+	out.WriteString("# resolved field-key writes over the least fixed point of (1) the provider\n")
+	out.WriteString("# type's own methods and (2) for every reached function, every callee that\n")
+	out.WriteString("# resolves to a package-local function whose BODY THIS WALK CAN INSPECT.\n")
+	out.WriteString("# Everything else is a LEAK, and every leak is counted.\n")
 	out.WriteString("#\n")
-	out.WriteString("# THE RESIDUAL, NAMED. Three things this walk does not reach:\n")
-	out.WriteString("# \"the functions it reaches\" is deliberately narrower than \"every function\".\n")
-	out.WriteString("# A direct call is followed; so is a call through a local bound to a\n")
-	out.WriteString("# package-level function, and a local closure needs no edge because its body\n")
-	out.WriteString("# is already walked. A call whose callee is not statically knowable -- a\n")
-	out.WriteString("# function value from a parameter or a field, an interface method -- is NOT\n")
-	out.WriteString("# followed and is counted in unresolved_call_sites. An earlier header claimed\n")
-	out.WriteString("# EVERY reachable function and was wrong: a review round constructed a\n")
-	out.WriteString("# provider emitting through a function value and this file reported it as\n")
-	out.WriteString("# emitting nothing. A coverage claim that overclaims is itself a defect.\n")
+	out.WriteString("# Writes are matched by TYPE, so a local, a parameter, a struct field and a\n")
+	out.WriteString("# returned map are one case rather than four.\n")
 	out.WriteString("#\n")
-	out.WriteString("#   0. a call whose callee is not statically knowable. COUNTED in\n")
-	out.WriteString("#      unresolved_call_sites. A `delete` from a fact-field map counts under\n")
-	out.WriteString("#      dynamic_key_sites instead: it makes the recorded set an OVERSTATEMENT\n")
-	out.WriteString("#      rather than an understatement.\n")
-	out.WriteString("#   1. a key that is not statically determined -- built from a variable, a\n")
-	out.WriteString("#      format string, or a value read from a row. COUNTED, per provider, in\n")
-	out.WriteString("#      the dynamic_key_sites column. A zero there is an OBSERVED zero, and a\n")
-	out.WriteString("#      provider that grows a dynamic key shows up as a diff in this file.\n")
-	out.WriteString("#   2. a helper in ANOTHER package that writes into a map passed to it.\n")
-	out.WriteString("#   3. reflection.\n")
-	out.WriteString("# 2 and 3 are not counted, because a count of them would be a count of what\n")
-	out.WriteString("# this walk cannot see at all. They are the honest edge of the instrument.\n")
+	out.WriteString("# EVERY CALL SITE IS CLASSIFIED into exactly one disposition, and that\n")
+	out.WriteString("# totality is asserted rather than assumed:\n")
+	out.WriteString("#   followed            an edge taken into a package-local body\n")
+	out.WriteString("#   accounted           a closure literal whose body is walked lexically, so\n")
+	out.WriteString("#                       its writes are already recorded and no edge is needed\n")
+	out.WriteString("#   not_a_call          a type conversion, which merely parses as a call\n")
+	out.WriteString("#   excluded_by_design  a function in another package, or a builtin\n")
+	out.WriteString("#   leaked              everything else -- see the per-cause breakdown\n")
 	out.WriteString("#\n")
-	out.WriteString("# reached_funcs is how many package-local functions the walk visited from\n")
-	out.WriteString("# that provider's methods -- the walk reporting its own reach, so a collapse\n")
-	out.WriteString("# in coverage is visible here rather than showing up as a provider that\n")
-	out.WriteString("# quietly emits less.\n")
+	out.WriteString("# WHAT A LEAK MEANS. A field written behind a leaked call is INVISIBLE to\n")
+	out.WriteString("# this walk. The count is the honest measure of how much of a provider was\n")
+	out.WriteString("# not seen -- not a defect list, and not a promise that the rest is\n")
+	out.WriteString("# complete. An interface method is a leak even when exactly one local\n")
+	out.WriteString("# implementation exists: a single-implementation shortcut is a guess that\n")
+	out.WriteString("# goes quietly wrong the day a second one lands.\n")
 	out.WriteString("#\n")
-	out.WriteString("# fact kind / reached_funcs / dynamic_key_sites / unresolved_call_sites /\n")
-	out.WriteString("# emitted field keys\n")
-
+	out.WriteString("# dynamic_key_sites counts writes whose KEY is not statically determined,\n")
+	out.WriteString("# plus every `delete` from a fact-field map -- a delete makes the recorded\n")
+	out.WriteString("# set an OVERSTATEMENT rather than an understatement.\n")
+	out.WriteString("#\n")
+	out.WriteString("# A zero in any counter is an OBSERVED zero: every closed token is printed\n")
+	out.WriteString("# on every provider, so a tier nothing reached is visibly empty rather than\n")
+	out.WriteString("# absent. reached_funcs is the walk reporting its own coverage, so a\n")
+	out.WriteString("# collapse shows up here and not as a provider that quietly emits less.\n")
+	out.WriteString("#\n")
+	out.WriteString("# This header claims what the disposition vocabulary proves and nothing\n")
+	out.WriteString("# more. Two earlier versions overclaimed -- one said the walk follows every\n")
+	out.WriteString("# package-local function, one said interface methods are counted while the\n")
+	out.WriteString("# code silently dropped them -- and each was found by a review round. A\n")
+	out.WriteString("# coverage claim that overclaims is itself a defect.\n")
 	kinds := make([]string, 0, len(emissions))
 	for kind := range emissions {
 		kinds = append(kinds, kind)
@@ -598,8 +782,15 @@ func renderReachableEmissions(t *testing.T) string {
 		if len(emission.fields) > 0 {
 			rendered = strings.Join(emission.fields, " ")
 		}
-		fmt.Fprintf(&out, "\n%s\n  reached_funcs         %d\n  dynamic_key_sites     %d\n  unresolved_call_sites %d\n  fields                %s\n",
-			kind, emission.reachedFuncs, emission.dynamicKeySites, emission.unresolvedCallSites, rendered)
+		fmt.Fprintf(&out, "\n%s\n  reached_funcs      %d\n  dynamic_key_sites  %d\n  leaked_call_sites  %d\n",
+			kind, emission.reachedFuncs, emission.dynamicKeySites, emission.leakedCallSites)
+		for index, cause := range leakCauses {
+			fmt.Fprintf(&out, "    leak %-20s %d\n", cause, emission.leaksByCause[index])
+		}
+		for index, disposition := range callDispositions {
+			fmt.Fprintf(&out, "    calls %-19s %d\n", disposition, emission.dispositions[index])
+		}
+		fmt.Fprintf(&out, "  fields             %s\n", rendered)
 	}
 	return out.String()
 }
@@ -776,7 +967,7 @@ func TestTheWalkCountsACallItCannotResolve(t *testing.T) {
 	if !walked {
 		t.Fatal("the fixture's indirect provider was not walked at all")
 	}
-	if indirect.unresolvedCallSites == 0 {
+	if indirect.leakedCallSites == 0 {
 		t.Errorf("a call through a parameter-supplied function value was neither followed nor counted -- the walk passed over it silently, reporting fields %v", indirect.fields)
 	}
 }
@@ -814,8 +1005,8 @@ func TestALocalClosureCallIsNotCountedAsUnresolved(t *testing.T) {
 	if !walked {
 		t.Fatal("the fixture's direct provider was not walked at all")
 	}
-	if direct.unresolvedCallSites != 0 {
-		t.Errorf("the direct-call provider reports %d unresolved call sites; it has none, so the counter is overstating", direct.unresolvedCallSites)
+	if direct.leakedCallSites != 0 {
+		t.Errorf("the direct-call provider reports %d leaked call sites; it has none, so the counter is overstating", direct.leakedCallSites)
 	}
 }
 
@@ -826,4 +1017,187 @@ func containsField(fields []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestEveryCallSiteGetsExactlyOneDisposition is the TOTALITY AND EXCLUSIVITY
+// assertion, and it is the property a hand-written ladder of syntactic cases
+// could never state about itself.
+//
+// Every `*ast.CallExpr` in every walked body must leave `classifyCall` with
+// exactly one disposition from the closed vocabulary. A case nobody thought
+// of cannot fall through: it reaches the final `leaked` return and is
+// counted. The check is that the classified population equals the syntactic
+// population -- so a future edit that adds an early `return` without a
+// disposition fails here rather than silently dropping call sites.
+func TestEveryCallSiteGetsExactlyOneDisposition(t *testing.T) {
+	pkg := loadProviderPackage(t)
+	info := pkg.TypesInfo
+
+	bodied := map[*types.Func]bool{}
+	for _, file := range pkg.Syntax {
+		for _, decl := range file.Decls {
+			fn, isFunc := decl.(*ast.FuncDecl)
+			if !isFunc || fn.Body == nil {
+				continue
+			}
+			if object, ok := info.Defs[fn.Name].(*types.Func); ok {
+				bodied[object] = true
+			}
+		}
+	}
+
+	syntactic, classified := 0, 0
+	valid := map[callDisposition]bool{}
+	for _, member := range callDispositions {
+		valid[member] = true
+	}
+	perDisposition := map[callDisposition]int{}
+
+	for _, file := range pkg.Syntax {
+		for _, decl := range file.Decls {
+			fn, isFunc := decl.(*ast.FuncDecl)
+			if !isFunc || fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn, func(node ast.Node) bool {
+				if _, isCall := node.(*ast.CallExpr); isCall {
+					syntactic++
+				}
+				return true
+			})
+			facts := analyseFunction(pkg, fn, bodied)
+			for _, site := range facts.sites {
+				if !valid[site.disposition] {
+					t.Errorf("a call site got disposition %q, which is not in the closed vocabulary", site.disposition)
+					continue
+				}
+				if site.disposition == callLeaked && site.cause == "" {
+					t.Error("a leaked call site named no cause -- the breakdown cannot account for it")
+				}
+				if site.disposition == callFollowed && site.callee == nil {
+					t.Error("a followed call site named no callee")
+				}
+				perDisposition[site.disposition]++
+				classified++
+			}
+		}
+	}
+	if syntactic == 0 {
+		t.Fatal("the provider package contains no call expressions; this assertion would be vacuous")
+	}
+	if classified != syntactic {
+		t.Errorf("%d call expressions in the package, %d classified -- %d call sites left the classifier with no disposition and are silently unaccounted for",
+			syntactic, classified, syntactic-classified)
+	}
+	t.Logf("classified %d call sites: %v", classified, perDisposition)
+}
+
+// dispositionFixtures maps each disposition to the fixture provider that
+// lands in it, and to the field that provider emits (empty for the leak
+// dispositions, where the point is that the field is NOT recovered).
+//
+// THE FIXTURE SET IS DERIVED FROM THE VOCABULARY, not from the shapes the
+// author happened to think of. That is the structural fix for the two
+// defects a review round found in the previous repair: the type-conversion
+// arm and the local-closure arm each had no fixture, because the fixtures
+// were an ad-hoc list. A disposition added to the vocabulary without a
+// fixture now fails by name.
+var dispositionFixtures = map[callDisposition]struct {
+	provider string
+	// saltedField is the uniquely-named field the fixture emits THROUGH
+	// this disposition. Non-leak dispositions must recover it; that is the
+	// salted positive, so a disposition that silently drops writes fails by
+	// name rather than reporting a healthy empty set.
+	saltedField string
+}{
+	callFollowed:         {provider: "ProbeDirect", saltedField: "direct_field"},
+	callAccounted:        {provider: "ProbeClosure", saltedField: "closure_field"},
+	callNotACall:         {provider: "ProbeConversion", saltedField: "conversion_field"},
+	callExcludedByDesign: {provider: "ProbeCrossPackage", saltedField: "cross_package_field"},
+	callLeaked:           {provider: "ProbeIndirect"},
+}
+
+// TestEveryDispositionHasAFixtureThatLandsInIt quantifies over the
+// vocabulary rather than over a list.
+func TestEveryDispositionHasAFixtureThatLandsInIt(t *testing.T) {
+	probes := walkProbeFixture(t)
+	checked := 0
+	for _, disposition := range callDispositions {
+		fixture, declared := dispositionFixtures[disposition]
+		if !declared {
+			t.Errorf("disposition %q has no fixture: a disposition nothing lands in can be dead for its whole life and read as green", disposition)
+			continue
+		}
+		emission, walked := probes[fixture.provider]
+		if !walked {
+			t.Errorf("disposition %q names fixture provider %q, which the walk did not find", disposition, fixture.provider)
+			continue
+		}
+		index, known := dispositionIndex(disposition)
+		if !known {
+			t.Errorf("disposition %q is not in its own vocabulary", disposition)
+			continue
+		}
+		if emission.dispositions[index] == 0 {
+			t.Errorf("fixture %q was supposed to land in disposition %q and did not -- the fixture no longer exercises the case it is named for", fixture.provider, disposition)
+		}
+		checked++
+	}
+	if checked != CallDispositionCount {
+		t.Fatalf("checked %d of %d dispositions", checked, CallDispositionCount)
+	}
+}
+
+// TestEveryNonLeakDispositionRecoversItsSaltedField is the salted positive,
+// one per disposition.
+//
+// A disposition can land correctly and still lose the write behind it --
+// that is precisely what interface dispatch did, and the artifact showed a
+// confident empty field list. So every non-leak disposition carries a
+// uniquely-named field that MUST come back. A disposition that silently
+// drops writes now fails by name instead of reporting a healthy zero.
+func TestEveryNonLeakDispositionRecoversItsSaltedField(t *testing.T) {
+	probes := walkProbeFixture(t)
+	checked := 0
+	for _, disposition := range callDispositions {
+		fixture := dispositionFixtures[disposition]
+		if fixture.saltedField == "" {
+			continue // a leak disposition: the point is that it does NOT recover
+		}
+		emission, walked := probes[fixture.provider]
+		if !walked {
+			t.Errorf("fixture provider %q for disposition %q was not walked", fixture.provider, disposition)
+			continue
+		}
+		if !containsField(emission.fields, fixture.saltedField) {
+			t.Errorf("disposition %q did not recover its salted field %q -- the write behind that disposition is being dropped; got %v",
+				disposition, fixture.saltedField, emission.fields)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("no salted field reached the assertions")
+	}
+}
+
+// TestTheInterfaceDispositionLeaksAndIsCounted pins the defect the
+// re-derivation exists to make structural.
+//
+// It is NOT that the walk should follow the interface method -- it cannot,
+// and pretending otherwise via a single-implementation shortcut would be a
+// guess that goes quietly wrong. It is that the field must be NAMED as lost
+// rather than silently absent.
+func TestTheInterfaceDispositionLeaksAndIsCounted(t *testing.T) {
+	probes := walkProbeFixture(t)
+	emission, walked := probes["ProbeInterface"]
+	if !walked {
+		t.Fatal("the interface fixture provider was not walked at all")
+	}
+	if containsField(emission.fields, "interface_field") {
+		t.Error("the walk claims to have recovered a field written behind an interface method; it cannot know that")
+	}
+	index, _ := leakCauseIndex(leakInterfaceMethod)
+	if emission.leaksByCause[index] == 0 {
+		t.Error("an interface-method call was neither followed nor counted as a leak -- the field is silently missing, which is the defect this rule exists to prevent")
+	}
 }
