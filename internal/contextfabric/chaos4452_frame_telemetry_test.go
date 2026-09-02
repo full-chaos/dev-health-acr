@@ -336,3 +336,92 @@ func contains(haystack, needle string) bool {
 	}
 	return false
 }
+
+// TestEverySetValuedFieldIsCanonicalOnTheFrameAndInTheEvent is the general
+// form of a defect that has now bitten three times in three disguises: a
+// property asserted about the OBJECT and not about what is RECORDED about
+// it.
+//
+// The instances were a leak test that planted its canary in one free-text
+// field while a different one leaked; a repair sweep that enumerated the
+// outer axes and treated a nested structure as a leaf; and a
+// canonicalization test that asserted `result.Frame.Goals` while the
+// telemetry projection kept the model's emission order and its duplicates.
+// Each time the test checked the thing its author was thinking about
+// rather than the property claimed.
+//
+// So this asserts the PROPERTY, over whatever fields exist:
+//
+//  1. ORDER-INSENSITIVITY of the declared SET axes. Goals, Emphasis and
+//     Dimensions are sets; permuting them must produce a byte-identical
+//     validated frame AND a byte-identical event. Terms, anchor terms and
+//     operands are deliberately NOT included -- they are ORDERED lists of
+//     retrieval pointers handed to the graph in the order the user named
+//     them, and reordering them would change which candidate a tie
+//     resolves to.
+//
+//  2. NO DUPLICATES in any slice field of the event, found by REFLECTION
+//     rather than by naming them. Today that is `ProposedGoals` alone; the
+//     point is that a second slice field added tomorrow is covered without
+//     anyone remembering to cover it.
+func TestEverySetValuedFieldIsCanonicalOnTheFrameAndInTheEvent(t *testing.T) {
+	base := QuestionFrame{
+		Goals: []InvestigationGoal{GoalRankOrSurvey, GoalAssessState, GoalRankOrSurvey},
+		SubjectExpression: SubjectExpression{
+			Kind:       SubjectExpressionDiscoveredKind,
+			Discovered: &DiscoveredSetExpression{MemberKind: contractsv1.ContextFabricSubjectTeam},
+		},
+		Emphasis:   []AnswerEmphasis{EmphasisPositiveOutliers, EmphasisNegativeOutliers, EmphasisPositiveOutliers},
+		Dimensions: []HealthDimension{HealthDimensionInvestmentBalance, HealthDimensionDeliveryFlow, HealthDimensionInvestmentBalance},
+	}
+	permuted := QuestionFrame{
+		Goals: []InvestigationGoal{GoalAssessState, GoalRankOrSurvey},
+		SubjectExpression: SubjectExpression{
+			Kind:       SubjectExpressionDiscoveredKind,
+			Discovered: &DiscoveredSetExpression{MemberKind: contractsv1.ContextFabricSubjectTeam},
+		},
+		Emphasis:   []AnswerEmphasis{EmphasisNegativeOutliers, EmphasisPositiveOutliers},
+		Dimensions: []HealthDimension{HealthDimensionDeliveryFlow, HealthDimensionInvestmentBalance},
+	}
+
+	baseResult := ValidateFrame(base, nil, "")
+	permResult := ValidateFrame(permuted, nil, "")
+	if baseResult.Outcome != FrameValidationOutcomeValid || permResult.Outcome != FrameValidationOutcomeValid {
+		t.Fatalf("both frames must validate; got %q and %q", baseResult.Outcome, permResult.Outcome)
+	}
+	if !reflect.DeepEqual(baseResult.Frame, permResult.Frame) {
+		t.Errorf("two orderings of one set-valued frame produced DIFFERENT validated frames:\n  %+v\n  %+v",
+			baseResult.Frame, permResult.Frame)
+	}
+
+	baseEvent := FrameValidationEventFrom(base, baseResult, "")
+	permEvent := FrameValidationEventFrom(permuted, permResult, "")
+	if !reflect.DeepEqual(baseEvent, permEvent) {
+		t.Errorf("two orderings of one set-valued frame produced DIFFERENT events -- the record must be canonical, not only the object:\n  %+v\n  %+v",
+			baseEvent, permEvent)
+	}
+
+	// The dedup half, quantified over the event's slice fields by
+	// reflection so a field added later is covered without being named.
+	eventValue := reflect.ValueOf(baseEvent)
+	eventType := eventValue.Type()
+	checked := 0
+	for i := 0; i < eventType.NumField(); i++ {
+		field := eventValue.Field(i)
+		if field.Kind() != reflect.Slice {
+			continue
+		}
+		checked++
+		seen := map[any]bool{}
+		for j := 0; j < field.Len(); j++ {
+			element := field.Index(j).Interface()
+			if seen[element] {
+				t.Errorf("event field %s carries duplicate %v -- a set-valued field must be canonical in the record", eventType.Field(i).Name, element)
+			}
+			seen[element] = true
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no slice fields found on the event -- this test would be vacuous, so the reflection is wrong")
+	}
+}
