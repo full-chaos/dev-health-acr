@@ -1,6 +1,9 @@
 package v1
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // The measured answer fixtures, built BY CONSTRUCTION from one table of the
 // validator's own limits.
@@ -61,4 +64,262 @@ var fixedAnswerInstant = time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
 // one-rune identifiers.
 func minimalSubject() ContextFabricSubjectRef {
 	return ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "p", Label: "l"}
+}
+
+// escaped returns n copies of the rune that costs the MOST serialized bytes.
+// It is not the widest UTF-8 encoding: Go's JSON encoder escapes "<" to a
+// six-byte \uXXXX form, against four bytes for a non-BMP emoji raw. Bounds in
+// this contract are counted in RUNES, so a maximal field's byte cost is its
+// rune bound times this factor. answer_bound_fixtures_test.go proves the choice
+// by comparing candidates rather than asserting it.
+func escaped(n int) string {
+	out := make([]rune, n)
+	for i := range out {
+		out[i] = '<'
+	}
+	return string(out)
+}
+
+// oneRune is the smallest value any 1..N bounded text field may hold.
+// The result validator spells these as literals rather than reusing
+// ContextFabricModelMintedIDMaxLength, so the fixtures must follow the
+// literals or they would be measuring a bound nothing enforces.
+const (
+	resultIDMinRunes = 8
+	resultIDMaxRunes = 256
+)
+
+const oneRune = "q"
+
+// minimalFinding / maximalFinding bound the three Finding-shaped collections
+// (RemainingWork, ReadinessGaps, Conflicts), which share one validator.
+// minimalFinding uses ContextFabricModelMintedIDMinLength for the id, not a
+// single rune: a 1-rune id would make every PastMax proof that carries a
+// minimal finding reject on the ID bound instead of the count bound it means
+// to breach -- passing for the wrong reason.
+func minimalFinding() ContextFabricFinding {
+	return ContextFabricFinding{
+		FindingID:      strings.Repeat(oneRune, ContextFabricModelMintedIDMinLength),
+		Kind:           "narrative",
+		Summary:        oneRune,
+		Subjects:       []ContextFabricSubjectRef{minimalSubject()},
+		EvidenceRefIDs: []string{},
+	}
+}
+
+func maximalFinding() ContextFabricFinding {
+	// uniqueSubjects rejects repeats, so the maximal finding needs DISTINCT
+	// subjects -- 250 copies of the same ref is not a maximal finding, it is
+	// an invalid one.
+	subjects := make([]ContextFabricSubjectRef, ContextFabricFindingSubjectsMaxCount)
+	for i := range subjects {
+		subjects[i] = distinctSubject(i)
+	}
+	return ContextFabricFinding{
+		FindingID: escaped(ContextFabricModelMintedIDMaxLength),
+		Kind:      string(maximalDriverCategory),
+		Summary:   escaped(ContextFabricFindingSummaryMaxLength),
+		Subjects:  subjects,
+		// boundedEvidenceRefs rejects a NIL slice even in its optional
+		// (required=false) mode, so nil and empty are NOT interchangeable
+		// here; the maximal carries the nested bound's worth of refs.
+		EvidenceRefIDs: repeatEvidenceRefs(ContextFabricNestedEvidenceRefIDsMaxCount, ContextFabricEvidenceRefIDMaxLength),
+		ClaimedFactIDs: []string{maximalClaimedFactID},
+	}
+}
+
+// repeatFinding builds a collection of n findings with distinct ids, since the
+// validator requires unique identifiers.
+func repeatFindings(n int, build func() ContextFabricFinding) []ContextFabricFinding {
+	out := make([]ContextFabricFinding, 0, n)
+	for i := 0; i < n; i++ {
+		f := build()
+		f.FindingID = uniqueID("f", i, len(f.FindingID))
+		out = append(out, f)
+	}
+	return out
+}
+
+// uniqueID produces a distinct identifier of the requested rune length,
+// padding with the worst-case rune so a maximal collection is maximal in bytes
+// as well as in count.
+func uniqueID(prefix string, i, runes int) string {
+	suffix := prefix + string(rune('a'+i%26)) + string(rune('a'+(i/26)%26)) + string(rune('a'+(i/676)%26))
+	if runes <= len(suffix) {
+		return suffix[:max(1, runes)]
+	}
+	return escaped(runes-len(suffix)) + suffix
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func repeatStrings(count, runes int) []string {
+	out := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		out = append(out, uniqueID("s", i, runes))
+	}
+	return out
+}
+
+func minimalInterpretation() ContextFabricInterpretedQuestion {
+	return ContextFabricInterpretedQuestion{
+		Shape:             ContextFabricShapeOpen,
+		RequestedJudgment: oneRune,
+		TimeContext:       ContextFabricTimeContext{Axis: ContextFabricTemporalCurrent},
+	}
+}
+
+func maximalInterpretation() ContextFabricInterpretedQuestion {
+	q := minimalInterpretation()
+	q.RequestedJudgment = escaped(ContextFabricRequestedJudgmentMaxLength)
+	q.SubjectTerms = repeatStrings(ContextFabricSubjectTermsMaxCount, ContextFabricSubjectOrComparisonTermMaxLength)
+	q.ComparisonTerms = repeatStrings(ContextFabricComparisonTermsMaxCount, ContextFabricSubjectOrComparisonTermMaxLength)
+	q.ClarificationReason = escaped(ContextFabricClarificationReasonMaxLength)
+	return q
+}
+
+func repeatDrivers(n int) []ContextFabricDriverJudgment {
+	out := make([]ContextFabricDriverJudgment, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, ContextFabricDriverJudgment{
+			DriverID:         uniqueID("d", i, 16),
+			Standing:         ContextFabricDriverPrincipal,
+			Category:         string(maximalDriverCategory),
+			Title:            oneRune,
+			Summary:          oneRune,
+			AffectedSubjects: []ContextFabricSubjectRef{minimalSubject()},
+			EvidenceRefIDs:   repeatEvidenceRefs(1, 8),
+			ClaimedFactIDs:   []string{maximalClaimedFactID},
+			Derivation:       ContextFabricDerivationCanonicalStructured,
+			EpistemicStatus:  ContextFabricEpistemicObserved,
+			Confidence:       0.9,
+			Current:          true,
+		})
+	}
+	return out
+}
+
+// maximalDriverCategory is a category whose ContextFabricDriverCategoryRequiresClaimedFact
+// entry exists, so the maximal driver must ALSO carry a ClaimedFactID that
+// resolves to a fact of the matching kind. Picking a requiring category on
+// purpose keeps the fixture honest: it exercises the strongest closure rule
+// rather than dodging it with a category that demands nothing.
+// maximalDriverCategory is the LONGEST member of the closed driver-category
+// vocabulary, derived rather than hardcoded so a future vocabulary entry
+// widens the fixture automatically. Finding.Kind is governed by this same
+// vocabulary (validate_context_fabric_result.go:912), which means
+// ContextFabricFindingKindMaxLength (128) is NOT reachable by any valid
+// document -- the vocabulary, not the length bound, is what caps that field.
+var maximalDriverCategory = longestDriverCategory()
+
+func longestDriverCategory() ContextFabricDriverCategory {
+	vocab := ContextFabricDriverCategoryVocabulary()
+	longest := vocab[0]
+	for _, c := range vocab {
+		if len(c) > len(longest) {
+			longest = c
+		}
+	}
+	return longest
+}
+
+var maximalDriverFactKind, _ = ContextFabricDriverCategoryRequiresClaimedFact(maximalDriverCategory)
+
+func claimedFactID(i int) string { return uniqueID("c", i, 16) }
+
+var maximalClaimedFactID = claimedFactID(0)
+
+func repeatClaimedFacts(n int) []ContextFabricClaimedFact {
+	value := oneRune
+	out := make([]ContextFabricClaimedFact, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, ContextFabricClaimedFact{
+			ClaimID: claimedFactID(i),
+			Kind:    maximalDriverFactKind,
+			Subject: minimalSubject(),
+			Field:   oneRune,
+			Value:   ContextFabricScalarValue{String: &value},
+		})
+	}
+	return out
+}
+
+func minimalResolution() ContextFabricSubjectResolution {
+	return ContextFabricSubjectResolution{
+		Candidates: []ContextFabricSubjectCandidate{},
+		Committed:  []ContextFabricSubjectRef{minimalSubject()},
+	}
+}
+
+func minimalCoverage() ContextFabricCoverage {
+	return ContextFabricCoverage{Sources: []ContextFabricSourceObservation{}, DegradedReasons: []string{}}
+}
+
+func minimalVersions() ContextFabricVersionSet {
+	return ContextFabricVersionSet{
+		ServiceVersion: oneRune, ContractVersion: ContextFabricInvestigationResultSchema, Backend: oneRune,
+		ProjectionVersion: oneRune, QueryVersion: oneRune, InterpretationVersion: oneRune,
+		SynthesisVersion: oneRune, CanonicalServiceVersion: oneRune,
+	}
+}
+
+func maximalVersions() ContextFabricVersionSet {
+	pad := escaped(256)
+	v := minimalVersions()
+	v.ServiceVersion, v.Backend, v.ProjectionVersion = pad, pad, pad
+	v.QueryVersion, v.InterpretationVersion, v.SynthesisVersion, v.CanonicalServiceVersion = pad, pad, pad, pad
+	v.BackendVersion = pad
+	return v
+}
+
+func maximalPlan() *ContextFabricAnswerPlan {
+	plan := ContextFabricAnswerPlan{
+		Family:        ContextFabricQuestionFamilySubjectInvestigation,
+		FamilySource:  ContextFabricQuestionFamilySourceStructurePrecedence,
+		FamilyVersion: escaped(64),
+		Budget:        ContextFabricAnswerPlanBudget{MaxItems: 30, MaxSerializedBytes: 1 << 20},
+	}
+	kinds := ContextFabricFactKindVocabulary()
+	plan.FactKinds = append(plan.FactKinds, kinds[:]...)
+	for i := 0; i < ContextFabricPlanNarrowingMaxCount; i++ {
+		plan.Narrowing = append(plan.Narrowing, ContextFabricPlanNarrowing{
+			Stage: ContextFabricPlanNarrowingAssembledResult, Basis: ContextFabricNarrowingBasisCanonicalIDLexical,
+			Before: 50, After: 10, Overrun: ContextFabricBudgetOverrunItems,
+		})
+	}
+	return &plan
+}
+
+// maximalLimitations fills the list to its count bound while satisfying the
+// coupling that makes a nonzero LimitationsDisplaced legal: one slot must hold
+// a service-authored limitation, which is shorter than the per-entry maximum.
+func maximalLimitations() []string {
+	out := []string{ContextFabricServiceAuthoredLimitations()[0]}
+	out = append(out, repeatStrings(ContextFabricLimitationsMaxCount-1, ContextFabricLimitationMaxLength)...)
+	return out
+}
+
+// repeatEvidenceRefs builds distinct evidence ids. Drivers REQUIRE at least one
+// (boundedEvidenceRefs(..., true) at validate_context_fabric_result.go:865),
+// which is why no driver -- not even in the irreducible direction -- can carry
+// an empty list.
+func repeatEvidenceRefs(count, runes int) []string {
+	out := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		out = append(out, uniqueID("e", i, runes))
+	}
+	return out
+}
+
+// distinctSubject yields refs that differ in canonical id, which uniqueSubjects
+// requires of every subject list.
+func distinctSubject(i int) ContextFabricSubjectRef {
+	ref := minimalSubject()
+	ref.CanonicalID = uniqueID("sub", i, ContextFabricModelMintedIDMinLength)
+	return ref
 }
