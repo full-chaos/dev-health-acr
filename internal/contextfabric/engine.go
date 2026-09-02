@@ -272,6 +272,18 @@ type EngineTelemetry interface {
 	// optional one discovered by type assertion. See PlanTelemetry's own
 	// doc comment for the CHAOS-4085 incident that rule comes from.
 	PlanTelemetry
+	// FrameValidationTelemetry (CHAOS-4452 stage 2, §13.6) is embedded on
+	// the same rule as the two above: a required interface, never an
+	// optional one discovered by type assertion.
+	//
+	// Embedding matters more here than usual, because the frame layer's
+	// ONLY output in phase 1 is its measurement. Nothing is gated on the
+	// frame, so a telemetry implementation that silently failed to report
+	// validations would not break a single behaviour -- it would simply
+	// make the slice produce nothing, and the shadow gate would read as
+	// "no invalid frames" rather than "no frames observed". Embedding
+	// makes that state a compile error.
+	FrameValidationTelemetry
 
 	// RecordPriorSubjectReceiptsSkipped reports how many of one
 	// Investigate call's PriorSubjectReceipts did not end up bound to a

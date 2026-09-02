@@ -95,7 +95,14 @@ group_kind, scope_anchor_term and question_family are ALL OPTIONAL, and the corr
 group_kind: emit ONLY when the question asks for results PARTITIONED INTO GROUPS -- phrasing like "for each X", "per X", "broken down by X", "grouped by X". Its value is the kind of thing the groups ARE, and MUST be exactly one of this closed set -- no other spelling, no invented value: %s. Example: "what are the project statuses for each team" groups projects by TEAM, so group_kind is "team". A question about one subject, or about a flat list with no grouping, has NO group_kind -- omit it. Do NOT emit group_kind merely because the question mentions teams or projects.
 scope_anchor_term: emit ONLY when the question asks about the MEMBERS OF a named parent, where the parent is a DIFFERENT kind of thing than the members -- phrasing like "the X team's projects", "repositories in Y". Its value is the parent's name, copied VERBATIM from the question text under the same verbatim rule that governs subject_terms. Example: in "what are the statuses of the fullchaos team's projects", the answer is about PROJECTS and the anchor is the team, so scope_anchor_term is "fullchaos" and scope_anchor_kind is "team". When you emit scope_anchor_term you SHOULD also emit scope_anchor_kind (the parent's kind, from the same closed set as group_kind). A question whose named subject IS the thing being asked about has NO scope anchor -- omit it.
 requested_subject_kind: the kind of thing the ANSWER is about, from the same closed set as group_kind. Emit it whenever the question makes it clear ("projects", "teams", "repositories"); omit it when the question does not say. It is the counterpart to scope_anchor_kind: in "the fullchaos team's projects" the anchor kind is "team" and requested_subject_kind is "project", and it is that DIFFERENCE that identifies the question as being about a scoped group of members rather than about the named subject itself.
-question_family: emit ONLY if one of these names obviously fits, otherwise omit it: %s. It is a hint; the service decides the family itself and will disagree with you when the question's own structure says otherwise.`,
+question_family: emit ONLY if one of these names obviously fits, otherwise omit it: %s. It is a hint; the service decides the family itself and will disagree with you when the question's own structure says otherwise.
+question_frame describes the question COMPOSITIONALLY, and unlike the three hints above it is worth emitting on EVERY question -- it is how the service knows what the answer has to establish. Emit it as an object with these fields.
+question_frame.goals: what the user is asking the system to ESTABLISH, as a LIST, because real questions ask for more than one thing at once. Every entry MUST be exactly one of this closed set -- no other spelling, no invented value: %s. Emit EVERY goal the question asks for, not just the first: "what teams are struggling and what are the driving factors" asks for BOTH rank_or_survey AND explain_drivers, and emitting only one of them silently drops half the question. Never emit a goal the question did not ask for.
+question_frame.subject_expression describes WHAT the question is about, structurally. Its kind MUST be exactly one of this closed set: %s. Pick by the question's own shape: named_subject when it names one or more subjects directly ("how is Dev Health Ops doing"); explicit_set when it compares named things side by side; discovered_kind when it asks the service to FIND the members of a kind ("which teams are struggling"); children_of_scope when it asks for the members OF a named parent of a different kind ("the fullchaos team's projects"); grouped_members when it asks for results partitioned into groups ("project statuses for each team"); organization_scope when the organization itself is the subject ("how are we doing").
+Fill only the fields that kind uses, and fill them ALL: named_subject uses terms; explicit_set uses operands (each operand is itself a named_subject with terms, or a children_of_scope with anchor_terms and member_kind); discovered_kind uses member_kind; children_of_scope uses anchor_terms and member_kind; grouped_members uses group_kind AND member_kind, which must be DIFFERENT kinds; organization_scope uses member_kind only when the question is a count ("how many repositories are in the organization"). terms and anchor_terms follow the same VERBATIM rule as subject_terms. member_kind and group_kind come from the same closed subject-kind set as group_kind above.
+question_frame.temporal: exactly one of %s. Use current unless the question asks about a span (bounded_window), a comparison between two periods (period_comparison), or movement over time (time_series). A question asking how something CHANGED is never current.
+question_frame.emphasis is OPTIONAL, a list from this closed set: %s. Emit it only when the question explicitly asks about the ends of a ranking ("who is doing best and who is struggling"); it says which ends the answer must speak to and never adds new evidence.
+question_frame.dimensions is OPTIONAL, a list from this closed set: %s. Emit a dimension only when the question is explicitly ABOUT it ("how is delivery flow for team X"). Naming a dimension only ever ADDS to what the answer covers; it never narrows it, so do not emit one to focus the answer.`,
 	contextFabricFactKindList,
 	contractsv1.ContextFabricRequestedJudgmentMaxLength,
 	contractsv1.ContextFabricSubjectTermsMaxCount,
@@ -109,6 +116,11 @@ question_family: emit ONLY if one of these names obviously fits, otherwise omit 
 	contextFabricWindowClassList,
 	contextFabricSubjectKindList,
 	contextFabricQuestionFamilyList,
+	contextFabricInvestigationGoalList,
+	contextFabricSubjectExpressionKindList,
+	contextFabricTemporalIntentList,
+	contextFabricAnswerEmphasisList,
+	contextFabricHealthDimensionList,
 )
 
 // contextFabricSubjectKindList and contextFabricQuestionFamilyList
@@ -130,6 +142,63 @@ var contextFabricSubjectKindList = func() string {
 // model should be invited to pick. Offering it would turn "the model was
 // unsure" into "the model asserted unclassified", which the precedence
 // table would then treat as an agreeing pick rather than as silence.
+// The CHAOS-4452 stage-2 frame vocabularies, rendered for the prompt on
+// the same rule as every list above: the prompt's closed set IS the
+// declaration the sanitizer accepts, so a member added or pruned cannot
+// leave a stale list in the prompt.
+//
+// NO jsonschema enum tag backs any of these on the output struct, and that
+// is deliberate rather than an omission -- it is the rule the subject-kind
+// fields already follow (runtime.go's own comment): a schema enum makes
+// the PROVIDER reject the whole response for an out-of-set value, which
+// converts a shadow capture into a way to fail a real investigation.
+// Sanitization handles the out-of-set case instead, and the prompt is
+// where the vocabulary is stated.
+var contextFabricInvestigationGoalList = func() string {
+	vocabulary := contextfabric.InvestigationGoalVocabulary()
+	goals := make([]string, 0, len(vocabulary))
+	for _, goal := range vocabulary {
+		goals = append(goals, string(goal))
+	}
+	return strings.Join(goals, ", ")
+}()
+
+var contextFabricSubjectExpressionKindList = func() string {
+	vocabulary := contextfabric.SubjectExpressionKindVocabulary()
+	kinds := make([]string, 0, len(vocabulary))
+	for _, kind := range vocabulary {
+		kinds = append(kinds, string(kind))
+	}
+	return strings.Join(kinds, ", ")
+}()
+
+var contextFabricTemporalIntentList = func() string {
+	vocabulary := contextfabric.TemporalIntentVocabulary()
+	temporals := make([]string, 0, len(vocabulary))
+	for _, temporal := range vocabulary {
+		temporals = append(temporals, string(temporal))
+	}
+	return strings.Join(temporals, ", ")
+}()
+
+var contextFabricAnswerEmphasisList = func() string {
+	vocabulary := contextfabric.AnswerEmphasisVocabulary()
+	emphases := make([]string, 0, len(vocabulary))
+	for _, emphasis := range vocabulary {
+		emphases = append(emphases, string(emphasis))
+	}
+	return strings.Join(emphases, ", ")
+}()
+
+var contextFabricHealthDimensionList = func() string {
+	vocabulary := contextfabric.HealthDimensionVocabulary()
+	dimensions := make([]string, 0, len(vocabulary))
+	for _, dimension := range vocabulary {
+		dimensions = append(dimensions, string(dimension))
+	}
+	return strings.Join(dimensions, ", ")
+}()
+
 var contextFabricQuestionFamilyList = func() string {
 	vocabulary := contextfabric.QuestionFamilyVocabulary()
 	families := make([]string, 0, len(vocabulary))
