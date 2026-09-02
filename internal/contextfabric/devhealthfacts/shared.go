@@ -555,15 +555,29 @@ func factKindObligations(kind contextfabric.FactKind) map[contextfabric.SubjectK
 			contractsv1.ContextFabricSubjectCIRun: {contextfabric.ObligationPrincipalDrivers},
 			contextfabric.SubjectRepository:       {contextfabric.ObligationPrincipalDrivers},
 		}
-	// Deployments and incidents are the release-readiness signals.
+	// Deployment history is a REPOSITORY's release-readiness signal.
+	//
+	// It is deliberately NOT declared as readiness for a `deployment`
+	// subject, and the distinction is the point of keying by subject kind:
+	// "is this ready to release" is a question about the thing being
+	// released, not about a release that already happened. A deployment
+	// subject's own facts explain what happened (a driver); they do not
+	// establish its readiness, and declaring that they do would put a
+	// category error into the plan where it would read as coverage.
 	case contextfabric.FactDeployments:
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
-			contextfabric.SubjectDeployment: {contextfabric.ObligationReadiness, contextfabric.ObligationPrincipalDrivers},
+			contextfabric.SubjectDeployment: {contextfabric.ObligationPrincipalDrivers},
 			contextfabric.SubjectRepository: {contextfabric.ObligationReadiness, contextfabric.ObligationPrincipalDrivers},
 		}
+	// Same reasoning, and here it leaves the producer with nothing to
+	// serve `readiness` for at all: IncidentsProvider supports only the
+	// `incident` subject kind, and an incident's readiness is not a
+	// question. Incidents EXPLAIN reliability -- they are a driver. The
+	// `readiness` obligation on a team or project is served by the
+	// readiness producer, not by this one.
 	case contextfabric.FactIncidents:
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
-			contextfabric.SubjectIncident: {contextfabric.ObligationReadiness, contextfabric.ObligationPrincipalDrivers},
+			contextfabric.SubjectIncident: {contextfabric.ObligationPrincipalDrivers},
 		}
 	// Fired operational-deficiency rules explain pressure: a driver, never
 	// a state.

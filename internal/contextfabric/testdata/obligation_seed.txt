@@ -35,8 +35,6 @@ principal_drivers
   team                 flow health investment landscape metrics operational_deficiencies readiness workload
 
 readiness
-  deployment           deployments
-  incident             incidents
   project              readiness
   repository           deployments
   team                 readiness
