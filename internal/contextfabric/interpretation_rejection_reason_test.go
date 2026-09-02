@@ -138,6 +138,21 @@ func TestNewInterpretationRejectionCanonicalizesANonMember(t *testing.T) {
 	if got := InterpretationRejectionReasonOf(err); got != InterpretationRejectionUnclassified {
 		t.Fatalf("InterpretationRejectionReasonOf() = %q, want %q -- a non-member must never survive to a telemetry field", got, InterpretationRejectionUnclassified)
 	}
+
+	// The equal-by-content case, which the non-member case above cannot
+	// reach: a caller-built string carrying a real member's TEXT must be
+	// replaced by the table's constant, not merely accepted.
+	callerBuilt := InterpretationRejectionReason(strings.Join([]string{"shape", "invalid"}, "_"))
+	if unsafe.StringData(string(callerBuilt)) == unsafe.StringData(string(contractsv1.ContextFabricInterpretationRejectionShapeInvalid)) {
+		return // interned by the compiler; nothing to distinguish here
+	}
+	var stored *InterpretationRejection
+	if !errors.As(NewInterpretationRejection(callerBuilt, errors.New("boom")), &stored) {
+		t.Fatal("errors.As(&InterpretationRejection{}) = false")
+	}
+	if unsafe.StringData(string(stored.Reason)) == unsafe.StringData(string(callerBuilt)) {
+		t.Fatal("NewInterpretationRejection stored the CALLER's string rather than the table's constant")
+	}
 }
 
 // TestFactCapabilityParameterRejectionNamesItsRuleOnBothRealSites pins the
@@ -319,4 +334,47 @@ type capturingReceiptSink struct{ got ModelExecutionReceipt }
 func (s *capturingReceiptSink) RecordModelExecution(_ context.Context, _ storage.Principal, receipt ModelExecutionReceipt) error {
 	s.got = receipt
 	return nil
+}
+
+// TestInterpretationRejectionReasonOfReturnsTheTableConstant closes the last
+// unguarded surface found by a deliberate sweep of every place the reason
+// value crosses a boundary.
+//
+// The gap was proven, not assumed: removing the canonicalization from
+// InterpretationRejectionReasonOf and running contextfabric, genkitruntime,
+// api and contracts/v1 left ALL FOUR packages green. Nothing asserted this
+// surface at all.
+//
+// It is a real bypass rather than a theoretical one, because
+// InterpretationRejection is an EXPORTED struct with an EXPORTED Reason
+// field: a caller can skip NewInterpretationRejection entirely and build the
+// wrapper by hand, so the constructor's canonicalization is not the only
+// path in. This reader is then the choke point that every telemetry surface
+// downstream depends on — the interpret decision line and the API failure
+// event both take their value from it — so a pointer-level assertion here
+// covers those transitively.
+func TestInterpretationRejectionReasonOfReturnsTheTableConstant(t *testing.T) {
+	t.Parallel()
+	callerBuilt := InterpretationRejectionReason(strings.Join([]string{"shape", "invalid"}, "_"))
+	if unsafe.StringData(string(callerBuilt)) == unsafe.StringData(string(contractsv1.ContextFabricInterpretationRejectionShapeInvalid)) {
+		t.Skip("the compiler interned the runtime-built string; this test cannot distinguish the two here")
+	}
+
+	// Built by hand, deliberately bypassing NewInterpretationRejection.
+	handBuilt := &InterpretationRejection{Reason: callerBuilt, err: errors.New("boom")}
+
+	got := InterpretationRejectionReasonOf(handBuilt)
+	if got != contractsv1.ContextFabricInterpretationRejectionShapeInvalid {
+		t.Fatalf("InterpretationRejectionReasonOf() = %q, want the member text", got)
+	}
+	if unsafe.StringData(string(got)) == unsafe.StringData(string(callerBuilt)) {
+		t.Fatal("InterpretationRejectionReasonOf returned the CALLER's string, not the table's constant -- every telemetry surface downstream takes its value from here, so a caller-owned string would reach all of them")
+	}
+
+	// A hand-built wrapper carrying a NON-member must also be laundered:
+	// the constructor is not in this path to have caught it.
+	nonMember := &InterpretationRejection{Reason: "MARKER_NOT_A_MEMBER_9c12", err: errors.New("boom")}
+	if got := InterpretationRejectionReasonOf(nonMember); got != InterpretationRejectionUnclassified {
+		t.Fatalf("InterpretationRejectionReasonOf() = %q for a hand-built non-member, want %q", got, InterpretationRejectionUnclassified)
+	}
 }
