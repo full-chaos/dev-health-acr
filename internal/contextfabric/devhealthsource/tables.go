@@ -238,13 +238,16 @@ WHERE w.org_id = {org_id:String}` + sincePredicate(cursor, "w.updated_at", rowKe
 		// A work item is valid from creation until it completed or
 		// closed, whichever the source recorded; an open item has no end.
 		validFrom, validTo := requiredTime(createdAt), optionalTime(hasEnded, endedAt)
-		// Trimmed at the row, not left to item_normalization.go's pass, so a
-		// reader of this producer sees the contract's trim rule where the
-		// label is minted. The pass is still the authority and still covers
-		// every OTHER label site in this package; it simply finds nothing to
-		// do here.
-		label := strings.TrimSpace(title)
-		if label == "" {
+		// Deliberately assigns the RAW title: item_normalization.go's pass
+		// trims every label in this package, and it is the only place that
+		// counts the repair. An earlier revision of that change trimmed here
+		// as well, which repaired the row just as well and made it INVISIBLE
+		// -- the three title sites are the ones an operator most wants on the
+		// label_trimmed counter, and a repair applied before the counter is a
+		// silent rewrite. The emptiness fallback still tests the TRIMMED
+		// value, so a whitespace-only title falls back exactly as before.
+		label := title
+		if strings.TrimSpace(label) == "" {
 			label = workItemID
 		}
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem, CanonicalID: canonicalID, Label: label}
@@ -317,8 +320,10 @@ WHERE p.org_id = {org_id:String}` + sincePredicate(cursor, "p.last_synced", rowK
 		validFrom, validTo := requiredTime(createdAt), optionalTime(hasEnded, endedAt)
 		canonicalID := fmt.Sprintf("pull_request:%s:%d", repoID, number)
 		rowSortKey := fmt.Sprintf("%s:%d", repoID, number)
-		label := strings.TrimSpace(title)
-		if label == "" {
+		// Raw title, trimmed and counted by item_normalization.go -- see
+		// queryWorkItems' note on why the trim does not happen here.
+		label := title
+		if strings.TrimSpace(label) == "" {
 			label = fmt.Sprintf("PR #%d", number)
 		}
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest, CanonicalID: canonicalID, Label: label}
@@ -447,8 +452,10 @@ WHERE i.org_id = {org_id:String}` + sincePredicate(cursor, timestampExpr, "i.id"
 			}
 			return []candidate{{observedAt: observedAt, sortKey: incidentID, tombstone: &tombstone}}, nil
 		}
-		label := strings.TrimSpace(title)
-		if label == "" {
+		// Raw title, trimmed and counted by item_normalization.go -- see
+		// queryWorkItems' note on why the trim does not happen here.
+		label := title
+		if strings.TrimSpace(label) == "" {
 			label = incidentID
 		}
 		subject := contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectIncident, CanonicalID: canonicalID, Label: label}

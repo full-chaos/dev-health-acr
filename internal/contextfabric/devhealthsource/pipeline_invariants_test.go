@@ -514,6 +514,75 @@ func TestNormalizationInvariantFOverGeneratedCandidates(t *testing.T) {
 	t.Logf("invariant (f) reach: %d rows repaired, %d more rows kept than without normalization, over %d cases", repairedTotal, keptDelta, pipelineInvariantCases)
 }
 
+// TestNormalizingTwinsCollidesThemAndTheGraphStillGains is seed 3, kept as a
+// named fixture because it is the case that decided the SHAPE of invariant (f).
+//
+// A candidate-level reading of "a repair must never cost a row" fails here, and
+// it is right to fail: candidate 14 is a work_item_ref:T-1 stub whose untrimmed
+// twin used to be quarantined. Normalization makes BOTH twins valid, so they
+// collide on one identity and dropDuplicateIdentities drops the second under
+// the documented first-occurrence-wins rule. Nothing is lost that a consumer
+// can see -- the identity stays supplied by the survivor, and the batch carries
+// MORE items than before, not fewer.
+//
+// The property test states (f) over identities supplied for exactly this
+// reason. This fixture pins the concrete numbers so that restatement stays
+// anchored to a case a reader can run, rather than to a rule that sounds
+// reasonable. If the generator changes and these numbers move, check that the
+// DIRECTION is still a gain before updating them, and say so in the commit.
+func TestNormalizingTwinsCollidesThemAndTheGraphStillGains(t *testing.T) {
+	t.Parallel()
+	const seed = 3
+	const keptWithoutNormalization, keptWithNormalization = 8, 12
+	const collidingStub = "work_item_ref:T-1"
+
+	control := generateCandidates(rand.New(rand.NewSource(seed)))
+	subject := generateCandidates(rand.New(rand.NewSource(seed)))
+	normalizeCandidates(subject.candidates, nil)
+
+	controlKept := partitionProjectableCandidates(control.candidates, nil)
+	var observations []quarantineObservation
+	subjectKept := partitionProjectableCandidates(subject.candidates, func(o quarantineObservation) {
+		observations = append(observations, o)
+	})
+
+	if len(controlKept) != keptWithoutNormalization || len(subjectKept) != keptWithNormalization {
+		t.Fatalf("kept %d without normalization and %d with it, want %d and %d -- if you changed the generator on purpose, check the direction is still a GAIN and update these in the same commit",
+			len(controlKept), len(subjectKept), keptWithoutNormalization, keptWithNormalization)
+	}
+
+	// The stub that is dropped as a duplicate is still SUPPLIED by its twin.
+	// That is the whole distinction, so it is asserted rather than described.
+	supplied := 0
+	for _, c := range subjectKept {
+		if c.entity != nil && c.entity.Subject.CanonicalID == collidingStub {
+			supplied++
+		}
+	}
+	if supplied != 1 {
+		t.Fatalf("%s is supplied by %d surviving candidates, want exactly 1: the colliding twins must collapse to one node, neither duplicated nor lost", collidingStub, supplied)
+	}
+	duplicates := 0
+	for _, o := range observations {
+		if o.Reason == quarantineDuplicateWithinBatch {
+			duplicates++
+		}
+	}
+	if duplicates == 0 {
+		t.Fatalf("no duplicate_within_batch was reported, so this fixture is no longer exercising the collision it exists for: %+v", observations)
+	}
+	// And the graph gains: every identity supplied before is still supplied.
+	before, after := suppliedIdentities(controlKept), suppliedIdentities(subjectKept)
+	for key := range before {
+		if !after[key] {
+			t.Fatalf("identity %q was supplied without normalization and is unsupplied with it", key)
+		}
+	}
+	if len(after) <= len(before) {
+		t.Fatalf("identities supplied went from %d to %d: normalization must add nodes and edges, never remove them", len(before), len(after))
+	}
+}
+
 // suppliedIdentities is the set of node and edge identities a kept candidate
 // set actually puts into the graph. Keyed the way the backend keys them -- an
 // entity by kind + canonical id, a relationship by its relationship id -- so

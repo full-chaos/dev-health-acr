@@ -167,16 +167,12 @@ func TestNormalizationKeepsEveryRowTheThreeBoundsUsedToCost(t *testing.T) {
 		wantToken string
 		wantLabel string
 	}{
-		// The untrimmed title is repaired AT THE ROW (tables.go trims the
-		// title before minting the subject), so the pass finds nothing left to
-		// do and reports NOTHING. That is deliberate and is why this case
-		// asserts the resulting LABEL rather than a token: the row-level trim
-		// at the three ticket-named sites is a readability choice, and its
-		// price is that those three families do not reach the label_trimmed
-		// counter. Every OTHER label family does -- see
-		// TestNormalizationCoversEveryLabelFamily, where the deployment
-		// environment and the dependency target both land on the counter.
-		{"untrimmed title (repaired at the row, so uncounted)", workItem("WI-TRIM", "  Investigate the checkout flake  ", "", created, 0, zeroTime), "", "Investigate the checkout flake"},
+		// The title reaches the pass RAW. An earlier revision trimmed it at
+		// the row for readability, which repaired the row and made the repair
+		// invisible -- the three title sites are the ones an operator most
+		// wants counted. So this case asserts BOTH: the token fires, and the
+		// label that reaches the batch is the trimmed one.
+		{"untrimmed title", workItem("WI-TRIM", "  Investigate the checkout flake  ", "", created, 0, zeroTime), "label_trimmed", "Investigate the checkout flake"},
 		{"oversize title", workItem("WI-CAP", bigText(contractsv1.ContextFabricSubjectRefLabelMaxLength+40), "", created, 0, zeroTime), "label_capped", ""},
 		{"oversize free-text property", workItem("WI-SCALAR", "ok", bigText(overRunes), created, 0, zeroTime), "scalar_capped", ""},
 		{"inverted validity window", workItem("WI-WINDOW", "ok", "", created, 1, ended), "window_collapsed", ""},
@@ -212,9 +208,6 @@ func TestNormalizationKeepsEveryRowTheThreeBoundsUsedToCost(t *testing.T) {
 		if tc.wantLabel != "" {
 			if got := batch.Entities[0].Subject.Label; got != tc.wantLabel {
 				t.Fatalf("%s: label = %q, want %q", tc.name, got, tc.wantLabel)
-			}
-			if len(tally) != 0 {
-				t.Fatalf("%s: the row-level trim already repaired this row, so the pass must report nothing: %v", tc.name, tally)
 			}
 		}
 		// The decisive negative: the bound that used to cost this row must no
@@ -516,9 +509,9 @@ func TestAnOversizeRepositorySlugIsNotThisPassesToRepair(t *testing.T) {
 // sites: a new site minting an existing kind is covered by construction, while
 // a new KIND is a visible gap.
 //
-// Two families behave differently and both are asserted rather than glossed:
-// the three ticket-named sites trim AT THE ROW, so only their CAP reaches the
-// counter, and the repository family is not repairable at all because its
+// EVERY family reaches the counter, including the three the ticket names: no
+// site repairs its own label first, so nothing is repaired upstream of the
+// count. The one family that is not repairable at all is the repository, whose
 // label is also its authorization scope (see
 // TestAnOversizeRepositorySlugIsNotThisPassesToRepair).
 func TestNormalizationCoversEveryLabelFamily(t *testing.T) {
@@ -533,16 +526,16 @@ func TestNormalizationCoversEveryLabelFamily(t *testing.T) {
 
 	tables := []fakeTable{
 		repoRow("repo-1", slug, "synthetic", at),
-		// Row-trimmed families: the cap reaches the counter, the trim does not.
+		// The three ticket-named title families. Both tokens fire on each.
 		{match: "FROM work_items AS w", rows: [][]any{
 			{"WI-1", "repo-1", slug, dirty("wi"), "open", "", at, created, uint8(0), zeroTime, "", "", "", []string{}}}},
 		{match: "FROM git_pull_requests AS p", rows: [][]any{
 			{"repo-1", slug, uint32(1042), dirty("pr"), "open", at, created, uint8(0), zeroTime, "main", ""}}},
 		{match: "FROM operational_incidents AS i", rows: [][]any{
 			{"incident-1", "repo-1", slug, dirty("inc"), "open", "low", at, uint8(0), uint8(1), created, uint8(0), zeroTime, ""}}},
-		// Pass-repaired families: the deployment label is built from the
-		// environment column and the ref stub's label is the raw target id.
-		// Neither goes through a row-level trim, so BOTH tokens fire.
+		// The families the ticket does NOT name: the deployment label is built
+		// from the environment column, and the ref stub's label is the raw
+		// target id. These are the sites a three-site fix would have missed.
 		{match: "FROM deployments AS d", rows: [][]any{
 			{"repo-1", slug, "deploy-1", "success", dirty("env"), at, uint8(1), created, uint8(0), zeroTime, "v1"}}},
 		// A CLEAN unresolved target, so the work_item_ref family is present
@@ -574,12 +567,18 @@ func TestNormalizationCoversEveryLabelFamily(t *testing.T) {
 	if tally["label_capped"] == 0 {
 		t.Fatalf("label_capped never fired on a corpus of five oversize labels: %v", tally)
 	}
-	// The POSITIVE control for the counter the three row-trimmed sites cannot
-	// reach: the deployment environment and the dependency target both arrive
-	// untrimmed at the pass, so label_trimmed must fire here. If it ever reads
-	// zero, the pass has stopped trimming and only the row-level sites remain.
-	if tally["label_trimmed"] == 0 {
-		t.Fatalf("label_trimmed never fired, though the deployment environment and the dependency target reach the pass untrimmed: %v", tally)
+	// EVERY dirty label family must reach BOTH counters -- five of them here,
+	// each untrimmed AND oversize. This is the positive control that no site
+	// has quietly started repairing its own label upstream of the count: such
+	// a site would still project a clean label and this assertion is the only
+	// thing that would notice the counter had gone quiet.
+	const dirtyLabelFamilies = 5 // work item, pull request, incident, deployment, ref stub
+	if tally["label_trimmed"] < dirtyLabelFamilies {
+		t.Fatalf("label_trimmed = %d, want at least %d (one per dirty label family) -- a family whose label is repaired before the pass runs is repaired SILENTLY: %v",
+			tally["label_trimmed"], dirtyLabelFamilies, tally)
+	}
+	if tally["label_capped"] < dirtyLabelFamilies {
+		t.Fatalf("label_capped = %d, want at least %d: %v", tally["label_capped"], dirtyLabelFamilies, tally)
 	}
 
 	wantKinds := []contractsv1.ContextFabricSubjectKind{

@@ -30,11 +30,23 @@ import (
 // would merge.
 //
 // This runs as ONE pass over every built candidate rather than as an edit at
-// each row-building site. The site list is long and grows: labels alone are
-// minted at more than a dozen places across tables.go, teams_projects.go,
-// teams_projects_edges.go and clickhouse.go, and a fix applied site by site
-// is exactly the enumeration that misses the site added next quarter. A pass
+// each row-building site, and it is the ONLY place any of it happens.
+//
+// The site list is long and grows: labels alone are minted at more than a
+// dozen places across tables.go, teams_projects.go, teams_projects_edges.go
+// and clickhouse.go, and free-text properties at twenty-eight -- fourteen
+// through setStringProperty with a zero limit, and fourteen more written
+// straight through stringScalar with no cap at all. A fix applied site by site
+// is exactly the enumeration that misses the site added next quarter; a pass
 // at the one point every candidate passes through cannot miss one.
+//
+// Nor does any site repair its own value first. An earlier revision also
+// trimmed the title at the three work_items / git_pull_requests /
+// operational_incidents sites, for readability. It repaired those rows just as
+// well and made them INVISIBLE: the pass had nothing left to do, so the three
+// families an operator most wants on the label_trimmed counter never reached
+// it. A repair applied upstream of the counter is a silent rewrite, which is
+// the one thing this change promised not to be.
 const (
 	// normalizationLabelTrimmed marks a subject label that carried leading
 	// or trailing whitespace and was trimmed.
