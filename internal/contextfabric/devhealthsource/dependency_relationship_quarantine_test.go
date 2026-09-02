@@ -307,56 +307,79 @@ func TestClickHouseSourceVersionStaysV6ForReplay(t *testing.T) {
 	}
 }
 
-// TestQuarantiningTheLastRowStillAdvancesTheCursorPastIt isolates the
-// cursorSource/items separation in buildBatch, which no other test pinned
-// (found by mutation: replacing cursorSource with items in buildBatch's
+// TestQuarantiningEveryItemOfTheLastRowStillAdvancesTheCursorPastIt isolates
+// the cursorSource/items separation in buildBatch, which no other test
+// pinned (found by mutation: replacing cursorSource with items in the
 // NextCursor derivation left the whole suite green).
 //
 // The rule: NextCursor comes from every candidate the page CONSUMED, not
-// from the subset that survived quarantine. Derive it from the survivors
-// instead and a page whose LAST row is quarantined reports a watermark
-// BEHIND that row -- so the next tick re-reads it, re-quarantines it,
-// re-reports it, and the cursor never passes it. That is the original wedge
-// wearing a different mask: the organization stops making progress at
-// exactly the bad row, and now it does so while logging a quarantine every
-// tick forever instead of an error.
+// from the subset that survived quarantine. Derive it from the survivors and
+// a page whose last row contributed NOTHING reports a watermark behind that
+// row -- the next tick re-reads it, re-quarantines it, re-reports it, and the
+// walk never passes it. That is the original wedge wearing a different mask:
+// no error, just a quarantine logged every tick forever and no progress.
 //
-// Seeds two legal rows followed by an illegal one at the LATEST timestamp,
-// so the quarantined row is unambiguously last.
-func TestQuarantiningTheLastRowStillAdvancesTheCursorPastIt(t *testing.T) {
+// It must be a row whose EVERY item is quarantined. A work_item_dependencies
+// row is the wrong instrument here: its illegal edge is accompanied by a
+// healing tombstone that is perfectly valid and shares the row's sort key, so
+// the surviving item lands on the same cursor position and the two
+// derivations agree by accident. A work_items row with an untrimmed title
+// fails on BOTH of its candidates -- the entity's Subject.Label and the
+// BELONGS_TO_REPOSITORY edge's From, which is that same subject -- leaving
+// the row with no representative at all.
+//
+// (The untrimmed title is itself a real producer defect: tables.go's
+// `label := title; if strings.TrimSpace(label) == ""` trims to TEST the
+// value but assigns it UNTRIMMED. Normalizing it is follow-up work; this
+// test only relies on such a row being unprojectable, which it is.)
+func TestQuarantiningEveryItemOfTheLastRowStillAdvancesTheCursorPastIt(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 6, 30, 10, 47, 54, 0, time.UTC)
-	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	rows := [][]any{
-		dependencyRow("WI-1", "WI-2", "RELATES_TO", at, created),
-		dependencyRow("WI-3", "WI-4", "RELATES_TO", at.Add(time.Second), created),
-		dependencyRow("WI-5", "EXT-9", "EXTERNAL_ISSUE_KEY", at.Add(2*time.Second), created), // LAST, and quarantined
+	row := func(id, title string, observedAt time.Time) []any {
+		return []any{id, "repo-000", "example-org/repo-000", title, "in_progress", "", observedAt, observedAt, uint8(0), zeroTime, "", "", "", []string{}}
 	}
-	tables := dependencyTablesOnly(t, at, rows)
+	tables := baseTables(at)
+	for index, table := range tables {
+		if table.match == "FROM work_items AS w" {
+			tables[index].rows = [][]any{
+				row("WI-1", "Investigate checkout flake", at),
+				row("WI-2", "Fix the retry budget", at.Add(time.Second)),
+				// LAST, and every one of its candidates is unprojectable.
+				row("WI-3", "Trailing whitespace survives the guard ", at.Add(2*time.Second)),
+			}
+			tables[index].cursorOf = workItemCursorOf
+			continue
+		}
+		tables[index].rows = nil
+	}
 
 	batch, available, err, observations := projectWithQuarantineLog(t, tables, testCursor(t, at.Add(-time.Hour), ""))
 	if err != nil || !available {
 		t.Fatalf("page 1: err=%v available=%v", err, available)
 	}
-	if len(batch.Relationships) != 2 {
-		t.Fatalf("page 1 relationships = %d, want 2", len(batch.Relationships))
+	if len(batch.Entities) != 2 {
+		t.Fatalf("page 1 entities = %d, want 2 (the third row is entirely quarantined)", len(batch.Entities))
 	}
-	if len(observations) != 1 {
-		t.Fatalf("page 1 quarantines = %d, want 1", len(observations))
+	if len(observations) != 2 {
+		t.Fatalf("page 1 quarantines = %d, want 2 (the bad row's entity AND its BELONGS_TO_REPOSITORY edge): %+v", len(observations), observations)
+	}
+	for _, entry := range observations {
+		if entry["quarantine_reason"] != "untrimmed_label" {
+			t.Fatalf("quarantine_reason = %v, want %q", entry["quarantine_reason"], "untrimmed_label")
+		}
 	}
 
-	// The decisive assertion: the cursor must be PAST the quarantined row,
-	// so the next tick finds nothing and never sees that row again.
+	// The decisive assertion.
 	_, nextAvailable, nextErr, nextObservations := projectWithQuarantineLog(t, tables, batch.NextCursor)
 	if nextErr != nil {
 		t.Fatalf("page 2: %v", nextErr)
 	}
 	if nextAvailable {
-		t.Fatal("page 2 returned a batch: the cursor did not advance past the quarantined last row")
+		t.Fatal("page 2 returned a batch: the cursor did not advance past the fully-quarantined last row")
 	}
 	if len(nextObservations) != 0 {
-		t.Fatalf("the quarantined row was re-read and re-quarantined on page 2 (%d observations) -- the cursor was derived from the SURVIVING items instead of every consumed candidate, so the walk can never pass it",
+		t.Fatalf("the fully-quarantined row was re-read and re-quarantined on page 2 (%d observations) -- NextCursor was derived from the SURVIVING items instead of every consumed candidate, so the walk can never pass it",
 			len(nextObservations))
 	}
 }
