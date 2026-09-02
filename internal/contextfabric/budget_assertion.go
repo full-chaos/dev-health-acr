@@ -65,13 +65,31 @@ const (
 	// windowConfirmationRequiredResult.
 	BudgetAssertWindowConfirmationRequired BudgetAssertStage = "window_confirmation_required"
 	// BudgetAssertStructureVeto is structure.go's structureVetoResult.
+	//
+	// The Save-race terminal (structureSupersessionVetoResult) reports under
+	// THIS label and deliberately gets no member of its own: it is a thin
+	// wrapper that delegates wholly to structureVetoResult, so it genuinely
+	// IS this code path. Minting a second token for it would put a member in
+	// the vocabulary that no producer can emit -- and a closed vocabulary
+	// wider than its producer is not a closed vocabulary (the rule #378
+	// established when it narrowed its own narrowing-basis enum to the two
+	// orders its sole producer can return).
 	BudgetAssertStructureVeto BudgetAssertStage = "structure_veto"
+	// BudgetAssertReuse is the reuse serve. A stored row is re-validated
+	// against the CURRENT effective budget, which is chris's promise of
+	// record in terms: "reuse and stored reads are re-validated against the
+	// current budget and refuse if they no longer fit." It persists nothing
+	// -- the stored document is left exactly as it was; only the decision to
+	// serve it is made here. The REMEDY for a reuse hit that no longer fits
+	// (budget-keyed reuse, or re-investigation) is a separate open decision,
+	// floor paper C2, ticketed.
+	BudgetAssertReuse BudgetAssertStage = "reuse"
 )
 
 // BudgetAssertStageCount is the vocabulary size, so a test that must cover
 // every member fails to compile rather than silently covering fewer when a
 // member is added.
-const BudgetAssertStageCount = 5
+const BudgetAssertStageCount = 6
 
 // BudgetAssertStageVocabulary returns every member. Returned as a sized array
 // rather than a slice for the same reason the count above is exported: a new
@@ -83,6 +101,7 @@ func BudgetAssertStageVocabulary() [BudgetAssertStageCount]BudgetAssertStage {
 		BudgetAssertWindowVeto,
 		BudgetAssertWindowConfirmationRequired,
 		BudgetAssertStructureVeto,
+		BudgetAssertReuse,
 	}
 }
 
@@ -174,4 +193,42 @@ func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Princip
 		// other four exits have no synthesis to re-run.
 		RetryAttempted: false,
 	}
+}
+
+// finalizeServed is THE point at which a served document becomes final and is
+// measured. There is exactly one of these, and every serving path goes through
+// it -- which is the property that matters, not the number of call sites.
+//
+// WHY ONE SITE, and why the previous shape was wrong. The first version of this
+// guard put an assertion at the tail of each exit function. That was defeated
+// immediately: `stampAnswerPlan` runs in the CALLER, so the plan object was
+// added to the document AFTER the callee had measured it -- the same
+// "something writes after the measurement" defeat that has now beaten this
+// program SEVEN times (four revisions of the minimal-answer-floor
+// specification, CHAOS-4636's own round-1 finding, this guard's
+// label-composition predecessor, and then the plan stamp itself).
+//
+// The order here is the whole point and it is not negotiable:
+//
+//	stamp every late writer  ->  measure  ->  (caller persists)
+//
+// Persistence deliberately follows the caller's own call to this function
+// rather than being passed in as a closure: each serving path keys its Save
+// differently (time-axis keys, watermarks, epochs), and lifting that into a
+// shared helper would move five different key derivations into one place for no
+// gain. What this function guarantees is that no path can persist or serve a
+// document that was not measured in its final form, because the measurement
+// happens here and the Save statements sit below the call.
+//
+// plan is nil on the paths that legitimately have none -- the three
+// pre-interpret veto/gate exits run before an AnswerPlan exists. A nil plan
+// stamps nothing; it is not a missing value.
+func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal, stage BudgetAssertStage, result InvestigationResult, plan *AnswerPlan, budget ResponseBudget) (InvestigationResult, error) {
+	if plan != nil {
+		result = stampAnswerPlan(result, *plan)
+	}
+	if err := e.assertFitsBudget(ctx, principal, stage, result, budget); err != nil {
+		return InvestigationResult{}, err
+	}
+	return result, nil
 }

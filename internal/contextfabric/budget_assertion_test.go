@@ -142,6 +142,22 @@ func buildTerminalEngineWithBudget(t *testing.T, graph GraphReader, results Inve
 	return engine
 }
 
+// cohortOf returns count minimal, unranked cohort members. Unranked
+// deliberately: ContextFabricCohort.validate imposes the dense 1..N
+// AttentionRank sequence only on members whose RankingComputed is true, so an
+// unranked cohort is the smallest legal shape that still charges its members to
+// the item budget.
+func cohortOf(count int) *Cohort {
+	members := make([]CohortMember, 0, count)
+	for i := 0; i < count; i++ {
+		members = append(members, CohortMember{
+			Subject: SubjectRef{Kind: SubjectProject, CanonicalID: fmt.Sprintf("project_member_%04d", i), Label: fmt.Sprintf("Member %04d", i)},
+			Rank:    i + 1,
+		})
+	}
+	return &Cohort{Kind: SubjectProject, Members: members}
+}
+
 // REFUTED HYPOTHESIS, recorded rather than deleted (executed 2026-09-02).
 //
 // A draft of this file also probed "ambiguous candidates PLUS a discovered
@@ -448,6 +464,21 @@ func TestEveryFreshResultExitAssertsTheBudget(t *testing.T) {
 		seen[BudgetAssertWindowConfirmationRequired] = true
 	})
 
+	t.Run("reuse", func(t *testing.T) {
+		telemetry := &recordingTelemetry{}
+		project, candidate := reusableCandidate()
+		engine := buildReuseEngineWithBudget(t, project, candidate, maxItems, telemetry)
+		result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		if !result.Reused {
+			t.Fatal("premise: this subtest must be a reuse hit, or it proves nothing about the reuse exit")
+		}
+		assertStageRecorded(t, telemetry, BudgetAssertReuse)
+		seen[BudgetAssertReuse] = true
+	})
+
 	// Coverage over the VOCABULARY, not over a hand-written list: adding a
 	// sixth exit without a subtest here fails at this assertion rather than
 	// passing silently. BudgetAssertStageVocabulary is a sized array, so a new
@@ -587,6 +618,286 @@ func buildWindowGateEngineWithBudget(t *testing.T, interpreter QuestionInterpret
 		Now:            func() time.Time { return time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC) },
 		NewResultID:    func() string { return "result_windowgate01" },
 		MaxItems:       maxItems,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	return engine
+}
+
+// buildReuseEngineWithBudget wires an engine whose reuse gate always hits with
+// candidate, plus a NON-ZERO item ceiling so the reuse assertion has a budget to
+// measure against.
+func buildReuseEngineWithBudget(t *testing.T, project SubjectRef, candidate InvestigationResult, maxItems int, telemetry EngineTelemetry) *Engine {
+	t.Helper()
+	engine, err := NewEngine(EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			t.Fatal("interpreter should not be reached on a reuse hit")
+			return InterpretedQuestion{}, nil
+		}),
+		Facts: failingFactReader{t: t},
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			t.Fatal("synthesizer should not be reached on a reuse hit")
+			return InvestigationResult{}, nil
+		}),
+		Results: &resultStoreStub{},
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return candidate, true, nil
+		}),
+		Telemetry: telemetry,
+	}, EngineOptions{
+		ServiceVersion: "acr-test",
+		Now:            func() time.Time { return time.Unix(200, 0).UTC() },
+		NewResultID:    func() string { return "result_fresh_00001" },
+		MaxItems:       maxItems,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	return engine
+}
+
+// TestReuseHitIsRevalidatedAgainstTheCurrentBudget is the promise-of-record
+// clause, executed.
+//
+// chris's ruled promise says in terms: "Reuse and stored reads are RE-VALIDATED
+// against the current budget and refuse if they no longer fit." The reuse key
+// does not include response budgets, so a row stored under a generous budget is
+// served unchanged after the budget is tightened -- and the ROUTE then refuses
+// it, with no engine measurement, no narrowing event and no continuation. That
+// is the CHAOS-4754 failure mode reached through a path no assembly strategy can
+// repair, because a stored row carries no facts or drivers to re-plan from.
+//
+// RED on origin/main: the stored row is served with no assertion at all.
+// GREEN: the reuse serve refuses with a measured AnswerBudgetRefusal.
+//
+// This is the INTERIM behaviour only. Whether such a hit should instead miss
+// (budget-keyed reuse) or re-investigate is floor paper C2, open and ticketed.
+func TestReuseHitIsRevalidatedAgainstTheCurrentBudget(t *testing.T) {
+	t.Parallel()
+
+	project, candidate := reusableCandidate()
+
+	// The budget is squeezed on the BYTE axis and the stored row is left
+	// EXACTLY as the fixture builds it. That is deliberate, and two earlier
+	// attempts are why: inflating the row with cohort members, and then with
+	// resolution candidates, both made the reuse gate MISS -- the recheck
+	// re-authorizes the row's contents, so an invented shape stops being a
+	// reuse hit and the test silently stops being about reuse at all (observed
+	// twice). Squeezing the ceiling instead of the document keeps the hit real.
+	stored, err := contractsv1.MeasureContextFabricResponse(candidate)
+	if err != nil {
+		t.Fatalf("measure stored row: %v", err)
+	}
+	maxBytes := stored.Bytes / 2
+	if maxBytes < 1 || maxBytes >= stored.Bytes {
+		t.Fatalf("premise: stored row is %d bytes, computed ceiling %d -- cannot straddle", stored.Bytes, maxBytes)
+	}
+
+	telemetry := &recordingTelemetry{}
+	engine := buildReuseEngineWithByteBudget(t, project, candidate, maxBytes, telemetry)
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err == nil {
+		t.Fatalf("reuse served a stored row of %d bytes against a %d-byte ceiling with no refusal (Reused=%v): the route will refuse it with no engine-side diagnosis", stored.Bytes, maxBytes, result.Reused)
+	}
+	var refusal AnswerBudgetRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Investigate() error = %v, want an AnswerBudgetRefusal from the reuse re-validation", err)
+	}
+	if refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
+		t.Fatalf("refusal.Overrun = %q, want %q", refusal.Overrun, contractsv1.ContextFabricBudgetOverrunBytes)
+	}
+	if len(telemetry.budgetAssertions) == 0 || telemetry.budgetAssertions[0].Stage != BudgetAssertReuse {
+		t.Fatalf("budget assertions = %+v, want one recorded at the reuse exit", telemetry.budgetAssertions)
+	}
+}
+
+// buildReuseEngineWithByteBudget is buildReuseEngineWithBudget with the ceiling
+// on the BYTE axis instead of the item axis.
+func buildReuseEngineWithByteBudget(t *testing.T, project SubjectRef, candidate InvestigationResult, maxBytes int64, telemetry EngineTelemetry) *Engine {
+	t.Helper()
+	engine, err := NewEngine(EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			t.Fatal("interpreter should not be reached on a reuse hit")
+			return InterpretedQuestion{}, nil
+		}),
+		Facts: failingFactReader{t: t},
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			t.Fatal("synthesizer should not be reached on a reuse hit")
+			return InvestigationResult{}, nil
+		}),
+		Results: &resultStoreStub{},
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return candidate, true, nil
+		}),
+		Telemetry: telemetry,
+	}, EngineOptions{
+		ServiceVersion:     "acr-test",
+		Now:                func() time.Time { return time.Unix(200, 0).UTC() },
+		NewResultID:        func() string { return "result_fresh_00001" },
+		MaxSerializedBytes: maxBytes,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	return engine
+}
+
+// TestPersistedRowCarriesTheAnswerPlan is the stored-vs-served divergence,
+// pinned. It is a defect independent of budgets and was found by the same
+// enumeration.
+//
+// BEFORE this change, every stamped exit did: compose -> validate -> SAVE ->
+// return, and the CALLER then did `stampAnswerPlan(result, plan)`. None of those
+// exits sets AnswerPlan itself (verified: zero writes to it in unresolved.go,
+// window.go and structure.go). So the persisted row had NO plan while the served
+// response did -- stored and served disagreed about what the answer was, which
+// is the divergence the budget measurement was moved into contracts/v1 to
+// prevent on the other axis.
+//
+// AFTER: finalizeServed stamps BEFORE the caller's Save runs, so the row that is
+// stored is the row that is served.
+//
+// RED on origin/main: the saved row's AnswerPlan is nil.
+func TestPersistedRowCarriesTheAnswerPlan(t *testing.T) {
+	t.Parallel()
+
+	store := newMapResultStore()
+	graphCtx := emptyGraphContext()
+	graphCtx.Coverage.Sources = []SourceObservation{{Source: "context-fabric:graph", State: SourceAvailable}}
+	graph := &acceptanceGraphReader{
+		resolution: manyAmbiguousCandidates(2, "Which subject did you mean?"),
+		context:    graphCtx,
+	}
+	engine := buildTerminalEngineWithBudget(t, graph, store, 500)
+
+	served, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if served.Status != InvestigationClarificationRequired {
+		t.Fatalf("Status = %q, want clarification_required (sanity check: the persisting exit under test was not reached)", served.Status)
+	}
+	if served.AnswerPlan == nil {
+		t.Fatal("premise: the SERVED result carries no plan, so this test cannot show a divergence")
+	}
+
+	stored, ok := store.byOrg[acceptancePrincipal().OrgID][served.ResultID]
+	if !ok {
+		t.Fatalf("no row persisted for result %q: this exit is supposed to persist, so the test proves nothing", served.ResultID)
+	}
+	if stored.AnswerPlan == nil {
+		t.Fatal("the PERSISTED row carries no AnswerPlan while the SERVED response does: stored and served disagree, and a later read of that row returns an answer missing the plan its original caller saw")
+	}
+	if stored.AnswerPlan.Family != served.AnswerPlan.Family {
+		t.Fatalf("stored plan family %q != served %q", stored.AnswerPlan.Family, served.AnswerPlan.Family)
+	}
+}
+
+// TestStampedExitMeasuresAfterTheStampNotBefore pins the EXACT defeat that made
+// the first version of this guard NOT CLEAN, on the axis it happens on.
+//
+// The first version asserted at the tail of each exit while `stampAnswerPlan`
+// ran in the CALLER, so the plan object was added to the document after it had
+// been measured. This is the seventh time this program has been beaten by
+// something writing after the measurement, and it is the one mutation that must
+// stay red: swap the stamp and the assert inside finalizeServed and this test
+// fails.
+//
+// Note the axis. The plan adds BYTES and no items, so an item-axis test cannot
+// see this and the subjectless-terminal item test above would stay green through
+// the mutation. The budget is calibrated from the run rather than hardcoded, for
+// the same reason as the decisive-path test: a literal would rot on the first
+// unrelated field change and would not prove the relation.
+func TestStampedExitMeasuresAfterTheStampNotBefore(t *testing.T) {
+	t.Parallel()
+
+	build := func(maxBytes int64) (InvestigationResult, error) {
+		graphCtx := emptyGraphContext()
+		graphCtx.Coverage.Sources = []SourceObservation{{Source: "context-fabric:graph", State: SourceAvailable}}
+		graph := &acceptanceGraphReader{
+			resolution: manyAmbiguousCandidates(2, "Which subject did you mean?"),
+			context:    graphCtx,
+		}
+		engine := buildTerminalEngineWithByteBudget(t, graph, newMapResultStore(), maxBytes)
+		return engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
+	}
+
+	served, err := build(0) // unbounded, to calibrate
+	if err != nil {
+		t.Fatalf("calibration run: Investigate() error = %v", err)
+	}
+	if served.AnswerPlan == nil {
+		t.Fatal("premise: this exit did not carry a stamped plan, so there is no stamp for the assertion to run after")
+	}
+	post, err := contractsv1.MeasureContextFabricResponse(served)
+	if err != nil {
+		t.Fatalf("measure served: %v", err)
+	}
+	unstamped := served
+	unstamped.AnswerPlan = nil
+	pre, err := contractsv1.MeasureContextFabricResponse(unstamped)
+	if err != nil {
+		t.Fatalf("measure unstamped: %v", err)
+	}
+	delta := post.Bytes - pre.Bytes
+	t.Logf("pre-stamp %d bytes, post-stamp %d bytes, the plan stamp adds %d bytes; items unchanged (%d -> %d)",
+		pre.Bytes, post.Bytes, delta, pre.Items.Budgeted(), post.Items.Budgeted())
+	if delta < 8 {
+		t.Fatalf("the plan stamp added only %d bytes: this probe cannot straddle the two measurements", delta)
+	}
+	if pre.Items.Budgeted() != post.Items.Budgeted() {
+		t.Fatalf("item counts changed across the stamp (%d -> %d): this test asserts the BYTE-axis relation and its premise no longer holds", pre.Items.Budgeted(), post.Items.Budgeted())
+	}
+
+	budget := pre.Bytes + delta/2
+	if budget <= pre.Bytes || budget >= post.Bytes {
+		t.Fatalf("calibrated budget %d does not lie strictly between %d and %d", budget, pre.Bytes, post.Bytes)
+	}
+
+	result, err := build(budget)
+	if err != nil {
+		var refusal AnswerBudgetRefusal
+		if !errors.As(err, &refusal) {
+			t.Fatalf("Investigate() error = %v, want an AnswerBudgetRefusal", err)
+		}
+		if refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
+			t.Fatalf("refusal.Overrun = %q, want %q", refusal.Overrun, contractsv1.ContextFabricBudgetOverrunBytes)
+		}
+		return // GREEN: measured after the stamp.
+	}
+	final, measureErr := contractsv1.MeasureContextFabricResponse(result)
+	if measureErr != nil {
+		t.Fatalf("measure final: %v", measureErr)
+	}
+	t.Fatalf("the exit accepted a fit at a %d-byte budget and served %d bytes: it measured BEFORE the plan stamp, which is exactly the defeat this guard was rebuilt to prevent", budget, final.Bytes)
+}
+
+// buildTerminalEngineWithByteBudget is buildTerminalEngineWithBudget with the
+// ceiling on the BYTE axis.
+func buildTerminalEngineWithByteBudget(t *testing.T, graph GraphReader, results InvestigationResultStore, maxBytes int64) *Engine {
+	t.Helper()
+	runtime := fakeModelRuntime{interpreted: bootstrapInterpretation(), draft: SynthesisDraft{}, receipt: acceptanceReceipt()}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: RuntimeQuestionInterpreter{Runtime: runtime},
+		Graph:       graph,
+		Facts: factReaderFunc(func(_ context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
+			t.Fatalf("ReadFacts called with %#v -- a no-committed-subject investigation must never reach the canonical fact read", request)
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			t.Fatal("Synthesize called -- a terminal result must be composed without a model call")
+			return InvestigationResult{}, nil
+		}),
+		Results: results,
+	}, EngineOptions{
+		ServiceVersion:     "terminal-byte-budget-test",
+		Now:                func() time.Time { return time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC) },
+		NewResultID:        func() string { return "result_terminal0001" },
+		MaxSerializedBytes: maxBytes,
 	})
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)

@@ -1148,6 +1148,11 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 	// unchanged by this PR; a genuine fix needs the SAME Save-race handling
 	// note above, scoped to window's own ConfirmedMember shape.
 	explicitStructure []explicitStructureMember,
+	// plan is the caller's AnswerPlan, or nil where none exists yet (the
+	// pre-interpret call sites). Passed IN rather than stamped by the caller
+	// afterwards -- a caller-side stamp lands after this function has
+	// measured and persisted. See finalizeServed.
+	plan *AnswerPlan,
 ) (InvestigationResult, error) {
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcomeForVeto(veto))
@@ -1256,7 +1261,8 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 	// Completeness and display-label stamps above already follow. Those two
 	// sweeps enumerated these exits and neither added the budget stage, so
 	// this exit served an unmeasured document. See budget_assertion.go.
-	if err := e.assertFitsBudget(ctx, principal, BudgetAssertWindowVeto, result, e.effectiveResponseBudget(request)); err != nil {
+	result, err := e.finalizeServed(ctx, principal, BudgetAssertWindowVeto, result, plan, e.effectiveResponseBudget(request))
+	if err != nil {
 		return InvestigationResult{}, err
 	}
 	if err := result.Validate(); err != nil {
@@ -1365,6 +1371,11 @@ func (e *Engine) windowConfirmationRequiredResult(
 	// below unconditionally so a caller's PriorSubjectReceipts are
 	// disclosed on this terminal too, not only on a decisive answer.
 	priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry,
+	// plan is the caller's AnswerPlan, or nil where none exists yet (the
+	// pre-interpret call sites). Passed IN rather than stamped by the caller
+	// afterwards -- a caller-side stamp lands after this function has
+	// measured and persisted. See finalizeServed.
+	plan *AnswerPlan,
 ) (InvestigationResult, error) {
 	resolvedInterpretation := InterpretedQuestion{
 		Shape:             ShapeOpen,
@@ -1565,7 +1576,8 @@ func (e *Engine) windowConfirmationRequiredResult(
 	// Completeness and display-label stamps above already follow. Those two
 	// sweeps enumerated these exits and neither added the budget stage, so
 	// this exit served an unmeasured document. See budget_assertion.go.
-	if err := e.assertFitsBudget(ctx, principal, BudgetAssertWindowConfirmationRequired, result, e.effectiveResponseBudget(request)); err != nil {
+	result, err := e.finalizeServed(ctx, principal, BudgetAssertWindowConfirmationRequired, result, plan, e.effectiveResponseBudget(request))
+	if err != nil {
 		return InvestigationResult{}, err
 	}
 	if err := ValidateResult(result); err != nil {
@@ -1589,7 +1601,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 					// CHAOS-3478 (codex round-2 finding): result.SubjectResolution
 					// already carries this call's own priorSubjectReceiptDispositions
 					// parameter -- the race terminal must not silently drop it.
-					return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon.Confirmed, superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions)
+					return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon.Confirmed, superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, plan)
 				}
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))

@@ -209,6 +209,12 @@ func (e *Engine) terminalResult(
 	// discipline as effectiveWindow's own doc comment two lines up.
 	windowCarried bool,
 	carriedStructureEntry *contractsv1.ContextFabricConfirmedStructureEntry,
+	// plan is the caller's AnswerPlan, or nil where none exists yet. It is
+	// passed IN rather than stamped by the caller afterwards: a caller-side
+	// stamp lands after this function has measured and persisted, which is
+	// the defect the final-assertion guard exists to prevent. See
+	// finalizeServed.
+	plan *AnswerPlan,
 ) (InvestigationResult, error) {
 	status, limitation := resolveTerminalStatus(request, &resolution)
 	// CHAOS-4634 (subsumes CHAOS-4579/CHAOS-4531's §1.3 class-conditional
@@ -423,7 +429,8 @@ func (e *Engine) terminalResult(
 	// Completeness and display-label stamps above already follow. Those two
 	// sweeps enumerated these exits and neither added the budget stage, so
 	// this exit served an unmeasured document. See budget_assertion.go.
-	if err := e.assertFitsBudget(ctx, principal, BudgetAssertSubjectlessTerminal, result, e.effectiveResponseBudget(request)); err != nil {
+	result, err := e.finalizeServed(ctx, principal, BudgetAssertSubjectlessTerminal, result, plan, e.effectiveResponseBudget(request))
+	if err != nil {
 		return InvestigationResult{}, err
 	}
 	if err := ValidateResult(result); err != nil {
@@ -455,7 +462,7 @@ func (e *Engine) terminalResult(
 				// already carries whatever dispositions this terminal's own
 				// resolution parameter carried -- the race terminal must not
 				// silently drop them.
-				return e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions)
+				return e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, plan)
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
