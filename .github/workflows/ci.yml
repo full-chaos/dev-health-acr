@@ -342,6 +342,136 @@ jobs:
         run: make shard-plan
       - name: Verify full-stack offline contract
         run: make fullstack-contract
+      # CHAOS-3273 L3: the endpoint-profile gate (guardrail G-1) validates
+      # endpoint-profiles.acr.json against a closed vocabulary OWNED BY OPS
+      # (endpoint-profile.schema.json, credential-classes.json) that this
+      # repo does not vendor. A full checkout of dev-health-ops would work
+      # too, but would silently track ops's moving default branch -- any
+      # push to ops's main would change what this job validates against
+      # with no acr commit recording that it happened. Pin instead: the
+      # exact ops commit this repo trusts lives in ONE place
+      # (ci/ops-contract.pin), a sparse checkout fetches ONLY the two
+      # contract paths at that pin (not the whole ops repo -- ops and acr
+      # stay two independently-triggered CI graphs, never a combined job),
+      # and bumping the pin is the acr-side commit that makes a contract
+      # change visible and re-runs this gate against it. Both repos are
+      # public (verified via `gh repo view`), so this checkout needs no
+      # token.
+      - name: Read the pinned ops-owned contract commit
+        id: ops-pin
+        run: echo "sha=$(tr -d '[:space:]' < ci/ops-contract.pin)" >> "$GITHUB_OUTPUT"
+      # A raw actions/checkout failure on an unresolvable ref reads as a
+      # cryptic git error with no context. Probe first with a message that
+      # distinguishes the ONE expected failure mode (the pinning lane's
+      # ops-side work has not merged to origin/main yet -- see
+      # ci/ops-contract.pin's own commit message for which lane/branch)
+      # from every other one (a stale or simply wrong pin), so a red run
+      # here is never mistaken for a broken mechanism.
+      # A pin that accepts any resolvable ref is not a pin. Merge-gate
+      # finding (CHAOS-3273, terra round on 896ca76e, EXECUTED): with only
+      # the resolvability probe below, putting the literal `main` in
+      # ci/ops-contract.pin passed and the sparse checkout then followed
+      # ops's default branch -- silently reintroducing exactly the floating
+      # ref this whole mechanism exists to reject, while the file, the
+      # commit message and this comment block all claimed otherwise. A
+      # mechanism documented as bought must actually be bought, so the
+      # shape is checked BEFORE the ref is resolved: a branch or tag name
+      # is rejected on its face, not by whether it happens to resolve.
+      - name: Verify the pin names an immutable commit, not a floating ref
+        run: |
+          set -euo pipefail
+          sha="${{ steps.ops-pin.outputs.sha }}"
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            cat >&2 <<EOF
+          ci/ops-contract.pin must name a full 40-character lowercase commit
+          SHA. It currently holds: $sha
+
+          REJECTED CASE: a branch name or tag (e.g. "main", "v1.2.0") -- any
+          floating ref. Those resolve perfectly well, which is the problem:
+          the checkout would then track whatever that ref points at, so a
+          push to dev-health-ops would change what this job validates
+          against with no commit in this repo recording that it happened.
+          The pin exists to make a contract change an acr-side commit. An
+          abbreviated SHA is rejected for the same reason it is rejected in
+          go.mod: it is not stable against future collisions.
+
+          Put the full SHA of the ops commit this repo trusts.
+          EOF
+            exit 1
+          fi
+          # git ls-remote only resolves NAMED refs (branches/tags), never
+          # an arbitrary commit SHA -- verified against ops's own current
+          # origin/main tip, which it reports as absent too. A bare
+          # `git fetch <url> <sha>` DOES work for a reachable, full 40-char
+          # SHA on a remote that allows it (GitHub.com does, for public
+          # repos) -- verified the same way, against the same tip.
+          if git fetch --depth 1 https://github.com/full-chaos/dev-health-ops.git "$sha" >/dev/null 2>&1; then
+            exit 0
+          fi
+          cat >&2 <<EOF
+          ci/ops-contract.pin names $sha, which does not exist on
+          full-chaos/dev-health-ops's remote (git fetch found nothing).
+
+          EXPECTED failure mode: the ops-side lane that produced this pin
+          has not merged to ops's origin/main yet. ci/ops-contract.pin's
+          own commit message names the exact ops branch/lane this SHA came
+          from -- once that lane merges, re-pin this file to the merged
+          SHA and this step passes.
+
+          If that ops lane HAS already merged and this still fails, the
+          pin itself is stale or wrong: check it against ops's actual
+          history. Do not "fix" this by pointing the pin at ops main or by
+          removing/weakening the pin -- see ci/ops-contract.pin's commit
+          message for why a floating ref was rejected.
+          EOF
+          exit 1
+      # actions/checkout v7.0.0 -- public repo, no token needed. Sparse,
+      # non-cone mode: fetches exactly the two listed file paths, not a
+      # directory tree.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: full-chaos/dev-health-ops
+          ref: ${{ steps.ops-pin.outputs.sha }}
+          path: .ops-contract
+          persist-credentials: false
+          sparse-checkout: |
+            contracts/auth/v1/endpoint-profile.schema.json
+            contracts/auth/v1/credential-classes.json
+            contracts/auth/v1/credential-classes.schema.json
+          sparse-checkout-cone-mode: false
+      # credential-classes.schema.json joined this list at the merge-gate
+      # round: the gate validated the endpoint-profile inventory against its
+      # schema but loaded the credential-class document only to harvest ids,
+      # so a vocabulary whose entries had lost their issuer, validator,
+      # lifecycle authority and allowed route set still passed. Validating it
+      # needs its schema present, so a missing entry here would turn a real
+      # check back into an absent one.
+      - name: Verify endpoint-profile inventory against the pinned ops contract
+        env:
+          ACR_ENDPOINT_PROFILE_SCHEMA: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/endpoint-profile.schema.json
+          ACR_CREDENTIAL_CLASSES: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/credential-classes.json
+          ACR_CREDENTIAL_CLASSES_SCHEMA: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/credential-classes.schema.json
+          # ACR_CONTRACT_GATE marks THIS step as the one job that is
+          # required to run the real-tree contract proof, and is the
+          # predicate the proof's fail-closed branch keys on.
+          #
+          # It replaces a check on `CI`, which was the wrong predicate:
+          # `CI` is set in every job on every runner, but the sparse
+          # checkout that delivers the three ops-owned inputs exists only
+          # here -- so the proof failed in `unit` and in every `race`
+          # shard, which is a red build that says nothing about the
+          # contract. Keying on a marker only this step sets means the
+          # proof fails loudly exactly where it is supposed to run, and
+          # skips (with its reason) where it is not.
+          #
+          # "Then a deleted step means the gate silently never runs" is the
+          # obvious objection, and it is why scripts/ci/test-workflow-contract.sh
+          # asserts this step exists and sets all three input paths plus
+          # this marker. The runtime guard proves the inputs ARRIVED; the
+          # workflow-contract test proves the step still EXISTS. Neither
+          # alone closes the class.
+          ACR_CONTRACT_GATE: required
+        run: go test ./ci/checkendpointprofiles/...
 
   container-contract-smoke:
     runs-on: ubuntu-24.04

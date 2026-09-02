@@ -1,0 +1,797 @@
+{
+  "schema_version": "endpoint-profile.v1",
+  "generated_at": "2026-09-01T15:56:19Z",
+  "source_commit": "0dd0e1ded927abc5d3a7f28a05e729689a687b37",
+  "credential_class_source": "contracts/auth/v1/credential-classes.json",
+  "rows": [
+    {
+      "id": "GET /healthz [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/healthz",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 74
+      },
+      "classification": "public",
+      "public_rationale": "Liveness probe; no principal, no org context.",
+      "accepted_credential_classes": [],
+      "primary_validator": {
+        "description": "No authenticator wrapper -- mux.HandleFunc directly.",
+        "anchor": {
+          "path": "internal/api/app.go",
+          "line": 74,
+          "line_end": 74
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "none",
+      "current_state_cache_behavior": "stateless",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "disclosure_behavior": "Fixed {status, service, version} body.",
+      "gaps": []
+    },
+    {
+      "id": "GET /readyz [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/readyz",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 75
+      },
+      "classification": "public",
+      "public_rationale": "Readiness probe (postgres/clickhouse/entitlement checks); no principal, no org context.",
+      "accepted_credential_classes": [],
+      "primary_validator": {
+        "description": "No authenticator wrapper -- mux.HandleFunc directly.",
+        "anchor": {
+          "path": "internal/api/app.go",
+          "line": 75,
+          "line_end": 75
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": null,
+      "resource_resolver": null,
+      "tenant_requirement": "none",
+      "current_state_cache_behavior": "stateless",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "disclosure_behavior": "Per-check ready/not_ready status list; no secret material.",
+      "gaps": []
+    },
+    {
+      "id": "GET /api/v1/agent-context/capabilities [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/agent-context/capabilities",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 76,
+        "router_local_path": "/api/v1/agent-context/capabilities"
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange",
+        "acr_web_assertion"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassAuth, ScopeContextRead, entitlement=false, allowWebAssertions=true): Authenticator.MiddlewareFor(true,...) dispatches on X-ACR-Web-Assertion presence (WebAssertionVerifier) vs Authorization: Bearer (credential-store lookup), then RequireScope(context:read).",
+        "anchor": {
+          "path": "internal/api/runtime.go",
+          "line": 156,
+          "line_end": 166
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer OR X-ACR-Web-Assertion (EdDSA JWT)",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [
+        {
+          "description": "Authenticator.MiddlewareFor is a SINGLE dispatch point (not two independent middlewares) -- if both X-ACR-Web-Assertion and Authorization headers are present, the web-assertion branch runs and explicitly REJECTS the request (web_assertion_middleware.go:12). No other validator can observe the credential before this one on this route.",
+          "anchor": {
+            "path": "internal/auth/web_assertion_middleware.go",
+            "line": 11,
+            "line_end": 16
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        }
+      ],
+      "action": "agent_context.capabilities.read",
+      "resource_resolver": "principal.OrgID (from credential/assertion); no path/body param.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": "GeneratedAt stamped per response; no persistent cache.",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "disclosure_behavior": "writeError() envelope (ErrorEnvelope: schema_version, request_id, error{code,message,http_status,retryable,details}); no raw internal error crosses the boundary.",
+      "gaps": []
+    },
+    {
+      "id": "POST /api/v1/agent-context/context-packets [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/agent-context/context-packets",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 77
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange",
+        "acr_web_assertion"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=false, allowWebAssertions=true).",
+        "anchor": {
+          "path": "internal/api/runtime.go",
+          "line": 156,
+          "line_end": 166
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer OR X-ACR-Web-Assertion",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [
+        {
+          "description": "Same single-dispatch guarantee as capabilities -- see web_assertion_middleware.go:11-16.",
+          "anchor": {
+            "path": "internal/auth/web_assertion_middleware.go",
+            "line": 11,
+            "line_end": 16
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        }
+      ],
+      "action": "agent_context.context_packet.create",
+      "resource_resolver": "principal.OrgID + RequireRepository-style scope check inside the handler body (not re-derived in this pass -- see gaps).",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "disclosure_behavior": "writeError() closed envelope.",
+      "gaps": [
+        "Whether/how RequireRepository is invoked for this specific handler was not independently re-traced beyond the shared protectedRuntimeHandler wrapper in this pass -- see internal/auth/middleware.go:187-205 for the mechanism if a CI gate needs the per-route call site."
+      ]
+    },
+    {
+      "id": "GET /api/v1/agent-context/evidence/{evidence_ref_id} [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/agent-context/evidence/{evidence_ref_id}",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 78
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange",
+        "acr_web_assertion"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassEvidence, ScopeEvidenceRead, entitlement=TRUE (agentContextRuntimeEntitlement), allowWebAssertions=true).",
+        "anchor": {
+          "path": "internal/api/runtime.go",
+          "line": 156,
+          "line_end": 166
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer OR X-ACR-Web-Assertion",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [
+        {
+          "description": "Same single-dispatch guarantee -- see web_assertion_middleware.go:11-16.",
+          "anchor": {
+            "path": "internal/auth/web_assertion_middleware.go",
+            "line": 11,
+            "line_end": 16
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        }
+      ],
+      "action": "agent_context.evidence.read",
+      "resource_resolver": "evidence_ref_id path param + principal.RepositoryScopes.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement (requireEntitlement, checked via runtime.Entitlements.HasEntitlement)",
+      "disclosure_behavior": "writeError() closed envelope; 403 feature_not_enabled on entitlement denial, distinct from 401 invalid_token.",
+      "gaps": []
+    },
+    {
+      "id": "POST /api/v1/agent-context/episodes [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/agent-context/episodes",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 79
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassEpisode, ScopeEpisodeWrite, entitlement=true, allowWebAssertions=FALSE) -- the only agent-context route that does NOT accept a web assertion; episode writes require a bearer fcacr_ credential.",
+        "anchor": {
+          "path": "internal/api/runtime.go",
+          "line": 156,
+          "line_end": 166
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer only",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "action": "agent_context.episode.write",
+      "resource_resolver": "principal.OrgID; episode body carries its own subject binding.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "writeError() closed envelope.",
+      "gaps": [
+        "FINDING: web has no code path that calls this endpoint (web's AcrRuntimeClient issues context:read/evidence:read/credential:issue assertions only, never episode:write -- see web's endpoint-profiles.web.json). episode:write is bearer-only by design (allowWebAssertions=false), consistent with that -- confirms web is deliberately NOT an episode-writer, not an oversight."
+      ]
+    },
+    {
+      "id": "POST /api/v1/context-fabric/investigations [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/context-fabric/investigations",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 80
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange",
+        "acr_web_assertion"
+      ],
+      "primary_validator": {
+        "description": "Handler wraps itself: return a.protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true) at the end of ContextFabricInvestigationHandler -- deliberately so the nil-investigator 503 check stays INSIDE the authenticated boundary (CHAOS-3755 finding H5: an early-return-unwrapped 503 would let an unauthenticated caller probe configuration state).",
+        "anchor": {
+          "path": "internal/api/context_fabric_routes.go",
+          "line": 158,
+          "line_end": 158
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer OR X-ACR-Web-Assertion",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [
+        {
+          "description": "Same single-dispatch guarantee -- see web_assertion_middleware.go:11-16.",
+          "anchor": {
+            "path": "internal/auth/web_assertion_middleware.go",
+            "line": 11,
+            "line_end": 16
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        }
+      ],
+      "action": "context_fabric.investigation.create",
+      "resource_resolver": "principal.OrgID; investigation subject/scope from request body.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": "no persistent cache at this hop (see answer_reuse.go for the separate reuse-gate feature).",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "writeContextFabricError() -- classified, bounded envelope; a recovered panic (errContextFabricPanic) carries NO panic-value data into the response or logs by design.",
+      "gaps": []
+    },
+    {
+      "id": "GET /api/v1/context-fabric/investigations/{result_id} [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/context-fabric/investigations/{result_id}",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 81
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange",
+        "acr_web_assertion"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricInvestigationResultHandler.",
+        "anchor": {
+          "path": "internal/api/context_fabric_result_routes.go",
+          "line": 185,
+          "line_end": 185
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer OR X-ACR-Web-Assertion",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [
+        {
+          "description": "Same single-dispatch guarantee -- see web_assertion_middleware.go:11-16.",
+          "anchor": {
+            "path": "internal/auth/web_assertion_middleware.go",
+            "line": 11,
+            "line_end": 16
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        }
+      ],
+      "action": "context_fabric.investigation.result.read",
+      "resource_resolver": "result_id path param; InvestigationResultStore.Get is documented as org-scoped as a binding precondition (per AGENTS.md's Context Fabric result-persistence entry) -- not independently re-verified in this pass.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": "Re-reads a stored, immutable result.",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "writeContextFabricError() closed envelope.",
+      "gaps": [
+        "Cross-org result_id enumeration protection depends on InvestigationResultStore.Get's own org-scoping (internal/contextfabric/pginvestigation) -- read AGENTS.md's description of it but did not re-trace the store implementation in this pass."
+      ]
+    },
+    {
+      "id": "GET /api/v1/context-fabric/model-config [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "GET",
+      "route": "/api/v1/context-fabric/model-config",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 82
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange",
+        "acr_web_assertion"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextAdmin, entitlement=true, allowWebAssertions=true). ScopeContextAdmin, not ScopeContextRead -- reading org BYO-LLM model config requires the admin scope.",
+        "anchor": {
+          "path": "internal/api/context_fabric_model_config_routes.go",
+          "line": 98,
+          "line_end": 98
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer OR X-ACR-Web-Assertion",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [
+        {
+          "description": "Same single-dispatch guarantee -- see web_assertion_middleware.go:11-16.",
+          "anchor": {
+            "path": "internal/auth/web_assertion_middleware.go",
+            "line": 11,
+            "line_end": 16
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        }
+      ],
+      "action": "context_fabric.model_config.read",
+      "resource_resolver": "principal.OrgID.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "AES-256-GCM sealed credential (CHAOS-3775, modelconfigcrypto) -- response shape not independently re-verified to confirm the sealed secret itself never round-trips to the caller; flagged for the CI-gate author to spot-check.",
+      "gaps": [
+        "Whether GET returns the sealed BYO-LLM credential material at all (vs. metadata only) was not independently verified against the response DTO in this pass."
+      ]
+    },
+    {
+      "id": "PUT /api/v1/context-fabric/model-config [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "PUT",
+      "route": "/api/v1/context-fabric/model-config",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 83
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextAdmin, entitlement=true, allowWebAssertions=FALSE) -- mutating org model config (writes a BYO-LLM credential) requires a bearer fcacr_ credential; web assertions are NOT accepted here, unlike the GET on the same path.",
+        "anchor": {
+          "path": "internal/api/context_fabric_model_config_routes.go",
+          "line": 167,
+          "line_end": 167
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer only",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "action": "context_fabric.model_config.write",
+      "resource_resolver": "principal.OrgID; body carries the BYO-LLM provider/base-URL/model/credential.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": "Invalidates the per-request runtime cache + reuse gate on write (reuseInvalidator).",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "AES-256-GCM sealed at rest (modelconfigcrypto).",
+      "gaps": [
+        "FINDING worth cross-checking against web: web's AcrRuntimeClient issues acr_web_assertion for context:read/evidence:read/credential:issue permissions only (see endpoint-profiles.web.json) -- it has NO code path with a context:admin permission or an equivalent web UI for org model-config, consistent with this endpoint deliberately excluding web assertions. If a future web admin UI needs to write model-config, it cannot reuse the assertion path as-is."
+      ]
+    },
+    {
+      "id": "DELETE /api/v1/context-fabric/model-config [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "DELETE",
+      "route": "/api/v1/context-fabric/model-config",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 84
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange"
+      ],
+      "primary_validator": {
+        "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextAdmin, entitlement=true, allowWebAssertions=FALSE) -- same posture as PUT.",
+        "anchor": {
+          "path": "internal/api/context_fabric_model_config_routes.go",
+          "line": 218,
+          "line_end": 218
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer only",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "action": "context_fabric.model_config.delete",
+      "resource_resolver": "principal.OrgID.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": "Evicts the org model runtime cache + reuse gate (orgModelRuntimeEvictor, reuseInvalidator).",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": "agentContextRuntimeEntitlement",
+      "disclosure_behavior": "No response body content beyond status.",
+      "gaps": []
+    },
+    {
+      "id": "POST /api/v1/oauth/device_authorization [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/oauth/device_authorization",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 85
+      },
+      "classification": "public",
+      "public_rationale": "First call in the OAuth 2.0 device-authorization grant (RFC 8628); the caller has no credential yet by definition. deviceRuntimeHandler only checks runtime/authenticator presence, no principal.",
+      "accepted_credential_classes": [],
+      "primary_validator": {
+        "description": "deviceRuntimeHandler -- no auth check beyond runtime readiness; protected only by allowDeviceRequest's per-IP rate limiter.",
+        "anchor": {
+          "path": "internal/api/device_routes.go",
+          "line": 241,
+          "line_end": 246
+        }
+      },
+      "token_shape": null,
+      "reachable_validators": [],
+      "action": "oauth.device_authorization.start",
+      "resource_resolver": "None yet -- issues a device_code/user_code pair.",
+      "tenant_requirement": "none",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "disclosure_behavior": "writeDeviceRateLimit()/writeOAuthDeviceError() closed shapes.",
+      "gaps": [],
+      "issued_credential": [
+        {
+          "class_id": "acr_device_flow_code",
+          "direction": "returned_to_caller",
+          "anchor": {
+            "path": "internal/auth/device_flow.go",
+            "line": 89,
+            "line_end": 121,
+            "note": "DeviceFlowService.Start -- mints device_code + user_code via s.store.Create"
+          },
+          "issuer": "acr DeviceFlowService",
+          "audience": null,
+          "algorithm": null,
+          "lifetime_seconds": null,
+          "key_source": null,
+          "verified_by": "acr:internal/auth/device_poll.go:62"
+        }
+      ]
+    },
+    {
+      "id": "POST /api/v1/oauth/token [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/oauth/token",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 86
+      },
+      "classification": "public",
+      "public_rationale": "Token-issuance endpoint by definition has no principal on entry. Content-Type dispatches to one of two grants (see primary_validator) -- neither requires a pre-existing ACR credential.",
+      "accepted_credential_classes": [
+        "acr_device_flow_code",
+        "acr_workload_identity_exchange"
+      ],
+      "primary_validator": {
+        "description": "handleDeviceToken dispatches on Content-Type: 'application/x-www-form-urlencoded' -> handleTokenExchange (RFC 8693 grant; subject_token = k8s SA JWT, validated via github.com/full-chaos/dev-health-go/authverify's KubernetesTokenReviewValidator -- see docs/endpoint-profiles.md '#authverify-anchor' for the full v0.5.5-pinned trace). Otherwise -> handleDeviceCodeToken (device_code poll, auth.DeviceFlow.Poll). THIS IS THE acr_workload_identity_exchange ENDPOINT L0 left as a stated gap.",
+        "anchor": {
+          "path": "internal/api/device_routes.go",
+          "line": 69,
+          "line_end": 79
+        }
+      },
+      "token_shape": {
+        "token_type": "RFC 8693 subject_token=k8s bound ServiceAccount JWT (workload grant) OR device_code (device grant)",
+        "issuer": "Kubernetes API server (validated live via TokenReview, not decoded locally -- see docs/endpoint-profiles.md)",
+        "audience": "ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE (workload grant only; deployment-configured, required non-empty to enable the grant at all)",
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "action": "oauth.token.device_poll | oauth.token.workload_exchange",
+      "resource_resolver": "Workload grant: {TrustDomain (static, ACR_WORKLOAD_TRUST_DOMAIN) + Namespace + ServiceAccountName + ServiceAccountUID from TokenReview} -> storage.WorkloadBindingKey lookup -> OrgID + RoleScopes(binding.Role) + RepositoryScopes. Device grant: device_code -> pre-approved org/scopes from the device_approval step.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "disclosure_behavior": "writeTokenExchangeError()/writeOAuthDeviceError() -- ErrSubjectTokenInvalid and ErrWorkloadBindingNotFound map to the SAME invalid_grant code (device_routes.go/token_exchange_routes.go:63-68) so a disabled workload binding is indistinguishable from one that never existed.",
+      "gaps": [],
+      "issued_credential": [
+        {
+          "class_id": "acr_client_credential",
+          "direction": "returned_to_caller",
+          "anchor": {
+            "path": "internal/auth/device_poll.go",
+            "line": 90,
+            "line_end": 112,
+            "note": "device_code grant path (JSON body, handleDeviceCodeToken -> deviceFlow.Poll -> redeem): mints the fcacr_ credential on approved-device redemption"
+          },
+          "issuer": "acr credential Service (via DeviceFlowService.redeem)",
+          "audience": null,
+          "algorithm": null,
+          "lifetime_seconds": null,
+          "key_source": null,
+          "verified_by": "acr:internal/auth/middleware.go:110"
+        },
+        {
+          "class_id": "acr_client_credential",
+          "direction": "returned_to_caller",
+          "anchor": {
+            "path": "internal/auth/workload_access_token_issuer.go",
+            "line": 42,
+            "line_end": 65,
+            "note": "token-exchange grant path (form-urlencoded RFC 8693, handleTokenExchange -> authverify.WorkloadTokenExchangeService.Exchange -> serviceAccessTokenIssuer.Issue, wired in internal/runtime/hosted/workload_token_exchange.go:93-97): mints an fcacr_ credential tagged CredentialIssuanceProvenanceWorkloadExchange"
+          },
+          "issuer": "acr serviceAccessTokenIssuer (via authverify.WorkloadTokenExchangeService, dev-health-go v0.5.5 -- see docs/endpoint-profiles.md 'authverify anchor')",
+          "audience": null,
+          "algorithm": null,
+          "lifetime_seconds": null,
+          "key_source": null,
+          "verified_by": "acr:internal/auth/middleware.go:132"
+        }
+      ]
+    },
+    {
+      "id": "POST /api/v1/oauth/device_approval [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/oauth/device_approval",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 87
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_web_assertion"
+      ],
+      "primary_validator": {
+        "description": "deviceApprovalHandler requires X-ACR-Web-Assertion EXACTLY (exactly one header) AND explicitly rejects if Authorization is ALSO present, at the route-wrapper level itself (in addition to the same check inside authenticateWebAssertion) -- a double belt-and-braces enforcement of the CHAOS-3271 double-header rejection pattern. RequireScope(credential:issue).",
+        "anchor": {
+          "path": "internal/api/device_routes.go",
+          "line": 219,
+          "line_end": 230
+        }
+      },
+      "token_shape": {
+        "token_type": "X-ACR-Web-Assertion (EdDSA JWT, permissions includes credential:issue)",
+        "issuer": null,
+        "audience": null,
+        "algorithm": "EdDSA"
+      },
+      "reachable_validators": [
+        {
+          "description": "Route-level check (device_routes.go:224) duplicates authenticateWebAssertion's own check (web_assertion_middleware.go:12) -- belt-and-braces, not a second DIFFERENT validator with different scope.",
+          "anchor": {
+            "path": "internal/api/device_routes.go",
+            "line": 224,
+            "line_end": 227
+          },
+          "is_intended_validator": true,
+          "reachable_but_not_owner": false
+        }
+      ],
+      "action": "oauth.device_approval",
+      "resource_resolver": "user_code + repository_scopes from body; org from the web assertion's org_id claim (bound to the approving admin's session, per web's approveDeviceAuthorization -- see web endpoint-profiles.web.json).",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "disclosure_behavior": "writeError() closed envelope.",
+      "gaps": [],
+      "issued_credential": []
+    },
+    {
+      "id": "POST /api/v1/auth/credentials/self/rotate [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/auth/credentials/self/rotate",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 88
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange"
+      ],
+      "primary_validator": {
+        "description": "selfLifecycleHandler = authenticator.Middleware (bearer only, allowWebAssertions=false) + ProtectedHandler(rate limit only) -- NO RequireScope call. Self-service rotation only needs a valid credential; it operates on the CALLER'S OWN principal.CredentialID, so no additional scope check is layered on.",
+        "anchor": {
+          "path": "internal/api/device_routes.go",
+          "line": 234,
+          "line_end": 239
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer only",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "action": "auth.credentials.self.rotate",
+      "resource_resolver": "principal.CredentialID (own credential only -- no id in the path/body that could target another credential).",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "disclosure_behavior": "writeSelfLifecycleError() closed shape.",
+      "gaps": []
+    },
+    {
+      "id": "POST /api/v1/auth/credentials/self/revoke [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/api/v1/auth/credentials/self/revoke",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 89
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential",
+        "internal_svc_acr_token",
+        "acr_workload_identity_exchange"
+      ],
+      "primary_validator": {
+        "description": "Same selfLifecycleHandler as rotate -- bearer only, no explicit scope requirement.",
+        "anchor": {
+          "path": "internal/api/device_routes.go",
+          "line": 234,
+          "line_end": 239
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer only",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "action": "auth.credentials.self.revoke",
+      "resource_resolver": "principal.CredentialID, OR an explicit RollbackReceipt naming a prior rotation to roll back (still scoped to the caller's own rotation lineage).",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": null,
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "disclosure_behavior": "writeSelfLifecycleError() closed shape.",
+      "gaps": []
+    }
+  ]
+}
