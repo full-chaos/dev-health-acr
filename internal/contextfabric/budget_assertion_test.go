@@ -171,3 +171,161 @@ func buildTerminalEngineWithBudget(t *testing.T, graph GraphReader, results Inve
 // reachable at any shipped consumer's budget today. That is the same honesty
 // CHAOS-4785 was filed with, and it is stated here rather than left for a
 // reviewer to discover.
+
+// stripPostMeasurementLabels returns a copy of result with exactly the fields
+// applyCoverageDisplayLabels writes cleared, so a caller can measure the
+// document as it stood WHEN fitAssembledResult measured it. Deliberately
+// mirrors chaos4690_coverage_display_labels.go's own write set, field for
+// field: if that composer grows a field, this helper stops matching it and the
+// delta it computes silently shrinks -- so the assertion below requires a
+// MINIMUM delta rather than merely a positive one.
+func stripPostMeasurementLabels(result InvestigationResult) InvestigationResult {
+	stripped := result
+	stripped.EvidenceRefLabels = nil
+	sources := append([]SourceObservation(nil), result.Coverage.Sources...)
+	for i := range sources {
+		sources[i].Label = ""
+		sources[i].StateLabel = ""
+	}
+	details := append([]CoverageDetail(nil), result.Coverage.Details...)
+	for i := range details {
+		details[i].Label = ""
+	}
+	stripped.Coverage.Sources = sources
+	stripped.Coverage.Details = details
+	return stripped
+}
+
+// TestDecisivePathMeasuresBeforeLabelCompositionNotAfter is Y3's RED #1, on the
+// BYTE axis -- the axis the decisive-path defect actually lives on.
+//
+// engine.go's order is: fitAssembledResult measures (:1859), the plan is
+// re-stamped (:1863), applyCoverageDisplayLabels writes source labels, detail
+// labels and the whole EvidenceRefLabels map (:1892), and only then does
+// Validate run (:1895). Every one of those writes adds BYTES and changes NO
+// item counts, so the document the engine measured is smaller than the document
+// the route serializes and serves.
+//
+// The budget is CALIBRATED from the run itself rather than hardcoded: the test
+// measures the served document, measures it again with exactly the post-
+// measurement label fields stripped, and picks a budget strictly between the
+// two. A hardcoded byte figure would rot the first time any unrelated field
+// changed, and would not prove the relation this test is about.
+func TestDecisivePathMeasuresBeforeLabelCompositionNotAfter(t *testing.T) {
+	t.Parallel()
+
+	build := func(maxBytes int64) (InvestigationResult, error) {
+		project := acceptanceProject()
+		graph := &acceptanceGraphReader{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+			context:    bootstrapGraphContext(project),
+		}
+		raw := "readiness: canonical fact capability timed out"
+		refs := []string{"evidence_status_0001", "evidence_status_0002", "evidence_status_0003", "evidence_status_0004"}
+		facts := factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{
+				Facts: []CanonicalFact{{Kind: FactStatus, Subject: project, Fields: map[string]FactValue{"status": StringFactValue("in_progress")}, EvidenceRefIDs: refs, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1"}},
+				Coverage: Coverage{
+					Sources: []SourceObservation{
+						{Source: "canonical_fact:status", State: SourceAvailable},
+						{Source: "canonical_fact:readiness", State: SourceUnavailable, Reason: "canonical fact capability timed out"},
+					},
+					Partial:         true,
+					DegradedReasons: []string{raw},
+					Details: []CoverageDetail{detailFixture(contractsv1.ContextFabricCoverageDetailFactReadFailed, "canonical_fact:readiness", true, raw, func(d *CoverageDetail) {
+						d.FactKind = FactReadiness
+						d.SourceState = SourceUnavailable
+					})},
+				},
+				Version: "ops-v1",
+			}, nil
+		})
+		draft := SynthesisDraft{
+			Status: InvestigationPartial, DirectJudgment: "Ask Dev status is in progress; readiness could not be evaluated.",
+			CurrentState: "Readiness data is unavailable.", StrongestPressures: []string{}, Drivers: []DriverJudgment{},
+			RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Conflicts: []Finding{},
+			Limitations:    []string{"Readiness evaluation was unavailable for this investigation."},
+			EvidenceRefIDs: refs, ClaimedFacts: []ClaimedFact{},
+			DeterministicAnswer: "placeholder", Warnings: []string{},
+		}
+		engine := buildAcceptanceEngineWithByteBudget(t, graph, facts, draft, maxBytes)
+		return engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
+	}
+
+	// Pass 1: unbounded, to calibrate. A zero budget axis means "unbounded on
+	// that axis" (ContextFabricResponseBudget's own doc comment).
+	served, err := build(0)
+	if err != nil {
+		t.Fatalf("calibration run: Investigate() error = %v", err)
+	}
+	post, err := contractsv1.MeasureContextFabricResponse(served)
+	if err != nil {
+		t.Fatalf("measure served: %v", err)
+	}
+	pre, err := contractsv1.MeasureContextFabricResponse(stripPostMeasurementLabels(served))
+	if err != nil {
+		t.Fatalf("measure stripped: %v", err)
+	}
+	delta := post.Bytes - pre.Bytes
+	t.Logf("pre-label %d bytes, post-label %d bytes, label composition adds %d bytes; items unchanged (%d -> %d)",
+		pre.Bytes, post.Bytes, delta, pre.Items.Budgeted(), post.Items.Budgeted())
+
+	if delta < 8 {
+		t.Fatalf("label composition added only %d bytes: this probe cannot straddle the two measurements, so it would prove nothing", delta)
+	}
+	if pre.Items.Budgeted() != post.Items.Budgeted() {
+		t.Fatalf("item counts changed across label composition (%d -> %d): this test asserts the BYTE-axis relation and its premise no longer holds", pre.Items.Budgeted(), post.Items.Budgeted())
+	}
+
+	// Pass 2: a budget strictly between what the engine measures and what the
+	// route serves.
+	budget := pre.Bytes + delta/2
+	if budget <= pre.Bytes || budget >= post.Bytes {
+		t.Fatalf("calibrated budget %d does not lie strictly between %d and %d", budget, pre.Bytes, post.Bytes)
+	}
+
+	result, err := build(budget)
+	if err != nil {
+		// GREEN side.
+		var refusal AnswerBudgetRefusal
+		if !errors.As(err, &refusal) {
+			t.Fatalf("Investigate() error = %v, want an AnswerBudgetRefusal from the post-label assertion", err)
+		}
+		if refusal.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
+			t.Fatalf("refusal.Overrun = %q, want %q", refusal.Overrun, contractsv1.ContextFabricBudgetOverrunBytes)
+		}
+		return
+	}
+
+	final, measureErr := contractsv1.MeasureContextFabricResponse(result)
+	if measureErr != nil {
+		t.Fatalf("measure final: %v", measureErr)
+	}
+	if final.Bytes <= budget {
+		t.Fatalf("served document is %d bytes against a %d-byte budget: it fits, so this run does not exercise the defect", final.Bytes, budget)
+	}
+	t.Fatalf("the engine accepted a fit at a %d-byte budget and then served %d bytes: it measured the document BEFORE the plan re-stamp and applyCoverageDisplayLabels, and the route will refuse what it actually serves", budget, final.Bytes)
+}
+
+// buildAcceptanceEngineWithByteBudget mirrors buildAcceptanceEngineWithTelemetry
+// with the SERVICE byte ceiling set, so the engine's effectiveResponseBudget has
+// a byte axis to measure against.
+func buildAcceptanceEngineWithByteBudget(t *testing.T, graph GraphReader, facts CanonicalFactReader, draft SynthesisDraft, maxBytes int64) *Engine {
+	t.Helper()
+	runtime := fakeModelRuntime{interpreted: bootstrapInterpretation(), draft: draft, receipt: acceptanceReceipt()}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: RuntimeQuestionInterpreter{Runtime: runtime},
+		Graph:       graph,
+		Facts:       facts,
+		Synthesizer: RuntimeAnswerSynthesizer{Runtime: runtime, Options: RuntimeAnswerSynthesizerOptions{ServiceVersion: "acceptance-test", Backend: "graph"}},
+	}, EngineOptions{
+		ServiceVersion:     "acceptance-test",
+		Now:                func() time.Time { return time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC) },
+		NewResultID:        func() string { return "result_acceptance01" },
+		MaxSerializedBytes: maxBytes,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	return engine
+}
