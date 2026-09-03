@@ -696,6 +696,21 @@ type EngineTelemetry interface {
 	// construction: RenderShapeSelectionEvent carries only closed
 	// vocabulary values and counts, never a label, subject or number.
 	RecordRenderShapeSelection(ctx context.Context, principal storage.Principal, event RenderShapeSelectionEvent)
+	// RecordServerStatusShadow (CHAOS-4452 stage 2, behaviour change B8)
+	// reports the SERVER-derived terminal status beside the model-authored
+	// one, with the fact that drove it. Fires once per investigation that
+	// reaches assembly with a plan -- which is the stated denominator: a
+	// terminal exit has no plan to hold an answer against, and an
+	// observation there would carry no information.
+	//
+	// REPORTS, NEVER ROUTES. The served status is unchanged. This exists
+	// so the authorship move T6 proposes is decided on measured
+	// disagreement rather than on the design's own argument, `status`
+	// being a required wire field consumers branch on.
+	//
+	// Content-safe by construction: ServerStatusShadow carries two status
+	// enums, one closed basis token, two booleans and a version constant.
+	RecordServerStatusShadow(ctx context.Context, principal storage.Principal, event ServerStatusShadow)
 	// RecordModelRowsStripped (CHAOS-4355 follow-up, cf_model_rows_stripped)
 	// reports the count of ClaimedFacts entries whose model-authored Rows
 	// was cleared before draft.ValidateAgainst ran, so an operator can tell
@@ -1928,6 +1943,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if e.telemetry != nil {
 		_, renderShapeEvent := SelectRenderShapes(result)
 		e.telemetry.RecordRenderShapeSelection(ctx, principal, renderShapeEvent)
+		// B8's shadow gate, emitted from the SAME once-per-served-result
+		// point and for the same reason: the derivation is pure and could
+		// run inside finalizeResult, but finalizeResult runs again on a
+		// retry and a disagreement counted twice is a disagreement RATE
+		// that is wrong. It reads the result AFTER the plan re-stamp, so
+		// the demands it holds the answer against are the ones the served
+		// plan actually states.
+		e.telemetry.RecordServerStatusShadow(ctx, principal, DeriveServerStatus(result, familyOutcome.FrameObligations))
 	}
 	// CHAOS-4690: the SINGLE stamp point for the decisive path -- AFTER
 	// finalizeResult/fitAssembledResult (fitAssembledResult can re-run

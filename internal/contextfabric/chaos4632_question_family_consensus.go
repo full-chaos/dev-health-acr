@@ -63,6 +63,25 @@ const (
 
 // QuestionFamilyOutcome is the resolver's whole verdict.
 type QuestionFamilyOutcome struct {
+	// FrameObligations is the VALIDATED frame's derived obligation set for
+	// this interpretation, empty when no frame reached validation.
+	//
+	// CARRIED HERE FOR THE B8 SHADOW, and the reason is the finding that
+	// forced it. The shadow first measured a missing driver set against the
+	// PLAN's RequireDrivers flag -- which the plan copies from the family
+	// registry row, which is the very value the design says is wrong. A
+	// shadow that reads the production flag cannot see the production gap:
+	// it reported `served` on an answer with an empty driver set that the
+	// frame REQUIRED, because the flag it consulted said drivers were not
+	// required. Measuring against the frame's own derived obligations is
+	// what makes the gap visible, and that gap is the measurement this
+	// slice exists to produce.
+	//
+	// This struct is internal to the package -- not a wire alias -- so
+	// carrying it here adds no contract surface, and it is already threaded
+	// from interpretation to finalization, which is exactly the span the
+	// shadow needs. NOTHING ROUTES ON IT.
+	FrameObligations []AnswerObligation
 	// Family is never empty -- unclassified is a real member, not a zero
 	// value standing in for absence.
 	Family QuestionFamily

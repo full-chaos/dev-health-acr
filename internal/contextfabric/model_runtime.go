@@ -1611,8 +1611,31 @@ func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal sto
 func (r RuntimeQuestionInterpreter) recordFamilyResolution(ctx context.Context, principal storage.Principal, interpreted InterpretedQuestion, receipt ModelExecutionReceipt) QuestionFamilyOutcome {
 	samples := []FamilySample{familySampleFrom(interpreted, receipt)}
 	outcome := ResolveQuestionFamily(samples)
+	// THE SHADOW COMPARISON, and its placement is the substantive part.
+	//
+	// It runs HERE because this is the one point where both readings of a
+	// single interpretation exist at once: the validated frame on the
+	// receipt, and the family the precedence table just resolved from that
+	// same call's signals. Computing the projection anywhere else would
+	// compare two calls, which measures the sampler's variance rather than
+	// the difference between the two tables.
+	//
+	// `outcome` is returned UNCHANGED. The shadow is read after the
+	// routing decision is already made and is never an input to it -- so
+	// "routing is unaffected" is a property of the control flow rather
+	// than a claim, and a reader can see it in one screen.
+	// The validated frame's obligations ride the outcome to finalization,
+	// where the B8 shadow measures against them rather than against the
+	// plan's registry-copied flags. Empty when no frame validated, which
+	// the shadow treats as "cannot measure" rather than "nothing required".
+	if receipt.QuestionFrame != nil && receipt.FrameOutcome == FrameValidationOutcomeValid {
+		outcome.FrameObligations = append([]AnswerObligation(nil), receipt.QuestionFrame.Obligations...)
+	}
+	shadow := ShadowFamilyAgreement(receipt, outcome)
 	if r.FamilyTelemetry != nil {
-		r.FamilyTelemetry.RecordQuestionFamilyResolution(ctx, principal, QuestionFamilyResolutionEventFrom(outcome, samples))
+		event := QuestionFamilyResolutionEventFrom(outcome, samples)
+		event.Shadow = shadow
+		r.FamilyTelemetry.RecordQuestionFamilyResolution(ctx, principal, event)
 	}
 	return outcome
 }
