@@ -69,7 +69,7 @@ jobs:
     # leg (workflow YAML has no cross-workflow expression for it); the hosted
     # leg allows this plus a three-minute reporting-lag buffer before it
     # calls a started-but-never-finished attempt a failure.
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       # actions/checkout v7.0.0 -- the same pin ci.yml uses. On a pull
       # request this checks out the merge ref, exactly as ci.yml's own jobs
