@@ -766,9 +766,27 @@ func (t SlogTelemetry) RecordCohortDeniedByAuthorization(_ context.Context, orgI
 // and denied) are ordinary, expected decisions of a correct gate, not
 // degradation; see cohortExactNameCensusEligibility's own doc comment for
 // what basis means.
-func (t SlogTelemetry) RecordCohortExactNameCensusGate(_ context.Context, orgID string, admitted bool, basis CohortExactNameCensusBasis) {
-	t.logger().Info("context_fabric: cohort exact-name census gate",
-		"org_id", orgID, "admitted", admitted, "basis", string(basis))
+func (t SlogTelemetry) RecordCohortExactNameCensusGate(ctx context.Context, orgID string, admitted bool, basis CohortExactNameCensusBasis) {
+	args := []any{"org_id", orgID, "admitted", admitted, "basis", string(basis)}
+	t.logger().Info("context_fabric: cohort exact-name census gate", append(args, graphRequestIDLogAttrs(ctx)...)...)
+}
+
+// graphRequestIDLogAttrs attaches the investigation's request id to a graph
+// adapter log line, the same way the engine's own telemetry does.
+//
+// ADDED AFTER IT COST REAL TIME. Every line this adapter emitted carried
+// org_id and nothing else, so nothing from the graph layer could be tied to
+// an investigation. Diagnosing one lost answer, I grepped these lines by
+// request id, got nothing, and concluded the code path had not run -- when
+// what I had actually proven was that the line carries no request id. A
+// telemetry line that cannot be attributed cannot be used to prove a path
+// did NOT execute, and a reader with a request id in hand should never have
+// to know which layer emitted which shape.
+func graphRequestIDLogAttrs(ctx context.Context) []any {
+	if requestID, ok := observability.RequestIDFromContext(ctx); ok {
+		return []any{"request_id", requestID}
+	}
+	return nil
 }
 
 // RecordCohortKindBasis logs at Info: every outcome here is an ordinary,
@@ -776,9 +794,9 @@ func (t SlogTelemetry) RecordCohortExactNameCensusGate(_ context.Context, orgID 
 // degradation of this component -- it is this component correctly declining
 // to guess -- so it is reported at the same level as a successful discovery
 // and is distinguished by its basis, never by its log level.
-func (t SlogTelemetry) RecordCohortKindBasis(_ context.Context, orgID string, basis graphrank.CohortKindBasis, discovered bool) {
-	t.logger().Info("context_fabric: cohort kind basis",
-		"org_id", orgID, "basis", string(basis), "discovered", discovered)
+func (t SlogTelemetry) RecordCohortKindBasis(ctx context.Context, orgID string, basis graphrank.CohortKindBasis, discovered bool) {
+	args := []any{"org_id", orgID, "basis", string(basis), "discovered", discovered}
+	t.logger().Info("context_fabric: cohort kind basis", append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 
 func (c Config) validate() error {
