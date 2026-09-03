@@ -252,4 +252,37 @@ func TestCarriedOutcomeDoesNotKeepThePreCarryRoute(t *testing.T) {
 		t.Fatalf("Route.Family = %q but the served family is %q; the outcome contradicts itself",
 			carried.Route.Family, carried.Family)
 	}
+	// EVERY field of the decision, not just the disposition. The first
+	// version of this test asserted the disposition alone, which left a
+	// route claiming `precedence` produced the family (it did not -- it
+	// produced unclassified, which is why the carry applied) and claiming
+	// nothing switched (it did -- unclassified became a real family). Both
+	// were caught by review because this test did not look at them.
+	if carried.Route.Source != FamilyRouteSourceCarried {
+		t.Fatalf("Route.Source = %q, want %q -- neither table produced this family, a prior turn did",
+			carried.Route.Source, FamilyRouteSourceCarried)
+	}
+	if !carried.Route.Switched {
+		t.Fatal("Route.Switched = false, but the carry replaced `unclassified` with a real family; that is a change to what is served")
+	}
+	if !ValidFamilyRouteSource(carried.Route.Source) {
+		t.Fatalf("Route.Source %q is outside the closed vocabulary", carried.Route.Source)
+	}
+}
+
+// A carry that does NOT change the family must not report a switch. Without
+// this, `Switched` on the carry path could be hardcoded true and the test
+// above would still pass -- the mirror of the bug it just caught.
+func TestCarryThatChangesNothingReportsNoSwitch(t *testing.T) {
+	t.Parallel()
+	outcome := QuestionFamilyOutcome{Family: QuestionFamilyUnclassified}
+	carried, applied := applyCarriedPlan(outcome, planCarryResult{
+		Outcome: PlanCarryHit, Family: QuestionFamilyUnclassified,
+	})
+	if !applied {
+		t.Fatal("the carry did not apply; this test proves nothing")
+	}
+	if carried.Route.Switched {
+		t.Fatal("a carry that produced the same family reported Switched")
+	}
 }

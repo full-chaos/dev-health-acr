@@ -51,9 +51,20 @@ const (
 	// FamilyRoutePrecedence: the §4.2 precedence table decided it, exactly
 	// as it did before this slice.
 	FamilyRoutePrecedence FamilyRouteSource = "precedence"
+	// FamilyRouteSourceCarried: NEITHER table decided. A prior turn's family
+	// was carried onto this one, and that turn is what produced the served
+	// value.
+	//
+	// It is a third SOURCE rather than a flavour of precedence because this
+	// type's own contract is "which table produced the served family", and
+	// answering `precedence` for a carry is false -- the precedence table ran
+	// on this turn and produced `unclassified`, which is exactly why the
+	// carry applied. Review caught that contradiction: the doc comment said
+	// neither table decided while the field said precedence.
+	FamilyRouteSourceCarried FamilyRouteSource = "carried"
 )
 
-var familyRouteSources = [...]FamilyRouteSource{FamilyRouteProjected, FamilyRoutePrecedence}
+var familyRouteSources = [...]FamilyRouteSource{FamilyRouteProjected, FamilyRoutePrecedence, FamilyRouteSourceCarried}
 
 // FamilyRouteSourceCount is the closed vocabulary's size.
 const FamilyRouteSourceCount = len(familyRouteSources)
@@ -167,11 +178,18 @@ const (
 	// restructure this slice is not making.
 	//
 	// What IS fixed: the OUTCOME is no longer self-contradictory. A carried
-	// outcome carries this disposition, so any reader holding the outcome
-	// sees that neither table decided. A reader consuming the telemetry
-	// STREAM must join on the plan-carry event to see a carried turn, and
-	// that is stated here rather than left for someone to discover from a
-	// counter that disagrees with the answer.
+	// outcome carries this disposition, source `carried`, and Switched
+	// computed against the family the carry replaced, so any in-process
+	// reader holding the outcome sees that neither table decided.
+	//
+	// WHAT IS NOT FIXED, stated exactly: a carried turn is NOT identifiable
+	// from the family-resolution telemetry STREAM at all. There is no
+	// plan-carry telemetry producer -- `RecordPlanCarry` does not exist, and
+	// `SourceResultID` is resolved but never emitted -- so a stream consumer
+	// has no event to correlate. An earlier version of this comment told
+	// readers to "join on the plan-carry event", which was worse than saying
+	// nothing: it pointed at an artifact that does not exist. Emitting carry
+	// telemetry is follow-on work, not this slice's.
 	FamilyRouteCarried FamilyRouteDisposition = "carried_from_prior_turn"
 	// FamilyRouteDeclinedUnexplained: no class describes the pair of rows
 	// that fired. A non-zero count here is a FINDING, not a routing input,

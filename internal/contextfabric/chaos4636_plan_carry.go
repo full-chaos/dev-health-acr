@@ -207,6 +207,7 @@ func applyCarriedPlan(outcome QuestionFamilyOutcome, carry planCarryResult) (Que
 	if outcome.Family != "" && outcome.Family != QuestionFamilyUnclassified {
 		return outcome, false
 	}
+	preCarryFamily := outcome.Family
 	outcome.Family = carry.Family
 	outcome.Source = QuestionFamilySourceCarried
 	// The group kind rides on the winning sample, which is where PlanAnswer
@@ -218,9 +219,14 @@ func applyCarriedPlan(outcome QuestionFamilyOutcome, carry planCarryResult) (Que
 	// before the carry. The family-resolution EVENT was already emitted by
 	// then and cannot be amended; see FamilyRouteCarried's own doc comment
 	// for the limit that leaves.
+	// Switched is computed against the family this carry REPLACED, not
+	// hardcoded: a carry applies only when this turn resolved to empty or
+	// `unclassified`, and a carriable prior family is neither, so replacing
+	// it does change what is served. Review caught this reporting false.
 	outcome.Route = FamilyRouteDecision{
-		Family: carry.Family, Source: FamilyRoutePrecedence,
+		Family: carry.Family, Source: FamilyRouteSourceCarried,
 		Disposition: FamilyRouteCarried,
+		Switched:    carry.Family != preCarryFamily,
 	}
 	return outcome, true
 }
