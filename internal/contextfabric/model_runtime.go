@@ -1469,6 +1469,37 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 		// persisted receipt can be replayed against the table that
 		// produced it.
 		validated := result.Frame
+		// CHAOS-4975: named_subject has no model-writable channel of its
+		// own for the frame's declared kind (prompts.go instructs the
+		// model to fill named_subject with terms only). RequestedSubjectKind
+		// is the SAME call's sanitized declared-kind signal for exactly
+		// this case (it is what the question's answer is about) and is
+		// already on this receipt by the time this function runs (set by
+		// applyFamilyCapture, before Interpret calls resolveFrame). Read
+		// here, once, on the VALIDATED frame -- never on the raw
+		// proposal above, so a refused frame's telemetry (and the
+		// FrameValidationEventFrom(proposed, ...) call below) keeps
+		// showing exactly what the model emitted, undisturbed. Applied
+		// only when the model's own frame left ExpectedKind unset: a
+		// future model version populating it directly is never
+		// overridden.
+		//
+		// A COPY of Named, never a mutation through the existing pointer:
+		// NormalizeFrame never touches SubjectExpression, so
+		// validated.SubjectExpression.Named is still the SAME pointer
+		// `proposed` (and receipt.QuestionFrame before this switch ran)
+		// holds. Writing through it would silently backdate the
+		// "proposal" telemetry to look like the model emitted this
+		// field, which is exactly the receipt/artifact disagreement this
+		// package's own doc comments elsewhere forbid.
+		if named := validated.SubjectExpression.Named; validated.SubjectExpression.Kind == SubjectExpressionNamed &&
+			named != nil && named.ExpectedKind == nil &&
+			receipt.RequestedSubjectKind != "" && !receipt.RequestedSubjectKindUnrecognized {
+			kind := receipt.RequestedSubjectKind
+			backfilled := *named
+			backfilled.ExpectedKind = &kind
+			validated.SubjectExpression.Named = &backfilled
+		}
 		receipt.QuestionFrame = &validated
 	default:
 		// On a refusal the receipt keeps the PROPOSAL, which is what the
