@@ -64,6 +64,29 @@ const (
 	// invent a set the question never asked for. This is the frame-side
 	// replacement for the old Shape gate.
 	CohortKindNotACohortVariant CohortKindBasis = "not_a_cohort_variant"
+	// CohortKindMemberKindUnservable: the frame declared a member kind the
+	// COHORT WIRE CONTRACT cannot carry, so no cohort is built.
+	//
+	// FOUND ON THE RIG, not by reading code. contracts/v1's
+	// ContextFabricCohort.validate permits exactly two kinds -- team and
+	// project -- and refuses every other with "cohort violates v1 bounds".
+	// The deleted prose matcher could only ever RETURN those two (it
+	// returned project on a "project"/"initiative" hit and otherwise
+	// defaulted to team), so that bound was unreachable for the entire life
+	// of the old code. Reading the frame's declared MemberKind makes it
+	// reachable for the first time: a question about repositories now
+	// declares `repository`, discovery builds a repository cohort, and the
+	// validator refuses the whole ANSWER -- an HTTP 500, not a degraded
+	// answer. That is strictly worse than the wrong-kind cohort it replaced.
+	//
+	// So the consumer refuses FIRST, and says so. Widening the wire contract
+	// to carry more cohort kinds is a contract change with a schema, an
+	// OpenAPI document, an MCP manifest, fixtures and a consumer pin behind
+	// it; it is not this slice's to make, and it is tracked separately as
+	// the repository-cohort work. Until then a cohort kind outside the
+	// contract is a REPORTED limitation with its own basis, which is what
+	// makes it countable rather than a crash.
+	CohortKindMemberKindUnservable CohortKindBasis = "member_kind_unservable"
 	// CohortKindNoMemberKind: the expression IS a cohort variant but
 	// declares no member kind. explicit_set is the case that reaches this:
 	// its operands are NAMED, so its members come from subject resolution,
@@ -81,6 +104,18 @@ var cohortKindBases = [...]CohortKindBasis{
 	CohortKindFrameAbsent,
 	CohortKindNotACohortVariant,
 	CohortKindNoMemberKind,
+	CohortKindMemberKindUnservable,
+}
+
+// servableCohortKinds is the set ContextFabricCohort.validate admits, stated
+// here as the reason this package refuses rather than as a copy of a rule
+// nobody can find. It is deliberately a DENY-BY-DEFAULT list: a subject kind
+// added to the frame vocabulary is unservable as a cohort until the wire
+// contract is widened to carry it, which is the safe direction -- the unsafe
+// one produces a 500 on a real question.
+var servableCohortKinds = map[contextfabric.SubjectKind]bool{
+	contextfabric.SubjectTeam:    true,
+	contextfabric.SubjectProject: true,
 }
 
 // CohortKindBasisCount is the closed vocabulary's size.
@@ -117,6 +152,9 @@ func cohortKindFromFrame(frame *contextfabric.QuestionFrame) (contextfabric.Subj
 	kind, ok := frame.SubjectExpression.MemberKind()
 	if !ok {
 		return "", CohortKindNoMemberKind
+	}
+	if !servableCohortKinds[kind] {
+		return "", CohortKindMemberKindUnservable
 	}
 	return kind, CohortKindFromFrameMemberKind
 }

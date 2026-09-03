@@ -94,11 +94,25 @@ func TestGroupedProjectQuestionDiscoversProjectsNotTeams(t *testing.T) {
 	}
 }
 
-// R2: a REPOSITORY cohort was unreachable through the deleted matcher by
-// construction -- it returned only `project` or `team`, and defaulted to
-// `team`. This is the class observed live: "Show me open incidents per
-// repository" served a 3-member TEAM cohort.
-func TestRepositoryCohortIsReachable(t *testing.T) {
+// R2 (the ticket's second repro): HALF-FIXED, and the half that remains is
+// NOT this slice's to fix. Stating that here rather than asserting a fix that
+// does not exist.
+//
+// The ticket says a repository cohort was unreachable because the prose
+// matcher returned only project-or-team and defaulted to team. That barrier
+// is gone: the frame declares `repository` and this function reads it. But a
+// SECOND, independent barrier was underneath it the whole time and could
+// never be observed while the first one stood -- contracts/v1's
+// ContextFabricCohort.validate admits exactly {team, project} and refuses
+// everything else with "cohort violates v1 bounds". Removing the matcher made
+// that bound reachable for the first time, and a repository question that
+// used to return a wrong-kind cohort returned an HTTP 500 on the rig instead.
+//
+// So the honest assertion is the one below: the KIND now comes from the
+// frame, and a repository cohort is refused by a NAMED contract limitation
+// rather than silently rewritten to `team`. Serving it needs the wire
+// contract widened, which is its own ticket.
+func TestRepositoryCohortIsRefusedByContractNotRewrittenToTeam(t *testing.T) {
 	t.Parallel()
 	discovery := frameDiscovery(contextfabric.SubjectExpression{
 		Kind:       contextfabric.SubjectExpressionDiscoveredKind,
@@ -110,15 +124,14 @@ func TestRepositoryCohortIsReachable(t *testing.T) {
 		candidateNode(contextfabric.SubjectTeam, "team_1", "Team One", 0.9, "*"),
 	}, noInternal)
 
-	if basis != CohortKindFromFrameMemberKind {
-		t.Fatalf("basis = %q, want %q", basis, CohortKindFromFrameMemberKind)
+	if cohort != nil {
+		t.Fatalf("built a %q cohort; the wire contract refuses it and the answer would 500", cohort.Kind)
 	}
-	if cohort == nil {
-		t.Fatal("cohort = nil, want a repository cohort")
-	}
-	if cohort.Kind != contextfabric.SubjectRepository {
-		t.Fatalf("cohort.Kind = %q, want %q -- repository was unreachable through the deleted matcher and is the live defect this slice fixes",
-			cohort.Kind, contextfabric.SubjectRepository)
+	// THE POINT: the old code answered this question with a TEAM cohort.
+	// Refusing with a named basis is the improvement; silently substituting
+	// a different kind is the defect the ticket is about.
+	if basis != CohortKindMemberKindUnservable {
+		t.Fatalf("basis = %q, want %q -- a repository question must not resolve to some other kind", basis, CohortKindMemberKindUnservable)
 	}
 }
 
@@ -183,6 +196,62 @@ func TestNonCohortAndMemberlessExpressionsRefuseWithTheirOwnBasis(t *testing.T) 
 	}
 }
 
+// A frame declaring a cohort kind the WIRE CONTRACT cannot carry must refuse
+// here, not build a document the validator will reject.
+//
+// THIS TEST EXISTS BECAUSE THE RIG FOUND IT. contracts/v1 permits exactly two
+// cohort kinds, team and project; the deleted prose matcher could only return
+// those two, so the bound was unreachable until the frame's declared kind
+// started reaching Cohort.Kind. A repository question then produced an HTTP
+// 500 ("cohort violates v1 bounds") instead of an answer -- strictly worse
+// than the wrong-kind cohort it replaced. Refusing early turns that crash
+// into a counted, named limitation.
+func TestUnservableCohortKindRefusesInsteadOfBuildingAnInvalidCohort(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []contextfabric.SubjectKind{
+		contextfabric.SubjectRepository, contextfabric.SubjectIncident,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			discovery := frameDiscovery(contextfabric.SubjectExpression{
+				Kind:       contextfabric.SubjectExpressionDiscoveredKind,
+				Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: kind},
+			}, "status", []string{"things"})
+			cohort, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery,
+				[]CandidateNode{candidateNode(kind, "node_a", "Node A", 0.9, "*")}, noInternal)
+			if cohort != nil {
+				t.Fatalf("built a %q cohort the wire contract refuses; the answer would 500", kind)
+			}
+			if basis != CohortKindMemberKindUnservable {
+				t.Fatalf("basis = %q, want %q -- the limitation has to be countable", basis, CohortKindMemberKindUnservable)
+			}
+		})
+	}
+}
+
+// The complement, so the guard cannot quietly refuse everything: the two
+// kinds the contract DOES carry must still discover. A deny-list with no
+// positive control is indistinguishable from a gate that always denies.
+func TestServableCohortKindsStillDiscover(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []contextfabric.SubjectKind{
+		contextfabric.SubjectTeam, contextfabric.SubjectProject,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			discovery := frameDiscovery(contextfabric.SubjectExpression{
+				Kind:       contextfabric.SubjectExpressionDiscoveredKind,
+				Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: kind},
+			}, "status", []string{"things"})
+			cohort, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery,
+				[]CandidateNode{candidateNode(kind, "node_a", "Node A", 0.9, "*")}, noInternal)
+			if basis != CohortKindFromFrameMemberKind || cohort == nil {
+				t.Fatalf("kind %q no longer discovers: basis=%q cohort=%v", kind, basis, cohort != nil)
+			}
+		})
+	}
+}
+
 // The basis vocabulary is closed and cohortKindFromFrame is TOTAL over it:
 // every member is produced by some reachable input, so no member is a dead
 // label and no input falls through unnamed. A tier with no positive fixture
@@ -203,12 +272,17 @@ func TestEveryCohortKindBasisIsReachable(t *testing.T) {
 		Kind:       contextfabric.SubjectExpressionDiscoveredKind,
 		Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectTeam},
 	}
+	unservable := contextfabric.SubjectExpression{
+		Kind:       contextfabric.SubjectExpressionDiscoveredKind,
+		Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectRepository},
+	}
 	reached := map[CohortKindBasis]bool{}
 	for _, frame := range []*contextfabric.QuestionFrame{
 		nil,
 		{SubjectExpression: named},
 		{SubjectExpression: explicit},
 		{SubjectExpression: discovered},
+		{SubjectExpression: unservable},
 	} {
 		_, basis := cohortKindFromFrame(frame)
 		if !ValidCohortKindBasis(basis) {
