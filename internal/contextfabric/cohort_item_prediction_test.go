@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -54,14 +55,18 @@ func loadGroupedCohortItemRatios(t *testing.T) groupedCohortItemRatioFixture {
 // point, asserted rather than left as prose in a JSON field.
 //
 // It records a REFUTATION. An earlier revision of this package predicted item
-// totals from a measured items-per-member rate and clamped the cohort with it;
-// the rig then produced, at SEVEN members, totals that overlap the ten-member
-// range completely. So no clamp on member count can bound the item total, and
-// any future attempt to reintroduce one has to answer this data first.
+// totals from a measured items-per-member RATE and clamped the cohort with it.
+// If that model held, a 30% smaller cohort would produce a proportionally
+// smaller answer. It does not.
 //
-// The assertion is deliberately the weakest thing that still forbids the wrong
-// model: the two member-count populations must OVERLAP. A rate model requires
-// them to separate.
+// The assertion is the one a rate model actually fails. Codex round 1 finding 4
+// showed the first version -- "the two populations must OVERLAP" -- was too
+// weak: buckets [70,170] at seven members and [100,200] at ten overlap while
+// still carrying a large per-member component, so the fixture could drift to
+// data that does not support the conclusion while the test stayed green. What a
+// proportional model REQUIRES is that the smaller cohort's mean scale down by
+// the member ratio; this asserts the observed means are far closer together
+// than that, which is the claim the branch actually rests on.
 func TestGroupedAnswerItemsAreNotAFunctionOfMemberCount(t *testing.T) {
 	t.Parallel()
 	fixture := loadGroupedCohortItemRatios(t)
@@ -73,36 +78,41 @@ func TestGroupedAnswerItemsAreNotAFunctionOfMemberCount(t *testing.T) {
 	if len(byMembers) < 2 {
 		t.Fatalf("fixture covers %d distinct member counts; the claim needs at least 2 to be testable", len(byMembers))
 	}
+	mean := func(xs []int) float64 {
+		total := 0
+		for _, x := range xs {
+			total += x
+		}
+		return float64(total) / float64(len(xs))
+	}
+	// Compare the smallest and largest cohort sizes present.
+	small, large := 0, 0
+	for members := range byMembers {
+		if small == 0 || members < small {
+			small = members
+		}
+		if members > large {
+			large = members
+		}
+	}
+	if small == large {
+		t.Fatal("smallest and largest cohort sizes are equal; the comparison below is vacuous")
+	}
+	smallMean, largeMean := mean(byMembers[small]), mean(byMembers[large])
 
-	type span struct{ lo, hi int }
-	spans := map[int]span{}
-	for members, items := range byMembers {
-		s := span{items[0], items[0]}
-		for _, n := range items {
-			if n < s.lo {
-				s.lo = n
-			}
-			if n > s.hi {
-				s.hi = n
-			}
-		}
-		spans[members] = s
-	}
-	overlapping := false
-	for a, sa := range spans {
-		for b, sb := range spans {
-			if a >= b {
-				continue
-			}
-			if sa.lo <= sb.hi && sb.lo <= sa.hi {
-				overlapping = true
-			}
-		}
-	}
-	if !overlapping {
-		t.Fatalf("item totals separate cleanly by member count (%v) -- if that is now true on real data, "+
-			"a member-count clamp may be derivable again and this test should be re-derived rather than deleted. Authority: %s",
-			spans, fixture.Authority)
+	// What a per-member rate model predicts for the smaller cohort, if the
+	// larger cohort's observed mean were entirely per-member cost.
+	proportional := largeMean * float64(small) / float64(large)
+	// The midpoint between "totals scale with members" (proportional) and
+	// "totals do not move at all" (largeMean). Landing above it means the
+	// member-independent term dominates, which is the branch's claim.
+	midpoint := (proportional + largeMean) / 2
+	if smallMean <= midpoint {
+		t.Fatalf("at %d members the mean total is %.1f; a proportional model predicts %.1f and a fully "+
+			"member-independent one predicts %.1f. %.1f is on the proportional side of the %.1f midpoint, so "+
+			"this data does NOT refute a per-member rate and the branch's anti-clamp conclusion is unsupported. "+
+			"Re-derive the design rather than relaxing this test. Authority: %s",
+			small, smallMean, proportional, largeMean, smallMean, midpoint, fixture.Authority)
 	}
 }
 
@@ -225,5 +235,79 @@ func TestPlanRefusalPredictsForTheCohortItMeasured(t *testing.T) {
 		t.Fatalf("PredictedItems = %d, want %d (the %d-member cohort synthesis RAN against). "+
 			"%d would be the prediction for the %d-member target the declined retry never synthesized",
 			event.PredictedItems, wantPredicted, synthesizedMembers, forRetryTarget, declinedRetryTarget)
+	}
+}
+
+// TestSingletonRefusalPredictsForItsOneMember pins codex round 1 finding 1.
+//
+// narrowSynthesisInput's trivial-cohort return used to carry the ZERO value for
+// Before/After, and the declined-retry path forwards those straight into
+// planRefusal. A one-member cohort that synthesis had genuinely measured an
+// answer against therefore published `before:0, after:0` and, once this branch
+// added the prediction, `predicted_items:0` beside a real measured count.
+//
+// Driven through narrowSynthesisInput itself, because the loss happened there
+// and a test that hand-supplies the counts (as the first M4 pin did) cannot see
+// a caller-side count loss.
+func TestSingletonRefusalPredictsForItsOneMember(t *testing.T) {
+	t.Parallel()
+	cohort := planFixtureCohort("only_member")
+	params := synthesisAssemblyParams{Graph: GraphContext{Cohort: cohort}, Facts: CanonicalFactBundle{}}
+	result := narrowSynthesisInput(params, &AnswerPlan{})
+
+	if result.Narrow {
+		t.Fatal("a one-member cohort cannot narrow; fixture is wrong")
+	}
+	if result.Before != 1 || result.After != 1 {
+		t.Fatalf("Before/After = %d/%d for a one-member cohort, want 1/1: the count the refusal and its "+
+			"prediction are derived from must describe the cohort that actually exists", result.Before, result.After)
+	}
+
+	plan := AnswerPlan{
+		Family: QuestionFamilyGroupedCohortStatus,
+		Budget: contractsv1.ContextFabricAnswerPlanBudget{MaxItems: 30, SynthesisHeadroom: 20},
+	}
+	if got, want := PredictedItemsForPlan(plan, result.Before), 1+20; got != want {
+		t.Fatalf("prediction for the singleton = %d, want %d", got, want)
+	}
+	// The control: zero members must still predict nothing, so the fix above
+	// cannot have been made by making PredictedItemsForPlan return a floor.
+	if got := PredictedItemsForPlan(plan, 0); got != 0 {
+		t.Fatalf("PredictedItemsForPlan(0) = %d, want 0", got)
+	}
+}
+
+// TestEveryAssembledResultEventCarriesAPrediction pins codex round 1 findings 2
+// and 3 together, by the POPULATION rather than by the sites I happened to
+// remember: every construction of an assembled_result PlanNarrowingEvent in the
+// stage-3 file must assign PredictedItems.
+//
+// Findings 2 and 3 were both "a site that sets MeasuredItems and not
+// PredictedItems". Enumerating sites by hand is what missed them the first
+// time, so this reads the source and fails on any site the enumeration does not
+// cover -- including sites added after this test was written.
+func TestEveryAssembledResultEventCarriesAPrediction(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile("chaos4636_budget_stage3.go")
+	if err != nil {
+		t.Fatalf("read stage-3 source: %v", err)
+	}
+	text := string(src)
+
+	constructions := strings.Count(text, "PlanNarrowingEventFrom(")
+	predictions := strings.Count(text, ".PredictedItems = PredictedItemsForPlan(")
+	// Positive control: if the file stops containing either shape, this test is
+	// measuring nothing and must say so rather than pass.
+	if constructions == 0 {
+		t.Fatal("no PlanNarrowingEventFrom( constructions found: this test is anchored to a shape that no longer exists")
+	}
+	if predictions == 0 {
+		t.Fatal("no PredictedItems assignments found: the prediction is not populated anywhere in stage 3")
+	}
+	if predictions != constructions {
+		t.Fatalf("stage 3 constructs %d assembled_result narrowing events but assigns PredictedItems only %d times. "+
+			"Every event that carries measured_items must carry the prediction beside it, or an operator reads a "+
+			"measurement against predicted_items:0 and concludes the plan expected nothing.",
+			constructions, predictions)
 	}
 }
