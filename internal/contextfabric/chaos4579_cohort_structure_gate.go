@@ -36,6 +36,15 @@ import (
 // separately-gated parameter (chaos3900_structure_offers.go's own doc
 // comment) -- ranked first when the axis still raises, and never raised
 // on its own when the declared kind is the only offerable kind in view.
+// CLOSED for exactly those three variants: children_of_scope,
+// discovered_kind, grouped_members.
+//
+// The SAME class gap for a plain named_subject question (its own declared
+// kind lives on a different field entirely, NamedSubjectExpression.
+// ExpectedKind, never read by frameKindHints/MemberKind/GroupKind) is
+// NOT closed here -- traced, but currently unreachable in production for
+// an unrelated reason one layer up (nothing populates that field today),
+// and tracked separately rather than folded into this fix.
 //
 // GateOffersByFamily replaces it with ONE lookup into the family table
 // (chaos4632_question_family_registry.go's ApplicableAxes column) that
