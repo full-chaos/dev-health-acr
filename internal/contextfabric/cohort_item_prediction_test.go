@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -309,5 +310,62 @@ func TestEveryAssembledResultEventCarriesAPrediction(t *testing.T) {
 			"Every event that carries measured_items must carry the prediction beside it, or an operator reads a "+
 			"measurement against predicted_items:0 and concludes the plan expected nothing.",
 			constructions, predictions)
+	}
+}
+
+// TestRetryEventPredictsForTheRetriedCohort pins the count the RETRY event's
+// prediction is derived from. My own mutation battery found this gap: deleting
+// any prediction assignment is caught by the population test above, but
+// SWAPPING the retry event's count from `after` to `before` survived it, because
+// counting assignments says nothing about which value each one passes.
+//
+// That is the third instance on this branch of the same class (M4 at the
+// refusal seam, and the first M4 pin that asserted on the helper instead of the
+// call site). The population test and this one are complements: one forbids an
+// omission, the other forbids a wrong argument.
+//
+// Driven through a REAL bounded retry (6 members overrun a 12-item budget,
+// halved to 3 and re-synthesized), so the counts come from production.
+func TestRetryEventPredictsForTheRetriedCohort(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	telemetry := &recordingTelemetry{}
+	engine := budgetStageEngine(t, budgetStageCohort(6), 2, budgetStageOptions(12, time.Second), &calls, telemetry)
+
+	result, err := engine.Investigate(context.Background(),
+		storage.Principal{OrgID: "org_retry_prediction"}, validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("synthesizer called %d times, want 2 (one bounded retry) -- this fixture must actually retry", calls)
+	}
+	if result.AnswerPlan == nil {
+		t.Fatal("served result carries no plan; cannot read the headroom the prediction is built from")
+	}
+	headroom := result.AnswerPlan.Budget.SynthesisHeadroom
+
+	var retryEvent *PlanNarrowingEvent
+	for index := range telemetry.planNarrowings {
+		if telemetry.planNarrowings[index].RetryAttempted {
+			retryEvent = &telemetry.planNarrowings[index]
+		}
+	}
+	if retryEvent == nil {
+		t.Fatal("no narrowing event with RetryAttempted was recorded; the retry path was not exercised")
+	}
+	// Non-vacuity: the two candidate counts must differ, or this assertion
+	// cannot distinguish the correct argument from the wrong one.
+	if retryEvent.Before == retryEvent.After {
+		t.Fatalf("Before == After == %d; this fixture cannot see the mutation it exists to catch", retryEvent.Before)
+	}
+
+	wantRetried := retryEvent.After + headroom
+	wrongOriginal := retryEvent.Before + headroom
+	if retryEvent.PredictedItems != wantRetried {
+		t.Fatalf("retry event PredictedItems = %d, want %d (After=%d + headroom=%d). %d would be the prediction "+
+			"for the PRE-narrowing cohort (Before=%d), but this event's measured_items describes the "+
+			"re-synthesized answer, which ran against the narrowed set",
+			retryEvent.PredictedItems, wantRetried, retryEvent.After, headroom, wrongOriginal, retryEvent.Before)
 	}
 }
