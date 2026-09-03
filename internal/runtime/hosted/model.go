@@ -3,6 +3,7 @@ package hosted
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
@@ -36,8 +37,20 @@ import (
 // engineTelemetry, never a second, independently-resolved instance. A nil
 // telemetry (every existing caller before this ticket) is exactly
 // pre-CHAOS-4355 behavior.
-func newContextFabricModelRuntime(ctx context.Context, lookup func(string) (string, bool), telemetry contextfabric.EngineTelemetry) (contextfabric.ModelRuntime, error) {
+//
+// logger must be non-nil (production passes request.options.Logger,
+// validated non-nil by validateBuildRequest before this runs). When no
+// provider is configured, it records one startup WARN naming any
+// tuning-only variable (ACR_CONTEXT_FABRIC_MODEL_TIMEOUT and siblings)
+// that was set anyway, so an operator who set only a tuning knob still
+// finds out it had no effect (CHAOS-4986; see modelprovider.Configured's
+// doc comment).
+func newContextFabricModelRuntime(ctx context.Context, lookup func(string) (string, bool), telemetry contextfabric.EngineTelemetry, logger *slog.Logger) (contextfabric.ModelRuntime, error) {
 	if !modelprovider.Configured(lookup) {
+		if ignored := modelprovider.IgnoredTuningVariables(lookup); len(ignored) > 0 {
+			logger.Warn("context fabric model tuning variable set without a provider; ignoring",
+				"variables", ignored)
+		}
 		return nil, nil
 	}
 	modelConfig, err := modelprovider.ConfigFromEnv(lookup)
