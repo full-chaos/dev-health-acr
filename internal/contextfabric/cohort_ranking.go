@@ -184,6 +184,10 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 	if cohort == nil || len(cohort.Members) == 0 {
 		return cohort, event, nil
 	}
+	// Set AFTER the nil guard on purpose: a nil cohort has no kind, and an
+	// empty-string kind on an event nothing ranked would read as a served
+	// cohort of an unknown kind rather than as no cohort at all.
+	event.CohortKind = cohort.Kind
 
 	bySubject := make(map[string][]CanonicalFact, len(cohort.Members))
 	for _, fact := range facts {

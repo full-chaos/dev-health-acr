@@ -788,7 +788,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			cohortNodes = append(cohortNodes, n)
 		}
 	}
-	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKindBasis := graphrank.DiscoveredCohort(principal, request, cohortNodes, isInternalSubject)
+	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis := graphrank.DiscoveredCohort(principal, request, cohortNodes, isInternalSubject)
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here
 	// and DiscoveredCohort stays pure -- the same split the authzDropped
@@ -797,7 +797,15 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// had no matching nodes" were indistinguishable before this, and the
 	// first is the cost of having deleted the prose matcher.
 	if a.config.Telemetry != nil {
-		a.config.Telemetry.RecordCohortKindBasis(ctx, principal.OrgID, cohortKindBasis, cohort != nil)
+		// The KIND travels beside the basis. Without it the line said a
+		// cohort kind was refused but never which one, so "which member kind
+		// did this question actually declare" could not be answered from a
+		// run's own artifacts -- it was inferred from question text instead,
+		// and the inference was wrong for a question whose repository noun
+		// was the grouping axis rather than the member kind. An empty kind
+		// is the honest value on every refusing basis: cohortKindFromFrame
+		// yields no kind when it refuses.
+		a.config.Telemetry.RecordCohortKindBasis(ctx, principal.OrgID, cohortKind, cohortKindBasis, cohort != nil)
 	}
 	if cohort != nil && exactNameTruncated {
 		// Codex round-2 finding (P2): DiscoveredCohort computes Complete
@@ -809,7 +817,15 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 	factRequirements := admission.FactRequirements
 	if cohort != nil {
-		factRequirements = graphrank.MergeFactRequirements(factRequirements, contextfabric.FactHealth, contextfabric.FactWorkload)
+		// KEYED ON THE COHORT'S KIND. This used to merge FactHealth and
+		// FactWorkload unconditionally, which was correct only while team
+		// and project were the sole servable kinds -- both are answered by
+		// both producers. A repository cohort has no workload producer, so
+		// an unconditional merge asked for a requirement the planner could
+		// only prune. See graphrank.CohortFactRequirements for the table and
+		// for what the prune actually cost (a coverage-record disclosure,
+		// not a lost answer).
+		factRequirements = graphrank.MergeFactRequirements(factRequirements, graphrank.CohortFactRequirements(cohort.Kind)...)
 	}
 	// CHAOS-3888: telemetry-only, never affects Coverage/Partial/the
 	// returned Cohort or Paths -- an authorization exclusion, a

@@ -244,7 +244,16 @@ func SortEdgesByRelevance(edges []CandidateEdge) []CandidateEdge {
 // change to stay shared. Ported from
 // zepgraph.(*Adapter).discoveredCohort.
 //
-// Returns (cohort, authzDropped, kindScopedAuthzDropped): authzDropped
+// Returns (cohort, authzDropped, kindScopedAuthzDropped, declaredKind, basis).
+// declaredKind is the member kind THE FRAME DECLARED -- the served kind on a
+// discovery, the REFUSED kind on member_kind_unservable, and empty where the
+// frame declared none at all. It is returned rather than read back off the
+// cohort precisely so a refusal is attributable: a refused turn has no cohort
+// to read a kind from, and "which member kind did this question declare" is
+// the question a refusal leaves open. It is never the value the cohort is
+// built from -- see cohortKindFromFrame's own doc comment for that split.
+//
+// authzDropped
 // (CHAOS-3888) counts every node this call excluded specifically because
 // AuthorizedAttributes denied it -- distinct from (and counted independently
 // of) the unauthorized-node, wrong-kind, or internal-bookkeeping exclusions
@@ -269,10 +278,10 @@ func SortEdgesByRelevance(edges []CandidateEdge) []CandidateEdge {
 // authzDropped -- codex round-1 P2, reproduced: a "which teams" cohort with
 // zero teams but one unauthorized repository node previously reported
 // authzDropped=1 even though no team was ever denied.
-func DiscoveredCohort(principal storage.Principal, discovery contextfabric.GraphDiscoveryRequest, nodes []CandidateNode, isInternal func(contextfabric.SubjectRef) bool) (*contextfabric.Cohort, int, int, CohortKindBasis) {
-	kind, basis := cohortKindFromFrame(discovery.Frame)
+func DiscoveredCohort(principal storage.Principal, discovery contextfabric.GraphDiscoveryRequest, nodes []CandidateNode, isInternal func(contextfabric.SubjectRef) bool) (*contextfabric.Cohort, int, int, contextfabric.SubjectKind, CohortKindBasis) {
+	kind, declaredKind, basis := cohortKindFromFrame(discovery.Frame)
 	if basis != CohortKindFromFrameMemberKind {
-		return nil, 0, 0, basis
+		return nil, 0, 0, declaredKind, basis
 	}
 	members := make([]contextfabric.CohortMember, 0)
 	seen := make(map[string]struct{})
@@ -306,13 +315,13 @@ func DiscoveredCohort(principal storage.Principal, discovery contextfabric.Graph
 		}
 	}
 	if len(members) == 0 {
-		return nil, authzDropped, kindScopedAuthzDropped, basis
+		return nil, authzDropped, kindScopedAuthzDropped, declaredKind, basis
 	}
 	return &contextfabric.Cohort{
 		Kind: kind, Members: members, Exclusions: []contextfabric.CohortExclusion{},
 		Rationale: "Subjects were discovered from the authorized Context Fabric graph using the user's open-ended cohort question.",
 		Complete:  len(members) < discovery.Request.Options.MaxCohortMembers, Truncated: len(members) >= discovery.Request.Options.MaxCohortMembers,
-	}, authzDropped, kindScopedAuthzDropped, basis
+	}, authzDropped, kindScopedAuthzDropped, declaredKind, basis
 }
 
 func edgeEpistemicStatus(edge ResolvedEdge) contextfabric.EpistemicStatus {

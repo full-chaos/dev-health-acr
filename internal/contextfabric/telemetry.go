@@ -510,6 +510,7 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 func (t SlogEngineTelemetry) RecordCohortRanked(ctx context.Context, principal storage.Principal, event CohortRankedEvent) {
 	t.logger.InfoContext(ctx, "context fabric cohort ranked", append([]any{
 		"org_id", principal.OrgID,
+		"cohort_kind", string(event.CohortKind),
 		"member_count", event.MemberCount,
 		"formula_version", event.FormulaVersion,
 		"degraded_member_count", event.DegradedMemberCount,
