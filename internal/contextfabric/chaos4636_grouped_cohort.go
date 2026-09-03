@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"fmt"
 	"sort"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -107,6 +108,19 @@ var canonicalCohortGroupingRefusals = map[CohortGroupingRefusal]CohortGroupingRe
 	CohortGroupingRefusalGroupKindSourceMismatch: CohortGroupingRefusalGroupKindSourceMismatch,
 }
 
+// CohortGroupingOutcome carries WHY grouping refused and the two kinds that
+// disagreed, so a caller can both log the refusal and DISCLOSE it to the
+// reader without re-deriving either kind. Both kinds are closed-vocabulary
+// subject kinds; neither is model text.
+type CohortGroupingOutcome struct {
+	Refusal CohortGroupingRefusal
+	// PlannedKind is what the question frame asked to group by.
+	PlannedKind SubjectKind
+	// SourceKind is what the facts actually group by. Zero unless a refusal
+	// names a mismatch.
+	SourceKind SubjectKind
+}
+
 // ValidCohortGroupingRefusal reports membership of the closed vocabulary.
 func ValidCohortGroupingRefusal(reason CohortGroupingRefusal) bool {
 	_, ok := canonicalCohortGroupingRefusals[reason]
@@ -144,9 +158,9 @@ func ValidCohortGroupingRefusal(reason CohortGroupingRefusal) bool {
 // rewrite: cohort.Complete can come back true after grouping only if it was
 // already true before grouping, and cohort.Truncated never comes back false
 // if it was already true.
-func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (groups []contractsv1.ContextFabricCohortGroup, ungrouped int, refusal CohortGroupingRefusal) {
+func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (groups []contractsv1.ContextFabricCohortGroup, ungrouped int, outcome CohortGroupingOutcome) {
 	if plan.GroupKind == "" || cohort == nil || len(cohort.Members) == 0 {
-		return nil, 0, CohortGroupingRefusalNone
+		return nil, 0, CohortGroupingOutcome{}
 	}
 	assignments := groupAssignmentsByMember(facts)
 	// Preserve the cohort's own member order inside each group, and order
@@ -169,7 +183,11 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 		// as a complete one.
 		for _, assignment := range placed {
 			if assignment.kind != plan.GroupKind {
-				return nil, 0, CohortGroupingRefusalGroupKindSourceMismatch
+				return nil, 0, CohortGroupingOutcome{
+					Refusal:     CohortGroupingRefusalGroupKindSourceMismatch,
+					PlannedKind: plan.GroupKind,
+					SourceKind:  assignment.kind,
+				}
 			}
 		}
 		// EVERY owning group, not the first one seen. A project genuinely
@@ -189,7 +207,7 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 		}
 	}
 	if len(order) == 0 {
-		return nil, ungrouped, CohortGroupingRefusalNone
+		return nil, ungrouped, CohortGroupingOutcome{}
 	}
 	sort.Strings(order)
 	groups = make([]contractsv1.ContextFabricCohortGroup, 0, len(order))
@@ -238,7 +256,7 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 			Truncated: false,
 		})
 	}
-	return groups, ungrouped, CohortGroupingRefusalNone
+	return groups, ungrouped, CohortGroupingOutcome{}
 }
 
 // groupAssignmentsByMember reads the owning group out of each fact's declared
@@ -519,4 +537,29 @@ func RemovedCohortMembers(before, after []CohortMember) []CohortMember {
 		removed = append(removed, member)
 	}
 	return removed
+}
+
+// applyGroupingRefusalDisclosure states on the WIRE that a grouped question
+// was answered ungrouped, and why.
+//
+// Telemetry alone is not disclosure: an operator reading logs is not the
+// person reading the answer, and a reader who asked for a per-team breakdown
+// and silently received a flat list has been told something false by omission.
+// The refusal already logs its reason; this is the half the caller sees.
+//
+// Both kinds are closed-vocabulary subject kinds, so the sentence carries no
+// model text and no corpus content -- the same rule every other disclosure
+// composer on this path follows.
+func applyGroupingRefusalDisclosure(result *InvestigationResult, outcome CohortGroupingOutcome) {
+	if result == nil || outcome.Refusal != CohortGroupingRefusalGroupKindSourceMismatch {
+		return
+	}
+	// Through the BOUNDED appender, not a raw append: the limitations
+	// collection has a contract cap, and this package's own closure test
+	// rejects any limitations-destined write that bypasses it. Caught here by
+	// that test rather than by a reviewer, which is the guard working.
+	result.Limitations, _ = appendBoundedLimitations(result.Limitations, []string{fmt.Sprintf(
+		"This question asked for a breakdown by %s, but the available facts group by %s, so the answer is presented ungrouped.",
+		outcome.PlannedKind, outcome.SourceKind)})
+	result.Coverage.Partial = true
 }

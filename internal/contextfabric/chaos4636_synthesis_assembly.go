@@ -94,6 +94,10 @@ type synthesisAssemblyParams struct {
 	// then fits without a stage-3 narrowing, reported
 	// largest_group_round_robin). Zero value when stage 2 narrowed nothing.
 	GroupedNarrowingBasis contractsv1.ContextFabricNarrowingBasis
+	// GroupingRefusal is a grouping refusal this request already took, carried
+	// so the ANSWER can disclose it. Zero on every request that grouped, and
+	// on every request that never planned a group axis.
+	GroupingRefusal CohortGroupingOutcome
 	// Retry marks the SECOND pass. It exists so the doubled emissions above
 	// are attributable rather than silent.
 	Retry bool
@@ -356,6 +360,11 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// so the disclosure, its Coverage.Partial flag and the answer are one
 	// object throughout.
 	applyFactScopeDisclosure(&result, facts.Scope)
+	// CHAOS-4962: a grouped question answered ungrouped says so on the wire,
+	// not only in telemetry. Placed with the other disclosure composers and
+	// before the commit-affirmation gate, Validate and Save, so the sentence,
+	// its Coverage.Partial flag and the answer are one object throughout.
+	applyGroupingRefusalDisclosure(&result, params.GroupingRefusal)
 	// CHAOS-4398 PR3b: §5a narrated cohort driver judgments. Placed HERE --
 	// AFTER synthesis (synthesisDriverCount = len(result.Drivers) and
 	// synthesisClaimedFactCount = len(result.ClaimedFacts) are the ACTUAL
