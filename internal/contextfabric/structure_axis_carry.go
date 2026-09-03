@@ -101,9 +101,18 @@ type kindCarryResult struct {
 
 // resolveCarriedKind walks this conversation's own prior-result chain for
 // the nearest receipt-confirmed expected_kind. Fails closed on every
-// ambiguity (no reference, an unloadable candidate, a stale graph epoch, a
-// chain exhausted before a hit, or two carriers that disagree): "no carry"
-// is always a safe, disclosed answer, never a guess.
+// ambiguity -- no reference, an unloadable candidate, a stale graph epoch, a
+// chain exhausted before a hit, two carriers that disagree, or a depth that
+// found a hit but could not be scanned to the end: "no carry" is always a
+// safe, disclosed answer, never a guess.
+//
+// THAT LAST CASE IS WHERE THIS DIVERGES FROM resolveCarriedWindow, deliberately
+// (codex round 1, finding 2). The window carry returns its first agreeing hit
+// even when the visit cap cut the depth short or a sibling at that depth was
+// unreadable, so an unexamined same-depth candidate could disagree and never
+// be seen. The same shape was inherited here and is fixed here only: changing
+// the window axis is a behaviour change to already-shipped carry semantics and
+// belongs in its own change, not smuggled into this one.
 //
 // The walk is resolveCarriedWindow's, hop for hop and bound for bound --
 // same seeding (carryReferencedResultIDs), same epoch taint gate, same
@@ -129,6 +138,16 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 		// on the first one seen would silently pick one of two real,
 		// disagreeing confirmations.
 		var hits []kindCarryResult
+		// depthTruncated (codex round 1, finding 2): a hit is only
+		// trustworthy if the WHOLE depth was scanned, because the conflict
+		// check below can only see the candidates it actually visited. If
+		// the visit cap cut this depth short, or a sibling at this depth
+		// could not be read at all (unloadable, or refused by the epoch
+		// taint gate), then an unexamined same-depth candidate may carry a
+		// DIFFERENT kind and returning the hit would resolve an ambiguity
+		// to a value. That is the one thing this mechanism must never do,
+		// so a truncated depth fails closed even when it found a hit.
+		depthTruncated := false
 		for _, resultID := range frontier {
 			if ctx.Err() != nil {
 				return kindCarryResult{Outcome: KindCarryMissUnloadable}
@@ -138,12 +157,14 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 			}
 			if len(visited) >= carryChainMaxVisited {
 				capExceeded = true
+				depthTruncated = true
 				break
 			}
 			visited[resultID] = struct{}{}
 			fetched, err := carryLoadResult(ctx, e.results, principal, resultID)
 			if err != nil {
 				sawUnloadable = true
+				depthTruncated = true
 				continue
 			}
 			// CHAOS-3898 §2.2 ingress taint gate -- IDENTICAL check to
@@ -153,6 +174,7 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 			// trusted partially.
 			if fetched.GraphEpoch == nil || *fetched.GraphEpoch != binding.Epoch {
 				sawStaleEpoch = true
+				depthTruncated = true
 				continue
 			}
 			prior := fetched.Result
@@ -175,6 +197,20 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 			for _, h := range hits[1:] {
 				if h.Kind != hits[0].Kind {
 					return kindCarryResult{Outcome: KindCarryMissConflictingKinds, ChainDepth: depth}
+				}
+			}
+			if depthTruncated {
+				// Scanned candidates all agree, but the depth was not fully
+				// scanned, so uniqueness is unproven. Report what truncated
+				// it, in the same precedence the exhausted-walk exit below
+				// uses.
+				switch {
+				case capExceeded:
+					return kindCarryResult{Outcome: KindCarryMissDepthExceeded, ChainDepth: depth}
+				case sawStaleEpoch:
+					return kindCarryResult{Outcome: KindCarryMissStaleGraphEpoch, ChainDepth: depth}
+				default:
+					return kindCarryResult{Outcome: KindCarryMissUnloadable, ChainDepth: depth}
 				}
 			}
 			return hits[0]
@@ -287,12 +323,10 @@ func (e *Engine) recordKindCarry(ctx context.Context, principal storage.Principa
 // carryResultCacheKey scopes the per-request carry load cache below.
 type carryResultCacheKey struct{}
 
-// carryResultCacheEntry memoizes one InvestigationResultStore.Get, error
-// included -- a load that failed once must not be retried by the next axis
-// and reported as a different miss reason.
+// carryResultCacheEntry memoizes one SUCCESSFUL InvestigationResultStore.Get.
+// Failures are deliberately not memoised -- see carryLoadResult.
 type carryResultCacheEntry struct {
 	stored StoredInvestigationResult
-	err    error
 }
 
 // withCarryResultCache returns a context carrying a per-REQUEST memo of
@@ -322,12 +356,19 @@ func carryLoadResult(ctx context.Context, results InvestigationResultStore, prin
 	cache, _ := ctx.Value(carryResultCacheKey{}).(map[string]carryResultCacheEntry)
 	if cache != nil {
 		if entry, ok := cache[resultID]; ok {
-			return entry.stored, entry.err
+			return entry.stored, nil
 		}
 	}
 	stored, err := results.Get(ctx, principal, resultID)
-	if cache != nil {
-		cache[resultID] = carryResultCacheEntry{stored: stored, err: err}
+	// SUCCESSFUL READS ONLY (codex round 1). Caching the error too would
+	// replay one axis's transient failure to the next axis and prevent the
+	// independent second load from ever succeeding -- which directly
+	// contradicts this mechanism's own rule that neither carry axis may
+	// suppress the other. InvestigationResultStore.Get makes no promise that
+	// its errors are stable within a request, so an error is retried per
+	// axis; only the immutable stored result is memoised.
+	if cache != nil && err == nil {
+		cache[resultID] = carryResultCacheEntry{stored: stored}
 	}
 	return stored, err
 }

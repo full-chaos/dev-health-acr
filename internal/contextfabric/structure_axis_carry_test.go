@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -438,4 +439,214 @@ func TestKindCarry_ThisTurnsOwnReceiptWinsOverACarriedKind(t *testing.T) {
 	if got := effectiveConfirmedKind(nil, kindCarryResult{Outcome: KindCarryMissNoReference}); got != nil {
 		t.Fatalf("effectiveConfirmedKind(no own receipt, miss) = %#v, want nil", got)
 	}
+}
+
+// flakyResultStore fails the FIRST Get of a given result id and succeeds on
+// every later one -- the transient-failure shape the per-request load memo
+// must not freeze in place.
+type flakyResultStore struct {
+	staticResultStore
+	failed map[string]bool
+	calls  int
+}
+
+func (s *flakyResultStore) Get(ctx context.Context, principal storage.Principal, resultID string) (StoredInvestigationResult, error) {
+	s.calls++
+	if s.failed == nil {
+		s.failed = map[string]bool{}
+	}
+	if !s.failed[resultID] {
+		s.failed[resultID] = true
+		return StoredInvestigationResult{}, errors.New("transient store failure")
+	}
+	return s.staticResultStore.Get(ctx, principal, resultID)
+}
+
+// TestCarryResultCache_DoesNotMemoiseFailures is codex round 1's memo finding.
+// Caching the error would replay the FIRST axis's transient failure to the
+// second, so one axis's miss would suppress the other's hit -- contradicting
+// the rule this mechanism states about the two axes being independent.
+// InvestigationResultStore.Get promises nothing about error stability within a
+// request, so only successful, immutable reads may be memoised.
+func TestCarryResultCache_DoesNotMemoiseFailures(t *testing.T) {
+	t.Parallel()
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_turn_a"
+	priorResult.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+		confirmedKindEntry(contractsv1.ContextFabricSubjectTeam, "result_turn_zero", "kindr_turn_zero_01"),
+	}
+	store := &flakyResultStore{staticResultStore: staticResultStore{
+		results: map[string]InvestigationResult{"result_turn_a": priorResult},
+	}}
+	engine := buildCarryTestEngine(t, store)
+	ctx := withCarryResultCache(context.Background())
+
+	request := validInvestigationRequest()
+	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_turn_a", ReceiptID: "candr_turn_a_01"}}
+
+	// First axis: the store fails, so this axis correctly misses.
+	first := engine.resolveCarriedKind(ctx, acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	if first.Outcome != KindCarryMissUnloadable {
+		t.Fatalf("first attempt Outcome = %q, want %q", first.Outcome, KindCarryMissUnloadable)
+	}
+	// Second axis, SAME request context: the failure must not have been
+	// memoised, so this load reaches the store again and succeeds.
+	second := engine.resolveCarriedKind(ctx, acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	if second.Outcome != KindCarryHit || second.Kind != contractsv1.ContextFabricSubjectTeam {
+		t.Fatalf("second attempt = %#v, want a hit carrying team: a transient failure must not be frozen into the memo", second)
+	}
+	if store.calls != 2 {
+		t.Fatalf("store.calls = %d, want 2 (the failure retried, the success then memoised)", store.calls)
+	}
+	// Third attempt proves the SUCCESS is memoised -- the memo still does its job.
+	if third := engine.resolveCarriedKind(ctx, acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}); third.Outcome != KindCarryHit {
+		t.Fatalf("third attempt = %#v, want a hit", third)
+	}
+	if store.calls != 2 {
+		t.Fatalf("store.calls = %d after a third attempt, want still 2: a successful read must be memoised", store.calls)
+	}
+}
+
+// TestResolveCarriedKind_FailsClosedWhenADepthCouldNotBeFullyScanned is codex
+// round 1's finding 2. The conflict check can only see candidates it actually
+// visited, so a hit found alongside a sibling that could NOT be read is a hit
+// whose uniqueness is unproven -- the unread sibling may carry a different
+// kind. Returning it would resolve an ambiguity to a value, which is the one
+// thing this mechanism must never do.
+func TestResolveCarriedKind_FailsClosedWhenADepthCouldNotBeFullyScanned(t *testing.T) {
+	t.Parallel()
+	good := validInvestigationResult()
+	good.ResultID = "result_readable"
+	good.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+		confirmedKindEntry(contractsv1.ContextFabricSubjectTeam, "result_turn_zero", "kindr_turn_zero_01"),
+	}
+	// The sibling at the SAME depth is refused by the epoch taint gate, so its
+	// kind is never read. It is deliberately given a DIFFERENT kind to make
+	// the stakes concrete: if this test ever goes green while returning a hit,
+	// the engine answered under `team` while an unread sibling said `project`.
+	stale := validInvestigationResult()
+	stale.ResultID = "result_stale_sibling"
+	stale.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+		confirmedKindEntry(contractsv1.ContextFabricSubjectProject, "result_turn_zero", "kindr_turn_zero_02"),
+	}
+	store := &perResultEpochStore{
+		staticResultStore: staticResultStore{results: map[string]InvestigationResult{
+			"result_readable": good, "result_stale_sibling": stale,
+		}},
+		epochs: map[string]int64{"result_readable": 0, "result_stale_sibling": 7},
+	}
+	engine := buildCarryTestEngine(t, store)
+
+	request := validInvestigationRequest()
+	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_readable", ReceiptID: "candr_readable_01"}}
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_stale_sibling", ReceiptID: "kindr_stale_01"}}
+
+	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	if got.Outcome == KindCarryHit {
+		t.Fatalf("resolveCarriedKind() = %#v, want a miss: a depth with an unreadable sibling cannot prove the hit is unique", got)
+	}
+	if got.Outcome != KindCarryMissStaleGraphEpoch {
+		t.Fatalf("resolveCarriedKind().Outcome = %q, want %q (what truncated the scan)", got.Outcome, KindCarryMissStaleGraphEpoch)
+	}
+	if got.Kind != "" {
+		t.Fatalf("resolveCarriedKind().Kind = %q, want empty", got.Kind)
+	}
+}
+
+// perResultEpochStore reports a different GraphEpoch per result id, so one
+// sibling can pass the taint gate while another is refused.
+type perResultEpochStore struct {
+	staticResultStore
+	epochs map[string]int64
+}
+
+func (s *perResultEpochStore) Get(ctx context.Context, principal storage.Principal, resultID string) (StoredInvestigationResult, error) {
+	stored, err := s.staticResultStore.Get(ctx, principal, resultID)
+	if err != nil {
+		return stored, err
+	}
+	if epoch, ok := s.epochs[resultID]; ok {
+		stored.GraphEpoch = &epoch
+	}
+	return stored, nil
+}
+
+// TestKindCarry_IsDisclosedOnTheClassDefaultWindowGate is codex round 1's
+// finding 1. On the class-default window path the request never reaches a
+// decisive resolution -- it returns through the gate's own terminal -- but the
+// carried kind HAS already narrowed the offers-only pool that shapes what the
+// caller is offered. A result that omitted the carry entry would let an
+// inherited value change the offer set while telling the caller nothing about
+// it, which is the silent inheritance this whole mechanism exists to prevent.
+//
+// The fixture deliberately gives the prior result NO carriable window, so the
+// window carry misses, the effective window stays inferred_default, and the
+// gate fires -- which is the only way to reach that terminal.
+func TestKindCarry_IsDisclosedOnTheClassDefaultWindowGate(t *testing.T) {
+	t.Parallel()
+	team := SubjectRef{Kind: SubjectTeam, CanonicalID: "team_ops", Label: "Ops Team"}
+
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_turn_two"
+	priorResult.Status = InvestigationClarificationRequired
+	priorResult.EffectiveEvidenceWindow = nil // nothing to carry on the window axis
+	priorResult.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+		confirmedKindEntry(contractsv1.ContextFabricSubjectTeam, "result_turn_one", "kindr_turn_one_01"),
+	}
+	priorResult.SubjectResolution = SubjectResolution{
+		Candidates: []SubjectCandidate{{
+			ReceiptID: "receipt_turn_two_candidate", Subject: team, State: ResolutionCommitted,
+			MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 1,
+		}},
+		Committed: []SubjectRef{},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{"result_turn_two": priorResult}}
+	telemetry := &recordingTelemetry{}
+	graph := &kindRecordingGraphReader{graphReaderStub{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		context:    emptyGraphContext(),
+	}, nil}
+
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: &countingInterpreter{interpretation: bootstrapInterpretation()},
+		Graph:       graph,
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			t.Fatal("ReadFacts must not run: the class-default gate returns before any fact read")
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			t.Fatal("Synthesize must not run: the class-default gate returns before synthesis")
+			return InvestigationResult{}, nil
+		}),
+		Results: store, Telemetry: telemetry,
+	}, EngineOptions{
+		ServiceVersion: "structure-axis-carry-gate-test",
+		Now:            func() time.Time { return time.Date(2026, 9, 3, 20, 0, 0, 0, time.UTC) },
+		NewResultID:    func() string { return "result_turn_three" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	request := validInvestigationRequest() // no EvidenceWindow: the class default gates it
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_turn_two", ReceiptID: "receipt_turn_two_candidate"}}
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(telemetry.kindCarries) != 1 || telemetry.kindCarries[0].outcome != KindCarryHit {
+		t.Fatalf("telemetry.kindCarries = %#v, want exactly one hit -- without a carry this test proves nothing", telemetry.kindCarries)
+	}
+	want := contractsv1.ContextFabricConfirmedStructureEntry{
+		Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam),
+		Source: contractsv1.ContextFabricStructureSourceCarried, PriorResultID: "result_turn_two",
+		Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+	}
+	for _, entry := range result.ConfirmedStructure {
+		if entry == want {
+			return
+		}
+	}
+	t.Fatalf("ConfirmedStructure = %#v, want an entry %#v: the gate's own terminal must disclose a carry that shaped its offers", result.ConfirmedStructure, want)
 }
