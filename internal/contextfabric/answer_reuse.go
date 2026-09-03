@@ -650,7 +650,15 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// digest (from the original synthesis) is exactly what a reuse hit is
 	// for: it survives on the served row without this recheck needing to
 	// reproduce it.
-	resolution, _, _, _, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding, nil, nil)
+	// NO FRAME on the reuse recheck, deliberately. This call asks only
+	// "are the stored answer's subjects still resolvable and still
+	// authorized for THIS principal" -- it re-resolves a PRIOR turn's
+	// subjects, and that turn's frame is not this turn's. Supplying the
+	// current frame would hint the recheck's pool toward kinds the stored
+	// answer was never about; supplying a reconstructed one would be the
+	// re-derivation bar 5 forbids. A nil frame yields no kind hints, which
+	// is the pre-seam-7 behaviour of this call unchanged.
+	resolution, _, _, _, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding, nil, nil, nil)
 	if err != nil {
 		return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization}
 	}

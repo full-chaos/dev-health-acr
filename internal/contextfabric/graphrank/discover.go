@@ -269,11 +269,11 @@ func SortEdgesByRelevance(edges []CandidateEdge) []CandidateEdge {
 // authzDropped -- codex round-1 P2, reproduced: a "which teams" cohort with
 // zero teams but one unauthorized repository node previously reported
 // authzDropped=1 even though no team was ever denied.
-func DiscoveredCohort(principal storage.Principal, discovery contextfabric.GraphDiscoveryRequest, nodes []CandidateNode, isInternal func(contextfabric.SubjectRef) bool) (*contextfabric.Cohort, int, int) {
-	if discovery.Interpretation.Shape != contextfabric.ShapeDiscoveredCohort && discovery.Interpretation.Shape != contextfabric.ShapeExplicitCohort {
-		return nil, 0, 0
+func DiscoveredCohort(principal storage.Principal, discovery contextfabric.GraphDiscoveryRequest, nodes []CandidateNode, isInternal func(contextfabric.SubjectRef) bool) (*contextfabric.Cohort, int, int, CohortKindBasis) {
+	kind, basis := cohortKindFromFrame(discovery.Frame)
+	if basis != CohortKindFromFrameMemberKind {
+		return nil, 0, 0, basis
 	}
-	kind := interpretedCohortKind(discovery.Interpretation)
 	members := make([]contextfabric.CohortMember, 0)
 	seen := make(map[string]struct{})
 	authzDropped := 0
@@ -306,27 +306,13 @@ func DiscoveredCohort(principal storage.Principal, discovery contextfabric.Graph
 		}
 	}
 	if len(members) == 0 {
-		return nil, authzDropped, kindScopedAuthzDropped
+		return nil, authzDropped, kindScopedAuthzDropped, basis
 	}
 	return &contextfabric.Cohort{
 		Kind: kind, Members: members, Exclusions: []contextfabric.CohortExclusion{},
 		Rationale: "Subjects were discovered from the authorized Context Fabric graph using the user's open-ended cohort question.",
 		Complete:  len(members) < discovery.Request.Options.MaxCohortMembers, Truncated: len(members) >= discovery.Request.Options.MaxCohortMembers,
-	}, authzDropped, kindScopedAuthzDropped
-}
-
-func interpretedCohortKind(interpreted contextfabric.InterpretedQuestion) contextfabric.SubjectKind {
-	values := append([]string{interpreted.RequestedJudgment}, interpreted.SubjectTerms...)
-	for _, value := range values {
-		lower := strings.ToLower(value)
-		if strings.Contains(lower, "project") || strings.Contains(lower, "initiative") {
-			return contextfabric.SubjectProject
-		}
-		if strings.Contains(lower, "team") || strings.Contains(lower, "group") {
-			return contextfabric.SubjectTeam
-		}
-	}
-	return contextfabric.SubjectTeam
+	}, authzDropped, kindScopedAuthzDropped, basis
 }
 
 func edgeEpistemicStatus(edge ResolvedEdge) contextfabric.EpistemicStatus {

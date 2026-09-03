@@ -501,6 +501,20 @@ type GraphTelemetry interface {
 	// downstream garbled clarification, never the gate decision that
 	// produced it.
 	RecordCohortExactNameCensusGate(ctx context.Context, orgID string, admitted bool, basis CohortExactNameCensusBasis)
+	// RecordCohortKindBasis (CHAOS-4736, seam 7) reports what decided the
+	// discovered cohort's KIND for one DiscoverContext call, or what
+	// prevented a cohort from being discovered at all.
+	//
+	// Emitted on EVERY call to DiscoveredCohort, admitted or not. Before
+	// seam 7 the kind came from a substring match over model prose that
+	// could not fail -- it always returned something -- so there was
+	// nothing to report and no way to tell "no frame" from "no matching
+	// nodes". Deleting the matcher makes the refusals real, and a real
+	// refusal that is not counted is indistinguishable from an empty
+	// graph. `discovered` is carried beside the basis so the two questions
+	// ("what decided" and "did anything come back") are never conflated in
+	// the reader.
+	RecordCohortKindBasis(ctx context.Context, orgID string, basis graphrank.CohortKindBasis, discovered bool)
 }
 
 // VectorFenceResult is CHAOS-3890's reason enum for the AC-3778-7 read
@@ -564,6 +578,8 @@ func (NoopTelemetry) RecordCohortMembersAuthzDropped(context.Context, string, in
 func (NoopTelemetry) RecordEdgesFilteredByReason(context.Context, string, int, int, int)   {}
 func (NoopTelemetry) RecordCohortDeniedByAuthorization(context.Context, string, int)       {}
 func (NoopTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bool, CohortExactNameCensusBasis) {
+}
+func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, graphrank.CohortKindBasis, bool) {
 }
 
 // SlogTelemetry is the production GraphTelemetry: structured operational logs
@@ -753,6 +769,16 @@ func (t SlogTelemetry) RecordCohortDeniedByAuthorization(_ context.Context, orgI
 func (t SlogTelemetry) RecordCohortExactNameCensusGate(_ context.Context, orgID string, admitted bool, basis CohortExactNameCensusBasis) {
 	t.logger().Info("context_fabric: cohort exact-name census gate",
 		"org_id", orgID, "admitted", admitted, "basis", string(basis))
+}
+
+// RecordCohortKindBasis logs at Info: every outcome here is an ordinary,
+// expected decision, including the refusals. A frame-absent turn is not a
+// degradation of this component -- it is this component correctly declining
+// to guess -- so it is reported at the same level as a successful discovery
+// and is distinguished by its basis, never by its log level.
+func (t SlogTelemetry) RecordCohortKindBasis(_ context.Context, orgID string, basis graphrank.CohortKindBasis, discovered bool) {
+	t.logger().Info("context_fabric: cohort kind basis",
+		"org_id", orgID, "basis", string(basis), "discovered", discovered)
 }
 
 func (c Config) validate() error {

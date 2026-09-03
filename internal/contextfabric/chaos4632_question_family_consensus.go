@@ -63,6 +63,25 @@ const (
 
 // QuestionFamilyOutcome is the resolver's whole verdict.
 type QuestionFamilyOutcome struct {
+	// Frame is the VALIDATED QuestionFrame this interpretation produced,
+	// nil when no frame reached validation.
+	//
+	// SEAM 7 CARRIES IT; NOTHING RE-DERIVES IT. Every retrieval consumer
+	// added by the seam-7 slice -- cohort discovery, the kind-hinted pool
+	// search, the exact-name census gate, cohort render intent and subject
+	// resolution -- reads the union off THIS pointer. The alternative,
+	// reconstructing a frame from the family or from the interpretation's
+	// flat fields at each site, is the exact defect the frame exists to
+	// remove: it would put a second, drifting derivation beside the
+	// authoritative one, and the sites would disagree the moment the
+	// tables moved. One validated object, carried, read many times.
+	//
+	// FrameObligations below is this frame's own Obligations slice. The two
+	// are kept in step by construction (both are set from the same receipt
+	// at the same point) and a test asserts they cannot drift; the slice is
+	// NOT removed here because the B8 shadow already reads it and a
+	// subtractive change to a shipped reader is not this slice's business.
+	Frame *QuestionFrame
 	// FrameObligations is the VALIDATED frame's derived obligation set for
 	// this interpretation, empty when no frame reached validation.
 	//

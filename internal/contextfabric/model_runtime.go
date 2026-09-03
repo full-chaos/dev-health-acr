@@ -1629,6 +1629,12 @@ func (r RuntimeQuestionInterpreter) recordFamilyResolution(ctx context.Context, 
 	// plan's registry-copied flags. Empty when no frame validated, which
 	// the shadow treats as "cannot measure" rather than "nothing required".
 	if receipt.QuestionFrame != nil && receipt.FrameOutcome == FrameValidationOutcomeValid {
+		// The frame itself and its obligation set leave this point
+		// TOGETHER, from the same receipt, in one branch. Setting them in
+		// two places is how the pair would drift; a test asserts the
+		// carried frame's Obligations equal FrameObligations exactly.
+		carried := *receipt.QuestionFrame
+		outcome.Frame = &carried
 		outcome.FrameObligations = append([]AnswerObligation(nil), receipt.QuestionFrame.Obligations...)
 	}
 	shadow := ShadowFamilyAgreement(receipt, outcome)

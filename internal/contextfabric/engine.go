@@ -1485,7 +1485,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// between here and there reads or alters it. A GraphReader that returns
 	// nil leaves every commit reading CommitBasisUnknown, which is the
 	// STRICT treatment (see CommitBasis).
-	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed))
+	// CARRIED, NOT RE-DERIVED (CHAOS-4736 bar 5): resolution gets this
+	// turn's validated frame so the kind-hinted pool search reads declared
+	// kinds instead of guessing at the question's words.
+	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed), familyOutcome.Frame)
 	if err != nil {
 		// CHAOS-4077: a never-projected org (ResolveSubjects queried a
 		// graph key that has never been created) degrades to the SAME
@@ -1593,6 +1596,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
 		Request: graphRequest, Interpretation: interpretation, Resolution: resolution, Binding: binding,
 		ScopeAnchorResolved: scopeAnchorResolved(familyOutcome),
+		// CARRIED, NOT RE-DERIVED (CHAOS-4736 bar 5): the frame comes off
+		// the family outcome this turn's interpretation already produced.
+		// Nothing here reconstructs a frame from the family, from Shape or
+		// from the interpretation's flat term fields.
+		Frame: familyOutcome.Frame,
 	})
 	if err != nil {
 		return InvestigationResult{}, stageError(StageGraph, fmt.Errorf("discover graph context: %w", err))
