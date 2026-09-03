@@ -35,73 +35,20 @@ jobs:
   # than nine confusing ones.
   mirror-preflight:
     runs-on: ubuntu-latest
-    # Narrower than the workflow default's implicit contents+packages: this
-    # job also needs `actions: read` to see the self-hosted sibling run's
-    # job list (the wait step below).
-    permissions:
-      contents: read
-      actions: read
-      packages: read
     steps:
-      # actions/checkout v7.0.0. Unconditional, and FIRST -- the wait step
-      # below runs scripts/ci/self-hosted-attempt.sh out of this workspace.
+      # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
-      # Runner-routing contract v1.5.1: this job is also the GitHub-hosted
-      # fallback leg for the self-hosted attempt `mirror-preflight-self-hosted`
-      # in the sibling `ci-self-hosted` workflow -- same job that already
-      # gates build-self-hosted there, reused here as this leg's attempt too
-      # (one self-hosted run, polled by two independent dependents).
-      - name: Wait for the self-hosted attempt, or claim the work here
-        id: wait
-        if: >-
-          vars.SELF_HOSTED_RUNNERS == 'enabled'
-          && (github.event_name != 'pull_request'
-          || github.event.pull_request.head.repo.full_name == github.repository)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          EVENT: ${{ github.event_name }}
-          REF: ${{ github.head_ref || github.ref_name }}
-          WORKFLOW_NAME: ci-self-hosted
-          WORKFLOW_PATH: .github/workflows/ci-self-hosted.yml
-          JOB_NAME: mirror-preflight-self-hosted
-          QUEUE_TIMEOUT_MINUTES: 5
-          # Kept in sync by hand with mirror-preflight-self-hosted's
-          # timeout-minutes (15) in ci-self-hosted.yml, plus the script's
-          # own 3-minute reporting-lag buffer: 12 + 3 = 15.
-          ATTEMPT_TIMEOUT_MINUTES: 12
-        run: scripts/ci/self-hosted-attempt.sh wait
-      - name: Decide whether this leg owns the real work
-        id: own
-        env:
-          OUTCOME: ${{ steps.wait.outputs.outcome }}
-        run: |
-          set -euo pipefail
-          if [ -z "${OUTCOME}" ] || [ "${OUTCOME}" = unclaimed ]; then
-            echo "run_here=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "run_here=false" >>"$GITHUB_OUTPUT"
-            printf 'self-hosted attempt reached a terminal state (%s); not repeating its work here\n' "${OUTCOME}"
-          fi
-      - name: Fail this leg if the self-hosted attempt itself failed
-        if: steps.own.outputs.run_here == 'false' && steps.wait.outputs.outcome == 'claimed-failure'
-        run: |
-          echo "the self-hosted attempt (mirror-preflight-self-hosted in the ci-self-hosted workflow) did not succeed; failing this leg so the required gate reflects it" >&2
-          exit 1
       # docker/login-action v4.5.1. Read-only use here (imagetools inspect),
       # but the mirrored packages' visibility is not guaranteed public, so
       # this authenticates the same way every pulling job below does.
       - name: Log in to GitHub Container Registry
-        if: steps.own.outputs.run_here == 'true'
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify every mirrored image is resolvable before any job pulls one
-        if: steps.own.outputs.run_here == 'true'
         run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
 
   scripts:
@@ -710,62 +657,12 @@ jobs:
 
   contracts:
     runs-on: ubuntu-latest
-    # Narrower than the workflow default's implicit contents+packages: this
-    # job also needs `actions: read` to see the self-hosted sibling run's
-    # job list (the wait step below).
-    permissions:
-      contents: read
-      actions: read
     steps:
-      # actions/checkout v7.0.0. Unconditional, and FIRST -- the wait step
-      # below runs scripts/ci/self-hosted-attempt.sh out of this workspace.
+      # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
-      # Runner-routing contract v1.5.1: this job is also the GitHub-hosted
-      # fallback leg for the self-hosted attempt `contracts-self-hosted` in
-      # the sibling `ci-self-hosted` workflow -- same shape as
-      # race-devhealthschema.
-      - name: Wait for the self-hosted attempt, or claim the work here
-        id: wait
-        if: >-
-          vars.SELF_HOSTED_RUNNERS == 'enabled'
-          && (github.event_name != 'pull_request'
-          || github.event.pull_request.head.repo.full_name == github.repository)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          EVENT: ${{ github.event_name }}
-          REF: ${{ github.head_ref || github.ref_name }}
-          WORKFLOW_NAME: ci-self-hosted
-          WORKFLOW_PATH: .github/workflows/ci-self-hosted.yml
-          JOB_NAME: contracts-self-hosted
-          QUEUE_TIMEOUT_MINUTES: 5
-          # Kept in sync by hand with contracts-self-hosted's timeout-minutes
-          # (15) in ci-self-hosted.yml, plus the script's own 3-minute
-          # reporting-lag buffer: 12 + 3 = 15.
-          ATTEMPT_TIMEOUT_MINUTES: 12
-        run: scripts/ci/self-hosted-attempt.sh wait
-      - name: Decide whether this leg owns the real work
-        id: own
-        env:
-          OUTCOME: ${{ steps.wait.outputs.outcome }}
-        run: |
-          set -euo pipefail
-          if [ -z "${OUTCOME}" ] || [ "${OUTCOME}" = unclaimed ]; then
-            echo "run_here=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "run_here=false" >>"$GITHUB_OUTPUT"
-            printf 'self-hosted attempt reached a terminal state (%s); not repeating its work here\n' "${OUTCOME}"
-          fi
-      - name: Fail this leg if the self-hosted attempt itself failed
-        if: steps.own.outputs.run_here == 'false' && steps.wait.outputs.outcome == 'claimed-failure'
-        run: |
-          echo "the self-hosted attempt (contracts-self-hosted in the ci-self-hosted workflow) did not succeed; failing this leg so the required gate reflects it" >&2
-          exit 1
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
-        if: steps.own.outputs.run_here == 'true'
         with:
           go-version: '1.27.0'
           cache: true
@@ -773,13 +670,10 @@ jobs:
       # worktree: the script refuses to start unless `git status --porcelain`
       # is empty.
       - name: Verify canonical receipts
-        if: steps.own.outputs.run_here == 'true'
         run: make canonical-receipts
       - name: Verify wire contracts
-        if: steps.own.outputs.run_here == 'true'
         run: make contract-test
       - name: Verify CodeGraph contract
-        if: steps.own.outputs.run_here == 'true'
         run: make codegraph-contract
       # CHAOS-4100. Runs HERE, not only in `make verify`: this job is what
       # actually executes script gates in CI, and a target that exists only
@@ -789,10 +683,8 @@ jobs:
       # which is the exact shape that broke it, and the shape no developer
       # machine reproduces.
       - name: Verify trial shard layout
-        if: steps.own.outputs.run_here == 'true'
         run: make shard-plan
       - name: Verify full-stack offline contract
-        if: steps.own.outputs.run_here == 'true'
         run: make fullstack-contract
       # CHAOS-3273 L3: the endpoint-profile gate (guardrail G-1) validates
       # endpoint-profiles.acr.json against a closed vocabulary OWNED BY OPS
@@ -811,7 +703,6 @@ jobs:
       # token.
       - name: Read the pinned ops-owned contract commit
         id: ops-pin
-        if: steps.own.outputs.run_here == 'true'
         run: echo "sha=$(tr -d '[:space:]' < ci/ops-contract.pin)" >> "$GITHUB_OUTPUT"
       # A raw actions/checkout failure on an unresolvable ref reads as a
       # cryptic git error with no context. Probe first with a message that
@@ -831,7 +722,6 @@ jobs:
       # shape is checked BEFORE the ref is resolved: a branch or tag name
       # is rejected on its face, not by whether it happens to resolve.
       - name: Verify the pin names an immutable commit, not a floating ref
-        if: steps.own.outputs.run_here == 'true'
         run: |
           set -euo pipefail
           sha="${{ steps.ops-pin.outputs.sha }}"
@@ -883,7 +773,6 @@ jobs:
       # non-cone mode: fetches exactly the two listed file paths, not a
       # directory tree.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        if: steps.own.outputs.run_here == 'true'
         with:
           repository: full-chaos/dev-health-ops
           ref: ${{ steps.ops-pin.outputs.sha }}
@@ -902,7 +791,6 @@ jobs:
       # needs its schema present, so a missing entry here would turn a real
       # check back into an absent one.
       - name: Verify endpoint-profile inventory against the pinned ops contract
-        if: steps.own.outputs.run_here == 'true'
         env:
           ACR_ENDPOINT_PROFILE_SCHEMA: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/endpoint-profile.schema.json
           ACR_CREDENTIAL_CLASSES: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/credential-classes.json
