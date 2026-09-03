@@ -545,6 +545,33 @@ esac
 assert_eq 'that case genuinely exercised the result phase final read' \
   'yes' "$late_reached"
 
+# Contract v1.4's F3 clause ends: "if that last read reveals a lost runner, it
+# resolves via F6, not a bare timeout failure." That is the one cell where two
+# clauses intersect, and mapping the clauses to tests is what showed it had
+# none -- the F3 tests and the F6 tests each exercise their own clause and meet
+# only in the code. The implementation conforms because the loop body and the
+# final read share `result_phase_outcome`, so F6's handling is reachable from
+# both; but a conformance that holds only because of a refactor done for an
+# unrelated reason is exactly the kind that regresses silently. Pin it.
+#
+# Poll accounting, measured: 1 first look (queued), 2 queue phase (in_progress,
+# hands straight over), 3..54 the result loop, 55 the result phase's final read
+# -- which is where the lost runner appears.
+mkdir -p "$tmpdir/jobs-lost-at-deadline"
+cp "$tmpdir/jobs-queued.json" "$tmpdir/jobs-lost-at-deadline/1.json"
+for i in $(seq 2 54); do cp "$tmpdir/jobs-running.json" "$tmpdir/jobs-lost-at-deadline/$i.json"; done
+cp "$tmpdir/jobs-queued.json" "$tmpdir/jobs-lost-at-deadline/55.json"
+assert_eq 'a lost runner revealed only by the result final read resolves via F6, not a timeout failure' \
+  'unclaimed' "$(run_wait "$tmpdir/runs-match.json" "$tmpdir/jobs-lost-at-deadline")"
+
+lost_trace="$(run_wait_verbose "$tmpdir/runs-match.json" "$tmpdir/jobs-lost-at-deadline")"
+case "$lost_trace" in
+  *"result phase (final read at the deadline)"*) lost_reached=yes ;;
+  *) lost_reached=no ;;
+esac
+assert_eq 'that F3-F6 case genuinely reached the result phase final read' \
+  'yes' "$lost_reached"
+
 # ---------------------------------------------------------------------------
 # 4. cross-file agreement between ci.yml and ci-self-hosted.yml
 # ---------------------------------------------------------------------------
