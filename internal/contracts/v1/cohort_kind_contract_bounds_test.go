@@ -55,8 +55,8 @@ const (
 // and TestCohortValidateAcceptsEveryPublishedCohortKind then passes over the
 // smaller set -- verified by mutation, not assumed. Two assertions close that
 // direction, so the pair is complete without re-coupling the oracle to the Go
-// side: TestEveryPublishedCohortKindEnumAgrees below fails because the other
-// four published sites still carry the full vocabulary, and
+// side: TestEveryPublishedSubjectKindEnumAgrees below fails because the other
+// published sites still carry the full vocabulary, and
 // TestCohortKindAuthorityHasNotNarrowed fails because the authority no longer
 // matches the Go type. Both were confirmed red under that mutation.
 func publishedCohortKinds(t *testing.T) []string {
@@ -245,24 +245,76 @@ func TestCohortValidateRefusesKindOutsideThePublishedVocabulary(t *testing.T) {
 	for _, value := range published {
 		publishedSet[value] = struct{}{}
 	}
-	const unpublished ContextFabricSubjectKind = "squad"
-	if _, exists := publishedSet[string(unpublished)]; exists {
-		t.Fatalf("%q is published, so it cannot serve as the out-of-vocabulary control", unpublished)
+	// MANY values, not one. A single literal is not a vocabulary check: a
+	// predicate that special-cases exactly the one value the test uses
+	// satisfies it while admitting everything else. Round 1 of review
+	// demonstrated this -- replacing the whole closed-vocabulary predicate
+	// with `c.Kind == "squad"` (the sole value this test used) left all six
+	// assertions in this file green while `department`, `guild` and every
+	// other unpublished string validated.
+	//
+	// The values below vary along the axes a narrow guard is most likely to
+	// get wrong: an ordinary unknown noun, a plural of a real kind, a case
+	// variant, a whitespace variant, a near-miss on a real kind's spelling,
+	// and the empty string.
+	unpublished := []ContextFabricSubjectKind{
+		"squad", "department", "guild",
+		"repositories", "Team", "team ", " team",
+		"work-item", "workitem", "",
 	}
 
-	cohort := validCohortOfKind(unpublished)
-	err := cohort.Validate()
-	if err == nil {
-		t.Fatal("Validate() = nil for a kind outside the published vocabulary, want a refusal")
-	}
-	if !strings.Contains(err.Error(), "cohort violates v1 bounds") {
-		t.Fatalf("Validate() = %q, want the cohort bound's own message -- a refusal from a different rule would prove nothing about the kind bound", err)
+	// EMPTY, non-nil members. The cohort-kind conjunct is evaluated before
+	// the member loop, but a member whose Subject.Kind mirrors an
+	// out-of-vocabulary cohort kind would ALSO be rejected by
+	// ContextFabricSubjectRef.Validate -- so a fixture carrying members
+	// cannot distinguish "the cohort kind was refused" from "a member's
+	// subject kind was refused". Zero members removes that second rule from
+	// the fixture entirely, leaving the cohort-kind bound as the only rule
+	// that can fire.
+	//
+	// This rests on empty cohorts being contract-valid, which is asserted
+	// directly below rather than assumed: `members` carries no minItems in
+	// context_fabric_common.v1, and validate() only requires it to be
+	// non-nil. If that ever changes, this test fails on the control rather
+	// than silently proving nothing.
+	emptyCohortOfKind := func(kind ContextFabricSubjectKind) ContextFabricCohort {
+		return ContextFabricCohort{
+			Kind:      kind,
+			Members:   []ContextFabricCohortMember{},
+			Rationale: "no member of the declared kind was authorized by the window",
+			Complete:  true,
+		}
 	}
 
-	// Attribution: the ONLY difference is the kind.
-	repaired := validCohortOfKind(ContextFabricSubjectTeam)
-	if err := repaired.Validate(); err != nil {
-		t.Fatalf("the control fixture is invalid for a reason other than its kind: %v -- the refusal above is therefore unattributable", err)
+	// Attribution control, and the stated assumption's own proof: the same
+	// shape with a PUBLISHED kind must validate. If it does not, every
+	// refusal below is unattributable and this test proves nothing.
+	control := emptyCohortOfKind(ContextFabricSubjectTeam)
+	if err := control.Validate(); err != nil {
+		t.Fatalf("the empty-cohort control is invalid for a reason other than its kind: %v -- every refusal below is therefore unattributable, and the assumption that empty cohorts are contract-valid no longer holds", err)
+	}
+
+	checked := 0
+	for _, kind := range unpublished {
+		if _, exists := publishedSet[string(kind)]; exists {
+			t.Errorf("%q is published, so it cannot serve as an out-of-vocabulary control", kind)
+			continue
+		}
+		checked++
+		err := emptyCohortOfKind(kind).Validate()
+		if err == nil {
+			t.Errorf("Validate() = nil for unpublished kind %q, want a refusal", kind)
+			continue
+		}
+		if !strings.Contains(err.Error(), "cohort violates v1 bounds") {
+			t.Errorf("Validate() for unpublished kind %q = %q, want the cohort bound's own message -- a refusal from a different rule would prove nothing about the kind bound", kind, err)
+		}
+	}
+	if checked != len(unpublished) {
+		t.Fatalf("checked %d of %d out-of-vocabulary values -- the loop did not reach them all", checked, len(unpublished))
+	}
+	if checked < 2 {
+		t.Fatal("a single out-of-vocabulary value cannot distinguish a vocabulary check from a special case for that one value")
 	}
 }
 
@@ -301,16 +353,23 @@ func TestProjectedCohortValidateAcceptsEveryPublishedCohortKind(t *testing.T) {
 	}
 }
 
-// TestEveryPublishedCohortKindEnumAgrees sweeps EVERY canonical schema
-// document for a cohort-kind enum and requires each to publish the same
+// TestEveryPublishedSubjectKindEnumAgrees sweeps EVERY canonical schema
+// document for a subject-kind enum and requires each to publish the same
 // vocabulary.
 //
-// The sites are found by WALKING the documents, not from a list written here:
-// a list would be correct on the day it was written and silently incomplete
-// afterwards, which is the enumeration failure this program has hit
-// repeatedly. A new document carrying a cohort is covered the moment it
-// lands.
-func TestEveryPublishedCohortKindEnumAgrees(t *testing.T) {
+// It is named for SUBJECT kinds rather than cohort kinds because that is the
+// population it actually covers. Cohort, ProjectedCohort, SubjectRef,
+// SubjectHint and the standalone SubjectKind defs all publish one vocabulary
+// on one axis, and a narrowing at any of them contradicts the rest. Scoping
+// the sweep to nodes whose pointer spells "Cohort" was round 1's finding: it
+// covered 5 of the 19 sites that publish this vocabulary and reported the
+// subset as the population.
+//
+// The sites are found by WALKING the documents and testing each enum's
+// CONTENT, not from a list written here and not from a node's name: a list
+// would be correct on the day it was written and silently incomplete
+// afterwards, and a name is not the population.
+func TestEveryPublishedSubjectKindEnumAgrees(t *testing.T) {
 	t.Parallel()
 	want := publishedCohortKinds(t)
 	wantSet := make(map[string]struct{}, len(want))
@@ -338,16 +397,7 @@ func TestEveryPublishedCohortKindEnumAgrees(t *testing.T) {
 			// selector: an enum that has DRIFTED NARROW is exactly what this
 			// test must catch, and an equality selector would filter it out
 			// of its own population.
-			overlap := 0
-			for _, value := range values {
-				if _, ok := wantSet[value]; ok {
-					overlap++
-				}
-			}
-			if overlap == 0 {
-				return
-			}
-			if !strings.Contains(pointer, "Cohort") {
+			if !publishesSubjectKinds(values, wantSet) {
 				return
 			}
 			sites = append(sites, site{document: name, pointer: pointer, values: values})
@@ -355,7 +405,22 @@ func TestEveryPublishedCohortKindEnumAgrees(t *testing.T) {
 	}
 
 	if len(sites) == 0 {
-		t.Fatalf("no cohort-kind enum was found across %d canonical schema documents -- the sweep proved nothing", len(schemas.documents))
+		t.Fatalf("no subject-kind enum was found across %d canonical schema documents -- the sweep proved nothing", len(schemas.documents))
+	}
+	// A FLOOR on the population, because the failure this sweep exists to
+	// catch is a selector that finds too FEW sites. Round 1 of review found
+	// exactly that: the selector used to require the literal string "Cohort"
+	// in the JSON pointer, which matched 5 of the 19 sites that actually
+	// publish this vocabulary, and a narrowed enum introduced at any of the
+	// other 14 passed unnoticed. A bare "len > 0" check would not have
+	// caught it, because 5 is greater than 0.
+	//
+	// Adding a schema that publishes the vocabulary raises this number and
+	// the pin moves in that commit, deliberately. Losing sites means the
+	// selector regressed.
+	const knownSubjectKindEnumSites = 19
+	if len(sites) < knownSubjectKindEnumSites {
+		t.Errorf("swept %d subject-kind enum sites, expected at least %d -- the selector has regressed and is covering a SUBSET of the publishers; if a schema was deliberately removed, lower this pin in that commit and say so", len(sites), knownSubjectKindEnumSites)
 	}
 	sort.Slice(sites, func(i, j int) bool {
 		if sites[i].document != sites[j].document {
@@ -375,7 +440,7 @@ func TestEveryPublishedCohortKindEnumAgrees(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("cohort-kind enum sites swept: %d across %d canonical documents", len(sites), len(schemas.documents))
+	t.Logf("subject-kind enum sites swept: %d across %d canonical documents", len(sites), len(schemas.documents))
 }
 
 // TestOpenAPIPublishesNoIndependentSubjectKindVocabulary pins the OpenAPI
@@ -437,6 +502,83 @@ func TestOpenAPIPublishesNoIndependentSubjectKindVocabulary(t *testing.T) {
 		t.Fatalf("%s now inlines a subject-kind vocabulary at %d site(s): %s -- OpenAPI must keep deriving the vocabulary through $ref, or it becomes another place it can drift", path, len(offenders), strings.Join(offenders, "; "))
 	}
 	t.Logf("OpenAPI derives its cohort vocabulary through %d $ref(s) into jsonschema/v1 and inlines none", refs)
+}
+
+// publishesSubjectKinds decides whether an enum is a publisher of the
+// subject-kind vocabulary, BY ITS CONTENT.
+//
+// The rule: a non-empty enum every one of whose members is a subject kind is
+// publishing that vocabulary, and must therefore publish all of it. An enum
+// that merely overlaps (a mixed vocabulary that happens to contain "team")
+// is not one, and is left alone.
+//
+// This replaces a selector that required the literal string "Cohort" in the
+// node's JSON pointer. That selector was keyed on a NOUN rather than on the
+// population it had to cover: it matched 5 sites while 19 documents' nodes
+// actually publish this vocabulary, so a narrowed enum introduced at any of
+// the other 14 -- or at any new node whose name nobody thought to spell
+// "Cohort" -- was excluded from the sweep before it was ever compared. Round
+// 1 of review demonstrated it with a `$defs/EntitySet/properties/kind` enum
+// restricted to ["repository"], which the sweep did not see.
+//
+// Measured when this was written: all 19 sites carry the full vocabulary and
+// none is deliberately narrow, so this predicate needs no exception list. If
+// a legitimately narrow publisher is ever added, it needs a declared
+// exception here with its reason -- not a quiet loosening of the predicate.
+func publishesSubjectKinds(values []string, vocabulary map[string]struct{}) bool {
+	if len(values) == 0 {
+		return false
+	}
+	for _, value := range values {
+		if _, ok := vocabulary[value]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// TestSubjectKindEnumSelectorIsNotKeyedOnANodeName is the positive control
+// for the selector above, and it is the regression guard for round 1's
+// finding.
+//
+// A sweep is only as good as its selector, and a selector's blind spot is
+// invisible from the sweep's own green result -- the sweep reported "5 sites"
+// with total confidence while missing 14. So the selector is tested directly,
+// against a node whose pointer deliberately contains no "Cohort" and no
+// "Subject": under the old name-keyed rule this case was invisible; under the
+// content-keyed rule it is caught.
+func TestSubjectKindEnumSelectorIsNotKeyedOnANodeName(t *testing.T) {
+	t.Parallel()
+	published := publishedCohortKinds(t)
+	vocabulary := make(map[string]struct{}, len(published))
+	for _, value := range published {
+		vocabulary[value] = struct{}{}
+	}
+
+	cases := []struct {
+		name   string
+		enum   []string
+		want   bool
+		reason string
+	}{
+		{"narrowed publisher at an unrelated node name", []string{"repository"}, true,
+			"round 1's witness: $defs/EntitySet/properties/kind, enum ['repository'] -- a real narrowing the name-keyed selector could not see"},
+		{"full vocabulary", published, true,
+			"the ordinary case"},
+		{"single published kind", []string{"team"}, true,
+			"a one-member narrowing is the most dangerous shape, not the least"},
+		{"mixed vocabulary that merely overlaps", []string{"team", "not_a_subject_kind"}, false,
+			"an enum containing a non-kind is a different vocabulary that happens to share a word"},
+		{"unrelated vocabulary", []string{"open", "closed"}, false,
+			"no overlap at all"},
+		{"empty enum", nil, false,
+			"nothing is published, so there is nothing to compare"},
+	}
+	for _, tc := range cases {
+		if got := publishesSubjectKinds(tc.enum, vocabulary); got != tc.want {
+			t.Errorf("publishesSubjectKinds(%v) = %v, want %v -- %s", tc.enum, got, tc.want, tc.reason)
+		}
+	}
 }
 
 // walkSchemaEnums visits every object node in a decoded JSON document,
