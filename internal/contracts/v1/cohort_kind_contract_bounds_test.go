@@ -48,6 +48,17 @@ const (
 // It deliberately does not consult ContextFabricSubjectKindVocabulary(): an
 // oracle that asks the Go side what to expect cannot detect the Go side being
 // wrong, which is the entire defect this file pins.
+//
+// THE LIMIT OF THAT CHOICE, stated because it is real and was measured rather
+// than reasoned about: an authority read at run time moves when the document
+// moves. Deleting a kind from $defs.Cohort.properties.kind narrows `want` too,
+// and TestCohortValidateAcceptsEveryPublishedCohortKind then passes over the
+// smaller set -- verified by mutation, not assumed. Two assertions close that
+// direction, so the pair is complete without re-coupling the oracle to the Go
+// side: TestEveryPublishedCohortKindEnumAgrees below fails because the other
+// four published sites still carry the full vocabulary, and
+// TestCohortKindAuthorityHasNotNarrowed fails because the authority no longer
+// matches the Go type. Both were confirmed red under that mutation.
 func publishedCohortKinds(t *testing.T) []string {
 	t.Helper()
 	root := moduleRootForParity(t)
@@ -151,6 +162,45 @@ func TestCohortValidateAcceptsEveryPublishedCohortKind(t *testing.T) {
 	if len(refused) > 0 {
 		t.Fatalf("ContextFabricCohort.Validate refuses %d of %d kinds the published schema %s advertises: %s",
 			len(refused), len(kinds), cohortKindSchemaPointer, strings.Join(refused, "; "))
+	}
+}
+
+// TestCohortKindAuthorityHasNotNarrowed guards the document this file trusts.
+//
+// Every other assertion here treats the published schema as the authority on
+// what the validator must accept. That is the right authority -- it is the
+// promise callers were given -- but it makes the document itself a place a
+// narrowing could hide: shrink the enum and the oracle shrinks with it.
+//
+// So the authority is itself pinned, against the Go closed vocabulary. This is
+// the ONE place in this file that consults ContextFabricSubjectKindVocabulary,
+// and it is not the oracle for any validator assertion; it exists so that a
+// silently narrowed promise fails here by name.
+//
+// TestPublishedEnumsMatchGoVocabularies (schema_go_field_parity_test.go) also
+// covers this document generically. The overlap is deliberate: that test's
+// scope is every bound enum in the tree and it can be re-scoped by work that
+// has nothing to do with cohorts, whereas this one fails with the cohort
+// bound's own name attached.
+func TestCohortKindAuthorityHasNotNarrowed(t *testing.T) {
+	t.Parallel()
+	published := publishedCohortKinds(t)
+
+	vocabulary := ContextFabricSubjectKindVocabulary()
+	want := make([]string, 0, len(vocabulary))
+	for _, kind := range vocabulary {
+		want = append(want, string(kind))
+	}
+	sort.Strings(want)
+
+	if len(published) != len(want) {
+		t.Fatalf("%s %s publishes %d kinds, but the Go closed vocabulary has %d: published=%v go=%v -- the authority this file reads its expectations from has drifted, so every other assertion in this file is measuring against the wrong set",
+			cohortKindSchemaDocument, cohortKindSchemaPointer, len(published), len(want), published, want)
+	}
+	for i := range want {
+		if published[i] != want[i] {
+			t.Fatalf("%s %s publishes %v, Go closed vocabulary is %v", cohortKindSchemaDocument, cohortKindSchemaPointer, published, want)
+		}
 	}
 }
 
