@@ -73,7 +73,7 @@ func (g graphReaderStub) ResolveInvestigationBinding(context.Context, storage.Pr
 	return ResolvedGraphBinding{GraphKey: "stub-key", Epoch: 0}, nil
 }
 
-func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection, *QuestionFrame) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	// CHAOS-4085: g.bases, nil unless the fixture set it -- see the field's
 	// own doc comment. Nil reads back as CommitBasisUnknown for every
 	// subject, the strict (must-be-affirmed) treatment. CHAOS-4087: nil
@@ -194,7 +194,7 @@ func (g *capturingGraphReader) ResolveInvestigationBinding(context.Context, stor
 	return ResolvedGraphBinding{GraphKey: "capturing-key", Epoch: g.bindingEpochs[index]}, nil
 }
 
-func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection, _ *QuestionFrame) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	g.resolveRequests = append(g.resolveRequests, request)
 	g.confirmedAnchors = append(g.confirmedAnchors, confirmedAnchor)
 	// CHAOS-4085: nil CommitBasisSet -- every commit this double returns reads
@@ -310,6 +310,10 @@ func TestNewEngineRequiresAllCoreCapabilities(t *testing.T) {
 // production code ever having a content-bearing telemetry sink to leak
 // through.
 type recordingTelemetry struct {
+	// planCarries records every applied carry verbatim -- the ONLY event
+	// that can carry family_source=carried, since the family-resolution
+	// line is sent before the carry runs.
+	planCarries                 []PlanCarryEvent
 	priorSubjectReceiptsSkipped []int
 	answerReuseOutcomes         []AnswerReuseOutcome
 	answerReuseContainment      []AnswerReuseContainmentEvent
@@ -653,6 +657,10 @@ func (r *recordingTelemetry) RecordRenderShapeSelection(_ context.Context, _ sto
 
 func (r *recordingTelemetry) RecordServerStatusShadow(_ context.Context, _ storage.Principal, event ServerStatusShadow) {
 	r.serverStatusShadows = append(r.serverStatusShadows, event)
+}
+
+func (r *recordingTelemetry) RecordPlanCarry(_ context.Context, _ storage.Principal, event PlanCarryEvent) {
+	r.planCarries = append(r.planCarries, event)
 }
 
 func (r *recordingTelemetry) RecordCohortRanked(_ context.Context, _ storage.Principal, event CohortRankedEvent) {
@@ -1856,7 +1864,7 @@ func (g *countingGraphReader) ResolveInvestigationBinding(context.Context, stora
 	return ResolvedGraphBinding{GraphKey: "counting-key", Epoch: 0}, nil
 }
 
-func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection, *QuestionFrame) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	g.resolveCalls++
 	// CHAOS-4085: nil CommitBasisSet -- every commit this double returns reads
 	// back as CommitBasisUnknown, the strict (must-be-affirmed) treatment.

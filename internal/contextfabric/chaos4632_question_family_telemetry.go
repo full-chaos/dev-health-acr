@@ -59,6 +59,18 @@ type QuestionFamilySampleRow struct {
 type QuestionFamilyResolutionEvent struct {
 	Family QuestionFamily
 	Source QuestionFamilySource
+	// Route is seam 7's (CHAOS-4736) routing decision for this
+	// interpretation: family_source = projected|precedence, the agreement
+	// class it was keyed on, the disposition that decided it, and whether
+	// the served family actually differs from what the precedence table
+	// alone would have served.
+	//
+	// THIS IS THE AXIS THE FLIP IS READ ON. "The projection now routes" is
+	// not a claim anyone should have to take on trust: every served answer
+	// carries which table decided it and why, so the rate of each
+	// disposition is countable per served answer rather than inferred from
+	// a deploy date.
+	Route FamilyRouteDecision
 	// SampleFamilies is the per-sample post-filter distribution: closed
 	// keys, counts only.
 	SampleFamilies map[QuestionFamily]int

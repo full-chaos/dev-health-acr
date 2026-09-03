@@ -217,7 +217,16 @@ type GraphReader interface {
 	// doc comment -- with the identical nil-is-safe guarantee: an absent
 	// digest reads back as the zero CommitDecisionDigest (CommitGate==""),
 	// the fail-closed "nothing recorded" value.
-	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error)
+	// The trailing *QuestionFrame is seam 7's (CHAOS-4736) carried frame,
+	// nil when none validated. It is a POSITIONAL PARAMETER rather than a
+	// context value deliberately: this package's own PlanAnswerInput doc
+	// states the rule ("a struct rather than a parameter list so that
+	// adding an input is a visible change to the stage's contract rather
+	// than a silently widened signature"), and a semantic input that
+	// decides which subject kinds resolution searches for must fail to
+	// compile when an implementation omits it, not disappear into a
+	// context the type checker cannot see.
+	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection, *QuestionFrame) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error)
 	DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error)
 }
 
@@ -385,6 +394,23 @@ type GraphDiscoveryRequest struct {
 	// DiscoverContext's own exact-name census gate for the one place this
 	// is read.
 	ScopeAnchorResolved bool `json:"-"`
+	// Frame is the VALIDATED QuestionFrame for this turn, carried from
+	// interpretation, nil when no frame validated.
+	//
+	// THIS IS SEAM 7's WHOLE POINT (CHAOS-4736, design §13.8b R1). Before
+	// it, the frame declared MemberKind and nothing read it: the cohort
+	// kind was decided by a substring match over RequestedJudgment +
+	// SubjectTerms that defaulted to `team` and could never return
+	// `repository`, and the cohort gate read Shape -- the field the stage-1
+	// design calls "the unstable variable". Both now read the union off
+	// this pointer.
+	//
+	// NIL IS NOT A FALLBACK TO THE OLD MATCHER, because the old matcher no
+	// longer exists. A turn whose frame did not validate discovers no
+	// cohort and says so in a closed-vocabulary basis; guessing a kind from
+	// prose is the behaviour this ticket deletes, and reintroducing it on
+	// the failure path would delete it in name only.
+	Frame *QuestionFrame `json:"-"`
 }
 
 // CanonicalFactReader is the typed, read-only boundary back to canonical Dev

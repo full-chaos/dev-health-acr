@@ -69,7 +69,11 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			name:    "interpretation system prompt",
 			version: DefaultInterpretationPromptVersion,
 			content: interpretationSystemPrompt,
-			digest:  "8aa150bad4a6ec166ce332ab33a29c4aca252fdff9fd817d0f91cc3b29dafe11",
+			// v11 -> v12 (CHAOS-4736, seam 7): the question_family ask and
+			// the family vocabulary list are REMOVED. See
+			// DefaultInterpretationPromptVersion's own doc comment for what
+			// changed and why a subtractive change still bumps the version.
+			digest: "4a65c994fbd5ea86800c8cb440d66b4f69828892313283f4e2eb6b69a698aa92",
 		},
 		{
 			name:    "synthesis system prompt",

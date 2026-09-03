@@ -69,7 +69,7 @@ func (a *Adapter) ResolveInvestigationBinding(ctx context.Context, principal sto
 	return contextfabric.ResolvedGraphBinding{GraphKey: key, Epoch: epoch}, nil
 }
 
-func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, binding contextfabric.ResolvedGraphBinding, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
+func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, binding contextfabric.ResolvedGraphBinding, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, frame *contextfabric.QuestionFrame) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
 	// CHAOS-3898 §2.1: the binding was already resolved ONCE by Engine, via
 	// ResolveInvestigationBinding above, before this call -- never
 	// re-resolved here. See ResolvedGraphBinding's own doc comment for the
@@ -490,7 +490,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	// adapter is the one production GraphReader, so this is where that
 	// record enters the engine. CHAOS-4087: digests is the SAME record's
 	// wire-safe companion set, carried out identically.
-	resolution, offers, bases, digests, err := graphrank.ResolveSubjectsWithCommitBasis(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor)
+	resolution, offers, bases, digests, err := graphrank.ResolveSubjectsWithCommitBasis(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, frame)
 	// CHAOS-4077: the single point every deps.* callback's own ErrNotFound
 	// (a never-projected org's graph key) funnels through on its way back
 	// to Engine -- translated here, once, rather than at each of the
@@ -733,7 +733,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// Shape/anchor say "census" (see cohortExactNameCensusEligibility's own
 	// doc comment -- CHAOS-4622 remainder widened this past Shape ==
 	// ShapeDiscoveredCohort alone), AND nothing was already committed.
-	shapeAnchorEligible, censusBasis := cohortExactNameCensusEligibility(request.Interpretation.Shape, request.ScopeAnchorResolved)
+	shapeAnchorEligible, censusBasis := cohortExactNameCensusEligibility(request.Frame, request.ScopeAnchorResolved)
 	censusAdmitted := shapeAnchorEligible && len(request.Resolution.Committed) == 0
 	if censusBasis != "" && a.config.Telemetry != nil {
 		reportedBasis := censusBasis
@@ -788,7 +788,17 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			cohortNodes = append(cohortNodes, n)
 		}
 	}
-	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped := graphrank.DiscoveredCohort(principal, request, cohortNodes, isInternalSubject)
+	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKindBasis := graphrank.DiscoveredCohort(principal, request, cohortNodes, isInternalSubject)
+	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
+	// a cohort. This is the I/O boundary, so the telemetry call lives here
+	// and DiscoveredCohort stays pure -- the same split the authzDropped
+	// counters beside it already use. Emitted on EVERY call, including the
+	// ones that discovered nothing: "the frame was absent" and "the graph
+	// had no matching nodes" were indistinguishable before this, and the
+	// first is the cost of having deleted the prose matcher.
+	if a.config.Telemetry != nil {
+		a.config.Telemetry.RecordCohortKindBasis(ctx, principal.OrgID, cohortKindBasis, cohort != nil)
+	}
 	if cohort != nil && exactNameTruncated {
 		// Codex round-2 finding (P2): DiscoveredCohort computes Complete
 		// purely from len(members) vs. MaxCohortMembers, with no way to

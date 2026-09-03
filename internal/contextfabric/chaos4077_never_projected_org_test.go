@@ -25,7 +25,7 @@ func (g neverProjectedGraphReader) ResolveInvestigationBinding(context.Context, 
 	return ResolvedGraphBinding{GraphKey: "never-projected-key", Epoch: 0}, nil
 }
 
-func (g neverProjectedGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+func (g neverProjectedGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection, *QuestionFrame) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	// %w, not a string-concatenated message: this must satisfy
 	// errors.Is(err, ErrGraphNotProjected) exactly the way
 	// falkorgraph.graphNotProjectedError's own real wrap does -- engine.go
@@ -107,7 +107,7 @@ func (ordinaryFailingGraphReader) ResolveInvestigationBinding(context.Context, s
 	return ResolvedGraphBinding{GraphKey: "ordinary-failing-key", Epoch: 0}, nil
 }
 
-func (ordinaryFailingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+func (ordinaryFailingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection, *QuestionFrame) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	return SubjectResolution{}, StructureOfferMaterial{}, nil, nil, errors.New("resolve subjects: a genuine dependency failure, unrelated to graph existence")
 }
 
@@ -158,7 +158,7 @@ func (g *discoverContextCallCounter) ResolveInvestigationBinding(context.Context
 	return ResolvedGraphBinding{GraphKey: "projected-empty-key", Epoch: 0}, nil
 }
 
-func (g *discoverContextCallCounter) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+func (g *discoverContextCallCounter) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection, *QuestionFrame) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	return SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, StructureOfferMaterial{}, nil, nil, nil
 }
 

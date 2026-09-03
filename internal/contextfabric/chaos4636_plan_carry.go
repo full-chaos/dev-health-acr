@@ -207,11 +207,91 @@ func applyCarriedPlan(outcome QuestionFamilyOutcome, carry planCarryResult) (Que
 	if outcome.Family != "" && outcome.Family != QuestionFamilyUnclassified {
 		return outcome, false
 	}
+	preCarryFamily := outcome.Family
 	outcome.Family = carry.Family
 	outcome.Source = QuestionFamilySourceCarried
 	// The group kind rides on the winning sample, which is where PlanAnswer
 	// reads it from -- so a carried grouped reading rebuilds the same group
 	// axis rather than becoming a grouped family with no axis to group by.
 	outcome.WinningSample.GroupKind = carry.GroupKind
+	// SEAM 7 (CHAOS-4736): neither table decided this answer -- a prior turn
+	// did -- so the outcome must not keep reporting the routing decision made
+	// before the carry. The family-resolution EVENT was already emitted by
+	// then and cannot be amended; see FamilyRouteCarried's own doc comment
+	// for the limit that leaves.
+	// Switched is computed against the family this carry REPLACED, not
+	// hardcoded: a carry applies only when this turn resolved to empty or
+	// `unclassified`, and a carriable prior family is neither, so replacing
+	// it does change what is served. Review caught this reporting false.
+	outcome.Route = FamilyRouteDecision{
+		Family: carry.Family, Source: FamilyRouteSourceCarried,
+		// Class is EXPLICITLY empty, not left to the zero value: no
+		// comparison happened on this turn, so no agreement class describes
+		// it. Review found that omitting it let a mutation setting
+		// Class=agreed survive -- an unasserted field is an unguarded one.
+		Class:       "",
+		Disposition: FamilyRouteCarried,
+		Switched:    carry.Family != preCarryFamily,
+	}
 	return outcome, true
+}
+
+// PlanCarryEvent is one carry: which family was replaced, which was carried
+// in, and the routing decision that replacement produced.
+//
+// CLOSED VOCABULARIES AND IDS ONLY. Two families, one source, one class, one
+// disposition, one boolean and a prior result id -- no question text, no
+// subject term, no member list. The member list in particular is deliberately
+// absent: it would carry an authorization decision (North Star check 18),
+// which is the same reason resolveCarriedPlan never returns one.
+type PlanCarryEvent struct {
+	// FamilyReplaced is what this turn resolved to before the carry. A carry
+	// applies only when it is empty or `unclassified`, and recording it is
+	// what makes Switched checkable rather than asserted.
+	FamilyReplaced QuestionFamily
+	// FamilyCarried is the prior turn's family, now served.
+	FamilyCarried QuestionFamily
+	// SourceResultID is the prior result the family came from -- the join
+	// key a stream reader needs to tie the two turns together.
+	SourceResultID string
+	// Route is the decision the carry produced, the same four fields the
+	// family-resolution line carries so the two can be read side by side.
+	Route FamilyRouteDecision
+}
+
+// PlanCarryEventFrom builds the event for an applied carry. Pure: the caller
+// at the I/O boundary emits it, the same split DiscoveredCohort's own
+// authzDropped counters use, so this file stays free of telemetry calls.
+func PlanCarryEventFrom(replaced QuestionFamily, carried QuestionFamilyOutcome, carry planCarryResult) PlanCarryEvent {
+	return PlanCarryEvent{
+		FamilyReplaced: replaced,
+		FamilyCarried:  carried.Family,
+		SourceResultID: carry.SourceResultID,
+		Route:          carried.Route,
+	}
+}
+
+// applyAndRecordCarry applies a carry and, when one applied, emits the ONE
+// event that can carry `family_source=carried`.
+//
+// IT IS A METHOD SO THE EMIT IS TESTABLE. Inline at the Investigate call site
+// the emit could only be reached by standing up the whole investigation, and
+// review proved the consequence: deleting the emit block survived the entire
+// package, because the recording fake's captured events were read by nothing.
+// A seam that can be driven directly is the difference between an emit that
+// is asserted and one that is merely present.
+//
+// Returns the outcome unchanged when no carry applied, so the call site stays
+// a single assignment and there is no branch to forget.
+func (e *Engine) applyAndRecordCarry(ctx context.Context, principal storage.Principal, outcome QuestionFamilyOutcome, carry planCarryResult) QuestionFamilyOutcome {
+	carried, applied := applyCarriedPlan(outcome, carry)
+	if !applied {
+		return outcome
+	}
+	if e.telemetry != nil {
+		// outcome.Family is still the PRE-carry value here -- the whole
+		// point of emitting before the assignment below.
+		e.telemetry.RecordPlanCarry(ctx, principal, PlanCarryEventFrom(outcome.Family, carried, carry))
+	}
+	return carried
 }

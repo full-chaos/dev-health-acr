@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -189,6 +190,14 @@ func TestQuestionFamilyTelemetryLeaksNoContent(t *testing.T) {
 		"shadow_projected_family":   true, "shadow_projected_row": true,
 		"shadow_precedence_family": true, "shadow_precedence_row": true,
 		"shadow_agreement_class": true, "shadow_agreed": true,
+		// SEAM 7's routing decision (CHAOS-4736), admitted under the same
+		// rule and for the same reason: a closed-vocabulary source, a
+		// closed-vocabulary class, a closed-vocabulary disposition and a
+		// boolean. The decision is keyed on the PAIR OF ROWS the two
+		// tables fired -- a structural property -- so nothing here can
+		// carry a subject term, an anchor, or any part of the question.
+		"family_source": true, "route_class": true,
+		"route_disposition": true, "route_switched": true,
 	}
 	for key := range records[0] {
 		if !allowed[key] {
@@ -241,4 +250,70 @@ func renderValue(value any) string {
 		parts = append(parts, fmt.Sprint(item))
 	}
 	return strings.Join(parts, "|")
+}
+
+// The plan-carry line gets the SAME content-safety guard as the family
+// resolution line above, and for the same reason: it is a new sink, and a new
+// sink without an allow-list is a leak nobody has found yet.
+//
+// Review proved that specifically — a mutation adding a `question_text` key to
+// this line survived the whole package before this test existed.
+func TestPlanCarryTelemetryLeaksNoContent(t *testing.T) {
+	// A REQUEST-ID-BEARING context, not a bare one. The bare context was the
+	// gap: request_id was absent even unmutated, so requiring it would have
+	// failed for the wrong reason and omitting it let the join key go
+	// unguarded -- deleting the request-id append survived the package.
+	// The id must be `req_` + exactly 32 lowercase hex characters;
+	// WithRequestID silently rejects anything else, so a readable label
+	// would leave the context bare and the assertion below would fail for
+	// the wrong reason.
+	ctx := observability.WithRequestID(context.Background(), "req_0123456789abcdef0123456789abcdef")
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordPlanCarry(
+			ctx, storage.Principal{OrgID: "org_sink_test"},
+			PlanCarryEvent{
+				FamilyReplaced: QuestionFamilyUnclassified,
+				FamilyCarried:  QuestionFamilyGroupedCohortStatus,
+				SourceResultID: "result_prior_turn",
+				Route: FamilyRouteDecision{
+					Family: QuestionFamilyGroupedCohortStatus, Source: FamilyRouteSourceCarried,
+					Disposition: FamilyRouteCarried, Switched: true,
+				},
+			})
+	})
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want exactly 1 per applied carry", len(records))
+	}
+	// ALLOW-LIST, not a denylist. Every member is a closed-vocabulary value,
+	// a server-generated id, or a boolean: two families, one source, one
+	// class, one disposition, one bool, a prior result id. No question text,
+	// no subject term, no member list -- the member list in particular would
+	// carry an authorization decision.
+	allowed := map[string]bool{
+		"time": true, "level": true, "msg": true, "request_id": true,
+		"org_id": true, "family_replaced": true, "family_carried": true,
+		"source_result_id": true, "family_source": true, "route_class": true,
+		"route_disposition": true, "route_switched": true,
+	}
+	for key := range records[0] {
+		if !allowed[key] {
+			t.Errorf("unexpected key %q on the plan carry line -- every field must be an explicitly allowed closed-vocabulary value, id, or boolean", key)
+		}
+	}
+	// And the reverse direction: the fields that make the event USEFUL must
+	// actually be present, or the line is an allow-listed nothing.
+	// EVERY field that makes the event useful, including the two route
+	// fields and -- above all -- request_id, which is the join key the whole
+	// "a carried turn is identifiable by joining the two lines" claim rests
+	// on. A story that depends on a key nothing requires is a story that
+	// silently stops being true.
+	for _, required := range []string{
+		"request_id",
+		"family_replaced", "family_carried", "source_result_id",
+		"family_source", "route_class", "route_disposition", "route_switched",
+	} {
+		if _, ok := records[0][required]; !ok {
+			t.Errorf("the plan carry line is missing %q; the event exists to make that value observable", required)
+		}
+	}
 }

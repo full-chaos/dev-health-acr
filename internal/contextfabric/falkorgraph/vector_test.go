@@ -268,7 +268,7 @@ func TestResolveSubjects_OverFetchLetsACorroboratedCandidateBeyondRawVectorRankW
 		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 	}
 
-	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -1270,6 +1270,9 @@ func (r *recordingTelemetry) RecordCohortDeniedByAuthorization(_ context.Context
 }
 func (r *recordingTelemetry) RecordCohortExactNameCensusGate(_ context.Context, orgID string, admitted bool, basis CohortExactNameCensusBasis) {
 	r.cohortExactNameCensusGates = append(r.cohortExactNameCensusGates, cohortExactNameCensusGateRecord{orgID: orgID, admitted: admitted, basis: basis})
+}
+
+func (r *recordingTelemetry) RecordCohortKindBasis(_ context.Context, _ string, _ graphrank.CohortKindBasis, _ bool) {
 }
 
 func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {

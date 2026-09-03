@@ -711,6 +711,19 @@ type EngineTelemetry interface {
 	// Content-safe by construction: ServerStatusShadow carries two status
 	// enums, one closed basis token, two booleans and a version constant.
 	RecordServerStatusShadow(ctx context.Context, principal storage.Principal, event ServerStatusShadow)
+	// RecordPlanCarry (CHAOS-4736, seam 7) reports the ONE point where a
+	// prior turn's family replaces this turn's, which is the only place a
+	// carried route is observable.
+	//
+	// WHY IT HAS TO EXIST. The family-resolution event is built and sent
+	// inside the interpreter; applyCarriedPlan runs later, in the engine. So
+	// `family_source=carried` could never appear on that line -- it was a
+	// permanent zero bucket, and a comment elsewhere told stream readers to
+	// "join on the plan-carry event" when no such producer existed. This is
+	// that producer. It is a SECOND line, never a second family-resolution
+	// line: re-emitting that one would double-count the flip counters the
+	// whole slice exists to make readable.
+	RecordPlanCarry(ctx context.Context, principal storage.Principal, event PlanCarryEvent)
 	// RecordModelRowsStripped (CHAOS-4355 follow-up, cf_model_rows_stripped)
 	// reports the count of ClaimedFacts entries whose model-authored Rows
 	// was cleared before draft.ValidateAgainst ran, so an operator can tell
@@ -1300,9 +1313,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// taint-gated, conflict-fails-closed -- and never the member list, which
 	// would carry an authorization decision (North Star check 18).
 	planCarry := e.resolveCarriedPlan(ctx, principal, request, priorValidatedReceipts, binding, priorLoadedResults)
-	if carried, applied := applyCarriedPlan(familyOutcome, planCarry); applied {
-		familyOutcome = carried
-	}
+	familyOutcome = e.applyAndRecordCarry(ctx, principal, familyOutcome, planCarry)
 	plan := PlanAnswer(PlanAnswerInput{
 		Family:           familyOutcome,
 		Interpretation:   interpretation,
@@ -1485,7 +1496,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// between here and there reads or alters it. A GraphReader that returns
 	// nil leaves every commit reading CommitBasisUnknown, which is the
 	// STRICT treatment (see CommitBasis).
-	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed))
+	// CARRIED, NOT RE-DERIVED (CHAOS-4736 bar 5): resolution gets this
+	// turn's validated frame so the kind-hinted pool search reads declared
+	// kinds instead of guessing at the question's words.
+	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed), familyOutcome.Frame)
 	if err != nil {
 		// CHAOS-4077: a never-projected org (ResolveSubjects queried a
 		// graph key that has never been created) degrades to the SAME
@@ -1593,6 +1607,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
 		Request: graphRequest, Interpretation: interpretation, Resolution: resolution, Binding: binding,
 		ScopeAnchorResolved: scopeAnchorResolved(familyOutcome),
+		// CARRIED, NOT RE-DERIVED (CHAOS-4736 bar 5): the frame comes off
+		// the family outcome this turn's interpretation already produced.
+		// Nothing here reconstructs a frame from the family, from Shape or
+		// from the interpretation's flat term fields.
+		Frame: familyOutcome.Frame,
 	})
 	if err != nil {
 		return InvestigationResult{}, stageError(StageGraph, fmt.Errorf("discover graph context: %w", err))
@@ -1875,7 +1894,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 
 	assemblyParams := synthesisAssemblyParams{
-		Request: request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
+		Request: request, Interpretation: interpretation, Frame: familyOutcome.Frame,
+		Graph: graphContext, Facts: facts,
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
 		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarry: windowCarry,
 		StructureCanon: structureCanon, CarriedStructureEntry: carriedStructureEntry,
@@ -1921,7 +1941,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// stage 3 measures that. The retry re-runs assembly AND finalization, so
 	// the shape measured on the second pass is the shape that would be
 	// served on the second pass.
-	result = e.finalizeResult(result, plan)
+	result = e.finalizeResult(result, plan, familyOutcome.Frame)
 	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, pendingTelemetry, retryBase)
 	if err != nil {
 		return InvestigationResult{}, err
@@ -1941,7 +1961,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// selection itself is pure and was already run by finalizeResult, but a
 	// retry would otherwise double-count a decision an operator counts.
 	if e.telemetry != nil {
-		_, renderShapeEvent := SelectRenderShapes(result)
+		_, renderShapeEvent := SelectRenderShapes(result, familyOutcome.Frame)
 		e.telemetry.RecordRenderShapeSelection(ctx, principal, renderShapeEvent)
 		// B8's shadow gate, emitted from the SAME once-per-served-result
 		// point and for the same reason: the derivation is pure and could

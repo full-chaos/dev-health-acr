@@ -8,28 +8,48 @@ import "github.com/full-chaos/dev-health-acr/internal/contextfabric"
 type CohortExactNameCensusBasis string
 
 const (
-	// CohortExactNameCensusBasisDiscoveredCohortShape is CHAOS-4395's
-	// original, unchanged basis: Shape itself already said "no term to
+	// CohortExactNameCensusBasisDiscoveredKind is CHAOS-4395's original
+	// basis, re-keyed by seam 7 (CHAOS-4736) from Shape onto the frame:
+	// the subject expression is `discovered_kind`, which IS "no term to
 	// match, give me the kind's whole census." Always admits (subject to
 	// the separate Resolution.Committed check the caller applies).
-	CohortExactNameCensusBasisDiscoveredCohortShape CohortExactNameCensusBasis = "discovered_cohort_shape"
-	// CohortExactNameCensusBasisAnchorUnset is CHAOS-4622's remainder fix:
-	// Shape resolved to explicit_cohort, but the winning interpretation
-	// sample named no specific subject (ScopeAnchorTerm unset) -- CHAOS-
-	// 4395's own carve-out assumed explicit_cohort always means a named
-	// member, which CHAOS-4622 traced as false whenever Shape itself is
-	// the unstable variable (a bare-kind-noun cohort survey like "which
-	// teams are struggling" non-deterministically lands on explicit_cohort
-	// some replicates and discovered_cohort others). Admits.
-	CohortExactNameCensusBasisAnchorUnset CohortExactNameCensusBasis = "explicit_cohort_anchor_unset"
+	//
+	// THE VALUE CHANGED with the field it reads. It was
+	// "discovered_cohort_shape", naming a Shape this gate no longer
+	// consults; a telemetry value that describes a deleted mechanism is
+	// the same rot as a comment naming a deleted symbol. The
+	// vocabulary change is called out in seam 7's PR body.
+	CohortExactNameCensusBasisDiscoveredKind CohortExactNameCensusBasis = "discovered_kind_expression"
+	// CohortExactNameCensusBasisFrameAbsent: no validated frame reached
+	// DiscoverContext, so there is no topology to gate on. DENIES.
+	//
+	// The old gate could not produce this outcome -- Shape is always
+	// present, so the gate always had an answer, even when that answer was
+	// derived from the least stable field in the interpretation. Denying
+	// here is the same fail-closed choice cohort discovery itself makes for
+	// an absent frame, and counting it is how the cost shows up.
+	CohortExactNameCensusBasisFrameAbsent CohortExactNameCensusBasis = "frame_absent"
+	// CohortExactNameCensusBasisAnchorUnset is CHAOS-4622's remainder fix,
+	// re-keyed onto the frame: the expression is a cohort variant OTHER
+	// than discovered_kind, and the winning interpretation sample named no
+	// specific subject (ScopeAnchorTerm unset). Admits.
+	//
+	// CHAOS-4622's own root cause is WHY this row survives the re-keying
+	// unchanged in meaning: CHAOS-4395's carve-out assumed explicit_cohort
+	// always means a named member, which was false whenever Shape itself
+	// was the unstable variable (a bare-kind-noun survey like "which teams
+	// are struggling" landed on explicit_cohort some replicates and
+	// discovered_cohort others). Reading the union removes that
+	// instability at the source, but the anchor half of the rule is about
+	// whether a subject was NAMED, which the anchor signal still answers.
+	CohortExactNameCensusBasisAnchorUnset CohortExactNameCensusBasis = "cohort_expression_anchor_unset"
 	// CohortExactNameCensusBasisAnchorSet is the preserved half of CHAOS-
-	// 4395's carve-out: Shape resolved to explicit_cohort AND the winning
-	// sample named a specific subject (ScopeAnchorTerm set) -- exactly the
-	// "compare the frontend and backend teams" case the carve-out exists
-	// to protect: admitting the org-wide census here would widen a
-	// question naming specific members into every member in the org.
-	// Denies.
-	CohortExactNameCensusBasisAnchorSet CohortExactNameCensusBasis = "explicit_cohort_anchor_set"
+	// 4395's carve-out: a cohort variant AND the winning sample named a
+	// specific subject (ScopeAnchorTerm set) -- exactly the "compare the
+	// frontend and backend teams" case the carve-out exists to protect:
+	// admitting the org-wide census here would widen a question naming
+	// specific members into every member in the org. Denies.
+	CohortExactNameCensusBasisAnchorSet CohortExactNameCensusBasis = "cohort_expression_anchor_set"
 	// CohortExactNameCensusBasisAlreadyCommitted is codex round-2's
 	// existing finding (reader.go): Shape/anchor said the census would be
 	// eligible, but request.Resolution already carries a committed
@@ -63,15 +83,19 @@ const (
 // single-subject or open-shaped investigation, and "" is the caller's own
 // signal to skip telemetry for it (see RecordCohortExactNameCensusGate's
 // own doc comment: never called for a non-cohort Shape).
-func cohortExactNameCensusEligibility(shape contextfabric.InvestigationShape, scopeAnchorResolved bool) (eligible bool, basis CohortExactNameCensusBasis) {
+func cohortExactNameCensusEligibility(frame *contextfabric.QuestionFrame, scopeAnchorResolved bool) (eligible bool, basis CohortExactNameCensusBasis) {
+	if frame == nil {
+		return false, CohortExactNameCensusBasisFrameAbsent
+	}
+	expression := frame.SubjectExpression
 	switch {
-	case shape == contextfabric.ShapeDiscoveredCohort:
-		return true, CohortExactNameCensusBasisDiscoveredCohortShape
-	case shape == contextfabric.ShapeExplicitCohort && !scopeAnchorResolved:
-		return true, CohortExactNameCensusBasisAnchorUnset
-	case shape == contextfabric.ShapeExplicitCohort:
-		return false, CohortExactNameCensusBasisAnchorSet
-	default:
+	case expression.Kind == contextfabric.SubjectExpressionDiscoveredKind:
+		return true, CohortExactNameCensusBasisDiscoveredKind
+	case !expression.IsCohortVariant():
 		return false, ""
+	case !scopeAnchorResolved:
+		return true, CohortExactNameCensusBasisAnchorUnset
+	default:
+		return false, CohortExactNameCensusBasisAnchorSet
 	}
 }

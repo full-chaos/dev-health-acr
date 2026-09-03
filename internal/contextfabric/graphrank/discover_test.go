@@ -306,15 +306,15 @@ func TestAdmitEdgesExcludesInternalBookkeepingRelationships(t *testing.T) {
 // TestDiscoveredCohortExcludesInternalBookkeepingSubjects is the direct port
 // of zepgraph's same-named test (Codex finding G8(b)): discoveredCohort's
 // membership loop must call isInternal itself, not rely on an accident of
-// interpretedCohortKind's kind range -- a node whose reported subject_kind
-// coincides with the interpreted cohort kind, while its canonical_id still
-// carries a reserved bookkeeping identifier, must still be excluded.
+// the cohort kind's range -- a node whose reported subject_kind coincides
+// with the cohort kind, while its canonical_id still carries a reserved
+// bookkeeping identifier, must still be excluded.
 func TestDiscoveredCohortExcludesInternalBookkeepingSubjects(t *testing.T) {
 	t.Parallel()
 	principal := storage.Principal{OrgID: "org_1"}
-	// subject_kind reports "team" -- matching interpretedCohortKind's output
-	// for a "teams" judgment below -- while canonical_id still carries the
-	// reserved organization-root identifier.
+	// subject_kind reports "team" -- matching the frame's declared member
+	// kind below -- while canonical_id still carries the reserved
+	// organization-root identifier.
 	impostorRoot := candidateNode(contextfabric.SubjectTeam, "organization-root", "Organization", 0.9, "*")
 	genuineTeam := candidateNode(contextfabric.SubjectTeam, "team_platform", "Platform", 0.9, "*")
 	isReserved := func(s contextfabric.SubjectRef) bool { return s.CanonicalID == "organization-root" }
@@ -325,9 +325,14 @@ func TestDiscoveredCohortExcludesInternalBookkeepingSubjects(t *testing.T) {
 			TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactHealth}},
 		},
 		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+		// CHAOS-4736: the cohort kind is DECLARED by the frame, not guessed
+		// from the judgment text above. These tests are about authorization
+		// counting, not kind selection, so the frame simply states the kind
+		// the judgment used to imply and every assertion below is unchanged.
+		Frame: teamCohortFrame(),
 	}
 	discovery.Request.Options.MaxCohortMembers = 10
-	cohort, _, _ := DiscoveredCohort(principal, discovery, []CandidateNode{impostorRoot, genuineTeam}, isReserved)
+	cohort, _, _, _ := DiscoveredCohort(principal, discovery, []CandidateNode{impostorRoot, genuineTeam}, isReserved)
 	if cohort == nil {
 		t.Fatal("cohort = nil, want the genuine team still discovered")
 	}
@@ -355,9 +360,14 @@ func TestDiscoveredCohortReportsAuthzDroppedCount(t *testing.T) {
 			TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactHealth}},
 		},
 		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+		// CHAOS-4736: the cohort kind is DECLARED by the frame, not guessed
+		// from the judgment text above. These tests are about authorization
+		// counting, not kind selection, so the frame simply states the kind
+		// the judgment used to imply and every assertion below is unchanged.
+		Frame: teamCohortFrame(),
 	}
 	discovery.Request.Options.MaxCohortMembers = 10
-	cohort, authzDropped, kindScopedAuthzDropped := DiscoveredCohort(principal, discovery, []CandidateNode{authorized, foreign}, noInternalSubjects)
+	cohort, authzDropped, kindScopedAuthzDropped, _ := DiscoveredCohort(principal, discovery, []CandidateNode{authorized, foreign}, noInternalSubjects)
 	if cohort == nil || len(cohort.Members) != 1 || cohort.Members[0].Subject.CanonicalID != "team_platform" {
 		t.Fatalf("cohort = %#v, want only the authorized team discovered", cohort)
 	}
@@ -388,9 +398,14 @@ func TestDiscoveredCohortKindScopedAuthzDroppedExcludesOtherKinds(t *testing.T) 
 			TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactHealth}},
 		},
 		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+		// CHAOS-4736: the cohort kind is DECLARED by the frame, not guessed
+		// from the judgment text above. These tests are about authorization
+		// counting, not kind selection, so the frame simply states the kind
+		// the judgment used to imply and every assertion below is unchanged.
+		Frame: teamCohortFrame(),
 	}
 	discovery.Request.Options.MaxCohortMembers = 10
-	cohort, authzDropped, kindScopedAuthzDropped := DiscoveredCohort(principal, discovery, []CandidateNode{deniedRepo, authorizedTeam}, noInternalSubjects)
+	cohort, authzDropped, kindScopedAuthzDropped, _ := DiscoveredCohort(principal, discovery, []CandidateNode{deniedRepo, authorizedTeam}, noInternalSubjects)
 	if cohort == nil || len(cohort.Members) != 1 || cohort.Members[0].Subject.CanonicalID != "team_platform" {
 		t.Fatalf("cohort = %#v, want the authorized team discovered despite the denied repository", cohort)
 	}
@@ -425,5 +440,20 @@ func TestAdmitEdgesReportsSelfLoopDropsSeparatelyFromInternalEndpointDrops(t *te
 	}
 	if result.DroppedSelfLoopCount != 1 {
 		t.Fatalf("DroppedSelfLoopCount = %d, want exactly 1 (the internal-bookkeeping drop must not inflate it)", result.DroppedSelfLoopCount)
+	}
+}
+
+// teamCohortFrame is the minimal validated frame declaring a discovered TEAM
+// cohort -- the kind the deleted matcher used to infer from a
+// "teams_under_pressure" judgment.
+func teamCohortFrame() *contextfabric.QuestionFrame {
+	return &contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind:       contextfabric.SubjectExpressionDiscoveredKind,
+			Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectTeam},
+		},
+		Temporal: contextfabric.TemporalIntentCurrent,
+		Version:  contextfabric.QuestionFrameVersion,
 	}
 }

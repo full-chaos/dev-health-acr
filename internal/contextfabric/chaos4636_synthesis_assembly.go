@@ -65,8 +65,15 @@ import (
 // Investigate's scope. It is a struct rather than a parameter list so that
 // adding an input is a visible change to this stage's contract.
 type synthesisAssemblyParams struct {
-	Request               InvestigationRequest
-	Interpretation        InterpretedQuestion
+	Request        InvestigationRequest
+	Interpretation InterpretedQuestion
+	// Frame is this turn's validated QuestionFrame, nil when none
+	// validated. CARRIED (CHAOS-4736 bar 5), never re-derived: the retry
+	// pass finalizes through the same render-shape selection the first
+	// pass did, and selecting on a different frame -- or on none -- would
+	// let a re-synthesized answer draw a different chart than the one the
+	// budget measured.
+	Frame                 *QuestionFrame
 	Graph                 GraphContext
 	Facts                 CanonicalFactBundle
 	Resolution            SubjectResolution

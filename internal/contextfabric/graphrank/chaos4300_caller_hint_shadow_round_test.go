@@ -170,7 +170,7 @@ func TestChaos4300_CallerHintShortCircuitShadowRoundNeverAltersResolution(t *tes
 	request := callerHintRequest(subject, "workbench")
 
 	without := newBackend().deps()
-	withoutResolution, _, withoutBases, withoutDigests, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), without, nil, confirmedAnchor)
+	withoutResolution, _, withoutBases, withoutDigests, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), without, nil, confirmedAnchor, nil)
 	if err != nil {
 		t.Fatalf("without CensusFunc: ResolveSubjectsWithCommitBasis error = %v", err)
 	}
@@ -187,7 +187,7 @@ func TestChaos4300_CallerHintShortCircuitShadowRoundNeverAltersResolution(t *tes
 		censusCalls++
 		return baseCensus(ctx, orgID, kind, value, handleApplies, anchorKind, anchorID, anchorApplies)
 	}
-	withResolution, _, withBases, withDigests, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), with, nil, confirmedAnchor)
+	withResolution, _, withBases, withDigests, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), with, nil, confirmedAnchor, nil)
 	if err != nil {
 		t.Fatalf("with CensusFunc: ResolveSubjectsWithCommitBasis error = %v", err)
 	}

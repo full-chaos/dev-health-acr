@@ -116,7 +116,7 @@ func TestNoTrendIsSelectedForTheLiveMisleadingRows(t *testing.T) {
 		t.Fatalf("both fixture rows carry work_scope_id %q; the defect needs two DIFFERENT scopes", first)
 	}
 
-	shapes, event := SelectRenderShapes(fixture)
+	shapes, event := SelectRenderShapes(fixture, frameForRenderFixture(fixture))
 	if len(shapes) != 0 {
 		t.Fatalf("a shape was selected for the rows that produced the misleading chart: %+v", shapes)
 	}
@@ -193,7 +193,7 @@ func TestUndeclaredRowsAreNeverCharted(t *testing.T) {
 			"day": renderScalarString("2026-08-30"), "items_completed": renderScalarNumber(3),
 		}},
 	}
-	shapes, event := SelectRenderShapes(trendFixture(rows))
+	shapes, event := SelectRenderShapes(trendFixture(rows), frameForRenderFixture(trendFixture(rows)))
 	if len(shapes) != 0 {
 		t.Fatalf("an undeclared table was charted: %+v", shapes)
 	}
@@ -209,7 +209,7 @@ func TestUndeclaredRowsAreNeverCharted(t *testing.T) {
 // correctly declines it.
 func TestTheTrendRuleDoesNotDisturbTheCohortRules(t *testing.T) {
 	t.Parallel()
-	shapes, _ := SelectRenderShapes(chrisTeamsAnswer())
+	shapes, _ := SelectRenderShapes(chrisTeamsAnswer(), frameForRenderFixture(chrisTeamsAnswer()))
 	rules := map[contractsv1.ContextFabricRenderShapeRule]bool{}
 	for _, shape := range shapes {
 		rules[shape.SelectedBy] = true
@@ -309,7 +309,7 @@ func TestTheScopeColumnCannotBeRecastAsAMeasure(t *testing.T) {
 		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
 		ClaimedFacts:   []ClaimedFact{claim},
 	}
-	shapes, event := SelectRenderShapes(result)
+	shapes, event := SelectRenderShapes(result, frameForRenderFixture(result))
 	if len(shapes) != 0 {
 		t.Fatalf("the recast declaration was charted -- the CHAOS-4616 false line is back through the declaration: %+v", shapes)
 	}

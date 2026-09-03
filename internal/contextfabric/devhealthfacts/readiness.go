@@ -345,8 +345,10 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 	// below under its own field name), so the claim this comment used to
 	// make here no longer holds. readinessGapSignal's numberField read of
 	// that key is subject-kind-blind, and project cohorts ARE constructed
-	// in production (graphrank/discover.go's interpretedCohortKind, on a
-	// "project"/"initiative" question -- an earlier version of this comment
+	// in production (graphrank's DiscoveredCohort, for a frame declaring
+	// member_kind "project"; before CHAOS-4736 the same cohorts arrived
+	// through a keyword match on a "project"/"initiative" question -- an
+	// earlier version of this comment
 	// claimed otherwise; that claim was wrong, caught in codex round 1, and
 	// no test by the name this comment used to cite ever existed).
 	//

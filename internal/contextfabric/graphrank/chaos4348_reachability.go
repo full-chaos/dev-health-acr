@@ -3,7 +3,6 @@ package graphrank
 import (
 	"context"
 	"strings"
-	"unicode"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -73,11 +72,21 @@ import (
 // closed-vocabulary), a confirmed prior-kind receipt (confirmedKind --
 // ConfirmedExpectedKind's own doc comment: only canonicalizeStructure's
 // receipt-confirmation path may construct one, so this is never
-// interpreter-inferred), and inferredKindHints (this resolution's own
-// interpreted text). A kind outside isAliasLookupScopedKind is never
+// interpreter-inferred), and the FRAME's own declared kinds (frameKindHints,
+// cohort_kind.go). A kind outside isAliasLookupScopedKind is never
 // returned -- this function exists ONLY to gate the CHAOS-4348 pool-search
 // arm, never a general-purpose kind-hint reader.
-func hintedPoolKinds(request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, confirmedKind *contextfabric.ConfirmedExpectedKind) []contextfabric.SubjectKind {
+//
+// SEAM 7 (CHAOS-4736) replaced the third source. It was a whole-word keyword
+// table over RequestedJudgment + SubjectTerms -- model PROSE deciding which
+// kinds resolution searches for -- and it is DELETED, not deprecated: the
+// ticket's acceptance is a grep showing no declaration and no caller, so this
+// comment deliberately does not spell its identifier. It is now the frame's
+// declared MemberKind/GroupKind. The three-source rule, the
+// isAliasLookupScopedKind filter and the "no hint, no call" byte-identical
+// guarantee are all unchanged; only where the third source's kinds come from
+// changed, from guessing at words to reading a closed-vocabulary field.
+func hintedPoolKinds(request contextfabric.InvestigationRequest, confirmedKind *contextfabric.ConfirmedExpectedKind, frame *contextfabric.QuestionFrame) []contextfabric.SubjectKind {
 	seen := make(map[contextfabric.SubjectKind]bool, 3)
 	var hints []contextfabric.SubjectKind
 	add := func(kind contextfabric.SubjectKind) {
@@ -93,72 +102,8 @@ func hintedPoolKinds(request contextfabric.InvestigationRequest, interpreted con
 	if confirmedKind != nil {
 		add(contextfabric.SubjectKind(confirmedKind.Kind))
 	}
-	for _, kind := range inferredKindHints(interpreted) {
+	for _, kind := range frameKindHints(frame) {
 		add(kind)
-	}
-	return hints
-}
-
-// inferredKindHints reads the SAME two model-authored fields
-// interpretedCohortKind (discover.go) already trusts for this exact
-// question -- RequestedJudgment and SubjectTerms -- for a keyword hint
-// toward repository/project/team. Deliberately NOT interpretedCohortKind
-// itself: that function always returns exactly one kind (defaulting to
-// SubjectTeam when neither keyword set matches), a single-subject
-// cohort-discovery convention wrong for a hint SOURCE, which must be able
-// to return NOTHING when the text gives no real signal -- a silent
-// default here would turn every kindless question into a spurious team
-// hint and defeat CHAOS-4348's own "no hint, no call" byte-identical
-// requirement (TestApplyKindHintedPoolSearch_NoHintProducesByteIdenticalPool).
-// Order is fixed (repository, project, team) so a caller iterating the
-// result never depends on Go's randomized map order.
-//
-// WHOLE-WORD matching only (codex review, Medium, confirmed): the prior
-// version used strings.Contains, so "projector" or "teamwork" would have
-// activated the real-pool SearchKind arm on words that merely CONTAIN
-// "project"/"team" as a substring, not name the kind at all. Each value is
-// split into words on anything that is not a letter or digit and compared
-// whole -- "project's"/"projects" still match ("project" survives the
-// split as its own token), "projector" does not (it is one token, not
-// two).
-// devhealthschema:not-a-production-replica the word-match cases below classify free-text words from an interpreted question into a SubjectKind hint, not a table declaration.
-// They (repo/repos/project/projects/team/teams, plurals of ENGLISH KIND
-// NOUNS a caller might type) happen to also spell three real ClickHouse
-// table names in devhealthschema.ProductionColumns, tripping
-// TestNoSecondPhysicalSourceOutsideTheDeclaration's "3+ declared tables in
-// a declaration-shaped list" heuristic. This switch reads no schema,
-// issues no query, and carries no column list; the string overlap with
-// real table names is coincidental English vocabulary, not a rival
-// physical-schema source.
-func inferredKindHints(interpreted contextfabric.InterpretedQuestion) []contextfabric.SubjectKind {
-	values := make([]string, 0, len(interpreted.SubjectTerms)+1)
-	values = append(values, interpreted.RequestedJudgment)
-	values = append(values, interpreted.SubjectTerms...)
-	var repo, project, team bool
-	isWordSep := func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	}
-	for _, value := range values {
-		for _, word := range strings.FieldsFunc(strings.ToLower(value), isWordSep) {
-			switch word {
-			case "repo", "repos", "repository", "repositories":
-				repo = true
-			case "project", "projects", "initiative", "initiatives":
-				project = true
-			case "team", "teams", "group", "groups":
-				team = true
-			}
-		}
-	}
-	var hints []contextfabric.SubjectKind
-	if repo {
-		hints = append(hints, contextfabric.SubjectRepository)
-	}
-	if project {
-		hints = append(hints, contextfabric.SubjectProject)
-	}
-	if team {
-		hints = append(hints, contextfabric.SubjectTeam)
 	}
 	return hints
 }
