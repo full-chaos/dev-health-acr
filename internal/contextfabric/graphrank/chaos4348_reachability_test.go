@@ -3,6 +3,7 @@ package graphrank
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -179,10 +180,12 @@ func TestResolveSubjects_UnhintedNonNameQuestionProducesByteIdenticalPool(t *tes
 			backend.exactNameCandidates = []CandidateNode{unrelatedProject}
 		}
 		request := testRequest()
-		// No ExpectedKinds, no confirmedKind, and testInterpreted's
-		// RequestedJudgment/SubjectTerms below carry no
-		// repository/project/team keyword -- inferredKindHints must return
-		// nothing either.
+		// No ExpectedKinds, no confirmedKind, and no frame -- so the
+		// frame-declared hint source must return nothing either. Before
+		// CHAOS-4736 this comment had to reason about whether
+		// testInterpreted's judgment and terms happened to contain a
+		// repository/project/team keyword; there is no longer any prose
+		// path to reason about.
 		resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted("the thing"), backend.deps(), nil, nil)
 		if err != nil {
 			t.Fatalf("ResolveSubjects() error = %v", err)
@@ -278,32 +281,67 @@ func TestResolveSubjects_ExactNameTruncatedFetchIsDisclosedAsSearchTruncated(t *
 	}
 }
 
-// TestInferredKindHints_WholeWordOnly is the fix for a codex review Medium
-// finding: the ORIGINAL implementation used strings.Contains, so
-// "projector" or "teamwork" would have activated the real-pool SearchKind
-// arm on words that merely CONTAIN "project"/"team" as a substring.
-func TestInferredKindHints_WholeWordOnly(t *testing.T) {
+// TestFrameKindHints_ProseIsNeverRead replaces
+// TestInferredKindHints_WholeWordOnly, and it asserts something STRONGER
+// than the test it replaces.
+//
+// That test pinned a keyword table's whole-word behaviour: "projector" must
+// not hint `project`, "teamwork" must not hint `team`. It was a real fix for
+// a real substring bug -- and it could only ever constrain HOW the prose was
+// read, never WHETHER it was read. CHAOS-4736 deleted the reading. So the
+// property worth pinning is no longer "the word match is careful", it is
+// "no arrangement of words in the question moves the hints at all".
+//
+// The prose below is deliberately the old test's own vocabulary, including
+// the cases it expected to HINT. Every one of them must now yield nothing,
+// because hints come from declared frame fields and from nowhere else. A
+// regression that reintroduces prose reading turns the last three rows green
+// in the old sense and fails here.
+func TestFrameKindHints_ProseIsNeverRead(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		name  string
-		terms []string
-		want  []contextfabric.SubjectKind
-	}{
-		{"substring false positives never hint", []string{"the projector broke", "teamwork matters"}, nil},
-		{"whole word project hints", []string{"what is the project's status"}, []contextfabric.SubjectKind{contextfabric.SubjectProject}},
-		{"whole word team hints", []string{"which team owns this"}, []contextfabric.SubjectKind{contextfabric.SubjectTeam}},
-		{"whole word repo hints", []string{"which repo has the most churn"}, []contextfabric.SubjectKind{contextfabric.SubjectRepository}},
-		{"plural project still hints", []string{"list the projects"}, []contextfabric.SubjectKind{contextfabric.SubjectProject}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, terms := range [][]string{
+		{"the projector broke", "teamwork matters"},
+		{"what is the project's status"},
+		{"which team owns this"},
+		{"which repo has the most churn"},
+		{"list the projects"},
+	} {
+		t.Run(strings.Join(terms, "|"), func(t *testing.T) {
 			t.Parallel()
-			interpreted := testInterpreted(tc.terms...)
-			interpreted.RequestedJudgment = ""
-			got := inferredKindHints(interpreted)
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("inferredKindHints(%v) = %v, want %v", tc.terms, got, tc.want)
+			// A frame that declares NO kind: named_subject has neither a
+			// member kind nor a group kind.
+			frame := &contextfabric.QuestionFrame{
+				SubjectExpression: contextfabric.SubjectExpression{
+					Kind:  contextfabric.SubjectExpressionNamed,
+					Named: &contextfabric.NamedSubjectExpression{Terms: terms},
+				},
+			}
+			if got := frameKindHints(frame); got != nil {
+				t.Fatalf("frameKindHints() = %v for prose %v, want nothing -- the question's words must not reach the hint source", got, terms)
 			}
 		})
+	}
+}
+
+// The positive half, and the one that proves the substitution actually
+// substituted: hints come from the DECLARED fields, and they do so even when
+// the prose says something else entirely.
+func TestFrameKindHints_ComeFromDeclaredFieldsAgainstContradictingProse(t *testing.T) {
+	t.Parallel()
+	frame := &contextfabric.QuestionFrame{
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind: contextfabric.SubjectExpressionGroupedMembers,
+			Grouped: &contextfabric.GroupedSetExpression{
+				GroupKind: contextfabric.SubjectTeam, MemberKind: contextfabric.SubjectProject,
+			},
+		},
+	}
+	got := frameKindHints(frame)
+	// BOTH axes of a grouped expression are hints: the members and the
+	// grouping axis both have to be in the pool. Order follows the closed
+	// subject-kind vocabulary, never Go's map order.
+	want := []contextfabric.SubjectKind{contextfabric.SubjectTeam, contextfabric.SubjectProject}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("frameKindHints() = %v, want %v (vocabulary order, both axes)", got, want)
 	}
 }

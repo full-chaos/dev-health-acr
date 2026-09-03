@@ -189,6 +189,14 @@ func TestQuestionFamilyTelemetryLeaksNoContent(t *testing.T) {
 		"shadow_projected_family":   true, "shadow_projected_row": true,
 		"shadow_precedence_family": true, "shadow_precedence_row": true,
 		"shadow_agreement_class": true, "shadow_agreed": true,
+		// SEAM 7's routing decision (CHAOS-4736), admitted under the same
+		// rule and for the same reason: a closed-vocabulary source, a
+		// closed-vocabulary class, a closed-vocabulary disposition and a
+		// boolean. The decision is keyed on the PAIR OF ROWS the two
+		// tables fired -- a structural property -- so nothing here can
+		// carry a subject term, an anchor, or any part of the question.
+		"family_source": true, "route_class": true,
+		"route_disposition": true, "route_switched": true,
 	}
 	for key := range records[0] {
 		if !allowed[key] {

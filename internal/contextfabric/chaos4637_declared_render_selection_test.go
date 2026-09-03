@@ -56,7 +56,7 @@ func TestADeclaredTimeSeriesIsSelectedAsATrend(t *testing.T) {
 	}
 
 	result := declaredTrendAnswer()
-	shapes, event := SelectRenderShapes(result)
+	shapes, event := SelectRenderShapes(result, frameForRenderFixture(result))
 	trend := shapeByRule(shapes, contractsv1.ContextFabricRenderRuleDatedFactTrend)
 	if trend == nil {
 		t.Fatalf("a DECLARED time_series was not charted; shapes=%+v skipped=%+v", shapes, event.Skipped)
@@ -143,7 +143,7 @@ func TestAClaimWhoseFieldIsNotADeclaredMeasureIsRefused(t *testing.T) {
 		t.Fatal("fixture's field IS a declared measure; the guarded path is not reached")
 	}
 
-	shapes, event := SelectRenderShapes(result)
+	shapes, event := SelectRenderShapes(result, frameForRenderFixture(result))
 	if shapeByRule(shapes, contractsv1.ContextFabricRenderRuleDatedFactTrend) != nil {
 		t.Fatal("a claim whose field names no declared measure was charted anyway")
 	}
@@ -171,7 +171,7 @@ func TestThePlanRefusesATrendItDidNotAuthorize(t *testing.T) {
 		FamilyVersion: "v1",
 		RenderKinds:   []contractsv1.ContextFabricRenderKind{contractsv1.ContextFabricRenderKindTable},
 	}
-	shapes, event := SelectRenderShapes(result)
+	shapes, event := SelectRenderShapes(result, frameForRenderFixture(result))
 	if len(shapes) != 0 {
 		t.Fatalf("the plan authorized only `table` and %d shape(s) were selected: %+v", len(shapes), shapes)
 	}
@@ -275,7 +275,7 @@ func TestEveryRuleExitRecordsExactlyOneOutcome(t *testing.T) {
 	}
 	reached := map[RenderShapeSkipReason]bool{}
 	for _, testCase := range cases {
-		_, event := SelectRenderShapes(testCase.result())
+		_, event := SelectRenderShapes(testCase.result(), frameForRenderFixture(testCase.result()))
 		if err := event.Accounted(); err != nil {
 			t.Errorf("%s: %v (selected=%+v skipped=%+v)", testCase.name, err, event.Selected, event.Skipped)
 		}
@@ -306,7 +306,7 @@ func TestEveryRuleExitRecordsExactlyOneOutcome(t *testing.T) {
 // matrix above would pass against an Accounted that never fails.
 func TestTheAccountingInvariantActuallyDetectsALostOutcome(t *testing.T) {
 	t.Parallel()
-	_, event := SelectRenderShapes(declaredTrendAnswer())
+	_, event := SelectRenderShapes(declaredTrendAnswer(), frameForRenderFixture(declaredTrendAnswer()))
 	if err := event.Accounted(); err != nil {
 		t.Fatalf("a healthy selection is already reported as unaccounted: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestTheDeclarationDescribesTheFieldWhoseRowsWereServed(t *testing.T) {
 			TimeSeriesRows: got[0].TimeSeriesRows, TimeSeriesTable: got[0].TimeSeriesTable,
 		}},
 	}
-	shapes, event := SelectRenderShapes(result)
+	shapes, event := SelectRenderShapes(result, frameForRenderFixture(result))
 	trend := shapeByRule(shapes, contractsv1.ContextFabricRenderRuleDatedFactTrend)
 	if trend == nil {
 		t.Fatalf("the dual-table fact's time_series was not charted; shapes=%+v skipped=%+v", shapes, event.Skipped)
@@ -453,7 +453,7 @@ func TestAnUndeclaredFieldGetsNoDeclaration(t *testing.T) {
 
 func mustSelect(t *testing.T, result InvestigationResult) []contractsv1.ContextFabricRenderShape {
 	t.Helper()
-	shapes, _ := SelectRenderShapes(result)
+	shapes, _ := SelectRenderShapes(result, frameForRenderFixture(result))
 	return shapes
 }
 
@@ -471,7 +471,7 @@ func TestTheProductionSinkReportsTheAccountingAndTheTrendLoss(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
 	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil)))
-	_, event := SelectRenderShapes(declaredTrendAnswer())
+	_, event := SelectRenderShapes(declaredTrendAnswer(), frameForRenderFixture(declaredTrendAnswer()))
 	// Non-vacuity: this is a selection that really did produce shapes and
 	// really is accounted, so "ok" below is a measurement rather than a
 	// default.
@@ -558,7 +558,7 @@ func TestASoleTimeSeriesFieldReachesTheWireDeclaredAndCharts(t *testing.T) {
 		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
 		ClaimedFacts:   []ClaimedFact{got[0]},
 	}
-	shapes, event := SelectRenderShapes(result)
+	shapes, event := SelectRenderShapes(result, frameForRenderFixture(result))
 	trend := shapeByRule(shapes, contractsv1.ContextFabricRenderRuleDatedFactTrend)
 	if trend == nil {
 		t.Fatalf("a sole declared time_series produced no trend; skipped=%+v", event.Skipped)

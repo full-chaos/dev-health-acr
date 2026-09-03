@@ -98,7 +98,7 @@ func (g *acceptanceGraphReader) ResolveInvestigationBinding(context.Context, sto
 	return ResolvedGraphBinding{GraphKey: "acceptance-fake-key", Epoch: 0}, nil
 }
 
-func (g *acceptanceGraphReader) ResolveSubjects(ctx context.Context, _ storage.Principal, request InvestigationRequest, interpreted InterpretedQuestion, _ ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, _ *ConfirmedAnchorSelection) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+func (g *acceptanceGraphReader) ResolveSubjects(ctx context.Context, _ storage.Principal, request InvestigationRequest, interpreted InterpretedQuestion, _ ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, _ *ConfirmedAnchorSelection, _ *QuestionFrame) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	g.resolveCalls++
 	g.lastRequest = request
 	g.resolveCtxs = append(g.resolveCtxs, ctx)

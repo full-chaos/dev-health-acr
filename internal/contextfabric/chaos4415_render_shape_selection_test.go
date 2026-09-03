@@ -116,7 +116,7 @@ func shapeByRule(shapes []contractsv1.ContextFabricRenderShape, rule contractsv1
 // guess. That capability returns through CHAOS-4627, not through this test.
 func TestCohortAnswerSelectsScoreBarsAndContributionStack(t *testing.T) {
 	t.Parallel()
-	shapes, event := SelectRenderShapes(chrisTeamsAnswer())
+	shapes, event := SelectRenderShapes(chrisTeamsAnswer(), frameForRenderFixture(chrisTeamsAnswer()))
 	// Two, not three: the dated trend was WITHDRAWN by CHAOS-4616 -- see
 	// chaos4616_trend_scope_test.go for why the rule could not be made
 	// honest from the row table alone.
@@ -174,7 +174,7 @@ func TestCohortAnswerSelectsScoreBarsAndContributionStack(t *testing.T) {
 func TestSelectedShapesValidateAgainstTheirOwnAnswer(t *testing.T) {
 	t.Parallel()
 	result := chrisTeamsAnswer()
-	shapes, _ := SelectRenderShapes(result)
+	shapes, _ := SelectRenderShapes(result, frameForRenderFixture(result))
 	result.RenderShapes = shapes
 	if err := contractsv1.ValidateRenderShapesForResult(result); err != nil {
 		t.Fatalf("shapes the selector built do not resolve against the answer they came from: %v", err)
@@ -190,7 +190,7 @@ func TestSingleSubjectAnswerCarryingCohortDataSelectsNoCohortShape(t *testing.T)
 	t.Parallel()
 	result := chrisTeamsAnswer()
 	result.Interpretation.Shape = contractsv1.ContextFabricShapeSingleSubject
-	shapes, event := SelectRenderShapes(result)
+	shapes, event := SelectRenderShapes(result, frameForRenderFixture(result))
 	if len(shapes) != 0 {
 		t.Errorf("a single-subject question got %d shapes; rich views are conditional on intent, never on the data happening to allow one", len(shapes))
 	}
@@ -205,9 +205,10 @@ func TestSingleSubjectAnswerCarryingCohortDataSelectsNoCohortShape(t *testing.T)
 // and "the selector never ran" must not look the same in a log.
 func TestAnswerWithNoChartableContentSelectsNothing(t *testing.T) {
 	t.Parallel()
-	shapes, event := SelectRenderShapes(InvestigationResult{
+	singleSubject := InvestigationResult{
 		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
-	})
+	}
+	shapes, event := SelectRenderShapes(singleSubject, frameForRenderFixture(singleSubject))
 	if shapes != nil {
 		t.Fatalf("SelectRenderShapes() drew %d shapes for an answer with nothing to plot", len(shapes))
 	}
@@ -227,7 +228,7 @@ func TestUnrankedCohortMemberIsNotPlottedAsZero(t *testing.T) {
 		Rank:             2,
 		InclusionReasons: []string{"in the census"},
 	})
-	shapes, _ := SelectRenderShapes(result)
+	shapes, _ := SelectRenderShapes(result, frameForRenderFixture(result))
 	score := shapeByRule(shapes, contractsv1.ContextFabricRenderRuleCohortAttentionScore)
 	if score == nil {
 		t.Fatal("expected an attention-score shape")
@@ -244,9 +245,9 @@ func TestUnrankedCohortMemberIsNotPlottedAsZero(t *testing.T) {
 // without sorting would produce a different chart on the same answer.
 func TestSelectionIsDeterministic(t *testing.T) {
 	t.Parallel()
-	first, _ := SelectRenderShapes(chrisTeamsAnswer())
+	first, _ := SelectRenderShapes(chrisTeamsAnswer(), frameForRenderFixture(chrisTeamsAnswer()))
 	for i := 0; i < 32; i++ {
-		next, _ := SelectRenderShapes(chrisTeamsAnswer())
+		next, _ := SelectRenderShapes(chrisTeamsAnswer(), frameForRenderFixture(chrisTeamsAnswer()))
 		if len(next) != len(first) {
 			t.Fatalf("run %d selected %d shapes, first run selected %d", i, len(next), len(first))
 		}
@@ -292,7 +293,7 @@ func TestSelectorReproducesTheGoldenExample(t *testing.T) {
 		t.Fatal("the published example carries no render shapes")
 	}
 	result.RenderShapes = nil
-	reselected, _ := SelectRenderShapes(result)
+	reselected, _ := SelectRenderShapes(result, frameForRenderFixture(result))
 	if !reflect.DeepEqual(reselected, published) {
 		t.Fatalf("re-running selection on the published example produced different shapes.\n got: %+v\nwant: %+v", reselected, published)
 	}
@@ -319,7 +320,7 @@ func TestRedLongMemberLabelsDoNotCollideAfterClamping(t *testing.T) {
 	second.AttentionRank = 2
 	second.Rank = 2
 	result.Cohort.Members = append(result.Cohort.Members, second)
-	shapes, _ := SelectRenderShapes(result)
+	shapes, _ := SelectRenderShapes(result, frameForRenderFixture(result))
 	result.RenderShapes = shapes
 	if err := contractsv1.ValidateRenderShapesForResult(result); err != nil {
 		t.Fatalf("two distinct long labels produced an invalid shape: %v", err)
@@ -342,7 +343,7 @@ func TestRedTruncatedCohortMembersAreReported(t *testing.T) {
 		member.Rank = i + 2
 		result.Cohort.Members = append(result.Cohort.Members, member)
 	}
-	_, event := SelectRenderShapes(result)
+	_, event := SelectRenderShapes(result, frameForRenderFixture(result))
 	if event.MembersTruncated == 0 {
 		t.Fatal("ranked members were dropped from the chart with no count recorded; a silent drop is undiagnosable from the run's own artifacts")
 	}

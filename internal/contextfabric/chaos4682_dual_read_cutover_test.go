@@ -102,7 +102,7 @@ func TestDualTableProjectFactRendersATrend(t *testing.T) {
 		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
 		ClaimedFacts:   []ClaimedFact{claim},
 	}
-	shapes, event := SelectRenderShapes(result)
+	shapes, event := SelectRenderShapes(result, frameForRenderFixture(result))
 	trend := shapeByRule(shapes, contractsv1.ContextFabricRenderRuleDatedFactTrend)
 	if trend == nil {
 		t.Fatalf("the dual-table PROJECT fact's time_series was not charted; shapes=%+v skipped=%+v", shapes, event.Skipped)
@@ -161,7 +161,7 @@ func TestSingleTableTeamFactStillRendersUnchanged(t *testing.T) {
 		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
 		ClaimedFacts:   []ClaimedFact{claim},
 	}
-	shapes, event := SelectRenderShapes(result)
+	shapes, event := SelectRenderShapes(result, frameForRenderFixture(result))
 	trend := shapeByRule(shapes, contractsv1.ContextFabricRenderRuleDatedFactTrend)
 	if trend == nil {
 		t.Fatalf("the single-table fact's trend regressed; shapes=%+v skipped=%+v", shapes, event.Skipped)

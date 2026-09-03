@@ -166,7 +166,27 @@ const (
 	// question, and asking a model for more structure changes what it
 	// attends to in the question text. That is measured on the rig
 	// before this ships, not assumed.
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v11"
+	// v12 (CHAOS-4736, seam 7) REMOVES the question_family ask and the
+	// family vocabulary list. The model is no longer shown the family
+	// names and no longer invited to pick one, because the family is now
+	// DERIVED from the frame the model does emit.
+	//
+	// SUBTRACTIVE, AND STILL A REQUIRED BUMP -- more clearly required than
+	// an additive one, not less. The rule stated at v9 and restated at v10
+	// and v11 is that ANY change to the prompt's content bumps this
+	// version, and the reason bites hardest here: this constant is a
+	// conjunctive ReuseKey dimension and the reuse lookup runs BEFORE
+	// Interpret. Without the bump, every stored answer produced while the
+	// model WAS being asked for a family keeps being served, and those are
+	// precisely the answers whose family this slice re-decides. The cache
+	// would go on serving the reading the deletion exists to replace.
+	//
+	// Removing an ask changes interpretation, it does not merely stop
+	// recording something: a model told to classify a question attends to
+	// the question differently than one told only to describe it
+	// structurally. That is measured on the rig before this ships, not
+	// assumed -- the before/after tally is in the PR body.
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v12"
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no

@@ -116,7 +116,7 @@ func TestChaos4096_CallerHintShortCircuitEmitsDecisionEvents(t *testing.T) {
 	deps := backend.deps()
 	deps.ResolutionTracer = tracer
 
-	resolution, _, bases, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), deps, nil, nil)
+	resolution, _, bases, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), deps, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjectsWithCommitBasis error = %v", err)
 	}
@@ -177,7 +177,7 @@ func TestChaos4096_CallerHintShortCircuitDecisionEventFields(t *testing.T) {
 	deps := backend.deps()
 	deps.ResolutionTracer = tracer
 
-	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(contextfabric.WithOffersOnlyResolution(context.Background()), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), deps, nil, nil)
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(contextfabric.WithOffersOnlyResolution(context.Background()), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), deps, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjectsWithCommitBasis error = %v", err)
 	}

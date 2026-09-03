@@ -71,7 +71,7 @@ func TestResolveSubjectsTruncatedFullCoveragePairDoesNotAutoCommit(t *testing.T)
 		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 	}
 
-	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -102,7 +102,7 @@ func TestResolveSubjectsUntruncatedFullCoverageLoneHitStillAutoCommits(t *testin
 		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 	}
 
-	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}

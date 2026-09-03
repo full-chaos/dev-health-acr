@@ -104,7 +104,7 @@ func TestChaos4637RigCheck_ADeclaredTimeSeriesChartsOnRealData(t *testing.T) {
 		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeSingleSubject},
 		ClaimedFacts:   []ClaimedFact{served[0]},
 	}
-	shapes, event := SelectRenderShapes(result)
+	shapes, event := SelectRenderShapes(result, frameForRenderFixture(result))
 	trend := shapeByRule(shapes, contractsv1.ContextFabricRenderRuleDatedFactTrend)
 	if trend == nil {
 		t.Fatalf("kiac/dh_0830 (real data): REAL declared rows produced no trend; skipped=%+v", event.Skipped)
