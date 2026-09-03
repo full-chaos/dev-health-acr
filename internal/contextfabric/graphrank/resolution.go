@@ -367,7 +367,7 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 	// parameter, from its one dedicated call site (resolve.go). Keeping this
 	// wrapper's signature byte-identical is deliberate: it is what lets those
 	// ~80 call sites stay untouched by this ticket.
-	resolution, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey, false, false)
+	resolution, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey, false, false, nil)
 	return resolution
 }
 
@@ -398,7 +398,7 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 // (see below): a caller passing true is making an affirmative claim that
 // this population is complete, and that claim is what gets recorded, not a
 // new commit path.
-func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
+func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
 	bases := make(contextfabric.CommitBasisSet)
 	// digests (CHAOS-4087) records IN LOCKSTEP with bases above, at every
 	// SAME bases.Record call site -- see CommitDecisionDigest's own doc
@@ -1255,9 +1255,17 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	}
 	sort.SliceStable(order, func(i, j int) bool { return tier(order[i]) < tier(order[j]) })
 	ordered := make([]contextfabric.SubjectCandidate, len(candidates))
+	orderedTier := make([]int, len(candidates))
 	for i, index := range order {
 		ordered[i] = candidates[index]
+		orderedTier[i] = tier(index)
 	}
+	// The cut is DECIDED here and taken below, so the ranked_cut trace can
+	// report what actually survived rather than assuming a plain prefix.
+	// keptIndex is the plain prefix whenever no kind is reserved, so a
+	// caller passing no reservedKinds gets byte-identical behaviour and a
+	// byte-identical trace to the pre-ticket version.
+	keptIndex := reservedPrefix(ordered, orderedTier, max, reservedKinds)
 	// CHAOS-4234 "ranked_cut": one event per candidate, in the exact
 	// order the cut below is taken over, BEFORE it is taken -- the only
 	// place a candidate's pre-cut rank still exists. See
@@ -1266,12 +1274,32 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 		for i, candidate := range ordered {
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "ranked_cut", Subject: candidate.Subject,
-				Rank: i + 1, Survived: max <= 0 || i < max,
+				Rank: i + 1, Survived: keptIndex[i],
 			})
 		}
 	}
 	if max > 0 && len(ordered) > max {
-		ordered = ordered[:max]
+		retained := make([]contextfabric.SubjectCandidate, 0, max)
+		for i, candidate := range ordered {
+			if keptIndex[i] {
+				retained = append(retained, candidate)
+			}
+		}
+		// A reserved-kind admission is the ONLY way an index past `max`
+		// is kept, and it always displaces exactly one tier-2 candidate,
+		// so the retained count is unchanged. Traced per admission so the
+		// effect is readable from a run's own artifacts.
+		if tracer != nil {
+			for i := max; i < len(ordered); i++ {
+				if keptIndex[i] {
+					tracer.Trace(ResolutionTraceEvent{
+						RequestID: requestID, Stage: "reserved_kind_admitted",
+						Subject: ordered[i].Subject, Rank: i + 1, Survived: true,
+					})
+				}
+			}
+		}
+		ordered = retained
 	}
 	resolution.Candidates = ordered
 	// Codex round-4 finding 1: the clarification prompt must be built from
@@ -1685,4 +1713,106 @@ func ClarificationPrompt(candidates []contextfabric.SubjectCandidate) string {
 		}
 	}
 	return "Which subject did you mean: " + strings.Join(labels, ", ") + "?"
+}
+
+// kindReserveSlotsPerKind is how many candidates of a RESERVED kind phase 4
+// guarantees a place for. One, deliberately: the purpose is to stop a kind
+// vanishing ENTIRELY from the offered candidate list, not to give it a share
+// of the budget. An honest client needs one candidate of the anchor's kind to
+// commit; a second buys nothing and costs a slot that ranking earned.
+const kindReserveSlotsPerKind = 1
+
+// reservedPrefix decides which of `ordered` survives phase 4's cut, returning
+// a mask parallel to it.
+//
+// WITHOUT reservedKinds IT IS EXACTLY THE OLD PREFIX. `ordered[:max]`, mask
+// form -- same candidates, same order, same count. Every caller that passes
+// nil (every call site except resolve.go's first pass) is byte-identical to
+// the pre-ticket function, which is why the widened signature needs no
+// behavioural review at those sites.
+//
+// WITH reservedKinds it guarantees that a kind the FRAME OR RECEIPT declared
+// -- the member kind, and now the scope anchor's kind -- does not disappear
+// from the offered list purely because a lexically noisier kind filled the
+// budget first. Measured live on the rig corpus: the question "how many teams
+// own the dev-health-acr repository?" retrieves 3,201 ci_pipeline_run nodes
+// and ONE repository, so a flat top-K keeps zero of the kind the question is
+// actually anchored on. That is the defect; this is the bound on it.
+//
+// WHY THIS CANNOT CHANGE A COMMIT DECISION, which is the property that makes
+// it safe and the one to re-check if this function is ever edited: phase 3
+// has ALREADY run, over the FULL untruncated candidate set, before this is
+// called (see this file's phase list: "commit decision, over the FULL
+// untruncated candidate set" then "truncation LAST"). This function only
+// selects which already-decided candidates are RETURNED. It is the same
+// post-decision, kind-only boundary completion that projectKindOfferKinds
+// (chaos3900_structure_offers.go) already performs for the expected_kind
+// offer -- that one stopped short of candidates precisely because of commit
+// eligibility, and the phase ordering here is why the same concern does not
+// apply.
+//
+// Displacement rules, each load-bearing:
+//   - It NEVER displaces tier 0 (a committed subject) or tier 1 (the canonical
+//     parent of a retained observation). The phase list promises a committed
+//     subject "can never be dropped by" truncation, and the parent tier exists
+//     so a document's answer-bearing parent is not crowded out; a reserve that
+//     could evict either would trade one starvation for another.
+//   - It never displaces a candidate of another reserved kind, so two reserved
+//     kinds cannot fight over the same slot.
+//   - It displaces from the TAIL, i.e. the lowest-ranked eligible candidate,
+//     so the cost is always paid by the weakest survivor.
+//   - If no eligible victim exists it admits NOTHING and returns the plain
+//     prefix. The budget is a caller-declared maximum and is never exceeded:
+//     the retained count is identical with and without a reserve.
+func reservedPrefix(ordered []contextfabric.SubjectCandidate, orderedTier []int, max int, reservedKinds []contextfabric.SubjectKind) []bool {
+	kept := make([]bool, len(ordered))
+	if max <= 0 || len(ordered) <= max {
+		for i := range kept {
+			kept[i] = true
+		}
+		return kept
+	}
+	for i := 0; i < max; i++ {
+		kept[i] = true
+	}
+	reserved := make(map[contextfabric.SubjectKind]bool, len(reservedKinds))
+	for _, kind := range reservedKinds {
+		if kind != "" {
+			reserved[kind] = true
+		}
+	}
+	if len(reserved) == 0 {
+		return kept
+	}
+	present := make(map[contextfabric.SubjectKind]int, len(reserved))
+	for i := 0; i < max; i++ {
+		if reserved[ordered[i].Subject.Kind] {
+			present[ordered[i].Subject.Kind]++
+		}
+	}
+	for _, kind := range reservedKinds {
+		if kind == "" || present[kind] >= kindReserveSlotsPerKind {
+			continue
+		}
+		for i := max; i < len(ordered) && present[kind] < kindReserveSlotsPerKind; i++ {
+			if kept[i] || ordered[i].Subject.Kind != kind {
+				continue
+			}
+			victim := -1
+			for j := max - 1; j >= 0; j-- {
+				if !kept[j] || orderedTier[j] != 2 || reserved[ordered[j].Subject.Kind] {
+					continue
+				}
+				victim = j
+				break
+			}
+			if victim < 0 {
+				break
+			}
+			kept[victim] = false
+			kept[i] = true
+			present[kind]++
+		}
+	}
+	return kept
 }

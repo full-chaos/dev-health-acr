@@ -85,7 +85,7 @@ func TestResolveSubjectsWeakLoneFulltextHitDoesNotAutoCommit(t *testing.T) {
 	adapter := newFakeAdapter(t, fake)
 	request, interpreted := openQuestionRequest("incident outage payment gateway")
 
-	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -118,7 +118,7 @@ func TestResolveSubjectsFullyMatchingLoneFulltextHitStillAutoCommits(t *testing.
 	adapter := newFakeAdapter(t, fake)
 	request, interpreted := openQuestionRequest("payment gateway outage")
 
-	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -180,7 +180,7 @@ func TestResolveSubjectsComparesConfidenceAcrossTermsOnOneScale(t *testing.T) {
 		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 	}
 
-	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -240,7 +240,7 @@ func TestResolveSubjectsNonExactFulltextPairDoesNotAutoCommit(t *testing.T) {
 		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 	}
 
-	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
