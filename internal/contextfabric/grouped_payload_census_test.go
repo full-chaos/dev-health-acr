@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"errors"
 	"math"
 	"testing"
 
@@ -201,5 +202,40 @@ func TestCensusFailureReportsBasisUnavailableRatherThanSilence(t *testing.T) {
 	if basis != SubjectScopeBasisUnavailable {
 		t.Fatalf("basis = %q, want %q -- reporting %q here would blame the model on a measurement that never happened",
 			basis, SubjectScopeBasisUnavailable, SubjectScopeAbsentFromPayload)
+	}
+}
+
+// TestSubjectScopeBasisVocabularyIsClosed gives the scope-basis vocabulary the
+// same fail-closed boundary every other closed vocabulary in this package has.
+//
+// It was missing. I minted a new closed vocabulary and did not give it the
+// closure test its siblings all carry, which is the sort of omission that goes
+// unnoticed until a value escapes onto a log line verbatim. Found while
+// checking whether the two new values needed golden or schema coverage.
+func TestSubjectScopeBasisVocabularyIsClosed(t *testing.T) {
+	t.Parallel()
+	if ValidSynthesisSubjectScopeBasis("a question the user typed") {
+		t.Fatal("an arbitrary string must not be a valid scope basis")
+	}
+	// A rogue value must not reach a telemetry field: the accessor reports
+	// "no basis" rather than handing the caller's own string back.
+	rogue := &SynthesisRejection{SubjectScopeBasis: "a question the user typed", err: errors.New("x")}
+	if _, ok := SynthesisSubjectScopeBasisOf(rogue); ok {
+		t.Fatal("SynthesisSubjectScopeBasisOf() accepted a value outside the vocabulary")
+	}
+	if _, ok := SynthesisSubjectScopeBasisOf(errors.New("not a rejection at all")); ok {
+		t.Fatal("SynthesisSubjectScopeBasisOf() reported a basis for a non-rejection")
+	}
+	if _, ok := SynthesisSubjectScopeBasisOf(nil); ok {
+		t.Fatal("SynthesisSubjectScopeBasisOf(nil) reported a basis")
+	}
+	// Every member is valid, so the table and the constants cannot drift apart.
+	for _, basis := range []SynthesisSubjectScopeBasis{
+		SubjectScopeAbsentFromPayload, SubjectScopeShownUncitableByPolicy,
+		SubjectScopeShownShouldBeCitable, SubjectScopeBasisUnavailable,
+	} {
+		if !ValidSynthesisSubjectScopeBasis(basis) {
+			t.Fatalf("declared member %q is not in the canonical table", basis)
+		}
 	}
 }
