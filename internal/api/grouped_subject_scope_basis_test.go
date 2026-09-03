@@ -21,12 +21,18 @@ import (
 // serialized to the model and deliberately uncitable, so it rejects
 // "shown_uncitable_by_policy"; a subject in no payload source at all is
 // invented, and rejects "absent".
-func subjectScopeRejection(t *testing.T, shown bool) error {
+func subjectScopeRejection(t *testing.T, shown bool, alarm bool) error {
 	t.Helper()
 	subject := contextfabric.SubjectRef{
 		Kind: contractsv1.ContextFabricSubjectProject, CanonicalID: "project_offending", Label: "Offending",
 	}
 	input := contextfabric.SynthesisInput{}
+	if alarm {
+		// A payload path the census sees by shape and no allow-set admits.
+		input.Interpretation.FactRequirements = []contextfabric.FactRequirement{{
+			Kind: contractsv1.ContextFabricFactReadiness, Subjects: []contextfabric.SubjectRef{subject},
+		}}
+	}
 	// Engine-supplied evidence, so the driver can close to something real and
 	// the evidence rules cannot reject before the subject rule is reached.
 	input.Graph.EvidenceRefIDs = []string{"evidence_release_1234"}
@@ -81,7 +87,7 @@ func failureEntryFor(t *testing.T, err error) map[string]any {
 // state: nothing in the payload mentioned the subject, so the rejection is
 // the model's and the operator should read it as model variance.
 func TestFailureEventReportsASubjectTheModelInvented(t *testing.T) {
-	entry := failureEntryFor(t, subjectScopeRejection(t, false))
+	entry := failureEntryFor(t, subjectScopeRejection(t, false, false))
 	if got := entry["subject_scope_basis"]; got != "absent" {
 		t.Fatalf("subject_scope_basis = %v, want \"absent\" for a subject that appears nowhere in the payload", got)
 	}
@@ -95,7 +101,7 @@ func TestFailureEventReportsASubjectTheModelInvented(t *testing.T) {
 // misuse. The operator must be able to tell the two apart on the line
 // itself, which is why the alarm value is its own constant.
 func TestFailureEventReportsAShownSubjectAsUncitableByPolicy(t *testing.T) {
-	entry := failureEntryFor(t, subjectScopeRejection(t, true))
+	entry := failureEntryFor(t, subjectScopeRejection(t, true, false))
 	if got := entry["subject_scope_basis"]; got != "shown_uncitable_by_policy" {
 		t.Fatalf("subject_scope_basis = %v, want \"shown_uncitable_by_policy\" -- a candidate is shown on purpose and uncitable on purpose", got)
 	}
@@ -116,5 +122,17 @@ func TestFailureEventOmitsScopeBasisForANonSubjectRejection(t *testing.T) {
 	entry := failureEntryFor(t, contextfabric.ClassifySynthesisRejection(draft, contextfabric.SynthesisInput{}, err))
 	if _, present := entry["subject_scope_basis"]; present {
 		t.Fatalf("subject_scope_basis = %v is present on a rejection that is not subject-scope", entry["subject_scope_basis"])
+	}
+}
+
+// TestFailureEventReportsTheAlarmOnTheWire is the route half of the alarm.
+// The validator-level tests prove the basis is COMPUTED; this proves an
+// operator can actually see it on the failure line, which is the only place
+// the value does any work. Round 2 found the route covered `absent` and the
+// policy exclusion and never the one value that means the defect is ours.
+func TestFailureEventReportsTheAlarmOnTheWire(t *testing.T) {
+	entry := failureEntryFor(t, subjectScopeRejection(t, false, true))
+	if got := entry["subject_scope_basis"]; got != "shown_should_be_citable" {
+		t.Fatalf("subject_scope_basis = %v, want the alarm value on a subject the payload carries and no list admits", got)
 	}
 }

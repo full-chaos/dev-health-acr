@@ -483,9 +483,25 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 	// is deliberately not the former. The three subject-scope rejections
 	// below classify the rejecting subject against all three -- telemetry
 	// only, no effect on the decision. See SynthesisSubjectScopeBasis.
-	payloadSubjects := synthesisPayloadSubjects(input)
-	uncitableShown := synthesisUncitableShownSubjects(input)
+	// Computed LAZILY: the census marshals the payload, and an answer that
+	// validates cleanly must not pay for diagnosis it never needs. Only a
+	// subject-scope rejection reaches scopeBasis, and rejections are the
+	// minority path.
+	var payloadSubjects map[string]struct{}
+	var uncitableShown map[string]struct{}
+	censusOK, censusDone := false, false
 	scopeBasis := func(subject SubjectRef) SynthesisSubjectScopeBasis {
+		if !censusDone {
+			payloadSubjects, censusOK = synthesisPayloadSubjects(input)
+			uncitableShown = synthesisUncitableShownSubjects(input)
+			censusDone = true
+		}
+		if !censusOK {
+			// No census, no claim. An empty set would classify every rejected
+			// subject as "absent" -- blaming the model on the strength of a
+			// measurement that did not happen.
+			return SynthesisSubjectScopeBasis("")
+		}
 		return synthesisSubjectScopeBasis(subject, payloadSubjects, uncitableShown)
 	}
 	// canonicalLabels binds every subject the model can legally reference
@@ -2669,6 +2685,16 @@ func synthesisSubjects(input SynthesisInput) map[string]struct{} {
 		for _, subject := range path.Nodes {
 			result[subjectKeyForModel(subject)] = struct{}{}
 		}
+		// An edge's endpoints are the same engine-minted path structure its
+		// nodes are -- the investigation committed to them by building the
+		// edge. They were serialized to the model and admitted by nothing,
+		// which is this branch's own defect appearing one field over for the
+		// third time; found by adversarial review, not by the guard that was
+		// supposed to catch exactly this.
+		for _, edge := range path.Edges {
+			result[subjectKeyForModel(edge.From)] = struct{}{}
+			result[subjectKeyForModel(edge.To)] = struct{}{}
+		}
 	}
 	for _, candidate := range input.Graph.DriverCandidates {
 		for _, subject := range candidate.AffectedSubjects {
@@ -2708,56 +2734,92 @@ func synthesisUncitableShownSubjects(input SynthesisInput) map[string]struct{} {
 }
 
 // synthesisPayloadSubjects is every subject the synthesis PAYLOAD serializes
-// to the model, enumerated INDEPENDENTLY from the serialization shape
-// (genkitruntime.synthesisInput) rather than derived from the allow-set.
+// to the model, taken from the SERIALIZED FORM by shape rather than from a
+// hand-written list of paths.
 //
-// The independence is the whole point and was learned the hard way: the
-// first version of this function was `synthesisSubjects(input)` plus
-// candidates, which made it structurally incapable of noticing anything the
-// allow-set omitted -- and Cohort.Exclusions, serialized to the model in
-// every cohort payload, was omitted by both. A guard derived from the thing
-// it guards cannot fail.
+// Two hand enumerations preceded this and both were incomplete, each caught by
+// a separate adversarial round. The first derived the payload set from the
+// allow-set, so it was structurally blind to anything the allow-set omitted --
+// and Cohort.Exclusions was omitted by both. The second enumerated sources
+// explicitly and still missed relationship-edge endpoints, which are subjects
+// the payload carries and the list did not name. The lesson is not "enumerate
+// harder": a census maintained by hand alongside a serializer it does not
+// share a definition with will drift again, and each drift produces the exact
+// false telemetry this field exists to prevent -- blaming the model for citing
+// something we showed it.
 //
-// Every source the payload carries a subject through is listed here once,
-// whether or not it is citable. What makes a subject citable is
-// synthesisSubjects; what makes it deliberately uncitable is
-// synthesisUncitableShownSubjects; and the invariant binding the three --
-// payload == citable + deliberately-uncitable, with no third category -- is
-// what TestEverySubjectThePayloadShowsIsCitableOrADeclaredException asserts.
-func synthesisPayloadSubjects(input SynthesisInput) map[string]struct{} {
+// So this walks the marshalled JSON and collects every object carrying both
+// "kind" and "canonical_id" -- the SubjectRef shape. Edge endpoints, cohort
+// exclusions, commit-decision digests and anything added later are all found
+// by shape, with no list to keep in sync.
+//
+// RESIDUAL, stated precisely because the previous two versions understated
+// theirs: what stays hand-maintained is the set of TOP-LEVEL payload members
+// below, which must mirror genkitruntime.synthesisInput. That is a far more
+// stable and reviewable surface than a list of nested subject paths -- a new
+// top-level member is a visible change to the serializer, whereas a new nested
+// SubjectRef is not -- but it is not nothing, and it is the remaining way this
+// can drift.
+//
+// It returns ok=false when the payload cannot be marshalled. Callers must then
+// report NO basis at all rather than defaulting: an empty census would
+// classify every rejected subject as "absent", which is the model-blaming
+// answer, and asserting that on the strength of a failed measurement is
+// exactly the shape this file's telemetry exists to stop.
+func synthesisPayloadSubjects(input SynthesisInput) (map[string]struct{}, bool) {
+	payload := struct {
+		Interpretation   InterpretedQuestion `json:"interpretation"`
+		Resolution       SubjectResolution   `json:"subject_resolution"`
+		Cohort           *Cohort             `json:"cohort,omitempty"`
+		Paths            []RelationshipPath  `json:"paths"`
+		DriverCandidates []DriverJudgment    `json:"driver_candidates"`
+		Facts            []CanonicalFact     `json:"canonical_facts"`
+		Coverage         Coverage            `json:"coverage"`
+	}{
+		Interpretation:   input.Interpretation,
+		Resolution:       input.Graph.Resolution,
+		Cohort:           input.Graph.Cohort,
+		Paths:            input.Graph.Paths,
+		DriverCandidates: input.Graph.DriverCandidates,
+		Facts:            input.Facts.Facts,
+		Coverage:         input.Graph.Coverage,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, false
+	}
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, false
+	}
 	result := make(map[string]struct{})
-	add := func(subject SubjectRef) { result[subjectKeyForModel(subject)] = struct{}{} }
-	for _, candidate := range input.Graph.Resolution.Candidates {
-		add(candidate.Subject)
-	}
-	for _, subject := range input.Graph.Resolution.Committed {
-		add(subject)
-	}
-	if input.Graph.Cohort != nil {
-		for _, member := range input.Graph.Cohort.Members {
-			add(member.Subject)
+	collectSubjectShapedValues(decoded, result)
+	return result, true
+}
+
+// collectSubjectShapedValues walks a decoded JSON tree and records every
+// object that carries both a string "kind" and a string "canonical_id".
+//
+// It keys by the SAME composite the allow-set uses (kind + id), so a subject
+// found here and a subject admitted there are comparable. Matching on shape
+// rather than on field path is the whole point: it cannot miss a nesting it
+// was never told about.
+func collectSubjectShapedValues(node any, into map[string]struct{}) {
+	switch value := node.(type) {
+	case map[string]any:
+		kind, kindOK := value["kind"].(string)
+		canonicalID, idOK := value["canonical_id"].(string)
+		if kindOK && idOK && canonicalID != "" {
+			into[string(SubjectKind(kind))+"\x00"+canonicalID] = struct{}{}
 		}
-		for _, group := range input.Graph.Cohort.Groups {
-			add(group.Subject)
+		for _, child := range value {
+			collectSubjectShapedValues(child, into)
 		}
-		for _, exclusion := range input.Graph.Cohort.Exclusions {
-			add(exclusion.Subject)
-		}
-	}
-	for _, path := range input.Graph.Paths {
-		for _, node := range path.Nodes {
-			add(node)
+	case []any:
+		for _, child := range value {
+			collectSubjectShapedValues(child, into)
 		}
 	}
-	for _, candidate := range input.Graph.DriverCandidates {
-		for _, subject := range candidate.AffectedSubjects {
-			add(subject)
-		}
-	}
-	for _, fact := range input.Facts.Facts {
-		add(fact.Subject)
-	}
-	return result
 }
 
 // synthesisSubjectScopeBasis classifies a subject a subject-scope rule just

@@ -301,6 +301,20 @@ func TestNonSubjectRejectionCarriesNoScopeBasis(t *testing.T) {
 func TestEverySubjectThePayloadShowsIsCitableOrADeclaredException(t *testing.T) {
 	t.Parallel()
 	input, _, team := groupedCohortFixture()
+	// Round 2 finding: the fixture's committed project is ALSO a cohort member
+	// and a path node, so deleting the committed or canonical-fact branch of
+	// the allow-set changed nothing and those mutants survived. Give each of
+	// those two sources a subject that appears nowhere else, so deleting
+	// either branch is observable.
+	soleCommitted := SubjectRef{Kind: SubjectProject, CanonicalID: "project_only_committed", Label: "Only Committed"}
+	input.Graph.Resolution.Committed = append(input.Graph.Resolution.Committed, soleCommitted)
+	soleFactSubject := SubjectRef{Kind: SubjectProject, CanonicalID: "project_only_fact", Label: "Only Fact"}
+	input.Facts.Facts = append(input.Facts.Facts, CanonicalFact{
+		Kind: FactReadiness, Subject: soleFactSubject,
+		Fields:         map[string]FactValue{"release_ready": BooleanFactValue(false)},
+		EvidenceRefIDs: []string{"evidence_release_1234"}, SourceState: SourceAvailable,
+		Source: "ops", SourceVersion: "v1",
+	})
 	candidate := SubjectRef{Kind: SubjectProject, CanonicalID: "project_unresolved", Label: "Unresolved"}
 	input.Graph.Resolution.Candidates = []SubjectCandidate{{
 		ReceiptID: "receipt_12345678", Subject: candidate,
@@ -323,7 +337,10 @@ func TestEverySubjectThePayloadShowsIsCitableOrADeclaredException(t *testing.T) 
 	}}
 
 	allowed := synthesisSubjects(input)
-	shown := synthesisPayloadSubjects(input)
+	shown, censusOK := synthesisPayloadSubjects(input)
+	if !censusOK {
+		t.Fatal("payload census failed on a well-formed input")
+	}
 	uncitable := synthesisUncitableShownSubjects(input)
 
 	for key := range shown {
@@ -346,7 +363,7 @@ func TestEverySubjectThePayloadShowsIsCitableOrADeclaredException(t *testing.T) 
 	}
 	// Attribution controls: this test means nothing unless these specific
 	// subjects actually reached the sets under test, on the sides claimed.
-	for _, subject := range []SubjectRef{team, driverCandidateSubject} {
+	for _, subject := range []SubjectRef{team, driverCandidateSubject, soleCommitted, soleFactSubject} {
 		if _, ok := allowed[subjectKeyForModel(subject)]; !ok {
 			t.Fatalf("fixture drift: %q must be citable", subject.CanonicalID)
 		}

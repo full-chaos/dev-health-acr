@@ -70,6 +70,47 @@ const (
 type cohortGroupAssignment struct {
 	canonicalID string
 	label       string
+	// kind is the subject kind the SOURCE says this group is, decided where
+	// the row was accepted rather than anywhere later. groupAssignmentsFromValue
+	// admits a row only when its scope column says "team" and reads
+	// team_id/team_name, so every assignment it produces is a team by
+	// construction -- this field simply stops that knowledge being thrown
+	// away and re-derived from somewhere less trustworthy.
+	kind SubjectKind
+}
+
+// CohortGroupingRefusal is the CLOSED vocabulary naming why grouping refused
+// to build, for telemetry. Empty means it did not refuse.
+type CohortGroupingRefusal string
+
+const (
+	// CohortGroupingRefusalNone is the absence of a refusal.
+	CohortGroupingRefusalNone CohortGroupingRefusal = ""
+	// CohortGroupingRefusalGroupKindSourceMismatch: the plan's declared group
+	// kind is not the kind the facts actually group by.
+	//
+	// The plan's GroupKind comes from the model's own question frame; a
+	// group's canonical id and label come from a canonical fact row. Stamping
+	// the former onto the latter produces a subject whose identity half is
+	// model-chosen and half source-chosen -- e.g. {repository, team_security}
+	// from rows that are unambiguously team rows. That identity exists in no
+	// source, and once group subjects became citable it would have been a
+	// forgery route into a served answer. Fail closed: build nothing.
+	CohortGroupingRefusalGroupKindSourceMismatch CohortGroupingRefusal = "group_kind_source_mismatch"
+)
+
+// canonicalCohortGroupingRefusals maps each member to ITSELF, so a telemetry
+// lookup returns a compile-time constant rather than the caller's own value --
+// the same reasoning every other closed vocabulary in this package documents.
+var canonicalCohortGroupingRefusals = map[CohortGroupingRefusal]CohortGroupingRefusal{
+	CohortGroupingRefusalNone:                    CohortGroupingRefusalNone,
+	CohortGroupingRefusalGroupKindSourceMismatch: CohortGroupingRefusalGroupKindSourceMismatch,
+}
+
+// ValidCohortGroupingRefusal reports membership of the closed vocabulary.
+func ValidCohortGroupingRefusal(reason CohortGroupingRefusal) bool {
+	_, ok := canonicalCohortGroupingRefusals[reason]
+	return ok
 }
 
 // BuildCohortGroups partitions cohort by the group kind the plan declared,
@@ -103,9 +144,9 @@ type cohortGroupAssignment struct {
 // rewrite: cohort.Complete can come back true after grouping only if it was
 // already true before grouping, and cohort.Truncated never comes back false
 // if it was already true.
-func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (groups []contractsv1.ContextFabricCohortGroup, ungrouped int) {
+func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (groups []contractsv1.ContextFabricCohortGroup, ungrouped int, refusal CohortGroupingRefusal) {
 	if plan.GroupKind == "" || cohort == nil || len(cohort.Members) == 0 {
-		return nil, 0
+		return nil, 0, CohortGroupingRefusalNone
 	}
 	assignments := groupAssignmentsByMember(facts)
 	// Preserve the cohort's own member order inside each group, and order
@@ -115,11 +156,21 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 	order := make([]string, 0, len(cohort.Members))
 	byGroup := make(map[string][]string, len(cohort.Members))
 	labels := make(map[string]string, len(cohort.Members))
+	kinds := make(map[string]SubjectKind, len(cohort.Members))
 	for _, member := range cohort.Members {
 		placed := assignments[SubjectMapKey(member.Subject)]
 		if len(placed) == 0 {
 			ungrouped++
 			continue
+		}
+		// The kind check is per assignment and fails the WHOLE grouping, not
+		// just this member: a grouped answer that silently kept the members
+		// whose source happened to agree would present a partial group axis
+		// as a complete one.
+		for _, assignment := range placed {
+			if assignment.kind != plan.GroupKind {
+				return nil, 0, CohortGroupingRefusalGroupKindSourceMismatch
+			}
 		}
 		// EVERY owning group, not the first one seen. A project genuinely
 		// owned by two teams belongs under both, and dropping one would be
@@ -132,12 +183,13 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 			if _, known := byGroup[assignment.canonicalID]; !known {
 				order = append(order, assignment.canonicalID)
 				labels[assignment.canonicalID] = assignment.label
+				kinds[assignment.canonicalID] = assignment.kind
 			}
 			byGroup[assignment.canonicalID] = append(byGroup[assignment.canonicalID], member.Subject.CanonicalID)
 		}
 	}
 	if len(order) == 0 {
-		return nil, ungrouped
+		return nil, ungrouped, CohortGroupingRefusalNone
 	}
 	sort.Strings(order)
 	groups = make([]contractsv1.ContextFabricCohortGroup, 0, len(order))
@@ -148,7 +200,7 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 			label = canonicalID
 		}
 		groups = append(groups, contractsv1.ContextFabricCohortGroup{
-			Subject:            SubjectRef{Kind: plan.GroupKind, CanonicalID: canonicalID, Label: label},
+			Subject:            SubjectRef{Kind: kinds[canonicalID], CanonicalID: canonicalID, Label: label},
 			MemberCanonicalIDs: members,
 			// Total is the group's membership AS DISCOVERED. It is not a
 			// claim about how many projects the team owns in the world:
@@ -186,7 +238,7 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 			Truncated: false,
 		})
 	}
-	return groups, ungrouped
+	return groups, ungrouped, CohortGroupingRefusalNone
 }
 
 // groupAssignmentsByMember reads the owning group out of each fact's declared
@@ -245,7 +297,10 @@ func groupAssignmentsFromValue(value FactValue) []cohortGroupAssignment {
 			continue
 		}
 		label, _ := firstRowString(row, groupLabelColumnCandidates)
-		found = append(found, cohortGroupAssignment{canonicalID: canonicalID, label: label})
+		// SubjectTeam, not the plan's kind: the scope filter above admitted
+		// this row precisely because it declares itself a team row, and the
+		// columns just read are team columns.
+		found = append(found, cohortGroupAssignment{canonicalID: canonicalID, label: label, kind: SubjectTeam})
 	}
 	return found
 }
