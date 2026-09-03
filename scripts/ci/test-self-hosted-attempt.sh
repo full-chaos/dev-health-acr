@@ -689,6 +689,33 @@ echo '{"jobs":[{"id":9,"name":"race-devhealthschema-self-hosted","status":"compl
 assert_eq 'a terminal FAILURE inside the floor is honoured, not discarded' \
   'claimed-failure' "$(run_wait "$tmpdir/runs-recent-prior.json" "$tmpdir/jobs-first-look-failure.json")"
 
+# Every terminal conclusion that is NOT success must reach claimed-failure.
+# The tip already does this for all of them, but nothing pinned it: review
+# round 2 showed that widening the success test to also accept `cancelled`
+# survived at 58/58, which would let a sibling cancelled before its tests ran
+# be reported as a pass. `success` is the ONLY conclusion that may skip this
+# leg's own work, and that is now a fixture rather than a reading of the code.
+#
+# `skipped` is in the list deliberately even though it should not normally
+# reach the waiter -- both workflows share the same switch and fork gate, so a
+# skipped attempt means the fallback was not polling in the first place. If
+# those gates ever drift apart, this pins the safe answer rather than leaving
+# it to whichever way the drift happens to fall.
+for conclusion in cancelled skipped timed_out neutral action_required stale; do
+  printf '{"jobs":[{"id":9,"name":"%s","status":"completed","conclusion":"%s"}]}\n' \
+    "$JOB" "$conclusion" >"$tmpdir/jobs-term-$conclusion.json"
+  assert_eq "a terminal '$conclusion' sibling is a failure, never an adopted pass" \
+    'claimed-failure' "$(run_wait "$tmpdir/runs-recent-prior.json" "$tmpdir/jobs-term-$conclusion.json")"
+done
+
+# A `completed` job with a NULL conclusion is the same class: unknown is not
+# success. It fails closed, and a re-run can clear it because the re-run bound
+# then rejects the old sibling and this leg does the work itself.
+printf '{"jobs":[{"id":9,"name":"%s","status":"completed","conclusion":null}]}\n' "$JOB" \
+  >"$tmpdir/jobs-term-null.json"
+assert_eq 'a completed sibling with a null conclusion is a failure, not a pass' \
+  'claimed-failure' "$(run_wait "$tmpdir/runs-recent-prior.json" "$tmpdir/jobs-term-null.json")"
+
 # REQUIRED FIXTURE 2 — re-run. On attempt 2, a sibling from attempt 1 passes
 # the created_at floor (created_at does not move on a re-run) but its own
 # run_started_at predates this attempt's, so it is NOT ours: a re-run must
