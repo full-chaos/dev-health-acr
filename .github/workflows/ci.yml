@@ -280,10 +280,13 @@ jobs:
           WORKFLOW_PATH: .github/workflows/ci-self-hosted.yml
           JOB_NAME: unit-self-hosted
           QUEUE_TIMEOUT_MINUTES: 5
-          # Kept in sync by hand with unit-self-hosted's timeout-minutes (27)
+          # Kept in sync by hand with unit-self-hosted's timeout-minutes (35)
           # in ci-self-hosted.yml, plus the script's own 3-minute
-          # reporting-lag buffer: 24 + 3 = 27.
-          ATTEMPT_TIMEOUT_MINUTES: 24
+          # reporting-lag buffer: 32 + 3 = 35. Raised from 27 after a real
+          # pool run: under concurrent load, packages hit Go's default
+          # 10-min per-binary test timeout (make test-coverage sets none),
+          # so unit-self-hosted now also overrides GOFLAGS=-timeout=25m.
+          ATTEMPT_TIMEOUT_MINUTES: 32
         run: scripts/ci/self-hosted-attempt.sh wait
       - name: Decide whether this leg owns the real work
         id: own
@@ -397,6 +400,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
+  # Runner-routing contract: race shards stay HOSTED-ONLY for now. Routed
+  # to the pool alongside scripts/unit/build/race-devhealthschema in an
+  # earlier version of this PR, all 4 shards failed under real concurrent
+  # load on bigboy (load ~65 at the time: codex rounds + other suites
+  # sharing the box, not a per-shard arm64 defect) -- testcontainers'
+  # reaper hit `context deadline exceeded: failed to create network`
+  # under contention. Revisit once the shards can run serially against the
+  # pool or the pool has headroom measured under realistic concurrent load.
   race:
     needs: mirror-preflight
     strategy:
@@ -405,13 +416,6 @@ jobs:
         shard: [1, 2, 3, 4]
     name: race (shard ${{ matrix.shard }} of 4)
     runs-on: ubuntu-latest
-    # Narrower than the workflow default's implicit contents+packages: this
-    # job also needs `actions: read` to see the self-hosted sibling run's
-    # job list (the wait step below).
-    permissions:
-      contents: read
-      actions: read
-      packages: read
     env:
       # CHAOS-4855: see the identical env on the unit job above -- the race
       # shards run the same testcontainers-backed suite, partitioned.
@@ -419,55 +423,11 @@ jobs:
       # ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner>.
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
     steps:
-      # actions/checkout v7.0.0. Unconditional, and FIRST -- the wait step
-      # below runs scripts/ci/self-hosted-attempt.sh out of this workspace.
+      # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
-      # Runner-routing contract v1.5.1: this shard is also the GitHub-hosted
-      # fallback leg for the self-hosted attempt of the SAME shard number in
-      # the sibling `ci-self-hosted` workflow's `race-self-hosted` matrix --
-      # same shape as race-devhealthschema, keyed per shard via matrix.shard.
-      - name: Wait for the self-hosted attempt, or claim the work here
-        id: wait
-        if: >-
-          vars.SELF_HOSTED_RUNNERS == 'enabled'
-          && (github.event_name != 'pull_request'
-          || github.event.pull_request.head.repo.full_name == github.repository)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          EVENT: ${{ github.event_name }}
-          REF: ${{ github.head_ref || github.ref_name }}
-          WORKFLOW_NAME: ci-self-hosted
-          WORKFLOW_PATH: .github/workflows/ci-self-hosted.yml
-          JOB_NAME: race-self-hosted (shard ${{ matrix.shard }} of 4)
-          QUEUE_TIMEOUT_MINUTES: 5
-          # Kept in sync by hand with race-self-hosted's timeout-minutes (15)
-          # in ci-self-hosted.yml, plus the script's own 3-minute
-          # reporting-lag buffer: 12 + 3 = 15.
-          ATTEMPT_TIMEOUT_MINUTES: 12
-        run: scripts/ci/self-hosted-attempt.sh wait
-      - name: Decide whether this leg owns the real work
-        id: own
-        env:
-          OUTCOME: ${{ steps.wait.outputs.outcome }}
-        run: |
-          set -euo pipefail
-          if [ -z "${OUTCOME}" ] || [ "${OUTCOME}" = unclaimed ]; then
-            echo "run_here=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "run_here=false" >>"$GITHUB_OUTPUT"
-            printf 'self-hosted attempt reached a terminal state (%s); not repeating its work here\n' "${OUTCOME}"
-          fi
-      - name: Fail this leg if the self-hosted attempt itself failed
-        if: steps.own.outputs.run_here == 'false' && steps.wait.outputs.outcome == 'claimed-failure'
-        run: |
-          echo "the self-hosted attempt (race-self-hosted shard ${{ matrix.shard }} in the ci-self-hosted workflow) did not succeed; failing this leg so the required gate reflects it" >&2
-          exit 1
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
-        if: steps.own.outputs.run_here == 'true'
         with:
           go-version: '1.27.0'
           cache: true
@@ -475,7 +435,6 @@ jobs:
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
       # GITHUB_TOKEN already has read access to.
       - name: Log in to GitHub Container Registry
-        if: steps.own.outputs.run_here == 'true'
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
         with:
           registry: ghcr.io
@@ -489,7 +448,6 @@ jobs:
       # skip-reads-as-ok trap the grant proof exists to close. Both the
       # unit and race jobs run this suite, so both install the client.
       - name: Install PostgreSQL client for the compose ACL integration test
-        if: steps.own.outputs.run_here == 'true'
         run: |
           set -euo pipefail
           # The runner image already ships the PostgreSQL 16 client binaries;
@@ -517,7 +475,6 @@ jobs:
       # scripts/ci/test-shard.sh, so each shard still runs a real subset of
       # `go list ./...` under -race with the same deterministic shuffle.
       - name: Run race and deterministic shuffle tests
-        if: steps.own.outputs.run_here == 'true'
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh ${{ matrix.shard }} 4)"

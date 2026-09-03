@@ -798,8 +798,8 @@ assert_eq 'a sibling that was itself re-run is still ours on our own re-run' \
 
 # Reads every `KEY: value` line from ci.yml's wait steps, in file order. One
 # self-hosted-routed job used to mean one wait step and one value per key;
-# routing scripts/unit/build/the race matrix alongside race-devhealthschema
-# means several wait steps now, each with its own JOB_NAME (and the same
+# routing scripts/unit/build alongside race-devhealthschema means several
+# wait steps now, each with its own JOB_NAME (and the same
 # WORKFLOW_NAME/WORKFLOW_PATH, since every one polls the same sibling
 # workflow) -- reading only the first would leave every later job's wiring
 # completely unverified.
@@ -840,17 +840,7 @@ check_cross_file() {
     status=1
   fi
 
-  # A matrix job's JOB_NAME (e.g. "race-self-hosted (shard ${{ matrix.shard
-  # }} of 4)") is a rendered `name:` field, never a job key -- match it
-  # against the sibling's `name:` fields instead of a job-key regex.
-  # shellcheck disable=SC2016
-  if printf '%s' "$job_name" | grep -qF '${{ matrix.shard }}'; then
-    if ! grep -qF "name: ${job_name}" "$sibling"; then
-      printf 'ci.yml polls for matrix job name "%s" but %s declares no such "name:" -- the attempt would never be found\n' \
-        "$job_name" "$sibling" >&2
-      status=1
-    fi
-  elif ! grep -qE "^  ${job_name}:" "$sibling"; then
+  if ! grep -qE "^  ${job_name}:" "$sibling"; then
     printf 'ci.yml polls for job "%s" but %s defines no such job -- the attempt would never be found\n' \
       "$job_name" "$sibling" >&2
     status=1
@@ -889,16 +879,6 @@ assert_fails 'renaming the attempt job breaks the cross-file check' \
 assert_fails 'a missing sibling workflow breaks the cross-file check' \
   check_cross_file "$tmpdir/no-such-workflow.yml" \
     race-devhealthschema-self-hosted ci-self-hosted
-
-# The matrix job's own name-matching branch needs its own negative control:
-# a rename of race-self-hosted's `name:` field must break the check the same
-# way a job-key rename does for the non-matrix jobs above.
-sed -E 's/name: race-self-hosted \(shard/name: race-self-hosted-renamed (shard/' \
-  "$repo_root/$sibling_path" >"$tmpdir/sibling-renamed-matrix-name.yml"
-# shellcheck disable=SC2016
-assert_fails 'renaming the matrix job'"'"'s name: field breaks the cross-file check' \
-  check_cross_file "$tmpdir/sibling-renamed-matrix-name.yml" \
-    'race-self-hosted (shard ${{ matrix.shard }} of 4)' ci-self-hosted
 
 # ---------------------------------------------------------------------------
 

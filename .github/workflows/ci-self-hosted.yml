@@ -329,12 +329,20 @@ jobs:
       || github.event.pull_request.head.repo.full_name == github.repository)
     needs: mirror-preflight-self-hosted
     runs-on: [self-hosted, oci-arc-runners]
-    timeout-minutes: 27
+    timeout-minutes: 35
     permissions:
       contents: read
       packages: read
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      # A real pool run (this PR's own CI) hit Go's default 10-min
+      # per-test-binary timeout under concurrent load from sibling pool
+      # jobs: `make test-coverage` sets no -timeout override, and hosted
+      # wall was already ~13min uncontended. GOFLAGS is respected by `go
+      # test` (verified locally: GOFLAGS=-timeout=... changes the actual
+      # deadline), so this raises it above the job's own measured wall
+      # with headroom, without touching the Makefile.
+      GOFLAGS: -timeout=25m
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -437,65 +445,3 @@ jobs:
         run: make clients-real
       - name: Test hosted runtime with disposable dependencies
         run: make hosted-integration
-
-  # The attempt for ci.yml's `race` matrix, one shard per matrix leg so each
-  # hosted shard's own wait step can find its own like-numbered sibling by
-  # JOB_NAME (see ci.yml's race job).
-  race-self-hosted:
-    if: >-
-      vars.SELF_HOSTED_RUNNERS == 'enabled'
-      && (github.event_name != 'pull_request'
-      || github.event.pull_request.head.repo.full_name == github.repository)
-    needs: mirror-preflight-self-hosted
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    name: race-self-hosted (shard ${{ matrix.shard }} of 4)
-    runs-on: [self-hosted, oci-arc-runners]
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      packages: read
-    env:
-      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with: {persist-credentials: false}
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
-        with:
-          go-version: '1.27.0'
-          cache: true
-      - name: Confirm this runner is actually arm64
-        run: |
-          set -euo pipefail
-          arch="$(go env GOARCH)"
-          if [ "${arch}" != "arm64" ]; then
-            echo "expected GOARCH=arm64 on oci-arc-runners, got '${arch}'" >&2
-            exit 1
-          fi
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Install PostgreSQL client for the compose ACL integration test
-        run: |
-          set -euo pipefail
-          if command -v psql >/dev/null 2>&1 \
-            && command -v pg_isready >/dev/null 2>&1; then
-            psql --version
-            pg_isready --version
-            exit 0
-          fi
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y postgresql-client
-          psql --version
-          pg_isready --version
-      - name: Run race and deterministic shuffle tests
-        run: |
-          set -euo pipefail
-          packages="$(scripts/ci/test-shard.sh ${{ matrix.shard }} 4)"
-          printf 'shard %s/4 packages:\n%s\n' '${{ matrix.shard }}' "$packages"
-          make test-race GOTEST_PKGS="$packages"
