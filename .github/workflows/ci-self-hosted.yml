@@ -362,3 +362,77 @@ jobs:
         run: make clients-real
       - name: Test hosted runtime with disposable dependencies
         run: make hosted-integration
+
+  # The attempt for ci.yml's `contracts` job. Container-free (no docker
+  # login, no testcontainers) -- confirmed by grepping the job and every
+  # `make` target it runs for docker/testcontainers references, none
+  # found. Same steps as hosted, same order, including the sparse checkout
+  # of the public full-chaos/dev-health-ops repo (no token needed) and the
+  # `git fetch` probe against it -- both plain network operations, no
+  # different on arm64.
+  contracts-self-hosted:
+    if: >-
+      vars.SELF_HOSTED_RUNNERS == 'enabled'
+      && (github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, oci-arc-runners]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.0'
+          cache: true
+      - name: Confirm this runner is actually arm64
+        run: |
+          set -euo pipefail
+          arch="$(go env GOARCH)"
+          if [ "${arch}" != "arm64" ]; then
+            echo "expected GOARCH=arm64 on oci-arc-runners, got '${arch}'" >&2
+            exit 1
+          fi
+      - name: Verify canonical receipts
+        run: make canonical-receipts
+      - name: Verify wire contracts
+        run: make contract-test
+      - name: Verify CodeGraph contract
+        run: make codegraph-contract
+      - name: Verify trial shard layout
+        run: make shard-plan
+      - name: Verify full-stack offline contract
+        run: make fullstack-contract
+      - name: Read the pinned ops-owned contract commit
+        id: ops-pin
+        run: echo "sha=$(tr -d '[:space:]' < ci/ops-contract.pin)" >> "$GITHUB_OUTPUT"
+      - name: Verify the pin names an immutable commit, not a floating ref
+        run: |
+          set -euo pipefail
+          sha="${{ steps.ops-pin.outputs.sha }}"
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "ci/ops-contract.pin must name a full 40-character lowercase commit SHA. It currently holds: $sha" >&2
+            exit 1
+          fi
+          if git fetch --depth 1 https://github.com/full-chaos/dev-health-ops.git "$sha" >/dev/null 2>&1; then
+            exit 0
+          fi
+          echo "ci/ops-contract.pin names $sha, which does not exist on full-chaos/dev-health-ops's remote (git fetch found nothing)." >&2
+          exit 1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: full-chaos/dev-health-ops
+          ref: ${{ steps.ops-pin.outputs.sha }}
+          path: .ops-contract
+          persist-credentials: false
+          sparse-checkout: |
+            contracts/auth/v1/endpoint-profile.schema.json
+            contracts/auth/v1/credential-classes.json
+            contracts/auth/v1/credential-classes.schema.json
+          sparse-checkout-cone-mode: false
+      - name: Verify endpoint-profile inventory against the pinned ops contract
+        env:
+          ACR_ENDPOINT_PROFILE_SCHEMA: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/endpoint-profile.schema.json
+          ACR_CREDENTIAL_CLASSES: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/credential-classes.json
+          ACR_CREDENTIAL_CLASSES_SCHEMA: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/credential-classes.schema.json
+          ACR_CONTRACT_GATE: required
+        run: go test ./ci/checkendpointprofiles/...
