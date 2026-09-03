@@ -1651,9 +1651,12 @@ func (r RuntimeQuestionInterpreter) recordFamilyResolution(ctx context.Context, 
 	// validated frame there is no projection to route to, and the
 	// precedence table decides exactly as it did before this slice -- the
 	// same fail-safe every other seam-7 consumer takes for a missing frame.
+	// Class is deliberately EMPTY here: with no validated frame there was no
+	// comparison, and labelling it `agreed`/`identical` (as the first version
+	// of this code did) inflates the very counters the flip decision reads.
 	route := FamilyRouteDecision{
 		Family: outcome.Family, Source: FamilyRoutePrecedence,
-		Class: FamilyAgreementAgreed, Disposition: FamilyRouteIdentical,
+		Disposition: FamilyRouteNoFrameObserved,
 	}
 	if shadow.FrameObserved {
 		route = RouteQuestionFamily(shadow.Agreement)

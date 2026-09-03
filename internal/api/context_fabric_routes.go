@@ -595,6 +595,19 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 // Redacting every double-quoted run keeps the first and removes the second,
 // without depending on a per-validator audit of which ones interpolate what.
 //
+// WHAT THIS ENFORCES, AND WHAT IT DOES NOT — stated as a limit rather than
+// patched a third time (round 2, Low). Redaction covers DOUBLE-QUOTED runs.
+// It does NOT cover values a validator interpolates OUTSIDE quotes: two
+// cohort-group rules emit `group-derived complete=%v` / `truncated=%v`, and
+// those booleans reach the line. They are bounded values from the
+// validator's own message, not request-derived content, which is why this is
+// a reported limit and not a leak — but the honest statement of the
+// guarantee is "quoted values are redacted", not "no value is emitted", and
+// the guarantee therefore rests on validators QUOTING request-derived
+// strings. TestValidationRuleUnquotedInterpolationsAreBounded pins the two
+// known unquoted sites by name so this limit fails loudly if a validator
+// ever interpolates a string there.
+//
 // The bound is a byte cap, not a rune cap, because the field is a log value
 // and the thing being bounded is line size.
 func contextFabricValidationRule(err error) string {

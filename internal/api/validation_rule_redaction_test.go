@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -104,5 +105,37 @@ func TestValidationRuleIsBounded(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "<truncated>") {
 		t.Fatalf("a truncated rule must say so, got the tail %q", got[max(0, len(got)-40):])
+	}
+}
+
+// The REPORTED limit, enforced by name so it cannot rot into a comment
+// nobody checks: redaction covers quoted runs, and the two validator rules
+// that interpolate OUTSIDE quotes must keep interpolating bounded values.
+//
+// A disclosure nothing verifies is indistinguishable from an omission. If a
+// validator ever swaps one of these for a request-derived string, this test
+// is what says so.
+func TestValidationRuleUnquotedInterpolationsAreBounded(t *testing.T) {
+	t.Parallel()
+	source, err := os.ReadFile("../contracts/v1/validate_context_fabric_result.go")
+	if err != nil {
+		t.Fatalf("cannot read the validator source: %v", err)
+	}
+	// The two known unquoted-interpolation rules. Each must still format a
+	// BOOL (a bounded value), never %q-less string content.
+	for _, want := range []string{
+		`group-derived complete=%v)", groupComplete`,
+		`group-derived truncated=%v)", groupTruncated`,
+	} {
+		if !strings.Contains(string(source), want) {
+			t.Errorf("the reported limit named this unquoted interpolation and it is gone or changed: %q\nIf a validator now interpolates something else there, re-check whether it can carry request-derived content before updating this test.", want)
+		}
+	}
+	// And the redactor's own behaviour on that shape, so the limit is
+	// demonstrated rather than only asserted about the source.
+	got := contextFabricValidationRule(fmt.Errorf("%w: %w", contextfabric.ErrInvalidResult,
+		errors.New("cohort claims complete=true but its groups do not (group-derived complete=false)")))
+	if !strings.Contains(got, "group-derived complete=false") {
+		t.Fatalf("the documented limit says this bounded value IS emitted; it was not: %q", got)
 	}
 }

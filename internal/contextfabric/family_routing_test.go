@@ -30,6 +30,38 @@ func TestFamilyRouteTableCoversEveryAgreementClassInOrder(t *testing.T) {
 	}
 }
 
+// A frame-absent turn must NOT be counted as an agreement.
+//
+// The regression this pins: the frame-absent path used to install
+// Class=agreed / Disposition=identical, so every turn with no validated
+// frame was counted in the `agreed` bucket the flip decision reads. The
+// counters could not distinguish "both tables produced the same family"
+// from "only one table ran".
+func TestFrameAbsentIsNotCountedAsAgreement(t *testing.T) {
+	t.Parallel()
+	// The value the production path installs when shadow.FrameObserved is
+	// false, restated here rather than derived from the code under test.
+	route := FamilyRouteDecision{
+		Family: QuestionFamilyDiscoveredCohortRanking, Source: FamilyRoutePrecedence,
+		Disposition: FamilyRouteNoFrameObserved,
+	}
+	if route.Class == FamilyAgreementAgreed {
+		t.Fatal("a frame-absent turn reports the `agreed` class; the projection never ran, so there was no agreement to report")
+	}
+	if route.Class != "" {
+		t.Fatalf("Class = %q, want empty -- the agreement vocabulary describes comparisons and there was none", route.Class)
+	}
+	if route.Disposition != FamilyRouteNoFrameObserved {
+		t.Fatalf("Disposition = %q, want %q", route.Disposition, FamilyRouteNoFrameObserved)
+	}
+	if route.Switched {
+		t.Fatal("a frame-absent turn reported Switched")
+	}
+	if !ValidFamilyRouteDisposition(route.Disposition) {
+		t.Fatal("the frame-absent disposition is outside the closed vocabulary")
+	}
+}
+
 // Every declared disposition is USED by some row. A disposition nothing
 // produces is a dead label that reads as coverage -- the same shape as a
 // gate tier with no positive fixture, which can be dead for its whole life
@@ -40,6 +72,10 @@ func TestEveryFamilyRouteDispositionIsUsed(t *testing.T) {
 	for _, rule := range familyRouteTable {
 		used[rule.disposition] = true
 	}
+	// Produced by the frame-absent path in recordFamilyResolution rather
+	// than by a table row, so it is named here explicitly instead of being
+	// silently exempted.
+	used[FamilyRouteNoFrameObserved] = true
 	for _, member := range FamilyRouteDispositionVocabulary() {
 		if !used[member] {
 			t.Errorf("disposition %q is declared but no routing row produces it", member)

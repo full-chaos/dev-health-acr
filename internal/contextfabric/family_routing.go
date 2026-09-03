@@ -136,6 +136,24 @@ const (
 	// `unclassified` -- strictly fewer answers, which is the opposite of
 	// this program's yardstick.
 	FamilyRouteDeclinedProjectionSilent FamilyRouteDisposition = "declined_projection_silent"
+	// FamilyRouteNoFrameObserved: NO FRAME VALIDATED, so no projection
+	// existed and no comparison happened. The precedence table decided,
+	// exactly as it did before this slice.
+	//
+	// THIS IS NOT `agreed`, AND CALLING IT THAT CORRUPTED THE MEASUREMENT.
+	// The first version of this code installed Class=agreed /
+	// Disposition=identical on the frame-absent path, reasoning that
+	// precedence served and nothing changed. Both halves are true and the
+	// label is still wrong: `agreed` asserts that TWO tables produced the
+	// same family, and here the second table never ran. Every frame-absent
+	// turn therefore inflated the `agreed`/`identical` counters -- the exact
+	// counters the flip decision reads as evidence that the switch is a
+	// no-op on most questions. A counter that cannot tell "both tables
+	// agreed" from "there was only one table" is not evidence of agreement.
+	//
+	// Class is left EMPTY on this disposition, deliberately: the agreement
+	// vocabulary describes COMPARISONS, and there was none to describe.
+	FamilyRouteNoFrameObserved FamilyRouteDisposition = "no_frame_observed"
 	// FamilyRouteDeclinedUnexplained: no class describes the pair of rows
 	// that fired. A non-zero count here is a FINDING, not a routing input,
 	// and the safe thing to do with a finding is not to route on it.
@@ -172,6 +190,7 @@ var familyRouteDispositions = [...]FamilyRouteDisposition{
 	FamilyRouteDeclinedIndistinguishable,
 	FamilyRouteDeclinedProjectionSilent,
 	FamilyRouteDeclinedUnexplained,
+	FamilyRouteNoFrameObserved,
 }
 
 // FamilyRouteDispositionCount is the closed vocabulary's size.
