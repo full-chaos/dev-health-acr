@@ -200,3 +200,67 @@ func TestInterpret_NamedSubjectFrame_RawProposalTelemetryNeverSeesTheBackfill(t 
 		t.Fatalf("the raw proposal's own Named.ExpectedKind = %v, want nil -- the backfill must never touch the model's raw emission", *named.ExpectedKind)
 	}
 }
+
+// capturingRequirementDeriver records the exact frame value it was called
+// with, so a test can assert what DeriveRequirements actually SAW, not just
+// what ended up on the receipt afterward -- the two can differ if the
+// backfill and the derivation run in the wrong order (codex round 1, P2).
+type capturingRequirementDeriver struct {
+	frame QuestionFrame
+	saw   bool
+}
+
+func (d *capturingRequirementDeriver) DeriveRequirements(frame QuestionFrame) []DerivedRequirement {
+	d.frame = frame
+	d.saw = true
+	return nil
+}
+
+// TestInterpret_NamedSubjectFrame_RequirementDerivationSeesTheBackfilledFrame
+// is codex round 1's P2 finding, red-first: DeriveRequirementCoordinates
+// (subject_role.go's frameRoleSlots, SubjectExpressionNamed case) already
+// reads Named.ExpectedKind directly to emit a subject role slot. Before
+// this fix, resolveFrame backfilled ExpectedKind only in the switch that
+// writes receipt.QuestionFrame, AFTER DeriveRequirements(result.Frame) had
+// already run on the pre-backfill frame -- so the persisted receipt showed
+// a backfilled kind while RequirementCellsDerived/Unserved (and the
+// FrameValidationEvent's own summary) were computed as though it were
+// still nil. Requirement derivation must see the SAME frame the receipt
+// ends up carrying.
+func TestInterpret_NamedSubjectFrame_RequirementDerivationSeesTheBackfilledFrame(t *testing.T) {
+	t.Parallel()
+	receipt := validModelReceiptFixture(ModelOperationInterpret)
+	receipt.RequestedSubjectKind = contractsv1.ContextFabricSubjectProject
+	frame := namedFrameWithGoal([]string{"acr"})
+	receipt.QuestionFrame = &frame
+
+	interpreted := InterpretedQuestion{
+		Shape: ShapeSingleSubject, RequestedJudgment: "why is acr struggling",
+		SubjectTerms: []string{"acr"}, TimeContext: TimeContext{Axis: TemporalCurrent},
+		FactRequirements: []FactRequirement{{Kind: FactStatus}},
+	}
+	deriver := &capturingRequirementDeriver{}
+	interpreter := RuntimeQuestionInterpreter{
+		Runtime:      fakeModelRuntime{interpreted: interpreted, receipt: receipt},
+		Sink:         &fakeReceiptSink{},
+		Requirements: deriver,
+	}
+	_, outcome, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Interpret() error = %v", err)
+	}
+	if !deriver.saw {
+		t.Fatal("DeriveRequirements was never called")
+	}
+	persisted := outcome.Frame.SubjectExpression.Named
+	if persisted == nil || persisted.ExpectedKind == nil {
+		t.Fatal("precondition failed: the persisted receipt frame was not backfilled")
+	}
+	derived := deriver.frame.SubjectExpression.Named
+	if derived == nil || derived.ExpectedKind == nil {
+		t.Fatalf("DeriveRequirements saw ExpectedKind=nil while the persisted frame has %q -- requirement derivation ran on the PRE-backfill frame", *persisted.ExpectedKind)
+	}
+	if *derived.ExpectedKind != *persisted.ExpectedKind {
+		t.Fatalf("DeriveRequirements saw ExpectedKind=%q, persisted frame has %q -- must be the SAME frame", *derived.ExpectedKind, *persisted.ExpectedKind)
+	}
+}
