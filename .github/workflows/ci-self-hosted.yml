@@ -178,22 +178,22 @@ jobs:
 
   # CHAOS-4855: the same bootstrap race ci.yml's own mirror-preflight guards
   # against (mirror-images.yml uploading newly-mirrored images while a
-  # pulling job is already trying to pull them) applies equally to the
-  # self-hosted attempts below that pull ghcr images (unit-self-hosted,
-  # build-self-hosted, race-self-hosted). There is no cross-workflow `needs`
-  # in GitHub Actions, so this workflow cannot depend on ci.yml's own
-  # mirror-preflight job -- it runs the identical check itself instead.
+  # pulling job is already trying to pull them) applies equally to
+  # build-self-hosted below, which also pulls ghcr images. There is no
+  # cross-workflow `needs` in GitHub Actions, so this workflow cannot
+  # depend on ci.yml's own mirror-preflight job -- it runs the identical
+  # check itself instead.
   #
   # Runs on the POOL, deliberately, not ubuntu-latest: this whole PR exists
   # because the hosted queue backs up for an hour while the pool sits idle
   # (chris: "use the damn box"). A hosted `needs:` dependency in front of
-  # unit-self-hosted/build-self-hosted/race-self-hosted would chain every
-  # one of them behind the exact hosted backlog they are being routed
-  # around -- caught live in this PR's own first CI run, where this job sat
-  # `queued` on ubuntu-latest for 9+ minutes while scripts-self-hosted had
-  # already completed on the pool. `docker buildx imagetools inspect` needs
-  # only the declared-present Docker daemon; buildx ships with the
-  # actions-runner base image's docker CLI.
+  # build-self-hosted would chain it behind the exact hosted backlog it is
+  # being routed around -- caught live in this PR's own first CI run,
+  # where this job sat `queued` on ubuntu-latest for 9+ minutes while
+  # scripts-self-hosted had already completed on the pool.
+  # `docker buildx imagetools inspect` needs only the declared-present
+  # Docker daemon; buildx ships with the actions-runner base image's
+  # docker CLI.
   mirror-preflight-self-hosted:
     if: >-
       vars.SELF_HOSTED_RUNNERS == 'enabled'
@@ -317,89 +317,6 @@ jobs:
         run: scripts/ci/test-self-hosted-attempt.sh
       - name: Verify every testcontainers image is pinned and mirrored
         run: scripts/ci/test-testcontainers-image-pins.sh
-
-  # The attempt for ci.yml's `unit` job. Same testcontainers-backed suite,
-  # same mirror redirect and login as the hosted job; gated on
-  # mirror-preflight-self-hosted for the same reason ci.yml's own `unit`
-  # job is gated on its mirror-preflight.
-  unit-self-hosted:
-    if: >-
-      vars.SELF_HOSTED_RUNNERS == 'enabled'
-      && (github.event_name != 'pull_request'
-      || github.event.pull_request.head.repo.full_name == github.repository)
-    needs: mirror-preflight-self-hosted
-    runs-on: [self-hosted, oci-arc-runners]
-    timeout-minutes: 35
-    permissions:
-      contents: read
-      packages: read
-    env:
-      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
-      # A real pool run (this PR's own CI) hit Go's default 10-min
-      # per-test-binary timeout under concurrent load from sibling pool
-      # jobs: `make test-coverage` sets no -timeout override, and hosted
-      # wall was already ~13min uncontended. GOFLAGS is respected by `go
-      # test` (verified locally: GOFLAGS=-timeout=... changes the actual
-      # deadline), so this raises it above the job's own measured wall
-      # with headroom, without touching the Makefile.
-      GOFLAGS: -timeout=25m
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with: {persist-credentials: false}
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
-        with:
-          go-version: '1.27.0'
-          cache: true
-      - name: Confirm this runner is actually arm64
-        run: |
-          set -euo pipefail
-          arch="$(go env GOARCH)"
-          if [ "${arch}" != "arm64" ]; then
-            echo "expected GOARCH=arm64 on oci-arc-runners, got '${arch}'" >&2
-            exit 1
-          fi
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Install PostgreSQL client for the compose ACL integration test
-        run: |
-          set -euo pipefail
-          if command -v psql >/dev/null 2>&1 \
-            && command -v pg_isready >/dev/null 2>&1; then
-            psql --version
-            pg_isready --version
-            exit 0
-          fi
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y postgresql-client
-          psql --version
-          pg_isready --version
-      - name: Run Go tests with coverage and JUnit reporting
-        id: go-tests
-        run: |
-          set +e
-          make test-coverage
-          status=$?
-          set -e
-          failure="$(jq -r '
-            select(.Action == "fail") |
-            if .Test then (.Package + "/" + .Test) else .Package end
-          ' .tmp/coverage/go-test.json | head -n 1)"
-          test -n "$failure" || failure=unknown
-          failure="$(printf '%s' "$failure" | tr '\r\n' '  ' | cut -c1-180)"
-          printf 'status=%s\nfailure=%s\n' "$status" "$failure" >>"$GITHUB_OUTPUT"
-      - name: Enforce Go tests (${{ steps.go-tests.outputs.failure }})
-        if: steps.go-tests.outputs.status != '0'
-        run: |
-          jq -r '
-            select(.Action == "output") |
-            select(.Output | test("^(--- FAIL:|FAIL[[:space:]]|panic:|fatal error:|[[:space:]]+.*_test\\.go:[0-9]+:|[[:space:]]+Error Trace:|[[:space:]]+Error:|[[:space:]]+Messages:|[[:space:]]+expected|[[:space:]]+actual)")) |
-            .Output
-          ' .tmp/coverage/go-test.json
-          exit 1
 
   # The attempt for ci.yml's `build` job. Same four make targets as hosted,
   # in the same order.
