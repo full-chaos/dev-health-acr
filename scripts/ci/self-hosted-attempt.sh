@@ -54,6 +54,11 @@ set -euo pipefail
 #                    the queue and never reached one inside the result bound.
 
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-15}"
+# How far before this run's own start a sibling run may have been created and
+# still count as ours. Covers the ordering jitter between two workflows started
+# by one webhook event; anything older is a previous trigger's run.
+SIBLING_CREATED_SKEW_SECONDS="${SIBLING_CREATED_SKEW_SECONDS:-90}"
+CREATED_FLOOR=""
 
 # Fake-clock support exists so the timeout paths are TESTED rather than
 # asserted. A five-minute queue bound cannot be exercised in a test suite
@@ -91,7 +96,17 @@ die() {
 # or an empty line when nothing matches. Every field is required to match,
 # and the reason each one is here is a way the lookup can silently pick the
 # wrong run:
-#   workflow name AND path  -- `head_sha` alone returns every workflow that
+#   workflow name AND path  -- measured, not assumed: review round 1 called it
+#     Critical that `workflow_runs[].path` carries an `@<ref>` suffix, which
+#     would make this exact match never fire and leave the routing silently
+#     dead. The live API disagrees, for this repository and for the sibling
+#     run of the PR that introduced this file:
+#       $ gh api "repos/full-chaos/dev-health-acr/actions/runs?per_page=5" \
+#           --jq '.workflow_runs[] | "\(.name)\t\(.path)"'
+#       ci-self-hosted   .github/workflows/ci-self-hosted.yml
+#       ci               .github/workflows/ci.yml
+#     The `@<ref>` form belongs to `referenced_workflows[].path`. Keeping the
+#     match exact: `head_sha` alone returns every workflow that
 #     ran on this commit, ci.yml's own run included. Matching the path as
 #     well as the display name means renaming one without the other stops
 #     matching (safe direction: no match => the hosted leg does the work)
@@ -109,12 +124,12 @@ die() {
 # Ties on all five (a genuine re-run of the same workflow) resolve to the
 # newest by created_at, which is the one this run's push actually started.
 select_run() {
-  local want_name="$1" want_path="$2" want_sha="$3" want_event="$4" want_ref="$5"
+  local want_name="$1" want_path="$2" want_sha="$3" want_event="$4" want_ref="$5" min_created="$6"
   # `jq -s` slurps, so this accepts both a single response object and the
   # concatenated stream `gh api --paginate` emits.
   jq -s -r \
     --arg wf "$want_name" --arg path "$want_path" --arg sha "$want_sha" \
-    --arg event "$want_event" --arg ref "$want_ref" '
+    --arg event "$want_event" --arg ref "$want_ref" --arg floor "$min_created" '
       [ .[]?.workflow_runs[]? ]
       | map(select(
           .name == $wf
@@ -122,8 +137,9 @@ select_run() {
           and .head_sha == $sha
           and .event == $event
           and .head_branch == $ref
+          and .created_at >= $floor
         ))
-      | sort_by(.created_at)
+      | sort_by(.created_at, .id)
       | last
       | if . == null then "" else (.id | tostring) end
     '
@@ -200,17 +216,51 @@ emit_outcome() {
   fi
 }
 
+# When did THIS run start? Used as the floor on which sibling runs are
+# eligible -- see the CREATED_FLOOR comment in cmd_wait.
+current_run_started_at() {
+  if [ -n "${ACR_ATTEMPT_RUN_STARTED_AT:-}" ]; then
+    printf '%s\n' "${ACR_ATTEMPT_RUN_STARTED_AT}"
+    return 0
+  fi
+  gh api "repos/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.run_started_at'
+}
+
 # Reads the attempt's current state, or `not_created null` when the sibling
 # run does not exist yet. Never fails: "I could not see it" is a state the
 # phase loops interpret, not an error that aborts the leg under `set -e`.
 current_state() {
   local run_id
-  run_id="$(fetch_runs | select_run "$WORKFLOW_NAME" "$WORKFLOW_PATH" "$HEAD_SHA" "$EVENT" "$REF")"
+  run_id="$(fetch_runs | select_run "$WORKFLOW_NAME" "$WORKFLOW_PATH" "$HEAD_SHA" "$EVENT" "$REF" "$CREATED_FLOOR")"
   if [ -z "$run_id" ]; then
     printf 'not_created null\n'
     return 0
   fi
   fetch_jobs "$run_id" | attempt_status "$JOB_NAME"
+}
+
+# Has the attempt actually been picked up by a runner?
+#
+# F4 (review round 1, EXECUTED): this used to be "anything that is not `queued`
+# and not `not_created`", which is a BLACKLIST -- and it fails UNSAFE. GitHub's
+# job status vocabulary is open and already carries non-terminal values beyond
+# `queued` (`waiting`, `requested`, `pending` are documented for checks/jobs
+# awaiting approval or deployment gates). Under the blacklist a `waiting` job
+# counted as started, so the leg entered the result phase, waited out the whole
+# result budget for a terminal state that was never coming, and failed the
+# required check -- a red build for a job no runner had even begun. Measured:
+#   $ printf '{"jobs":[{"id":9,"name":"…-self-hosted","status":"waiting"}]}' \
+#       | self-hosted-attempt.sh attempt-status …   ->  waiting null
+#   ... wait ...                                    ->  outcome=claimed-failure
+#
+# Enumerate the STARTED states positively instead. Anything unrecognised --
+# a status GitHub adds next year included -- counts as not yet started, which
+# degrades to "the hosted leg does the work": slower, never wrong.
+attempt_has_started() {
+  case "$1" in
+    in_progress|completed) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # ---- the two-phase wait ---------------------------------------------------
@@ -229,6 +279,32 @@ cmd_wait() {
     die "HEAD_SHA must be a full 40-character lowercase commit SHA, got: ${HEAD_SHA}"
   fi
 
+  # F2 (review round 1, EXECUTED): head SHA + workflow + event + ref do not
+  # identify THIS invocation -- they identify the commit and trigger, which a
+  # previous attempt on the same commit shares. On a re-run of this workflow,
+  # or a reopened PR, a sibling run from the EARLIER trigger is already listed
+  # and already terminal, so the very first poll found it and propagated its
+  # conclusion: the leg skipped its own work on the strength of a run it had
+  # no evidence belonged to it, and a genuinely failing new attempt could be
+  # reported as success. Measured: with one completed/success sibling in the
+  # listing, `wait` returned outcome=claimed-success on poll 1.
+  #
+  # The discriminator is time: a sibling that belongs to this invocation
+  # cannot have been created meaningfully before this run started. The two
+  # runs are created by the same webhook event, normally within the same
+  # second, so a small tolerance covers ordering jitter. Erring tight is the
+  # safe direction -- rejecting a real sibling costs latency (the hosted leg
+  # does the work), while accepting a stale one costs correctness.
+  local started_at floor_epoch
+  started_at="$(current_run_started_at)"
+  if [ -z "$started_at" ] || [ "$started_at" = null ]; then
+    die "could not read this run's own start time; refusing to poll without a staleness floor"
+  fi
+  floor_epoch=$(( $(date -u -d "$started_at" +%s) - SIBLING_CREATED_SKEW_SECONDS ))
+  CREATED_FLOOR="$(date -u -d "@${floor_epoch}" +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'this run started at %s; ignoring sibling runs created before %s\n' \
+    "$started_at" "$CREATED_FLOOR"
+
   local queue_minutes="${QUEUE_TIMEOUT_MINUTES:-5}"
   local attempt_minutes="${ATTEMPT_TIMEOUT_MINUTES:-10}"
   local deadline status conclusion left_queue=false
@@ -243,12 +319,26 @@ cmd_wait() {
   while [ "$(now)" -lt "$deadline" ]; do
     read -r status conclusion <<<"$(current_state)"
     printf 'queue phase: attempt status=%s conclusion=%s\n' "$status" "$conclusion"
-    if [ "$status" != queued ] && [ "$status" != not_created ]; then
+    if attempt_has_started "$status"; then
       left_queue=true
       break
     fi
     poll_sleep
   done
+
+  # F3 (review round 1, EXECUTED): the loop above polls at 0:00, 0:15 … 4:45 and
+  # then exits on the deadline WITHOUT reading the state at 5:00, so an attempt
+  # picked up anywhere in that last 15-second window was invisible and both legs
+  # would run the real suite. One final read closes the blind spot to zero
+  # rather than leaving a guaranteed one-poll gap.
+  if [ "$left_queue" != true ]; then
+    read -r status conclusion <<<"$(current_state)"
+    printf 'queue phase (final read at the deadline): attempt status=%s conclusion=%s\n' \
+      "$status" "$conclusion"
+    if attempt_has_started "$status"; then
+      left_queue=true
+    fi
+  fi
 
   if [ "$left_queue" != true ]; then
     printf 'self-hosted attempt did not leave the queue within %sm -- claiming the work here\n' \
@@ -283,7 +373,7 @@ cmd_wait() {
 }
 
 usage() {
-  printf 'usage: %s select-run <workflow_name> <workflow_path> <head_sha> <event> <ref>   (runs JSON on stdin)\n' "${0##*/}" >&2
+  printf 'usage: %s select-run <workflow_name> <workflow_path> <head_sha> <event> <ref> <min_created_at>  (runs JSON on stdin)\n' "${0##*/}" >&2
   printf '       %s attempt-status <job_name>                                             (jobs JSON on stdin)\n' "${0##*/}" >&2
   printf '       %s wait                                                                  (env-driven)\n' "${0##*/}" >&2
 }
@@ -293,7 +383,7 @@ main() {
   case "$subcommand" in
     select-run)
       shift
-      [ "$#" -eq 5 ] || { usage; exit 2; }
+      [ "$#" -eq 6 ] || { usage; exit 2; }
       select_run "$@"
       ;;
     attempt-status)

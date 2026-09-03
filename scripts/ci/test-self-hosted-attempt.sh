@@ -79,6 +79,10 @@ WF_PATH='.github/workflows/ci-self-hosted.yml'
 EVENT='pull_request'
 REF='some-topic-branch'
 JOB='race-devhealthschema-self-hosted'
+# Every fixture run is created at 10:00-13:30 on 2026-09-02, so a floor before
+# that admits them all; the staleness tests below use a floor between them.
+FLOOR='2026-09-01T00:00:00Z'
+RUN_STARTED='2026-09-02T10:30:00Z'
 
 # ---------------------------------------------------------------------------
 # 1. select-run: which sibling run, if any, belongs to THIS commit and trigger
@@ -102,7 +106,7 @@ JSON
 
 assert_eq 'select-run picks the newest fully-matching sibling run' \
   '105' \
-  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" <"$tmpdir/runs-mixed.json")"
+  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" "$FLOOR" <"$tmpdir/runs-mixed.json")"
 
 # The stale-sibling hazard on its own: the ONLY run on this commit came from
 # a different trigger. The right answer is "no sibling", so the hosted leg
@@ -116,7 +120,7 @@ JSON
 
 assert_eq 'select-run rejects a run on the same SHA from a different event' \
   '' \
-  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" <"$tmpdir/runs-wrong-event.json")"
+  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" "$FLOOR" <"$tmpdir/runs-wrong-event.json")"
 
 # NEGATIVE CONTROL for the above: the defect shape (match on workflow + SHA,
 # ignore event and ref) must return the stale run on this same fixture. If it
@@ -139,7 +143,7 @@ cat >"$tmpdir/runs-wrong-branch.json" <<'JSON'
 JSON
 assert_eq 'select-run rejects a run on the same SHA and event from another ref' \
   '' \
-  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" <"$tmpdir/runs-wrong-branch.json")"
+  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" "$FLOOR" <"$tmpdir/runs-wrong-branch.json")"
 
 # The empty list is the ordinary case for the first few polls (the sibling
 # run exists but the API has not listed it yet) and the permanent case when
@@ -149,7 +153,7 @@ assert_eq 'select-run rejects a run on the same SHA and event from another ref' 
 echo '{"workflow_runs":[]}' >"$tmpdir/runs-empty.json"
 assert_eq 'select-run returns empty, not an error, when no run matches' \
   '' \
-  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" <"$tmpdir/runs-empty.json")"
+  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" "$FLOOR" <"$tmpdir/runs-empty.json")"
 
 # ---------------------------------------------------------------------------
 # 2. attempt-status: absent must be distinguishable from started
@@ -214,6 +218,7 @@ run_wait() {
     REPOSITORY='full-chaos/dev-health-acr' \
     HEAD_SHA="$SHA" EVENT="$EVENT" REF="$REF" \
     WORKFLOW_NAME="$WF_NAME" WORKFLOW_PATH="$WF_PATH" JOB_NAME="$JOB" \
+    ACR_ATTEMPT_RUN_STARTED_AT="$RUN_STARTED" \
     QUEUE_TIMEOUT_MINUTES=5 ATTEMPT_TIMEOUT_MINUTES=10 \
     "$subject" wait 2>/dev/null | sed -n 's/^outcome=//p'
 }
@@ -277,6 +282,7 @@ short_sha_wait() {
     ACR_ATTEMPT_RUNS_SRC="$tmpdir/runs-match.json" \
     ACR_ATTEMPT_JOBS_SRC="$tmpdir/jobs-queued.json" \
     REPOSITORY='full-chaos/dev-health-acr' \
+    ACR_ATTEMPT_RUN_STARTED_AT="$RUN_STARTED" \
     HEAD_SHA='aaaaaaa' EVENT="$EVENT" REF="$REF" \
     WORKFLOW_NAME="$WF_NAME" WORKFLOW_PATH="$WF_PATH" JOB_NAME="$JOB" \
     "$subject" wait
@@ -290,6 +296,93 @@ missing_env_wait() {
     "$subject" wait
 }
 assert_fails 'a missing required input is rejected rather than defaulted' missing_env_wait
+
+# ---------------------------------------------------------------------------
+# 3b. defects found by review round 1, each EXECUTED against this code first
+# ---------------------------------------------------------------------------
+
+# F2. head SHA + workflow + event + ref identify the COMMIT AND TRIGGER, not
+# this invocation. A previous attempt on the same commit -- a re-run, a
+# reopened PR -- shares all four, is already terminal, and is listed before the
+# current sibling exists. Measured before the fix: `wait` returned
+# claimed-success on poll 1 against a stale completed run, so the leg skipped
+# its own work on the strength of a run it had no evidence owned.
+cat >"$tmpdir/runs-stale.json" <<'JSON'
+{"workflow_runs":[
+ {"id":41,"name":"ci-self-hosted","path":".github/workflows/ci-self-hosted.yml","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"pull_request","head_branch":"some-topic-branch","created_at":"2026-09-02T09:00:00Z"}
+]}
+JSON
+assert_eq 'select-run rejects a sibling created before this run started' \
+  '' \
+  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" '2026-09-02T10:29:30Z' <"$tmpdir/runs-stale.json")"
+
+# NEGATIVE CONTROL: the same fixture with an early floor DOES select it, so the
+# assertion above is the floor working and not the fixture failing to match on
+# some other field.
+assert_eq 'negative control: the same stale run is selected when the floor is early' \
+  '41' \
+  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" "$FLOOR" <"$tmpdir/runs-stale.json")"
+
+echo '{"jobs":[{"id":9,"name":"race-devhealthschema-self-hosted","status":"completed","conclusion":"success"}]}' >"$tmpdir/jobs-old-success.json"
+assert_eq 'a stale completed sibling does not let the hosted leg skip its work' \
+  'unclaimed' "$(run_wait "$tmpdir/runs-stale.json" "$tmpdir/jobs-old-success.json")"
+
+# F3. The queue loop polled at 0:00, 0:15 … 4:45 and then exited ON the
+# deadline without reading 5:00, so an attempt picked up inside that last
+# 15-second window was invisible and BOTH legs ran the real suite. 20 empty
+# polls then a started job is exactly that boundary; before the fix this
+# returned `unclaimed`.
+mkdir -p "$tmpdir/jobs-at-deadline"
+for i in $(seq 1 20); do cp "$tmpdir/jobs-empty.json" "$tmpdir/jobs-at-deadline/$i.json"; done
+cp "$tmpdir/jobs-success.json" "$tmpdir/jobs-at-deadline/21.json"
+assert_eq 'an attempt picked up exactly at the queue deadline is still seen' \
+  'claimed-success' "$(run_wait "$tmpdir/runs-match.json" "$tmpdir/jobs-at-deadline")"
+
+# F4. GitHub's job-status vocabulary is open and already carries non-terminal
+# values beyond `queued`. The old blacklist ("not queued and not not_created
+# means started") sent `waiting` into the result phase, which then failed the
+# required check for a job no runner had begun -- it failed UNSAFE. Every
+# unrecognised status must degrade to "not started yet".
+for status in waiting requested pending some_status_github_adds_in_2027; do
+  printf '{"jobs":[{"id":9,"name":"%s","status":"%s","conclusion":null}]}\n' "$JOB" "$status" \
+    >"$tmpdir/jobs-$status.json"
+  assert_eq "a '$status' attempt is not treated as started" \
+    'unclaimed' "$(run_wait "$tmpdir/runs-match.json" "$tmpdir/jobs-$status.json")"
+done
+
+# NEGATIVE CONTROL for F4: the blacklist predicate the code used to carry calls
+# `waiting` started, which is what produced the red build.
+blacklist_says_started() {
+  local status="$1"
+  if [ "$status" != queued ] && [ "$status" != not_created ]; then echo started; else echo queued; fi
+}
+assert_eq 'negative control: the old blacklist predicate calls "waiting" started' \
+  'started' "$(blacklist_says_started waiting)"
+
+# F5. `sort_by` is stable, so two runs created in the same second kept API
+# order and an OLDER run could win. Ids break the tie deterministically.
+cat >"$tmpdir/runs-same-second.json" <<'JSON'
+{"workflow_runs":[
+ {"id":2,"name":"ci-self-hosted","path":".github/workflows/ci-self-hosted.yml","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"pull_request","head_branch":"some-topic-branch","created_at":"2026-09-02T11:00:00Z"},
+ {"id":1,"name":"ci-self-hosted","path":".github/workflows/ci-self-hosted.yml","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"pull_request","head_branch":"some-topic-branch","created_at":"2026-09-02T11:00:00Z"}
+]}
+JSON
+assert_eq 'two runs created in the same second resolve to the newer id' \
+  '2' \
+  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" "$FLOOR" <"$tmpdir/runs-same-second.json")"
+
+# F1 was REFUTED, and the measurement is recorded here so it is not re-raised:
+# review round 1 called it Critical that `workflow_runs[].path` carries an
+# `@<ref>` suffix, which would make the exact path match never fire. The live
+# API for this repository returns the bare path -- including for the sibling
+# run of the very PR that introduced this file:
+#   $ gh api "repos/full-chaos/dev-health-acr/actions/runs?per_page=5" \
+#       --jq '.workflow_runs[] | "\(.name)\t\(.path)"'
+#   ci-self-hosted   .github/workflows/ci-self-hosted.yml
+#   ci               .github/workflows/ci.yml
+# The `@<ref>` form belongs to `referenced_workflows[].path`, not here. The
+# finding's own repro asserted the shape it set out to prove, so it proved only
+# that the selector rejects a path it should reject.
 
 # ---------------------------------------------------------------------------
 # 4. cross-file agreement between ci.yml and ci-self-hosted.yml
