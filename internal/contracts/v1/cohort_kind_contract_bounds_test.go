@@ -3,9 +3,13 @@ package v1
 import (
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -400,6 +404,10 @@ func TestEveryPublishedSubjectKindEnumAgrees(t *testing.T) {
 			if !publishesSubjectKinds(values, wantSet) {
 				return
 			}
+			if reason, excepted := mixedVocabularyExceptions[name+pointer]; excepted {
+				t.Logf("mixed-vocabulary exception applied at %s %s: %s", name, pointer, reason)
+				return
+			}
 			sites = append(sites, site{document: name, pointer: pointer, values: values})
 		})
 	}
@@ -525,16 +533,35 @@ func TestOpenAPIPublishesNoIndependentSubjectKindVocabulary(t *testing.T) {
 // none is deliberately narrow, so this predicate needs no exception list. If
 // a legitimately narrow publisher is ever added, it needs a declared
 // exception here with its reason -- not a quiet loosening of the predicate.
+// ROUND 2 CORRECTION. The first repair of this selector required every enum
+// member to be a subject kind. That is a SUBSET test, and it traded one blind
+// spot for another: an enum carrying a single non-kind member -- a sentinel, a
+// typo, an "unknown" -- is not a subset, so it was skipped entirely and its
+// narrowing was invisible. A witness enum of ["repository", "unknown"] was
+// swept past while the test reported 19 sites and passed.
+//
+// The selector now keys on INTERSECTION: an enum sharing any member with the
+// subject-kind vocabulary is a candidate publisher and must publish the whole
+// vocabulary. Measured when this was written: 19 sites intersect and ALL 19
+// are pure subsets -- there is no enum in the canonical schemas that mixes
+// subject kinds with anything else -- so this widening adds zero false
+// positives today.
+//
+// mixedVocabularyExceptions is the registry for a legitimately mixed enum, if
+// one is ever added. It is EMPTY on purpose. An entry is a reviewed decision
+// that a node may share words with this vocabulary without publishing it, and
+// it carries the reason; the alternative -- quietly loosening the predicate
+// again -- is how this test lost 14 sites the first time and one more the
+// second.
+var mixedVocabularyExceptions = map[string]string{}
+
 func publishesSubjectKinds(values []string, vocabulary map[string]struct{}) bool {
-	if len(values) == 0 {
-		return false
-	}
 	for _, value := range values {
-		if _, ok := vocabulary[value]; !ok {
-			return false
+		if _, ok := vocabulary[value]; ok {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // TestSubjectKindEnumSelectorIsNotKeyedOnANodeName is the positive control
@@ -567,8 +594,10 @@ func TestSubjectKindEnumSelectorIsNotKeyedOnANodeName(t *testing.T) {
 			"the ordinary case"},
 		{"single published kind", []string{"team"}, true,
 			"a one-member narrowing is the most dangerous shape, not the least"},
-		{"mixed vocabulary that merely overlaps", []string{"team", "not_a_subject_kind"}, false,
-			"an enum containing a non-kind is a different vocabulary that happens to share a word"},
+		{"narrowed publisher carrying one non-kind member", []string{"repository", "unknown"}, true,
+			"round 2's witness: a single extra member made this fail the old SUBSET test, so its narrowing was swept past invisibly"},
+		{"mixed vocabulary that shares one word", []string{"team", "not_a_subject_kind"}, true,
+			"selected DELIBERATELY, reversing the old expectation: an enum sharing a member with this vocabulary is either publishing it or needs a reviewed entry in mixedVocabularyExceptions -- silently skipping it is what round 2 found"},
 		{"unrelated vocabulary", []string{"open", "closed"}, false,
 			"no overlap at all"},
 		{"empty enum", nil, false,
@@ -618,4 +647,164 @@ func walkSchemaRefs(node any, visit func(ref string)) {
 			walkSchemaRefs(item, visit)
 		}
 	}
+}
+
+// TestCohortValidateKindDecisionMatchesTheClosedVocabulary is round 2's
+// answer to a guard that could be defeated by naming one value it did not
+// test.
+//
+// THE DEFECT IT REPLACES. The refusal test checks a list of out-of-vocabulary
+// values. A list is a SAMPLE, and a sample can be evaded exactly: a predicate
+// written as
+//
+//	(!validContextFabricSubjectKind(c.Kind) && c.Kind != "division")
+//
+// rejects every value that list happens to contain, accepts every published
+// kind, and admits `division`. Round 2 found this and it was reproduced here:
+// all seven assertions in this file passed while an unpublished kind
+// validated. Adding "division" to the list would fix that one mutant and
+// leave the class untouched.
+//
+// WHY THIS CLOSES THE CLASS RATHER THAN ONE MORE INSTANCE. A special case has
+// to NAME its exception, and in Go that name is a string literal in the
+// source. So the corpus is not hand-written: it is harvested from the
+// validator's own source with go/parser, and every string literal that file
+// contains is required to be decided identically by Validate and by
+// ValidContextFabricSubjectKind. A mutant that special-cases `division` puts
+// the word `division` into the file it mutates, and the corpus therefore
+// contains it by construction. Parsing is used rather than a regex over the
+// text because a regex cannot tell a literal from the same characters inside
+// a comment -- the static-anchoring mistake this codebase has made repeatedly.
+//
+// THE RESIDUAL, stated rather than implied: a special case that does not name
+// its value -- `len(c.Kind) == 8`, a computed constant, a value assembled at
+// run time -- writes no matching literal and survives this. That is a
+// strictly smaller class than "any value the author did not think of", and it
+// is the honest boundary of what a finite test can prove here. The generated
+// perturbations below narrow it further; they do not close it.
+func TestCohortValidateKindDecisionMatchesTheClosedVocabulary(t *testing.T) {
+	t.Parallel()
+	published := publishedCohortKinds(t)
+
+	// Same empty-member fixture as the refusal test, for the same reason:
+	// zero members removes the member-level subject-kind rule, leaving the
+	// cohort-kind bound as the only rule that can fire.
+	validateKind := func(kind string) error {
+		return ContextFabricCohort{
+			Kind:      ContextFabricSubjectKind(kind),
+			Members:   []ContextFabricCohortMember{},
+			Rationale: "no member of the declared kind was authorized by the window",
+			Complete:  true,
+		}.Validate()
+	}
+	if err := validateKind(string(ContextFabricSubjectTeam)); err != nil {
+		t.Fatalf("the empty-cohort control is invalid for a reason other than its kind: %v -- every case below is unattributable", err)
+	}
+
+	corpus := map[string]string{}
+	add := func(value, source string) {
+		if _, seen := corpus[value]; !seen {
+			corpus[value] = source
+		}
+	}
+
+	// (a) Every published kind: the accept side.
+	for _, kind := range published {
+		add(kind, "published vocabulary")
+	}
+
+	// (b) Every string literal in the validator's own source. This is the
+	// half that closes the special-case class.
+	for _, literal := range stringLiteralsInValidatorSource(t) {
+		add(literal, "string literal in validate_context_fabric_result.go")
+	}
+
+	// (c) Systematic single-edit perturbations of each published kind, which
+	// catch the near-miss shapes a hand-written list tends to omit.
+	for _, kind := range published {
+		for i := range kind {
+			add(kind[:i]+kind[i+1:], "single-character deletion of "+kind)
+			add(kind[:i]+"x"+kind[i+1:], "single-character substitution in "+kind)
+		}
+		add(kind+"s", "plural of "+kind)
+		add(strings.ToUpper(kind), "upper-cased "+kind)
+		add(strings.ReplaceAll(kind, "_", "-"), "hyphenated "+kind)
+		add(strings.ReplaceAll(kind, "_", ""), "unseparated "+kind)
+		add(" "+kind, "leading space on "+kind)
+		add(kind+" ", "trailing space on "+kind)
+	}
+
+	// (d) The curated values, kept so the named shapes stay visible.
+	for _, value := range []string{"", "squad", "department", "guild", "division", "team_", "orgs"} {
+		add(value, "curated")
+	}
+
+	publishedSet := make(map[string]struct{}, len(published))
+	for _, value := range published {
+		publishedSet[value] = struct{}{}
+	}
+
+	accepted, refused := 0, 0
+	for value, source := range corpus {
+		_, shouldAccept := publishedSet[value]
+		err := validateKind(value)
+		switch {
+		case shouldAccept && err != nil:
+			t.Errorf("Validate refused published kind %q (from %s): %v", value, source, err)
+		case !shouldAccept && err == nil:
+			t.Errorf("Validate ACCEPTED unpublished kind %q (from %s) -- the cohort-kind decision is not the closed vocabulary alone", value, source)
+		}
+		if shouldAccept {
+			accepted++
+		} else {
+			refused++
+		}
+	}
+
+	// Both sides must be non-empty. A corpus that had drifted to all-valid
+	// or all-invalid would pass every assertion above while testing one
+	// direction only.
+	if accepted != len(published) {
+		t.Errorf("corpus covered %d published kinds, want all %d", accepted, len(published))
+	}
+	if refused < 100 {
+		t.Errorf("corpus held only %d out-of-vocabulary values; the generator produces far more, so it has silently collapsed", refused)
+	}
+	t.Logf("kind decision checked over %d values (%d published, %d not), corpus generated + harvested, not hand-written", len(corpus), accepted, refused)
+}
+
+// stringLiteralsInValidatorSource parses the validator's source and returns
+// every string literal in it.
+//
+// go/parser rather than a regex: a regex over source text cannot distinguish a
+// literal from the same characters inside a comment or an identifier, and this
+// codebase has been bitten by exactly that (a drift guard that pulled a flag
+// out of a comment it had just written, and a guard anchored to whole-file
+// line adjacency). A parser understands the syntax structurally.
+func stringLiteralsInValidatorSource(t *testing.T) []string {
+	t.Helper()
+	root := moduleRootForParity(t)
+	path := filepath.Join(root, "internal", "contracts", "v1", "validate_context_fabric_result.go")
+	fileSet := token.NewFileSet()
+	parsed, err := parser.ParseFile(fileSet, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	var literals []string
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		lit, ok := node.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		value, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			return true
+		}
+		literals = append(literals, value)
+		return true
+	})
+	if len(literals) == 0 {
+		t.Fatalf("no string literals found in %s -- the harvest returned nothing, so the corpus it feeds proves less than it claims", path)
+	}
+	return literals
 }
