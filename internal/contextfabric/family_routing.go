@@ -177,19 +177,24 @@ const (
 	// after carry means moving it out of the interpreter, which is a
 	// restructure this slice is not making.
 	//
-	// What IS fixed: the OUTCOME is no longer self-contradictory. A carried
-	// outcome carries this disposition, source `carried`, and Switched
-	// computed against the family the carry replaced, so any in-process
-	// reader holding the outcome sees that neither table decided.
+	// The OUTCOME is self-consistent: a carried outcome carries this
+	// disposition, source `carried`, an empty class, and Switched computed
+	// against the family the carry replaced. PlanAnswer is what reads that
+	// outcome downstream; the claim here is about the value's own
+	// coherence, not about a reader that inspects Route (none does today).
 	//
-	// WHAT IS NOT FIXED, stated exactly: a carried turn is NOT identifiable
-	// from the family-resolution telemetry STREAM at all. There is no
-	// plan-carry telemetry producer -- `RecordPlanCarry` does not exist, and
-	// `SourceResultID` is resolved but never emitted -- so a stream consumer
-	// has no event to correlate. An earlier version of this comment told
-	// readers to "join on the plan-carry event", which was worse than saying
-	// nothing: it pointed at an artifact that does not exist. Emitting carry
-	// telemetry is follow-on work, not this slice's.
+	// HOW A CARRIED TURN IS OBSERVED: by joining the family-resolution
+	// line's request id against the "context fabric plan carry" event, which
+	// is emitted at the replacement itself and carries the same four route
+	// fields. `family_source=carried` appears ONLY on that second event --
+	// the family-resolution line is built and sent from the interpreter,
+	// before the carry runs, so it can never show it.
+	//
+	// Two earlier versions of this comment were wrong in opposite
+	// directions: the first told readers to join an event that did not
+	// exist, the second said a carried turn was unidentifiable from the
+	// stream and called emitting it follow-on work. The event exists now, so
+	// the join is real.
 	FamilyRouteCarried FamilyRouteDisposition = "carried_from_prior_turn"
 	// FamilyRouteDeclinedUnexplained: no class describes the pair of rows
 	// that fired. A non-zero count here is a FINDING, not a routing input,

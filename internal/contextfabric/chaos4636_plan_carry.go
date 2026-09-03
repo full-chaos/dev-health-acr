@@ -225,8 +225,48 @@ func applyCarriedPlan(outcome QuestionFamilyOutcome, carry planCarryResult) (Que
 	// it does change what is served. Review caught this reporting false.
 	outcome.Route = FamilyRouteDecision{
 		Family: carry.Family, Source: FamilyRouteSourceCarried,
+		// Class is EXPLICITLY empty, not left to the zero value: no
+		// comparison happened on this turn, so no agreement class describes
+		// it. Review found that omitting it let a mutation setting
+		// Class=agreed survive -- an unasserted field is an unguarded one.
+		Class:       "",
 		Disposition: FamilyRouteCarried,
 		Switched:    carry.Family != preCarryFamily,
 	}
 	return outcome, true
+}
+
+// PlanCarryEvent is one carry: which family was replaced, which was carried
+// in, and the routing decision that replacement produced.
+//
+// CLOSED VOCABULARIES AND IDS ONLY. Two families, one source, one class, one
+// disposition, one boolean and a prior result id -- no question text, no
+// subject term, no member list. The member list in particular is deliberately
+// absent: it would carry an authorization decision (North Star check 18),
+// which is the same reason resolveCarriedPlan never returns one.
+type PlanCarryEvent struct {
+	// FamilyReplaced is what this turn resolved to before the carry. A carry
+	// applies only when it is empty or `unclassified`, and recording it is
+	// what makes Switched checkable rather than asserted.
+	FamilyReplaced QuestionFamily
+	// FamilyCarried is the prior turn's family, now served.
+	FamilyCarried QuestionFamily
+	// SourceResultID is the prior result the family came from -- the join
+	// key a stream reader needs to tie the two turns together.
+	SourceResultID string
+	// Route is the decision the carry produced, the same four fields the
+	// family-resolution line carries so the two can be read side by side.
+	Route FamilyRouteDecision
+}
+
+// PlanCarryEventFrom builds the event for an applied carry. Pure: the caller
+// at the I/O boundary emits it, the same split DiscoveredCohort's own
+// authzDropped counters use, so this file stays free of telemetry calls.
+func PlanCarryEventFrom(replaced QuestionFamily, carried QuestionFamilyOutcome, carry planCarryResult) PlanCarryEvent {
+	return PlanCarryEvent{
+		FamilyReplaced: replaced,
+		FamilyCarried:  carried.Family,
+		SourceResultID: carry.SourceResultID,
+		Route:          carried.Route,
+	}
 }

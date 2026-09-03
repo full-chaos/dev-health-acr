@@ -711,6 +711,19 @@ type EngineTelemetry interface {
 	// Content-safe by construction: ServerStatusShadow carries two status
 	// enums, one closed basis token, two booleans and a version constant.
 	RecordServerStatusShadow(ctx context.Context, principal storage.Principal, event ServerStatusShadow)
+	// RecordPlanCarry (CHAOS-4736, seam 7) reports the ONE point where a
+	// prior turn's family replaces this turn's, which is the only place a
+	// carried route is observable.
+	//
+	// WHY IT HAS TO EXIST. The family-resolution event is built and sent
+	// inside the interpreter; applyCarriedPlan runs later, in the engine. So
+	// `family_source=carried` could never appear on that line -- it was a
+	// permanent zero bucket, and a comment elsewhere told stream readers to
+	// "join on the plan-carry event" when no such producer existed. This is
+	// that producer. It is a SECOND line, never a second family-resolution
+	// line: re-emitting that one would double-count the flip counters the
+	// whole slice exists to make readable.
+	RecordPlanCarry(ctx context.Context, principal storage.Principal, event PlanCarryEvent)
 	// RecordModelRowsStripped (CHAOS-4355 follow-up, cf_model_rows_stripped)
 	// reports the count of ClaimedFacts entries whose model-authored Rows
 	// was cleared before draft.ValidateAgainst ran, so an operator can tell
@@ -1301,6 +1314,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// would carry an authorization decision (North Star check 18).
 	planCarry := e.resolveCarriedPlan(ctx, principal, request, priorValidatedReceipts, binding, priorLoadedResults)
 	if carried, applied := applyCarriedPlan(familyOutcome, planCarry); applied {
+		// Emitted HERE, at the one point the replacement happens, because
+		// the family-resolution line was already sent from the interpreter
+		// and a carried route can never appear on it. This is the only
+		// event that can carry `family_source=carried`.
+		if e.telemetry != nil {
+			e.telemetry.RecordPlanCarry(ctx, principal, PlanCarryEventFrom(familyOutcome.Family, carried, planCarry))
+		}
 		familyOutcome = carried
 	}
 	plan := PlanAnswer(PlanAnswerInput{

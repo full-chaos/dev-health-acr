@@ -709,11 +709,20 @@ func (t SlogEngineTelemetry) RecordQuestionFamilyResolution(ctx context.Context,
 	// SEAM 7's ROUTING DECISION (CHAOS-4736), on the same sink discipline:
 	// every field on the struct reaches this line.
 	//
-	// `family_source` is the axis the flip is read on and is deliberately
-	// NOT merged with `source` above: that one names where the PRECEDENCE
-	// table's inputs came from (model / carried / none), this one names
-	// which TABLE decided the served family. Splicing two different
-	// questions into one key is how a rate stops meaning anything.
+	// TWO KEYS ON THIS LINE BOTH SPELL "carried", AND THEY ARE NOT THE SAME
+	// FACT. `source` is ContextFabricQuestionFamilySource -- where the
+	// PRECEDENCE table's inputs came from: model / carried / none.
+	// `family_source` is FamilyRouteSource -- which table decided the served
+	// family: projected / precedence / carried. Splicing two different
+	// questions into one key is how a rate stops meaning anything, so they
+	// stay separate and both vocabularies are named here rather than one of
+	// them being described as "the token list".
+	//
+	// `family_source` CANNOT read `carried` on this line: it is built and
+	// sent from the interpreter, and applyCarriedPlan runs later in the
+	// engine. A carried turn is identified by joining this line's request id
+	// against the "context fabric plan carry" event, which is emitted at the
+	// replacement itself and carries the same four route fields.
 	//
 	// `route_switched` is logged beside `family_source` because they are
 	// not the same fact: the `agreed` class serves the PROJECTED family and
@@ -918,4 +927,26 @@ func (t SlogEngineTelemetry) RecordBudgetAssertion(ctx context.Context, principa
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric budget assertion", args...)
+}
+
+// RecordPlanCarry (CHAOS-4736, seam 7) logs at Info, once per applied carry.
+//
+// Every field on the event reaches this line, per the CHAOS-4085 sink
+// discipline: a field populated on the struct and never logged is not
+// telemetry, it is a field. The four route fields use the SAME key names as
+// the family-resolution line so the two can be read side by side, and the
+// request id is what joins them.
+func (t SlogEngineTelemetry) RecordPlanCarry(ctx context.Context, principal storage.Principal, event PlanCarryEvent) {
+	args := []any{
+		"org_id", principal.OrgID,
+		"family_replaced", string(event.FamilyReplaced),
+		"family_carried", string(event.FamilyCarried),
+		"source_result_id", event.SourceResultID,
+		"family_source", string(event.Route.Source),
+		"route_class", string(event.Route.Class),
+		"route_disposition", string(event.Route.Disposition),
+		"route_switched", event.Route.Switched,
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric plan carry", args...)
 }

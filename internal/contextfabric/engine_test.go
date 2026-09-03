@@ -310,6 +310,10 @@ func TestNewEngineRequiresAllCoreCapabilities(t *testing.T) {
 // production code ever having a content-bearing telemetry sink to leak
 // through.
 type recordingTelemetry struct {
+	// planCarries records every applied carry verbatim -- the ONLY event
+	// that can carry family_source=carried, since the family-resolution
+	// line is sent before the carry runs.
+	planCarries                 []PlanCarryEvent
 	priorSubjectReceiptsSkipped []int
 	answerReuseOutcomes         []AnswerReuseOutcome
 	answerReuseContainment      []AnswerReuseContainmentEvent
@@ -653,6 +657,10 @@ func (r *recordingTelemetry) RecordRenderShapeSelection(_ context.Context, _ sto
 
 func (r *recordingTelemetry) RecordServerStatusShadow(_ context.Context, _ storage.Principal, event ServerStatusShadow) {
 	r.serverStatusShadows = append(r.serverStatusShadows, event)
+}
+
+func (r *recordingTelemetry) RecordPlanCarry(_ context.Context, _ storage.Principal, event PlanCarryEvent) {
+	r.planCarries = append(r.planCarries, event)
 }
 
 func (r *recordingTelemetry) RecordCohortRanked(_ context.Context, _ storage.Principal, event CohortRankedEvent) {

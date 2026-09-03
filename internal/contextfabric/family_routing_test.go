@@ -268,21 +268,103 @@ func TestCarriedOutcomeDoesNotKeepThePreCarryRoute(t *testing.T) {
 	if !ValidFamilyRouteSource(carried.Route.Source) {
 		t.Fatalf("Route.Source %q is outside the closed vocabulary", carried.Route.Source)
 	}
+	// Class, asserted because an unasserted field is an unguarded one: a
+	// mutation setting Class=agreed on this path survived the package until
+	// review pointed at it.
+	if carried.Route.Class != "" {
+		t.Fatalf("Route.Class = %q, want empty -- no comparison happened on a carried turn", carried.Route.Class)
+	}
 }
 
-// A carry that does NOT change the family must not report a switch. Without
-// this, `Switched` on the carry path could be hardcoded true and the test
-// above would still pass -- the mirror of the bug it just caught.
-func TestCarryThatChangesNothingReportsNoSwitch(t *testing.T) {
+// THE REACHABLE SET, stated rather than guessed at. A carry applies only
+// when this turn's family is empty or `unclassified`, and resolveCarriedPlan
+// only offers a family that is neither -- so on every reachable path the
+// carry REPLACES one with the other and Switched is true by construction.
+//
+// The previous version of this test tried to prove the opposite case by
+// feeding a carry whose family was itself `unclassified`. That input cannot
+// occur: it is rejected before it reaches the route. Review caught it as an
+// impossible fixture, which is worse than no test -- it implied a guarded
+// branch that does not exist. What is worth pinning is the real invariant.
+func TestSwitchedIsTrueOnEveryReachableCarry(t *testing.T) {
 	t.Parallel()
-	outcome := QuestionFamilyOutcome{Family: QuestionFamilyUnclassified}
-	carried, applied := applyCarriedPlan(outcome, planCarryResult{
-		Outcome: PlanCarryHit, Family: QuestionFamilyUnclassified,
-	})
+	for _, preCarry := range []QuestionFamily{"", QuestionFamilyUnclassified} {
+		t.Run("replacing_"+string(preCarry), func(t *testing.T) {
+			t.Parallel()
+			carried, applied := applyCarriedPlan(
+				QuestionFamilyOutcome{Family: preCarry},
+				planCarryResult{Outcome: PlanCarryHit, Family: QuestionFamilyGroupedCohortStatus})
+			if !applied {
+				t.Fatal("the carry did not apply; this test proves nothing")
+			}
+			if !carried.Route.Switched {
+				t.Fatalf("replacing %q with a real family reported no switch", preCarry)
+			}
+		})
+	}
+}
+
+// The SOURCE vocabulary needs the same totality the dispositions have. Added
+// after review noted `carried` joined it with nothing checking coverage.
+func TestEveryFamilyRouteSourceIsUsed(t *testing.T) {
+	t.Parallel()
+	used := map[FamilyRouteSource]bool{}
+	for _, rule := range familyRouteTable {
+		used[rule.source] = true
+	}
+	// Produced by applyCarriedPlan rather than a table row, and asserted by
+	// TestCarriedOutcomeDoesNotKeepThePreCarryRoute -- named here for the
+	// same reason the disposition exemptions are, not silently skipped.
+	used[FamilyRouteSourceCarried] = true
+	for _, member := range FamilyRouteSourceVocabulary() {
+		if !used[member] {
+			t.Errorf("source %q is declared but nothing produces it", member)
+		}
+	}
+}
+
+// The carry event must actually REACH a telemetry sink, with the four route
+// fields on it. This is what makes `family_source=carried` observable at all.
+//
+// It drives applyCarriedPlan and the event builder together rather than
+// asserting on a literal — the vacuity correction round 3 forced. What it
+// cannot drive here is the engine's emit call site; that is covered by the
+// engine's own carry test, and the split is stated so neither is mistaken for
+// end-to-end proof on its own.
+func TestPlanCarryEventCarriesTheRouteToTheSink(t *testing.T) {
+	t.Parallel()
+	carry := planCarryResult{
+		Outcome: PlanCarryHit, Family: QuestionFamilyGroupedCohortStatus,
+		GroupKind: SubjectTeam, SourceResultID: "result_prior_turn",
+	}
+	carried, applied := applyCarriedPlan(QuestionFamilyOutcome{Family: QuestionFamilyUnclassified}, carry)
 	if !applied {
 		t.Fatal("the carry did not apply; this test proves nothing")
 	}
-	if carried.Route.Switched {
-		t.Fatal("a carry that produced the same family reported Switched")
+	event := PlanCarryEventFrom(QuestionFamilyUnclassified, carried, carry)
+
+	if event.FamilyReplaced != QuestionFamilyUnclassified {
+		t.Fatalf("FamilyReplaced = %q, want the family the carry displaced", event.FamilyReplaced)
+	}
+	if event.FamilyCarried != QuestionFamilyGroupedCohortStatus {
+		t.Fatalf("FamilyCarried = %q, want the prior turn's family", event.FamilyCarried)
+	}
+	if event.SourceResultID != "result_prior_turn" {
+		t.Fatalf("SourceResultID = %q, want the prior result -- it is the join key a stream reader needs", event.SourceResultID)
+	}
+	// The four route fields, all of them: this event is the ONLY place
+	// family_source=carried can be observed, so a missing field here is a
+	// permanently unobservable fact.
+	if event.Route.Source != FamilyRouteSourceCarried {
+		t.Fatalf("Route.Source = %q, want %q", event.Route.Source, FamilyRouteSourceCarried)
+	}
+	if event.Route.Disposition != FamilyRouteCarried {
+		t.Fatalf("Route.Disposition = %q, want %q", event.Route.Disposition, FamilyRouteCarried)
+	}
+	if event.Route.Class != "" {
+		t.Fatalf("Route.Class = %q, want empty", event.Route.Class)
+	}
+	if !event.Route.Switched {
+		t.Fatal("Route.Switched = false on a carry that replaced unclassified")
 	}
 }
