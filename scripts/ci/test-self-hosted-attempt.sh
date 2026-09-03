@@ -211,6 +211,7 @@ assert_eq 'a different job in the same run does not answer for the attempt' \
 
 run_wait() {
   local runs="$1" jobs="$2"
+  rm -f "$jobs/.poll-index" 2>/dev/null || true
   env \
     ACR_ATTEMPT_FAKE_CLOCK=1 \
     ACR_ATTEMPT_RUNS_SRC="$runs" \
@@ -307,6 +308,23 @@ assert_fails 'a missing required input is rejected rather than defaulted' missin
 # current sibling exists. Measured before the fix: `wait` returned
 # claimed-success on poll 1 against a stale completed run, so the leg skipped
 # its own work on the strength of a run it had no evidence owned.
+# Same as run_wait but keeps the progress trace, so a test can assert which
+# phase a case actually reached instead of assuming it.
+run_wait_verbose() {
+  local runs="$1" jobs="$2"
+  rm -f "$jobs/.poll-index" 2>/dev/null || true
+  env \
+    ACR_ATTEMPT_FAKE_CLOCK=1 \
+    ACR_ATTEMPT_RUNS_SRC="$runs" \
+    ACR_ATTEMPT_JOBS_SRC="$jobs" \
+    ACR_ATTEMPT_RUN_STARTED_AT="$RUN_STARTED" \
+    REPOSITORY='full-chaos/dev-health-acr' \
+    HEAD_SHA="$SHA" EVENT="$EVENT" REF="$REF" \
+    WORKFLOW_NAME="$WF_NAME" WORKFLOW_PATH="$WF_PATH" JOB_NAME="$JOB" \
+    QUEUE_TIMEOUT_MINUTES=5 ATTEMPT_TIMEOUT_MINUTES=10 \
+    "$subject" wait 2>/dev/null
+}
+
 cat >"$tmpdir/runs-stale.json" <<'JSON'
 {"workflow_runs":[
  {"id":41,"name":"ci-self-hosted","path":".github/workflows/ci-self-hosted.yml","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"pull_request","head_branch":"some-topic-branch","created_at":"2026-09-02T09:00:00Z"}
@@ -332,11 +350,29 @@ assert_eq 'a stale completed sibling does not let the hosted leg skip its work' 
 # 15-second window was invisible and BOTH legs ran the real suite. 20 empty
 # polls then a started job is exactly that boundary; before the fix this
 # returned `unclaimed`.
+#
+# Poll accounting, which is load-bearing and drifted once already: the first-look
+# read is poll 1, the queue loop then polls at t=0,15,…,285 (polls 2..21), and
+# the final read at the deadline is poll 22. The started state must therefore
+# land on poll 22 to exercise the deadline read; at poll 21 it is caught by the
+# loop's last iteration and the test passes with the deadline read deleted.
+# That is exactly what happened when the first-look read was added in round 2 --
+# every replay fixture shifted by one and this test silently stopped testing
+# anything. Caught by a surviving mutation, not by review. The reach assertion
+# below is the guard against it drifting again.
 mkdir -p "$tmpdir/jobs-at-deadline"
-for i in $(seq 1 20); do cp "$tmpdir/jobs-empty.json" "$tmpdir/jobs-at-deadline/$i.json"; done
-cp "$tmpdir/jobs-success.json" "$tmpdir/jobs-at-deadline/21.json"
+for i in $(seq 1 21); do cp "$tmpdir/jobs-empty.json" "$tmpdir/jobs-at-deadline/$i.json"; done
+cp "$tmpdir/jobs-success.json" "$tmpdir/jobs-at-deadline/22.json"
 assert_eq 'an attempt picked up exactly at the queue deadline is still seen' \
   'claimed-success' "$(run_wait "$tmpdir/runs-match.json" "$tmpdir/jobs-at-deadline")"
+
+deadline_trace="$(run_wait_verbose "$tmpdir/runs-match.json" "$tmpdir/jobs-at-deadline")"
+case "$deadline_trace" in
+  *"final read at the deadline"*) deadline_reached=yes ;;
+  *) deadline_reached=no ;;
+esac
+assert_eq 'that case genuinely exercised the final read at the deadline' \
+  'yes' "$deadline_reached"
 
 # F4. GitHub's job-status vocabulary is open and already carries non-terminal
 # values beyond `queued`. The old blacklist ("not queued and not not_created
@@ -383,6 +419,104 @@ assert_eq 'two runs created in the same second resolve to the newer id' \
 # The `@<ref>` form belongs to `referenced_workflows[].path`, not here. The
 # finding's own repro asserted the shape it set out to prove, so it proved only
 # that the selector rejects a path it should reject.
+
+# ---------------------------------------------------------------------------
+# 3c. defects found by review round 2, each EXECUTED against this code first
+# ---------------------------------------------------------------------------
+
+# R2-F1. The created_at floor narrows the stale-sibling class but cannot close
+# it: any tolerance wide enough for webhook ordering jitter is wide enough for
+# a separate trigger inside it. Measured before the fix -- a prior sibling 60 s
+# older was selected under the 90 s allowance. The discriminator is now a
+# property instead of a tuning: a sibling already TERMINAL at first look
+# belongs to an earlier invocation, because our first poll happens seconds
+# after this run starts and an attempt takes minutes.
+cat >"$tmpdir/runs-recent-prior.json" <<'JSON'
+{"workflow_runs":[
+ {"id":41,"name":"ci-self-hosted","path":".github/workflows/ci-self-hosted.yml","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"pull_request","head_branch":"some-topic-branch","created_at":"2026-09-02T10:29:00Z"}
+]}
+JSON
+assert_eq 'a sibling already completed at first look is not adopted, even inside the floor' \
+  'unclaimed' "$(run_wait "$tmpdir/runs-recent-prior.json" "$tmpdir/jobs-success.json")"
+
+# And the property does not depend on the tolerance. Round 2 showed all 36
+# checks passing with SIBLING_CREATED_SKEW_SECONDS widened tenfold, which meant
+# the safety property was pinned by the fixture's age rather than by the code.
+# Re-assert the same case with the skew widened far past any plausible value:
+# if this still holds, the guarantee is not a function of the constant.
+assert_eq 'the first-look rule holds with the staleness tolerance widened 100x' \
+  'unclaimed' \
+  "$(SIBLING_CREATED_SKEW_SECONDS=9000 run_wait "$tmpdir/runs-recent-prior.json" "$tmpdir/jobs-success.json")"
+
+# NEGATIVE CONTROL: the same recent sibling IS selectable by the selector --
+# the assertions above are the first-look rule working, not the fixture
+# failing to match on some other field.
+assert_eq 'negative control: that same sibling is selectable when nothing excludes it' \
+  '41' \
+  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" "$FLOOR" <"$tmpdir/runs-recent-prior.json")"
+
+assert_eq 'an excluded run id is not selected' \
+  '' \
+  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" "$FLOOR" '41' <"$tmpdir/runs-recent-prior.json")"
+
+# R2-F1b. The floor comparison is lexical, so a non-`Z` timestamp could sort
+# later than it occurred: an offset timestamp denoting the previous day passed
+# the floor. Only the exact `...Z` shape GitHub emits is accepted now;
+# anything else is rejected rather than compared.
+cat >"$tmpdir/runs-offset-ts.json" <<'JSON'
+{"workflow_runs":[
+ {"id":42,"name":"ci-self-hosted","path":".github/workflows/ci-self-hosted.yml","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"pull_request","head_branch":"some-topic-branch","created_at":"2026-09-02T10:29:31+23:00"}
+]}
+JSON
+assert_eq 'a non-Z timestamp is rejected rather than lexically compared' \
+  '' \
+  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" '2026-09-02T10:29:30Z' <"$tmpdir/runs-offset-ts.json")"
+
+# R2-F2. A runner lost mid-job sends the attempt `in_progress` -> `queued`.
+# Waiting out the result budget for a terminal state that is not coming and
+# then failing turns a recoverable infrastructure event into a red required
+# check; measured, that is exactly what happened. There is no running attempt
+# left to trust, so the work comes back to this leg.
+#
+# The ORDER of these fixtures is load-bearing, and the first attempt at them
+# was vacuous. `wait` takes one read BEFORE the queue loop (the first-look
+# rule), so a fixture starting at `in_progress` spends that observation on the
+# first look and the queue loop then sees only `queued` -- the assertion passed
+# from the QUEUE phase and never entered the result phase at all. It was a
+# mutation that survived (disabling the requeue branch changed nothing) that
+# exposed it, not review. Poll 1 must therefore be `queued` so the first look
+# is uneventful, poll 2 `in_progress` so the queue loop hands over to the
+# result phase, and poll 3 `queued` so the requeue branch is the thing under
+# test.
+mkdir -p "$tmpdir/jobs-requeued"
+cp "$tmpdir/jobs-queued.json"  "$tmpdir/jobs-requeued/1.json"
+cp "$tmpdir/jobs-running.json" "$tmpdir/jobs-requeued/2.json"
+cp "$tmpdir/jobs-queued.json"  "$tmpdir/jobs-requeued/3.json"
+assert_eq 'an attempt whose runner is lost hands the work back instead of failing the check' \
+  'unclaimed' "$(run_wait "$tmpdir/runs-match.json" "$tmpdir/jobs-requeued")"
+
+# Reach check: the assertion above is only about the requeue branch if the run
+# actually got into the result phase. Assert that it did, rather than trusting
+# the fixture ordering to stay correct through future edits.
+#
+# NB: this probe captures the trace into a variable before matching it. The
+# first spelling piped into `grep -q`, which exits on its first match, SIGPIPEs
+# the producer, and under `set -o pipefail` makes the whole pipeline exit 141 --
+# so the `||` branch fired and the probe reported "no" for a case that plainly
+# does reach the result phase. A probe whose failure branch can be reached for a
+# reason unrelated to what it measures is worse than no probe.
+requeue_trace="$(run_wait_verbose "$tmpdir/runs-match.json" "$tmpdir/jobs-requeued")"
+case "$requeue_trace" in
+  *"result phase"*) requeue_reached=yes ;;
+  *) requeue_reached=no ;;
+esac
+assert_eq 'that requeue case genuinely reached the result phase' \
+  'yes' "$requeue_reached"
+
+# The genuine hang is still a failure: an attempt that stays `in_progress`
+# past the result bound is not recoverable and must not read as a pass.
+assert_eq 'an attempt still running past the result bound is still a failure' \
+  'claimed-failure' "$(run_wait "$tmpdir/runs-match.json" "$tmpdir/jobs-running.json")"
 
 # ---------------------------------------------------------------------------
 # 4. cross-file agreement between ci.yml and ci-self-hosted.yml

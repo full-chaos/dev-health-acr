@@ -59,6 +59,9 @@ POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-15}"
 # by one webhook event; anything older is a previous trigger's run.
 SIBLING_CREATED_SKEW_SECONDS="${SIBLING_CREATED_SKEW_SECONDS:-90}"
 CREATED_FLOOR=""
+# A sibling run identified as belonging to an EARLIER invocation; excluded from
+# every subsequent lookup. See the first-look rule in cmd_wait.
+EXCLUDE_RUN_ID=""
 
 # Fake-clock support exists so the timeout paths are TESTED rather than
 # asserted. A five-minute queue bound cannot be exercised in a test suite
@@ -125,11 +128,13 @@ die() {
 # newest by created_at, which is the one this run's push actually started.
 select_run() {
   local want_name="$1" want_path="$2" want_sha="$3" want_event="$4" want_ref="$5" min_created="$6"
+  local exclude_id="${7:-}"
   # `jq -s` slurps, so this accepts both a single response object and the
   # concatenated stream `gh api --paginate` emits.
   jq -s -r \
     --arg wf "$want_name" --arg path "$want_path" --arg sha "$want_sha" \
-    --arg event "$want_event" --arg ref "$want_ref" --arg floor "$min_created" '
+    --arg event "$want_event" --arg ref "$want_ref" --arg floor "$min_created" \
+    --arg exclude "$exclude_id" '
       [ .[]?.workflow_runs[]? ]
       | map(select(
           .name == $wf
@@ -137,7 +142,9 @@ select_run() {
           and .head_sha == $sha
           and .event == $event
           and .head_branch == $ref
+          and (.created_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
           and .created_at >= $floor
+          and (.id | tostring) != $exclude
         ))
       | sort_by(.created_at, .id)
       | last
@@ -231,12 +238,12 @@ current_run_started_at() {
 # phase loops interpret, not an error that aborts the leg under `set -e`.
 current_state() {
   local run_id
-  run_id="$(fetch_runs | select_run "$WORKFLOW_NAME" "$WORKFLOW_PATH" "$HEAD_SHA" "$EVENT" "$REF" "$CREATED_FLOOR")"
+  run_id="$(fetch_runs | select_run "$WORKFLOW_NAME" "$WORKFLOW_PATH" "$HEAD_SHA" "$EVENT" "$REF" "$CREATED_FLOOR" "$EXCLUDE_RUN_ID")"
   if [ -z "$run_id" ]; then
-    printf 'not_created null\n'
+    printf 'not_created null -\n'
     return 0
   fi
-  fetch_jobs "$run_id" | attempt_status "$JOB_NAME"
+  printf '%s %s\n' "$(fetch_jobs "$run_id" | attempt_status "$JOB_NAME")" "$run_id"
 }
 
 # Has the attempt actually been picked up by a runner?
@@ -307,7 +314,30 @@ cmd_wait() {
 
   local queue_minutes="${QUEUE_TIMEOUT_MINUTES:-5}"
   local attempt_minutes="${ATTEMPT_TIMEOUT_MINUTES:-10}"
-  local deadline status conclusion left_queue=false
+  local deadline status conclusion run_id left_queue=false
+
+  # Review round 2, EXECUTED: the created_at floor alone does NOT close the
+  # stale-sibling class, it only narrows it. Any tolerance wide enough to
+  # absorb webhook ordering jitter is also wide enough to admit a genuinely
+  # separate trigger inside it -- measured, a prior sibling 60 s older was
+  # selected under the 90 s allowance. A time window cannot tell those apart,
+  # so the floor is demoted to a cheap pre-filter and the actual discriminator
+  # is a property no clock tolerance can fake:
+  #
+  #   A sibling that is ALREADY TERMINAL the first time we look belongs to an
+  #   earlier invocation.
+  #
+  # Our first poll happens seconds after this run starts; the attempt takes
+  # minutes. A genuinely concurrent sibling therefore cannot be `completed`
+  # when we first see it. One that is, is somebody else's -- so drop it and
+  # look again for ours. This holds no matter how wide the skew is set, which
+  # is what makes it a property rather than a tuning.
+  read -r status conclusion run_id <<<"$(current_state)"
+  if [ "$status" = completed ]; then
+    EXCLUDE_RUN_ID="$run_id"
+    printf 'sibling run %s was already %s/%s at first look, so it belongs to an earlier invocation of this commit; ignoring it\n' \
+      "$run_id" "$status" "$conclusion"
+  fi
 
   # Phase 1, the queue bound. This is the actual hang guard, and it runs on
   # GitHub-hosted infrastructure so it does not depend on the self-hosted
@@ -317,8 +347,8 @@ cmd_wait() {
   # GitHub's documented 24-hour queue backstop.
   deadline=$(( $(now) + queue_minutes * 60 ))
   while [ "$(now)" -lt "$deadline" ]; do
-    read -r status conclusion <<<"$(current_state)"
-    printf 'queue phase: attempt status=%s conclusion=%s\n' "$status" "$conclusion"
+    read -r status conclusion run_id <<<"$(current_state)"
+    printf 'queue phase: attempt status=%s conclusion=%s run=%s\n' "$status" "$conclusion" "$run_id"
     if attempt_has_started "$status"; then
       left_queue=true
       break
@@ -332,9 +362,9 @@ cmd_wait() {
   # would run the real suite. One final read closes the blind spot to zero
   # rather than leaving a guaranteed one-poll gap.
   if [ "$left_queue" != true ]; then
-    read -r status conclusion <<<"$(current_state)"
-    printf 'queue phase (final read at the deadline): attempt status=%s conclusion=%s\n' \
-      "$status" "$conclusion"
+    read -r status conclusion run_id <<<"$(current_state)"
+    printf 'queue phase (final read at the deadline): attempt status=%s conclusion=%s run=%s\n' \
+      "$status" "$conclusion" "$run_id"
     if attempt_has_started "$status"; then
       left_queue=true
     fi
@@ -354,14 +384,28 @@ cmd_wait() {
   # attempt's own timeout-minutes should have ended it well inside this.
   deadline=$(( $(now) + (attempt_minutes + 3) * 60 ))
   while [ "$(now)" -lt "$deadline" ]; do
-    read -r status conclusion <<<"$(current_state)"
-    printf 'result phase: attempt status=%s conclusion=%s\n' "$status" "$conclusion"
+    read -r status conclusion run_id <<<"$(current_state)"
+    printf 'result phase: attempt status=%s conclusion=%s run=%s\n' "$status" "$conclusion" "$run_id"
     if [ "$status" = completed ]; then
       if [ "$conclusion" = success ]; then
         emit_outcome claimed-success
       else
         emit_outcome claimed-failure
       fi
+      return 0
+    fi
+    # Review round 2, EXECUTED: an attempt can go `in_progress` -> `queued`
+    # when its runner is lost and GitHub re-queues the job. Waiting out the
+    # result budget for a terminal state that is not coming, then failing,
+    # turns a recoverable infrastructure event into a RED required check --
+    # measured: in_progress once, then queued, produced claimed-failure while
+    # the job was one pickup away from success. There is no longer a running
+    # attempt to trust, so hand the work back to this leg: slower, and right.
+    # Only an attempt still genuinely running past the bound (below) is a hang.
+    if ! attempt_has_started "$status"; then
+      printf 'the attempt returned to %s after starting (runner lost, or the run vanished); claiming the work here rather than failing a job that may still succeed\n' \
+        "$status"
+      emit_outcome unclaimed
       return 0
     fi
     poll_sleep
@@ -373,7 +417,7 @@ cmd_wait() {
 }
 
 usage() {
-  printf 'usage: %s select-run <workflow_name> <workflow_path> <head_sha> <event> <ref> <min_created_at>  (runs JSON on stdin)\n' "${0##*/}" >&2
+  printf 'usage: %s select-run <workflow_name> <workflow_path> <head_sha> <event> <ref> <min_created_at> [exclude_run_id]  (runs JSON on stdin)\n' "${0##*/}" >&2
   printf '       %s attempt-status <job_name>                                             (jobs JSON on stdin)\n' "${0##*/}" >&2
   printf '       %s wait                                                                  (env-driven)\n' "${0##*/}" >&2
 }
@@ -383,7 +427,7 @@ main() {
   case "$subcommand" in
     select-run)
       shift
-      [ "$#" -eq 6 ] || { usage; exit 2; }
+      [ "$#" -ge 6 ] && [ "$#" -le 7 ] || { usage; exit 2; }
       select_run "$@"
       ;;
     attempt-status)
