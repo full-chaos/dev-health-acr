@@ -189,6 +189,90 @@ func TestKindOfferMaterial_DeclaredKindAloneSuppressesNeed(t *testing.T) {
 	}
 }
 
+// TestKindOfferMaterial_NamedSubjectDeclaredKindRanksFirst (CHAOS-4967,
+// rig-found gap) reproduces "Why is the acr project struggling?" verbatim:
+// a named_subject frame declaring ExpectedKind=project (NamedSubjectExpression
+// -- a DIFFERENT field from the MemberKind()/GroupKind() frameKindHints
+// reads, see namedSubjectDeclaredKind's own doc comment, cohort_kind.go)
+// against the exact pool the live rig measured -- [ci_pipeline_run,
+// pull_request, pull_request_review, repository], project absent. Before
+// namedSubjectDeclaredKind existed, this frame contributed nothing to
+// declaredKinds and the offer kept omitting project even after the
+// children_of_scope/discovered_kind/grouped_members half of this fix
+// landed -- confirmed live on 3/3 rig reps.
+func TestKindOfferMaterial_NamedSubjectDeclaredKindRanksFirst(t *testing.T) {
+	t.Parallel()
+	frame := &contextfabric.QuestionFrame{
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind: contextfabric.SubjectExpressionNamed,
+			Named: &contextfabric.NamedSubjectExpression{
+				Terms:        []string{"acr"},
+				ExpectedKind: kindPtr(contractsv1.ContextFabricSubjectProject),
+			},
+		},
+	}
+	declaredKinds := namedSubjectDeclaredKind(frame)
+	if len(declaredKinds) != 1 || declaredKinds[0] != contractsv1.ContextFabricSubjectProject {
+		t.Fatalf("namedSubjectDeclaredKind(named_subject, ExpectedKind=project) = %v, want [project]", declaredKinds)
+	}
+
+	poolKinds := []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectCIRun,
+		contractsv1.ContextFabricSubjectPullRequest,
+		contractsv1.ContextFabricSubjectPullRequestReview,
+		contractsv1.ContextFabricSubjectRepository,
+	}
+	material, diag := kindOfferMaterial(poolKinds, nil, declaredKinds)
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
+		t.Fatalf("material.Missing = %v, want [expected_kind]", material.Missing)
+	}
+	if len(material.KindOptions) != 5 {
+		t.Fatalf("len(material.KindOptions) = %d, want 5 (declared + 4 pool kinds)", len(material.KindOptions))
+	}
+	if got := material.KindOptions[0].Kind; got != contractsv1.ContextFabricSubjectProject {
+		t.Fatalf("KindOptions[0].Kind = %q, want project ranked FIRST -- this is the rig-found gap: a named_subject question's own declared kind was absent from its own offer", got)
+	}
+	if diag != (kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 1, DistinctKindCount: 5, SuppressedByCardinality: false}) {
+		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:1 DistinctKindCount:5 SuppressedByCardinality:false}", diag)
+	}
+}
+
+// TestNamedSubjectDeclaredKind_OtherVariantsAndMissingFieldsYieldNothing pins
+// namedSubjectDeclaredKind's own scope: nil frame, a non-named_subject
+// variant, a named_subject frame with no ExpectedKind (the model stated
+// none), and a nil Named all yield nil -- never a spurious hint.
+func TestNamedSubjectDeclaredKind_OtherVariantsAndMissingFieldsYieldNothing(t *testing.T) {
+	t.Parallel()
+	if got := namedSubjectDeclaredKind(nil); got != nil {
+		t.Errorf("namedSubjectDeclaredKind(nil) = %v, want nil", got)
+	}
+	scoped := &contextfabric.QuestionFrame{SubjectExpression: contextfabric.SubjectExpression{
+		Kind:   contextfabric.SubjectExpressionChildrenOfScope,
+		Scoped: &contextfabric.ScopedSetExpression{MemberKind: contractsv1.ContextFabricSubjectRepository},
+	}}
+	if got := namedSubjectDeclaredKind(scoped); got != nil {
+		t.Errorf("namedSubjectDeclaredKind(children_of_scope) = %v, want nil -- not this function's variant", got)
+	}
+	noKind := &contextfabric.QuestionFrame{SubjectExpression: contextfabric.SubjectExpression{
+		Kind:  contextfabric.SubjectExpressionNamed,
+		Named: &contextfabric.NamedSubjectExpression{Terms: []string{"acr"}},
+	}}
+	if got := namedSubjectDeclaredKind(noKind); got != nil {
+		t.Errorf("namedSubjectDeclaredKind(named_subject, no ExpectedKind) = %v, want nil -- the model stated none", got)
+	}
+	nilNamed := &contextfabric.QuestionFrame{SubjectExpression: contextfabric.SubjectExpression{
+		Kind: contextfabric.SubjectExpressionNamed,
+	}}
+	if got := namedSubjectDeclaredKind(nilNamed); got != nil {
+		t.Errorf("namedSubjectDeclaredKind(named_subject, nil Named) = %v, want nil", got)
+	}
+}
+
+func kindPtr(kind contractsv1.ContextFabricSubjectKind) *contextfabric.SubjectKind {
+	sk := contextfabric.SubjectKind(kind)
+	return &sk
+}
+
 // TestCandidateOfferMaterial_EmptyPoolOffersNothing pins the "genuinely
 // nothing to rank" case -- distinct from the cardinality question
 // kindOfferMaterial's own gate asks; candidateOfferMaterial has no

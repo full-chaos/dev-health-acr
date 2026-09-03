@@ -201,3 +201,59 @@ func frameKindHints(frame *contextfabric.QuestionFrame) []contextfabric.SubjectK
 	}
 	return hints
 }
+
+// namedSubjectDeclaredKind (CHAOS-4967) reads the declared kind off a
+// named_subject frame -- NamedSubjectExpression.ExpectedKind (frame.go),
+// "the kind the question expects, when the model stated one". This is a
+// SEPARATE field from MemberKind()/GroupKind(): frame.go's own doc comment
+// on MemberKind names exactly the four variants it covers
+// (discovered_kind/children_of_scope/grouped_members/organization_scope),
+// and named_subject (like explicit_set) is not among them, so
+// frameKindHints above never sees a single-named-subject question's own
+// declared kind at all -- confirmed live: "Why is the acr project
+// struggling?" (named_subject, ExpectedKind=project) kept offering
+// [ci_pipeline_run, pull_request, pull_request_review, repository] with
+// project absent even after frameKindHints started feeding the offer.
+//
+// Deliberately NOT folded into frameKindHints itself and NOT read by
+// hintedPoolKinds/applyKindHintedPoolSearch (chaos4348_reachability.go) --
+// CHAOS-4348's own "no hint, no call" pool-search contract for
+// named_subject questions is unrelated to this ticket and stays exactly
+// as it was. This reads the SAME kind of frame-declared information
+// frameKindHints reads, for the OFFER composer alone, via its own
+// declaredKinds parameter (kindOfferMaterial's own doc comment,
+// chaos3900_structure_offers.go) -- ranked, never enough alone to raise
+// the need, the same treatment every declared kind gets regardless of
+// which SubjectExpression variant produced it.
+//
+// explicit_set (comparison operands, each themselves a NamedSubjectExpression
+// or a ScopedSetExpression) is deliberately out of scope here: CHAOS-4967's
+// three documented instances are all single-kind, non-comparison frames.
+//
+// CURRENTLY INERT IN PRODUCTION, BY DESIGN OF A DIFFERENT COMPONENT, NOT A
+// BUG IN THIS FUNCTION: genkitruntime/prompts.go's own frame-authoring
+// instructions ("Fill only the fields that kind uses, and fill them ALL:
+// named_subject uses terms") never ask the model to emit expected_kind for
+// a named_subject expression, so ExpectedKind is nil on every live
+// named_subject frame today -- a rig re-check on the live tip (3/3 reps,
+// "Why is the acr project struggling?") confirmed this function correctly
+// returns nil throughout, not a code defect. A DIFFERENT model output,
+// RequestedSubjectKind (model_runtime.go, prompts.go's own
+// "requested_subject_kind" instruction), looks like the field that
+// actually carries this signal for named_subject questions, but today it
+// is consumed only by the family-precedence asymmetry check
+// (chaos4632_question_family_precedence.go) and was never traced or wired
+// to this offer -- left for a follow-up, not built here. This function is
+// shipped now because it is correct, tested, and harmless, and needs no
+// further change the day (if ever) something upstream starts populating
+// ExpectedKind.
+func namedSubjectDeclaredKind(frame *contextfabric.QuestionFrame) []contextfabric.SubjectKind {
+	if frame == nil || frame.SubjectExpression.Kind != contextfabric.SubjectExpressionNamed {
+		return nil
+	}
+	named := frame.SubjectExpression.Named
+	if named == nil || named.ExpectedKind == nil {
+		return nil
+	}
+	return []contextfabric.SubjectKind{*named.ExpectedKind}
+}

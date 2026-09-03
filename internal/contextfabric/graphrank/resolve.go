@@ -2685,7 +2685,16 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// distinctly-behaved input, never folded into explicitKinds. Read once
 	// and reused for both calls below, mirroring beforeKinds/afterKinds'
 	// own "computed once, read twice" shape.
-	declaredKinds := frameKindHints(frame)
+	//
+	// namedSubjectDeclaredKind (cohort_kind.go) covers the fifth
+	// SubjectExpression variant frameKindHints' own MemberKind()/
+	// GroupKind() calls do not: named_subject's declared kind lives on
+	// NamedSubjectExpression.ExpectedKind, a different field entirely. A
+	// single-subject question ("Why is the acr project struggling?") is
+	// exactly as much "the frame already declared its kind" as a cohort
+	// question is, and rig evidence showed it still omitted from the offer
+	// with frameKindHints alone -- see that function's own doc comment.
+	declaredKinds := append(frameKindHints(frame), namedSubjectDeclaredKind(frame)...)
 	// beforeOffer is discarded -- only beforeDiag's counts are kept, as the
 	// PRE-repair telemetry twin below. Calling kindOfferMaterial twice
 	// (once per kind list) keeps both diagnostics computed by the
