@@ -33,7 +33,7 @@ func TestCohortRankedLineCarriesTheServedCohortKind(t *testing.T) {
 			context.Background(), storage.Principal{OrgID: "org_sink_test"},
 			CohortRankedEvent{
 				CohortKind: SubjectRepository, MemberCount: 3,
-				FormulaVersion: RankingFormulaVersion,
+				FormulaVersion:   RankingFormulaVersion,
 				SignalsAvailable: map[string]int{}, OutcomeCounts: map[string]int{},
 			})
 	})
