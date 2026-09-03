@@ -177,7 +177,31 @@ jobs:
             exit 1
           fi
           out="${RUNNER_TEMP}/race-output.txt"
-          make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=900s 2>&1 | tee "$out"
+          # Invoked directly rather than through `make test-race`, because an
+          # attempt leg must not depend on tooling the routing contract does
+          # not declare: this runner image has no `make`, and the first pilot
+          # of this branch died on `make: command not found` (exit 127) after
+          # the shard script had correctly printed its package. The flags are
+          # spelled out to match that target exactly, and a drift guard in
+          # scripts/ci/test-self-hosted-attempt.sh fails the build if the two
+          # ever diverge -- keeping the legs in step was the whole reason the
+          # make target was used here, so it is replaced by an assertion
+          # rather than by trust.
+          #
+          # GOMAXPROCS and GOFLAGS are exported explicitly because this runner
+          # leaves both UNSET (measured on the pilot probe: `go env` returned
+          # empty for each), where the hosted runner inherits the repo's
+          # bounds. Unset means "use every core", and the pod reports 8.
+          export GOMAXPROCS=4
+          export GOFLAGS="${GOFLAGS:+$GOFLAGS }-p=2"
+          # Split into an array rather than relying on unquoted word
+          # splitting: the shard script emits its packages space-separated on
+          # one line today, but a newline-separated future would silently
+          # collapse to a single bogus argument, and `go test` would then run
+          # nothing while exiting 0 -- the vacuous-pass shape this job's
+          # result-line count exists to catch.
+          read -ra pkgs <<<"$(printf '%s' "$packages" | tr '\n' ' ')"
+          go test -count=1 -race -shuffle=20260727 -timeout 900s "${pkgs[@]}" 2>&1 | tee "$out"
           passed="$(grep -c '^ok' "$out" || true)"
           printf 'packages expected: %s, packages reporting ok: %s\n' "$expected" "$passed"
           if [ "$passed" -ne "$expected" ]; then

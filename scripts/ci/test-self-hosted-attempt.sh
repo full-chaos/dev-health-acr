@@ -666,6 +666,79 @@ assert_fails 'dropping --paginate from the fetchers breaks the pagination check'
   check_paginate_flags "$tmpdir/no-paginate.sh"
 
 # ---------------------------------------------------------------------------
+# 3e. flag drift between the two legs
+# ---------------------------------------------------------------------------
+# The attempt leg used to run `make test-race`, deliberately, so that the two
+# legs could not drift apart on test flags -- the shared target owned -count,
+# -race and the shuffle seed. The runner image has no `make` (measured: the
+# first arm64 pickup died on `make: command not found`, exit 127), so the
+# attempt leg now spells the flags out. That trades one risk for another: the
+# legs can now silently disagree, and a self-hosted leg running a DIFFERENT
+# test command than the hosted leg is a stand-in that proves something other
+# than what it claims. The guarantee moves from sharing a target to this
+# assertion.
+
+make_race_flags() {
+  # The recipe line of the Makefile's test-race target, with make variables
+  # resolved from their `?=` defaults, reduced to its flags.
+  local recipe seed
+  recipe="$(awk '/^test-race:/{getline; print; exit}' "$repo_root/Makefile")"
+  seed="$(awk -F'= *' '/^GOTEST_SHUFFLE_SEED \?=/{print $2; exit}' "$repo_root/Makefile")"
+  printf '%s\n' "$recipe" \
+    | sed "s/\$(GOTEST_SHUFFLE_SEED)/$seed/" \
+    | grep -oE '\-(count|race|shuffle)[^ ]*' \
+    | LC_ALL=C sort
+}
+
+attempt_race_flags() {
+  # Anchored to the COMMAND LINE -- a line whose first non-space token is
+  # `go test` -- and comments stripped first. The first version grepped the
+  # file for `go test ` anywhere and picked up `-race` out of the phrase
+  # "`make test-race`" inside a comment, reporting a drift that did not
+  # exist. That is the third time on this branch that a static check read a
+  # comment as code; the rule is the same each time: anchor to the
+  # construct, never to a substring of the whole file.
+  local file="${1:-$repo_root/.github/workflows/ci-self-hosted.yml}"
+  sed 's/#.*$//' "$file" \
+    | grep -E '^[[:space:]]*go test ' \
+    | grep -oE '\-(count|race|shuffle)[^ ]*' \
+    | LC_ALL=C sort
+}
+
+mk="$(make_race_flags)"
+at="$(attempt_race_flags)"
+checks=$(( checks + 1 ))
+if [ -n "$mk" ] && [ "$mk" = "$at" ]; then
+  printf 'PASS: the attempt leg runs the same test flags as the make target (%s)\n' "$(printf '%s' "$mk" | tr '\n' ' ')"
+else
+  printf 'FAIL: the attempt leg and the make target disagree on test flags\n  make:    [%s]\n  attempt: [%s]\n' \
+    "$(printf '%s' "$mk" | tr '\n' ' ')" "$(printf '%s' "$at" | tr '\n' ' ')" >&2
+  failures=$(( failures + 1 ))
+fi
+
+# Red-first, by construction: flip one flag in a copy and require the
+# comparison to notice. Without this the check could be comparing two empty
+# strings and reporting agreement -- the failure mode of every "compare two
+# derived values" test.
+sed 's/-shuffle=20260727/-shuffle=99999999/' \
+  "$repo_root/.github/workflows/ci-self-hosted.yml" >"$tmpdir/drifted-flags.yml"
+checks=$(( checks + 1 ))
+if [ "$(attempt_race_flags "$tmpdir/drifted-flags.yml")" = "$mk" ]; then
+  printf 'NEGATIVE CONTROL FAILED: changing the shuffle seed did not change the compared flags\n' >&2
+  failures=$(( failures + 1 ))
+else
+  printf 'PASS (negative control): changing one flag in the attempt leg breaks the comparison\n'
+fi
+
+checks=$(( checks + 1 ))
+if [ -n "$mk" ]; then
+  printf 'PASS: the make target flags parsed to something non-empty (%s)\n' "$(printf '%s' "$mk" | tr '\n' ' ')"
+else
+  printf 'FAIL: parsed no flags from the make target -- the comparison above would be vacuous\n' >&2
+  failures=$(( failures + 1 ))
+fi
+
+# ---------------------------------------------------------------------------
 # 4. cross-file agreement between ci.yml and ci-self-hosted.yml
 # ---------------------------------------------------------------------------
 # Without this, renaming the attempt job or the sibling workflow leaves both
