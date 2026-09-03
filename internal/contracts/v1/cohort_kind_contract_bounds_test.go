@@ -149,9 +149,27 @@ func TestCohortValidateAcceptsEveryPublishedCohortKind(t *testing.T) {
 		kind := ContextFabricSubjectKind(published)
 		cohort := validCohortOfKind(kind)
 		reached++
-		if err := cohort.Validate(); err != nil {
-			refused = append(refused, fmt.Sprintf("%s (%v)", published, err))
+		err := cohort.Validate()
+		if err == nil {
+			continue
 		}
+		// Report the refusal ATTRIBUTABLY, per kind. A bare list of kinds
+		// and errors is not enough to tell "this predicate rejects the
+		// kind" from "this fixture is malformed for an unrelated reason":
+		// the first draft of validCohortOfKind was refused on the ranking
+		// sub-contract's `cohort member has a score but no drivers`, which
+		// would have read as a larger and more convincing red while proving
+		// nothing about the kind bound.
+		//
+		// So each refusal carries the message it actually red on, and
+		// whether the SAME fixture becomes valid when only the kind is
+		// swapped for one the validator is known to accept. attributable
+		// means the kind is the sole cause.
+		attribution := "attributable=kind"
+		if control := validCohortOfKind(ContextFabricSubjectTeam); control.Validate() != nil {
+			attribution = "attributable=UNKNOWN (the control fixture is itself invalid, so this refusal says nothing about the kind bound)"
+		}
+		refused = append(refused, fmt.Sprintf("%s red on %q, %s", published, err.Error(), attribution))
 	}
 	if reached != len(kinds) {
 		t.Fatalf("reached %d kinds, want %d -- the loop did not assert on every published kind", reached, len(kinds))
@@ -160,8 +178,8 @@ func TestCohortValidateAcceptsEveryPublishedCohortKind(t *testing.T) {
 		t.Fatal("no published cohort kind was checked -- the assertion never ran")
 	}
 	if len(refused) > 0 {
-		t.Fatalf("ContextFabricCohort.Validate refuses %d of %d kinds the published schema %s advertises: %s",
-			len(refused), len(kinds), cohortKindSchemaPointer, strings.Join(refused, "; "))
+		t.Fatalf("ContextFabricCohort.Validate refuses %d of %d kinds the published schema %s advertises:\n  %s",
+			len(refused), len(kinds), cohortKindSchemaPointer, strings.Join(refused, "\n  "))
 	}
 }
 
