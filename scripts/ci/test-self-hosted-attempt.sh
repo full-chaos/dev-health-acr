@@ -82,7 +82,10 @@ JOB='race-devhealthschema-self-hosted'
 # Every fixture run is created at 10:00-13:30 on 2026-09-02, so a floor before
 # that admits them all; the staleness tests below use a floor between them.
 FLOOR='2026-09-01T00:00:00Z'
-RUN_STARTED='2026-09-02T10:30:00Z'
+# "<created_at> <run_started_at> <run_attempt>" for the run under test.
+# Attempt 1, so created_at == run_started_at, as measured on every real
+# attempt-1 run.
+RUN_IDENTITY='2026-09-02T10:30:00Z 2026-09-02T10:30:00Z 1'
 
 # ---------------------------------------------------------------------------
 # 1. select-run: which sibling run, if any, belongs to THIS commit and trigger
@@ -219,7 +222,7 @@ run_wait() {
     REPOSITORY='full-chaos/dev-health-acr' \
     HEAD_SHA="$SHA" EVENT="$EVENT" REF="$REF" \
     WORKFLOW_NAME="$WF_NAME" WORKFLOW_PATH="$WF_PATH" JOB_NAME="$JOB" \
-    ACR_ATTEMPT_RUN_STARTED_AT="$RUN_STARTED" \
+    ACR_ATTEMPT_RUN_IDENTITY="${ACR_ATTEMPT_RUN_IDENTITY:-$RUN_IDENTITY}" \
     QUEUE_TIMEOUT_MINUTES=5 ATTEMPT_TIMEOUT_MINUTES=10 \
     "$subject" wait 2>/dev/null | sed -n 's/^outcome=//p'
 }
@@ -283,7 +286,7 @@ short_sha_wait() {
     ACR_ATTEMPT_RUNS_SRC="$tmpdir/runs-match.json" \
     ACR_ATTEMPT_JOBS_SRC="$tmpdir/jobs-queued.json" \
     REPOSITORY='full-chaos/dev-health-acr' \
-    ACR_ATTEMPT_RUN_STARTED_AT="$RUN_STARTED" \
+    ACR_ATTEMPT_RUN_IDENTITY="${ACR_ATTEMPT_RUN_IDENTITY:-$RUN_IDENTITY}" \
     HEAD_SHA='aaaaaaa' EVENT="$EVENT" REF="$REF" \
     WORKFLOW_NAME="$WF_NAME" WORKFLOW_PATH="$WF_PATH" JOB_NAME="$JOB" \
     "$subject" wait
@@ -317,7 +320,7 @@ run_wait_verbose() {
     ACR_ATTEMPT_FAKE_CLOCK=1 \
     ACR_ATTEMPT_RUNS_SRC="$runs" \
     ACR_ATTEMPT_JOBS_SRC="$jobs" \
-    ACR_ATTEMPT_RUN_STARTED_AT="$RUN_STARTED" \
+    ACR_ATTEMPT_RUN_IDENTITY="${ACR_ATTEMPT_RUN_IDENTITY:-$RUN_IDENTITY}" \
     REPOSITORY='full-chaos/dev-health-acr' \
     HEAD_SHA="$SHA" EVENT="$EVENT" REF="$REF" \
     WORKFLOW_NAME="$WF_NAME" WORKFLOW_PATH="$WF_PATH" JOB_NAME="$JOB" \
@@ -360,9 +363,17 @@ assert_eq 'a stale completed sibling does not let the hosted leg skip its work' 
 # every replay fixture shifted by one and this test silently stopped testing
 # anything. Caught by a surviving mutation, not by review. The reach assertion
 # below is the guard against it drifting again.
+#
+# RE-INDEXED for v1.5.1: deleting the first-look read shifted every replay
+# fixture down by one poll. The queue phase now polls 1..20 and takes its
+# final deadline read as poll 21, so the started state must land on 21.
+# Measured, not derived -- deriving it is what silently broke this fixture and
+# the requeue one when a read was ADDED ahead of them, and the same arithmetic
+# breaks the other way when a read is removed. The reach assertion below is
+# what keeps it honest either way.
 mkdir -p "$tmpdir/jobs-at-deadline"
-for i in $(seq 1 21); do cp "$tmpdir/jobs-empty.json" "$tmpdir/jobs-at-deadline/$i.json"; done
-cp "$tmpdir/jobs-success.json" "$tmpdir/jobs-at-deadline/22.json"
+for i in $(seq 1 20); do cp "$tmpdir/jobs-empty.json" "$tmpdir/jobs-at-deadline/$i.json"; done
+cp "$tmpdir/jobs-success.json" "$tmpdir/jobs-at-deadline/21.json"
 assert_eq 'an attempt picked up exactly at the queue deadline is still seen' \
   'claimed-success' "$(run_wait "$tmpdir/runs-match.json" "$tmpdir/jobs-at-deadline")"
 
@@ -436,28 +447,25 @@ cat >"$tmpdir/runs-recent-prior.json" <<'JSON'
  {"id":41,"name":"ci-self-hosted","path":".github/workflows/ci-self-hosted.yml","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"pull_request","head_branch":"some-topic-branch","created_at":"2026-09-02T10:29:00Z"}
 ]}
 JSON
-assert_eq 'a sibling already completed at first look is not adopted, even inside the floor' \
-  'unclaimed' "$(run_wait "$tmpdir/runs-recent-prior.json" "$tmpdir/jobs-success.json")"
+assert_eq 'a sibling already completed at first look IS ours and its success is adopted' \
+  'claimed-success' "$(run_wait "$tmpdir/runs-recent-prior.json" "$tmpdir/jobs-success.json")"
 
 # And the property does not depend on the tolerance. Round 2 showed all 36
 # checks passing with SIBLING_CREATED_SKEW_SECONDS widened tenfold, which meant
 # the safety property was pinned by the fixture's age rather than by the code.
 # Re-assert the same case with the skew widened far past any plausible value:
 # if this still holds, the guarantee is not a function of the constant.
-assert_eq 'the first-look rule holds with the staleness tolerance widened 100x' \
-  'unclaimed' \
+assert_eq 'adoption of an in-floor terminal sibling does not depend on the tolerance' \
+  'claimed-success' \
   "$(SIBLING_CREATED_SKEW_SECONDS=9000 run_wait "$tmpdir/runs-recent-prior.json" "$tmpdir/jobs-success.json")"
 
 # NEGATIVE CONTROL: the same recent sibling IS selectable by the selector --
 # the assertions above are the first-look rule working, not the fixture
 # failing to match on some other field.
-assert_eq 'negative control: that same sibling is selectable when nothing excludes it' \
+assert_eq 'negative control: that same sibling is selectable on identity alone' \
   '41' \
   "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" "$FLOOR" <"$tmpdir/runs-recent-prior.json")"
 
-assert_eq 'an excluded run id is not selected' \
-  '' \
-  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" "$FLOOR" '41' <"$tmpdir/runs-recent-prior.json")"
 
 # R2-F1b. The floor comparison is lexical, so a non-`Z` timestamp could sort
 # later than it occurred: an offset timestamp denoting the previous day passed
@@ -664,6 +672,60 @@ fi
 sed 's/gh api --paginate/gh api/' "$subject" >"$tmpdir/no-paginate.sh"
 assert_fails 'dropping --paginate from the fetchers breaks the pagination check' \
   check_paginate_flags "$tmpdir/no-paginate.sh"
+
+# ---------------------------------------------------------------------------
+# 3f. contract v1.5.1's two REQUIRED fixtures
+# ---------------------------------------------------------------------------
+
+# REQUIRED FIXTURE 1 — fast-fail. A completed/FAILURE sibling inside the floor
+# at first look is this invocation's result and its failure must be HONOURED.
+# The rule this replaced discarded it, and the discard was not theoretical: an
+# attempt that failed in 24 seconds was terminal before the hosted leg --
+# sixteen minutes behind it in the queue -- looked even once, so its failure
+# would have been thrown away and the build reported green. A fast-failing
+# attempt is exactly the one most likely to be terminal at first look, which
+# made the old rule most likely to hide the signal the routing exists for.
+echo '{"jobs":[{"id":9,"name":"race-devhealthschema-self-hosted","status":"completed","conclusion":"failure"}]}' >"$tmpdir/jobs-first-look-failure.json"
+assert_eq 'a terminal FAILURE inside the floor is honoured, not discarded' \
+  'claimed-failure' "$(run_wait "$tmpdir/runs-recent-prior.json" "$tmpdir/jobs-first-look-failure.json")"
+
+# REQUIRED FIXTURE 2 — re-run. On attempt 2, a sibling from attempt 1 passes
+# the created_at floor (created_at does not move on a re-run) but its own
+# run_started_at predates this attempt's, so it is NOT ours: a re-run must
+# produce a fresh result rather than replay a prior attempt's verdict.
+# Without the conjunct the floor alone would adopt it, which is the round-2
+# stale-sibling defect arriving back through the composition of two
+# separately-reasonable rules.
+cat >"$tmpdir/runs-prior-attempt.json" <<'JSON'
+{"workflow_runs":[
+ {"id":77,"name":"ci-self-hosted","path":".github/workflows/ci-self-hosted.yml","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"pull_request","head_branch":"some-topic-branch","created_at":"2026-09-02T10:29:50Z","run_started_at":"2026-09-02T10:29:50Z"}
+]}
+JSON
+assert_eq 'on a re-run, a prior attempt sibling is NOT ours even though it passes the created_at floor' \
+  'unclaimed' \
+  "$(ACR_ATTEMPT_RUN_IDENTITY='2026-09-02T10:29:45Z 2026-09-02T11:30:00Z 2' \
+      run_wait "$tmpdir/runs-prior-attempt.json" "$tmpdir/jobs-success.json")"
+
+# NEGATIVE CONTROL for fixture 2: the same sibling on ATTEMPT 1 (no re-run
+# bound) IS ours and its success is adopted. Without this, the assertion above
+# could pass because the fixture fails identity on some unrelated field.
+assert_eq 'negative control: the same sibling on attempt 1 IS adopted' \
+  'claimed-success' \
+  "$(ACR_ATTEMPT_RUN_IDENTITY='2026-09-02T10:29:45Z 2026-09-02T10:29:45Z 1' \
+      run_wait "$tmpdir/runs-prior-attempt.json" "$tmpdir/jobs-success.json")"
+
+# And a sibling that was ITSELF re-run keeps created_at at the original
+# trigger while its run_started_at moves forward -- it must still be ours.
+# This is why the conjunct compares run_started_at rather than created_at.
+cat >"$tmpdir/runs-fresh-attempt2.json" <<'JSON'
+{"workflow_runs":[
+ {"id":78,"name":"ci-self-hosted","path":".github/workflows/ci-self-hosted.yml","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"pull_request","head_branch":"some-topic-branch","created_at":"2026-09-02T10:29:50Z","run_started_at":"2026-09-02T11:30:05Z"}
+]}
+JSON
+assert_eq 'a sibling that was itself re-run is still ours on our own re-run' \
+  'claimed-success' \
+  "$(ACR_ATTEMPT_RUN_IDENTITY='2026-09-02T10:29:45Z 2026-09-02T11:30:00Z 2' \
+      run_wait "$tmpdir/runs-fresh-attempt2.json" "$tmpdir/jobs-success.json")"
 
 # ---------------------------------------------------------------------------
 # 4. cross-file agreement between ci.yml and ci-self-hosted.yml
