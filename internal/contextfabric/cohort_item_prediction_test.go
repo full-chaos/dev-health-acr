@@ -101,6 +101,30 @@ func TestGroupedAnswerItemsAreNotAFunctionOfMemberCount(t *testing.T) {
 	}
 	smallMean, largeMean := mean(byMembers[small]), mean(byMembers[large])
 
+	// Bind the BUDGET axis. Codex round 2 finding: the means comparison alone
+	// ignores max_items_in_force entirely, so editing the fixture's ceiling
+	// from 30 to 45 left this test green while destroying the conclusion --
+	// at 45 every recorded measurement fits, and a fixture in which nothing
+	// overruns cannot support an argument about what to do when things
+	// overrun. The refutation needs a SMALLER cohort that still exceeded the
+	// ceiling: that is the observation a member-count clamp promises to
+	// prevent and did not.
+	if fixture.MaxItems <= 0 {
+		t.Fatalf("fixture max_items_in_force = %d, want the positive ceiling these rows were measured against", fixture.MaxItems)
+	}
+	overBudgetAtSmall := 0
+	for _, items := range byMembers[small] {
+		if items > fixture.MaxItems {
+			overBudgetAtSmall++
+		}
+	}
+	if overBudgetAtSmall == 0 {
+		t.Fatalf("no %d-member measurement exceeds the declared %d-item ceiling. The anti-clamp conclusion "+
+			"rests on a NARROWED cohort still overrunning; a fixture where the small cohort always fits is "+
+			"consistent with a clamp working, not with one being underivable. Authority: %s",
+			small, fixture.MaxItems, fixture.Authority)
+	}
+
 	// What a per-member rate model predicts for the smaller cohort, if the
 	// larger cohort's observed mean were entirely per-member cost.
 	proportional := largeMean * float64(small) / float64(large)
@@ -367,5 +391,97 @@ func TestRetryEventPredictsForTheRetriedCohort(t *testing.T) {
 			"for the PRE-narrowing cohort (Before=%d), but this event's measured_items describes the "+
 			"re-synthesized answer, which ran against the narrowed set",
 			retryEvent.PredictedItems, wantRetried, retryEvent.After, headroom, wrongOriginal, retryEvent.Before)
+	}
+}
+
+// TestFitEventPredictsForTheLiveCohort closes the FIT half of the shape sweep.
+// Codex round 2 found (and I executed) that swapping the FIT path's
+// `cohortMemberCount(params.Graph.Cohort)` for `plan.Budget.MaxMembers` — a
+// CONFIGURED CAP rather than the cohort that was actually answered — survived
+// the whole package. The existing FIT test reads existence, overrun and
+// measurement, never the prediction.
+func TestFitEventPredictsForTheLiveCohort(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	telemetry := &recordingTelemetry{}
+	// 3 members x 1 claim = 6 items, comfortably inside a 30-item budget, so
+	// this is the FIT path and no narrowing runs.
+	engine := budgetStageEngine(t, budgetStageCohort(3), 1, budgetStageOptions(30, time.Second), &calls, telemetry)
+
+	result, err := engine.Investigate(context.Background(),
+		storage.Principal{OrgID: "org_fit_prediction"}, validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.AnswerPlan == nil {
+		t.Fatal("served result carries no plan")
+	}
+	headroom := result.AnswerPlan.Budget.SynthesisHeadroom
+	capped := result.AnswerPlan.Budget.MaxMembers
+
+	var fit *PlanNarrowingEvent
+	for index := range telemetry.planNarrowings {
+		if e := telemetry.planNarrowings[index]; e.Stage == contractsv1.ContextFabricPlanNarrowingAssembledResult &&
+			e.Overrun == contractsv1.ContextFabricBudgetFits {
+			fit = &telemetry.planNarrowings[index]
+		}
+	}
+	if fit == nil {
+		t.Fatal("no recorded FIT event; this fixture did not exercise the fit path")
+	}
+	// Non-vacuity: the live cohort and the configured cap must DIFFER, or the
+	// mutation this test exists to catch is invisible.
+	if capped == 3 {
+		t.Fatalf("MaxMembers == the cohort size (3); this fixture cannot distinguish the live cohort from the cap")
+	}
+	if want := 3 + headroom; fit.PredictedItems != want {
+		t.Fatalf("FIT PredictedItems = %d, want %d (live cohort 3 + headroom %d). %d would be the prediction "+
+			"for the configured cap MaxMembers=%d, which is not what was answered",
+			fit.PredictedItems, want, headroom, capped+headroom, capped)
+	}
+}
+
+// TestRetryFailureEventPredictsForTheFirstSynthesisCohort closes the last site
+// in the sweep. Codex round 2 found (and I executed) that swapping this event's
+// `before` for `after` survived: its measurement belongs to the FIRST
+// synthesis, taken against the pre-narrowing cohort, so predicting for the
+// retry cohort pairs a measurement of one cohort with an expectation for
+// another. The existing path-3 test asserts Before/After and never the
+// prediction.
+func TestRetryFailureEventPredictsForTheFirstSynthesisCohort(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	telemetry := &recordingTelemetry{}
+	engine := budgetStageEngine(t, chaos4809OverlappingGroupedCohort(), 20, budgetStageOptions(20, time.Second), &calls, telemetry)
+	attempts := 0
+	engine.synthesizer = chaos4809FailOnSecondCall(engine.synthesizer, &attempts)
+
+	if _, err := engine.Investigate(context.Background(),
+		storage.Principal{OrgID: "org_retry_failure_prediction"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
+		t.Fatal("Investigate() returned no error; this fixture must fail its SECOND synthesis")
+	}
+	var failed *PlanNarrowingEvent
+	for index := range telemetry.planNarrowings {
+		if telemetry.planNarrowings[index].RetryFailed {
+			failed = &telemetry.planNarrowings[index]
+		}
+	}
+	if failed == nil {
+		t.Fatal("no RetryFailed narrowing event recorded; the retry-failure path was not exercised")
+	}
+	if failed.Before == failed.After {
+		t.Fatalf("Before == After == %d; this fixture cannot see the mutation it exists to catch", failed.Before)
+	}
+	// headroom is not on the event, so derive it from the site's own contract
+	// and check the OTHER candidate would have produced a different number.
+	headroom := failed.PredictedItems - failed.Before
+	if wrong := failed.After + headroom; failed.PredictedItems == wrong {
+		t.Fatalf("PredictedItems = %d is consistent with BOTH Before=%d and After=%d; the assertion cannot discriminate",
+			failed.PredictedItems, failed.Before, failed.After)
+	}
+	if failed.PredictedItems != failed.Before+headroom {
+		t.Fatalf("retry-failure event PredictedItems = %d, want Before(%d)+headroom(%d) = %d: this event's "+
+			"measured_items describes the FIRST synthesis, which ran against the pre-narrowing cohort",
+			failed.PredictedItems, failed.Before, headroom, failed.Before+headroom)
 	}
 }
