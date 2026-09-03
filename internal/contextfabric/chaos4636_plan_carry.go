@@ -213,5 +213,14 @@ func applyCarriedPlan(outcome QuestionFamilyOutcome, carry planCarryResult) (Que
 	// reads it from -- so a carried grouped reading rebuilds the same group
 	// axis rather than becoming a grouped family with no axis to group by.
 	outcome.WinningSample.GroupKind = carry.GroupKind
+	// SEAM 7 (CHAOS-4736): neither table decided this answer -- a prior turn
+	// did -- so the outcome must not keep reporting the routing decision made
+	// before the carry. The family-resolution EVENT was already emitted by
+	// then and cannot be amended; see FamilyRouteCarried's own doc comment
+	// for the limit that leaves.
+	outcome.Route = FamilyRouteDecision{
+		Family: carry.Family, Source: FamilyRoutePrecedence,
+		Disposition: FamilyRouteCarried,
+	}
 	return outcome, true
 }

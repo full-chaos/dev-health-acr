@@ -1,6 +1,11 @@
 package contextfabric
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
 
 // THE TABLE AND THE PR BODY MUST BE THE SAME ARTIFACT. These tests exist so
 // that a class added to the agreement vocabulary without a routing decision
@@ -32,21 +37,41 @@ func TestFamilyRouteTableCoversEveryAgreementClassInOrder(t *testing.T) {
 
 // A frame-absent turn must NOT be counted as an agreement.
 //
-// The regression this pins: the frame-absent path used to install
-// Class=agreed / Disposition=identical, so every turn with no validated
-// frame was counted in the `agreed` bucket the flip decision reads. The
-// counters could not distinguish "both tables produced the same family"
-// from "only one table ran".
+// THE REGRESSION: the frame-absent path used to install Class=agreed /
+// Disposition=identical, so every turn with no validated frame landed in the
+// `agreed` bucket the flip decision reads. The counters could not tell "both
+// tables produced the same family" from "only one table ran".
+//
+// THIS TEST DRIVES THE REAL PATH. Its first version built a
+// FamilyRouteDecision literal in the test and asserted on that, which is a
+// test that cannot fail: reintroducing the production bug would have left it
+// green. Review caught it. It now runs Interpret() with a receipt carrying NO
+// frame and reads the event the production sink actually received.
 func TestFrameAbsentIsNotCountedAsAgreement(t *testing.T) {
 	t.Parallel()
-	// The value the production path installs when shadow.FrameObserved is
-	// false, restated here rather than derived from the code under test.
-	route := FamilyRouteDecision{
-		Family: QuestionFamilyDiscoveredCohortRanking, Source: FamilyRoutePrecedence,
-		Disposition: FamilyRouteNoFrameObserved,
+	spy := &familyTelemetrySpy{}
+	receipt := validModelReceiptFixture(ModelOperationInterpret)
+	// No frame reaches validation on this turn -- the condition under test.
+	receipt.QuestionFrame = nil
+	receipt.FrameOutcome = ""
+
+	interpreter := RuntimeQuestionInterpreter{
+		Runtime:         fakeModelRuntime{interpreted: groupedInterpretation(), receipt: receipt},
+		Sink:            &fakeReceiptSink{},
+		FamilyTelemetry: spy,
+	}
+	if _, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil {
+		t.Fatalf("Interpret() error = %v", err)
+	}
+	if len(spy.events) != 1 {
+		t.Fatalf("got %d family events, want exactly 1", len(spy.events))
+	}
+	route := spy.events[0].Route
+	if spy.events[0].Shadow.FrameObserved {
+		t.Fatal("the fixture was supposed to carry no frame; it observed one, so this test proves nothing about the frame-absent path")
 	}
 	if route.Class == FamilyAgreementAgreed {
-		t.Fatal("a frame-absent turn reports the `agreed` class; the projection never ran, so there was no agreement to report")
+		t.Fatal("a frame-absent turn reported the `agreed` class; the projection never ran, so there was no agreement to report")
 	}
 	if route.Class != "" {
 		t.Fatalf("Class = %q, want empty -- the agreement vocabulary describes comparisons and there was none", route.Class)
@@ -54,11 +79,8 @@ func TestFrameAbsentIsNotCountedAsAgreement(t *testing.T) {
 	if route.Disposition != FamilyRouteNoFrameObserved {
 		t.Fatalf("Disposition = %q, want %q", route.Disposition, FamilyRouteNoFrameObserved)
 	}
-	if route.Switched {
-		t.Fatal("a frame-absent turn reported Switched")
-	}
-	if !ValidFamilyRouteDisposition(route.Disposition) {
-		t.Fatal("the frame-absent disposition is outside the closed vocabulary")
+	if route.Source != FamilyRoutePrecedence || route.Switched {
+		t.Fatalf("frame-absent turn routed %q switched=%v, want precedence and no switch", route.Source, route.Switched)
 	}
 }
 
@@ -72,10 +94,15 @@ func TestEveryFamilyRouteDispositionIsUsed(t *testing.T) {
 	for _, rule := range familyRouteTable {
 		used[rule.disposition] = true
 	}
-	// Produced by the frame-absent path in recordFamilyResolution rather
-	// than by a table row, so it is named here explicitly instead of being
-	// silently exempted.
+	// Produced by the frame-absent path rather than by a table row. It is
+	// marked used only because TestFrameAbsentIsNotCountedAsAgreement DRIVES
+	// that path and asserts this exact disposition -- not as a bare
+	// exemption, which would let a disposition nothing produces pass as
+	// covered.
 	used[FamilyRouteNoFrameObserved] = true
+	// Same discipline: produced by applyCarriedPlan and asserted by
+	// TestCarriedOutcomeDoesNotKeepThePreCarryRoute below.
+	used[FamilyRouteCarried] = true
 	for _, member := range FamilyRouteDispositionVocabulary() {
 		if !used[member] {
 			t.Errorf("disposition %q is declared but no routing row produces it", member)
@@ -189,5 +216,40 @@ func TestUnknownClassFallsBackToPrecedence(t *testing.T) {
 	}
 	if decision.Switched {
 		t.Fatal("unknown class reported Switched")
+	}
+}
+
+// A carried outcome must not keep reporting the routing decision made BEFORE
+// the carry. Neither table decided that answer -- a prior turn did.
+//
+// This drives applyCarriedPlan itself rather than asserting on a literal,
+// which is the correction round 3 forced on the sibling test above.
+func TestCarriedOutcomeDoesNotKeepThePreCarryRoute(t *testing.T) {
+	t.Parallel()
+	// An outcome as the interpreter would leave it: unclassified, and
+	// already carrying a routing decision from the frame-absent path.
+	outcome := QuestionFamilyOutcome{
+		Family: QuestionFamilyUnclassified,
+		Route: FamilyRouteDecision{
+			Family: QuestionFamilyUnclassified, Source: FamilyRoutePrecedence,
+			Disposition: FamilyRouteNoFrameObserved,
+		},
+	}
+	carried, applied := applyCarriedPlan(outcome, planCarryResult{
+		Outcome: PlanCarryHit, Family: QuestionFamilyGroupedCohortStatus, GroupKind: SubjectTeam,
+	})
+	if !applied {
+		t.Fatal("the carry did not apply; this test proves nothing")
+	}
+	if carried.Family != QuestionFamilyGroupedCohortStatus {
+		t.Fatalf("carried family = %q, want the prior turn's", carried.Family)
+	}
+	if carried.Route.Disposition != FamilyRouteCarried {
+		t.Fatalf("Route.Disposition = %q, want %q -- the outcome still reports a decision the carry superseded",
+			carried.Route.Disposition, FamilyRouteCarried)
+	}
+	if carried.Route.Family != carried.Family {
+		t.Fatalf("Route.Family = %q but the served family is %q; the outcome contradicts itself",
+			carried.Route.Family, carried.Family)
 	}
 }

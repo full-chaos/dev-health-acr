@@ -154,6 +154,25 @@ const (
 	// Class is left EMPTY on this disposition, deliberately: the agreement
 	// vocabulary describes COMPARISONS, and there was none to describe.
 	FamilyRouteNoFrameObserved FamilyRouteDisposition = "no_frame_observed"
+	// FamilyRouteCarried: a PRIOR TURN's family was carried onto this
+	// outcome after the routing decision was made, so neither table decided
+	// what is served -- the earlier turn did.
+	//
+	// REPORTED LIMIT, NOT A FULL FIX (round 3, Medium). The family-resolution
+	// EVENT is emitted inside the interpreter, and `applyCarriedPlan` runs
+	// later in the engine; an event already on the wire cannot be amended.
+	// So on a carried turn the emitted event records the INTERPRETATION-TIME
+	// decision, and the served family can differ from it. Moving the emission
+	// after carry means moving it out of the interpreter, which is a
+	// restructure this slice is not making.
+	//
+	// What IS fixed: the OUTCOME is no longer self-contradictory. A carried
+	// outcome carries this disposition, so any reader holding the outcome
+	// sees that neither table decided. A reader consuming the telemetry
+	// STREAM must join on the plan-carry event to see a carried turn, and
+	// that is stated here rather than left for someone to discover from a
+	// counter that disagrees with the answer.
+	FamilyRouteCarried FamilyRouteDisposition = "carried_from_prior_turn"
 	// FamilyRouteDeclinedUnexplained: no class describes the pair of rows
 	// that fired. A non-zero count here is a FINDING, not a routing input,
 	// and the safe thing to do with a finding is not to route on it.
@@ -191,6 +210,7 @@ var familyRouteDispositions = [...]FamilyRouteDisposition{
 	FamilyRouteDeclinedProjectionSilent,
 	FamilyRouteDeclinedUnexplained,
 	FamilyRouteNoFrameObserved,
+	FamilyRouteCarried,
 }
 
 // FamilyRouteDispositionCount is the closed vocabulary's size.
