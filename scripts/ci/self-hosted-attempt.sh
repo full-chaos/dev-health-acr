@@ -458,7 +458,10 @@ main() {
   case "$subcommand" in
     select-run)
       shift
-      [ "$#" -ge 6 ] && [ "$#" -le 7 ] || { usage; exit 2; }
+      # Spelled as an explicit `if` rather than `A && B || C`: with the
+      # latter, C also runs when A is true and B is false, which is correct
+      # here but is not obvious, and shellcheck flags it (SC2015).
+      if [ "$#" -lt 6 ] || [ "$#" -gt 7 ]; then usage; exit 2; fi
       select_run "$@"
       ;;
     attempt-status)
