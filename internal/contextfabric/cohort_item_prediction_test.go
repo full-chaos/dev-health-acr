@@ -231,3 +231,61 @@ func TestPredictedItemsIsForTheSynthesizedCohortNotTheDeclinedRetryTarget(t *tes
 			synthesizedMembers, forSynthesized, want, synthesizedMembers, worstRatio)
 	}
 }
+
+// TestPlanRefusalPredictsForTheCohortItMeasured drives planRefusal ITSELF --
+// the production seam -- rather than the helper it calls.
+//
+// The first attempt at pinning M4 asserted on PredictedItemsForPlan directly
+// and the mutation SURVIVED: proving the helper can tell two member counts
+// apart says nothing about which one the call site hands it. That is the
+// "a sweep's key is the population, never the helper you happened to call"
+// trap, and this test is keyed on the call site instead.
+//
+// members(10) and selected(5) are the real refusal shape from the rig
+// (before:10 -> after:5, overlap_aware_set_cover). They must predict
+// DIFFERENT totals or the assertion cannot see the mutation, so that is
+// asserted before the property.
+func TestPlanRefusalPredictsForTheCohortItMeasured(t *testing.T) {
+	t.Parallel()
+	const synthesizedMembers, declinedRetryTarget = 10, 5
+
+	plan := &AnswerPlan{
+		Family: QuestionFamilyGroupedCohortStatus,
+		Budget: contractsv1.ContextFabricAnswerPlanBudget{MaxItems: 30, MaxSerializedBytes: 262144},
+	}
+	wantPredicted := PredictedItemsForPlan(*plan, synthesizedMembers)
+	forRetryTarget := PredictedItemsForPlan(*plan, declinedRetryTarget)
+	if wantPredicted <= 0 {
+		t.Fatalf("prediction for the synthesized cohort = %d, want positive", wantPredicted)
+	}
+	if wantPredicted == forRetryTarget {
+		t.Fatalf("both counts predict %d; this fixture cannot see the mutation it exists to catch", wantPredicted)
+	}
+
+	telemetry := &recordingTelemetry{}
+	engine := &Engine{telemetry: telemetry}
+	err := engine.planRefusal(
+		context.Background(), storage.Principal{OrgID: "org_predicted_call_site"}, plan,
+		ResponseMeasurement{}, contractsv1.ContextFabricBudgetOverrunItems,
+		false, true, contractsv1.ContextFabricNarrowingBasisOverlapAwareSetCover,
+		synthesizedMembers, declinedRetryTarget, RetryDeclinedInsufficientDeadline,
+	)
+	if err == nil {
+		t.Fatal("planRefusal returned no error; a refusal must terminate the answer")
+	}
+	if len(telemetry.planNarrowings) != 1 {
+		t.Fatalf("recorded %d narrowing events, want exactly 1", len(telemetry.planNarrowings))
+	}
+	event := telemetry.planNarrowings[0]
+	// Reach check: the event must be the refusal this test drove, or the
+	// assertion below is reading someone else's record.
+	if !event.RefusalPlanned || event.Before != synthesizedMembers || event.After != declinedRetryTarget {
+		t.Fatalf("recorded event is not the refusal driven here: RefusalPlanned=%v Before=%d After=%d",
+			event.RefusalPlanned, event.Before, event.After)
+	}
+	if event.PredictedItems != wantPredicted {
+		t.Fatalf("PredictedItems = %d, want %d (the %d-member cohort synthesis RAN against). "+
+			"%d would be the prediction for the %d-member target the declined retry never synthesized",
+			event.PredictedItems, wantPredicted, synthesizedMembers, forRetryTarget, declinedRetryTarget)
+	}
+}
