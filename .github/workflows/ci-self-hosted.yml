@@ -175,3 +175,319 @@ jobs:
             echo "expected one result line per isolated package; a package that produced no result means this job proved less than it claims" >&2
             exit 1
           fi
+
+  # CHAOS-4855: the same bootstrap race ci.yml's own mirror-preflight guards
+  # against (mirror-images.yml uploading newly-mirrored images while a
+  # pulling job is already trying to pull them) applies equally to the
+  # self-hosted attempts below that pull ghcr images (unit-self-hosted,
+  # build-self-hosted, race-self-hosted). There is no cross-workflow `needs`
+  # in GitHub Actions, so this workflow cannot depend on ci.yml's own
+  # mirror-preflight job -- it runs the identical check itself instead.
+  # Runs on ubuntu-latest rather than the pool: it is a cheap, read-only
+  # `docker buildx imagetools inspect` sweep with no reason to consume ARC
+  # capacity, and race-devhealthschema-self-hosted (which pulls no images)
+  # never needed it.
+  mirror-preflight-self-hosted:
+    if: >-
+      vars.SELF_HOSTED_RUNNERS == 'enabled'
+      && (github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify every mirrored image is resolvable before any job pulls one
+        run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
+
+  # The attempt for ci.yml's `scripts` job. Go-less: no setup-go, so the
+  # arm64 check below reads `uname -m` (arm64 Linux reports `aarch64`)
+  # rather than `go env GOARCH` the way the Go-backed jobs below do.
+  #
+  # shellcheck is the one tool this job needs that the declared pool
+  # toolset does not carry and the ARC image (ops/docker/arc-runner/
+  # Dockerfile) does not bake in -- GitHub-hosted `ubuntu-latest` ships it
+  # by default, which is why ci.yml's own `scripts` job never installs it.
+  # Installed here the same guarded way the unit/race jobs already install
+  # psql: skip the network call when it is already present, fail loudly
+  # (not skip) when apt cannot provide it either.
+  scripts-self-hosted:
+    if: >-
+      vars.SELF_HOSTED_RUNNERS == 'enabled'
+      && (github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, oci-arc-runners]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      - name: Confirm this runner is actually arm64
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          if [ "${arch}" != aarch64 ]; then
+            echo "expected uname -m=aarch64 on oci-arc-runners, got '${arch}'" >&2
+            exit 1
+          fi
+      - name: Install shellcheck (present on GitHub-hosted ubuntu-latest, not on this pool image)
+        run: |
+          set -euo pipefail
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck --version
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y shellcheck
+          shellcheck --version
+      - name: Check release setup script modes
+        run: |
+          test -x scripts/release/setup-cosign-key.sh
+          test -x scripts/release/export-tag-signing-key.sh
+          test -x scripts/release/publish-private-release.sh
+          test -x scripts/release/publish-private-image.sh
+          test -x scripts/release/publish-ci-release.sh
+          test -x scripts/release/revoke-private-release.sh
+          test -x scripts/release/assemble-release-assets.sh
+          test -x scripts/release/test-assemble-release-assets.sh
+          test -x scripts/release/test-container-release-manifest.sh
+          test -x scripts/release/test-publish-private-image.sh
+          test -x scripts/release/test_release_scripts.sh
+          test -x scripts/release/verify-mcp-binary-approval.sh
+          test -x scripts/release/write-container-release-manifest.sh
+      - name: Shellcheck CI release publisher
+        run: |
+          # SC2016: jq receives named arguments whose $names must remain literal
+          # inside single-quoted jq programs rather than expand in the shell.
+          shellcheck -x -e SC2016 scripts/release/publish-ci-release.sh
+      - name: Shellcheck release policy contract tests
+        run: |
+          # SC2016: this test intentionally searches source files for literal
+          # shell and jq variables such as $tag, $name, and $release_digest.
+          shellcheck -x -e SC2016 scripts/release/test_release_scripts.sh
+      - name: Shellcheck existing release scripts
+        run: |
+          find scripts/release -maxdepth 1 -type f -name '*.sh' \
+            ! -name 'publish-ci-release.sh' \
+            ! -name 'test_release_scripts.sh' -print0 \
+            | xargs -0 shellcheck -x
+      - name: Shellcheck container scripts
+        run: |
+          # SC2016: test-contract.sh intentionally greps scan.sh for literal
+          # shell variables such as $trivy_db_mirror and $metadata.
+          find scripts/container -type f -name '*.sh' -print0 \
+            | xargs -0 shellcheck -x -e SC2016
+      - name: Shellcheck CI workflow scripts
+        run: |
+          find scripts/ci -type f -name '*.sh' -print0 \
+            | xargs -0 shellcheck -x
+      - name: Test release asset assembly
+        run: scripts/release/test-assemble-release-assets.sh
+      - name: Test container release manifest
+        run: scripts/release/test-container-release-manifest.sh
+      - name: Test private image publisher
+        run: scripts/release/test-publish-private-image.sh
+      - name: Test release policy contracts
+        run: scripts/release/test_release_scripts.sh
+      - name: Test optional MCP binary approval gate
+        run: |
+          approval_gates=scripts/release/test-remote-gates.sh
+          "$approval_gates" --mode dry-run \
+            --fixtures testdata/release-approvals
+          "$approval_gates" --mode reject-invalid \
+            --fixtures testdata/release-approvals
+      - name: Verify CI workflow contract
+        run: scripts/ci/test-workflow-contract.sh
+      - name: Verify the self-hosted attempt selector
+        run: scripts/ci/test-self-hosted-attempt.sh
+      - name: Verify every testcontainers image is pinned and mirrored
+        run: scripts/ci/test-testcontainers-image-pins.sh
+
+  # The attempt for ci.yml's `unit` job. Same testcontainers-backed suite,
+  # same mirror redirect and login as the hosted job; gated on
+  # mirror-preflight-self-hosted for the same reason ci.yml's own `unit`
+  # job is gated on its mirror-preflight.
+  unit-self-hosted:
+    if: >-
+      vars.SELF_HOSTED_RUNNERS == 'enabled'
+      && (github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository)
+    needs: mirror-preflight-self-hosted
+    runs-on: [self-hosted, oci-arc-runners]
+    timeout-minutes: 27
+    permissions:
+      contents: read
+      packages: read
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.0'
+          cache: true
+      - name: Confirm this runner is actually arm64
+        run: |
+          set -euo pipefail
+          arch="$(go env GOARCH)"
+          if [ "${arch}" != "arm64" ]; then
+            echo "expected GOARCH=arm64 on oci-arc-runners, got '${arch}'" >&2
+            exit 1
+          fi
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install PostgreSQL client for the compose ACL integration test
+        run: |
+          set -euo pipefail
+          if command -v psql >/dev/null 2>&1 \
+            && command -v pg_isready >/dev/null 2>&1; then
+            psql --version
+            pg_isready --version
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y postgresql-client
+          psql --version
+          pg_isready --version
+      - name: Run Go tests with coverage and JUnit reporting
+        id: go-tests
+        run: |
+          set +e
+          make test-coverage
+          status=$?
+          set -e
+          failure="$(jq -r '
+            select(.Action == "fail") |
+            if .Test then (.Package + "/" + .Test) else .Package end
+          ' .tmp/coverage/go-test.json | head -n 1)"
+          test -n "$failure" || failure=unknown
+          failure="$(printf '%s' "$failure" | tr '\r\n' '  ' | cut -c1-180)"
+          printf 'status=%s\nfailure=%s\n' "$status" "$failure" >>"$GITHUB_OUTPUT"
+      - name: Enforce Go tests (${{ steps.go-tests.outputs.failure }})
+        if: steps.go-tests.outputs.status != '0'
+        run: |
+          jq -r '
+            select(.Action == "output") |
+            select(.Output | test("^(--- FAIL:|FAIL[[:space:]]|panic:|fatal error:|[[:space:]]+.*_test\\.go:[0-9]+:|[[:space:]]+Error Trace:|[[:space:]]+Error:|[[:space:]]+Messages:|[[:space:]]+expected|[[:space:]]+actual)")) |
+            .Output
+          ' .tmp/coverage/go-test.json
+          exit 1
+
+  # The attempt for ci.yml's `build` job. Same four make targets as hosted,
+  # in the same order.
+  build-self-hosted:
+    if: >-
+      vars.SELF_HOSTED_RUNNERS == 'enabled'
+      && (github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository)
+    needs: mirror-preflight-self-hosted
+    runs-on: [self-hosted, oci-arc-runners]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.0'
+          cache: true
+      - name: Confirm this runner is actually arm64
+        run: |
+          set -euo pipefail
+          arch="$(go env GOARCH)"
+          if [ "${arch}" != "arm64" ]; then
+            echo "expected GOARCH=arm64 on oci-arc-runners, got '${arch}'" >&2
+            exit 1
+          fi
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cross-compile supported targets
+        run: make crosscompile
+      - name: Build all shipped commands
+        run: make build
+      - name: Test deterministic native-client harness
+        run: make clients-real
+      - name: Test hosted runtime with disposable dependencies
+        run: make hosted-integration
+
+  # The attempt for ci.yml's `race` matrix, one shard per matrix leg so each
+  # hosted shard's own wait step can find its own like-numbered sibling by
+  # JOB_NAME (see ci.yml's race job).
+  race-self-hosted:
+    if: >-
+      vars.SELF_HOSTED_RUNNERS == 'enabled'
+      && (github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository)
+    needs: mirror-preflight-self-hosted
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    name: race-self-hosted (shard ${{ matrix.shard }} of 4)
+    runs-on: [self-hosted, oci-arc-runners]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.0'
+          cache: true
+      - name: Confirm this runner is actually arm64
+        run: |
+          set -euo pipefail
+          arch="$(go env GOARCH)"
+          if [ "${arch}" != "arm64" ]; then
+            echo "expected GOARCH=arm64 on oci-arc-runners, got '${arch}'" >&2
+            exit 1
+          fi
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install PostgreSQL client for the compose ACL integration test
+        run: |
+          set -euo pipefail
+          if command -v psql >/dev/null 2>&1 \
+            && command -v pg_isready >/dev/null 2>&1; then
+            psql --version
+            pg_isready --version
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y postgresql-client
+          psql --version
+          pg_isready --version
+      - name: Run race and deterministic shuffle tests
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh ${{ matrix.shard }} 4)"
+          printf 'shard %s/4 packages:\n%s\n' '${{ matrix.shard }}' "$packages"
+          make test-race GOTEST_PKGS="$packages"

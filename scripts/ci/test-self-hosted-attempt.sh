@@ -796,24 +796,37 @@ assert_eq 'a sibling that was itself re-run is still ours on our own re-run' \
 # dead: the lookup would match nothing, the hosted leg would silently do all
 # the work, and the switch would look enabled while buying nothing.
 
-# Reads one `KEY: value` from the ci.yml wait step, asserting it appears
-# exactly once first -- a value read from an ambiguous match is not evidence.
-ci_env_value() {
-  local key="$1" count value
-  count="$(grep -c "^          ${key}: " "$ci_workflow" || true)"
-  if [ "$count" != 1 ]; then
-    printf 'expected exactly one "%s:" in the wait step of %s, found %s\n' \
-      "$key" "$ci_workflow" "$count" >&2
-    return 1
-  fi
-  value="$(grep "^          ${key}: " "$ci_workflow" | sed -E "s/^ *${key}: //")"
-  printf '%s\n' "$value"
+# Reads every `KEY: value` line from ci.yml's wait steps, in file order. One
+# self-hosted-routed job used to mean one wait step and one value per key;
+# routing scripts/unit/build/the race matrix alongside race-devhealthschema
+# means several wait steps now, each with its own JOB_NAME (and the same
+# WORKFLOW_NAME/WORKFLOW_PATH, since every one polls the same sibling
+# workflow) -- reading only the first would leave every later job's wiring
+# completely unverified.
+ci_env_values() {
+  local key="$1"
+  grep "^          ${key}: " "$ci_workflow" | sed -E "s/^ *${key}: //"
 }
 
+mapfile -t job_names < <(ci_env_values JOB_NAME)
+mapfile -t wf_names < <(ci_env_values WORKFLOW_NAME)
+mapfile -t wf_paths < <(ci_env_values WORKFLOW_PATH)
+
+checks=$(( checks + 1 ))
+if [ "${#job_names[@]}" -eq 0 ]; then
+  printf 'FAIL: no JOB_NAME: found in any wait step of %s\n' "$ci_workflow" >&2
+  failures=$(( failures + 1 ))
+elif [ "${#job_names[@]}" != "${#wf_names[@]}" ] || [ "${#job_names[@]}" != "${#wf_paths[@]}" ]; then
+  printf 'FAIL: JOB_NAME (%s), WORKFLOW_NAME (%s) and WORKFLOW_PATH (%s) counts disagree in %s -- a wait step is missing one of the three\n' \
+    "${#job_names[@]}" "${#wf_names[@]}" "${#wf_paths[@]}" "$ci_workflow" >&2
+  failures=$(( failures + 1 ))
+else
+  printf 'PASS: found %s wait step(s) in %s, each with a JOB_NAME/WORKFLOW_NAME/WORKFLOW_PATH triplet\n' \
+    "${#job_names[@]}" "$ci_workflow"
+fi
+
 check_cross_file() {
-  local sibling="$1" job_name wf_name declared_name status=0
-  job_name="$(ci_env_value JOB_NAME)" || return 1
-  wf_name="$(ci_env_value WORKFLOW_NAME)" || return 1
+  local sibling="$1" job_name="$2" wf_name="$3" declared_name status=0
 
   if [ ! -r "$sibling" ]; then
     printf 'ci.yml names the sibling workflow %s, which does not exist\n' "$sibling" >&2
@@ -827,7 +840,17 @@ check_cross_file() {
     status=1
   fi
 
-  if ! grep -qE "^  ${job_name}:" "$sibling"; then
+  # A matrix job's JOB_NAME (e.g. "race-self-hosted (shard ${{ matrix.shard
+  # }} of 4)") is a rendered `name:` field, never a job key -- match it
+  # against the sibling's `name:` fields instead of a job-key regex.
+  # shellcheck disable=SC2016
+  if printf '%s' "$job_name" | grep -qF '${{ matrix.shard }}'; then
+    if ! grep -qF "name: ${job_name}" "$sibling"; then
+      printf 'ci.yml polls for matrix job name "%s" but %s declares no such "name:" -- the attempt would never be found\n' \
+        "$job_name" "$sibling" >&2
+      status=1
+    fi
+  elif ! grep -qE "^  ${job_name}:" "$sibling"; then
     printf 'ci.yml polls for job "%s" but %s defines no such job -- the attempt would never be found\n' \
       "$job_name" "$sibling" >&2
     status=1
@@ -835,29 +858,47 @@ check_cross_file() {
   return "$status"
 }
 
-sibling_path="$(ci_env_value WORKFLOW_PATH)"
-checks=$(( checks + 1 ))
-if check_cross_file "$repo_root/$sibling_path"; then
-  printf 'PASS: ci.yml and %s agree on the workflow name and the attempt job name\n' "$sibling_path"
-else
-  printf 'FAIL: ci.yml and %s disagree\n' "$sibling_path" >&2
-  failures=$(( failures + 1 ))
-fi
+sibling_path="${wf_paths[0]:-}"
+for i in "${!job_names[@]}"; do
+  checks=$(( checks + 1 ))
+  if check_cross_file "$repo_root/${wf_paths[$i]}" "${job_names[$i]}" "${wf_names[$i]}"; then
+    printf 'PASS: ci.yml (%s) and %s agree on the workflow name and the attempt job name\n' \
+      "${job_names[$i]}" "${wf_paths[$i]}"
+  else
+    printf 'FAIL: ci.yml (%s) and %s disagree\n' "${job_names[$i]}" "${wf_paths[$i]}" >&2
+    failures=$(( failures + 1 ))
+  fi
+done
 
 # Negative controls: each mutation is a rename someone could plausibly make,
-# and each must break the check above.
+# and each must break the check above. Exercised against the original pilot
+# job's identity (still present, unchanged) so these controls keep testing
+# the same mutations they always have.
 sed -E 's/^name: ci-self-hosted$/name: ci-self-hosted-renamed/' \
   "$repo_root/$sibling_path" >"$tmpdir/sibling-renamed-workflow.yml"
 assert_fails 'renaming the sibling workflow breaks the cross-file check' \
-  check_cross_file "$tmpdir/sibling-renamed-workflow.yml"
+  check_cross_file "$tmpdir/sibling-renamed-workflow.yml" \
+    race-devhealthschema-self-hosted ci-self-hosted
 
 sed -E 's/^  race-devhealthschema-self-hosted:/  race-devhealthschema-attempt:/' \
   "$repo_root/$sibling_path" >"$tmpdir/sibling-renamed-job.yml"
 assert_fails 'renaming the attempt job breaks the cross-file check' \
-  check_cross_file "$tmpdir/sibling-renamed-job.yml"
+  check_cross_file "$tmpdir/sibling-renamed-job.yml" \
+    race-devhealthschema-self-hosted ci-self-hosted
 
 assert_fails 'a missing sibling workflow breaks the cross-file check' \
-  check_cross_file "$tmpdir/no-such-workflow.yml"
+  check_cross_file "$tmpdir/no-such-workflow.yml" \
+    race-devhealthschema-self-hosted ci-self-hosted
+
+# The matrix job's own name-matching branch needs its own negative control:
+# a rename of race-self-hosted's `name:` field must break the check the same
+# way a job-key rename does for the non-matrix jobs above.
+sed -E 's/name: race-self-hosted \(shard/name: race-self-hosted-renamed (shard/' \
+  "$repo_root/$sibling_path" >"$tmpdir/sibling-renamed-matrix-name.yml"
+# shellcheck disable=SC2016
+assert_fails 'renaming the matrix job'"'"'s name: field breaks the cross-file check' \
+  check_cross_file "$tmpdir/sibling-renamed-matrix-name.yml" \
+    'race-self-hosted (shard ${{ matrix.shard }} of 4)' ci-self-hosted
 
 # ---------------------------------------------------------------------------
 

@@ -53,11 +53,62 @@ jobs:
 
   scripts:
     runs-on: ubuntu-latest
+    # Narrower than the workflow default (contents+packages): this job pulls
+    # no packages, and needs `actions: read` only to see the sibling run's
+    # job list.
+    permissions:
+      contents: read
+      actions: read
     steps:
-      # actions/checkout v7.0.0
+      # actions/checkout v7.0.0. Unconditional, and FIRST -- see
+      # race-devhealthschema's identical comment: the wait step below runs
+      # scripts/ci/self-hosted-attempt.sh out of this workspace.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
+      # Runner-routing contract v1.5.1: this job is also the GitHub-hosted
+      # fallback leg for the self-hosted attempt `scripts-self-hosted` in the
+      # sibling `ci-self-hosted` workflow. Same shape as race-devhealthschema
+      # below -- see that job's own comments for the full outcome vocabulary.
+      - name: Wait for the self-hosted attempt, or claim the work here
+        id: wait
+        if: >-
+          vars.SELF_HOSTED_RUNNERS == 'enabled'
+          && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.head_ref || github.ref_name }}
+          WORKFLOW_NAME: ci-self-hosted
+          WORKFLOW_PATH: .github/workflows/ci-self-hosted.yml
+          JOB_NAME: scripts-self-hosted
+          QUEUE_TIMEOUT_MINUTES: 5
+          # Kept in sync by hand with scripts-self-hosted's timeout-minutes
+          # (15) in ci-self-hosted.yml, plus the script's own 3-minute
+          # reporting-lag buffer: 12 + 3 = 15.
+          ATTEMPT_TIMEOUT_MINUTES: 12
+        run: scripts/ci/self-hosted-attempt.sh wait
+      - name: Decide whether this leg owns the real work
+        id: own
+        env:
+          OUTCOME: ${{ steps.wait.outputs.outcome }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OUTCOME}" ] || [ "${OUTCOME}" = unclaimed ]; then
+            echo "run_here=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "run_here=false" >>"$GITHUB_OUTPUT"
+            printf 'self-hosted attempt reached a terminal state (%s); not repeating its work here\n' "${OUTCOME}"
+          fi
+      - name: Fail this leg if the self-hosted attempt itself failed
+        if: steps.own.outputs.run_here == 'false' && steps.wait.outputs.outcome == 'claimed-failure'
+        run: |
+          echo "the self-hosted attempt (scripts-self-hosted in the ci-self-hosted workflow) did not succeed; failing this leg so the required gate reflects it" >&2
+          exit 1
       - name: Check release setup script modes
+        if: steps.own.outputs.run_here == 'true'
         run: |
           test -x scripts/release/setup-cosign-key.sh
           test -x scripts/release/export-tag-signing-key.sh
@@ -73,40 +124,50 @@ jobs:
           test -x scripts/release/verify-mcp-binary-approval.sh
           test -x scripts/release/write-container-release-manifest.sh
       - name: Shellcheck CI release publisher
+        if: steps.own.outputs.run_here == 'true'
         run: |
           # SC2016: jq receives named arguments whose $names must remain literal
           # inside single-quoted jq programs rather than expand in the shell.
           shellcheck -x -e SC2016 scripts/release/publish-ci-release.sh
       - name: Shellcheck release policy contract tests
+        if: steps.own.outputs.run_here == 'true'
         run: |
           # SC2016: this test intentionally searches source files for literal
           # shell and jq variables such as $tag, $name, and $release_digest.
           shellcheck -x -e SC2016 scripts/release/test_release_scripts.sh
       - name: Shellcheck existing release scripts
+        if: steps.own.outputs.run_here == 'true'
         run: |
           find scripts/release -maxdepth 1 -type f -name '*.sh' \
             ! -name 'publish-ci-release.sh' \
             ! -name 'test_release_scripts.sh' -print0 \
             | xargs -0 shellcheck -x
       - name: Shellcheck container scripts
+        if: steps.own.outputs.run_here == 'true'
         run: |
           # SC2016: test-contract.sh intentionally greps scan.sh for literal
           # shell variables such as $trivy_db_mirror and $metadata.
           find scripts/container -type f -name '*.sh' -print0 \
             | xargs -0 shellcheck -x -e SC2016
       - name: Shellcheck CI workflow scripts
+        if: steps.own.outputs.run_here == 'true'
         run: |
           find scripts/ci -type f -name '*.sh' -print0 \
             | xargs -0 shellcheck -x
       - name: Test release asset assembly
+        if: steps.own.outputs.run_here == 'true'
         run: scripts/release/test-assemble-release-assets.sh
       - name: Test container release manifest
+        if: steps.own.outputs.run_here == 'true'
         run: scripts/release/test-container-release-manifest.sh
       - name: Test private image publisher
+        if: steps.own.outputs.run_here == 'true'
         run: scripts/release/test-publish-private-image.sh
       - name: Test release policy contracts
+        if: steps.own.outputs.run_here == 'true'
         run: scripts/release/test_release_scripts.sh
       - name: Test optional MCP binary approval gate
+        if: steps.own.outputs.run_here == 'true'
         run: |
           approval_gates=scripts/release/test-remote-gates.sh
           "$approval_gates" --mode dry-run \
@@ -114,6 +175,7 @@ jobs:
           "$approval_gates" --mode reject-invalid \
             --fixtures testdata/release-approvals
       - name: Verify CI workflow contract
+        if: steps.own.outputs.run_here == 'true'
         run: scripts/ci/test-workflow-contract.sh
       # The self-hosted routing's run-selection and status-reading logic,
       # its timeout branches, and the cross-file agreement between ci.yml
@@ -122,6 +184,7 @@ jobs:
       # makes the hosted leg quietly do all the work forever while every
       # report says the routing works.
       - name: Verify the self-hosted attempt selector
+        if: steps.own.outputs.run_here == 'true'
         run: scripts/ci/test-self-hosted-attempt.sh
       # CHAOS-4855 R3: mirror-preflight and resolve-mirrored-images.sh only
       # verify the images this list's author already knew to add -- neither
@@ -133,6 +196,7 @@ jobs:
       # the module via `git grep` and fails naming the file:line if it is
       # not both digest-pinned and present in the mirror list.
       - name: Verify every testcontainers image is pinned and mirrored
+        if: steps.own.outputs.run_here == 'true'
         run: scripts/ci/test-testcontainers-image-pins.sh
 
   lint:
@@ -170,6 +234,13 @@ jobs:
   unit:
     runs-on: ubuntu-latest
     needs: mirror-preflight
+    # Narrower than the workflow default's implicit contents+packages: this
+    # job also needs `actions: read` to see the self-hosted sibling run's
+    # job list (the wait step below).
+    permissions:
+      contents: read
+      actions: read
+      packages: read
     env:
       # CHAOS-4855: redirect every registry-less Docker Hub pull this suite
       # makes (postgres, clickhouse, falkordb, and testcontainers-go's own
@@ -186,11 +257,54 @@ jobs:
       # own repo-scoped path instead -- see mirror-images.yml.
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
     steps:
-      # actions/checkout v7.0.0
+      # actions/checkout v7.0.0. Unconditional, and FIRST -- the wait step
+      # below runs scripts/ci/self-hosted-attempt.sh out of this workspace.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
+      # Runner-routing contract v1.5.1: this job is also the GitHub-hosted
+      # fallback leg for the self-hosted attempt `unit-self-hosted` in the
+      # sibling `ci-self-hosted` workflow -- same shape as race-devhealthschema.
+      - name: Wait for the self-hosted attempt, or claim the work here
+        id: wait
+        if: >-
+          vars.SELF_HOSTED_RUNNERS == 'enabled'
+          && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.head_ref || github.ref_name }}
+          WORKFLOW_NAME: ci-self-hosted
+          WORKFLOW_PATH: .github/workflows/ci-self-hosted.yml
+          JOB_NAME: unit-self-hosted
+          QUEUE_TIMEOUT_MINUTES: 5
+          # Kept in sync by hand with unit-self-hosted's timeout-minutes (27)
+          # in ci-self-hosted.yml, plus the script's own 3-minute
+          # reporting-lag buffer: 24 + 3 = 27.
+          ATTEMPT_TIMEOUT_MINUTES: 24
+        run: scripts/ci/self-hosted-attempt.sh wait
+      - name: Decide whether this leg owns the real work
+        id: own
+        env:
+          OUTCOME: ${{ steps.wait.outputs.outcome }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OUTCOME}" ] || [ "${OUTCOME}" = unclaimed ]; then
+            echo "run_here=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "run_here=false" >>"$GITHUB_OUTPUT"
+            printf 'self-hosted attempt reached a terminal state (%s); not repeating its work here\n' "${OUTCOME}"
+          fi
+      - name: Fail this leg if the self-hosted attempt itself failed
+        if: steps.own.outputs.run_here == 'false' && steps.wait.outputs.outcome == 'claimed-failure'
+        run: |
+          echo "the self-hosted attempt (unit-self-hosted in the ci-self-hosted workflow) did not succeed; failing this leg so the required gate reflects it" >&2
+          exit 1
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        if: steps.own.outputs.run_here == 'true'
         with:
           go-version: '1.27.0'
           cache: true
@@ -198,6 +312,7 @@ jobs:
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
       # GITHUB_TOKEN already has read access to.
       - name: Log in to GitHub Container Registry
+        if: steps.own.outputs.run_here == 'true'
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
         with:
           registry: ghcr.io
@@ -211,6 +326,7 @@ jobs:
       # skip-reads-as-ok trap the grant proof exists to close. Both the
       # unit and race jobs run this suite, so both install the client.
       - name: Install PostgreSQL client for the compose ACL integration test
+        if: steps.own.outputs.run_here == 'true'
         run: |
           set -euo pipefail
           # The runner image already ships the PostgreSQL 16 client binaries;
@@ -242,6 +358,7 @@ jobs:
       # `if: always()` so a failing run still leaves reports to inspect.
       - name: Run Go tests with coverage and JUnit reporting
         id: go-tests
+        if: steps.own.outputs.run_here == 'true'
         run: |
           set +e
           make test-coverage
@@ -255,7 +372,7 @@ jobs:
           failure="$(printf '%s' "$failure" | tr '\r\n' '  ' | cut -c1-180)"
           printf 'status=%s\nfailure=%s\n' "$status" "$failure" >>"$GITHUB_OUTPUT"
       - name: Enforce Go tests (${{ steps.go-tests.outputs.failure }})
-        if: steps.go-tests.outputs.status != '0'
+        if: steps.own.outputs.run_here == 'true' && steps.go-tests.outputs.status != '0'
         run: |
           jq -r '
             select(.Action == "output") |
@@ -265,7 +382,7 @@ jobs:
           exit 1
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: always()
+        if: always() && steps.own.outputs.run_here == 'true'
         with:
           name: go-coverage
           path: .tmp/coverage/coverage.xml
@@ -273,7 +390,7 @@ jobs:
           retention-days: 90
       # actions/upload-artifact v7.0.1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: always()
+        if: always() && steps.own.outputs.run_here == 'true'
         with:
           name: go-junit
           path: .tmp/coverage/junit.xml
@@ -288,6 +405,13 @@ jobs:
         shard: [1, 2, 3, 4]
     name: race (shard ${{ matrix.shard }} of 4)
     runs-on: ubuntu-latest
+    # Narrower than the workflow default's implicit contents+packages: this
+    # job also needs `actions: read` to see the self-hosted sibling run's
+    # job list (the wait step below).
+    permissions:
+      contents: read
+      actions: read
+      packages: read
     env:
       # CHAOS-4855: see the identical env on the unit job above -- the race
       # shards run the same testcontainers-backed suite, partitioned.
@@ -295,11 +419,55 @@ jobs:
       # ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner>.
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
     steps:
-      # actions/checkout v7.0.0
+      # actions/checkout v7.0.0. Unconditional, and FIRST -- the wait step
+      # below runs scripts/ci/self-hosted-attempt.sh out of this workspace.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
+      # Runner-routing contract v1.5.1: this shard is also the GitHub-hosted
+      # fallback leg for the self-hosted attempt of the SAME shard number in
+      # the sibling `ci-self-hosted` workflow's `race-self-hosted` matrix --
+      # same shape as race-devhealthschema, keyed per shard via matrix.shard.
+      - name: Wait for the self-hosted attempt, or claim the work here
+        id: wait
+        if: >-
+          vars.SELF_HOSTED_RUNNERS == 'enabled'
+          && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.head_ref || github.ref_name }}
+          WORKFLOW_NAME: ci-self-hosted
+          WORKFLOW_PATH: .github/workflows/ci-self-hosted.yml
+          JOB_NAME: race-self-hosted (shard ${{ matrix.shard }} of 4)
+          QUEUE_TIMEOUT_MINUTES: 5
+          # Kept in sync by hand with race-self-hosted's timeout-minutes (15)
+          # in ci-self-hosted.yml, plus the script's own 3-minute
+          # reporting-lag buffer: 12 + 3 = 15.
+          ATTEMPT_TIMEOUT_MINUTES: 12
+        run: scripts/ci/self-hosted-attempt.sh wait
+      - name: Decide whether this leg owns the real work
+        id: own
+        env:
+          OUTCOME: ${{ steps.wait.outputs.outcome }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OUTCOME}" ] || [ "${OUTCOME}" = unclaimed ]; then
+            echo "run_here=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "run_here=false" >>"$GITHUB_OUTPUT"
+            printf 'self-hosted attempt reached a terminal state (%s); not repeating its work here\n' "${OUTCOME}"
+          fi
+      - name: Fail this leg if the self-hosted attempt itself failed
+        if: steps.own.outputs.run_here == 'false' && steps.wait.outputs.outcome == 'claimed-failure'
+        run: |
+          echo "the self-hosted attempt (race-self-hosted shard ${{ matrix.shard }} in the ci-self-hosted workflow) did not succeed; failing this leg so the required gate reflects it" >&2
+          exit 1
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        if: steps.own.outputs.run_here == 'true'
         with:
           go-version: '1.27.0'
           cache: true
@@ -307,6 +475,7 @@ jobs:
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
       # GITHUB_TOKEN already has read access to.
       - name: Log in to GitHub Container Registry
+        if: steps.own.outputs.run_here == 'true'
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
         with:
           registry: ghcr.io
@@ -320,6 +489,7 @@ jobs:
       # skip-reads-as-ok trap the grant proof exists to close. Both the
       # unit and race jobs run this suite, so both install the client.
       - name: Install PostgreSQL client for the compose ACL integration test
+        if: steps.own.outputs.run_here == 'true'
         run: |
           set -euo pipefail
           # The runner image already ships the PostgreSQL 16 client binaries;
@@ -347,6 +517,7 @@ jobs:
       # scripts/ci/test-shard.sh, so each shard still runs a real subset of
       # `go list ./...` under -race with the same deterministic shuffle.
       - name: Run race and deterministic shuffle tests
+        if: steps.own.outputs.run_here == 'true'
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh ${{ matrix.shard }} 4)"
@@ -482,6 +653,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
     needs: mirror-preflight
+    # Narrower than the workflow default's implicit contents+packages: this
+    # job also needs `actions: read` to see the self-hosted sibling run's
+    # job list (the wait step below).
+    permissions:
+      contents: read
+      actions: read
+      packages: read
     env:
       # CHAOS-4855: `make hosted-integration` below sets ACR_HOSTED_INTEGRATION=1,
       # which starts real postgres/clickhouse testcontainers fixtures
@@ -491,11 +669,54 @@ jobs:
       # ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner>.
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
     steps:
-      # actions/checkout v7.0.0
+      # actions/checkout v7.0.0. Unconditional, and FIRST -- the wait step
+      # below runs scripts/ci/self-hosted-attempt.sh out of this workspace.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
+      # Runner-routing contract v1.5.1: this job is also the GitHub-hosted
+      # fallback leg for the self-hosted attempt `build-self-hosted` in the
+      # sibling `ci-self-hosted` workflow -- same shape as race-devhealthschema.
+      - name: Wait for the self-hosted attempt, or claim the work here
+        id: wait
+        if: >-
+          vars.SELF_HOSTED_RUNNERS == 'enabled'
+          && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.head_ref || github.ref_name }}
+          WORKFLOW_NAME: ci-self-hosted
+          WORKFLOW_PATH: .github/workflows/ci-self-hosted.yml
+          JOB_NAME: build-self-hosted
+          QUEUE_TIMEOUT_MINUTES: 5
+          # Kept in sync by hand with build-self-hosted's timeout-minutes (15)
+          # in ci-self-hosted.yml, plus the script's own 3-minute
+          # reporting-lag buffer: 12 + 3 = 15.
+          ATTEMPT_TIMEOUT_MINUTES: 12
+        run: scripts/ci/self-hosted-attempt.sh wait
+      - name: Decide whether this leg owns the real work
+        id: own
+        env:
+          OUTCOME: ${{ steps.wait.outputs.outcome }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OUTCOME}" ] || [ "${OUTCOME}" = unclaimed ]; then
+            echo "run_here=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "run_here=false" >>"$GITHUB_OUTPUT"
+            printf 'self-hosted attempt reached a terminal state (%s); not repeating its work here\n' "${OUTCOME}"
+          fi
+      - name: Fail this leg if the self-hosted attempt itself failed
+        if: steps.own.outputs.run_here == 'false' && steps.wait.outputs.outcome == 'claimed-failure'
+        run: |
+          echo "the self-hosted attempt (build-self-hosted in the ci-self-hosted workflow) did not succeed; failing this leg so the required gate reflects it" >&2
+          exit 1
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        if: steps.own.outputs.run_here == 'true'
         with:
           go-version: '1.27.0'
           cache: true
@@ -503,18 +724,23 @@ jobs:
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
       # GITHUB_TOKEN already has read access to.
       - name: Log in to GitHub Container Registry
+        if: steps.own.outputs.run_here == 'true'
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Cross-compile supported targets
+        if: steps.own.outputs.run_here == 'true'
         run: make crosscompile
       - name: Build all shipped commands
+        if: steps.own.outputs.run_here == 'true'
         run: make build
       - name: Test deterministic native-client harness
+        if: steps.own.outputs.run_here == 'true'
         run: make clients-real
       - name: Test hosted runtime with disposable dependencies
+        if: steps.own.outputs.run_here == 'true'
         run: make hosted-integration
 
   contracts:
