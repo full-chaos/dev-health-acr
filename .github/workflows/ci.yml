@@ -14,8 +14,12 @@ permissions:
   packages: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Cancel unconditionally, push included: main is fast-forward-only from
+  # squash merges, so an in-progress run for a superseded main commit is
+  # moot the moment a newer push lands -- letting it finish only burns
+  # runner time (hosted or pool) nobody will read the result of.
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # CHAOS-4855 R2: ci.yml and mirror-images.yml are independent workflows

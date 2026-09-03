@@ -54,7 +54,7 @@ func TestChaos4096_MultiSubjectCommitEmitsOneDecisionEventPerSubject(t *testing.
 	resolution, bases, _ := ResolveFromMergedCandidatesWithGateAndBasis(
 		bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
 		nil, 0, false, 10, 20, true,
-		DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-multi", "", false, false)
+		DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-multi", "", false, false, nil)
 
 	if len(resolution.Committed) != 2 {
 		t.Fatalf("both pre-committed hints must still commit, got %v", resolution.Committed)
@@ -116,7 +116,7 @@ func TestChaos4096_CallerHintShortCircuitEmitsDecisionEvents(t *testing.T) {
 	deps := backend.deps()
 	deps.ResolutionTracer = tracer
 
-	resolution, _, bases, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), deps, nil, nil, nil)
+	resolution, _, bases, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), deps, nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjectsWithCommitBasis error = %v", err)
 	}
@@ -177,7 +177,7 @@ func TestChaos4096_CallerHintShortCircuitDecisionEventFields(t *testing.T) {
 	deps := backend.deps()
 	deps.ResolutionTracer = tracer
 
-	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(contextfabric.WithOffersOnlyResolution(context.Background()), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), deps, nil, nil, nil)
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(contextfabric.WithOffersOnlyResolution(context.Background()), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), deps, nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjectsWithCommitBasis error = %v", err)
 	}

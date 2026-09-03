@@ -226,7 +226,7 @@ type GraphReader interface {
 	// decides which subject kinds resolution searches for must fail to
 	// compile when an implementation omits it, not disappear into a
 	// context the type checker cannot see.
-	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection, *QuestionFrame) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error)
+	ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection, *QuestionFrame, SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error)
 	DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error)
 }
 

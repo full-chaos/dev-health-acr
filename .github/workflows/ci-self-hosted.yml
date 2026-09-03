@@ -35,13 +35,18 @@ permissions:
   contents: read
 
 # A group of its own, so this workflow can neither cancel nor be cancelled by
-# ci.yml's `ci-${{ github.workflow }}-${{ github.ref }}`. The two runs are
-# independent: a new push cancels this run and ci.yml's run separately, each
-# by its own group, which is what keeps a superseded attempt from holding an
-# ephemeral ARC runner while its replacement queues behind it.
+# ci.yml's own group. The two runs are independent: a new push cancels this
+# run and ci.yml's run separately, each by its own group, which is what
+# keeps a superseded attempt from holding an ephemeral ARC runner while its
+# replacement queues behind it.
+#
+# Cancel unconditionally, push included: main is fast-forward-only from
+# squash merges, so an in-progress attempt for a superseded main commit is
+# moot the moment a newer push lands -- letting it finish only holds a pool
+# runner nobody will read the result of.
 concurrency:
-  group: ci-self-hosted-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-self-hosted-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # The attempt for ci.yml's `race-devhealthschema` job.

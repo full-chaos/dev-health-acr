@@ -9,20 +9,18 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// Round-3 review findings, pinned RED and deliberately NOT fixed here. The
-// review cycle is closed at three rounds, so these exist so the defects are
-// executable rather than described, and so whoever fixes them has the bar in
-// front of them.
+// Round-3 review findings, FIXED in the same change that added these tests.
+// They were written red first, against the defects, and now pin the fixes.
 
-// TestKindCarry_PluralExplicitExpectedKindsBlocksTheCarry is round 3's
-// finding 1, and it is a precedence violation on a reachable request shape.
+// TestKindCarry_PluralExplicitExpectedKindsBlocksTheCarry pins round 3's
+// finding 1, which was a precedence violation on a reachable request shape.
 //
 // An explicit expected_kind is echoed onto the result ONLY when the caller
 // states exactly one (resolveExplicitStructure, structure.go) -- a plural
 // value narrows and shapes offers but has no single value to echo. The carry's
-// own block reads that ECHO (statedExpectedKindThisTurn reads canon.Explicit),
-// so a caller who states TWO kinds is treated as having stated none, and an
-// inherited kind from a linked prior result overrides them both.
+// block used to read that ECHO, so a caller who stated TWO kinds was treated
+// as having stated none, and an inherited kind from a linked prior result
+// overrode them both. It now reads request.ExpectedKinds directly.
 //
 // Note what this is NOT: plural has no echo, so it never collides into the
 // duplicate-entry validation failure round 2 fixed. Nothing fails loudly. The
@@ -109,15 +107,20 @@ func TestKindCarry_PluralExplicitExpectedKindsBlocksTheCarry(t *testing.T) {
 	}
 }
 
-// TestKindCarry_SaveTimeSupersessionVetoStillDisclosesTheCarry is round 3's
-// finding 2, and it is a re-find of round 1's disclosure class one path over.
+// TestKindCarry_SaveTimeSupersessionVetoStillDisclosesTheCarry pins round 3's
+// finding 2, which was a re-find of round 1's disclosure class one path over.
 //
 // The decisive path, the subjectless terminal and the class-default window
 // gate all append the per-axis carry disclosures. The three Save-time
-// supersession race paths return through structureSupersessionVetoResult,
-// which renders only the stale receipt entries -- so a turn that genuinely
-// inherited a kind, and resolved under it, reports nothing about it on that
+// supersession race paths returned through structureSupersessionVetoResult,
+// which rendered only the stale receipt entries -- so a turn that genuinely
+// inherited a kind, and resolved under it, reported nothing about it on that
 // terminal.
+//
+// COVERAGE LIMIT, stated rather than left to be discovered: this pins the
+// WINDOW race site (window.go's own call). The other two call sites
+// (engine.go's decisive path and unresolved.go's subjectless terminal) pass
+// the same entries through the same helper and are NOT independently pinned.
 //
 // The shape below is the window race (window.go's own call site): the request
 // redeems a winr_ receipt from a prior result that ALSO carries a

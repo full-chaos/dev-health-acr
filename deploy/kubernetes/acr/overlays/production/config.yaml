@@ -5,3 +5,4 @@ metadata:
 data:
   ACR_ENVIRONMENT: production
   ACR_LOG_LEVEL: warn
+  ACR_MAX_ITEMS: "45"
