@@ -573,6 +573,99 @@ assert_eq 'that F3-F6 case genuinely reached the result phase final read' \
   'yes' "$lost_reached"
 
 # ---------------------------------------------------------------------------
+# 3d. pagination: a listing that spans pages must still be searched whole
+# ---------------------------------------------------------------------------
+# `gh api --paginate` does not return one merged document -- it emits one JSON
+# object PER PAGE, concatenated. Both consumers therefore slurp (`jq -s`) and
+# flatten across objects. If either half of that regresses -- the fetcher
+# dropping `--paginate`, or a consumer reading a single object -- everything
+# past page 1 becomes invisible: the sibling run or the attempt job simply is
+# not found, the hosted leg quietly does all the work, and nothing goes red.
+# Same silent-in-a-green-build shape as the rest of this file.
+#
+# NOTE on what these can and cannot prove. Every other test here drives the
+# script through `ACR_ATTEMPT_RUNS_SRC`/`ACR_ATTEMPT_JOBS_SRC`, which replace
+# the `gh api` call entirely -- so no fixture-driven test can detect a missing
+# `--paginate`. The two halves need different instruments: the stream tests
+# below pin the CONSUMER (a multi-object stream is parsed whole), and the
+# static check pins the PRODUCER (the flag is actually passed). The static one
+# asserts the guard is PRESENT, not that it works, which is weaker on purpose
+# and is the best available without a live API call.
+
+cat >"$tmpdir/runs-page1.json" <<'JSON'
+{"total_count":150,"workflow_runs":[{"id":1,"name":"ci","path":".github/workflows/ci.yml","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"pull_request","head_branch":"some-topic-branch","created_at":"2026-09-02T10:55:00Z"}]}
+JSON
+cat >"$tmpdir/runs-page2.json" <<'JSON'
+{"total_count":150,"workflow_runs":[{"id":2,"name":"ci-self-hosted","path":".github/workflows/ci-self-hosted.yml","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"pull_request","head_branch":"some-topic-branch","created_at":"2026-09-02T11:00:00Z"}]}
+JSON
+assert_eq 'a sibling run found only on page 2 of a paginated listing is still selected' \
+  '2' \
+  "$(cat "$tmpdir/runs-page1.json" "$tmpdir/runs-page2.json" | "$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" "$FLOOR")"
+
+cat >"$tmpdir/jobs-page1.json" <<'JSON'
+{"total_count":150,"jobs":[{"id":1,"name":"some-other-job","status":"completed","conclusion":"success"}]}
+JSON
+cat >"$tmpdir/jobs-page2.json" <<'JSON'
+{"total_count":150,"jobs":[{"id":2,"name":"race-devhealthschema-self-hosted","status":"in_progress","conclusion":null}]}
+JSON
+assert_eq 'an attempt job found only on page 2 of a paginated listing is still read' \
+  'in_progress null' \
+  "$(cat "$tmpdir/jobs-page1.json" "$tmpdir/jobs-page2.json" | "$subject" attempt-status "$JOB")"
+
+# Negative control: the multi-page path must not manufacture a match either.
+cat >"$tmpdir/jobs-page2-other.json" <<'JSON'
+{"total_count":150,"jobs":[{"id":2,"name":"yet-another-job","status":"queued","conclusion":null}]}
+JSON
+assert_eq 'a job absent from every page reads not_created, not a false match' \
+  'not_created null' \
+  "$(cat "$tmpdir/jobs-page1.json" "$tmpdir/jobs-page2-other.json" | "$subject" attempt-status "$JOB")"
+
+# The producer half. Both collection listings must request every page; the
+# single-object endpoint (this run's own record) correctly does not.
+#
+# Scoped to the two FETCHER FUNCTION BODIES, with comments stripped. The first
+# version of this check grepped the whole file for a line carrying both `gh
+# api` and a collection URL, and was wrong in both directions at once: it
+# matched the example command inside the F1 refutation COMMENT (the same decoy
+# trap scripts/ci/test-workflow-contract.sh documents), and it missed the runs
+# fetcher entirely, because that call puts its URL on a continuation line. It
+# reported a failure it had invented while not checking the call it existed
+# for. Anchoring on the function body fixes both.
+paginate_body() {
+  local file="$1" fn="$2"
+  awk -v fn="$fn" '$0 ~ "^" fn "\\(\\) \\{" { grab=1; next } grab && /^}/ { grab=0 } grab' "$file" \
+    | sed 's/#.*$//'
+}
+
+check_paginate_flags() {
+  local file="$1" status=0 fn body
+  for fn in fetch_runs fetch_jobs; do
+    body="$(paginate_body "$file" "$fn")"
+    if ! printf '%s' "$body" | grep -q 'gh api'; then
+      printf '%s() does not call gh api at all -- this check is pointed at the wrong function\n' "$fn" >&2
+      status=1
+      continue
+    fi
+    if ! printf '%s' "$body" | grep -q -- '--paginate'; then
+      printf '%s() fetches a collection without --paginate, so nothing past page 1 is visible\n' "$fn" >&2
+      status=1
+    fi
+  done
+  return "$status"
+}
+checks=$(( checks + 1 ))
+if check_paginate_flags "$subject"; then
+  printf 'PASS: every collection listing is fetched with --paginate\n'
+else
+  printf 'FAIL: a collection listing is missing --paginate\n' >&2
+  failures=$(( failures + 1 ))
+fi
+
+sed 's/gh api --paginate/gh api/' "$subject" >"$tmpdir/no-paginate.sh"
+assert_fails 'dropping --paginate from the fetchers breaks the pagination check' \
+  check_paginate_flags "$tmpdir/no-paginate.sh"
+
+# ---------------------------------------------------------------------------
 # 4. cross-file agreement between ci.yml and ci-self-hosted.yml
 # ---------------------------------------------------------------------------
 # Without this, renaming the attempt job or the sibling workflow leaves both
