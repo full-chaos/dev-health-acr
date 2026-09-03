@@ -299,8 +299,19 @@ func carriableConfirmedKind(prior InvestigationResult) (contractsv1.ContextFabri
 // NOT become one (that type's own tripwire, ports.go, admits only
 // receipt-confirmed values). It blocks the carry without gaining the carry's
 // authority.
-func statedExpectedKindThisTurn(canon requestStructureCanonicalization) bool {
+func statedExpectedKindThisTurn(request InvestigationRequest, canon requestStructureCanonicalization) bool {
 	if confirmedExpectedKind(canon.Confirmed) != nil {
+		return true
+	}
+	// request.ExpectedKinds DIRECTLY, not the echoed member (codex round 3).
+	// resolveExplicitStructure echoes an explicit kind only when the caller
+	// states exactly ONE -- a plural value narrows and shapes offers but has
+	// no single value to echo. Reading the echo therefore treated a caller
+	// who stated TWO kinds as having stated none, and let an inherited kind
+	// override both, silently: plural has no echo to collide with, so
+	// nothing failed loudly the way the singular case did. The caller spoke
+	// either way, and the carry exists to fill a silence.
+	if len(request.ExpectedKinds) > 0 {
 		return true
 	}
 	for _, e := range canon.Explicit {

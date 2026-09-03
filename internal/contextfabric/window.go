@@ -1614,7 +1614,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 					// CHAOS-3478 (codex round-2 finding): result.SubjectResolution
 					// already carries this call's own priorSubjectReceiptDispositions
 					// parameter -- the race terminal must not silently drop it.
-					return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon.Confirmed, superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, plan)
+					return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon.Confirmed, superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, plan)
 				}
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))

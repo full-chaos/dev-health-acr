@@ -737,7 +737,7 @@ func TestKindCarry_ExplicitExpectedKindBlocksTheCarry(t *testing.T) {
 			Provenance:   contractsv1.ContextFabricStructureInferredDefault,
 		}},
 	}
-	if !statedExpectedKindThisTurn(canon) {
+	if !statedExpectedKindThisTurn(InvestigationRequest{}, canon) {
 		t.Fatal("statedExpectedKindThisTurn(explicit expected_kind) = false, want true: an explicit kind must block the carry, or the result carries two expected_kind entries and fails validation")
 	}
 	// A receipt-confirmed kind blocks it too (the pre-existing precedence).
@@ -746,7 +746,7 @@ func TestKindCarry_ExplicitExpectedKindBlocksTheCarry(t *testing.T) {
 			Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam),
 		}},
 	}
-	if !statedExpectedKindThisTurn(confirmedOnly) {
+	if !statedExpectedKindThisTurn(InvestigationRequest{}, confirmedOnly) {
 		t.Fatal("statedExpectedKindThisTurn(receipt-confirmed kind) = false, want true")
 	}
 	// An explicit member for a DIFFERENT axis must not block it.
@@ -755,10 +755,19 @@ func TestKindCarry_ExplicitExpectedKindBlocksTheCarry(t *testing.T) {
 			Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedValue: "acr-123",
 		}},
 	}
-	if statedExpectedKindThisTurn(otherAxis) {
+	if statedExpectedKindThisTurn(InvestigationRequest{}, otherAxis) {
 		t.Fatal("statedExpectedKindThisTurn(explicit subject_handle) = true, want false: only the kind axis blocks the kind carry")
 	}
-	if statedExpectedKindThisTurn(requestStructureCanonicalization{}) {
+	if statedExpectedKindThisTurn(InvestigationRequest{}, requestStructureCanonicalization{}) {
 		t.Fatal("statedExpectedKindThisTurn(nothing stated) = true, want false")
+	}
+	// A PLURAL explicit value has no echoed member at all, so reading
+	// canon.Explicit alone treats a caller who named two kinds as having
+	// named none (codex round 3). The request field is the authority.
+	plural := InvestigationRequest{ExpectedKinds: []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectProject,
+	}}
+	if !statedExpectedKindThisTurn(plural, requestStructureCanonicalization{}) {
+		t.Fatal("statedExpectedKindThisTurn(two stated kinds, no echo) = false, want true: a plural explicit value is still the caller stating a kind this turn")
 	}
 }

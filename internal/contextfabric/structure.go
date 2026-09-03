@@ -886,7 +886,14 @@ func (e *Engine) recordStructureConfirmationOutcome(ctx context.Context, princip
 // window-only claim loss at Save time must echo exactly like a
 // kind/anchor/handle one does, via the SAME staleConfirmedStructureEntries
 // call below.
-func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, confirmed []confirmedStructureMember, superseded *ErrStructureOfferSuperseded, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry, plan *AnswerPlan) (InvestigationResult, error) {
+// carriedStructureEntries (codex round 3) are this turn's per-axis carry
+// disclosures. They belong on THIS terminal for the same reason they belong
+// on every other result shape: the race discards the round's own decisive
+// output, but it does not undo what was inherited -- the carry really did
+// apply, and really did shape the resolution this round performed. Omitting
+// it here left one result path where a carry was silent, which is the same
+// gap the class-default gate had.
+func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, confirmed []confirmedStructureMember, superseded *ErrStructureOfferSuperseded, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry, carriedStructureEntries []*contractsv1.ContextFabricConfirmedStructureEntry, plan *AnswerPlan) (InvestigationResult, error) {
 	// CHAOS-3972 P3: cf_structure_explicit{member,outcome} -- the SAME
 	// synthetic Veto:structureVetoStaleSupersededOffer canonicalization
 	// recordStructureReceiptTelemetry's own call above uses, so an
@@ -894,7 +901,8 @@ func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal 
 	// non-applied too, never silently left unrecorded or misreported as
 	// "applied" against a round that was actually discarded.
 	recordStructureExplicitTelemetry(ctx, e.telemetry, principal, request, requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer})
-	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, staleConfirmedStructureEntries(confirmed, superseded.Members), binding, priorSubjectReceiptDispositions, plan)
+	echo := appendCarriedStructureEntry(staleConfirmedStructureEntries(confirmed, superseded.Members), carriedStructureEntries...)
+	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, echo, binding, priorSubjectReceiptDispositions, plan)
 }
 
 // resolveExplicitStructure implements design brief §2.5's "explicit

@@ -1451,7 +1451,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// axes are independent (each fails closed on its own), and a window
 	// carry miss must not suppress a kind carry hit.
 	var kindCarry kindCarryResult
-	if !statedExpectedKindThisTurn(structureCanon) {
+	if !statedExpectedKindThisTurn(request, structureCanon) {
 		kindCarry = e.resolveCarriedKind(carryCtx, principal, request, priorValidatedReceipts, binding)
 		e.recordKindCarry(ctx, principal, kindCarry)
 	}
@@ -2095,7 +2095,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// Investigate rather than by fixing the two that were
 				// reported -- which is the whole point of doing this as a
 				// sweep: the class was "post-plan exits", never "this exit".
-				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, &plan)
+				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, &plan)
 				return superseding, supersededErr
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))

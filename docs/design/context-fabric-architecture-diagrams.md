@@ -58,8 +58,8 @@ flowchart TD
   STRUCT --> CARRY{"CHAOS-4360 same-conversation<br/>window carry<br/>resolveCarriedWindow<br/>(chaos4360_carry.go)<br/>-- ONLY when effectiveWindow<br/>would be inferred_default"}
   CARRY -->|"hit: nearest chain confirmation<br/>found (bounded walk,<br/>CHAOS-3898 taint gate applied)<br/>effectiveWindow REPLACED,<br/>Source=carried disclosed on<br/>ConfirmedStructure -- never<br/>re-accepts a receipt, the<br/>IsStructureSuperseded guard<br/>is untouched"| KINDCARRY
   CARRY -->|"miss: no reference / unloadable /<br/>stale_graph_epoch / no_confirmed_window /<br/>depth_exceeded"| KINDCARRY
-  KINDCARRY{"same-conversation expected_kind carry<br/>resolveCarriedKind (structure_axis_carry.go)<br/>-- ONLY when this turn confirmed no kind<br/>of its own; receipt/carried sources ONLY.<br/>Runs whether or not the window carried:<br/>the two axes are independent and<br/>neither may suppress the other"}
-  KINDCARRY -->|"hit: effectiveConfirmedKind feeds<br/>ResolveSubjects' *ConfirmedExpectedKind<br/>(pool filter, and through it the kind<br/>offer's own cardinality suppression),<br/>Source=carried disclosed.<br/>This turn's own kindr_ receipt always wins"| WGATE
+  KINDCARRY{"same-conversation expected_kind carry<br/>resolveCarriedKind (structure_axis_carry.go)<br/>-- ONLY when this turn states no kind of its own,<br/>by RECEIPT or EXPLICITLY (any number of<br/>expected_kinds values blocks it);<br/>receipt/carried sources ONLY.<br/>Runs whether or not the window carried:<br/>the two axes are independent and<br/>neither may suppress the other"}
+  KINDCARRY -->|"hit: effectiveConfirmedKind feeds<br/>ResolveSubjects' *ConfirmedExpectedKind<br/>(pool filter, and through it the kind<br/>offer's own cardinality suppression),<br/>Source=carried disclosed on EVERY result<br/>shape, the save-time supersession veto<br/>terminal included.<br/>A kind stated THIS turn always wins"| WGATE
   KINDCARRY -->|"miss: no reference / unloadable /<br/>stale_graph_epoch / no_confirmed_kind /<br/>depth_exceeded / conflicting_kinds"| WGATE
   WGATE{"class-default window gate<br/>WindowCanonicalizationGatedClassDefault<br/>CHAOS-4040/4234"}
   WGATE -->|"regime A: inferred_default"| GATED["gatedOfferMaterial<br/>chaos4234_offers_only.go"]
@@ -218,8 +218,12 @@ replicate never terminating at all. Only a receipt-confirmed (or itself
 carried) kind is eligible: carrying an explicit/inferred-tier value forward
 would launder it into caller authority a turn later, which is what
 `ConfirmedExpectedKind`'s type-level tripwire (`ports.go`) exists to
-prevent. This turn's OWN kind receipt always wins over a carried one — the
-carry fills a silence, it does not argue with a statement.
+prevent. A kind the caller states on THIS turn always wins over a carried one
+— by redeemed receipt, or explicitly via `expected_kinds`, whatever number of
+values it names (a plural value has no single entry to echo, so the block reads
+the request field directly rather than the echo). The carry fills a silence; it
+does not argue with a statement. And a carry that applied is disclosed on every
+result shape it can reach, the save-time supersession-veto terminal included.
 
 **The limit, stated rather than left to be discovered.** Both carries seed
 their walk from a prior result the REQUEST names, and a request names one
