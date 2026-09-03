@@ -665,23 +665,31 @@ func walkSchemaRefs(node any, visit func(ref string)) {
 // validated. Adding "division" to the list would fix that one mutant and
 // leave the class untouched.
 //
-// WHY THIS CLOSES THE CLASS RATHER THAN ONE MORE INSTANCE. A special case has
-// to NAME its exception, and in Go that name is a string literal in the
-// source. So the corpus is not hand-written: it is harvested from the
-// validator's own source with go/parser, and every string literal that file
-// contains is required to be decided identically by Validate and by
-// ValidContextFabricSubjectKind. A mutant that special-cases `division` puts
-// the word `division` into the file it mutates, and the corpus therefore
-// contains it by construction. Parsing is used rather than a regex over the
-// text because a regex cannot tell a literal from the same characters inside
-// a comment -- the static-anchoring mistake this codebase has made repeatedly.
+// WHAT THIS ENFORCES, stated as exactly what it proves and no wider. A special
+// case that NAMES its exception as a string literal ANYWHERE in this package's
+// non-test source is caught: the corpus is harvested from that source with
+// go/parser, so a mutant that exempts `division` writes the word `division`
+// into a file the corpus reads, and supplies its own killer. Parsing rather
+// than a regex, because a regex cannot tell a literal from the same characters
+// inside a comment -- the static-anchoring mistake this codebase has made
+// repeatedly.
 //
-// THE RESIDUAL, stated rather than implied: a special case that does not name
-// its value -- `len(c.Kind) == 8`, a computed constant, a value assembled at
-// run time -- writes no matching literal and survives this. That is a
-// strictly smaller class than "any value the author did not think of", and it
-// is the honest boundary of what a finite test can prove here. The generated
-// perturbations below narrow it further; they do not close it.
+// THE RESIDUAL, and this claim has been narrowed twice under review rather
+// than defended. Round 2 defeated a hand-written list of forbidden values.
+// Round 3 defeated a harvest that read only the validator's own file, by
+// declaring the exempt value as a constant in a SIBLING FILE of the same
+// package -- so the harvest now reads the whole package. What still survives:
+//
+//   - a special case that names no value at all: `len(c.Kind) == 8`, a prefix
+//     or suffix match, a value assembled at run time;
+//   - a constant declared in a DIFFERENT package and referenced here.
+//
+// Those are not closed, and this test does not claim to close them. Closing
+// them needs a different instrument than a corpus -- an assertion about the
+// SHAPE of the decision rather than about sampled inputs -- and that couples
+// the test to an implementation form, which is a trade this slice did not
+// make. The property is enforced for literal-naming exceptions and REPORTED
+// for the rest; the header claims only the former.
 func TestCohortValidateKindDecisionMatchesTheClosedVocabulary(t *testing.T) {
 	t.Parallel()
 	published := publishedCohortKinds(t)
@@ -713,10 +721,10 @@ func TestCohortValidateKindDecisionMatchesTheClosedVocabulary(t *testing.T) {
 		add(kind, "published vocabulary")
 	}
 
-	// (b) Every string literal in the validator's own source. This is the
-	// half that closes the special-case class.
-	for _, literal := range stringLiteralsInValidatorSource(t) {
-		add(literal, "string literal in validate_context_fabric_result.go")
+	// (b) Every string literal in the PACKAGE's non-test source. This is the
+	// half that narrows the special-case class.
+	for _, literal := range stringLiteralsInPackageSource(t) {
+		add(literal, "string literal in package v1 source")
 	}
 
 	// (c) Systematic single-edit perturbations of each published kind, which
@@ -773,38 +781,69 @@ func TestCohortValidateKindDecisionMatchesTheClosedVocabulary(t *testing.T) {
 	t.Logf("kind decision checked over %d values (%d published, %d not), corpus generated + harvested, not hand-written", len(corpus), accepted, refused)
 }
 
-// stringLiteralsInValidatorSource parses the validator's source and returns
-// every string literal in it.
+// stringLiteralsInPackageSource parses every non-test file in this package and
+// returns every string literal in them.
 //
-// go/parser rather than a regex: a regex over source text cannot distinguish a
-// literal from the same characters inside a comment or an identifier, and this
-// codebase has been bitten by exactly that (a drift guard that pulled a flag
-// out of a comment it had just written, and a guard anchored to whole-file
-// line adjacency). A parser understands the syntax structurally.
-func stringLiteralsInValidatorSource(t *testing.T) []string {
+// WHY THE WHOLE PACKAGE, not just the validator's own file. The first version
+// of this harvest parsed `validate_context_fabric_result.go` alone. Review
+// round 3 defeated it in one line: declare the exempt value as a constant in
+// ANOTHER file of the same package and reference the identifier in the guard.
+// The validator's file then contains no matching literal, the corpus never
+// sees the value, and all seven assertions pass while an unpublished kind
+// validates. Reproduced before this repair; the guard is only as wide as the
+// source it reads.
+//
+// go/parser rather than a regex, for the same reason as before: a regex over
+// source text cannot distinguish a literal from the same characters inside a
+// comment or an identifier, and this codebase has been bitten by exactly that.
+//
+// Non-test files only. Including `_test.go` would feed the corpus its own
+// expected values, which is circular, and a special case living in a test file
+// is not a production guard anyway.
+func stringLiteralsInPackageSource(t *testing.T) []string {
 	t.Helper()
 	root := moduleRootForParity(t)
-	path := filepath.Join(root, "internal", "contracts", "v1", "validate_context_fabric_result.go")
-	fileSet := token.NewFileSet()
-	parsed, err := parser.ParseFile(fileSet, path, nil, 0)
+	dir := filepath.Join(root, "internal", "contracts", "v1")
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
+		t.Fatalf("read package dir %s: %v", dir, err)
 	}
+	fileSet := token.NewFileSet()
 	var literals []string
-	ast.Inspect(parsed, func(node ast.Node) bool {
-		lit, ok := node.(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			return true
+	filesParsed := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
 		}
-		value, err := strconv.Unquote(lit.Value)
+		parsed, err := parser.ParseFile(fileSet, filepath.Join(dir, name), nil, 0)
 		if err != nil {
-			return true
+			t.Fatalf("parse %s: %v", name, err)
 		}
-		literals = append(literals, value)
-		return true
-	})
-	if len(literals) == 0 {
-		t.Fatalf("no string literals found in %s -- the harvest returned nothing, so the corpus it feeds proves less than it claims", path)
+		filesParsed++
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			lit, ok := node.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			value, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				return true
+			}
+			literals = append(literals, value)
+			return true
+		})
 	}
+	// Both floors matter and they fail for different reasons: zero files means
+	// the directory walk broke, zero literals means the AST walk did. Either
+	// way the corpus this feeds would prove less than it claims while still
+	// reading green.
+	if filesParsed == 0 {
+		t.Fatalf("no non-test .go files found under %s -- the harvest read nothing", dir)
+	}
+	if len(literals) == 0 {
+		t.Fatalf("no string literals found across %d files in %s -- the harvest returned nothing", filesParsed, dir)
+	}
+	t.Logf("harvested %d string literals from %d non-test files in package v1", len(literals), filesParsed)
 	return literals
 }
