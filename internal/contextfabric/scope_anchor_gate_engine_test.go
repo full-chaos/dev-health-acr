@@ -163,3 +163,84 @@ func TestEngine_AdmittedAnchorKindReachesRetrieval(t *testing.T) {
 		t.Fatalf("anchor kinds received = %v, want at least one %q — the admitted case never reaches retrieval, so the refusal test above is vacuous", graph.anchorKinds, SubjectTeam)
 	}
 }
+
+// THE OFFERS-ONLY CALL SITE. Round 2 found that the tests above reach only the
+// DECISIVE resolve (engine.go:1502): a ShapeOpen interpretation infers no
+// default window, so the class-default gate never fires and the offers-only
+// resolve (chaos4234_offers_only.go:146) is never driven. Bypassing the gate
+// at THAT site therefore survived everything.
+//
+// That is the same finding class as the decisive-path one, at the second of
+// the two application sites — my own sweep named both sites and then closed
+// only one, because the recording double reached one path and the
+// parameter-discarding double covered the other. The shared
+// acceptanceGraphReader now records the parameter, which is what makes this
+// path assertable at all.
+func TestEngine_OffersOnlyPathAlsoAppliesTheRefusalGate(t *testing.T) {
+	t.Parallel()
+	malformed := &QuestionFrame{
+		Goals: []InvestigationGoal{GoalAssessState},
+		SubjectExpression: SubjectExpression{
+			Kind:    SubjectExpressionGroupedMembers,
+			Grouped: &GroupedSetExpression{GroupKind: SubjectTeam, MemberKind: SubjectProject},
+			Scoped:  &ScopedSetExpression{AnchorTerms: []string{"platform"}, MemberKind: SubjectRepository},
+		},
+	}
+	interpreter := &countingInterpreter{
+		interpretation: bootstrapInterpretation(),
+		family:         anchorGateOutcome(malformed, SubjectTeam),
+	}
+	graph := chaos4234GatedGraph()
+	engine := buildWindowGateEngineWithTelemetry(t, interpreter, graph,
+		&staticResultStore{results: map[string]InvestigationResult{}}, &recordingTelemetry{})
+
+	// No EvidenceWindow: the class-default gate applies, so the ONLY resolve
+	// is the offers-only one.
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationClarificationRequired {
+		t.Fatalf("Status = %q, want clarification_required — the window gate must still hold, or this is not the offers-only path", result.Status)
+	}
+	// NON-VACUITY: prove this drove the offers-only resolve specifically.
+	if graph.resolveCalls != 1 {
+		t.Fatalf("resolveCalls = %d, want exactly 1 (the offers-only resolve under the gate); this test is not on the path it claims", graph.resolveCalls)
+	}
+	if len(graph.receivedAnchorKinds) != 1 {
+		t.Fatalf("receivedAnchorKinds = %v, want exactly one recorded call", graph.receivedAnchorKinds)
+	}
+	if got := graph.receivedAnchorKinds[0]; got != "" {
+		t.Errorf("the offers-only resolve received anchor kind %q, want \"\" — the gate is bypassed at chaos4234_offers_only.go", got)
+	}
+}
+
+// Positive control for the offers-only path: an ADMITTED frame must reach it,
+// or the refusal assertion above passes because nothing is ever forwarded.
+func TestEngine_OffersOnlyPathForwardsAnAdmittedAnchorKind(t *testing.T) {
+	t.Parallel()
+	scoped := &QuestionFrame{
+		Goals: []InvestigationGoal{GoalAssessState},
+		SubjectExpression: SubjectExpression{
+			Kind:   SubjectExpressionChildrenOfScope,
+			Scoped: &ScopedSetExpression{AnchorTerms: []string{"platform"}, MemberKind: SubjectRepository},
+		},
+	}
+	interpreter := &countingInterpreter{
+		interpretation: bootstrapInterpretation(),
+		family:         anchorGateOutcome(scoped, SubjectTeam),
+	}
+	graph := chaos4234GatedGraph()
+	engine := buildWindowGateEngineWithTelemetry(t, interpreter, graph,
+		&staticResultStore{results: map[string]InvestigationResult{}}, &recordingTelemetry{})
+
+	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest()); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(graph.receivedAnchorKinds) == 0 {
+		t.Fatal("the offers-only resolve was never called; the refusal test above would be vacuous")
+	}
+	if got := graph.receivedAnchorKinds[0]; got != SubjectTeam {
+		t.Fatalf("offers-only resolve received %q, want %q — an admitted anchor kind must reach this path too", got, SubjectTeam)
+	}
+}

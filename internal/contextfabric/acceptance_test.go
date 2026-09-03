@@ -75,6 +75,12 @@ type acceptanceGraphReader struct {
 	context     GraphContext
 	err         error
 	lastRequest InvestigationRequest
+	// receivedAnchorKinds records the scope-anchor kind the engine passed on
+	// every ResolveSubjects call. This double previously DISCARDED that
+	// parameter, which is why bypassing the refusal gate at a call site went
+	// undetected: the doubles could not see what the engine sent. Recording
+	// it is additive -- a test that does not read this field is unaffected.
+	receivedAnchorKinds []SubjectKind
 	// Call counters. A test that asserts something did NOT happen needs
 	// these to also prove the engine got far enough for it to have been
 	// possible: "the fact read never ran" is satisfied just as well by an
@@ -98,7 +104,8 @@ func (g *acceptanceGraphReader) ResolveInvestigationBinding(context.Context, sto
 	return ResolvedGraphBinding{GraphKey: "acceptance-fake-key", Epoch: 0}, nil
 }
 
-func (g *acceptanceGraphReader) ResolveSubjects(ctx context.Context, _ storage.Principal, request InvestigationRequest, interpreted InterpretedQuestion, _ ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, _ *ConfirmedAnchorSelection, _ *QuestionFrame, _ SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+func (g *acceptanceGraphReader) ResolveSubjects(ctx context.Context, _ storage.Principal, request InvestigationRequest, interpreted InterpretedQuestion, _ ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, _ *ConfirmedAnchorSelection, _ *QuestionFrame, anchorKind SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	g.receivedAnchorKinds = append(g.receivedAnchorKinds, anchorKind)
 	g.resolveCalls++
 	g.lastRequest = request
 	g.resolveCtxs = append(g.resolveCtxs, ctx)
