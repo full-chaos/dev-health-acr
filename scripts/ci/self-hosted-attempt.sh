@@ -53,15 +53,30 @@ set -euo pipefail
 #   claimed-failure  the attempt reached a non-success terminal state, or left
 #                    the queue and never reached one inside the result bound.
 
+# DECLARED RUNNER TOOLSET (contract v1.5.1). An attempt leg may rely only on
+# tooling the contract declares. Measured on oci-arc-runners (arm64, 8 vCPU,
+# 125 GiB), 2026-09-03:
+#   present  git, jq, curl, and a Docker daemon (arm64 29.7.2, Alpine 3.24
+#            containerized, overlayfs) able to pull this repo's own ghcr
+#            mirror unauthenticated
+#   absent   make, node, psql, pg_isready
+#   unset    GOMAXPROCS, GOFLAGS -- a leg wanting the repo's bounds exports
+#            them itself
+# Anything outside "present" is installed in the image first or invoked
+# another way. A leg that assumes an undeclared tool exits 127 with no routing
+# signal at all: that is not hypothetical, it is how the first arm64 pickup
+# died, on `make: command not found`, after the shard script had correctly
+# printed its package.
+
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-15}"
 # How far before this run's own start a sibling run may have been created and
 # still count as ours. Covers the ordering jitter between two workflows started
 # by one webhook event; anything older is a previous trigger's run.
 SIBLING_CREATED_SKEW_SECONDS="${SIBLING_CREATED_SKEW_SECONDS:-90}"
 CREATED_FLOOR=""
-# A sibling run identified as belonging to an EARLIER invocation; excluded from
-# every subsequent lookup. See the first-look rule in cmd_wait.
-EXCLUDE_RUN_ID=""
+# Empty on attempt 1; on a re-run, the instant a candidate's own run_started_at
+# must reach to be this attempt's sibling rather than a prior attempt's.
+RERUN_FLOOR=""
 
 # Fake-clock support exists so the timeout paths are TESTED rather than
 # asserted. A five-minute queue bound cannot be exercised in a test suite
@@ -128,13 +143,21 @@ die() {
 # newest by created_at, which is the one this run's push actually started.
 select_run() {
   local want_name="$1" want_path="$2" want_sha="$3" want_event="$4" want_ref="$5" min_created="$6"
-  local exclude_id="${7:-}"
+  # v1.5.1: when this run is a re-run, a candidate whose own run_started_at
+  # predates this attempt's (less the tolerance) is not ours -- a re-run must
+  # produce a fresh result, never replay a prior attempt's verdict. Empty on
+  # attempt 1, where the constraint does not apply. Compared on the
+  # CANDIDATE's run_started_at rather than its created_at, because a sibling
+  # workflow that was itself re-run keeps created_at at the original trigger
+  # while its run_started_at moves; comparing created_at would wrongly exclude
+  # that fresh attempt-2 sibling.
+  local min_run_started="${7:-}"
   # `jq -s` slurps, so this accepts both a single response object and the
   # concatenated stream `gh api --paginate` emits.
   jq -s -r \
     --arg wf "$want_name" --arg path "$want_path" --arg sha "$want_sha" \
     --arg event "$want_event" --arg ref "$want_ref" --arg floor "$min_created" \
-    --arg exclude "$exclude_id" '
+    --arg minstarted "$min_run_started" '
       [ .[]?.workflow_runs[]? ]
       | map(select(
           .name == $wf
@@ -144,7 +167,7 @@ select_run() {
           and .head_branch == $ref
           and (.created_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
           and .created_at >= $floor
-          and (.id | tostring) != $exclude
+          and ($minstarted == "" or (.run_started_at // .created_at) >= $minstarted)
         ))
       | sort_by(.created_at, .id)
       | last
@@ -223,14 +246,23 @@ emit_outcome() {
   fi
 }
 
-# When did THIS run start? Used as the floor on which sibling runs are
-# eligible -- see the CREATED_FLOOR comment in cmd_wait.
-current_run_started_at() {
-  if [ -n "${ACR_ATTEMPT_RUN_STARTED_AT:-}" ]; then
-    printf '%s\n' "${ACR_ATTEMPT_RUN_STARTED_AT}"
+# This run's own identity instants: "<created_at> <run_started_at> <run_attempt>".
+#
+# v1.5.1 is explicit that both are RUN-LEVEL instants, never job-level ones.
+# That distinction is load-bearing and easy to get backwards: `run_started_at`
+# is stamped at run CREATION, not at runner pickup -- measured across 20 recent
+# runs of every workflow in this repo, it equals `created_at` on every
+# `run_attempt=1` run, including ones read while still `queued`. The pilot's
+# fallback JOB started 16 minutes after its run was created and neither field
+# moved. The two diverge only on a re-run, where `created_at` stays at the
+# original trigger and `run_started_at` moves (measured: +42m55s).
+current_run_identity() {
+  if [ -n "${ACR_ATTEMPT_RUN_IDENTITY:-}" ]; then
+    printf '%s\n' "${ACR_ATTEMPT_RUN_IDENTITY}"
     return 0
   fi
-  gh api "repos/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq '.run_started_at'
+  gh api "repos/${REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+    --jq '"\(.created_at) \(.run_started_at) \(.run_attempt)"'
 }
 
 # Reads the attempt's current state, or `not_created null` when the sibling
@@ -238,7 +270,7 @@ current_run_started_at() {
 # phase loops interpret, not an error that aborts the leg under `set -e`.
 current_state() {
   local run_id
-  run_id="$(fetch_runs | select_run "$WORKFLOW_NAME" "$WORKFLOW_PATH" "$HEAD_SHA" "$EVENT" "$REF" "$CREATED_FLOOR" "$EXCLUDE_RUN_ID")"
+  run_id="$(fetch_runs | select_run "$WORKFLOW_NAME" "$WORKFLOW_PATH" "$HEAD_SHA" "$EVENT" "$REF" "$CREATED_FLOOR" "$RERUN_FLOOR")"
   if [ -z "$run_id" ]; then
     printf 'not_created null -\n'
     return 0
@@ -331,15 +363,29 @@ cmd_wait() {
   # second, so a small tolerance covers ordering jitter. Erring tight is the
   # safe direction -- rejecting a real sibling costs latency (the hosted leg
   # does the work), while accepting a stale one costs correctness.
-  local started_at floor_epoch
-  started_at="$(current_run_started_at)"
-  if [ -z "$started_at" ] || [ "$started_at" = null ]; then
-    die "could not read this run's own start time; refusing to poll without a staleness floor"
+  local created_at started_at attempt floor_epoch rerun_epoch
+  read -r created_at started_at attempt <<<"$(current_run_identity)"
+  if [ -z "$created_at" ] || [ "$created_at" = null ]; then
+    die "could not read this run's own created_at; refusing to poll without a staleness floor"
   fi
-  floor_epoch=$(( $(date -u -d "$started_at" +%s) - SIBLING_CREATED_SKEW_SECONDS ))
+  floor_epoch=$(( $(date -u -d "$created_at" +%s) - SIBLING_CREATED_SKEW_SECONDS ))
   CREATED_FLOOR="$(date -u -d "@${floor_epoch}" +%Y-%m-%dT%H:%M:%SZ)"
-  printf 'this run started at %s; ignoring sibling runs created before %s\n' \
-    "$started_at" "$CREATED_FLOOR"
+  printf 'this run was created at %s (attempt %s); ignoring sibling runs created before %s\n' \
+    "$created_at" "$attempt" "$CREATED_FLOOR"
+
+  # The re-run conjunct applies only from attempt 2 onward. On attempt 1 the
+  # bound is empty and the identity check skips it entirely, so an ordinary
+  # run pays nothing for it.
+  RERUN_FLOOR=""
+  if [ "${attempt:-1}" != 1 ]; then
+    if [ -z "$started_at" ] || [ "$started_at" = null ]; then
+      die "run_attempt is $attempt but run_started_at is unreadable; refusing to poll without the re-run bound"
+    fi
+    rerun_epoch=$(( $(date -u -d "$started_at" +%s) - SIBLING_CREATED_SKEW_SECONDS ))
+    RERUN_FLOOR="$(date -u -d "@${rerun_epoch}" +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'this is attempt %s, started %s; a candidate whose own run_started_at predates %s is a prior attempt and is not ours\n' \
+      "$attempt" "$started_at" "$RERUN_FLOOR"
+  fi
 
   local queue_minutes="${QUEUE_TIMEOUT_MINUTES:-5}"
   local attempt_minutes="${ATTEMPT_TIMEOUT_MINUTES:-10}"
@@ -361,12 +407,19 @@ cmd_wait() {
   # when we first see it. One that is, is somebody else's -- so drop it and
   # look again for ours. This holds no matter how wide the skew is set, which
   # is what makes it a property rather than a tuning.
-  read -r status conclusion run_id <<<"$(current_state)"
-  if [ "$status" = completed ]; then
-    EXCLUDE_RUN_ID="$run_id"
-    printf 'sibling run %s was already %s/%s at first look, so it belongs to an earlier invocation of this commit; ignoring it\n' \
-      "$run_id" "$status" "$conclusion"
-  fi
+  # v1.5.1 F2: NO first look that discards. A candidate satisfying the
+  # identity conjunction is ours whatever its state, so a terminal one found
+  # immediately is this invocation's result and falls through to the same
+  # decision the result phase uses -- its success adopted, its failure
+  # HONOURED as claimed-failure.
+  #
+  # The rule this replaces did the opposite, and the cost was measured rather
+  # than argued: an attempt that failed in 24 seconds was terminal before the
+  # hosted leg -- queued 16 minutes behind it -- had looked even once, so its
+  # failure would have been discarded and the build reported green. A
+  # fast-failing attempt is precisely the one most likely to be terminal at
+  # first look, which made the old rule most likely to hide exactly the
+  # signal this routing exists to obtain.
 
   # Phase 1, the queue bound. This is the actual hang guard, and it runs on
   # GitHub-hosted infrastructure so it does not depend on the self-hosted
