@@ -76,7 +76,11 @@ func TestHintedPoolKinds_NamedSubjectExpectedKindNowHintsRetrieval(t *testing.T)
 	request := testRequest()
 	frame := namedSubjectFrame("acr", kindOf(contractsv1.ContextFabricSubjectProject))
 
-	got := hintedPoolKinds(request, nil, frame)
+	// "" for the scope-anchor kind: a named_subject frame declares no scope
+	// anchor, so the anchor-hint source is inapplicable here and its
+	// disabled state is what this assertion is about -- the kind must
+	// reach the pool from frameKindHints ALONE.
+	got := hintedPoolKinds(request, nil, frame, "")
 	want := []contextfabric.SubjectKind{contractsv1.ContextFabricSubjectProject}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("hintedPoolKinds() = %v, want %v -- named_subject's declared kind must now reach the CHAOS-4348 pool-search gate, same as children_of_scope/discovered_kind/grouped_members already do", got, want)
@@ -85,7 +89,7 @@ func TestHintedPoolKinds_NamedSubjectExpectedKindNowHintsRetrieval(t *testing.T)
 	// Control: named_subject with NO declared kind still produces nothing,
 	// preserving CHAOS-4348's byte-identical "no hint, no call" guarantee
 	// for the case that gap actually covers.
-	unhinted := hintedPoolKinds(request, nil, namedSubjectFrame("acr", nil))
+	unhinted := hintedPoolKinds(request, nil, namedSubjectFrame("acr", nil), "")
 	if unhinted != nil {
 		t.Fatalf("hintedPoolKinds() = %v, want nothing when named_subject declares no kind", unhinted)
 	}
