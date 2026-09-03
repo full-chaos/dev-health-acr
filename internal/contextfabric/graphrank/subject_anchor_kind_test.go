@@ -359,3 +359,210 @@ func TestReservedKinds_DoNotChangeCommitDecisions(t *testing.T) {
 			len(without.Candidates), len(with.Candidates))
 	}
 }
+
+// ============================================================================
+// Round-1 gap closures. Each pins a property a mutant walked through before.
+// ============================================================================
+
+// F1. The commit-unchanged claim was proven only over a population where BOTH
+// arms were already ambiguous, so it asserted "ambiguous stays ambiguous" and
+// never "a commit stays a commit" — and `reservedKinds` is in scope at every
+// one of the seven commit gates, so gating any of them on it compiled and went
+// green. This drives a population that actually COMMITS and asserts the commit
+// survives the reserve, with a guard that fails if the setup stops committing.
+func TestReservedKinds_DoNotChangeAnActualCommit(t *testing.T) {
+	t.Parallel()
+	build := func() map[string]contextfabric.SubjectCandidate {
+		pool := make(map[string]contextfabric.SubjectCandidate)
+		winner := contextfabric.SubjectCandidate{
+			Subject:      contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: "ci_winner", Label: "ci winner"},
+			State:        contractsv1.ContextFabricResolutionProposed,
+			Confidence:   1,
+			MatchReasons: []string{"exact"},
+			MatchMechanisms: []contractsv1.ContextFabricSubjectMatchMechanism{
+				contractsv1.ContextFabricMatchExact,
+			},
+		}
+		pool[SubjectKey(winner.Subject)] = winner
+		for i := 0; i < 5; i++ {
+			c := contextfabric.SubjectCandidate{
+				Subject:    contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: fmt.Sprintf("ci_%d", i)},
+				State:      contractsv1.ContextFabricResolutionAmbiguous,
+				Confidence: 0.5,
+			}
+			pool[SubjectKey(c.Subject)] = c
+		}
+		team := contextfabric.SubjectCandidate{
+			Subject:    contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_1", Label: "Platform Team"},
+			State:      contractsv1.ContextFabricResolutionAmbiguous,
+			Confidence: 0.2,
+		}
+		pool[SubjectKey(team.Subject)] = team
+		return pool
+	}
+	call := func(reserved []contextfabric.SubjectKind) contextfabric.SubjectResolution {
+		res, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(
+			build(), map[string]string{}, map[string]bool{}, 3, true, false,
+			nil, 0, false, 10, 20, true,
+			DefaultCommitGatePolicy(), nil, nil, false, nil, "", "", false, false, reserved)
+		return res
+	}
+	without := call(nil)
+	with := call([]contextfabric.SubjectKind{contextfabric.SubjectTeam})
+
+	// NON-VACUITY, and this is the assertion the old test was missing: the
+	// population must actually COMMIT, or "commit unchanged" is a statement
+	// about nothing.
+	if len(without.Committed) == 0 {
+		t.Fatal("setup is vacuous: nothing committed even WITHOUT a reserve, so this cannot detect a commit change")
+	}
+	if len(with.Committed) != len(without.Committed) {
+		t.Fatalf("the reserve CHANGED the commit set: without=%v with=%v", without.Committed, with.Committed)
+	}
+	for i := range without.Committed {
+		if without.Committed[i] != with.Committed[i] {
+			t.Errorf("committed[%d] changed under a reserve: %v -> %v", i, without.Committed[i], with.Committed[i])
+		}
+	}
+}
+
+// F2. `frameReservedKinds` was pinned directly, which says nothing about what
+// the production call site HANDS it. A caller-supplied ExpectedKinds must
+// reach retrieval (it is a legitimate hint) but must NEVER buy a reserved
+// slot, or a caller could guarantee itself an otherwise-truncated candidate.
+func TestResolveSubjects_CallerExpectedKindsGetNoReservedSlot(t *testing.T) {
+	t.Parallel()
+	const crowd = 90
+	backend := &fakeGraphBackend{
+		searchResults:    map[string][]CandidateNode{"platform": lexicalCrowd("platform", crowd)},
+		enableSearchKind: true,
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			"platform": {contextfabric.SubjectTeam: {anchorTeamNode("platform", "Platform Team")}},
+		},
+	}
+	req := testRequest()
+	req.Options.MaxSubjectCandidates = 20
+	// team is a CALLER hint only. The frame declares repository as its member
+	// kind and NO anchor kind is supplied, so team must not be reserved.
+	req.ExpectedKinds = []contextfabric.SubjectKind{contextfabric.SubjectTeam}
+
+	res := resolveWithAnchor(t, backend, req, anchorScopedFrame("platform"), "")
+	kinds := candidateKinds(res)
+	if kinds[contextfabric.SubjectTeam] != 0 {
+		t.Fatalf("a caller-supplied ExpectedKind was RESERVED through truncation (team=%d, kinds=%v); only frame/receipt kinds may reserve",
+			kinds[contextfabric.SubjectTeam], kinds)
+	}
+	// Non-vacuity: the crowd really did exceed the budget, so absence is a
+	// truncation result rather than an empty pool.
+	if len(res.Candidates) != req.Options.MaxSubjectCandidates {
+		t.Fatalf("candidates=%d, want the budget %d — truncation did not bite, so this proves nothing",
+			len(res.Candidates), req.Options.MaxSubjectCandidates)
+	}
+}
+
+// F3. Two declared kinds is the ORDINARY grouped-frame shape (group kind AND
+// member kind are both reserved). Admitting one must not evict the other.
+func TestReservedPrefix_OneReservedKindNeverEvictsAnother(t *testing.T) {
+	t.Parallel()
+	ordered := []contextfabric.SubjectCandidate{
+		{Subject: contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: "noise"}},
+		{Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_1"}},
+		{Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_1"}},
+	}
+	tiers := []int{2, 2, 2}
+
+	kept := reservedPrefix(ordered, tiers, 2, []contextfabric.SubjectKind{contextfabric.SubjectTeam, contextfabric.SubjectProject})
+	if !kept[1] {
+		t.Error("admitting the reserved TEAM evicted the reserved PROJECT already inside the budget")
+	}
+	if !kept[2] {
+		t.Error("the reserved TEAM was not admitted")
+	}
+	if kept[0] {
+		t.Error("expected the non-reserved noise candidate to be the victim")
+	}
+	n := 0
+	for _, k := range kept {
+		if k {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("kept %d, want exactly max=2", n)
+	}
+}
+
+// F4. The mask drives BOTH the returned list and the admission trace. Nothing
+// read the trace, so it could report anything.
+func TestReservedPrefix_AdmissionTraceMatchesTheReturnedCandidates(t *testing.T) {
+	t.Parallel()
+	pool := make(map[string]contextfabric.SubjectCandidate)
+	for i := 0; i < 6; i++ {
+		c := contextfabric.SubjectCandidate{
+			Subject:    contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: fmt.Sprintf("ci_%d", i)},
+			State:      contractsv1.ContextFabricResolutionAmbiguous,
+			Confidence: 0.9,
+		}
+		pool[SubjectKey(c.Subject)] = c
+	}
+	team := contextfabric.SubjectCandidate{
+		Subject:    contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_1", Label: "Platform Team"},
+		State:      contractsv1.ContextFabricResolutionAmbiguous,
+		Confidence: 0.4,
+	}
+	pool[SubjectKey(team.Subject)] = team
+
+	tracer := &captureResolutionTracer{}
+	res, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(
+		pool, map[string]string{}, map[string]bool{}, 3, true, false,
+		nil, 0, false, 10, 20, true,
+		DefaultCommitGatePolicy(), nil, nil, false, tracer, "request_12345678", "", false, false,
+		[]contextfabric.SubjectKind{contextfabric.SubjectTeam})
+
+	admitted := tracer.eventsForStage("reserved_kind_admitted")
+	if len(admitted) == 0 {
+		t.Fatal("no reserved_kind_admitted events; the reserve did not fire, so this proves nothing")
+	}
+	returned := make(map[contextfabric.SubjectRef]bool, len(res.Candidates))
+	for _, c := range res.Candidates {
+		returned[c.Subject] = true
+	}
+	for _, e := range admitted {
+		if !returned[e.Subject] {
+			t.Errorf("trace claims %v was admitted but it is NOT in the returned candidates", e.Subject)
+		}
+		if !e.Survived {
+			t.Errorf("reserved_kind_admitted for %v reports Survived=false; the event exists only for admissions", e.Subject)
+		}
+	}
+}
+
+// F6. The anchor kind is appended LAST so the pre-existing sources keep their
+// order. Nothing exercised all three sources together.
+func TestHintedPoolKinds_AnchorKindIsAppendedAfterExistingSources(t *testing.T) {
+	t.Parallel()
+	req := testRequest()
+	req.ExpectedKinds = []contextfabric.SubjectKind{contextfabric.SubjectProject}
+	confirmed := &contextfabric.ConfirmedExpectedKind{Kind: contextfabric.SubjectTeam}
+
+	got := hintedPoolKinds(req, confirmed, anchorScopedFrame("platform"), contextfabric.SubjectRepository)
+
+	want := []contextfabric.SubjectKind{
+		contextfabric.SubjectProject,    // caller ExpectedKinds, first
+		contextfabric.SubjectTeam,       // confirmed kind, second
+		contextfabric.SubjectRepository, // frameKindHints (member), third
+	}
+	if len(got) != len(want) {
+		t.Fatalf("hintedPoolKinds = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("hintedPoolKinds = %v, want %v (order is load-bearing: it is the SearchKind call order)", got, want)
+		}
+	}
+	// The anchor kind here DUPLICATES the frame's member kind, so dedupe must
+	// leave the list unchanged rather than moving the earlier entry.
+	if got[2] != contextfabric.SubjectRepository {
+		t.Errorf("a duplicate anchor kind moved an earlier source's position: %v", got)
+	}
+}
