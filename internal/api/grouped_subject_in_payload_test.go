@@ -47,9 +47,9 @@ func subjectScopeRejection(t *testing.T, shown bool) error {
 			Summary: "A driver summary.", AffectedSubjects: []contextfabric.SubjectRef{subject},
 			// Structurally valid, so driver.Validate() cannot reject first
 			// and mask the subject-scope rule this fixture is about.
-			Derivation: contractsv1.ContextFabricDerivationRuleInferred,
+			Derivation:      contractsv1.ContextFabricDerivationRuleInferred,
 			EpistemicStatus: contractsv1.ContextFabricEpistemicInferred,
-			Confidence: 0.9, Current: true,
+			Confidence:      0.9, Current: true,
 			EvidenceRefIDs: []string{"evidence_release_1234"},
 		}},
 	}
