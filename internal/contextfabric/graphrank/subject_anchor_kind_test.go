@@ -201,23 +201,29 @@ func TestReservedPrefix_OnlyReservesTheKindsItWasGiven(t *testing.T) {
 // exist so the test cannot pass by admitting nothing.
 func TestReservedPrefix_NeverDisplacesCommittedOrParentTiers(t *testing.T) {
 	t.Parallel()
+	// ORDER MATTERS HERE, and the first version of this test did not have it
+	// right: the victim scan runs from the TAIL of the in-budget window, so
+	// if the tail-most candidate is already an ordinary one the guard is
+	// never asked to skip anything and a mutation removing it survives
+	// (it did). The protected candidates are placed LAST inside the budget so
+	// the scan must walk PAST both of them to find its victim.
 	ordered := []contextfabric.SubjectCandidate{
+		{Subject: contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: "ordinary"}},
 		{Subject: contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: "committed"}},
 		{Subject: contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: "parent"}},
-		{Subject: contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: "ordinary"}},
 		{Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_1"}},
 	}
-	tiers := []int{0, 1, 2, 2} // committed, parent, ordinary, (past the cut)
+	tiers := []int{2, 0, 1, 2} // ordinary, committed, parent, (past the cut)
 
 	kept := reservedPrefix(ordered, tiers, 3, []contextfabric.SubjectKind{contextfabric.SubjectTeam})
-	if !kept[0] {
+	if !kept[1] {
 		t.Error("displaced the COMMITTED subject")
 	}
-	if !kept[1] {
+	if !kept[2] {
 		t.Error("displaced the canonical PARENT")
 	}
-	if kept[2] {
-		t.Error("expected the tier-2 candidate to be the victim")
+	if kept[0] {
+		t.Error("expected the ordinary tier-2 candidate to be the victim")
 	}
 	if !kept[3] {
 		t.Error("reserved team candidate was not admitted")

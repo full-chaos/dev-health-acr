@@ -43,6 +43,21 @@ func TestScopeAnchorRetrievalKind_RefusalPaths(t *testing.T) {
 		{"grouped_members declares no scope anchor", grouped, SubjectTeam,
 			"GroupKind is a grouping axis frameKindHints already contributes, not an anchor"},
 		{"named_subject declares no scope anchor", named, SubjectTeam, "wrong variant"},
+		// ISOLATES THE VARIANT CHECK. Every other wrong-variant fixture has a
+		// nil Scoped, so the nil guard subsumes the variant guard and a
+		// mutation deleting the variant check survives them all (it did).
+		// This one is a MALFORMED union -- a grouped kind carrying a populated
+		// Scoped -- which only the variant check can refuse. Invariant I1
+		// forbids this shape upstream; the check is what makes that refusal
+		// local rather than assumed.
+		{"grouped kind carrying a populated Scoped", &QuestionFrame{
+			Goals: []InvestigationGoal{GoalAssessState},
+			SubjectExpression: SubjectExpression{
+				Kind:    SubjectExpressionGroupedMembers,
+				Grouped: &GroupedSetExpression{GroupKind: SubjectTeam, MemberKind: SubjectProject},
+				Scoped:  &ScopedSetExpression{AnchorTerms: []string{"platform"}, MemberKind: SubjectRepository},
+			},
+		}, SubjectTeam, "only the variant check can refuse a malformed union"},
 		{"no anchor terms", scopedFrameWith(SubjectRepository, nil), SubjectTeam,
 			"a kind with nothing to search for cannot seed retrieval"},
 		{"empty anchor kind", scopedFrameWith(SubjectRepository, []string{"platform"}), "",
