@@ -444,7 +444,7 @@ jobs:
           # in ci-self-hosted.yml; the script allows this plus three minutes
           # of reporting lag before calling a started-but-unfinished attempt
           # a failure.
-          ATTEMPT_TIMEOUT_MINUTES: 10
+          ATTEMPT_TIMEOUT_MINUTES: 22
         run: scripts/ci/self-hosted-attempt.sh wait
       # An empty outcome means the step above was skipped -- switch off, or a
       # fork PR -- which is the same instruction as `unclaimed`: do the work.
