@@ -210,7 +210,30 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 		return nil, ungrouped, CohortGroupingOutcome{}
 	}
 	sort.Strings(order)
-	groups = make([]contractsv1.ContextFabricCohortGroup, 0, len(order))
+	groups = buildGroupsFrom(cohort, order, byGroup, labels, kinds)
+	return groups, ungrouped, CohortGroupingOutcome{}
+}
+
+// groupAssignmentsByMember reads the owning group out of each fact's declared
+// tables, keyed by the fact's own subject.
+//
+// It reads DECLARED tables (FactValue.Table) and falls back to the sibling
+// Rows the same producers still populate, because CHAOS-4633's migration is
+// deliberately dual-write: a producer emits both, and reading only one of
+// them would make this depend on which phase of that migration is deployed.
+// buildGroupsFrom constructs the group entries from assignments the caller's
+// kind guard has already admitted.
+//
+// It deliberately does NOT receive the plan. A group subject's Kind is the
+// SOURCE's kind and nothing else, and the cheapest way to guarantee that is to
+// put the plan's kind out of scope entirely -- a stamp cannot regress to a
+// value it cannot name. Adversarial review observed that reverting the stamp to
+// plan.GroupKind was an EQUIVALENT mutant while the guard stood, meaning the
+// guard was carrying the whole property on its own. This makes source authority
+// structural instead: the defect is now unexpressible here rather than merely
+// unreachable.
+func buildGroupsFrom(cohort *Cohort, order []string, byGroup map[string][]string, labels map[string]string, kinds map[string]SubjectKind) []contractsv1.ContextFabricCohortGroup {
+	groups := make([]contractsv1.ContextFabricCohortGroup, 0, len(order))
 	for _, canonicalID := range order {
 		members := byGroup[canonicalID]
 		label := labels[canonicalID]
@@ -256,16 +279,9 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 			Truncated: false,
 		})
 	}
-	return groups, ungrouped, CohortGroupingOutcome{}
+	return groups
 }
 
-// groupAssignmentsByMember reads the owning group out of each fact's declared
-// tables, keyed by the fact's own subject.
-//
-// It reads DECLARED tables (FactValue.Table) and falls back to the sibling
-// Rows the same producers still populate, because CHAOS-4633's migration is
-// deliberately dual-write: a producer emits both, and reading only one of
-// them would make this depend on which phase of that migration is deployed.
 func groupAssignmentsByMember(facts []CanonicalFact) map[string][]cohortGroupAssignment {
 	assignments := make(map[string][]cohortGroupAssignment, len(facts))
 	seen := make(map[string]map[string]struct{}, len(facts))

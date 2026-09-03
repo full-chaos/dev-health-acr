@@ -61,6 +61,18 @@ const (
 	RejectionReasonDriverPathUnknown          SynthesisRejectionReason = "driver_path_unknown"
 	RejectionReasonDriverEvidenceUnknown      SynthesisRejectionReason = "driver_evidence_unknown"
 	RejectionReasonDriverClaimUngrounded      SynthesisRejectionReason = "driver_claim_ungrounded"
+	// RejectionReasonDriverGroupMemberForeign: a driver named a cohort GROUP
+	// and also named a subject that is not one of that group's members.
+	//
+	// Every part of such a draft passes the older rules -- the subjects are
+	// in scope, the claim is grounded in a real canonical fact, and the
+	// claim's subject IS one of the driver's own affected subjects -- and the
+	// combination still asserts something false: that another group's member
+	// is this group's business. The older rules are all per-subject, and the
+	// allow-sets are global, so none of them can see a MEMBERSHIP violation.
+	// The cohort's own Groups[].MemberCanonicalIDs is the only place that
+	// truth lives, and until this reason existed nothing consulted it.
+	RejectionReasonDriverGroupMemberForeign SynthesisRejectionReason = "driver_group_member_foreign"
 
 	// Findings (remaining_work / readiness_gaps / conflicts share one set:
 	// WHICH section is already carried by the wrapped error's own prefix,
@@ -112,6 +124,7 @@ var canonicalSynthesisRejectionReasons = map[SynthesisRejectionReason]SynthesisR
 	RejectionReasonDriverPathUnknown:                RejectionReasonDriverPathUnknown,
 	RejectionReasonDriverEvidenceUnknown:            RejectionReasonDriverEvidenceUnknown,
 	RejectionReasonDriverClaimUngrounded:            RejectionReasonDriverClaimUngrounded,
+	RejectionReasonDriverGroupMemberForeign:         RejectionReasonDriverGroupMemberForeign,
 	RejectionReasonFindingInvalid:                   RejectionReasonFindingInvalid,
 	RejectionReasonFindingSubjectOutOfScope:         RejectionReasonFindingSubjectOutOfScope,
 	RejectionReasonFindingSubjectLabelMismatch:      RejectionReasonFindingSubjectLabelMismatch,
@@ -156,6 +169,12 @@ const (
 	// deliberately -- see synthesisUncitableShownSubjects for the two
 	// sources and why each is excluded. Model error, not ACR's.
 	SubjectScopeShownUncitableByPolicy SynthesisSubjectScopeBasis = "shown_uncitable_by_policy"
+	// SubjectScopeBasisUnavailable: the census itself could not be taken, so
+	// NOTHING is claimed about this subject. Emitted rather than omitted:
+	// omitting the field makes a broken measurement indistinguishable from a
+	// rejection this field does not describe, which blinds the alarm exactly
+	// when its own instrument failed.
+	SubjectScopeBasisUnavailable SynthesisSubjectScopeBasis = "basis_unavailable"
 	// SubjectScopeShownShouldBeCitable: THE ALARM. Shown, and on no
 	// exclusion list. ACR's defect, not the model's.
 	SubjectScopeShownShouldBeCitable SynthesisSubjectScopeBasis = "shown_should_be_citable"
@@ -170,6 +189,7 @@ var canonicalSynthesisSubjectScopeBases = map[SynthesisSubjectScopeBasis]Synthes
 	SubjectScopeAbsentFromPayload:      SubjectScopeAbsentFromPayload,
 	SubjectScopeShownUncitableByPolicy: SubjectScopeShownUncitableByPolicy,
 	SubjectScopeShownShouldBeCitable:   SubjectScopeShownShouldBeCitable,
+	SubjectScopeBasisUnavailable:       SubjectScopeBasisUnavailable,
 }
 
 // ValidSynthesisSubjectScopeBasis reports membership of the closed

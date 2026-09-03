@@ -1,6 +1,11 @@
 package contextfabric
 
-import "testing"
+import (
+	"math"
+	"testing"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
 
 // edgeEndpointOnlyInput returns an input carrying a subject that appears ONLY
 // as a relationship edge's endpoint -- never as a path node, cohort member,
@@ -112,5 +117,89 @@ func TestScopeBasisAlarmFiresForAPayloadSubjectNoListAdmits(t *testing.T) {
 	if !ok || basis != SubjectScopeShownShouldBeCitable {
 		t.Fatalf("basis = %q (present=%v), want %q -- the payload carries this subject and no list excuses it, which is ACR's defect and not the model's",
 			basis, ok, SubjectScopeShownShouldBeCitable)
+	}
+}
+
+// TestASubjectInBothACommittedAndAnExcludedRoleIsCitable is the precedence
+// rule, and it is a real bug rather than a hypothetical: the census is a flat
+// set keyed by (kind, id), so a subject appearing in TWO payload roles loses
+// which role it came from. A project that is both a committed subject and a
+// cohort exclusion would be classified uncitable purely because one of its
+// occurrences was an exclusion -- refusing a subject the investigation
+// actually committed to.
+//
+// Precedence: CITABLE WINS. A subject the investigation committed to is
+// citable regardless of also appearing in an advisory role; the exclusion
+// entry says "not a member of this cohort", not "may not be discussed".
+func TestASubjectInBothACommittedAndAnExcludedRoleIsCitable(t *testing.T) {
+	t.Parallel()
+	input, draft, _ := groupedCohortFixture()
+	dual := input.Graph.Resolution.Committed[0] // committed, and a cohort member
+	cohort := *input.Graph.Cohort
+	cohort.Exclusions = []contractsv1.ContextFabricCohortExclusion{{
+		Subject: dual, Reason: "also excluded from the grouped view",
+	}}
+	input.Graph.Cohort = &cohort
+
+	uncitable := synthesisUncitableShownSubjects(input)
+	allowed := synthesisSubjects(input)
+	key := subjectKeyForModel(dual)
+	if _, citable := allowed[key]; !citable {
+		t.Fatal("fixture drift: the dual-role subject must be committed, or this test proves nothing")
+	}
+	if _, excluded := uncitable[key]; excluded {
+		t.Fatal("a subject that is BOTH committed and excluded was recorded as uncitable -- one advisory occurrence must not revoke a committed subject")
+	}
+
+	draft.Drivers[0].AffectedSubjects = []SubjectRef{dual}
+	draft.Drivers[0].ClaimedFactIDs = nil
+	draft.Drivers[0].Category = "relationship"
+	if err := draft.ValidateAgainst(input); err != nil {
+		t.Fatalf("ValidateAgainst() error = %v, want a committed subject to stay citable despite an exclusion entry", err)
+	}
+}
+
+// TestCensusFailureReportsBasisUnavailableRatherThanSilence closes the blind
+// spot sol named: omitting the field when the census fails makes the alarm
+// silently absent exactly when its own measurement broke. An explicit value
+// is diagnosable; a missing field is indistinguishable from "not a
+// subject-scope rejection".
+//
+// The failure is driven for REAL, not asserted on the constant. An earlier
+// version of this test checked only that the constant existed and was in the
+// vocabulary, and a mutation restoring the silent path SURVIVED it -- the test
+// proved a value was declared, not that anything ever returns it. A
+// non-finite float is the cheapest genuine json.Marshal failure, and it sits
+// on a payload field the census actually serializes.
+func TestCensusFailureReportsBasisUnavailableRatherThanSilence(t *testing.T) {
+	t.Parallel()
+	if !ValidSynthesisSubjectScopeBasis(SubjectScopeBasisUnavailable) {
+		t.Fatal("basis_unavailable must be a member of the closed vocabulary, or the telemetry seam reports it as unclassified")
+	}
+	input, draft, _ := groupedCohortFixture()
+	unmarshalable := SubjectRef{Kind: SubjectProject, CanonicalID: "project_unresolved", Label: "Unresolved"}
+	input.Graph.Resolution.Candidates = []SubjectCandidate{{
+		ReceiptID: "receipt_12345678", Subject: unmarshalable,
+		MatchReasons: []string{"lexical"},
+		Confidence:   math.Inf(1), // json.Marshal refuses a non-finite float
+	}}
+	if _, ok := synthesisPayloadSubjects(input); ok {
+		t.Fatal("fixture drift: the census succeeded, so this test is not exercising the failure path")
+	}
+
+	draft.Drivers[0].AffectedSubjects = []SubjectRef{{
+		Kind: SubjectTeam, CanonicalID: "team_never_discovered", Label: "Invented",
+	}}
+	err := draft.ValidateAgainst(input)
+	if got := SynthesisRejectionReasonOf(err); got != RejectionReasonDriverSubjectOutOfScope {
+		t.Fatalf("rejection reason = %q, want a subject-scope rejection", got)
+	}
+	basis, ok := SynthesisSubjectScopeBasisOf(err)
+	if !ok {
+		t.Fatal("no basis reported when the census failed -- a broken instrument must say so, not go quiet")
+	}
+	if basis != SubjectScopeBasisUnavailable {
+		t.Fatalf("basis = %q, want %q -- reporting %q here would blame the model on a measurement that never happened",
+			basis, SubjectScopeBasisUnavailable, SubjectScopeAbsentFromPayload)
 	}
 }

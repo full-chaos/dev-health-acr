@@ -497,10 +497,12 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 			censusDone = true
 		}
 		if !censusOK {
-			// No census, no claim. An empty set would classify every rejected
-			// subject as "absent" -- blaming the model on the strength of a
-			// measurement that did not happen.
-			return SynthesisSubjectScopeBasis("")
+			// No census, no claim -- but SAY so. An empty set would classify
+			// every rejected subject as "absent", blaming the model on the
+			// strength of a measurement that did not happen; an omitted field
+			// would hide the broken instrument behind a shape that also means
+			// "not a subject-scope rejection".
+			return synthesisSubjectScopeBasisUnavailable()
 		}
 		return synthesisSubjectScopeBasis(subject, payloadSubjects, uncitableShown)
 	}
@@ -661,6 +663,15 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		if err := requireGroundedClaims("driver", driver.Category, driver.AffectedSubjects, allowedSubjects, driver.ClaimedFactIDs, claimedByID); err != nil {
 			return rejectSynthesis(RejectionReasonDriverClaimUngrounded, "%w", err)
 		}
+		// The RELATIONAL rule. Everything above is per-subject, and the
+		// allow-sets are global, so a driver naming Team A and also naming a
+		// project owned by Team B passes every one of them while asserting
+		// that the second is the first's business. Membership is the only
+		// thing that can refute it, and the cohort's own groups are the only
+		// place membership is recorded.
+		if err := requireGroupMembershipClosure(driver.AffectedSubjects, input.Graph.Cohort); err != nil {
+			return rejectSynthesis(RejectionReasonDriverGroupMemberForeign, "driver: %w", err)
+		}
 	}
 	// Fixed slice, NOT a map: a map's iteration order is randomized per
 	// run, so returning the first-rejected section's error from a map
@@ -728,6 +739,70 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 // InvestigationResult.Validate() (classified ErrInvalidResult -> 500)
 // lets the route correctly attribute a closure-violating draft to the
 // model, not to ACR.
+// requireGroupMembershipClosure rejects a driver that names a cohort GROUP
+// alongside a subject that group does not contain.
+//
+// The rule, stated once: if a driver names a group, every OTHER subject it
+// names must be that group's own member, or the group itself. A driver naming
+// no group is untouched, so single-subject answers and flat cohorts behave
+// exactly as they did.
+//
+// Naming SEVERAL groups is allowed and means the union of their members --
+// "these two teams both have the same problem" is a legitimate driver, and the
+// contract already permits a member to belong to more than one group
+// (ownership is a relation, not a partition). What is refused is naming a
+// group and a subject belonging to NO named group.
+//
+// Subjects that are not cohort members at all -- a path node, a committed
+// resolution subject -- are not group-scoped and are not judged here; this
+// rule is about member attribution, and treating an unrelated subject as a
+// membership violation would reject legitimate context.
+func requireGroupMembershipClosure(subjects []SubjectRef, cohort *Cohort) error {
+	if cohort == nil || len(cohort.Groups) == 0 {
+		return nil
+	}
+	named := make(map[string]struct{}, len(subjects))
+	for _, subject := range subjects {
+		named[subjectKeyForModel(subject)] = struct{}{}
+	}
+	// Which groups this driver actually names, and the union of their members.
+	permitted := make(map[string]struct{})
+	namesAGroup := false
+	for _, group := range cohort.Groups {
+		if _, ok := named[subjectKeyForModel(group.Subject)]; !ok {
+			continue
+		}
+		namesAGroup = true
+		permitted[subjectKeyForModel(group.Subject)] = struct{}{}
+		for _, memberID := range group.MemberCanonicalIDs {
+			for _, member := range cohort.Members {
+				if member.Subject.CanonicalID == memberID {
+					permitted[subjectKeyForModel(member.Subject)] = struct{}{}
+				}
+			}
+		}
+	}
+	if !namesAGroup {
+		return nil
+	}
+	// Every cohort MEMBER this driver names must be inside that union. A
+	// non-member subject is out of this rule's scope entirely.
+	members := make(map[string]struct{}, len(cohort.Members))
+	for _, member := range cohort.Members {
+		members[subjectKeyForModel(member.Subject)] = struct{}{}
+	}
+	for _, subject := range subjects {
+		key := subjectKeyForModel(subject)
+		if _, isMember := members[key]; !isMember {
+			continue
+		}
+		if _, ok := permitted[key]; !ok {
+			return fmt.Errorf("names a group and also cohort member %q, which belongs to no group it named", subject.CanonicalID)
+		}
+	}
+	return nil
+}
+
 func requireGroundedClaims(name, category string, scopeSubjects []SubjectRef, fallbackAllowed map[string]struct{}, claimedFactIDs []string, claimed map[string]ClaimedFact) error {
 	scoped := fallbackAllowed
 	if len(scopeSubjects) > 0 {
@@ -2730,7 +2805,26 @@ func synthesisUncitableShownSubjects(input SynthesisInput) map[string]struct{} {
 			result[subjectKeyForModel(exclusion.Subject)] = struct{}{}
 		}
 	}
+	// PRECEDENCE: citable wins. The census is keyed by (kind, id) and so
+	// cannot remember which ROLE an occurrence came from; a subject appearing
+	// in two roles would otherwise be judged by whichever list happened to
+	// contain it. A subject the investigation COMMITTED to -- a committed
+	// resolution subject, a cohort member, a group, a path node, a fact
+	// subject -- stays citable even if it also appears as a candidate or an
+	// exclusion. Those entries say "not resolved" and "not a member of this
+	// cohort"; neither says "may not be discussed", and revoking a committed
+	// subject on that basis refuses a subject the answer is genuinely about.
+	for key := range synthesisSubjects(input) {
+		delete(result, key)
+	}
 	return result
+}
+
+// synthesisSubjectScopeBasisUnavailable is the basis reported when the census
+// could not be taken. A function rather than a bare constant so every caller
+// routes through one place if that policy ever changes.
+func synthesisSubjectScopeBasisUnavailable() SynthesisSubjectScopeBasis {
+	return SubjectScopeBasisUnavailable
 }
 
 // synthesisPayloadSubjects is every subject the synthesis PAYLOAD serializes
