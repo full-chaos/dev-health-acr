@@ -5,3 +5,5 @@ metadata:
 data:
   ACR_ENVIRONMENT: production
   ACR_LOG_LEVEL: warn
+  ACR_MAX_ITEMS: "45"
+  ACR_CONTEXT_FABRIC_MODEL_TIMEOUT: "120s"
