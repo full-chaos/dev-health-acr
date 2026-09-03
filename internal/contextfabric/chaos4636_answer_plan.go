@@ -91,6 +91,46 @@ func planSynthesisHeadroom(profile PlanBudgetProfile) int {
 	return 0
 }
 
+// PredictedAnswerItems is what the PLAN ITSELF budgeted a cohort of this size
+// to cost: one item per member, plus the synthesis headroom the profile
+// reserved for what synthesis adds on top. It is the plan's own arithmetic, not
+// a second model of it -- every term is a field the plan already publishes.
+//
+// It exists to be logged BESIDE the measured count, because the plan's
+// expectation is exactly the thing that turned out to be wrong on the rig and
+// there was no way to see that from the artifacts. Measured against this
+// prediction, a grouped answer of 7 members came in anywhere from 21 to 41
+// items against a predicted 27 (testdata/grouped_cohort_item_ratio.json).
+//
+// Deliberately NOT a per-member rate. An earlier revision of this function
+// predicted from a measured items-per-member ratio and used it to clamp the
+// cohort; the rig then showed the ratio RISES as the cohort shrinks (2.80-3.90
+// at 10 members, 3.00-5.86 at 7), so total items are largely insensitive to
+// member count and the rate was not a property of the system. Publishing a
+// prediction from that model would be a number that looks like evidence.
+func PredictedAnswerItems(headroom, members int) int {
+	if members <= 0 || headroom < 0 {
+		return 0
+	}
+	return members + headroom
+}
+
+// PredictedItemsForPlan is PredictedAnswerItems addressed by the plan a
+// telemetry site already holds, so a caller cannot pair a measurement with a
+// prediction derived from a different budget than the one that planned it.
+//
+// DOMAIN: every member count planBudget can admit, which is
+// MaxItems - SynthesisHeadroom and rises with the item budget -- 25 at
+// ACR_MAX_ITEMS=45, 38 at the configured maximum of 50. There is no clamp here
+// and there must not be one: codex round 3 found that capping this helper at a
+// constant leaves every call site holding the right count while the helper
+// corrupts it afterwards, and no test noticed because they all drove cohorts of
+// ten or fewer. A clamp here would be invisible exactly where the item budget is
+// raised, which is the configuration the rig is moving to.
+func PredictedItemsForPlan(plan AnswerPlan, members int) int {
+	return PredictedAnswerItems(plan.Budget.SynthesisHeadroom, members)
+}
+
 // PlanAnswerInput is everything PlanAnswer is allowed to see. It is a struct
 // rather than a parameter list so that adding an input is a visible change to
 // the stage's contract rather than a silently widened signature.
