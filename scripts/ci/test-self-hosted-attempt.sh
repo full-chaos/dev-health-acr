@@ -714,6 +714,16 @@ assert_eq 'negative control: the same sibling on attempt 1 IS adopted' \
   "$(ACR_ATTEMPT_RUN_IDENTITY='2026-09-02T10:29:45Z 2026-09-02T10:29:45Z 1' \
       run_wait "$tmpdir/runs-prior-attempt.json" "$tmpdir/jobs-success.json")"
 
+# The re-run branch must apply to EVERY attempt beyond the first, not just
+# attempt 2. Review round 1 raised this as an argued coverage gap and it was
+# real when executed: narrowing the branch to `attempt = 2`, which exempts
+# attempt 3 and beyond, left all 57 checks green. Both prior fixtures use
+# attempt 2, so nothing pinned the general case. This one does.
+assert_eq 'the re-run rule applies at attempt 3, not only at attempt 2' \
+  'unclaimed' \
+  "$(ACR_ATTEMPT_RUN_IDENTITY='2026-09-02T10:29:45Z 2026-09-02T12:30:00Z 3' \
+      run_wait "$tmpdir/runs-prior-attempt.json" "$tmpdir/jobs-success.json")"
+
 # And a sibling that was ITSELF re-run keeps created_at at the original
 # trigger while its run_started_at moves forward -- it must still be ours.
 # This is why the conjunct compares run_started_at rather than created_at.
