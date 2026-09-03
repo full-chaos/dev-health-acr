@@ -78,15 +78,22 @@ type PlanNarrowingEvent struct {
 	MeasuredBytes      int64
 	MaxItems           int
 	MaxSerializedBytes int64
-	// PredictedItems is what the plan EXPECTED this cohort to cost, from the
-	// profile's measured items-per-member rate, beside what stage 3 actually
-	// measured. The pair is the point: the rate is a measurement with a shelf
-	// life, and the only way it gets corrected before it causes another
-	// refusal is an operator being able to watch predicted drift away from
-	// measured on one line.
+	// PredictedItems is what the plan EXPECTED this cohort to cost: one item
+	// per cohort member plus the SynthesisHeadroom the profile reserved for
+	// what synthesis adds. It is the plan's OWN arithmetic, beside what stage 3
+	// actually measured, and the pair is the point -- the plan's expectation is
+	// the thing that turned out to be wrong on the rig, and an operator can
+	// only see that by reading predicted against measured on one line.
 	//
-	// Zero when the profile has no measured rate (PredictedAnswerItems returns
-	// zero) or when no cohort exists to predict for. An absent prediction is
+	// NOT a per-member rate. An earlier revision predicted from a measured
+	// items-per-member ratio and clamped the cohort with it; the rig showed the
+	// ratio RISES as the cohort shrinks, so totals are largely insensitive to
+	// member count and the rate was not a property of the system. This comment
+	// described that refuted model for two commits after the code stopped
+	// implementing it (codex round 3) -- if the arithmetic changes again, this
+	// sentence changes with it.
+	//
+	// Zero only when there is no cohort to predict for. An absent prediction is
 	// honest; a guessed one would be a number that looks like evidence.
 	PredictedItems int
 	// RetryAttempted and RetryFit are the re-synthesis outcome. Both false

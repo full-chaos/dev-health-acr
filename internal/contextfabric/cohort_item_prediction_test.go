@@ -132,6 +132,25 @@ func TestGroupedAnswerItemsAreNotAFunctionOfMemberCount(t *testing.T) {
 	// "totals do not move at all" (largeMean). Landing above it means the
 	// member-independent term dominates, which is the branch's claim.
 	midpoint := (proportional + largeMean) / 2
+	// DISTRIBUTION GUARD. Codex round 3: the mean comparison alone accepts
+	// 7-member [20,20,20,20,20,20,100] against 10-member [31 x7] -- six of seven
+	// small-cohort observations sit at the proportional prediction and a single
+	// outlier carries the mean. A claim about where a population sits cannot
+	// rest on a statistic one point can move, so require the MAJORITY of
+	// individual observations to clear the midpoint, not just the average.
+	clearedMidpoint := 0
+	for _, items := range byMembers[small] {
+		if float64(items) > midpoint {
+			clearedMidpoint++
+		}
+	}
+	if clearedMidpoint*2 <= len(byMembers[small]) {
+		t.Fatalf("only %d of %d observations at %d members clear the %.1f midpoint (mean %.1f). The mean is "+
+			"being carried by a minority of points, so this data does not show the member-independent term "+
+			"dominating -- it shows one or two large answers. Authority: %s",
+			clearedMidpoint, len(byMembers[small]), small, midpoint, smallMean, fixture.Authority)
+	}
+
 	if smallMean <= midpoint {
 		t.Fatalf("at %d members the mean total is %.1f; a proportional model predicts %.1f and a fully "+
 			"member-independent one predicts %.1f. %.1f is on the proportional side of the %.1f midpoint, so "+
@@ -532,4 +551,58 @@ func retryFailureReferenceHeadroom(t *testing.T) int {
 	}
 	t.Fatal("reference run recorded no refusal event; cannot recover the headroom")
 	return 0
+}
+
+// TestPredictionHoldsAcrossThePlannersWholeMemberDomain closes codex round 3's
+// finding: the FOURTH wrong-argument instance was not at any call site, it was
+// in the helper. Capping it -- `min(members, 10)` -- left all four call sites
+// passing their correct count and every existing test green, because every one
+// of them drove a cohort of ten or fewer.
+//
+// The sweep that was supposed to prevent this keyed on CALL-SITE PROVENANCE.
+// That is the right key for an omission and the wrong key for a value corrupted
+// downstream of every site. This test keys on the helper's DOMAIN instead: every
+// member count planBudget can admit, up to the configured ceiling.
+//
+// The upper bound is derived from the production planner, not chosen here, so it
+// tracks the config rather than going stale when ACR_MAX_ITEMS moves.
+func TestPredictionHoldsAcrossThePlannersWholeMemberDomain(t *testing.T) {
+	t.Parallel()
+	// ACR_MAX_ITEMS is validated 1..50 (internal/config/config.go), so 50 is the
+	// largest budget a deployment can ask for and therefore the largest cohort
+	// the planner can admit.
+	const maxConfigurableItems = 50
+	plan := PlanAnswer(PlanAnswerInput{
+		Family: QuestionFamilyOutcome{
+			Family: QuestionFamilyGroupedCohortStatus,
+			Source: QuestionFamilySourceModel,
+		},
+		Budget:           ResponseBudget{MaxItems: maxConfigurableItems},
+		MaxCohortMembers: 200,
+	})
+	domainMax := plan.Budget.MaxMembers
+	if domainMax <= 10 {
+		t.Fatalf("planner admits only %d members at the maximum item budget; this test would not reach "+
+			"past the counts the other tests already cover and could not see a cap", domainMax)
+	}
+	headroom := plan.Budget.SynthesisHeadroom
+
+	// Every count the planner can admit, not a sample: a cap hides wherever the
+	// sample does not land.
+	for members := 1; members <= domainMax; members++ {
+		if got, want := PredictedItemsForPlan(plan, members), members+headroom; got != want {
+			t.Fatalf("PredictedItemsForPlan(%d members) = %d, want %d (members + headroom %d). "+
+				"The prediction must be exact across the planner's whole domain -- a clamp or saturation "+
+				"anywhere in it publishes a wrong expectation precisely where the item budget is raised",
+				members, got, want, headroom)
+		}
+	}
+	// Strictly increasing, which a clamp of any shape breaks even if some
+	// individual value happened to match.
+	for members := 2; members <= domainMax; members++ {
+		if PredictedItemsForPlan(plan, members) <= PredictedItemsForPlan(plan, members-1) {
+			t.Fatalf("prediction did not increase from %d to %d members: the helper saturates inside the "+
+				"planner's own domain", members-1, members)
+		}
+	}
 }

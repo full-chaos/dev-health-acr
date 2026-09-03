@@ -118,6 +118,15 @@ func PredictedAnswerItems(headroom, members int) int {
 // PredictedItemsForPlan is PredictedAnswerItems addressed by the plan a
 // telemetry site already holds, so a caller cannot pair a measurement with a
 // prediction derived from a different budget than the one that planned it.
+//
+// DOMAIN: every member count planBudget can admit, which is
+// MaxItems - SynthesisHeadroom and rises with the item budget -- 25 at
+// ACR_MAX_ITEMS=45, 38 at the configured maximum of 50. There is no clamp here
+// and there must not be one: codex round 3 found that capping this helper at a
+// constant leaves every call site holding the right count while the helper
+// corrupts it afterwards, and no test noticed because they all drove cohorts of
+// ten or fewer. A clamp here would be invisible exactly where the item budget is
+// raised, which is the configuration the rig is moving to.
 func PredictedItemsForPlan(plan AnswerPlan, members int) int {
 	return PredictedAnswerItems(plan.Budget.SynthesisHeadroom, members)
 }

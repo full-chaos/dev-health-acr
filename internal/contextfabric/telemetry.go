@@ -867,9 +867,10 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"groups", event.Groups,
 		"overrun", string(event.Overrun),
 		"measured_items", event.MeasuredItems,
-		// Beside measured_items on purpose: the plan's own prediction from the
-		// profile's measured items-per-member rate. Zero where no rate has
-		// been measured for the profile.
+		// Beside measured_items on purpose: the plan's own arithmetic for this
+		// cohort (members + reserved SynthesisHeadroom), NOT a per-member rate
+		// -- see PlanNarrowingEvent.PredictedItems. Zero only when there is no
+		// cohort to predict for.
 		"predicted_items", event.PredictedItems,
 		"measured_bytes", event.MeasuredBytes,
 		"max_items", event.MaxItems,

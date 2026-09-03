@@ -92,5 +92,6 @@
       "bytes": 134165
     }
   ],
-  "reading": "Ten members: 28, 31, 32, 32, 34, 34, 39 (1 of 7 fit a 30-item ceiling). Seven members: 21, 27, 31, 37, 41 (2 of 5 fit). Cutting the cohort by 30% did not move the distribution. Bytes never bind on either population: the largest row is 141842 of 262144 (54%), so the item ceiling is the only binding axis and narrowing on bytes would narrow on the wrong quantity."
+  "reading": "Ten members: 28, 31, 32, 32, 34, 34, 39 (1 of 7 fit a 30-item ceiling). Seven members: 21, 27, 31, 37, 41 (2 of 5 fit). Cutting the cohort by 30% did not move the distribution in this sample. Bytes never bind on either population: the largest row is 141842 of 262144 (54%), so the item ceiling is the only binding axis and narrowing on bytes would narrow on the wrong quantity.",
+  "claim": "NARROW, and deliberately narrower than the earlier wording (codex round 3). What these rows SUPPORT: a 7-member grouped answer still overruns a 30-item ceiling, and the observed 7-member totals are not proportionally smaller than the 10-member ones -- so clamping member count did not buy the fit it was built to buy, and the specific per-member rate derived from the 10-member rows (3.90) does not predict the 7-member rows. What these rows DO NOT establish: that total items are insensitive to member count IN GENERAL. n=7 at ten members and n=5 at seven, from two different builds and runs, over one org's data. Treat this as a refutation of one specific clamp, not as a general law; widening the claim needs more cohort sizes and more replicates."
 }
