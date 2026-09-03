@@ -135,6 +135,18 @@ jobs:
           echo "--- postgres client (gates unit / race shards) ---"
           command -v psql || echo "psql: ABSENT"
           command -v pg_isready || echo "pg_isready: ABSENT"
+          # Added after the race step failed on `-race requires cgo`: the
+          # probe surveyed what the MAKE TARGETS needed and never asked what
+          # the TEST FLAGS needed, so it reported the runner surveyed while
+          # missing the one precondition that blocks every -race job here.
+          # Until these read, "can this pool run the race detector at all" is
+          # unmeasured, and that gates the pilot job and all four race shards.
+          echo "--- cgo and a C toolchain (gates every -race job) ---"
+          go env CGO_ENABLED CC CXX || true
+          for tool in gcc cc clang; do
+            printf '%s: %s\n' "$tool" "$(command -v "$tool" || echo ABSENT)"
+          done
+          gcc --version 2>/dev/null | head -1 || echo "gcc --version: unavailable"
           echo "--- toolchain the make targets need ---"
           for tool in make git jq node curl; do
             printf '%s: %s\n' "$tool" "$(command -v "$tool" || echo ABSENT)"
