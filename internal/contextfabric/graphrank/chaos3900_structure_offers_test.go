@@ -22,7 +22,7 @@ func candidateOf(kind contractsv1.ContextFabricSubjectKind, id string) contextfa
 
 func TestKindOfferMaterial_EmptyPoolOffersNothing(t *testing.T) {
 	t.Parallel()
-	material, diag := kindOfferMaterial(nil, nil)
+	material, diag := kindOfferMaterial(nil, nil, nil)
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(nil, nil) = %+v, want empty (nothing to disambiguate)", material)
 	}
@@ -37,7 +37,7 @@ func TestKindOfferMaterial_SingleKindPoolOffersNothing(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_2"),
 	}
-	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil)
+	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil, nil)
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(single-kind pool) = %+v, want empty: nothing to disambiguate when every candidate is the same kind", material)
 	}
@@ -59,7 +59,7 @@ func TestKindOfferMaterial_MultiKindPoolOffersDisambiguation(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
 	}
-	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil)
+	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil, nil)
 	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
 		t.Fatalf("material.Missing = %v, want exactly [expected_kind]", material.Missing)
 	}
@@ -101,7 +101,7 @@ func TestKindOfferMaterial_DuplicateKindsCollapseToOneOption(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_3"),
 		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
 	}
-	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil)
+	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil, nil)
 	if len(material.KindOptions) != 2 {
 		t.Fatalf("len(material.KindOptions) = %d, want 2 (one per DISTINCT kind, not one per candidate)", len(material.KindOptions))
 	}
@@ -121,7 +121,7 @@ func TestKindOfferMaterial_NonOfferableKindsAreIgnoredForDisambiguation(t *testi
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectDocument, "doc_1"),
 	}
-	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil)
+	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil, nil)
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(pull_request + document) = %+v, want empty: document is not in the offerable expected_kind vocabulary", material)
 	}
@@ -131,6 +131,97 @@ func TestKindOfferMaterial_NonOfferableKindsAreIgnoredForDisambiguation(t *testi
 	// non-offerable second kind, not merely a duplicate of the first).
 	if diag.DistinctKindCount != 1 || !diag.SuppressedByCardinality {
 		t.Errorf("diag = %+v, want DistinctKindCount=1, SuppressedByCardinality=true -- document never counts as a second distinct offerable kind", diag)
+	}
+}
+
+// TestKindOfferMaterial_DeclaredKindRanksFirstAlongsidePool (CHAOS-4967)
+// reproduces the ticket's own rep 1 verbatim: a frame declaring member
+// kind `repository` (children_of_scope: "Which repositories does the
+// platform team own?") whose kind-hinted lexical search found nothing (no
+// named entity in a scope/cohort question for it to match), so the
+// ordinary pool contains only the OTHER kinds an unscoped text search
+// happened to surface -- ci_pipeline_run/project/pull_request/
+// pull_request_review, byte-identical to the ticket's own reported offer.
+// Before CHAOS-4967, kindOfferMaterial had no parameter carrying the
+// frame's declared kind at all, so KindOptions never contained repository
+// no matter what the frame declared; declaredKinds now ranks it first.
+func TestKindOfferMaterial_DeclaredKindRanksFirstAlongsidePool(t *testing.T) {
+	t.Parallel()
+	poolKinds := []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectCIRun,
+		contractsv1.ContextFabricSubjectProject,
+		contractsv1.ContextFabricSubjectPullRequest,
+		contractsv1.ContextFabricSubjectPullRequestReview,
+	}
+	declaredKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}
+	material, diag := kindOfferMaterial(poolKinds, nil, declaredKinds)
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
+		t.Fatalf("material.Missing = %v, want [expected_kind] -- declared kind alongside a genuinely multi-kind pool must still raise the need", material.Missing)
+	}
+	if len(material.KindOptions) != 5 {
+		t.Fatalf("len(material.KindOptions) = %d, want 5 (the declared kind plus the 4 pool kinds)", len(material.KindOptions))
+	}
+	if got := material.KindOptions[0].Kind; got != contractsv1.ContextFabricSubjectRepository {
+		t.Fatalf("KindOptions[0].Kind = %q, want repository ranked FIRST -- CHAOS-4967's own defect was the declared kind absent from, not merely buried within, its own offer", got)
+	}
+	if diag != (kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 1, DistinctKindCount: 5, SuppressedByCardinality: false}) {
+		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:1 DistinctKindCount:5 SuppressedByCardinality:false}", diag)
+	}
+}
+
+// TestKindOfferMaterial_DeclaredKindAloneSuppressesNeed pins the other half
+// of the CHAOS-4967 ruling: a declared kind is the frame's OWN prior
+// conclusion about this question, not a real ambiguity, so a declared kind
+// with an otherwise empty pool and no explicit hint must NOT raise
+// expected_kind -- there is nothing left to disambiguate. This is why
+// declaredKinds is a parameter separate from explicitKinds (an explicit
+// hint bypasses this same gate alone, see the explicit-kind tests below) --
+// a declared kind must not.
+func TestKindOfferMaterial_DeclaredKindAloneSuppressesNeed(t *testing.T) {
+	t.Parallel()
+	declaredKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}
+	material, diag := kindOfferMaterial(nil, nil, declaredKinds)
+	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
+		t.Errorf("kindOfferMaterial(nil pool, nil explicit, [repository] declared) = %+v, want empty -- a declared kind alone is not an ambiguity to disclose", material)
+	}
+	if diag != (kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 1, DistinctKindCount: 1, SuppressedByCardinality: true}) {
+		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:1 DistinctKindCount:1 SuppressedByCardinality:true}", diag)
+	}
+}
+
+// TestKindOfferMaterial_TwoDeclaredKindsAloneSuppressesNeed (CHAOS-4967
+// codex round 1, P2) is TestKindOfferMaterial_DeclaredKindAloneSuppressesNeed's
+// own sibling for the case that finding caught: declaredKinds can carry
+// TWO distinct entries at once -- a valid grouped_members frame declares
+// both a member_kind and a group_kind, always different (invariant I6) --
+// and two distinct declared kinds alone used to satisfy the old
+// "len(ranked)<2" cardinality check even though neither the pool nor an
+// explicit hint contributed anything: two already-known, frame-declared
+// axes are not a real ambiguity any more than one is.
+func TestKindOfferMaterial_TwoDeclaredKindsAloneSuppressesNeed(t *testing.T) {
+	t.Parallel()
+	declaredKinds := []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectTeam,
+		contractsv1.ContextFabricSubjectProject,
+	}
+	material, diag := kindOfferMaterial(nil, nil, declaredKinds)
+	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
+		t.Errorf("kindOfferMaterial(nil pool, nil explicit, [team, project] declared) = %+v, want empty -- two already-declared axes are not an ambiguity to disclose", material)
+	}
+	if diag != (kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 2, DistinctKindCount: 2, SuppressedByCardinality: true}) {
+		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:2 DistinctKindCount:2 SuppressedByCardinality:true} -- DistinctKindCount is still 2 (both declared kinds ARE distinct offerable kinds), only SuppressedByCardinality changes", diag)
+	}
+
+	// The complement: the SAME two declared kinds alongside a pool that
+	// contributes a genuinely new, third kind must still raise -- pool
+	// contribution is what makes it a real ambiguity again.
+	poolKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}
+	material, diag = kindOfferMaterial(poolKinds, nil, declaredKinds)
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
+		t.Fatalf("material.Missing = %v, want [expected_kind] -- two declared kinds PLUS a genuinely new pool kind must raise", material.Missing)
+	}
+	if len(material.KindOptions) != 3 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectTeam || material.KindOptions[1].Kind != contractsv1.ContextFabricSubjectProject {
+		t.Fatalf("KindOptions = %+v, want [team, project, pull_request] -- both declared kinds ranked first, in declaredKinds order, pool kind last", material.KindOptions)
 	}
 }
 
@@ -2009,7 +2100,7 @@ func TestProjectKindOfferKinds_NoAbsentKindsIsANoOp(t *testing.T) {
 func TestKindOfferMaterial_ExplicitKindAlwaysOfferedEvenAloneInThePool(t *testing.T) {
 	t.Parallel()
 	// Empty pool, one explicit kind: still offered.
-	material, diag := kindOfferMaterial(nil, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest})
+	material, diag := kindOfferMaterial(nil, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}, nil)
 	if len(material.KindOptions) != 1 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectPullRequest {
 		t.Fatalf("material.KindOptions = %+v, want exactly the one explicit kind", material.KindOptions)
 	}
@@ -2028,7 +2119,7 @@ func TestKindOfferMaterial_ExplicitKindAlwaysOfferedEvenAloneInThePool(t *testin
 		{Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem}},
 		{Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest}},
 	}
-	material, diag = kindOfferMaterial(distinctOfferableKinds(candidates), []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem})
+	material, diag = kindOfferMaterial(distinctOfferableKinds(candidates), []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem}, nil)
 	if len(material.KindOptions) != 2 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectWorkItem {
 		t.Fatalf("material.KindOptions = %+v, want the explicit kind ranked first", material.KindOptions)
 	}

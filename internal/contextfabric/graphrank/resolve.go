@@ -901,7 +901,16 @@ type ResolutionTraceEvent struct {
 	// on a precondition the way the coverage floor and confirmed-kind
 	// rescue are), so this stage fires every time deps.ResolutionTracer is
 	// non-nil, corpus-wide, not only for the previously-flagged subset.
-	KindOfferExplicitHintCount       int
+	KindOfferExplicitHintCount int
+	// KindOfferDeclaredHintCount (CHAOS-4967 codex round 1, P2) mirrors
+	// KindOfferExplicitHintCount for the SAME reason -- a reader tracing
+	// why KindOfferDistinctKindCount came back N needs to know how many of
+	// those N kinds are frame-declared (kindOfferDiagnostics.DeclaredHintCount,
+	// chaos3900_structure_offers.go) versus pool-derived, exactly the way
+	// ExplicitHintCount already separates caller-declared from pool-derived.
+	// No BeforeRepair companion, matching ExplicitHintCount's own shape --
+	// only DistinctKindCount/SuppressedByCardinality get before/after pairs.
+	KindOfferDeclaredHintCount       int
 	KindOfferDistinctKindCount       int
 	KindOfferSuppressedByCardinality bool
 	// KindOfferCandidateOfferCount/KindOfferOfferKind (stage=="kind_offer"
@@ -2673,13 +2682,26 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// kindOfferCandidates once ResolveFromMergedCandidatesWithGateAndBasis's
 	// own MaxSubjectCandidates ranking/truncation has run.
 	beforeKinds, afterKinds := projectKindOfferKinds(kindOfferCandidates, candidatesBySubject, len(resolution.Committed))
+	// CHAOS-4967: the frame's own declared member/group kind(s) -- the SAME
+	// closed-vocabulary field hintedPoolKinds/frameKindHints already reads
+	// for RETRIEVAL (chaos4348_reachability.go, this file's own call at
+	// hintedPoolKinds() above) -- now also reach the OFFER composer. Before
+	// this, a children_of_scope/discovered_kind/grouped_members question
+	// whose kind-hinted lexical search found nothing (no named entity to
+	// match) offered whatever kind an ordinary text search happened to
+	// surface and never the kind the frame itself already declared. See
+	// kindOfferMaterial's own doc comment for why this is a THIRD,
+	// distinctly-behaved input, never folded into explicitKinds. Read once
+	// and reused for both calls below, mirroring beforeKinds/afterKinds'
+	// own "computed once, read twice" shape.
+	declaredKinds := frameKindHints(frame)
 	// beforeOffer is discarded -- only beforeDiag's counts are kept, as the
 	// PRE-repair telemetry twin below. Calling kindOfferMaterial twice
 	// (once per kind list) keeps both diagnostics computed by the
 	// IDENTICAL cardinality-check logic, rather than duplicating that
 	// check by hand and risking the two readings drifting apart.
-	_, beforeDiag := kindOfferMaterial(beforeKinds, request.ExpectedKinds)
-	kindOffer, kindOfferDiag := kindOfferMaterial(afterKinds, request.ExpectedKinds)
+	_, beforeDiag := kindOfferMaterial(beforeKinds, request.ExpectedKinds, declaredKinds)
+	kindOffer, kindOfferDiag := kindOfferMaterial(afterKinds, request.ExpectedKinds, declaredKinds)
 	// CHAOS-4012: the SAME union kindOfferMaterial read (pre-repair) above
 	// is also the read-only pool candidateOfferMaterial ranks over -- one
 	// candidate pool, two independent offer axes, never two different
@@ -2738,6 +2760,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 			RequestID: request.RequestID, Stage: "kind_offer",
 			KindOfferExplicitHintCount:                   kindOfferDiag.ExplicitHintCount,
+			KindOfferDeclaredHintCount:                   kindOfferDiag.DeclaredHintCount,
 			KindOfferDistinctKindCount:                   kindOfferDiag.DistinctKindCount,
 			KindOfferSuppressedByCardinality:             kindOfferDiag.SuppressedByCardinality,
 			KindOfferCandidateOfferCount:                 candidateOfferDiag.CandidateOfferCount,

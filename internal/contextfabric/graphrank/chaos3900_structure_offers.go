@@ -72,14 +72,42 @@ var structureOfferKinds = map[contractsv1.ContextFabricSubjectKind]bool{
 // (CHAOS-3972 P3) any caller-supplied explicitKinds
 // (contextfabric.InvestigationRequest.ExpectedKinds) -- ranked FIRST
 // (design brief §2.3: "an explicit value the engine can verify becomes a
-// top-ranked, receipt-bound offer"), pool-derived kinds after, deduped.
-// Offered when EITHER the pool spans more than one distinct offerable
-// kind OR the caller named at least one explicit kind -- a single-kind
-// (or empty) pool with NO explicit hint has nothing to disambiguate on
-// this axis, so offering it would disclose a choice the question does not
-// actually present; a caller-named kind is always worth offering back
-// (it may be wrong, and the receipt-bound offer is exactly how a caller
-// finds out).
+// top-ranked, receipt-bound offer"), PLUS (CHAOS-4967) declaredKinds -- the
+// frame's own already-declared member/group kind(s) (frameKindHints,
+// cohort_kind.go) -- ranked second, pool-derived kinds last, all deduped.
+//
+// declaredKinds is DELIBERATELY a separate parameter from explicitKinds,
+// not folded into it, because the two must NOT behave alike at the
+// cardinality gate below: an explicitKinds hint is caller-verified intent
+// and is ALWAYS worth offering back on its own (explicitCount bypasses the
+// gate entirely); a declaredKind is the frame's OWN prior conclusion about
+// this same question, so a declared kind with nothing else in the pool is
+// not a real ambiguity to disclose -- there is nothing to pick between. A
+// declared kind therefore participates in `ranked` (so it can satisfy the
+// >=2-distinct-kind cardinality test when the pool genuinely offers a
+// different kind too, and so it ranks ahead of pool-derived kinds when the
+// need IS raised) but contributes nothing of its own to explicitCount, so
+// "declared kind alone, nothing else" still falls through the existing
+// "explicitCount==0 && len(ranked)<2" suppression exactly like an
+// undifferentiated single-kind pool always has.
+//
+// CHAOS-4967: before this parameter existed, the frame's own declared kind
+// (already threaded to hintedPoolKinds/applyKindHintedPoolSearch for
+// RETRIEVAL, resolve.go:1925) had no path into the OFFER -- a
+// children_of_scope/discovered_kind/grouped_members question whose kind-
+// hinted lexical search found nothing (the common case: a scope/cohort
+// question names no single entity to match) offered whatever unrelated
+// kinds an ordinary text search happened to surface, never the kind the
+// frame itself already named. See chaos4579_cohort_structure_gate.go's own
+// note (CHAOS-4967, closed) for why the axis stays eligible regardless.
+//
+// Offered when EITHER {declared kinds, pool} together span more than one
+// distinct offerable kind OR the caller named at least one explicit kind --
+// a single-kind (or empty) declared+pool union with NO explicit hint has
+// nothing to disambiguate on this axis, so offering it would disclose a
+// choice the question does not actually present; a caller-named kind is
+// always worth offering back (it may be wrong, and the receipt-bound offer
+// is exactly how a caller finds out).
 // kindOfferDiagnostics (CHAOS-4012 v20, telemetry-only) reports the exact
 // counts kindOfferMaterial's own suppression check consumes, so a caller
 // can trace WHY KindOptions came back empty -- distinct from the
@@ -92,14 +120,24 @@ type kindOfferDiagnostics struct {
 	// caller-supplied ExpectedKinds hints that survived the
 	// structureOfferKinds/dedup filter.
 	ExplicitHintCount int
+	// DeclaredHintCount (CHAOS-4967) is the number of valid, deduped,
+	// frame-declared kinds (declaredKinds) that survived the
+	// structureOfferKinds/dedup filter -- distinct from ExplicitHintCount
+	// because it never bypasses the cardinality gate on its own (see this
+	// function's own doc comment).
+	DeclaredHintCount int
 	// DistinctKindCount is len(ranked) at the moment the suppression check
-	// runs -- explicit hints plus pool-derived kinds, deduped, restricted
-	// to the closed structureOfferKinds set. 0 means genuinely no offerable
-	// kind was present at all; 1 means exactly the "in the pool, still not
-	// offered" gap CHAOS-4012 investigates.
+	// runs -- explicit hints, declared hints and pool-derived kinds,
+	// deduped, restricted to the closed structureOfferKinds set. 0 means
+	// genuinely no offerable kind was present at all; 1 means exactly the
+	// "in the pool, still not offered" gap CHAOS-4012 investigates.
 	DistinctKindCount int
 	// SuppressedByCardinality is true exactly when
-	// "explicitCount==0 && len(ranked)<2" fired.
+	// "explicitCount==0 && (len(poolDistinct)==0 || len(ranked)<2)" fired
+	// (CHAOS-4967 codex round 1, P2: declaredKinds alone -- even two of
+	// them, e.g. a grouped_members frame's member_kind+group_kind -- can
+	// never satisfy this gate; only a pool-sourced kind or an explicit hint
+	// can).
 	SuppressedByCardinality bool
 }
 
@@ -114,8 +152,8 @@ type kindOfferDiagnostics struct {
 // function's own doc comment). Accepting kinds directly means this
 // function's own cardinality/dedup logic is identical regardless of which
 // source produced its input.
-func kindOfferMaterial(poolKinds []contractsv1.ContextFabricSubjectKind, explicitKinds []contractsv1.ContextFabricSubjectKind) (contextfabric.StructureOfferMaterial, kindOfferDiagnostics) {
-	seen := make(map[contractsv1.ContextFabricSubjectKind]bool, len(poolKinds)+len(explicitKinds))
+func kindOfferMaterial(poolKinds []contractsv1.ContextFabricSubjectKind, explicitKinds []contractsv1.ContextFabricSubjectKind, declaredKinds []contractsv1.ContextFabricSubjectKind) (contextfabric.StructureOfferMaterial, kindOfferDiagnostics) {
+	seen := make(map[contractsv1.ContextFabricSubjectKind]bool, len(poolKinds)+len(explicitKinds)+len(declaredKinds))
 	var ranked []contractsv1.ContextFabricSubjectKind
 	for _, kind := range explicitKinds {
 		if seen[kind] || !structureOfferKinds[kind] {
@@ -125,6 +163,20 @@ func kindOfferMaterial(poolKinds []contractsv1.ContextFabricSubjectKind, explici
 		ranked = append(ranked, kind)
 	}
 	explicitCount := len(ranked)
+	// CHAOS-4967: declared kinds rank AFTER explicit (caller-verified)
+	// hints but BEFORE pool-derived kinds, and are appended to `ranked`
+	// exactly like poolDistinct below -- they count toward the >=2
+	// cardinality test but, unlike explicitKinds, do NOT set explicitCount
+	// and so cannot bypass the gate alone (see doc comment above).
+	declaredCount := 0
+	for _, kind := range declaredKinds {
+		if seen[kind] || !structureOfferKinds[kind] {
+			continue
+		}
+		seen[kind] = true
+		ranked = append(ranked, kind)
+		declaredCount++
+	}
 	var poolDistinct []contractsv1.ContextFabricSubjectKind
 	for _, kind := range poolKinds {
 		if seen[kind] || !structureOfferKinds[kind] {
@@ -134,12 +186,27 @@ func kindOfferMaterial(poolKinds []contractsv1.ContextFabricSubjectKind, explici
 		poolDistinct = append(poolDistinct, kind)
 	}
 	ranked = append(ranked, poolDistinct...)
-	diagnostics := kindOfferDiagnostics{ExplicitHintCount: explicitCount, DistinctKindCount: len(ranked)}
+	diagnostics := kindOfferDiagnostics{ExplicitHintCount: explicitCount, DeclaredHintCount: declaredCount, DistinctKindCount: len(ranked)}
 	// The pool alone still needs >=2 DISTINCT kinds (its own kinds plus
 	// whatever explicit kinds already claimed) to be worth disambiguating
 	// on its own; an explicit kind is ALWAYS worth offering regardless of
 	// pool cardinality.
-	if explicitCount == 0 && len(ranked) < 2 {
+	//
+	// CHAOS-4967 codex round 1, P2: len(ranked)<2 alone is NOT sufficient
+	// once declaredKinds can itself contribute >=2 entries -- a valid
+	// grouped_members frame declares BOTH its member_kind and its
+	// group_kind (invariant I6: always two DIFFERENT kinds), so
+	// declaredKinds alone can reach len(ranked)==2 with an entirely empty
+	// pool. Those two kinds are already-known axes the frame itself named,
+	// not a real ambiguity -- offering "team or project?" back to a
+	// question that already declared both is exactly the "declared kind
+	// alone is not a real ambiguity" case this whole parameter exists to
+	// prevent, just reached via TWO declared kinds instead of one. The fix
+	// is requiring poolDistinct to have contributed at least one kind of
+	// its own: declaredKinds (any count) can never satisfy this gate by
+	// itself, only alongside a genuinely pool-sourced kind or an explicit
+	// hint.
+	if explicitCount == 0 && (len(poolDistinct) == 0 || len(ranked) < 2) {
 		diagnostics.SuppressedByCardinality = true
 		return contextfabric.StructureOfferMaterial{}, diagnostics
 	}

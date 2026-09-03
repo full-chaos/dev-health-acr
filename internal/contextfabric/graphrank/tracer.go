@@ -198,6 +198,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		t.logger.DebugContext(ctx, "context fabric resolution trace: kind offer",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"explicit_hint_count", event.KindOfferExplicitHintCount,
+			"declared_hint_count", event.KindOfferDeclaredHintCount,
 			"distinct_kind_count", event.KindOfferDistinctKindCount,
 			"suppressed_by_cardinality", event.KindOfferSuppressedByCardinality,
 			"candidate_offer_count", event.KindOfferCandidateOfferCount,

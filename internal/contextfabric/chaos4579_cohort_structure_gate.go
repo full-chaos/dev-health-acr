@@ -22,6 +22,30 @@ import (
 // asked to pick a single CI-run candidate on a question with no single
 // subject).
 //
+// `kindOfferMaterial`'s class gap, CHAOS-4967 (closed): the family table
+// below still deliberately keeps expected_kind applicable for
+// scoped_cohort_status (chaos4634_scoped_cohort_gate_test.go's own
+// assertion -- a cohort's member kind IS a real thing to disambiguate),
+// so this is not the axis-eligibility half of the gap re-opened. What
+// CHAOS-4967 closed is narrower and sat entirely inside kindOfferMaterial
+// itself: when the axis WAS eligible and DID raise, the composer had no
+// channel for the frame's own already-declared member/group kind, so a
+// children_of_scope/discovered_kind/grouped_members question's own
+// declared kind could be, and reliably was, absent from its own offer.
+// kindOfferMaterial now takes that declared kind as a third,
+// separately-gated parameter (chaos3900_structure_offers.go's own doc
+// comment) -- ranked first when the axis still raises, and never raised
+// on its own when the declared kind is the only offerable kind in view.
+// CLOSED for exactly those three variants: children_of_scope,
+// discovered_kind, grouped_members.
+//
+// The SAME class gap for a plain named_subject question (its own declared
+// kind lives on a different field entirely, NamedSubjectExpression.
+// ExpectedKind, never read by frameKindHints/MemberKind/GroupKind) is
+// NOT closed here -- traced, but currently unreachable in production for
+// an unrelated reason one layer up (nothing populates that field today),
+// and tracked separately rather than folded into this fix.
+//
 // GateOffersByFamily replaces it with ONE lookup into the family table
 // (chaos4632_question_family_registry.go's ApplicableAxes column) that
 // decides ALL FIVE structure axes at once -- kind, anchor, handle,
