@@ -1,10 +1,14 @@
 package contextfabric
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"math"
 	"os"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -142,5 +146,88 @@ func TestGroupedCohortClampStillAnswersTheQuestion(t *testing.T) {
 	if plan.Budget.NarrowingBasis != contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical {
 		t.Fatalf("NarrowingBasis = %q, want the declared stage-1 order to survive the clamp change",
 			plan.Budget.NarrowingBasis)
+	}
+}
+
+// TestPlanNarrowingLineCarriesPredictedItems pins the telemetry half of the
+// fix. Mutation M3 (deleting the "predicted_items" pair from
+// SlogEngineTelemetry.RecordPlanNarrowing's arg list) SURVIVED the package
+// before this test existed: the field was populated on the event and reached
+// no sink, which is exactly the "a field populated on the struct and never
+// logged is not telemetry" discipline chaos4085 already states for this file's
+// neighbours.
+//
+// The prediction is only useful BESIDE the measurement, so this asserts both
+// keys on ONE record, not either alone.
+func TestPlanNarrowingLineCarriesPredictedItems(t *testing.T) {
+	t.Parallel()
+	event := PlanNarrowingEvent{
+		Family:        QuestionFamilyGroupedCohortStatus,
+		Stage:         contractsv1.ContextFabricPlanNarrowingAssembledResult,
+		Before:        10,
+		After:         5,
+		MeasuredItems: 39,
+		MaxItems:      30,
+		// The value under test. Distinct from every other number on the event
+		// so a record carrying it cannot be satisfied by a neighbouring field.
+		PredictedItems: 27,
+	}
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordPlanNarrowing(
+			context.Background(), storage.Principal{OrgID: "org_predicted_items_test"}, event)
+	})
+	if len(records) != 1 {
+		t.Fatalf("emitted %d records, want exactly 1", len(records))
+	}
+	record := records[0]
+	predicted, ok := record["predicted_items"]
+	if !ok {
+		t.Fatal("plan narrowing line carries no predicted_items key: the prediction is populated on the event and never reaches an operator")
+	}
+	if got := predicted.(float64); int(got) != event.PredictedItems {
+		t.Fatalf("predicted_items = %v, want %d", got, event.PredictedItems)
+	}
+	// Beside, not instead of.
+	measured, ok := record["measured_items"]
+	if !ok {
+		t.Fatal("plan narrowing line lost measured_items: predicted is only readable against it")
+	}
+	if got := measured.(float64); int(got) != event.MeasuredItems {
+		t.Fatalf("measured_items = %v, want %d", got, event.MeasuredItems)
+	}
+}
+
+// TestPredictedItemsIsForTheSynthesizedCohortNotTheDeclinedRetryTarget pins
+// which member count the refusal's prediction describes. Mutation M4
+// (predicting from `selected`, the count the DECLINED retry would have
+// narrowed to, instead of `members`, the cohort synthesis actually ran
+// against) SURVIVED the package: nothing compared the two, so a refusal could
+// have published a prediction for an answer that was never assembled, sitting
+// next to a measurement of one that was.
+//
+// Driven through PredictedItemsForPlan -- the seam planRefusal calls -- with
+// the two counts from a real refusal (before=10, after=5).
+func TestPredictedItemsIsForTheSynthesizedCohortNotTheDeclinedRetryTarget(t *testing.T) {
+	t.Parallel()
+	plan := AnswerPlan{Family: QuestionFamilyGroupedCohortStatus}
+	const synthesizedMembers, declinedRetryTarget = 10, 5
+
+	forSynthesized := PredictedItemsForPlan(plan, synthesizedMembers)
+	forRetryTarget := PredictedItemsForPlan(plan, declinedRetryTarget)
+	if forSynthesized <= 0 {
+		t.Fatalf("prediction for the synthesized cohort = %d, want positive (the grouped profile has a measured rate)", forSynthesized)
+	}
+	// Non-vacuity: if the two counts predicted the SAME total, this test could
+	// not tell the mutation from the fix.
+	if forSynthesized == forRetryTarget {
+		t.Fatalf("both member counts predict %d items; this fixture cannot distinguish them", forSynthesized)
+	}
+
+	fixture := loadGroupedCohortItemRatios(t)
+	worstRatio, _ := worstMeasuredItemsPerMember(fixture)
+	want := int(math.Ceil(float64(synthesizedMembers) * worstRatio))
+	if forSynthesized != want {
+		t.Fatalf("PredictedItemsForPlan(%d) = %d, want %d (%d members at the worst measured %.2f items/member)",
+			synthesizedMembers, forSynthesized, want, synthesizedMembers, worstRatio)
 	}
 }
