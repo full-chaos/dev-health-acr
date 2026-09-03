@@ -478,6 +478,14 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		return rejectSynthesis(RejectionReasonDeterministicAnswerMissing, "deterministic answer is required")
 	}
 	allowedSubjects := synthesisSubjects(input)
+	// payloadSubjects is what the model was SHOWN; allowedSubjects is what it
+	// may cite. The three subject-scope rejections below report which side a
+	// rejected subject fell on -- see SynthesisRejection.SubjectInPayload.
+	payloadSubjects := synthesisPayloadSubjects(input)
+	subjectWasShown := func(subject SubjectRef) bool {
+		_, shown := payloadSubjects[subjectKeyForModel(subject)]
+		return shown
+	}
 	// canonicalLabels binds every subject the model can legally reference
 	// to the ONE label the investigation input actually carries for that
 	// canonical ID (graph resolution, cohort, paths, and canonical facts
@@ -534,6 +542,18 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 			allowedEvidence[evidenceRefID] = struct{}{}
 		}
 	}
+	// CHAOS-4962, the same display/validate asymmetry on the evidence axis:
+	// the payload hands the model the engine's own driver candidates, each
+	// carrying its EvidenceRefIDs, and answer_reuse_degrade serves those
+	// candidates verbatim as the answer's Drivers -- so their evidence was
+	// simultaneously good enough for ACR to publish and "unknown" when the
+	// model cited it. Engine-minted, exactly like the path/fact/cohort refs
+	// above; admitting them widens nothing the model could forge.
+	for _, candidate := range input.Graph.DriverCandidates {
+		for _, evidenceRefID := range candidate.EvidenceRefIDs {
+			allowedEvidence[evidenceRefID] = struct{}{}
+		}
+	}
 	for _, evidenceRefID := range d.EvidenceRefIDs {
 		if _, ok := allowedEvidence[evidenceRefID]; !ok {
 			return rejectSynthesis(RejectionReasonEvidenceUnknown, "synthesis references unknown evidence %q", evidenceRefID)
@@ -583,7 +603,7 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		}
 		claimedByID[claim.ClaimID] = claim
 		if _, ok := allowedSubjects[subjectKeyForModel(claim.Subject)]; !ok {
-			return rejectSynthesis(RejectionReasonClaimSubjectOutOfScope, "claimed fact references subject outside the investigation")
+			return rejectSynthesisSubject(RejectionReasonClaimSubjectOutOfScope, subjectWasShown(claim.Subject), "claimed fact references subject outside the investigation")
 		}
 		if err := requireBoundLabel("claimed fact", claim.Subject, canonicalLabels); err != nil {
 			return rejectSynthesis(RejectionReasonClaimSubjectLabelMismatch, "%w", err)
@@ -604,7 +624,7 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		}
 		for _, subject := range driver.AffectedSubjects {
 			if _, ok := allowedSubjects[subjectKeyForModel(subject)]; !ok {
-				return rejectSynthesis(RejectionReasonDriverSubjectOutOfScope, "driver references subject outside the investigation")
+				return rejectSynthesisSubject(RejectionReasonDriverSubjectOutOfScope, subjectWasShown(subject), "driver references subject outside the investigation")
 			}
 			if err := requireBoundLabel("driver", subject, canonicalLabels); err != nil {
 				return rejectSynthesis(RejectionReasonDriverSubjectLabelMismatch, "%w", err)
@@ -649,7 +669,7 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 			}
 			for _, subject := range finding.Subjects {
 				if _, ok := allowedSubjects[subjectKeyForModel(subject)]; !ok {
-					return rejectSynthesis(RejectionReasonFindingSubjectOutOfScope, "%s references subject outside the investigation", name)
+					return rejectSynthesisSubject(RejectionReasonFindingSubjectOutOfScope, subjectWasShown(subject), "%s references subject outside the investigation", name)
 				}
 				if err := requireBoundLabel(name, subject, canonicalLabels); err != nil {
 					return rejectSynthesis(RejectionReasonFindingSubjectLabelMismatch, "%w", err)
@@ -743,6 +763,15 @@ func canonicalSubjectLabels(input SynthesisInput) map[string]string {
 		for _, member := range input.Graph.Cohort.Members {
 			set(member.Subject)
 		}
+		// CHAOS-4962: synthesisSubjects now admits the group entity, so its
+		// label must be bound here in the same change. Admitting a subject
+		// without binding its label reopens CHAOS-3755 H3 (a real, in-bounds
+		// subject presented under a forged name) on precisely the entity a
+		// grouped answer is organised around -- one team's data shown under
+		// another team's name.
+		for _, group := range input.Graph.Cohort.Groups {
+			set(group.Subject)
+		}
 	}
 	for _, path := range input.Graph.Paths {
 		for _, node := range path.Nodes {
@@ -751,6 +780,11 @@ func canonicalSubjectLabels(input SynthesisInput) map[string]string {
 	}
 	for _, fact := range input.Facts.Facts {
 		set(fact.Subject)
+	}
+	for _, candidate := range input.Graph.DriverCandidates {
+		for _, subject := range candidate.AffectedSubjects {
+			set(subject)
+		}
 	}
 	return labels
 }
@@ -2582,6 +2616,37 @@ func sourceStatePriority(state SourceState) int {
 	}
 }
 
+// synthesisSubjects is the allow-set ValidateAgainst checks every
+// model-referenced subject against.
+//
+// THE RULE, stated once here because three separate widenings have now been
+// argued case by case: a subject is citable iff the investigation COMMITTED
+// to it as part of the answer's own scope -- committed resolution, cohort
+// members, cohort GROUPS, path nodes, canonical fact subjects, and the
+// engine's own driver candidates. Every one of those is engine-minted, so
+// admitting them widens nothing the model could forge; that is the same
+// reasoning CHAOS-4522's cohort-evidence widening records a few dozen lines
+// up in ValidateAgainst.
+//
+// The deliberate EXCLUSION is Resolution.Candidates: an unresolved
+// alternative is shown to the model for disambiguation, and a driver
+// asserting something about a candidate the investigation never committed
+// to would present a resolution that did not happen. Candidates stay out,
+// and synthesisPayloadSubjects below is what makes that exclusion
+// observable rather than silent.
+//
+// The GROUPS branch is the CHAOS-4962 defect. A grouped cohort's group
+// entity -- the team in "project statuses for each team" -- lives only in
+// Cohort.Groups[].Subject (see ContextFabricCohortGroup.Subject's own doc
+// comment: "the group entity itself (the team), not one of its members").
+// The whole cohort, groups included, is serialized into the synthesis
+// payload, so the model was shown each team, asked a question whose subject
+// IS the teams, and had every driver about one rejected here. That was 14
+// of the 27 grouped synthesis rejections in the rig log and appeared on no
+// other family. The DRIVER CANDIDATES branch is the same class: the engine
+// hands the model its own candidate drivers, and answer_reuse_degrade
+// already serves those verbatim as the answer's Drivers, so their subjects
+// were servable by ACR and uncitable by the model at the same time.
 func synthesisSubjects(input SynthesisInput) map[string]struct{} {
 	result := make(map[string]struct{})
 	for _, subject := range input.Graph.Resolution.Committed {
@@ -2591,6 +2656,9 @@ func synthesisSubjects(input SynthesisInput) map[string]struct{} {
 		for _, member := range input.Graph.Cohort.Members {
 			result[subjectKeyForModel(member.Subject)] = struct{}{}
 		}
+		for _, group := range input.Graph.Cohort.Groups {
+			result[subjectKeyForModel(group.Subject)] = struct{}{}
+		}
 	}
 	for _, fact := range input.Facts.Facts {
 		result[subjectKeyForModel(fact.Subject)] = struct{}{}
@@ -2599,6 +2667,33 @@ func synthesisSubjects(input SynthesisInput) map[string]struct{} {
 		for _, subject := range path.Nodes {
 			result[subjectKeyForModel(subject)] = struct{}{}
 		}
+	}
+	for _, candidate := range input.Graph.DriverCandidates {
+		for _, subject := range candidate.AffectedSubjects {
+			result[subjectKeyForModel(subject)] = struct{}{}
+		}
+	}
+	return result
+}
+
+// synthesisPayloadSubjects is every subject the synthesis PAYLOAD serializes
+// to the model, derived from the serialization shape
+// (genkitruntime.synthesisInput) rather than from the validation shape.
+//
+// It exists so the difference between "shown" and "citable" is a MEASURED
+// quantity instead of an assumption. synthesisSubjects is a subset of this
+// by design (Resolution.Candidates is the one deliberate gap); the
+// subject_in_payload telemetry field reports, for every subject-scope
+// rejection, which side of that line the rejected subject fell on --
+// distinguishing "the model invented a subject" (false, the model's error)
+// from "we showed it something and then refused it" (true, ACR's error, and
+// exactly the CHAOS-4962 defect). Any NEW display/validate asymmetry
+// introduced later shows up in production as subject_in_payload=true
+// instead of as another family that silently fails to serve.
+func synthesisPayloadSubjects(input SynthesisInput) map[string]struct{} {
+	result := synthesisSubjects(input)
+	for _, candidate := range input.Graph.Resolution.Candidates {
+		result[subjectKeyForModel(candidate.Subject)] = struct{}{}
 	}
 	return result
 }

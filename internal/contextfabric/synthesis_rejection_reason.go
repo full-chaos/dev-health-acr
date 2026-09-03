@@ -147,7 +147,27 @@ type SynthesisRejection struct {
 	// evaluated -- which would make the documented "1 versus >1" reading of
 	// this number wrong in exactly the case it exists to diagnose.
 	FactGroupSize int
-	err           error
+	// SubjectInPayload is set ONLY by the three subject-scope rejections
+	// (claim/driver/finding "references subject outside the investigation"),
+	// and reports whether the rejected subject was one the synthesis payload
+	// had actually SHOWN the model -- synthesisPayloadSubjects, derived from
+	// the serialization shape, not from the allow-set that just rejected it.
+	//
+	// It is a pointer because the two states it distinguishes are both
+	// meaningful and neither is a sensible zero: false means the model named
+	// a subject nothing in its input mentioned (the model's error, the
+	// expected steady state), true means ACR displayed a subject and then
+	// refused it (ACR's error, and precisely the CHAOS-4962 defect -- a
+	// grouped cohort's group entity was serialized in every payload and
+	// admitted by nothing). nil means the rejection was not a subject-scope
+	// one, and the telemetry seam omits the field entirely rather than
+	// printing a false-looking default on rejections it does not describe.
+	//
+	// A non-nil TRUE in production is therefore a standing alarm for a NEW
+	// display/validate asymmetry, which is the class this field exists to
+	// stop from being discovered by a family that silently fails to serve.
+	SubjectInPayload *bool
+	err              error
 }
 
 func (e *SynthesisRejection) Error() string { return e.err.Error() }
@@ -176,6 +196,26 @@ func rejectSynthesis(reason SynthesisRejectionReason, format string, args ...any
 // a maximum over the draft.
 func rejectSynthesisClaim(reason SynthesisRejectionReason, groupSize int, format string, args ...any) error {
 	return &SynthesisRejection{Reason: reason, FactGroupSize: groupSize, err: fmt.Errorf(format, args...)}
+}
+
+// rejectSynthesisSubject is rejectSynthesis for the three subject-scope
+// rules, carrying whether the rejected subject was in the payload the model
+// was shown -- see SynthesisRejection.SubjectInPayload.
+func rejectSynthesisSubject(reason SynthesisRejectionReason, inPayload bool, format string, args ...any) error {
+	return &SynthesisRejection{Reason: reason, SubjectInPayload: &inPayload, err: fmt.Errorf(format, args...)}
+}
+
+// SynthesisSubjectInPayloadOf returns the rejected subject's payload
+// membership and true when err carries one, and (false, false) otherwise --
+// so a telemetry seam can tell "not a subject-scope rejection" from "a
+// subject-scope rejection on a subject we never showed the model" without
+// reaching into the error type.
+func SynthesisSubjectInPayloadOf(err error) (bool, bool) {
+	var rejection *SynthesisRejection
+	if errors.As(err, &rejection) && rejection.SubjectInPayload != nil {
+		return *rejection.SubjectInPayload, true
+	}
+	return false, false
 }
 
 // SynthesisFactGroupSizeOf returns the rejecting claim's (Kind, Subject)

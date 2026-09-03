@@ -527,6 +527,19 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 	var rejection *contextfabric.SynthesisRejection
 	if errors.As(err, &rejection) {
 		fields = append(fields, "rejection_reason", string(contextfabric.SynthesisRejectionReasonOf(err)))
+		// CHAOS-4962: for the three subject-scope reasons only, say which
+		// side of the display/validate line the rejected subject fell on.
+		// false is the expected steady state (the model named a subject
+		// nothing in its input mentioned); TRUE means ACR serialized a
+		// subject into the payload and then refused it, which is an ACR
+		// defect rather than a model one and is what this ticket was.
+		// Boolean, never the subject itself -- the same content-safety rule
+		// rejection_reason above follows, so no corpus text reaches a log
+		// field. Omitted entirely on rejections that are not subject-scope,
+		// so no line carries a meaningless default.
+		if inPayload, ok := contextfabric.SynthesisSubjectInPayloadOf(err); ok {
+			fields = append(fields, "subject_in_payload", inPayload)
+		}
 	}
 	// The INTERPRET-side half of the same field, on the same line, for the
 	// same reason. Without it a 422 interpretation_rejected reaching this
