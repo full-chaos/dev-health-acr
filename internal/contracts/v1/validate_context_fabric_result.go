@@ -157,7 +157,37 @@ func (c ContextFabricCohort) validateStored() error {
 }
 
 func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
-	if !validContextFabricSubjectKind(c.Kind) || (c.Kind != ContextFabricSubjectTeam && c.Kind != ContextFabricSubjectProject) || c.Members == nil || len(c.Members) > 250 || len(c.Exclusions) > 250 || !boundedText(c.Rationale, 1, 4000, bounds) || (c.Complete && c.Truncated) {
+	// The cohort kind is bounded by the closed subject-kind vocabulary and
+	// nothing narrower.
+	//
+	// It used to also require team or project. That extra conjunct was
+	// unreachable for the entire life of the code that fed it: the cohort
+	// kind came from a keyword matcher over model prose that could only
+	// return those two values, so no test, no rig run and no production
+	// request ever reached the bound. It was not a considered restriction
+	// that had been validated in the field; it was a restriction nothing
+	// had ever tested.
+	//
+	// Meanwhile the published schemas -- context_fabric_common.v1's
+	// $defs.Cohort.properties.kind, the answer projection's ProjectedCohort,
+	// and the MCP request/response documents that embed both -- advertised
+	// all fifteen kinds, and ContextFabricProjectedCohort.Validate already
+	// accepted all fifteen. Three artifacts said fifteen and this one said
+	// two, on the same axis.
+	//
+	// When retrieval stopped guessing and began carrying the kind the
+	// question actually declared, the bound became reachable and a
+	// repository question invalidated the whole result: an HTTP 500, not a
+	// degraded answer. The published schema is the promise, so the promise
+	// is what this now enforces.
+	//
+	// This widens what the contract can CARRY. It does not widen what
+	// discovery can BUILD: the retrieval seam keeps its own deny-by-default
+	// allow-list of kinds a discovery arm can actually serve, refusing the
+	// rest by name rather than constructing a document this validator would
+	// then reject. That seam is deliberately narrower than this bound and is
+	// pinned by its own tests.
+	if !validContextFabricSubjectKind(c.Kind) || c.Members == nil || len(c.Members) > 250 || len(c.Exclusions) > 250 || !boundedText(c.Rationale, 1, 4000, bounds) || (c.Complete && c.Truncated) {
 		return fmt.Errorf("cohort violates v1 bounds")
 	}
 	seen := make(map[string]struct{}, len(c.Members))
