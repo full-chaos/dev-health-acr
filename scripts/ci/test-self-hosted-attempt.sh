@@ -111,6 +111,30 @@ assert_eq 'select-run picks the newest fully-matching sibling run' \
   '105' \
   "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" "$FLOOR" <"$tmpdir/runs-mixed.json")"
 
+# Each identity field needs a candidate that differs in THAT FIELD ALONE, or
+# the conjunct is not covered. The mixed fixture above has a decoy differing
+# on both name and path at once, so dropping the path conjunct still excluded
+# it by name -- review round 3 showed exactly that mutation surviving all 65
+# checks. A same-named workflow at a different path would then be adopted and
+# the fallback would skip its work on a stranger's conclusion.
+cat >"$tmpdir/runs-path-only.json" <<'JSON'
+{"workflow_runs":[
+ {"id":999,"name":"ci-self-hosted","path":".github/workflows/unrelated.yml","head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"pull_request","head_branch":"some-topic-branch","created_at":"2026-09-02T11:00:00Z","run_started_at":"2026-09-02T11:00:00Z"}
+]}
+JSON
+assert_eq 'a candidate differing ONLY in workflow path is not selected' \
+  '' \
+  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" "$FLOOR" <"$tmpdir/runs-path-only.json")"
+
+# NEGATIVE CONTROL: the same candidate with the correct path IS selected, so
+# the assertion above is the path conjunct working rather than the fixture
+# failing identity on some other field.
+sed 's|.github/workflows/unrelated.yml|.github/workflows/ci-self-hosted.yml|' \
+  "$tmpdir/runs-path-only.json" >"$tmpdir/runs-path-fixed.json"
+assert_eq 'negative control: the same candidate with the right path IS selected' \
+  '999' \
+  "$("$subject" select-run "$WF_NAME" "$WF_PATH" "$SHA" "$EVENT" "$REF" "$FLOOR" <"$tmpdir/runs-path-fixed.json")"
+
 # The stale-sibling hazard on its own: the ONLY run on this commit came from
 # a different trigger. The right answer is "no sibling", so the hosted leg
 # does the work. A lookup keyed on SHA + workflow alone answers 101 instead
