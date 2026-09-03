@@ -98,6 +98,8 @@ func TestHopWalkDiscoveredCohortMembershipIsDeterministicAcrossRuns(t *testing.T
 			TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		},
 		Resolution: contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{origin}},
+		// CHAOS-4736: the cohort gate reads the frame, not Shape.
+		Frame: discoveredTeamCohortFrame(),
 	}
 
 	var first []string

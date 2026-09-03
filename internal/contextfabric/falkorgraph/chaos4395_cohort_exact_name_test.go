@@ -62,6 +62,10 @@ func TestDiscoverContextCohortFindsTeamsWithNoLexicalMatchInTheQuestion(t *testi
 			TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		},
 		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+		// CHAOS-4736: the cohort gate and the cohort KIND both read the
+		// frame now, not Shape. The frame declares the team cohort this
+		// fixture's Shape used to imply; every assertion below is unchanged.
+		Frame: discoveredTeamCohortFrame(),
 	}
 
 	result, err := adapter.DiscoverContext(context.Background(), principal, request)
@@ -117,7 +121,35 @@ func cohortDiscoveryRequest(shape contextfabric.InvestigationShape) contextfabri
 			TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		},
 		Resolution: contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+		// CHAOS-4736: the census gate and the cohort kind both read the
+		// FRAME now. These fixtures state their intent in Shape because
+		// they predate the union; the frame says the same thing in the
+		// vocabulary the gate actually reads, so every assertion built on
+		// this helper keeps testing what it was written to test.
+		Frame: cohortFrameForShape(shape),
 	}
+}
+
+// cohortFrameForShape translates a pre-seam-7 fixture's Shape into the union
+// the gate now reads, PRESERVING the distinction the Shape carried.
+//
+// discovered_cohort meant "no term to match, give me the kind's census" --
+// that is discovered_kind, which the gate admits regardless of anchor.
+// explicit_cohort meant "the question names its members", which is a cohort
+// variant the anchor rule still governs: admitted when no anchor resolved,
+// refused when one did. Mapping BOTH onto discovered_kind would erase that
+// second case and quietly turn three anchor tests green for the wrong reason.
+func cohortFrameForShape(shape contextfabric.InvestigationShape) *contextfabric.QuestionFrame {
+	frame := discoveredTeamCohortFrame()
+	if shape == contextfabric.ShapeExplicitCohort {
+		frame.SubjectExpression = contextfabric.SubjectExpression{
+			Kind: contextfabric.SubjectExpressionChildrenOfScope,
+			Scoped: &contextfabric.ScopedSetExpression{
+				AnchorTerms: []string{"platform"}, MemberKind: contextfabric.SubjectTeam,
+			},
+		}
+	}
+	return frame
 }
 
 // cohortDiscoveryRequestWithScopeAnchor is cohortDiscoveryRequest's CHAOS-
@@ -485,5 +517,22 @@ func TestDiscoverContextCountsUnboundedValidityForExactNameOnlyCohortMembers(t *
 	}
 	if !disclosed {
 		t.Error("an exact-name-only cohort member carrying no validity window was admitted but never disclosed in Coverage.Sources")
+	}
+}
+
+// discoveredTeamCohortFrame is the validated frame these pre-seam-7 fixtures
+// imply. They were written when the cohort gate read Interpretation.Shape, so
+// they state their intent there; seam 7 reads the subject-expression union
+// instead. This says the same thing in the union's vocabulary, so every
+// assertion in those tests keeps testing what it was written to test.
+func discoveredTeamCohortFrame() *contextfabric.QuestionFrame {
+	return &contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind:       contextfabric.SubjectExpressionDiscoveredKind,
+			Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectTeam},
+		},
+		Temporal: contextfabric.TemporalIntentCurrent,
+		Version:  contextfabric.QuestionFrameVersion,
 	}
 }
