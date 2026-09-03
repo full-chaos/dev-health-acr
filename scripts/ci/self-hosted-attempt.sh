@@ -5,7 +5,7 @@ set -euo pipefail
 # self-hosted attempt running in the sibling `ci-self-hosted` workflow.
 #
 # Runner-routing contract v1 (fleet-shared; see the PR body) puts the real
-# work on [self-hosted, oci-arc-runners] behind the repository variable
+# work on the oci-arc-runners scale set behind the repository variable
 # SELF_HOSTED_RUNNERS, and requires a GitHub-hosted leg that takes the work
 # back if the self-hosted attempt never starts. acr differs from ops in ONE
 # respect: the attempt lives in a SEPARATE workflow file rather than as a

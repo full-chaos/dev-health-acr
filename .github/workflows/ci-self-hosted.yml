@@ -64,7 +64,16 @@ jobs:
       vars.SELF_HOSTED_RUNNERS == 'enabled'
       && (github.event_name != 'pull_request'
       || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, oci-arc-runners]
+    # The scale-set name ALONE, with no `self-hosted` label beside it. An
+    # Actions Runner Controller gha-runner-scale-set assigns a job only when
+    # `runs-on` matches the scale set's name exactly; a label array -- even one
+    # whose entries are individually correct -- never matches, and the job sits
+    # queued until GitHub's 24-hour backstop with no error anywhere. Measured
+    # on the first pilot: the attempt job carrying [self-hosted,
+    # oci-arc-runners] stayed queued for over an hour with a healthy listener
+    # and zero assigned jobs, and the hosted leg took the work at its bound.
+    # The takeover is what made that survivable rather than red.
+    runs-on: oci-arc-runners
     # Kept in sync by hand with ATTEMPT_TIMEOUT_MINUTES in ci.yml's hosted
     # leg (workflow YAML has no cross-workflow expression for it); the hosted
     # leg allows this plus a three-minute reporting-lag buffer before it
