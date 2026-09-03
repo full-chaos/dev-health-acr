@@ -183,16 +183,24 @@ jobs:
   # build-self-hosted, race-self-hosted). There is no cross-workflow `needs`
   # in GitHub Actions, so this workflow cannot depend on ci.yml's own
   # mirror-preflight job -- it runs the identical check itself instead.
-  # Runs on ubuntu-latest rather than the pool: it is a cheap, read-only
-  # `docker buildx imagetools inspect` sweep with no reason to consume ARC
-  # capacity, and race-devhealthschema-self-hosted (which pulls no images)
-  # never needed it.
+  #
+  # Runs on the POOL, deliberately, not ubuntu-latest: this whole PR exists
+  # because the hosted queue backs up for an hour while the pool sits idle
+  # (chris: "use the damn box"). A hosted `needs:` dependency in front of
+  # unit-self-hosted/build-self-hosted/race-self-hosted would chain every
+  # one of them behind the exact hosted backlog they are being routed
+  # around -- caught live in this PR's own first CI run, where this job sat
+  # `queued` on ubuntu-latest for 9+ minutes while scripts-self-hosted had
+  # already completed on the pool. `docker buildx imagetools inspect` needs
+  # only the declared-present Docker daemon; buildx ships with the
+  # actions-runner base image's docker CLI.
   mirror-preflight-self-hosted:
     if: >-
       vars.SELF_HOSTED_RUNNERS == 'enabled'
       && (github.event_name != 'pull_request'
       || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, oci-arc-runners]
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: read
