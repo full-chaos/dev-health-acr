@@ -372,57 +372,76 @@ func TestReservedKinds_DoNotChangeCommitDecisions(t *testing.T) {
 // survives the reserve, with a guard that fails if the setup stops committing.
 func TestReservedKinds_DoNotChangeAnActualCommit(t *testing.T) {
 	t.Parallel()
-	build := func() map[string]contextfabric.SubjectCandidate {
-		pool := make(map[string]contextfabric.SubjectCandidate)
-		winner := contextfabric.SubjectCandidate{
-			Subject:      contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: "ci_winner", Label: "ci winner"},
-			State:        contractsv1.ContextFabricResolutionProposed,
-			Confidence:   1,
-			MatchReasons: []string{"exact"},
-			MatchMechanisms: []contractsv1.ContextFabricSubjectMatchMechanism{
-				contractsv1.ContextFabricMatchExact,
-			},
-		}
-		pool[SubjectKey(winner.Subject)] = winner
-		for i := 0; i < 5; i++ {
-			c := contextfabric.SubjectCandidate{
-				Subject:    contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: fmt.Sprintf("ci_%d", i)},
-				State:      contractsv1.ContextFabricResolutionAmbiguous,
-				Confidence: 0.5,
+	// A TABLE OVER COMMIT GATES, because `reservedKinds` is in scope at all
+	// seven of them and pinning one says nothing about the others. The first
+	// fixture routes through lone_floor (which needs EXACTLY ONE
+	// commit-eligible candidate, above LoneFloor=0.72, not an exact match);
+	// the second through exact_index. The gate each takes is asserted, so a
+	// fixture that silently starts committing through a different gate fails
+	// instead of quietly covering nothing.
+	cases := []struct {
+		name string
+		pool func() map[string]contextfabric.SubjectCandidate
+	}{
+		{"lone_floor", func() map[string]contextfabric.SubjectCandidate {
+			pool := make(map[string]contextfabric.SubjectCandidate)
+			lone := contextfabric.SubjectCandidate{
+				Subject:    contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_lone", Label: "Platform Team"},
+				State:      contractsv1.ContextFabricResolutionProposed,
+				Confidence: 0.8, // >= LoneFloor 0.72, and NOT 1.0, so not exact_index
+				MatchMechanisms: []contractsv1.ContextFabricSubjectMatchMechanism{
+					contractsv1.ContextFabricMatchLexical,
+				},
 			}
-			pool[SubjectKey(c.Subject)] = c
-		}
-		team := contextfabric.SubjectCandidate{
-			Subject:    contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_1", Label: "Platform Team"},
-			State:      contractsv1.ContextFabricResolutionAmbiguous,
-			Confidence: 0.2,
-		}
-		pool[SubjectKey(team.Subject)] = team
-		return pool
+			pool[SubjectKey(lone.Subject)] = lone
+			return pool
+		}},
+		{"exact_index", func() map[string]contextfabric.SubjectCandidate {
+			pool := make(map[string]contextfabric.SubjectCandidate)
+			winner := contextfabric.SubjectCandidate{
+				Subject:    contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_exact", Label: "Platform Team"},
+				State:      contractsv1.ContextFabricResolutionProposed,
+				Confidence: 1,
+				MatchMechanisms: []contractsv1.ContextFabricSubjectMatchMechanism{
+					contractsv1.ContextFabricMatchExact,
+				},
+			}
+			pool[SubjectKey(winner.Subject)] = winner
+			return pool
+		}},
 	}
-	call := func(reserved []contextfabric.SubjectKind) contextfabric.SubjectResolution {
-		res, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(
-			build(), map[string]string{}, map[string]bool{}, 3, true, false,
-			nil, 0, false, 10, 20, true,
-			DefaultCommitGatePolicy(), nil, nil, false, nil, "", "", false, false, reserved)
-		return res
-	}
-	without := call(nil)
-	with := call([]contextfabric.SubjectKind{contextfabric.SubjectTeam})
 
-	// NON-VACUITY, and this is the assertion the old test was missing: the
-	// population must actually COMMIT, or "commit unchanged" is a statement
-	// about nothing.
-	if len(without.Committed) == 0 {
-		t.Fatal("setup is vacuous: nothing committed even WITHOUT a reserve, so this cannot detect a commit change")
-	}
-	if len(with.Committed) != len(without.Committed) {
-		t.Fatalf("the reserve CHANGED the commit set: without=%v with=%v", without.Committed, with.Committed)
-	}
-	for i := range without.Committed {
-		if without.Committed[i] != with.Committed[i] {
-			t.Errorf("committed[%d] changed under a reserve: %v -> %v", i, without.Committed[i], with.Committed[i])
-		}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			call := func(reserved []contextfabric.SubjectKind) contextfabric.SubjectResolution {
+				res, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(
+					tc.pool(), map[string]string{}, map[string]bool{}, 10, true, false,
+					nil, 0, false, 10, 20, true,
+					DefaultCommitGatePolicy(), nil, nil, false, nil, "", "", false, false, reserved)
+				return res
+			}
+			without := call(nil)
+			with := call([]contextfabric.SubjectKind{contextfabric.SubjectTeam, contextfabric.SubjectRepository})
+
+			// NON-VACUITY. The old version of this test asserted commit
+			// equality over a population where BOTH arms were ambiguous, so
+			// it proved that ambiguity survives a reserve and never that a
+			// COMMIT does. If nothing commits here, the assertion below is
+			// about nothing.
+			if len(without.Committed) == 0 {
+				t.Fatalf("setup is vacuous: nothing committed WITHOUT a reserve, so a commit change is undetectable")
+			}
+			if len(with.Committed) != len(without.Committed) {
+				t.Fatalf("the reserve CHANGED the commit set: without=%v with=%v", without.Committed, with.Committed)
+			}
+			for i := range without.Committed {
+				if without.Committed[i] != with.Committed[i] {
+					t.Errorf("committed[%d] changed under a reserve: %v -> %v", i, without.Committed[i], with.Committed[i])
+				}
+			}
+		})
 	}
 }
 
