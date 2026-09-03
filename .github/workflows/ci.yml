@@ -115,6 +115,14 @@ jobs:
             --fixtures testdata/release-approvals
       - name: Verify CI workflow contract
         run: scripts/ci/test-workflow-contract.sh
+      # The self-hosted routing's run-selection and status-reading logic,
+      # its timeout branches, and the cross-file agreement between ci.yml
+      # and ci-self-hosted.yml. Every check has a negative control, because
+      # every defect this can carry is silent: a lookup that matches nothing
+      # makes the hosted leg quietly do all the work forever while every
+      # report says the routing works.
+      - name: Verify the self-hosted attempt selector
+        run: scripts/ci/test-self-hosted-attempt.sh
       # CHAOS-4855 R3: mirror-preflight and resolve-mirrored-images.sh only
       # verify the images this list's author already knew to add -- neither
       # notices a NEW or reintroduced bare-tag testcontainers image
@@ -361,19 +369,110 @@ jobs:
   # the round-robin split above (isolated_packages) so it is tested here
   # and only here; scripts/ci/test-shard-closure.sh proves the two together
   # still cover the whole module exactly once.
+  #
+  # Runner-routing contract v1: this job is also the GitHub-hosted FALLBACK
+  # LEG for the self-hosted attempt in the sibling `ci-self-hosted` workflow,
+  # and it is the sole source of truth for this lane's result. Nothing about
+  # its identity changes -- same job key, same display name, same runner,
+  # same command -- so `verify`, branch protection and
+  # scripts/ci/test-workflow-contract.sh all see exactly what they saw
+  # before. With the repository variable SELF_HOSTED_RUNNERS unset (the
+  # default), the wait step below is skipped outright, no API call is made,
+  # and this job runs precisely as it always has.
+  #
+  # When the switch IS on, the wait step polls the sibling run in two
+  # phases (scripts/ci/self-hosted-attempt.sh holds the logic and the
+  # reasoning) and reports one of three outcomes:
+  #   unclaimed        the attempt never left the queue inside the 5-minute
+  #                    bound -- this leg does the work itself, so a dead or
+  #                    saturated self-hosted pool costs latency, never a red
+  #                    build. This is the takeover chris asked for.
+  #   claimed-success  the attempt passed; this leg skips its own work and
+  #                    reports that success.
+  #   claimed-failure  the attempt actually ran and did not pass; this leg
+  #                    FAILS. That is deliberate and is the one case people
+  #                    expect to be a takeover and is not: an attempt that
+  #                    ran and failed has found something, and re-running it
+  #                    on a hosted runner would mask exactly the arm64
+  #                    behaviour this routing exists to learn about. Only a
+  #                    never-started attempt is taken over.
   race-devhealthschema:
     name: race (devhealthschema, isolated scope)
     runs-on: ubuntu-latest
+    # Narrower than the workflow default (contents+packages): this job pulls
+    # no packages, and needs `actions: read` only to see the sibling run's
+    # job list.
+    permissions:
+      contents: read
+      actions: read
     steps:
-      # actions/checkout v7.0.0
+      # actions/checkout v7.0.0. Unconditional, and FIRST, because the wait
+      # step below runs scripts/ci/self-hosted-attempt.sh out of this
+      # workspace -- gating the checkout on the outcome of a step that needs
+      # the checkout is a cycle. It costs a few seconds on the path where
+      # the self-hosted attempt already did the work, which is the cheapest
+      # part of this job by a wide margin.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
+      # Contract v1's two gates, identical to the sibling workflow's: the
+      # variable must be the literal string `enabled`, and fork pull requests
+      # never reach self-hosted capacity. Skipping this step (rather than
+      # branching inside it) is what makes the switch-off path cost nothing
+      # at all -- no token use, no API call, no added wall-clock.
+      - name: Wait for the self-hosted attempt, or claim the work here
+        id: wait
+        if: >-
+          vars.SELF_HOSTED_RUNNERS == 'enabled'
+          && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          # The PR head SHA on a pull request, the pushed SHA otherwise --
+          # always the full 40 characters, which the script re-validates
+          # before it queries: `?head_sha=` with an abbreviated SHA returns
+          # an empty list, and an empty list is indistinguishable from a
+          # self-hosted pool that is down.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.head_ref || github.ref_name }}
+          WORKFLOW_NAME: ci-self-hosted
+          WORKFLOW_PATH: .github/workflows/ci-self-hosted.yml
+          JOB_NAME: race-devhealthschema-self-hosted
+          QUEUE_TIMEOUT_MINUTES: 5
+          # Kept in sync by hand with the attempt job's own timeout-minutes
+          # in ci-self-hosted.yml; the script allows this plus three minutes
+          # of reporting lag before calling a started-but-unfinished attempt
+          # a failure.
+          ATTEMPT_TIMEOUT_MINUTES: 10
+        run: scripts/ci/self-hosted-attempt.sh wait
+      # An empty outcome means the step above was skipped -- switch off, or a
+      # fork PR -- which is the same instruction as `unclaimed`: do the work.
+      - name: Decide whether this leg owns the real work
+        id: own
+        env:
+          OUTCOME: ${{ steps.wait.outputs.outcome }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OUTCOME}" ] || [ "${OUTCOME}" = unclaimed ]; then
+            echo "run_here=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "run_here=false" >>"$GITHUB_OUTPUT"
+            printf 'self-hosted attempt reached a terminal state (%s); not repeating its work here\n' "${OUTCOME}"
+          fi
+      - name: Fail this leg if the self-hosted attempt itself failed
+        if: steps.own.outputs.run_here == 'false' && steps.wait.outputs.outcome == 'claimed-failure'
+        run: |
+          echo "the self-hosted attempt (race-devhealthschema-self-hosted in the ci-self-hosted workflow) did not succeed; failing this leg so the required gate reflects it" >&2
+          exit 1
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        if: steps.own.outputs.run_here == 'true'
         with:
           go-version: '1.27.0'
           cache: true
       - name: Run isolated devhealthschema race suite
+        if: steps.own.outputs.run_here == 'true'
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated)"
