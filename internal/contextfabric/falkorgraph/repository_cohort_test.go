@@ -549,3 +549,87 @@ func TestTeamCohortStillAsksForWorkload(t *testing.T) {
 		t.Errorf("FactRequirements %+v for a TEAM cohort must still carry both %q and %q; a merge that served nothing for every kind would pass the repository assertion and break every team answer", result.FactRequirements, contextfabric.FactHealth, contextfabric.FactWorkload)
 	}
 }
+
+// THE REFUSAL PATHS, DRIVEN THROUGH THE READER. This is round 1's finding.
+//
+// Every test above drives DiscoverContext and asserts the cohort-kind basis on
+// a SERVED turn. Nothing drove a REFUSED turn through the reader, and the
+// telemetry sink test calls SlogTelemetry directly, so between them they left
+// the reader's own emit unpinned on exactly the paths it exists for.
+//
+// The surviving mutation, executed rather than argued: narrowing the guard at
+// reader.go to `a.config.Telemetry != nil && cohort != nil` compiles, keeps
+// both packages green across the entire battery, and silently deletes the
+// diagnostic on every refusal. That is not a cosmetic loss. The line is
+// emitted on EVERY call precisely because "the frame was absent" and "the
+// graph had no matching nodes" used to be indistinguishable, and this whole
+// change exists so a refusal can NAME the kind it refused -- the property that
+// settled what "open incidents per repository" actually declares. A mutation
+// that removes it must fail loudly.
+//
+// The four bases below are every basis a refusal can carry, so this also
+// pins the empty-kind mirror END TO END rather than only at the sink.
+func TestEveryRefusalPathEmitsItsBasisThroughTheReader(t *testing.T) {
+	named := contextfabric.SubjectExpression{
+		Kind:  contextfabric.SubjectExpressionNamed,
+		Named: &contextfabric.NamedSubjectExpression{Terms: []string{"platform"}},
+	}
+	explicit := contextfabric.SubjectExpression{
+		Kind: contextfabric.SubjectExpressionExplicitSet,
+		Explicit: &contextfabric.ExplicitSetExpression{Operands: []contextfabric.SubjectOperand{
+			{Kind: contextfabric.SubjectOperandNamed, Named: &contextfabric.NamedSubjectExpression{Terms: []string{"acr"}}},
+		}},
+	}
+	unservable := contextfabric.SubjectExpression{
+		Kind:       contextfabric.SubjectExpressionDiscoveredKind,
+		Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectIncident},
+	}
+
+	for _, testCase := range []struct {
+		name         string
+		frameAbsent  bool
+		expression   contextfabric.SubjectExpression
+		wantBasis    graphrank.CohortKindBasis
+		wantDeclared contextfabric.SubjectKind
+	}{
+		{"frame absent", true, contextfabric.SubjectExpression{}, graphrank.CohortKindFrameAbsent, ""},
+		{"not a cohort variant", false, named, graphrank.CohortKindNotACohortVariant, ""},
+		{"no member kind", false, explicit, graphrank.CohortKindNoMemberKind, ""},
+		// The one basis that HAS a kind to report, and the reason the key
+		// was added: a refusal that cannot name the kind it refused sends
+		// the next reader to the question text.
+		{"member kind unservable", false, unservable, graphrank.CohortKindMemberKindUnservable, contextfabric.SubjectIncident},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fake := censusServingConn([]row{repositoryNodeRow("repo_acr", "dev-health-acr")})
+			telemetry := &recordingTelemetry{}
+			adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+
+			request := repositoryCohortRequest(testCase.expression, "a question that will be refused", 10)
+			if testCase.frameAbsent {
+				request.Frame = nil
+			}
+
+			result, err := adapter.DiscoverContext(context.Background(), repositoryPrincipal(), request)
+			if err != nil {
+				t.Fatalf("DiscoverContext() error = %v", err)
+			}
+			if result.Cohort != nil {
+				t.Fatalf("a refused turn built a %q cohort", result.Cohort.Kind)
+			}
+			if len(telemetry.cohortKindBases) != 1 {
+				t.Fatalf("cohortKindBases = %+v, want exactly 1 event -- a refusal that emits nothing is the diagnostic disappearing", telemetry.cohortKindBases)
+			}
+			got := telemetry.cohortKindBases[0]
+			if got.basis != testCase.wantBasis {
+				t.Errorf("basis = %q, want %q", got.basis, testCase.wantBasis)
+			}
+			if got.declaredKind != testCase.wantDeclared {
+				t.Errorf("declared kind = %q, want %q", got.declaredKind, testCase.wantDeclared)
+			}
+			if got.discovered {
+				t.Error("a refusal reported discovered=true")
+			}
+		})
+	}
+}
