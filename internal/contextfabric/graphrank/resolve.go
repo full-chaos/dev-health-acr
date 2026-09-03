@@ -1449,8 +1449,8 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// not the production path; production goes through
 	// ResolveSubjectsWithCommitBasis, which the adapter calls with the
 	// carried frame. A nil frame yields no kind hints, which is the same
-	// fail-safe `inferredKindHints` documented for a question whose text
-	// gave no signal -- "no hint, no call", byte-identical pool.
+	// fail-safe the deleted keyword matcher documented for a question whose
+	// text gave no signal -- "no hint, no call", byte-identical pool.
 	resolution, offerMaterial, _, _, err := ResolveSubjectsWithCommitBasis(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, nil)
 	return resolution, offerMaterial, err
 }

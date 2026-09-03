@@ -148,8 +148,28 @@ func PlanAnswer(input PlanAnswerInput) AnswerPlan {
 	// emission -- the exact failure mode CHAOS-4632's gate measured for,
 	// finding 0 across 18 labelled negative cases -- partition an answer
 	// that nobody asked to have partitioned.
+	//
+	// SEAM 7 (CHAOS-4736) changed the SOURCE, not the field. The name
+	// stays `plan.GroupKind` and every existing reader of it -- the grouped
+	// cohort assembly, the plan contract's own GroupKind != MemberKind
+	// refusal -- is untouched. What changed is where the value comes from:
+	// the frame's `grouped_members.group_kind`, a field whose invariant I6
+	// already forbids equalling MemberKind, in preference to the winning
+	// sample's loose GroupKind capture.
+	//
+	// The sample remains the source for a turn with NO validated frame,
+	// and that is not a prose fallback: the sample's GroupKind is itself a
+	// closed-vocabulary model emission, sanitized, never a substring match.
+	// It is the pre-seam-7 path preserved for the turns the frame did not
+	// reach, and such a turn discovers no cohort anyway, so the axis has
+	// nothing to group.
 	if definition.SubjectAxis == SubjectAxisManyGrouped {
 		plan.GroupKind = input.Family.WinningSample.GroupKind
+		if input.Family.Frame != nil {
+			if groupKind, ok := input.Family.Frame.SubjectExpression.GroupKind(); ok {
+				plan.GroupKind = groupKind
+			}
+		}
 	}
 	return plan
 }

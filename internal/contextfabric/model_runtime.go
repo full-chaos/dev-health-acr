@@ -1638,9 +1638,32 @@ func (r RuntimeQuestionInterpreter) recordFamilyResolution(ctx context.Context, 
 		outcome.FrameObligations = append([]AnswerObligation(nil), receipt.QuestionFrame.Obligations...)
 	}
 	shadow := ShadowFamilyAgreement(receipt, outcome)
+	// SEAM 7 (CHAOS-4736): the shadow stops being only a measurement here.
+	//
+	// The comparison above still runs at the one point where both readings
+	// of a single interpretation exist at once -- that placement is what
+	// makes the two families comparable at all, and it is unchanged. What
+	// changed is that the decision table is now CONSULTED: for the classes
+	// it routes to the projection, the projected family is what reaches the
+	// plan, the offer, the budget and the wire.
+	//
+	// The route is applied ONLY when a frame was actually observed. With no
+	// validated frame there is no projection to route to, and the
+	// precedence table decides exactly as it did before this slice -- the
+	// same fail-safe every other seam-7 consumer takes for a missing frame.
+	route := FamilyRouteDecision{
+		Family: outcome.Family, Source: FamilyRoutePrecedence,
+		Class: FamilyAgreementAgreed, Disposition: FamilyRouteIdentical,
+	}
+	if shadow.FrameObserved {
+		route = RouteQuestionFamily(shadow.Agreement)
+		outcome.Family = route.Family
+	}
+	outcome.Route = route
 	if r.FamilyTelemetry != nil {
 		event := QuestionFamilyResolutionEventFrom(outcome, samples)
 		event.Shadow = shadow
+		event.Route = route
 		r.FamilyTelemetry.RecordQuestionFamilyResolution(ctx, principal, event)
 	}
 	return outcome

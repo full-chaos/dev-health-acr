@@ -706,6 +706,26 @@ func (t SlogEngineTelemetry) RecordQuestionFamilyResolution(ctx context.Context,
 		"shadow_agreement_class", string(event.Shadow.Agreement.Class),
 		"shadow_agreed", event.Shadow.Agreement.Agreed,
 	)
+	// SEAM 7's ROUTING DECISION (CHAOS-4736), on the same sink discipline:
+	// every field on the struct reaches this line.
+	//
+	// `family_source` is the axis the flip is read on and is deliberately
+	// NOT merged with `source` above: that one names where the PRECEDENCE
+	// table's inputs came from (model / carried / none), this one names
+	// which TABLE decided the served family. Splicing two different
+	// questions into one key is how a rate stops meaning anything.
+	//
+	// `route_switched` is logged beside `family_source` because they are
+	// not the same fact: the `agreed` class serves the PROJECTED family and
+	// switches nothing, which is exactly why 21 of the 25 measured rows
+	// were safe. A reader counting switches off family_source alone would
+	// report every agreeing answer as a behaviour change.
+	args = append(args,
+		"family_source", string(event.Route.Source),
+		"route_class", string(event.Route.Class),
+		"route_disposition", string(event.Route.Disposition),
+		"route_switched", event.Route.Switched,
+	)
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric question family resolution", args...)
 }

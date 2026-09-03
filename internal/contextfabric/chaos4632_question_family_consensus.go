@@ -82,6 +82,15 @@ type QuestionFamilyOutcome struct {
 	// NOT removed here because the B8 shadow already reads it and a
 	// subtractive change to a shipped reader is not this slice's business.
 	Frame *QuestionFrame
+	// Route is seam 7's routing decision: which table produced Family,
+	// which agreement class it was keyed on, and why that class routes the
+	// way it does.
+	//
+	// Family above is ALREADY the routed value -- Route is the record of
+	// how it got there, not a second thing to consult. A reader that
+	// branched on Route.Source to pick a family would be re-deciding a
+	// decision already made, which is how the two would drift.
+	Route FamilyRouteDecision
 	// FrameObligations is the VALIDATED frame's derived obligation set for
 	// this interpretation, empty when no frame reached validation.
 	//

@@ -532,10 +532,13 @@ ORDER BY project_key, scope, scope_id`)
 	// a usable severity either. Below, the freshest daily_health day's
 	// declared Measure (compounding_risk only, NOT severity) is now copied
 	// in under its own field name. healthRiskSignal is subject-kind-blind
-	// and project cohorts ARE constructed in production
-	// (graphrank/discover.go's interpretedCohortKind, on a
-	// "project"/"initiative" question) -- corrected from an earlier,
-	// incorrect claim to the contrary (codex round 1 finding). Deliberately
+	// and project cohorts ARE constructed in production (graphrank's
+	// DiscoveredCohort, for a frame whose subject expression declares
+	// member_kind "project"; before CHAOS-4736 the same cohorts arrived
+	// through a keyword match on a "project"/"initiative" question, which
+	// is the mechanism this comment used to cite) -- corrected from an
+	// earlier, incorrect claim to the contrary (codex round 1 finding).
+	// Deliberately
 	// copying only compounding_risk, never severity, keeps RankCohort
 	// behavior unaffected for now; a project cohort's health-risk signal
 	// stays unavailable exactly as before, until that generalization is
@@ -633,10 +636,12 @@ ORDER BY project_key, scope, scope_id`)
 			// (CHAOS-4680's Observation, not a Measure), is exactly the
 			// field name healthRiskSignal (cohort_ranking.go) reads off ANY
 			// FactHealth fact regardless of subject kind, and project
-			// cohorts ARE constructed in production
-			// (graphrank/discover.go's interpretedCohortKind, on a
-			// "project"/"initiative" question -- codex round 1 finding,
-			// confirmed). Copying severity here would silently start
+			// cohorts ARE constructed in production (graphrank's
+			// DiscoveredCohort, for a frame declaring member_kind
+			// "project"; before CHAOS-4736 the same cohorts arrived through
+			// a keyword match on a "project"/"initiative" question -- codex
+			// round 1 finding, confirmed). Copying severity here would
+			// silently start
 			// feeding project cohorts into health-risk ranking, a real
 			// behavior change this ticket never reviewed or tested. Copying
 			// only the declared Measure satisfies this ticket's actual

@@ -39,10 +39,10 @@ import (
 // permits ("Hardcode only where determinism is a safety property
 // (contracts, receipts, validation, fact grounding)"). There is no string
 // matching against question text anywhere in this slice. The two keyword
-// matchers that do decide structure from prose today
-// (graphrank.interpretedCohortKind, graphrank.inferredKindHints) are L6
-// inventory rows 1 and 2 and are DELETED by the retrieval slice; nothing
-// here adds a third.
+// matchers that used to decide structure from prose were L6 inventory rows
+// 1 and 2, and CHAOS-4736 (seam 7) DELETED both -- their identifiers are
+// deliberately not spelled here, because that ticket's acceptance is a grep
+// showing no declaration and no caller. Nothing here adds a third.
 
 // InvestigationGoal is the closed vocabulary of what the user is asking
 // the system to establish. Design §13.2.2, EIGHT members.
