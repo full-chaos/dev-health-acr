@@ -1440,9 +1440,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	// Same-conversation expected_kind carry (structure_axis_carry.go), the
 	// structure-axis twin of the window carry above. Attempted ONLY when
-	// this turn confirmed no kind of its own -- a kindr_ receipt redeemed on
-	// THIS request is the caller stating a kind now, and an inherited value
-	// must never override what the caller just said.
+	// this turn states no kind of its own -- by receipt OR explicitly. A kind
+	// stated on THIS request is the caller speaking now, and an inherited
+	// value must never override it; see statedExpectedKindThisTurn for why
+	// the explicit case is a validity requirement, not just precedence.
 	//
 	// Placed here, before the CHAOS-4234 gate below, so BOTH the gated
 	// offers-only resolution and the decisive resolution read the same
@@ -1450,7 +1451,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// axes are independent (each fails closed on its own), and a window
 	// carry miss must not suppress a kind carry hit.
 	var kindCarry kindCarryResult
-	if confirmedExpectedKind(structureCanon.Confirmed) == nil {
+	if !statedExpectedKindThisTurn(structureCanon) {
 		kindCarry = e.resolveCarriedKind(carryCtx, principal, request, priorValidatedReceipts, binding)
 		e.recordKindCarry(ctx, principal, kindCarry)
 	}

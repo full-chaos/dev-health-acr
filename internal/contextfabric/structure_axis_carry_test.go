@@ -650,3 +650,115 @@ func TestKindCarry_IsDisclosedOnTheClassDefaultWindowGate(t *testing.T) {
 	}
 	t.Fatalf("ConfirmedStructure = %#v, want an entry %#v: the gate's own terminal must disclose a carry that shaped its offers", result.ConfirmedStructure, want)
 }
+
+// TestResolveCarriedKind_DoesNotDescendPastATruncatedDepth is codex round 2's
+// first finding. Rejecting a hit found AT a truncated depth is not enough: if
+// that depth yields no hit at all, the walk used to descend and return a
+// deeper one. Both rest on the same unproven assumption -- that the
+// candidates we could not read carry nothing that matters.
+//
+// It matters twice over here. "Nearest confirmation wins" is this walk's own
+// rule, so an unread sibling at depth 0 may hold a NEARER confirmation than
+// the depth-1 hit, and it may hold a CONFLICTING one. The fixture below makes
+// both true at once: the unreadable depth-0 sibling says `project`, the
+// reachable depth-1 result says `team`. A regression answers `team` while a
+// nearer, unread result said otherwise.
+func TestResolveCarriedKind_DoesNotDescendPastATruncatedDepth(t *testing.T) {
+	t.Parallel()
+	// Depth 0, readable, confirms nothing itself but breadcrumbs to depth 1.
+	breadcrumb := validInvestigationResult()
+	breadcrumb.ResultID = "result_depth0_breadcrumb"
+	breadcrumb.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{{
+		Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: "trailing_30d",
+		Source: contractsv1.ContextFabricStructureSourceReceipt, PriorResultID: "result_depth1",
+		ReceiptID: "winr_depth1_01", Provenance: contractsv1.ContextFabricStructureClarificationConfirmed,
+		Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+	}}
+	// Depth 0, UNREADABLE (refused by the epoch taint gate), and it holds a
+	// conflicting kind that the walk must never get to ignore.
+	unreadable := validInvestigationResult()
+	unreadable.ResultID = "result_depth0_unreadable"
+	unreadable.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+		confirmedKindEntry(contractsv1.ContextFabricSubjectProject, "result_older", "kindr_older_01"),
+	}
+	// Depth 1, readable, confirms a DIFFERENT kind.
+	deeper := validInvestigationResult()
+	deeper.ResultID = "result_depth1"
+	deeper.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+		confirmedKindEntry(contractsv1.ContextFabricSubjectTeam, "result_older", "kindr_older_02"),
+	}
+	store := &perResultEpochStore{
+		staticResultStore: staticResultStore{results: map[string]InvestigationResult{
+			"result_depth0_breadcrumb": breadcrumb,
+			"result_depth0_unreadable": unreadable,
+			"result_depth1":            deeper,
+		}},
+		epochs: map[string]int64{
+			"result_depth0_breadcrumb": 0,
+			"result_depth0_unreadable": 7, // refused
+			"result_depth1":            0,
+		},
+	}
+	engine := buildCarryTestEngine(t, store)
+
+	request := validInvestigationRequest()
+	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_depth0_breadcrumb", ReceiptID: "candr_depth0_01"}}
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_depth0_unreadable", ReceiptID: "kindr_depth0_01"}}
+
+	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	if got.Outcome == KindCarryHit {
+		t.Fatalf("resolveCarriedKind() = %#v, want a miss: the walk must not descend past a depth it could not finish reading", got)
+	}
+	if got.Kind != "" {
+		t.Fatalf("resolveCarriedKind().Kind = %q, want empty", got.Kind)
+	}
+	if got.Outcome != KindCarryMissStaleGraphEpoch {
+		t.Fatalf("resolveCarriedKind().Outcome = %q, want %q -- the reason the depth was truncated, reported at that depth", got.Outcome, KindCarryMissStaleGraphEpoch)
+	}
+}
+
+// TestKindCarry_ExplicitExpectedKindBlocksTheCarry is codex round 2's second
+// finding, and it is a VALIDITY bug rather than a disclosure one. An explicit
+// ExpectedKinds value is echoed on the result by composeConfirmedStructure; a
+// carried entry appended alongside it puts TWO expected_kind entries on one
+// result, and the v1 validator rejects that outright ("one entry per member").
+// So a request that both states a kind and names a carryable prior result
+// would fail validation rather than answer.
+//
+// Blocking the carry is also the right precedence independently: the caller
+// stated a kind on THIS turn, and a carry fills a silence.
+func TestKindCarry_ExplicitExpectedKindBlocksTheCarry(t *testing.T) {
+	t.Parallel()
+	canon := requestStructureCanonicalization{
+		Explicit: []explicitStructureMember{{
+			Member:       contractsv1.ContextFabricStructureNeedExpectedKind,
+			AppliedValue: string(contractsv1.ContextFabricSubjectProject),
+			Source:       contractsv1.ContextFabricStructureSourceExplicitUnattributed,
+			Provenance:   contractsv1.ContextFabricStructureInferredDefault,
+		}},
+	}
+	if !statedExpectedKindThisTurn(canon) {
+		t.Fatal("statedExpectedKindThisTurn(explicit expected_kind) = false, want true: an explicit kind must block the carry, or the result carries two expected_kind entries and fails validation")
+	}
+	// A receipt-confirmed kind blocks it too (the pre-existing precedence).
+	confirmedOnly := requestStructureCanonicalization{
+		Confirmed: []confirmedStructureMember{{
+			Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam),
+		}},
+	}
+	if !statedExpectedKindThisTurn(confirmedOnly) {
+		t.Fatal("statedExpectedKindThisTurn(receipt-confirmed kind) = false, want true")
+	}
+	// An explicit member for a DIFFERENT axis must not block it.
+	otherAxis := requestStructureCanonicalization{
+		Explicit: []explicitStructureMember{{
+			Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedValue: "acr-123",
+		}},
+	}
+	if statedExpectedKindThisTurn(otherAxis) {
+		t.Fatal("statedExpectedKindThisTurn(explicit subject_handle) = true, want false: only the kind axis blocks the kind carry")
+	}
+	if statedExpectedKindThisTurn(requestStructureCanonicalization{}) {
+		t.Fatal("statedExpectedKindThisTurn(nothing stated) = true, want false")
+	}
+}

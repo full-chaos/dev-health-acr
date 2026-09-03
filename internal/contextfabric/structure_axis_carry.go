@@ -193,24 +193,29 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 				next = append(next, id)
 			}
 		}
+		if depthTruncated {
+			// This depth was not scanned to the end, so the walk stops here
+			// -- it neither returns a hit found at this depth nor descends
+			// past it (codex round 2). Both would rest on the same unproven
+			// assumption: that the candidates we could NOT read carry
+			// nothing that matters. An unread sibling at this depth may hold
+			// a conflicting kind, and -- because "nearest confirmation wins"
+			// is this walk's own rule -- it may equally hold a NEARER one
+			// than anything a deeper hit could offer. Descending would
+			// silently prefer the far confirmation over an unread near one.
+			switch {
+			case capExceeded:
+				return kindCarryResult{Outcome: KindCarryMissDepthExceeded, ChainDepth: depth}
+			case sawStaleEpoch:
+				return kindCarryResult{Outcome: KindCarryMissStaleGraphEpoch, ChainDepth: depth}
+			default:
+				return kindCarryResult{Outcome: KindCarryMissUnloadable, ChainDepth: depth}
+			}
+		}
 		if len(hits) > 0 {
 			for _, h := range hits[1:] {
 				if h.Kind != hits[0].Kind {
 					return kindCarryResult{Outcome: KindCarryMissConflictingKinds, ChainDepth: depth}
-				}
-			}
-			if depthTruncated {
-				// Scanned candidates all agree, but the depth was not fully
-				// scanned, so uniqueness is unproven. Report what truncated
-				// it, in the same precedence the exhausted-walk exit below
-				// uses.
-				switch {
-				case capExceeded:
-					return kindCarryResult{Outcome: KindCarryMissDepthExceeded, ChainDepth: depth}
-				case sawStaleEpoch:
-					return kindCarryResult{Outcome: KindCarryMissStaleGraphEpoch, ChainDepth: depth}
-				default:
-					return kindCarryResult{Outcome: KindCarryMissUnloadable, ChainDepth: depth}
 				}
 			}
 			return hits[0]
@@ -275,6 +280,37 @@ func carriableConfirmedKind(prior InvestigationResult) (contractsv1.ContextFabri
 // treats a carried kind exactly as it treats a kind confirmed on this turn,
 // which is the whole point of a carry. A second, parallel path would make
 // the two diverge.
+// statedExpectedKindThisTurn reports whether THIS request already carries an
+// expected_kind of its own -- by redeemed receipt (Confirmed) or as the
+// caller's own explicit value (Explicit).
+//
+// Both block the carry, for one reason and one consequence (codex round 2).
+// The reason: a kind stated on this turn is the caller speaking now, and the
+// carry exists to fill a silence, not to argue with a statement -- the same
+// precedence effectiveConfirmedKind applies to the receipt case. The
+// consequence, which is what makes this load-bearing rather than tidy: an
+// explicit member is echoed by composeConfirmedStructure, so appending a
+// carried entry alongside it would put TWO expected_kind entries on one
+// result, and the v1 result validator rejects that outright ("one entry per
+// member"). The request would fail validation rather than merely disclose
+// oddly.
+//
+// Note the asymmetry with ConfirmedExpectedKind: an explicit kind still does
+// NOT become one (that type's own tripwire, ports.go, admits only
+// receipt-confirmed values). It blocks the carry without gaining the carry's
+// authority.
+func statedExpectedKindThisTurn(canon requestStructureCanonicalization) bool {
+	if confirmedExpectedKind(canon.Confirmed) != nil {
+		return true
+	}
+	for _, e := range canon.Explicit {
+		if e.Member == contractsv1.ContextFabricStructureNeedExpectedKind {
+			return true
+		}
+	}
+	return false
+}
+
 func effectiveConfirmedKind(confirmed []confirmedStructureMember, carry kindCarryResult) *ConfirmedExpectedKind {
 	if own := confirmedExpectedKind(confirmed); own != nil {
 		return own
