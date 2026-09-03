@@ -118,34 +118,8 @@ func TestPlanAnswerClampsMembersBelowTheItemBudget(t *testing.T) {
 	if plan.Budget.MaxMembers >= 30 {
 		t.Fatalf("MaxMembers = %d, want strictly below the 30-item budget", plan.Budget.MaxMembers)
 	}
-	// The clamp is the TIGHTER of two reservations, not the headroom one
-	// alone. The flat headroom (MaxItems - SynthesisHeadroom) models synthesis
-	// as a fixed cost; the per-member prediction models it as a rate, and for
-	// any profile with a measured rate the rate binds first. Asserting only
-	// the headroom arm let a 10-member clamp stand against a measured 3.90
-	// items/member -- a predicted 39 items against this same 30-item budget.
-	// See cohort_item_prediction_test.go for the rig measurement that pins the
-	// rate, and testdata/grouped_cohort_item_ratio.json for its authority.
-	headroomArm := 30 - plan.Budget.SynthesisHeadroom
-	predictedArm := predictedMemberAllowance(PlanBudgetGroupedCohort, 30)
-	want := headroomArm
-	if predictedArm > 0 && predictedArm < want {
-		want = predictedArm
-	}
-	if plan.Budget.MaxMembers != want {
-		t.Fatalf("MaxMembers = %d, want min(MaxItems(30)-headroom(%d)=%d, predicted-allowance=%d) = %d",
-			plan.Budget.MaxMembers, plan.Budget.SynthesisHeadroom, headroomArm, predictedArm, want)
-	}
-	// Both arms must actually be exercised by this fixture, or the min above
-	// is decided by an absent value and the assertion proves only that one
-	// path works. This is the profile that HAS a measurement, so the
-	// predicted arm must be the binding one here.
-	if predictedArm <= 0 {
-		t.Fatal("predicted allowance is zero for the grouped profile: the per-member arm is not being exercised")
-	}
-	if predictedArm >= headroomArm {
-		t.Fatalf("predicted allowance %d does not bind against headroom arm %d; this fixture no longer tests the tighter-of-two rule",
-			predictedArm, headroomArm)
+	if plan.Budget.MaxMembers != 30-plan.Budget.SynthesisHeadroom {
+		t.Fatalf("MaxMembers = %d, want MaxItems(30) - headroom(%d)", plan.Budget.MaxMembers, plan.Budget.SynthesisHeadroom)
 	}
 	if plan.Budget.NarrowingBasis != contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical {
 		t.Fatalf("NarrowingBasis = %q -- stage 1 must DECLARE its arbitrary-but-stable order even when it does not act", plan.Budget.NarrowingBasis)

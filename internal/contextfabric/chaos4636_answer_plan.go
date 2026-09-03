@@ -91,84 +91,35 @@ func planSynthesisHeadroom(profile PlanBudgetProfile) int {
 	return 0
 }
 
-// planSynthesisItemsPerMemberCentis is the measured upper bound on how many
-// items a synthesized answer charges PER COHORT MEMBER, in hundredths so the
-// budget arithmetic stays integer (a float ceiling in a budget is a rounding
-// argument nobody wins twice).
+// PredictedAnswerItems is what the PLAN ITSELF budgeted a cohort of this size
+// to cost: one item per member, plus the synthesis headroom the profile
+// reserved for what synthesis adds on top. It is the plan's own arithmetic, not
+// a second model of it -- every term is a field the plan already publishes.
 //
-// It counts the member's OWN item plus everything synthesis attaches to it --
-// per-member drivers and the claimed facts that cite them. It is the
-// per-member half of what planSynthesisHeadroom estimates as a constant, and
-// it exists because that comment's own instruction ("If the measured value
-// differs, THIS TABLE is what moves, and the narrowing telemetry is what says
-// by how much") turned out to require a different SHAPE of value, not just a
-// different number: no constant is correct at two cohort sizes.
+// It exists to be logged BESIDE the measured count, because the plan's
+// expectation is exactly the thing that turned out to be wrong on the rig and
+// there was no way to see that from the artifacts. Measured against this
+// prediction, a grouped answer of 7 members came in anywhere from 21 to 41
+// items against a predicted 27 (testdata/grouped_cohort_item_ratio.json).
 //
-// ZERO means "not measured for this profile", and zero is the honest default.
-// A profile without a rig measurement keeps the flat-headroom clamp alone --
-// inventing a per-member rate for it would narrow answers that had room, which
-// is the same mistake in the opposite direction.
-//
-// The value is the WORST measured ratio, not the mean: a clamp sized on the
-// mean refuses about half the time, which is precisely the 1-of-7 fit rate the
-// fixture records.
-func planSynthesisItemsPerMemberCentis(profile PlanBudgetProfile) int {
-	switch profile {
-	case PlanBudgetGroupedCohort:
-		// 3.90 items/member, the worst of 7 rig requests
-		// (req_77031712014f40a535052f4507ba86b4, 39 items over 10 members).
-		// A grouped answer carries per-group drivers on top of per-member
-		// ones, which is why this profile is the first to need the shape.
-		return 390
-	}
-	// Every other profile: no rig measurement yet, so no prediction.
-	return 0
-}
-
-// predictedMemberAllowance is the largest member count whose PREDICTED item
-// total still fits maxItems, or zero when the profile has no measured
-// per-member rate. Integer floor division is deliberate: it rounds toward the
-// safer answer.
-func predictedMemberAllowance(profile PlanBudgetProfile, maxItems int) int {
-	centis := planSynthesisItemsPerMemberCentis(profile)
-	if centis <= 0 || maxItems <= 0 {
+// Deliberately NOT a per-member rate. An earlier revision of this function
+// predicted from a measured items-per-member ratio and used it to clamp the
+// cohort; the rig then showed the ratio RISES as the cohort shrinks (2.80-3.90
+// at 10 members, 3.00-5.86 at 7), so total items are largely insensitive to
+// member count and the rate was not a property of the system. Publishing a
+// prediction from that model would be a number that looks like evidence.
+func PredictedAnswerItems(headroom, members int) int {
+	if members <= 0 || headroom < 0 {
 		return 0
 	}
-	return maxItems * 100 / centis
-}
-
-// PredictedAnswerItems is what predictedMemberAllowance's clamp is predicting:
-// the item total a cohort of `members` is expected to produce under this
-// profile's measured per-member rate. Exported for the narrowing telemetry, so
-// an operator can read PREDICTED beside MEASURED on the same line and see the
-// estimate drift before it becomes a refusal -- which is the only way this
-// table gets corrected without another incident.
-//
-// Zero when the profile has no measured rate; a telemetry field that is absent
-// is honest, one that reports a guess is not.
-func PredictedAnswerItems(profile PlanBudgetProfile, members int) int {
-	centis := planSynthesisItemsPerMemberCentis(profile)
-	if centis <= 0 || members <= 0 {
-		return 0
-	}
-	// Ceiling: a prediction that rounds DOWN is the one that lets an overrun
-	// through, and this number's whole job is to be compared against a ceiling.
-	return (members*centis + 99) / 100
+	return members + headroom
 }
 
 // PredictedItemsForPlan is PredictedAnswerItems addressed by the plan a
-// telemetry site already holds, so a caller does not have to re-derive the
-// budget profile (and cannot derive a DIFFERENT one, which would publish a
-// prediction the clamp never made).
-//
-// Zero for a family the registry does not know or a profile with no measured
-// rate -- the same "absent rather than guessed" rule as PredictedAnswerItems.
+// telemetry site already holds, so a caller cannot pair a measurement with a
+// prediction derived from a different budget than the one that planned it.
 func PredictedItemsForPlan(plan AnswerPlan, members int) int {
-	definition, ok := LookupQuestionFamily(plan.Family)
-	if !ok {
-		return 0
-	}
-	return PredictedAnswerItems(definition.Budget, members)
+	return PredictedAnswerItems(plan.Budget.SynthesisHeadroom, members)
 }
 
 // PlanAnswerInput is everything PlanAnswer is allowed to see. It is a struct
@@ -367,20 +318,6 @@ func planBudget(profile PlanBudgetProfile, budget ResponseBudget, maxCohortMembe
 		// clamp guessing at it would narrow answers that had room. Stage 3
 		// charges them, where they exist.
 		allowance := budget.MaxItems - headroom
-		// A CONSTANT headroom models synthesis output as a fixed cost, but the
-		// drivers and claimed facts it reserves for are charged PER MEMBER, so
-		// the reservation is only correct at one cohort size. Measured on the
-		// rig for the grouped profile (testdata/grouped_cohort_item_ratio.json,
-		// 7 requests, org 70d529e0, real data): 10 members produced 28 to 39
-		// items against a 30-item ceiling -- 2.80 to 3.90 items per member, and
-		// only 1 of the 7 fit. Where a per-member figure has been MEASURED for
-		// a profile, predict from it and take whichever clamp is tighter; the
-		// flat headroom stays in force for the profiles that have no
-		// measurement yet, because a guessed per-member rate would narrow
-		// answers that had room.
-		if predicted := predictedMemberAllowance(profile, budget.MaxItems); predicted > 0 && predicted < allowance {
-			allowance = predicted
-		}
 		if allowance < 1 {
 			// A budget smaller than its own headroom still admits one
 			// member. Zero members is not a narrower answer, it is a
