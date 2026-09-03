@@ -430,7 +430,7 @@ func TestEveryPublishedSubjectKindEnumAgrees(t *testing.T) {
 	})
 	for _, s := range sites {
 		if len(s.values) != len(want) {
-			t.Errorf("%s %s publishes %d cohort kinds, want %d: %v", s.document, s.pointer, len(s.values), len(want), s.values)
+			t.Errorf("%s %s publishes %d subject kind(s), want the full %d: %v", s.document, s.pointer, len(s.values), len(want), s.values)
 			continue
 		}
 		for i := range want {
