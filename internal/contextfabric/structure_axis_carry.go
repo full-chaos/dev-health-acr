@@ -314,6 +314,29 @@ func statedExpectedKindThisTurn(request InvestigationRequest, canon requestStruc
 	if len(request.ExpectedKinds) > 0 {
 		return true
 	}
+	// ANY receipt redeemed this turn that names a KIND counts as the caller
+	// stating one, not just a kind receipt (design review S2). Every redeemed
+	// member records its offer's own kind on AppliedKind (structure.go), and
+	// two of them are the caller picking a subject OF a kind: a candidate
+	// receipt names a specific ranked subject, an anchor receipt names the
+	// scope anchor. The failure this prevents is the sharpest the carry has,
+	// because the value at risk is one the caller chose explicitly THIS turn:
+	// pick a team candidate from a prior result whose own kind was never
+	// confirmed, and the walk descends past it, inherits `project` from
+	// further back, and narrows the pool until the chosen team candidate is
+	// filtered out of it.
+	//
+	// Blocking outright rather than comparing values: when the carried kind
+	// AGREES with what the receipt named, blocking costs only the extra
+	// narrowing, and the caller has already committed to a specific subject
+	// anyway. A compare-and-conflict branch would buy that narrowing back at
+	// the price of a second failure mode, on the one path where the caller's
+	// own choice is what is at stake.
+	for _, c := range canon.Confirmed {
+		if c.AppliedKind != "" {
+			return true
+		}
+	}
 	for _, e := range canon.Explicit {
 		if e.Member == contractsv1.ContextFabricStructureNeedExpectedKind {
 			return true

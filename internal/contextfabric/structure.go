@@ -75,13 +75,21 @@ type confirmedStructureMember struct {
 	Member       contractsv1.ContextFabricStructureNeedKind
 	AppliedValue string
 	// AppliedKind (CHAOS-3972 P3, codex xhigh review round 1 finding 3) is
-	// the confirmed offer's own Kind -- populated for subject_handle (the
-	// one member with an explicit-field conflict class to check against,
-	// §2.1: "anchors are RECEIPT-ONLY on the MCP surface... there is no
-	// explicit anchor field"). Empty for expected_kind (AppliedValue IS
-	// already the kind there) and subject_anchor (no explicit-anchor
-	// conflict class exists). See resolveExplicitStructure's own handle
-	// conflict check, the sole reader.
+	// the confirmed offer's own Kind. It is populated for EVERY member whose
+	// matched offer names one -- the redemption loop below sets it
+	// unconditionally from the matcher's own kind -- so subject_handle,
+	// subject_anchor and subject_candidate all carry it. It is empty for
+	// expected_kind, where AppliedValue IS already the kind, and for any
+	// member whose offer named no kind.
+	//
+	// This comment previously said "populated for subject_handle" only, with
+	// subject_anchor called out as empty, and named resolveExplicitStructure's
+	// handle conflict check as the SOLE reader. Both were already untrue:
+	// confirmedAnchorSelection reads it for subject_anchor, and the carry's
+	// own "did the caller state a kind this turn" check
+	// (statedExpectedKindThisTurn, structure_axis_carry.go) reads it for every
+	// member. A reader who trusted the old text would conclude a candidate
+	// receipt states no kind, which is exactly the wrong conclusion.
 	AppliedKind    contractsv1.ContextFabricSubjectKind
 	PriorResultID  string
 	ReceiptID      string

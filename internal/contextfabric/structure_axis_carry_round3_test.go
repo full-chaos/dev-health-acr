@@ -198,3 +198,57 @@ func TestKindCarry_SaveTimeSupersessionVetoStillDisclosesTheCarry(t *testing.T) 
 	}
 	_ = storage.Principal{}
 }
+
+// TestKindCarry_AReceiptThatStatesAKindThisTurnBlocksTheCarry is the design
+// review's S2, and it is the sharpest of the carry's failure modes because the
+// value it can override is one the caller picked EXPLICITLY on this turn.
+//
+// Every receipt redeemed this turn records the offer's own kind on the
+// confirmed member (`AppliedKind`, structure.go) -- not just kind receipts.
+// A candidate receipt (candr_) names a specific ranked subject, and an anchor
+// receipt (ancr_) names a scope anchor; both carry that subject's kind. But
+// the carry's block only looked at the expected_kind member and at
+// request.ExpectedKinds, so neither counted as the caller stating a kind.
+//
+// The shape that bites: the caller picks a TEAM candidate from a prior result
+// whose own kind was never confirmed. The walk finds no kind at that result,
+// descends, and inherits `project` from further back. That carried `project`
+// then narrows the pool -- and filters out the very team candidate the caller
+// just chose. The caller's own explicit pick loses to an inherited value.
+func TestKindCarry_AReceiptThatStatesAKindThisTurnBlocksTheCarry(t *testing.T) {
+	t.Parallel()
+	// A candidate receipt redeemed this turn, naming a team subject.
+	candidatePick := requestStructureCanonicalization{
+		Confirmed: []confirmedStructureMember{{
+			Member:       contractsv1.ContextFabricStructureNeedSubjectCandidate,
+			AppliedValue: "team_ops",
+			AppliedKind:  contractsv1.ContextFabricSubjectTeam,
+		}},
+	}
+	if !statedExpectedKindThisTurn(InvestigationRequest{}, candidatePick) {
+		t.Fatal("statedExpectedKindThisTurn(candidate receipt naming a team) = false, want true: the caller picked a subject OF A KIND this turn, and an inherited kind must not be allowed to filter that very pick out of the pool")
+	}
+	// The same for an anchor receipt, which names the scope anchor's kind.
+	anchorPick := requestStructureCanonicalization{
+		Confirmed: []confirmedStructureMember{{
+			Member:       contractsv1.ContextFabricStructureNeedSubjectAnchor,
+			AppliedValue: "team_ops",
+			AppliedKind:  contractsv1.ContextFabricSubjectTeam,
+		}},
+	}
+	if !statedExpectedKindThisTurn(InvestigationRequest{}, anchorPick) {
+		t.Fatal("statedExpectedKindThisTurn(anchor receipt naming a team) = false, want true")
+	}
+	// A confirmed member carrying NO kind must still not block: subject_handle
+	// can be redeemed without the offer naming a kind, and blocking on it
+	// would cost carries for nothing.
+	kindlessHandle := requestStructureCanonicalization{
+		Confirmed: []confirmedStructureMember{{
+			Member:       contractsv1.ContextFabricStructureNeedSubjectHandle,
+			AppliedValue: "acr-123",
+		}},
+	}
+	if statedExpectedKindThisTurn(InvestigationRequest{}, kindlessHandle) {
+		t.Fatal("statedExpectedKindThisTurn(handle receipt with no kind) = true, want false: a member that states no kind states nothing to protect")
+	}
+}
