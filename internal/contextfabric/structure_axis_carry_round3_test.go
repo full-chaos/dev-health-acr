@@ -252,3 +252,126 @@ func TestKindCarry_AReceiptThatStatesAKindThisTurnBlocksTheCarry(t *testing.T) {
 		t.Fatal("statedExpectedKindThisTurn(handle receipt with no kind) = true, want false: a member that states no kind states nothing to protect")
 	}
 }
+
+// vetoedKindEntry builds the shape a turn PERSISTS when its kind receipt lost
+// the save-time supersession race: receipt-sourced, expected_kind, and marked
+// vetoed_stale. This exact shape is produced by the supersession-veto path and
+// is asserted by that path's own test, so it is a real stored artefact rather
+// than a hypothetical.
+func vetoedKindEntry(kind contractsv1.ContextFabricSubjectKind, disposition contractsv1.ContextFabricStructureDisposition) contractsv1.ContextFabricConfirmedStructureEntry {
+	return contractsv1.ContextFabricConfirmedStructureEntry{
+		Member:        contractsv1.ContextFabricStructureNeedExpectedKind,
+		AppliedValue:  string(kind),
+		Source:        contractsv1.ContextFabricStructureSourceReceipt,
+		PriorResultID: "result_turn_zero",
+		ReceiptID:     "kindr_turn_zero_01",
+		Provenance:    contractsv1.ContextFabricStructureClarificationConfirmed,
+		Disposition:   disposition,
+	}
+}
+
+// TestResolveCarriedKind_RefusesAVetoedCarrier is the design review's critical
+// finding: authority laundering.
+//
+// A kind the engine REFUSED could come back a turn later as caller authority.
+// The eligibility check tested Member and Source only, and a receipt-sourced
+// expected_kind entry marked `vetoed_stale` satisfies both -- so the walk
+// carried it forward and composed a NEW entry with Disposition=applied. The
+// refusal became an application, one hop later.
+//
+// This is reachable, not theoretical: the save-time supersession path persists
+// exactly this shape, and this branch's own supersession test asserts it.
+// Every vetoed disposition in the vocabulary is checked here, because the
+// contract admits all three and the laundering works identically for each.
+func TestResolveCarriedKind_RefusesAVetoedCarrier(t *testing.T) {
+	t.Parallel()
+	for _, disposition := range []contractsv1.ContextFabricStructureDisposition{
+		contractsv1.ContextFabricStructureDispositionVetoedStale,
+		contractsv1.ContextFabricStructureDispositionVetoedConflict,
+		contractsv1.ContextFabricStructureDispositionVetoedUnresolved,
+	} {
+		t.Run(string(disposition), func(t *testing.T) {
+			t.Parallel()
+			prior := validInvestigationResult()
+			prior.ResultID = "result_turn_a"
+			prior.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+				vetoedKindEntry(contractsv1.ContextFabricSubjectTeam, disposition),
+			}
+			// The vetoed entry names the result whose offer it redeemed, so the
+			// walk follows that breadcrumb. It is stocked here deliberately:
+			// leaving it dangling would make the load FAIL and report
+			// miss_unloadable, which would hide the veto behind an unrelated
+			// read error and let this test pass for the wrong reason.
+			breadcrumb := validInvestigationResult()
+			breadcrumb.ResultID = "result_turn_zero"
+			breadcrumb.ConfirmedStructure = nil
+			store := &staticResultStore{results: map[string]InvestigationResult{
+				"result_turn_a": prior, "result_turn_zero": breadcrumb,
+			}}
+			engine := buildCarryTestEngine(t, store)
+
+			request := validInvestigationRequest()
+			request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_turn_a", ReceiptID: "candr_turn_a_01"}}
+
+			got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+			if got.Outcome == KindCarryHit {
+				t.Fatalf("resolveCarriedKind() = %#v, want a miss: a %s entry is a kind the engine REFUSED, and carrying it forward relabels that refusal as applied caller authority", got, disposition)
+			}
+			if got.Kind != "" {
+				t.Fatalf("resolveCarriedKind().Kind = %q, want empty", got.Kind)
+			}
+			// The miss must NAME the veto rather than look like an ordinary
+			// "nothing to carry" -- an operator reading the telemetry has to be
+			// able to tell a refused carrier from an absent one.
+			if got.Outcome != KindCarryMissVetoedCarrier {
+				t.Fatalf("resolveCarriedKind().Outcome = %q, want %q: a refused carrier must be disclosed as such, not folded into a generic miss", got.Outcome, KindCarryMissVetoedCarrier)
+			}
+		})
+	}
+}
+
+// TestResolveCarriedKind_NamesTheOriginalConfirmationAcrossHops is the design
+// review's provenance finding.
+//
+// A carried entry's prior_result_id is contractually the ORIGINAL confirmation,
+// not whichever result happened to carry it last. The window carry flattens
+// that (carriedWindowOrigin, chaos4360_carry.go); the kind carry did not, so a
+// second hop pointed at the intermediate carrier and the disclosure quietly
+// meant something different from what the contract says it means.
+func TestResolveCarriedKind_NamesTheOriginalConfirmationAcrossHops(t *testing.T) {
+	t.Parallel()
+	// The ORIGIN: where the caller actually redeemed the kind receipt.
+	origin := validInvestigationResult()
+	origin.ResultID = "result_origin"
+	origin.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+		confirmedKindEntry(contractsv1.ContextFabricSubjectTeam, "result_before_origin", "kindr_origin_01"),
+	}
+	// The CARRIER: a later turn that inherited it and re-disclosed it as
+	// carried, naming the origin. This is what every successful carry persists.
+	carrier := validInvestigationResult()
+	carrier.ResultID = "result_carrier"
+	carrier.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{{
+		Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam),
+		Source: contractsv1.ContextFabricStructureSourceCarried, PriorResultID: "result_origin",
+		Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+	}}
+	store := &staticResultStore{results: map[string]InvestigationResult{
+		"result_origin": origin, "result_carrier": carrier,
+	}}
+	engine := buildCarryTestEngine(t, store)
+
+	request := validInvestigationRequest()
+	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_carrier", ReceiptID: "candr_carrier_01"}}
+
+	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	if got.Outcome != KindCarryHit || got.Kind != contractsv1.ContextFabricSubjectTeam {
+		t.Fatalf("resolveCarriedKind() = %#v, want a hit carrying team", got)
+	}
+	if got.SourceResultID != "result_origin" {
+		t.Fatalf("resolveCarriedKind().SourceResultID = %q, want %q -- the disclosure names the ORIGINAL confirmation, never the result that merely carried it last", got.SourceResultID, "result_origin")
+	}
+	entry := composeCarriedKindEntry(got)
+	if entry == nil || entry.PriorResultID != "result_origin" {
+		t.Fatalf("composeCarriedKindEntry() = %#v, want prior_result_id = result_origin", entry)
+	}
+}

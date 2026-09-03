@@ -82,6 +82,14 @@ const (
 	// KindCarryMissDepthExceeded: the walk still had unvisited candidates
 	// when carryChainMaxDepth/carryChainMaxVisited was reached.
 	KindCarryMissDepthExceeded KindCarryOutcome = "miss_depth_exceeded"
+	// KindCarryMissVetoedCarrier: a reachable result carried an expected_kind
+	// entry the engine itself REFUSED -- any disposition other than applied
+	// (vetoed_stale / vetoed_conflict / vetoed_unresolved). Its own value is
+	// never carried. This has its own outcome rather than folding into
+	// miss_no_confirmed_kind because the two mean opposite things to an
+	// operator: "there was nothing to carry" versus "there was something and
+	// it had already been refused".
+	KindCarryMissVetoedCarrier KindCarryOutcome = "miss_vetoed_carrier"
 	// KindCarryMissConflictingKinds: two or more of the SAME depth's
 	// directly-reachable candidates carried genuinely DIFFERENT confirmed
 	// kinds. The six receipt fields validate independently of one another,
@@ -128,7 +136,7 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 		return kindCarryResult{Outcome: KindCarryMissNoReference}
 	}
 	visited := make(map[string]struct{}, carryChainMaxVisited)
-	var sawUnloadable, sawStaleEpoch, capExceeded bool
+	var sawUnloadable, sawStaleEpoch, capExceeded, sawVetoedCarrier bool
 	for depth := 0; depth < carryChainMaxDepth && len(frontier) > 0; depth++ {
 		var next []string
 		// The WHOLE depth is scanned before any decision, for the reason
@@ -178,8 +186,16 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 				continue
 			}
 			prior := fetched.Result
-			if kind, ok := carriableConfirmedKind(prior); ok {
-				hits = append(hits, kindCarryResult{Kind: kind, SourceResultID: prior.ResultID, Outcome: KindCarryHit, ChainDepth: depth})
+			kind, ok, refused := carriableConfirmedKind(prior)
+			if refused {
+				sawVetoedCarrier = true
+			}
+			if ok {
+				sourceResultID := prior.ResultID
+				if origin := carriedKindOrigin(prior); origin != "" {
+					sourceResultID = origin
+				}
+				hits = append(hits, kindCarryResult{Kind: kind, SourceResultID: sourceResultID, Outcome: KindCarryHit, ChainDepth: depth})
 				continue
 			}
 			for _, entry := range prior.ConfirmedStructure {
@@ -230,6 +246,12 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 		return kindCarryResult{Outcome: KindCarryMissStaleGraphEpoch}
 	case sawUnloadable:
 		return kindCarryResult{Outcome: KindCarryMissUnloadable}
+	case sawVetoedCarrier:
+		// Ranked below the read failures above and above the generic miss: a
+		// refused carrier is a definite fact about a result we DID read, so it
+		// is more informative than "nothing found", but a result we could not
+		// read at all is a wider unknown and outranks it.
+		return kindCarryResult{Outcome: KindCarryMissVetoedCarrier}
 	default:
 		return kindCarryResult{Outcome: KindCarryMissNoConfirmedKind}
 	}
@@ -248,7 +270,7 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 // vocabulary: a value persisted under an older vocabulary is not a kind
 // this deployment can narrow a census by, and admitting it would push an
 // unrecognized string down into the pool filter.
-func carriableConfirmedKind(prior InvestigationResult) (contractsv1.ContextFabricSubjectKind, bool) {
+func carriableConfirmedKind(prior InvestigationResult) (kind contractsv1.ContextFabricSubjectKind, ok bool, refused bool) {
 	for _, entry := range prior.ConfirmedStructure {
 		if entry.Member != contractsv1.ContextFabricStructureNeedExpectedKind {
 			continue
@@ -256,13 +278,48 @@ func carriableConfirmedKind(prior InvestigationResult) (contractsv1.ContextFabri
 		if entry.Source != contractsv1.ContextFabricStructureSourceReceipt && entry.Source != contractsv1.ContextFabricStructureSourceCarried {
 			continue
 		}
-		kind := contractsv1.ContextFabricSubjectKind(entry.AppliedValue)
-		if !contractsv1.ValidContextFabricSubjectKind(kind) {
+		// DISPOSITION AND PROVENANCE, not just member and source (design
+		// review, critical). The contract admits a receipt-sourced
+		// expected_kind entry marked vetoed_stale / vetoed_conflict /
+		// vetoed_unresolved, and the save-time supersession path persists
+		// exactly that shape. Without this check the walk carried such an
+		// entry forward and composed a NEW one with Disposition=applied --
+		// turning a kind the engine had REFUSED into caller authority one hop
+		// later. An entry is caller authority only if it was applied AND
+		// reached that state by confirmation.
+		if entry.Disposition != contractsv1.ContextFabricStructureDispositionApplied {
+			refused = true
 			continue
 		}
-		return kind, true
+		if entry.Provenance != contractsv1.ContextFabricStructureClarificationConfirmed {
+			refused = true
+			continue
+		}
+		candidate := contractsv1.ContextFabricSubjectKind(entry.AppliedValue)
+		if !contractsv1.ValidContextFabricSubjectKind(candidate) {
+			continue
+		}
+		return candidate, true, refused
 	}
-	return "", false
+	return "", false, refused
+}
+
+// carriedKindOrigin returns the ORIGIN result id a prior result's own carried
+// expected_kind entry names, or "" when that result confirmed the kind itself.
+//
+// Mirrors carriedWindowOrigin (chaos4360_carry.go) and exists for the same
+// contractual reason: a carried entry's prior_result_id names the ORIGINAL
+// confirmation, not whichever result carried it most recently. Without this
+// flattening a second hop pointed at the intermediate carrier, so the
+// disclosure quietly meant something other than what the contract says it
+// means -- and each further hop moved it further from the truth.
+func carriedKindOrigin(result InvestigationResult) string {
+	for _, entry := range result.ConfirmedStructure {
+		if entry.Member == contractsv1.ContextFabricStructureNeedExpectedKind && entry.Source == contractsv1.ContextFabricStructureSourceCarried {
+			return strings.TrimSpace(entry.PriorResultID)
+		}
+	}
+	return ""
 }
 
 // effectiveConfirmedKind is what the two ResolveSubjects call sites read
