@@ -69,7 +69,7 @@ func (a *Adapter) ResolveInvestigationBinding(ctx context.Context, principal sto
 	return contextfabric.ResolvedGraphBinding{GraphKey: key, Epoch: epoch}, nil
 }
 
-func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, binding contextfabric.ResolvedGraphBinding, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, frame *contextfabric.QuestionFrame) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
+func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, binding contextfabric.ResolvedGraphBinding, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, frame *contextfabric.QuestionFrame, scopeAnchorKind contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
 	// CHAOS-3898 §2.1: the binding was already resolved ONCE by Engine, via
 	// ResolveInvestigationBinding above, before this call -- never
 	// re-resolved here. See ResolvedGraphBinding's own doc comment for the
@@ -490,7 +490,7 @@ func (a *Adapter) ResolveSubjects(ctx context.Context, principal storage.Princip
 	// adapter is the one production GraphReader, so this is where that
 	// record enters the engine. CHAOS-4087: digests is the SAME record's
 	// wire-safe companion set, carried out identically.
-	resolution, offers, bases, digests, err := graphrank.ResolveSubjectsWithCommitBasis(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, frame)
+	resolution, offers, bases, digests, err := graphrank.ResolveSubjectsWithCommitBasis(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, frame, scopeAnchorKind)
 	// CHAOS-4077: the single point every deps.* callback's own ErrNotFound
 	// (a never-projected org's graph key) funnels through on its way back
 	// to Engine -- translated here, once, rather than at each of the

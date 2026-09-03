@@ -658,7 +658,7 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	// answer was never about; supplying a reconstructed one would be the
 	// re-derivation bar 5 forbids. A nil frame yields no kind hints, which
 	// is the pre-seam-7 behaviour of this call unchanged.
-	resolution, _, _, _, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding, nil, nil, nil)
+	resolution, _, _, _, err := e.graph.ResolveSubjects(ctx, principal, recheckRequest, candidate.Interpretation, binding, nil, nil, nil, "")
 	if err != nil {
 		return reuseRecheckVerdict{Refused: true, Outcome: AnswerReuseMissAuthorization}
 	}

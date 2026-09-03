@@ -143,7 +143,7 @@ func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Princ
 	// exists to produce a better clarification for this very turn, so
 	// resolving it with a different (or absent) frame would offer the user
 	// candidates from a pool the real resolution never searched.
-	_, resolved, _, _, err := e.graph.ResolveSubjects(WithOffersOnlyResolution(ctx), principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed), familyOutcome.Frame)
+	_, resolved, _, _, err := e.graph.ResolveSubjects(WithOffersOnlyResolution(ctx), principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed), familyOutcome.Frame, ScopeAnchorRetrievalKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind))
 	if err != nil && !errors.Is(err, ErrGraphNotProjected) {
 		record(GatedOfferResolutionFailed)
 		return StructureOfferMaterial{}, true

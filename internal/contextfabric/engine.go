@@ -1499,7 +1499,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// CARRIED, NOT RE-DERIVED (CHAOS-4736 bar 5): resolution gets this
 	// turn's validated frame so the kind-hinted pool search reads declared
 	// kinds instead of guessing at the question's words.
-	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed), familyOutcome.Frame)
+	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed), familyOutcome.Frame, ScopeAnchorRetrievalKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind))
 	if err != nil {
 		// CHAOS-4077: a never-projected org (ResolveSubjects queried a
 		// graph key that has never been created) degrades to the SAME
