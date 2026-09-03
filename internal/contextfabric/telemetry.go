@@ -867,6 +867,10 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"groups", event.Groups,
 		"overrun", string(event.Overrun),
 		"measured_items", event.MeasuredItems,
+		// Beside measured_items on purpose: the plan's own prediction from the
+		// profile's measured items-per-member rate. Zero where no rate has
+		// been measured for the profile.
+		"predicted_items", event.PredictedItems,
 		"measured_bytes", event.MeasuredBytes,
 		"max_items", event.MaxItems,
 		"max_serialized_bytes", event.MaxSerializedBytes,

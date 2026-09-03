@@ -1,0 +1,19 @@
+{
+  "authority": "acr-api log lines \"context fabric plan narrowing\", stage=assembled_result, family=grouped_cohort_status, read from the kiac acceptance rig (acr-api pid 86199, build 814f0cc8-kiac, org 70d529e0-3c06-4597-8480-794fd02328b6, ClickHouse db dh_0830, real data). Source file on the rig host: logs/acr-api-814f0cc8-tmux.log. Each row is ONE request, joined by request_id; members is the event's `before` (the cohort size synthesis actually ran against) and items is `measured_items` (the engine's own budgeted item count, Paths excluded).",
+  "why_this_exists": "planSynthesisHeadroom's own doc comment states the per-profile headroom values are 'a starting estimate per budget profile, not a derivation ... If the measured value differs, THIS TABLE is what moves, and the narrowing telemetry is what says by how much.' These are that measurement for PlanBudgetGroupedCohort. The flat 20-item headroom models synthesis output as a CONSTANT, but the drivers and claimed facts it reserves for scale with the member count, so the reservation is only correct at one cohort size.",
+  "collected": "2026-09-03",
+  "family": "grouped_cohort_status",
+  "profile": "PlanBudgetGroupedCohort",
+  "max_items_in_force": 30,
+  "max_serialized_bytes_in_force": 262144,
+  "rows": [
+    {"request_id": "req_bd20d866d069c06d0ee81ae3463f0d1c", "members": 10, "items": 31, "bytes": 70780, "overrun": "items"},
+    {"request_id": "req_b07bdc15b331f6876facb1db6397b823", "members": 10, "items": 28, "bytes": 78497, "overrun": "fits"},
+    {"request_id": "req_371cbc6b9eaa96f51386f3b2be59d4dc", "members": 10, "items": 32, "bytes": 82601, "overrun": "items"},
+    {"request_id": "req_46ee4ab658f24434d94d534d1aca784b", "members": 10, "items": 34, "bytes": 92713, "overrun": "items"},
+    {"request_id": "req_5aec126f0bf855dcfe063c26fdf7ce7c", "members": 10, "items": 34, "bytes": 91553, "overrun": "items"},
+    {"request_id": "req_b445528e8e63fe5191b45f1eb519b913", "members": 10, "items": 32, "bytes": 81296, "overrun": "items"},
+    {"request_id": "req_77031712014f40a535052f4507ba86b4", "members": 10, "items": 39, "bytes": 109527, "overrun": "items"}
+  ],
+  "reading": "1 of 7 fit. Items per member ranges 2.80 to 3.90; the worst case is what a clamp must survive, because a clamp sized on the mean refuses half the time. Bytes never bind: the largest row is 109527 of 262144 (42%), so the item ceiling is the only binding axis for this family and narrowing on bytes would be narrowing on the wrong quantity."
+}

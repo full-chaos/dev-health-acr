@@ -78,6 +78,17 @@ type PlanNarrowingEvent struct {
 	MeasuredBytes      int64
 	MaxItems           int
 	MaxSerializedBytes int64
+	// PredictedItems is what the plan EXPECTED this cohort to cost, from the
+	// profile's measured items-per-member rate, beside what stage 3 actually
+	// measured. The pair is the point: the rate is a measurement with a shelf
+	// life, and the only way it gets corrected before it causes another
+	// refusal is an operator being able to watch predicted drift away from
+	// measured on one line.
+	//
+	// Zero when the profile has no measured rate (PredictedAnswerItems returns
+	// zero) or when no cohort exists to predict for. An absent prediction is
+	// honest; a guessed one would be a number that looks like evidence.
+	PredictedItems int
 	// RetryAttempted and RetryFit are the re-synthesis outcome. Both false
 	// outside stage 3.
 	RetryAttempted bool

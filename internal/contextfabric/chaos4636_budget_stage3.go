@@ -122,6 +122,11 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			contractsv1.ContextFabricBudgetFits, params.GroupedNarrowingBasis)
 		fit.MeasuredItems = measurement.Items.Budgeted()
 		fit.MeasuredBytes = measurement.Bytes
+		// Predicted beside measured on the SAME line, for the cohort synthesis
+		// actually ran against. A fit is where the rate is confirmed; a
+		// refusal is where it has already failed, so recording it only on
+		// refusals would show the rate exclusively when it was wrong.
+		fit.PredictedItems = PredictedItemsForPlan(*plan, cohortMemberCount(params.Graph.Cohort))
 		fit.DeadlineReserved = e.synthesisDeadlineReserve > 0
 		e.recordPlanNarrowing(ctx, principal, fit)
 		return result, firstPass, nil
@@ -395,6 +400,11 @@ func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, p
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, selected, grouped, false, overrun, basis)
 	event.MeasuredItems = measurement.Items.Budgeted()
 	event.MeasuredBytes = measurement.Bytes
+	// `members` is the cohort synthesis ran against, which is the count the
+	// measurement describes -- NOT `selected`, which is what the declined
+	// retry would have narrowed to. Predicting from `selected` would publish a
+	// number for an answer that was never assembled.
+	event.PredictedItems = PredictedItemsForPlan(*plan, members)
 	event.RetryAttempted = retryAttempted
 	event.RetryFit = false
 	event.RefusalPlanned = true
