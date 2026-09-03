@@ -1313,16 +1313,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// taint-gated, conflict-fails-closed -- and never the member list, which
 	// would carry an authorization decision (North Star check 18).
 	planCarry := e.resolveCarriedPlan(ctx, principal, request, priorValidatedReceipts, binding, priorLoadedResults)
-	if carried, applied := applyCarriedPlan(familyOutcome, planCarry); applied {
-		// Emitted HERE, at the one point the replacement happens, because
-		// the family-resolution line was already sent from the interpreter
-		// and a carried route can never appear on it. This is the only
-		// event that can carry `family_source=carried`.
-		if e.telemetry != nil {
-			e.telemetry.RecordPlanCarry(ctx, principal, PlanCarryEventFrom(familyOutcome.Family, carried, planCarry))
-		}
-		familyOutcome = carried
-	}
+	familyOutcome = e.applyAndRecordCarry(ctx, principal, familyOutcome, planCarry)
 	plan := PlanAnswer(PlanAnswerInput{
 		Family:           familyOutcome,
 		Interpretation:   interpretation,

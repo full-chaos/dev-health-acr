@@ -250,3 +250,51 @@ func renderValue(value any) string {
 	}
 	return strings.Join(parts, "|")
 }
+
+// The plan-carry line gets the SAME content-safety guard as the family
+// resolution line above, and for the same reason: it is a new sink, and a new
+// sink without an allow-list is a leak nobody has found yet.
+//
+// Review proved that specifically — a mutation adding a `question_text` key to
+// this line survived the whole package before this test existed.
+func TestPlanCarryTelemetryLeaksNoContent(t *testing.T) {
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordPlanCarry(
+			context.Background(), storage.Principal{OrgID: "org_sink_test"},
+			PlanCarryEvent{
+				FamilyReplaced: QuestionFamilyUnclassified,
+				FamilyCarried:  QuestionFamilyGroupedCohortStatus,
+				SourceResultID: "result_prior_turn",
+				Route: FamilyRouteDecision{
+					Family: QuestionFamilyGroupedCohortStatus, Source: FamilyRouteSourceCarried,
+					Disposition: FamilyRouteCarried, Switched: true,
+				},
+			})
+	})
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want exactly 1 per applied carry", len(records))
+	}
+	// ALLOW-LIST, not a denylist. Every member is a closed-vocabulary value,
+	// a server-generated id, or a boolean: two families, one source, one
+	// class, one disposition, one bool, a prior result id. No question text,
+	// no subject term, no member list -- the member list in particular would
+	// carry an authorization decision.
+	allowed := map[string]bool{
+		"time": true, "level": true, "msg": true, "request_id": true,
+		"org_id": true, "family_replaced": true, "family_carried": true,
+		"source_result_id": true, "family_source": true, "route_class": true,
+		"route_disposition": true, "route_switched": true,
+	}
+	for key := range records[0] {
+		if !allowed[key] {
+			t.Errorf("unexpected key %q on the plan carry line -- every field must be an explicitly allowed closed-vocabulary value, id, or boolean", key)
+		}
+	}
+	// And the reverse direction: the fields that make the event USEFUL must
+	// actually be present, or the line is an allow-listed nothing.
+	for _, required := range []string{"family_replaced", "family_carried", "source_result_id", "family_source", "route_switched"} {
+		if _, ok := records[0][required]; !ok {
+			t.Errorf("the plan carry line is missing %q; the event exists to make that value observable", required)
+		}
+	}
+}

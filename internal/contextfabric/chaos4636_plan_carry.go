@@ -270,3 +270,28 @@ func PlanCarryEventFrom(replaced QuestionFamily, carried QuestionFamilyOutcome, 
 		Route:          carried.Route,
 	}
 }
+
+// applyAndRecordCarry applies a carry and, when one applied, emits the ONE
+// event that can carry `family_source=carried`.
+//
+// IT IS A METHOD SO THE EMIT IS TESTABLE. Inline at the Investigate call site
+// the emit could only be reached by standing up the whole investigation, and
+// review proved the consequence: deleting the emit block survived the entire
+// package, because the recording fake's captured events were read by nothing.
+// A seam that can be driven directly is the difference between an emit that
+// is asserted and one that is merely present.
+//
+// Returns the outcome unchanged when no carry applied, so the call site stays
+// a single assignment and there is no branch to forget.
+func (e *Engine) applyAndRecordCarry(ctx context.Context, principal storage.Principal, outcome QuestionFamilyOutcome, carry planCarryResult) QuestionFamilyOutcome {
+	carried, applied := applyCarriedPlan(outcome, carry)
+	if !applied {
+		return outcome
+	}
+	if e.telemetry != nil {
+		// outcome.Family is still the PRE-carry value here -- the whole
+		// point of emitting before the assignment below.
+		e.telemetry.RecordPlanCarry(ctx, principal, PlanCarryEventFrom(outcome.Family, carried, carry))
+	}
+	return carried
+}

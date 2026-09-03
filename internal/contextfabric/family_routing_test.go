@@ -327,10 +327,12 @@ func TestEveryFamilyRouteSourceIsUsed(t *testing.T) {
 // fields on it. This is what makes `family_source=carried` observable at all.
 //
 // It drives applyCarriedPlan and the event builder together rather than
-// asserting on a literal — the vacuity correction round 3 forced. What it
-// cannot drive here is the engine's emit call site; that is covered by the
-// engine's own carry test, and the split is stated so neither is mistaken for
-// end-to-end proof on its own.
+// asserting on a literal — the vacuity correction round 3 forced. The EMIT
+// itself is driven by TestApplyAndRecordCarryEmitsExactlyOneEvent below; an
+// earlier version of this comment pointed at "the engine's own carry test",
+// which did not exist. That was the third reference in this change to an
+// artifact that was not there, so: the named test is directly below, and it
+// fails if the emit is deleted.
 func TestPlanCarryEventCarriesTheRouteToTheSink(t *testing.T) {
 	t.Parallel()
 	carry := planCarryResult{
@@ -366,5 +368,72 @@ func TestPlanCarryEventCarriesTheRouteToTheSink(t *testing.T) {
 	}
 	if !event.Route.Switched {
 		t.Fatal("Route.Switched = false on a carry that replaced unclassified")
+	}
+}
+
+// THE EMIT ITSELF. Review found that deleting the emit call site survived the
+// whole package: the recording fake captured events that nothing read. This
+// drives the engine seam directly and asserts what reached the sink.
+func TestApplyAndRecordCarryEmitsExactlyOneEvent(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	engine := &Engine{telemetry: telemetry}
+	carry := planCarryResult{
+		Outcome: PlanCarryHit, Family: QuestionFamilyGroupedCohortStatus,
+		GroupKind: SubjectTeam, SourceResultID: "result_prior_turn",
+	}
+
+	got := engine.applyAndRecordCarry(context.Background(), storage.Principal{OrgID: "org_1"},
+		QuestionFamilyOutcome{Family: QuestionFamilyUnclassified}, carry)
+
+	if len(telemetry.planCarries) != 1 {
+		t.Fatalf("got %d plan-carry events, want exactly 1 -- this is the only event that can carry family_source=carried", len(telemetry.planCarries))
+	}
+	event := telemetry.planCarries[0]
+	if event.FamilyReplaced != QuestionFamilyUnclassified {
+		t.Fatalf("FamilyReplaced = %q, want the PRE-carry family; the emit must run before the assignment", event.FamilyReplaced)
+	}
+	if event.FamilyCarried != QuestionFamilyGroupedCohortStatus || event.SourceResultID != "result_prior_turn" {
+		t.Fatalf("event = %+v, want the prior turn's family and result id", event)
+	}
+	if event.Route.Source != FamilyRouteSourceCarried || event.Route.Disposition != FamilyRouteCarried ||
+		event.Route.Class != "" || !event.Route.Switched {
+		t.Fatalf("Route = %+v, want carried/carried/empty-class/switched", event.Route)
+	}
+	if got.Family != QuestionFamilyGroupedCohortStatus {
+		t.Fatalf("returned family = %q, want the carried one", got.Family)
+	}
+}
+
+// The negative control: no carry, no event. Without it an emit that fired
+// unconditionally would pass the test above.
+func TestApplyAndRecordCarryEmitsNothingWhenNoCarryApplies(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	engine := &Engine{telemetry: telemetry}
+
+	// A turn that already resolved to a real family: the carry is refused.
+	got := engine.applyAndRecordCarry(context.Background(), storage.Principal{OrgID: "org_1"},
+		QuestionFamilyOutcome{Family: QuestionFamilySubjectInvestigation},
+		planCarryResult{Outcome: PlanCarryHit, Family: QuestionFamilyGroupedCohortStatus})
+
+	if len(telemetry.planCarries) != 0 {
+		t.Fatalf("got %d plan-carry events for a turn where no carry applied", len(telemetry.planCarries))
+	}
+	if got.Family != QuestionFamilySubjectInvestigation {
+		t.Fatalf("family = %q, want the turn's own family untouched", got.Family)
+	}
+}
+
+// A nil telemetry port must not panic -- the same nil-safety every other
+// engine telemetry call site has.
+func TestApplyAndRecordCarryToleratesNilTelemetry(t *testing.T) {
+	t.Parallel()
+	engine := &Engine{}
+	got := engine.applyAndRecordCarry(context.Background(), storage.Principal{OrgID: "org_1"},
+		QuestionFamilyOutcome{Family: QuestionFamilyUnclassified},
+		planCarryResult{Outcome: PlanCarryHit, Family: QuestionFamilyGroupedCohortStatus})
+	if got.Family != QuestionFamilyGroupedCohortStatus {
+		t.Fatalf("family = %q, want the carry still applied without telemetry", got.Family)
 	}
 }
