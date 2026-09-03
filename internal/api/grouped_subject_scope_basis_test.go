@@ -17,11 +17,10 @@ import (
 // route prints a struct field, while this proves the field an operator
 // actually reads is populated by the code path that rejects a live answer.
 //
-// inScope decides which side of the display/validate line the offending
-// subject sits on. A cohort GROUP subject is citable, so the driver is
-// admitted; a resolution CANDIDATE is serialized to the model and
-// deliberately not citable, so it rejects with subject_in_payload true; a
-// subject in neither is invented, and rejects with false.
+// shown picks which basis the rejection carries: a resolution candidate is
+// serialized to the model and deliberately uncitable, so it rejects
+// "shown_uncitable_by_policy"; a subject in no payload source at all is
+// invented, and rejects "absent".
 func subjectScopeRejection(t *testing.T, shown bool) error {
 	t.Helper()
 	subject := contextfabric.SubjectRef{
@@ -83,36 +82,39 @@ func failureEntryFor(t *testing.T, err error) map[string]any {
 // the model's and the operator should read it as model variance.
 func TestFailureEventReportsASubjectTheModelInvented(t *testing.T) {
 	entry := failureEntryFor(t, subjectScopeRejection(t, false))
-	if got := entry["subject_in_payload"]; got != false {
-		t.Fatalf("subject_in_payload = %v, want false for a subject that appears nowhere in the payload", got)
+	if got := entry["subject_scope_basis"]; got != "absent" {
+		t.Fatalf("subject_scope_basis = %v, want \"absent\" for a subject that appears nowhere in the payload", got)
 	}
 }
 
-// TestFailureEventReportsASubjectWeShowedAndThenRefused is the alarm this
-// field exists to raise. A true here says ACR serialized a subject into the
-// synthesis payload and then rejected the model for citing it -- an ACR
-// defect, not a model one. That is exactly the shape the grouped family hit,
-// where a cohort's group entity was in every payload and admitted by
-// nothing, and it is why this reads as a boolean an operator can alert on
-// rather than as one more rejection reason among many.
-func TestFailureEventReportsASubjectWeShowedAndThenRefused(t *testing.T) {
+// TestFailureEventReportsAShownSubjectAsUncitableByPolicy is the case that
+// replaced this file's original "we showed it and refused it" assertion.
+// A resolution candidate IS shown to the model, so the boolean this field
+// replaced reported true -- and true was documented as an ACR defect, so an
+// alert written to that documentation would have fired on ordinary model
+// misuse. The operator must be able to tell the two apart on the line
+// itself, which is why the alarm value is its own constant.
+func TestFailureEventReportsAShownSubjectAsUncitableByPolicy(t *testing.T) {
 	entry := failureEntryFor(t, subjectScopeRejection(t, true))
-	if got := entry["subject_in_payload"]; got != true {
-		t.Fatalf("subject_in_payload = %v, want true for a subject the payload showed the model", got)
+	if got := entry["subject_scope_basis"]; got != "shown_uncitable_by_policy" {
+		t.Fatalf("subject_scope_basis = %v, want \"shown_uncitable_by_policy\" -- a candidate is shown on purpose and uncitable on purpose", got)
+	}
+	if got := entry["subject_scope_basis"]; got == "shown_should_be_citable" {
+		t.Fatal("a policy exclusion must never render as the ACR-defect alarm value")
 	}
 }
 
-// TestFailureEventOmitsSubjectMembershipForANonSubjectRejection keeps the
-// field honest at the boundary: a rejection it does not describe must not
-// carry a false-looking default.
-func TestFailureEventOmitsSubjectMembershipForANonSubjectRejection(t *testing.T) {
+// TestFailureEventOmitsScopeBasisForANonSubjectRejection keeps the field
+// honest at the boundary: a rejection it does not describe must not carry a
+// default-looking value.
+func TestFailureEventOmitsScopeBasisForANonSubjectRejection(t *testing.T) {
 	draft := contextfabric.SynthesisDraft{Status: "not_a_status"}
 	err := draft.ValidateAgainst(contextfabric.SynthesisInput{})
 	if got := contextfabric.SynthesisRejectionReasonOf(err); got != contextfabric.RejectionReasonStatusInvalid {
 		t.Fatalf("fixture drift: rejection reason = %q, want a non-subject rejection", got)
 	}
 	entry := failureEntryFor(t, contextfabric.ClassifySynthesisRejection(draft, contextfabric.SynthesisInput{}, err))
-	if _, present := entry["subject_in_payload"]; present {
-		t.Fatalf("subject_in_payload = %v is present on a rejection that is not subject-scope", entry["subject_in_payload"])
+	if _, present := entry["subject_scope_basis"]; present {
+		t.Fatalf("subject_scope_basis = %v is present on a rejection that is not subject-scope", entry["subject_scope_basis"])
 	}
 }

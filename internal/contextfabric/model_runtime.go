@@ -478,13 +478,15 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		return rejectSynthesis(RejectionReasonDeterministicAnswerMissing, "deterministic answer is required")
 	}
 	allowedSubjects := synthesisSubjects(input)
-	// payloadSubjects is what the model was SHOWN; allowedSubjects is what it
-	// may cite. The three subject-scope rejections below report which side a
-	// rejected subject fell on -- see SynthesisRejection.SubjectInPayload.
+	// allowedSubjects is what the model may cite; payloadSubjects is
+	// everything it was SHOWN; uncitableShown is the part of the latter that
+	// is deliberately not the former. The three subject-scope rejections
+	// below classify the rejecting subject against all three -- telemetry
+	// only, no effect on the decision. See SynthesisSubjectScopeBasis.
 	payloadSubjects := synthesisPayloadSubjects(input)
-	subjectWasShown := func(subject SubjectRef) bool {
-		_, shown := payloadSubjects[subjectKeyForModel(subject)]
-		return shown
+	uncitableShown := synthesisUncitableShownSubjects(input)
+	scopeBasis := func(subject SubjectRef) SynthesisSubjectScopeBasis {
+		return synthesisSubjectScopeBasis(subject, payloadSubjects, uncitableShown)
 	}
 	// canonicalLabels binds every subject the model can legally reference
 	// to the ONE label the investigation input actually carries for that
@@ -603,7 +605,7 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		}
 		claimedByID[claim.ClaimID] = claim
 		if _, ok := allowedSubjects[subjectKeyForModel(claim.Subject)]; !ok {
-			return rejectSynthesisSubject(RejectionReasonClaimSubjectOutOfScope, subjectWasShown(claim.Subject), "claimed fact references subject outside the investigation")
+			return rejectSynthesisSubject(RejectionReasonClaimSubjectOutOfScope, scopeBasis(claim.Subject), "claimed fact references subject outside the investigation")
 		}
 		if err := requireBoundLabel("claimed fact", claim.Subject, canonicalLabels); err != nil {
 			return rejectSynthesis(RejectionReasonClaimSubjectLabelMismatch, "%w", err)
@@ -624,7 +626,7 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		}
 		for _, subject := range driver.AffectedSubjects {
 			if _, ok := allowedSubjects[subjectKeyForModel(subject)]; !ok {
-				return rejectSynthesisSubject(RejectionReasonDriverSubjectOutOfScope, subjectWasShown(subject), "driver references subject outside the investigation")
+				return rejectSynthesisSubject(RejectionReasonDriverSubjectOutOfScope, scopeBasis(subject), "driver references subject outside the investigation")
 			}
 			if err := requireBoundLabel("driver", subject, canonicalLabels); err != nil {
 				return rejectSynthesis(RejectionReasonDriverSubjectLabelMismatch, "%w", err)
@@ -669,7 +671,7 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 			}
 			for _, subject := range finding.Subjects {
 				if _, ok := allowedSubjects[subjectKeyForModel(subject)]; !ok {
-					return rejectSynthesisSubject(RejectionReasonFindingSubjectOutOfScope, subjectWasShown(subject), "%s references subject outside the investigation", name)
+					return rejectSynthesisSubject(RejectionReasonFindingSubjectOutOfScope, scopeBasis(subject), "%s references subject outside the investigation", name)
 				}
 				if err := requireBoundLabel(name, subject, canonicalLabels); err != nil {
 					return rejectSynthesis(RejectionReasonFindingSubjectLabelMismatch, "%w", err)
@@ -2676,26 +2678,99 @@ func synthesisSubjects(input SynthesisInput) map[string]struct{} {
 	return result
 }
 
-// synthesisPayloadSubjects is every subject the synthesis PAYLOAD serializes
-// to the model, derived from the serialization shape
-// (genkitruntime.synthesisInput) rather than from the validation shape.
+// synthesisUncitableShownSubjects is every subject the payload SHOWS the
+// model that is deliberately NOT citable. Both entries are policy, not
+// oversight, and each needs its reason stated here:
 //
-// It exists so the difference between "shown" and "citable" is a MEASURED
-// quantity instead of an assumption. synthesisSubjects is a subset of this
-// by design (Resolution.Candidates is the one deliberate gap); the
-// subject_in_payload telemetry field reports, for every subject-scope
-// rejection, which side of that line the rejected subject fell on --
-// distinguishing "the model invented a subject" (false, the model's error)
-// from "we showed it something and then refused it" (true, ACR's error, and
-// exactly the CHAOS-4962 defect). Any NEW display/validate asymmetry
-// introduced later shows up in production as subject_in_payload=true
-// instead of as another family that silently fails to serve.
-func synthesisPayloadSubjects(input SynthesisInput) map[string]struct{} {
-	result := synthesisSubjects(input)
+//   - Resolution.Candidates: an unresolved alternative, offered for
+//     disambiguation. A driver asserting something about a candidate the
+//     investigation never committed to presents a resolution that did not
+//     happen.
+//   - Cohort.Exclusions: a subject the cohort explicitly REMOVED, carrying
+//     the reason it was removed (ContextFabricCohortExclusion). Citing one
+//     asserts a membership the engine denied.
+//
+// Keeping this list separate from the allow-set is what lets a rejection say
+// "shown, and uncitable on purpose" rather than collapsing that into the
+// same signal as "shown, and we should have admitted it" -- which is a real
+// distinction, because only the second is an ACR defect.
+func synthesisUncitableShownSubjects(input SynthesisInput) map[string]struct{} {
+	result := make(map[string]struct{})
 	for _, candidate := range input.Graph.Resolution.Candidates {
 		result[subjectKeyForModel(candidate.Subject)] = struct{}{}
 	}
+	if input.Graph.Cohort != nil {
+		for _, exclusion := range input.Graph.Cohort.Exclusions {
+			result[subjectKeyForModel(exclusion.Subject)] = struct{}{}
+		}
+	}
 	return result
+}
+
+// synthesisPayloadSubjects is every subject the synthesis PAYLOAD serializes
+// to the model, enumerated INDEPENDENTLY from the serialization shape
+// (genkitruntime.synthesisInput) rather than derived from the allow-set.
+//
+// The independence is the whole point and was learned the hard way: the
+// first version of this function was `synthesisSubjects(input)` plus
+// candidates, which made it structurally incapable of noticing anything the
+// allow-set omitted -- and Cohort.Exclusions, serialized to the model in
+// every cohort payload, was omitted by both. A guard derived from the thing
+// it guards cannot fail.
+//
+// Every source the payload carries a subject through is listed here once,
+// whether or not it is citable. What makes a subject citable is
+// synthesisSubjects; what makes it deliberately uncitable is
+// synthesisUncitableShownSubjects; and the invariant binding the three --
+// payload == citable + deliberately-uncitable, with no third category -- is
+// what TestEverySubjectThePayloadShowsIsCitableOrADeclaredException asserts.
+func synthesisPayloadSubjects(input SynthesisInput) map[string]struct{} {
+	result := make(map[string]struct{})
+	add := func(subject SubjectRef) { result[subjectKeyForModel(subject)] = struct{}{} }
+	for _, candidate := range input.Graph.Resolution.Candidates {
+		add(candidate.Subject)
+	}
+	for _, subject := range input.Graph.Resolution.Committed {
+		add(subject)
+	}
+	if input.Graph.Cohort != nil {
+		for _, member := range input.Graph.Cohort.Members {
+			add(member.Subject)
+		}
+		for _, group := range input.Graph.Cohort.Groups {
+			add(group.Subject)
+		}
+		for _, exclusion := range input.Graph.Cohort.Exclusions {
+			add(exclusion.Subject)
+		}
+	}
+	for _, path := range input.Graph.Paths {
+		for _, node := range path.Nodes {
+			add(node)
+		}
+	}
+	for _, candidate := range input.Graph.DriverCandidates {
+		for _, subject := range candidate.AffectedSubjects {
+			add(subject)
+		}
+	}
+	for _, fact := range input.Facts.Facts {
+		add(fact.Subject)
+	}
+	return result
+}
+
+// synthesisSubjectScopeBasis classifies a subject a subject-scope rule just
+// rejected, for telemetry only -- it never changes the decision.
+func synthesisSubjectScopeBasis(subject SubjectRef, payload, uncitable map[string]struct{}) SynthesisSubjectScopeBasis {
+	key := subjectKeyForModel(subject)
+	if _, shown := payload[key]; !shown {
+		return SubjectScopeAbsentFromPayload
+	}
+	if _, policy := uncitable[key]; policy {
+		return SubjectScopeShownUncitableByPolicy
+	}
+	return SubjectScopeShownShouldBeCitable
 }
 
 // cloneSlice returns an independent copy of values. Unlike

@@ -195,34 +195,31 @@ func TestDriverAboutAGroupCitingMemberClaimsShiftsToUngrounded(t *testing.T) {
 	}
 }
 
-// --- subject_in_payload telemetry -------------------------------------
+// --- subject scope basis telemetry -----------------------------------
 
-// TestSubjectScopeRejectionReportsAnInventedSubjectAsNotInPayload is the
-// expected steady state: the model named something nothing in its input
-// mentioned, so the rejection is the model's fault and the field says so.
-func TestSubjectScopeRejectionReportsAnInventedSubjectAsNotInPayload(t *testing.T) {
+// TestScopeBasisReportsASubjectTheModelInvented is the expected steady
+// state: nothing in the payload mentioned the subject.
+func TestScopeBasisReportsASubjectTheModelInvented(t *testing.T) {
 	t.Parallel()
 	input, draft, _ := groupedCohortFixture()
 	draft.Drivers[0].AffectedSubjects = []SubjectRef{{
 		Kind: SubjectTeam, CanonicalID: "team_never_discovered", Label: "Invented",
 	}}
-	err := draft.ValidateAgainst(input)
-	inPayload, ok := SynthesisSubjectInPayloadOf(err)
+	basis, ok := SynthesisSubjectScopeBasisOf(draft.ValidateAgainst(input))
 	if !ok {
-		t.Fatal("SynthesisSubjectInPayloadOf() reported no membership, want a subject-scope rejection to carry one")
+		t.Fatal("no scope basis on a subject-scope rejection")
 	}
-	if inPayload {
-		t.Fatal("subject_in_payload = true for a subject that appears nowhere in the payload")
+	if basis != SubjectScopeAbsentFromPayload {
+		t.Fatalf("basis = %q, want %q", basis, SubjectScopeAbsentFromPayload)
 	}
 }
 
-// TestSubjectScopeRejectionReportsAShownButUncitableSubjectAsInPayload is
-// the field's whole reason to exist, and the proof it is not vacuous: a
-// resolution CANDIDATE is serialized to the model and deliberately not
-// citable (synthesisSubjects' stated rule), so a rejection naming one must
-// come back true. Before this ticket, a group subject produced exactly this
-// signal and there was no field to carry it.
-func TestSubjectScopeRejectionReportsAShownButUncitableSubjectAsInPayload(t *testing.T) {
+// TestScopeBasisReportsAResolutionCandidateAsUncitableByPolicy is the
+// distinction the boolean this replaced could not make. A candidate IS shown
+// to the model, so the old field said true, and true was documented as an
+// ACR defect -- so ordinary model misuse would have raised a false
+// ACR-defect alert. Adversarial review caught that before it shipped.
+func TestScopeBasisReportsAResolutionCandidateAsUncitableByPolicy(t *testing.T) {
 	t.Parallel()
 	input, draft, _ := groupedCohortFixture()
 	candidate := SubjectRef{Kind: SubjectProject, CanonicalID: "project_unresolved", Label: "Unresolved"}
@@ -233,52 +230,75 @@ func TestSubjectScopeRejectionReportsAShownButUncitableSubjectAsInPayload(t *tes
 	draft.Drivers[0].AffectedSubjects = []SubjectRef{candidate}
 	err := draft.ValidateAgainst(input)
 	if got := SynthesisRejectionReasonOf(err); got != RejectionReasonDriverSubjectOutOfScope {
-		t.Fatalf("rejection reason = %q, want %q -- a candidate must stay uncitable", got, RejectionReasonDriverSubjectOutOfScope)
+		t.Fatalf("rejection reason = %q, want a candidate to stay uncitable", got)
 	}
-	inPayload, ok := SynthesisSubjectInPayloadOf(err)
-	if !ok {
-		t.Fatal("SynthesisSubjectInPayloadOf() reported no membership on a subject-scope rejection")
-	}
-	if !inPayload {
-		t.Fatal("subject_in_payload = false for a subject the payload serialized to the model")
+	basis, _ := SynthesisSubjectScopeBasisOf(err)
+	if basis != SubjectScopeShownUncitableByPolicy {
+		t.Fatalf("basis = %q, want %q -- a candidate is shown on purpose and uncitable on purpose", basis, SubjectScopeShownUncitableByPolicy)
 	}
 }
 
-// TestNonSubjectRejectionCarriesNoPayloadMembership pins the omission: a
-// rejection this field does not describe must report ok=false, so the
-// telemetry seam prints nothing rather than a misleading default.
-func TestNonSubjectRejectionCarriesNoPayloadMembership(t *testing.T) {
+// TestScopeBasisReportsACohortExclusionAsUncitableByPolicy is the second
+// source, and the one that exposed the original guard as circular: the whole
+// cohort is serialized to the model, Exclusions included
+// (ContextFabricCohortExclusion carries the subject AND the reason it was
+// removed), and the first version of synthesisPayloadSubjects was built by
+// copying the allow-set, so it could not see a source the allow-set omitted.
+// Citing an excluded subject asserts a membership the engine denied.
+func TestScopeBasisReportsACohortExclusionAsUncitableByPolicy(t *testing.T) {
 	t.Parallel()
 	input, draft, _ := groupedCohortFixture()
-	draft.ClaimedFacts[0].Value = boolScalar(true) // contradicts the canonical value
+	excluded := SubjectRef{Kind: SubjectProject, CanonicalID: "project_excluded", Label: "Excluded"}
+	input.Graph.Cohort.Exclusions = []contractsv1.ContextFabricCohortExclusion{{
+		Subject: excluded, Reason: "out of the requested window",
+	}}
+	draft.Drivers[0].AffectedSubjects = []SubjectRef{excluded}
 	err := draft.ValidateAgainst(input)
-	if got := SynthesisRejectionReasonOf(err); got != RejectionReasonClaimValueContradicts {
-		t.Fatalf("fixture drift: rejection reason = %q, want %q", got, RejectionReasonClaimValueContradicts)
+	if got := SynthesisRejectionReasonOf(err); got != RejectionReasonDriverSubjectOutOfScope {
+		t.Fatalf("rejection reason = %q, want an excluded subject to stay uncitable", got)
 	}
-	if _, ok := SynthesisSubjectInPayloadOf(err); ok {
-		t.Fatal("SynthesisSubjectInPayloadOf() reported a membership on a rejection that is not subject-scope")
+	basis, _ := SynthesisSubjectScopeBasisOf(err)
+	if basis != SubjectScopeShownUncitableByPolicy {
+		t.Fatalf("basis = %q, want %q -- an exclusion is shown to the model and must not read as an ACR defect", basis, SubjectScopeShownUncitableByPolicy)
 	}
 }
 
-// TestEverySubjectThePayloadShowsIsCitableExceptTheDeclaredExceptions is
-// the guard against re-introducing this whole class, and it is keyed on the
-// QUANTITY (subjects the payload shows) rather than on the call sites that
-// happen to add them -- the CHAOS-4962 handoff's own standing lesson, after
-// two population guards there missed a defect one layer outside the chosen
-// population.
+// TestNonSubjectRejectionCarriesNoScopeBasis keeps the field honest at the
+// boundary: a rejection it does not describe must carry no basis at all.
+func TestNonSubjectRejectionCarriesNoScopeBasis(t *testing.T) {
+	t.Parallel()
+	input, draft, _ := groupedCohortFixture()
+	draft.ClaimedFacts[0].Value = boolScalar(true)
+	err := draft.ValidateAgainst(input)
+	if got := SynthesisRejectionReasonOf(err); got != RejectionReasonClaimValueContradicts {
+		t.Fatalf("fixture drift: rejection reason = %q", got)
+	}
+	if _, ok := SynthesisSubjectScopeBasisOf(err); ok {
+		t.Fatal("a scope basis is present on a rejection that is not subject-scope")
+	}
+}
+
+// TestEverySubjectThePayloadShowsIsCitableOrADeclaredException is the guard
+// against re-introducing this class, rewritten after adversarial review
+// showed the first version could not fail.
 //
-// It builds an input where every subject-bearing payload source carries a
-// DISTINCT subject, then asserts synthesisSubjects covers synthesisPayloadSubjects
-// exactly, minus one named exception. Adding a new payload source without
-// admitting it fails here instead of in a family that silently stops
-// serving.
+// That version derived the payload set from the allow-set, so it was
+// structurally blind to any source the allow-set omitted -- which is exactly
+// how Cohort.Exclusions escaped both. The three sets are now built
+// independently and the invariant is an EXACT partition: every subject the
+// payload shows is citable or deliberately uncitable, never neither, and
+// nothing is both.
 //
-// STATED LIMIT: a new source added to NEITHER function is invisible to this
-// test, because both are hand-maintained enumerations and no mechanical
-// check can compare them against the serializer's struct. That residual is
-// what the subject_in_payload production field covers -- a real payload
-// carrying an unadmitted subject reports true at runtime.
-func TestEverySubjectThePayloadShowsIsCitableExceptTheDeclaredExceptions(t *testing.T) {
+// STATED LIMIT, unchanged and irreducible here: a payload source added to
+// NEITHER synthesisSubjects nor synthesisPayloadSubjects is invisible to
+// this test, because both are hand-maintained enumerations and this package
+// cannot see genkitruntime's serializer struct. That residual is what the
+// production telemetry covers -- such a subject rejects as
+// shown_should_be_citable only if it reaches the payload set, so the honest
+// statement is that the field catches the one-sided omission and this test
+// catches the other; a two-sided omission is caught by neither, and closing
+// it needs the serializer and the allow-set to share one source of truth.
+func TestEverySubjectThePayloadShowsIsCitableOrADeclaredException(t *testing.T) {
 	t.Parallel()
 	input, _, team := groupedCohortFixture()
 	candidate := SubjectRef{Kind: SubjectProject, CanonicalID: "project_unresolved", Label: "Unresolved"}
@@ -286,48 +306,114 @@ func TestEverySubjectThePayloadShowsIsCitableExceptTheDeclaredExceptions(t *test
 		ReceiptID: "receipt_12345678", Subject: candidate,
 		MatchReasons: []string{"lexical"}, Confidence: 0.4,
 	}}
+	excluded := SubjectRef{Kind: SubjectProject, CanonicalID: "project_excluded", Label: "Excluded"}
+	input.Graph.Cohort.Exclusions = []contractsv1.ContextFabricCohortExclusion{{
+		Subject: excluded, Reason: "out of the requested window",
+	}}
 	driverCandidateSubject := SubjectRef{Kind: SubjectProject, CanonicalID: "project_candidate_driver", Label: "Candidate Driver Subject"}
 	input.Graph.DriverCandidates = []DriverJudgment{{
 		DriverID: "driver_87654321", Standing: DriverPrincipal, Category: "relationship",
 		Title: "Engine-proposed driver", Summary: "Proposed by retrieval.",
 		AffectedSubjects: []SubjectRef{driverCandidateSubject},
+		// Carries evidence of its OWN, which nothing else in the input
+		// supplies. Without this the DriverCandidates evidence allowance had
+		// no test that failed when it was deleted -- proved by running that
+		// mutation, which SURVIVED the whole battery before this line.
+		EvidenceRefIDs: []string{"evidence_candidate_9876"},
 	}}
 
 	allowed := synthesisSubjects(input)
 	shown := synthesisPayloadSubjects(input)
-
-	// The exceptions registry: subjects the payload shows on purpose and
-	// does NOT make citable. One entry today; every entry needs a reason in
-	// synthesisSubjects' doc comment.
-	exceptions := map[string]string{
-		subjectKeyForModel(candidate): "resolution candidate -- an unresolved alternative the investigation never committed to",
-	}
+	uncitable := synthesisUncitableShownSubjects(input)
 
 	for key := range shown {
-		if _, citable := allowed[key]; citable {
-			continue
+		_, citable := allowed[key]
+		_, declared := uncitable[key]
+		if citable == declared {
+			t.Fatalf("subject %q is %s -- the payload must partition into citable and deliberately-uncitable, with no third category", key,
+				map[bool]string{true: "BOTH citable and declared uncitable", false: "NEITHER citable nor a declared exception (the display/validate asymmetry reappearing)"}[citable])
 		}
-		if _, declared := exceptions[key]; declared {
-			continue
-		}
-		t.Fatalf("a subject the synthesis payload shows the model is neither citable nor a declared exception (key %q) -- this is the CHAOS-4962 display/validate asymmetry reappearing", key)
 	}
 	for key := range allowed {
 		if _, ok := shown[key]; !ok {
-			t.Fatalf("a citable subject (key %q) is not in the payload set -- synthesisPayloadSubjects must be a superset", key)
+			t.Fatalf("citable subject %q is not in the payload set -- synthesisPayloadSubjects must be a superset", key)
 		}
 	}
-	// Attribution controls: the test is only meaningful if these specific
-	// subjects actually reached the sets under test.
+	for key := range uncitable {
+		if _, ok := shown[key]; !ok {
+			t.Fatalf("deliberately-uncitable subject %q is not in the payload set", key)
+		}
+	}
+	// Attribution controls: this test means nothing unless these specific
+	// subjects actually reached the sets under test, on the sides claimed.
 	for _, subject := range []SubjectRef{team, driverCandidateSubject} {
 		if _, ok := allowed[subjectKeyForModel(subject)]; !ok {
-			t.Fatalf("fixture drift: %q must be citable for this test to be attributing anything", subject.CanonicalID)
+			t.Fatalf("fixture drift: %q must be citable", subject.CanonicalID)
 		}
 	}
-	if _, ok := allowed[subjectKeyForModel(candidate)]; ok {
-		t.Fatal("fixture drift: the resolution candidate must NOT be citable, or the exception is untested")
+	for _, subject := range []SubjectRef{candidate, excluded} {
+		if _, ok := uncitable[subjectKeyForModel(subject)]; !ok {
+			t.Fatalf("fixture drift: %q must be a declared exception, or its case is untested", subject.CanonicalID)
+		}
 	}
-	if len(exceptions) != 1 {
-		t.Fatalf("exceptions registry has %d entries; every entry must be justified in synthesisSubjects' doc comment", len(exceptions))
+}
+
+// TestDriverMayCiteEvidenceCarriedOnlyByAnEngineDriverCandidate pins the
+// evidence half of the widening on its own. The engine hands the model its
+// candidate drivers WITH their evidence refs, and the reuse-degrade path
+// serves those candidates verbatim as an answer's drivers, so that evidence
+// was publishable by ACR and "unknown" when the model cited it.
+//
+// This test exists because deleting that allowance survived the entire
+// mutation battery: every other fixture supplied the same evidence ref from
+// some other source, so nothing depended on the new branch.
+func TestDriverMayCiteEvidenceCarriedOnlyByAnEngineDriverCandidate(t *testing.T) {
+	t.Parallel()
+	input, draft, _ := groupedCohortFixture()
+	subject := input.Graph.Resolution.Committed[0]
+	input.Graph.DriverCandidates = []DriverJudgment{{
+		DriverID: "driver_87654321", Standing: DriverPrincipal, Category: "relationship",
+		Title: "Engine-proposed driver", Summary: "Proposed by retrieval.",
+		AffectedSubjects: []SubjectRef{subject},
+		EvidenceRefIDs:   []string{"evidence_candidate_9876"},
+	}}
+	draft.Drivers[0].EvidenceRefIDs = []string{"evidence_candidate_9876"}
+	if err := draft.ValidateAgainst(input); err != nil {
+		t.Fatalf("ValidateAgainst() error = %v, want evidence carried only by an engine driver candidate to be citable", err)
+	}
+}
+
+// TestScopeBasisAlarmFiresForAShownSubjectOnNoExceptionList pins the ALARM
+// branch, and it is a direct unit test of the classifier rather than a test
+// driven through ValidateAgainst, deliberately.
+//
+// In a correct build that branch is UNREACHABLE from any production input:
+// TestEverySubjectThePayloadShowsIsCitableOrADeclaredException asserts the
+// payload partitions exactly into citable and deliberately-uncitable, so no
+// real synthesis input can produce a subject that is shown and on neither
+// list. That is precisely why it needs a direct test -- a mutation making
+// the alarm never fire survived the entire battery, because every
+// end-to-end fixture is, by the invariant, incapable of reaching it.
+//
+// The branch still has to work: the day a new payload source is added to the
+// serializer and to synthesisPayloadSubjects but not to either list, this is
+// the value that says so in production, and the partition test above cannot
+// see that case at all.
+func TestScopeBasisAlarmFiresForAShownSubjectOnNoExceptionList(t *testing.T) {
+	t.Parallel()
+	subject := SubjectRef{Kind: SubjectTeam, CanonicalID: "team_shown_not_admitted", Label: "Shown"}
+	key := subjectKeyForModel(subject)
+	payload := map[string]struct{}{key: {}}
+
+	if got := synthesisSubjectScopeBasis(subject, payload, map[string]struct{}{}); got != SubjectScopeShownShouldBeCitable {
+		t.Fatalf("basis = %q, want %q -- a subject the payload shows and no list excuses is ACR's defect", got, SubjectScopeShownShouldBeCitable)
+	}
+	// The three inputs must each decide the outcome, or the classifier is
+	// not actually reading them.
+	if got := synthesisSubjectScopeBasis(subject, map[string]struct{}{}, map[string]struct{}{}); got != SubjectScopeAbsentFromPayload {
+		t.Fatalf("basis = %q for a subject in no payload, want %q", got, SubjectScopeAbsentFromPayload)
+	}
+	if got := synthesisSubjectScopeBasis(subject, payload, map[string]struct{}{key: {}}); got != SubjectScopeShownUncitableByPolicy {
+		t.Fatalf("basis = %q for a declared exception, want %q", got, SubjectScopeShownUncitableByPolicy)
 	}
 }
