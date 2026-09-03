@@ -518,6 +518,33 @@ assert_eq 'that requeue case genuinely reached the result phase' \
 assert_eq 'an attempt still running past the result bound is still a failure' \
   'claimed-failure' "$(run_wait "$tmpdir/runs-match.json" "$tmpdir/jobs-running.json")"
 
+# The RESULT phase had the same deadline blind spot the queue phase had, and it
+# fails in the worse direction -- a red required check for an attempt that
+# passed. Found by reviewing the fleet contract's F3 clause ("applies to every
+# poll phase with a wall-clock deadline"), not by either review round, because
+# both rounds' fixtures targeted the queue phase.
+#
+# The poll index below was MEASURED, not derived: poll 1 is the first look,
+# poll 2 the queue phase's single reading (in_progress, so it hands straight
+# over), polls 3..54 the result loop, and poll 55 the result phase's final read
+# at its deadline. Deriving it by arithmetic is what silently broke two earlier
+# fixtures when a read was added ahead of them, so the reach assertion below is
+# what keeps this honest rather than the comment.
+mkdir -p "$tmpdir/jobs-late-success"
+cp "$tmpdir/jobs-queued.json" "$tmpdir/jobs-late-success/1.json"
+for i in $(seq 2 54); do cp "$tmpdir/jobs-running.json" "$tmpdir/jobs-late-success/$i.json"; done
+cp "$tmpdir/jobs-success.json" "$tmpdir/jobs-late-success/55.json"
+assert_eq 'an attempt that finishes exactly at the result deadline is not failed' \
+  'claimed-success' "$(run_wait "$tmpdir/runs-match.json" "$tmpdir/jobs-late-success")"
+
+late_trace="$(run_wait_verbose "$tmpdir/runs-match.json" "$tmpdir/jobs-late-success")"
+case "$late_trace" in
+  *"result phase (final read at the deadline)"*) late_reached=yes ;;
+  *) late_reached=no ;;
+esac
+assert_eq 'that case genuinely exercised the result phase final read' \
+  'yes' "$late_reached"
+
 # ---------------------------------------------------------------------------
 # 4. cross-file agreement between ci.yml and ci-self-hosted.yml
 # ---------------------------------------------------------------------------

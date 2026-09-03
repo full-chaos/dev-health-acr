@@ -270,6 +270,35 @@ attempt_has_started() {
   esac
 }
 
+# Maps one result-phase observation to a final outcome, printing it and
+# returning 0, or returning 1 when the attempt is still legitimately running
+# and the caller should keep waiting.
+#
+# Factored out so the loop body and the final read at the deadline cannot
+# drift apart: the queue phase grew its own deadline read in round 1 and the
+# result phase did not, which is precisely the defect this exists to prevent
+# recurring. One decision, two call sites.
+result_phase_outcome() {
+  local status="$1" conclusion="$2"
+  if [ "$status" = completed ]; then
+    if [ "$conclusion" = success ]; then
+      printf 'claimed-success\n'
+    else
+      printf 'claimed-failure\n'
+    fi
+    return 0
+  fi
+  # An attempt that is no longer in a started state -- a lost runner that
+  # GitHub re-queued, or a run that vanished -- leaves nothing to trust, so
+  # the hosted leg claims the work rather than waiting out a terminal state
+  # that may never arrive and then failing the required check.
+  if ! attempt_has_started "$status"; then
+    printf 'unclaimed\n'
+    return 0
+  fi
+  return 1
+}
+
 # ---- the two-phase wait ---------------------------------------------------
 
 cmd_wait() {
@@ -383,33 +412,35 @@ cmd_wait() {
   # running out of budget is a failure rather than a silent pass -- the
   # attempt's own timeout-minutes should have ended it well inside this.
   deadline=$(( $(now) + (attempt_minutes + 3) * 60 ))
+  local outcome
   while [ "$(now)" -lt "$deadline" ]; do
     read -r status conclusion run_id <<<"$(current_state)"
     printf 'result phase: attempt status=%s conclusion=%s run=%s\n' "$status" "$conclusion" "$run_id"
-    if [ "$status" = completed ]; then
-      if [ "$conclusion" = success ]; then
-        emit_outcome claimed-success
-      else
-        emit_outcome claimed-failure
+    if outcome="$(result_phase_outcome "$status" "$conclusion")"; then
+      if [ "$outcome" = unclaimed ]; then
+        printf 'the attempt returned to %s after starting (runner lost, or the run vanished); claiming the work here rather than failing a job that may still succeed\n' \
+          "$status"
       fi
-      return 0
-    fi
-    # Review round 2, EXECUTED: an attempt can go `in_progress` -> `queued`
-    # when its runner is lost and GitHub re-queues the job. Waiting out the
-    # result budget for a terminal state that is not coming, then failing,
-    # turns a recoverable infrastructure event into a RED required check --
-    # measured: in_progress once, then queued, produced claimed-failure while
-    # the job was one pickup away from success. There is no longer a running
-    # attempt to trust, so hand the work back to this leg: slower, and right.
-    # Only an attempt still genuinely running past the bound (below) is a hang.
-    if ! attempt_has_started "$status"; then
-      printf 'the attempt returned to %s after starting (runner lost, or the run vanished); claiming the work here rather than failing a job that may still succeed\n' \
-        "$status"
-      emit_outcome unclaimed
+      emit_outcome "$outcome"
       return 0
     fi
     poll_sleep
   done
+
+  # The result phase has the same deadline blind spot the queue phase had, and
+  # it fails in the worse direction: contract v1.3's F3 clause says the final
+  # read applies to EVERY deadline-bounded phase, and reviewing that clause is
+  # what exposed this. Measured before the fix -- an attempt still
+  # `in_progress` through the bound and `completed/success` on the very next
+  # poll produced `claimed-failure`: a red required check for an attempt that
+  # had passed, its success never read.
+  read -r status conclusion run_id <<<"$(current_state)"
+  printf 'result phase (final read at the deadline): attempt status=%s conclusion=%s run=%s\n' \
+    "$status" "$conclusion" "$run_id"
+  if outcome="$(result_phase_outcome "$status" "$conclusion")"; then
+    emit_outcome "$outcome"
+    return 0
+  fi
 
   printf 'self-hosted attempt left the queue but reached no terminal state within %sm; failing rather than reporting a silent pass\n' \
     "$(( attempt_minutes + 3 ))" >&2
