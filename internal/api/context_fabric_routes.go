@@ -556,6 +556,13 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 	// call site (Engine.Investigate), not only a classified rejection --
 	// the state is equally true and equally diagnosable for an upstream
 	// synthesis fault.
+	// The VALIDATION-side half, on the same line and the same discipline as
+	// the two rejection_reason branches above: an invalid_result failure
+	// names the rule that refused the document, with quoted values redacted
+	// (contextFabricValidationRule).
+	if errors.Is(err, contextfabric.ErrInvalidResult) {
+		fields = append(fields, "validation_rule", contextFabricValidationRule(err))
+	}
 	if snapshot, ok := contextfabric.SynthesisNarrowingSnapshotOf(err); ok {
 		fields = append(fields,
 			"narrowing_basis", string(snapshot.DeclaredBasis),
@@ -564,6 +571,59 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 		)
 	}
 	a.logger.Log(context.WithoutCancel(r.Context()), level, "context fabric investigation failed", fields...)
+}
+
+// contextFabricValidationRule renders the validator's own rule text for an
+// ErrInvalidResult failure, with every quoted value REDACTED.
+//
+// WHY THIS EXISTS. A result the engine built and its own validator refused
+// used to log `failure_stage=validation, failure_classification=invalid_result`
+// and nothing else -- no rule, no field path. That is a failure whose reason
+// cannot be recovered from the run's own artifacts, which is exactly what
+// this repository's telemetry standard forbids: "a defect there must be
+// diagnosable from the run's own completed artifacts alone -- never by
+// re-reading source, re-running with instrumentation added after the fact, or
+// transcript archaeology." Diagnosing one 500 on the rig required all three.
+//
+// WHY REDACTION RATHER THAN THE RAW MESSAGE. contracts/v1's validators build
+// their errors as a STATIC rule skeleton plus, sometimes, a `%q` of the
+// offending value -- "answer plan groups %q members by their own kind",
+// "claimed fact rows+time_series_rows combined cell count violates v1
+// bounds". The skeleton is the rule and the field path, which is the whole
+// diagnostic value; the quoted value is request-derived and may be a subject
+// LABEL, which is question-adjacent content this sink must never carry.
+// Redacting every double-quoted run keeps the first and removes the second,
+// without depending on a per-validator audit of which ones interpolate what.
+//
+// The bound is a byte cap, not a rune cap, because the field is a log value
+// and the thing being bounded is line size.
+func contextFabricValidationRule(err error) string {
+	const maxRuleBytes = 300
+	text := err.Error()
+	var out []byte
+	quoted := false
+	for i := 0; i < len(text); i++ {
+		if text[i] == '"' {
+			if !quoted {
+				out = append(out, "<redacted>"...)
+			}
+			quoted = !quoted
+			continue
+		}
+		if !quoted {
+			out = append(out, text[i])
+		}
+	}
+	if quoted {
+		// An unbalanced quote means the tail was being redacted when the
+		// string ended; fail CLOSED and keep it redacted rather than
+		// emitting the remainder.
+		out = append(out, "<unterminated>"...)
+	}
+	if len(out) > maxRuleBytes {
+		out = append(out[:maxRuleBytes], "<truncated>"...)
+	}
+	return string(out)
 }
 
 // contextFabricInnermostErrorType walks err's Unwrap chain to the deepest
