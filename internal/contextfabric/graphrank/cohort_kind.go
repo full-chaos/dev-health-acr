@@ -1,6 +1,8 @@
 package graphrank
 
 import (
+	"sort"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -107,15 +109,50 @@ var cohortKindBases = [...]CohortKindBasis{
 	CohortKindMemberKindUnservable,
 }
 
-// servableCohortKinds is the set ContextFabricCohort.validate admits, stated
-// here as the reason this package refuses rather than as a copy of a rule
-// nobody can find. It is deliberately a DENY-BY-DEFAULT list: a subject kind
-// added to the frame vocabulary is unservable as a cohort until the wire
-// contract is widened to carry it, which is the safe direction -- the unsafe
-// one produces a 500 on a real question.
+// servableCohortKinds is the set a DISCOVERY ARM CAN ACTUALLY SERVE. It is
+// deliberately a DENY-BY-DEFAULT list, and it is deliberately NARROWER than
+// the wire contract: since the contract widening, ContextFabricCohort.validate
+// admits all fifteen published subject kinds, and being carriable is not the
+// same fact as being discoverable. A subject kind added to the frame
+// vocabulary stays unservable here until the change that PROVES an arm for
+// it, which is the safe direction -- the unsafe one answers a real question
+// with a cohort nothing filled in.
+//
+// `repository` was added by the change that proved the arm, not by a tidy-up
+// to match the contract. The proof is a fixture per cohort variant that can
+// carry the kind -- grouped_members, children_of_scope and discovered_kind --
+// each driving DiscoverContext through the falkorgraph reader, each red
+// before this line moved. The candidate pool was never the obstacle: the
+// exact-name census already fetches repository nodes
+// (falkorgraph/chaos4348_exact_name.go, exactNameKinds).
+//
+// NOT every question about repositories reaches this map. "Open incidents per
+// repository" declares repository as the GROUPING AXIS and `incident` as the
+// member kind -- invariant I6 refuses a grouped expression that groups a kind
+// by itself -- so it refuses here on `incident`, and serving it is an
+// incident-cohort arm with its own candidate pool, tracked separately.
 var servableCohortKinds = map[contextfabric.SubjectKind]bool{
-	contextfabric.SubjectTeam:    true,
-	contextfabric.SubjectProject: true,
+	contextfabric.SubjectTeam:       true,
+	contextfabric.SubjectProject:    true,
+	contextfabric.SubjectRepository: true,
+}
+
+// ServableCohortKindsForAudit returns the allow-list's members, sorted, so a
+// test in a package that can see the real fact providers can quantify over
+// "every kind the seam admits" without importing the map.
+//
+// It exists for that audit alone. The seam's own decision never calls it --
+// cohortKindFromFrame reads the map directly -- so this function cannot
+// become a second, drifting definition of what is servable.
+func ServableCohortKindsForAudit() []contextfabric.SubjectKind {
+	kinds := make([]contextfabric.SubjectKind, 0, len(servableCohortKinds))
+	for kind, admitted := range servableCohortKinds {
+		if admitted {
+			kinds = append(kinds, kind)
+		}
+	}
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
+	return kinds
 }
 
 // CohortKindBasisCount is the closed vocabulary's size.
@@ -142,21 +179,39 @@ func ValidCohortKindBasis(value CohortKindBasis) bool {
 //
 // TOTAL AND PURE over a possibly-nil frame. It reads the union and nothing
 // else -- not Shape, not RequestedJudgment, not SubjectTerms, not the family.
-func cohortKindFromFrame(frame *contextfabric.QuestionFrame) (contextfabric.SubjectKind, CohortKindBasis) {
+//
+// TWO KINDS COME BACK AND THE DIFFERENCE IS THE POINT.
+//
+//   - `servable` is what a caller may BUILD A COHORT FROM. It is empty on
+//     every refusing basis, including member_kind_unservable, so a caller
+//     that ignored the basis still cannot construct the cohort the refusal
+//     exists to prevent. That emptiness is pinned by a test.
+//   - `declared` is what the FRAME SAID, reported for telemetry and for
+//     nothing else. On member_kind_unservable it is the refused kind; on
+//     every other refusing basis there was no declared kind to report and it
+//     is empty too.
+//
+// The split was added because the two had been the same value, which meant a
+// refusal could say THAT a member kind was unservable but never WHICH. A
+// question whose repository noun was its grouping axis rather than its member
+// kind was read from its question text instead, in three separate documents,
+// and the reading was wrong. A refusal a run cannot attribute to a kind is a
+// refusal someone will attribute by guessing.
+func cohortKindFromFrame(frame *contextfabric.QuestionFrame) (servable contextfabric.SubjectKind, declared contextfabric.SubjectKind, basis CohortKindBasis) {
 	if frame == nil {
-		return "", CohortKindFrameAbsent
+		return "", "", CohortKindFrameAbsent
 	}
 	if !frame.SubjectExpression.IsCohortVariant() {
-		return "", CohortKindNotACohortVariant
+		return "", "", CohortKindNotACohortVariant
 	}
 	kind, ok := frame.SubjectExpression.MemberKind()
 	if !ok {
-		return "", CohortKindNoMemberKind
+		return "", "", CohortKindNoMemberKind
 	}
 	if !servableCohortKinds[kind] {
-		return "", CohortKindMemberKindUnservable
+		return "", kind, CohortKindMemberKindUnservable
 	}
-	return kind, CohortKindFromFrameMemberKind
+	return kind, kind, CohortKindFromFrameMemberKind
 }
 
 // frameKindHints returns the kinds this turn's frame declares, for the

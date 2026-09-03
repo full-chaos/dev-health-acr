@@ -25,9 +25,10 @@ import (
 // the contract admitting 15 kinds and this map admitting 2 is looking at the
 // intended state, not at drift.
 //
-// These tests are GREEN both before and after the contract widening. That is
-// their entire purpose: they are the evidence that the widening changed
-// nothing at the seam.
+// The contract widening left this map at two kinds on purpose; the change
+// that ADDED `repository` is the one that proved a discovery arm for it, and
+// these tests moved in that same commit rather than after it. A pin that is
+// relaxed in a later tidy-up commit is not a pin.
 
 // TestSeamAllowListAdmitsExactlyTheServableKinds pins the allow-list's
 // membership in both directions -- nothing missing, nothing extra.
@@ -37,7 +38,12 @@ import (
 // it; the behavioural half is the test below.
 func TestSeamAllowListAdmitsExactlyTheServableKinds(t *testing.T) {
 	t.Parallel()
-	want := []string{string(contextfabric.SubjectProject), string(contextfabric.SubjectTeam)}
+	want := []string{
+		string(contextfabric.SubjectProject),
+		string(contextfabric.SubjectRepository),
+		string(contextfabric.SubjectTeam),
+	}
+	sort.Strings(want)
 
 	got := make([]string, 0, len(servableCohortKinds))
 	for kind, admitted := range servableCohortKinds {
@@ -84,12 +90,19 @@ func TestSeamStaysNarrowerThanTheWireContract(t *testing.T) {
 			Kind:       contextfabric.SubjectExpressionDiscoveredKind,
 			Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: kind},
 		}}
-		got, basis := cohortKindFromFrame(frame)
+		got, declared, basis := cohortKindFromFrame(frame)
 		if basis != CohortKindMemberKindUnservable {
 			t.Errorf("kind %q is outside the seam allow-list but cohortKindFromFrame returned basis %q, want %q", kind, basis, CohortKindMemberKindUnservable)
 		}
 		if got != "" {
 			t.Errorf("kind %q refused at the seam but still yielded cohort kind %q; a refused kind must yield no kind at all, or a caller can build the cohort the refusal exists to prevent", kind, got)
+		}
+		// The REFUSED kind is still reported, and that is the half a
+		// refusal used to lose: the seam could say a member kind was
+		// unservable but never which one, so the kind got inferred from
+		// question text instead.
+		if declared != kind {
+			t.Errorf("kind %q was refused at the seam but reported declared kind %q; a refusal that cannot name the kind it refused is a refusal someone will attribute by guessing", kind, declared)
 		}
 	}
 	if carriedNotServable == 0 {
@@ -98,19 +111,29 @@ func TestSeamStaysNarrowerThanTheWireContract(t *testing.T) {
 	t.Logf("kinds carried by the wire contract but deliberately unservable at the seam: %d", carriedNotServable)
 }
 
-// TestSeamStillServesItsTwoKinds is the positive half: the kinds that DO have
-// a discovery arm keep returning frame_member_kind. A pin that only proved
-// refusals would be satisfied by a seam that refused everything.
-func TestSeamStillServesItsTwoKinds(t *testing.T) {
+// TestSeamServesEveryKindWithAProvenArm is the positive half: the kinds that
+// DO have a discovery arm keep returning frame_member_kind. A pin that only
+// proved refusals would be satisfied by a seam that refused everything.
+//
+// It was named ...ItsTwoKinds while there were two. Renaming it with the
+// third rather than leaving the count in the name is deliberate: a test whose
+// name states a number it no longer checks is a comment that lies, and this
+// file exists to stop exactly that kind of drift.
+func TestSeamServesEveryKindWithAProvenArm(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []contextfabric.SubjectKind{contextfabric.SubjectTeam, contextfabric.SubjectProject} {
+	for _, kind := range []contextfabric.SubjectKind{
+		contextfabric.SubjectTeam, contextfabric.SubjectProject, contextfabric.SubjectRepository,
+	} {
 		frame := &contextfabric.QuestionFrame{SubjectExpression: contextfabric.SubjectExpression{
 			Kind:       contextfabric.SubjectExpressionDiscoveredKind,
 			Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: kind},
 		}}
-		got, basis := cohortKindFromFrame(frame)
+		got, declared, basis := cohortKindFromFrame(frame)
 		if basis != CohortKindFromFrameMemberKind || got != kind {
-			t.Errorf("kind %q: cohortKindFromFrame = (%q, %q), want (%q, %q)", kind, got, basis, kind, CohortKindFromFrameMemberKind)
+			t.Errorf("kind %q: cohortKindFromFrame = (%q, %q, %q), want servable %q with basis %q", kind, got, declared, basis, kind, CohortKindFromFrameMemberKind)
+		}
+		if declared != kind {
+			t.Errorf("kind %q: cohortKindFromFrame reported declared kind %q; on a served turn the declared and servable kinds are the same value", kind, declared)
 		}
 	}
 }

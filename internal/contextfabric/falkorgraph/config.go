@@ -514,7 +514,7 @@ type GraphTelemetry interface {
 	// graph. `discovered` is carried beside the basis so the two questions
 	// ("what decided" and "did anything come back") are never conflated in
 	// the reader.
-	RecordCohortKindBasis(ctx context.Context, orgID string, basis graphrank.CohortKindBasis, discovered bool)
+	RecordCohortKindBasis(ctx context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool)
 }
 
 // VectorFenceResult is CHAOS-3890's reason enum for the AC-3778-7 read
@@ -579,7 +579,7 @@ func (NoopTelemetry) RecordEdgesFilteredByReason(context.Context, string, int, i
 func (NoopTelemetry) RecordCohortDeniedByAuthorization(context.Context, string, int)       {}
 func (NoopTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bool, CohortExactNameCensusBasis) {
 }
-func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, graphrank.CohortKindBasis, bool) {
+func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, contextfabric.SubjectKind, graphrank.CohortKindBasis, bool) {
 }
 
 // SlogTelemetry is the production GraphTelemetry: structured operational logs
@@ -794,8 +794,8 @@ func graphRequestIDLogAttrs(ctx context.Context) []any {
 // degradation of this component -- it is this component correctly declining
 // to guess -- so it is reported at the same level as a successful discovery
 // and is distinguished by its basis, never by its log level.
-func (t SlogTelemetry) RecordCohortKindBasis(ctx context.Context, orgID string, basis graphrank.CohortKindBasis, discovered bool) {
-	args := []any{"org_id", orgID, "basis", string(basis), "discovered", discovered}
+func (t SlogTelemetry) RecordCohortKindBasis(ctx context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool) {
+	args := []any{"org_id", orgID, "member_kind", string(declaredKind), "basis", string(basis), "discovered", discovered}
 	t.logger().Info("context_fabric: cohort kind basis", append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 

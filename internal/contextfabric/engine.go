@@ -843,6 +843,16 @@ type EngineTelemetry interface {
 // person-to-person rankings" guardrail's team-to-team analogue does not
 // license leaking WHICH team ranked where into an operator log line.
 type CohortRankedEvent struct {
+	// CohortKind is the subject kind of the cohort that was ranked and
+	// served -- a closed-vocabulary value, content-safe by the same
+	// reasoning as every other field here.
+	//
+	// It rides on the served-answer line because "which cohort kinds does
+	// this system actually SERVE" had no answer in the record: the served
+	// side carried counts, and the graph side carried a refusal basis with
+	// no kind. An operator watching a newly admitted kind reach production
+	// had nothing to watch.
+	CohortKind          SubjectKind
 	MemberCount         int
 	FormulaVersion      string
 	DegradedMemberCount int

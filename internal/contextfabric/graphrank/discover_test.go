@@ -332,7 +332,7 @@ func TestDiscoveredCohortExcludesInternalBookkeepingSubjects(t *testing.T) {
 		Frame: teamCohortFrame(),
 	}
 	discovery.Request.Options.MaxCohortMembers = 10
-	cohort, _, _, _ := DiscoveredCohort(principal, discovery, []CandidateNode{impostorRoot, genuineTeam}, isReserved)
+	cohort, _, _, _, _ := DiscoveredCohort(principal, discovery, []CandidateNode{impostorRoot, genuineTeam}, isReserved)
 	if cohort == nil {
 		t.Fatal("cohort = nil, want the genuine team still discovered")
 	}
@@ -367,7 +367,7 @@ func TestDiscoveredCohortReportsAuthzDroppedCount(t *testing.T) {
 		Frame: teamCohortFrame(),
 	}
 	discovery.Request.Options.MaxCohortMembers = 10
-	cohort, authzDropped, kindScopedAuthzDropped, _ := DiscoveredCohort(principal, discovery, []CandidateNode{authorized, foreign}, noInternalSubjects)
+	cohort, authzDropped, kindScopedAuthzDropped, _, _ := DiscoveredCohort(principal, discovery, []CandidateNode{authorized, foreign}, noInternalSubjects)
 	if cohort == nil || len(cohort.Members) != 1 || cohort.Members[0].Subject.CanonicalID != "team_platform" {
 		t.Fatalf("cohort = %#v, want only the authorized team discovered", cohort)
 	}
@@ -405,7 +405,7 @@ func TestDiscoveredCohortKindScopedAuthzDroppedExcludesOtherKinds(t *testing.T) 
 		Frame: teamCohortFrame(),
 	}
 	discovery.Request.Options.MaxCohortMembers = 10
-	cohort, authzDropped, kindScopedAuthzDropped, _ := DiscoveredCohort(principal, discovery, []CandidateNode{deniedRepo, authorizedTeam}, noInternalSubjects)
+	cohort, authzDropped, kindScopedAuthzDropped, _, _ := DiscoveredCohort(principal, discovery, []CandidateNode{deniedRepo, authorizedTeam}, noInternalSubjects)
 	if cohort == nil || len(cohort.Members) != 1 || cohort.Members[0].Subject.CanonicalID != "team_platform" {
 		t.Fatalf("cohort = %#v, want the authorized team discovered despite the denied repository", cohort)
 	}
