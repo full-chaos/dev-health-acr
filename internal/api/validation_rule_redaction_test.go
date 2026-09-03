@@ -34,6 +34,26 @@ func TestValidationRuleKeepsTheRuleAndRedactsQuotedValues(t *testing.T) {
 			mustNotHave: []string{"<redacted>"},
 		},
 		{
+			// THE CASE EVERY FIXTURE HERE ORIGINALLY MISSED. `%q` of a value
+			// containing a quote emits an ESCAPED quote; if the scanner treats
+			// that as a terminator, redaction ends early and the rest of the
+			// value is printed. Every other fixture in this table uses
+			// quote-free values, so all of them passed while this shape leaked.
+			// Found by adversarial review and reproduced before it was fixed.
+			name: "a value containing a quote does not end redaction early",
+			err: fmt.Errorf("%w: %w", contextfabric.ErrInvalidResult,
+				fmt.Errorf("cohort group %q has kind %q", `a"SECRET`, "team")),
+			mustContain: []string{"cohort group", "has kind"},
+			mustNotHave: []string{"SECRET", `a\"`},
+		},
+		{
+			name: "a trailing backslash inside a quoted value cannot escape the closing quote",
+			err: fmt.Errorf("%w: %w", contextfabric.ErrInvalidResult,
+				fmt.Errorf("subject %q rejected", `ends-with-backslash\`)),
+			mustContain: []string{"rejected"},
+			mustNotHave: []string{"ends-with-backslash"},
+		},
+		{
 			name: "several quoted values are all removed, not just the first",
 			err: fmt.Errorf("%w: %w", contextfabric.ErrInvalidResult,
 				fmt.Errorf("key fact %q cites evidence %q that is not present", "acr deploy cadence", "ev_secret_123")),

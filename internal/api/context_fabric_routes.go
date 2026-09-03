@@ -603,6 +603,17 @@ func contextFabricValidationRule(err error) string {
 	var out []byte
 	quoted := false
 	for i := 0; i < len(text); i++ {
+		// A BACKSLASH ESCAPES THE NEXT BYTE INSIDE A QUOTED RUN, and missing
+		// that is a content leak, not a cosmetic bug. `%q` of a value that
+		// itself contains a quote emits `"a\"SECRET"`; treating the escaped
+		// quote as a terminator ends redaction early and prints the rest of
+		// the value. Found by review, reproduced: the fixtures here were all
+		// quote-free, so every one of them passed while the one shape that
+		// matters leaked.
+		if quoted && text[i] == '\\' {
+			i++ // consume the escaped byte; both stay redacted
+			continue
+		}
 		if text[i] == '"' {
 			if !quoted {
 				out = append(out, "<redacted>"...)
