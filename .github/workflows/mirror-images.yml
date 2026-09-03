@@ -114,7 +114,26 @@ permissions:
   packages: write
 
 concurrency:
-  group: mirror-images
+  # A constant group name serialized EVERY invocation of this workflow --
+  # the weekly schedule, every push to main, and every pull_request run
+  # (this workflow actually WRITES mirrored images even on pull_request,
+  # not just a read-only check) -- against every other one, regardless of
+  # ref. A PR touching one of the watched paths above queued behind an
+  # unrelated PR's own mirror run, and behind the weekly schedule.
+  #
+  # Split by event instead: pull_request gets its own per-PR key (so one
+  # PR's repeated pushes still serialize against themselves, but never
+  # queue behind another PR or the schedule/push path), while push/
+  # schedule/workflow_dispatch -- the actual publish-to-main path --
+  # keep the original constant key, deliberately: never cancelled
+  # (cancel-in-progress stays false below), and still serialized against
+  # each other, since every write here targets the SAME ghcr package set
+  # this repo owns and there is no reason for two of those writes to ever
+  # race.
+  group: >-
+    ${{ github.event_name == 'pull_request'
+    && format('mirror-images-pr-{0}', github.event.pull_request.number)
+    || 'mirror-images' }}
   cancel-in-progress: false
 
 jobs:
