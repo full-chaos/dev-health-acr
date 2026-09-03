@@ -472,16 +472,64 @@ func TestRetryFailureEventPredictsForTheFirstSynthesisCohort(t *testing.T) {
 	if failed.Before == failed.After {
 		t.Fatalf("Before == After == %d; this fixture cannot see the mutation it exists to catch", failed.Before)
 	}
-	// headroom is not on the event, so derive it from the site's own contract
-	// and check the OTHER candidate would have produced a different number.
-	headroom := failed.PredictedItems - failed.Before
-	if wrong := failed.After + headroom; failed.PredictedItems == wrong {
-		t.Fatalf("PredictedItems = %d is consistent with BOTH Before=%d and After=%d; the assertion cannot discriminate",
-			failed.PredictedItems, failed.Before, failed.After)
+	// headroom must come from OUTSIDE the value under test. Deriving it as
+	// (PredictedItems - Before) made this assertion circular and the wrong-count
+	// mutation SURVIVED it -- the "an expectation must never be computed by the
+	// thing it checks" trap, self-inflicted and caught only by re-running the
+	// mutation. Guessing the family's headroom was also wrong (the harness's
+	// plan reserves a different amount than a hand-built one).
+	//
+	// So: run the SAME harness configuration with a synthesizer that does not
+	// fail, and read the headroom off the plan that run actually served. Same
+	// inputs, same plan, and nothing in it derives from the value under test.
+	headroom := retryFailureReferenceHeadroom(t)
+	if failed.Before+headroom == failed.After+headroom {
+		t.Fatal("both candidate counts predict the same total; the assertion cannot discriminate")
 	}
 	if failed.PredictedItems != failed.Before+headroom {
 		t.Fatalf("retry-failure event PredictedItems = %d, want Before(%d)+headroom(%d) = %d: this event's "+
 			"measured_items describes the FIRST synthesis, which ran against the pre-narrowing cohort",
 			failed.PredictedItems, failed.Before, headroom, failed.Before+headroom)
 	}
+}
+
+// retryFailureReferenceHeadroom recovers the headroom the retry-failure run
+// used, WITHOUT deriving it from the value under test.
+//
+// The obvious routes both fail: this fixture never serves a plan (the reference
+// run refuses on budget too), and hand-building a plan gets a different
+// headroom than the harness's. So it reads the REFUSAL event from the same
+// configuration and solves h = PredictedItems - Before there.
+//
+// That site (planRefusal) is a DIFFERENT one from the site under test
+// (retry-failed), and its own argument is independently pinned by
+// TestPlanRefusalPredictsForTheCohortItMeasured -- so if planRefusal ever
+// starts predicting from the wrong count, that test fails, not this one
+// silently. The dependency is deliberate and named.
+func retryFailureReferenceHeadroom(t *testing.T) int {
+	t.Helper()
+	calls := 0
+	telemetry := &recordingTelemetry{}
+	// Reserve ZERO, so the retry is DECLINED and the refusal comes from
+	// planRefusal -- the site whose argument TestPlanRefusalPredictsForTheCohort
+	// ItMeasured pins. With a non-zero reserve the retry RUNS and the
+	// RefusalPlanned event is the retry event instead, whose prediction is
+	// derived from `after`; reading headroom off that one silently inverted
+	// this test (it passed under the mutation and failed clean).
+	engine := budgetStageEngine(t, chaos4809OverlappingGroupedCohort(), 20, budgetStageOptions(20, 0), &calls, telemetry)
+	_, err := engine.Investigate(context.Background(),
+		storage.Principal{OrgID: "org_retry_failure_reference"}, validInvestigationRequestWithConfirmedWindow())
+	if err == nil {
+		t.Fatal("reference run served an answer; this fixture is expected to refuse on budget")
+	}
+	for index := range telemetry.planNarrowings {
+		if e := telemetry.planNarrowings[index]; e.RefusalPlanned {
+			if e.RetryAttempted {
+				t.Fatal("reference refusal came from the RETRY path; its prediction uses `after` and cannot supply headroom here")
+			}
+			return e.PredictedItems - e.Before
+		}
+	}
+	t.Fatal("reference run recorded no refusal event; cannot recover the headroom")
+	return 0
 }
