@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -100,12 +101,152 @@ type kindCarryResult struct {
 
 // resolveCarriedKind walks this conversation's own prior-result chain for
 // the nearest receipt-confirmed expected_kind. Fails closed on every
-// ambiguity: "no carry" is always a safe, disclosed answer, never a guess.
+// ambiguity (no reference, an unloadable candidate, a stale graph epoch, a
+// chain exhausted before a hit, or two carriers that disagree): "no carry"
+// is always a safe, disclosed answer, never a guess.
 //
-// NOT IMPLEMENTED YET -- the red-first tests in structure_axis_carry_test.go
-// pin the behavior this must have before any of it is written.
-func (e *Engine) resolveCarriedKind(_ context.Context, _ storage.Principal, _ InvestigationRequest, _ []BoundSubjectReceipt, _ ResolvedGraphBinding) kindCarryResult {
-	return kindCarryResult{}
+// The walk is resolveCarriedWindow's, hop for hop and bound for bound --
+// same seeding (carryReferencedResultIDs), same epoch taint gate, same
+// carryChainMaxDepth/carryChainMaxVisited, same whole-depth scan before any
+// decision. What differs is only WHERE the confirmation lives: a window
+// rides EffectiveEvidenceWindow, a kind rides a ConfirmedStructure entry.
+func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Principal, request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt, binding ResolvedGraphBinding) kindCarryResult {
+	if e.results == nil {
+		return kindCarryResult{Outcome: KindCarryMissNoReference}
+	}
+	frontier := carryReferencedResultIDs(request, validatedSubjectReceipts)
+	if len(frontier) == 0 {
+		return kindCarryResult{Outcome: KindCarryMissNoReference}
+	}
+	visited := make(map[string]struct{}, carryChainMaxVisited)
+	var sawUnloadable, sawStaleEpoch, capExceeded bool
+	for depth := 0; depth < carryChainMaxDepth && len(frontier) > 0; depth++ {
+		var next []string
+		// The WHOLE depth is scanned before any decision, for the reason
+		// resolveCarriedWindow's own hits slice records: the six receipt
+		// fields validate independently, so one request can legitimately
+		// name two different prior results at the same depth, and deciding
+		// on the first one seen would silently pick one of two real,
+		// disagreeing confirmations.
+		var hits []kindCarryResult
+		for _, resultID := range frontier {
+			if ctx.Err() != nil {
+				return kindCarryResult{Outcome: KindCarryMissUnloadable}
+			}
+			if _, ok := visited[resultID]; ok {
+				continue
+			}
+			if len(visited) >= carryChainMaxVisited {
+				capExceeded = true
+				break
+			}
+			visited[resultID] = struct{}{}
+			fetched, err := carryLoadResult(ctx, e.results, principal, resultID)
+			if err != nil {
+				sawUnloadable = true
+				continue
+			}
+			// CHAOS-3898 §2.2 ingress taint gate -- IDENTICAL check to
+			// resolveCarriedWindow's and resolvePriorSubjectHints' own. A
+			// rebuild between turns can change what a kind even denotes, so
+			// a carrier from another epoch is refused outright rather than
+			// trusted partially.
+			if fetched.GraphEpoch == nil || *fetched.GraphEpoch != binding.Epoch {
+				sawStaleEpoch = true
+				continue
+			}
+			prior := fetched.Result
+			if kind, ok := carriableConfirmedKind(prior); ok {
+				hits = append(hits, kindCarryResult{Kind: kind, SourceResultID: prior.ResultID, Outcome: KindCarryHit, ChainDepth: depth})
+				continue
+			}
+			for _, entry := range prior.ConfirmedStructure {
+				id := strings.TrimSpace(entry.PriorResultID)
+				if id == "" {
+					continue
+				}
+				if _, ok := visited[id]; ok {
+					continue
+				}
+				next = append(next, id)
+			}
+		}
+		if len(hits) > 0 {
+			for _, h := range hits[1:] {
+				if h.Kind != hits[0].Kind {
+					return kindCarryResult{Outcome: KindCarryMissConflictingKinds, ChainDepth: depth}
+				}
+			}
+			return hits[0]
+		}
+		frontier = next
+	}
+	if len(frontier) > 0 || capExceeded {
+		return kindCarryResult{Outcome: KindCarryMissDepthExceeded}
+	}
+	switch {
+	case sawStaleEpoch:
+		return kindCarryResult{Outcome: KindCarryMissStaleGraphEpoch}
+	case sawUnloadable:
+		return kindCarryResult{Outcome: KindCarryMissUnloadable}
+	default:
+		return kindCarryResult{Outcome: KindCarryMissNoConfirmedKind}
+	}
+}
+
+// carriableConfirmedKind reports the expected_kind one stored result
+// genuinely confirmed, if any. Source is the whole test: only receipt
+// (redeemed here) and carried (inherited from a turn that redeemed it)
+// are caller authority. An explicit or explicit_unattributed entry is an
+// inferred-tier value -- CHAOS-3972 §2.0 requires a kind-insensitivity
+// proof before anything decisive may rest on one -- and carrying it forward
+// would launder it into authority a turn later, which is precisely what
+// ConfirmedExpectedKind's type-level tripwire (ports.go) exists to prevent.
+//
+// The applied value must also still be a live member of the subject-kind
+// vocabulary: a value persisted under an older vocabulary is not a kind
+// this deployment can narrow a census by, and admitting it would push an
+// unrecognized string down into the pool filter.
+func carriableConfirmedKind(prior InvestigationResult) (contractsv1.ContextFabricSubjectKind, bool) {
+	for _, entry := range prior.ConfirmedStructure {
+		if entry.Member != contractsv1.ContextFabricStructureNeedExpectedKind {
+			continue
+		}
+		if entry.Source != contractsv1.ContextFabricStructureSourceReceipt && entry.Source != contractsv1.ContextFabricStructureSourceCarried {
+			continue
+		}
+		kind := contractsv1.ContextFabricSubjectKind(entry.AppliedValue)
+		if !contractsv1.ValidContextFabricSubjectKind(kind) {
+			continue
+		}
+		return kind, true
+	}
+	return "", false
+}
+
+// effectiveConfirmedKind is what the two ResolveSubjects call sites read
+// instead of confirmedExpectedKind alone: this turn's OWN receipt-confirmed
+// kind when it has one, otherwise the carried kind.
+//
+// This turn's own receipt always wins. A caller redeeming a kindr_ receipt
+// on this request is stating a kind now, and a value inherited from an
+// earlier turn must never override what the caller just said -- the carry
+// exists to fill a silence, never to argue with a statement.
+//
+// The carried kind enters through the SAME *ConfirmedExpectedKind the
+// receipt path constructs, deliberately: everything downstream (the pool
+// filter, and through it the kind offer's own cardinality suppression) then
+// treats a carried kind exactly as it treats a kind confirmed on this turn,
+// which is the whole point of a carry. A second, parallel path would make
+// the two diverge.
+func effectiveConfirmedKind(confirmed []confirmedStructureMember, carry kindCarryResult) *ConfirmedExpectedKind {
+	if own := confirmedExpectedKind(confirmed); own != nil {
+		return own
+	}
+	if carry.Outcome != KindCarryHit || carry.Kind == "" {
+		return nil
+	}
+	return &ConfirmedExpectedKind{Kind: carry.Kind}
 }
 
 // composeCarriedKindEntry renders the wire disclosure for a carried kind:
@@ -115,7 +256,78 @@ func (e *Engine) resolveCarriedKind(_ context.Context, _ storage.Principal, _ In
 // any member (validate_context_fabric_structure.go). A carry is never
 // silent.
 //
-// NOT IMPLEMENTED YET -- see resolveCarriedKind.
-func composeCarriedKindEntry(_ kindCarryResult) *contractsv1.ContextFabricConfirmedStructureEntry {
-	return nil
+// Provenance is clarification_confirmed rather than inferred_default
+// because carriableConfirmedKind admits only receipt- and carried-sourced
+// origins -- every kind that can reach here was confirmed by a caller
+// redeeming an offer, one or more turns ago.
+func composeCarriedKindEntry(carry kindCarryResult) *contractsv1.ContextFabricConfirmedStructureEntry {
+	if carry.Outcome != KindCarryHit || carry.Kind == "" {
+		return nil
+	}
+	return &contractsv1.ContextFabricConfirmedStructureEntry{
+		Member:        contractsv1.ContextFabricStructureNeedExpectedKind,
+		AppliedValue:  string(carry.Kind),
+		Source:        contractsv1.ContextFabricStructureSourceCarried,
+		PriorResultID: carry.SourceResultID,
+		Provenance:    contractsv1.ContextFabricStructureClarificationConfirmed,
+		Disposition:   contractsv1.ContextFabricStructureDispositionApplied,
+	}
+}
+
+// recordKindCarry reports carry.Outcome to telemetry -- a no-op when
+// telemetry is unconfigured or carry was never attempted, mirroring
+// recordWindowCarry's own "once per non-zero signal" shape.
+func (e *Engine) recordKindCarry(ctx context.Context, principal storage.Principal, carry kindCarryResult) {
+	if e.telemetry == nil || carry.Outcome == KindCarryNotAttempted {
+		return
+	}
+	e.telemetry.RecordKindCarry(ctx, principal, carry.Outcome, carry.ChainDepth)
+}
+
+// carryResultCacheKey scopes the per-request carry load cache below.
+type carryResultCacheKey struct{}
+
+// carryResultCacheEntry memoizes one InvestigationResultStore.Get, error
+// included -- a load that failed once must not be retried by the next axis
+// and reported as a different miss reason.
+type carryResultCacheEntry struct {
+	stored StoredInvestigationResult
+	err    error
+}
+
+// withCarryResultCache returns a context carrying a per-REQUEST memo of
+// prior-result loads, shared by every carry axis attempted on that request.
+//
+// WHY THIS EXISTS. The window carry and the kind carry are independent
+// mechanisms -- each fails closed on its own, and neither may suppress the
+// other -- but on the one turn where BOTH are eligible they walk the SAME
+// chain from the SAME frontier, so without a memo each prior result is
+// loaded twice. That is a duplicated store read on exactly the turn a
+// clarification chain is already struggling to terminate.
+//
+// WHY A CONTEXT VALUE rather than a parameter, given this package's stated
+// preference for positional parameters (ports.go): that rule is about
+// SEMANTIC inputs, which must fail to compile when an implementation omits
+// them. This is not one. The cache cannot change any carry's outcome -- an
+// absent cache means every load goes straight to the store, which is
+// byte-identical behavior and exactly what every direct-call unit test in
+// this package gets by passing a bare context.
+func withCarryResultCache(ctx context.Context) context.Context {
+	return context.WithValue(ctx, carryResultCacheKey{}, map[string]carryResultCacheEntry{})
+}
+
+// carryLoadResult loads one prior result through the request's carry cache
+// when there is one, and straight from the store when there is not.
+func carryLoadResult(ctx context.Context, results InvestigationResultStore, principal storage.Principal, resultID string) (StoredInvestigationResult, error) {
+	cache, _ := ctx.Value(carryResultCacheKey{}).(map[string]carryResultCacheEntry)
+	if cache != nil {
+		if entry, ok := cache[resultID]; ok {
+			return entry.stored, entry.err
+		}
+	}
+	stored, err := results.Get(ctx, principal, resultID)
+	if cache != nil {
+		cache[resultID] = carryResultCacheEntry{stored: stored, err: err}
+	}
+	return stored, err
 }

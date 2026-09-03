@@ -498,6 +498,16 @@ type EngineTelemetry interface {
 	// "carry hit rate" measures. chainDepth is meaningful only when
 	// outcome==hit (0 for every miss).
 	RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int)
+	// RecordKindCarry reports the outcome of ONE same-conversation
+	// expected_kind carry attempt -- see KindCarryOutcome's own doc comment
+	// for the closed vocabulary (structure_axis_carry.go). Called at most
+	// once per Investigate call, ONLY when this turn confirmed no kind of
+	// its own, so the denominator across every call this fires for IS the
+	// carry-eligible population, exactly as RecordWindowCarry's is. A
+	// SEPARATE counter rather than one call with an axis label: a reader
+	// diagnosing an ask/answer oscillation must be able to tell WHICH axis
+	// missed, and the two axes have independent hit rates.
+	RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int)
 	// RecordStructureNeedsDisclosed (CHAOS-3900 P1.F, design brief §2.1's
 	// cf_structure_needs_disclosed{member}) reports one member appearing
 	// in a composed StructureNeeds.Missing -- called once per member,
@@ -1198,6 +1208,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// `interpretation`. Interpret below now receives ONLY the receipts
 	// resolvePriorSubjectHints itself validated (priorValidatedReceipts).
 	graphRequest := request
+	// carryCtx carries ONE per-request memo of prior-result loads, shared by
+	// prior-subject-hint resolution and by every carry axis below
+	// (withCarryResultCache, structure_axis_carry.go). Without it, a turn
+	// that resolves hints AND attempts both carries loads the same prior
+	// result three times -- and that turn is precisely the one a struggling
+	// clarification chain keeps landing on.
+	carryCtx := withCarryResultCache(ctx)
 	var priorHints []SubjectHint
 	var priorValidatedReceipts []BoundSubjectReceipt
 	var priorOutcomes []priorSubjectReceiptOutcome
@@ -1207,7 +1224,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	var priorLoadedResults map[string]InvestigationResult
 	var priorHintsStaleGraphEpochDelta int64
 	if e.results != nil && len(request.PriorSubjectReceipts) > 0 {
-		priorHints, priorValidatedReceipts, priorHintsStaleGraphEpochDelta, priorOutcomes, priorLoadedResults = e.resolvePriorSubjectHints(ctx, principal, request.Consumer, request.PriorSubjectReceipts, binding)
+		priorHints, priorValidatedReceipts, priorHintsStaleGraphEpochDelta, priorOutcomes, priorLoadedResults = e.resolvePriorSubjectHints(carryCtx, principal, request.Consumer, request.PriorSubjectReceipts, binding)
 		// The v1 contract bounds RequestedScope.SubjectHints at 50
 		// (ContextFabricRequestedScope.Validate). request.Validate()
 		// already proved the caller's own hints are within that bound,
@@ -1415,20 +1432,39 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// request.PriorSubjectReceipts -- see carryReferencedResultIDs' own
 		// doc comment (chaos4360_carry.go) for why an unmatched
 		// PriorSubjectReceipts entry must not be able to seed the walk.
-		windowCarry = e.resolveCarriedWindow(ctx, principal, request, priorValidatedReceipts, binding)
+		windowCarry = e.resolveCarriedWindow(carryCtx, principal, request, priorValidatedReceipts, binding)
 		e.recordWindowCarry(ctx, principal, windowCarry)
 		if windowCarry.Outcome == WindowCarryHit {
 			effectiveWindow = windowCarry.Window
 		}
 	}
-	carriedStructureEntry := composeCarriedWindowEntry(windowCarry)
+	// Same-conversation expected_kind carry (structure_axis_carry.go), the
+	// structure-axis twin of the window carry above. Attempted ONLY when
+	// this turn confirmed no kind of its own -- a kindr_ receipt redeemed on
+	// THIS request is the caller stating a kind now, and an inherited value
+	// must never override what the caller just said.
+	//
+	// Placed here, before the CHAOS-4234 gate below, so BOTH the gated
+	// offers-only resolution and the decisive resolution read the same
+	// effective kind. Sequenced after the window carry deliberately: the two
+	// axes are independent (each fails closed on its own), and a window
+	// carry miss must not suppress a kind carry hit.
+	var kindCarry kindCarryResult
+	if confirmedExpectedKind(structureCanon.Confirmed) == nil {
+		kindCarry = e.resolveCarriedKind(carryCtx, principal, request, priorValidatedReceipts, binding)
+		e.recordKindCarry(ctx, principal, kindCarry)
+	}
+	carriedStructureEntries := []*contractsv1.ContextFabricConfirmedStructureEntry{
+		composeCarriedWindowEntry(windowCarry),
+		composeCarriedKindEntry(kindCarry),
+	}
 	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
 		// CHAOS-4234: the gate still fires HERE, before anything decisive,
 		// but it now composes kind/handle/candidate offers from an
 		// offers-only resolution whose commit-bearing outputs are discarded
 		// -- see chaos4234_offers_only.go for the ruling and the two
 		// safety layers.
-		gatedMaterial, gatedMaterialWindowExpandUnavailable := e.gatedOfferMaterial(ctx, principal, request, graphRequest, interpretation, familyOutcome, binding, structureCanon, priorEntries)
+		gatedMaterial, gatedMaterialWindowExpandUnavailable := e.gatedOfferMaterial(ctx, principal, request, graphRequest, interpretation, familyOutcome, binding, structureCanon, kindCarry, priorEntries)
 		// CHAOS-3478/CHAOS-4234: priorOutcomes was already computed above
 		// (resolvePriorSubjectHints runs before Interpret, this gate fires
 		// after) but this gate's own resolution is offers-only and
@@ -1509,7 +1545,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// CARRIED, NOT RE-DERIVED (CHAOS-4736 bar 5): resolution gets this
 	// turn's validated frame so the kind-hinted pool search reads declared
 	// kinds instead of guessing at the question's words.
-	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed), familyOutcome.Frame)
+	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, effectiveConfirmedKind(structureCanon.Confirmed, kindCarry), confirmedAnchorSelection(structureCanon.Confirmed), familyOutcome.Frame)
 	if err != nil {
 		// CHAOS-4077: a never-projected org (ResolveSubjects queried a
 		// graph key that has never been created) degrades to the SAME
@@ -1551,7 +1587,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				emptyResolution.PriorSubjectReceiptDispositions = composePriorSubjectReceiptDispositions(priorOutcomes, emptyResolution)
 				e.recordPriorSubjectReceiptSkips(ctx, principal, emptyResolution.PriorSubjectReceiptDispositions, priorHintsStaleGraphEpochDelta)
 			}
-			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, emptyResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntry, &plan)
+			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, emptyResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntries, &plan)
 			return terminal, terminalErr
 		}
 		// CHAOS-4088: StageSubjectResolution, not StageResolution -- the
@@ -1647,7 +1683,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// read facts for, and it must keep running.
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if len(subjects) == 0 {
-		terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntry, &plan)
+		terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntries, &plan)
 		return terminal, terminalErr
 	}
 
@@ -1908,7 +1944,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		Graph: graphContext, Facts: facts,
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
 		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarry: windowCarry,
-		StructureCanon: structureCanon, CarriedStructureEntry: carriedStructureEntry,
+		StructureCanon: structureCanon, CarriedStructureEntries: carriedStructureEntries,
 		CommitBases: commitBases, CommitDigests: commitDigests,
 		GroupedNarrowingBasis: stage2GroupedBasis,
 	}
@@ -2216,7 +2252,7 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 		}
 		prior, ok := loaded[resultID]
 		if !ok {
-			fetched, err := e.results.Get(ctx, principal, resultID)
+			fetched, err := carryLoadResult(ctx, e.results, principal, resultID)
 			if err != nil {
 				outcomes = append(outcomes, priorSubjectReceiptOutcome{receipt: receipt, preGraphSkipReason: priorSubjectReceiptSkipUnloadable})
 				continue

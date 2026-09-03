@@ -56,8 +56,12 @@ flowchart TD
   PLANCARRY --> STRUCT
   STRUCT["structure needs: kind / anchor / handle / window<br/>composeEffectiveWindow (window.go)<br/>canonicalizeStructure (chaos3900)"]
   STRUCT --> CARRY{"CHAOS-4360 same-conversation<br/>window carry<br/>resolveCarriedWindow<br/>(chaos4360_carry.go)<br/>-- ONLY when effectiveWindow<br/>would be inferred_default"}
-  CARRY -->|"hit: nearest chain confirmation<br/>found (bounded walk,<br/>CHAOS-3898 taint gate applied)<br/>effectiveWindow REPLACED,<br/>Source=carried disclosed on<br/>ConfirmedStructure -- never<br/>re-accepts a receipt, the<br/>IsStructureSuperseded guard<br/>is untouched"| WGATE
-  CARRY -->|"miss: no reference / unloadable /<br/>stale_graph_epoch / no_confirmed_window /<br/>depth_exceeded"| WGATE{"class-default window gate<br/>WindowCanonicalizationGatedClassDefault<br/>CHAOS-4040/4234"}
+  CARRY -->|"hit: nearest chain confirmation<br/>found (bounded walk,<br/>CHAOS-3898 taint gate applied)<br/>effectiveWindow REPLACED,<br/>Source=carried disclosed on<br/>ConfirmedStructure -- never<br/>re-accepts a receipt, the<br/>IsStructureSuperseded guard<br/>is untouched"| KINDCARRY
+  CARRY -->|"miss: no reference / unloadable /<br/>stale_graph_epoch / no_confirmed_window /<br/>depth_exceeded"| KINDCARRY
+  KINDCARRY{"same-conversation expected_kind carry<br/>resolveCarriedKind (structure_axis_carry.go)<br/>-- ONLY when this turn confirmed no kind<br/>of its own; receipt/carried sources ONLY.<br/>Runs whether or not the window carried:<br/>the two axes are independent and<br/>neither may suppress the other"}
+  KINDCARRY -->|"hit: effectiveConfirmedKind feeds<br/>ResolveSubjects' *ConfirmedExpectedKind<br/>(pool filter, and through it the kind<br/>offer's own cardinality suppression),<br/>Source=carried disclosed.<br/>This turn's own kindr_ receipt always wins"| WGATE
+  KINDCARRY -->|"miss: no reference / unloadable /<br/>stale_graph_epoch / no_confirmed_kind /<br/>depth_exceeded / conflicting_kinds"| WGATE
+  WGATE{"class-default window gate<br/>WindowCanonicalizationGatedClassDefault<br/>CHAOS-4040/4234"}
   WGATE -->|"regime A: inferred_default"| GATED["gatedOfferMaterial<br/>chaos4234_offers_only.go"]
   GATED --> OFFRES["graph.ResolveSubjects(WithOffersOnlyResolution)<br/>same pool mechanism as regime B,<br/>commit-bearing output DISCARDED"]
   OFFRES --> CLSGATE{"GateOffersByFamily<br/>family ApplicableAxes gate, CHAOS-4634<br/>(subsumes CHAOS-4579/4531)<br/>chaos4579_cohort_structure_gate.go"}
@@ -115,7 +119,7 @@ flowchart TD
   classDef fixed fill:#14532d,stroke:#22c55e,color:#ffffff
   classDef refuse fill:#7f1d1d,stroke:#ef4444,color:#ffffff
   class POOL gap
-  class UNEXP,GATE2,ROWS,CARRY,STAGE2,STAGE3 fixed
+  class UNEXP,GATE2,ROWS,CARRY,KINDCARRY,STAGE2,STAGE3 fixed
   class RETRACT,REFUSE refuse
 ```
 
@@ -197,12 +201,35 @@ it. A carry is disclosed, never silent: a new `ContextFabricConfirmedStructureEn
 with `Source=carried` (a v1-additive fourth `ContextFabricStructureSource`
 value, deliberately excluded from `structureSupersessionClaims` — a carry
 reads already-stored confirmed structure, it never re-accepts a receipt)
-names the origin `PriorResultID`. Scope: this ticket carries the WINDOW
-only (the proven defect and the ticket's own literal acceptance bar);
-`expected_kind`/`subject_anchor` functional carry is flagged as a
-follow-up, not built here, since `PriorSubjectReceipts` re-verification
-already resolves the concrete candidate-commit gap on its own once the
-window stops being gated.
+names the origin `PriorResultID`. That ticket carried the WINDOW only (its
+proven defect and its literal acceptance bar) and flagged the structure
+axes as a follow-up.
+
+**The `expected_kind` half is now built** (`resolveCarriedKind`,
+`structure_axis_carry.go`), on the same chain walk, the same
+`CHAOS-3898` taint gate and the same bounds — because the follow-up turned
+out to be a defect of its own, not a nicety. Measured on the kiac pilot:
+turn 1 raises `expected_kind` and `window`, turn 2 answers both, turn 2's
+response then offers NEITHER, and an honest offer-driven client — one that
+only re-presents receipts for needs the latest response still offers — has
+nothing left to send, so turn 3 is asked the same two needs again.
+Turns-to-terminal on identical input measured 1, 5 and >8, with one
+replicate never terminating at all. Only a receipt-confirmed (or itself
+carried) kind is eligible: carrying an explicit/inferred-tier value forward
+would launder it into caller authority a turn later, which is what
+`ConfirmedExpectedKind`'s type-level tripwire (`ports.go`) exists to
+prevent. This turn's OWN kind receipt always wins over a carried one — the
+carry fills a silence, it does not argue with a statement.
+
+**The limit, stated rather than left to be discovered.** Both carries seed
+their walk from a prior result the REQUEST names, and a request names one
+only through a receipt (`carryReferencedResultIDs`). On the measured chain
+turn 3 named nothing at all, so the window carry missed with
+`miss_no_reference` on three separate `request_id`s and the kind carry
+would miss identically. This mechanism therefore fixes every LINKED chain
+and does not, by itself, close the measured row: that needs chain identity
+a client can supply without a receipt, which is a contract question ruled
+separately. `subject_anchor`/`subject_handle` carry remains unbuilt.
 
 ---
 

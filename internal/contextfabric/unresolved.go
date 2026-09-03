@@ -200,15 +200,17 @@ func (e *Engine) terminalResult(
 	structureCanon requestStructureCanonicalization,
 	structureMaterial StructureOfferMaterial,
 	effectiveWindow *contractsv1.ContextFabricEffectiveEvidenceWindow,
-	// windowCarried and carriedStructureEntry (CHAOS-4360) mirror the
-	// decisive path's own carry disclosure (engine.go): windowCarried feeds
-	// windowCanonicalizationOutcome's carried-vs-inferred distinction,
-	// carriedStructureEntry is appended to this terminal's own
-	// ConfirmedStructure echo below. Both computed ONCE by the caller,
-	// alongside effectiveWindow itself -- never recomputed here, same
-	// discipline as effectiveWindow's own doc comment two lines up.
+	// windowCarried and carriedStructureEntries (CHAOS-4360, extended for
+	// the structure axes) mirror the decisive path's own carry disclosure
+	// (engine.go): windowCarried feeds windowCanonicalizationOutcome's
+	// carried-vs-inferred distinction, carriedStructureEntries are appended
+	// to this terminal's own ConfirmedStructure echo below. A SLICE because
+	// carries are per-axis and one turn can carry several. All computed
+	// ONCE by the caller, alongside effectiveWindow itself -- never
+	// recomputed here, same discipline as effectiveWindow's own doc comment
+	// two lines up.
 	windowCarried bool,
-	carriedStructureEntry *contractsv1.ContextFabricConfirmedStructureEntry,
+	carriedStructureEntries []*contractsv1.ContextFabricConfirmedStructureEntry,
 	// plan is the caller's AnswerPlan, or nil where none exists yet. It is
 	// passed IN rather than stamped by the caller afterwards: a caller-side
 	// stamp lands after this function has measured and persisted, which is
@@ -368,7 +370,7 @@ func (e *Engine) terminalResult(
 		// CHAOS-4360: a carried window is disclosed here too, appended after
 		// every receipt/explicit entry, mirroring the decisive path's own
 		// identical merge (engine.go).
-		ConfirmedStructure: appendCarriedStructureEntry(composeConfirmedStructure(mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), structureCanon.Explicit), carriedStructureEntry),
+		ConfirmedStructure: appendCarriedStructureEntry(composeConfirmedStructure(mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), structureCanon.Explicit), carriedStructureEntries...),
 		// CHAOS-3900 P1.G: no guard needed -- structureCanon.OfferSnapshot
 		// is only ever non-nil alongside structureCanon.Confirmed, see
 		// requestStructureCanonicalization's own doc comment (structure.go).

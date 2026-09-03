@@ -3,8 +3,10 @@ package contextfabric
 import (
 	"context"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // confirmedKindEntry builds the ConfirmedStructure entry a turn that
@@ -250,5 +252,190 @@ func TestResolveCarriedKind_IgnoresANonReceiptSourcedKind(t *testing.T) {
 	}
 	if got.Kind != "" {
 		t.Fatalf("resolveCarriedKind().Kind = %q, want empty", got.Kind)
+	}
+}
+
+// kindRecordingGraphReader embeds graphReaderStub and records the
+// *ConfirmedExpectedKind each ResolveSubjects call received. The engine's
+// own seam is exactly that argument -- everything downstream (the pool
+// filter, and through it the kind offer's cardinality suppression) hangs
+// off it -- so a test that asserts on it is asserting on the thing the
+// carry actually changes, not on a stub's scripted reply.
+type kindRecordingGraphReader struct {
+	graphReaderStub
+	seen []*ConfirmedExpectedKind
+}
+
+func (g *kindRecordingGraphReader) ResolveSubjects(ctx context.Context, principal storage.Principal, request InvestigationRequest, interpreted InterpretedQuestion, binding ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection, frame *QuestionFrame) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	g.seen = append(g.seen, confirmedKind)
+	return g.graphReaderStub.ResolveSubjects(ctx, principal, request, interpreted, binding, confirmedKind, confirmedAnchor, frame)
+}
+
+// TestKindCarry_TurnThatIsOfferedNothingStillResolvesUnderTheConfirmedKind
+// is this lane's test 2: the replay of the measured r3 chain shape, reduced
+// to the one turn that matters.
+//
+// THE MEASURED SHAPE (leg :3046 -> :18096, question "Which repositories does
+// the Ops Team own?"): turn 1 raises expected_kind and window; turn 2 answers
+// both and its response then offers NEITHER; turn 3, an honest offer-driven
+// client having nothing left to re-present, is asked the same two needs
+// again. Turns-to-terminal on identical input measured 1, 5 and >8, with one
+// replicate never terminating.
+//
+// This test is turn 3 of a LINKED chain -- the request still names turn 2
+// through a candidate receipt, which is the case the carry can serve. The
+// unlinked case (turn 3 names nothing at all, measured miss_no_reference on
+// three separate request_ids) is NOT fixed by this mechanism and is not
+// pretended to be here: it needs chain identity the client can supply
+// without a receipt, which is a contract question ruled elsewhere.
+//
+// What this pins: turn 3 resolves under the kind turn 2 confirmed, rather
+// than under nil, and says so on the wire. The consequence -- that the
+// expected_kind need is then not re-raised -- follows from the pool filter
+// narrowing to a single kind, which is graphrank's own cardinality
+// suppression and has its own coverage there; this test pins the seam that
+// feeds it.
+func TestKindCarry_TurnThatIsOfferedNothingStillResolvesUnderTheConfirmedKind(t *testing.T) {
+	t.Parallel()
+	team := SubjectRef{Kind: SubjectTeam, CanonicalID: "team_ops", Label: "Ops Team"}
+
+	// Turn 2's persisted result: it confirmed expected_kind=team AND a
+	// window by redeeming the receipts turn 1 offered, and its own response
+	// then offered neither axis again.
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_turn_two"
+	priorResult.Status = InvestigationClarificationRequired
+	priorResult.EffectiveEvidenceWindow = &contractsv1.ContextFabricEffectiveEvidenceWindow{
+		RelativeID: RelativeWindowTrailing90D, Provenance: WindowClarificationConfirmed,
+	}
+	priorResult.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+		confirmedKindEntry(contractsv1.ContextFabricSubjectTeam, "result_turn_one", "kindr_turn_one_01"),
+	}
+	priorResult.SubjectResolution = SubjectResolution{
+		Candidates: []SubjectCandidate{{
+			ReceiptID: "receipt_turn_two_candidate", Subject: team, State: ResolutionCommitted,
+			MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 1,
+		}},
+		Committed: []SubjectRef{},
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{"result_turn_two": priorResult}}
+	telemetry := &recordingTelemetry{}
+	graph := &kindRecordingGraphReader{graphReaderStub: graphReaderStub{
+		resolution: SubjectResolution{
+			Candidates: []SubjectCandidate{{
+				ReceiptID: "receipt_turn_three_candidate", Subject: team, State: ResolutionCommitted,
+				MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 0.97,
+			}},
+			Committed: []SubjectRef{team},
+		},
+		context: emptyGraphContext(),
+		bases:   provenCommitBases(team),
+	}}
+
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: &countingInterpreter{interpretation: bootstrapInterpretation()},
+		Graph:       graph,
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{
+				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+			}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{
+				Status: InvestigationComplete, DirectJudgment: "The Ops Team owns two repositories.", CurrentState: "Nominal.",
+				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
+				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+				ClaimedFacts:        []ClaimedFact{},
+				Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				DeterministicAnswer: "The Ops Team owns two repositories.", Warnings: []string{},
+				Versions: VersionSet{
+					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+					InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+				},
+			}, nil
+		}),
+		Results: store, Telemetry: telemetry,
+	}, EngineOptions{
+		ServiceVersion: "structure-axis-carry-test",
+		Now:            func() time.Time { return time.Date(2026, 9, 3, 20, 0, 0, 0, time.UTC) },
+		NewResultID:    func() string { return "result_turn_three" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	// Turn 3 as an honest offer-driven client sends it: no expected_kind of
+	// its own, no kindr_ receipt (turn 2 offered none to redeem), and the
+	// chain named only through the candidate offer turn 2 DID make.
+	request := validInvestigationRequest()
+	request.ExpectedKinds = nil
+	// A SUBJECT candidate receipt, which is literally what the measured
+	// driver sent on these turns (lane-4973's receipt column): turn 2 offered
+	// three subject candidates and no kind or window options, so a candidate
+	// pick is the only thing an offer-driven client had to send.
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_turn_two", ReceiptID: "receipt_turn_two_candidate"}}
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+
+	if len(graph.seen) == 0 {
+		t.Fatal("ResolveSubjects was never called; the test proves nothing about the seam")
+	}
+	for i, seen := range graph.seen {
+		if seen == nil {
+			t.Fatalf("ResolveSubjects call %d received a nil *ConfirmedExpectedKind, want the carried team: turn 3 must not resolve as though nothing had been confirmed", i)
+		}
+		if seen.Kind != contractsv1.ContextFabricSubjectTeam {
+			t.Fatalf("ResolveSubjects call %d received kind %q, want %q", i, seen.Kind, contractsv1.ContextFabricSubjectTeam)
+		}
+	}
+
+	wantEntry := contractsv1.ContextFabricConfirmedStructureEntry{
+		Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam),
+		Source: contractsv1.ContextFabricStructureSourceCarried, PriorResultID: "result_turn_two",
+		Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+	}
+	found := false
+	for _, entry := range result.ConfirmedStructure {
+		if entry == wantEntry {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("ConfirmedStructure = %#v, want an entry %#v: a carry the caller cannot see is a silent inheritance", result.ConfirmedStructure, wantEntry)
+	}
+
+	if len(telemetry.kindCarries) != 1 || telemetry.kindCarries[0] != (kindCarryRecord{KindCarryHit, 0}) {
+		t.Fatalf("telemetry.kindCarries = %#v, want exactly one hit at depth 0", telemetry.kindCarries)
+	}
+}
+
+// TestKindCarry_ThisTurnsOwnReceiptWinsOverACarriedKind pins the precedence
+// rule: a caller redeeming a kindr_ receipt on THIS request is stating a
+// kind now, and a value inherited from an earlier turn must never override
+// what the caller just said. The carry fills a silence; it does not argue
+// with a statement. Without this, a caller could never change its mind
+// about the kind for the rest of a conversation.
+func TestKindCarry_ThisTurnsOwnReceiptWinsOverACarriedKind(t *testing.T) {
+	t.Parallel()
+	own := []confirmedStructureMember{{
+		Member:       contractsv1.ContextFabricStructureNeedExpectedKind,
+		AppliedValue: string(contractsv1.ContextFabricSubjectProject),
+	}}
+	carry := kindCarryResult{Kind: contractsv1.ContextFabricSubjectTeam, SourceResultID: "result_turn_a", Outcome: KindCarryHit}
+
+	got := effectiveConfirmedKind(own, carry)
+	if got == nil || got.Kind != contractsv1.ContextFabricSubjectProject {
+		t.Fatalf("effectiveConfirmedKind(own=project, carried=team) = %#v, want project: this turn's own receipt wins", got)
+	}
+	if got := effectiveConfirmedKind(nil, carry); got == nil || got.Kind != contractsv1.ContextFabricSubjectTeam {
+		t.Fatalf("effectiveConfirmedKind(no own receipt, carried=team) = %#v, want team", got)
+	}
+	if got := effectiveConfirmedKind(nil, kindCarryResult{Outcome: KindCarryMissNoReference}); got != nil {
+		t.Fatalf("effectiveConfirmedKind(no own receipt, miss) = %#v, want nil", got)
 	}
 }
