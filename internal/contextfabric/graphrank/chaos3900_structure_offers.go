@@ -133,7 +133,11 @@ type kindOfferDiagnostics struct {
 	// "in the pool, still not offered" gap CHAOS-4012 investigates.
 	DistinctKindCount int
 	// SuppressedByCardinality is true exactly when
-	// "explicitCount==0 && len(ranked)<2" fired.
+	// "explicitCount==0 && (len(poolDistinct)==0 || len(ranked)<2)" fired
+	// (CHAOS-4967 codex round 1, P2: declaredKinds alone -- even two of
+	// them, e.g. a grouped_members frame's member_kind+group_kind -- can
+	// never satisfy this gate; only a pool-sourced kind or an explicit hint
+	// can).
 	SuppressedByCardinality bool
 }
 
@@ -187,7 +191,22 @@ func kindOfferMaterial(poolKinds []contractsv1.ContextFabricSubjectKind, explici
 	// whatever explicit kinds already claimed) to be worth disambiguating
 	// on its own; an explicit kind is ALWAYS worth offering regardless of
 	// pool cardinality.
-	if explicitCount == 0 && len(ranked) < 2 {
+	//
+	// CHAOS-4967 codex round 1, P2: len(ranked)<2 alone is NOT sufficient
+	// once declaredKinds can itself contribute >=2 entries -- a valid
+	// grouped_members frame declares BOTH its member_kind and its
+	// group_kind (invariant I6: always two DIFFERENT kinds), so
+	// declaredKinds alone can reach len(ranked)==2 with an entirely empty
+	// pool. Those two kinds are already-known axes the frame itself named,
+	// not a real ambiguity -- offering "team or project?" back to a
+	// question that already declared both is exactly the "declared kind
+	// alone is not a real ambiguity" case this whole parameter exists to
+	// prevent, just reached via TWO declared kinds instead of one. The fix
+	// is requiring poolDistinct to have contributed at least one kind of
+	// its own: declaredKinds (any count) can never satisfy this gate by
+	// itself, only alongside a genuinely pool-sourced kind or an explicit
+	// hint.
+	if explicitCount == 0 && (len(poolDistinct) == 0 || len(ranked) < 2) {
 		diagnostics.SuppressedByCardinality = true
 		return contextfabric.StructureOfferMaterial{}, diagnostics
 	}

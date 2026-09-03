@@ -901,7 +901,16 @@ type ResolutionTraceEvent struct {
 	// on a precondition the way the coverage floor and confirmed-kind
 	// rescue are), so this stage fires every time deps.ResolutionTracer is
 	// non-nil, corpus-wide, not only for the previously-flagged subset.
-	KindOfferExplicitHintCount       int
+	KindOfferExplicitHintCount int
+	// KindOfferDeclaredHintCount (CHAOS-4967 codex round 1, P2) mirrors
+	// KindOfferExplicitHintCount for the SAME reason -- a reader tracing
+	// why KindOfferDistinctKindCount came back N needs to know how many of
+	// those N kinds are frame-declared (kindOfferDiagnostics.DeclaredHintCount,
+	// chaos3900_structure_offers.go) versus pool-derived, exactly the way
+	// ExplicitHintCount already separates caller-declared from pool-derived.
+	// No BeforeRepair companion, matching ExplicitHintCount's own shape --
+	// only DistinctKindCount/SuppressedByCardinality get before/after pairs.
+	KindOfferDeclaredHintCount       int
 	KindOfferDistinctKindCount       int
 	KindOfferSuppressedByCardinality bool
 	// KindOfferCandidateOfferCount/KindOfferOfferKind (stage=="kind_offer"
@@ -2751,6 +2760,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 			RequestID: request.RequestID, Stage: "kind_offer",
 			KindOfferExplicitHintCount:                   kindOfferDiag.ExplicitHintCount,
+			KindOfferDeclaredHintCount:                   kindOfferDiag.DeclaredHintCount,
 			KindOfferDistinctKindCount:                   kindOfferDiag.DistinctKindCount,
 			KindOfferSuppressedByCardinality:             kindOfferDiag.SuppressedByCardinality,
 			KindOfferCandidateOfferCount:                 candidateOfferDiag.CandidateOfferCount,

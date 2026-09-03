@@ -189,6 +189,42 @@ func TestKindOfferMaterial_DeclaredKindAloneSuppressesNeed(t *testing.T) {
 	}
 }
 
+// TestKindOfferMaterial_TwoDeclaredKindsAloneSuppressesNeed (CHAOS-4967
+// codex round 1, P2) is TestKindOfferMaterial_DeclaredKindAloneSuppressesNeed's
+// own sibling for the case that finding caught: declaredKinds can carry
+// TWO distinct entries at once -- a valid grouped_members frame declares
+// both a member_kind and a group_kind, always different (invariant I6) --
+// and two distinct declared kinds alone used to satisfy the old
+// "len(ranked)<2" cardinality check even though neither the pool nor an
+// explicit hint contributed anything: two already-known, frame-declared
+// axes are not a real ambiguity any more than one is.
+func TestKindOfferMaterial_TwoDeclaredKindsAloneSuppressesNeed(t *testing.T) {
+	t.Parallel()
+	declaredKinds := []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectTeam,
+		contractsv1.ContextFabricSubjectProject,
+	}
+	material, diag := kindOfferMaterial(nil, nil, declaredKinds)
+	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
+		t.Errorf("kindOfferMaterial(nil pool, nil explicit, [team, project] declared) = %+v, want empty -- two already-declared axes are not an ambiguity to disclose", material)
+	}
+	if diag != (kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 2, DistinctKindCount: 2, SuppressedByCardinality: true}) {
+		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:2 DistinctKindCount:2 SuppressedByCardinality:true} -- DistinctKindCount is still 2 (both declared kinds ARE distinct offerable kinds), only SuppressedByCardinality changes", diag)
+	}
+
+	// The complement: the SAME two declared kinds alongside a pool that
+	// contributes a genuinely new, third kind must still raise -- pool
+	// contribution is what makes it a real ambiguity again.
+	poolKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}
+	material, diag = kindOfferMaterial(poolKinds, nil, declaredKinds)
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
+		t.Fatalf("material.Missing = %v, want [expected_kind] -- two declared kinds PLUS a genuinely new pool kind must raise", material.Missing)
+	}
+	if len(material.KindOptions) != 3 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectTeam || material.KindOptions[1].Kind != contractsv1.ContextFabricSubjectProject {
+		t.Fatalf("KindOptions = %+v, want [team, project, pull_request] -- both declared kinds ranked first, in declaredKinds order, pool kind last", material.KindOptions)
+	}
+}
+
 // TestCandidateOfferMaterial_EmptyPoolOffersNothing pins the "genuinely
 // nothing to rank" case -- distinct from the cardinality question
 // kindOfferMaterial's own gate asks; candidateOfferMaterial has no
