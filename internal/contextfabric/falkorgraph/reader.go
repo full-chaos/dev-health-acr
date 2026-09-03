@@ -733,7 +733,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// Shape/anchor say "census" (see cohortExactNameCensusEligibility's own
 	// doc comment -- CHAOS-4622 remainder widened this past Shape ==
 	// ShapeDiscoveredCohort alone), AND nothing was already committed.
-	shapeAnchorEligible, censusBasis := cohortExactNameCensusEligibility(request.Interpretation.Shape, request.ScopeAnchorResolved)
+	shapeAnchorEligible, censusBasis := cohortExactNameCensusEligibility(request.Frame, request.ScopeAnchorResolved)
 	censusAdmitted := shapeAnchorEligible && len(request.Resolution.Committed) == 0
 	if censusBasis != "" && a.config.Telemetry != nil {
 		reportedBasis := censusBasis

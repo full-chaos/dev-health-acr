@@ -338,10 +338,10 @@ func stampAnswerPlan(result InvestigationResult, plan AnswerPlan) InvestigationR
 // Pure, and deliberately telemetry-free: it runs once per synthesis pass, and
 // a retry must not double-count a render-selection decision. The engine emits
 // that event once, for the result it actually serves.
-func (e *Engine) finalizeResult(result InvestigationResult, plan AnswerPlan) InvestigationResult {
+func (e *Engine) finalizeResult(result InvestigationResult, plan AnswerPlan, frame *QuestionFrame) InvestigationResult {
 	stamped := plan
 	result.AnswerPlan = &stamped
-	renderShapes, _ := SelectRenderShapes(result)
+	renderShapes, _ := SelectRenderShapes(result, frame)
 	result.RenderShapes = renderShapes
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result

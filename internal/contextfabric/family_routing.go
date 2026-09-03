@@ -98,6 +98,25 @@ const (
 	// it; neither exists, so the projection would route the question
 	// somewhere nothing can answer it.
 	FamilyRouteDeclinedWithdrawnClaim FamilyRouteDisposition = "declined_withdrawn_claim"
+	// FamilyRouteSwitchedAdditiveUnobserved: the precedence side produced
+	// NO family, so today's outcome for this class is an unserved question.
+	// Routing to the projected family can only ADD an answer where there
+	// was none -- there is no served answer to put at risk, which is what
+	// separates this class from every other unobserved one and is the whole
+	// of the argument for switching it.
+	//
+	// UNOBSERVED ON THE MEASUREMENT OF RECORD (0 of 25 rows), and switched
+	// on DESIGN grounds rather than measured ones. That distinction is the
+	// reason this disposition has its own name instead of sharing
+	// `intended_change`: a reader must be able to tell which switches the
+	// live run actually exercised from which were argued.
+	//
+	// Every answer served under it carries family_source=projected and its
+	// agreement class in telemetry, and the AFTER run's guard is that any
+	// row landing here is QUOTED and hand-checked for family correctness
+	// before the merge token -- an additive claim still has to be right,
+	// not merely additive.
+	FamilyRouteSwitchedAdditiveUnobserved FamilyRouteDisposition = "switched_additive_unobserved"
 	// FamilyRouteDeclinedNotObserved: the class was never observed on the
 	// measurement of record, so nothing has shown it safe. Not a claim it
 	// is unreachable or wrong -- a statement that this slice has no
@@ -144,6 +163,37 @@ type FamilyRouteDecision struct {
 	Switched bool
 }
 
+var familyRouteDispositions = [...]FamilyRouteDisposition{
+	FamilyRouteIdentical,
+	FamilyRouteIntendedChange,
+	FamilyRouteSwitchedAdditiveUnobserved,
+	FamilyRouteDeclinedWithdrawnClaim,
+	FamilyRouteDeclinedNotObserved,
+	FamilyRouteDeclinedIndistinguishable,
+	FamilyRouteDeclinedProjectionSilent,
+	FamilyRouteDeclinedUnexplained,
+}
+
+// FamilyRouteDispositionCount is the closed vocabulary's size.
+const FamilyRouteDispositionCount = len(familyRouteDispositions)
+
+// FamilyRouteDispositionVocabulary returns the closed vocabulary in declared
+// order.
+func FamilyRouteDispositionVocabulary() [FamilyRouteDispositionCount]FamilyRouteDisposition {
+	return familyRouteDispositions
+}
+
+// ValidFamilyRouteDisposition reports membership. The empty value is not a
+// member: every decision names a disposition.
+func ValidFamilyRouteDisposition(value FamilyRouteDisposition) bool {
+	for _, member := range familyRouteDispositions {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
 // familyRouteRule is one row of the closed decision table.
 type familyRouteRule struct {
 	class       FamilyAgreementClass
@@ -157,7 +207,7 @@ type familyRouteRule struct {
 var familyRouteTable = [...]familyRouteRule{
 	{FamilyAgreementAgreed, FamilyRouteProjected, FamilyRouteIdentical},
 	{FamilyAgreementProjectionUnclassified, FamilyRoutePrecedence, FamilyRouteDeclinedProjectionSilent},
-	{FamilyAgreementPrecedenceUnclassified, FamilyRoutePrecedence, FamilyRouteDeclinedNotObserved},
+	{FamilyAgreementPrecedenceUnclassified, FamilyRouteProjected, FamilyRouteSwitchedAdditiveUnobserved},
 	{FamilyAgreementGoalRowUnreachable, FamilyRoutePrecedence, FamilyRouteDeclinedNotObserved},
 	{FamilyAgreementPrecedenceComparisonRow, FamilyRoutePrecedence, FamilyRouteDeclinedIndistinguishable},
 	{FamilyAgreementOrganizationRoute, FamilyRoutePrecedence, FamilyRouteDeclinedWithdrawnClaim},

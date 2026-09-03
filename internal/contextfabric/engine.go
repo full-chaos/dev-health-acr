@@ -1883,7 +1883,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 
 	assemblyParams := synthesisAssemblyParams{
-		Request: request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
+		Request: request, Interpretation: interpretation, Frame: familyOutcome.Frame,
+		Graph: graphContext, Facts: facts,
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
 		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarry: windowCarry,
 		StructureCanon: structureCanon, CarriedStructureEntry: carriedStructureEntry,
@@ -1929,7 +1930,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// stage 3 measures that. The retry re-runs assembly AND finalization, so
 	// the shape measured on the second pass is the shape that would be
 	// served on the second pass.
-	result = e.finalizeResult(result, plan)
+	result = e.finalizeResult(result, plan, familyOutcome.Frame)
 	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, pendingTelemetry, retryBase)
 	if err != nil {
 		return InvestigationResult{}, err
@@ -1949,7 +1950,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// selection itself is pure and was already run by finalizeResult, but a
 	// retry would otherwise double-count a decision an operator counts.
 	if e.telemetry != nil {
-		_, renderShapeEvent := SelectRenderShapes(result)
+		_, renderShapeEvent := SelectRenderShapes(result, familyOutcome.Frame)
 		e.telemetry.RecordRenderShapeSelection(ctx, principal, renderShapeEvent)
 		// B8's shadow gate, emitted from the SAME once-per-served-result
 		// point and for the same reason: the derivation is pure and could

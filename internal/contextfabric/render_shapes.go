@@ -186,14 +186,30 @@ const (
 	RenderShapeSkipNotPlanAuthorized RenderShapeSkipReason = "not_plan_authorized"
 )
 
-// cohortIntentShapes are the interpreted shapes a cohort chart is an answer
-// TO. Carrying cohort data is NOT on its own a reason to draw one: a
+// cohortRenderIntent reports whether a cohort chart is an answer TO this
+// question, read off the FRAME (seam 7, CHAOS-4736).
+//
+// Carrying cohort data is NOT on its own a reason to draw one: a
 // single-subject answer can legitimately carry a ranked cohort as context,
-// and charting it would answer a question nobody asked. "open" is excluded
-// for the same reason -- an unshaped question has not asked for a ranking.
-var cohortIntentShapes = map[contractsv1.ContextFabricInvestigationShape]struct{}{
-	contractsv1.ContextFabricShapeExplicitCohort:   {},
-	contractsv1.ContextFabricShapeDiscoveredCohort: {},
+// and charting it would answer a question nobody asked. That rule is
+// unchanged; what changed is the field it reads.
+//
+// IT WAS A SET OF TWO SHAPES, {explicit_cohort, discovered_cohort}, and the
+// old comment noted that "open" was excluded because "an unshaped question
+// has not asked for a ranking." That reasoning was sound and its INPUT was
+// not: Shape is the least stable field in the interpretation, and a grouped
+// cohort question that emitted `open` -- which is exactly what "what are the
+// project statuses for each team" did on the rig -- lost its chart for a
+// reason that had nothing to do with what the user asked. IsCohortVariant()
+// asks the same question of a field the model filled in deliberately: does
+// this expression name a SET of subjects rather than one.
+//
+// A nil frame is NOT cohort intent, and that is safe rather than
+// conservative: with no validated frame this build discovers no cohort at
+// all (cohort_kind.go), so there are no ranked members to chart and the
+// `no_ranked_member` skip would fire regardless.
+func cohortRenderIntent(frame *QuestionFrame) bool {
+	return frame != nil && frame.SubjectExpression.IsCohortVariant()
 }
 
 // SelectRenderShapes applies the CHAOS-4415 selection rules to a FINAL
@@ -204,11 +220,15 @@ var cohortIntentShapes = map[contractsv1.ContextFabricInvestigationShape]struct{
 // a verbatim copy of one already in result, addressed by a
 // ContextFabricRenderPointSource that
 // ContextFabricInvestigationResult.Validate then resolves and compares.
-func SelectRenderShapes(result InvestigationResult) ([]contractsv1.ContextFabricRenderShape, RenderShapeSelectionEvent) {
+func SelectRenderShapes(result InvestigationResult, frame *QuestionFrame) ([]contractsv1.ContextFabricRenderShape, RenderShapeSelectionEvent) {
+	// event.Shape stays the INTERPRETED shape. It is a decision-basis
+	// record, and what the model emitted is still worth recording even now
+	// that nothing branches on it -- it is how a Shape/frame divergence
+	// stays observable after the branch on Shape is gone.
 	event := RenderShapeSelectionEvent{Shape: result.Interpretation.Shape}
 	shapes := make([]contractsv1.ContextFabricRenderShape, 0, 3)
 
-	_, cohortIntent := cohortIntentShapes[result.Interpretation.Shape]
+	cohortIntent := cohortRenderIntent(frame)
 	ranked := rankedCohortMembers(result.Cohort)
 	// CHAOS-4636: the plan gates the KIND before the geometry is consulted.
 	// Both cohort rules produce a `series`, so a plan that does not

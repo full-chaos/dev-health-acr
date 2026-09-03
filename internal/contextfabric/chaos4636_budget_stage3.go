@@ -207,7 +207,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	}
 	// Finalize the retry too, or the second pass repeats round 1 finding 1's
 	// defect: measuring a pre-final shape and serving a larger one.
-	retried = e.finalizeResult(retried, *plan)
+	retried = e.finalizeResult(retried, *plan, params.Frame)
 	retryMeasurement, err := contractsv1.MeasureContextFabricResponse(retried)
 	if err != nil {
 		return InvestigationResult{}, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("measure re-synthesized result: %w", err))
