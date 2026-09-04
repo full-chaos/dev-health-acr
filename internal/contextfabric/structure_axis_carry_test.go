@@ -412,7 +412,11 @@ func TestKindCarry_TurnThatIsOfferedNothingStillResolvesUnderTheConfirmedKind(t 
 
 	// carriedKind rides a HIT as well as a drop -- "hit" alone does not say
 	// WHICH kind the conversation inherited.
-	wantCarry := kindCarryRecord{outcome: KindCarryHit, carriedKind: contractsv1.ContextFabricSubjectTeam}
+	// seedSource joins the comparison rather than being excluded from it: this
+	// assertion is whole-record equality on purpose, so a new dimension that
+	// went unasserted here would be a dimension nothing pins on the hit path.
+	// This chain is linked by a candidate receipt, hence CarrySeedReceipt.
+	wantCarry := kindCarryRecord{outcome: KindCarryHit, carriedKind: contractsv1.ContextFabricSubjectTeam, seedSource: CarrySeedReceipt, viaStoredAncestry: false}
 	if len(telemetry.kindCarries) != 1 || telemetry.kindCarries[0] != wantCarry {
 		t.Fatalf("telemetry.kindCarries = %#v, want exactly one hit at depth 0 carrying team", telemetry.kindCarries)
 	}

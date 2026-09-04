@@ -1011,7 +1011,7 @@ type snapshotCapturingResultStore struct {
 	savedEpoch    RebuildEpoch
 }
 
-func (s *snapshotCapturingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64) error {
+func (s *snapshotCapturingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64, _ string) error {
 	s.saveCalled = true
 	s.savedSnapshot = reuseSnapshot
 	s.savedEpoch = reuseEpoch
@@ -1200,7 +1200,7 @@ type keyRecordingResultStore struct {
 	savedKey string
 }
 
-func (s *keyRecordingResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, timeAxisKey string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64) error {
+func (s *keyRecordingResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, timeAxisKey string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64, _ string) error {
 	s.saved = result
 	s.savedKey = timeAxisKey
 	return nil
@@ -1388,7 +1388,7 @@ type retrievalRecordingResultStore struct {
 	savedVersionAuthority ReuseVersionAuthorities
 }
 
-func (s *retrievalRecordingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, retrieval ReuseRetrievalIdentity, promptVersions ReusePromptVersions, versionAuthorities ReuseVersionAuthorities, _ int64) error {
+func (s *retrievalRecordingResultStore) Save(_ context.Context, _ storage.Principal, _ InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, retrieval ReuseRetrievalIdentity, promptVersions ReusePromptVersions, versionAuthorities ReuseVersionAuthorities, _ int64, _ string) error {
 	s.saveCalled = true
 	s.savedRetrieval = retrieval
 	s.savedPromptVersion = promptVersions

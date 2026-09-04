@@ -69,6 +69,18 @@ func (r ContextFabricInvestigationRequest) Validate() error {
 	if err := validateStructureReceiptField("prior_candidate_receipts", r.PriorCandidateReceipts, ContextFabricCandidateOptionReceiptPrefix); err != nil {
 		return err
 	}
+	// parent_result_id is OPTIONAL and bounded exactly like a receipt's own
+	// ResultID (8..256), never pinned to newInvestigationResultID's current
+	// shape: this field and prior_*_receipts[].result_id name the same kind
+	// of thing, so two different answers to "is this a well-formed result id"
+	// would be a defect waiting to happen. Validation here establishes only
+	// that the string is well-formed -- it grants no trust. Every guard that
+	// makes following a prior result safe (org-scoped read, graph-epoch taint
+	// gate, a confirmed value actually present on the named result) is
+	// applied by the engine's carry walk, identically to a receipt-borne id.
+	if r.ParentResultID != "" && !stringLengthBetween(r.ParentResultID, 8, 256) {
+		return fmt.Errorf("parent_result_id violates v1 bounds")
+	}
 	// CHAOS-3972 P3 (design brief §2.3): explicit structure fields, bounded
 	// the same order-of-magnitude as their receipt counterparts.
 	if len(r.ExpectedKinds) > ContextFabricExpectedKindsMaxCount {

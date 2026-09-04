@@ -78,6 +78,12 @@ type MCPInvestigateQuestionRequest struct {
 	// candr_ receipt would have been silently dropped by ordinary
 	// json.Unmarshal rather than rejected or forwarded.
 	PriorCandidateReceipts []ContextFabricBoundSubjectReceipt `json:"prior_candidate_receipts,omitempty"`
+	// ParentResultID is this surface's own twin of the HTTP request's field
+	// (see ContextFabricInvestigationRequest.ParentResultID for the full
+	// reasoning). The MCP surface needs it for the same reason and more
+	// acutely: an MCP client drives the conversation itself and is the
+	// offer-driven caller the field exists for.
+	ParentResultID string `json:"parent_result_id,omitempty"`
 	// ExpectedKinds and SubjectHandles (CHAOS-3972 P3) are this surface's
 	// own explicit structure fields -- see
 	// ContextFabricInvestigationRequest.ExpectedKinds/SubjectHandles for
