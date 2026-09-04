@@ -299,6 +299,106 @@ func TestSameQuestionContainment_ASameQuestionChainStillWalksTwoHops(t *testing.
 	}
 }
 
+// TestSameQuestionContainment_ComparesTheOriginNotTheHopItArrivedThrough is
+// the arm that pins the DESIGN CLAIM, and it is the only one that separates
+// this shape from a comparison against the parent the caller named.
+//
+// THE CHAIN. Turn A answers question Q and confirms the value. Turn B answers
+// a DIFFERENT question Q' and legitimately inherits A's value by redeeming a
+// receipt -- legitimate because receipt-rooted carries are ungated by design,
+// which is what the arm below protects. Turn B therefore holds the value AND
+// answers Q'. A caller now asks Q' again and names B through parent_result_id.
+//
+// Comparing the NAMED PARENT's question would pass: B answered Q'. Comparing
+// the ORIGIN's question refuses: the value was confirmed against Q, and it is
+// the value's provenance -- not the last turn to touch it -- that decides
+// whether inheriting it continues this conversation or borrows another one.
+//
+// This is the difference between a gate that can be walked around by adding
+// one legitimate hop and one that cannot. Deleting the carriedWindowOrigin /
+// carriedKindOrigin resolution from the walk turns SourceResultID back into
+// the hop, and this arm is what goes red.
+func TestSameQuestionContainment_ComparesTheOriginNotTheHopItArrivedThrough(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		// build returns turn B: a result answering the REQUEST's question that
+		// holds a value whose declared origin is turn A (which answered a
+		// different one).
+		build   func(originID, hopID, hopQuestion string) InvestigationResult
+		resolve func(engine *Engine, request InvestigationRequest) containmentOutcome
+	}{
+		{
+			name: "window",
+			build: func(originID, hopID, hopQuestion string) InvestigationResult {
+				hop := carriableWindowResult(hopID, hopQuestion)
+				hop.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{{
+					Member:        contractsv1.ContextFabricStructureNeedWindow,
+					AppliedValue:  string(RelativeWindowTrailing90D),
+					Source:        contractsv1.ContextFabricStructureSourceCarried,
+					PriorResultID: originID,
+					Provenance:    contractsv1.ContextFabricStructureClarificationConfirmed,
+					Disposition:   contractsv1.ContextFabricStructureDispositionApplied,
+				}}
+				return hop
+			},
+			resolve: func(engine *Engine, request InvestigationRequest) containmentOutcome {
+				got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+				return containmentOutcome{hit: got.Outcome == WindowCarryHit, drift: got.Outcome == WindowCarryMissQuestionDrift, outcome: string(got.Outcome)}
+			},
+		},
+		{
+			name: "kind",
+			build: func(originID, hopID, hopQuestion string) InvestigationResult {
+				hop := validInvestigationResult()
+				hop.ResultID = hopID
+				hop.Question = hopQuestion
+				hop.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{{
+					Member:        contractsv1.ContextFabricStructureNeedExpectedKind,
+					AppliedValue:  string(contractsv1.ContextFabricSubjectTeam),
+					Source:        contractsv1.ContextFabricStructureSourceCarried,
+					PriorResultID: originID,
+					Provenance:    contractsv1.ContextFabricStructureClarificationConfirmed,
+					Disposition:   contractsv1.ContextFabricStructureDispositionApplied,
+				}}
+				return hop
+			},
+			resolve: func(engine *Engine, request InvestigationRequest) containmentOutcome {
+				got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+				return containmentOutcome{hit: got.Outcome == KindCarryHit, drift: got.Outcome == KindCarryMissQuestionDrift, outcome: string(got.Outcome)}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			request := validInvestigationRequest()
+			// Turn A: the ORIGIN. Answered a different question.
+			origin := emptyResult("result_origin_drifted", driftQuestion)
+			// Turn B: the HOP. Answers THIS question, holds the value, and
+			// declares turn A as where the value came from.
+			hop := tc.build(origin.ResultID, "result_hop_same_question", request.Question)
+			if hop.Question != request.Question {
+				t.Fatalf("the hop must answer the REQUEST's question, or this arm degenerates into the ordinary drift case and proves nothing about the origin")
+			}
+
+			store := &staticResultStore{results: map[string]InvestigationResult{
+				origin.ResultID: origin, hop.ResultID: hop,
+			}}
+			request.ParentResultID = hop.ResultID
+
+			got := tc.resolve(buildCarryTestEngine(t, store), request)
+			if got.hit {
+				t.Fatalf("%s carry HIT: the named parent answers this question, but the value it holds was confirmed against a different one -- comparing the hop rather than the origin lets one legitimate intermediate turn launder any value in the org", tc.name)
+			}
+			if !got.drift {
+				t.Errorf("%s carry outcome = %q, want the question-drift refusal: the walk must reach the value and refuse it on its ORIGIN's question, not fail to find it", tc.name, got.outcome)
+			}
+		})
+	}
+}
+
 // TestSameQuestionContainment_ARedeemedReceiptIsNeverGated is the
 // BEHAVIOUR-PRESERVING control, and it is the half of the two-tier rule that a
 // containment change is most likely to break silently.
