@@ -439,96 +439,162 @@ func TestARefusalLineAlsoSaysWhatItsChargedItemsWereAbout(t *testing.T) {
 
 // uncoveredArm is an assembled-result arm no scenario below drives.
 //
-// IT IS A CLAIM, AND A CLAIM NEEDS A TEST. The previous version of this was a
-// bare string, and an adversarial round proved the string false: it asserted
-// that no fixture in this family could reach the candidate-reduction arm
-// without entering subject clarification, and an existing test in this very
-// package -- TestARetryThatIsRescuedByTheReductionPlansNoRefusal -- reached it.
+// IT IS A CLAIM, AND A CLAIM NEEDS A PROBE. The first version was a bare
+// string, and a review proved the string false: it asserted that no fixture in
+// this family could reach the candidate-reduction arm, and an existing test in
+// this very package already reached it. The damage was not the wrong sentence
+// -- it was that the arm-count reconciliation BALANCED around it while that arm
+// was reached and unasserted, because the arithmetic checked the COUNT and
+// never the CLAIM.
 //
-// The damage was not the wrong sentence. It was that the arm-count
-// reconciliation BALANCED around it (four driven plus one "unreachable" equals
-// five call sites) while that fifth arm was reached and unasserted. The
-// arithmetic checked the COUNT and never the CLAIM, so the mechanism built to
-// keep the gap honest is exactly what made it invisible.
+// The second version required the entry to name a test that EXISTS. A review
+// defeated that too: naming any passing test satisfied it, so a "probe" that
+// could never fail was accepted.
 //
-// So an entry here must now name a REACH PROBE: a test in this package that
-// FAILS if the arm ever executes under the package's own suite. Registering an
-// arm without one is itself a failure -- see
-// TestEveryUncoveredArmClaimCarriesAReachProbe.
+// So an entry must now name a test that FAILS IF THE ARM EXECUTES, and the
+// checker requires that test to call assertArmNeverExecuted -- the one helper
+// that can express it. Both failure modes are planted as controls in
+// TestEveryUncoveredArmClaimCarriesAReachProbe: a name that does not exist, and
+// a name that exists but is not a probe.
 type uncoveredArm struct {
 	what string
-	// reachProbeTest is the name of a Test function in this package that
-	// fails if the arm executes. Not a comment: the name is checked against
-	// the package's syntax tree.
+	// reachProbeTest names a Test function in this package that calls
+	// assertArmNeverExecuted for this arm. Checked against the syntax tree,
+	// not taken on trust.
 	reachProbeTest string
 }
 
-// armsWithNoBehaviouralCase is EMPTY, and that is the point: every
-// assembled-result arm is now driven by a case below. It stays as a mechanism
-// because the next arm added may not be reachable immediately, and the rule
-// for registering one is written above rather than rediscovered.
+// armsWithNoBehaviouralCase is EMPTY: every assembled-result arm is driven by a
+// case below. It stays as a mechanism because the next arm added may not be
+// reachable at once, and the rule for registering one is written above rather
+// than rediscovered.
 var armsWithNoBehaviouralCase = []uncoveredArm{}
 
-// TestEveryUncoveredArmClaimCarriesAReachProbe enforces the rule.
+// assertArmNeverExecuted is the only shape a reach probe may take.
 //
-// An unreachability claim that nothing can falsify is indistinguishable from
-// "I did not look", which is what shipped last time. The named probe must
-// exist as a real Test function in this package.
-func TestEveryUncoveredArmClaimCarriesAReachProbe(t *testing.T) {
-	t.Parallel()
-	declared := packageTestFunctionNames(t)
-	for _, arm := range armsWithNoBehaviouralCase {
-		if arm.reachProbeTest == "" {
-			t.Errorf("uncovered arm %q names no reach probe: an unreachability claim with no test is a "+
-				"sentence, and this seam has already shipped a false one", arm.what)
-			continue
-		}
-		if !declared[arm.reachProbeTest] {
-			t.Errorf("uncovered arm %q names reach probe %q, which is not a Test function in this package",
-				arm.what, arm.reachProbeTest)
-		}
-	}
-	// POSITIVE CONTROL: the checker must be able to reject a bad entry, or an
-	// empty list would make this test pass for the wrong reason forever.
-	if declared["TestThisNameIsDeliberatelyNotDeclaredAnywhere"] {
-		t.Fatal("the control name exists; pick another")
-	}
-	if len(declared) < 5 {
-		t.Fatalf("only %d test functions found in this package; the AST walk is broken and would accept "+
-			"any probe name", len(declared))
+// It fails when the named arm executed during the package's own tests. A probe
+// author wires observed to whatever records execution -- a counter incremented
+// in the arm, or a recovered panic. The point is that the assertion is
+// UNCONDITIONAL and negative: a probe that cannot fail is not a probe, which is
+// exactly what the previous version of this rule accepted.
+func assertArmNeverExecuted(t *testing.T, arm string, observed int) {
+	t.Helper()
+	if observed != 0 {
+		t.Fatalf("arm %q executed %d times under this package's tests, so it is REACHABLE and must be "+
+			"driven by a case in assembledResultArmCases rather than registered as uncovered", arm, observed)
 	}
 }
 
-// packageTestFunctionNames is every Test function declared in this package's
-// _test.go files, read from the syntax tree rather than from a list.
-func packageTestFunctionNames(t *testing.T) map[string]bool {
+// TestEveryUncoveredArmClaimCarriesAReachProbe enforces the rule, and proves it
+// is enforceable by planting both ways it can be broken.
+func TestEveryUncoveredArmClaimCarriesAReachProbe(t *testing.T) {
+	t.Parallel()
+	declared, probes := packageTestFunctions(t)
+
+	for _, arm := range armsWithNoBehaviouralCase {
+		switch {
+		case arm.reachProbeTest == "":
+			t.Errorf("uncovered arm %q names no reach probe", arm.what)
+		case !declared[arm.reachProbeTest]:
+			t.Errorf("uncovered arm %q names reach probe %q, which is not a Test function in this package",
+				arm.what, arm.reachProbeTest)
+		case !probes[arm.reachProbeTest]:
+			t.Errorf("uncovered arm %q names %q as its reach probe, but that test never calls "+
+				"assertArmNeverExecuted -- a test that cannot fail when the arm executes is not a probe, "+
+				"and accepting one is how a false unreachability claim shipped before",
+				arm.what, arm.reachProbeTest)
+		}
+	}
+
+	// CONTROL 1: a name that does not exist must be rejected.
+	if declared["TestThisNameIsDeliberatelyNotDeclaredAnywhere"] {
+		t.Fatal("the control name exists; pick another")
+	}
+	// CONTROL 2, and this is the one the previous version failed: a test that
+	// EXISTS but is not a probe must be rejected. Any test in this file that
+	// does not call assertArmNeverExecuted will do.
+	const existsButIsNotAProbe = "TestEveryAssembledResultArmEmitsASplitThatDescribesIt"
+	if !declared[existsButIsNotAProbe] {
+		t.Fatalf("control test %q is missing; the control cannot run", existsButIsNotAProbe)
+	}
+	if probes[existsButIsNotAProbe] {
+		t.Fatalf("control test %q calls assertArmNeverExecuted, so it cannot serve as the "+
+			"exists-but-is-not-a-probe control", existsButIsNotAProbe)
+	}
+	// And the checker must recognise a REAL probe, or every entry would be
+	// rejected and the rule would be unusable.
+	if !probes["TestTheReachProbeShapeIsRecognised"] {
+		t.Fatal("the reference probe is not recognised as one; the checker cannot tell a probe from a " +
+			"non-probe, which makes the rule either vacuous or unusable")
+	}
+}
+
+// TestTheReachProbeShapeIsRecognised is the reference probe: it exists so the
+// checker above has a positive example, and it demonstrates the shape a real
+// entry must use. No arm is currently uncovered, so it observes zero by
+// construction.
+func TestTheReachProbeShapeIsRecognised(t *testing.T) {
+	t.Parallel()
+	assertArmNeverExecuted(t, "reference probe (no arm is currently uncovered)", 0)
+}
+
+// packageTestFunctions returns every Test function in this package's _test.go
+// files, and which of them call assertArmNeverExecuted.
+//
+// EXACT RECONCILIATION, not a floor. The previous version accepted any walk
+// that found at least five tests, which a partial enumeration passes. This one
+// asserts it parsed EVERY _test.go file the directory holds.
+func packageTestFunctions(t *testing.T) (declared, probes map[string]bool) {
 	t.Helper()
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("read package directory: %v", err)
 	}
-	fset := token.NewFileSet()
-	names := map[string]bool{}
+	wanted := []string{}
 	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, "_test.go") {
-			continue
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), "_test.go") {
+			wanted = append(wanted, entry.Name())
 		}
-		parsed, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+	}
+	if len(wanted) == 0 {
+		t.Fatal("no _test.go files found; the enumeration is broken and an empty walk would accept any probe name")
+	}
+	fset := token.NewFileSet()
+	declared, probes = map[string]bool{}, map[string]bool{}
+	parsed := 0
+	for _, name := range wanted {
+		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
-		for _, decl := range parsed.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok && strings.HasPrefix(fn.Name.Name, "Test") {
-				names[fn.Name.Name] = true
+		parsed++
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || !strings.HasPrefix(fn.Name.Name, "Test") || fn.Body == nil {
+				continue
 			}
+			declared[fn.Name.Name] = true
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				call, isCall := node.(*ast.CallExpr)
+				if !isCall {
+					return true
+				}
+				if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "assertArmNeverExecuted" {
+					probes[fn.Name.Name] = true
+				}
+				return true
+			})
 		}
 	}
-	return names
+	if parsed != len(wanted) {
+		t.Fatalf("parsed %d of %d _test.go files: a partial enumeration would accept a probe name it "+
+			"never looked for", parsed, len(wanted))
+	}
+	return declared, probes
 }
 
 // assembledResultArmCase is one scenario, the arm it must reach, how to
-// recognise that arm on the emitted line, and which cohort that arm measured.
+// recognise that arm on the emitted line, and where its expectation comes from.
 type assembledResultArmCase struct {
 	name string
 	// discriminator is the substring that identifies THIS arm's line. A
@@ -537,18 +603,18 @@ type assembledResultArmCase struct {
 	discriminator string
 	// spec is per-arm because the expected bucket values must be pairwise
 	// DISTINCT on the document THIS arm measured, and the arms measure
-	// cohorts of different sizes. One shared spec would collide on some of
-	// them, and a collision is what lets a redistribution pass.
+	// cohorts of different sizes.
 	spec attributionFixtureSpec
-	// measuresNarrowedCohort says which cohort the document this arm
-	// measured contained: the re-synthesized, narrowed one (the line's
-	// `after`) or the one synthesis first ran against (its `before`).
-	//
-	// It is a CLAIM about the production code, not a convenience, and the
-	// per-bucket assertion enforces it: state it wrongly and the member
-	// count will not match what the line reports.
+	// measuresNarrowedCohort says the event measured the RE-SYNTHESIZED
+	// document rather than the one synthesis first ran against. On that arm
+	// the cohort size is a production decision this test does not
+	// independently know, so the member bucket is bounded rather than exact
+	// -- stated here rather than papered over.
 	measuresNarrowedCohort bool
-	drive                  func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec)
+	// drive runs the scenario. It returns the SERVED result when the arm
+	// serves one, and served=false when the answer was refused or the retry
+	// failed, in which case there is no served document to count.
+	drive func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) (result InvestigationResult, served bool)
 }
 
 func assembledResultArmCases() []assembledResultArmCase {
@@ -557,34 +623,32 @@ func assembledResultArmCases() []assembledResultArmCase {
 			name:          "measured fit",
 			discriminator: "overrun=fits",
 			spec:          defaultAttributionSpec(),
-			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) {
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) (InvestigationResult, bool) {
 				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(200, 0))
-				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err != nil {
+				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+				if err != nil {
 					t.Fatalf("Investigate() error = %v, want a served answer", err)
 				}
+				return result, true
 			},
 		},
 		{
 			name:          "planned refusal, nothing to narrow",
 			discriminator: "retry_declined=nothing_to_narrow",
-			// One member, so the member bucket is small; the group and
-			// multi_group counts are raised to keep all four distinct.
-			spec: attributionFixtureSpec{members: 1, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 4, memberDrivers: 1},
-			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) {
+			spec:          attributionFixtureSpec{members: 1, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 4, memberDrivers: 1},
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) (InvestigationResult, bool) {
 				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(1, 0))
 				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
 					t.Fatal("Investigate() returned no error, want a planned budget refusal")
 				}
+				return InvestigationResult{}, false
 			},
 		},
 		{
-			name: "retry synthesis FAILED",
-			// This is the arm an adversarial review reached twice: first by
-			// aliasing past the one-stamp pin, then by redistributing two
-			// buckets while preserving the total. Both are visible now.
+			name:          "retry synthesis FAILED",
 			discriminator: "retry_failed=true",
 			spec:          defaultAttributionSpec(),
-			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) {
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) (InvestigationResult, bool) {
 				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(10, time.Second))
 				attempts := 0
 				engine.synthesizer = chaos4809FailOnSecondCall(engine.synthesizer, &attempts)
@@ -593,48 +657,45 @@ func assembledResultArmCases() []assembledResultArmCase {
 					t.Fatal("Investigate() returned no error, want the retry's own propagated failure")
 				}
 				if errors.Is(err, ErrAnswerExceedsBudget) {
-					t.Fatalf("error = %v, want the retry's OWN fault, not a budget refusal -- this fixture must reach the retry-FAILURE arm", err)
+					t.Fatalf("error = %v, want the retry's OWN fault, not a budget refusal", err)
 				}
 				if attempts != 2 {
 					t.Fatalf("synthesis attempted %d times, want 2 -- the retry must have RUN for this arm to be under test", attempts)
 				}
+				return InvestigationResult{}, false
+			},
+		},
+		{
+			name:                   "retry ran and still did not fit",
+			discriminator:          "retry_attempted=true retry_fit=false retry_failed=false",
+			measuresNarrowedCohort: true,
+			spec:                   attributionFixtureSpec{members: 3, globalFindings: 6, groupDrivers: 4, multiGroupDrivers: 5, memberDrivers: 1},
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) (InvestigationResult, bool) {
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(10, time.Second))
+				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
+					t.Fatal("Investigate() returned no error, want a refusal after a retry that did not fit")
+				}
+				return InvestigationResult{}, false
 			},
 		},
 		{
 			name: "outcome layer served a candidate narrowing",
-			// THE ARM AN ADVERSARIAL ROUND PROVED I HAD WRONGLY DECLARED
-			// UNREACHABLE. It runs when the candidate reduction cuts enough
-			// for the reduced document to fit, and it is reached without any
-			// subject clarification: the cohort supplies the subjects.
-			//
+			// The arm a review proved I had wrongly declared unreachable.
 			// One member means the cohort cannot be narrowed, so stage three
-			// declines the retry and goes straight to the reduction. Seven
-			// proposed candidates against a 20-item ceiling leave an
-			// allowance of four, so three are cut and the answer serves.
+			// declines the retry and goes straight to the reduction; seven
+			// proposed candidates against a 20-item ceiling leave four.
 			discriminator: "outcome_reduction_applied=true",
 			spec: attributionFixtureSpec{
 				members: 1, globalFindings: 3, groupDrivers: 5, multiGroupDrivers: 6,
 				memberDrivers: 1, candidates: 7,
 			},
-			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) {
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) (InvestigationResult, bool) {
 				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(20, 0))
-				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err != nil {
+				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+				if err != nil {
 					t.Fatalf("Investigate() error = %v, want an answer SERVED by the candidate reduction", err)
 				}
-			},
-		},
-		{
-			name:          "retry ran and still did not fit",
-			discriminator: "retry_attempted=true retry_fit=false retry_failed=false",
-			// The ONLY arm whose event measures the re-synthesized document,
-			// so its member count is the line's `after`.
-			measuresNarrowedCohort: true,
-			spec:                   attributionFixtureSpec{members: 3, globalFindings: 6, groupDrivers: 4, multiGroupDrivers: 5, memberDrivers: 1},
-			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) {
-				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(10, time.Second))
-				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
-					t.Fatal("Investigate() returned no error, want a refusal after a retry that did not fit")
-				}
+				return result, true
 			},
 		},
 	}
@@ -646,44 +707,7 @@ var reductionAppliedPattern = regexp.MustCompile(`outcome_reduction_applied=(tru
 
 var outcomeItemsServedPattern = regexp.MustCompile(`outcome_items_served=(-?\d+)`)
 
-// candidatesInDocumentOf is how many resolution candidates the document THIS
-// line describes actually carries.
-//
-// Derived from the line, not declared per arm: when the outcome layer applied
-// its reduction the survivors are what it reports as served, and otherwise the
-// document carries every candidate the resolver proposed. A per-arm boolean
-// here would be one more hand-written claim of the kind that just cost a
-// round.
-func candidatesInDocumentOf(t *testing.T, line string, proposed int) int {
-	t.Helper()
-	applied := reductionAppliedPattern.FindStringSubmatch(line)
-	if applied == nil {
-		t.Fatalf("the emitted line carries no outcome_reduction_applied: %s", line)
-	}
-	if applied[1] != "true" {
-		return proposed
-	}
-	served := outcomeItemsServedPattern.FindStringSubmatch(line)
-	if served == nil {
-		t.Fatalf("the line says the reduction applied but carries no outcome_items_served: %s", line)
-	}
-	value, err := strconv.Atoi(served[1])
-	if err != nil {
-		t.Fatalf("outcome_items_served is not an integer: %v", err)
-	}
-	if value >= proposed {
-		t.Fatalf("the line says the reduction applied but served %d of %d proposed candidates -- it cut "+
-			"nothing, so this arm is not doing what the case claims\nline: %s", value, proposed, line)
-	}
-	return value
-}
-
 // cohortCountsOf reads the member counts the arm's own line reports.
-//
-// Taking them from the LINE rather than from the fixture is what keeps the
-// expectation honest across arms that narrowed: the arm says how many members
-// the document it measured contained, and the fixture says what each member
-// costs.
 func cohortCountsOf(t *testing.T, line string) (before, after int) {
 	t.Helper()
 	match := beforeAfterPattern.FindStringSubmatch(line)
@@ -701,56 +725,74 @@ func cohortCountsOf(t *testing.T, line string) (before, after int) {
 	return before, after
 }
 
-// TestEveryAssembledResultArmEmitsASplitThatDescribesIt is the behavioural
-// counterpart to the structural one-stamp pin, and it is the load-bearing one.
+// lineReportsReductionApplied reads the reduction flag and, when set, the
+// number of candidates the line CLAIMS were served.
+func lineReportsReductionApplied(t *testing.T, line string) (applied bool, served int) {
+	t.Helper()
+	match := reductionAppliedPattern.FindStringSubmatch(line)
+	if match == nil {
+		t.Fatalf("the emitted line carries no outcome_reduction_applied: %s", line)
+	}
+	if match[1] != "true" {
+		return false, 0
+	}
+	servedMatch := outcomeItemsServedPattern.FindStringSubmatch(line)
+	if servedMatch == nil {
+		t.Fatalf("the line says the reduction applied but carries no outcome_items_served: %s", line)
+	}
+	value, err := strconv.Atoi(servedMatch[1])
+	if err != nil {
+		t.Fatalf("outcome_items_served is not an integer: %v", err)
+	}
+	return true, value
+}
+
+// TestEveryAssembledResultArmEmitsASplitThatDescribesIt is the load-bearing
+// behavioural test, and its expectation is deliberately NOT taken from the line
+// it checks.
 //
-// WHY IT EXISTS, and why it asserts the four VALUES rather than their sum.
-// Two adversarial rounds attacked this seam and both found the same shape one
-// level apart. The first zeroed an arm's split through a pointer alias the
-// static walk could not see; the answer was to drive every arm rather than to
-// patch the walk. The second then redistributed two buckets on an arm --
+// THREE REVIEWS, THREE VERSIONS, AND THE REASON FOR THIS ONE.
 //
-//	event.Attribution.Global += event.Attribution.Member
-//	event.Attribution.Member = 0
+//  1. The first version drove two arms. A review zeroed a third arm's split
+//     through a pointer alias and nothing objected, because three of the five
+//     arms had no behavioural case at all.
+//  2. The second drove every arm but asserted only that the four buckets summed
+//     to measured_items. A review REDISTRIBUTED two buckets -- Global += Member,
+//     Member = 0 -- which preserves the total, and passed.
+//  3. The third asserted the four values, but derived the candidate count from
+//     `outcome_items_served` ON THE SAME LINE. A review then corrupted
+//     Attribution.Global, MeasuredItems and OutcomeItemsServed TOGETHER: a
+//     self-consistent forged line, which passed while the served document was
+//     unchanged.
 //
-// -- which leaves the TOTAL unchanged, so an assertion on the sum passes while
-// the line now says the answer's items were about something they were not.
-// Both findings are the same defect class: a guarantee held on some arms and
-// not on others. First it was coverage, then it was assertion strength.
+// Version three's mistake is the one worth naming: moving the expectation off
+// the production attribution function and onto the emitted line looked like
+// independence and was not, because the line is written by the same code. An
+// expectation must never be computed by the thing it checks, and a log record
+// IS the thing being checked here.
 //
-// So every arm now gets the same strength: the four expected values, derived
-// from the fixture's own item literals and the member count THAT ARM'S LINE
-// reports, with a precondition that the four differ pairwise so a
-// redistribution cannot cancel out. Nothing here calls
-// AttributeContextFabricResultItems -- the expectation and the value under test
-// must not be able to share a defect.
+// So the expectation now comes from two sources the emitter cannot forge:
+//   - the fixture's own literals (globalFindings, groupDrivers, multiGroupDrivers,
+//     memberDrivers), which no production code can move; and
+//   - the SERVED RESULT DOCUMENT -- the candidates actually present in
+//     result.SubjectResolution and the members actually in result.Cohort -- for
+//     the arms that serve one.
 //
-// The arms are reconciled against the production call-site count, so this is a
-// population rather than a list.
+// The line is then asserted to AGREE with that independent expectation, which
+// is a second check rather than the source of the first.
 func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 	t.Parallel()
 	cases := assembledResultArmCases()
 
-	// The population check. `recordMeasurement` call sites are the arms that
-	// emit a measured assembled-result event; every one is either driven
-	// below or named in the enforced gap list.
-	sites := 0
-	fset := token.NewFileSet()
-	for _, name := range packageProductionFiles(t) {
-		parsed, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		sites += countRecordMeasurementCalls(parsed)
-	}
+	// The population check: every recordMeasurement call site is either
+	// driven below or registered as uncovered with a probe.
+	sites := recordMeasurementSiteCount(t)
 	if got := len(cases) + len(armsWithNoBehaviouralCase); got != sites {
-		t.Fatalf("this test accounts for %d arms (%d driven + %d named as uncovered) but the package has "+
-			"%d recordMeasurement call sites: an arm is neither covered nor disclosed",
+		t.Fatalf("this test accounts for %d arms (%d driven + %d registered uncovered) but the package has "+
+			"%d recordMeasurement sites: an arm is neither covered nor disclosed",
 			got, len(cases), len(armsWithNoBehaviouralCase), sites)
 	}
 
-	// Two scenarios sharing a discriminator would silently test one arm
-	// twice while leaving another untouched.
 	seen := map[string]string{}
 	for _, one := range cases {
 		if other, clash := seen[one.discriminator]; clash {
@@ -764,11 +806,8 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 		t.Run(one.name, func(t *testing.T) {
 			t.Parallel()
 			var sink bytes.Buffer
-			one.drive(t, &sink, one.spec)
+			result, servedDocument := one.drive(t, &sink, one.spec)
 
-			// REACH CHECK, hard failure. A fixture that landed on a
-			// different arm would otherwise assert about a line this
-			// scenario is not responsible for.
 			line := ""
 			for _, candidate := range strings.Split(sink.String(), "\n") {
 				if strings.Contains(candidate, "context fabric plan narrowing") &&
@@ -782,22 +821,78 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 					"it claims to test.\nemitted:\n%s", one.discriminator, sink.String())
 			}
 
-			before, after := cohortCountsOf(t, line)
-			membersMeasured := before
-			if one.measuresNarrowedCohort {
-				membersMeasured = after
+			// ---- the INDEPENDENT expectation ----
+			//
+			// Candidates and members come from the SERVED DOCUMENT when there
+			// is one. When the answer was refused there is no served document,
+			// and the measured one is the pre-narrowing result, whose size is
+			// the fixture's own literal.
+			candidatesInDoc := one.spec.candidates
+			membersMeasured := one.spec.members
+			memberExact := true
+			switch {
+			case servedDocument:
+				candidatesInDoc = len(result.SubjectResolution.Candidates)
+				if result.Cohort != nil {
+					membersMeasured = len(result.Cohort.Members)
+				}
+			case one.measuresNarrowedCohort:
+				// The only arm whose measured cohort size is a production
+				// decision with no served document to read it from. Its
+				// member bucket is bounded, not pinned -- said plainly
+				// rather than pinned to a number off the line.
+				memberExact = false
 			}
-			candidatesInDoc := candidatesInDocumentOf(t, line, one.spec.candidates)
+
 			want := one.spec.expect(membersMeasured, candidatesInDoc)
-			want.assertPairwiseDistinct(t, one.name)
+			if memberExact {
+				want.assertPairwiseDistinct(t, one.name)
+			}
 
 			fields := attributionFieldsOf(t, line)
-			for name, wantCount := range want.byBucket() {
-				if fields[name] != wantCount {
-					t.Errorf("attribution_%s = %d, want %d -- counted off the fixture's own items, the %d cohort "+
-						"members and the %d candidates this arm's line reports, never recomputed from the "+
-						"production split\nline: %s",
-						name, fields[name], wantCount, membersMeasured, candidatesInDoc, line)
+
+			// global, group and multi_group are fixture literals plus the
+			// served document's own candidate count on every arm, so they are
+			// pinned exactly everywhere. A redistribution INTO global fails
+			// here whatever it does to the rest of the line.
+			for _, name := range []string{"global", "group", "multi_group"} {
+				if fields[name] != want.byBucket()[name] {
+					t.Errorf("attribution_%s = %d, want %d -- from the fixture's own items and the %d "+
+						"candidates the SERVED DOCUMENT carries, never from this line\nline: %s",
+						name, fields[name], want.byBucket()[name], candidatesInDoc, line)
+				}
+			}
+			if memberExact {
+				if fields["member"] != want.member {
+					t.Errorf("attribution_member = %d, want %d -- from the fixture's own items and the %d "+
+						"members the measured document carries, never from this line\nline: %s",
+						fields["member"], want.member, membersMeasured, line)
+				}
+			} else {
+				floor, ceiling := 1+one.spec.memberDrivers, one.spec.members+one.spec.memberDrivers
+				if fields["member"] < floor || fields["member"] >= ceiling {
+					t.Errorf("attribution_member = %d, want in [%d,%d) -- this arm measured a NARROWED cohort, "+
+						"so the exact count is a production decision, but it must be at least one member "+
+						"and fewer than the fixture supplied\nline: %s", fields["member"], floor, ceiling, line)
+				}
+			}
+
+			// The line must AGREE with the independent expectation. This is
+			// the second check, not the source of the first: a forged
+			// outcome_items_served now contradicts the served document.
+			if applied, servedCandidates := lineReportsReductionApplied(t, line); applied {
+				if !servedDocument {
+					t.Fatalf("the line says the reduction applied but this arm served no document to check it "+
+						"against\nline: %s", line)
+				}
+				if servedCandidates != candidatesInDoc {
+					t.Errorf("the line reports outcome_items_served=%d but the SERVED DOCUMENT carries %d "+
+						"candidates: the line and the answer disagree about what was served\nline: %s",
+						servedCandidates, candidatesInDoc, line)
+				}
+				if servedCandidates >= one.spec.candidates {
+					t.Errorf("the line says the reduction applied but served %d of %d proposed candidates -- "+
+						"it cut nothing\nline: %s", servedCandidates, one.spec.candidates, line)
 				}
 			}
 
@@ -807,8 +902,13 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 				t.Errorf("the four attribution dimensions sum to %d but measured_items is %d on the same line: "+
 					"this arm's split describes a different document from its own count\nline: %s", sum, measured, line)
 			}
-			if measured != want.total() {
-				t.Errorf("measured_items = %d, want %d from the fixture\nline: %s", measured, want.total(), line)
+			if memberExact && measured != want.total() {
+				t.Errorf("measured_items = %d, want %d from the fixture and the served document\nline: %s",
+					measured, want.total(), line)
+			}
+			if !servedDocument && one.spec.candidates != 0 {
+				t.Fatalf("this arm serves no document but its fixture proposes %d candidates, so the "+
+					"expectation would have to come from the line", one.spec.candidates)
 			}
 		})
 	}

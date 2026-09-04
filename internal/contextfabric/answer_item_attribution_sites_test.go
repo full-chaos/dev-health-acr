@@ -123,20 +123,80 @@ func findMeasurementStamps(fset *token.FileSet, file *ast.File, name string) []m
 	return stamps
 }
 
-// countRecordMeasurementCalls counts calls to the one stamping method.
-func countRecordMeasurementCalls(file *ast.File) int {
-	calls := 0
+// countRecordMeasurementCalls counts CALLS to the one stamping method, and
+// separately reports METHOD VALUES of it.
+//
+// The method-value half is a review finding, not caution: the call count is
+// what the arm reconciliation is built on, and `f := event.recordMeasurement`
+// stamps an arm without ever appearing as a call at that site. An arm routed
+// through a wrapper or a function value would then be invisible to the
+// arithmetic, which is the same "the count balanced around something it could
+// not see" shape that produced the false unreachability claim.
+//
+// Method values are reported rather than counted: one may be legitimate, but it
+// must be looked at, because the reconciliation cannot tell where it is invoked.
+func countRecordMeasurementCalls(file *ast.File) (calls int, methodValues []string) {
+	fset := token.NewFileSet()
+	_ = fset
 	ast.Inspect(file, func(node ast.Node) bool {
-		call, isCall := node.(*ast.CallExpr)
-		if !isCall {
-			return true
+		if call, isCall := node.(*ast.CallExpr); isCall {
+			if selector, isSelector := call.Fun.(*ast.SelectorExpr); isSelector && selector.Sel.Name == "recordMeasurement" {
+				calls++
+			}
+			// Walk the arguments too, but do not let the Fun selector be
+			// re-counted as a method value below.
+			for _, arg := range call.Args {
+				ast.Inspect(arg, func(inner ast.Node) bool {
+					if sel, ok := inner.(*ast.SelectorExpr); ok && sel.Sel.Name == "recordMeasurement" {
+						methodValues = append(methodValues, "passed as an argument")
+					}
+					return true
+				})
+			}
+			return false
 		}
-		if selector, isSelector := call.Fun.(*ast.SelectorExpr); isSelector && selector.Sel.Name == "recordMeasurement" {
-			calls++
+		// A selector naming the method OUTSIDE call position is a method
+		// value: assigned, returned, or stored.
+		if assign, isAssign := node.(*ast.AssignStmt); isAssign {
+			for _, rhs := range assign.Rhs {
+				if sel, ok := rhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "recordMeasurement" {
+					methodValues = append(methodValues, "assigned to a variable")
+				}
+			}
+		}
+		if ret, isReturn := node.(*ast.ReturnStmt); isReturn {
+			for _, res := range ret.Results {
+				if sel, ok := res.(*ast.SelectorExpr); ok && sel.Sel.Name == "recordMeasurement" {
+					methodValues = append(methodValues, "returned as a value")
+				}
+			}
 		}
 		return true
 	})
-	return calls
+	return calls, methodValues
+}
+
+// recordMeasurementSiteCount is the arm population: how many places stamp a
+// measured document. It fails loudly on a method value, because the count
+// cannot account for one.
+func recordMeasurementSiteCount(t *testing.T) int {
+	t.Helper()
+	fset := token.NewFileSet()
+	total := 0
+	for _, name := range packageProductionFiles(t) {
+		parsed, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		calls, methodValues := countRecordMeasurementCalls(parsed)
+		total += calls
+		for _, how := range methodValues {
+			t.Errorf("%s: recordMeasurement appears as a METHOD VALUE (%s). The arm reconciliation counts "+
+				"call sites, so an arm reached through a value is invisible to it -- either call it "+
+				"directly or extend the reconciliation deliberately", name, how)
+		}
+	}
+	return total
 }
 
 // packageProductionFiles is every non-test Go file of this package.
@@ -171,13 +231,12 @@ func TestEveryAssembledResultArmStampsItsMeasurementThroughOnePath(t *testing.T)
 
 	offenders := []measurementStamp{}
 	stampsInHelper := map[string]bool{}
-	calls := 0
+	calls := recordMeasurementSiteCount(t)
 	for _, name := range packageProductionFiles(t) {
 		parsed, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
-		calls += countRecordMeasurementCalls(parsed)
 		for _, stamp := range findMeasurementStamps(fset, parsed, name) {
 			if stamp.function == "recordMeasurement" {
 				stampsInHelper[stamp.field] = true
@@ -196,13 +255,17 @@ func TestEveryAssembledResultArmStampsItsMeasurementThroughOnePath(t *testing.T)
 		}
 	}
 
-	// The arms. Five is the number that exist today; a floor rather than an
-	// equality so that adding an arm is not a test failure, but losing one
-	// silently is.
-	const knownArms = 5
-	if calls < knownArms {
-		t.Errorf("found %d recordMeasurement call sites, want at least the %d assembled-result arms: "+
-			"an arm has stopped stamping its measurement", calls, knownArms)
+	// EXACT reconciliation, not a floor. A floor accepts an arm that stopped
+	// stamping as long as another was added, and it accepted the population
+	// that hid a false unreachability claim. The number of stamping sites must
+	// equal the arms this package accounts for -- driven plus registered
+	// uncovered -- so adding or losing one fails here and in the behavioural
+	// test together.
+	accounted := len(assembledResultArmCases()) + len(armsWithNoBehaviouralCase)
+	if calls != accounted {
+		t.Errorf("found %d recordMeasurement call sites but the package accounts for %d arms "+
+			"(%d driven + %d registered uncovered): an arm was added without a case, or one stopped "+
+			"stamping its measurement", calls, accounted, len(assembledResultArmCases()), len(armsWithNoBehaviouralCase))
 	}
 
 	for _, offender := range offenders {
