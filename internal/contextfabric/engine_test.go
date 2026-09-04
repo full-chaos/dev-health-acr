@@ -397,6 +397,7 @@ type recordingTelemetry struct {
 	// a test asserts the exact outcome/chain-depth pair, never merely that
 	// something fired.
 	windowCarries []windowCarryRecord
+	kindCarries   []kindCarryRecord
 	// modelRowsStripped (CHAOS-4355 follow-up) mirrors the SAME
 	// list-not-count discipline.
 	modelRowsStripped []int
@@ -431,6 +432,11 @@ type coverageDisclosurePhrasingRecord struct {
 // own shape one field pair over.
 type windowCarryRecord struct {
 	outcome    WindowCarryOutcome
+	chainDepth int
+}
+
+type kindCarryRecord struct {
+	outcome    KindCarryOutcome
 	chainDepth int
 }
 
@@ -531,6 +537,10 @@ func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ s
 
 func (r *recordingTelemetry) RecordWindowCarry(_ context.Context, _ storage.Principal, outcome WindowCarryOutcome, chainDepth int) {
 	r.windowCarries = append(r.windowCarries, windowCarryRecord{outcome, chainDepth})
+}
+
+func (r *recordingTelemetry) RecordKindCarry(_ context.Context, _ storage.Principal, outcome KindCarryOutcome, chainDepth int) {
+	r.kindCarries = append(r.kindCarries, kindCarryRecord{outcome, chainDepth})
 }
 
 func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {

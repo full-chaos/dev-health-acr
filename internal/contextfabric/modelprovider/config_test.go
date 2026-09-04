@@ -68,20 +68,43 @@ func TestConfigured_acceptsEitherCredentialOrBaseURL(t *testing.T) {
 	}
 }
 
-// TestConfigured_treatsAnyModelVariableAsOptingIn is the CHAOS-3770 F5
-// probe: setting ONLY a model name, or ONLY a tuning variable, with no
-// credential and no base URL, must still opt into full config parsing.
-// Before this fix, Configured() consulted only EnvAPIKey/EnvAPIKey_FILE/
-// EnvBaseURL, so a model-only (or timeout-only, or provider-only)
-// environment silently reported "unconfigured" -- newContextFabricModelRuntime
-// then returned (nil, nil), and the caller's setting was discarded with a
-// clean per-request 503 instead of the startup failure AC-3770-2 requires
-// for a mis-specified configuration.
-func TestConfigured_treatsAnyModelVariableAsOptingIn(t *testing.T) {
+// TestConfigured_treatsAnyIdentityVariableAsOptingIn is the CHAOS-3770 F5
+// probe, narrowed to the identity subset: setting ONLY a model name (or
+// provider, or fallback model), with no credential and no base URL, must
+// still opt into full config parsing. Before the CHAOS-3770 F5 fix,
+// Configured() consulted only EnvAPIKey/EnvAPIKey_FILE/EnvBaseURL, so a
+// model-only (or provider-only) environment silently reported
+// "unconfigured" -- newContextFabricModelRuntime then returned (nil, nil),
+// and the caller's setting was discarded with a clean per-request 503
+// instead of the startup failure AC-3770-2 requires for a mis-specified
+// configuration.
+func TestConfigured_treatsAnyIdentityVariableAsOptingIn(t *testing.T) {
 	cases := map[string]map[string]string{
-		"model only":                   {EnvModel: "gpt-5-mini"},
-		"provider only":                {EnvProvider: "acme-gateway"},
-		"fallback model only":          {EnvFallbackModel: "gpt-5.6-luna"},
+		"model only":          {EnvModel: "gpt-5-mini"},
+		"provider only":       {EnvProvider: "acme-gateway"},
+		"fallback model only": {EnvFallbackModel: "gpt-5.6-luna"},
+	}
+	for name, values := range cases {
+		t.Run(name, func(t *testing.T) {
+			if !Configured(lookupFrom(values)) {
+				t.Fatalf("Configured(%v) = false, want true -- a provider-identifying variable must opt in even alone", values)
+			}
+		})
+	}
+}
+
+// TestConfigured_ignoresATuningVariableAlone is the CHAOS-4986 red-first
+// probe superseding CHAOS-3770 F5 for this subset: a tuning-only variable
+// -- timeout, max attempts, max transport retries, or the insecure-base-URL
+// opt-in -- no longer opts a deployment into provider validation by
+// itself. Before this fix these four subcases asserted Configured()==true
+// (see TestConfigured_treatsAnyIdentityVariableAsOptingIn's prior form),
+// which made a timeout-only environment (the 2026-09-03 prod incident)
+// fail startup demanding EnvAPIKey. See Configured's doc comment for the
+// full rationale and IgnoredTuningVariables for the startup-log half of
+// the fix.
+func TestConfigured_ignoresATuningVariableAlone(t *testing.T) {
+	cases := map[string]map[string]string{
 		"timeout only":                 {EnvTimeout: "60s"},
 		"max attempts only":            {EnvMaxAttempts: "3"},
 		"max transport retries only":   {EnvMaxTransportRetries: "0"},
@@ -89,10 +112,22 @@ func TestConfigured_treatsAnyModelVariableAsOptingIn(t *testing.T) {
 	}
 	for name, values := range cases {
 		t.Run(name, func(t *testing.T) {
-			if !Configured(lookupFrom(values)) {
-				t.Fatalf("Configured(%v) = false, want true -- a nonblank ACR_CONTEXT_FABRIC_MODEL* variable must opt in even alone", values)
+			if Configured(lookupFrom(values)) {
+				t.Fatalf("Configured(%v) = true, want false -- a tuning-only variable must not opt in alone", values)
 			}
 		})
+	}
+}
+
+// TestConfigured_treatsATuningVariableAsOptingInAlongsideIdentity confirms
+// the split cuts only the "alone" case: a tuning variable set TOGETHER
+// with an identity variable still participates in Configured() being
+// true (trivially, since the identity variable alone already opts in),
+// and -- the behavior that actually matters -- ConfigFromEnv still reads
+// and honors it; see TestConfigFromEnv_appliesAnExplicitTimeoutWhenIdentified.
+func TestConfigured_treatsATuningVariableAsOptingInAlongsideIdentity(t *testing.T) {
+	if !Configured(lookupFrom(map[string]string{EnvAPIKey: "sk-test", EnvTimeout: "90s"})) {
+		t.Fatal("Configured() = false, want true: an identity variable opts in regardless of any tuning variable set alongside it")
 	}
 }
 
@@ -126,6 +161,23 @@ func TestConfigFromEnv_appliesProviderShapedDefaults(t *testing.T) {
 	}
 	if cfg.AllowInsecureBaseURL {
 		t.Fatal("insecure base URLs are permitted by default")
+	}
+}
+
+// TestConfigFromEnv_appliesAnExplicitTimeoutWhenIdentified is the CHAOS-4986
+// companion to TestConfigured_ignoresATuningVariableAlone: the split only
+// stops a tuning variable from opting in ALONE -- once a provider is
+// identified, an explicit tuning value is still read and honored exactly
+// as before this ticket. Default (45s) and cap (2m) semantics are
+// untouched.
+func TestConfigFromEnv_appliesAnExplicitTimeoutWhenIdentified(t *testing.T) {
+	lookup := lookupFrom(map[string]string{EnvAPIKey: "sk-test", EnvTimeout: "90s"})
+	cfg, err := ConfigFromEnv(lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Timeout != 90*time.Second {
+		t.Fatalf("timeout = %v, want the explicit 90s", cfg.Timeout)
 	}
 }
 
