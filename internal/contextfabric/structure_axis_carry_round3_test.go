@@ -288,6 +288,14 @@ func vetoedKindEntry(kind contractsv1.ContextFabricSubjectKind, disposition cont
 // exactly this shape, and this branch's own supersession test asserts it.
 // Every vetoed disposition in the vocabulary is checked here, because the
 // contract admits all three and the laundering works identically for each.
+//
+// SCOPE: this pins the NO-ANCESTOR shape only -- a vetoed carrier with nothing
+// carriable behind it. A vetoed carrier MARKS the walk but does not STOP it,
+// so where an eligible ancestor exists deeper in the chain the walk still
+// reaches it and returns a hit; `miss_vetoed_carrier` is reported only when no
+// hit was found anywhere. Whether a vetoed carrier should halt the walk
+// outright is a separate design question, ticketed, and deliberately not
+// decided here.
 func TestResolveCarriedKind_RefusesAVetoedCarrier(t *testing.T) {
 	t.Parallel()
 	for _, disposition := range []contractsv1.ContextFabricStructureDisposition{
