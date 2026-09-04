@@ -162,8 +162,17 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// truncation signal -- see ConfirmedKindRescueTruncated's own doc
 		// comment for why). Counts and bools only -- no kind name, no
 		// term, no candidate identity.
+		// "attempted" is emitted explicitly rather than left implicit in the
+		// event's presence. The presence rule is correct and documented
+		// above, but "fired=false" reads as "the rescue did not run" to
+		// anyone who has not read that doc comment -- it actually means the
+		// rescue RAN and found nothing, which is the opposite conclusion
+		// about whether "no candidate" is an exhaustive census or a skipped
+		// one. That misreading has already happened once. A reader should
+		// not need the source to interpret the line.
 		t.logger.DebugContext(ctx, "context fabric resolution trace: confirmed kind rescue",
 			"request_id", event.RequestID, "stage", event.Stage,
+			"attempted", true,
 			"fired", event.ConfirmedKindRescueFired,
 			"result_count", event.ConfirmedKindRescueResultCount,
 			"truncated", event.ConfirmedKindRescueTruncated)
