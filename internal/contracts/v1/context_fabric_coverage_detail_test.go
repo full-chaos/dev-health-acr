@@ -45,6 +45,10 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		d.Source, d.Count = "context-fabric:graph-validity-windows", intPtr(1)
 	case ContextFabricCoverageDetailReuseAuxiliaryRefsStripped:
 		d.Source, d.Count, d.Degrading = "context-fabric:answer-reuse", intPtr(4), true
+	case ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt:
+		// Source only. No fact kind and no count, matching the field rule:
+		// nothing was read, so there is nothing to name or to count.
+		d.Source = "context-fabric:answer-plan"
 	}
 	return d
 }

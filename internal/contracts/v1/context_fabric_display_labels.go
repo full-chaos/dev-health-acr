@@ -242,6 +242,13 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		label = countPhrase(d.Count, "undated element", "undated elements") + " included at the requested time"
 	case ContextFabricCoverageDetailReuseAuxiliaryRefsStripped:
 		label = countPhrase(d.Count, "supporting item is", "supporting items are") + " no longer visible to you and were removed"
+	case ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt:
+		// Says the answer STOPPED, not that a read failed. A reader who is
+		// told "could not be read" would go looking for a broken source;
+		// nothing was read, so there is nothing to look at.
+		// No count phrasing: the field rule for this code allows no count,
+		// because nothing was read and there is nothing to count.
+		label = "The answer ended before this was looked at"
 	default:
 		label = "Coverage was limited"
 	}

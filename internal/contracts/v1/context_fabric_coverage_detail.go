@@ -84,6 +84,23 @@ const (
 	// citation still does: a narrowed answer is useful, an answer whose own
 	// cited evidence vanished is a different answer.
 	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped ContextFabricCoverageDetailCode = "reuse_auxiliary_refs_stripped"
+	// ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt: the turn
+	// ENDED before this requirement was attempted at all.
+	//
+	// Every other code in this vocabulary describes something that happened
+	// TO a read -- a fact was unconfigured, a read failed, a set was pruned
+	// or narrowed. This one exists because no read happened: a terminal veto
+	// stopped the turn while the plan already described the requirement, so
+	// the requirement is neither served nor unservable. It was simply never
+	// reached.
+	//
+	// Without it that state had NO truthful expression. The outcome token for
+	// it, `not_attempted`, is not lossless, so a row carrying it must name a
+	// cause -- and the nearest existing code, `fact_pruned`, would assert
+	// that a fact was pruned when nothing was read. Borrowing it would have
+	// replaced a false `satisfied` with a false `fact_pruned`, which is not a
+	// repair.
+	ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt ContextFabricCoverageDetailCode = "answer_terminated_before_attempt"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -101,6 +118,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailGraphUnknownRelationshipType,
 	ContextFabricCoverageDetailGraphValidityUnbounded,
 	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped,
+	ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -276,10 +294,14 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	},
 	ContextFabricCoverageDetailGraphEndpointLookupFailed:         {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailGraphExactNameCandidatesTruncated: {},
-	ContextFabricCoverageDetailGraphCohortDeniedByAuthorization:  {requireCount: true, allowCount: true},
-	ContextFabricCoverageDetailGraphUnknownRelationshipType:      {requireCount: true, allowCount: true},
-	ContextFabricCoverageDetailGraphValidityUnbounded:            {requireCount: true, allowCount: true},
-	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped:        {requireCount: true, allowCount: true},
+	// No fact kind and no count: this code is about the TURN ending, not
+	// about any one fact or any countable set. Every other allowance stays
+	// off, so a row cannot decorate it with a fact it never read.
+	ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt:    {},
+	ContextFabricCoverageDetailGraphCohortDeniedByAuthorization: {requireCount: true, allowCount: true},
+	ContextFabricCoverageDetailGraphUnknownRelationshipType:     {requireCount: true, allowCount: true},
+	ContextFabricCoverageDetailGraphValidityUnbounded:           {requireCount: true, allowCount: true},
+	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped:       {requireCount: true, allowCount: true},
 }
 
 // coverageDetailCodeDegrades declares, per the settled design, which codes

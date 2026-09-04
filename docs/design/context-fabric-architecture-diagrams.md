@@ -42,6 +42,17 @@ cohort ranking + drivers + Rows pipeline, and the score formula for CHAOS-4398
 [context-fabric-subject-model-and-cohort-answers.md](context-fabric-subject-model-and-cohort-answers.md),
 not repeated here.
 
+**Related (2026-09-04):** what was built on the intent engine since 2026-09-01
+and why — seam status S1 through S7c, the decisions taken after the design of
+record's D5 (chain-identity containment, the grouped-budget descope, the
+requirement rows and their refinements, the provider shape disclosure), the
+known-holes list written for an external reviewer, and the build ledger — is
+covered in
+[context-fabric-intent-engine-build-state.md](context-fabric-intent-engine-build-state.md).
+That page carries its own flow diagram of planning to facts to outcome row to
+completeness to serve, showing the four reducing sites and the `finalizeServed`
+choke point; the diagrams here are not duplicated there.
+
 ---
 
 ## 1 — Question flow end-to-end
