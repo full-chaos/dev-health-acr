@@ -234,6 +234,26 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 				}
 				next = append(next, id)
 			}
+			// DURABLE ANCESTRY, not just the wire-visible edges above.
+			//
+			// ConfirmedStructure only points somewhere when this result
+			// actually CARRIED or CONFIRMED something -- so a turn that was
+			// vetoed, or that simply carried nothing, has no wire edge out of
+			// it and the walk stops dead there. That is a hole: the turn had a
+			// real predecessor, and every turn after the hole is cut off from
+			// everything before it.
+			//
+			// The stored parent is what closes it. It is recorded by EVERY
+			// Save regardless of what was carried, which is exactly why it can
+			// bridge a turn that carried nothing. Appended AFTER the
+			// confirmation edges so a chain that does have wire-visible
+			// provenance still prefers it -- this widens what is reachable
+			// without re-ordering what was already reachable.
+			if id := strings.TrimSpace(fetched.ParentResultID); id != "" {
+				if _, ok := visited[id]; !ok {
+					next = append(next, id)
+				}
+			}
 		}
 		if depthTruncated {
 			// This depth was not scanned to the end, so the walk stops here

@@ -840,3 +840,204 @@ func TestChainIdentity_QuestionDriftGatesTheCallerSuppliedRootOnly(t *testing.T)
 		}
 	})
 }
+
+// TestChainIdentity_AWalkContinuesThroughATurnThatCarriedNothing is the test
+// that should have existed from the start, and its absence is why persisted
+// ancestry could be written by every Save and read by nothing while a five-arm
+// durability suite stayed green.
+//
+// Those arms assert what the Save DOUBLE received. That proves stamping. It
+// does not prove TRAVERSAL, and traversal is the whole point: ancestry exists
+// so a later turn can walk back THROUGH a turn that carried nothing. Writing a
+// parent that no walk reads is a half-mechanism that looks complete from the
+// write side.
+//
+// The chain here is the shape the design review described:
+//
+//	turn 1  confirms expected_kind=team
+//	turn 2  follows turn 1, is VETOED, carries nothing, so it has NO
+//	        ConfirmedStructure entry pointing anywhere -- its only link back
+//	        is the durable parent the store recorded
+//	turn 3  follows turn 2
+//
+// Turn 3 can only reach turn 1's confirmed kind by reading turn 2's stored
+// ancestry. Expanding the frontier from ConfirmedStructure alone stops dead at
+// turn 2, which is exactly the hole this ticket claims to close.
+func TestChainIdentity_AWalkContinuesThroughATurnThatCarriedNothing(t *testing.T) {
+	t.Parallel()
+
+	turn1 := validInvestigationResult()
+	turn1.ResultID = "result_turn_one_00001"
+	turn1.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+		confirmedKindEntry(contractsv1.ContextFabricSubjectTeam, "result_turn_zero_0001", "kindr_confirm0001"),
+	}
+
+	// Turn 2 carried NOTHING: no ConfirmedStructure at all, so the walk has no
+	// wire-visible edge to follow out of it. Its link to turn 1 exists only as
+	// store metadata -- which is precisely the condition being tested.
+	turn2 := validInvestigationResult()
+	turn2.ResultID = "result_turn_two_00001"
+	turn2.ConfirmedStructure = nil
+
+	store := &ancestryLinkedStore{
+		staticResultStore: &staticResultStore{results: map[string]InvestigationResult{
+			turn1.ResultID: turn1,
+			turn2.ResultID: turn2,
+		}},
+		parents: map[string]string{turn2.ResultID: turn1.ResultID},
+	}
+
+	request := validInvestigationRequest()
+	request.ParentResultID = turn2.ResultID
+
+	telemetry := &recordingTelemetry{}
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	graph := &kindRecordingGraphReader{graphReaderStub: graphReaderStub{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+	}}
+	fresh := validInvestigationResult()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graph,
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return fresh, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results:   store,
+		Telemetry: telemetry,
+	})
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+
+	// Guard: turn 2 must genuinely be reachable and genuinely carry nothing,
+	// or this test is measuring a different chain than it describes.
+	if len(store.gotIDs) == 0 {
+		t.Fatal("no prior result was loaded at all, so this test proves nothing about traversal")
+	}
+
+	var got []KindCarryOutcome
+	hit := false
+	for _, c := range telemetry.kindCarries {
+		got = append(got, c.outcome)
+		if c.outcome == KindCarryHit {
+			hit = true
+		}
+	}
+	if !hit {
+		t.Errorf("kind carry outcomes = %v, want a hit: turn 2 carried nothing, so the ONLY route from turn 3 to turn 1's confirmed kind is turn 2's persisted ancestry -- a walk that expands only from ConfirmedStructure stops dead at turn 2, which is the hole this ticket claims to close", got)
+	}
+
+	carried := false
+	for _, entry := range result.ConfirmedStructure {
+		if entry.Member == contractsv1.ContextFabricStructureNeedExpectedKind &&
+			entry.Source == contractsv1.ContextFabricStructureSourceCarried {
+			carried = true
+		}
+	}
+	if !carried {
+		t.Errorf("ConfirmedStructure = %+v, want a source=carried expected_kind entry inherited from turn 1", result.ConfirmedStructure)
+	}
+}
+
+// ancestryLinkedStore returns durable parents on Get, which staticResultStore
+// does not model. Without it no test could exercise traversal at all -- the
+// shared double reports every stored result as having no ancestry, so a walk
+// that ignores ancestry entirely is indistinguishable from one that honours it.
+type ancestryLinkedStore struct {
+	*staticResultStore
+	parents map[string]string
+}
+
+func (s *ancestryLinkedStore) Get(ctx context.Context, principal storage.Principal, resultID string) (StoredInvestigationResult, error) {
+	stored, err := s.staticResultStore.Get(ctx, principal, resultID)
+	if err != nil {
+		return stored, err
+	}
+	stored.ParentResultID = s.parents[resultID]
+	return stored, nil
+}
+
+// TestChainIdentity_AValidatedReceiptIsRecordedAsAncestryOnATerminal covers
+// the receipt FALLBACK on a path that returns early.
+//
+// parent_result_id is the ancestry root when supplied; receipt-derived roots
+// are the fallback, so that existing clients which link by redeeming an offer
+// still build walkable history instead of ancestry existing only for callers
+// who adopted the new field. That fallback was being dropped on three
+// post-validation terminals, which passed nil for the validated receipts even
+// though the caller had them in scope -- so precisely the clients the fallback
+// exists for got no ancestry on any turn that ended in a veto or a terminal.
+//
+// The reasoning that produced the bug is worth recording: "these paths run
+// before receipt validation, so nil is correct" is TRUE for the structure
+// veto and FALSE for these three. A single sentence covering five call sites
+// was right about two of them.
+func TestChainIdentity_AValidatedReceiptIsRecordedAsAncestryOnATerminal(t *testing.T) {
+	t.Parallel()
+
+	prior := validInvestigationResult()
+	prior.ResultID = "result_receipt_parent_1"
+	// The receipt must match a CANDIDATE in the prior result, not merely a
+	// committed subject: an unmatched receipt classifies skipped_no_match and
+	// is deliberately never validated, so it must not seed ancestry either.
+	// My first fixture set only Committed and the test failed -- correctly,
+	// because the receipt never validated. That is the behaviour working, not
+	// a second bug.
+	ops := SubjectRef{Kind: SubjectTeam, CanonicalID: "team_ops", Label: "Ops"}
+	prior.SubjectResolution = SubjectResolution{
+		Candidates: []SubjectCandidate{{
+			ReceiptID: "receipt_abc12345678", Subject: ops, State: ResolutionCommitted,
+			MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 1,
+		}},
+		Committed: []SubjectRef{ops},
+	}
+	seed := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}
+	store := newAncestryRecordingStore(seed)
+
+	request := validInvestigationRequest()
+	// Linked by a prior-subject receipt ONLY -- no parent_result_id, which is
+	// exactly the existing-client shape the fallback serves.
+	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: prior.ResultID, ReceiptID: "receipt_abc12345678"}}
+
+	fresh := validInvestigationResult()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		// Empty committed set routes through the subjectless terminal, one of
+		// the three paths that was dropping the fallback.
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return fresh, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: store,
+	})
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	// Reachability guard: this must genuinely be the subjectless terminal, or
+	// the arm is re-testing the decisive path.
+	if result.Status != InvestigationNoMatch {
+		t.Fatalf("Status = %q, want %q -- this fixture no longer reaches the subjectless terminal", result.Status, InvestigationNoMatch)
+	}
+	got, saved := store.saved[result.ResultID]
+	if !saved {
+		t.Fatalf("the terminal saved no row for %q", result.ResultID)
+	}
+	if got != prior.ResultID {
+		t.Fatalf("terminal recorded parent %q, want %q: a client linking by a validated receipt must build walkable history on early-return paths too, not only on the decisive one", got, prior.ResultID)
+	}
+}

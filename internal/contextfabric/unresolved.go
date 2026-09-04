@@ -217,7 +217,12 @@ func (e *Engine) terminalResult(
 	// the defect the final-assertion guard exists to prevent. See
 	// finalizeServed.
 	plan *AnswerPlan,
-) (InvestigationResult, error) {
+	// ancestryParent is the durable chain parent this terminal records. Passed
+	// in rather than recomputed here: only the caller knows whether receipt
+	// validation has run yet, and a terminal that recomputed it with nil would
+	// silently drop a validated prior-subject receipt on exactly the paths
+	// where one exists.
+	ancestryParent string) (InvestigationResult, error) {
 	status, limitation := resolveTerminalStatus(request, &resolution)
 	// CHAOS-4634 (subsumes CHAOS-4579/CHAOS-4531's §1.3 class-conditional
 	// gate): applied HERE, at the top, before ANY reader of
@@ -447,7 +452,7 @@ func (e *Engine) terminalResult(
 		// introduce a difference, and a terminal result saved under a key no
 		// lookup will ever form is a row the clarification loop cannot reach.
 		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
-		if err := e.results.Save(ctx, principal, result, watermark, epoch, composeTimeAxisKey(TimeAxisKeyFor(request.TimeContext), windowCanon.KeyComponent), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch, ancestryParentResultID(request, nil)); err != nil {
+		if err := e.results.Save(ctx, principal, result, watermark, epoch, composeTimeAxisKey(TimeAxisKeyFor(request.TimeContext), windowCanon.KeyComponent), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch, ancestryParent); err != nil {
 			// CHAOS-3927 P4 (codex round-2 adversarial review fix): a
 			// subjectless terminal can carry confirmed structure exactly
 			// like a synthesized answer can (result.ConfirmedStructure
