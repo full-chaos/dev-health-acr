@@ -39,7 +39,7 @@ func (p *ContinuousIntegrationProvider) Capability() contextfabric.FactCapabilit
 	})
 }
 
-func (p *ContinuousIntegrationProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *ContinuousIntegrationProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -51,6 +51,19 @@ func (p *ContinuousIntegrationProvider) ReadFacts(ctx context.Context, principal
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
 	rejectedCount := 0
+	// CHAOS-5026: a defer, not a final-line call, so EVERY return path in
+	// this function -- including one a future edit adds -- passes through
+	// the disclosure, not just the one return statement someone remembered
+	// to add it to (exactly the shape source_health.go's ReadFacts got
+	// wrong: a 3rd success-shaped return with no call of its own). Skipped
+	// when err != nil: an error return's FactProviderResult is never read
+	// by the caller (Go convention), and the raw error already reports a
+	// state at least as severe as SourceTruncated would.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.continuous_integration", contextfabric.FactContinuousIntegration, rejectedCount)
+		}
+	}()
 	// grain starts at the run-status shape's exact precision and widens to
 	// daily only once a repository aggregate ACTUALLY CONTRIBUTED a fact
 	// (rowCount > 0) -- widening merely because a repository subject was
@@ -85,8 +98,7 @@ func (p *ContinuousIntegrationProvider) ReadFacts(ctx context.Context, principal
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
-	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}
-	applySubjectShapeRejection(&result, "devhealthfacts.continuous_integration", contextfabric.FactContinuousIntegration, rejectedCount)
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}
 	return result, nil
 }
 

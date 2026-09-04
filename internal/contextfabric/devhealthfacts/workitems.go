@@ -25,15 +25,22 @@ func (p *StatusProvider) Capability() contextfabric.FactCapability {
 	return newCapability(contextfabric.FactStatus, "devhealthfacts.status", []contextfabric.SubjectKind{contextfabric.SubjectWorkItem})
 }
 
-func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := refuseHistoricalFact(query); unsupported {
-		return result, nil
+func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
+	if refused, unsupported := refuseHistoricalFact(query); unsupported {
+		return refused, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject, rejected := v2Index(query.Subjects, identity.KindWorkItem)
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.status", contextfabric.FactStatus, rejected)
+		}
+	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-4377: the SQL build + scan half moved to
 	// github.com/full-chaos/dev-health-go/readers.ReadWorkItemStatus.
@@ -53,8 +60,7 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 		})
 	}
 	state, emptyReason := currentAxisReadState(len(facts))
-	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}
-	applySubjectShapeRejection(&result, "devhealthfacts.status", contextfabric.FactStatus, rejected)
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}
 	return result, nil
 }
 
@@ -71,15 +77,22 @@ func (p *WorkProvider) Capability() contextfabric.FactCapability {
 	return newCapability(contextfabric.FactWork, "devhealthfacts.work", []contextfabric.SubjectKind{contextfabric.SubjectWorkItem})
 }
 
-func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := refuseHistoricalFact(query); unsupported {
-		return result, nil
+func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
+	if refused, unsupported := refuseHistoricalFact(query); unsupported {
+		return refused, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject, rejected := v2Index(query.Subjects, identity.KindWorkItem)
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.work", contextfabric.FactWork, rejected)
+		}
+	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-4377: the SQL build + scan half moved to
 	// github.com/full-chaos/dev-health-go/readers.ReadWorkItemTitle.
@@ -99,8 +112,7 @@ func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principa
 		})
 	}
 	state, emptyReason := currentAxisReadState(len(facts))
-	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}
-	applySubjectShapeRejection(&result, "devhealthfacts.work", contextfabric.FactWork, rejected)
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}
 	return result, nil
 }
 
@@ -128,7 +140,7 @@ func (p *ActualCompletionProvider) Capability() contextfabric.FactCapability {
 	return newCapability(contextfabric.FactActualCompletion, "devhealthfacts.actual_completion", []contextfabric.SubjectKind{contextfabric.SubjectWorkItem})
 }
 
-func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -138,6 +150,13 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject, rejected := v2Index(query.Subjects, identity.KindWorkItem)
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.actual_completion", contextfabric.FactActualCompletion, rejected)
+		}
+	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-4377: the SQL build + scan half (the isNotNull/ifNull
 	// coalescing, the Tier B "was it done at T" derivation) moved to
@@ -162,7 +181,6 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 		})
 	}
 	state, retentionReason := timeBound.retentionState(len(rows))
-	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery}
-	applySubjectShapeRejection(&result, "devhealthfacts.actual_completion", contextfabric.FactActualCompletion, rejected)
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery}
 	return result, nil
 }

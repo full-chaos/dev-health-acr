@@ -59,7 +59,7 @@ func (p *LandscapeProvider) Capability() contextfabric.FactCapability {
 	return capability
 }
 
-func (p *LandscapeProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *LandscapeProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -72,6 +72,13 @@ func (p *LandscapeProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	truncated := false
 	omittedRows := 0
 	rejectedCount := 0
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.landscape", contextfabric.FactLandscape, rejectedCount)
+		}
+	}()
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		rowCount, rowsOmitted, rejected, scanErr := p.readTeamLandscape(ctx, orgID, teamSubjects, &facts, timeBound)
@@ -97,8 +104,7 @@ func (p *LandscapeProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	// CHAOS-4521b: this source has no project dimension, so an all-project
 	// read that came back empty says something more specific than "no rows".
 	retentionReason = explainTeamScopedProjectAbsence(timeBound, state, retentionReason, query.Subjects)
-	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated, OmittedCount: omittedRows}
-	applySubjectShapeRejection(&result, "devhealthfacts.landscape", contextfabric.FactLandscape, rejectedCount)
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated, OmittedCount: omittedRows}
 	return result, nil
 }
 

@@ -40,7 +40,7 @@ func (p *DeploymentsProvider) Capability() contextfabric.FactCapability {
 	})
 }
 
-func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -52,6 +52,13 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
 	rejectedCount := 0
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.deployments", contextfabric.FactDeployments, rejectedCount)
+		}
+	}()
 	// See ci.go's identical comment: the coarser grain wins only once a
 	// repository aggregate ACTUALLY CONTRIBUTED a fact, not merely because
 	// one was attempted.
@@ -79,8 +86,7 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
-	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}
-	applySubjectShapeRejection(&result, "devhealthfacts.deployments", contextfabric.FactDeployments, rejectedCount)
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}
 	return result, nil
 }
 

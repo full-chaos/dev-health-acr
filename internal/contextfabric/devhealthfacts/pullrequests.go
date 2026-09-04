@@ -37,7 +37,7 @@ func (p *PullRequestsProvider) Capability() contextfabric.FactCapability {
 	return newCapability(contextfabric.FactPullRequests, "devhealthfacts.pull_requests", []contextfabric.SubjectKind{contextfabric.SubjectPullRequest})
 }
 
-func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -47,6 +47,13 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject, rejected := pullRequestSubjectIndex(query.Subjects)
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.pull_requests", contextfabric.FactPullRequests, rejected)
+		}
+	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-4377: the SQL build + scan half (the "merged wins over closed"
 	// derivation, the existence guard, the UInt32 Scan quirk) moved to
@@ -75,8 +82,7 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 		})
 	}
 	state, retentionReason := timeBound.retentionState(len(rows))
-	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery}
-	applySubjectShapeRejection(&result, "devhealthfacts.pull_requests", contextfabric.FactPullRequests, rejected)
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery}
 	return result, nil
 }
 
@@ -93,7 +99,7 @@ func (p *ReviewsProvider) Capability() contextfabric.FactCapability {
 	return newCapability(contextfabric.FactReviews, "devhealthfacts.reviews", []contextfabric.SubjectKind{contractsv1.ContextFabricSubjectPullRequestReview})
 }
 
-func (p *ReviewsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *ReviewsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -103,6 +109,13 @@ func (p *ReviewsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject, rejected := v2Index(query.Subjects, identity.KindPullRequestReview)
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.reviews", contextfabric.FactReviews, rejected)
+		}
+	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-4377: the SQL build + scan half moved to
 	// github.com/full-chaos/dev-health-go/readers.ReadPullRequestReviews;
@@ -123,7 +136,6 @@ func (p *ReviewsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 		})
 	}
 	state, retentionReason := timeBound.retentionState(len(rows))
-	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery}
-	applySubjectShapeRejection(&result, "devhealthfacts.reviews", contextfabric.FactReviews, rejected)
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery}
 	return result, nil
 }

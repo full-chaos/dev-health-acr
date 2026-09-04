@@ -67,7 +67,7 @@ func (p *WorkloadProvider) Capability() contextfabric.FactCapability {
 	return capability
 }
 
-func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -79,6 +79,13 @@ func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
 	rejectedCount := 0
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.workload", contextfabric.FactWorkload, rejectedCount)
+		}
+	}()
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		rowCount, rejected, scanErr := p.readTeamWorkload(ctx, orgID, teamSubjects, &facts, timeBound)
@@ -99,8 +106,7 @@ func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
-	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: truncated}
-	applySubjectShapeRejection(&result, "devhealthfacts.workload", contextfabric.FactWorkload, rejectedCount)
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: truncated}
 	return result, nil
 }
 

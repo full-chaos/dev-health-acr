@@ -34,7 +34,7 @@ func (p *IncidentsProvider) Capability() contextfabric.FactCapability {
 	return newCapability(contextfabric.FactIncidents, "devhealthfacts.incidents", []contextfabric.SubjectKind{contextfabric.SubjectIncident})
 }
 
-func (p *IncidentsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *IncidentsProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -44,6 +44,13 @@ func (p *IncidentsProvider) ReadFacts(ctx context.Context, principal storage.Pri
 		return contextfabric.FactProviderResult{}, err
 	}
 	ids, bySubject, rejected := subjectIndex(query.Subjects, "incident:")
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.incidents", contextfabric.FactIncidents, rejected)
+		}
+	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-4377: the SQL build + scan half (the status/severity Tier
 	// B/Tier C split, the soft-delete guard) moved to
@@ -76,7 +83,7 @@ func (p *IncidentsProvider) ReadFacts(ctx context.Context, principal storage.Pri
 		})
 	}
 	state, retentionReason := timeBound.retentionState(len(rows))
-	result := contextfabric.FactProviderResult{
+	result = contextfabric.FactProviderResult{
 		Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion,
 		Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery,
 	}
@@ -86,6 +93,5 @@ func (p *IncidentsProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	if timeBound.active && retentionReason == "" {
 		result.Reason = incidentSeverityOmittedReason
 	}
-	applySubjectShapeRejection(&result, "devhealthfacts.incidents", contextfabric.FactIncidents, rejected)
 	return result, nil
 }

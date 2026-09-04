@@ -35,7 +35,7 @@ func (p *SourceHealthProvider) Capability() contextfabric.FactCapability {
 	return newCapability(contextfabric.FactSourceHealth, "devhealthfacts.source_health", []contextfabric.SubjectKind{contextfabric.SubjectOrganization})
 }
 
-func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -53,17 +53,22 @@ func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.
 
 	// codex terra xhigh r1 (EXECUTED-confirmed): this provider has THREE
 	// success-shaped outcomes (no well-shaped org subject survived; the
-	// survivor isn't the caller's own org; the real query ran) -- unlike
-	// every other provider in this package, which builds ONE
-	// FactProviderResult at the bottom of ReadFacts. Three separate
-	// applySubjectShapeRejection call sites meant a caller-visible subject
-	// could reach the real query (and get a clean SourceNoData) while its
-	// shape-rejected sibling's disclosure lived on a DIFFERENT, unreached
-	// return -- deleting only the third call was a compiling mutation that
-	// survived every other test in this package. Consolidated to ONE
-	// `result` variable and ONE applySubjectShapeRejection call every branch
-	// passes through, so no future branch can re-introduce that gap.
-	result := contextfabric.FactProviderResult{Facts: nil, State: contextfabric.SourceAvailable, Version: QueryVersion}
+	// survivor isn't the caller's own org; the real query ran). Three
+	// separate applySubjectShapeRejection call sites meant a caller-visible
+	// subject could reach the real query (and get a clean SourceNoData)
+	// while its shape-rejected sibling's disclosure lived on a DIFFERENT,
+	// unreached return -- deleting only the third call was a compiling
+	// mutation that survived every other test in this package. Consolidated
+	// to ONE `result` variable, and -- same as every other provider in this
+	// package -- a DEFERRED call so a future branch added to this switch
+	// cannot re-introduce the gap by skipping the disclosure entirely, not
+	// just by landing on the wrong one of several call sites.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.source_health", contextfabric.FactSourceHealth, rejected)
+		}
+	}()
+	result = contextfabric.FactProviderResult{Facts: nil, State: contextfabric.SourceAvailable, Version: QueryVersion}
 	subject, requested := bySubject[orgID]
 	switch {
 	case len(orgSubjectIDs) == 0:
@@ -123,6 +128,5 @@ func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.
 		}
 		result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery, OmittedCount: omittedUnrepresentableCount}
 	}
-	applySubjectShapeRejection(&result, "devhealthfacts.source_health", contextfabric.FactSourceHealth, rejected)
 	return result, nil
 }

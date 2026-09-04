@@ -69,7 +69,7 @@ func (p *InvestmentProvider) Capability() contextfabric.FactCapability {
 	return capability
 }
 
-func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -82,6 +82,16 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	truncated := false
 	omittedUnrepresentableCount := 0
 	rejectedCount := 0
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note. A team/project subject
+	// named without its "team:"/project v2 shape reads no differently from
+	// a subject with genuinely no investment data unless this runs -- see
+	// subjectIndex/v2Index's own doc comments.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.investment", contextfabric.FactInvestment, rejectedCount)
+		}
+	}()
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
 		rowCount, omitted, rejected, scanErr := p.readTeamInvestment(ctx, orgID, teamSubjects, &facts, timeBound)
@@ -122,12 +132,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if omittedUnrepresentableCount > 0 && retentionReason == "" {
 		retentionReason = unrepresentableValueReason
 	}
-	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}
-	// CHAOS-5026: a team/project subject named without its "team:"/project
-	// v2 shape reads no differently from a subject with genuinely no
-	// investment data unless this is applied -- see subjectIndex/v2Index's
-	// own doc comments.
-	applySubjectShapeRejection(&result, "devhealthfacts.investment", contextfabric.FactInvestment, rejectedCount)
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}
 	return result, nil
 }
 
