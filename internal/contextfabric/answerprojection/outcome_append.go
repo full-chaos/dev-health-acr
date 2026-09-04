@@ -97,7 +97,7 @@ func appendProjectionOutcomes(projection contractsv1.ContextFabricAnswerProjecti
 // projectionOutcomeRow is the shape every projection-stage row takes: no
 // requirement identity, the caller's byte ceiling as the cause, observed.
 func projectionOutcomeRow(impact contractsv1.ContextFabricAnswerImpactKind, declared int) contractsv1.ContextFabricPlanRequirementOutcomeRow {
-	return contractsv1.ContextFabricPlanRequirementOutcomeRow{
+	row := contractsv1.ContextFabricPlanRequirementOutcomeRow{
 		Stage:         contractsv1.ContextFabricOutcomeStageProjection,
 		Outcome:       contractsv1.ContextFabricRequirementNarrowed,
 		Impact:        impact,
@@ -106,4 +106,8 @@ func projectionOutcomeRow(impact contractsv1.ContextFabricAnswerImpactKind, decl
 		Served:        0,
 		Declared:      declared,
 	}
+	// The reduction step, derived from the row. Yields nothing when declared
+	// is zero -- a projection that dropped nothing has no step to record, and
+	// a zero-length step is not a refinement.
+	return contractsv1.ContextFabricWithReductionRefinement(row)
 }

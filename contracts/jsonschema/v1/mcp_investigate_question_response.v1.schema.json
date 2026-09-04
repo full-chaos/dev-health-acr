@@ -2558,6 +2558,10 @@
               ],
               "description": "The declared ceiling that forced the reduction, when a ceiling did. A refinement must name at least one of basis and overrun: a reduction with no cause is the generic truncation this layer exists to replace."
             },
+            "coverage": {
+              "type": "string",
+              "description": "A coverage event that caused the reduction, from the published coverage detail code vocabulary. A refinement must name at least one of basis, overrun and coverage: a reduction with no cause is the generic truncation this layer exists to replace."
+            },
             "before": {
               "type": "integer",
               "minimum": 0
@@ -6171,6 +6175,10 @@
                 "bytes"
               ],
               "description": "The declared ceiling that forced the reduction, when a ceiling did. A refinement must name at least one of basis and overrun: a reduction with no cause is the generic truncation this layer exists to replace."
+            },
+            "coverage": {
+              "type": "string",
+              "description": "A coverage event that caused the reduction, from the published coverage detail code vocabulary. A refinement must name at least one of basis, overrun and coverage: a reduction with no cause is the generic truncation this layer exists to replace."
             },
             "before": {
               "type": "integer",

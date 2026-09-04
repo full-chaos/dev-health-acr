@@ -303,6 +303,12 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// surface below gains NOTHING: the canonical result carries no
 		// projection budget, since the budget describes what a PROJECTION
 		// dropped and the canonical result is what it was projected from.
+		// Round-1 fix: 226 -> 228. The refinement gained `overrun` and then
+		// `coverage`, mirroring the enclosing row's full cause model -- two
+		// more string leaves per document. The second was not optional
+		// polish: a sweep of every reducing site found the reuse degrade
+		// names a coverage code and NOTHING else, so a refinement without it
+		// could not represent that site at all.
 		// Plan-requirement layer: 224 -> 226. The projection embeds the
 		// outcome row, which gained a refinement chain, and a refinement
 		// carries exactly two STRING leaves -- stage and basis. before and
@@ -310,7 +316,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// answer plan, so it gains none of the requirement-row leaves.
 		// S7c: 215 -> 224 -- completeness.state plus the eight string
 		// leaves of a requirement outcome row.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 226},
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 228},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -353,6 +359,8 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// as the answer_projection surface above.
 		// CHAOS-4682: 306 -> 313 -- the same seven new time_series_rows/
 		// time_series_table leaves as the answer_projection surface above.
+		// Round-1 fix: 337 -> 339, the refinement's `overrun` and `coverage`
+		// causes -- the same two leaves the projection gains above.
 		// Plan-requirement layer: 322 -> 337, and the +15 accounts exactly.
 		// TWO come from the refinement chain on the outcome row (stage,
 		// basis), the same two the projection gains above. THIRTEEN come from
@@ -363,7 +371,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// and none belongs in the untrusted set.
 		// S7c: 313 -> 322 -- the same nine new completeness leaves as the
 		// answer_projection surface above.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 337},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 339},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -485,6 +493,11 @@ func trustedBecauseClosed(path string) bool {
 		// model-output DTO is schema-inferred from this block.
 		"subject", "scope", "quantifier", "step", "step_execution",
 		"input_class", "input_fact_kinds", "unavailable",
+		// The refinement's own cause leaves. "basis" and "overrun" are
+		// already covered by the row's cause fields above under their
+		// cause_-prefixed names; "coverage" is the third, and every one is
+		// validated against the same closed vocabulary the row uses.
+		"coverage",
 		// CHAOS-4087: "commit_gate" (ContextFabricCommitDecisionDigest) is a
 		// closed-vocabulary string validated against its own registry
 		// (validCommitGate) before a result is stored -- never model prose,

@@ -443,13 +443,19 @@ type ContextFabricRequirementRefinement struct {
 	// therefore demanded the one cause that site will not invent, and the
 	// field shipped with nothing able to write it.
 	//
-	// The shape now mirrors the enclosing row, which had solved this
-	// already: that row carries three cause fields and requires at least
-	// one, rather than insisting on a particular kind of cause. A reduction
-	// caused by a ceiling says so; a reduction caused by an ordering says
-	// that instead.
-	Basis   ContextFabricNarrowingBasis `json:"basis,omitempty"`
-	Overrun ContextFabricBudgetOverrun  `json:"overrun,omitempty"`
+	// The shape now mirrors the enclosing row's cause model in FULL --
+	// ordering, ceiling and coverage, at least one required -- rather than
+	// insisting on a particular kind of cause.
+	//
+	// All THREE, because a sweep of every reducing site found two causes was
+	// still not enough: the reuse degrade names a COVERAGE code and no
+	// ceiling and no ordering, so a two-cause refinement could not represent
+	// it either. That would have been the same defect a second time, fixed
+	// per instance instead of as a class. The vocabularies are the ones the
+	// row already uses; nothing is re-declared here.
+	Basis    ContextFabricNarrowingBasis     `json:"basis,omitempty"`
+	Overrun  ContextFabricBudgetOverrun      `json:"overrun,omitempty"`
+	Coverage ContextFabricCoverageDetailCode `json:"coverage,omitempty"`
 	// Before and After are counts of the thing that was narrowed.
 	Before int `json:"before"`
 	After  int `json:"after"`
@@ -466,12 +472,15 @@ func (r ContextFabricRequirementRefinement) Validate() error {
 	if r.Overrun != "" && !ValidContextFabricBudgetOverrun(r.Overrun) {
 		return fmt.Errorf("refinement overrun %q is not a vocabulary member", r.Overrun)
 	}
+	if r.Coverage != "" && !validCoverageDetailCode(r.Coverage) {
+		return fmt.Errorf("refinement coverage %q is not a vocabulary member", r.Coverage)
+	}
 	// A reduction with no named cause is the generic truncation this whole
 	// layer exists to replace, moved one level down. Both directions of the
 	// enclosing row's own cause rule, minus the "must name none when
 	// lossless" half, which cannot arise here: a refinement that reduced
 	// nothing is already refused below.
-	if r.Basis == "" && r.Overrun == "" {
+	if r.Basis == "" && r.Overrun == "" && r.Coverage == "" {
 		return fmt.Errorf("refinement at stage %q names no cause; a reduction must say what forced it", r.Stage)
 	}
 	if r.Before < 0 || r.After < 0 || r.After > r.Before {
@@ -658,4 +667,57 @@ func validateContextFabricRequirementRefinements(row ContextFabricPlanRequiremen
 		return fmt.Errorf("refinement chain ends at %d but the row served %d", last, row.Served)
 	}
 	return nil
+}
+
+// ContextFabricReductionRefinement derives the refinement a reduced outcome
+// row implies, from THAT ROW'S OWN counts and causes.
+//
+// One authority, deliberately. Every reducing stage already states what it
+// cut and why, in the row it returns; a refinement hand-built beside that
+// statement would be a second place for the same fact to be written, and the
+// two would disagree the first time one of them changed. Deriving it means a
+// stage cannot record a step that contradicts its own row.
+//
+// Returns false when the row describes no reduction -- a satisfied row, or a
+// row whose declared and served counts are equal. A refinement must reduce,
+// so there is nothing honest to record in those cases and an empty chain is
+// the correct output rather than a zero-length step.
+func ContextFabricReductionRefinement(row ContextFabricPlanRequirementOutcomeRow) (ContextFabricRequirementRefinement, bool) {
+	if row.Declared <= row.Served {
+		return ContextFabricRequirementRefinement{}, false
+	}
+	if row.Outcome == ContextFabricRequirementSatisfied || row.Outcome == ContextFabricRequirementNotApplicable {
+		return ContextFabricRequirementRefinement{}, false
+	}
+	refinement := ContextFabricRequirementRefinement{
+		Stage:    row.Stage,
+		Basis:    row.CauseNarrowing,
+		Overrun:  row.CauseOverrun,
+		Coverage: row.CauseCoverage,
+		Before:   row.Declared,
+		After:    row.Served,
+	}
+	// A row that named no cause cannot produce a refinement that names one.
+	// The row's own validator already refuses a causeless reduction, so this
+	// is unreachable on a valid row -- handled rather than assumed, because
+	// the alternative is emitting a step this type would reject.
+	if refinement.Basis == "" && refinement.Overrun == "" && refinement.Coverage == "" {
+		return ContextFabricRequirementRefinement{}, false
+	}
+	return refinement, true
+}
+
+// ContextFabricWithReductionRefinement returns row with its own reduction
+// recorded, when it describes one.
+//
+// It is the call every reducing site makes instead of building a chain by
+// hand, so "which stage cut what" is stated once per stage rather than twice.
+func ContextFabricWithReductionRefinement(row ContextFabricPlanRequirementOutcomeRow) ContextFabricPlanRequirementOutcomeRow {
+	if len(row.Refinements) > 0 {
+		return row
+	}
+	if refinement, ok := ContextFabricReductionRefinement(row); ok {
+		row.Refinements = []ContextFabricRequirementRefinement{refinement}
+	}
+	return row
 }

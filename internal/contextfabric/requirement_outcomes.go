@@ -288,7 +288,7 @@ func narrowCandidatesToBudget(result InvestigationResult, budget ResponseBudget,
 // not a silent gap: the completeness state derived from the set says
 // `not_derived` for exactly the turns where attribution was impossible.
 func candidateNarrowingOutcomeRow(narrowing candidateNarrowing, overrun contractsv1.ContextFabricBudgetOverrun, requirement string, obligation string) RequirementOutcomeRow {
-	return RequirementOutcomeRow{
+	row := RequirementOutcomeRow{
 		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
 		Requirement: requirement,
 		Obligation:  obligation,
@@ -303,27 +303,15 @@ func candidateNarrowingOutcomeRow(narrowing candidateNarrowing, overrun contract
 		CauseObserved: true,
 		Served:        narrowing.Served,
 		Declared:      narrowing.Declared,
-		// THE REDUCTION STEP ITSELF, recorded rather than left to be
-		// inferred from the two counts.
-		//
-		// Served and Declared are a before and an after with everything
-		// between them erased. This says WHICH stage cut, and what forced
-		// it -- the ceiling, named from the same overrun vocabulary the
-		// row's own cause field uses, and deliberately NOT a selection
-		// basis: no selection ran here, the list was truncated at its own
-		// declared order, and this function's header refuses to claim
-		// otherwise.
-		//
-		// One step, because this stage cuts once. The chain therefore runs
-		// exactly from Declared to Served, which is what the validator
-		// requires of it.
-		Refinements: []contractsv1.ContextFabricRequirementRefinement{{
-			Stage:   contractsv1.ContextFabricOutcomeStageAssembledResult,
-			Overrun: overrun,
-			Before:  narrowing.Declared,
-			After:   narrowing.Served,
-		}},
 	}
+	// THE REDUCTION STEP ITSELF, derived from the row rather than built
+	// beside it. Served and Declared are a before and an after with the step
+	// between them erased; this says which stage cut and what forced it. The
+	// cause here is the ceiling, never a selection basis -- no selection ran,
+	// the list was truncated at its own declared order, and this function's
+	// header refuses to claim otherwise. Deriving it from the row is what
+	// keeps that true without restating it.
+	return contractsv1.ContextFabricWithReductionRefinement(row)
 }
 
 // subjectScopeRequirement finds the requirement row a candidate-list
