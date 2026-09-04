@@ -318,3 +318,17 @@ func reusedPlanNarrowing(reused InvestigationResult) []contractsv1.ContextFabric
 	}
 	return reused.AnswerPlan.Narrowing
 }
+
+// reusedPlanFamily names the family a REUSED answer was planned under.
+//
+// Read off the stored plan rather than this turn's, for the same reason the
+// narrowing history is: the event describes the document being served, and
+// that document was planned under its own family. A stored row with no plan
+// carries no family, and the event says so by carrying none rather than by
+// borrowing one that would be a guess.
+func reusedPlanFamily(reused InvestigationResult) QuestionFamily {
+	if reused.AnswerPlan == nil {
+		return ""
+	}
+	return reused.AnswerPlan.Family
+}

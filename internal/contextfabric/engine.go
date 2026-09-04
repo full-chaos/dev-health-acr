@@ -1238,6 +1238,23 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				reused.Completeness.Outcomes = backfilled
 			}
 			reused.Completeness = ComputeAnswerCompleteness(reused)
+			// The count reaches the OPERATOR on this path too.
+			//
+			// The backfill above states a cardinality on a served answer, and
+			// the only emitter used to sit on the fresh-result path -- so a
+			// reused answer carried a count with nothing in the run's own
+			// artifacts to diagnose it. That is the telemetry-same-change bar
+			// failing on a path this slice ADDED: the consumer was verified
+			// where the step already ran and never asked of the path the
+			// backfill created.
+			//
+			// It reads the SERVED row through the same builder the fresh path
+			// uses, so the two surfaces cannot describe different numbers.
+			if e.telemetry != nil {
+				if event, counted := membershipCardinalityEventFrom(reused, reusedPlanFamily(reused)); counted {
+					e.telemetry.RecordMembershipCardinality(ctx, principal, event)
+				}
+			}
 			// chris's promise of record, verbatim: "reuse and stored reads
 			// are re-validated against the current budget and refuse if they
 			// no longer fit." A stored row keyed WITHOUT the response budget

@@ -1312,3 +1312,276 @@ func TestTheCardinalityEventCopiesEveryFieldItClaimsTo(t *testing.T) {
 		}
 	}
 }
+
+// TestTheShadowDoesNotCallAnUnavailableCountServed is codex round-3 finding
+// 1, pinned.
+//
+// THE DEFECT, and it is my own fix's seam. Stating an unserved count as an
+// `unavailable` row was round 2's correction. The shadow's predicate asks
+// only whether an assembled count row EXISTS, so that row -- which says the
+// count could not be produced -- made the shadow report `served` on an answer
+// whose own completeness reads `degraded`.
+//
+// That is the shadow's founding defect in a new place: claiming served on the
+// strength of not having looked properly. A row's presence is not its
+// outcome.
+func TestTheShadowDoesNotCallAnUnavailableCountServed(t *testing.T) {
+	t.Parallel()
+	plan := AnswerPlan{Family: QuestionFamilyScopedCohortStatus}
+	result := InvestigationResult{
+		Status: InvestigationComplete, AnswerPlan: &plan, ClaimedFacts: oneFact(),
+		Completeness: contractsv1.ContextFabricAnswerCompleteness{
+			Outcomes: []RequirementOutcomeRow{{
+				Stage:         contractsv1.ContextFabricOutcomeStageAssembledResult,
+				Requirement:   string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectRepository),
+				Obligation:    string(ObligationCount),
+				Outcome:       contractsv1.ContextFabricRequirementUnavailable,
+				Impact:        contractsv1.ContextFabricAnswerImpactDimension,
+				CauseCoverage: unavailableRequirementCause(RequirementReasonComputedPopulationAbsent),
+				CauseObserved: true,
+			}},
+		},
+	}
+	result.Completeness.State = contractsv1.DeriveContextFabricAnswerCompletenessState(result.Completeness.Outcomes)
+
+	shadow := DeriveServerStatus(result, []AnswerObligation{ObligationCount, ObligationEvidence, ObligationCoverage})
+	if shadow.Basis == ServerStatusBasisServed {
+		t.Fatalf("the answer states its count UNAVAILABLE and its own completeness reads %q, and the shadow "+
+			"reported `served` -- a row's presence is not its outcome", result.Completeness.State)
+	}
+	if shadow.Basis != ServerStatusBasisCountAbsent {
+		t.Fatalf("basis = %q, want %q -- the frame demanded a count and the answer states it could not be produced",
+			shadow.Basis, ServerStatusBasisCountAbsent)
+	}
+	// The control, in the same test: a SERVED count on an otherwise identical
+	// result must still reach `served`, or this fix would have closed the
+	// gate on everything rather than on the unserved case.
+	served := result
+	served.Completeness.Outcomes = []RequirementOutcomeRow{{
+		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
+		Requirement: string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectRepository),
+		Obligation:  string(ObligationCount),
+		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+		Impact:      contractsv1.ContextFabricAnswerImpactNone,
+		Served:      4, Declared: 4,
+	}}
+	served.Completeness.State = contractsv1.DeriveContextFabricAnswerCompletenessState(served.Completeness.Outcomes)
+	if got := DeriveServerStatus(served, []AnswerObligation{ObligationCount, ObligationEvidence, ObligationCoverage}); got.Basis != ServerStatusBasisServed {
+		t.Fatalf("control: a SERVED count reports basis %q, want %q", got.Basis, ServerStatusBasisServed)
+	}
+}
+
+// TestAReusedAnswersCountReachesTheOperator is codex round-3 finding 2,
+// pinned, and it is the telemetry bar applied to a path I added.
+//
+// The reuse backfill states a cardinality on a served answer. The only
+// emitter sat on the fresh-result path, so a reused answer carried a count
+// with NOTHING in the run's own artifacts to diagnose it -- the same bar I
+// checked on the fresh path and never asked of the path I had just created.
+func TestAReusedAnswersCountReachesTheOperator(t *testing.T) {
+	t.Parallel()
+	project, candidate := reusableCandidate()
+	candidate.Cohort = countingCohort(SubjectTeam, 3)
+	candidate.Completeness.Outcomes = []RequirementOutcomeRow{{
+		Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
+		Requirement: string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam),
+		Obligation:  string(ObligationCount),
+		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+		Impact:      contractsv1.ContextFabricAnswerImpactNone,
+	}}
+	candidate.Completeness = ComputeAnswerCompleteness(candidate)
+	committed := []SubjectRef{project}
+	for _, member := range candidate.Cohort.Members {
+		committed = append(committed, member.Subject)
+	}
+	telemetry := &recordingTelemetry{}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
+		Results:   &resultStoreStub{},
+		Telemetry: telemetry,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return candidate, true, nil
+		}),
+	})
+	served, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !served.Reused {
+		t.Fatal("the fixture did not take the reuse path, so it proves nothing about it")
+	}
+	rows := countOutcomeRows(served, contractsv1.ContextFabricOutcomeStageAssembledResult)
+	if len(rows) != 1 {
+		t.Fatalf("served count rows = %d, want 1", len(rows))
+	}
+	if len(telemetry.membershipCardinalities) != 1 {
+		t.Fatalf("a REUSED answer served a %d/%d count and produced %d telemetry events, want 1 -- the count "+
+			"reaches the reader with nothing in the run's own artifacts to diagnose it",
+			rows[0].Served, rows[0].Declared, len(telemetry.membershipCardinalities))
+	}
+	event := telemetry.membershipCardinalities[0]
+	if event.Served != rows[0].Served || event.Declared != rows[0].Declared || event.Outcome != rows[0].Outcome {
+		t.Fatalf("reuse telemetry (%q %d/%d) disagrees with the served row (%q %d/%d)",
+			event.Outcome, event.Served, event.Declared, rows[0].Outcome, rows[0].Served, rows[0].Declared)
+	}
+}
+
+// TestTheCardinalityEventCarriesEveryOutcomeTheBuilderCanProduce is codex
+// round-3 finding 3, pinned, and it is the THIRD scoping of the same sweep.
+//
+// THE PATTERN THIS FILE HAS NOW PAID FOR THREE TIMES. After the first
+// telemetry finding I swept and asked "can this fixture discriminate the two
+// values it compares". After the second I asked "does this assertion cover
+// every FIELD the builder writes". Both were too narrow. The question that
+// was missing is "every CASE the builder can carry": the end-to-end test
+// exercised the narrowed outcome only, so logging an `unavailable` count as
+// `satisfied` passed the whole package -- a confident telemetry/document
+// contradiction on exactly the answer that has no count.
+//
+// It is written against the shipped VOCABULARY rather than a list of cases I
+// thought of, so a value added to that enum fails this test instead of
+// silently widening the gap. Every member is either exercised or declared
+// unreachable with its reason; neither state is silent.
+func TestTheCardinalityEventCarriesEveryOutcomeTheBuilderCanProduce(t *testing.T) {
+	t.Parallel()
+	identity := "count/member/team"
+
+	// The outcomes the two row builders can actually produce, each with a row
+	// that is VALID for it -- the pairing rule is enforced by the contract,
+	// so an invalid row here would fail for the wrong reason.
+	exercised := map[contractsv1.ContextFabricPlanRequirementOutcome]RequirementOutcomeRow{
+		contractsv1.ContextFabricRequirementSatisfied: {
+			Outcome: contractsv1.ContextFabricRequirementSatisfied,
+			Impact:  contractsv1.ContextFabricAnswerImpactNone,
+			Served:  6, Declared: 6,
+		},
+		contractsv1.ContextFabricRequirementNarrowed: {
+			Outcome:        contractsv1.ContextFabricRequirementNarrowed,
+			Impact:         contractsv1.ContextFabricAnswerImpactScope,
+			CauseNarrowing: contractsv1.ContextFabricNarrowingBasisAttentionRank,
+			CauseObserved:  true,
+			Served:         2, Declared: 9,
+		},
+		contractsv1.ContextFabricRequirementUnavailable: {
+			Outcome:       contractsv1.ContextFabricRequirementUnavailable,
+			Impact:        contractsv1.ContextFabricAnswerImpactDimension,
+			CauseCoverage: unavailableRequirementCause(RequirementReasonComputedPopulationAbsent),
+			CauseObserved: true,
+		},
+	}
+	// Declared unreachable, WITH the reason. A member that is merely absent
+	// from the table above would be indistinguishable from one nobody
+	// thought about.
+	unreachable := map[contractsv1.ContextFabricPlanRequirementOutcome]string{
+		contractsv1.ContextFabricRequirementNotApplicable: "neither row builder emits it: a derived count coordinate is always applicable, and a frame that derives none produces no row at all",
+		contractsv1.ContextFabricRequirementNotAttempted:  "neither row builder emits it: assembly always reaches the step, and a step with no member set is reported unavailable rather than unattempted",
+	}
+
+	checked := 0
+	for _, member := range contractsv1.ContextFabricPlanRequirementOutcomeVocabulary() {
+		row, covered := exercised[member]
+		if !covered {
+			if why, declared := unreachable[member]; !declared || why == "" {
+				t.Errorf("outcome %q is neither exercised nor declared unreachable -- a value added to the "+
+					"vocabulary must fail this test rather than quietly widening the gap it exists to close", member)
+			}
+			continue
+		}
+		row.Stage = contractsv1.ContextFabricOutcomeStageAssembledResult
+		row.Requirement = identity
+		row.Obligation = string(ObligationCount)
+		if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(row); err != nil {
+			t.Fatalf("fixture for outcome %q is not a valid row, so it would fail for the wrong reason: %v", member, err)
+		}
+		result := InvestigationResult{
+			Cohort:       &Cohort{Kind: SubjectTeam},
+			Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: []RequirementOutcomeRow{row}},
+		}
+		event, ok := membershipCardinalityEventFrom(result, QuestionFamilyScopedCohortStatus)
+		if !ok {
+			t.Errorf("outcome %q: the builder found no count row on a document that carries one", member)
+			continue
+		}
+		if event.Outcome != row.Outcome {
+			t.Errorf("outcome %q logged as %q -- the operator's line and the served document disagree about "+
+				"what became of the count", row.Outcome, event.Outcome)
+		}
+		if event.Served != row.Served || event.Declared != row.Declared {
+			t.Errorf("outcome %q: event %d/%d, row %d/%d", member, event.Served, event.Declared, row.Served, row.Declared)
+		}
+		checked++
+	}
+	// The outcomes exercised must DIFFER from one another, or a builder that
+	// hardcoded a single value could satisfy every comparison above.
+	if checked < 2 {
+		t.Fatalf("only %d outcome(s) reached the assertions; with fewer than two distinct values a hardcoded "+
+			"builder passes every comparison", checked)
+	}
+	if checked != len(exercised) {
+		t.Fatalf("%d of %d exercised outcomes reached their assertions", checked, len(exercised))
+	}
+}
+
+// TestTheShadowClassifiesEveryCountOutcome is the same "every case" question
+// asked of the OTHER reader of that enum.
+//
+// The round-3 sweep found the builder's outcome coverage incomplete. The
+// shadow's predicate reads the same vocabulary and decides something
+// different with it -- whether the answer STATES a count -- so it needs the
+// same totality, or a value added to the enum silently becomes "not served"
+// with nobody having decided that.
+//
+// Every member is classified deliberately here, and the classification is
+// asserted against the predicate rather than restated: a member added later
+// fails this test until someone says which side it falls on.
+func TestTheShadowClassifiesEveryCountOutcome(t *testing.T) {
+	t.Parallel()
+	// TRUE means "the answer states a cardinality". `narrowed` counts: a
+	// count over a reduced set is still a count, and the row's own numbers
+	// say so. `unavailable` does not: that row says the count was not
+	// produced. The two `not_*` members are not produced by either builder
+	// and are classified conservatively.
+	want := map[contractsv1.ContextFabricPlanRequirementOutcome]bool{
+		contractsv1.ContextFabricRequirementSatisfied:     true,
+		contractsv1.ContextFabricRequirementNarrowed:      true,
+		contractsv1.ContextFabricRequirementUnavailable:   false,
+		contractsv1.ContextFabricRequirementNotApplicable: false,
+		contractsv1.ContextFabricRequirementNotAttempted:  false,
+	}
+
+	checked, stated := 0, 0
+	for _, member := range contractsv1.ContextFabricPlanRequirementOutcomeVocabulary() {
+		expected, classified := want[member]
+		if !classified {
+			t.Errorf("outcome %q has no classification here -- a value added to the vocabulary must fail this "+
+				"test rather than defaulting into `the answer stated no count` with nobody deciding that", member)
+			continue
+		}
+		result := InvestigationResult{
+			Completeness: contractsv1.ContextFabricAnswerCompleteness{
+				Outcomes: []RequirementOutcomeRow{{
+					Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
+					Requirement: "count/member/team",
+					Obligation:  string(ObligationCount),
+					Outcome:     member,
+				}},
+			},
+		}
+		if got := servedACountedCardinality(result); got != expected {
+			t.Errorf("outcome %q: the shadow reads `states a count` = %v, want %v", member, got, expected)
+		}
+		if expected {
+			stated++
+		}
+		checked++
+	}
+	if checked != contractsv1.ContextFabricPlanRequirementOutcomeCount {
+		t.Fatalf("classified %d of %d outcomes", checked, contractsv1.ContextFabricPlanRequirementOutcomeCount)
+	}
+	// Both sides must be populated, or the predicate is decorative: all-true
+	// would make the unserved arm dead and all-false would make the gate
+	// refuse every count.
+	if stated == 0 || stated == checked {
+		t.Fatalf("the classification is one-sided: %d of %d outcomes state a count", stated, checked)
+	}
+}

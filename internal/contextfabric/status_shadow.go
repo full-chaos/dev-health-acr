@@ -248,9 +248,24 @@ func servedACountedCardinality(result InvestigationResult) bool {
 		if row.Stage != contractsv1.ContextFabricOutcomeStageAssembledResult {
 			continue
 		}
-		if row.Obligation == string(ObligationCount) {
-			return true
+		if row.Obligation != string(ObligationCount) {
+			continue
 		}
+		// A ROW'S PRESENCE IS NOT ITS OUTCOME, and this asked only whether
+		// one existed.
+		//
+		// Assembly states an UNAVAILABLE count where no member set could be
+		// resolved -- which is the honest report, and the row it produces
+		// says the count was NOT produced. Reading "a count row exists" as
+		// "the answer states its count" made the shadow report `served` on
+		// an answer whose own completeness reads `degraded`: this
+		// derivation's founding defect, claiming served on the strength of
+		// not having looked properly, one level in.
+		//
+		// `narrowed` DOES count: a count over a reduced set is still a
+		// cardinality the answer states, and it says so in its own numbers.
+		return row.Outcome == contractsv1.ContextFabricRequirementSatisfied ||
+			row.Outcome == contractsv1.ContextFabricRequirementNarrowed
 	}
 	return false
 }
