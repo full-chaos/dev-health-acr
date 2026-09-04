@@ -101,6 +101,15 @@ func runCountingInvestigation(t *testing.T, cohortSize int, maxMembers int) (Inv
 	telemetry := &recordingTelemetry{}
 	frame := countingFrame(SubjectTeam)
 	cohort := countingCohort(SubjectTeam, cohortSize)
+	engine := newCountingEngine(t, cohort, frame, telemetry)
+	return runCountingRequest(t, engine, maxMembers), telemetry
+}
+
+// newCountingEngine builds the engine the counting fixtures drive. It is
+// factored out so a test can call finalizeResult DIRECTLY -- the re-entry
+// guard is about calling it twice, which no end-to-end drive can express.
+func newCountingEngine(t *testing.T, cohort *Cohort, frame *QuestionFrame, telemetry *recordingTelemetry) *Engine {
+	t.Helper()
 	anchor := SubjectRef{Kind: SubjectOrganization, CanonicalID: "org_1", Label: "Org"}
 
 	graph := graphReaderStub{
@@ -163,6 +172,13 @@ func runCountingInvestigation(t *testing.T, cohortSize int, maxMembers int) (Inv
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
+	return engine
+}
+
+// runCountingRequest drives one counting investigation and asserts the
+// fixture reached a complete answer.
+func runCountingRequest(t *testing.T, engine *Engine, maxMembers int) InvestigationResult {
+	t.Helper()
 	// A cohort investigation needs a CONFIRMED window before it reaches
 	// fact-read/assembly (CHAOS-3900/CHAOS-4040). An unconfirmed window is a
 	// legitimate reason to stop short, and is not what these tests are
@@ -182,7 +198,7 @@ func runCountingInvestigation(t *testing.T, cohortSize int, maxMembers int) (Inv
 		t.Fatalf("Investigate() status = %q, want %q -- this fixture never reached assembly, so it proves nothing",
 			result.Status, InvestigationComplete)
 	}
-	return result, telemetry
+	return result
 }
 
 // TestTheCountObligationReachesTheServedDocumentAsACountableField is THE
@@ -663,5 +679,130 @@ func TestComputeMembershipCardinalityReadsOnlyMemberNarrowings(t *testing.T) {
 	}
 	if reached != len(cases) {
 		t.Fatalf("%d of %d rows reached their assertions", reached, len(cases))
+	}
+}
+
+// TestFinalizingTwiceStatesOneCardinality is the re-entry guard, tested
+// rather than asserted in a comment.
+//
+// finalizeResult runs more than once on real paths: the stage-3 retry
+// finalizes a fresh result, and the outcome layer's candidate reduction
+// re-finalizes one that ALREADY carries rows. The second shape is the
+// dangerous one -- the seed is skipped because the set is non-empty, so
+// nothing else would stop a second cardinality being appended for the same
+// requirement, and a reader would have two answers to one question with no
+// way to tell which described the document they received.
+//
+// It calls finalizeResult TWICE on the same result, which is the only way to
+// express the defect: no single end-to-end drive re-enters it on an
+// already-rowed document.
+func TestFinalizingTwiceStatesOneCardinality(t *testing.T) {
+	t.Parallel()
+	frame := countingFrame(SubjectTeam)
+	cohort := countingCohort(SubjectTeam, 4)
+	engine := newCountingEngine(t, cohort, frame, &recordingTelemetry{})
+
+	plan := AnswerPlan{Family: QuestionFamilyScopedCohortStatus, FamilyVersion: QuestionFamilyTableVersion}
+	result := InvestigationResult{
+		Status: InvestigationComplete, ResultID: "result_50210002", Cohort: cohort,
+		Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+	}
+
+	once := engine.finalizeResult(result, plan, frame)
+	if got := len(countOutcomeRows(once, contractsv1.ContextFabricOutcomeStageAssembledResult)); got != 1 {
+		t.Fatalf("after ONE finalization: %d count rows, want 1", got)
+	}
+	twice := engine.finalizeResult(once, plan, frame)
+	rows := countOutcomeRows(twice, contractsv1.ContextFabricOutcomeStageAssembledResult)
+	if len(rows) != 1 {
+		t.Fatalf("after TWO finalizations: %d count rows, want 1 -- re-entry appended a second cardinality "+
+			"for the same requirement, and a reader now has two answers to one question", len(rows))
+	}
+	// The surviving row must be the real one, not a zeroed placeholder: a
+	// guard that kept exactly one row by keeping the WRONG one would pass a
+	// bare count check.
+	if rows[0].Served != 4 || rows[0].Declared != 4 {
+		t.Fatalf("the surviving row says %d/%d, want 4/4", rows[0].Served, rows[0].Declared)
+	}
+	// And the seed rows must not have been duplicated either -- the same
+	// re-entry runs through seedRequirementOutcomes' own guard.
+	planningCount := len(countOutcomeRows(twice, contractsv1.ContextFabricOutcomeStagePlanning))
+	if planningCount != 1 {
+		t.Fatalf("planning-stage `count` rows = %d, want 1", planningCount)
+	}
+}
+
+// TestATruncatedCohortsCountIsNotAPopulationClaim pins the reported limit at
+// the CONSUMER, not only in a doc comment.
+//
+// `satisfied` on a count row means "counted the RESOLVED member set exactly".
+// It does NOT mean "this is the population". The distinction is real and it
+// is the one thing about this row a reader could get wrong: where the graph
+// read stopped at the cohort ceiling, the resolved set is a lower bound and
+// the count over it is still exact.
+//
+// A doc comment cannot enforce that. What can is this: whenever the served
+// document states a count, the SAME document must carry the cohort whose
+// complete/truncated flags say whether the counted set is the whole of it. A
+// count that arrived without them would be unreadable except as a population
+// claim -- which is precisely the misreading the limit describes.
+func TestATruncatedCohortsCountIsNotAPopulationClaim(t *testing.T) {
+	t.Parallel()
+	frame := countingFrame(SubjectTeam)
+	// A cohort the DISCOVERY truncated: the read stopped at the ceiling, so
+	// these three are a lower bound on the population. Nothing narrowed
+	// afterwards, so the count over the resolved set is exact.
+	cohort := countingCohort(SubjectTeam, 3)
+	cohort.Complete = false
+	cohort.Truncated = true
+	telemetry := &recordingTelemetry{}
+	engine := newCountingEngine(t, cohort, frame, telemetry)
+	result := runCountingRequest(t, engine, 0)
+
+	rows := countOutcomeRows(result, contractsv1.ContextFabricOutcomeStageAssembledResult)
+	if len(rows) != 1 {
+		t.Fatalf("assembled-result `count` rows = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if row.Outcome != contractsv1.ContextFabricRequirementSatisfied {
+		t.Fatalf("outcome = %q, want %q -- nothing narrowed the resolved set, so the count over it IS exact; "+
+			"reporting `narrowed` here would blame this answer for a discovery bound it did not apply",
+			row.Outcome, contractsv1.ContextFabricRequirementSatisfied)
+	}
+	if row.Served != row.Declared {
+		t.Fatalf("served/declared = %d/%d; nothing narrowed, so they must agree", row.Served, row.Declared)
+	}
+
+	// THE CONSUMER-SIDE ASSERTION. The count is on the document; so is the
+	// signal that says what it is a count OF.
+	if result.Cohort == nil {
+		t.Fatal("the served document states a count and carries NO cohort -- a reader has the number and " +
+			"nothing that says whether the counted set is the whole population, so the only available " +
+			"reading is the population claim this row does not make")
+	}
+	if !result.Cohort.Truncated {
+		t.Fatal("the served cohort does not report the discovery truncation, so the `satisfied` count reads " +
+			"as a population claim")
+	}
+	if result.Cohort.Complete {
+		t.Fatal("a truncated cohort reported Complete")
+	}
+	// And the same pair reaches the OPERATOR on the telemetry line, so the
+	// two consumers of this number cannot disagree about its standing. This
+	// is the half a doc comment cannot hold: the answer's reader and the
+	// operator must both be able to tell an exact count of a truncated set
+	// from a count of a whole population.
+	if len(telemetry.membershipCardinalities) != 1 {
+		t.Fatalf("membership cardinality events = %d, want 1", len(telemetry.membershipCardinalities))
+	}
+	event := telemetry.membershipCardinalities[0]
+	if !event.CohortTruncated || event.CohortComplete {
+		t.Fatalf("telemetry reports cohort_complete=%v cohort_truncated=%v for a truncated cohort -- "+
+			"an operator reading this line would take the number for a population",
+			event.CohortComplete, event.CohortTruncated)
+	}
+	if event.Outcome != row.Outcome || event.Served != row.Served {
+		t.Fatalf("telemetry (%q, %d) disagrees with the served row (%q, %d)",
+			event.Outcome, event.Served, row.Outcome, row.Served)
 	}
 }
