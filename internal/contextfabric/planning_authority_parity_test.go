@@ -256,18 +256,43 @@ type planningAuthority struct {
 	// all (a model input, a prior turn), which is a different statement
 	// from "fires and contributes nothing".
 	contribute func(frame contextfabric.QuestionFrame) (kinds []contextfabric.FactKind, ok bool)
+
+	// sinkArgument is WHICH argument group of the engine's
+	// mergeFactRequirements call this authority rides into the fact read,
+	// or 0 for an authority that does not reach that call at all.
+	//
+	// engine.go passes three groups:
+	//   1  statusComposedRequirements   <- authority 1 (fed by 2)
+	//   2  graphContext.FactRequirements <- authorities 5a and 5b
+	//   3  cohortRankingRequirements     <- authorities 3 and 4
+	// Authority 6 is 0: the carry acts on the FAMILY, upstream of the
+	// sink, which is why it contributes no kinds of its own.
+	sinkArgument int
 }
 
-// mergeSinkArgumentCount is how many argument groups the engine's fact
-// requirement sink takes today.
+// mergeSinkArgumentCount is DERIVED FROM THE ROSTER, never written down.
 //
-// It is NOT a decoration: TestMergeSinkArityPinsTheAuthorityRoster reads
-// engine.go and fails if a SEVENTH group appears, which is the only way
-// this file can notice an authority that nobody told it about. A check
-// that quantifies over a list cannot see something missing from the list
-// -- this package's own review history names that as a defect class that
-// cost more than one round -- so the list is pinned against the source.
-const mergeSinkArgumentCount = 3
+// An earlier revision made it a free-standing `const = 3`, and the mutation
+// battery proved that version hollow: deleting an authority from the roster
+// left the constant at 3, so the pin stayed green and only the artifact diff
+// noticed. A pin that compares the source to a constant tests the constant.
+// Deriving it from the roster is what makes losing a sink authority break
+// the pin itself.
+//
+// WHAT THIS PIN CATCHES, stated exactly rather than generously: engine.go
+// gaining or losing an argument group, and the roster losing the LAST
+// authority of a group. It does NOT catch losing one of two authorities
+// that share a group (5a vs 5b, 3 vs 4) -- the artifact diff is what covers
+// that, and it is weaker because it depends on the committed artifact.
+func mergeSinkArgumentCount() int {
+	groups := map[int]bool{}
+	for _, authority := range planningAuthorities() {
+		if authority.sinkArgument != 0 {
+			groups[authority.sinkArgument] = true
+		}
+	}
+	return len(groups)
+}
 
 // planningAuthorities is the roster, in design order.
 //
@@ -284,12 +309,16 @@ func planningAuthorities() []planningAuthority {
 	return []planningAuthority{
 		{
 			id: "1", name: "composeStatusCategoryRequirements", site: "chaos4347_status_category_composition.go",
-			reach:      reachPreResolution,
-			contribute: contributeStatusComposition,
+			reach:        reachPreResolution,
+			contribute:   contributeStatusComposition,
+			sinkArgument: 1,
 		},
 		{
 			id: "2", name: "InterpretedQuestion.FactRequirements (the model's widening)", site: "model.go / genkitruntime/runtime.go",
 			reach: reachModelInput,
+			// Rides into the sink INSIDE group 1: the composition is
+			// handed interpretation.FactRequirements as its input.
+			sinkArgument: 1,
 			contribute: func(contextfabric.QuestionFrame) ([]contextfabric.FactKind, bool) {
 				// There is no per-frame value: this authority IS the
 				// model's emission for a particular question, and two
@@ -301,22 +330,26 @@ func planningAuthorities() []planningAuthority {
 		},
 		{
 			id: "3", name: "planFactKinds (the family DEFINITION's own contribution)", site: "chaos4636_answer_plan.go",
-			reach:      reachPreResolution,
-			contribute: contributeFamilyDefinition,
+			reach:        reachPreResolution,
+			contribute:   contributeFamilyDefinition,
+			sinkArgument: 3,
 		},
 		{
 			id: "4", name: "cohortRankingFormulaKinds (unconditional cohort injection)", site: "engine.go / chaos4636_answer_plan.go",
-			reach:      reachPostResolution,
-			contribute: contributeCohortRankingInjection,
+			reach:        reachPostResolution,
+			contribute:   contributeCohortRankingInjection,
+			sinkArgument: 3,
 		},
 		{
 			id: "5a", name: "graphrank.CohortFactRequirements (the DECLARED per-kind table)", site: "graphrank/cohort_fact_requirements.go",
-			reach:      reachPreResolution,
-			contribute: contributeDeclaredCohortRequirements,
+			reach:        reachPreResolution,
+			contribute:   contributeDeclaredCohortRequirements,
+			sinkArgument: 2,
 		},
 		{
 			id: "5b", name: "graphrank edge-derived requirements (relationMeaning over live edges)", site: "graphrank/discover.go",
-			reach: reachPostResolution,
+			reach:        reachPostResolution,
+			sinkArgument: 2,
 			contribute: func(contextfabric.QuestionFrame) ([]contextfabric.FactKind, bool) {
 				// The kinds depend on which edges the graph returned and
 				// on their relevance scores. A frame determines none of it.
@@ -326,6 +359,8 @@ func planningAuthorities() []planningAuthority {
 		{
 			id: "6", name: "applyCarriedPlan (the carried plan)", site: "chaos4636_plan_carry.go",
 			reach: reachPriorTurn,
+			// 0: the carry acts upstream of the sink, on the family.
+			sinkArgument: 0,
 			contribute: func(contextfabric.QuestionFrame) ([]contextfabric.FactKind, bool) {
 				// Contributes no fact kinds directly. What it overlays is
 				// the FAMILY and the group axis -- and the family is
@@ -833,11 +868,11 @@ func TestMergeSinkArityPinsTheAuthorityRoster(t *testing.T) {
 	}
 
 	arity := len(callSites[0].Args)
-	if arity != mergeSinkArgumentCount {
+	if arity != mergeSinkArgumentCount() {
 		t.Fatalf("the fact-requirement sink at %s takes %d argument groups, the roster is pinned at %d.\n"+
 			"A group was added or removed, which means a PLANNING AUTHORITY was added or removed.\n"+
 			"Update planningAuthorities() and this pin together, and say in the commit which authority moved.",
-			fileSet.Position(callSites[0].Pos()), arity, mergeSinkArgumentCount)
+			fileSet.Position(callSites[0].Pos()), arity, mergeSinkArgumentCount())
 	}
 }
 
