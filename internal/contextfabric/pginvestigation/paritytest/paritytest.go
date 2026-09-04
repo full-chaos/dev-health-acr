@@ -28,6 +28,10 @@ type SaveStep struct {
 	Principal storage.Principal
 	Result    contextfabric.InvestigationResult
 	WantErr   bool
+	// ParentResultID is the durable ancestry pointer this Save records.
+	// Empty for every pre-existing case, which keeps them byte-identical to
+	// their pre-ancestry behaviour.
+	ParentResultID string
 }
 
 // GetStep is the Get call a Case verifies after its Save steps.
@@ -36,6 +40,11 @@ type GetStep struct {
 	ResultID     string
 	WantNotFound bool
 	Want         *contextfabric.InvestigationResult
+	// WantParentResultID, when set, asserts the ancestry pointer survived the
+	// round trip. A POINTER so that "assert it is empty" is expressible and
+	// distinguishable from "do not check" -- the empty-string case is the one
+	// that matters for a first turn, and a plain string could not say it.
+	WantParentResultID *string
 }
 
 // Case is one save/get parity scenario.
@@ -120,6 +129,8 @@ func Cases() []Case {
 	divergent := original
 	divergent.DirectJudgment = "a different judgment"
 	divergent.Question = "why did the deploy fail? (mutated)"
+	withParent := result("result-id-ancestry", "which repositories does the ops team own?")
+	firstTurn := result("result-id-first-turn", "how is the migration going?")
 
 	// M1 (Codex adversarial review, CHAOS-3755): a result_id collision
 	// across two DIFFERENT organizations must reject the second Save
@@ -190,6 +201,30 @@ func Cases() []Case {
 			},
 		},
 		{
+			// Ancestry is store metadata, not part of the result payload, so
+			// the payload comparison every other case relies on cannot see
+			// it. Without these two cases a store could drop the parent
+			// entirely and the whole parity suite would stay green -- and a
+			// conversation would be walkable on one backend and silently not
+			// on the other.
+			Name: "ancestry survives the round trip",
+			Save: []SaveStep{
+				{Principal: orgA, Result: withParent, ParentResultID: "result-ancestry-parent"},
+			},
+			Get: GetStep{Principal: orgA, ResultID: withParent.ResultID, Want: &withParent, WantParentResultID: ptr("result-ancestry-parent")},
+		},
+		{
+			// The first turn of a conversation. Empty must round-trip as
+			// EMPTY, never as some placeholder: the walk fails closed on an
+			// absent parent, and a store that invented a value would send it
+			// hunting a result that does not exist.
+			Name: "a result with no parent reads back with no parent",
+			Save: []SaveStep{
+				{Principal: orgA, Result: firstTurn},
+			},
+			Get: GetStep{Principal: orgA, ResultID: firstTurn.ResultID, Want: &firstTurn, WantParentResultID: ptr("")},
+		},
+		{
 			Name: "save rejects a semantically invalid result and persists nothing",
 			Save: []SaveStep{
 				{Principal: orgA, Result: invalid, WantErr: true},
@@ -214,7 +249,7 @@ func RunSuite(t *testing.T, newStore func(t *testing.T) contextfabric.Investigat
 			ctx := context.Background()
 
 			for index, step := range testCase.Save {
-				err := store.Save(ctx, step.Principal, step.Result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "")
+				err := store.Save(ctx, step.Principal, step.Result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, step.ParentResultID)
 				if step.WantErr {
 					if err == nil {
 						t.Fatalf("save[%d] %q: want error, got nil", index, step.Result.ResultID)
@@ -253,6 +288,9 @@ func runGet(t *testing.T, ctx context.Context, store contextfabric.Investigation
 	// carrier; this parity suite compares the wrapped canonical payload
 	// only -- persistence metadata (GraphEpoch) is a store-implementation
 	// detail, not part of what parity across stores means here.
+	if step.WantParentResultID != nil && stored.ParentResultID != *step.WantParentResultID {
+		t.Fatalf("get %q: ParentResultID = %q, want %q -- ancestry must survive the round trip identically in every store, or a conversation is walkable on one backend and not the other", step.ResultID, stored.ParentResultID, *step.WantParentResultID)
+	}
 	got := stored.Result
 	gotJSON, err := json.Marshal(got)
 	if err != nil {
@@ -338,3 +376,7 @@ func RunExplicitNullDegradedReasonsSuite(t *testing.T, newStore func(t *testing.
 		}
 	})
 }
+
+// ptr is the address-of helper GetStep.WantParentResultID needs so that
+// "assert empty" stays expressible and distinct from "do not check".
+func ptr[T any](v T) *T { return &v }
