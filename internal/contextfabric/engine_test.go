@@ -436,8 +436,10 @@ type windowCarryRecord struct {
 }
 
 type kindCarryRecord struct {
-	outcome    KindCarryOutcome
-	chainDepth int
+	outcome      KindCarryOutcome
+	chainDepth   int
+	carriedKind  contractsv1.ContextFabricSubjectKind
+	redeemedKind contractsv1.ContextFabricSubjectKind
 }
 
 type priorConsultedRecord struct {
@@ -539,8 +541,8 @@ func (r *recordingTelemetry) RecordWindowCarry(_ context.Context, _ storage.Prin
 	r.windowCarries = append(r.windowCarries, windowCarryRecord{outcome, chainDepth})
 }
 
-func (r *recordingTelemetry) RecordKindCarry(_ context.Context, _ storage.Principal, outcome KindCarryOutcome, chainDepth int) {
-	r.kindCarries = append(r.kindCarries, kindCarryRecord{outcome, chainDepth})
+func (r *recordingTelemetry) RecordKindCarry(_ context.Context, _ storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind) {
+	r.kindCarries = append(r.kindCarries, kindCarryRecord{outcome, chainDepth, carriedKind, redeemedKind})
 }
 
 func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {

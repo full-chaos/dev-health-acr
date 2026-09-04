@@ -507,7 +507,15 @@ type EngineTelemetry interface {
 	// SEPARATE counter rather than one call with an axis label: a reader
 	// diagnosing an ask/answer oscillation must be able to tell WHICH axis
 	// missed, and the two axes have independent hit rates.
-	RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int)
+	// carriedKind/redeemedKind are closed-vocabulary subject kinds, content-safe
+	// by construction -- no label, no id, no free text. carriedKind is
+	// populated for a HIT as well as a drop: "hit" alone does not say which
+	// kind a conversation inherited, and that is the other half of a hit rate.
+	// redeemedKind is set ONLY on a drop, where it is the sole record of what
+	// disagreed. They are in the signature rather than a side channel because
+	// a drop reported without both sides is a decision an operator cannot
+	// check.
+	RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind)
 	// RecordStructureNeedsDisclosed (CHAOS-3900 P1.F, design brief §2.1's
 	// cf_structure_needs_disclosed{member}) reports one member appearing
 	// in a composed StructureNeeds.Missing -- called once per member,
@@ -1453,6 +1461,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	var kindCarry kindCarryResult
 	if !statedExpectedKindThisTurn(request, structureCanon) {
 		kindCarry = e.resolveCarriedKind(carryCtx, principal, request, priorValidatedReceipts, binding)
+		// Compare and drop BEFORE the disclosure is composed and before the
+		// outcome is recorded, so all three views agree.
+		kindCarry = applyCarryDrop(structureCanon.Confirmed, kindCarry)
 		e.recordKindCarry(ctx, principal, kindCarry)
 	}
 	carriedStructureEntries := []*contractsv1.ContextFabricConfirmedStructureEntry{
