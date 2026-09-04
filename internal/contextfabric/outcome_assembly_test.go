@@ -52,6 +52,58 @@ func outcomeAssemblyCandidates(n int) []SubjectCandidate {
 // team, NO cohort, `candidates` unresolved alternatives, and `facts`
 // single-table time_series claimed facts about that one team.
 func outcomeAssemblySingleSubjectEngine(t *testing.T, candidates, facts int, options EngineOptions, calls *int, telemetry *recordingTelemetry) *Engine {
+	return outcomeAssemblySingleSubjectEngineWithDrivers(t, candidates, facts, 0, options, calls, telemetry)
+}
+
+// outcomeAssemblyDrivers builds n driver judgments about the one committed
+// team, in the shape the measurement probe beside this file measured the
+// acceptance question at.
+//
+// Drivers matter to the fixture for one reason: they are a charged term the
+// reduction may NOT touch. A driver is cited by the composed judgment, so
+// dropping one leaves prose describing content that is no longer present.
+// A fixture with zero drivers cannot show that the reduction left them
+// alone, because there is nothing there to leave alone.
+// outcomeAssemblyEvidenceRef is a real, contract-shaped evidence reference.
+// A made-up token like "ev_0001" measures fine and fails validation, which
+// is how the measurement probe's fixture got away with one.
+const outcomeAssemblyEvidenceRef = "acr:v1:pull-request:PR-7"
+
+// claimIDs is the driver's canonical-observation leg, taken from the claims
+// the synthesizer actually emitted rather than typed out beside them -- a
+// hand-written id is one rename away from citing a fact that is not there.
+func claimIDs(claims []ClaimedFact) []string {
+	ids := make([]string, 0, len(claims))
+	for _, claim := range claims {
+		ids = append(ids, claim.ClaimID)
+	}
+	return ids
+}
+
+func outcomeAssemblyDrivers(n int, subject SubjectRef, claimIDs []string) []DriverJudgment {
+	drivers := make([]DriverJudgment, 0, n)
+	for index := 0; index < n; index++ {
+		drivers = append(drivers, DriverJudgment{
+			DriverID: "driver_00" + string(rune('a'+index%26)),
+			Standing: DriverPrincipal, Category: string(contractsv1.ContextFabricDriverCategoryStatus),
+			Title:            "Cycle time widened in the most recent periods",
+			Summary:          "Items closed per period fell while items opened held steady, widening the queue.",
+			AffectedSubjects: []SubjectRef{subject},
+			EvidenceRefIDs:   []string{outcomeAssemblyEvidenceRef},
+			// `status` is one of the categories the contract requires a
+			// CLAIMED FACT for -- the canonical-observation leg of the
+			// evidence distinction. A driver citing nothing would be
+			// rejected, which is the gate this fixture has to satisfy
+			// rather than route around.
+			ClaimedFactIDs: claimIDs[:1],
+			Derivation:     DerivationCanonicalStructured, EpistemicStatus: EpistemicObserved,
+			Confidence: 0.71, Current: true,
+		})
+	}
+	return drivers
+}
+
+func outcomeAssemblySingleSubjectEngineWithDrivers(t *testing.T, candidates, facts, drivers int, options EngineOptions, calls *int, telemetry *recordingTelemetry) *Engine {
 	t.Helper()
 	team := SubjectRef{Kind: SubjectTeam, CanonicalID: "org:linear:CHAOS", Label: "CHAOS"}
 	engine, err := NewEngine(EngineDependencies{
@@ -95,9 +147,9 @@ func outcomeAssemblySingleSubjectEngine(t *testing.T, candidates, facts int, opt
 			return InvestigationResult{
 				Status: InvestigationComplete, DirectJudgment: "Throughput held roughly flat.",
 				CurrentState:       "Within the band observed over the window.",
-				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{},
+				StrongestPressures: []string{}, Drivers: outcomeAssemblyDrivers(drivers, team, claimIDs(claims)), RemainingWork: []Finding{},
 				ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{},
-				Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: claims,
+				Limitations: []string{}, EvidenceRefIDs: []string{outcomeAssemblyEvidenceRef}, ClaimedFacts: claims,
 				Coverage:            Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 				DeterministicAnswer: "Throughput held roughly flat over the requested window.",
 				Warnings:            []string{},
@@ -119,11 +171,24 @@ func TestSingleSubjectOverBudgetIsNarrowedAndDisclosedNotRefused(t *testing.T) {
 	t.Parallel()
 	calls := 0
 	telemetry := &recordingTelemetry{}
-	// 23 candidates + 12 claimed facts = 35 charged items against a 30-item
-	// ceiling -- the measured arithmetic of the filed shape, whose own split
-	// (18 candidates + 12 facts + 5 drivers) is recorded by the measurement
-	// probe beside this file.
-	engine := outcomeAssemblySingleSubjectEngine(t, 23, 12, budgetStageOptions(30, time.Second), &calls, telemetry)
+	// THE ACCEPTANCE SHAPE, EXACTLY AS FILED: 18 resolution candidates + 12
+	// claimed facts + 5 drivers = 35 charged items against a 30-item
+	// ceiling, which is the split the measurement probe beside this file
+	// measured.
+	//
+	// It is the same input the FAIL-at-parent run uses, deliberately. An
+	// earlier revision proved the parent's refusal on 18c/12f/5d and this
+	// pass on 23c/12f/0d -- two different documents, so the pair showed that
+	// two things happen, not that ONE thing changed. Drivers at 5 also give
+	// the reduction something it must NOT touch: a driver is cited by the
+	// composed judgment, and the assertion below that all 5 survive is only
+	// meaningful when there are 5 to survive.
+	//
+	// The arithmetic the reduction performs, stated so a fixture edit cannot
+	// silently stop exercising it: fixed = 35 - 18 = 17 charged items the
+	// cut cannot reach, so allowance = 30 - 17 = 13 candidates, and the
+	// served document is 13 + 12 + 5 = 30 items exactly.
+	engine := outcomeAssemblySingleSubjectEngineWithDrivers(t, 18, 12, 5, budgetStageOptions(30, time.Second), &calls, telemetry)
 
 	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
 	if errors.Is(err, ErrAnswerExceedsBudget) {
@@ -177,8 +242,24 @@ func TestSingleSubjectOverBudgetIsNarrowedAndDisclosedNotRefused(t *testing.T) {
 	if narrowed.Stage != contractsv1.ContextFabricOutcomeStageAssembledResult {
 		t.Fatalf("Stage = %q, want assembled_result", narrowed.Stage)
 	}
-	if narrowed.Declared != 23 || narrowed.Served >= narrowed.Declared {
-		t.Fatalf("served/declared = %d/%d, want a real reduction out of the 23 candidates the resolver found", narrowed.Served, narrowed.Declared)
+	if narrowed.Declared != 18 || narrowed.Served != 13 {
+		t.Fatalf("served/declared = %d/%d, want 13/18 -- the exact allowance the ceiling leaves once the 17 charged items the cut cannot reach are subtracted", narrowed.Served, narrowed.Declared)
+	}
+	// The terms the reduction may NOT touch, asserted rather than assumed.
+	// Dropping a driver or a claimed fact would leave the composed judgment
+	// describing content that is no longer present, which is the one defect
+	// this seam is forbidden to introduce.
+	if measurement.Items.Drivers != 5 {
+		t.Fatalf("served %d drivers, want all 5 -- a driver is cited by the composed judgment and the reduction may not reach it", measurement.Items.Drivers)
+	}
+	if measurement.Items.ClaimedFacts != 12 {
+		t.Fatalf("served %d claimed facts, want all 12 -- the reduction cuts candidates and nothing else", measurement.Items.ClaimedFacts)
+	}
+	if measurement.Items.Candidates != 13 {
+		t.Fatalf("served %d candidates, want 13", measurement.Items.Candidates)
+	}
+	if measurement.Items.Budgeted() != 30 {
+		t.Fatalf("served %d budgeted items, want exactly 30 -- the reduction is arithmetic, not a search that stops when it fits", measurement.Items.Budgeted())
 	}
 	if !narrowed.CauseObserved {
 		t.Fatal("CauseObserved is false on a cause this stage itself computed; a defaulted cause must never read as an observed one")
