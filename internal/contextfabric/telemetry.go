@@ -134,6 +134,17 @@ func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal st
 	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", args...)
 }
 
+// RecordAnswerReuseBypass (CHAOS-4998) logs at Info under its OWN message,
+// distinct from the reuse-outcome line above so the bypassed population can
+// be counted apart from the attempted one rather than polluting that
+// stream's hit-rate denominator. reason is a closed AnswerReuseBypassReason
+// -- content-safe by construction, never question text, a subject label or
+// a receipt id.
+func (t SlogEngineTelemetry) RecordAnswerReuseBypass(ctx context.Context, principal storage.Principal, reason AnswerReuseBypassReason) {
+	args := append([]any{"org_id", principal.OrgID, "reason", string(reason)}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric answer reuse bypass", args...)
+}
+
 // AnswerReuseContainmentEvent is one reuse attempt's containment
 // measurement -- see EngineTelemetry.RecordAnswerReuseContainment for why
 // this is a measurement rather than another outcome label. Every field is
@@ -918,6 +929,20 @@ func (t SlogEngineTelemetry) RecordGroupedCohortCompleteness(ctx context.Context
 		"groups_marked_incomplete", event.GroupsMarkedIncomplete,
 		"complete", event.Complete,
 		"truncated", event.Truncated,
+	}
+	// Emitted only on a refusal, so an ordinary grouped answer's line is
+	// byte-for-byte what it was before this field existed, and a reader
+	// filtering on grouping_refusal sees refusals alone. The value is routed
+	// through the canonical table so a value escaping the vocabulary is
+	// reported as unclassified rather than emitted verbatim -- the same
+	// fail-closed posture every other closed enum in this file applies.
+	if event.Refusal != CohortGroupingRefusalNone {
+		refusal := event.Refusal
+		if !ValidCohortGroupingRefusal(refusal) {
+			refusal = CohortGroupingRefusal("unclassified")
+		}
+		args = append(args, "grouping_refusal", string(refusal),
+			"planned_group_kind", string(event.PlannedGroupKind))
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric grouped cohort completeness", args...)

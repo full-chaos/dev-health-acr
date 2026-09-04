@@ -61,6 +61,18 @@ const (
 	RejectionReasonDriverPathUnknown          SynthesisRejectionReason = "driver_path_unknown"
 	RejectionReasonDriverEvidenceUnknown      SynthesisRejectionReason = "driver_evidence_unknown"
 	RejectionReasonDriverClaimUngrounded      SynthesisRejectionReason = "driver_claim_ungrounded"
+	// RejectionReasonDriverGroupMemberForeign: a driver named a cohort GROUP
+	// and also named a subject that is not one of that group's members.
+	//
+	// Every part of such a draft passes the older rules -- the subjects are
+	// in scope, the claim is grounded in a real canonical fact, and the
+	// claim's subject IS one of the driver's own affected subjects -- and the
+	// combination still asserts something false: that another group's member
+	// is this group's business. The older rules are all per-subject, and the
+	// allow-sets are global, so none of them can see a MEMBERSHIP violation.
+	// The cohort's own Groups[].MemberCanonicalIDs is the only place that
+	// truth lives, and until this reason existed nothing consulted it.
+	RejectionReasonDriverGroupMemberForeign SynthesisRejectionReason = "driver_group_member_foreign"
 
 	// Findings (remaining_work / readiness_gaps / conflicts share one set:
 	// WHICH section is already carried by the wrapped error's own prefix,
@@ -112,6 +124,7 @@ var canonicalSynthesisRejectionReasons = map[SynthesisRejectionReason]SynthesisR
 	RejectionReasonDriverPathUnknown:                RejectionReasonDriverPathUnknown,
 	RejectionReasonDriverEvidenceUnknown:            RejectionReasonDriverEvidenceUnknown,
 	RejectionReasonDriverClaimUngrounded:            RejectionReasonDriverClaimUngrounded,
+	RejectionReasonDriverGroupMemberForeign:         RejectionReasonDriverGroupMemberForeign,
 	RejectionReasonFindingInvalid:                   RejectionReasonFindingInvalid,
 	RejectionReasonFindingSubjectOutOfScope:         RejectionReasonFindingSubjectOutOfScope,
 	RejectionReasonFindingSubjectLabelMismatch:      RejectionReasonFindingSubjectLabelMismatch,
@@ -126,6 +139,64 @@ var canonicalSynthesisRejectionReasons = map[SynthesisRejectionReason]SynthesisR
 // closed-vocabulary field in this package applies at its own boundary.
 func ValidSynthesisRejectionReason(reason SynthesisRejectionReason) bool {
 	_, ok := canonicalSynthesisRejectionReasons[reason]
+	return ok
+}
+
+// SynthesisSubjectScopeBasis is the CLOSED vocabulary classifying a subject
+// that one of the three subject-scope rules just rejected. It is telemetry
+// only and never changes a decision.
+//
+// This replaced a BOOLEAN (subject_in_payload) that could not carry the
+// distinction it was documented to carry. That field called every "the model
+// was shown this subject" case an ACR defect, but one such case is
+// legitimate and expected: a resolution candidate, or a cohort exclusion, is
+// shown on purpose and is uncitable on purpose. An alert written against the
+// boolean's documented meaning would have raised false ACR-defect incidents
+// on ordinary model misuse -- found in adversarial review before it shipped.
+//
+// Only SubjectScopeShownShouldBeCitable is an alarm. It means the payload
+// carried a subject that is on neither the citable list nor the
+// deliberately-uncitable list, which is ACR showing the model something and
+// then refusing it for citing it -- the defect this whole change exists to
+// fix, and the shape a NEW display/validate asymmetry would take.
+type SynthesisSubjectScopeBasis string
+
+const (
+	// SubjectScopeAbsentFromPayload: nothing in the model's input mentioned
+	// this subject. Ordinary model error, and the expected steady state.
+	SubjectScopeAbsentFromPayload SynthesisSubjectScopeBasis = "absent"
+	// SubjectScopeShownUncitableByPolicy: shown deliberately, uncitable
+	// deliberately -- see synthesisUncitableShownSubjects for the two
+	// sources and why each is excluded. Model error, not ACR's.
+	SubjectScopeShownUncitableByPolicy SynthesisSubjectScopeBasis = "shown_uncitable_by_policy"
+	// SubjectScopeBasisUnavailable: the census itself could not be taken, so
+	// NOTHING is claimed about this subject. Emitted rather than omitted:
+	// omitting the field makes a broken measurement indistinguishable from a
+	// rejection this field does not describe, which blinds the alarm exactly
+	// when its own instrument failed.
+	SubjectScopeBasisUnavailable SynthesisSubjectScopeBasis = "basis_unavailable"
+	// SubjectScopeShownShouldBeCitable: THE ALARM. Shown, and on no
+	// exclusion list. ACR's defect, not the model's.
+	SubjectScopeShownShouldBeCitable SynthesisSubjectScopeBasis = "shown_should_be_citable"
+)
+
+// canonicalSynthesisSubjectScopeBases maps each member to ITSELF, for the
+// same reason canonicalSynthesisRejectionReasons does: a lookup returns a
+// compile-time constant rather than the caller's own value, so "nothing
+// derived from model output reaches a log field" stays a property the
+// compiler can see.
+var canonicalSynthesisSubjectScopeBases = map[SynthesisSubjectScopeBasis]SynthesisSubjectScopeBasis{
+	SubjectScopeAbsentFromPayload:      SubjectScopeAbsentFromPayload,
+	SubjectScopeShownUncitableByPolicy: SubjectScopeShownUncitableByPolicy,
+	SubjectScopeShownShouldBeCitable:   SubjectScopeShownShouldBeCitable,
+	SubjectScopeBasisUnavailable:       SubjectScopeBasisUnavailable,
+}
+
+// ValidSynthesisSubjectScopeBasis reports membership of the closed
+// vocabulary, the same fail-closed posture every other closed vocabulary in
+// this package applies at its own boundary.
+func ValidSynthesisSubjectScopeBasis(basis SynthesisSubjectScopeBasis) bool {
+	_, ok := canonicalSynthesisSubjectScopeBases[basis]
 	return ok
 }
 
@@ -147,7 +218,17 @@ type SynthesisRejection struct {
 	// evaluated -- which would make the documented "1 versus >1" reading of
 	// this number wrong in exactly the case it exists to diagnose.
 	FactGroupSize int
-	err           error
+	// SubjectScopeBasis is set ONLY by the three subject-scope rejections
+	// (claim/driver/finding "references subject outside the investigation")
+	// and classifies the subject that ACTUALLY rejected -- never another
+	// subject of the draft, which matters because ValidateAgainst
+	// short-circuits and a later subject was never evaluated.
+	//
+	// Empty means the rejection was not a subject-scope one, and the
+	// telemetry seam omits the field rather than printing a default on
+	// rejections it does not describe.
+	SubjectScopeBasis SynthesisSubjectScopeBasis
+	err               error
 }
 
 func (e *SynthesisRejection) Error() string { return e.err.Error() }
@@ -176,6 +257,28 @@ func rejectSynthesis(reason SynthesisRejectionReason, format string, args ...any
 // a maximum over the draft.
 func rejectSynthesisClaim(reason SynthesisRejectionReason, groupSize int, format string, args ...any) error {
 	return &SynthesisRejection{Reason: reason, FactGroupSize: groupSize, err: fmt.Errorf(format, args...)}
+}
+
+// rejectSynthesisSubject is rejectSynthesis for the three subject-scope
+// rules, carrying the rejecting subject's scope basis -- see
+// SynthesisRejection.SubjectScopeBasis.
+func rejectSynthesisSubject(reason SynthesisRejectionReason, basis SynthesisSubjectScopeBasis, format string, args ...any) error {
+	return &SynthesisRejection{Reason: reason, SubjectScopeBasis: basis, err: fmt.Errorf(format, args...)}
+}
+
+// SynthesisSubjectScopeBasisOf returns the rejecting subject's scope basis
+// and true when err carries one, and ("", false) otherwise -- so a telemetry
+// seam can tell "not a subject-scope rejection" apart from every basis
+// without reaching into the error type. It returns the TABLE's constant, so
+// a value that somehow escaped the vocabulary cannot reach a log field.
+func SynthesisSubjectScopeBasisOf(err error) (SynthesisSubjectScopeBasis, bool) {
+	var rejection *SynthesisRejection
+	if errors.As(err, &rejection) {
+		if canonical, ok := canonicalSynthesisSubjectScopeBases[rejection.SubjectScopeBasis]; ok {
+			return canonical, true
+		}
+	}
+	return "", false
 }
 
 // SynthesisFactGroupSizeOf returns the rejecting claim's (Kind, Subject)
