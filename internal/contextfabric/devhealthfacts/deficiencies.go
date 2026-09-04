@@ -44,7 +44,7 @@ func (p *OperationalDeficienciesProvider) Capability() contextfabric.FactCapabil
 	return newCapability(contextfabric.FactOperationalDeficiencies, "devhealthfacts.operational_deficiencies", []contextfabric.SubjectKind{contextfabric.SubjectTeam})
 }
 
-func (p *OperationalDeficienciesProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *OperationalDeficienciesProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -53,7 +53,14 @@ func (p *OperationalDeficienciesProvider) ReadFacts(ctx context.Context, princip
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := subjectIndex(query.Subjects, teamPrefix)
+	ids, bySubject, rejected := subjectIndex(query.Subjects, teamPrefix)
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.operational_deficiencies", contextfabric.FactOperationalDeficiencies, rejected)
+		}
+	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// row_number() windows over EVERY row for (team_id, rule_id) -- fired
 	// is never part of that WHERE -- so rn=1 is always the truly latest
@@ -111,5 +118,6 @@ WHERE rn = 1 AND fired = 1`)
 		return contextfabric.FactProviderResult{}, readFailure("query team operational deficiencies", scanErr)
 	}
 	state, retentionReason := timeBound.retentionState(rowCount)
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery}
+	return result, nil
 }

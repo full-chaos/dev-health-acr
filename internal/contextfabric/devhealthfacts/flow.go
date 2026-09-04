@@ -73,7 +73,7 @@ func (p *FlowProvider) Capability() contextfabric.FactCapability {
 	return capability
 }
 
-func (p *FlowProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *FlowProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -85,35 +85,47 @@ func (p *FlowProvider) ReadFacts(ctx context.Context, principal storage.Principa
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
 	omittedRows := 0
+	rejectedCount := 0
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.flow", contextfabric.FactFlow, rejectedCount)
+		}
+	}()
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
-		rowCount, rowsOmitted, scanErr := p.readTeamFlow(ctx, orgID, teamSubjects, &facts, timeBound)
+		rowCount, rowsOmitted, rejected, scanErr := p.readTeamFlow(ctx, orgID, teamSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team flow", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery || rowsOmitted > 0
 		omittedRows += rowsOmitted
+		rejectedCount += rejected
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, rowsOmitted, scanErr := p.readProjectFlow(ctx, orgID, projectSubjects, &facts, timeBound)
+		rowCount, rowsOmitted, rejected, scanErr := p.readProjectFlow(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project flow", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery || rowsOmitted > 0
 		omittedRows += rowsOmitted
+		rejectedCount += rejected
 	}
 
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
-		rowCount, scanErr := p.readRepositoryFlow(ctx, orgID, repoSubjects, &facts, timeBound)
+		rowCount, rejected, scanErr := p.readRepositoryFlow(ctx, orgID, repoSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query repository flow", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		rejectedCount += rejected
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated, OmittedCount: omittedRows}, nil
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated, OmittedCount: omittedRows}
+	return result, nil
 }
 
 // flowScopeRow is one (team_id, provider, work_scope_id) partition's latest
@@ -321,14 +333,14 @@ ORDER BY team_id, work_scope_id, provider`)
 	return byTeam, teamOrder, rowCount, scanErr
 }
 
-func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
-	ids, bySubject := subjectIndex(subjects, teamPrefix)
+func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, int, error) {
+	ids, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
-		return 0, 0, nil
+		return 0, 0, rejected, nil
 	}
 	byTeam, teamOrder, rowCount, err := p.queryTeamScopeRows(ctx, orgID, ids, timeBound)
 	if err != nil {
-		return rowCount, 0, err
+		return rowCount, 0, rejected, err
 	}
 	// CHAOS-4645, design doc §5.2: a second, ADDITIVE query for the dated
 	// series -- the scalar fields below are computed byte-identically to
@@ -339,7 +351,7 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 	// there is no RankCohort input to pin here) can observe a difference.
 	dailyByTeam, seriesErr := p.queryTeamFlowDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
-		return rowCount, 0, seriesErr
+		return rowCount, 0, rejected, seriesErr
 	}
 	// codex CHAOS-4645 round-1 P2 (EXECUTED): the daily-series query carries
 	// its OWN withRowLimit(200) cap, shared across every requested team in
@@ -427,7 +439,7 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 		})
 	}
-	return rowCount, totalOmitted, nil
+	return rowCount, totalOmitted, rejected, nil
 }
 
 // projectFlowRow is one owning team's contribution to a project's flow
@@ -508,10 +520,10 @@ func (r teamFlowAggregateRow) toFactValueRow() contextfabric.FactValueRow {
 	return contextfabric.FactValueRow{Fields: fields}
 }
 
-func (p *FlowProvider) readProjectFlow(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
-	ids, bySubject := v2Index(subjects, identity.KindProject)
+func (p *FlowProvider) readProjectFlow(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, int, error) {
+	ids, bySubject, rejected := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, 0, nil
+		return 0, 0, rejected, nil
 	}
 	// CHAOS-4521b: the project's OWN work_item_metrics_daily rows, matched
 	// on work_scope_id, with NO team-ownership hop.
@@ -586,14 +598,14 @@ ORDER BY p.id, wm.team_id`)
 		return nil
 	}, timeBound.bindings()...)
 	if scanErr != nil {
-		return rowCount, 0, scanErr
+		return rowCount, 0, rejected, scanErr
 	}
 	// CHAOS-4645: additive, off the SAME work-scope join, never changing
 	// an existing field -- flow carries no RankCohort signal, so there is
 	// nothing to pin here (see readTeamFlow's identical note).
 	dailyByProject, seriesErr := p.queryProjectFlowDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
-		return rowCount, 0, seriesErr
+		return rowCount, 0, rejected, seriesErr
 	}
 	// codex CHAOS-4645 round-1 P2 (EXECUTED): see readTeamFlow's identical
 	// note -- the daily-series query's own withRowLimit(200) cap, shared
@@ -683,7 +695,7 @@ ORDER BY p.id, wm.team_id`)
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
-	return rowCount, totalOmitted, nil
+	return rowCount, totalOmitted, rejected, nil
 }
 
 // queryProjectFlowDailySeries is queryTeamFlowDailySeries' project-rollup
@@ -723,10 +735,10 @@ ORDER BY p.id, wm.day DESC`)
 // read (readRepositoryMetrics) documents, applied to a different column
 // set from the SAME table (no conflict: two providers may each read their
 // own columns off one row).
-func (p *FlowProvider) readRepositoryFlow(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
-	ids, bySubject := subjectIndex(subjects, repositoryPrefix)
+func (p *FlowProvider) readRepositoryFlow(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
+	ids, bySubject, rejected := subjectIndex(subjects, repositoryPrefix)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, rejected, nil
 	}
 	statement := withRowLimit(`SELECT toString(repo_id), toString(day), toInt64(prs_merged), toInt64(prs_with_first_review),
 	toUInt8(isNotNull(pr_pickup_time_p50_hours)), toFloat64(ifNull(pr_pickup_time_p50_hours, 0)),
@@ -778,5 +790,5 @@ WHERE rn = 1`)
 		})
 		return nil
 	}, timeBound.bindings()...)
-	return rowCount, scanErr
+	return rowCount, rejected, scanErr
 }

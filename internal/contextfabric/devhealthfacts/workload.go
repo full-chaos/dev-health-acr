@@ -67,7 +67,7 @@ func (p *WorkloadProvider) Capability() contextfabric.FactCapability {
 	return capability
 }
 
-func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -78,25 +78,36 @@ func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
+	rejectedCount := 0
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.workload", contextfabric.FactWorkload, rejectedCount)
+		}
+	}()
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
-		rowCount, scanErr := p.readTeamWorkload(ctx, orgID, teamSubjects, &facts, timeBound)
+		rowCount, rejected, scanErr := p.readTeamWorkload(ctx, orgID, teamSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team workload", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		rejectedCount += rejected
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, breakdownTruncated, scanErr := p.readProjectWorkload(ctx, orgID, projectSubjects, &facts, timeBound)
+		rowCount, rejected, breakdownTruncated, scanErr := p.readProjectWorkload(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project workload", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery || breakdownTruncated
+		rejectedCount += rejected
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: truncated}, nil
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: truncated}
+	return result, nil
 }
 
 // workloadDailyRow is one (team_id or project, day)'s COMBINED
@@ -261,11 +272,11 @@ ORDER BY p.id, toDate(cf.computed_at) DESC`)
 // see that function's doc comment for the full tiebreak reasoning. This
 // adapter keeps the CanonicalFact-building half, factored out so ReadFacts
 // can branch by subject kind the same way metrics.go/health.go already do.
-func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
-	ids, bySubject := subjectIndex(subjects, teamPrefix)
+func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
+	ids, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	rows, err := readers.ReadTeamWorkload(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
-		return 0, err
+		return 0, rejected, err
 	}
 	// CHAOS-4645, design doc §5.2: a second, ADDITIVE query for the dated
 	// series -- computed byte-identically to before this ticket off the SAME
@@ -281,7 +292,7 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 	// not otherwise have.
 	dailyByTeam, seriesErr := p.queryTeamWorkloadDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
-		return 0, seriesErr
+		return 0, rejected, seriesErr
 	}
 	// codex CHAOS-4645 round-1 P2 (EXECUTED): see flow.go's readTeamFlow
 	// identical note -- the daily-series query's own withRowLimit(200) cap,
@@ -337,7 +348,7 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.TeamID)},
 		})
 	}
-	return rowCount, nil
+	return rowCount, rejected, nil
 }
 
 // readProjectWorkload rolls FactWorkload up for a project through
@@ -349,14 +360,14 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 // readers.ReadProjectWorkload; this adapter does the Go-side
 // grouping/breakdown-table construction the reader deliberately leaves to
 // its caller.
-func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, breakdownTruncated bool, err error) {
-	ids, bySubject := v2Index(subjects, identity.KindProject)
+func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, rejected int, breakdownTruncated bool, err error) {
+	ids, bySubject, rejected := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, false, nil
+		return 0, rejected, false, nil
 	}
 	scanned, err := readers.ReadProjectWorkload(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
-		return 0, false, err
+		return 0, rejected, false, err
 	}
 	// CHAOS-4645, design doc §5.2: additive, off the SAME project-identity
 	// join readProjectWorkload's base read above uses -- never changes an
@@ -367,7 +378,7 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 	// subject's pin test covers the shared signal.
 	dailyByProject, seriesErr := p.queryProjectWorkloadDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
-		return 0, false, seriesErr
+		return 0, rejected, false, seriesErr
 	}
 	rowCount = len(scanned)
 	// codex CHAOS-4645 round-1 P2 (EXECUTED): see readTeamWorkload's
@@ -508,5 +519,5 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
-	return rowCount, breakdownTruncated, nil
+	return rowCount, rejected, breakdownTruncated, nil
 }
