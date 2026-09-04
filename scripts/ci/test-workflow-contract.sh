@@ -196,10 +196,31 @@ check_isolated_devhealthschema_job() {
 check_go_cache() {
   local file="$1"
   local status=0
-  if grep -q 'cache: false' "$file"; then
-    printf 'a setup-go step still has cache: false\n' >&2
-    status=1
-  fi
+  # v1.6: self-hosted legs share one GOMODCACHE/GOCACHE hostPath mount
+  # (helm rev 6) across every concurrent pool job -- setup-go's own
+  # cache:true would restore/save a tarball against those same paths and
+  # can race the live mount, corrupting it for every other job on the
+  # pool. So cache:false is now REQUIRED on self-hosted legs and
+  # FORBIDDEN on hosted ones (which have no such shared mount and should
+  # keep using setup-go's own cache).
+  local job
+  while IFS= read -r job; do
+    local block
+    block="$(job_block "$file" "$job")"
+    if printf '%s' "$block" | grep -qE 'runs-on: *\[self-hosted'; then
+      if printf '%s' "$block" | grep -q 'cache: true'; then
+        printf 'self-hosted job "%s" has setup-go cache: true -- it shares a GOMODCACHE/GOCACHE mount with every other pool job; a cache restore here can race and corrupt it\n' \
+          "$job" >&2
+        status=1
+      fi
+    else
+      if printf '%s' "$block" | grep -q 'cache: false'; then
+        printf 'hosted job "%s" has setup-go cache: false -- only self-hosted legs skip setup-go'"'"'s cache (they share a hostPath mount instead)\n' \
+          "$job" >&2
+        status=1
+      fi
+    fi
+  done < <(list_jobs "$file")
   if ! grep -q 'cache: true' "$file"; then
     printf 'no setup-go step has cache: true\n' >&2
     status=1
@@ -362,6 +383,104 @@ check_pin_binds_checkout_ref() {
   fi
 }
 
+# Runner-routing contract v1.6 pair invariants. Every entry names a
+# `<base>-hosted` / `<base>-self-hosted` job pair: both must exist, both
+# must carry the identical `name:` (the stable check name a PR sees
+# across the SELF_HOSTED_RUNNERS flip), and their `if:` gates must be the
+# canonical exact-complement pair (never both true, never both false,
+# including the fork-PR carve-out that always falls back to hosted).
+V16_PAIR_BASES="mirror-preflight scripts build contracts race-devhealthschema"
+
+check_v16_pairs() {
+  local file="$1" base status=0
+  for base in $V16_PAIR_BASES; do
+    local hosted_key="${base}-hosted" pool_key="${base}-self-hosted"
+    local hosted_block pool_block hosted_name pool_name
+
+    if ! grep -qE "^  ${hosted_key}:" "$file"; then
+      printf 'v1.6 pair "%s": no job "%s" found\n' "$base" "$hosted_key" >&2
+      status=1
+      continue
+    fi
+    if ! grep -qE "^  ${pool_key}:" "$file"; then
+      printf 'v1.6 pair "%s": no job "%s" found\n' "$base" "$pool_key" >&2
+      status=1
+      continue
+    fi
+
+    hosted_block="$(job_block "$file" "$hosted_key")"
+    pool_block="$(job_block "$file" "$pool_key")"
+
+    # Both legs must declare an explicit `name:` (a bare job key is not
+    # enough -- the whole point is a STABLE name across the flip), and
+    # those two names must be identical.
+    hosted_name="$(printf '%s' "$hosted_block" | sed -n -E 's/^    name: (.*)$/\1/p' | head -n1)"
+    pool_name="$(printf '%s' "$pool_block" | sed -n -E 's/^    name: (.*)$/\1/p' | head -n1)"
+    if [ -z "$hosted_name" ] || [ -z "$pool_name" ]; then
+      printf 'v1.6 pair "%s": both "%s" and "%s" must declare an explicit name:\n' \
+        "$base" "$hosted_key" "$pool_key" >&2
+      status=1
+    elif [ "$hosted_name" != "$pool_name" ]; then
+      printf 'v1.6 pair "%s": "%s" is named "%s" but "%s" is named "%s" -- the check reported to a PR would move when the switch flips\n' \
+        "$base" "$hosted_key" "$hosted_name" "$pool_key" "$pool_name" >&2
+      status=1
+    fi
+
+    # The canonical exact-complement `if:` markers. Not a full logical
+    # proof of exhaustiveness/exclusivity -- that would need a real
+    # expression evaluator -- but pins the known-correct textual pattern
+    # (both directions of the switch check, plus the fork-PR carve-out on
+    # both legs) so a hand-edit that drops one clause is caught.
+    if ! printf '%s' "$hosted_block" | grep -qF "vars.SELF_HOSTED_RUNNERS != 'enabled'"; then
+      printf 'v1.6 pair "%s": hosted leg "%s" if: is missing the SELF_HOSTED_RUNNERS != enabled clause\n' \
+        "$base" "$hosted_key" >&2
+      status=1
+    fi
+    if ! printf '%s' "$hosted_block" | grep -qF 'head.repo.full_name != github.repository'; then
+      printf 'v1.6 pair "%s": hosted leg "%s" if: is missing the fork-PR carve-out (forks must always fall back to hosted)\n' \
+        "$base" "$hosted_key" >&2
+      status=1
+    fi
+    if ! printf '%s' "$pool_block" | grep -qF "vars.SELF_HOSTED_RUNNERS == 'enabled'"; then
+      printf 'v1.6 pair "%s": self-hosted leg "%s" if: is missing the SELF_HOSTED_RUNNERS == enabled clause\n' \
+        "$base" "$pool_key" >&2
+      status=1
+    fi
+    if ! printf '%s' "$pool_block" | grep -qF 'head.repo.full_name == github.repository'; then
+      printf 'v1.6 pair "%s": self-hosted leg "%s" if: is missing the fork-PR exclusion (forks must never reach the pool)\n' \
+        "$base" "$pool_key" >&2
+      status=1
+    fi
+  done
+  return "$status"
+}
+
+# The aggregator's own pair-tolerant logic: verify's assertion script must
+# actually implement "one success + partner skipped = pass, both skipped
+# = fail" for every v1.6 pair, not just list the pair's two job keys in
+# `needs:` (check_needs_matches_jobs already proves that half). Scoped to
+# the verify job block so a copy of this text living only in a comment
+# elsewhere in the file cannot satisfy it.
+check_verify_pair_logic() {
+  local file="$1" block status=0
+  block="$(job_block "$file" verify)"
+
+  if ! printf '%s' "$block" | grep -qF 'PAIRS'; then
+    printf 'verify job has no PAIRS-driven pair check -- the v1.6 hosted/self-hosted pairs would be asserted as if they were plain single jobs, and a by-design skip on the leg that did not run would fail the whole gate\n' >&2
+    return 1
+  fi
+  # shellcheck disable=SC2016
+  if ! printf '%s' "$block" | grep -qF '!= success ] && [ "$hosted_result" != skipped'; then
+    printf 'verify'"'"'s pair check does not tolerate a skipped hosted leg\n' >&2
+    status=1
+  fi
+  if ! printf '%s' "$block" | grep -qF 'neither'; then
+    printf 'verify has no "neither ... ran" guard -- if both pair members were somehow skipped, the gate would not notice that lane never ran at all\n' >&2
+    status=1
+  fi
+  return "$status"
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -375,6 +494,8 @@ run_all_checks() {
   check_endpoint_profile_gate_step "$file"
   check_pin_requires_full_sha "$file"
   check_pin_binds_checkout_ref "$file"
+  check_v16_pairs "$file"
+  check_verify_pair_logic "$file"
 }
 
 # ---- positive run -------------------------------------------------------
@@ -400,18 +521,26 @@ assert_check_fails() {
 
 # (a) drop one job name from verify's needs.
 needs_missing_job="$tmpdir/needs-missing-job.yml"
-awk '/^ {6}- build$/ { next } { print }' "$workflow" > "$needs_missing_job"
-assert_check_fails 'dropped "build" from verify.needs' check_needs_matches_jobs "$needs_missing_job"
+awk '/^ {6}- build-hosted$/ { next } { print }' "$workflow" > "$needs_missing_job"
+assert_check_fails 'dropped "build-hosted" from verify.needs' check_needs_matches_jobs "$needs_missing_job"
 
 # (b) remove "if: always()" from verify.
 missing_if_always="$tmpdir/missing-if-always.yml"
 awk '/^ {4}if: always\(\)$/ { next } { print }' "$workflow" > "$missing_if_always"
 assert_check_fails 'removed if: always() from verify' check_verify_if_always "$missing_if_always"
 
-# (c) flip one "cache: true" back to "cache: false".
+# (c) flip a HOSTED job's "cache: true" to "cache: false" -- hosted legs
+# have no shared mount and should keep using setup-go's own cache.
 cache_false="$tmpdir/cache-false.yml"
 awk '!done && /cache: true/ { sub(/cache: true/, "cache: false"); done=1 } { print }' "$workflow" > "$cache_false"
-assert_check_fails 'flipped one cache: true back to cache: false' check_go_cache "$cache_false"
+assert_check_fails 'flipped a hosted job'"'"'s cache: true to cache: false' check_go_cache "$cache_false"
+
+# (c2) flip a SELF-HOSTED job's "cache: false" to "cache: true" -- v1.6
+# self-hosted legs share one GOMODCACHE/GOCACHE mount, and setup-go's own
+# cache would race it.
+cache_true_on_pool="$tmpdir/cache-true-on-pool.yml"
+awk '!done && /cache: false/ { sub(/cache: false/, "cache: true"); done=1 } { print }' "$workflow" > "$cache_true_on_pool"
+assert_check_fails 'flipped a self-hosted job'"'"'s cache: false to cache: true' check_go_cache "$cache_true_on_pool"
 
 # (d) shrink the race matrix to 3 shards while test-shard.sh is still
 # called with total 4.
@@ -456,16 +585,19 @@ sed 's/shard: \[1, 2, 3, 4\]/shard: [1, 2, 5, 9]/' "$workflow" > "$out_of_range_
 assert_check_fails 'used shard indices outside 1..total' \
   check_race_shard_agreement "$out_of_range_shard"
 
-# (j) remove the isolated-package job so the isolated package's dedicated
-# scope silently disappears while test-shard.sh still excludes it from the
-# round-robin shards.
+# (j) remove BOTH race-devhealthschema-{hosted,self-hosted} pair members
+# so the isolated package's dedicated scope silently disappears while
+# test-shard.sh still excludes it from the round-robin shards. Removing
+# only one member would not trip this check -- the other still satisfies
+# it, which is the whole point of the v1.6 pair (exactly one runs).
 isolated_job_removed="$tmpdir/isolated-job-removed.yml"
 awk '
-  /^  race-devhealthschema:/ { skip=1 }
-  skip && /^  [A-Za-z0-9_-]+:/ && !/^  race-devhealthschema:/ { skip=0 }
+  /^  race-devhealthschema-hosted:/ { skip=1 }
+  /^  race-devhealthschema-self-hosted:/ { skip=1 }
+  skip && /^  [A-Za-z0-9_-]+:/ && !/^  race-devhealthschema-hosted:/ && !/^  race-devhealthschema-self-hosted:/ { skip=0 }
   !skip { print }
 ' "$workflow" > "$isolated_job_removed"
-assert_check_fails 'removed the race-devhealthschema job entirely' \
+assert_check_fails 'removed both race-devhealthschema pair members entirely' \
   check_isolated_devhealthschema_job "$isolated_job_removed"
 
 # (k) keep the job but drop its explicit timeout override, so it would
@@ -530,5 +662,49 @@ sed "s|grep -Eq '\^\[0-9a-f\]{40}\$'|grep -Eq '^[a-z0-9]+\$' # [0-9a-f]{40}|" \
   "$workflow" > "$pin_decoy_comment"
 assert_check_fails 'loosened the pin regex while leaving a decoy [0-9a-f]{40} in a comment' \
   check_pin_requires_full_sha "$pin_decoy_comment"
+
+# (s) rename one pair member's name: away from its partner's -- the check
+# reported to a PR would move when the switch flips.
+pair_name_mismatch="$tmpdir/pair-name-mismatch.yml"
+awk '!done && /^    name: scripts$/ { sub(/name: scripts/, "name: scripts-renamed"); done=1 } { print }' \
+  "$workflow" > "$pair_name_mismatch"
+assert_check_fails 'renamed scripts-hosted'"'"'s name: away from scripts-self-hosted'"'"'s' \
+  check_v16_pairs "$pair_name_mismatch"
+
+# (t) drop the fork-PR carve-out from a self-hosted leg's if: -- would let
+# a fork PR reach the pool.
+pair_fork_guard_dropped="$tmpdir/pair-fork-guard-dropped.yml"
+sed "s|&& (github.event_name != 'pull_request'\$|\&\& (true|" "$workflow" \
+  | awk '!done && /head.repo.full_name == github.repository/ { sub(/head.repo.full_name == github.repository/, "true"); done=1 } { print }' \
+  > "$pair_fork_guard_dropped"
+assert_check_fails 'dropped the fork-PR exclusion from a self-hosted leg'"'"'s if:' \
+  check_v16_pairs "$pair_fork_guard_dropped"
+
+# (u) a pair base with a hosted leg but no self-hosted leg at all.
+pair_member_missing="$tmpdir/pair-member-missing.yml"
+awk '
+  /^  scripts-self-hosted:/ { skip=1 }
+  skip && /^  [A-Za-z0-9_-]+:/ && !/^  scripts-self-hosted:/ { skip=0 }
+  !skip { print }
+' "$workflow" > "$pair_member_missing"
+assert_check_fails 'removed scripts-self-hosted while scripts-hosted remains' \
+  check_v16_pairs "$pair_member_missing"
+
+# (v) verify's pair check keeps the pair's two keys in `needs:` but drops the
+# both-skipped guard -- a pair where neither leg ran would silently pass.
+pair_neither_guard_dropped="$tmpdir/pair-neither-guard-dropped.yml"
+awk '/printf .neither/ { next } /neither .base.-hosted/ { next } { print }' "$workflow" \
+  > "$pair_neither_guard_dropped"
+assert_check_fails 'dropped verify'"'"'s "neither ... ran" guard' \
+  check_verify_pair_logic "$pair_neither_guard_dropped"
+
+# (w) verify's pair check loses the PAIRS-driven loop entirely, reverting to
+# treating every need as a plain job that must be a literal success -- which
+# would fail the gate on every run, since the leg that did not run always
+# reports skipped.
+pair_check_removed="$tmpdir/pair-check-removed.yml"
+awk '!/PAIRS/ { print }' "$workflow" > "$pair_check_removed"
+assert_check_fails 'removed every reference to PAIRS from verify'"'"'s pair check' \
+  check_verify_pair_logic "$pair_check_removed"
 
 printf 'PASS: all negative controls correctly failed their check\n'
