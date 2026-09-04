@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -276,8 +277,23 @@ func ValidateStoredParentResultID(resultID, parentResultID string) error {
 	if parent == "" {
 		return nil
 	}
-	if len(parent) < 8 || len(parent) > 256 {
-		return fmt.Errorf("parent_result_id must be 8..256 characters, got %d", len(parent))
+	// RUNES, not bytes. The migration states this bound with char_length and
+	// the wire contract states it with utf8.RuneCountInString; both count
+	// characters, and they agree with each other for every UTF-8 input. A byte
+	// count agrees with neither the moment the id is not ASCII:
+	//
+	//	256 * "é" = 256 characters, 512 bytes -> byte count REJECTS what the
+	//	  contract accepted and Postgres would have stored, so a valid request
+	//	  fails at Save instead of returning its result
+	//	  4 * "é" =   4 characters,   8 bytes -> byte count ACCEPTS what
+	//	  Postgres rejects, so the parity this function exists to provide is
+	//	  simply false there
+	//
+	// The ASCII cases could not show this, because for ASCII bytes, runes and
+	// characters are the same number -- which is why the first version of this
+	// check read correct and was not.
+	if runes := utf8.RuneCountInString(parent); runes < 8 || runes > 256 {
+		return fmt.Errorf("parent_result_id must be 8..256 runes, got %d", utf8.RuneCountInString(parent))
 	}
 	if parent == strings.TrimSpace(resultID) {
 		return errors.New("parent_result_id must not name the result itself")

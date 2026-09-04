@@ -149,6 +149,8 @@ func Cases() []Case {
 	shortParent := result("result-id-short-parent", "is a three-character parent storable?")
 	longParent := result("result-id-long-parent", "is an over-long parent storable?")
 	boundParent := result("result-id-bound-parent", "is a parent at the lower bound storable?")
+	wideMaxParent := result("result-id-wide-max-parent", "is a 256-rune parent storable?")
+	wideMinParent := result("result-id-wide-min-parent", "is a 4-rune parent storable?")
 
 	// M1 (Codex adversarial review, CHAOS-3755): a result_id collision
 	// across two DIFFERENT organizations must reject the second Save
@@ -262,6 +264,32 @@ func Cases() []Case {
 				{Principal: orgA, Result: longParent, ParentResultID: strings.Repeat("x", 257), WantErr: true},
 			},
 			Get: GetStep{Principal: orgA, ResultID: longParent.ResultID, WantNotFound: true},
+		},
+		{
+			// MULTIBYTE BOUNDS. The bound is stated in CHARACTERS by the
+			// migration (char_length) and in RUNES by the request contract
+			// (utf8.RuneCountInString); a Go check measuring BYTES agrees with
+			// neither the moment the id is not ASCII. Both directions are
+			// exercised because they fail differently: a byte-measuring check
+			// REJECTS a 256-rune id that both authorities accept (a valid
+			// request would fail at Save), and ACCEPTS a 4-rune id that
+			// Postgres rejects (the parity claim is simply false there).
+			//
+			// The ASCII cases above cannot see either: 8 ASCII characters are
+			// 8 bytes, so every measurement agrees and the suite reads green
+			// while the rule is wrong for any non-ASCII id.
+			Name: "a parent id of 256 multibyte runes is accepted by both backends",
+			Save: []SaveStep{
+				{Principal: orgA, Result: wideMaxParent, ParentResultID: strings.Repeat("é", 256)},
+			},
+			Get: GetStep{Principal: orgA, ResultID: wideMaxParent.ResultID, Want: &wideMaxParent, WantParentResultID: ptr(strings.Repeat("é", 256))},
+		},
+		{
+			Name: "a parent id of 4 multibyte runes is refused by both backends",
+			Save: []SaveStep{
+				{Principal: orgA, Result: wideMinParent, ParentResultID: strings.Repeat("é", 4), WantErr: true},
+			},
+			Get: GetStep{Principal: orgA, ResultID: wideMinParent.ResultID, WantNotFound: true},
 		},
 		{
 			// CONTROL for the three above: a parent at each BOUND is accepted.
