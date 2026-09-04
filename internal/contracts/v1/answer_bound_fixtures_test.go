@@ -592,7 +592,7 @@ func maximalOutcomeRows(n int) []ContextFabricPlanRequirementOutcomeRow {
 	identity := longestObligation + "/" + escaped(role) + "/" + escaped(kind)
 	for index := 0; index < n; index++ {
 		rows = append(rows, ContextFabricPlanRequirementOutcomeRow{
-			Stage:          ContextFabricPlanNarrowingAssembledResult,
+			Stage:          ContextFabricOutcomeStageAssembledResult,
 			Requirement:    identity,
 			Obligation:     longestObligation,
 			Outcome:        ContextFabricRequirementUnavailable,

@@ -78,7 +78,7 @@ func seedRequirementOutcomes(frame *QuestionFrame, deriver RequirementDeriver) [
 			// The seed rows belong to the stage that PLANNED them, so a
 			// reader can see which rows the plan carried and which a later
 			// stage appended.
-			Stage:       contractsv1.ContextFabricPlanNarrowingSynthesisInput,
+			Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
 			Requirement: requirementIdentity(requirement),
 			Obligation:  string(requirement.Obligation),
 			Outcome:     contractsv1.ContextFabricRequirementSatisfied,
@@ -187,7 +187,7 @@ func narrowCandidatesToBudget(result InvestigationResult, budget ResponseBudget,
 // `not_derived` for exactly the turns where attribution was impossible.
 func candidateNarrowingOutcomeRow(narrowing candidateNarrowing, overrun contractsv1.ContextFabricBudgetOverrun, requirement string, obligation string) RequirementOutcomeRow {
 	return RequirementOutcomeRow{
-		Stage:       contractsv1.ContextFabricPlanNarrowingAssembledResult,
+		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
 		Requirement: requirement,
 		Obligation:  obligation,
 		Outcome:     contractsv1.ContextFabricRequirementNarrowed,

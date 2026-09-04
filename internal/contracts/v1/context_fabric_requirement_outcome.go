@@ -99,6 +99,63 @@ func ValidContextFabricPlanRequirementOutcome(value ContextFabricPlanRequirement
 	return false
 }
 
+// ContextFabricOutcomeStage says WHICH stage produced an outcome row.
+// CLOSED, three members.
+//
+// It is its own vocabulary rather than a reuse of
+// ContextFabricPlanNarrowingStage, and the reason is a shape rule this layer
+// is held to elsewhere: that vocabulary names the three points at which the
+// COHORT is narrowed, and it has no member for planning and none for the
+// projection. Borrowing it would have forced every row this layer writes to
+// claim a stage it did not come from -- a vocabulary NARROWER than its
+// producer, which fails the closure test for the same reason one wider than
+// its producer does. Widening the shipped vocabulary instead was refused: it
+// is consumed as a closed union by a pinned client, and it would have gained
+// members that mean nothing to the narrowing steps that already use it.
+type ContextFabricOutcomeStage string
+
+const (
+	// ContextFabricOutcomeStagePlanning: the row was seeded when this
+	// turn's requirements were derived, before any narrowing.
+	ContextFabricOutcomeStagePlanning ContextFabricOutcomeStage = "planning"
+	// ContextFabricOutcomeStageAssembledResult: the row was appended when
+	// the assembled result was measured against the response budget.
+	ContextFabricOutcomeStageAssembledResult ContextFabricOutcomeStage = "assembled_result"
+	// ContextFabricOutcomeStageProjection: the row was appended when the
+	// answer was projected onto a caller's own budget.
+	//
+	// This member is why the set must be re-derived at the serving
+	// surface rather than copied: the projection cuts AFTER the canonical
+	// completeness would otherwise have been computed, and a copied state
+	// would describe a document the caller never receives.
+	ContextFabricOutcomeStageProjection ContextFabricOutcomeStage = "projection"
+)
+
+var contextFabricOutcomeStages = [...]ContextFabricOutcomeStage{
+	ContextFabricOutcomeStagePlanning,
+	ContextFabricOutcomeStageAssembledResult,
+	ContextFabricOutcomeStageProjection,
+}
+
+// ContextFabricOutcomeStageCount is the vocabulary size.
+const ContextFabricOutcomeStageCount = len(contextFabricOutcomeStages)
+
+// ContextFabricOutcomeStageVocabulary returns the closed vocabulary in
+// published order.
+func ContextFabricOutcomeStageVocabulary() [ContextFabricOutcomeStageCount]ContextFabricOutcomeStage {
+	return contextFabricOutcomeStages
+}
+
+// ValidContextFabricOutcomeStage reports membership.
+func ValidContextFabricOutcomeStage(value ContextFabricOutcomeStage) bool {
+	for _, member := range contextFabricOutcomeStages {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
 // ContextFabricAnswerImpactKind says what the READER loses when a row is not
 // satisfied. It is the reader-facing half; the outcome is the engine-facing
 // half. CLOSED, four members.
@@ -252,11 +309,11 @@ const (
 // dynamically formatted or model-authored text, and a row carrying a string
 // cause would be a third such channel wearing a closed vocabulary's name.
 type ContextFabricPlanRequirementOutcomeRow struct {
-	// Stage names WHICH narrowing stage produced this row. REQUIRED on
-	// every row, including a seed row, so the append invariant is legible
-	// from the document: a reader can see which stage each row came from
-	// and therefore that later stages added rather than rewrote.
-	Stage ContextFabricPlanNarrowingStage `json:"stage"`
+	// Stage names WHICH stage produced this row. REQUIRED on every row,
+	// including a seed row, so the append invariant is legible from the
+	// document: a reader can see which stage each row came from, and
+	// therefore that later stages added rather than rewrote.
+	Stage ContextFabricOutcomeStage `json:"stage"`
 	// Requirement is the requirement row's own identity, when the
 	// reduction can be attributed to one. It is EMPTY when the served
 	// document was narrowed on a turn for which no requirement rows were
@@ -340,7 +397,7 @@ func DeriveContextFabricAnswerCompletenessState(rows []ContextFabricPlanRequirem
 // checks only which keys are present accepts a permitted key holding a
 // token-shaped value from no vocabulary at all.
 func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequirementOutcomeRow) error {
-	if !ValidContextFabricPlanNarrowingStage(row.Stage) {
+	if !ValidContextFabricOutcomeStage(row.Stage) {
 		return fmt.Errorf("outcome row stage %q is not a vocabulary member", row.Stage)
 	}
 	if !ValidContextFabricPlanRequirementOutcome(row.Outcome) {

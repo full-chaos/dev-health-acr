@@ -2439,11 +2439,11 @@
             "stage": {
               "type": "string",
               "enum": [
-                "cardinality",
-                "synthesis_input",
-                "assembled_result"
+                "planning",
+                "assembled_result",
+                "projection"
               ],
-              "description": "Which narrowing stage produced this row. Present on every row, including a seed row, so a reader can see that later stages APPENDED rather than rewrote."
+              "description": "Which stage produced this row. Its own vocabulary, not the plan's cohort-narrowing stages: those name the three points at which the cohort is narrowed and have no member for planning or for the projection, so borrowing them would force every row to claim a stage it did not come from."
             },
             "requirement": {
               "type": "string",
