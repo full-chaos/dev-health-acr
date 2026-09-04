@@ -47,6 +47,28 @@ func QuestionHash(question string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// IdentitylessQuestionHash is the ONE hash every question with no identity
+// produces: the digest of the empty canonical form. "?", "!!" and "..." all
+// canonicalize to "" (CanonicalizeQuestion strips trailing terminal
+// punctuation), so they share it -- they are not the same question, they are
+// questions this hash cannot tell apart.
+//
+// EXPORTED AS A PREDICATE, NOT LEFT TO EACH CALLER, because the same defect
+// has now been found at three separate seams: answer reuse (fixed at its own
+// earlier review), the same-question carry containment, and the structure
+// priors path. Each had its own spelling of "is this question usable?", and
+// two of the three simply did not ask. A named predicate beside the hash it
+// concerns is the closest this package can get to making the question
+// unavoidable at the next seam that keys on a question.
+//
+// Note this is a property of the HASH, so it is checkable at a site that only
+// ever sees a hash -- which is exactly the situation the priors read path is
+// in, and why a guard phrased over the question text could not have been
+// applied there without changing a signature.
+func IdentitylessQuestionHash(questionHash string) bool {
+	return questionHash == QuestionHash("")
+}
+
 func collapseInternalWhitespace(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))

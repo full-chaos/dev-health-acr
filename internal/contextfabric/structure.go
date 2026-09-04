@@ -869,6 +869,15 @@ func (e *Engine) recordStructureConfirmationOutcome(ctx context.Context, princip
 	recordStructureReceiptTelemetry(ctx, e.telemetry, principal, request, structureCanon)
 	if e.structureSelectionSink != nil {
 		for _, event := range structureCanon.PendingSelections {
+			// Never capture a selection under the identityless hash: curation
+			// turns these rows into priors keyed by question hash, so writing
+			// one here is what would later let an unrelated punctuation-only
+			// question inherit this selection. The read side refuses to serve
+			// them; this stops them being written at all, so the collision has
+			// no material to work with rather than merely being unreadable.
+			if IdentitylessQuestionHash(event.QuestionHash) {
+				continue
+			}
 			e.structureSelectionSink.RecordSelection(ctx, event)
 		}
 	}

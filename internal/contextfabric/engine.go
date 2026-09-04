@@ -2557,6 +2557,12 @@ func (e *Engine) captureClarificationSelection(ctx context.Context, principal st
 			selectedOffered = offered[i]
 		}
 	}
+	// Same guard as the structure-selection twin (structure.go): a selection
+	// captured under the identityless hash becomes a prior an unrelated
+	// punctuation-only question would inherit.
+	if IdentitylessQuestionHash(QuestionHash(prior.Question)) {
+		return
+	}
 	e.clarificationSelectionSink.RecordSelection(ctx, ClarificationSelectionEvent{
 		OrgID: principal.OrgID, CapturedAt: e.now().UTC(),
 		QuestionHash: QuestionHash(prior.Question), PriorResultID: priorResultID,

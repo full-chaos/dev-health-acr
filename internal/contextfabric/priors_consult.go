@@ -53,6 +53,20 @@ func (e *Engine) fetchPriorEntries(ctx context.Context, principal storage.Princi
 	if e.priorConsultant == nil {
 		return nil
 	}
+	// A QUESTION WITH NO IDENTITY CONSULTS NOTHING. Every punctuation-only
+	// question hashes to the same value, so a lookup keyed on it would serve
+	// this request the structure priors curated from unrelated questions that
+	// merely happen to be equally unhashable. Measured before this guard
+	// existed: a prior curated from "?" was returned for a request asking
+	// "!!".
+	//
+	// The reuse path and the carry containment both fail closed on the same
+	// collision; this is the third seam, and it is a MISS rather than an
+	// error -- consulting no priors is the ordinary cold-start behaviour and
+	// is always safe.
+	if IdentitylessQuestionHash(questionHash) {
+		return nil
+	}
 	entries, state := e.priorConsultant.Consult(ctx, principal.OrgID, questionHash)
 	if state != PriorDegradationNone {
 		e.recordPriorDegradation(ctx, principal, state)
