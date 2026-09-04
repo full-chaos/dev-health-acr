@@ -73,7 +73,7 @@ func (g graphReaderStub) ResolveInvestigationBinding(context.Context, storage.Pr
 	return ResolvedGraphBinding{GraphKey: "stub-key", Epoch: 0}, nil
 }
 
-func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection, *QuestionFrame) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+func (g graphReaderStub) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection, *QuestionFrame, SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	// CHAOS-4085: g.bases, nil unless the fixture set it -- see the field's
 	// own doc comment. Nil reads back as CommitBasisUnknown for every
 	// subject, the strict (must-be-affirmed) treatment. CHAOS-4087: nil
@@ -194,7 +194,7 @@ func (g *capturingGraphReader) ResolveInvestigationBinding(context.Context, stor
 	return ResolvedGraphBinding{GraphKey: "capturing-key", Epoch: g.bindingEpochs[index]}, nil
 }
 
-func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection, _ *QuestionFrame) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+func (g *capturingGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection, _ *QuestionFrame, _ SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	g.resolveRequests = append(g.resolveRequests, request)
 	g.confirmedAnchors = append(g.confirmedAnchors, confirmedAnchor)
 	// CHAOS-4085: nil CommitBasisSet -- every commit this double returns reads
@@ -1864,7 +1864,7 @@ func (g *countingGraphReader) ResolveInvestigationBinding(context.Context, stora
 	return ResolvedGraphBinding{GraphKey: "counting-key", Epoch: 0}, nil
 }
 
-func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection, *QuestionFrame) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection, *QuestionFrame, SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	g.resolveCalls++
 	// CHAOS-4085: nil CommitBasisSet -- every commit this double returns reads
 	// back as CommitBasisUnknown, the strict (must-be-affirmed) treatment.
