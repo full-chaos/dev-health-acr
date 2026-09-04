@@ -299,6 +299,69 @@ func TestSameQuestionContainment_ASameQuestionChainStillWalksTwoHops(t *testing.
 	}
 }
 
+// TestSameQuestionContainment_AReceiptRootedHitWinsOverADriftedParent exists
+// because the mutation battery found the property UNPINNED.
+//
+// Deleting the early return that makes a receipt-rooted hit win outright left
+// every test green. The reason is that no fixture in the suite linked a
+// request by BOTH a redeemed receipt and a parent_result_id -- the
+// `CarrySeedBoth` seed-source member had a name, a doc comment and a
+// telemetry label, and no behavioural coverage at all. Every existing arm used
+// one linkage or the other, and each of those passes under the mutation:
+// with the early return gone, a receipts-only request still returns its hit
+// (the parent branch is skipped), and a parent-only request has no receipt hit
+// to protect.
+//
+// THE HARM the deletion admits, which is what this arm now catches: with both
+// linkages present, the receipt's hit falls through into the parent walk, the
+// parent walk hits, and the CHOKE POINT is applied to it -- so a caller who
+// legitimately redeemed an offer AND named an unrelated parent gets their
+// receipt-rooted carry refused for the parent's drift. That inverts the
+// two-tier rule: the gate exists to constrain the weaker linkage, and here it
+// would punish the stronger one.
+//
+// This is the "mixed fixture" class this codebase keeps rediscovering: a
+// fixture whose identifiers are all deliberately distinct hides every
+// interaction defect. A carry fixture needs a both-linkages case.
+func TestSameQuestionContainment_AReceiptRootedHitWinsOverADriftedParent(t *testing.T) {
+	t.Parallel()
+
+	for _, axis := range containmentAxes() {
+		t.Run(axis.name, func(t *testing.T) {
+			t.Parallel()
+
+			request := validInvestigationRequest()
+			// The receipt names a SAME-QUESTION prior that carries the value.
+			viaReceipt := axis.carriable("result_via_receipt", request.Question)
+			// The parent names a DIFFERENT prior that also carries a value and
+			// answers a different question. Both hold a carriable value, so
+			// the walks cannot be told apart by "one of them found nothing".
+			viaParent := axis.carriable("result_via_parent", driftQuestion)
+
+			store := &staticResultStore{results: map[string]InvestigationResult{
+				viaReceipt.ResultID: viaReceipt, viaParent.ResultID: viaParent,
+			}}
+			request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: viaReceipt.ResultID, ReceiptID: "candr_containment02"}}
+			request.ParentResultID = viaParent.ResultID
+
+			// SEED-SOURCE GUARD: this arm is only about the BOTH case, and a
+			// fixture that silently stopped carrying one of the two linkages
+			// would degenerate into an arm that already exists.
+			if got := carrySeedSource(request, nil); got != CarrySeedBoth {
+				t.Fatalf("carrySeedSource = %q, want %q -- this arm exists to cover the both-linkages case and cannot do so on a request linked only one way", got, CarrySeedBoth)
+			}
+
+			got := axis.resolve(t, buildCarryTestEngine(t, store), request)
+			if got.drift {
+				t.Fatalf("%s: a request carrying a valid receipt was refused for the PARENT's drift -- the gate exists to constrain the weaker linkage, and refusing the stronger one inverts the two-tier rule", axis.name)
+			}
+			if !got.hit {
+				t.Errorf("%s carry outcome = %q, want a hit: the receipt-rooted walk found a same-question carrier and must win outright, without the parent chain being consulted at all", axis.name, got.outcome)
+			}
+		})
+	}
+}
+
 // TestSameQuestionContainment_ComparesTheOriginNotTheHopItArrivedThrough is
 // the arm that pins the DESIGN CLAIM, and it is the only one that separates
 // this shape from a comparison against the parent the caller named.
