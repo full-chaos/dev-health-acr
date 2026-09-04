@@ -475,25 +475,78 @@ func exposeQuota(allocation ItemAllocation, result InvestigationResult) QuotaExp
 	if allocation.Groups == 0 || allocation.ItemsPerGroup <= 0 || result.Cohort == nil {
 		return exposure
 	}
-	attribution := contractsv1.AttributeContextFabricResultItems(result)
-	// Group-attributed items are apportioned across the groups; a
-	// multi_group item is charged to EVERY group it names under the
-	// declared default rule, so it counts once per group here.
-	perGroup := attribution.Group + attribution.MultiGroup
-	if perGroup <= allocation.ItemsPerGroup*allocation.Groups {
-		return exposure
-	}
-	// Evenly-spread excess is the conservative reading: without per-group
-	// identity on each item the exact distribution is unknown, and claiming
-	// a specific group blew its quota would be a precision this measurement
-	// does not have. Reporting the COUNT of groups the excess implies is
-	// what the enforcement layer actually needs.
-	excess := perGroup - (allocation.ItemsPerGroup * allocation.Groups)
-	exposure.OverQuota = (excess + allocation.ItemsPerGroup - 1) / allocation.ItemsPerGroup
-	if exposure.OverQuota > allocation.Groups {
-		exposure.OverQuota = allocation.Groups
+	// MEASURE PER GROUP, under the rule the allocator DECLARED.
+	//
+	// The first version compared `Group + MultiGroup` against the AGGREGATE
+	// capacity `ItemsPerGroup * Groups`. That is `shared_pool` arithmetic,
+	// and the allocator declares `every_group` -- so the measurement
+	// contradicted the rule it was measuring. Eighteen drivers each naming
+	// both of two groups, at a quota of nine, measured 18 <= 18 and reported
+	// ZERO over quota, while under the declared rule each group carried all
+	// eighteen. A false zero, in the direction that matters.
+	//
+	// The fix is to charge each item to the groups it actually NAMES, which
+	// is what `every_group` means, and then compare EACH group against its
+	// own quota. That needs per-group counts, so this walks the result once
+	// rather than reasoning from a total -- the total is exactly the thing
+	// that cannot answer "how many groups are over".
+	usage := perGroupUsage(result)
+	for _, used := range usage {
+		if used > allocation.ItemsPerGroup {
+			exposure.OverQuota++
+		}
 	}
 	return exposure
+}
+
+// perGroupUsage counts, for each group subject in the cohort, how many
+// charged items NAME that group -- charging a multi-group item to every group
+// it names, per ContextFabricMultiGroupChargeEveryGroup.
+//
+// The sum of these counts may EXCEED the item total, and that is correct
+// rather than a bug: `every_group` deliberately double-charges a cross-cutting
+// item so no group's quota can under-count what it is responsible for. That is
+// also why this is kept separate from
+// AttributeContextFabricResultItems, whose totals must sum to Budgeted()
+// exactly -- attribution answers "what is this item", pricing answers "who
+// pays for it", and merging them would break one of the two.
+func perGroupUsage(result InvestigationResult) map[string]int {
+	usage := map[string]int{}
+	if result.Cohort == nil {
+		return usage
+	}
+	groups := map[string]struct{}{}
+	for _, group := range result.Cohort.Groups {
+		key := SubjectMapKey(group.Subject)
+		groups[key] = struct{}{}
+		// Every group starts at zero so a group named by nothing is still
+		// a group with a quota, not an absent one.
+		usage[key] = 0
+	}
+	charge := func(subjects []SubjectRef) {
+		named := map[string]struct{}{}
+		for _, subject := range subjects {
+			key := SubjectMapKey(subject)
+			if _, isGroup := groups[key]; isGroup {
+				named[key] = struct{}{}
+			}
+		}
+		for key := range named {
+			usage[key]++
+		}
+	}
+	for _, driver := range result.Drivers {
+		charge(driver.AffectedSubjects)
+	}
+	for _, findings := range [][]Finding{result.RemainingWork, result.ReadinessGaps, result.Conflicts} {
+		for _, finding := range findings {
+			charge(finding.Subjects)
+		}
+	}
+	for _, claim := range result.ClaimedFacts {
+		charge([]SubjectRef{claim.Subject})
+	}
+	return usage
 }
 
 // recordCandidateNarrowing emits the decision-basis event for an attempt
@@ -531,6 +584,13 @@ func (e *Engine) recordCandidateNarrowing(
 		Overrun: overrun,
 	})
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, basis)
+	// READ the quota the allocator published. Writing QuotaExposure onto the
+	// attempt and never reading it here is exactly what made this seam inert
+	// in its first version: three write sites, zero readers, so S7c had
+	// nothing to act on and no line could diagnose a breach.
+	event.QuotaItemsPerGroup = attempt.Quota.ItemsPerGroup
+	event.QuotaGroups = attempt.Quota.Groups
+	event.QuotaOverQuota = attempt.Quota.OverQuota
 	event.MeasuredItems = attempt.Measurement.Items.Budgeted()
 	event.MeasuredBytes = attempt.Measurement.Bytes
 	event.PredictedItems = PredictedItemsForPlan(*plan, after)

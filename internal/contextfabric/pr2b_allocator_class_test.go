@@ -74,8 +74,23 @@ func TestNarrationCannotSpendPastThePlanItemBudget(t *testing.T) {
 	judgments, minted, event := narrateCohortDriverJudgments(
 		ranked, make([]DriverJudgment, synthesisDrivers), synthesisClaims, citations, allocation)
 
-	if event.Outcome != CohortDriverNarrationEmitted {
-		t.Fatalf("fixture drift: event.Outcome = %q, want narration to actually emit", event.Outcome)
+	// NOT a "must emit" precondition any more, and the correction is worth
+	// recording rather than quietly deleting. This originally asserted that
+	// narration emits here -- true of the DEFECTIVE behaviour, which narrated
+	// 16 members at this fixture. Once narration was carved OUT of the pool
+	// rather than added on top (round-1 P1a), the arithmetic at this ceiling
+	// is: 16 members spend 16 of 30, reserved takes 2, leaving 12 for global
+	// AND narration AND groups; narration's third of that is 4, and one
+	// narrated member costs 6 (three drivers plus a minted claim each). So
+	// narration correctly DECLINES.
+	//
+	// Declining is the right answer here, not a regression -- and keeping the
+	// "must emit" assertion would have forced the overrun back in to satisfy
+	// it. What must hold is the BUDGET, whether narration emits or not.
+	if event.Outcome != CohortDriverNarrationBudgetExhausted {
+		t.Fatalf("event.Outcome = %q, want %q: at a 30-item ceiling already spending 16 on members, "+
+			"narration cannot afford a single member and must say so",
+			event.Outcome, CohortDriverNarrationBudgetExhausted)
 	}
 
 	// Narration's own charge against the item budget: every narrated driver

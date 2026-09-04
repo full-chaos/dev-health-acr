@@ -67,6 +67,18 @@ type PlanNarrowingEvent struct {
 	// member-narrowing either mislabel its order or falsely increment this
 	// counter. See PlanNarrowingEventFrom's two separate parameters.
 	Groups bool
+	// QuotaItemsPerGroup / QuotaGroups / QuotaOverQuota are the ONE item
+	// allocator's published per-group quota and how many groups exceeded it
+	// in the document that will actually be served (S5, quota side).
+	//
+	// They are carried HERE, on the narrowing event, because this is the
+	// moment enforcement acts: a refusal or a narrowing that cannot say
+	// whether a per-group quota was blown is not diagnosable from the run's
+	// own artifacts, which is the bar. Zero groups means no quota was in
+	// force -- distinct from a quota that every group fitted inside.
+	QuotaItemsPerGroup int
+	QuotaGroups        int
+	QuotaOverQuota     int
 	// Overrun names which budget axis forced the step, empty when nothing
 	// was measured (stage 1) or nothing was over (a recorded fit).
 	Overrun contractsv1.ContextFabricBudgetOverrun

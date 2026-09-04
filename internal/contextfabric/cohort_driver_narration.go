@@ -153,11 +153,20 @@ func narrateCohortDriverJudgments(cohort *Cohort, synthesisDrivers []DriverJudgm
 		contractsv1.ContextFabricDriversMaxCount, len(synthesisDrivers),
 		contractsv1.ContextFabricClaimedFactsMaxCount, synthesisClaimedFactCount,
 	)
+	// NAME THE BOUND THAT ACTUALLY BOUND, not merely the one that existed.
+	//
+	// The first version set plan_budget whenever MaxItems > 0, BEFORE
+	// checking whether the allocator was tighter than the caps. At
+	// MaxItems=300 with 16 members the allocator permits 23 narrated
+	// members while the caps permit 16 -- the CAPS bind, and the line said
+	// plan_budget. That makes the field unable to answer the one question
+	// it exists for, which is worse than not having it: a reader would
+	// trust it.
 	allocator := CohortDriverNarrationAllocatorStaticCaps
 	if allocation.MaxItems > 0 {
-		allocator = CohortDriverNarrationAllocatorPlanBudget
 		if allocated := allocation.NarrationDriverAllowance(driversPerMember); allocated < membersToNarrate {
 			membersToNarrate = allocated
+			allocator = CohortDriverNarrationAllocatorPlanBudget
 		}
 	}
 	if membersToNarrate == 0 {

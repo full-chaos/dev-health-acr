@@ -943,6 +943,12 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"outcome_items_served", event.OutcomeItemsServed,
 		"outcome_items_declared", event.OutcomeItemsDeclared,
 		"outcome_completeness_state", string(event.OutcomeCompletenessState),
+		// quota_* (S5, quota side): the published per-group quota and how
+		// many groups exceeded it. Counts and a closed shape only -- no
+		// group name, no subject id.
+		"quota_items_per_group", event.QuotaItemsPerGroup,
+		"quota_groups", event.QuotaGroups,
+		"quota_over_quota", event.QuotaOverQuota,
 		"outcome_reduction_declined", string(event.OutcomeReductionDeclined),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)

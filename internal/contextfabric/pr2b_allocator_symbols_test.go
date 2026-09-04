@@ -76,9 +76,15 @@ func TestRemainderIsPublishedAndDeterministic(t *testing.T) {
 			t.Fatalf("AllocateItems is not deterministic: %+v then %+v", first, again)
 		}
 	}
-	pool := first.Global + (first.Groups * first.ItemsPerGroup) + first.Remainder
+	// Narration is a CLAIMANT on the pool, not a second helping of it
+	// (round-1 P1a), so it belongs on the left-hand side of this identity.
+	// The earlier form summed only global+groups+remainder and expected the
+	// whole pool — which was true only while narration was being allocated
+	// on top, i.e. only while the double-reservation defect existed. Adding
+	// narration here is restoring the identity, not relaxing it.
+	pool := first.Global + (first.Groups * first.ItemsPerGroup) + first.Remainder + first.NarrationBudget
 	if want := first.MaxItems - first.Reserved - 7; pool != want {
-		t.Fatalf("global+groups+remainder = %d, want the whole spendable pool %d: an item went missing in the split", pool, want)
+		t.Fatalf("global+groups+remainder+narration = %d, want the whole spendable pool %d: an item went missing in the split", pool, want)
 	}
 	if first.Remainder < 0 || first.Remainder >= first.Groups {
 		t.Fatalf("Remainder = %d with %d groups: a remainder at or above the group count means the split under-allocated",

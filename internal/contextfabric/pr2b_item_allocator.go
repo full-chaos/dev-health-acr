@@ -85,7 +85,11 @@ const allocatorReservedDeterministic = 2
 //
 // The invariant it maintains, checked by TestTheAllocatorRespectsTheInvariant:
 //
-//	Reserved + Global + (Groups * ItemsPerGroup) + Remainder + members <= MaxItems
+//	Reserved + Global + (Groups * ItemsPerGroup) + Remainder
+//	         + NarrationBudget + members  <=  MaxItems
+//
+// NarrationBudget is INSIDE the invariant, and its absence from the first
+// version is precisely what let the allocator permit an overrun.
 //
 // An unbounded budget (MaxItems <= 0) yields a zero allocation, which every
 // consumer reads as "no quota in force" -- never as "a quota of zero".
@@ -120,16 +124,31 @@ func AllocateItems(plan AnswerPlan, groups, members int) ItemAllocation {
 		available = 0
 	}
 
+	// NARRATION IS CARVED OUT OF THE POOL FIRST, NOT ADDED ON TOP.
+	//
+	// The first version of this function assigned the WHOLE pool to
+	// Global + per-group + remainder and THEN handed narration half of the
+	// per-group pool -- so every spender together could claim more than the
+	// ceiling while each individual number looked compliant. At MaxItems=30
+	// with two groups and one member that reached 39 against 30.
+	//
+	// That is CHAOS-5008's own shape reintroduced by the repair for it: a
+	// spender the others cannot see. It is fixed by making narration a
+	// FIRST-CLASS CLAIMANT on the pool rather than a second helping of it,
+	// and by putting narration INSIDE the published invariant
+	// (TestTheAllocatorDoesNotDoubleReserveNarration sums every spender),
+	// so the same omission cannot recur invisibly.
+	allocation.NarrationBudget = narrationItemBudget(available)
+	available -= allocation.NarrationBudget
+
 	if groups == 0 {
 		allocation.Global = available
-		allocation.NarrationBudget = narrationItemBudget(available)
 		return allocation
 	}
 
-	// Global first, then the remainder splits across groups. A grouped
-	// answer still carries candidates and unattributed findings, and a
-	// quota that forgot them would be apportioning items that are already
-	// spent.
+	// Global first, then the rest splits across groups. A grouped answer
+	// still carries candidates and unattributed findings, and a quota that
+	// forgot them would be apportioning items that are already spent.
 	allocation.Global = available / (groups + 1)
 	perGroupPool := available - allocation.Global
 	allocation.ItemsPerGroup = perGroupPool / groups
@@ -137,23 +156,23 @@ func AllocateItems(plan AnswerPlan, groups, members int) ItemAllocation {
 	// group would make the quota depend on group ORDER, and group order is
 	// not a property this system promises to be stable.
 	allocation.Remainder = perGroupPool - (allocation.ItemsPerGroup * groups)
-	allocation.NarrationBudget = narrationItemBudget(perGroupPool)
 	return allocation
 }
 
-// narrationItemBudget is the share of the spendable allowance narration may
-// charge, in ITEMS.
+// narrationItemBudget is narration's OWN share of the spendable allowance, in
+// ITEMS, carved out before anything else is apportioned.
 //
-// Half, and the halving is the point rather than the number: narration and
-// model synthesis are two spenders on one pool, so neither may be handed all
-// of it. Before this, narration was handed 50 drivers and 250 claims -- the
-// static contract caps -- which it could satisfy while spending 68 items
-// against a 30-item ceiling.
+// A THIRD of the pool, not a half. Narration is one claimant among three --
+// itself, the global pool, and the groups -- and handing it half left too
+// little for the axis a grouped answer is actually about. The fraction is a
+// starting value the rig is expected to move, like planSynthesisHeadroom's own
+// table; what is NOT negotiable is that it comes OUT of the pool rather than
+// being added to an already-full one.
 func narrationItemBudget(available int) int {
 	if available <= 0 {
 		return 0
 	}
-	return available / 2
+	return available / 3
 }
 
 // NarrationDriverAllowance converts the allocator's ITEM budget into the two
