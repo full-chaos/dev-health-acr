@@ -2,6 +2,8 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -244,6 +246,43 @@ func carryReferencedResultIDs(request InvestigationRequest, validatedSubjectRece
 	add(request.PriorAnchorReceipts)
 	add(request.PriorHandleReceipts)
 	return ids
+}
+
+// ValidateStoredParentResultID is the ONE Go-side statement of what a stored
+// ancestry parent may be, so the two InvestigationResultStore adapters cannot
+// disagree with each other or with the database.
+//
+// IT MIRRORS THE MIGRATION'S OWN CHECK CONSTRAINTS, deliberately and by name:
+//
+//	ck_..._parent_result_id_len       char_length BETWEEN 8 AND 256
+//	ck_..._parent_not_self            parent_result_id <> result_id
+//
+// WHY IT EXISTS. PostgreSQL enforced both; the in-memory store enforced
+// neither, so a self-parent or an out-of-bounds id round-tripped in tests and
+// dev and was rejected only in production. A parity suite that never fed the
+// stores an invalid parent could not see the difference -- measured: memory
+// accepted all three shapes Postgres rejects, with a valid-parent control
+// proving the rejections were attributable to the parent and not to schema
+// validation.
+//
+// A self-parent is refused rather than tolerated because a row that cannot be
+// meaningful should not be storable: the carry walk's visited-set already
+// terminates the loop, so this is about not persisting nonsense, not about
+// walk safety.
+//
+// The empty string is VALID and means "no parent" -- most turns have none.
+func ValidateStoredParentResultID(resultID, parentResultID string) error {
+	parent := strings.TrimSpace(parentResultID)
+	if parent == "" {
+		return nil
+	}
+	if len(parent) < 8 || len(parent) > 256 {
+		return fmt.Errorf("parent_result_id must be 8..256 characters, got %d", len(parent))
+	}
+	if parent == strings.TrimSpace(resultID) {
+		return errors.New("parent_result_id must not name the result itself")
+	}
+	return nil
 }
 
 // carryParentSeed is the caller-supplied ancestry root, trimmed: the ONE id

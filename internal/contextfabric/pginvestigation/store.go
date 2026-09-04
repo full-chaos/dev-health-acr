@@ -123,6 +123,15 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	// invalid result before it is ever persisted -- an immutable row that
 	// fails the same contract the public API enforces on every returned
 	// result can never be corrected later.
+	// The same rule the migration's CHECK constraints enforce, applied in Go
+	// too. The database is still the authority -- this is not a substitute for
+	// it -- but a Go-side check turns a constraint violation into a named,
+	// testable error instead of a driver error surfaced from the insert, and
+	// it is what keeps this adapter's behaviour identical to the in-memory
+	// one's (which had no equivalent at all until now).
+	if err := contextfabric.ValidateStoredParentResultID(resultID, parentResultID); err != nil {
+		return fmt.Errorf("pginvestigation: %w", err)
+	}
 	if err := contextfabric.ValidateResult(result); err != nil {
 		return fmt.Errorf("pginvestigation: invalid investigation result: %w", err)
 	}

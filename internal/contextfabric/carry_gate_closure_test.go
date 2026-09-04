@@ -213,6 +213,13 @@ func TestCarryGateClosure_CatchesEveryConstructionShape(t *testing.T) {
 			src: `func ungated() windowCarryResult { return windowCarryResult{nil, "", WindowCarryHit, 0, false} }`},
 		{name: "a MISS literal is not a hit", wantSites: 0,
 			src: `func ungated() windowCarryResult { return windowCarryResult{Outcome: "miss_no_reference"} }`},
+		// --- codex round 2: three shapes measured MISSED before the fix ---
+		{name: "CHAINED type alias", wantSites: 1,
+			src: "type A = windowCarryResult\ntype B = A\n\nfunc ungated() windowCarryResult { return B{Outcome: WindowCarryHit} }"},
+		{name: "ALIASED hit constant", wantSites: 1,
+			src: "const H = WindowCarryHit\n\nfunc ungated() windowCarryResult { return windowCarryResult{Outcome: H} }"},
+		{name: "a MISS constant behind an alias is still not a hit", wantSites: 0,
+			src: "const M = \"miss_no_reference\"\n\nfunc ungated() windowCarryResult { return windowCarryResult{Outcome: M} }"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -229,6 +236,53 @@ func TestCarryGateClosure_CatchesEveryConstructionShape(t *testing.T) {
 				t.Errorf("refused %d unkeyed literal(s), want %d (%v)", len(unkeyed), tc.wantUnkeyed, unkeyed)
 			}
 		})
+	}
+}
+
+// TestCarryGateClosure_MethodValueCountsAsACaller pins the third shape codex
+// round 2 measured: a helper that reaches a walk through a METHOD VALUE
+// (`f := e.walkCarriedWindow`) never appears as a call, so the call graph
+// still reported the producer as the walk's SOLE caller while an ungated path
+// to a hit existed.
+//
+// Sole-callership is the entire load-bearing claim of the closure proof -- it
+// is what licenses a hit being constructed outside the gated producer. A
+// sole-caller answer that can be routed around by one assignment is not a
+// proof of anything.
+func TestCarryGateClosure_MethodValueCountsAsACaller(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	source := `package sample
+
+type windowCarryResult struct{ Outcome string }
+
+const WindowCarryHit = "hit"
+
+type Engine struct{}
+
+func (e *Engine) resolveCarriedWindow() windowCarryResult { return e.walkCarriedWindow() }
+
+func (e *Engine) walkCarriedWindow() windowCarryResult { return windowCarryResult{Outcome: WindowCarryHit} }
+
+// The planted defect: a SECOND, ungated caller that never names the walk at a
+// call site.
+func (e *Engine) backDoor() windowCarryResult {
+	f := e.walkCarriedWindow
+	return f()
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "s.go"), []byte(source), 0o600); err != nil {
+		t.Fatalf("writing the fixture: %v", err)
+	}
+
+	pkg := parsePackageForClosure(t, dir)
+	callers := pkg.callersOf("walkCarriedWindow")
+	if len(callers) != 2 {
+		t.Fatalf("callers of walkCarriedWindow = %v, want both Engine.resolveCarriedWindow and Engine.backDoor: a method value that the graph cannot see is an ungated path the closure proof would call gated", callers)
+	}
+	if sole := pkg.soleCallerOf("walkCarriedWindow"); sole != "" {
+		t.Errorf("soleCallerOf = %q, want \"\" (no sole caller): with two callers the walk is reachable from an ungated helper, and claiming a sole caller is what would let its hit pass", sole)
 	}
 }
 
@@ -256,6 +310,9 @@ type closurePackage struct {
 	// through `type wAlias = windowCarryResult` is still attributed to the
 	// real result type.
 	aliases map[string]string
+	// constAliases maps a constant alias to the constant it names, so
+	// `const H = WindowCarryHit` cannot hide a hit from the name comparison.
+	constAliases map[string]string
 	// calls maps a callee BARE name to the set of QUALIFIED enclosing function
 	// names that call it. Bare on the callee side because that is all a
 	// selector expression carries without type information.
@@ -307,11 +364,12 @@ func parsePackageForClosure(t *testing.T, dir string) *closurePackage {
 	t.Helper()
 	fset := token.NewFileSet()
 	pkg := &closurePackage{
-		fset:      fset,
-		functions: map[string]*ast.FuncDecl{},
-		bare:      map[string][]string{},
-		aliases:   map[string]string{},
-		calls:     map[string]map[string]bool{},
+		fset:         fset,
+		functions:    map[string]*ast.FuncDecl{},
+		bare:         map[string][]string{},
+		aliases:      map[string]string{},
+		constAliases: map[string]string{},
+		calls:        map[string]map[string]bool{},
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -341,6 +399,25 @@ func parsePackageForClosure(t *testing.T, dir string) *closurePackage {
 					}
 					if ident, ok := ts.Type.(*ast.Ident); ok {
 						pkg.aliases[ts.Name.Name] = ident.Name
+					}
+				}
+				continue
+			}
+			// CONSTANT aliases (codex r2): `const H = WindowCarryHit` makes
+			// `{Outcome: H}` a hit the name comparison could not see.
+			if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.CONST {
+				for _, spec := range gen.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					for i, nm := range vs.Names {
+						if i >= len(vs.Values) {
+							continue
+						}
+						if ident, ok := vs.Values[i].(*ast.Ident); ok {
+							pkg.constAliases[nm.Name] = ident.Name
+						}
 					}
 				}
 				continue
@@ -376,25 +453,35 @@ func (p *closurePackage) recordCalls(qualified string, fn *ast.FuncDecl) {
 	if fn.Body == nil {
 		return
 	}
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		var callee string
-		switch target := call.Fun.(type) {
-		case *ast.Ident:
-			callee = target.Name
-		case *ast.SelectorExpr:
-			callee = target.Sel.Name
-		}
+	record := func(callee string) {
 		if callee == "" {
-			return true
+			return
 		}
 		if p.calls[callee] == nil {
 			p.calls[callee] = map[string]bool{}
 		}
 		p.calls[callee][qualified] = true
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.CallExpr:
+			switch target := node.Fun.(type) {
+			case *ast.Ident:
+				record(target.Name)
+			case *ast.SelectorExpr:
+				record(target.Sel.Name)
+			}
+		case *ast.SelectorExpr:
+			// A METHOD VALUE is a caller too (codex r2). `f := e.walkCarriedWindow`
+			// reaches the walk without ever appearing as a call, so the graph
+			// still named the producer its SOLE caller while an ungated path
+			// existed -- measured. Recording the reference is what makes
+			// sole-callership mean what the closure proof relies on it meaning.
+			record(node.Sel.Name)
+		case *ast.Ident:
+			// The bare-function equivalent of the above.
+			record(node.Name)
+		}
 		return true
 	})
 }
@@ -510,7 +597,7 @@ func (p *closurePackage) hitConstructionSitesAndUnkeyed(resultType, hitConstant 
 					continue
 				}
 				value, ok := kv.Value.(*ast.Ident)
-				if !ok || value.Name != hitConstant {
+				if !ok || p.resolveConstAlias(value.Name) != hitConstant {
 					continue
 				}
 				pos := p.fset.Position(lit.Pos())
@@ -528,11 +615,42 @@ func (p *closurePackage) hitConstructionSitesAndUnkeyed(resultType, hitConstant 
 	return sites, unkeyed
 }
 
-// resolveAlias follows a type alias to the type it names, one hop, which is
-// all Go permits in a single declaration and all this walk needs.
+// resolveAlias follows a type alias to the type it names, TRANSITIVELY.
+//
+// One hop was not enough (codex r2): `type A = windowCarryResult; type B = A`
+// is legal, and `B{Outcome: WindowCarryHit}` resolved to "A" rather than to
+// the result type, so the hit was invisible. Measured before the fix.
+//
+// The chain is bounded and cycle-guarded. A cycle is not legal Go, so
+// reaching the bound means the input is malformed rather than deep; the walk
+// returns what it has instead of looping, and the caller's own salted
+// positive is what catches a walk that has stopped resolving anything.
 func (p *closurePackage) resolveAlias(name string) string {
-	if target, ok := p.aliases[name]; ok {
-		return target
+	seen := map[string]bool{}
+	for i := 0; i < 16; i++ {
+		target, ok := p.aliases[name]
+		if !ok || seen[name] {
+			return name
+		}
+		seen[name] = true
+		name = target
+	}
+	return name
+}
+
+// resolveConstAlias follows a constant alias to the constant it names, the
+// same way and for the same reason: `const H = WindowCarryHit` made
+// `{Outcome: H}` invisible, because the walk compared the identifier's NAME to
+// the hit constant's.
+func (p *closurePackage) resolveConstAlias(name string) string {
+	seen := map[string]bool{}
+	for i := 0; i < 16; i++ {
+		target, ok := p.constAliases[name]
+		if !ok || seen[name] {
+			return name
+		}
+		seen[name] = true
+		name = target
 	}
 	return name
 }

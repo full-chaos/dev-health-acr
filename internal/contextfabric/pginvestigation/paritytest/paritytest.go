@@ -142,6 +142,13 @@ func Cases() []Case {
 	divergent.Question = "why did the deploy fail? (mutated)"
 	withParent := result("result-id-ancestry", "which repositories does the ops team own?")
 	firstTurn := result("result-id-first-turn", "how is the migration going?")
+	// Fixtures for the parent-validation cases below. Each needs its OWN
+	// result id: a self-parent case must be able to name its own id, and the
+	// bounds cases must not collide with rows another case saved.
+	selfParent := result("result-id-self-parent", "does this result parent itself?")
+	shortParent := result("result-id-short-parent", "is a three-character parent storable?")
+	longParent := result("result-id-long-parent", "is an over-long parent storable?")
+	boundParent := result("result-id-bound-parent", "is a parent at the lower bound storable?")
 
 	// M1 (Codex adversarial review, CHAOS-3755): a result_id collision
 	// across two DIFFERENT organizations must reject the second Save
@@ -223,6 +230,48 @@ func Cases() []Case {
 				{Principal: orgA, Result: withParent, ParentResultID: "result-ancestry-parent"},
 			},
 			Get: GetStep{Principal: orgA, ResultID: withParent.ResultID, Want: &withParent, WantParentResultID: ptr("result-ancestry-parent")},
+		},
+		{
+			// BOTH BACKENDS REFUSE A PARENT THE DATABASE'S CHECK CONSTRAINTS
+			// REFUSE, and this case exists because only one of them did.
+			// PostgreSQL rejected a self-parent and an out-of-bounds id via
+			// ck_..._parent_not_self and ck_..._parent_result_id_len; the
+			// in-memory store accepted all three shapes, so an id that failed
+			// only in production round-tripped cleanly in tests and dev.
+			//
+			// The parity suite could not see it because every prior case fed
+			// a VALID parent -- a suite that never supplies an invalid input
+			// cannot detect that one backend fails to reject it. Same shape as
+			// a gate tier with no positive fixture.
+			Name: "a self-parent is refused by both backends",
+			Save: []SaveStep{
+				{Principal: orgA, Result: selfParent, ParentResultID: selfParent.ResultID, WantErr: true},
+			},
+			Get: GetStep{Principal: orgA, ResultID: selfParent.ResultID, WantNotFound: true},
+		},
+		{
+			Name: "a parent id shorter than the bound is refused by both backends",
+			Save: []SaveStep{
+				{Principal: orgA, Result: shortParent, ParentResultID: "abc", WantErr: true},
+			},
+			Get: GetStep{Principal: orgA, ResultID: shortParent.ResultID, WantNotFound: true},
+		},
+		{
+			Name: "a parent id longer than the bound is refused by both backends",
+			Save: []SaveStep{
+				{Principal: orgA, Result: longParent, ParentResultID: strings.Repeat("x", 257), WantErr: true},
+			},
+			Get: GetStep{Principal: orgA, ResultID: longParent.ResultID, WantNotFound: true},
+		},
+		{
+			// CONTROL for the three above: a parent at each BOUND is accepted.
+			// Without it, a backend that refused every parent outright would
+			// pass all three refusal cases while breaking the mechanism.
+			Name: "a parent id at the bounds is accepted by both backends",
+			Save: []SaveStep{
+				{Principal: orgA, Result: boundParent, ParentResultID: strings.Repeat("y", 8)},
+			},
+			Get: GetStep{Principal: orgA, ResultID: boundParent.ResultID, Want: &boundParent, WantParentResultID: ptr(strings.Repeat("y", 8))},
 		},
 		{
 			// The first turn of a conversation. Empty must round-trip as

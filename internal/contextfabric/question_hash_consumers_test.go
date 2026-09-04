@@ -157,7 +157,58 @@ func moduleRoot(t *testing.T) string {
 	return ""
 }
 
-// questionHashCallSites finds every call to QuestionHash, CanonicalizeQuestion
+// walkForIdentityRefs reports every reference to a FUNCTION named by a bare
+// in-package identifier or by a package-qualified selector, and deliberately
+// does NOT report a struct field that happens to share the name.
+//
+// The two shapes it must tell apart:
+//
+//	QuestionHash(q) / hash := QuestionHash    the function  -> reported
+//	contextfabric.QuestionHash(q)             the function  -> reported
+//	event.QuestionHash                        a field read  -> not reported
+//	StructureSelectionEvent{QuestionHash: h}  a field name  -> not reported
+func walkForIdentityRefs(root ast.Node, imports map[string]bool, report func(ast.Node, string)) {
+	var walk func(n ast.Node)
+	walk = func(n ast.Node) {
+		if n == nil {
+			return
+		}
+		switch node := n.(type) {
+		case *ast.SelectorExpr:
+			// Only a PACKAGE qualifier names a function here. Anything else is
+			// a field read on a value. Either way, do not descend: the Sel is
+			// not an independent identifier reference.
+			if pkg, ok := node.X.(*ast.Ident); ok && imports[pkg.Name] {
+				report(node, node.Sel.Name)
+				return
+			}
+			walk(node.X)
+			return
+		case *ast.KeyValueExpr:
+			// The KEY of a composite literal is a field name, never a
+			// reference to a function. Descend into the VALUE only.
+			walk(node.Value)
+			return
+		case *ast.Ident:
+			report(node, node.Name)
+			return
+		}
+		ast.Inspect(n, func(child ast.Node) bool {
+			if child == nil || child == n {
+				return true
+			}
+			switch child.(type) {
+			case *ast.SelectorExpr, *ast.KeyValueExpr, *ast.Ident:
+				walk(child)
+				return false
+			}
+			return true
+		})
+	}
+	walk(root)
+}
+
+// questionHashCallSites finds every reference to QuestionHash, CanonicalizeQuestion
 // or IdentitylessQuestionHash in non-test Go files under root, qualified or
 // not. The predicate is included deliberately -- see the callee check below.
 func questionHashCallSites(t *testing.T, root string) []questionHashSite {
@@ -182,40 +233,54 @@ func questionHashCallSites(t *testing.T, root string) []questionHashSite {
 		if perr != nil {
 			return nil // a file this walk cannot parse is not a silent pass; see the count guard
 		}
+		// The file's own import names, so a package-qualified reference
+		// (`contextfabric.QuestionHash`) can be told apart from a STRUCT FIELD
+		// read (`event.QuestionHash`). Both are SelectorExprs; only the first
+		// touches the function. Without this the walk reported every selection
+		// event's QuestionHash FIELD as a consumer -- over-reporting into a
+		// different thing entirely, which is noise a reader learns to ignore.
+		imports := map[string]bool{}
+		for _, spec := range file.Imports {
+			if spec.Name != nil {
+				imports[spec.Name.Name] = true
+				continue
+			}
+			path := strings.Trim(spec.Path.Value, `"`)
+			if i := strings.LastIndex(path, "/"); i >= 0 {
+				path = path[i+1:]
+			}
+			imports[path] = true
+		}
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
 				continue
 			}
 			name := qualifiedFuncName(fn)
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
+			// An EXPLICIT walk, not ast.Inspect's blanket descent.
+			//
+			// ast.Inspect visits the Sel of every SelectorExpr and the Key of
+			// every KeyValueExpr as bare identifiers in their own right, so a
+			// field read (`entry.QuestionHash`) and a composite-literal key
+			// (`QuestionHash: h`) both surface as an Ident named QuestionHash
+			// and were reported as consumers of the FUNCTION. They are not:
+			// they are uses of a same-named struct field.
+			//
+			// The walk below decides at each node and refuses to descend into
+			// the parts that would produce those false positives, so what it
+			// reports is references to the function itself: bare in-package
+			// identifiers (a call or a function VALUE) and package-qualified
+			// selectors.
+			walkForIdentityRefs(fn.Body, imports, func(node ast.Node, referenced string) {
+				if referenced != "QuestionHash" && referenced != "CanonicalizeQuestion" && referenced != "IdentitylessQuestionHash" {
+					return
 				}
-				var callee string
-				switch target := call.Fun.(type) {
-				case *ast.Ident:
-					callee = target.Name
-				case *ast.SelectorExpr:
-					callee = target.Sel.Name
-				}
-				// IdentitylessQuestionHash counts as a call site too, and
-				// leaving it out was an error this test caught in its own
-				// registry: a function that calls only the PREDICATE is a
-				// question-identity consumer -- in fact it is the most
-				// important kind, since it is a guard -- and a population that
-				// excluded guards would drop a site the moment it was fixed.
-				if callee != "QuestionHash" && callee != "CanonicalizeQuestion" && callee != "IdentitylessQuestionHash" {
-					return true
-				}
-				pos := fset.Position(call.Pos())
+				pos := fset.Position(node.Pos())
 				rel, rerr := filepath.Rel(root, pos.Filename)
 				if rerr != nil {
 					rel = pos.Filename
 				}
 				sites = append(sites, questionHashSite{file: rel, line: pos.Line, enclosing: name})
-				return true
 			})
 		}
 		return nil
@@ -224,4 +289,62 @@ func questionHashCallSites(t *testing.T, root string) []questionHashSite {
 		t.Fatalf("walking %s: %v", root, err)
 	}
 	return sites
+}
+
+// TestQuestionHashConsumers_WalkTellsFunctionsFromFields is the NEGATIVE
+// CONTROL for the walk, and every row is one the walk got WRONG at some point
+// while being extended.
+//
+// The check above reports success by finding nothing unregistered, which is
+// indistinguishable from a walk that finds nothing at all. These rows pin both
+// directions: the shapes it must catch, and the two same-named decoys it must
+// not — a struct field read and a composite-literal key. Reporting those was
+// not merely noisy; it was the walk claiming a consumer where there was none,
+// which teaches a reader to ignore its output.
+func TestQuestionHashConsumers_WalkTellsFunctionsFromFields(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		src     string
+		wantHit bool
+	}{
+		{name: "direct call", wantHit: true,
+			src: `func consume(q string) string { return QuestionHash(q) }`},
+		{name: "FUNCTION VALUE (codex r2: invisible to a call-only walk)", wantHit: true,
+			src: `func consume(q string) string { hash := QuestionHash; return hash(q) }`},
+		{name: "package-qualified call", wantHit: true,
+			src: `func consume(q string) string { return contextfabric.QuestionHash(q) }`},
+		{name: "package-qualified function value", wantHit: true,
+			src: `func consume(q string) string { h := contextfabric.QuestionHash; return h(q) }`},
+		{name: "the guard predicate alone", wantHit: true,
+			src: `func consume(h string) bool { return IdentitylessQuestionHash(h) }`},
+		{name: "DECOY: a struct field read", wantHit: false,
+			src: `type ev struct{ QuestionHash string }` + "\n" + `func consume(e ev) string { return e.QuestionHash }`},
+		{name: "DECOY: a composite-literal field key", wantHit: false,
+			src: `type ev struct{ QuestionHash string }` + "\n" + `func consume(h string) ev { return ev{QuestionHash: h} }`},
+		{name: "DECOY: an indexed field read", wantHit: false,
+			src: `type ev struct{ QuestionHash string }` + "\n" + `func consume(all []ev) string { return all[0].QuestionHash }`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			header := "package sample\n\nimport \"github.com/full-chaos/dev-health-acr/internal/contextfabric\"\n\nvar _ = contextfabric.InvestigationRequest{}\n\nfunc QuestionHash(q string) string { return q }\n\nfunc IdentitylessQuestionHash(h string) bool { return h == \"\" }\n\n"
+			if err := os.WriteFile(filepath.Join(dir, "s.go"), []byte(header+tc.src+"\n"), 0o600); err != nil {
+				t.Fatalf("writing the fixture: %v", err)
+			}
+			var hits []string
+			for _, site := range questionHashCallSites(t, dir) {
+				if site.enclosing == "consume" {
+					hits = append(hits, site.String())
+				}
+			}
+			if tc.wantHit && len(hits) == 0 {
+				t.Errorf("the walk MISSED %s: a consumer using this shape would need no registry entry, which is how the rule gets bypassed", tc.name)
+			}
+			if !tc.wantHit && len(hits) > 0 {
+				t.Errorf("the walk REPORTED %s (%v): it is a same-named struct field, not the function, and claiming a consumer where there is none teaches readers to ignore this check", tc.name, hits)
+			}
+		})
+	}
 }

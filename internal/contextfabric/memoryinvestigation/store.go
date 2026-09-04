@@ -106,6 +106,13 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	// invalid result before it is ever persisted -- an immutable row that
 	// fails the same contract the public API enforces on every returned
 	// result can never be corrected later.
+	// The SAME rule PostgreSQL enforces via CHECK constraints, applied here so
+	// the two adapters cannot disagree. This store used to accept a
+	// self-parent and any length, so an id that failed only in production
+	// round-tripped cleanly in tests and dev.
+	if err := contextfabric.ValidateStoredParentResultID(resultID, parentResultID); err != nil {
+		return fmt.Errorf("memoryinvestigation: %w", err)
+	}
 	if err := contextfabric.ValidateResult(result); err != nil {
 		return fmt.Errorf("memoryinvestigation: invalid investigation result: %w", err)
 	}
