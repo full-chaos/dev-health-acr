@@ -1875,9 +1875,10 @@ and as many minted claims — 90 items on top of synthesis' four, against a
 ceiling of 30**. (A live cohort narrates only members carrying a ranked driver,
 so a given run charges less than the authorisation; the authorisation is what
 the caps permit and what the item budget never sees.) It is a second spender on
-one ceiling and it is the largest single source of the overrun. It is not fixed
-here, and the split above is what makes it VISIBLE from a run's own artifacts
-for the first time.
+one ceiling and it is the largest single source of the overrun. **It is not
+fixed here and it is tracked separately**; the split above is what makes it
+visible from a run's own artifacts for the first time, which is the whole
+reason this half was worth shipping before the half that would bound it.
 
 **And one arithmetic fact that reframes the fix for whoever takes it on.**
 `planBudget` sets `MaxMembers = MaxItems − SynthesisHeadroom`, and the grouped

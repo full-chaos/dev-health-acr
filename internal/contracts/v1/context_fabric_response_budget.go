@@ -197,7 +197,8 @@ func (m ContextFabricResponseMeasurement) Fits(budget ContextFabricResponseBudge
 }
 
 // ContextFabricItemBucket is the CLOSED vocabulary naming WHAT a charged item
-// is about, when a cohort has a GROUP axis (CHAOS-4636 / S5, observing half).
+// is about, when a cohort has a GROUP axis (the answer-budget seam, observing
+// half).
 //
 // WHY THE SPLIT HAS TO EXIST AT ALL. ContextFabricResultItemCounts above is a
 // per-COLLECTION breakdown -- drivers, claims, members -- and every one of
