@@ -51,6 +51,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 const planningAuthorityParityArtifact = "testdata/planning_authority_parity.txt"
@@ -926,6 +927,179 @@ func TestEverySinkAuthorityDeclaresItsArgumentGroup(t *testing.T) {
 			t.Errorf("sink argument groups are not contiguous from 1: group %d is empty while %d groups are declared -- a group number is an argument POSITION, not a label", position, len(groups))
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// THE BRANCHES THE CORPUS CANNOT REACH
+//
+// Round 1 found a SURVIVING MUTATION: `classifyLoss`'s zero-rows branch
+// could be changed from the conservative cause to a SUPERSEDING one -- which
+// would rule a total loss "superior" and authorize retiring an authority --
+// and the whole package suite stayed green, because no frame in the corpus
+// derives zero rows. The branch was reasoned about in a comment and pinned by
+// nothing. A tier with no fixture that lands in it is indistinguishable from
+// an enforcement check that always answers no.
+//
+// The fix is the CLASS, not the instance. Every branch of this harness's
+// classification and contribution logic was enumerated against the corpus,
+// and the ones the fourteen frames cannot reach are driven directly here with
+// constructed inputs:
+//
+//	site                                     branch                    corpus reach
+//	classifyLoss                             len(rows) == 0            NEVER  <- the finding
+//	classifyLoss                             served == 0               B5
+//	classifyLoss                             computed == 0             reached
+//	classifyLoss                             fallthrough               reached
+//	contributeStatusComposition              no coordinates            NEVER
+//	contributeFamilyDefinition               family not found          UNREACHABLE (proven below)
+//	contributeCohortRankingInjection         family not found          UNREACHABLE (proven below)
+//	contributeCohortRankingInjection         non-cohort axis           reached
+//	computeParityCell                        every verdict branch      reached
+//
+// "UNREACHABLE" is a stronger claim than "never reached", so it carries its
+// own proof rather than a fixture: the family lookup is TOTAL over the closed
+// vocabulary, which makes those two branches provably dead code instead of
+// untested code. Those are different findings and are not collapsed.
+// ---------------------------------------------------------------------------
+
+// parityTestRow builds one derived-requirement row with just the fields
+// classifyLoss reads, so a branch can be driven without a frame that
+// produces it.
+func parityTestRow(step contextfabric.ComputedObligationStep, unavailable contextfabric.RequirementUnavailableReason) contextfabric.DerivedRequirement {
+	return contextfabric.DerivedRequirement{Step: step, Unavailable: unavailable}
+}
+
+// TestClassifyLossLandsInEveryBranch drives every branch of the classifier,
+// including the two the corpus cannot produce.
+//
+// The zero-rows case asserts the PROPERTY the surviving mutation broke, not
+// merely the current constant: whatever that branch returns, it must not be
+// a cause that authorizes a retirement. Asserting only the constant would
+// pin the letter and miss a future cause that is renamed into the
+// superseding set.
+func TestClassifyLossLandsInEveryBranch(t *testing.T) {
+	cases := []struct {
+		name string
+		rows []contextfabric.DerivedRequirement
+		want lossCause
+	}{
+		{
+			// THE BRANCH ROUND 1's MUTATION SURVIVED IN. No corpus frame
+			// derives zero rows; oracle O9 fails a frame that does. A
+			// future frame that derived nothing must not read as superior.
+			name: "no rows at all (unreachable from the corpus)",
+			rows: nil,
+			want: causeComputedObligationInputsUndeclared,
+		},
+		{
+			name: "every row unavailable",
+			rows: []contextfabric.DerivedRequirement{parityTestRow("", "no_declaring_producer")},
+			want: causeUnavailableNamedInstead,
+		},
+		{
+			name: "served reads, no computed obligation",
+			rows: []contextfabric.DerivedRequirement{parityTestRow("", "")},
+			want: causeNotRequiredByAnyObligation,
+		},
+		{
+			name: "a computed obligation is present",
+			rows: []contextfabric.DerivedRequirement{parityTestRow("", ""), parityTestRow("rank_cohort", "")},
+			want: causeComputedObligationInputsUndeclared,
+		},
+		{
+			// A mixed frame: some rows unavailable, some served, one
+			// computed. served != 0 so it must not take the unavailable
+			// branch.
+			name: "mixed availability with a computed obligation",
+			rows: []contextfabric.DerivedRequirement{
+				parityTestRow("", "no_declaring_producer"),
+				parityTestRow("", ""),
+				parityTestRow("membership_cardinality", ""),
+			},
+			want: causeComputedObligationInputsUndeclared,
+		},
+	}
+
+	reached := 0
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := classifyLoss(testCase.rows)
+			if got != testCase.want {
+				t.Fatalf("classifyLoss = %q, want %q", got, testCase.want)
+			}
+		})
+		reached++
+	}
+	if reached != len(cases) {
+		t.Fatalf("ran %d of %d branch cases", reached, len(cases))
+	}
+
+	// The property, stated separately from the constant: the branch that
+	// handles a shape nobody has seen must never authorize a retirement.
+	if supersedingCauses[classifyLoss(nil)] {
+		t.Fatal("the zero-rows branch returns a SUPERSEDING cause -- a frame that derives nothing would rule every authority's whole contribution 'superior' and authorize retiring it")
+	}
+}
+
+// TestContributionOfAFrameWithNoCoordinatesIsEmpty lands in the other
+// corpus-unreachable branch: an authority asked about a frame that derives
+// no requirement coordinates at all.
+//
+// A named subject with no expected kind is exactly that shape -- the frame
+// layer emits no role slot, "which is a weaker claim than guessing one" --
+// and no corpus frame has it, because every named frame in the corpus
+// declares its kind.
+func TestContributionOfAFrameWithNoCoordinatesIsEmpty(t *testing.T) {
+	frame := contextfabric.DeriveFrameObligations(contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind:  contextfabric.SubjectExpressionNamed,
+			Named: &contextfabric.NamedSubjectExpression{Terms: []string{"s"}},
+		},
+		Temporal: contextfabric.TemporalIntentCurrent,
+		Version:  contextfabric.QuestionFrameVersion,
+	}, nil)
+
+	// The premise of the test, asserted rather than assumed: if this frame
+	// ever starts deriving coordinates, the branch below is no longer the
+	// one being exercised and the test has gone vacuous.
+	if coordinates := contextfabric.DeriveRequirementCoordinates(frame); len(coordinates) != 0 {
+		t.Fatalf("premise broken: this frame now derives %d coordinates, so it no longer reaches the no-coordinates branch", len(coordinates))
+	}
+	if refs := frameSubjectRefs(frame); len(refs) != 0 {
+		t.Fatalf("frameSubjectRefs = %d refs for a frame with no coordinates", len(refs))
+	}
+
+	kinds, comparable := contributeStatusComposition(frame)
+	if !comparable {
+		t.Fatal("the status composition reported itself incomparable for a frame with no subjects; it has no per-frame value only when it is a model input")
+	}
+	if len(kinds) != 0 {
+		t.Fatalf("the status composition contributed %v for a frame with no subjects -- it expanded a requirement for subjects that do not exist", kinds)
+	}
+}
+
+// TestEveryFamilyInTheVocabularyIsInTheRegistry proves the two `family not
+// found` branches are DEAD CODE rather than untested code.
+//
+// Both contribution functions handle a lookup miss defensively. If the
+// lookup is total over the closed vocabulary, those branches can never run,
+// and that is a different statement from "the corpus does not reach them" --
+// dead code is a disclosure question, untested code is a coverage one. This
+// test settles which they are, and turns into a real failure the day a
+// vocabulary member is added without a registry row.
+func TestEveryFamilyInTheVocabularyIsInTheRegistry(t *testing.T) {
+	checked := 0
+	for _, family := range contractsv1.ContextFabricQuestionFamilyVocabulary() {
+		checked++
+		if _, found := contextfabric.LookupQuestionFamily(family); !found {
+			t.Errorf("family %q is in the closed vocabulary but has no registry row -- the defensive lookup branches in the contribution functions are now REACHABLE and need fixtures", family)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("the family vocabulary is empty -- this test proved nothing")
+	}
+	t.Logf("family lookup is total over %d vocabulary members; the two `not found` branches are dead code", checked)
 }
 
 // ---------------------------------------------------------------------------
