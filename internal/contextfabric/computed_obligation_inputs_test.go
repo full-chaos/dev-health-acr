@@ -2,6 +2,8 @@ package contextfabric
 
 import (
 	"testing"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // Tests for the §13.2.3 amendment: a computed obligation declares the fact
@@ -455,4 +457,138 @@ func TestComputedStepExecutionMatchesTheTree(t *testing.T) {
 	if observation.observed {
 		t.Error("`count` is recorded as OBSERVED in the shadow layer while its step is declared-only -- the two records disagree, and one of them is authorizing retirements")
 	}
+}
+
+// TestEveryHistogramThisSliceAddsIsIndexedByVocabularyPosition is a CLASS fix,
+// written after a second review round found the same defect a second time.
+//
+// THE CLASS: a closed-vocabulary histogram whose test asserts only a TOTAL.
+// Round 1 found `sortedFactKinds`'s unfixtured branch and I fixed that one
+// instance. Round 2 then found `ComputedStepExecutions`, which no test touched
+// at all. Sweeping for the shape rather than the instance found a THIRD site
+// the round did not report: `ComputedInputClasses` was asserted only by its sum
+// against ComputedRowsWithDeclaredInputs, so collapsing every class into slot 0
+// keeps the sum correct and the suite green -- while the log line, which labels
+// slots by vocabulary position, reports the wrong token.
+//
+// Both misbucketings were confirmed by mutation before this test was written:
+// each left `go test ./internal/contextfabric/ -count=1` green.
+//
+// WHY THIS SHAPE OF TEST. Asserting one bucket's value per histogram would fix
+// today's three sites and rot the moment a fourth is added or a vocabulary
+// grows. This asserts the PROPERTY the log line depends on -- that each index
+// function is a bijection onto its vocabulary's positions -- for every member
+// of every vocabulary this slice introduced. A new member is covered because it
+// is in the vocabulary, not because someone remembered to add a case.
+func TestEveryHistogramThisSliceAddsIsIndexedByVocabularyPosition(t *testing.T) {
+	checked := 0
+
+	// The log line renders slot N with vocabulary member N's name. If the
+	// index function disagrees with the vocabulary's own order, the label and
+	// the count belong to different tokens -- which is how an UNWIRED step
+	// gets reported as wired.
+	for want, member := range ComputedStepInputClassVocabulary() {
+		got, ok := computedStepInputClassIndex(member)
+		if !ok {
+			t.Errorf("input class %q has no histogram slot", member)
+			continue
+		}
+		if got != want {
+			t.Errorf("input class %q indexes to slot %d, but the log line labels that slot %q", member, got, ComputedStepInputClassVocabulary()[got])
+		}
+		checked++
+	}
+
+	for want, member := range ComputedStepExecutionVocabulary() {
+		got, ok := computedStepExecutionIndex(member)
+		if !ok {
+			t.Errorf("step execution %q has no histogram slot", member)
+			continue
+		}
+		if got != want {
+			t.Errorf("step execution %q indexes to slot %d, but the log line labels that slot %q", member, got, ComputedStepExecutionVocabulary()[got])
+		}
+		checked++
+	}
+
+	for want, member := range contractsv1.ContextFabricFactKindVocabulary() {
+		got, ok := factKindIndex(member)
+		if !ok {
+			t.Errorf("fact kind %q has no histogram slot", member)
+			continue
+		}
+		if got != want {
+			t.Errorf("fact kind %q indexes to slot %d, not its vocabulary position", member, got)
+		}
+		checked++
+	}
+
+	// A non-member must NOT resolve to a slot. Without this, an index function
+	// that returned (0, true) for everything would satisfy every check above
+	// for the member at position 0.
+	if _, ok := computedStepInputClassIndex(ComputedStepInputClass("zz_not_a_class")); ok {
+		t.Error("a non-member input class resolved to a histogram slot")
+	}
+	if _, ok := computedStepExecutionIndex(ComputedStepExecution("zz_not_an_execution")); ok {
+		t.Error("a non-member execution resolved to a histogram slot")
+	}
+	if _, ok := factKindIndex(FactKind("zz_not_a_kind")); ok {
+		t.Error("a non-member fact kind resolved to a histogram slot")
+	}
+
+	if checked == 0 {
+		t.Fatal("no vocabulary member was checked -- this test proved nothing")
+	}
+}
+
+// TestComputedStepExecutionCountsLandInTheRightBucket is the behavioural half:
+// the property test above pins the index functions, and this pins that a real
+// summary routes a DECLARED-ONLY row to the declared-only bucket.
+//
+// Both halves are needed and neither subsumes the other -- correct indexing
+// with a miswired fold, or a correct fold over a broken index, each produce the
+// same wrong log line.
+func TestComputedStepExecutionCountsLandInTheRightBucket(t *testing.T) {
+	rows, _ := requirementRowsForCountingFrame(t)
+	summary := RequirementDerivationSummaryFrom(rows)
+
+	declaredOnly := summary.ComputedStepExecutions[executionIndexForTest(t, ComputedStepDeclaredOnly)]
+	serverExecuted := summary.ComputedStepExecutions[executionIndexForTest(t, ComputedStepServerExecuted)]
+
+	// A counting frame's only computation is membership_cardinality, which is
+	// declared-only. Reporting it as server-executed is the exact
+	// misinformation this histogram exists to prevent.
+	if declaredOnly == 0 {
+		t.Errorf("a counting frame recorded %d declared-only computed rows, want at least one", declaredOnly)
+	}
+	if serverExecuted != 0 {
+		t.Errorf("a counting frame recorded %d SERVER-EXECUTED computed rows -- nothing runs its step, and reporting it as wired is what the parity proof would read as licence to retire", serverExecuted)
+	}
+
+	classTotal := 0
+	for _, count := range summary.ComputedInputClasses {
+		classTotal += count
+	}
+	memberSet := summary.ComputedInputClasses[classIndexForTest(t, ComputedInputResolvedMemberSet)]
+	if memberSet == 0 || memberSet != classTotal {
+		t.Errorf("counting frame input classes = %v, want every declared row in the resolved_member_set bucket", summary.ComputedInputClasses)
+	}
+}
+
+func executionIndexForTest(t *testing.T, value ComputedStepExecution) int {
+	t.Helper()
+	index, ok := computedStepExecutionIndex(value)
+	if !ok {
+		t.Fatalf("execution %q is not in the closed vocabulary", value)
+	}
+	return index
+}
+
+func classIndexForTest(t *testing.T, value ComputedStepInputClass) int {
+	t.Helper()
+	index, ok := computedStepInputClassIndex(value)
+	if !ok {
+		t.Fatalf("input class %q is not in the closed vocabulary", value)
+	}
+	return index
 }
