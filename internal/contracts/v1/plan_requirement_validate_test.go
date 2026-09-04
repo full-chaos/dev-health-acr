@@ -772,10 +772,19 @@ func TestTheReductionDerivationRefusesRowsThatReducedNothing(t *testing.T) {
 
 	// A SATISFIED row, likewise: it lost nothing, and the outcome row's own
 	// validator refuses a refinement on it.
+	// THE FIXTURE MUST CARRY A CAUSE, or this case cannot reach the arm it
+	// tests. The derivation refuses a causeless row LAST; a lossless fixture
+	// with no cause set is refused by that later guard whether or not the
+	// outcome arm exists, so deleting the outcome arm left the test green.
+	// The battery caught exactly that -- the mutant survived a run in which
+	// this test executed. Such a row is not a legal DOCUMENT (a lossless row
+	// must name no cause), but this is a unit test of the derivation, which
+	// does not validate its input, and passing one isolates the arm.
 	satisfied := ContextFabricPlanRequirementOutcomeRow{
 		Stage: ContextFabricOutcomeStagePlanning, Requirement: "state/subject/project",
 		Obligation: "state", Outcome: ContextFabricRequirementSatisfied,
 		Impact: ContextFabricAnswerImpactNone, Declared: 4, Served: 2,
+		CauseOverrun: ContextFabricBudgetOverrunItems,
 	}
 	if _, ok := ContextFabricReductionRefinement(satisfied); ok {
 		t.Error("a satisfied row produced a refinement; it lost nothing")
@@ -789,6 +798,10 @@ func TestTheReductionDerivationRefusesRowsThatReducedNothing(t *testing.T) {
 		Stage: ContextFabricOutcomeStagePlanning, Requirement: "state/subject/project",
 		Obligation: "state", Outcome: ContextFabricRequirementNotApplicable,
 		Impact: ContextFabricAnswerImpactNone, Declared: 4, Served: 2,
+		// A cause, for the same reason the satisfied fixture above carries
+		// one: without it the later causeless guard refuses this row and the
+		// outcome arm goes untested.
+		CauseOverrun: ContextFabricBudgetOverrunItems,
 	}
 	if _, ok := ContextFabricReductionRefinement(notApplicable); ok {
 		t.Error("a not_applicable row produced a refinement; the question did not ask for it, so nothing was lost")
@@ -866,4 +879,88 @@ func TestTheReductionDerivationCarriesEachOfTheRowsCauses(t *testing.T) {
 	if coverageOnly.CauseCoverage == "" || overrunOnly.CauseOverrun == "" || basisOnly.CauseNarrowing == "" {
 		t.Fatal("the three cause fixtures are not distinct; this test cannot discriminate")
 	}
+}
+
+// THE FOUR ARMS THE COVERAGE SWEEP FOUND UNASSERTED.
+//
+// The sweep enumerated every error message the new guards can emit — 42 arms
+// across the requirement validator, the refinement validator, the chain check
+// and the join — and matched each against the fragments the tests actually
+// assert. Four had no assertion. They are the length and count bounds, which
+// the breach table skipped because it was built around VOCABULARY membership
+// and quietly stopped there.
+//
+// This is the same shape as the finding that produced this file: an arm nobody
+// tested, in a guard everyone assumed was covered because its neighbours were.
+func TestThePlanRequirementLengthAndCountBoundsAreEnforced(t *testing.T) {
+	t.Parallel()
+	// POSITIVE CONTROL first, so each breach below is attributable.
+	if err := validReadRequirement().Validate(); err != nil {
+		t.Fatalf("the baseline must be valid: %v", err)
+	}
+
+	t.Run("an identity past its length bound", func(t *testing.T) {
+		t.Parallel()
+		row := validReadRequirement()
+		// Past ContextFabricRequirementIdentityMaxLength while still a
+		// three-segment coordinate, so the LENGTH clause rejects it rather
+		// than the shape clause.
+		pad := strings.Repeat("x", ContextFabricRequirementIdentityMaxLength)
+		row.Requirement = "state/subject/" + pad
+		row.Subject = ContextFabricSubjectKind(pad)
+		err := row.Validate()
+		if err == nil {
+			t.Fatal("an over-long identity was accepted")
+		}
+		if !strings.Contains(err.Error(), "identity or obligation violates v1 bounds") {
+			t.Fatalf("rejected for the wrong reason: %v", err)
+		}
+	})
+
+	t.Run("more serving fact kinds than the vocabulary has", func(t *testing.T) {
+		t.Parallel()
+		row := validReadRequirement()
+		kinds := ContextFabricFactKindVocabulary()
+		// One past the bound. Repeating a member is enough: the count clause
+		// is what must fire, and it is checked before per-member validity.
+		row.FactKinds = append(append([]ContextFabricFactKind{}, kinds[:]...), kinds[0])
+		err := row.Validate()
+		if err == nil {
+			t.Fatal("an over-count fact kind list was accepted")
+		}
+		if !strings.Contains(err.Error(), "declares more fact kinds than the closed vocabulary") {
+			t.Fatalf("rejected for the wrong reason: %v", err)
+		}
+	})
+
+	t.Run("more input fact kinds than the vocabulary has", func(t *testing.T) {
+		t.Parallel()
+		row := validComputedRequirement()
+		kinds := ContextFabricFactKindVocabulary()
+		row.InputClass = "fact_kinds"
+		row.InputFactKinds = append(append([]ContextFabricFactKind{}, kinds[:]...), kinds[0])
+		err := row.Validate()
+		if err == nil {
+			t.Fatal("an over-count input fact kind list was accepted")
+		}
+		if !strings.Contains(err.Error(), "declares more input fact kinds than the closed vocabulary") {
+			t.Fatalf("rejected for the wrong reason: %v", err)
+		}
+	})
+
+	t.Run("the array wrapper names WHICH row failed", func(t *testing.T) {
+		t.Parallel()
+		// The per-row wrapper is its own arm: without the index a caller
+		// holding a 200-row array learns only that something in it is
+		// invalid, which is the bare-count disclosure this layer replaces.
+		bad := validReadRequirement()
+		bad.Kind = "inferred"
+		err := ValidateContextFabricPlanRequirements([]ContextFabricPlanRequirement{validComputedRequirement(), bad})
+		if err == nil {
+			t.Fatal("an array containing an invalid row was accepted")
+		}
+		if !strings.Contains(err.Error(), "requirement 1:") {
+			t.Fatalf("the error does not name which row failed: %v", err)
+		}
+	})
 }
