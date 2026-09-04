@@ -1,5 +1,11 @@
 package contextfabric
 
+import (
+	"context"
+
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
 // Test-only exports, the standard Go pattern: this file is compiled into
 // the package for the test binary and nothing else, so the external
 // contextfabric_test package can reach package internals WITHOUT widening
@@ -25,4 +31,75 @@ func StatusCategoryCompositionForTest() map[SubjectKind][]FactKind {
 		out[subject] = append([]FactKind(nil), kinds...)
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// The SIX PLANNING AUTHORITIES (design 13.8a), reached for the parity proof.
+//
+// Every shim below CALLS the production authority. None of them
+// re-implements one, and that is the whole discipline: an expectation
+// computed by a transcription of the thing it is checking is decided by
+// the transcription, and this package's own review history carries three
+// instances of exactly that defect.
+//
+// They live here rather than on the production surface for the reason the
+// file header already gives for the status composition: these functions
+// are REFERENCES FOR A RETIREMENT PROOF, not an API. A production reader
+// of any of them would be a seventh planning authority.
+// ---------------------------------------------------------------------------
+
+// ComposeStatusCategoryRequirementsForTest runs AUTHORITY 1 --
+// composeStatusCategoryRequirements (chaos4347_status_category_composition.go)
+// -- against a requirement list and a subject set.
+//
+// The engine value carries no telemetry sink, which the production method
+// nil-guards (recordCategoryFactComposition), so the composition runs and
+// records nothing. The composition itself reads no engine state at all.
+func ComposeStatusCategoryRequirementsForTest(requirements []FactRequirement, subjects []SubjectRef) []FactRequirement {
+	engine := &Engine{}
+	return engine.composeStatusCategoryRequirements(context.Background(), storage.Principal{OrgID: "org_parity"}, requirements, subjects)
+}
+
+// PlanFactKindsForTest runs AUTHORITY 3 -- planFactKinds
+// (chaos4636_answer_plan.go) -- for a family definition and an
+// interpretation.
+//
+// Passing a ZERO InterpretedQuestion isolates authority 3 from authority 2:
+// planFactKinds unions the model's requirement kinds with the family's own
+// contribution, so an empty model side leaves exactly what the FAMILY
+// contributes. That separation is the only way the two can carry different
+// verdicts, and they do.
+func PlanFactKindsForTest(definition QuestionFamilyDefinition, interpretation InterpretedQuestion) []FactKind {
+	return planFactKinds(definition, interpretation)
+}
+
+// CohortRankingFormulaKindsForTest returns a copy of AUTHORITY 4 --
+// cohortRankingFormulaKinds (chaos4636_answer_plan.go), the five-kind set
+// the engine appends FIRST and unconditionally whenever the resolved
+// graph context carries a cohort (engine.go, inside `if
+// graphContext.Cohort != nil`).
+//
+// A COPY, for the reason StatusCategoryCompositionForTest gives: the
+// variable is package state shared with the engine's own tests in this
+// binary.
+func CohortRankingFormulaKindsForTest() []FactKind {
+	return append([]FactKind(nil), cohortRankingFormulaKinds...)
+}
+
+// IsCohortSubjectAxisForTest exposes the predicate authority 3 uses to
+// decide whether the ranking kinds are part of the plan, so the harness
+// asks the PRODUCTION rule rather than re-listing the cohort axes.
+func IsCohortSubjectAxisForTest(axis SubjectAxisKind) bool {
+	return isCohortSubjectAxis(axis)
+}
+
+// ApplyCarriedPlanForTest runs AUTHORITY 6 -- applyCarriedPlan
+// (chaos4636_plan_carry.go) -- and reports whether the carry applied.
+//
+// It is reached through a shim because the carry contributes no fact kinds
+// at all: what it overlays is the FAMILY and the group axis, which is a
+// planning authority precisely because the family is authority 3's input.
+// The harness needs to demonstrate that, not assert it.
+func ApplyCarriedPlanForTest(outcome QuestionFamilyOutcome, family QuestionFamily, groupKind SubjectKind) (QuestionFamilyOutcome, bool) {
+	return applyCarriedPlan(outcome, planCarryResult{Outcome: PlanCarryHit, Family: family, GroupKind: groupKind})
 }
