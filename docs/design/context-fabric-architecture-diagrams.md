@@ -1516,6 +1516,16 @@ flowchart TD
    without re-deriving would turn every degraded reuse into a refusal,
    trading a usable narrowed answer for a disclosure gap.
 
+**Not every `assembled_result` row is a narrowing.** The outcome set is also
+where a COMPUTED obligation states its server step's result: the `count`
+requirement's row carries the `membership_cardinality` step's cardinality in
+`served`/`declared`, appended by `finalizeResult` (§11). A reader can tell it
+from a reduction by its outcome token — an exact count is `satisfied`, and
+the validator forbids a `satisfied` row from naming a cause or claiming an
+impact. That is why the state derivation is unaffected by it: a satisfied row
+contributes nothing to the running state, so an answer that served its count
+in full still reads `complete`.
+
 **Update rule.** A new `Investigate()` exit path (a sixth veto/terminal
 shape) must stamp `Completeness` before its own `Validate`, in the same PR,
 and add its box to this diagram. **Any narrowing surface between planning and
@@ -2029,7 +2039,13 @@ flowchart TB
     IK --> CR["row.FactKinds stays EMPTY<br/>a computed cell plans no read of its own"]
     IN --> CR
 
-    RR --> T["RequirementDerivationSummary<br/>+ requirement_computed_input_kind_* counts<br/>(histogram over the closed vocabulary,<br/>zeroes included)"]
+    I --> EX{"row.StepExecution<br/>does the SERVER run it?"}
+    EX -- server_executed --> XR["RankCohort<br/>between the fact read and Synthesize"]
+    EX -- server_executed --> XC["ComputeMembershipCardinality<br/>in finalizeResult, over the SERVED member set"]
+    XC --> OUT["appended as the count requirement's<br/>assembled_result outcome row:<br/>served / declared + the outcome token"]
+    OUT --> TEL["RecordMembershipCardinality<br/>reads the SERVED row, never recounts"]
+
+    RR --> T["RequirementDerivationSummary<br/>+ requirement_computed_input_kind_* counts<br/>+ ComputedStepExecutions<br/>(histograms over the closed vocabularies,<br/>zeroes included)"]
     CR --> T
 ```
 
@@ -2064,8 +2080,39 @@ retiring the authority would remove the only thing planning to read it. What
 changed is that this is now decided per cell against the declaration, instead
 of assumed for every loss on any frame with a computation.
 
+**Declaring a step is not running one, and that is the second half of the
+amendment.** A computed obligation's row also declares its EXECUTION.
+`membership_cardinality` was `declared_only` — named by the vocabulary and
+satisfied by nothing, so the count reached a reader through the model
+narrating over whatever facts the plan happened to read. Under that mechanism
+retiring an authority's reads CAN change the answer, which is exactly what a
+`superior` ruling asserts it cannot; the parity proof therefore blocked five
+cells on `computed_step_not_wired` rather than clearing them on the strength
+of a step nobody ran.
+
+**Where the step now runs.** `ComputeMembershipCardinality` counts the
+resolved member set, and `finalizeResult` states the result on the served
+document as the `count` requirement's own `assembled_result` outcome row —
+`served` and `declared`, with the row's closed outcome token distinguishing a
+count exact over the resolved set (`satisfied`) from one served over a set a
+stage narrowed (`narrowed`, which the row's validator forces to name the
+mechanism that cut it). It runs in `finalizeResult` and nowhere earlier
+because stage 3 can narrow the cohort and re-synthesize: a cardinality
+computed before that would name a member set the reader never receives.
+
+**What the count does NOT claim.** It counts the RESOLVED member set, which is
+the step's own declared input. Whether that set is the whole population is a
+coverage question, and `Cohort.Complete`/`Cohort.Truncated` already answer it
+— they ride the telemetry line beside the number for that reason. A count
+over a cohort the graph read stopped short of is a true count of the resolved
+set and a lower bound on the population. Making the population itself
+countable needs a census the pre-read clamp (§10) makes unobservable.
+Synthesis prose is also still the model's: this makes the count a server
+result, it does not stop the model stating a number in words.
+
 **Update rule.** Any change to the obligation kinds table, the computed-step
-table, the input declaration, or `DerivedRequirement`'s fields updates this
+table, the input declaration, the EXECUTION declaration or where a
+server-executed step runs, or `DerivedRequirement`'s fields updates this
 diagram in the same PR.
 
 ---

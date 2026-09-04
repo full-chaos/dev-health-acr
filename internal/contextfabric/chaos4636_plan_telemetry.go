@@ -353,6 +353,18 @@ type PlanTelemetry interface {
 	// every artifact; this is what makes it countable. Closed
 	// enums/counts only, fired once per grouped answer.
 	RecordGroupedCohortCompleteness(ctx context.Context, principal storage.Principal, event GroupedCohortCompletenessEvent)
+
+	// RecordMembershipCardinality reports the `membership_cardinality`
+	// server step's own result for one served answer: what was counted, how
+	// many the answer carries, how many were found, and -- when those
+	// differ -- the recorded mechanism that cut them.
+	//
+	// REQUIRED, on this interface, for the reason stated above: while
+	// nothing executed this step the count was narration, and an OPTIONAL
+	// telemetry method is how an entire event class disappears with every
+	// test still passing. A build in which nothing reports the count must
+	// not compile.
+	RecordMembershipCardinality(ctx context.Context, principal storage.Principal, event MembershipCardinalityEvent)
 	// RecordBudgetAssertion reports the FINAL budget assertion at one fresh
 	// result exit -- the measurement taken on the document the route will
 	// actually serialize, after every composer. It fires on a FIT as well as
@@ -444,4 +456,40 @@ func (e *Engine) effectiveResponseBudget(request InvestigationRequest) ResponseB
 		}
 	}
 	return budget
+}
+
+// MembershipCardinalityEvent is one served answer's counted cardinality.
+//
+// IT IS READ OFF THE SERVED DOCUMENT, never recomputed for the log line.
+// A telemetry value derived independently of the field it describes can
+// disagree with it, and then the run's own artifacts contain two answers to
+// "how many" with nothing to say which the reader received.
+//
+// Counts and closed tokens only, same discipline as every event beside it.
+type MembershipCardinalityEvent struct {
+	// Family identifies which plan counted, so a regression can be
+	// attributed to a family-table row.
+	Family QuestionFamily
+	// Requirement is the counted requirement's own identity
+	// (obligation/role/subject kind), carried from the derivation.
+	Requirement string
+	// Outcome is the row's own closed token: `satisfied` for a count exact
+	// over the resolved member set, `narrowed` for one served over a reduced
+	// one.
+	Outcome contractsv1.ContextFabricPlanRequirementOutcome
+	// Served and Declared are the two numbers the answer states.
+	Served   int
+	Declared int
+	// Basis and Overrun name the recorded mechanism that cut the set. Empty
+	// when nothing narrowed.
+	Basis   contractsv1.ContextFabricNarrowingBasis
+	Overrun contractsv1.ContextFabricBudgetOverrun
+	// CohortComplete and CohortTruncated are the cohort's OWN coverage flags,
+	// carried here because they are the difference between "this is the
+	// population" and "this is a lower bound on it". The step counts the
+	// RESOLVED member set; whether that set is the whole population is what
+	// these two say, and a reader of this line needs both halves or the
+	// number reads as a claim the step does not make.
+	CohortComplete  bool
+	CohortTruncated bool
 }
