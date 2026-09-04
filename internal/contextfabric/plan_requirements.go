@@ -51,10 +51,14 @@ import (
 // every case in the shared store parity table failed once, in CI's container
 // job only.
 //
-// Returns nil for an empty input rather than an empty slice: nil encodes as
-// an absent key under omitempty, an empty slice as `[]`, and "the derivation
-// produced nothing" is the same statement as "there is no array here". The
-// byte-minimality probe over the irreducible answer reads the difference.
+// Returns nil for an empty input rather than an empty slice. NOT because the
+// two differ on the wire -- MEASURED, they do not: under `omitempty`
+// encoding/json omits an empty slice exactly as it omits a nil one, so both
+// produce an absent key and no consumer can tell them apart. The reason is
+// ROUND-TRIP EQUALITY: an absent key DECODES to nil, so a projection that
+// emitted an empty slice would not equal itself after a store round trip, and
+// the equality check that guards the persisted document would fail on a
+// difference that never reached the document.
 func PlanRequirementsFromDerived(rows []DerivedRequirement) []contractsv1.ContextFabricPlanRequirement {
 	if len(rows) == 0 {
 		return nil
@@ -92,11 +96,20 @@ func planRequirement(row DerivedRequirement) contractsv1.ContextFabricPlanRequir
 
 // copyFactKinds returns an independent copy, preserving nil.
 //
-// Preserving nil is not tidiness: an empty non-nil slice encodes as `[]` and a
-// nil one is omitted entirely, and a read row and a computed row are told
-// apart on the wire by which of fact_kinds and input_fact_kinds is PRESENT.
-// Turning nil into empty would put both keys on every row and erase that
-// distinction.
+// An earlier revision of this comment claimed nil and empty differ on the
+// wire -- that an empty slice encodes as `[]` while a nil one is omitted. That
+// is FALSE for an omitempty slice, and the mutation battery is what exposed
+// it: deleting the nil branch below left the test asserting key-absence green,
+// because `omitempty` omits BOTH. Measured directly, `{A: nil}` and
+// `{A: []string{}}` marshal to identical bytes.
+//
+// The branch stays because it IS load-bearing, for a different reason than the
+// one first written down. An absent key decodes to nil, so returning empty
+// here would make a projected row unequal to itself across a store round trip
+// -- and that equality is what TestPlanRequirementRowsSurviveAStoreRoundTrip
+// checks. What actually tells a read row from a computed one on the wire is
+// `kind` and `input_class`, both of which are always present, never the
+// presence or absence of a key.
 func copyFactKinds(kinds []FactKind) []FactKind {
 	if kinds == nil {
 		return nil

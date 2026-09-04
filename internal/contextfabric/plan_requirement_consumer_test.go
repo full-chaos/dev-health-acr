@@ -209,9 +209,13 @@ func reencodeResult(t *testing.T, result InvestigationResult) InvestigationResul
 	return decoded
 }
 
-// factKindsEqual treats nil and empty as DIFFERENT, because they are different
-// on the wire: nil is omitted, empty encodes as `[]`, and which kind list is
-// present is how a read row is told from a computed one.
+// factKindsEqual treats nil and empty as DIFFERENT.
+//
+// Not because they differ on the WIRE -- they do not; `omitempty` omits both.
+// Because an absent key DECODES to nil, so this is the check that catches a
+// projection emitting an empty slice: such a row would not survive its own
+// round trip. This is the pin the mutation battery showed the encoding test
+// could not provide.
 func factKindsEqual(a, b []FactKind) bool {
 	if (a == nil) != (b == nil) || len(a) != len(b) {
 		return false

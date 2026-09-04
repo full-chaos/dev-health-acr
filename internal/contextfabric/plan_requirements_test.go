@@ -272,8 +272,21 @@ func TestPlanRequirementProjectionCopiesItsSlices(t *testing.T) {
 	}
 }
 
-// nil and empty are DIFFERENT on the wire, and the difference carries meaning:
-// a read row is told from a computed row by which kind list is PRESENT.
+// What a computed row's ENCODING actually looks like -- and an honest note
+// about what this cannot prove.
+//
+// It CANNOT distinguish a nil kind list from an empty one. Under `omitempty`
+// encoding/json omits both, measured directly: `{A: nil}` and
+// `{A: []string{}}` marshal to identical bytes. An earlier version of this
+// test claimed to pin nil-preservation and was vacuous for exactly that
+// reason; the mutation battery caught it (deleting the nil branch in
+// copyFactKinds left this test green). Nil-preservation is pinned by
+// TestPlanRequirementRowsSurviveAStoreRoundTrip, where an absent key decodes
+// to nil and an emitted empty slice would fail the equality check.
+//
+// What it DOES prove is still worth having: a computed row carries no serving
+// kind list and no input kinds when its step consumes none, while the fields
+// that actually discriminate the arms -- kind and input_class -- are present.
 func TestPlanRequirementProjectionPreservesNilFactKinds(t *testing.T) {
 	t.Parallel()
 	row := DerivedRequirement{
