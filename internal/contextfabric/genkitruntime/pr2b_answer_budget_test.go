@@ -2,7 +2,9 @@ package genkitruntime
 
 import (
 	"encoding/json"
-	"os"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 
@@ -106,29 +108,45 @@ func TestTheSystemPromptExplainsTheBudgetItIsGiven(t *testing.T) {
 // the engine could stop setting it, and every test above would still pass
 // because they construct the SynthesisInput themselves.
 func TestTheAllocationReachesThePayloadFromTheEngine(t *testing.T) {
-	// The projection must READ the field.
-	runtime, err := os.ReadFile("runtime.go")
+	// ONE derivation, and that is ALL this test still asserts. Two
+	// AllocateItems calls in that function would be two authorities over one
+	// number -- the defect the allocator exists to remove -- and "how many
+	// times is this derived" has no behavioural expression, so reading the
+	// source is the right tool for it.
+	//
+	// TWO source greps were REMOVED from here in the round-three class sweep,
+	// because both asserted things a run can show:
+	//
+	//   - "the projection reads input.Allocation" is what
+	//     TestThePayloadStatesTheAllocatorsOwnNumber above already proves, by
+	//     calling synthesisInputFromDomain and comparing the payload against
+	//     the allocator's own numbers.
+	//   - "the engine sets Allocation:" is proved by
+	//     TestTheAllocationTheEngineHandsSynthesisIsThePlansOwn in
+	//     internal/contextfabric, which reads the SynthesisInput the ENGINE
+	//     built and is mutation-proved by deleting `Plan: plan` from
+	//     engine.go.
+	//
+	// Counted through the AST, not by counting substrings: a substring count
+	// cannot tell code from a comment, so commenting a derivation out would
+	// leave the count unchanged and this pin green while the call was gone.
+	const assembly = "../chaos4636_synthesis_assembly.go"
+	file, err := parser.ParseFile(token.NewFileSet(), assembly, nil, 0)
 	if err != nil {
-		t.Fatalf("read runtime source: %v", err)
+		t.Fatalf("parse %s: %v", assembly, err)
 	}
-	if !strings.Contains(string(runtime), "modelFacingAnswerBudget(input.Allocation)") {
-		t.Error("synthesisInputFromDomain does not read input.Allocation: the payload's budget would be empty on every " +
-			"real request while every unit test that builds its own SynthesisInput stays green")
-	}
-
-	// And the ENGINE must set it, or the field the projection reads is
-	// always zero.
-	assembly, err := os.ReadFile("../chaos4636_synthesis_assembly.go")
-	if err != nil {
-		t.Fatalf("read assembly source: %v", err)
-	}
-	body := string(assembly)
-	if !strings.Contains(body, "Allocation: synthesisAllocation") {
-		t.Error("the engine's Synthesize call does not set Allocation: the model is never told its budget in production")
-	}
-	// ONE derivation. Two AllocateItems calls in this function would be two
-	// authorities over one number -- the defect the allocator exists to remove.
-	if got := strings.Count(body, "AllocateItems("); got != 1 {
-		t.Errorf("synthesis assembly derives the allocation %d times, want exactly 1: a second derivation is a second authority", got)
+	derivations := 0
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "AllocateItems" {
+			derivations++
+		}
+		return true
+	})
+	if derivations != 1 {
+		t.Errorf("synthesis assembly derives the allocation %d times, want exactly 1: a second derivation is a second authority", derivations)
 	}
 }

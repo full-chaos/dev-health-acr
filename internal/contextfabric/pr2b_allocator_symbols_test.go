@@ -3,8 +3,10 @@ package contextfabric
 import (
 	"bytes"
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log/slog"
-	"os"
 	"strings"
 	"testing"
 
@@ -145,48 +147,19 @@ func TestNarrationAllowanceChargesBothDriversAndTheirClaims(t *testing.T) {
 	}
 }
 
-// TestTheAssemblyPathActuallyAllocates pins the CALL SITE, not the allocator.
+// TestTheAssemblyPathActuallyAllocates HAS BEEN DELETED, and its deletion is
+// part of the round-three class sweep.
 //
-// Every other test here drives AllocateItems directly, so deleting `Plan: plan`
-// from the assembly params -- which silently makes every allocation unbounded
-// and restores the CHAOS-5008 behaviour in production while leaving the unit
-// tests green -- would survive all of them. That is the same mutation shape
-// this lane already had survive once, on a disclosure composer nobody called.
-func TestTheAssemblyPathActuallyAllocates(t *testing.T) {
-	// Constructing a params value here and asserting the field exists would
-	// prove only that the STRUCT has a Plan -- it would stay green with the
-	// production call site never setting it. So this reads the source and
-	// asserts the literal POPULATES it.
-	source, err := os.ReadFile("engine.go")
-	if err != nil {
-		t.Fatalf("read engine source: %v", err)
-	}
-	body := string(source)
-	index := strings.Index(body, "assemblyParams := synthesisAssemblyParams{")
-	if index < 0 {
-		t.Fatal("the assembly params literal has moved; this call-site pin is watching nothing")
-	}
-	end := strings.Index(body[index:], "\n\t}")
-	if end < 0 {
-		t.Fatal("could not delimit the assembly params literal")
-	}
-	literal := body[index : index+end]
-	if !strings.Contains(literal, "Plan:") {
-		t.Error("engine.go's synthesisAssemblyParams literal does not set Plan: every allocation is then " +
-			"unbounded and narration silently returns to charging the static contract caps (CHAOS-5008), " +
-			"with every unit test still green because they drive AllocateItems directly")
-	}
-
-	// And the allocator must be reached from the assembly path, not merely
-	// exist: a composer nobody calls allocates nothing.
-	assembly, err := os.ReadFile("chaos4636_synthesis_assembly.go")
-	if err != nil {
-		t.Fatalf("read assembly source: %v", err)
-	}
-	if !strings.Contains(string(assembly), "AllocateItems(params.Plan") {
-		t.Error("the assembly path does not call AllocateItems(params.Plan, ...): the quota is computed nowhere")
-	}
-}
+// It read engine.go for `Plan:` in the synthesisAssemblyParams literal and
+// chaos4636_synthesis_assembly.go for `AllocateItems(params.Plan`. Both are
+// properties a RUN can show: with the plan unset the allocation the engine
+// hands synthesis has MaxItems 0. TestTheAllocationTheEngineHandsSynthesisIsThePlansOwn
+// (pr2b_refusal_arm_line_test.go) asserts exactly that and is mutation-proved
+// by deleting the `Plan: plan` line from engine.go.
+//
+// The rule the deleted pin was missing: read the source only for a property
+// with no behavioural expression -- "derived in exactly ONE place", "exactly
+// two call sites". Everything a run can show, a run should show.
 
 // TestNarrationTelemetryNamesWhichBudgetBoundedIt is the CONSUMER test for
 // CHAOS-5008, and the reason the counts are not sufficient on their own.
@@ -329,22 +302,56 @@ func TestZeroOverQuotaIsAnAnswerNotAnAbsentQuota(t *testing.T) {
 	}
 }
 
-// TestBothStageThreeArmsPassTheQuotaIn pins the CALL SITES. Every test above
-// drives exposeQuota directly, so dropping the allocation argument at either
-// arm -- which silently makes every exposure empty and leaves S7c with nothing
-// to act on -- would survive all of them.
+// TestBothStageThreeArmsPassTheQuotaIn keeps ONLY the structural half of what
+// it used to assert: that stage three has exactly the two documented arms.
+// An arity like that has no behavioural expression -- a third arm is not
+// visible from any single run -- so reading the source is the right tool.
+//
+// The half that WAS removed counted `AllocateItems(*plan,` occurrences to
+// prove both arms pass the quota in. That is behaviourally observable and is
+// now observed: TestTheDeclinedRefusalArmCarriesTheQuotaToTheEmittedLine and
+// TestTheRetryRefusalArmCarriesTheQuotaToTheEmittedLine drive a real
+// over-quota answer into each arm and read the emitted line, and each is
+// mutation-proved by deleting that arm's population of the event.
 func TestBothStageThreeArmsPassTheQuotaIn(t *testing.T) {
-	source, err := os.ReadFile("chaos4636_budget_stage3.go")
-	if err != nil {
-		t.Fatalf("read stage-3 source: %v", err)
-	}
-	body := string(source)
-	if got := strings.Count(body, "planCandidateNarrowing("); got != 2 {
+	if got := countCallsInFile(t, "chaos4636_budget_stage3.go", "planCandidateNarrowing"); got != 2 {
 		t.Fatalf("found %d planCandidateNarrowing call sites, want the two documented stage-3 arms", got)
 	}
-	if got := strings.Count(body, "AllocateItems(*plan,"); got != 2 {
-		t.Errorf("only %d of the 2 stage-3 arms pass an allocation into planCandidateNarrowing: "+
-			"the quota reaches enforcement at one arm and not the other, so a refusal on the silent arm "+
-			"carries no per-group numbers at all", got)
+}
+
+// countCallsInFile counts CALLS to a named function in one Go file, via the
+// AST rather than by counting substrings.
+//
+// The mechanism matters, and it is the round-three lesson generalised. A
+// substring count cannot tell code from a comment: commenting a call out
+// leaves the text in the file, so the count is unchanged and the pin stays
+// green while the call is gone. That is precisely how a deleted-versus-
+// commented mutation produced two different answers earlier in this branch.
+// Parsed with mode 0 the comments are never attached, so commented-out code
+// simply is not there.
+func countCallsInFile(t *testing.T, path string, name string) int {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
 	}
+	count := 0
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch fun := call.Fun.(type) {
+		case *ast.Ident:
+			if fun.Name == name {
+				count++
+			}
+		case *ast.SelectorExpr:
+			if fun.Sel.Name == name {
+				count++
+			}
+		}
+		return true
+	})
+	return count
 }

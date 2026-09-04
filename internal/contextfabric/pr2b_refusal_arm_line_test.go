@@ -188,3 +188,53 @@ func TestTheRetryRefusalArmCarriesTheQuotaToTheEmittedLine(t *testing.T) {
 	line := refusalLineFor(t, emitted, "retry_attempted=true")
 	assertQuotaReachedTheLine(t, line, 2)
 }
+
+// The three tests below replace three MORE source-text pins found by sweeping
+// the class rather than fixing the one instance that was reported.
+//
+// Each of the three asserted, by reading a .go file as text, a property that
+// is in fact observable by running the engine. The rule they were missing:
+// read the source only for a property that has no behavioural expression --
+// "this is derived in exactly ONE place", "there are exactly two call sites".
+// Everything a run can show, a run should show.
+
+// NOTE on a test that is deliberately NOT here. The `Plan: plan` mutant --
+// deleting that field from engine.go's synthesisAssemblyParams literal, which
+// makes every allocation unbounded and returns narration to the static caps --
+// is killed by TestTheAllocationTheEngineHandsSynthesisIsThePlansOwn below,
+// because an unset Plan yields an allocation with MaxItems 0. A separate
+// narration-flavoured test for the same mutant would need a much heavier
+// fixture (driver candidates and signal citations, so narration actually runs)
+// to prove nothing the next test does not already prove.
+
+// TestTheAllocationTheEngineHandsSynthesisIsThePlansOwn replaces the
+// source-grep pin in genkitruntime that asserted the engine sets
+// `Allocation:` and the projection reads `input.Allocation`.
+//
+// The engine is the only thing that can prove this: every test that builds its
+// own SynthesisInput passes whether or not production ever populates the
+// field. So this reads the SynthesisInput the ENGINE built.
+func TestTheAllocationTheEngineHandsSynthesisIsThePlansOwn(t *testing.T) {
+	t.Parallel()
+	const ceiling = 12
+	var seen []ItemAllocation
+	calls := 0
+	engine := budgetStageEngineWithTelemetry(t, budgetStageCohort(6), 2,
+		budgetStageOptions(ceiling, 0), &calls, &recordingTelemetry{},
+		func(input SynthesisInput) { seen = append(seen, input.Allocation) })
+
+	_, _ = engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"},
+		validInvestigationRequestWithConfirmedWindow())
+
+	if len(seen) == 0 {
+		t.Fatal("synthesis was never called; this test cannot say anything about what it was handed")
+	}
+	for index, allocation := range seen {
+		if allocation.MaxItems != ceiling {
+			t.Errorf("synthesis call %d was handed an allocation with MaxItems = %d, want the plan's own %d.\n"+
+				"Zero means the engine never set Allocation, so the model is told nothing about its budget in\n"+
+				"production while every test that builds its own SynthesisInput stays green.",
+				index, allocation.MaxItems, ceiling)
+		}
+	}
+}

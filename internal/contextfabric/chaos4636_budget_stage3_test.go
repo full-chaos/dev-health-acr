@@ -45,7 +45,10 @@ func budgetStageEngine(t *testing.T, cohort *Cohort, claimsPerMember int, option
 // on the EMITTED LINE instead of a captured struct. A captured struct is one
 // step short of what enforcement actually receives, which is the gap the
 // refusal-arm tests exist to close.
-func budgetStageEngineWithTelemetry(t *testing.T, cohort *Cohort, claimsPerMember int, options EngineOptions, calls *int, telemetry EngineTelemetry) *Engine {
+// The variadic capture hook receives every SynthesisInput the engine builds,
+// so a test can assert on what the engine ACTUALLY handed synthesis rather than
+// on a SynthesisInput the test constructed itself.
+func budgetStageEngineWithTelemetry(t *testing.T, cohort *Cohort, claimsPerMember int, options EngineOptions, calls *int, telemetry EngineTelemetry, capture ...func(SynthesisInput)) *Engine {
 	t.Helper()
 	graphCohort := cohort
 	engine, err := NewEngine(EngineDependencies{
@@ -73,6 +76,9 @@ func budgetStageEngineWithTelemetry(t *testing.T, cohort *Cohort, claimsPerMembe
 		}),
 		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
 			*calls++
+			for _, observe := range capture {
+				observe(input)
+			}
 			claims := []ClaimedFact{}
 			if input.Graph.Cohort != nil {
 				for _, member := range input.Graph.Cohort.Members {
