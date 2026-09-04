@@ -129,7 +129,13 @@ const (
 	// inheriting its window. Applies to the caller-supplied root ONLY -- a
 	// receipt is an accepted offer and a different follow-up question against
 	// it stays legitimate (see carryFrontier).
-	WindowCarryMissQuestionDrift WindowCarryOutcome = "miss_question_drift"
+	WindowCarryMissQuestionDrift WindowCarryOutcome = "miss_question_drift" // WindowCarryMissQuestionIndeterminate: the carry was rooted in parent_result_id
+	// and one of the two questions canonicalizes to the empty string, so the
+	// hash cannot tell it apart from every other punctuation-only question.
+	// Refused, and reported as its own basis rather than folded into drift --
+	// nothing was shown to DIFFER, the comparison simply has no identity to
+	// work with.
+	WindowCarryMissQuestionIndeterminate WindowCarryOutcome = "miss_question_indeterminate"
 )
 
 // windowCarryResult is resolveCarriedWindow's own return shape.
@@ -270,6 +276,18 @@ const (
 	// predicate that could not be evaluated means NOT PROVEN, never "proceed",
 	// and never a claim about what the origin said.
 	carryOriginUnverifiable
+	// carryOriginIndeterminateQuestion: one of the two questions has no
+	// identity to compare. A question consisting only of terminal punctuation
+	// ("?", "!!", "...") canonicalizes to the empty string, so EVERY such
+	// question shares one hash -- they are not the same question, they are
+	// questions the hash cannot tell apart.
+	//
+	// This is a THIRD refusal reason and not a spelling of either neighbour.
+	// It is not drift: nothing was shown to differ. It is not unverifiable in
+	// the unloadable sense: the origin read back perfectly. Folding it into
+	// either would put a false basis in the telemetry, which is the same
+	// mistake the three-state verdict exists to avoid.
+	carryOriginIndeterminateQuestion
 )
 
 // carryOriginSameQuestionVerdict is THE same-question containment. It is the
@@ -307,6 +325,28 @@ func (e *Engine) carryOriginSameQuestionVerdict(ctx context.Context, principal s
 	stored, err := carryLoadResult(ctx, e.results, principal, origin)
 	if err != nil {
 		return carryOriginUnverifiable
+	}
+	// EQUAL HASHES ARE NOT ENOUGH, and this guard is why (codex r1, HIGH).
+	//
+	// CanonicalizeQuestion strips trailing terminal punctuation, so "?", "!!"
+	// and "..." all reduce to the empty string and share ONE hash. Without
+	// this check, a result answering "?" satisfies the comparison for a
+	// request asking "!!" -- two unrelated questions -- and the containment is
+	// bypassed on every axis. Measured, not argued: all three axes returned
+	// `hit` for exactly that pair before this guard existed.
+	//
+	// The answer-reuse path already fails closed on precisely this collision
+	// and has since its own round-2 review (tryReuse, answer_reuse.go). The
+	// class was known and fixed one seam over; this seam did not mirror it.
+	// That is the whole lesson -- a guard that exists elsewhere in the same
+	// package is not a guard here.
+	//
+	// BOTH sides are checked, not just the request's. The reuse guard only
+	// needs the request's because the request is what it keys on; here the
+	// ORIGIN is a caller-named bearer reference, so an origin with no
+	// identity is exactly as unusable as a request with none.
+	if CanonicalizeQuestion(request.Question) == "" || CanonicalizeQuestion(stored.Result.Question) == "" {
+		return carryOriginIndeterminateQuestion
 	}
 	if QuestionHash(stored.Result.Question) != QuestionHash(request.Question) {
 		return carryOriginDrifted
@@ -593,6 +633,8 @@ func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Pri
 		return parentWalk
 	case carryOriginDrifted:
 		return windowCarryResult{Outcome: WindowCarryMissQuestionDrift}
+	case carryOriginIndeterminateQuestion:
+		return windowCarryResult{Outcome: WindowCarryMissQuestionIndeterminate}
 	default:
 		// Unverifiable: the origin could not be read. Refuse, but report what
 		// actually happened rather than claiming the origin said something.

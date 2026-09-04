@@ -498,3 +498,141 @@ func TestSameQuestionContainment_ARedeemedReceiptIsNeverGated(t *testing.T) {
 		})
 	}
 }
+
+// TestSameQuestionContainment_RefusesAQuestionWithNoIdentity is codex round 1's
+// HIGH finding, and it is the one that would have shipped.
+//
+// CanonicalizeQuestion strips trailing terminal punctuation, so "?", "!!" and
+// "..." all reduce to the empty string and therefore share ONE QuestionHash
+// (sha256 of ""). Equal hashes are not the same question here -- they are
+// questions the hash cannot tell apart. Before the guard, a parent answering
+// "?" carried a confirmed axis into a request asking "!!" on ALL THREE axes;
+// that was executed, not argued, before the fix went in.
+//
+// WHY IT MATTERS MORE THAN ITS SIZE. The answer-reuse path already fails
+// closed on exactly this collision and has since its own round-2 review. The
+// class was known and fixed one seam over, and this seam did not mirror it --
+// so the sweep that enumerated every carry PRODUCER was the wrong axis of
+// enumeration for this defect: every producer did reach the choke point, and
+// the hole was in what the choke point ACCEPTS.
+//
+// The refusal is reported as its own basis. Folding it into drift would claim
+// the two questions differ, which is precisely what cannot be established.
+func TestSameQuestionContainment_RefusesAQuestionWithNoIdentity(t *testing.T) {
+	t.Parallel()
+
+	for _, axis := range containmentAxes() {
+		t.Run(axis.name, func(t *testing.T) {
+			t.Parallel()
+
+			request := validInvestigationRequest()
+			request.Question = "!!"
+			prior := axis.carriable("result_punctuation_only", "?")
+
+			// PREMISE GUARD. This test is only meaningful while the two
+			// questions genuinely collide; if canonicalization is ever
+			// narrowed so they do not, the arm must fail loudly rather than
+			// pass by testing nothing.
+			if QuestionHash(prior.Question) != QuestionHash(request.Question) {
+				t.Fatalf("premise gone: %q and %q no longer share a hash, so this arm cannot exercise the collision", prior.Question, request.Question)
+			}
+			if CanonicalizeQuestion(request.Question) != "" {
+				t.Fatalf("premise gone: %q no longer canonicalizes to the empty string", request.Question)
+			}
+
+			store := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}
+			request.ParentResultID = prior.ResultID
+
+			got := axis.resolve(t, buildCarryTestEngine(t, store), request)
+			if got.hit {
+				t.Fatalf("%s carry HIT: a result answering %q was inherited by a request asking %q -- two unrelated questions that share a hash only because both canonicalize to the empty string", axis.name, prior.Question, request.Question)
+			}
+			if got.drift {
+				t.Errorf("%s reported question DRIFT: nothing was shown to differ, so claiming drift puts a false basis in the telemetry; the honest basis is that the question has no identity to compare", axis.name)
+			}
+			if got.outcome != "miss_question_indeterminate" {
+				t.Errorf("%s carry outcome = %q, want %q -- the refusal must name its real basis", axis.name, got.outcome, "miss_question_indeterminate")
+			}
+		})
+	}
+}
+
+// TestSameQuestionContainment_RefusesAHitWhoseOriginCannotBeRead is codex round
+// 1's MEDIUM #2: the `unverifiable` state was reachable but pinned by nothing.
+//
+// Deleting its branch left the ENTIRE package green (measured: 36 s full run),
+// because every existing arm stores both the hop and the origin. A missing
+// origin then falls through to compare an empty stored question and reports
+// question DRIFT -- a claim about what the origin said, made about an origin
+// that was never read. That is exactly the mislabelling the three-state
+// verdict exists to prevent, so the state needed a test, not just a constant.
+func TestSameQuestionContainment_RefusesAHitWhoseOriginCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		build func(originID, hopID, hopQuestion string) InvestigationResult
+		want  string
+	}{
+		{name: "window", build: containmentWindowHopDeclaringOrigin, want: "miss_unloadable"},
+		{name: "kind", build: containmentKindHopDeclaringOrigin, want: "miss_unloadable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			request := validInvestigationRequest()
+			// The hop is loadable, answers THIS question, and holds a
+			// carriable value whose declared origin is ABSENT from the store.
+			hop := tc.build("result_origin_absent", "result_hop_present", request.Question)
+			store := &staticResultStore{results: map[string]InvestigationResult{hop.ResultID: hop}}
+			request.ParentResultID = hop.ResultID
+
+			var got containmentOutcome
+			for _, axis := range containmentAxes() {
+				if axis.name == tc.name {
+					got = axis.resolve(t, buildCarryTestEngine(t, store), request)
+				}
+			}
+			if got.hit {
+				t.Fatalf("%s carry HIT on a value whose origin could not be read: an unreadable origin is NOT PROVEN, never proceed", tc.name)
+			}
+			if got.drift {
+				t.Errorf("%s reported question DRIFT for an origin that was never read -- a predicate that could not be evaluated must not make a claim about what the origin said", tc.name)
+			}
+			if got.outcome != tc.want {
+				t.Errorf("%s carry outcome = %q, want %q", tc.name, got.outcome, tc.want)
+			}
+		})
+	}
+}
+
+// containmentWindowHopDeclaringOrigin / containmentKindHopDeclaringOrigin build
+// a loadable hop whose carried value names an origin id the store does not
+// hold, which is the only way to reach the unverifiable branch.
+func containmentWindowHopDeclaringOrigin(originID, hopID, hopQuestion string) InvestigationResult {
+	hop := carriableWindowResult(hopID, hopQuestion)
+	hop.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{{
+		Member:        contractsv1.ContextFabricStructureNeedWindow,
+		AppliedValue:  string(RelativeWindowTrailing90D),
+		Source:        contractsv1.ContextFabricStructureSourceCarried,
+		PriorResultID: originID,
+		Provenance:    contractsv1.ContextFabricStructureClarificationConfirmed,
+		Disposition:   contractsv1.ContextFabricStructureDispositionApplied,
+	}}
+	return hop
+}
+
+func containmentKindHopDeclaringOrigin(originID, hopID, hopQuestion string) InvestigationResult {
+	hop := validInvestigationResult()
+	hop.ResultID = hopID
+	hop.Question = hopQuestion
+	hop.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{{
+		Member:        contractsv1.ContextFabricStructureNeedExpectedKind,
+		AppliedValue:  string(contractsv1.ContextFabricSubjectTeam),
+		Source:        contractsv1.ContextFabricStructureSourceCarried,
+		PriorResultID: originID,
+		Provenance:    contractsv1.ContextFabricStructureClarificationConfirmed,
+		Disposition:   contractsv1.ContextFabricStructureDispositionApplied,
+	}}
+	return hop
+}

@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -178,6 +179,59 @@ func smuggle() windowCarryResult {
 	}
 }
 
+// TestCarryGateClosure_CatchesEveryConstructionShape is the per-shape negative
+// control for the walk, and it exists because codex round 1's shape list was
+// PARTLY right: two of the four shapes it named were real misses, one was
+// already disclosed, and one (a literal inside a closure) it argued was a miss
+// when measurement showed the walk already caught it.
+//
+// That mix is the reason each row is measured here rather than reasoned about.
+// A claim that an instrument misses a shape, and a claim that it catches one,
+// are both testable, and this table is what makes either provable.
+func TestCarryGateClosure_CatchesEveryConstructionShape(t *testing.T) {
+	t.Parallel()
+
+	const header = "package sample\n\ntype windowCarryResult struct{ W *int; S string; Outcome string; D int; V bool }\n\nconst WindowCarryHit = \"hit\"\n\n"
+
+	for _, tc := range []struct {
+		name string
+		src  string
+		// wantSites is how many hit constructions the walk must attribute.
+		wantSites int
+		// wantUnkeyed is how many unattributable literals it must REFUSE.
+		wantUnkeyed int
+	}{
+		{name: "keyed literal", wantSites: 1,
+			src: `func ungated() windowCarryResult { return windowCarryResult{Outcome: WindowCarryHit} }`},
+		{name: "post-construction assignment", wantSites: 1,
+			src: `func ungated() windowCarryResult { r := windowCarryResult{}; r.Outcome = WindowCarryHit; return r }`},
+		{name: "literal inside a closure", wantSites: 1,
+			src: `func ungated() windowCarryResult { f := func() windowCarryResult { return windowCarryResult{Outcome: WindowCarryHit} }; return f() }`},
+		{name: "literal behind a type alias", wantSites: 1,
+			src: "type wAlias = windowCarryResult\n\nfunc ungated() windowCarryResult { return wAlias{Outcome: WindowCarryHit} }"},
+		{name: "unkeyed literal is REFUSED, not silently missed", wantSites: 0, wantUnkeyed: 1,
+			src: `func ungated() windowCarryResult { return windowCarryResult{nil, "", WindowCarryHit, 0, false} }`},
+		{name: "a MISS literal is not a hit", wantSites: 0,
+			src: `func ungated() windowCarryResult { return windowCarryResult{Outcome: "miss_no_reference"} }`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "s.go"), []byte(header+tc.src+"\n"), 0o600); err != nil {
+				t.Fatalf("writing the fixture: %v", err)
+			}
+			pkg := parsePackageForClosure(t, dir)
+			sites, unkeyed := pkg.hitConstructionSitesAndUnkeyed("windowCarryResult", "WindowCarryHit")
+			if len(sites) != tc.wantSites {
+				t.Errorf("attributed %d hit site(s), want %d -- the walk cannot see this construction shape, so an ungated producer using it would pass the closure proof", len(sites), tc.wantSites)
+			}
+			if len(unkeyed) != tc.wantUnkeyed {
+				t.Errorf("refused %d unkeyed literal(s), want %d (%v)", len(unkeyed), tc.wantUnkeyed, unkeyed)
+			}
+		})
+	}
+}
+
 // chokePointCall is the method every gated producer must call. Named once so
 // the assertion and the failure message cannot disagree.
 const chokePointCall = "carryOriginSameQuestionVerdict"
@@ -198,6 +252,10 @@ type closurePackage struct {
 	// two same-named methods a call reached. requireUnambiguous refuses those
 	// rather than guessing.
 	bare map[string][]string
+	// aliases maps an alias name to the type it aliases, so a hit constructed
+	// through `type wAlias = windowCarryResult` is still attributed to the
+	// real result type.
+	aliases map[string]string
 	// calls maps a callee BARE name to the set of QUALIFIED enclosing function
 	// names that call it. Bare on the callee side because that is all a
 	// selector expression carries without type information.
@@ -252,6 +310,7 @@ func parsePackageForClosure(t *testing.T, dir string) *closurePackage {
 		fset:      fset,
 		functions: map[string]*ast.FuncDecl{},
 		bare:      map[string][]string{},
+		aliases:   map[string]string{},
 		calls:     map[string]map[string]bool{},
 	}
 	entries, err := os.ReadDir(dir)
@@ -270,6 +329,22 @@ func parsePackageForClosure(t *testing.T, dir string) *closurePackage {
 		}
 		parsed++
 		for _, decl := range file.Decls {
+			// TYPE ALIASES first (codex r1): `type wAlias = windowCarryResult`
+			// makes `wAlias{Outcome: WindowCarryHit}` a hit construction the
+			// name-matching walk below could not see. Measured, not assumed --
+			// the alias shape was probed and MISSED before this.
+			if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.TYPE {
+				for _, spec := range gen.Specs {
+					ts, ok := spec.(*ast.TypeSpec)
+					if !ok || !ts.Assign.IsValid() {
+						continue // a defined type is a different type; only an ALIAS aliases
+					}
+					if ident, ok := ts.Type.(*ast.Ident); ok {
+						pkg.aliases[ts.Name.Name] = ident.Name
+					}
+				}
+				continue
+			}
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok {
 				continue
@@ -340,24 +415,89 @@ type hitSite struct {
 // each.
 //
 // KEYED ON THE OUTCOME FIELD, not on the type alone: a miss literal of the
-// same type is not a carry and gating it would be meaningless. That also
-// means a hit minted by mutating an existing value rather than by a literal
-// would be invisible here -- a real limit of this instrument, stated rather
-// than papered over, and the reason the per-axis behavioural arms remain.
+// same type is not a carry and gating it would be meaningless.
+//
+// FOUR CONSTRUCTION SHAPES ARE HANDLED, three of them added after codex round
+// 1 measured which ones this walk actually missed:
+//
+//	keyed literal                 CAUGHT (the baseline)
+//	literal inside a closure      CAUGHT -- measured; the round ARGUED this was
+//	                              a miss and it is not, because ast.Inspect
+//	                              descends into function literals and attributes
+//	                              them to the enclosing declaration
+//	post-construction assignment  now CAUGHT (`r.Outcome = Hit`); it used to be
+//	                              a DISCLOSED limit, and disclosing a hole is
+//	                              not closing one
+//	literal behind a type alias   now CAUGHT (`type wAlias = windowCarryResult`)
+//	UNKEYED literal               REFUSED outright -- it sets Outcome
+//	                              positionally, which cannot be attributed
+//	                              without type information, and an
+//	                              unattributable construction is an unproven one
+//
+// The behavioural arms remain regardless: this walk reasons about syntax, and
+// syntax cannot say whether the gate DECIDES correctly.
 func (p *closurePackage) hitConstructionSites(resultType, hitConstant string) []hitSite {
+	sites, unkeyed := p.hitConstructionSitesAndUnkeyed(resultType, hitConstant)
+	if len(unkeyed) > 0 {
+		panic("unkeyed " + resultType + " literal(s) this walk cannot attribute: " + strings.Join(unkeyed, ", "))
+	}
+	return sites
+}
+
+// hitConstructionSitesAndUnkeyed is the walk proper. Unkeyed literals are
+// returned separately rather than swallowed, so the caller decides whether an
+// unreadable construction is a test failure (production) or an expected probe
+// result (the negative controls).
+func (p *closurePackage) hitConstructionSitesAndUnkeyed(resultType, hitConstant string) ([]hitSite, []string) {
 	var sites []hitSite
+	var unkeyed []string
 	for name, fn := range p.functions {
 		if fn.Body == nil {
 			continue
 		}
 		bareName := fn.Name.Name
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			// POST-CONSTRUCTION ASSIGNMENT (codex r1): `r.Outcome = Hit`
+			// mints a hit without any literal naming it. Previously this was
+			// a DISCLOSED limit; disclosing a hole is not closing one, so it
+			// is closed here.
+			if assign, ok := n.(*ast.AssignStmt); ok {
+				for i, lhs := range assign.Lhs {
+					sel, ok := lhs.(*ast.SelectorExpr)
+					if !ok || sel.Sel.Name != "Outcome" || i >= len(assign.Rhs) {
+						continue
+					}
+					if rhs, ok := assign.Rhs[i].(*ast.Ident); ok && rhs.Name == hitConstant {
+						pos := p.fset.Position(assign.Pos())
+						sites = append(sites, hitSite{file: filepath.Base(pos.Filename), line: pos.Line, enclosing: name, enclosingBare: bareName})
+					}
+				}
+				return true
+			}
 			lit, ok := n.(*ast.CompositeLit)
 			if !ok {
 				return true
 			}
 			ident, ok := lit.Type.(*ast.Ident)
-			if !ok || ident.Name != resultType {
+			if !ok || p.resolveAlias(ident.Name) != resultType {
+				return true
+			}
+			// UNKEYED LITERAL (codex r1): `windowCarryResult{w, id, Hit, 0, false}`
+			// sets Outcome positionally, which this walk cannot attribute
+			// without type information. Rather than under-report -- an
+			// unattributable construction is an unproven one -- refuse the
+			// form outright, so the closure proof never depends on a shape it
+			// cannot read.
+			hasKeys := false
+			for _, elt := range lit.Elts {
+				if _, ok := elt.(*ast.KeyValueExpr); ok {
+					hasKeys = true
+					break
+				}
+			}
+			if len(lit.Elts) > 0 && !hasKeys {
+				pos := p.fset.Position(lit.Pos())
+				unkeyed = append(unkeyed, fmt.Sprintf("%s:%d (in %s)", filepath.Base(pos.Filename), pos.Line, name))
 				return true
 			}
 			for _, elt := range lit.Elts {
@@ -385,7 +525,16 @@ func (p *closurePackage) hitConstructionSites(resultType, hitConstant string) []
 		}
 		return sites[i].line < sites[j].line
 	})
-	return sites
+	return sites, unkeyed
+}
+
+// resolveAlias follows a type alias to the type it names, one hop, which is
+// all Go permits in a single declaration and all this walk needs.
+func (p *closurePackage) resolveAlias(name string) string {
+	if target, ok := p.aliases[name]; ok {
+		return target
+	}
+	return name
 }
 
 // callersOf returns the sorted set of QUALIFIED function names in this package

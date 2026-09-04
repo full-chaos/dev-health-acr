@@ -112,7 +112,13 @@ const (
 	// inheriting its confirmed kind. Caller-supplied root ONLY -- a receipt is
 	// an accepted offer and a different follow-up question against it stays
 	// legitimate (see carryFrontier, chaos4360_carry.go).
-	KindCarryMissQuestionDrift KindCarryOutcome = "miss_question_drift"
+	KindCarryMissQuestionDrift KindCarryOutcome = "miss_question_drift" // KindCarryMissQuestionIndeterminate: the carry was rooted in parent_result_id
+	// and one of the two questions canonicalizes to the empty string, so the
+	// hash cannot tell it apart from every other punctuation-only question.
+	// Refused, and reported as its own basis rather than folded into drift --
+	// nothing was shown to DIFFER, the comparison simply has no identity to
+	// work with.
+	KindCarryMissQuestionIndeterminate KindCarryOutcome = "miss_question_indeterminate"
 )
 
 // kindCarryResult is resolveCarriedKind's return shape.
@@ -187,6 +193,8 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 		return parentWalk
 	case carryOriginDrifted:
 		return kindCarryResult{Outcome: KindCarryMissQuestionDrift}
+	case carryOriginIndeterminateQuestion:
+		return kindCarryResult{Outcome: KindCarryMissQuestionIndeterminate}
 	default:
 		return kindCarryResult{Outcome: KindCarryMissUnloadable}
 	}

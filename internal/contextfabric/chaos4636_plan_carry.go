@@ -82,7 +82,13 @@ const (
 	// axis had NO such gate at all until CHAOS-5003, which is exactly the miss
 	// a per-path containment cannot prevent -- nobody enumerated this producer,
 	// so no path-level rule was ever written for it.
-	PlanCarryMissQuestionDrift PlanCarryOutcome = "miss_question_drift"
+	PlanCarryMissQuestionDrift PlanCarryOutcome = "miss_question_drift" // PlanCarryMissQuestionIndeterminate: the carry was rooted in parent_result_id
+	// and one of the two questions canonicalizes to the empty string, so the
+	// hash cannot tell it apart from every other punctuation-only question.
+	// Refused, and reported as its own basis rather than folded into drift --
+	// nothing was shown to DIFFER, the comparison simply has no identity to
+	// work with.
+	PlanCarryMissQuestionIndeterminate PlanCarryOutcome = "miss_question_indeterminate"
 )
 
 // planCarryResult is resolveCarriedPlan's return shape.
@@ -143,6 +149,8 @@ func (e *Engine) resolveCarriedPlan(ctx context.Context, principal storage.Princ
 		return parentWalk
 	case carryOriginDrifted:
 		return planCarryResult{Outcome: PlanCarryMissQuestionDrift}
+	case carryOriginIndeterminateQuestion:
+		return planCarryResult{Outcome: PlanCarryMissQuestionIndeterminate}
 	default:
 		return planCarryResult{Outcome: PlanCarryMissUnloadable}
 	}
