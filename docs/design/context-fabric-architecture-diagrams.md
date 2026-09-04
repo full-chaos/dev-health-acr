@@ -1424,6 +1424,8 @@ flowchart TD
     ST --> OUT
     OUTROWS --> OUT
 
+    OUT --> REUSE["the REUSE degrade — a narrowing stage like any other.<br/>Strips evidence this caller may no longer see and, when<br/>stripping empties an object the contract requires to carry<br/>evidence, DROPS whole candidates, members, drivers,<br/>findings and paths. APPENDS one row (stage=reuse,<br/>cause=reuse_auxiliary_refs_stripped) and re-derives.<br/>Impact is decided by WHAT was lost: depth for references<br/>alone, scope when whole objects went."]
+    REUSE --> OUT
     OUT --> PROJ["answerprojection.Project — APPENDS a row per cut it makes,<br/>then RE-DERIVES state from the extended set.<br/>SUPERSEDES 'copied verbatim, never re-derived' for the<br/>outcome layer only: a copied block cannot carry a NAME it<br/>never had, and naming the reduced requirement is the point.<br/>The counts below are still copied verbatim, un-clamped."]
     OUT --> HARNESS["cmd/acr-trial-merge-two-turn's chaos4525StampTerminal<br/>now reads result.completeness — no longer a side channel"]
     OUT --> ASKDEV["ask-dev renders result.completeness<br/>(pin bump required before this is consumed)"]
@@ -1431,7 +1433,7 @@ flowchart TD
     classDef fixed fill:#123d1c,stroke:#3fa45b,color:#e8ffe8
     classDef gate fill:#3d2a12,stroke:#c08a3e,color:#fff3e0
     classDef unreachable fill:#3a1b1b,stroke:#a4453f,color:#ffe8e8
-    class OUT,PROJ,HARNESS,ASKDEV,ST,OUTROWS fixed
+    class OUT,PROJ,REUSE,HARNESS,ASKDEV,ST,OUTROWS fixed
     class TR,TRWHICH,OC,IC gate
     class ONAT,ONAP unreachable
 ```
@@ -1479,12 +1481,33 @@ flowchart TD
    requirement-derivation seam, and a vocabulary member no producer can reach
    is a promise rather than a member.
 
+5. **The stage vocabulary has FOUR members, and the fourth is the one that
+   proves the rule.** `planning`, `assembled_result`, `projection`, `reuse`.
+   The reuse degrade was missed on the first pass and found by adversarial
+   review, serving an answer that had lost six of seven evidence references
+   and three whole objects while still reporting `complete`. It is a WORSE
+   instance than the assembly case this layer was built for — assembly
+   refused, reuse serves — and it gets its own member rather than borrowing
+   `assembled_result` because a reader must be able to tell which surface cut
+   the answer: a budget the caller can widen is a different problem from an
+   authorization that changed underneath a cached answer.
+
+   The reuse stage also re-derives INSIDE the degrade, not only at the
+   serving surface. That looks redundant and is not: the degrade validates
+   the payload before anything is served, and the single-authority check
+   rejects a block whose state disagrees with its own rows — so appending
+   without re-deriving would turn every degraded reuse into a refusal,
+   trading a usable narrowed answer for a disclosure gap.
+
 **Update rule.** A new `Investigate()` exit path (a sixth veto/terminal
 shape) must stamp `Completeness` before its own `Validate`, in the same PR,
-and add its box to this diagram. A new narrowing surface between planning and
+and add its box to this diagram. **Any narrowing surface between planning and
 the served document APPENDS its own outcome rows and re-derives the state —
-it never rewrites another stage's row — and adds itself to this diagram in
-the same PR.
+it never rewrites another stage's row — declares its own member of the stage
+vocabulary, and adds itself to this diagram in the same PR.** The reuse stage
+is here because that rule was applied to a surface nobody had counted as a
+narrowing stage; the next one will be found the same way if it is not
+declared.
 
 ---
 
@@ -1525,7 +1548,7 @@ erDiagram
   }
   ANSWER_PLAN ||--o{ PLAN_REQUIREMENT_OUTCOME : "discloses (S7c, append-only)"
   PLAN_REQUIREMENT_OUTCOME {
-    OutcomeStage Stage "planning / assembled_result / projection -- ITS OWN vocabulary, NOT the plan's"
+    OutcomeStage Stage "planning / assembled_result / projection / reuse -- ITS OWN vocabulary, NOT the plan's"
     string Requirement "the obligation/role/subject COORDINATE, never a minted id"
     AnswerObligation Obligation "wire-mirrored, both-directions parity test"
     PlanRequirementOutcome Outcome "satisfied / narrowed / unavailable / not_attempted / not_applicable"
