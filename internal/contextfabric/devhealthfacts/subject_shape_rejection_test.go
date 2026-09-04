@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -183,5 +184,107 @@ func TestSourceHealthProviderDisclosesRejectionOnTheQueriedBranch(t *testing.T) 
 	}
 	if result.OmittedCount != 1 {
 		t.Fatalf("OmittedCount = %d, want 1", result.OmittedCount)
+	}
+}
+
+// wellShapedSubjectByKind gives every SubjectKind this package's providers
+// support a well-shaped, correctly-prefixed/-composited constructor, reusing
+// each kind's own existing test helper (never a hand-rolled shape) so this
+// table can never drift from what the providers' own happy-path tests
+// already exercise.
+var wellShapedSubjectByKind = map[contextfabric.SubjectKind]func() contextfabric.SubjectRef{
+	contextfabric.SubjectTeam:                         func() contextfabric.SubjectRef { return teamSubject("team-cov") },
+	contextfabric.SubjectOrganization:                 func() contextfabric.SubjectRef { return organizationSubject("org-1") },
+	contextfabric.SubjectRepository:                   func() contextfabric.SubjectRef { return repoSubject("repo-cov") },
+	contextfabric.SubjectWorkItem:                     func() contextfabric.SubjectRef { return workItemSubject("repo-cov", "WIDGET-1") },
+	contextfabric.SubjectProject:                      func() contextfabric.SubjectRef { return projectSubject("linear", "proj-cov") },
+	contextfabric.SubjectPullRequest:                  func() contextfabric.SubjectRef { return pullRequestSubject("repo-cov", "1") },
+	contextfabric.SubjectDeployment:                   func() contextfabric.SubjectRef { return deploymentSubject("repo-cov", "deploy-1") },
+	contextfabric.SubjectIncident:                     func() contextfabric.SubjectRef { return incidentSubject("incident-1") },
+	contractsv1.ContextFabricSubjectPullRequestReview: func() contextfabric.SubjectRef { return reviewSubject("repo-cov", "review-1") },
+	contractsv1.ContextFabricSubjectCIRun:             func() contextfabric.SubjectRef { return ciRunSubject("repo-cov", "run-1") },
+}
+
+// TestEveryProviderDisclosesShapeRejectionAlongsideItsOwnSubjectKind closes
+// the gap the lane itself flagged as its weakest point going into round 2:
+// the three tests above are executed proof for exactly 3 of the 21
+// registered providers, leaving 18 covered only by the shared mutation
+// battery plus a STATIC producer/kind cross-check -- neither of which is an
+// executed proof that a given provider's OWN deferred call actually fires
+// correctly for a subject of its OWN kind.
+//
+// The provider list is read from devhealthfacts.NewProviders itself, never
+// hand-typed, so a provider added later is automatically included -- the
+// count pin below exists so that inclusion is never silent: a provider
+// whose SupportedSubjectKinds[0] has no registered well-shaped constructor
+// above fails loudly (via t.Fatalf), not by being skipped.
+func TestEveryProviderDisclosesShapeRejectionAlongsideItsOwnSubjectKind(t *testing.T) {
+	handler := &recordingSlogHandler{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	client := &fakeClient{}
+	providers := devhealthfacts.NewProviders(client)
+
+	// Count pin: NewProviders' own doc comment says "one provider per
+	// registered FactKind". A provider added or removed must update this
+	// number deliberately.
+	const wantProviderCount = 21
+	if len(providers) != wantProviderCount {
+		t.Fatalf("devhealthfacts.NewProviders() returned %d providers, want %d -- if a provider was deliberately added or removed, update this pin AND add/remove its well-shaped constructor in wellShapedSubjectByKind", len(providers), wantProviderCount)
+	}
+
+	for _, provider := range providers {
+		capability := provider.Capability()
+		t.Run(string(capability.Name), func(t *testing.T) {
+			if len(capability.SupportedSubjectKinds) == 0 {
+				t.Fatalf("provider %s declares no SupportedSubjectKinds", capability.Name)
+			}
+			kind := capability.SupportedSubjectKinds[0]
+			wellShaped, ok := wellShapedSubjectByKind[kind]
+			if !ok {
+				t.Fatalf("no well-shaped constructor registered for subject kind %q (provider %s) -- add one to wellShapedSubjectByKind", kind, capability.Name)
+			}
+			shapeRejected := contextfabric.SubjectRef{Kind: kind, CanonicalID: "shape-rejected-sibling", Label: "shape-rejected-sibling"}
+
+			result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+				Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+				Kind: capability.Kind, Subjects: []contextfabric.SubjectRef{wellShaped(), shapeRejected},
+			})
+			if err != nil {
+				t.Fatalf("ReadFacts() error = %v", err)
+			}
+
+			if result.State != contextfabric.SourceTruncated {
+				t.Fatalf("State = %q, want %q: this provider's own shape-rejected sibling was not disclosed", result.State, contextfabric.SourceTruncated)
+			}
+			if !strings.Contains(result.Reason, "subject_id_shape_rejected") {
+				t.Fatalf("Reason = %q, want it to contain %q", result.Reason, "subject_id_shape_rejected")
+			}
+			if result.OmittedCount != 1 {
+				t.Fatalf("OmittedCount = %d, want 1", result.OmittedCount)
+			}
+
+			var found bool
+			for _, record := range handler.snapshot() {
+				if record.Message != "context_fabric_subject_id_shape_rejected" {
+					continue
+				}
+				attrs := recordAttrs(record)
+				producer, ok := attrs["producer"]
+				if !ok || producer.String() != capability.Name {
+					continue
+				}
+				recordedKind, ok := attrs["kind"]
+				if !ok || recordedKind.String() != string(capability.Kind) {
+					continue
+				}
+				found = true
+			}
+			if !found {
+				t.Fatalf("no context_fabric_subject_id_shape_rejected slog record emitted for producer=%s kind=%s", capability.Name, capability.Kind)
+			}
+		})
 	}
 }
