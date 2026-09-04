@@ -37,7 +37,7 @@ func ComputeAnswerCompleteness(result InvestigationResult) contractsv1.ContextFa
 	// It also means this function must never DROP rows: rebuilding the
 	// block without them would silently delete another stage's disclosure,
 	// which is the one thing the append invariant forbids.
-	outcomes := result.Completeness.Outcomes
+	outcomes := accountForPublishedPlanRequirements(result)
 	return contractsv1.ContextFabricAnswerCompleteness{
 		TerminalStatus:    result.Status,
 		TerminalReason:    answerTerminalReason(result),
@@ -88,4 +88,72 @@ func answerTerminalReason(result InvestigationResult) contractsv1.ContextFabricT
 		}
 		return contractsv1.ContextFabricTerminalReasonUndisclosed
 	}
+}
+
+// accountForPublishedPlanRequirements returns the carried outcome set with a
+// planning-stage row added for every requirement the plan PUBLISHES that no
+// carried row names.
+//
+// THE DEFECT IT CLOSES. Publishing the requirement rows and seeding their
+// outcomes were two steps in two places. The rows are stamped where the plan
+// is created, so every terminal downstream of planning carries them. The seed
+// ran inside finalization -- which the window- and structure-veto terminals
+// never reach. Those terminals served, and SAVED, a plan describing
+// requirements that nothing accounted for; the document-level join, which
+// holds in both directions, then refuses the saved document. The failure is
+// invisible from any single exit's tests because each exit is individually
+// well-formed. It only appears when the two published arrays are read
+// together, which is the one thing a reader of the artifact does.
+//
+// WHY HERE, AND NOT AT EACH EXIT. This function is the choke point every
+// independent exit already calls immediately before its own Validate. Fixing
+// it per-exit would mean the next exit added is wrong by default and stays
+// wrong until someone remembers; fixing it here means an exit cannot publish
+// requirements it does not account for, because the accounting happens on the
+// way out rather than on the way in. The rule is a property of the surface,
+// so it lives at the surface.
+//
+// WHY GAP-FILL RATHER THAN SEED-IF-EMPTY. Filling only when the set is empty
+// would leave the join broken for the harder, quieter case: an exit that
+// appended rows for some requirements and not others. Gap-filling is monotone
+// -- it only ever adds -- so it cannot violate the append invariant this file
+// states above, and it is idempotent, so running it twice is running it once.
+//
+// It is NOT a second authority for what the requirements are: the identities
+// come from the plan's own published array, so a row it adds cannot describe
+// a requirement the plan does not publish.
+func accountForPublishedPlanRequirements(result InvestigationResult) []RequirementOutcomeRow {
+	outcomes := result.Completeness.Outcomes
+	if result.AnswerPlan == nil || len(result.AnswerPlan.Requirements) == 0 {
+		return outcomes
+	}
+	accounted := make(map[string]bool, len(outcomes))
+	for _, row := range outcomes {
+		if row.Requirement != "" {
+			accounted[row.Requirement] = true
+		}
+	}
+	gaps := make([]RequirementOutcomeRow, 0, len(result.AnswerPlan.Requirements))
+	for _, seeded := range SeedOutcomesFromPublishedPlanRequirements(result.AnswerPlan.Requirements) {
+		if accounted[seeded.Requirement] {
+			continue
+		}
+		// Mark before appending: two published rows sharing an identity
+		// would otherwise each add a row, and the join reads "exactly one".
+		accounted[seeded.Requirement] = true
+		gaps = append(gaps, seeded)
+	}
+	if len(gaps) == 0 {
+		return outcomes
+	}
+	// COPY, then append. `result` arrives by value but its slice header
+	// still points at the CALLER's backing array, so appending onto
+	// `outcomes` directly would write the gap rows into that array whenever
+	// it has spare capacity -- mutating a caller this function documents
+	// itself as not mutating, and doing so only for some capacities, which
+	// is the kind of defect that reproduces on Tuesdays.
+	accountedSet := make([]RequirementOutcomeRow, 0, len(outcomes)+len(gaps))
+	accountedSet = append(accountedSet, outcomes...)
+	accountedSet = append(accountedSet, gaps...)
+	return accountedSet
 }

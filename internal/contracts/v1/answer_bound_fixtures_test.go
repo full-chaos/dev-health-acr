@@ -394,6 +394,17 @@ const irreducibleAnswerBytes = 1023
 // its maximum LEGAL encoding (the longest obligation, then two escaped
 // segments filling the 256-character bound) and all three cause vocabularies
 // present at their longest member.
+// 521144216 -> 521151843 (+7627): the plan's requirement array now takes the
+// 200 LONGEST coordinates rather than the first 200 the product walk emits.
+// The rows were each individually maximal in the fields the builder chose, and
+// the array was not: the coordinate is itself a byte cost, carried in three
+// fields and again in the concatenated identity, and 580 of the 780 product
+// members were never considered. The old fixture left "health/member/
+// pull_request" (589 bytes) out while taking "state/group/team" (569) -- so
+// the pinned number was BELOW a legal document, which is the one direction a
+// ceiling must never be wrong in. Selection is by measured serialized length,
+// ties broken on the identity so the fixture is deterministic.
+//
 // 521103416 -> 521144216 (+40800): the refinement's third cause. The fixture
 // carried basis and overrun and omitted coverage, which the refinement permits
 // alongside them -- so the previous number was not a maximum. Found by review;
@@ -416,7 +427,7 @@ const irreducibleAnswerBytes = 1023
 // arrays on this document, so the maximum grew by construction rather than by
 // a bound drifting -- and the irreducible floor above did NOT move, because
 // both arrays are omitempty and the smallest answer has neither.
-const maximalAnswerBytes = 521144216
+const maximalAnswerBytes = 521151843
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {

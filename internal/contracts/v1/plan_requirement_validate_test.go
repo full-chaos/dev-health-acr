@@ -554,7 +554,13 @@ func TestALosslessOutcomeRowMayNotRecordARefinement(t *testing.T) {
 	if err == nil {
 		t.Fatal("a satisfied row carrying a refinement was accepted")
 	}
-	if !strings.Contains(err.Error(), "lost nothing and must record no refinement") {
+	// The rule became an ALLOW-LIST -- only `narrowed` may carry a refinement
+	// -- so the rejection now names the outcome and the one token that may.
+	// Both halves are checked: the outcome, so the message is about THIS row,
+	// and the permitted token, so the message is the allow-list's and not
+	// some other clause that happens to mention `satisfied`.
+	if !strings.Contains(err.Error(), string(ContextFabricRequirementSatisfied)) ||
+		!strings.Contains(err.Error(), string(ContextFabricRequirementNarrowed)) {
 		t.Fatalf("rejected for the wrong reason: %v", err)
 	}
 }
@@ -963,4 +969,217 @@ func TestThePlanRequirementLengthAndCountBoundsAreEnforced(t *testing.T) {
 			t.Fatalf("the error does not name which row failed: %v", err)
 		}
 	})
+}
+
+// rowCarryingAReduction builds a row for `outcome` that declared 4 and served
+// 1, legal in every respect EXCEPT any refinement the caller adds.
+//
+// One shape for every outcome, so the only thing varying across the cases
+// below is the outcome token itself. The impact and cause fields follow the
+// pairing rule the row validator states: the lossless outcomes must carry
+// impact `none` and name NO cause, every other outcome must carry a non-none
+// impact and name one.
+func rowCarryingAReduction(outcome ContextFabricPlanRequirementOutcome) ContextFabricPlanRequirementOutcomeRow {
+	row := ContextFabricPlanRequirementOutcomeRow{
+		Stage: ContextFabricOutcomeStageAssembledResult, Requirement: "state/subject/project",
+		Obligation: "state", Outcome: outcome, Declared: 4, Served: 1,
+	}
+	if outcome == ContextFabricRequirementSatisfied || outcome == ContextFabricRequirementNotApplicable {
+		row.Impact = ContextFabricAnswerImpactNone
+		return row
+	}
+	row.Impact = ContextFabricAnswerImpactScope
+	row.CauseOverrun = ContextFabricBudgetOverrunItems
+	row.CauseObserved = true
+	return row
+}
+
+// ONLY `narrowed` MAY CARRY A REFINEMENT — the validator half.
+//
+// Written over the CLOSED VOCABULARY rather than over a hand-written list of
+// tokens, because the rule this pins is an allow-list and a hand-written list
+// is exactly what an allow-list is meant to stop being. A sixth outcome added
+// to the vocabulary is covered by this test on the day it is added.
+//
+// The previous rule was a deny-list naming `satisfied` and `not_applicable`,
+// so `unavailable` and `not_attempted` could carry a chain reducing a
+// population they never served. The fixture below is that document: declared
+// 4, served 1, chain 4 -> 1, which reconciles and was accepted.
+//
+// EVERY case first asserts the SAME row validates WITHOUT the refinement.
+// Without that control a rejection could come from any other rule -- the
+// pairing rule, the counts, the cause vocabulary -- and the test would pass
+// while the rule it names does nothing.
+func TestOnlyNarrowedMayCarryARefinement(t *testing.T) {
+	t.Parallel()
+	refinement := ContextFabricRequirementRefinement{
+		Stage: ContextFabricOutcomeStageAssembledResult, Overrun: ContextFabricBudgetOverrunItems,
+		Before: 4, After: 1,
+	}
+	accepted, rejected := 0, 0
+	for _, outcome := range ContextFabricPlanRequirementOutcomeVocabulary() {
+		base := rowCarryingAReduction(outcome)
+		if err := ValidateContextFabricPlanRequirementOutcomeRow(base); err != nil {
+			t.Fatalf("the control row for outcome %q does not validate without a refinement (%v); "+
+				"a rejection below could not be attributed to the refinement rule", outcome, err)
+		}
+		withRefinement := base
+		withRefinement.Refinements = []ContextFabricRequirementRefinement{refinement}
+		err := ValidateContextFabricPlanRequirementOutcomeRow(withRefinement)
+
+		if outcome == ContextFabricRequirementNarrowed {
+			accepted++
+			if err != nil {
+				t.Errorf("outcome %q was refused a refinement (%v); it is the one outcome that describes a reduction", outcome, err)
+			}
+			continue
+		}
+		rejected++
+		if err == nil {
+			t.Errorf("outcome %q carried a refinement and validated; only %q describes a population that shrank and was still served",
+				outcome, ContextFabricRequirementNarrowed)
+			continue
+		}
+		// ATTRIBUTE it. The message must name this outcome, or the rejection
+		// came from some other clause and this case proved nothing.
+		if !strings.Contains(err.Error(), string(outcome)) {
+			t.Errorf("outcome %q was rejected by a message that does not name it: %v", outcome, err)
+		}
+	}
+	// The loop must have exercised BOTH answers. A vocabulary that lost
+	// `narrowed`, or one whose every member were refused, would otherwise
+	// leave this test asserting one half of a two-sided rule.
+	if accepted != 1 {
+		t.Errorf("%d outcomes accepted a refinement, want exactly 1 (%q)", accepted, ContextFabricRequirementNarrowed)
+	}
+	if rejected == 0 {
+		t.Error("no outcome was rejected; the allow-list was never exercised")
+	}
+}
+
+// ONLY `narrowed` MAY CARRY A REFINEMENT — the derivation half.
+//
+// Stated separately from the validator because they fail in different places:
+// this one keeps a step that no outcome can carry from ever being MINTED, the
+// other keeps a hand-built row from carrying one anyway. Deleting either left
+// the other green, which is why both are pinned.
+//
+// Every row here declares 4, serves 1 and names a cause, so the derivation's
+// EARLIER guards -- the non-reduction refusal and the causeless refusal -- are
+// both satisfied. Without that the outcome arm is unreachable and deleting it
+// changes nothing, which is the shape the mutation battery caught in this
+// file's older cases.
+func TestTheReductionDerivationMintsAStepOnlyForNarrowed(t *testing.T) {
+	t.Parallel()
+	minted, refused := 0, 0
+	for _, outcome := range ContextFabricPlanRequirementOutcomeVocabulary() {
+		row := rowCarryingAReduction(outcome)
+		// The lossless rows must name a cause HERE, even though such a row is
+		// not a legal document: the derivation refuses a causeless row in a
+		// LATER guard, so a causeless fixture would be refused by that guard
+		// whether or not the outcome arm exists.
+		if row.CauseOverrun == "" && row.CauseNarrowing == "" && row.CauseCoverage == "" {
+			row.CauseOverrun = ContextFabricBudgetOverrunItems
+		}
+		step, ok := ContextFabricReductionRefinement(row)
+
+		if outcome == ContextFabricRequirementNarrowed {
+			minted++
+			if !ok {
+				t.Errorf("outcome %q produced no refinement; it is the one outcome a reduction is derivable from", outcome)
+				continue
+			}
+			if step.Before != row.Declared || step.After != row.Served {
+				t.Errorf("outcome %q minted %d -> %d, want %d -> %d", outcome, step.Before, step.After, row.Declared, row.Served)
+			}
+			continue
+		}
+		refused++
+		if ok {
+			t.Errorf("outcome %q minted refinement %+v; it never served a reduced population", outcome, step)
+		}
+	}
+	if minted != 1 {
+		t.Errorf("%d outcomes minted a refinement, want exactly 1 (%q)", minted, ContextFabricRequirementNarrowed)
+	}
+	if refused == 0 {
+		t.Error("no outcome was refused; the allow-list was never exercised")
+	}
+}
+
+// THE MAXIMAL FIXTURE MUST ACTUALLY BE MAXIMAL.
+//
+// Every row the builder emits is individually maximal in the fields it
+// CHOOSES. The array as a whole was not, because the coordinate is itself a
+// byte cost -- obligation, role and subject are carried in three fields and
+// again concatenated into the identity -- and the builder took the first 200
+// members of a 780-member product in walk order. 580 members were never
+// considered, and a longer coordinate among them made the "maximal" fixture
+// smaller than a legal document.
+//
+// That is the one error a bound fixture must not make: everything downstream
+// reads it as the ceiling, so a fixture below the true maximum turns every
+// byte pin built on it into a pin on a document the service can legally
+// exceed.
+//
+// The assertion is the selection property, not a byte count: no coordinate
+// left out may be longer than one taken. A byte count would pin today's
+// arithmetic and would have to be re-derived on every vocabulary change; this
+// stays true across them.
+func TestTheMaximalRequirementFixtureTakesTheLongestCoordinates(t *testing.T) {
+	t.Parallel()
+	kinds := ContextFabricFactKindVocabulary()
+	obligations := ContextFabricAnswerObligationVocabulary()
+	roles := ContextFabricSubjectRoleVocabulary()
+	subjects := ContextFabricSubjectKindVocabulary()
+
+	pool := make([]ContextFabricPlanRequirement, 0, len(obligations)*len(roles)*len(subjects))
+	for _, obligation := range obligations {
+		for _, role := range roles {
+			for _, subject := range subjects {
+				pool = append(pool, maximalPlanRequirementAt(obligation, role, subject, kinds[:]))
+			}
+		}
+	}
+
+	chosen := maximalPlanRequirements()
+	if len(chosen) != ContextFabricPlanRequirementsMaxCount {
+		t.Fatalf("the fixture chose %d rows, want the bound of %d", len(chosen), ContextFabricPlanRequirementsMaxCount)
+	}
+	// THE POOL MUST BE LARGER THAN THE CHOICE. If the product exactly filled
+	// the bound there would be nothing left out, every selection rule would
+	// pass, and this test would assert nothing.
+	if len(pool) <= len(chosen) {
+		t.Fatalf("the coordinate product has %d members and the fixture takes %d; nothing is left out and the selection is untested",
+			len(pool), len(chosen))
+	}
+
+	taken := make(map[string]bool, len(chosen))
+	for _, row := range chosen {
+		taken[row.Requirement] = true
+	}
+	if len(taken) != len(chosen) {
+		t.Fatalf("the fixture chose %d rows carrying %d distinct identities; the join would be ambiguous", len(chosen), len(taken))
+	}
+
+	shortestTaken, shortestIdentity := -1, ""
+	for _, row := range chosen {
+		if length := planRequirementSerializedLength(row); shortestTaken < 0 || length < shortestTaken {
+			shortestTaken, shortestIdentity = length, row.Requirement
+		}
+	}
+	compared := 0
+	for _, row := range pool {
+		if taken[row.Requirement] {
+			continue
+		}
+		compared++
+		if length := planRequirementSerializedLength(row); length > shortestTaken {
+			t.Errorf("coordinate %q serializes to %d bytes and was left out, while %q at %d bytes was taken; the fixture is not maximal",
+				row.Requirement, length, shortestIdentity, shortestTaken)
+		}
+	}
+	if compared == 0 {
+		t.Fatal("no unchosen coordinate reached the comparison; this test proved nothing")
+	}
 }

@@ -182,6 +182,13 @@ func TestPlanRequirementsAreIdenticalWithAndWithoutAMemberKind(t *testing.T) {
 	if withKind.MemberKind == withoutKind.MemberKind {
 		t.Fatal("both plans carry the same member kind; the fixture cannot detect a capture")
 	}
+	// BOTH SIDES MUST BE NON-EMPTY. reflect.DeepEqual of two empty slices is
+	// true, so a projection that returned nothing for both plans would
+	// satisfy the comparison below while proving nothing about capture.
+	if len(withKind.Requirements) == 0 || len(withoutKind.Requirements) == 0 {
+		t.Fatalf("the projection returned %d rows with a member kind and %d without; an equality over an empty side asserts nothing",
+			len(withKind.Requirements), len(withoutKind.Requirements))
+	}
 	if !reflect.DeepEqual(withKind.Requirements, withoutKind.Requirements) {
 		t.Fatalf("the requirement rows changed when the plan gained a member kind:\n with: %+v\n without: %+v",
 			withKind.Requirements, withoutKind.Requirements)
@@ -190,11 +197,18 @@ func TestPlanRequirementsAreIdenticalWithAndWithoutAMemberKind(t *testing.T) {
 	// they had no reason to. This is the weaker, direct reading of the same
 	// boundary and it is stated separately because the equality above would
 	// also hold if BOTH projections captured it.
+	inspected := 0
 	for _, row := range withKind.Requirements {
+		inspected++
 		if row.Subject == withKind.MemberKind && row.Role != string(SubjectRoleMember) {
 			t.Errorf("requirement %q carries the plan's member kind %q in a %s-role subject slot",
 				row.Requirement, row.Subject, row.Role)
 		}
+	}
+	// COUNT WHAT REACHED THE ASSERTION. An empty projection would execute
+	// this loop zero times and the test would pass having checked no row.
+	if inspected == 0 {
+		t.Fatal("no requirement row reached the member-kind slot check; this test proved nothing")
 	}
 }
 
@@ -209,6 +223,7 @@ func TestAppendingARefinementLeavesThePlanRequirementsUntouched(t *testing.T) {
 
 	outcomes := SeedRequirementOutcomes(rows)
 	// Narrow the first attributable row, the way an assembly stage would.
+	narrowed := 0
 	for index := range outcomes {
 		if outcomes[index].Requirement == "" {
 			continue
@@ -224,9 +239,22 @@ func TestAppendingARefinementLeavesThePlanRequirementsUntouched(t *testing.T) {
 			Basis:  contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical,
 			Before: 3, After: 1,
 		}}
+		narrowed++
 		break
 	}
+	// The append must have HAPPENED. A fixture whose rows were all
+	// unattributed would leave the set untouched, and every assertion below
+	// would then be about a document nothing was appended to.
+	if narrowed == 0 {
+		t.Fatal("no outcome row was narrowed; the append invariant was never exercised")
+	}
 
+	// NON-EMPTY ON BOTH SIDES, for the same reason as above: two empty
+	// slices compare equal, so the append invariant would look preserved by
+	// a projection that produced nothing to preserve.
+	if len(plan) == 0 || len(before) == 0 {
+		t.Fatalf("the plan carries %d rows and the snapshot %d; an equality over an empty side cannot detect a disturbance", len(plan), len(before))
+	}
 	if !reflect.DeepEqual(plan, before) {
 		t.Fatal("appending a refinement changed the plan's requirement rows; the two layers are not independent")
 	}

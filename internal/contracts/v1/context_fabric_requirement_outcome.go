@@ -640,11 +640,25 @@ func validateContextFabricRequirementRefinements(row ContextFabricPlanRequiremen
 		return fmt.Errorf("outcome row records %d refinements, more than the %d stages able to append one",
 			len(row.Refinements), ContextFabricRequirementRefinementMaxCount)
 	}
-	// A row that lost nothing cannot have been refined. Allowing it would
-	// let `satisfied` carry a reduction, which is the pairing rule above
-	// restated one field down.
-	if row.Outcome == ContextFabricRequirementSatisfied || row.Outcome == ContextFabricRequirementNotApplicable {
-		return fmt.Errorf("outcome %q lost nothing and must record no refinement", row.Outcome)
+	// ONLY `narrowed` may carry a refinement, and the rule is written as an
+	// ALLOW-LIST rather than as a list of refusals.
+	//
+	// A refinement says: this requirement was served over a population that
+	// shrank from Before to After. That sentence is only true of `narrowed`.
+	// The vocabulary's own doc comments say why for each of the others --
+	// `satisfied` and `not_applicable` lost nothing; `unavailable` "could not
+	// be served at all", so there is no surviving population to have shrunk;
+	// `not_attempted` was stopped BEFORE any read, so there was never a
+	// Before to reduce from.
+	//
+	// It was previously a deny-list naming `satisfied` and `not_applicable`.
+	// That let `unavailable` and `not_attempted` carry a reduction chain
+	// describing a population neither of them ever had. A deny-list is also
+	// wrong by construction for a CLOSED vocabulary: the sixth outcome added
+	// would be permitted by default, and permitted silently.
+	if row.Outcome != ContextFabricRequirementNarrowed {
+		return fmt.Errorf("outcome %q records a refinement; only %q describes a population that was reduced and still served",
+			row.Outcome, ContextFabricRequirementNarrowed)
 	}
 	for index, refinement := range row.Refinements {
 		if err := refinement.Validate(); err != nil {
@@ -686,7 +700,13 @@ func ContextFabricReductionRefinement(row ContextFabricPlanRequirementOutcomeRow
 	if row.Declared <= row.Served {
 		return ContextFabricRequirementRefinement{}, false
 	}
-	if row.Outcome == ContextFabricRequirementSatisfied || row.Outcome == ContextFabricRequirementNotApplicable {
+	// The same allow-list the validator applies, for the same reason. The
+	// two halves are stated separately on purpose: this one keeps the
+	// derivation from MINTING a step no outcome can carry, and the validator
+	// keeps a hand-built row from carrying one anyway. A derivation that
+	// emitted what the validator rejects would fail at the wire rather than
+	// at the call, which is the harder place to read it.
+	if row.Outcome != ContextFabricRequirementNarrowed {
 		return ContextFabricRequirementRefinement{}, false
 	}
 	refinement := ContextFabricRequirementRefinement{
