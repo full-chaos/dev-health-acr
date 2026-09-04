@@ -710,3 +710,111 @@ func resultWithRequirementJoin(t *testing.T, planned ContextFabricPlanRequiremen
 	r.Completeness.State = DeriveContextFabricAnswerCompletenessState(r.Completeness.Outcomes)
 	return r
 }
+
+// THE DERIVATION ITSELF, which the battery found unpinned twice.
+//
+// ContextFabricReductionRefinement is now the single authority for "what step
+// does this row imply", and two of its properties had no test: that it refuses
+// a row describing no reduction, and that it carries a COVERAGE cause. Both
+// mutants survived a battery run, which is the same evidence as a defect --
+// the property a green suite does not pin is the one the next edit breaks.
+func TestTheReductionDerivationRefusesRowsThatReducedNothing(t *testing.T) {
+	t.Parallel()
+	// A row whose counts are EQUAL described no reduction. Deriving a step
+	// from it would emit before == after, which the refinement validator
+	// rejects -- so the guard is what keeps a non-reduction from becoming an
+	// invalid document rather than merely an untidy one.
+	equal := ContextFabricPlanRequirementOutcomeRow{
+		Stage: ContextFabricOutcomeStageAssembledResult, Requirement: "state/subject/project",
+		Obligation: "state", Outcome: ContextFabricRequirementNarrowed,
+		Impact: ContextFabricAnswerImpactScope, CauseOverrun: ContextFabricBudgetOverrunItems,
+		CauseObserved: true, Declared: 4, Served: 4,
+	}
+	if _, ok := ContextFabricReductionRefinement(equal); ok {
+		t.Error("a row that served everything it declared produced a refinement; before == after is not a reduction")
+	}
+
+	// A SATISFIED row, likewise: it lost nothing, and the outcome row's own
+	// validator refuses a refinement on it.
+	satisfied := ContextFabricPlanRequirementOutcomeRow{
+		Stage: ContextFabricOutcomeStagePlanning, Requirement: "state/subject/project",
+		Obligation: "state", Outcome: ContextFabricRequirementSatisfied,
+		Impact: ContextFabricAnswerImpactNone, Declared: 4, Served: 2,
+	}
+	if _, ok := ContextFabricReductionRefinement(satisfied); ok {
+		t.Error("a satisfied row produced a refinement; it lost nothing")
+	}
+
+	// A row naming NO cause cannot produce a step that names one. Unreachable
+	// on a valid row, handled rather than assumed.
+	causeless := equal
+	causeless.Declared, causeless.Served = 4, 1
+	causeless.CauseOverrun = ""
+	causeless.CauseObserved = false
+	if _, ok := ContextFabricReductionRefinement(causeless); ok {
+		t.Error("a row naming no cause produced a refinement; the step would name none either")
+	}
+
+	// POSITIVE CONTROL: a real reduction DOES produce one, so the three
+	// refusals above are the guard acting and not the function being inert.
+	reducing := equal
+	reducing.Declared, reducing.Served = 4, 1
+	step, ok := ContextFabricReductionRefinement(reducing)
+	if !ok {
+		t.Fatal("a genuine reduction produced no refinement; the guard rejects everything and proves nothing")
+	}
+	if step.Before != 4 || step.After != 1 {
+		t.Errorf("refinement runs %d->%d, want 4->1", step.Before, step.After)
+	}
+}
+
+// EVERY ONE of the row's three causes must reach the derived step, and the
+// coverage arm is the one a sweep found a real site depends on: the reuse
+// degrade names a coverage code and NO ceiling and NO ordering, so a
+// derivation that dropped coverage could not represent that site at all.
+func TestTheReductionDerivationCarriesEachOfTheRowsCauses(t *testing.T) {
+	t.Parallel()
+	base := ContextFabricPlanRequirementOutcomeRow{
+		Stage: ContextFabricOutcomeStageReuse, Requirement: "state/subject/project",
+		Obligation: "state", Outcome: ContextFabricRequirementNarrowed,
+		Impact: ContextFabricAnswerImpactDepth, CauseObserved: true,
+		Declared: 5, Served: 2,
+	}
+
+	coverageOnly := base
+	coverageOnly.CauseCoverage = ContextFabricCoverageDetailReuseAuxiliaryRefsStripped
+	step, ok := ContextFabricReductionRefinement(coverageOnly)
+	if !ok {
+		t.Fatal("a coverage-caused reduction produced no refinement; the reuse degrade could not be represented")
+	}
+	if step.Coverage != coverageOnly.CauseCoverage {
+		t.Errorf("refinement coverage = %q, the row named %q", step.Coverage, coverageOnly.CauseCoverage)
+	}
+	// It must carry ONLY that cause -- inventing a ceiling or an ordering
+	// would state a mechanism that did not run.
+	if step.Overrun != "" || step.Basis != "" {
+		t.Errorf("refinement invented causes the row did not name: overrun=%q basis=%q", step.Overrun, step.Basis)
+	}
+	if err := step.Validate(); err != nil {
+		t.Errorf("a coverage-only refinement must be valid: %v", err)
+	}
+
+	// The other two arms, so this test covers the whole cause model rather
+	// than the one arm that happened to be broken.
+	overrunOnly := base
+	overrunOnly.CauseOverrun = ContextFabricBudgetOverrunItems
+	if step, ok := ContextFabricReductionRefinement(overrunOnly); !ok || step.Overrun != overrunOnly.CauseOverrun {
+		t.Errorf("overrun cause did not reach the step: ok=%v step=%+v", ok, step)
+	}
+	basisOnly := base
+	basisOnly.CauseNarrowing = ContextFabricNarrowingBasisCanonicalIDLexical
+	if step, ok := ContextFabricReductionRefinement(basisOnly); !ok || step.Basis != basisOnly.CauseNarrowing {
+		t.Errorf("basis cause did not reach the step: ok=%v step=%+v", ok, step)
+	}
+
+	// The three fixtures must DIFFER in which cause they set, or the three
+	// assertions above are all reading the same field.
+	if coverageOnly.CauseCoverage == "" || overrunOnly.CauseOverrun == "" || basisOnly.CauseNarrowing == "" {
+		t.Fatal("the three cause fixtures are not distinct; this test cannot discriminate")
+	}
+}
