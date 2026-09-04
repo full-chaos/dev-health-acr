@@ -29,7 +29,9 @@ artifact that produced them.
 **What is deliberately not here.** No text from the private evaluation corpus. Cases are named by
 index, band or case label only.
 
-`origin/main` at the time of writing: `34718732` (PR #429).
+`origin/main` at the time of writing: `255eb412` (PR #427). The section was drafted against
+`34718732` (PR #429) and rebased onto `255eb412` when PR #427 merged; every claim below was
+re-checked against the later SHA.
 
 ---
 
@@ -50,7 +52,7 @@ One row per seam. "Shipped" means merged and confirmed on `origin/main`.
 | **S7b-ii** obligation → requirement derivation | the requirement-derivation ticket | In Review | PR **#384** `f51d096e`; PR **#390** `adab4d8e`; PR **#421** `f32432266c06` 09-04; PR **#424** `5631984f164c` 09-04; PR **#426** `e5e781449c82` 09-04 | The requirement row replaces the flattened `FactKinds` set as the planning object. §13.2.3 amended: a computed obligation now declares what its server step **consumes** and whether anything **executes** it. | Parity artifact: **98 cells** (14 frames × 7 authorities) — subsumed 18, not_subsumed 14 (8 superior, 6 blocking), not_applicable 10, disclosed drops 56, **0 authorities retirable**. Batteries: #421 11/11, #424 19/19, #426 12/12 killed. | The design assumed the parity proof would retire authorities. It retired none. Two revisions claimed authorities retirable and **both were retracted** (#424's first cut; #426's intermediate branch). |
 | **S7c** requirement outcomes; completeness derived from them | the minimal-answer-floor design ticket / the assembled-result narrowing ticket | PR1 shipped | PR **#422** · `7c6eda591fb5` · 2026-09-04 | Answer completeness is now **derived from the outcome set**, not inferred by synthesis. Adds a fourth completeness state, `not_derived`. Stage 3 gains a second decision arm: narrow candidates instead of refusing. | Acceptance shape 18 candidates + 12 claimed facts + 5 drivers = 35 items → refused; after: 30 items / 9,586 bytes / 200. Minimum answer floor 1,001 → 1,023 bytes. 12 findings, each red-at-parent; battery 10/10. | D5 ruled "C now, A ticketed". S7c does **not** deliver A (the bounded minimal-answer floor): it delivers a *reduction arm before* the planned refusal. The floor remains the minimal-answer-floor design ticket. |
 | **lever-2** item ceiling as configuration | the grouped-budget ticket | Live | PR **#409** · `3d9692a6` · 2026-09-03 | `ACR_MAX_ITEMS` is the D4 raise lever §12 C4 named. | prod = **45**; rig = **30** (a record saying "45 live on rig" was a plan, corrected 09-04 07:1x). | D4 deferred the magnitude to S5's measurement. The measured answer is that raising the ceiling buys **member slots only** — grouped headroom is a **constant 20 non-member items** at both 30 and 45. |
-| **lever-3** grouped-cohort budget | the grouped-budget ticket | PR1 shipped; PR2B open | PR **#415** · `c39f3364af85` · 2026-09-04 (PR1) · PR **#427** OPEN (PR2B, observing half) | PR1 makes the cohort's own group entity a citable synthesis subject. PR2B adds a closed four-member item-attribution vocabulary. | PR1 interleaved ABBA, 60 chains / 30 per arm: revert arm served 13/30 with 3× 413 and 35× `driver_subject_out_of_scope`; fix arm served 29/30 with 0 and 0. Battery 12/12 + 7 re-run. PR2B battery 23/23. | The allocator half of PR2B is **descoped** — see D7. |
+| **lever-3** grouped-cohort budget | the grouped-budget ticket | PR1 and PR2B shipped; allocator descoped | PR **#415** · `c39f3364af85` · 2026-09-04 (PR1) · PR **#427** · `255eb4121a82` · 2026-09-04 (PR2B, observing half) | PR1 makes the cohort's own group entity a citable synthesis subject. PR2B adds a closed four-member item-attribution vocabulary. | PR1 interleaved ABBA, 60 chains / 30 per arm: revert arm served 13/30 with 3× 413 and 35× `driver_subject_out_of_scope`; fix arm served 29/30 with 0 and 0. Battery 12/12 + 7 re-run. PR2B battery 23/23. | The allocator half of PR2B is **descoped** — see D7. |
 | **chain identity** — a request names the result it follows | the chain-identity ticket | Done | PR **#428** · `5a3ab55b588f` · 2026-09-04 | Same-question containment moves from a path property to a producer property: one choke point per axis. | 18 findings; battery 23/23 on the merged tip; 3 adversarial rounds + one executed confirmation, CLEAN. | Not in the 08-30/09-01 design at all. It is the containment layer under the cross-turn carry S5 introduced. |
 | **subject-shape disclosure** | the subject-id-shape ticket | Done | PR **#429** · `347187320d6f` · 2026-09-04 | A wrongly-shaped subject id is disclosed as `SourceTruncated` with reason `subject_id_shape_rejected`, never as `no_data`. Directly serves North Star check 12 (*missing is not healthy*). | 39 call sites across 17 files; **21** providers; **35** (provider, kind) cells pinned at `internal/contextfabric/devhealthfacts/subject_shape_rejection_test.go:312`; battery 8/8. | none — it closes a defect the design's fact vocabulary implied but never stated. |
 | **plan requirement rows on the artifact** | the plan-requirement-rows ticket | In Progress | PR **#430** OPEN | The persisted `answer_plan` gains `requirements`; the outcome row gains `refinements`. Makes the artifact self-describing: what the requirement *was*, not only what became of it. | Battery 25/25 on the reviewed tip; PG store parity PASS, 17 subtests; bytes ≤ **46,648** worst case, items **+0**. | The design said the plan carries requirement rows. Ruling (d) on the requirement-derivation ticket PR3 recorded that as of that slice **"the persisted answer_plan carries no requirement rows"** — #430 is the correction. |
@@ -270,7 +272,7 @@ existed to protect.
 > afterwards would measure a smaller document than the one served — the "stamp every late writer,
 > then measure" class. The open change's own text counts **seven** prior instances of that class
 > and calls this the eighth, caught before it shipped; that count is the change's, not a
-> measurement of this section's. What *is* verified on `origin/main` at `34718732`:
+> measurement of this section's. What *is* verified on `origin/main` at `255eb412`:
 > `finalizeServed` is at `internal/contextfabric/budget_assertion.go:226`, it stamps the plan and
 > then asserts the budget, and its own header already records the two defects that made it
 > necessary — the decisive path measuring the wrong document (label composition adds 324 bytes on
@@ -581,7 +583,7 @@ gates it on question identity, which is containment, not authorization — and t
 failed review three times before reaching that shape. The server-minted continuation token is the
 end state and is **a contract change best made before the field ships**; it has not shipped. The
 plan-carry asymmetry (the plan-carry asymmetry ticket) is a live inconsistency, re-verified on `origin/main` at
-`34718732`: `engine.go:1800-1801` reads `planCarry` directly, checking only
+`255eb412`: `engine.go:1800-1801` reads `planCarry` directly, checking only
 `Outcome == PlanCarryHit && NarrowingBasis != ""`, while `applyCarriedPlan`
 (`chaos4636_plan_carry.go:258-264`) additionally requires that the turn resolved no family of its
 own. So on a turn that classified its own family the carried family is correctly refused and the
@@ -695,14 +697,16 @@ were confirmed ancestors of `origin/main` on 2026-09-04.
 | #426 | S7b-ii (the membership-count ticket) | count the resolved member set on the server and say so on the answer | 3 adversarial rounds + confirmation, **all NOT CLEAN with real findings**; r3's 3 findings all in code the branch had just added; battery 12/12 | `e5e781449c82` · 09-04 |
 | #428 | chain identity (the chain-identity ticket) | contain same-question carry at one choke point per axis | 3 adversarial rounds (4 / 3 / 1 findings) + executed confirmation CLEAN; battery 23/23 on the merged tip | `5a3ab55b588f` · 09-04 |
 | #429 | providers (the subject-id-shape ticket) | disclose shape-rejected subjects instead of `no_data` | r1 and r2 fixed (5 findings across `ReadFacts` return paths), r3 CLEAN; battery 8/8 | `347187320d6f` · 09-04 |
-| **#427** | lever-3 PR2B (the grouped-budget ticket) | say what an answer's charged items were about — **observing half only** | **6 rounds**; each found a distinct instrument gap; battery 23/23 (M12 survived the first battery) | **OPEN** |
+| #427 | lever-3 PR2B (the grouped-budget ticket) | say what an answer's charged items were about — **observing half only** | **6 rounds**; each found a distinct instrument gap; battery 23/23 (M12 survived the first battery) | `255eb4121a82` · 09-04 |
 | **#430** | plan rows (the plan-requirement-rows ticket) | publish the derived requirement rows and say what refined each | r1 could not run Go (findings reasoned, all three reproduced and held); r2 NOT CLEAN; battery 25/25 final, one earlier run **VOID** | **OPEN** |
 
 Consumer pins in the same window: ask-dev #45 pinned acr `7c6eda59`; ask-dev #46 pinned
 `5a3ab55b`. PR #430 widens the published contract, so a further pin bump is **owed** before any
 consumer reads the new fields.
 
-Two ledger facts about the open pair, recorded because they change how its evidence should be read.
+**One pull request in this ledger is still open: #430.** PR #427 merged as `255eb4121a82` while
+this section was being written, and its rows above are stated as shipped. Two ledger facts about
+#430, recorded because they change how its evidence should be read.
 PR #430's round 2 **died mid-review** on an external credits exhaustion after 348,717 tokens with
 no verdict file, and does not count as a round; the retry (r2b) returned **NOT CLEAN with four
 findings**, and the final round's verdict is **not preserved** in the lane's evidence directory, so
@@ -716,7 +720,7 @@ wrote**, so a round with no verdict could read as a round with one. PR #430 is a
 ## 14.5 The path as it now stands
 
 Planning → facts → outcome row → completeness → serve, with the four reducing sites and the
-`finalizeServed` choke point. Solid boxes are on `origin/main` at `34718732`; the two dashed steps
+`finalizeServed` choke point. Solid boxes are on `origin/main` at `255eb412`; the two dashed steps
 are in the open plan-rows change.
 
 ```mermaid
