@@ -37,6 +37,16 @@ func budgetStageCohort(n int) *Cohort {
 // re-synthesis a real reduction rather than a hopeful one.
 func budgetStageEngine(t *testing.T, cohort *Cohort, claimsPerMember int, options EngineOptions, calls *int, telemetry ...*recordingTelemetry) *Engine {
 	t.Helper()
+	return budgetStageEngineWithTelemetry(t, cohort, claimsPerMember, options, calls, budgetStageTelemetry(telemetry))
+}
+
+// budgetStageEngineWithTelemetry is budgetStageEngine with the telemetry sink
+// supplied directly rather than as a *recordingTelemetry, so a test can assert
+// on the EMITTED LINE instead of a captured struct. A captured struct is one
+// step short of what enforcement actually receives, which is the gap the
+// refusal-arm tests exist to close.
+func budgetStageEngineWithTelemetry(t *testing.T, cohort *Cohort, claimsPerMember int, options EngineOptions, calls *int, telemetry EngineTelemetry) *Engine {
+	t.Helper()
 	graphCohort := cohort
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
@@ -88,7 +98,7 @@ func budgetStageEngine(t *testing.T, cohort *Cohort, claimsPerMember int, option
 				},
 			}, nil
 		}),
-		Telemetry: budgetStageTelemetry(telemetry),
+		Telemetry: telemetry,
 	}, options)
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)

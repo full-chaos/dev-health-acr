@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
-	"os"
 	"strings"
 	"testing"
 
@@ -170,40 +169,20 @@ func TestQuotaExposureIsActuallyRead(t *testing.T) {
 	}
 }
 
-// TestBothRefusalArmsCarryTheQuotaToTheLine pins the CALL SITES of the two
-// refusal paths, which is where the quota was actually being dropped.
+// The source-grep pin that used to live here has been DELETED, and its
+// deletion is the round-three finding.
 //
-// The served emitter copied attempt.Quota; planRefusal built its event without
-// it, and the retry-refusal arm built its own event without it too. Two
-// consumers, both silent, while a source-grep pin stayed green.
-func TestBothRefusalArmsCarryTheQuotaToTheLine(t *testing.T) {
-	source, err := os.ReadFile("chaos4636_budget_stage3.go")
-	if err != nil {
-		t.Fatalf("read stage-3 source: %v", err)
-	}
-	body := string(source)
-	// The declined arm passes the exposure INTO planRefusal...
-	if !strings.Contains(body, "attempt.Declined, attempt.Quota)") {
-		t.Error("the declined refusal arm does not pass the quota into planRefusal: a refusal from that arm " +
-			"emits zeros for the per-group numbers while the attempt holds the real ones")
-	}
-	// ...planRefusal stamps them...
-	if !strings.Contains(body, "event.QuotaItemsPerGroup = quota.ItemsPerGroup") {
-		t.Error("planRefusal does not stamp the quota onto its event")
-	}
-	// ...and the retry-refusal arm stamps its own.
-	if !strings.Contains(body, "event.QuotaItemsPerGroup = outcomeAttempt.Quota.ItemsPerGroup") {
-		t.Error("the retry-refusal arm does not stamp the quota onto its event: the same omission, one branch over")
-	}
-	// The served emitter's own read, so all three consumers are covered.
-	outcomes, err := os.ReadFile("requirement_outcomes.go")
-	if err != nil {
-		t.Fatalf("read outcomes source: %v", err)
-	}
-	if !strings.Contains(string(outcomes), "attempt.Quota.ItemsPerGroup") {
-		t.Error("the served narrowing emitter does not read attempt.Quota")
-	}
-}
+// It read chaos4636_budget_stage3.go with os.ReadFile and asserted that the
+// assignment text appeared. That proves a string exists; it proves nothing
+// about a consumer. Deleting an arm's population failed only this grep, and
+// COMMENTING it out did not fail even that, because the literal text stayed in
+// the file. No behavioural test in the package objected either way -- so both
+// refusal arms were, in substance, unpinned.
+//
+// Replaced by TestTheDeclinedRefusalArmCarriesTheQuotaToTheEmittedLine and
+// TestTheRetryRefusalArmCarriesTheQuotaToTheEmittedLine in
+// pr2b_refusal_arm_line_test.go, which drive a real over-quota answer into
+// each arm and read the line the engine actually emitted.
 
 // TestNarrationAllocatorNamesTheBOUNDThatActuallyBound is P2.
 //
