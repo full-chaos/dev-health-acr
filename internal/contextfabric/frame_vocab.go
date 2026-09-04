@@ -641,16 +641,22 @@ var computedStepInputs = map[ComputedObligationStep]ComputedStepInputs{
 	},
 	ComputedStepMembershipCardinality: {
 		Class: ComputedInputResolvedMemberSet,
-		// NOTHING satisfies `count` with this step today. The name exists in
-		// the vocabulary; no production call site computes a cardinality for
-		// the obligation (cohortMemberCount serves BUDGET fitting, not the
-		// answer), and status_shadow.go records `count` as unobserved
-		// because "a cardinality is carried in the answer text, not in a
-		// countable field". Declared honestly rather than aspirationally:
-		// marking it executed would make this table assert something the
-		// tree does not do, and the parity proof would retire authorities on
-		// the strength of it.
-		Execution: ComputedStepDeclaredOnly,
+		// ComputeMembershipCardinality counts the resolved member set and
+		// finalizeResult states the result on the served document, as the
+		// `count` requirement's own outcome row -- so the number is a server
+		// result with a requirement identity, not prose the model was free
+		// to write or not.
+		//
+		// THIS ENTRY READ `declared_only` UNTIL THE STEP WAS WIRED, and the
+		// order matters: the declaration was corrected to match the tree,
+		// never the other way round. While nothing executed the step, its
+		// "consumes no fact kinds" said nothing about what the ANSWER
+		// depended on, because the answer's count came from the model
+		// narrating over whatever the plan read. That is why the parity
+		// proof could not clear the counting frames on the strength of this
+		// row, and why flipping this line without wiring the step would have
+		// authorized retiring a real fact read.
+		Execution: ComputedStepServerExecuted,
 	},
 }
 
