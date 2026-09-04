@@ -149,3 +149,39 @@ func TestStatusProviderKeepsRealFactsWhileDisclosingAShapeRejectedSibling(t *tes
 		t.Fatalf("OmittedCount = %d, want 1", result.OmittedCount)
 	}
 }
+
+// TestSourceHealthProviderDisclosesRejectionOnTheQueriedBranch pins a codex
+// terra xhigh r1 finding (EXECUTED-confirmed by the lane): SourceHealthProvider.ReadFacts
+// has THREE separate success-shaped return points (no org subjects survived
+// shape filtering; the survivor isn't the caller's own org; the real query
+// ran) -- unlike every other provider in this package, which aggregates into
+// ONE final return. Each of the three previously needed its OWN
+// applySubjectShapeRejection call, so deleting only the THIRD one (the one
+// on the branch that actually queries ClickHouse) is a compiling mutation
+// that survives every other test in this package: it only manifests when a
+// well-shaped organization subject (which reaches the real query) is
+// requested ALONGSIDE a shape-rejected one, and no other test in this
+// package constructs that combination for SourceHealthProvider.
+func TestSourceHealthProviderDisclosesRejectionOnTheQueriedBranch(t *testing.T) {
+	client := &fakeClient{}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactSourceHealth)
+
+	shapeRejected := contextfabric.SubjectRef{Kind: contextfabric.SubjectOrganization, CanonicalID: "org-2", Label: "org-2"}
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactSourceHealth, Subjects: []contextfabric.SubjectRef{organizationSubject("org-1"), shapeRejected},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+
+	if result.State == contextfabric.SourceNoData {
+		t.Fatalf("State = %q, want anything other than no_data: the well-shaped org-1 subject's empty read must not silently absorb its shape-rejected sibling", result.State)
+	}
+	if !strings.Contains(result.Reason, "subject_id_shape_rejected") {
+		t.Fatalf("Reason = %q, want it to contain %q", result.Reason, "subject_id_shape_rejected")
+	}
+	if result.OmittedCount != 1 {
+		t.Fatalf("OmittedCount = %d, want 1", result.OmittedCount)
+	}
+}
