@@ -261,7 +261,7 @@ var supersedingCauses = map[lossCause]bool{
 // so the question is asked of THE KINDS ACTUALLY LOST, per cell. A loss that
 // is not an input of any computation this frame derives falls through to the
 // superior cause it always belonged to.
-func classifyLoss(rows []contextfabric.DerivedRequirement, lost []contextfabric.FactKind) lossCause {
+func classifyLoss(rows []contextfabric.DerivedRequirement, derived, lost []contextfabric.FactKind) lossCause {
 	if len(rows) == 0 {
 		// No rows at all is not a shape any frame in the corpus has (O9
 		// fails a frame that derives none), but a future frame that
@@ -274,19 +274,27 @@ func classifyLoss(rows []contextfabric.DerivedRequirement, lost []contextfabric.
 	// what the artifact and any consumer see, so a classifier consulting the
 	// table again could disagree with the thing it claims to explain.
 	declaredInputs := map[contextfabric.FactKind]bool{}
-	// plannedRead is every kind the rows CAUSE TO BE READ: what a read row
-	// names, plus what a served, server-executed computed row declares its
-	// step consumes -- the second half read from the same production function
-	// the plan is built through, never re-derived here. A computed step's
-	// input that appears here is planned for; one that does not is the
-	// blocking case.
+	// plannedRead is every kind the rows CAUSE TO BE READ -- and it is the
+	// cell's OWN `derived` set, handed in, not a second computation over the
+	// same rows.
 	//
-	// IT WAS "every kind a READ row names" UNTIL THE INPUTS GAINED A
-	// CONSUMER, and the widening is not this classifier being made lenient:
-	// a declared input of a step nothing executes still does not appear here,
-	// so `computed_step_input_unserved` keeps a shape it fires on and does not
-	// become a tier that can never be reached.
+	// IT WAS COMPUTED HERE, from row.FactKinds plus the production input
+	// reads, and the mutation battery is what exposed the cost: deleting the
+	// input half of derivedFactKinds left this copy intact, so a lost kind
+	// that the derivation no longer planned was still ruled
+	// `not_required_by_any_obligation` -- SUPERIOR, the verdict that
+	// authorizes a deletion -- and the blocking-count pin stayed green. Two
+	// authorities for "what the rows plan" disagreed, and the disagreement
+	// resolved in the unsafe direction. There is now one.
+	//
+	// The widening from the old "every kind a READ row names" is not this
+	// classifier being made lenient: a declared input of a step nothing
+	// executes is not in `derived` either, so `computed_step_input_unserved`
+	// keeps a shape it fires on and does not become a tier nothing reaches.
 	plannedRead := map[contextfabric.FactKind]bool{}
+	for _, kind := range derived {
+		plannedRead[kind] = true
+	}
 	// declaredOnly records whether ANY computation on this frame is named but
 	// unexecuted. Read off the ROWS, like everything else here.
 	declaredOnly := false
@@ -309,12 +317,6 @@ func classifyLoss(rows []contextfabric.DerivedRequirement, lost []contextfabric.
 		for _, kind := range row.InputFactKinds {
 			declaredInputs[kind] = true
 		}
-		for _, kind := range row.FactKinds {
-			plannedRead[kind] = true
-		}
-	}
-	for _, kind := range contextfabric.ComputedStepInputReads(rows) {
-		plannedRead[kind] = true
 	}
 	if populationUnavailable {
 		// FIRST, and ahead of the all-unavailable superior ruling, because
@@ -744,7 +746,7 @@ func computeParityCell(
 		cell.verdict = verdictSubsumed
 	default:
 		cell.verdict = verdictNotSubsumed
-		cell.cause = classifyLoss(rows, cell.lost)
+		cell.cause = classifyLoss(rows, cell.derived, cell.lost)
 	}
 	return cell
 }
@@ -1414,7 +1416,12 @@ func TestClassifyLossLandsInEveryBranch(t *testing.T) {
 	reached := 0
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := classifyLoss(testCase.rows, testCase.lost)
+			// The DERIVED set is computed by the same function the
+			// parity cell uses, from the case's own rows -- never
+			// listed by hand beside them. A hand-written derived set
+			// would be a second authority for what the rows plan,
+			// which is the drift this parameter exists to remove.
+			got := classifyLoss(testCase.rows, derivedFactKinds(testCase.rows), testCase.lost)
 			if got != testCase.want {
 				t.Fatalf("classifyLoss = %q, want %q", got, testCase.want)
 			}
@@ -1427,7 +1434,7 @@ func TestClassifyLossLandsInEveryBranch(t *testing.T) {
 
 	// The property, stated separately from the constant: the branch that
 	// handles a shape nobody has seen must never authorize a retirement.
-	if supersedingCauses[classifyLoss(nil, []contextfabric.FactKind{contextfabric.FactHealth})] {
+	if supersedingCauses[classifyLoss(nil, derivedFactKinds(nil), []contextfabric.FactKind{contextfabric.FactHealth})] {
 		t.Fatal("the zero-rows branch returns a SUPERSEDING cause -- a frame that derives nothing would rule every authority's whole contribution 'superior' and authorize retiring it")
 	}
 }
