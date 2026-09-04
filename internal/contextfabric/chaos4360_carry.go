@@ -342,68 +342,116 @@ func (e *Engine) carryFrontier(ctx context.Context, principal storage.Principal,
 	return filtered, true
 }
 
-// ancestryParentResultID picks the ONE prior result this turn records as its
-// parent -- durable chain identity, written by every Save regardless of
-// whether any axis was carried, disclosed, or even attempted.
+// receiptValidation is the state of prior-subject-receipt validation at an
+// ancestry call site, made EXPLICIT so that "nothing has been validated yet"
+// and "validation ran and produced these" are different values rather than
+// both being a nil slice.
 //
-// parent_result_id is the SINGLE ancestry root when the caller supplies it:
-// it is the caller stating outright which turn they are continuing, which is
-// a stronger and less ambiguous claim than anything inferred. Receipt-derived
-// roots are the FALLBACK, for the many existing clients that link by
-// redeeming an offer and will never send the new field -- without that
-// fallback, ancestry would only exist for callers who had already adopted it,
-// and the chains most in need of walking (the ones a struggling clarification
-// loop produces) would be exactly the ones with no history.
+// This type exists because a nil-able convenience parameter is what let the
+// same defect land twice. Three sites were fixed after the first review and a
+// fourth was missed, because `nil` reads as a reasonable default at every call
+// site and nothing forces the author to decide which situation they are in.
+// Now the compiler asks.
+type receiptValidation struct {
+	ran      bool
+	receipts []BoundSubjectReceipt
+}
+
+// receiptsNotYetValidated is the honest value for a call site that runs BEFORE
+// resolvePriorSubjectHints. It is not "no receipts" -- it is "we do not know
+// yet", and ancestry must not treat an unvalidated reference as confirmed.
+func receiptsNotYetValidated() receiptValidation { return receiptValidation{} }
+
+// receiptsValidated carries what resolvePriorSubjectHints actually confirmed.
+func receiptsValidated(receipts []BoundSubjectReceipt) receiptValidation {
+	return receiptValidation{ran: true, receipts: receipts}
+}
+
+// vetoingWindowReceiptID names the prior result whose window receipt caused a
+// window confirmation veto, so ancestryRoot can refuse to record it.
 //
-// The fallback takes the FIRST id in carryReferencedResultIDs' own fixed
-// order rather than inventing a second ordering, so "which prior result did
-// this turn follow" and "which prior result does a carry try first" can never
-// answer differently. Returns "" when the turn names nothing -- a first turn,
-// recorded as having no parent rather than as having an unknown one.
+// This is the reachable half of a claim I got wrong. The unresolvable-window
+// veto fires BEFORE receipt validation, so "prefer a validated reference"
+// cannot help there -- nothing is validated yet. But the id is not merely
+// unconfirmed, it is DISPROVED: the veto exists precisely because that receipt
+// did not resolve. Recording it guarantees the next turn's walk stops at
+// miss_unloadable, recreating the chain hole this mechanism exists to close.
 //
-// A false or unrelated parent is CONTAINED, not prevented: nothing here
-// verifies the named result, because verification belongs to the walk that
-// reads it (org-scoped Get, the graph-epoch taint gate, and the requirement
-// that the named result actually carry a confirmed value). Recording an
-// unusable pointer costs a miss on a later hop; refusing to record one costs
-// a chain that cannot be walked at all.
-func ancestryParentResultID(request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt) string {
-	if id := strings.TrimSpace(request.ParentResultID); id != "" {
-		return id
+// Only the confirmation vetoes qualify. A veto for some other reason says
+// nothing about whether the named result is loadable, and refusing an id on a
+// path that never tested it would throw away usable ancestry.
+func vetoingWindowReceiptID(request InvestigationRequest, veto windowVetoReason) string {
+	switch veto {
+	case windowVetoConfirmationUnresolved, windowVetoConfirmationConflict:
+	default:
+		return ""
 	}
-	ids := carryReferencedResultIDs(request, validatedSubjectReceipts)
-	// PREFER A VALIDATED REFERENCE. Same ordered list, one extra filter --
-	// deliberately not a second derivation, so the ancestry root and the carry
-	// frontier cannot drift apart.
-	//
-	// Carry order puts window receipts first, which is right for a WINDOW
-	// carry and wrong for ancestry on one path: the window axis-conflict veto
-	// fires precisely BECAUSE its window receipt did not resolve, and a
-	// request can carry that alongside a perfectly good subject receipt.
-	// Taking the first id outright recorded the one that does not resolve
-	// while a validated one sat behind it -- a dangling parent by
-	// construction, on the one path where we already knew better.
-	//
-	// validatedSubjectReceipts is the only POSITIVELY confirmed set available
-	// here. The other five fields are atomic-batch validated before the carry
-	// runs in the ordinary case, but a veto path is exactly the case where an
-	// entry is still in its raw request field and did NOT check out, so their
-	// presence is not proof.
-	validated := make(map[string]struct{}, len(validatedSubjectReceipts))
-	for _, r := range validatedSubjectReceipts {
+	for _, receipt := range request.PriorWindowReceipts {
+		if id := strings.TrimSpace(receipt.ResultID); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+// ancestryRoot picks the ONE prior result this turn records as its parent --
+// durable chain identity, written by every Save regardless of whether any axis
+// was carried, disclosed, or even attempted.
+//
+// parent_result_id is the SINGLE ancestry root when the caller supplies it and
+// it was not refused: the caller stating outright which turn they are
+// continuing is a stronger claim than anything inferred. Receipt-derived roots
+// are the FALLBACK, so existing clients that link by redeeming an offer still
+// build walkable history instead of ancestry existing only for callers who
+// adopted the new field.
+//
+// PREFERS A VALIDATED REFERENCE, falling back to the first id in
+// carryReferencedResultIDs' own fixed order only when none is validated. Same
+// ordered list, one extra filter -- not a second derivation, so the ancestry
+// root and the carry frontier cannot drift apart.
+//
+// refusedIDs are ids this turn already PROVED unusable: a parent the drift
+// gate rejected, or the receipt whose failure caused a veto. Recording one
+// would be actively harmful rather than merely useless -- a drift-rejected
+// parent becomes laundering material for a later turn (the gate refuses a
+// direct hop and the recorded edge supplies the same value one hop deeper),
+// and a veto-causing receipt guarantees the next turn's walk stops at
+// miss_unloadable, recreating the chain hole this mechanism exists to close.
+//
+// A reference we merely cannot confirm is still better ancestry than none: a
+// dangling parent costs a miss on a later hop, while no parent costs the whole
+// chain past this turn. A reference we have DISPROVED is not.
+func ancestryRoot(request InvestigationRequest, validation receiptValidation, refusedIDs ...string) string {
+	refused := make(map[string]struct{}, len(refusedIDs))
+	for _, id := range refusedIDs {
+		if trimmed := strings.TrimSpace(id); trimmed != "" {
+			refused[trimmed] = struct{}{}
+		}
+	}
+	if id := strings.TrimSpace(request.ParentResultID); id != "" {
+		if _, bad := refused[id]; !bad {
+			return id
+		}
+	}
+	ids := carryReferencedResultIDs(request, validation.receipts)
+	validated := make(map[string]struct{}, len(validation.receipts))
+	for _, r := range validation.receipts {
 		if id := strings.TrimSpace(r.ResultID); id != "" {
 			validated[id] = struct{}{}
 		}
 	}
 	for _, id := range ids {
+		if _, bad := refused[id]; bad {
+			continue
+		}
 		if _, ok := validated[id]; ok {
 			return id
 		}
 	}
-	// None validated: the caller still named something, and a reference we
-	// cannot confirm is better ancestry than none. A dangling parent costs a
-	// miss on a later hop; no parent costs the whole chain past this turn.
 	for _, id := range ids {
+		if _, bad := refused[id]; bad {
+			continue
+		}
 		return id
 	}
 	return ""
@@ -435,6 +483,21 @@ func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Pri
 	// reachedViaAncestry records which frontier ids were reachable ONLY
 	// because a stored parent pointed at them -- see ViaStoredAncestry.
 	reachedViaAncestry := make(map[string]struct{}, carryChainMaxVisited)
+	// fromParentRoot tracks which branch of the walk descends from the
+	// caller-supplied parent_result_id, so the same-question rule can be
+	// re-applied on THAT branch's stored-ancestry edges without touching
+	// receipt-rooted branches -- a receipt is an accepted offer and a
+	// different follow-up question against it stays legitimate.
+	//
+	// Without this, the drift gate is enforced exactly one hop deep and
+	// launderable at two: a turn refused for drift still persists the refused
+	// parent, and a later turn naming THAT result inherits the same value
+	// through the ancestry edge. Gating the direct root alone is not a
+	// barrier, it is a speed bump.
+	fromParentRoot := make(map[string]struct{}, carryChainMaxVisited)
+	if id := strings.TrimSpace(request.ParentResultID); id != "" {
+		fromParentRoot[id] = struct{}{}
+	}
 	var sawUnloadable, sawStaleEpoch, capExceeded bool
 	for depth := 0; depth < carryChainMaxDepth && len(frontier) > 0; depth++ {
 		var next []string
@@ -515,7 +578,20 @@ func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Pri
 			// provenance still prefers it -- this widens what is reachable
 			// without re-ordering what was already reachable.
 			if id := strings.TrimSpace(fetched.ParentResultID); id != "" {
-				if _, ok := visited[id]; !ok {
+				_, onParentBranch := fromParentRoot[resultID]
+				if onParentBranch {
+					// Defence in depth: re-apply the same-question rule to this
+					// edge. The direct gate already refused a drifted parent;
+					// this refuses a drifted GRANDparent reached through one.
+					if next, err := carryLoadResult(ctx, e.results, principal, id); err != nil ||
+						QuestionHash(next.Result.Question) != QuestionHash(request.Question) {
+						id = ""
+					}
+				}
+				if _, ok := visited[id]; id != "" && !ok {
+					if onParentBranch {
+						fromParentRoot[id] = struct{}{}
+					}
 					// Only marked when NO confirmation edge already produced
 					// this id: the flag must mean "ancestry is why this was
 					// reachable", not merely "ancestry also pointed here".

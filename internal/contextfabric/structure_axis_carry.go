@@ -178,6 +178,21 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 	// reachedViaAncestry records which frontier ids were reachable ONLY
 	// because a stored parent pointed at them -- see ViaStoredAncestry.
 	reachedViaAncestry := make(map[string]struct{}, carryChainMaxVisited)
+	// fromParentRoot tracks which branch of the walk descends from the
+	// caller-supplied parent_result_id, so the same-question rule can be
+	// re-applied on THAT branch's stored-ancestry edges without touching
+	// receipt-rooted branches -- a receipt is an accepted offer and a
+	// different follow-up question against it stays legitimate.
+	//
+	// Without this, the drift gate is enforced exactly one hop deep and
+	// launderable at two: a turn refused for drift still persists the refused
+	// parent, and a later turn naming THAT result inherits the same value
+	// through the ancestry edge. Gating the direct root alone is not a
+	// barrier, it is a speed bump.
+	fromParentRoot := make(map[string]struct{}, carryChainMaxVisited)
+	if id := strings.TrimSpace(request.ParentResultID); id != "" {
+		fromParentRoot[id] = struct{}{}
+	}
 	var sawUnloadable, sawStaleEpoch, capExceeded, sawVetoedCarrier bool
 	for depth := 0; depth < carryChainMaxDepth && len(frontier) > 0; depth++ {
 		var next []string
@@ -267,7 +282,20 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 			// provenance still prefers it -- this widens what is reachable
 			// without re-ordering what was already reachable.
 			if id := strings.TrimSpace(fetched.ParentResultID); id != "" {
-				if _, ok := visited[id]; !ok {
+				_, onParentBranch := fromParentRoot[resultID]
+				if onParentBranch {
+					// Defence in depth: re-apply the same-question rule to this
+					// edge. The direct gate already refused a drifted parent;
+					// this refuses a drifted GRANDparent reached through one.
+					if next, err := carryLoadResult(ctx, e.results, principal, id); err != nil ||
+						QuestionHash(next.Result.Question) != QuestionHash(request.Question) {
+						id = ""
+					}
+				}
+				if _, ok := visited[id]; id != "" && !ok {
+					if onParentBranch {
+						fromParentRoot[id] = struct{}{}
+					}
 					// Only marked when NO confirmation edge already produced
 					// this id: the flag must mean "ancestry is why this was
 					// reachable", not merely "ancestry also pointed here".

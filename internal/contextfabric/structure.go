@@ -901,7 +901,7 @@ func (e *Engine) recordStructureConfirmationOutcome(ctx context.Context, princip
 // apply, and really did shape the resolution this round performed. Omitting
 // it here left one result path where a carry was silent, which is the same
 // gap the class-default gate had.
-func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, confirmed []confirmedStructureMember, superseded *ErrStructureOfferSuperseded, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry, carriedStructureEntries []*contractsv1.ContextFabricConfirmedStructureEntry, plan *AnswerPlan) (InvestigationResult, error) {
+func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, confirmed []confirmedStructureMember, superseded *ErrStructureOfferSuperseded, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry, carriedStructureEntries []*contractsv1.ContextFabricConfirmedStructureEntry, plan *AnswerPlan, ancestryParent string) (InvestigationResult, error) {
 	// CHAOS-3972 P3: cf_structure_explicit{member,outcome} -- the SAME
 	// synthetic Veto:structureVetoStaleSupersededOffer canonicalization
 	// recordStructureReceiptTelemetry's own call above uses, so an
@@ -910,7 +910,7 @@ func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal 
 	// "applied" against a round that was actually discarded.
 	recordStructureExplicitTelemetry(ctx, e.telemetry, principal, request, requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer})
 	echo := appendCarriedStructureEntry(staleConfirmedStructureEntries(confirmed, superseded.Members), carriedStructureEntries...)
-	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, echo, binding, priorSubjectReceiptDispositions, plan)
+	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, echo, binding, priorSubjectReceiptDispositions, plan, ancestryParent)
 }
 
 // resolveExplicitStructure implements design brief §2.5's "explicit
@@ -1277,7 +1277,7 @@ func structureVetoLimitation(veto structureVetoReason) string {
 // paths -- StaleMembers and VetoedEntries are mutually exclusive by
 // construction (each is populated by different veto reasons), so callers
 // pass whichever one the veto reason actually populated.
-func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto structureVetoReason, echoEntries []contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry, plan *AnswerPlan) (InvestigationResult, error) {
+func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, veto structureVetoReason, echoEntries []contractsv1.ContextFabricConfirmedStructureEntry, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry, plan *AnswerPlan, ancestryParent string) (InvestigationResult, error) {
 	limitation := structureVetoLimitation(veto)
 	resolvedInterpretation := InterpretedQuestion{
 		Shape:             ShapeOpen,
@@ -1344,7 +1344,7 @@ func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Prin
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
 	if e.results != nil {
-		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(request.TimeContext), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch, ancestryParentResultID(request, nil)); err != nil {
+		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(request.TimeContext), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch, ancestryParent); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 	}

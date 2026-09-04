@@ -117,7 +117,7 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 	// bump this literal too -- see expectedMigrationVersions in
 	// migrations/postgres/runner_integration_test.go for the same
 	// convention, held in one place there.
-	require.Equal(t, "applied 36 migrations\n", first.String())
+	require.Equal(t, "applied 37 migrations\n", first.String())
 	require.NoError(t, secondErr)
 	require.Equal(t, "no migrations applied\n", second.String())
 }

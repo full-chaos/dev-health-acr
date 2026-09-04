@@ -1041,19 +1041,25 @@ func TestChainIdentity_AValidatedReceiptIsRecordedAsAncestryOnEveryTerminal(t *t
 			// PRE-VALIDATION veto, and the label matters. An unresolvable
 			// window receipt vetoes at engine.go:1058 -- before Interpret and
 			// before resolvePriorSubjectHints ever runs -- so NOTHING is
-			// validated at that point and nil is the correct argument there.
-			// I first labelled this the axis-conflict veto and expected the
-			// validated subject receipt to win; it cannot, because on this
-			// path no receipt has been validated yet.
+			// validated there. I first labelled this the axis-conflict veto
+			// and expected the validated subject receipt to win; it cannot.
 			//
-			// So ancestry falls back to the first id in carry order, which is
-			// the window receipt. That is the fallback behaving as specified,
-			// not the preference failing.
+			// Ancestry is EMPTY here, and that is the intended outcome rather
+			// than a gap. The window receipt is not merely unconfirmed, it is
+			// DISPROVED -- the veto exists because it did not resolve -- so
+			// recording it would guarantee the next turn's walk stops at
+			// miss_unloadable, recreating the chain hole this mechanism exists
+			// to close. The only other reference is a subject receipt nothing
+			// has validated yet, and treating an unvalidated reference as
+			// confirmed is what the receiptValidation type exists to prevent.
+			//
+			// Recording nothing is the honest answer: this turn has no
+			// predecessor it can stand behind.
 			name: "unresolvable-window veto (pre-validation)", site: "window.go windowVetoResult",
 			mutate: func(r *InvestigationRequest) {
 				r.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: "result_absent_00001", ReceiptID: "winr_absent000001"}}
 			},
-			wantParent: "result_absent_00001",
+			wantParent: "",
 			wantStatus: InvestigationNoMatch,
 		},
 	} {
@@ -1129,4 +1135,166 @@ func TestChainIdentity_AValidatedReceiptIsRecordedAsAncestryOnEveryTerminal(t *t
 			}
 		})
 	}
+}
+
+// TestChainIdentity_DriftCannotBeLaunderedThroughAnAncestryEdge pins the
+// bypass the traversal fix opened, and it is the sharpest failure this lane
+// produced: two changes that were each correct alone and wrong together.
+//
+// The drift gate refuses a parent whose question differs. The traversal fix
+// makes stored ancestry walkable. Neither is wrong. Together they let a caller
+// reach a refused value in two hops instead of one:
+//
+//	turn A  answers Q1, confirms kind=team
+//	turn B  asks Q2 naming A -- the gate REFUSES the carry, but B still
+//	        persisted ParentResultID=A
+//	turn C  asks Q2 naming B -- B's question matches Q2, so the gate passes,
+//	        and the walk follows B's ancestry edge to A and imports A's kind
+//
+// Nothing here is out-of-org, stale-epoch, or receipt-borne. The barrier was
+// enforced exactly one hop deep, which is not a barrier.
+//
+// Both remedies are asserted, because either alone leaves a hole: turn B must
+// not RECORD the refused parent (no laundering material), and the walk must
+// re-apply the question rule on ancestry edges from a parent-supplied root
+// (defence in depth if a refused parent is ever recorded some other way).
+func TestChainIdentity_DriftCannotBeLaunderedThroughAnAncestryEdge(t *testing.T) {
+	t.Parallel()
+
+	const q1 = "which repositories does the ops team own?"
+	const q2 = "how many pull requests merged last quarter?"
+
+	turnA := validInvestigationResult()
+	turnA.ResultID = "result_launder_a_0001"
+	turnA.Question = q1
+	turnA.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
+		confirmedKindEntry(contractsv1.ContextFabricSubjectTeam, "result_launder_z_0001", "kindr_confirm0001"),
+	}
+
+	// turn B: asks Q2 while naming A. The gate refuses the carry; the question
+	// under test is what B PERSISTS as its parent.
+	turnB := validInvestigationResult()
+	turnB.ResultID = "result_launder_b_0001"
+	turnB.Question = q2
+	turnB.ConfirmedStructure = nil
+
+	seed := &staticResultStore{results: map[string]InvestigationResult{
+		turnA.ResultID: turnA, turnB.ResultID: turnB,
+	}}
+
+	t.Run("the refused parent is never recorded", func(t *testing.T) {
+		t.Parallel()
+		store := newAncestryRecordingStore(&staticResultStore{
+			results: map[string]InvestigationResult{turnA.ResultID: turnA},
+		})
+		request := validInvestigationRequest()
+		request.Question = q2
+		request.ParentResultID = turnA.ResultID
+
+		result, err := ancestryTestEngine(t, store).Investigate(context.Background(), reusePrincipal(), request)
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		if got := store.saved[result.ResultID]; got == turnA.ResultID {
+			t.Fatalf("recorded parent %q: the drift gate refused this parent, and persisting it anyway leaves exactly the edge a later turn walks to reach the value the gate rejected", got)
+		}
+	})
+
+	t.Run("an ancestry edge from a parent root is re-checked", func(t *testing.T) {
+		t.Parallel()
+		// B already carries the refused edge (as if written before the fix, or
+		// by any other path). The walk itself must refuse to follow it.
+		store := &ancestryLinkedStore{
+			staticResultStore: seed,
+			parents:           map[string]string{turnB.ResultID: turnA.ResultID},
+		}
+		telemetry := &recordingTelemetry{}
+		project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+		fresh := validInvestigationResult()
+		engine := mustReuseTestEngine(t, EngineDependencies{
+			Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+			Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+				return CanonicalFactBundle{}, nil
+			}),
+			Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+				return fresh, nil
+			}),
+			Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+				return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+			}),
+			Results:   store,
+			Telemetry: telemetry,
+		})
+
+		request := validInvestigationRequest()
+		request.Question = q2
+		request.ParentResultID = turnB.ResultID // B's question MATCHES q2, so the direct gate passes
+
+		result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		for _, c := range telemetry.kindCarries {
+			if c.outcome == KindCarryHit {
+				t.Fatalf("kind carry HIT: turn A answers a different question and the gate refused it directly -- reaching it through B's ancestry edge crosses the same barrier one hop deeper")
+			}
+		}
+		for _, entry := range result.ConfirmedStructure {
+			if entry.Source == contractsv1.ContextFabricStructureSourceCarried {
+				t.Errorf("ConfirmedStructure carries %#v laundered through an ancestry edge", entry)
+			}
+		}
+	})
+
+	t.Run("control: a same-question chain still walks two hops", func(t *testing.T) {
+		t.Parallel()
+		// The remedy must not break legitimate depth. Same shape, except every
+		// turn asks the SAME question -- the ordinary clarification loop this
+		// whole mechanism exists to serve.
+		sameA := turnA
+		sameA.Question = q2
+		sameB := turnB
+		store := &ancestryLinkedStore{
+			staticResultStore: &staticResultStore{results: map[string]InvestigationResult{
+				sameA.ResultID: sameA, sameB.ResultID: sameB,
+			}},
+			parents: map[string]string{sameB.ResultID: sameA.ResultID},
+		}
+		telemetry := &recordingTelemetry{}
+		project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+		fresh := validInvestigationResult()
+		engine := mustReuseTestEngine(t, EngineDependencies{
+			Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+			Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+				return CanonicalFactBundle{}, nil
+			}),
+			Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+				return fresh, nil
+			}),
+			Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+				return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+			}),
+			Results:   store,
+			Telemetry: telemetry,
+		})
+
+		request := validInvestigationRequest()
+		request.Question = q2
+		request.ParentResultID = sameB.ResultID
+
+		if _, err := engine.Investigate(context.Background(), reusePrincipal(), request); err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		hit := false
+		var got []KindCarryOutcome
+		for _, c := range telemetry.kindCarries {
+			got = append(got, c.outcome)
+			if c.outcome == KindCarryHit {
+				hit = true
+			}
+		}
+		if !hit {
+			t.Errorf("kind carry outcomes = %v, want a hit: the re-check must refuse a DRIFTED ancestry edge without breaking a same-question chain, which is the case the mechanism exists for", got)
+		}
+	})
 }
