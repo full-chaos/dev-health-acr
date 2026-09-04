@@ -237,7 +237,7 @@ func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Pri
 				break
 			}
 			visited[resultID] = struct{}{}
-			fetched, err := e.results.Get(ctx, principal, resultID)
+			fetched, err := carryLoadResult(ctx, e.results, principal, resultID)
 			if err != nil {
 				sawUnloadable = true
 				continue
@@ -397,16 +397,24 @@ func carriedStructureProvenance(windowProvenance contractsv1.ContextFabricWindow
 	return contractsv1.ContextFabricStructureClarificationConfirmed
 }
 
-// appendCarriedStructureEntry appends entry to entries when non-nil,
-// otherwise returns entries unchanged -- the single merge point both
-// terminalResult (unresolved.go) and Investigate's own decisive path
-// (engine.go) use so a carried window is disclosed on every result shape
-// that carries a ConfirmedStructure echo at all.
-func appendCarriedStructureEntry(entries []contractsv1.ContextFabricConfirmedStructureEntry, entry *contractsv1.ContextFabricConfirmedStructureEntry) []contractsv1.ContextFabricConfirmedStructureEntry {
-	if entry == nil {
-		return entries
+// appendCarriedStructureEntry appends each non-nil entry to entries -- the
+// single merge point both terminalResult (unresolved.go) and Investigate's
+// own decisive path (engine.go) use so a carry is disclosed on every result
+// shape that carries a ConfirmedStructure echo at all.
+//
+// Variadic because carries are per-AXIS and a single turn can legitimately
+// carry more than one: a window from the window carry, an expected_kind from
+// the structure-axis carry (structure_axis_carry.go). Each axis composes its
+// own entry independently and they merge here, rather than one axis's miss
+// being able to suppress another's hit.
+func appendCarriedStructureEntry(entries []contractsv1.ContextFabricConfirmedStructureEntry, carried ...*contractsv1.ContextFabricConfirmedStructureEntry) []contractsv1.ContextFabricConfirmedStructureEntry {
+	for _, entry := range carried {
+		if entry == nil {
+			continue
+		}
+		entries = append(entries, *entry)
 	}
-	return append(entries, *entry)
+	return entries
 }
 
 // recordWindowCarry reports carry.Outcome to telemetry -- a no-op when

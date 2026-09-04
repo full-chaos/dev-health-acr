@@ -73,18 +73,18 @@ type synthesisAssemblyParams struct {
 	// pass did, and selecting on a different frame -- or on none -- would
 	// let a re-synthesized answer draw a different chart than the one the
 	// budget measured.
-	Frame                 *QuestionFrame
-	Graph                 GraphContext
-	Facts                 CanonicalFactBundle
-	Resolution            SubjectResolution
-	CohortSignalCitations cohortMemberSignalCitations
-	EffectiveWindow       *contractsv1.ContextFabricEffectiveEvidenceWindow
-	WindowCanon           requestWindowCanonicalization
-	WindowCarry           windowCarryResult
-	StructureCanon        requestStructureCanonicalization
-	CarriedStructureEntry *ConfirmedStructureEntry
-	CommitBases           CommitBasisSet
-	CommitDigests         CommitDecisionDigestSet
+	Frame                   *QuestionFrame
+	Graph                   GraphContext
+	Facts                   CanonicalFactBundle
+	Resolution              SubjectResolution
+	CohortSignalCitations   cohortMemberSignalCitations
+	EffectiveWindow         *contractsv1.ContextFabricEffectiveEvidenceWindow
+	WindowCanon             requestWindowCanonicalization
+	WindowCarry             windowCarryResult
+	StructureCanon          requestStructureCanonicalization
+	CarriedStructureEntries []*ConfirmedStructureEntry
+	CommitBases             CommitBasisSet
+	CommitDigests           CommitDecisionDigestSet
 	// GroupedNarrowingBasis is which grouped order (if any) already shaped
 	// Graph.Cohort before assembly ran -- stage 2's own selection, carried
 	// forward so stage 3's "fits" event (which measures this cohort as-is,
@@ -205,7 +205,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	windowCanon := params.WindowCanon
 	windowCarry := params.WindowCarry
 	structureCanon := params.StructureCanon
-	carriedStructureEntry := params.CarriedStructureEntry
+	carriedStructureEntries := params.CarriedStructureEntries
 	commitBases := params.CommitBases
 	commitDigests := params.CommitDigests
 
@@ -314,10 +314,10 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// (empty/nil when this request carried no structure receipts) --
 	// mirrors EffectiveEvidenceWindow's own placement, right beside the
 	// window echo it is the structure-frame sibling of.
-	// CHAOS-4360: a carried window is disclosed here too, appended after
+	// CHAOS-4360: every carried axis is disclosed here too, appended after
 	// every receipt/explicit entry -- appendCarriedStructureEntry is a
-	// no-op unless resolveCarriedWindow actually hit above.
-	result.ConfirmedStructure = appendCarriedStructureEntry(composeConfirmedStructure(mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), structureCanon.Explicit), carriedStructureEntry)
+	// no-op for any axis whose own carry did not hit above.
+	result.ConfirmedStructure = appendCarriedStructureEntry(composeConfirmedStructure(mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), structureCanon.Explicit), carriedStructureEntries...)
 	// CHAOS-3900 P1.G (design brief §2.1 B5): a decisive result reached via
 	// structure confirmation still carries the full (offered, selected)
 	// pair the Bridge needs. No guard needed: structureCanon.OfferSnapshot

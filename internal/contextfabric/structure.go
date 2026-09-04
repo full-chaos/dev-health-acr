@@ -75,13 +75,21 @@ type confirmedStructureMember struct {
 	Member       contractsv1.ContextFabricStructureNeedKind
 	AppliedValue string
 	// AppliedKind (CHAOS-3972 P3, codex xhigh review round 1 finding 3) is
-	// the confirmed offer's own Kind -- populated for subject_handle (the
-	// one member with an explicit-field conflict class to check against,
-	// §2.1: "anchors are RECEIPT-ONLY on the MCP surface... there is no
-	// explicit anchor field"). Empty for expected_kind (AppliedValue IS
-	// already the kind there) and subject_anchor (no explicit-anchor
-	// conflict class exists). See resolveExplicitStructure's own handle
-	// conflict check, the sole reader.
+	// the confirmed offer's own Kind. It is populated for EVERY redeemed
+	// member -- the redemption loop below sets it unconditionally from the
+	// matcher's own kind, and every option validator rejects an empty kind
+	// (validate_context_fabric_structure.go), so subject_handle,
+	// subject_anchor and subject_candidate ALWAYS carry one. It is empty only
+	// for expected_kind, where AppliedValue IS already the kind.
+	//
+	// This comment previously said "populated for subject_handle" only, with
+	// subject_anchor called out as empty, and named resolveExplicitStructure's
+	// handle conflict check as the SOLE reader. Both were already untrue:
+	// confirmedAnchorSelection reads it for subject_anchor, and the carry's
+	// own "did the caller state a kind this turn" check
+	// (statedExpectedKindThisTurn, structure_axis_carry.go) reads it for every
+	// member. A reader who trusted the old text would conclude a candidate
+	// receipt states no kind, which is exactly the wrong conclusion.
 	AppliedKind    contractsv1.ContextFabricSubjectKind
 	PriorResultID  string
 	ReceiptID      string
@@ -886,7 +894,14 @@ func (e *Engine) recordStructureConfirmationOutcome(ctx context.Context, princip
 // window-only claim loss at Save time must echo exactly like a
 // kind/anchor/handle one does, via the SAME staleConfirmedStructureEntries
 // call below.
-func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, confirmed []confirmedStructureMember, superseded *ErrStructureOfferSuperseded, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry, plan *AnswerPlan) (InvestigationResult, error) {
+// carriedStructureEntries (codex round 3) are this turn's per-axis carry
+// disclosures. They belong on THIS terminal for the same reason they belong
+// on every other result shape: the race discards the round's own decisive
+// output, but it does not undo what was inherited -- the carry really did
+// apply, and really did shape the resolution this round performed. Omitting
+// it here left one result path where a carry was silent, which is the same
+// gap the class-default gate had.
+func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal storage.Principal, request InvestigationRequest, confirmed []confirmedStructureMember, superseded *ErrStructureOfferSuperseded, binding ResolvedGraphBinding, priorSubjectReceiptDispositions []contractsv1.ContextFabricPriorSubjectReceiptEntry, carriedStructureEntries []*contractsv1.ContextFabricConfirmedStructureEntry, plan *AnswerPlan) (InvestigationResult, error) {
 	// CHAOS-3972 P3: cf_structure_explicit{member,outcome} -- the SAME
 	// synthetic Veto:structureVetoStaleSupersededOffer canonicalization
 	// recordStructureReceiptTelemetry's own call above uses, so an
@@ -894,7 +909,8 @@ func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal 
 	// non-applied too, never silently left unrecorded or misreported as
 	// "applied" against a round that was actually discarded.
 	recordStructureExplicitTelemetry(ctx, e.telemetry, principal, request, requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer})
-	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, staleConfirmedStructureEntries(confirmed, superseded.Members), binding, priorSubjectReceiptDispositions, plan)
+	echo := appendCarriedStructureEntry(staleConfirmedStructureEntries(confirmed, superseded.Members), carriedStructureEntries...)
+	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, echo, binding, priorSubjectReceiptDispositions, plan)
 }
 
 // resolveExplicitStructure implements design brief §2.5's "explicit

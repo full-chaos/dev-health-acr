@@ -1364,6 +1364,15 @@ func (e *Engine) windowConfirmationRequiredResult(
 	// enough to safely recommend a wider tier) and for gate 2's own
 	// Empty/Composed outcomes.
 	gatedMaterialWindowExpandUnavailable bool,
+	// carriedStructureEntries (codex round 1, finding 1) are the per-axis
+	// carry disclosures for this turn. This gate is a TERMINAL like any
+	// other, and on the class-default path a carried kind has already
+	// shaped gatedMaterial's own offers -- so a result that omitted these
+	// would let a carry change what the caller is offered while telling
+	// them nothing about it, which is exactly the silent inheritance the
+	// carry mechanism exists to avoid. nil at the gate-1 call site, which
+	// fires before any carry has been attempted.
+	carriedStructureEntries []*contractsv1.ContextFabricConfirmedStructureEntry,
 	// priorSubjectReceiptDispositions (CHAOS-3478/CHAOS-3813): the caller's
 	// own composePriorSubjectReceiptDispositions output, or nil when this
 	// gate fires before resolvePriorSubjectHints has run at all (gate 1 --
@@ -1410,6 +1419,10 @@ func (e *Engine) windowConfirmationRequiredResult(
 		// requestStructureCanonicalization's own doc comment (structure.go).
 		offerSnapshot = structureCanon.OfferSnapshot
 	}
+	// Appended OUTSIDE the structureCanon guard: a carry is disclosed even
+	// on a turn that confirmed nothing of its own, which is precisely the
+	// turn a carry exists for.
+	confirmedStructureEcho = appendCarriedStructureEntry(confirmedStructureEcho, carriedStructureEntries...)
 	resultID := e.newResultID()
 	windowClarification := composeWindowClarification(&effective, resultID, e.now())
 	emptyCoverage := Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}
@@ -1601,7 +1614,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 					// CHAOS-3478 (codex round-2 finding): result.SubjectResolution
 					// already carries this call's own priorSubjectReceiptDispositions
 					// parameter -- the race terminal must not silently drop it.
-					return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon.Confirmed, superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, plan)
+					return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon.Confirmed, superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, plan)
 				}
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
