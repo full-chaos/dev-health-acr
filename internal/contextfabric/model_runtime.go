@@ -1575,11 +1575,29 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 	receipt.FrameOutcome = result.Outcome
 	receipt.FrameFailedInvariant = result.Failure.Invariant
 
-	// The requirement rows are derived from the VALIDATED frame, so this
-	// runs before the receipt switch below writes it. A refused frame
-	// derives none: its obligation set was never accepted, and crossing an
-	// unaccepted set with the registry would count cells for a question
-	// the server declined to act on.
+	// CHAOS-4975 (codex round 1, P2): the backfill below MUST run BEFORE
+	// requirement derivation, not after. DeriveRequirementCoordinates
+	// (subject_role.go's frameRoleSlots, SubjectExpressionNamed case)
+	// already reads Named.ExpectedKind directly to emit a subject role
+	// slot -- an EARLIER version of this fix ran the backfill only in the
+	// switch below, after DeriveRequirements(result.Frame) had already
+	// run on the PRE-backfill frame. That produced a receipt where
+	// QuestionFrame.SubjectExpression.Named.ExpectedKind was populated but
+	// RequirementCellsDerived/Unserved (and the FrameValidationEvent's own
+	// requirement summary) were computed as if it were still nil --
+	// requirement telemetry and the persisted frame describing two
+	// different frames from the SAME interpretation. Backfilling first and
+	// deriving from that SAME frame closes the gap.
+	if result.Outcome == FrameValidationOutcomeValid {
+		result.Frame = backfillNamedSubjectExpectedKind(result.Frame, receipt)
+	}
+
+	// The requirement rows are derived from the VALIDATED (and, for
+	// named_subject, now backfilled) frame, so this runs before the
+	// receipt switch below writes it. A refused frame derives none: its
+	// obligation set was never accepted, and crossing an unaccepted set
+	// with the registry would count cells for a question the server
+	// declined to act on.
 	var requirements []DerivedRequirement
 	if r.Requirements != nil && result.Outcome == FrameValidationOutcomeValid {
 		requirements = r.Requirements.DeriveRequirements(result.Frame)
@@ -1591,10 +1609,11 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 
 	switch result.Outcome {
 	case FrameValidationOutcomeValid:
-		// The receipt carries the VALIDATED, normalized frame -- the one
-		// that would be acted on -- rather than the raw proposal, so a
-		// persisted receipt can be replayed against the table that
-		// produced it.
+		// The receipt carries the VALIDATED, normalized (and backfilled)
+		// frame -- the one that would be acted on -- rather than the raw
+		// proposal, so a persisted receipt can be replayed against the
+		// table that produced it, and so it agrees with the requirement
+		// rows just derived above from this SAME frame value.
 		validated := result.Frame
 		receipt.QuestionFrame = &validated
 	default:
@@ -1607,6 +1626,41 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 	if r.FrameTelemetry != nil {
 		r.FrameTelemetry.RecordFrameValidation(ctx, principal, FrameValidationEventFrom(proposed, result, emittedShape, requirements))
 	}
+}
+
+// backfillNamedSubjectExpectedKind (CHAOS-4975) fills a named_subject
+// frame's declared kind from the classification receipt's own
+// RequestedSubjectKind -- named_subject has no model-writable channel of
+// its own for it (prompts.go instructs the model to fill named_subject
+// with terms only), while RequestedSubjectKind is the SAME call's
+// sanitized declared-kind signal for exactly this case (it is what the
+// question's answer is about) and is already on receipt by the time this
+// runs (set by applyFamilyCapture, before Interpret calls resolveFrame).
+//
+// Takes and returns the VALIDATED frame by value, never the raw proposal:
+// a refused frame's telemetry (FrameValidationEventFrom(proposed, ...))
+// must keep showing exactly what the model emitted, undisturbed. Applied
+// only when the model's own frame left ExpectedKind unset: a future model
+// version populating it directly is never overridden.
+//
+// Returns a frame whose Named field is a COPY when it backfills, never a
+// mutation through the existing pointer: NormalizeFrame never touches
+// SubjectExpression, so frame.SubjectExpression.Named is still the SAME
+// pointer the raw proposal holds. Writing through it would silently
+// backdate the "proposal" telemetry to look like the model emitted this
+// field, which is exactly the receipt/artifact disagreement this
+// package's own doc comments elsewhere forbid.
+func backfillNamedSubjectExpectedKind(frame QuestionFrame, receipt *ModelExecutionReceipt) QuestionFrame {
+	named := frame.SubjectExpression.Named
+	if frame.SubjectExpression.Kind != SubjectExpressionNamed || named == nil || named.ExpectedKind != nil ||
+		receipt.RequestedSubjectKind == "" || receipt.RequestedSubjectKindUnrecognized {
+		return frame
+	}
+	kind := receipt.RequestedSubjectKind
+	backfilled := *named
+	backfilled.ExpectedKind = &kind
+	frame.SubjectExpression.Named = &backfilled
+	return frame
 }
 
 // THE ENSEMBLE SIZE IS DELIBERATELY NOT A FIELD HERE, and the absence is

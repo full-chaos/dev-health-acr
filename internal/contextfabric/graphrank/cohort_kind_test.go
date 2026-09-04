@@ -64,7 +64,7 @@ func TestGroupedProjectQuestionDiscoversProjectsNotTeams(t *testing.T) {
 		},
 	}, "status", []string{"each team", "projects"})
 
-	cohort, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
+	cohort, _, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
 		candidateNode(contextfabric.SubjectProject, "project_a", "Project A", 0.9, "*"),
 		candidateNode(contextfabric.SubjectProject, "project_b", "Project B", 0.9, "*"),
 		candidateNode(contextfabric.SubjectTeam, "team_1", "Team One", 0.9, "*"),
@@ -108,30 +108,39 @@ func TestGroupedProjectQuestionDiscoversProjectsNotTeams(t *testing.T) {
 // that bound reachable for the first time, and a repository question that
 // used to return a wrong-kind cohort returned an HTTP 500 on the rig instead.
 //
-// So the honest assertion is the one below: the KIND now comes from the
-// frame, and a repository cohort is refused by a NAMED contract limitation
-// rather than silently rewritten to `team`. Serving it needs the wire
-// contract widened, which is its own ticket.
-func TestRepositoryCohortIsRefusedByContractNotRewrittenToTeam(t *testing.T) {
+// The assertion INVERTED when the arm was proven, and the property it
+// protects did not: a repository question resolves to a REPOSITORY cohort. It
+// used to be refused by a named contract limitation; before that it was
+// silently rewritten to `team`. The constant across all three states is that
+// it is never answered as some other kind, and that is what this asserts --
+// including the team decoy sitting in the same node list, which differs from
+// the repository node in SUBJECT KIND ALONE.
+func TestRepositoryCohortIsDiscoveredAndNeverRewrittenToTeam(t *testing.T) {
 	t.Parallel()
 	discovery := frameDiscovery(contextfabric.SubjectExpression{
 		Kind:       contextfabric.SubjectExpressionDiscoveredKind,
 		Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectRepository},
 	}, "open_incidents", []string{"repositories"})
 
-	cohort, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
+	cohort, _, _, declared, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
 		candidateNode(contextfabric.SubjectRepository, "repo_a", "Repo A", 0.9, "*"),
 		candidateNode(contextfabric.SubjectTeam, "team_1", "Team One", 0.9, "*"),
 	}, noInternal)
 
-	if cohort != nil {
-		t.Fatalf("built a %q cohort; the wire contract refuses it and the answer would 500", cohort.Kind)
+	if basis != CohortKindFromFrameMemberKind {
+		t.Fatalf("basis = %q, want %q", basis, CohortKindFromFrameMemberKind)
 	}
-	// THE POINT: the old code answered this question with a TEAM cohort.
-	// Refusing with a named basis is the improvement; silently substituting
-	// a different kind is the defect the ticket is about.
-	if basis != CohortKindMemberKindUnservable {
-		t.Fatalf("basis = %q, want %q -- a repository question must not resolve to some other kind", basis, CohortKindMemberKindUnservable)
+	if declared != contextfabric.SubjectRepository {
+		t.Fatalf("declared kind = %q, want %q", declared, contextfabric.SubjectRepository)
+	}
+	if cohort == nil {
+		t.Fatal("no cohort was built for a repository question that has candidate repository nodes")
+	}
+	if cohort.Kind != contextfabric.SubjectRepository {
+		t.Fatalf("cohort kind = %q, want %q -- a repository question must not resolve to some other kind", cohort.Kind, contextfabric.SubjectRepository)
+	}
+	if len(cohort.Members) != 1 || cohort.Members[0].Subject.CanonicalID != "repo_a" {
+		t.Fatalf("members = %+v, want exactly the repository node; the team node differs in kind alone and must be excluded by the kind filter, not by anything else", cohort.Members)
 	}
 }
 
@@ -146,7 +155,7 @@ func TestNoFrameDiscoversNothingAndNamesWhy(t *testing.T) {
 	}, "teams_under_pressure", []string{"teams"})
 	discovery.Frame = nil
 
-	cohort, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
+	cohort, _, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
 		candidateNode(contextfabric.SubjectTeam, "team_1", "Team One", 0.9, "*"),
 	}, noInternal)
 
@@ -183,7 +192,7 @@ func TestNonCohortAndMemberlessExpressionsRefuseWithTheirOwnBasis(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			discovery := frameDiscovery(tc.expression, "status", []string{"teams"})
-			cohort, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
+			cohort, _, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
 				candidateNode(contextfabric.SubjectTeam, "team_1", "Team One", 0.9, "*"),
 			}, noInternal)
 			if cohort != nil {
@@ -208,8 +217,15 @@ func TestNonCohortAndMemberlessExpressionsRefuseWithTheirOwnBasis(t *testing.T) 
 // into a counted, named limitation.
 func TestUnservableCohortKindRefusesInsteadOfBuildingAnInvalidCohort(t *testing.T) {
 	t.Parallel()
+	// `repository` LEFT this list in the change that proved its arm.
+	// `incident` is here on its own merit and not as a placeholder: it is
+	// the member kind "open incidents per repository" actually declares
+	// (invariant I6 forbids a grouped expression from grouping a kind by
+	// itself, so the repository noun in that question is the GROUPING AXIS),
+	// and it has no candidate pool at all -- the exact-name census fetches
+	// repository, project and team. Serving it is an incident-cohort arm.
 	for _, kind := range []contextfabric.SubjectKind{
-		contextfabric.SubjectRepository, contextfabric.SubjectIncident,
+		contextfabric.SubjectIncident, contextfabric.SubjectWorkItem,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
 			t.Parallel()
@@ -217,25 +233,28 @@ func TestUnservableCohortKindRefusesInsteadOfBuildingAnInvalidCohort(t *testing.
 				Kind:       contextfabric.SubjectExpressionDiscoveredKind,
 				Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: kind},
 			}, "status", []string{"things"})
-			cohort, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery,
+			cohort, _, _, declared, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery,
 				[]CandidateNode{candidateNode(kind, "node_a", "Node A", 0.9, "*")}, noInternal)
 			if cohort != nil {
-				t.Fatalf("built a %q cohort the wire contract refuses; the answer would 500", kind)
+				t.Fatalf("built a %q cohort no discovery arm was proven for", kind)
 			}
 			if basis != CohortKindMemberKindUnservable {
 				t.Fatalf("basis = %q, want %q -- the limitation has to be countable", basis, CohortKindMemberKindUnservable)
+			}
+			if declared != kind {
+				t.Fatalf("declared kind = %q, want %q -- a refusal that cannot name the kind it refused sends the next reader to the question text", declared, kind)
 			}
 		})
 	}
 }
 
-// The complement, so the guard cannot quietly refuse everything: the two
-// kinds the contract DOES carry must still discover. A deny-list with no
-// positive control is indistinguishable from a gate that always denies.
+// The complement, so the guard cannot quietly refuse everything: every kind
+// with a PROVEN ARM must still discover. A deny-list with no positive control
+// is indistinguishable from a gate that always denies.
 func TestServableCohortKindsStillDiscover(t *testing.T) {
 	t.Parallel()
 	for _, kind := range []contextfabric.SubjectKind{
-		contextfabric.SubjectTeam, contextfabric.SubjectProject,
+		contextfabric.SubjectTeam, contextfabric.SubjectProject, contextfabric.SubjectRepository,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
 			t.Parallel()
@@ -243,7 +262,7 @@ func TestServableCohortKindsStillDiscover(t *testing.T) {
 				Kind:       contextfabric.SubjectExpressionDiscoveredKind,
 				Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: kind},
 			}, "status", []string{"things"})
-			cohort, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery,
+			cohort, _, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery,
 				[]CandidateNode{candidateNode(kind, "node_a", "Node A", 0.9, "*")}, noInternal)
 			if basis != CohortKindFromFrameMemberKind || cohort == nil {
 				t.Fatalf("kind %q no longer discovers: basis=%q cohort=%v", kind, basis, cohort != nil)
@@ -272,9 +291,15 @@ func TestEveryCohortKindBasisIsReachable(t *testing.T) {
 		Kind:       contextfabric.SubjectExpressionDiscoveredKind,
 		Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectTeam},
 	}
+	// RE-POINTED off `repository` in the change that made repository
+	// servable. This fixture is the ONLY input in this test that reaches
+	// member_kind_unservable, so leaving it on a now-servable kind would
+	// have turned that basis into a dead label while the test stayed green
+	// on the other four. `incident` is chosen because it is genuinely
+	// unservable and expected to stay that way.
 	unservable := contextfabric.SubjectExpression{
 		Kind:       contextfabric.SubjectExpressionDiscoveredKind,
-		Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectRepository},
+		Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectIncident},
 	}
 	reached := map[CohortKindBasis]bool{}
 	for _, frame := range []*contextfabric.QuestionFrame{
@@ -284,7 +309,7 @@ func TestEveryCohortKindBasisIsReachable(t *testing.T) {
 		{SubjectExpression: discovered},
 		{SubjectExpression: unservable},
 	} {
-		_, basis := cohortKindFromFrame(frame)
+		_, _, basis := cohortKindFromFrame(frame)
 		if !ValidCohortKindBasis(basis) {
 			t.Fatalf("basis %q is outside the closed vocabulary", basis)
 		}

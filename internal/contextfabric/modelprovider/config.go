@@ -108,6 +108,20 @@ const (
 	EnvAllowInsecureBaseURL = "ACR_CONTEXT_FABRIC_MODEL_ALLOW_INSECURE_BASE_URL"
 )
 
+// identityEnvVars name a provider: setting any ONE of them, alone, is an
+// unambiguous opt-in signal for Configured (see its doc comment).
+var identityEnvVars = []string{
+	EnvProvider, EnvBaseURL, EnvModel, EnvFallbackModel, EnvPhrasingModel,
+	EnvAPIKey, EnvAPIKey + "_FILE",
+}
+
+// tuningEnvVars bound the CALLING BEHAVIOR of an already-identified
+// provider; none of them names a provider on its own, so none opts in
+// alone (see Configured's doc comment and IgnoredTuningVariables).
+var tuningEnvVars = []string{
+	EnvTimeout, EnvMaxAttempts, EnvMaxTransportRetries, EnvAllowInsecureBaseURL,
+}
+
 // Config is the provider-shaped model runtime configuration. Its fields are
 // deliberately vendor-neutral: Provider is a plugin namespace, not a brand
 // check, and no field is consulted for an OpenAI-specific behavior anywhere
@@ -269,34 +283,59 @@ func validateModelID(name, value string) error {
 // leave contextfabric.ModelRuntime nil, which keeps the investigation
 // endpoint's clean per-request 503 (CHAOS-3755) exactly as it is today.
 //
-// ANY nonblank ACR_CONTEXT_FABRIC_MODEL* variable counts as opting in --
-// not just a credential or base URL (CHAOS-3770 F5). An operator who sets
-// only ACR_CONTEXT_FABRIC_MODEL, or only a tuning variable like
-// ACR_CONTEXT_FABRIC_MODEL_TIMEOUT, has unambiguously expressed intent to
-// configure a provider; treating that as "unconfigured" would silently
-// discard their setting and degrade to a clean per-request 503 instead of
-// the startup failure AC-3770-2 requires for a mis-specified configuration.
-// Once any of these variables is set, ConfigFromEnv+validate own deciding
-// whether the resulting configuration is actually usable (e.g. a model
-// name with no credential and no base URL still fails validate() with a
-// message naming EnvAPIKey) -- Configured only decides whether to attempt
-// that parse at all.
+// Only a PROVIDER-IDENTIFYING variable opts in: EnvProvider, EnvBaseURL,
+// EnvModel, EnvFallbackModel, EnvPhrasingModel, EnvAPIKey (direct or
+// _FILE) -- see identityEnvVars. Once any of these is set,
+// ConfigFromEnv+validate own deciding whether the resulting configuration
+// is actually usable (e.g. a model name with no credential and no base
+// URL still fails validate() with a message naming EnvAPIKey) --
+// Configured only decides whether to attempt that parse at all.
+//
+// A TUNING variable alone -- EnvTimeout, EnvMaxAttempts,
+// EnvMaxTransportRetries, EnvAllowInsecureBaseURL; see tuningEnvVars --
+// does NOT opt in (CHAOS-4986). This supersedes the CHAOS-3770 F5
+// decision for the tuning subset only: F5 treated ANY nonblank
+// ACR_CONTEXT_FABRIC_MODEL* variable, including ACR_CONTEXT_FABRIC_MODEL_TIMEOUT
+// alone, as an explicit opt-in, reasoning that silently discarding a set
+// tuning variable was worse than a startup failure. In practice that made
+// a timeout-only (or any other tuning-only) environment fail closed at
+// startup demanding EnvAPIKey, a variable the operator never intended to
+// set -- CHAOS-4986 (2026-09-03 prod crash loop, whose same-day
+// antecedent is #409's production-overlay amendment dropping the timeout
+// line to route around exactly this) is that scenario. A tuning variable
+// is a calling convention for an ALREADY-identified provider, not a
+// provider-identifying signal by itself, so it no longer gates
+// composition; a caller composing the deployment-default runtime instead
+// logs IgnoredTuningVariables once at startup, so the operator still
+// learns their setting had no effect, without a crash loop.
 //
 // Ambient OPENAI_* variables are deliberately NOT consulted: opting this
 // service into a paid provider is an ACR configuration decision, never
 // something inherited from whatever happened to be exported in the
 // process environment.
 func Configured(lookup func(string) (string, bool)) bool {
-	for _, key := range []string{
-		EnvProvider, EnvBaseURL, EnvModel, EnvFallbackModel, EnvPhrasingModel,
-		EnvAPIKey, EnvAPIKey + "_FILE",
-		EnvTimeout, EnvMaxAttempts, EnvMaxTransportRetries, EnvAllowInsecureBaseURL,
-	} {
+	for _, key := range identityEnvVars {
 		if value, ok := lookup(key); ok && strings.TrimSpace(value) != "" {
 			return true
 		}
 	}
 	return false
+}
+
+// IgnoredTuningVariables returns the names of tuningEnvVars that are set
+// (nonblank) in the environment. It is meaningful only when Configured()
+// is false: a caller composing the deployment-default model runtime uses
+// it to log, once at startup, which tuning-only settings had no effect
+// because no provider was identified (CHAOS-4986; see Configured's doc
+// comment).
+func IgnoredTuningVariables(lookup func(string) (string, bool)) []string {
+	var ignored []string
+	for _, key := range tuningEnvVars {
+		if value, ok := lookup(key); ok && strings.TrimSpace(value) != "" {
+			ignored = append(ignored, key)
+		}
+	}
+	return ignored
 }
 
 // ConfigFromEnv builds a Config from the process environment. Callers own

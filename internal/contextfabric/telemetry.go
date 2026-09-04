@@ -287,6 +287,16 @@ func (t SlogEngineTelemetry) RecordWindowCarry(ctx context.Context, principal st
 	t.logger.InfoContext(ctx, "context fabric window carry", args...)
 }
 
+// RecordKindCarry logs at Info, mirroring RecordWindowCarry exactly:
+// outcome/chain_depth are closed-vocabulary/plain-integer, content-safe by
+// construction -- never a question, subject label, or canonical id. A
+// distinct message from the window carry's so the two axes' hit rates can
+// be counted apart.
+func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int) {
+	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "chain_depth", chainDepth}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric kind carry", args...)
+}
+
 // RecordStructureNeedsDisclosed (CHAOS-3900 P1.F). member is a closed
 // StructureNeedKind enum value -- content-safe by construction, never
 // question text or a subject identifier.
@@ -510,6 +520,7 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 func (t SlogEngineTelemetry) RecordCohortRanked(ctx context.Context, principal storage.Principal, event CohortRankedEvent) {
 	t.logger.InfoContext(ctx, "context fabric cohort ranked", append([]any{
 		"org_id", principal.OrgID,
+		"cohort_kind", string(event.CohortKind),
 		"member_count", event.MemberCount,
 		"formula_version", event.FormulaVersion,
 		"degraded_member_count", event.DegradedMemberCount,

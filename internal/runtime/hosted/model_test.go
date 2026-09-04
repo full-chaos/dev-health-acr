@@ -1,8 +1,10 @@
 package hosted
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -16,6 +18,13 @@ func envLookup(values map[string]string) func(string) (string, bool) {
 		value, ok := values[key]
 		return value, ok
 	}
+}
+
+// discardLogger is a non-nil logger for tests that don't inspect log
+// output -- newContextFabricModelRuntime requires a non-nil logger (see
+// its doc comment), matching production's validateBuildRequest guarantee.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
 }
 
 // TestNewContextFabricModelRuntime_keepsTheCleanFiveOhThreeWithoutACredential
@@ -36,7 +45,7 @@ func TestNewContextFabricModelRuntime_keepsTheCleanFiveOhThreeWithoutACredential
 	})
 
 	// When
-	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup, nil)
+	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup, nil, discardLogger())
 
 	// Then
 	if err != nil {
@@ -64,7 +73,7 @@ func TestNewContextFabricModelRuntime_buildsAUsableRuntimeWhenConfigured(t *test
 	lookup := envLookup(map[string]string{modelprovider.EnvAPIKey: "sk-test"})
 
 	// When
-	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup, nil)
+	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup, nil, discardLogger())
 
 	// Then the returned interface must be genuinely non-nil, not a typed
 	// nil: RuntimeQuestionInterpreter only degrades on a nil interface, so a
@@ -88,7 +97,7 @@ func TestNewContextFabricModelRuntime_failsCompositionOnAModelOnlyPartialConfig(
 	lookup := envLookup(map[string]string{modelprovider.EnvModel: "gpt-5-mini"})
 
 	// When
-	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup, nil)
+	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup, nil, discardLogger())
 
 	// Then startup fails loudly, naming the missing credential variable --
 	// not a silent nil runtime that 503s forever without ever telling the
@@ -112,7 +121,7 @@ func TestNewContextFabricModelRuntime_failsCompositionOnAMisconfiguredProvider(t
 	})
 
 	// When
-	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup, nil)
+	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup, nil, discardLogger())
 
 	// Then startup fails loudly rather than degrading silently to 503 --
 	// the opposite of the unconfigured case above.
@@ -124,5 +133,63 @@ func TestNewContextFabricModelRuntime_failsCompositionOnAMisconfiguredProvider(t
 	}
 	if !strings.Contains(err.Error(), modelprovider.EnvTimeout) {
 		t.Fatalf("err = %q, want it to name the offending environment variable", err)
+	}
+}
+
+// TestNewContextFabricModelRuntime_ignoresATimeoutOnlyEnvironment is the
+// CHAOS-4986 red-first probe at the composition boundary: an operator who
+// sets ONLY ACR_CONTEXT_FABRIC_MODEL_TIMEOUT (the 2026-09-03 prod crash
+// loop) must get the CHAOS-3755 clean 503 (no provider configured), not a
+// startup failure demanding a credential they never intended to set --
+// and a startup WARN naming the ignored variable, so the setting's loss
+// isn't silent.
+func TestNewContextFabricModelRuntime_ignoresATimeoutOnlyEnvironment(t *testing.T) {
+	// Given an operator who set only the timeout, matching the incident.
+	lookup := envLookup(map[string]string{modelprovider.EnvTimeout: "120s"})
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+	// When
+	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup, nil, logger)
+
+	// Then no failure, no runtime -- the same clean-503 shape as no
+	// configuration at all.
+	if err != nil {
+		t.Fatalf("newContextFabricModelRuntime() = %v, want no failure for a tuning-only environment", err)
+	}
+	if modelRuntime != nil {
+		t.Fatalf("model runtime = %#v, want nil: a tuning-only variable must not opt into a provider", modelRuntime)
+	}
+	// And the operator is told the variable had no effect.
+	logged := logs.String()
+	if !strings.Contains(logged, modelprovider.EnvTimeout) {
+		t.Fatalf("startup log = %q, want it to name the ignored variable %s", logged, modelprovider.EnvTimeout)
+	}
+	if !strings.Contains(logged, "WARN") {
+		t.Fatalf("startup log = %q, want a WARN level record", logged)
+	}
+}
+
+// TestNewContextFabricModelRuntime_appliesAnExplicitTimeoutWhenConfigured
+// is the CHAOS-4986 companion case: a tuning variable set ALONGSIDE an
+// identity variable is not ignored -- it must still apply, exactly as
+// before this ticket.
+func TestNewContextFabricModelRuntime_appliesAnExplicitTimeoutWhenConfigured(t *testing.T) {
+	// Given a real credential and an explicit timeout together.
+	lookup := envLookup(map[string]string{
+		modelprovider.EnvAPIKey:  "sk-test",
+		modelprovider.EnvTimeout: "90s",
+	})
+
+	// When
+	modelRuntime, err := newContextFabricModelRuntime(context.Background(), lookup, nil, discardLogger())
+
+	// Then composition succeeds with a real runtime -- the timeout is
+	// honored, not silently dropped, once a provider is identified.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modelRuntime == nil {
+		t.Fatal("model runtime = nil for a configured provider with an explicit timeout")
 	}
 }

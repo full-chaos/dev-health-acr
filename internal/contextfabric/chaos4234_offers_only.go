@@ -125,7 +125,7 @@ const (
 // wider") or found something. Every error path also returns empty
 // material: the gated terminal must never be blocked by a read whose only
 // purpose is a better clarification.
-func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Principal, request InvestigationRequest, graphRequest InvestigationRequest, interpretation InterpretedQuestion, familyOutcome QuestionFamilyOutcome, binding ResolvedGraphBinding, structureCanon requestStructureCanonicalization, priorEntries []StructurePriorEntry) (material StructureOfferMaterial, windowExpandUnavailable bool) {
+func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Principal, request InvestigationRequest, graphRequest InvestigationRequest, interpretation InterpretedQuestion, familyOutcome QuestionFamilyOutcome, binding ResolvedGraphBinding, structureCanon requestStructureCanonicalization, kindCarry kindCarryResult, priorEntries []StructurePriorEntry) (material StructureOfferMaterial, windowExpandUnavailable bool) {
 	record := func(outcome GatedOfferResolutionOutcome) {
 		if e.telemetry != nil {
 			e.telemetry.RecordGatedOfferResolution(ctx, principal, outcome)
@@ -143,7 +143,7 @@ func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Princ
 	// exists to produce a better clarification for this very turn, so
 	// resolving it with a different (or absent) frame would offer the user
 	// candidates from a pool the real resolution never searched.
-	_, resolved, _, _, err := e.graph.ResolveSubjects(WithOffersOnlyResolution(ctx), principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed), familyOutcome.Frame)
+	_, resolved, _, _, err := e.graph.ResolveSubjects(WithOffersOnlyResolution(ctx), principal, graphRequest, interpretation, binding, effectiveConfirmedKind(structureCanon.Confirmed, kindCarry), confirmedAnchorSelection(structureCanon.Confirmed), familyOutcome.Frame, ScopeAnchorRetrievalKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind))
 	if err != nil && !errors.Is(err, ErrGraphNotProjected) {
 		record(GatedOfferResolutionFailed)
 		return StructureOfferMaterial{}, true

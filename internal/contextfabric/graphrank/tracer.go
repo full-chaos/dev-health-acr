@@ -162,8 +162,17 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// truncation signal -- see ConfirmedKindRescueTruncated's own doc
 		// comment for why). Counts and bools only -- no kind name, no
 		// term, no candidate identity.
+		// "attempted" is emitted explicitly rather than left implicit in the
+		// event's presence. The presence rule is correct and documented
+		// above, but "fired=false" reads as "the rescue did not run" to
+		// anyone who has not read that doc comment -- it actually means the
+		// rescue RAN and found nothing, which is the opposite conclusion
+		// about whether "no candidate" is an exhaustive census or a skipped
+		// one. That misreading has already happened once. A reader should
+		// not need the source to interpret the line.
 		t.logger.DebugContext(ctx, "context fabric resolution trace: confirmed kind rescue",
 			"request_id", event.RequestID, "stage", event.Stage,
+			"attempted", true,
 			"fired", event.ConfirmedKindRescueFired,
 			"result_count", event.ConfirmedKindRescueResultCount,
 			"truncated", event.ConfirmedKindRescueTruncated)
@@ -235,6 +244,20 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"request_id", event.RequestID, "stage", event.Stage,
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"rank", event.Rank, "survived", event.Survived, "coverage_bypass", event.CoverageBypass)
+	case "reserved_kind_admitted":
+		// One event per candidate that phase 4's kind reserve kept past the
+		// flat cut (resolution.go, reservedPrefix). It is the operator-visible
+		// half of the reserve: its presence means a kind the FRAME OR RECEIPT
+		// declared would otherwise have been truncated out of the offered
+		// candidate list entirely, which is the defect the reserve exists to
+		// stop. Absence means the reserve was inert on this resolution --
+		// either nothing was reserved, or the ranking already kept the kind.
+		// Rank is the candidate's PRE-CUT rank, so the distance past `max`
+		// says how badly the kind lost the ranking race.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: reserved kind admitted",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
+			"rank", event.Rank, "survived", event.Survived)
 	case "confirmed_kind_scope":
 		// CHAOS-4154: the operator-visible half of the confirmed-kind
 		// truncation-scoping mechanism -- this event's own presence in a

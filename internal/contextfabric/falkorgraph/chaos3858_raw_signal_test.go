@@ -37,7 +37,7 @@ func TestAdapterResolveSubjects_RawSignalObserverReceivesRawLexicalCoverage(t *t
 	adapter.config.RawSignalObserver = observer
 	request, interpreted := openQuestionRequest("incident outage payment gateway")
 
-	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -73,7 +73,7 @@ func TestAdapterResolveSubjects_NilRawSignalObserverIsDefault(t *testing.T) {
 	adapter := newFakeAdapter(t, fake)
 	request, interpreted := openQuestionRequest("incident outage payment gateway")
 
-	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v (nil observer must never cause a failure)", err)
 	}

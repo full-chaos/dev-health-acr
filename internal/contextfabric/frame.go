@@ -374,6 +374,20 @@ func (e SubjectExpression) MemberKind() (SubjectKind, bool) {
 			return "", false
 		}
 		return *e.Org.MemberKind, *e.Org.MemberKind != ""
+	case SubjectExpressionNamed:
+		// CHAOS-4975: named_subject's declared kind lives on a different
+		// field name (ExpectedKind, not MemberKind) because a named
+		// subject is not a member of anything -- it IS the subject. Read
+		// it here anyway so frameKindHints (graphrank/cohort_kind.go),
+		// the single production caller this method exists to feed, stops
+		// treating a named_subject frame as declaring no kind at all.
+		// cohortKindFromFrame, this method's only OTHER caller, is
+		// unaffected: it checks IsCohortVariant() first and named_subject
+		// is not a cohort variant, so this case never reaches it.
+		if e.Named == nil || e.Named.ExpectedKind == nil {
+			return "", false
+		}
+		return *e.Named.ExpectedKind, *e.Named.ExpectedKind != ""
 	default:
 		return "", false
 	}

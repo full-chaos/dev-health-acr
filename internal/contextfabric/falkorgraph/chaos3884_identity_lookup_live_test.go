@@ -116,7 +116,7 @@ func (f *fakeIdentityTelemetry) RecordCohortDeniedByAuthorization(context.Contex
 func (f *fakeIdentityTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bool, falkorgraph.CohortExactNameCensusBasis) {
 }
 
-func (f *fakeIdentityTelemetry) RecordCohortKindBasis(_ context.Context, _ string, _ graphrank.CohortKindBasis, _ bool) {
+func (f *fakeIdentityTelemetry) RecordCohortKindBasis(_ context.Context, _ string, _ contextfabric.SubjectKind, _ graphrank.CohortKindBasis, _ bool) {
 }
 
 // TestLiveAliasIdentityFastPathCommitsAUniqueClaimant is CHAOS-3884 Option
@@ -164,7 +164,7 @@ func TestLiveAliasIdentityFastPathCommitsAUniqueClaimant(t *testing.T) {
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{"dev-health-acr"},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	resolution, _, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -223,7 +223,7 @@ func TestLiveAliasIdentityCollisionNeverCommits(t *testing.T) {
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{"chaos-ops"},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	resolution, _, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -285,7 +285,7 @@ func TestLiveAliasIdentityGraphMissingClaimantIsExcludedAndReported(t *testing.T
 		Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{"ghost-repo"},
 		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
-	resolution, _, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -358,7 +358,7 @@ func TestLiveAliasIdentityUniverseCompletenessIsTracedThroughTheWiredComposition
 				Shape: contextfabric.ShapeSingleSubject, RequestedJudgment: "status", SubjectTerms: []string{"trace-" + tc.name},
 				TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 			}
-			if _, _, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil); err != nil {
+			if _, _, _, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil, ""); err != nil {
 				t.Fatalf("ResolveSubjects(nil) error = %v", err)
 			}
 

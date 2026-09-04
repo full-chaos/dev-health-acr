@@ -268,7 +268,7 @@ func TestResolveSubjects_OverFetchLetsACorroboratedCandidateBeyondRawVectorRankW
 		TimeContext:  contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 	}
 
-	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil)
+	resolution, _, _, _, err := adapter.ResolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, request, interpreted, contextfabric.ResolvedGraphBinding{}, nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjects(nil) error = %v", err)
 	}
@@ -1147,6 +1147,9 @@ type recordingTelemetry struct {
 	// count argument (CHAOS-3884).
 	identityGraphMissing int
 
+	// cohortKindBases records every RecordCohortKindBasis call verbatim.
+	cohortKindBases []cohortKindBasisRecord
+
 	// vectorFences/lexiconExpansions record every RecordVectorFence/
 	// RecordLexiconExpansion call verbatim (CHAOS-3890) -- slices, so a
 	// test can assert the exact reason/memoized or fired/batch/added/
@@ -1222,6 +1225,17 @@ type cohortExactNameCensusGateRecord struct {
 	basis    CohortExactNameCensusBasis
 }
 
+// cohortKindBasisRecord is one RecordCohortKindBasis call, verbatim -- the
+// same slice-not-a-count shape efRuntimeMismatches and vectorFences already
+// use, so a test can assert WHICH basis was reported and whether a cohort
+// came back, never merely that something fired.
+type cohortKindBasisRecord struct {
+	orgID        string
+	declaredKind contextfabric.SubjectKind
+	basis        graphrank.CohortKindBasis
+	discovered   bool
+}
+
 func (r *recordingTelemetry) RecordObservationTraversalDegraded(context.Context, string, int) {}
 func (r *recordingTelemetry) RecordVectorRetrievalDegraded(context.Context, string) {
 	r.degraded++
@@ -1272,7 +1286,15 @@ func (r *recordingTelemetry) RecordCohortExactNameCensusGate(_ context.Context, 
 	r.cohortExactNameCensusGates = append(r.cohortExactNameCensusGates, cohortExactNameCensusGateRecord{orgID: orgID, admitted: admitted, basis: basis})
 }
 
-func (r *recordingTelemetry) RecordCohortKindBasis(_ context.Context, _ string, _ graphrank.CohortKindBasis, _ bool) {
+// RecordCohortKindBasis RECORDS. It used to discard every argument, which
+// made it a discarding fake wearing a recorder's name: deleting the
+// production emit at reader.go would not have failed a single test in this
+// package. The cohort-kind basis is the one signal that distinguishes "the
+// graph had no matching nodes" from "the seam refused this kind", so a test
+// asserting a refusal or a discovery needs to read it, not merely to have
+// caused it.
+func (r *recordingTelemetry) RecordCohortKindBasis(_ context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool) {
+	r.cohortKindBases = append(r.cohortKindBases, cohortKindBasisRecord{orgID: orgID, declaredKind: declaredKind, basis: basis, discovered: discovered})
 }
 
 func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {

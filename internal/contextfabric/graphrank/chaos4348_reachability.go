@@ -86,7 +86,28 @@ import (
 // isAliasLookupScopedKind filter and the "no hint, no call" byte-identical
 // guarantee are all unchanged; only where the third source's kinds come from
 // changed, from guessing at words to reading a closed-vocabulary field.
-func hintedPoolKinds(request contextfabric.InvestigationRequest, confirmedKind *contextfabric.ConfirmedExpectedKind, frame *contextfabric.QuestionFrame) []contextfabric.SubjectKind {
+// scopeAnchorKind is the THIRD hint source (the frame's scope ANCHOR kind),
+// already gated by contextfabric.ScopeAnchorRetrievalKind at the engine call
+// site -- see that function for every condition under which it is "" and why
+// each is a refusal rather than a fallback. "" contributes nothing, so a
+// caller that passes it gets a byte-identical hint list to the pre-ticket
+// version of this function.
+//
+// It is a SEPARATE source from frameKindHints, not an extension of it,
+// because they answer different questions about the same frame:
+// frameKindHints reads what the members ARE (SubjectExpression.MemberKind/
+// GroupKind), while this reads what the members hang OFF. For
+// children_of_scope those are necessarily different kinds -- the gate refuses
+// an equal pair -- and before this parameter existed the anchor's own terms
+// were searched under the MEMBER's kind, which is the defect.
+//
+// It is added LAST so that the pre-existing sources keep their exact relative
+// order and their first-occurrence positions in the result; add() dedupes, so
+// an anchor kind some earlier source already contributed changes nothing at
+// all. isAliasLookupScopedKind still filters it, exactly as it filters every
+// other source -- this parameter widens WHICH kinds are hinted, never WHICH
+// kinds are hintable.
+func hintedPoolKinds(request contextfabric.InvestigationRequest, confirmedKind *contextfabric.ConfirmedExpectedKind, frame *contextfabric.QuestionFrame, scopeAnchorKind contextfabric.SubjectKind) []contextfabric.SubjectKind {
 	seen := make(map[contextfabric.SubjectKind]bool, 3)
 	var hints []contextfabric.SubjectKind
 	add := func(kind contextfabric.SubjectKind) {
@@ -105,7 +126,39 @@ func hintedPoolKinds(request contextfabric.InvestigationRequest, confirmedKind *
 	for _, kind := range frameKindHints(frame) {
 		add(kind)
 	}
+	add(scopeAnchorKind)
 	return hints
+}
+
+// frameReservedKinds is the set of kinds phase 4's truncation guarantees a
+// place for (resolution.go, reservedPrefix): the kinds THIS QUESTION'S OWN
+// FRAME OR RECEIPT declared, and nothing else.
+//
+// It is deliberately NARROWER than hintedPoolKinds. That function also admits
+// request.ExpectedKinds -- a CALLER-supplied hint -- and a caller must not be
+// able to buy itself a guaranteed slot in the ranked candidate list by
+// asserting a kind. These two kinds are different: they are what the model
+// declared the question to be ABOUT (the members) and what it hangs OFF (the
+// anchor), both server-validated against the closed registry before they get
+// here. A confirmed kind is excluded for the same reason plus a stronger one:
+// by the time a kind is confirmed the question is no longer starved for that
+// kind's candidates.
+//
+// Empty for a nil frame with no anchor kind, which is the disabled state:
+// reservedPrefix with an empty list is the plain prefix.
+func frameReservedKinds(frame *contextfabric.QuestionFrame, scopeAnchorKind contextfabric.SubjectKind) []contextfabric.SubjectKind {
+	var kinds []contextfabric.SubjectKind
+	seen := make(map[contextfabric.SubjectKind]bool, 2)
+	for _, kind := range frameKindHints(frame) {
+		if !seen[kind] {
+			seen[kind] = true
+			kinds = append(kinds, kind)
+		}
+	}
+	if scopeAnchorKind != "" && !seen[scopeAnchorKind] {
+		kinds = append(kinds, scopeAnchorKind)
+	}
+	return kinds
 }
 
 // applyKindHintedPoolSearch runs deps.SearchKind for every hinted kind
