@@ -3,8 +3,10 @@ package contextfabric
 import (
 	"context"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // Compare-and-drop. The shipped behaviour BLOCKS the carry whenever any
@@ -144,4 +146,56 @@ func TestCarryDrop_RegressionPinsThatMustNotMove(t *testing.T) {
 		t.Fatalf("effectiveConfirmedKind(miss) = %#v, want nil", got)
 	}
 	_ = context.Background()
+}
+
+// TestCarryDrop_TelemetryCarriesBothKinds. A drop reported as an outcome alone
+// is a decision an operator cannot check: it says the mechanism deferred, not
+// whether it was right to. The carried kind beside the redeemed one is what
+// distinguishes a caller who pivoted from a chain that went stale, and both are
+// closed-vocabulary subject kinds so carrying them is content-safe.
+//
+// The field existed before this test and was never plumbed through, which a
+// review caught: the struct comment promised telemetry that the recorder did
+// not send.
+func TestCarryDrop_TelemetryCarriesBothKinds(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			t.Fatal("Interpret must not be called")
+			return InterpretedQuestion{}, nil
+		}),
+		Graph: neverProjectedGraphReader{t: t},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			t.Fatal("ReadFacts must not be called")
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			t.Fatal("Synthesize must not be called")
+			return InvestigationResult{}, nil
+		}),
+		Results:   &staticResultStore{results: map[string]InvestigationResult{}},
+		Telemetry: telemetry,
+	}, EngineOptions{ServiceVersion: "carry-drop-telemetry-test", Now: func() time.Time { return time.Unix(400, 0).UTC() }, NewResultID: func() string { return "result_x" }})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	dropped := kindCarryResult{
+		Kind:         contractsv1.ContextFabricSubjectRepository,
+		RedeemedKind: contractsv1.ContextFabricSubjectTeam,
+		Outcome:      KindCarryDroppedRedeemedKindDiffers,
+	}
+	engine.recordKindCarry(context.Background(), acceptancePrincipal(), dropped)
+
+	if len(telemetry.kindCarries) != 1 {
+		t.Fatalf("kindCarries = %#v, want exactly one record", telemetry.kindCarries)
+	}
+	got := telemetry.kindCarries[0]
+	if got.outcome != KindCarryDroppedRedeemedKindDiffers {
+		t.Fatalf("outcome = %q, want %q", got.outcome, KindCarryDroppedRedeemedKindDiffers)
+	}
+	if got.carriedKind != contractsv1.ContextFabricSubjectRepository || got.redeemedKind != contractsv1.ContextFabricSubjectTeam {
+		t.Fatalf("carried/redeemed = %q/%q, want repository/team -- an outcome without both sides cannot be checked", got.carriedKind, got.redeemedKind)
+	}
 }

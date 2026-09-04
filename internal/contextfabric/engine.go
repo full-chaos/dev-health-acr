@@ -507,7 +507,11 @@ type EngineTelemetry interface {
 	// SEPARATE counter rather than one call with an axis label: a reader
 	// diagnosing an ask/answer oscillation must be able to tell WHICH axis
 	// missed, and the two axes have independent hit rates.
-	RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int)
+	// carriedKind/redeemedKind are the two sides of a drop -- both closed
+	// vocabulary, both empty on every other outcome. They are in the signature
+	// rather than a side channel because a drop reported without them is a
+	// decision an operator cannot check.
+	RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind)
 	// RecordStructureNeedsDisclosed (CHAOS-3900 P1.F, design brief §2.1's
 	// cf_structure_needs_disclosed{member}) reports one member appearing
 	// in a composed StructureNeeds.Missing -- called once per member,

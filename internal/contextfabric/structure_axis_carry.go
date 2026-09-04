@@ -505,7 +505,18 @@ func (e *Engine) recordKindCarry(ctx context.Context, principal storage.Principa
 	if e.telemetry == nil || carry.Outcome == KindCarryNotAttempted {
 		return
 	}
-	e.telemetry.RecordKindCarry(ctx, principal, carry.Outcome, carry.ChainDepth)
+	// Both kinds travel with the outcome. On a DROP the outcome alone says the
+	// mechanism deferred but not why it was right to: an operator needs the
+	// carried kind beside the redeemed one to tell a caller who pivoted from a
+	// chain that went stale. Both are closed-vocabulary subject kinds, so this
+	// is content-safe by construction -- no label, no id, no free text.
+	//
+	// carriedKind is populated on a HIT too, not only on a drop: which kind a
+	// conversation actually inherited is the other half of a hit rate, and an
+	// operator reading "hit" alone cannot tell a chain carrying `repository`
+	// from one carrying `team`. redeemedKind is empty except on a drop, where
+	// it is the only place the disagreement is recorded.
+	e.telemetry.RecordKindCarry(ctx, principal, carry.Outcome, carry.ChainDepth, carry.Kind, carry.RedeemedKind)
 }
 
 // carryResultCacheKey scopes the per-request carry load cache below.
