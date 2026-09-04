@@ -46,14 +46,25 @@ func TestEveryOutcomeIdentityResolvesToExactlyOnePlanRequirement(t *testing.T) {
 			t.Errorf("plan carries identity %q %d times; the join is ambiguous", identity, count)
 		}
 	}
+	// COUNT WHAT REACHES THE ASSERTION. This loop skips unattributed rows, so
+	// a fixture whose rows were ALL unattributed would execute the body zero
+	// times and the test would pass having asserted nothing. Today the seed
+	// attributes every row -- but nothing here PROVED that until this count
+	// did, and an assertion whose execution depends on fixture data nobody
+	// checks is the third instance of that shape on this branch.
+	reached := 0
 	for _, outcome := range outcomes {
 		if outcome.Requirement == "" {
 			continue // an unattributed row is legal and joins to nothing
 		}
+		reached++
 		if planByIdentity[outcome.Requirement] != 1 {
 			t.Errorf("outcome row names requirement %q, which the plan does not describe exactly once (%d)",
 				outcome.Requirement, planByIdentity[outcome.Requirement])
 		}
+	}
+	if reached == 0 {
+		t.Fatal("no attributed outcome row reached the join assertion; this test proved nothing")
 	}
 
 	outcomeByIdentity := map[string]bool{}
@@ -73,13 +84,18 @@ func TestEveryOutcomeIdentityResolvesToExactlyOnePlanRequirement(t *testing.T) {
 	for _, row := range plan {
 		planObligation[row.Requirement] = row.Obligation
 	}
+	obligationsChecked := 0
 	for _, outcome := range outcomes {
 		if outcome.Requirement == "" {
 			continue
 		}
+		obligationsChecked++
 		if got, want := outcome.Obligation, planObligation[outcome.Requirement]; got != want {
 			t.Errorf("outcome row %q names obligation %q, the plan row names %q", outcome.Requirement, got, want)
 		}
+	}
+	if obligationsChecked == 0 {
+		t.Fatal("no attributed row reached the obligation-agreement assertion; this test proved nothing")
 	}
 }
 
