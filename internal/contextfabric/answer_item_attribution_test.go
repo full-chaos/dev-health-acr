@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"log/slog"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -118,6 +120,11 @@ type attributionFixtureSpec struct {
 	groupDrivers      int
 	multiGroupDrivers int
 	memberDrivers     int
+	// candidates is how many resolution candidates the resolver PROPOSES.
+	// They charge the global bucket, and they are the only thing the outcome
+	// layer's reduction may cut -- which is what makes the fifth arm
+	// reachable at all.
+	candidates int
 }
 
 // expect is what the split must be for a document carrying membersMeasured
@@ -127,9 +134,13 @@ type attributionFixtureSpec struct {
 // AttributeContextFabricResultItems, so the expectation and the value under
 // test cannot share a defect; and membersMeasured comes from the arm's own
 // emitted line (its before/after counts), not from a number written here.
-func (s attributionFixtureSpec) expect(membersMeasured int) attributionFixtureCounts {
+func (s attributionFixtureSpec) expect(membersMeasured, candidatesInDocument int) attributionFixtureCounts {
 	return attributionFixtureCounts{
-		global: s.globalFindings,
+		// Resolution candidates are global items. On the arm where the
+		// reduction CUT some, the survivors are what the served document
+		// carries -- so this takes the count from the line, not from the
+		// number the resolver proposed.
+		global: s.globalFindings + candidatesInDocument,
 		// The cohort member ROWS plus the drivers about a member. The rows
 		// are the item class the earlier design of this seam charged and
 		// never accounted for, so they are counted explicitly.
@@ -220,7 +231,7 @@ func attributionEngine(t *testing.T, spec attributionFixtureSpec, sink *bytes.Bu
 			}, nil
 		}),
 		Graph: &capturingGraphReader{
-			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+			resolution: SubjectResolution{Candidates: outcomeAssemblyCandidates(spec.candidates), Committed: []SubjectRef{}},
 			context: GraphContext{
 				Cohort: graphCohort,
 				Paths:  []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
@@ -323,7 +334,7 @@ func TestTheServedAnswerLineSaysWhatItsChargedItemsWereAbout(t *testing.T) {
 	var sink bytes.Buffer
 	spec := defaultAttributionSpec()
 	engine, _ := attributionEngine(t, spec, &sink, budgetStageOptions(200, 0))
-	want := spec.expect(spec.members)
+	want := spec.expect(spec.members, spec.candidates)
 
 	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
@@ -386,7 +397,7 @@ func TestARefusalLineAlsoSaysWhatItsChargedItemsWereAbout(t *testing.T) {
 	// cannot fit, cannot be narrowed into fitting, and reaches the refusal.
 	spec := defaultAttributionSpec()
 	engine, _ := attributionEngine(t, spec, &sink, budgetStageOptions(1, 0))
-	want := spec.expect(spec.members)
+	want := spec.expect(spec.members, spec.candidates)
 
 	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
 		t.Fatal("Investigate() returned no error; this fixture is meant to reach a budget refusal")
@@ -426,17 +437,94 @@ func TestARefusalLineAlsoSaysWhatItsChargedItemsWereAbout(t *testing.T) {
 	}
 }
 
-// armsWithNoBehaviouralCase names the assembled-result arms no scenario below
-// reaches, and it is ENFORCED rather than merely disclosed.
+// uncoveredArm is an assembled-result arm no scenario below drives.
 //
-// A gap written only in a comment is indistinguishable from an omission, so
-// the count is reconciled against the number of `recordMeasurement` call sites
-// the package actually has. Covering one of these without removing it from the
-// list fails; adding a sixth arm without covering it fails too.
-var armsWithNoBehaviouralCase = []string{
-	"the outcome layer serving a candidate narrowing (recordCandidateNarrowing): " +
-		"reaching it needs resolution candidates present in the served result, which this " +
-		"fixture family cannot produce without entering the subject-clarification flow",
+// IT IS A CLAIM, AND A CLAIM NEEDS A TEST. The previous version of this was a
+// bare string, and an adversarial round proved the string false: it asserted
+// that no fixture in this family could reach the candidate-reduction arm
+// without entering subject clarification, and an existing test in this very
+// package -- TestARetryThatIsRescuedByTheReductionPlansNoRefusal -- reached it.
+//
+// The damage was not the wrong sentence. It was that the arm-count
+// reconciliation BALANCED around it (four driven plus one "unreachable" equals
+// five call sites) while that fifth arm was reached and unasserted. The
+// arithmetic checked the COUNT and never the CLAIM, so the mechanism built to
+// keep the gap honest is exactly what made it invisible.
+//
+// So an entry here must now name a REACH PROBE: a test in this package that
+// FAILS if the arm ever executes under the package's own suite. Registering an
+// arm without one is itself a failure -- see
+// TestEveryUncoveredArmClaimCarriesAReachProbe.
+type uncoveredArm struct {
+	what string
+	// reachProbeTest is the name of a Test function in this package that
+	// fails if the arm executes. Not a comment: the name is checked against
+	// the package's syntax tree.
+	reachProbeTest string
+}
+
+// armsWithNoBehaviouralCase is EMPTY, and that is the point: every
+// assembled-result arm is now driven by a case below. It stays as a mechanism
+// because the next arm added may not be reachable immediately, and the rule
+// for registering one is written above rather than rediscovered.
+var armsWithNoBehaviouralCase = []uncoveredArm{}
+
+// TestEveryUncoveredArmClaimCarriesAReachProbe enforces the rule.
+//
+// An unreachability claim that nothing can falsify is indistinguishable from
+// "I did not look", which is what shipped last time. The named probe must
+// exist as a real Test function in this package.
+func TestEveryUncoveredArmClaimCarriesAReachProbe(t *testing.T) {
+	t.Parallel()
+	declared := packageTestFunctionNames(t)
+	for _, arm := range armsWithNoBehaviouralCase {
+		if arm.reachProbeTest == "" {
+			t.Errorf("uncovered arm %q names no reach probe: an unreachability claim with no test is a "+
+				"sentence, and this seam has already shipped a false one", arm.what)
+			continue
+		}
+		if !declared[arm.reachProbeTest] {
+			t.Errorf("uncovered arm %q names reach probe %q, which is not a Test function in this package",
+				arm.what, arm.reachProbeTest)
+		}
+	}
+	// POSITIVE CONTROL: the checker must be able to reject a bad entry, or an
+	// empty list would make this test pass for the wrong reason forever.
+	if declared["TestThisNameIsDeliberatelyNotDeclaredAnywhere"] {
+		t.Fatal("the control name exists; pick another")
+	}
+	if len(declared) < 5 {
+		t.Fatalf("only %d test functions found in this package; the AST walk is broken and would accept "+
+			"any probe name", len(declared))
+	}
+}
+
+// packageTestFunctionNames is every Test function declared in this package's
+// _test.go files, read from the syntax tree rather than from a list.
+func packageTestFunctionNames(t *testing.T) map[string]bool {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package directory: %v", err)
+	}
+	fset := token.NewFileSet()
+	names := map[string]bool{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		parsed, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, decl := range parsed.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && strings.HasPrefix(fn.Name.Name, "Test") {
+				names[fn.Name.Name] = true
+			}
+		}
+	}
+	return names
 }
 
 // assembledResultArmCase is one scenario, the arm it must reach, how to
@@ -513,6 +601,29 @@ func assembledResultArmCases() []assembledResultArmCase {
 			},
 		},
 		{
+			name: "outcome layer served a candidate narrowing",
+			// THE ARM AN ADVERSARIAL ROUND PROVED I HAD WRONGLY DECLARED
+			// UNREACHABLE. It runs when the candidate reduction cuts enough
+			// for the reduced document to fit, and it is reached without any
+			// subject clarification: the cohort supplies the subjects.
+			//
+			// One member means the cohort cannot be narrowed, so stage three
+			// declines the retry and goes straight to the reduction. Seven
+			// proposed candidates against a 20-item ceiling leave an
+			// allowance of four, so three are cut and the answer serves.
+			discriminator: "outcome_reduction_applied=true",
+			spec: attributionFixtureSpec{
+				members: 1, globalFindings: 3, groupDrivers: 5, multiGroupDrivers: 6,
+				memberDrivers: 1, candidates: 7,
+			},
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) {
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(20, 0))
+				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err != nil {
+					t.Fatalf("Investigate() error = %v, want an answer SERVED by the candidate reduction", err)
+				}
+			},
+		},
+		{
 			name:          "retry ran and still did not fit",
 			discriminator: "retry_attempted=true retry_fit=false retry_failed=false",
 			// The ONLY arm whose event measures the re-synthesized document,
@@ -530,6 +641,42 @@ func assembledResultArmCases() []assembledResultArmCase {
 }
 
 var beforeAfterPattern = regexp.MustCompile(`before=(-?\d+) after=(-?\d+)`)
+
+var reductionAppliedPattern = regexp.MustCompile(`outcome_reduction_applied=(true|false)`)
+
+var outcomeItemsServedPattern = regexp.MustCompile(`outcome_items_served=(-?\d+)`)
+
+// candidatesInDocumentOf is how many resolution candidates the document THIS
+// line describes actually carries.
+//
+// Derived from the line, not declared per arm: when the outcome layer applied
+// its reduction the survivors are what it reports as served, and otherwise the
+// document carries every candidate the resolver proposed. A per-arm boolean
+// here would be one more hand-written claim of the kind that just cost a
+// round.
+func candidatesInDocumentOf(t *testing.T, line string, proposed int) int {
+	t.Helper()
+	applied := reductionAppliedPattern.FindStringSubmatch(line)
+	if applied == nil {
+		t.Fatalf("the emitted line carries no outcome_reduction_applied: %s", line)
+	}
+	if applied[1] != "true" {
+		return proposed
+	}
+	served := outcomeItemsServedPattern.FindStringSubmatch(line)
+	if served == nil {
+		t.Fatalf("the line says the reduction applied but carries no outcome_items_served: %s", line)
+	}
+	value, err := strconv.Atoi(served[1])
+	if err != nil {
+		t.Fatalf("outcome_items_served is not an integer: %v", err)
+	}
+	if value >= proposed {
+		t.Fatalf("the line says the reduction applied but served %d of %d proposed candidates -- it cut "+
+			"nothing, so this arm is not doing what the case claims\nline: %s", value, proposed, line)
+	}
+	return value
+}
 
 // cohortCountsOf reads the member counts the arm's own line reports.
 //
@@ -640,15 +787,17 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 			if one.measuresNarrowedCohort {
 				membersMeasured = after
 			}
-			want := one.spec.expect(membersMeasured)
+			candidatesInDoc := candidatesInDocumentOf(t, line, one.spec.candidates)
+			want := one.spec.expect(membersMeasured, candidatesInDoc)
 			want.assertPairwiseDistinct(t, one.name)
 
 			fields := attributionFieldsOf(t, line)
 			for name, wantCount := range want.byBucket() {
 				if fields[name] != wantCount {
-					t.Errorf("attribution_%s = %d, want %d -- counted off the fixture's own items and the %d "+
-						"cohort members this arm's line reports, never recomputed from the production split\nline: %s",
-						name, fields[name], wantCount, membersMeasured, line)
+					t.Errorf("attribution_%s = %d, want %d -- counted off the fixture's own items, the %d cohort "+
+						"members and the %d candidates this arm's line reports, never recomputed from the "+
+						"production split\nline: %s",
+						name, fields[name], wantCount, membersMeasured, candidatesInDoc, line)
 				}
 			}
 
