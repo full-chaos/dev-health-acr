@@ -71,6 +71,38 @@ func TestAProjectionThatDropsContentCannotServeACompleteAnswer(t *testing.T) {
 		if row.Requirement != "" {
 			t.Fatalf("the projection attributed a cut to requirement %q; it cuts by its own budget over a finished document and does not know which requirement a dropped item served", row.Requirement)
 		}
+		// THE REDUCTION STEP MUST BE ON THE ROW THE PROJECTION SERVES.
+		//
+		// This assertion is here because it was NOT, and a review round
+		// found the gap by mutation: replacing the projection's derivation
+		// call with a bare `return row` stripped refinements from every
+		// projection cut and no test failed. Validating the row is not the
+		// same as pinning what it carries -- the refinement list is
+		// optional, so an empty one is legal and a validator can never
+		// notice its absence. Only an assertion at the consumer can.
+		if len(row.Refinements) != 1 {
+			t.Fatalf("a projection cut served %d of %d and recorded %d refinements, want exactly 1: "+
+				"the two counts are a before and an after with the step between them erased",
+				row.Served, row.Declared, len(row.Refinements))
+		}
+		step := row.Refinements[0]
+		if step.Stage != contractsv1.ContextFabricOutcomeStageProjection {
+			t.Errorf("refinement stage = %q, want projection", step.Stage)
+		}
+		// The cause is the caller's BYTE ceiling -- the projection cuts to a
+		// budget, it runs no selection and reads no coverage event.
+		if step.Overrun != contractsv1.ContextFabricBudgetOverrunBytes {
+			t.Errorf("refinement overrun = %q, want bytes", step.Overrun)
+		}
+		if step.Basis != "" || step.Coverage != "" {
+			t.Errorf("the refinement invented causes the projection does not have: basis=%q coverage=%q", step.Basis, step.Coverage)
+		}
+		// And it must reconcile with the row's own numbers, which is what
+		// makes the chain an audit rather than a decoration.
+		if step.Before != row.Declared || step.After != row.Served {
+			t.Errorf("refinement runs %d->%d but the row declared %d and served %d",
+				step.Before, step.After, row.Declared, row.Served)
+		}
 	}
 }
 

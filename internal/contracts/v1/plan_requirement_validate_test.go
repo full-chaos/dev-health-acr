@@ -664,11 +664,47 @@ func TestTheJoinIsVacuousWhenEitherArrayIsAbsent(t *testing.T) {
 		t.Errorf("a document with outcome rows and no plan requirements must stay valid: %v", err)
 	}
 
-	// An outcome row with an EMPTY requirement is an unattributed narrowing,
-	// which is a legal state and must not be forced to join anything.
+	// An unattributed row beside a plan that describes NOTHING is legal --
+	// there is no requirement for it to have failed to account for.
+	unattributedNoPlan := resultWithRequirementJoin(t, planned, "")
+	unattributedNoPlan.AnswerPlan.Requirements = nil
+	if err := unattributedNoPlan.Validate(); err != nil {
+		t.Errorf("an unattributed row beside an empty plan must stay valid: %v", err)
+	}
+}
+
+// ALL-UNATTRIBUTED BESIDE A POPULATED PLAN IS NOT AN HONEST ABSENCE.
+//
+// This case was BLESSED by an earlier revision of the test above, which is
+// worse than it being merely unchecked: a test that asserts an invalid shape
+// is valid actively defends the gap. The review round found it by reading the
+// escape in the validator and the test that protected it together.
+//
+// The seed writes one attributed row per derived requirement, so a document
+// whose plan describes requirements while NO outcome row names any of them
+// has lost the seed. Reporting that as a legal unattributed narrowing would
+// let exactly the "planned then dropped" case the join exists to catch pass.
+func TestAllUnattributedOutcomesBesideAPopulatedPlanIsRejected(t *testing.T) {
+	t.Parallel()
+	planned := validReadRequirement()
+
+	// POSITIVE CONTROL: the attributed pair is valid, so the rejection below
+	// is caused by the attribution and not by the fixture's shape.
+	attributed := resultWithRequirementJoin(t, planned, planned.Requirement)
+	if err := attributed.Validate(); err != nil {
+		t.Fatalf("the attributed baseline must be valid: %v", err)
+	}
+
 	unattributed := resultWithRequirementJoin(t, planned, "")
-	if err := unattributed.Validate(); err != nil {
-		t.Errorf("an unattributed outcome row must not be forced to join: %v", err)
+	if len(unattributed.AnswerPlan.Requirements) == 0 {
+		t.Fatal("the fixture's plan carries no requirements; this case cannot discriminate")
+	}
+	err := unattributed.Validate()
+	if err == nil {
+		t.Fatal("a document whose plan describes a requirement no outcome row accounts for was accepted")
+	}
+	if !strings.Contains(err.Error(), "which no outcome row accounts for") {
+		t.Fatalf("rejected for the wrong reason: %v", err)
 	}
 }
 
@@ -743,6 +779,19 @@ func TestTheReductionDerivationRefusesRowsThatReducedNothing(t *testing.T) {
 	}
 	if _, ok := ContextFabricReductionRefinement(satisfied); ok {
 		t.Error("a satisfied row produced a refinement; it lost nothing")
+	}
+
+	// NOT_APPLICABLE, which is a DISTINCT arm of the same guard and was
+	// unpinned: the test covered `satisfied` and stopped there, so deleting
+	// the not_applicable arm let a caused reduction on such a row produce a
+	// step. Two tokens, two arms, two assertions.
+	notApplicable := ContextFabricPlanRequirementOutcomeRow{
+		Stage: ContextFabricOutcomeStagePlanning, Requirement: "state/subject/project",
+		Obligation: "state", Outcome: ContextFabricRequirementNotApplicable,
+		Impact: ContextFabricAnswerImpactNone, Declared: 4, Served: 2,
+	}
+	if _, ok := ContextFabricReductionRefinement(notApplicable); ok {
+		t.Error("a not_applicable row produced a refinement; the question did not ask for it, so nothing was lost")
 	}
 
 	// A row naming NO cause cannot produce a step that names one. Unreachable

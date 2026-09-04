@@ -1775,18 +1775,20 @@ func validateRequirementJoin(r ContextFabricInvestigationResult) error {
 	if r.AnswerPlan == nil || len(r.AnswerPlan.Requirements) == 0 {
 		return nil
 	}
-	attributed := 0
-	for _, row := range r.Completeness.Outcomes {
-		if row.Requirement != "" {
-			attributed++
-		}
-	}
-	if attributed == 0 {
-		// Every outcome row is unattributed, which is a legal state: a
-		// narrowing that could not be tied to a requirement says so by
-		// leaving the field empty rather than by guessing one.
-		return nil
-	}
+	// NO "every row is unattributed" ESCAPE. An earlier revision returned
+	// early when no outcome row carried an identity, reasoning that an
+	// unattributed narrowing is a legal state. It is -- but that escape made
+	// the rule NON-TOTAL in the one direction that matters: a document with
+	// populated plan requirements and only unattributed rows bypassed the
+	// "every planned requirement is accounted for" half entirely, which is
+	// precisely the state the seed exists to make impossible. A plan that
+	// derived requirements always seeds an attributed row per requirement, so
+	// zero attributed rows beside a non-empty plan is not an honest absence,
+	// it is a lost seed.
+	//
+	// Individual unattributed rows stay legal and are skipped below; what is
+	// no longer legal is ALL of them being unattributed while the plan
+	// describes requirements.
 
 	planned := make(map[string]bool, len(r.AnswerPlan.Requirements))
 	for _, requirement := range r.AnswerPlan.Requirements {

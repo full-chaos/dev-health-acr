@@ -433,10 +433,18 @@ func maximalRefinements(declared, served int) []ContextFabricRequirementRefineme
 			// legal encoding and a refinement may carry either or both. The
 			// validator requires at least one; carrying one would understate
 			// the maximum.
-			Basis:   longestNarrowingBasis(),
-			Overrun: longestBudgetOverrun(),
-			Before:  before,
-			After:   after,
+			// ALL THREE causes. The refinement requires at least one and
+			// permits every one, so a fixture carrying two was not maximal
+			// -- adding the third stays valid and adds bytes. Found by
+			// review, and the saturation probe structurally cannot find it:
+			// it grows an empty closed-vocabulary field by writing a
+			// one-rune string, which is not a vocabulary member, so the
+			// document goes invalid and the field reads as saturated.
+			Basis:    longestNarrowingBasis(),
+			Overrun:  longestBudgetOverrun(),
+			Coverage: longestCoverageDetailCode(),
+			Before:   before,
+			After:    after,
 		})
 		before = after
 	}
@@ -867,6 +875,19 @@ func longestNarrowingBasis() ContextFabricNarrowingBasis {
 func longestBudgetOverrun() ContextFabricBudgetOverrun {
 	longest := ContextFabricBudgetOverrun("")
 	for _, member := range ContextFabricBudgetOverrunVocabulary() {
+		if len(member) > len(longest) {
+			longest = member
+		}
+	}
+	return longest
+}
+
+// longestCoverageDetailCode picks the worst-case coverage token by MEASURING
+// the published vocabulary, for the same reason its two siblings do: a
+// hand-picked "longest" understates the maximum the day a longer member ships.
+func longestCoverageDetailCode() ContextFabricCoverageDetailCode {
+	longest := ContextFabricCoverageDetailCode("")
+	for _, member := range ContextFabricCoverageDetailCodeVocabulary() {
 		if len(member) > len(longest) {
 			longest = member
 		}

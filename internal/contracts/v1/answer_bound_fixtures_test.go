@@ -394,6 +394,13 @@ const irreducibleAnswerBytes = 1023
 // its maximum LEGAL encoding (the longest obligation, then two escaped
 // segments filling the 256-character bound) and all three cause vocabularies
 // present at their longest member.
+// 521103416 -> 521144216 (+40800): the refinement's third cause. The fixture
+// carried basis and overrun and omitted coverage, which the refinement permits
+// alongside them -- so the previous number was not a maximum. Found by review;
+// the saturation probe structurally cannot find this class, because it grows an
+// empty closed-vocabulary field by writing a one-rune string, the document goes
+// invalid, and the field reads as already saturated.
+//
 // 521367470 -> 521103416 (-264054), and a DECREASE is the point rather than a
 // regression. Round 1's join finding produced a document-level rule: every
 // outcome identity must name a requirement the plan describes. A plan
@@ -409,7 +416,7 @@ const irreducibleAnswerBytes = 1023
 // arrays on this document, so the maximum grew by construction rather than by
 // a bound drifting -- and the irreducible floor above did NOT move, because
 // both arrays are omitempty and the smallest answer has neither.
-const maximalAnswerBytes = 521103416
+const maximalAnswerBytes = 521144216
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
