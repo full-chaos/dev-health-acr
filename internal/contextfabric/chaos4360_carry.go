@@ -141,10 +141,11 @@ type windowCarryResult struct {
 }
 
 // carryReferencedResultIDs collects the distinct, non-empty ResultID values
-// named by ANY of the six prior-receipt fields on request, in a fixed,
-// deterministic field order (window first: most semantically related to a
-// window carry, so a request naming several different prior results tries
-// the most likely one first) -- first occurrence wins on a duplicate.
+// named by ANY of the six prior-receipt fields on request PLUS the top-level
+// parent_result_id, in a fixed, deterministic order (window first: most
+// semantically related to a window carry, so a request naming several
+// different prior results tries the most likely one first; parent_result_id
+// last, see its own comment below) -- first occurrence wins on a duplicate.
 //
 // validatedSubjectReceipts (codex R1 P1, fixed): the SIX fields are not
 // symmetric. PriorKindReceipts/PriorAnchorReceipts/PriorHandleReceipts/
@@ -205,6 +206,24 @@ func carryReferencedResultIDs(request InvestigationRequest, validatedSubjectRece
 	add(request.PriorKindReceipts)
 	add(request.PriorAnchorReceipts)
 	add(request.PriorHandleReceipts)
+	// parent_result_id is added LAST, and the position is a decision rather
+	// than an afterthought. This order decides which prior result a carry
+	// tries FIRST when a request names several, so putting the new field
+	// anywhere but the end would re-rank the five receipt fields against each
+	// other for existing callers -- a behaviour change for requests that do
+	// not use this field at all. Appending is purely additive: a request
+	// without a parent walks exactly the frontier it walked before.
+	//
+	// It also happens to be the right precedence on the merits. A receipt is
+	// an ACCEPTANCE of a specific offer the caller was shown; parent_result_id
+	// is the weaker claim "this is the turn I follow". When a caller has done
+	// both, the thing they explicitly accepted should be consulted first.
+	if id := strings.TrimSpace(request.ParentResultID); id != "" {
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
 	return ids
 }
 

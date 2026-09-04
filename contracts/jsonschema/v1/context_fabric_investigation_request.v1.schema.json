@@ -79,6 +79,12 @@
       "maxItems": 20,
       "uniqueItems": true
     },
+    "parent_result_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256,
+      "description": "Result id of the investigation this turn follows. Optional. Seeds the same-conversation carry walk only; it never binds the named result's subjects into this turn. Bounded identically to prior_*_receipts[].result_id so the two can never disagree about what a well-formed result id is."
+    },
     "expected_kinds": {
       "description": "CHAOS-3972 P3, design brief section 2.3/2.0/DP12(b): the caller's own explicit expected_kind guess(es). Per the DP12(b) uniform surface split, this NEVER mints question_stated authority by itself -- on the MCP surface it enters at inferred_default/explicit_unattributed (drives census-narrowing and offer-shaping only); every other surface keeps 3900 v5.2's ordinary question_stated rule.",
       "type": "array",
