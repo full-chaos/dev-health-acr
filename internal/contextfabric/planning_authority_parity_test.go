@@ -274,10 +274,19 @@ func classifyLoss(rows []contextfabric.DerivedRequirement, lost []contextfabric.
 	// what the artifact and any consumer see, so a classifier consulting the
 	// table again could disagree with the thing it claims to explain.
 	declaredInputs := map[contextfabric.FactKind]bool{}
-	// servedByARead is every kind a READ row names. A computed step's input
-	// that appears here is already planned for; one that does not is the
+	// plannedRead is every kind the rows CAUSE TO BE READ: what a read row
+	// names, plus what a served, server-executed computed row declares its
+	// step consumes -- the second half read from the same production function
+	// the plan is built through, never re-derived here. A computed step's
+	// input that appears here is planned for; one that does not is the
 	// blocking case.
-	servedByARead := map[contextfabric.FactKind]bool{}
+	//
+	// IT WAS "every kind a READ row names" UNTIL THE INPUTS GAINED A
+	// CONSUMER, and the widening is not this classifier being made lenient:
+	// a declared input of a step nothing executes still does not appear here,
+	// so `computed_step_input_unserved` keeps a shape it fires on and does not
+	// become a tier that can never be reached.
+	plannedRead := map[contextfabric.FactKind]bool{}
 	// declaredOnly records whether ANY computation on this frame is named but
 	// unexecuted. Read off the ROWS, like everything else here.
 	declaredOnly := false
@@ -301,8 +310,11 @@ func classifyLoss(rows []contextfabric.DerivedRequirement, lost []contextfabric.
 			declaredInputs[kind] = true
 		}
 		for _, kind := range row.FactKinds {
-			servedByARead[kind] = true
+			plannedRead[kind] = true
 		}
+	}
+	for _, kind := range contextfabric.ComputedStepInputReads(rows) {
+		plannedRead[kind] = true
 	}
 	if populationUnavailable {
 		// FIRST, and ahead of the all-unavailable superior ruling, because
@@ -324,7 +336,7 @@ func classifyLoss(rows []contextfabric.DerivedRequirement, lost []contextfabric.
 		return causeUnavailableNamedInstead
 	}
 	for _, kind := range lost {
-		if declaredInputs[kind] && !servedByARead[kind] {
+		if declaredInputs[kind] && !plannedRead[kind] {
 			// One unserved input is enough. A cell that lost several kinds
 			// of which only one is an unserved input still blocks: the
 			// retirement is a single act, and it would take that read with
@@ -599,14 +611,30 @@ func frameSubjectRefs(frame contextfabric.QuestionFrame) []contextfabric.Subject
 	return refs
 }
 
-// derivedFactKinds is the union of every fact kind the derived requirement
-// rows name for this frame -- the "derived fact_kinds union" 13.8a talks
-// about, built from the PRODUCTION derivation against the LIVE registry.
-func derivedFactKinds(frame contextfabric.QuestionFrame, seed contextfabric.ObligationSeed, capabilities []contextfabric.FactCapability) []contextfabric.FactKind {
+// derivedFactKinds is every fact kind the derived requirement rows CAUSE TO
+// BE READ for this frame -- the "derived fact_kinds union" 13.8a talks about,
+// built from the PRODUCTION derivation against the LIVE registry.
+//
+// TWO HALVES, AND THE SECOND ONE IS ONLY HONEST BECAUSE PRODUCTION READS IT.
+// The first half is what a read cell's own server names. The second is what a
+// computed cell's step CONSUMES, and it counts here for exactly one reason:
+// planFactKinds unions contextfabric.ComputedStepInputReads into the plan, so
+// those kinds are fetched because the rows declared them. Counting a declared
+// input that nothing planned would be the circular move this proof exists to
+// refuse -- the derivation clearing its own blocking cell by asserting a need
+// rather than serving it -- which is precisely why the pre-consumer state was
+// classified `computed_step_input_unserved` and not waved through.
+//
+// The second half calls the SAME production function the plan calls. A
+// hand-rolled union here that happened to agree with production today would
+// stop agreeing the first time either moved, and this file would then be
+// measuring a plan that does not exist.
+func derivedFactKinds(rows []contextfabric.DerivedRequirement) []contextfabric.FactKind {
 	var kinds []contextfabric.FactKind
-	for _, row := range contextfabric.DeriveRequirements(frame, seed, capabilities) {
+	for _, row := range rows {
 		kinds = append(kinds, row.FactKinds...)
 	}
+	kinds = append(kinds, contextfabric.ComputedStepInputReads(rows)...)
 	return sortedUniqueKinds(kinds)
 }
 
@@ -683,7 +711,7 @@ func computeParityCell(
 	capabilities []contextfabric.FactCapability,
 ) parityCell {
 	rows := contextfabric.DeriveRequirements(frame, seed, capabilities)
-	derived := derivedFactKinds(frame, seed, capabilities)
+	derived := derivedFactKinds(rows)
 	cell := parityCell{frameID: frameID, authorityID: authority.id, derived: derived}
 
 	contributed, comparable := authority.contribute(frame)
@@ -792,6 +820,91 @@ func TestEveryLossIsClassifiedByAClosedCause(t *testing.T) {
 		t.Fatal("no not_subsumed cell was found, so the loss classifier never ran. Either every authority became subsumed -- which is a result worth its own commit message -- or the harness stopped computing losses.")
 	}
 	t.Logf("checked %d cells, classified %d losses", checked, losses)
+}
+
+// TestEachAuthorityBlockingLossCountIsPinned pins the arithmetic that decides
+// a deletion, per authority, so a move in it fails BY NAME.
+//
+// The artifact already prints "(n superior, m blocking, k cells)" per
+// authority and the regeneration test diffs the whole file, so a changed
+// count is visible -- visible inside a 190-line diff a reader has to
+// interpret, which is not the same as asserted. A retirement verdict is the
+// one number here whose direction is unsafe in both directions: it rising
+// silently hides a lost read, and it falling silently authorizes a deletion.
+//
+// The counts are RECOMPUTED from the cells with the artifact's own
+// definition, never parsed out of the rendered text -- a pin that read the
+// text would agree with the renderer by construction and could not see a
+// renderer that stopped counting.
+func TestEachAuthorityBlockingLossCountIsPinned(t *testing.T) {
+	// Authorities 1 and 5a each block on ONE cell, and the cause is
+	// `computed_population_unavailable`: the organization-scope counting
+	// frame derives a countable population that nothing discovers, so the
+	// value still reaches the reader by narration over whatever was read.
+	// Those belong to the open allocator/population ticket, not to this
+	// change, and they are pinned here so
+	// that a change which cleared authority 3 by moving a loss onto a
+	// neighbour would fail rather than read as progress.
+	//
+	// Authority 3's own count is the whole point of this pin. It blocked on
+	// `computed_step_input_unserved` -- `operational_deficiencies` is a
+	// declared rank_cohort input that no derived row planned to read -- and
+	// it is 0 once the derivation plans a served, server-executed computed
+	// step's declared inputs as reads.
+	//
+	// 2, 4, 5b and 6 are 0 BY REACH rather than by measurement: a
+	// model-input, post-resolution or prior-turn authority is dropped before
+	// any set is compared, so it can hold no loss cell at all. They are
+	// listed rather than skipped so the table is total over the roster.
+	want := map[string]int{"1": 1, "2": 0, "3": 0, "4": 0, "5a": 1, "5b": 0, "6": 0}
+
+	blocking := map[string]int{}
+	seen := map[string]bool{}
+	cells := parityCells(t)
+	if len(cells) == 0 {
+		t.Fatal("no parity cell was computed -- this pin proved nothing")
+	}
+	for _, cell := range cells {
+		seen[cell.authorityID] = true
+		if cell.verdict == verdictNotSubsumed && !cell.superior() {
+			blocking[cell.authorityID]++
+		}
+	}
+
+	// Totality in BOTH directions, so a roster entry added without a pinned
+	// count, or a pin left behind for an authority that was removed, fails
+	// here rather than being silently uncovered.
+	for _, authority := range planningAuthorities() {
+		if _, pinned := want[authority.id]; !pinned {
+			t.Errorf("authority %s has no pinned blocking count -- a new authority must arrive with the number that decides its retirement", authority.id)
+		}
+	}
+	for id := range want {
+		if !seen[id] {
+			t.Errorf("pinned blocking count for authority %s, which the roster no longer contains", id)
+		}
+	}
+
+	for id, wantCount := range want {
+		if blocking[id] != wantCount {
+			t.Errorf("authority %s: %d blocking loss cell(s), want %d -- a blocking count that ROSE hides a read the derivation would drop, and one that FELL authorizes a deletion; say which in the same commit",
+				id, blocking[id], wantCount)
+		}
+	}
+
+	// The instrument's own positive control. If every pinned count were 0 a
+	// counter that never increments would pass this test while proving
+	// nothing, which is the dead-tier shape this package has paid for twice.
+	nonZero := 0
+	for _, count := range want {
+		if count > 0 {
+			nonZero++
+		}
+	}
+	if nonZero == 0 {
+		t.Fatal("every pinned blocking count is 0, so a counter stuck at zero would pass -- this pin needs at least one cell it must count")
+	}
+	t.Logf("blocking cells by authority: %v (over %d cells)", blocking, len(cells))
 }
 
 // TestEverySupersedingCauseIsQuotedAgainstARule guards the one direction
@@ -1176,13 +1289,57 @@ func TestClassifyLossLandsInEveryBranch(t *testing.T) {
 			want: causeNotRequiredByAnyObligation,
 		},
 		{
-			// THE BLOCKING CASE. The computation declares the lost kind as
-			// an input and no read row serves it, so retiring the authority
-			// would remove the only thing planning to read it.
-			name: "lost kind is an UNSERVED declared input",
+			// THE BLOCKING CASE, AND IT NARROWED TO THE DECLARED-ONLY STEP.
+			// The computation declares the lost kind as an input, nothing
+			// executes the step, and so nothing plans the read: retiring the
+			// authority would remove the only thing fetching a fact the
+			// answer still depends on, because an unexecuted step's value
+			// reaches the reader by narration over whatever was read.
+			//
+			// It USED TO BE A SERVER-EXECUTED step, and that case is the
+			// mirror below. The change is the ticket: a served,
+			// server-executed step's declared inputs are now planned as
+			// reads by planFactKinds, so an executed step can no longer leave
+			// an input unserved. This case is what keeps the cause a live
+			// tier rather than one nothing can reach.
+			name: "lost kind is the UNSERVED declared input of a DECLARED-ONLY step",
+			rows: []contextfabric.DerivedRequirement{
+				parityTestRow("", "", nil, []contextfabric.FactKind{health}),
+				parityTestRowExec("rank_cohort", "", []contextfabric.FactKind{deficiencies}, nil, contextfabric.ComputedStepDeclaredOnly),
+			},
+			lost: []contextfabric.FactKind{deficiencies},
+			want: causeComputedStepInputUnserved,
+		},
+		{
+			// THE MIRROR OF THE CASE ABOVE, differing in the execution field
+			// ALONE. Identical rows otherwise: same step, same declared
+			// input, same read row, same loss. The server EXECUTES this one,
+			// so ComputedStepInputReads plans the input and the loss falls
+			// through to the superior cause it always belonged to.
+			//
+			// The pair is the whole proof that execution -- not the presence
+			// of a declaration -- is what decides the read. Collapsing them
+			// would let a classifier keyed on "does the row declare inputs"
+			// pass both.
+			name: "the same declared input, SERVER-EXECUTED, is planned as a read",
 			rows: []contextfabric.DerivedRequirement{
 				parityTestRow("", "", nil, []contextfabric.FactKind{health}),
 				parityTestRow("rank_cohort", "", []contextfabric.FactKind{deficiencies}, nil),
+			},
+			lost: []contextfabric.FactKind{deficiencies},
+			want: causeNotRequiredByAnyObligation,
+		},
+		{
+			// AN UNAVAILABLE COMPUTED ROW PLANS NOTHING, however its step is
+			// declared. The row names no step it can run, so reading its
+			// inputs would fetch facts for a computation that cannot happen
+			// -- the second of ComputedStepInputReads' two guards, driven on
+			// its own so a mutation dropping either guard cannot hide behind
+			// the other.
+			name: "an UNAVAILABLE computed row does not plan its declared inputs",
+			rows: []contextfabric.DerivedRequirement{
+				parityTestRow("", "", nil, []contextfabric.FactKind{health}),
+				parityTestRow("", "computed_population_absent", []contextfabric.FactKind{deficiencies}, nil),
 			},
 			lost: []contextfabric.FactKind{deficiencies},
 			want: causeComputedStepInputUnserved,
@@ -1234,7 +1391,7 @@ func TestClassifyLossLandsInEveryBranch(t *testing.T) {
 			name: "an unserved input beats an unwired step",
 			rows: []contextfabric.DerivedRequirement{
 				parityTestRow("", "", nil, []contextfabric.FactKind{health}),
-				parityTestRow("rank_cohort", "", []contextfabric.FactKind{deficiencies}, nil),
+				parityTestRowExec("rank_cohort", "", []contextfabric.FactKind{deficiencies}, nil, contextfabric.ComputedStepDeclaredOnly),
 				parityTestRowExec("membership_cardinality", "", nil, nil, contextfabric.ComputedStepDeclaredOnly),
 			},
 			lost: []contextfabric.FactKind{deficiencies},
@@ -1247,7 +1404,7 @@ func TestClassifyLossLandsInEveryBranch(t *testing.T) {
 			rows: []contextfabric.DerivedRequirement{
 				parityTestRow("", "no_declaring_producer", nil, nil),
 				parityTestRow("", "", nil, []contextfabric.FactKind{health}),
-				parityTestRow("rank_cohort", "", []contextfabric.FactKind{deficiencies}, nil),
+				parityTestRowExec("rank_cohort", "", []contextfabric.FactKind{deficiencies}, nil, contextfabric.ComputedStepDeclaredOnly),
 			},
 			lost: []contextfabric.FactKind{health, deficiencies},
 			want: causeComputedStepInputUnserved,
@@ -1358,6 +1515,14 @@ func renderParityArtifact(cells []parityCell) string {
 	out.WriteString("# retirement: empty means the derived rows already name everything the\n")
 	out.WriteString("# authority supplies. `gained` = derived \\ contributed, the plan.fact_kinds\n")
 	out.WriteString("# GROWTH design 13.9 B9 predicts -- reported, never asserted away.\n")
+	out.WriteString("#\n")
+	out.WriteString("# `derived` is what the rows CAUSE TO BE READ, which is two things: the\n")
+	out.WriteString("# kinds a read cell's own server names, AND the kinds a SERVED,\n")
+	out.WriteString("# SERVER-EXECUTED computed cell declares its step consumes. The second half\n")
+	out.WriteString("# counts only because planFactKinds plans it (ComputedStepInputReads); a\n")
+	out.WriteString("# declared input nothing planned was classified `computed_step_input_unserved`\n")
+	out.WriteString("# and blocked a retirement, which is what this change closed. A DECLARED-ONLY\n")
+	out.WriteString("# step's inputs are still not planned and still block.\n")
 	out.WriteString("#\n")
 	out.WriteString("# Source 5 is SPLIT into 5a (the declared per-cohort-kind table, which a\n")
 	out.WriteString("# frame determines) and 5b (edge-derived, which no frame determines).\n")

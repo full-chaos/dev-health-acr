@@ -402,6 +402,66 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 	return row
 }
 
+// ComputedStepInputReads is what the derived rows PLAN TO READ on behalf of a
+// computation: the declared inputs of every computed cell whose step the
+// server actually executes.
+//
+// WHY THIS FUNCTION EXISTS AT ALL, and it is the whole of the ticket. The
+// §13.2.3 amendment gave a computed row a place to say what its step
+// CONSUMES, and said in the same breath that declaring an input is not
+// planning a read -- so the declaration sat on the row with no consumer, and
+// the six-authority parity proof recorded the gap as a blocking cell:
+// `operational_deficiencies` is a declared `rank_cohort` input that no derived
+// read row served, so retiring the authority that injects it would have
+// dropped a real read. This is the consumer. Once the plan's fact kinds are
+// built through it, the declaration IS the plan, and the proof's question --
+// "would retiring this authority remove a read?" -- is answered by the rows.
+//
+// WHY NOT A READ ROW OF ITS OWN, which is the other closure design 14.3's H1
+// weighs. A row needs a coordinate, a coordinate is obligation/role/subject,
+// and that string is the wire join key -- `ranking/member/team` is already the
+// computed row's identity, and the frame layer offers no second role or
+// subject for the same cell. A new row therefore needs a new member in
+// AnswerObligation, which is "the closed vocabulary of what an answer must
+// ESTABLISH" (§13.2.2, thirteen members). A fact read only so RankCohort can
+// order a cohort is not something the answer establishes, so minting an
+// obligation for it would put a non-answer into the answer's own vocabulary.
+// Routing it to an existing obligation that does serve the kind
+// (`principal_drivers`, which serves `operational_deficiencies` for a team)
+// fails the same way from the other side: it makes a rank-only answer
+// responsible for establishing drivers, and drags in every other kind that
+// obligation's seed carries. H1 asks whether the row closure "plans reads
+// nobody needs"; on this corpus it does, and this is the closure that does
+// not.
+//
+// TWO GUARDS, both of which decide a read and neither of which is inferable
+// from the other:
+//
+//   - The row must be SERVED. An unavailable computed cell names no step and
+//     runs nothing, so reading its declared inputs would fetch facts for a
+//     computation that cannot happen.
+//   - The step must be SERVER-EXECUTED. `declared_only` is the case D13 was
+//     written about: a step named by the vocabulary and run by nothing. Its
+//     inputs are exactly the read nobody needs, and planning them would be
+//     this closure committing the error it exists to avoid. It is also what
+//     keeps `computed_step_input_unserved` a live cause rather than a dead
+//     tier -- a declared-only step's unserved input still blocks.
+//
+// Deduplicated and returned in fact-kind VOCABULARY order, like every other
+// kind list this package hands out, so the plan, the artifact and the
+// telemetry histogram all see one order. Returns nil when nothing is planned,
+// never an empty slice.
+func ComputedStepInputReads(rows []DerivedRequirement) []FactKind {
+	var kinds []FactKind
+	for _, row := range rows {
+		if !row.Served() || row.Step == "" || row.StepExecution != ComputedStepServerExecuted {
+			continue
+		}
+		kinds = append(kinds, row.InputFactKinds...)
+	}
+	return sortedFactKinds(kinds)
+}
+
 // dimensionsOfFactKinds reads the §13.3 requirement dimension off the
 // producers' own declarations: the set of FactCapability.Dimension values
 // carried by the kinds that actually serve this cell.

@@ -11,6 +11,14 @@
 # authority supplies. `gained` = derived \ contributed, the plan.fact_kinds
 # GROWTH design 13.9 B9 predicts -- reported, never asserted away.
 #
+# `derived` is what the rows CAUSE TO BE READ, which is two things: the
+# kinds a read cell's own server names, AND the kinds a SERVED,
+# SERVER-EXECUTED computed cell declares its step consumes. The second half
+# counts only because planFactKinds plans it (ComputedStepInputReads); a
+# declared input nothing planned was classified `computed_step_input_unserved`
+# and blocked a retirement, which is what this change closed. A DECLARED-ONLY
+# step's inputs are still not planned and still block.
+#
 # Source 5 is SPLIT into 5a (the declared per-cohort-kind table, which a
 # frame determines) and 5b (edge-derived, which no frame determines).
 # Folding them together would report the reproducible half as unreproducible.
@@ -84,11 +92,11 @@
   C3    5a  subsumed                         -                                      lost=[-] gained=[flow investment landscape metrics readiness]
   C3    5b  not_reproducible_by_construction -                                      lost=[-] gained=[-]
   C3    6   dropped_pending_mechanism        -                                      lost=[-] gained=[-]
-  C4    1   subsumed                         -                                      lost=[-] gained=[-]
+  C4    1   subsumed                         -                                      lost=[-] gained=[operational_deficiencies]
   C4    2   advisory_by_rule                 -                                      lost=[-] gained=[-]
-  C4    3   not_subsumed                     computed_step_input_unserved           lost=[operational_deficiencies] gained=[flow landscape]
-  C4    4   not_reproducible_by_construction -                                      lost=[operational_deficiencies] gained=[flow landscape]
-  C4    5a  subsumed                         -                                      lost=[-] gained=[flow investment landscape readiness]
+  C4    3   subsumed                         -                                      lost=[-] gained=[flow landscape]
+  C4    4   not_reproducible_by_construction -                                      lost=[-] gained=[flow landscape]
+  C4    5a  subsumed                         -                                      lost=[-] gained=[flow investment landscape operational_deficiencies readiness]
   C4    5b  not_reproducible_by_construction -                                      lost=[-] gained=[-]
   C4    6   dropped_pending_mechanism        -                                      lost=[-] gained=[-]
   C5    1   not_subsumed                     not_required_by_any_obligation (SUPERIOR) lost=[flow health investment landscape readiness workload] gained=[-]
@@ -131,7 +139,7 @@
 
   1   subsumed=11  not_subsumed=3  not_applicable=0  advisory_by_rule=0  not_reproducible_by_construction=0  dropped_pending_mechanism=0
   2   subsumed=0  not_subsumed=0  not_applicable=0  advisory_by_rule=14  not_reproducible_by_construction=0  dropped_pending_mechanism=0
-  3   subsumed=1  not_subsumed=9  not_applicable=4  advisory_by_rule=0  not_reproducible_by_construction=0  dropped_pending_mechanism=0
+  3   subsumed=2  not_subsumed=8  not_applicable=4  advisory_by_rule=0  not_reproducible_by_construction=0  dropped_pending_mechanism=0
   4   subsumed=0  not_subsumed=0  not_applicable=0  advisory_by_rule=0  not_reproducible_by_construction=14  dropped_pending_mechanism=0
   5a  subsumed=6  not_subsumed=2  not_applicable=6  advisory_by_rule=0  not_reproducible_by_construction=0  dropped_pending_mechanism=0
   5b  subsumed=0  not_subsumed=0  not_applicable=0  advisory_by_rule=0  not_reproducible_by_construction=14  dropped_pending_mechanism=0
@@ -141,7 +149,7 @@
 
   unavailable_named_instead                  1  derivation ruled SUPERIOR
   not_required_by_any_obligation            10  derivation ruled SUPERIOR
-  computed_step_input_unserved               1  blocks retirement
+  computed_step_input_unserved               0  blocks retirement
   computed_step_not_wired                    0  blocks retirement
   computed_population_unavailable            2  blocks retirement
 
@@ -162,7 +170,7 @@
 
   1   NOT RETIRABLE -- 1 blocking loss cell(s)                   (2 superior, 1 blocking, 14 cells)
   2   NOT RETIRABLE -- disclosed drop, see the roster's reach column (0 superior, 0 blocking, 14 cells)
-  3   NOT RETIRABLE -- 1 blocking loss cell(s)                   (8 superior, 1 blocking, 14 cells)
+  3   RETIRABLE on this evidence                                 (8 superior, 0 blocking, 14 cells)
   4   NOT RETIRABLE -- disclosed drop, see the roster's reach column (0 superior, 0 blocking, 14 cells)
   5a  NOT RETIRABLE -- 1 blocking loss cell(s)                   (1 superior, 1 blocking, 14 cells)
   5b  NOT RETIRABLE -- disclosed drop, see the roster's reach column (0 superior, 0 blocking, 14 cells)
@@ -170,11 +178,11 @@
 
 # MEASUREMENT
 #   98 cells = 14 frames x 7 authorities
-#   subsumed 18 / not_subsumed 14 / not_applicable 10 / disclosed drops 56
-#   of the 14 not_subsumed cells, 11 are ruled SUPERIOR and 3 BLOCK retirement
+#   subsumed 19 / not_subsumed 13 / not_applicable 10 / disclosed drops 56
+#   of the 13 not_subsumed cells, 11 are ruled SUPERIOR and 2 BLOCK retirement
 #
 # REFUTED PROPERTY (reported, not asserted -- see the file header)
 #   "every pre-resolution authority is subsumed by the derived rows"
-#   FAILS on 14 of 42 pre-resolution cells. This proof was written to assert it;
+#   FAILS on 13 of 42 pre-resolution cells. This proof was written to assert it;
 #   the measurement stands and the assertion moved to oracle O9's shape. Closing
 #   the blocking cause drives this number toward the superior-only remainder.
