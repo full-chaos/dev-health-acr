@@ -1878,13 +1878,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// score depends on which members are present -- ranking before
 	// narrowing would leave the surviving members carrying scores computed
 	// against members that are no longer in the answer.
+	var groupingRefusalForDisclosure CohortGroupingOutcome
 	if graphContext.Cohort != nil && plan.GroupKind != "" {
 		// CHAOS-4733: captured BEFORE BuildCohortGroups/
 		// ApplyGroupedCohortCompleteness run, so the telemetry below reports
 		// the pre-grouping, discovery-level state -- the exact signal that
 		// used to have no surviving representation once grouped.
 		preGroupingComplete, preGroupingTruncated := graphContext.Cohort.Complete, graphContext.Cohort.Truncated
-		groups, ungrouped := BuildCohortGroups(plan, graphContext.Cohort, facts.Facts)
+		groups, ungrouped, groupingOutcome := BuildCohortGroups(plan, graphContext.Cohort, facts.Facts)
 		if len(groups) > 0 {
 			cohort := *graphContext.Cohort
 			cohort.Groups = groups
@@ -1905,6 +1906,28 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				Complete:               cohort.Complete,
 				Truncated:              cohort.Truncated,
 			})
+		} else if groupingOutcome.Refusal != CohortGroupingRefusalNone {
+			// Fail closed: the plan's group axis is not the axis the facts
+			// group by, so no group axis is delivered and the plan stops
+			// claiming one -- the same posture as the nothing-placed branch
+			// below, for a different and more serious reason. Recorded so an
+			// operator sees a refusal rather than inferring one from a
+			// grouped question that came back flat.
+			e.recordGroupedCohortCompleteness(ctx, principal, GroupedCohortCompletenessEvent{
+				Family:               plan.Family,
+				PreGroupingComplete:  preGroupingComplete,
+				PreGroupingTruncated: preGroupingTruncated,
+				GroupCount:           0,
+				Complete:             graphContext.Cohort.Complete,
+				Truncated:            graphContext.Cohort.Truncated,
+				Refusal:              groupingOutcome.Refusal,
+				PlannedGroupKind:     groupingOutcome.PlannedKind,
+			})
+			// Carried to assembly so the ANSWER discloses it too. The plan
+			// stops claiming a group axis it did not deliver; the reader is
+			// told the same thing in words.
+			groupingRefusalForDisclosure = groupingOutcome
+			plan.GroupKind = ""
 		} else if ungrouped > 0 {
 			// The group axis was planned and NOTHING could be placed. The
 			// answer degrades to the flat cohort it would have been, and
@@ -1991,6 +2014,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		StructureCanon: structureCanon, CarriedStructureEntries: carriedStructureEntries,
 		CommitBases: commitBases, CommitDigests: commitDigests,
 		GroupedNarrowingBasis: stage2GroupedBasis,
+		GroupingRefusal:       groupingRefusalForDisclosure,
 	}
 	// The retry's base is snapshotted BEFORE the first pass runs. Taking it
 	// afterwards copied state pass one had already dirtied in place -- see

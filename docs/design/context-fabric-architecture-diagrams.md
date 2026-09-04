@@ -1058,12 +1058,29 @@ both fatal to every discovered-cohort answer on real data (HTTP 422
 flowchart LR
     IN["synthesisInputFromDomain<br/>SHOWS the model:<br/>Cohort (members + evidence_ref_ids),<br/>Resolution, Paths, DriverCandidates,<br/>modelFacingFacts(Facts)"] --> M["model drafts<br/>claims / drivers / findings"]
     M --> V["SynthesisDraft.ValidateAgainst"]
-    V --> S["allowedSubjects = synthesisSubjects<br/>Committed + <b>Cohort.Members[].Subject</b><br/>+ Facts[].Subject + Paths[].Nodes"]
-    V --> E["allowedEvidence<br/>Paths + Graph + Facts + Candidates<br/>+ <b>Cohort.Members[].EvidenceRefIDs</b><br/>(ADDED, CHAOS-4522 — was missing)"]
+    V --> S["allowedSubjects = synthesisSubjects<br/>ONE walk: forEachCitableSynthesisSubject<br/>Committed + <b>Cohort.Members[].Subject</b><br/>+ <b>Cohort.Groups[].Subject</b> + Paths[].Nodes<br/>+ <b>Paths[].Edges[].From/To</b> + Facts[].Subject<br/>+ <b>DriverCandidates[].AffectedSubjects</b>"]
+    S --> L["canonicalSubjectLabels = Candidates<br/>+ the SAME walk<br/>(binding ⊇ admission, by construction)"]
+    V --> U["shown-but-uncitable, on purpose:<br/>Resolution.Candidates · Cohort.Exclusions<br/>(citable wins when a subject is both)"]
+    V --> E["allowedEvidence<br/>Paths + Graph + Facts + Candidates<br/>+ <b>Cohort.Members[].EvidenceRefIDs</b><br/>+ <b>DriverCandidates[].EvidenceRefIDs</b>"]
     V --> G2["groundClaim(Facts, claim)<br/>closes over <b>EVERY</b> fact sharing<br/>(Kind, Subject)<br/>(was: FIRST match only)"]
     G2 --> R["attachCanonicalRows uses the fact<br/>that GROUNDED the claim"]
-    V -. rejects .-> T["rejection_reason<br/>(closed vocab, CHAOS-4522)<br/>+ fact_group_max"]
+    V -. rejects .-> T["rejection_reason (closed vocab)<br/>+ fact_group_max<br/>+ <b>subject_scope_basis</b>: absent /<br/>shown_uncitable_by_policy /<br/><b>shown_should_be_citable</b> = OUR defect"]
 ```
+
+**Why admission and label binding are ONE walk.** A subject admitted to
+`allowedSubjects` with no entry in `canonicalSubjectLabels` is citable under
+any label the model invents: `requireBoundLabel` is deliberately a no-op for an
+id it holds no binding for, because an unbound id is out of bounds and the
+membership check has already rejected it. Two hand-maintained lists drifted
+apart three times — groups, the payload census, and finally edge endpoints,
+which shipped admitted-and-unbound and were caught by adversarial review. So
+both consumers now derive from `forEachCitableSynthesisSubject` and a source
+added later is admitted and bound in the same edit. Resolution candidates are
+the one deliberate asymmetry: bound but NOT admitted, which is the safe
+direction.
+
+**Where a refusal on the grouped axis is disclosed:** see §10b, which draws the
+grouping refusal and the single bounded path into the answer's `Limitations`.
 
 - **Grounding.** `ClaimedFact` addresses a fact by `(Kind, Subject, Field)`
   only — `CanonicalFact` carries no identifier — and the lookup returned the
@@ -1515,6 +1532,91 @@ the answer because synthesis is what *creates* the drivers, findings and claims
 the budget charges. Only stage 3 can measure, and it measures with a
 `contracts/v1` function both planes import — the route's 413 gate is an
 assertion over the same numbers, not a second measurement.
+
+### 10b — The grouping REFUSAL, and how its disclosure reaches the reader
+
+The group axis is read off the members' own facts, so the plan's declared
+`GroupKind` and the kind the fact rows actually carry can disagree. When they
+do, grouping is refused **wholesale** — keeping the members whose source
+happened to agree would present a partial axis as a complete one — and the
+question is answered flat.
+
+A flat answer to a grouped question is only honest if the reader is told. That
+is the half this sub-diagram exists to make visible, because it is the half
+that broke: the disclosure was composed correctly and then silently **dropped**
+by a later composer, and nothing in this document showed that such a thing
+could happen.
+
+```mermaid
+flowchart TD
+    PLAN["AnswerPlan.GroupKind<br/>(the model's question frame)"]
+    ROWS["group assignment rows<br/>(kind read where the row was ACCEPTED)"]
+    PLAN --> CMP{"kinds agree?"}
+    ROWS --> CMP
+    CMP -->|yes| BUILD["build groups<br/>COHORT_GROUP per group"]
+    CMP -->|"no"| REFUSE["REFUSE WHOLESALE<br/>outcome.Refusal = group_kind_source_mismatch<br/>+ planned_group_kind on grouping telemetry"]
+
+    REFUSE --> FLAT["answer is composed FLAT"]
+    REFUSE --> DISC["applyGroupingRefusalDisclosure"]
+
+    subgraph bounded["appendBoundedLimitations — the ONE path into Limitations"]
+        DEDUP["dedup → normalize to cap → append"]
+        FULL{"list at the contract cap?"}
+        DROP["displace the LAST MODEL-AUTHORED caveat<br/>never a service disclosure"]
+        COUNT["displaced count → result.LimitationsDisplaced"]
+        DEDUP --> FULL
+        FULL -->|yes| DROP --> COUNT
+        FULL -->|no| COUNT
+    end
+
+    DISC -->|"sentence from contracts/v1<br/>ContextFabricGroupingRefusalLimitation(planned, source)"| DEDUP
+    REG["IsContextFabricServiceAuthoredLimitation<br/>= fixed list OR a PARSE of the interpolated sentence<br/>(both kinds must be closed-vocabulary members)"]
+    REG -.->|"answers 'service or model?'"| DROP
+    REG -.->|"coherence oracle for a positive count"| VAL
+
+    COUNT --> LATER["commit affirmation — the ONLY composer<br/>that runs AFTER this one, and the one<br/>that displaced this disclosure"]
+    LATER --> DEDUP
+    COUNT --> VAL["result Validate → served answer"]
+```
+
+**Assembly order, because "a later composer" is only checkable if the order is
+written down.** Every one of these appends through the bounded appender, in
+this sequence inside `synthesizeAndAssemble`:
+
+```mermaid
+flowchart LR
+    RD["1 retrieval degradation"] --> TL["2 temporal"] --> SO["3 status override"]
+    SO --> FS["4 fact scope"] --> GR["5 GROUPING REFUSAL"] --> CA["6 commit affirmation"]
+    CA --> V["Validate → Save → served"]
+```
+
+So the grouping refusal is fifth of six, and **commit affirmation is the only
+composer that runs after it** — which is precisely why that one, and no other,
+was able to displace it. Retrieval degradation, temporal and fact scope all run
+BEFORE the refusal and can only contribute to the list it finds already full;
+they are not candidates for having dropped it.
+
+**The defect this drawing would have prevented.** The refusal sentence is
+**interpolated** — it names the axis asked for and the axis the facts support —
+so the exact-match registry of service-authored disclosures could not hold it.
+To the displacement rule an unrecognised disclosure is a model caveat, so on a
+full limitation list the commit-affirmation composer displaced it and the
+served flat answer said nothing about having been answered on a different axis.
+The dotted edges are the fix: recognition is a **parse** whose two interpolated
+segments must be closed subject-kind vocabulary members, so a model caveat that
+merely opens with the same wording cannot become undisplaceable and take a real
+caveat's slot.
+
+**Two properties worth reading off the shape.** Every arrow into `Limitations`
+passes through the bounded appender — there is no second door — and every
+displacement is counted, because a displaced list and a list that simply had
+room are the same length and end the same way, so the count is the only record
+the dropped caveat existed.
+
+**Update rule.** Any new service-authored disclosure, any new composer that
+runs on a composed result, or any change to the recognition rule updates this
+sub-diagram in the same PR. An **interpolated** disclosure additionally needs a
+sole composer and a parse-based recogniser; a list of constants cannot hold it.
 
 **Update rule.** Any change to `PlanAnswer`, the narrowing stages, or
 `ContextFabricCohortGroup` updates this diagram in the same PR.
