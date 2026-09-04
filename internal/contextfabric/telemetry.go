@@ -972,6 +972,39 @@ func (t SlogEngineTelemetry) RecordGroupedCohortCompleteness(ctx context.Context
 	t.logger.InfoContext(ctx, "context fabric grouped cohort completeness", args...)
 }
 
+// RecordMembershipCardinality emits the `membership_cardinality` step's own
+// result for one served answer.
+//
+// Every field is a count or a closed token. `cohort_complete`/
+// `cohort_truncated` ride the SAME line as the number rather than a sibling
+// event, because a cardinality without them reads as a claim about the
+// population that the step does not make -- it counts the RESOLVED member
+// set, and those two are what say whether that set is the whole of it.
+func (t SlogEngineTelemetry) RecordMembershipCardinality(ctx context.Context, principal storage.Principal, event MembershipCardinalityEvent) {
+	args := []any{
+		"org_id", principal.OrgID,
+		"family", string(event.Family),
+		"requirement", event.Requirement,
+		"outcome", string(event.Outcome),
+		"served", event.Served,
+		"declared", event.Declared,
+		"cohort_complete", event.CohortComplete,
+		"cohort_truncated", event.CohortTruncated,
+	}
+	// Emitted only where a narrowing actually ran, so an exact count's line
+	// is byte-for-byte what it would be with no narrowing vocabulary at all,
+	// and a reader filtering on `basis` sees reductions alone. Same posture
+	// as the grouping-refusal fields on the completeness line.
+	if event.Basis != "" {
+		args = append(args, "basis", string(event.Basis))
+	}
+	if event.Overrun != "" {
+		args = append(args, "overrun", string(event.Overrun))
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric membership cardinality", args...)
+}
+
 // RecordBudgetAssertion emits the FINAL budget assertion for one fresh result
 // exit. Closed enums and counts only.
 //

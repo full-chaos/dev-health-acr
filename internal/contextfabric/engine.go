@@ -1239,7 +1239,46 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// makes an old row's projection/re-serve pass the SAME
 			// required-field validation a brand-new answer must pass,
 			// instead of 500ing the moment a bounded consumer projects it.
+			//
+			// The SAME argument covers the cardinality, and codex round 1
+			// found this path serving without it. A row persisted before
+			// the `membership_cardinality` step was wired carries no
+			// assembled-result count, so a counting question answered from
+			// cache served a cohort and no number -- while the step's own
+			// declaration says the server computes one. That declaration is
+			// what the planning-authority parity proof reads, so leaving it
+			// false on the reuse path would make the proof's evidence false
+			// for every reused answer.
+			//
+			// A BACKFILL, not a reuse-key fence, for the reason the
+			// paragraph above gives: the cardinality is a pure function of
+			// the member set the stored document ALREADY CARRIES, so
+			// computing it here invents nothing. Fencing the key instead
+			// would discard every cached answer to re-derive something
+			// already derivable from it. The idempotence guard makes this a
+			// no-op for a row stored after the wiring, so a document can
+			// never end up stating two cardinalities.
+			if backfilled, _, _ := appendMembershipCardinality(reused.Completeness.Outcomes, reused.Cohort, reusedPlanNarrowing(reused)); len(backfilled) > 0 {
+				reused.Completeness.Outcomes = backfilled
+			}
 			reused.Completeness = ComputeAnswerCompleteness(reused)
+			// The count reaches the OPERATOR on this path too.
+			//
+			// The backfill above states a cardinality on a served answer, and
+			// the only emitter used to sit on the fresh-result path -- so a
+			// reused answer carried a count with nothing in the run's own
+			// artifacts to diagnose it. That is the telemetry-same-change bar
+			// failing on a path this slice ADDED: the consumer was verified
+			// where the step already ran and never asked of the path the
+			// backfill created.
+			//
+			// It reads the SERVED row through the same builder the fresh path
+			// uses, so the two surfaces cannot describe different numbers.
+			if e.telemetry != nil {
+				if event, counted := membershipCardinalityEventFrom(reused, reusedPlanFamily(reused)); counted {
+					e.telemetry.RecordMembershipCardinality(ctx, principal, event)
+				}
+			}
 			// chris's promise of record, verbatim: "reuse and stored reads
 			// are re-validated against the current budget and refuse if they
 			// no longer fit." A stored row keyed WITHOUT the response budget
@@ -2162,6 +2201,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// the demands it holds the answer against are the ones the served
 		// plan actually states.
 		e.telemetry.RecordServerStatusShadow(ctx, principal, DeriveServerStatus(result, familyOutcome.FrameObligations))
+		// The `membership_cardinality` step's result, from the SAME
+		// once-per-served-result point and for the same reason: the step
+		// runs inside finalizeResult, which runs again on a retry, and a
+		// cardinality counted twice is a count an operator cannot trust.
+		//
+		// It READS the served document's own row rather than recomputing
+		// the number for the log line. A telemetry value derived
+		// independently of the field it describes can disagree with it, and
+		// then the run's own artifacts hold two answers to "how many".
+		if event, counted := membershipCardinalityEventFrom(result, plan.Family); counted {
+			e.telemetry.RecordMembershipCardinality(ctx, principal, event)
+		}
 	}
 	// CHAOS-4690: the SINGLE stamp point for the decisive path -- AFTER
 	// finalizeResult/fitAssembledResult (fitAssembledResult can re-run

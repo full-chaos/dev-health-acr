@@ -413,6 +413,21 @@ func (e *Engine) finalizeResult(result InvestigationResult, plan AnswerPlan, fra
 	if len(result.Completeness.Outcomes) == 0 {
 		result.Completeness.Outcomes = seedRequirementOutcomes(frame, e.requirements)
 	}
+	// Run the `membership_cardinality` server step over the member set this
+	// document actually carries, and state the result on it.
+	//
+	// HERE, and not earlier, for the reason this function exists: the count
+	// must describe the document the route will marshal. Stage 3 can narrow
+	// the cohort and re-synthesize, and it re-finalizes, so a cardinality
+	// computed before that would name a member set the reader never
+	// receives -- the same defect round 1 finding 1 recorded for the plan
+	// and the render shapes.
+	//
+	// AFTER the seed, because the step's own requirement identity is read
+	// off the seeded rows rather than minted here, and appended through
+	// appendOutcomeRows like every other stage's row.
+	rows, _, _ := appendMembershipCardinality(result.Completeness.Outcomes, result.Cohort, plan.Narrowing)
+	result.Completeness.Outcomes = rows
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result
 }

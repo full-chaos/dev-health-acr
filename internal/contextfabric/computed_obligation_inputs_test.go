@@ -417,45 +417,119 @@ func TestSortedFactKindsPreservesAKindOutsideTheVocabulary(t *testing.T) {
 // TestComputedStepExecutionMatchesTheTree pins each step's declared execution
 // against whether the tree actually runs it.
 //
-// This is the assertion an adversarial round forced. `membership_cardinality`
-// was declared with an input class and no execution statement, and the parity
-// proof read "consumes no fact" as evidence about the ANSWER -- clearing five
-// blocking cells and reporting two planning authorities retirable. Nothing
-// executes that step: the cardinality reaches the user through narration, so
-// the reads those authorities cause can still change the answer.
+// THE HISTORY THIS TEST CARRIES. `membership_cardinality` was declared with an
+// input class and no execution statement, and the parity proof read "consumes
+// no fact" as evidence about the ANSWER -- clearing five blocking cells and
+// reporting two planning authorities retirable. Nothing executed that step:
+// the cardinality reached the user through narration, so the reads those
+// authorities cause could still change the answer. The execution field was
+// added to say so, and this test pinned the step DECLARED-ONLY with a note
+// that "flipping it without wiring the step re-opens the defect."
 //
-// The pin is deliberately asymmetric. `rank_cohort` is asserted EXECUTED
-// because `RankCohort` exists and the engine calls it; `membership_cardinality`
-// is asserted DECLARED-ONLY, and that assertion is what has to be revisited by
-// whoever wires it. Flipping it without wiring the step re-opens the defect.
+// THE STEP IS NOW WIRED, so the pin moved -- and it moved AFTER the wiring,
+// not to make room for it. `ComputeMembershipCardinality` counts the resolved
+// member set and `finalizeResult` states the result on the served document.
+// The claim that it genuinely runs is not made here: it is made by
+// TestTheCountObligationReachesTheServedDocumentAsACountableField, which
+// drives Engine.Investigate and reads the count off the document the engine
+// served. This test's job is the AGREEMENT between the two records.
+//
+// IT IS A PROPERTY OVER THE STEP VOCABULARY, not two hand-pinned constants.
+// Two constants are exactly what let one record be flipped while the other
+// stayed: the shadow's observation declaration and this table are two
+// statements of one fact, and either alone can authorize a retirement. Stated
+// as a property, a step added later cannot be declared executed while the
+// layer that would have to see its output still says it cannot.
 func TestComputedStepExecutionMatchesTheTree(t *testing.T) {
-	rank, ok := InputsForComputedStep(ComputedStepRankCohort)
-	if !ok {
-		t.Fatal("rank_cohort has no declaration")
+	checked := 0
+	for _, step := range ComputedObligationStepVocabulary() {
+		inputs, ok := InputsForComputedStep(step)
+		if !ok {
+			t.Errorf("step %q has no input declaration", step)
+			continue
+		}
+		if !ValidComputedStepExecution(inputs.Execution) {
+			t.Errorf("step %q declares execution %q, which is not a vocabulary member", step, inputs.Execution)
+			continue
+		}
+		obligation, found := obligationForComputedStepInTest(step)
+		if !found {
+			t.Errorf("step %q satisfies no obligation -- the two vocabulary tables have drifted", step)
+			continue
+		}
+		observation, declared := obligationObservations[obligation]
+		if !declared {
+			t.Errorf("obligation %q has no observation declaration", obligation)
+			continue
+		}
+		// THE INVARIANT. A step the server executes produces something the
+		// answer can carry, so the shadow can observe the obligation. A step
+		// nothing executes leaves the value to reach the reader some other
+		// way, which the shadow by construction cannot see. The two records
+		// disagreeing means one of them is authorizing retirements on a
+		// mechanism that is not the answering mechanism.
+		wantObserved := inputs.Execution == ComputedStepServerExecuted
+		if observation.observed != wantObserved {
+			t.Errorf("step %q declares execution %q while the shadow records obligation %q as observed=%v -- "+
+				"the two records disagree, and one of them is authorizing retirements",
+				step, inputs.Execution, obligation, observation.observed)
+		}
+		checked++
 	}
-	if rank.Execution != ComputedStepServerExecuted {
-		t.Errorf("rank_cohort execution = %q, want %q -- RankCohort is wired between the fact read and synthesis", rank.Execution, ComputedStepServerExecuted)
+	if checked != ComputedObligationStepCount {
+		t.Fatalf("checked %d of %d computed steps -- a step that skipped its assertions proves nothing about itself",
+			checked, ComputedObligationStepCount)
 	}
 
-	count, ok := InputsForComputedStep(ComputedStepMembershipCardinality)
-	if !ok {
-		t.Fatal("membership_cardinality has no declaration")
+	// Both live steps are wired today, so the assertion above is satisfied
+	// by two `server_executed` rows. Stated explicitly, because a property
+	// every member satisfies the same way cannot distinguish itself from a
+	// property that always holds: the DECLARED-ONLY side of the invariant is
+	// exercised by TestADeclaredOnlyStepIsNotReportedAsWired below.
+	for _, step := range ComputedObligationStepVocabulary() {
+		inputs, _ := InputsForComputedStep(step)
+		if inputs.Execution != ComputedStepServerExecuted {
+			t.Fatalf("step %q is declared %q; this comment and the declared-only companion test are stale",
+				step, inputs.Execution)
+		}
 	}
-	if count.Execution != ComputedStepDeclaredOnly {
-		t.Errorf("membership_cardinality execution = %q, want %q -- no production call site satisfies `count` with this step; if that changed, wire it and update this pin deliberately", count.Execution, ComputedStepDeclaredOnly)
-	}
+}
 
-	// The corroboration, read off the shadow layer's own record rather than
-	// asserted here: `count` is listed as an obligation this derivation
-	// cannot observe, because a cardinality is carried in the answer text
-	// rather than in a countable result field. Two independent statements of
-	// the same fact, in the two places that each need it.
-	observation, declared := obligationObservations[ObligationCount]
-	if !declared {
-		t.Fatal("obligationObservations has no row for `count`")
+// obligationForComputedStepInTest inverts the step table, so the property
+// above reads the shipped mapping rather than a copy of it.
+func obligationForComputedStepInTest(step ComputedObligationStep) (AnswerObligation, bool) {
+	for _, obligation := range AnswerObligationVocabulary() {
+		if mapped, ok := StepForComputedObligation(obligation); ok && mapped == step {
+			return obligation, true
+		}
 	}
-	if observation.observed {
-		t.Error("`count` is recorded as OBSERVED in the shadow layer while its step is declared-only -- the two records disagree, and one of them is authorizing retirements")
+	return "", false
+}
+
+// TestADeclaredOnlyStepIsNotReportedAsWired keeps the declared-only half of
+// the invariant alive now that no live step declares it.
+//
+// A closed token no input can produce is a dead tier that reads as green --
+// the same class this file's own histogram tests were written for. Both live
+// steps are `server_executed` today, so the ONLY way to exercise the other
+// side is a constructed row. That is stated rather than hidden: the row is
+// input to the summary fold, which is the unit under test.
+func TestADeclaredOnlyStepIsNotReportedAsWired(t *testing.T) {
+	rows := []DerivedRequirement{{
+		Kind:          ObligationKindComputed,
+		Step:          ComputedStepMembershipCardinality,
+		InputClass:    ComputedInputResolvedMemberSet,
+		StepExecution: ComputedStepDeclaredOnly,
+	}}
+	summary := RequirementDerivationSummaryFrom(rows)
+
+	declaredOnly := summary.ComputedStepExecutions[executionIndexForTest(t, ComputedStepDeclaredOnly)]
+	serverExecuted := summary.ComputedStepExecutions[executionIndexForTest(t, ComputedStepServerExecuted)]
+	if declaredOnly != 1 {
+		t.Errorf("declared-only bucket = %d, want 1 -- the tier a token can never reach is a tier that cannot fail", declaredOnly)
+	}
+	if serverExecuted != 0 {
+		t.Errorf("server-executed bucket = %d for a declared-only row, want 0", serverExecuted)
 	}
 }
 
@@ -555,14 +629,16 @@ func TestComputedStepExecutionCountsLandInTheRightBucket(t *testing.T) {
 	declaredOnly := summary.ComputedStepExecutions[executionIndexForTest(t, ComputedStepDeclaredOnly)]
 	serverExecuted := summary.ComputedStepExecutions[executionIndexForTest(t, ComputedStepServerExecuted)]
 
-	// A counting frame's only computation is membership_cardinality, which is
-	// declared-only. Reporting it as server-executed is the exact
-	// misinformation this histogram exists to prevent.
-	if declaredOnly == 0 {
-		t.Errorf("a counting frame recorded %d declared-only computed rows, want at least one", declaredOnly)
+	// A counting frame's only computation is membership_cardinality, and the
+	// server now executes it. Reporting a wired step as declared-only would
+	// understate what the answer is built from, which is the mirror of the
+	// over-claim this histogram was originally written to prevent -- both
+	// directions are misinformation, and the bucket has to be right.
+	if serverExecuted == 0 {
+		t.Errorf("a counting frame recorded %d server-executed computed rows, want at least one", serverExecuted)
 	}
-	if serverExecuted != 0 {
-		t.Errorf("a counting frame recorded %d SERVER-EXECUTED computed rows -- nothing runs its step, and reporting it as wired is what the parity proof would read as licence to retire", serverExecuted)
+	if declaredOnly != 0 {
+		t.Errorf("a counting frame recorded %d DECLARED-ONLY computed rows -- the server computes this cardinality and states it on the answer", declaredOnly)
 	}
 
 	classTotal := 0

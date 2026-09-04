@@ -351,6 +351,7 @@ type recordingTelemetry struct {
 	// groupedCohortCompletenesses (CHAOS-4733) records every grouped-cohort
 	// completeness fold verbatim, same list-not-count discipline.
 	groupedCohortCompletenesses []GroupedCohortCompletenessEvent
+	membershipCardinalities     []MembershipCardinalityEvent
 	commitAffirmations          int
 	// categoryFactCompositions (CHAOS-4347) records every status-category
 	// composition event verbatim, same list-not-count discipline.
@@ -620,6 +621,14 @@ func (r *recordingTelemetry) RecordPlanNarrowing(_ context.Context, _ storage.Pr
 // list-not-count discipline as RecordPlanNarrowing above.
 func (r *recordingTelemetry) RecordGroupedCohortCompleteness(_ context.Context, _ storage.Principal, event GroupedCohortCompletenessEvent) {
 	r.groupedCohortCompletenesses = append(r.groupedCohortCompletenesses, event)
+}
+
+// RecordMembershipCardinality records the whole event, same list-not-count
+// discipline. A recorder nothing reads is a DISCARDING fake, so the
+// membership-cardinality telemetry test reads this slice back after driving
+// Engine.Investigate; deleting the production emit must fail it.
+func (r *recordingTelemetry) RecordMembershipCardinality(_ context.Context, _ storage.Principal, event MembershipCardinalityEvent) {
+	r.membershipCardinalities = append(r.membershipCardinalities, event)
 }
 
 // RecordBudgetAssertion (Y3) records the whole event, same list-not-count
