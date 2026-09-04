@@ -1005,6 +1005,83 @@ func TestAReusedAnswerStatesItsCardinality(t *testing.T) {
 	}
 }
 
+// TestAReusedNarrowedAnswerIsBackfilledAsNarrowed is the discriminating half
+// of the reuse backfill.
+//
+// The fixture above has no narrowing, so the backfilled row is `satisfied`
+// and a bug that ignored the stored plan's narrowing history entirely would
+// still pass it -- the same shape as the M10 vacuity the first battery run
+// caught. A stored document whose plan recorded a member narrowing must be
+// backfilled as `narrowed` over the population that plan observed, not as an
+// exact count of the survivors: reporting exact over a reduced set is the
+// confident wrong answer this whole change exists to avoid, and it would be
+// no better for arriving from cache.
+func TestAReusedNarrowedAnswerIsBackfilledAsNarrowed(t *testing.T) {
+	t.Parallel()
+	project, candidate := reusableCandidate()
+	candidate.Cohort = countingCohort(SubjectTeam, 3)
+	candidate.Cohort.Complete = false
+	candidate.Cohort.Truncated = true
+	// The stored plan's OWN narrowing history: this document was cut from
+	// eight members to the three it carries.
+	candidate.AnswerPlan = &AnswerPlan{
+		Family:        QuestionFamilyScopedCohortStatus,
+		FamilyVersion: QuestionFamilyTableVersion,
+		Narrowing: []contractsv1.ContextFabricPlanNarrowing{{
+			Stage:  contractsv1.ContextFabricPlanNarrowingSynthesisInput,
+			Basis:  contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical,
+			Before: 8, After: 3,
+		}},
+	}
+	candidate.Completeness.Outcomes = []RequirementOutcomeRow{{
+		Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
+		Requirement: string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam),
+		Obligation:  string(ObligationCount),
+		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+		Impact:      contractsv1.ContextFabricAnswerImpactNone,
+	}}
+	candidate.Completeness = ComputeAnswerCompleteness(candidate)
+
+	committed := []SubjectRef{project}
+	for _, member := range candidate.Cohort.Members {
+		committed = append(committed, member.Subject)
+	}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph:   graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
+		Results: &resultStoreStub{},
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return candidate, true, nil
+		}),
+	})
+	served, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !served.Reused {
+		t.Fatal("the fixture did not take the reuse path, so it proves nothing about it")
+	}
+	rows := countOutcomeRows(served, contractsv1.ContextFabricOutcomeStageAssembledResult)
+	if len(rows) != 1 {
+		t.Fatalf("reused narrowed answer states %d cardinalities, want 1", len(rows))
+	}
+	row := rows[0]
+	if row.Served == row.Declared {
+		t.Fatalf("backfilled row says %d/%d -- the stored plan recorded a narrowing from 8 to 3, and a row "+
+			"whose two numbers agree cannot distinguish an exact count from an ignored history",
+			row.Served, row.Declared)
+	}
+	if row.Outcome != contractsv1.ContextFabricRequirementNarrowed {
+		t.Fatalf("backfilled outcome = %q, want %q over a stored narrowing", row.Outcome, contractsv1.ContextFabricRequirementNarrowed)
+	}
+	if row.Served != 3 || row.Declared != 8 {
+		t.Fatalf("backfilled row says %d/%d, want 3/8 -- the members carried, over the population the stored plan observed",
+			row.Served, row.Declared)
+	}
+	if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(row); err != nil {
+		t.Fatalf("the backfilled narrowed row does not validate: %v", err)
+	}
+}
+
 // TestAnAnswerThatDerivedNoCountStatesNone pins the gate that keeps every
 // non-answering exit from claiming a cardinality.
 //
