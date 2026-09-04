@@ -105,11 +105,11 @@
   C6    5a  not_applicable                   -                                      lost=[-] gained=[flow health investment landscape readiness workload]
   C6    5b  not_reproducible_by_construction -                                      lost=[-] gained=[-]
   C6    6   dropped_pending_mechanism        -                                      lost=[-] gained=[-]
-  C7    1   not_subsumed                     not_required_by_any_obligation (SUPERIOR) lost=[health identity metrics] gained=[-]
+  C7    1   not_subsumed                     computed_population_unavailable        lost=[health identity metrics] gained=[-]
   C7    2   advisory_by_rule                 -                                      lost=[-] gained=[-]
   C7    3   not_applicable                   -                                      lost=[-] gained=[-]
   C7    4   not_reproducible_by_construction -                                      lost=[-] gained=[-]
-  C7    5a  not_subsumed                     not_required_by_any_obligation (SUPERIOR) lost=[health] gained=[-]
+  C7    5a  not_subsumed                     computed_population_unavailable        lost=[health] gained=[-]
   C7    5b  not_reproducible_by_construction -                                      lost=[-] gained=[-]
   C7    6   dropped_pending_mechanism        -                                      lost=[-] gained=[-]
   B5    1   not_subsumed                     unavailable_named_instead (SUPERIOR)   lost=[status] gained=[-]
@@ -140,9 +140,10 @@
 ## LOSS CAUSE HISTOGRAM (every token, including the zeroes)
 
   unavailable_named_instead                  1  derivation ruled SUPERIOR
-  not_required_by_any_obligation            12  derivation ruled SUPERIOR
+  not_required_by_any_obligation            10  derivation ruled SUPERIOR
   computed_step_input_unserved               1  blocks retirement
   computed_step_not_wired                    0  blocks retirement
+  computed_population_unavailable            2  blocks retirement
 
 ## RETIREMENT VERDICT, PER AUTHORITY
 #
@@ -159,18 +160,18 @@
 # measurement on real answers -- which this table, computed from frames
 # alone, cannot stand in for.
 
-  1   RETIRABLE on this evidence                                 (3 superior, 0 blocking, 14 cells)
+  1   NOT RETIRABLE -- 1 blocking loss cell(s)                   (2 superior, 1 blocking, 14 cells)
   2   NOT RETIRABLE -- disclosed drop, see the roster's reach column (0 superior, 0 blocking, 14 cells)
   3   NOT RETIRABLE -- 1 blocking loss cell(s)                   (8 superior, 1 blocking, 14 cells)
   4   NOT RETIRABLE -- disclosed drop, see the roster's reach column (0 superior, 0 blocking, 14 cells)
-  5a  RETIRABLE on this evidence                                 (2 superior, 0 blocking, 14 cells)
+  5a  NOT RETIRABLE -- 1 blocking loss cell(s)                   (1 superior, 1 blocking, 14 cells)
   5b  NOT RETIRABLE -- disclosed drop, see the roster's reach column (0 superior, 0 blocking, 14 cells)
   6   NOT RETIRABLE -- disclosed drop, see the roster's reach column (0 superior, 0 blocking, 14 cells)
 
 # MEASUREMENT
 #   98 cells = 14 frames x 7 authorities
 #   subsumed 18 / not_subsumed 14 / not_applicable 10 / disclosed drops 56
-#   of the 14 not_subsumed cells, 13 are ruled SUPERIOR and 1 BLOCK retirement
+#   of the 14 not_subsumed cells, 11 are ruled SUPERIOR and 3 BLOCK retirement
 #
 # REFUTED PROPERTY (reported, not asserted -- see the file header)
 #   "every pre-resolution authority is subsumed by the derived rows"
