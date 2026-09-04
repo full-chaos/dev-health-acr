@@ -292,8 +292,9 @@ func (t SlogEngineTelemetry) RecordWindowCarry(ctx context.Context, principal st
 // construction -- never a question, subject label, or canonical id. A
 // distinct message from the window carry's so the two axes' hit rates can
 // be counted apart.
-func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int) {
-	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "chain_depth", chainDepth}, requestIDLogAttrs(ctx)...)
+func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind) {
+	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "chain_depth", chainDepth,
+		"carried_kind", string(carriedKind), "redeemed_kind", string(redeemedKind)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric kind carry", args...)
 }
 

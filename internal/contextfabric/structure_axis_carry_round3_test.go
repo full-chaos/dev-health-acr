@@ -217,7 +217,17 @@ func TestKindCarry_SaveTimeSupersessionVetoStillDisclosesTheCarry(t *testing.T) 
 // just chose. The caller's own explicit pick loses to an inherited value.
 func TestKindCarry_AReceiptThatStatesAKindThisTurnBlocksTheCarry(t *testing.T) {
 	t.Parallel()
-	// A candidate receipt redeemed this turn, naming a team subject.
+	// SUPERSEDED MECHANISM, SAME GUARANTEE. This test originally asserted that
+	// any receipt naming a kind BLOCKED the carry outright. That was too blunt
+	// and re-opened the very loop the carry closes: on a turn linked by a
+	// candidate receipt whose candidate does not commit, blocking left the pool
+	// mixed and the kind offer was raised again. Compare-and-drop replaces the
+	// block with a comparison -- see structure_axis_carry_drop_test.go.
+	//
+	// The GUARANTEE this test exists for is unchanged and still pinned here:
+	// an inherited kind must never filter out the subject the caller picked on
+	// this turn. It is now enforced by dropping the carry on disagreement
+	// rather than by refusing to look.
 	candidatePick := requestStructureCanonicalization{
 		Confirmed: []confirmedStructureMember{{
 			Member:       contractsv1.ContextFabricStructureNeedSubjectCandidate,
@@ -225,10 +235,24 @@ func TestKindCarry_AReceiptThatStatesAKindThisTurnBlocksTheCarry(t *testing.T) {
 			AppliedKind:  contractsv1.ContextFabricSubjectTeam,
 		}},
 	}
-	if !statedExpectedKindThisTurn(InvestigationRequest{}, candidatePick) {
-		t.Fatal("statedExpectedKindThisTurn(candidate receipt naming a team) = false, want true: the caller picked a subject OF A KIND this turn, and an inherited kind must not be allowed to filter that very pick out of the pool")
+	inherited := kindCarryResult{Kind: contractsv1.ContextFabricSubjectProject, SourceResultID: "result_origin", Outcome: KindCarryHit}
+	dropped := applyCarryDrop(candidatePick.Confirmed, inherited)
+	if dropped.Outcome != KindCarryDroppedRedeemedKindDiffers {
+		t.Fatalf("applyCarryDrop = %#v, want the carry dropped: the caller picked a TEAM this turn and the chain offers PROJECT, so the inherited value must stand down", dropped)
 	}
-	// The same for an anchor receipt, which names the scope anchor's kind.
+	if got := effectiveConfirmedKind(candidatePick.Confirmed, dropped); got != nil {
+		t.Fatalf("effectiveConfirmedKind = %#v, want nil: a dropped carry must not reach resolution and filter the caller's own pick out of the pool", got)
+	}
+	// And the drop must not be disclosed as an applied carry.
+	if entry := composeCarriedKindEntry(dropped); entry != nil {
+		t.Fatalf("composeCarriedKindEntry(dropped) = %#v, want nil", entry)
+	}
+
+	// An ANCHOR receipt is NOT a comparator: its kind is the scope anchor's
+	// own, a different axis from the sought subject kind. "Which repositories
+	// does the Ops Team own" carries a TEAM anchor while seeking REPOSITORY
+	// subjects, so treating it as a disagreement would drop the carry on
+	// exactly the scoped questions this mechanism serves.
 	anchorPick := requestStructureCanonicalization{
 		Confirmed: []confirmedStructureMember{{
 			Member:       contractsv1.ContextFabricStructureNeedSubjectAnchor,
@@ -236,25 +260,9 @@ func TestKindCarry_AReceiptThatStatesAKindThisTurnBlocksTheCarry(t *testing.T) {
 			AppliedKind:  contractsv1.ContextFabricSubjectTeam,
 		}},
 	}
-	if !statedExpectedKindThisTurn(InvestigationRequest{}, anchorPick) {
-		t.Fatal("statedExpectedKindThisTurn(anchor receipt naming a team) = false, want true")
-	}
-	// A confirmed member carrying NO kind must still not block. This shape is
-	// NOT reachable in production and the case is deliberately defensive: the
-	// contract FORBIDS it, because every option validator rejects an empty
-	// kind (validate_context_fabric_structure.go), so a redeemed member always
-	// carries one. The guard and this case exist so that if that invariant is
-	// ever relaxed, a kindless member fails open into "states nothing to
-	// protect" rather than silently blocking every carry -- and so a reader
-	// does not mistake the guard for a live branch.
-	kindlessHandle := requestStructureCanonicalization{
-		Confirmed: []confirmedStructureMember{{
-			Member:       contractsv1.ContextFabricStructureNeedSubjectHandle,
-			AppliedValue: "acr-123",
-		}},
-	}
-	if statedExpectedKindThisTurn(InvestigationRequest{}, kindlessHandle) {
-		t.Fatal("statedExpectedKindThisTurn(handle receipt with no kind) = true, want false: a member that states no kind states nothing to protect")
+	carriedRepo := kindCarryResult{Kind: contractsv1.ContextFabricSubjectRepository, SourceResultID: "result_origin", Outcome: KindCarryHit}
+	if kept := applyCarryDrop(anchorPick.Confirmed, carriedRepo); kept.Outcome != KindCarryHit {
+		t.Fatalf("applyCarryDrop(anchor) = %#v, want the carry KEPT: an anchor kind and a sought kind are two axes, not a disagreement", kept)
 	}
 }
 

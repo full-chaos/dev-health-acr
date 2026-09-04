@@ -410,8 +410,11 @@ func TestKindCarry_TurnThatIsOfferedNothingStillResolvesUnderTheConfirmedKind(t 
 		t.Fatalf("ConfirmedStructure = %#v, want an entry %#v: a carry the caller cannot see is a silent inheritance", result.ConfirmedStructure, wantEntry)
 	}
 
-	if len(telemetry.kindCarries) != 1 || telemetry.kindCarries[0] != (kindCarryRecord{KindCarryHit, 0}) {
-		t.Fatalf("telemetry.kindCarries = %#v, want exactly one hit at depth 0", telemetry.kindCarries)
+	// carriedKind rides a HIT as well as a drop -- "hit" alone does not say
+	// WHICH kind the conversation inherited.
+	wantCarry := kindCarryRecord{outcome: KindCarryHit, carriedKind: contractsv1.ContextFabricSubjectTeam}
+	if len(telemetry.kindCarries) != 1 || telemetry.kindCarries[0] != wantCarry {
+		t.Fatalf("telemetry.kindCarries = %#v, want exactly one hit at depth 0 carrying team", telemetry.kindCarries)
 	}
 }
 
