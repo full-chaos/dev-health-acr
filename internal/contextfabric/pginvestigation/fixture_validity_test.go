@@ -31,6 +31,11 @@ func TestEveryStoredFixtureIsValidWithoutADatabase(t *testing.T) {
 	fixtures := map[string]contextfabric.InvestigationResult{
 		"validResult":    validResult("result_fixture_guard"),
 		"reusableResult": reusableResult("result_fixture_guard_reuse", "org_fixture_guard", "why is throughput down?"),
+		// The third builder. A builder left OUT of this guard is exactly the
+		// gap that produced the incident, so all three are named here rather
+		// than the two that happened to fail.
+		"historicalResult": historicalResult(t, "result_fixture_guard_hist", "org_fixture_guard",
+			contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}),
 	}
 	// Every result the shared parity table expects to save SUCCESSFULLY.
 	//
