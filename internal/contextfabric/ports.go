@@ -523,7 +523,19 @@ type InvestigationResultStore interface {
 	// (pre-migration rows, and rows from a Store with reuse disabled
 	// entirely, read back NULL) -- the same NULL-never-matches fail-closed
 	// convention as every sibling reuse dimension.
-	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities, int64) error
+	//
+	// The FINAL string is parentResultID: the result this one follows, or ""
+	// for a turn that follows nothing. Explicit, positional, and required for
+	// exactly the reason every parameter above it is -- a caller who forgets
+	// it must fail to compile. That matters more here than for most: ancestry
+	// is only durable if EVERY Save records it, including the four pre-carry
+	// veto/terminal returns, and those are precisely the paths a reader would
+	// forget because no carry ran on them. A chain with a hole where a vetoed
+	// turn should be cannot be walked past that hole.
+	//
+	// Implementations persist it as an additive NULLABLE column (migration
+	// 0037); "" is stored as NULL and reads back as "".
+	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities, int64, string) error
 	// Get returns the CHAOS-3898 §2.4 metadata-bearing
 	// StoredInvestigationResult carrier, not a bare InvestigationResult --
 	// see that type's own doc comment for why persistence metadata (here,

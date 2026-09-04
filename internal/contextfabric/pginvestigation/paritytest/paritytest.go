@@ -29,6 +29,10 @@ type SaveStep struct {
 	Principal storage.Principal
 	Result    contextfabric.InvestigationResult
 	WantErr   bool
+	// ParentResultID is the durable ancestry pointer this Save records.
+	// Empty for every pre-existing case, which keeps them byte-identical to
+	// their pre-ancestry behaviour.
+	ParentResultID string
 }
 
 // GetStep is the Get call a Case verifies after its Save steps.
@@ -37,6 +41,11 @@ type GetStep struct {
 	ResultID     string
 	WantNotFound bool
 	Want         *contextfabric.InvestigationResult
+	// WantParentResultID, when set, asserts the ancestry pointer survived the
+	// round trip. A POINTER so that "assert it is empty" is expressible and
+	// distinguishable from "do not check" -- the empty-string case is the one
+	// that matters for a first turn, and a plain string could not say it.
+	WantParentResultID *string
 }
 
 // Case is one save/get parity scenario.
@@ -215,6 +224,17 @@ func Cases() []Case {
 	divergent := original
 	divergent.DirectJudgment = "a different judgment"
 	divergent.Question = "why did the deploy fail? (mutated)"
+	withParent := result("result-id-ancestry", "which repositories does the ops team own?")
+	firstTurn := result("result-id-first-turn", "how is the migration going?")
+	// Fixtures for the parent-validation cases below. Each needs its OWN
+	// result id: a self-parent case must be able to name its own id, and the
+	// bounds cases must not collide with rows another case saved.
+	selfParent := result("result-id-self-parent", "does this result parent itself?")
+	shortParent := result("result-id-short-parent", "is a three-character parent storable?")
+	longParent := result("result-id-long-parent", "is an over-long parent storable?")
+	boundParent := result("result-id-bound-parent", "is a parent at the lower bound storable?")
+	wideMaxParent := result("result-id-wide-max-parent", "is a 256-rune parent storable?")
+	wideMinParent := result("result-id-wide-min-parent", "is a 4-rune parent storable?")
 
 	// M1 (Codex adversarial review, CHAOS-3755): a result_id collision
 	// across two DIFFERENT organizations must reject the second Save
@@ -290,6 +310,98 @@ func Cases() []Case {
 			},
 		},
 		{
+			// Ancestry is store metadata, not part of the result payload, so
+			// the payload comparison every other case relies on cannot see
+			// it. Without these two cases a store could drop the parent
+			// entirely and the whole parity suite would stay green -- and a
+			// conversation would be walkable on one backend and silently not
+			// on the other.
+			Name: "ancestry survives the round trip",
+			Save: []SaveStep{
+				{Principal: orgA, Result: withParent, ParentResultID: "result-ancestry-parent"},
+			},
+			Get: GetStep{Principal: orgA, ResultID: withParent.ResultID, Want: &withParent, WantParentResultID: ptr("result-ancestry-parent")},
+		},
+		{
+			// BOTH BACKENDS REFUSE A PARENT THE DATABASE'S CHECK CONSTRAINTS
+			// REFUSE, and this case exists because only one of them did.
+			// PostgreSQL rejected a self-parent and an out-of-bounds id via
+			// ck_..._parent_not_self and ck_..._parent_result_id_len; the
+			// in-memory store accepted all three shapes, so an id that failed
+			// only in production round-tripped cleanly in tests and dev.
+			//
+			// The parity suite could not see it because every prior case fed
+			// a VALID parent -- a suite that never supplies an invalid input
+			// cannot detect that one backend fails to reject it. Same shape as
+			// a gate tier with no positive fixture.
+			Name: "a self-parent is refused by both backends",
+			Save: []SaveStep{
+				{Principal: orgA, Result: selfParent, ParentResultID: selfParent.ResultID, WantErr: true},
+			},
+			Get: GetStep{Principal: orgA, ResultID: selfParent.ResultID, WantNotFound: true},
+		},
+		{
+			Name: "a parent id shorter than the bound is refused by both backends",
+			Save: []SaveStep{
+				{Principal: orgA, Result: shortParent, ParentResultID: "abc", WantErr: true},
+			},
+			Get: GetStep{Principal: orgA, ResultID: shortParent.ResultID, WantNotFound: true},
+		},
+		{
+			Name: "a parent id longer than the bound is refused by both backends",
+			Save: []SaveStep{
+				{Principal: orgA, Result: longParent, ParentResultID: strings.Repeat("x", 257), WantErr: true},
+			},
+			Get: GetStep{Principal: orgA, ResultID: longParent.ResultID, WantNotFound: true},
+		},
+		{
+			// MULTIBYTE BOUNDS. The bound is stated in CHARACTERS by the
+			// migration (char_length) and in RUNES by the request contract
+			// (utf8.RuneCountInString); a Go check measuring BYTES agrees with
+			// neither the moment the id is not ASCII. Both directions are
+			// exercised because they fail differently: a byte-measuring check
+			// REJECTS a 256-rune id that both authorities accept (a valid
+			// request would fail at Save), and ACCEPTS a 4-rune id that
+			// Postgres rejects (the parity claim is simply false there).
+			//
+			// The ASCII cases above cannot see either: 8 ASCII characters are
+			// 8 bytes, so every measurement agrees and the suite reads green
+			// while the rule is wrong for any non-ASCII id.
+			Name: "a parent id of 256 multibyte runes is accepted by both backends",
+			Save: []SaveStep{
+				{Principal: orgA, Result: wideMaxParent, ParentResultID: strings.Repeat("é", 256)},
+			},
+			Get: GetStep{Principal: orgA, ResultID: wideMaxParent.ResultID, Want: &wideMaxParent, WantParentResultID: ptr(strings.Repeat("é", 256))},
+		},
+		{
+			Name: "a parent id of 4 multibyte runes is refused by both backends",
+			Save: []SaveStep{
+				{Principal: orgA, Result: wideMinParent, ParentResultID: strings.Repeat("é", 4), WantErr: true},
+			},
+			Get: GetStep{Principal: orgA, ResultID: wideMinParent.ResultID, WantNotFound: true},
+		},
+		{
+			// CONTROL for the three above: a parent at each BOUND is accepted.
+			// Without it, a backend that refused every parent outright would
+			// pass all three refusal cases while breaking the mechanism.
+			Name: "a parent id at the bounds is accepted by both backends",
+			Save: []SaveStep{
+				{Principal: orgA, Result: boundParent, ParentResultID: strings.Repeat("y", 8)},
+			},
+			Get: GetStep{Principal: orgA, ResultID: boundParent.ResultID, Want: &boundParent, WantParentResultID: ptr(strings.Repeat("y", 8))},
+		},
+		{
+			// The first turn of a conversation. Empty must round-trip as
+			// EMPTY, never as some placeholder: the walk fails closed on an
+			// absent parent, and a store that invented a value would send it
+			// hunting a result that does not exist.
+			Name: "a result with no parent reads back with no parent",
+			Save: []SaveStep{
+				{Principal: orgA, Result: firstTurn},
+			},
+			Get: GetStep{Principal: orgA, ResultID: firstTurn.ResultID, Want: &firstTurn, WantParentResultID: ptr("")},
+		},
+		{
 			Name: "save rejects a semantically invalid result and persists nothing",
 			Save: []SaveStep{
 				{Principal: orgA, Result: invalid, WantErr: true},
@@ -314,7 +426,7 @@ func RunSuite(t *testing.T, newStore func(t *testing.T) contextfabric.Investigat
 			ctx := context.Background()
 
 			for index, step := range testCase.Save {
-				err := store.Save(ctx, step.Principal, step.Result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
+				err := store.Save(ctx, step.Principal, step.Result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, step.ParentResultID)
 				if step.WantErr {
 					if err == nil {
 						t.Fatalf("save[%d] %q: want error, got nil", index, step.Result.ResultID)
@@ -353,6 +465,9 @@ func runGet(t *testing.T, ctx context.Context, store contextfabric.Investigation
 	// carrier; this parity suite compares the wrapped canonical payload
 	// only -- persistence metadata (GraphEpoch) is a store-implementation
 	// detail, not part of what parity across stores means here.
+	if step.WantParentResultID != nil && stored.ParentResultID != *step.WantParentResultID {
+		t.Fatalf("get %q: ParentResultID = %q, want %q -- ancestry must survive the round trip identically in every store, or a conversation is walkable on one backend and not the other", step.ResultID, stored.ParentResultID, *step.WantParentResultID)
+	}
 	got := stored.Result
 	gotJSON, err := json.Marshal(got)
 	if err != nil {
@@ -429,7 +544,7 @@ func RunExplicitNullDegradedReasonsSuite(t *testing.T, newStore func(t *testing.
 		// successful idempotent replay: doing so would report success
 		// while leaving the invalid stored row in place forever, since
 		// these stores never overwrite.
-		err := store.Save(context.Background(), orgA, valid, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
+		err := store.Save(context.Background(), orgA, valid, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "")
 		if err == nil {
 			t.Fatal("Save() error = nil, want a replay against a stored explicit-null row to be rejected, not treated as an idempotent success")
 		}
@@ -438,3 +553,7 @@ func RunExplicitNullDegradedReasonsSuite(t *testing.T, newStore func(t *testing.
 		}
 	})
 }
+
+// ptr is the address-of helper GetStep.WantParentResultID needs so that
+// "assert empty" stays expressible and distinct from "do not check".
+func ptr[T any](v T) *T { return &v }

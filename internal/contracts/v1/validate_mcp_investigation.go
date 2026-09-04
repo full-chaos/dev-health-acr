@@ -70,6 +70,11 @@ func (r MCPInvestigateQuestionRequest) Validate() error {
 	if err := validateStructureReceiptField("prior_candidate_receipts", r.PriorCandidateReceipts, ContextFabricCandidateOptionReceiptPrefix); err != nil {
 		return err
 	}
+	// Same bound as the HTTP surface's own parent_result_id -- the two
+	// surfaces must never disagree about what this field accepts.
+	if r.ParentResultID != "" && !stringLengthBetween(r.ParentResultID, 8, 256) {
+		return fmt.Errorf("parent_result_id violates v1 bounds")
+	}
 	if len(r.ExpectedKinds) > ContextFabricExpectedKindsMaxCount {
 		return fmt.Errorf("investigate_question expected_kinds exceeds v1 bounds")
 	}

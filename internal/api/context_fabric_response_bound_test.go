@@ -419,7 +419,7 @@ func TestContextFabricInvestigationResultRouteRowsBearingResultFitsProductionRes
 // Rows-bearing fixtures can be stored directly.
 func seedResult3355(t *testing.T, store *memoryinvestigation.Store, orgID string, result contractsv1.ContextFabricInvestigationResult) contractsv1.ContextFabricInvestigationResult {
 	t.Helper()
-	if err := store.Save(context.Background(), storage.Principal{OrgID: orgID}, result, contextfabric.SourceWatermarkSnapshot{}, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0); err != nil {
+	if err := store.Save(context.Background(), storage.Principal{OrgID: orgID}, result, contextfabric.SourceWatermarkSnapshot{}, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""); err != nil {
 		t.Fatalf("seed result: %v", err)
 	}
 	return result

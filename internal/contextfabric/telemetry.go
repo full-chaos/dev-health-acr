@@ -293,8 +293,8 @@ func (t SlogEngineTelemetry) RecordWindowCanonicalization(ctx context.Context, p
 // this stream's own hit-rate denominator (RecordWindowCarry's own doc
 // comment, engine.go, for why it fires only on the carry-eligible
 // population).
-func (t SlogEngineTelemetry) RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int) {
-	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "chain_depth", chainDepth}, requestIDLogAttrs(ctx)...)
+func (t SlogEngineTelemetry) RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource, viaStoredAncestry bool) {
+	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "chain_depth", chainDepth, "seed_source", string(seedSource), "via_stored_ancestry", viaStoredAncestry}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric window carry", args...)
 }
 
@@ -303,9 +303,9 @@ func (t SlogEngineTelemetry) RecordWindowCarry(ctx context.Context, principal st
 // construction -- never a question, subject label, or canonical id. A
 // distinct message from the window carry's so the two axes' hit rates can
 // be counted apart.
-func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind) {
+func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource, viaStoredAncestry bool) {
 	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "chain_depth", chainDepth,
-		"carried_kind", string(carriedKind), "redeemed_kind", string(redeemedKind)}, requestIDLogAttrs(ctx)...)
+		"carried_kind", string(carriedKind), "redeemed_kind", string(redeemedKind), "seed_source", string(seedSource), "via_stored_ancestry", viaStoredAncestry}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric kind carry", args...)
 }
 
@@ -1048,4 +1048,19 @@ func (t SlogEngineTelemetry) RecordPlanCarry(ctx context.Context, principal stor
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric plan carry", args...)
+}
+
+// RecordPlanCarryOutcome (CHAOS-5003) logs at Info, mirroring
+// RecordWindowCarry and RecordKindCarry: a closed outcome vocabulary and a
+// closed seed-source vocabulary, content-safe by construction -- never a
+// question, subject label or family. A DISTINCT message from "context fabric
+// plan carry" above, which fires only on an applied carry: folding the two
+// would make the applied-carry counter and the attempt counter the same
+// number and destroy the hit rate this line exists to publish.
+//
+// source_result_id is empty on every miss and is the origin on a hit -- the
+// join key that ties this line to the applied-carry line for the same turn.
+func (t SlogEngineTelemetry) RecordPlanCarryOutcome(ctx context.Context, principal storage.Principal, outcome PlanCarryOutcome, sourceResultID string, seedSource CarrySeedSource) {
+	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "source_result_id", sourceResultID, "seed_source", string(seedSource)}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric plan carry outcome", args...)
 }
