@@ -166,6 +166,23 @@ type windowCarryResult struct {
 // request.PriorSubjectReceipts: only entries that matched a real candidate
 // in a real, taint-gate-passing prior result), so this function is called
 // with that instead of the raw field.
+// SECOND CALLER, ADDED BY CHAOS-4998 -- read this before changing what this
+// function returns. reuseBypassReason (answer_reuse.go) keys the reuse
+// bypass on this same population, deliberately: the set of requests that
+// must not be served a cached answer IS the set of requests a carry could
+// walk, and every carry runs long after the reuse lookup. Widening what this
+// function collects therefore widens the reuse bypass too, and narrowing it
+// silently reopens the defect CHAOS-4998 closed (a request whose only prior-
+// result reference was a window receipt was served a stored answer produced
+// before that reference existed). That coupling is the point -- a bypass
+// keyed on a hand-copied list of fields is exactly how the two drifted
+// apart in the first place -- but it is invisible from the call site, so it
+// is written down here.
+//
+// reuseBypassReason calls this with a nil validatedSubjectReceipts, which is
+// sound only because it has already returned on a non-empty
+// request.PriorSubjectReceipts; see its own doc comment and the test that
+// pins that ordering.
 func carryReferencedResultIDs(request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt) []string {
 	var ids []string
 	seen := make(map[string]struct{}, 8)

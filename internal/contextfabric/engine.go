@@ -326,6 +326,23 @@ type EngineTelemetry interface {
 	// operator only ever seeing "reuse rarely happens" with no way to
 	// tell why.
 	RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome)
+	// RecordAnswerReuseBypass (CHAOS-4998) reports that ONE Investigate
+	// call never reached the reuse lookup at all, and which of the closed
+	// AnswerReuseBypassReason arms decided that. Deliberately a SEPARATE
+	// counter from RecordAnswerReuse rather than another outcome label on
+	// it: a bypassed request never had a reuse attempt, so counting it as
+	// an outcome would change what RecordAnswerReuse's own hit rate is a
+	// rate OF -- the denominator CHAOS-4831's containment measurement is
+	// read against. The two streams answer different questions ("of the
+	// requests that tried, how many hit" vs "how many never tried, and
+	// why"), and an operator needs both to tell a low hit rate caused by
+	// staleness apart from one caused by a bypass arm firing more often
+	// than expected.
+	//
+	// Emitted BEFORE the bypass is acted on, so the counter and the
+	// decision can never disagree -- the same discipline the compare-and-
+	// drop decision follows.
+	RecordAnswerReuseBypass(ctx context.Context, principal storage.Principal, reason AnswerReuseBypassReason)
 	// RecordAnswerReuseContainment reports the condition-6 containment
 	// MEASUREMENT for one reuse attempt whose evidence leg actually ran
 	// (CHAOS-4831; the differentiation half of the sibling telemetry
@@ -1170,7 +1187,22 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// names. Prior-subject receipts do not (yet) get their own
 	// ReuseKey-folding optimization for the identical reason structure
 	// receipts don't (DP11, above) -- bypass is the v1 answer for both.
-	if len(structureCanon.Confirmed) == 0 && len(request.PriorSubjectReceipts) == 0 {
+	//
+	// CHAOS-4998: the two conditions above are no longer spelled out here.
+	// They were under-inclusive in a way that was invisible from this call
+	// site: `window` is a member of the SAME closed StructureNeedKind
+	// vocabulary the first condition is about, but a window confirmed by
+	// receipt lands in windowCanon.ConfirmedMember rather than in
+	// structureCanon.Confirmed, so a turn that confirmed the window axis --
+	// and therefore names a prior result both carries can walk -- consulted
+	// the cache and could be served an answer produced before that
+	// confirmation existed. reuseBypassReason (answer_reuse.go) states the
+	// whole rule in one place, keyed on the carries' own seed population so
+	// the two cannot drift again, and NAMES the arm that fired so the
+	// bypass stops being a silent branch.
+	if bypass := reuseBypassReason(request, structureCanon); bypass != "" {
+		e.recordReuseBypass(ctx, principal, bypass)
+	} else {
 		if reused, ok := e.tryReuse(ctx, principal, request, clampedRequestTime, windowCanon.KeyComponent, windowCanon.KeyEncoding, binding); ok {
 			// CHAOS-4413 (codex xhigh round-1 P1, confirmed): a reuse hit
 			// can serve a row persisted before Completeness existed --
