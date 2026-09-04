@@ -265,15 +265,14 @@ func (s *ancestryRecordingStore) Save(ctx context.Context, principal storage.Pri
 	return s.staticResultStore.Save(ctx, principal, result, snap, epoch, axisKey, retrieval, prompts, authorities, graphEpoch, parentResultID)
 }
 
-// TestChainIdentity_AncestryIsRecordedEvenWhenTheTurnIsVetoed is the design
+// TestChainIdentity_EverySaveBearingReturnRecordsAncestry is the design
 // review's durability requirement, and it is the part of this ticket most
 // likely to be got wrong by building only what the happy path needs.
 //
 // A request-only parent pointer is not durable chain identity. Ancestry is
-// only walkable if EVERY turn recorded its parent -- and several engine paths
-// return BEFORE any carry runs: the four pre-carry veto/terminal returns and
-// the answer-reuse hit. Those are exactly the paths a reader forgets, because
-// no carry happened on them and nothing about a carry is on screen.
+// only walkable if EVERY turn recorded its parent -- and most engine paths
+// return BEFORE any carry runs. Those are exactly the paths a reader forgets,
+// because no carry happened on them and nothing about a carry is on screen.
 //
 // The failure they cause is not local. A chain whose MIDDLE turn recorded no
 // parent has a hole in it, and every turn after the hole is cut off from
@@ -281,56 +280,115 @@ func (s *ancestryRecordingStore) Save(ctx context.Context, principal storage.Pri
 // middle loses its whole history, which is precisely the situation where the
 // history was worth keeping.
 //
-// COVERAGE LIMIT, stated rather than left to be discovered: this exercises
-// the DECISIVE path and ONE veto path (the structure veto, reached by a kind
-// receipt that names a prior result the store does not hold). The other three
-// Save-bearing returns pass the same helper at the same position and are NOT
-// independently pinned here.
-func TestChainIdentity_AncestryIsRecordedEvenWhenTheTurnIsVetoed(t *testing.T) {
+// ONE ARM PER SAVE-BEARING RETURN. The five arms below are the complete
+// population, and the population came from the COMPILER, not from a grep:
+// adding a required positional parameter to InvestigationResultStore.Save
+// turned "did I find every save site?" into a build error. That also
+// corrected the count -- structureSupersessionVetoResult delegates to
+// structureVetoResult and shares its Save, so there are five sites, not the
+// six a name-keyed sweep suggests.
+//
+// Three arms land on the same no_match status, so status is NOT what tells
+// them apart -- each arm's independence is proven by the stamp-drop mutation
+// matrix (drop ancestry at ONE Save site, exactly that arm goes red), which
+// is recorded in the PR body rather than assumed here.
+func TestChainIdentity_EverySaveBearingReturnRecordsAncestry(t *testing.T) {
 	t.Parallel()
 
-	t.Run("decisive path", func(t *testing.T) {
-		t.Parallel()
-		request, seed := chainIdentityFixture()
-		store := newAncestryRecordingStore(seed)
-		engine := ancestryTestEngine(t, store)
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 
-		result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
-		if err != nil {
-			t.Fatalf("Investigate() error = %v", err)
-		}
-		if got := store.saved[result.ResultID]; got != request.ParentResultID {
-			t.Fatalf("Save recorded parent %q for %q, want %q", got, result.ResultID, request.ParentResultID)
-		}
-	})
+	for _, tc := range []struct {
+		// name identifies the Save-bearing return this arm exercises.
+		name string
+		site string
+		// mutate shapes the request into one that reaches that return.
+		mutate func(*InvestigationRequest)
+		// subjectless routes through the subjectless terminal instead of a
+		// committed-subject answer.
+		subjectless bool
+		// gated uses the interpretation that leaves this turn's window an
+		// inferred class default, which is what the confirmation gate fires on.
+		gated bool
+		// wantStatus is a REACHABILITY GUARD, not the assertion. Without it an
+		// arm whose fixture stopped reaching its intended path would silently
+		// re-test the decisive path and still pass.
+		wantStatus contractsv1.ContextFabricInvestigationStatus
+	}{
+		{
+			name: "decisive answer", site: "engine.go Investigate",
+			mutate: func(*InvestigationRequest) {}, wantStatus: InvestigationComplete,
+		},
+		{
+			name: "structure veto", site: "structure.go structureVetoResult",
+			mutate: func(r *InvestigationRequest) {
+				r.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_absent_00001", ReceiptID: "kindr_absent00001"}}
+			},
+			wantStatus: InvestigationNoMatch,
+		},
+		{
+			name: "window veto", site: "window.go windowVetoResult",
+			mutate: func(r *InvestigationRequest) {
+				r.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: "result_absent_00001", ReceiptID: "winr_absent000001"}}
+			},
+			wantStatus: InvestigationNoMatch,
+		},
+		{
+			name: "subjectless terminal", site: "unresolved.go terminalResult",
+			mutate: func(*InvestigationRequest) {}, subjectless: true, wantStatus: InvestigationNoMatch,
+		},
+		{
+			name: "window confirmation gate", site: "window.go windowConfirmationRequiredResult",
+			mutate: func(*InvestigationRequest) {}, gated: true, wantStatus: InvestigationClarificationRequired,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	t.Run("pre-carry veto path", func(t *testing.T) {
-		t.Parallel()
-		request, seed := chainIdentityFixture()
-		// A kind receipt naming a prior result the store does not hold vetoes
-		// the whole request before any carry runs -- the shape that would
-		// leave a hole in the chain.
-		request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_absent_00001", ReceiptID: "kindr_absent00001"}}
-		store := newAncestryRecordingStore(seed)
-		engine := ancestryTestEngine(t, store)
+			request, seed := chainIdentityFixture()
+			tc.mutate(&request)
+			store := newAncestryRecordingStore(seed)
 
-		result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
-		if err != nil {
-			t.Fatalf("Investigate() error = %v", err)
-		}
-		// Guard: if this stopped being a veto the assertion below would be
-		// testing the decisive path twice and would not know it.
-		if result.Status != InvestigationNoMatch {
-			t.Fatalf("result.Status = %q, want %q -- the fixture must actually reach the veto path for this test to prove anything", result.Status, InvestigationNoMatch)
-		}
-		got, saved := store.saved[result.ResultID]
-		if !saved {
-			t.Fatalf("the vetoed turn %q was never saved, so no ancestry could be recorded for it", result.ResultID)
-		}
-		if got != request.ParentResultID {
-			t.Fatalf("vetoed turn recorded parent %q, want %q: a turn that was vetoed on an unrelated axis still has a real predecessor, and a later turn must be able to walk back THROUGH it", got, request.ParentResultID)
-		}
-	})
+			resolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}
+			if tc.subjectless {
+				resolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
+			}
+			interpretation := InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}
+			if tc.gated {
+				interpretation = bootstrapInterpretation()
+			}
+			fresh := validInvestigationResult()
+
+			engine := mustReuseTestEngine(t, EngineDependencies{
+				Graph: graphReaderStub{resolution: resolution},
+				Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+					return CanonicalFactBundle{}, nil
+				}),
+				Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+					return fresh, nil
+				}),
+				Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+					return interpretation, nil
+				}),
+				Results: store,
+			})
+
+			result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+			if err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			if result.Status != tc.wantStatus {
+				t.Fatalf("Status = %q, want %q -- this arm no longer reaches %s, so it proves nothing about that return", result.Status, tc.wantStatus, tc.site)
+			}
+
+			got, saved := store.saved[result.ResultID]
+			if !saved {
+				t.Fatalf("%s saved no row for %q, so no ancestry could be recorded", tc.site, result.ResultID)
+			}
+			if got != request.ParentResultID {
+				t.Fatalf("%s recorded parent %q, want %q: a turn that returned early still has a real predecessor, and a later turn must be able to walk back THROUGH it", tc.site, got, request.ParentResultID)
+			}
+		})
+	}
 }
 
 func ancestryTestEngine(t *testing.T, store InvestigationResultStore) *Engine {
