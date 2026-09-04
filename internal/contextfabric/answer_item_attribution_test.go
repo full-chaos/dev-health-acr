@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"log/slog"
 	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -163,8 +164,11 @@ func defaultAttributionSpec() attributionFixtureSpec {
 // because that one emits claims only: every charged item lands in the member
 // bucket, three of the four dimensions read zero, and a test over four zeros
 // cannot tell a correct split from a dropped one.
-func attributionEngine(t *testing.T, spec attributionFixtureSpec, sink *bytes.Buffer, options EngineOptions) (*Engine, attributionFixtureSpec) {
+func attributionEngine(t *testing.T, spec attributionFixtureSpec, sink *bytes.Buffer, options EngineOptions, synthesisCohortSizes *[]int) (*Engine, attributionFixtureSpec) {
 	t.Helper()
+	if synthesisCohortSizes == nil {
+		synthesisCohortSizes = &[]int{}
+	}
 
 	cohort := attributionCohort(spec.members)
 	memberRef := cohort.Members[0].Subject
@@ -245,7 +249,21 @@ func attributionEngine(t *testing.T, spec attributionFixtureSpec, sink *bytes.Bu
 				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
 			}, nil
 		}),
-		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+			// RECORD THE COHORT SYNTHESIS WAS GIVEN, per call.
+			//
+			// This is the seam that makes the retry arm's member count
+			// knowable independently. That arm serves no document, so its
+			// measured cohort used to be read off the emitted line -- and a
+			// review showed a mutant could move the line's member count and
+			// its total together and stay inside a bounded check. What
+			// synthesis was HANDED is observed here, before the event
+			// exists, so no edit to the emitter can forge it.
+			members := 0
+			if input.Graph.Cohort != nil {
+				members = len(input.Graph.Cohort.Members)
+			}
+			*synthesisCohortSizes = append(*synthesisCohortSizes, members)
 			return InvestigationResult{
 				Status: InvestigationComplete, DirectJudgment: "Fine.", CurrentState: "Nominal.",
 				StrongestPressures: []string{}, Drivers: drivers, RemainingWork: findings,
@@ -333,7 +351,7 @@ func TestTheServedAnswerLineSaysWhatItsChargedItemsWereAbout(t *testing.T) {
 	t.Parallel()
 	var sink bytes.Buffer
 	spec := defaultAttributionSpec()
-	engine, _ := attributionEngine(t, spec, &sink, budgetStageOptions(200, 0))
+	engine, _ := attributionEngine(t, spec, &sink, budgetStageOptions(200, 0), nil)
 	want := spec.expect(spec.members, spec.candidates)
 
 	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
@@ -396,7 +414,7 @@ func TestARefusalLineAlsoSaysWhatItsChargedItemsWereAbout(t *testing.T) {
 	// A ceiling of one item is under every fixture bucket, so the answer
 	// cannot fit, cannot be narrowed into fitting, and reaches the refusal.
 	spec := defaultAttributionSpec()
-	engine, _ := attributionEngine(t, spec, &sink, budgetStageOptions(1, 0))
+	engine, _ := attributionEngine(t, spec, &sink, budgetStageOptions(1, 0), nil)
 	want := spec.expect(spec.members, spec.candidates)
 
 	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
@@ -527,6 +545,18 @@ func TestEveryUncoveredArmClaimCarriesAReachProbe(t *testing.T) {
 		t.Fatal("the reference probe is not recognised as one; the checker cannot tell a probe from a " +
 			"non-probe, which makes the rule either vacuous or unusable")
 	}
+	// CONTROL 3, the one a review used to defeat the previous rule: a test
+	// that is a probe in every visible respect but is NOT COMPILED. It lives
+	// at answer_item_attribution_neverbuilt_test.go under `//go:build never`.
+	// If it appears here, the probe set came from the filesystem rather than
+	// from the compiler, and a probe that never runs would be accepted as
+	// proof that an arm is unreachable.
+	const neverBuilt = "TestABuildConstrainedProbeMustNotCount"
+	if declared[neverBuilt] || probes[neverBuilt] {
+		t.Fatalf("%s is build-excluded (//go:build never) yet appears in the probe set: the enumeration "+
+			"is reading the filesystem instead of the compiler's view, so a probe that can never run "+
+			"would satisfy an unreachability claim", neverBuilt)
+	}
 }
 
 // TestTheReachProbeShapeIsRecognised is the reference probe: it exists so the
@@ -538,36 +568,46 @@ func TestTheReachProbeShapeIsRecognised(t *testing.T) {
 	assertArmNeverExecuted(t, "reference probe (no arm is currently uncovered)", 0)
 }
 
-// packageTestFunctions returns every Test function in this package's _test.go
-// files, and which of them call assertArmNeverExecuted.
+// packageTestFunctions returns every Test function the COMPILER will build for
+// this package, and which of them call assertArmNeverExecuted.
 //
-// EXACT RECONCILIATION, not a floor. The previous version accepted any walk
-// that found at least five tests, which a partial enumeration passes. This one
-// asserts it parsed EVERY _test.go file the directory holds.
+// THE FILE LIST COMES FROM `go list`, NOT FROM THE FILESYSTEM, and that is the
+// whole point. The previous version walked os.ReadDir and parsed whatever
+// ended in _test.go, without applying build constraints -- so a file tagged
+// `//go:build never` registered as a valid reach probe even though `go test`
+// never compiles it, and a probe that cannot run cannot fail. A review found
+// that; answer_item_attribution_neverbuilt_test.go is the permanent control
+// that keeps it found.
+//
+// `go list` answers with the build context the test binary is actually
+// compiled under, so the probe set is the set that can really execute.
 func packageTestFunctions(t *testing.T) (declared, probes map[string]bool) {
 	t.Helper()
-	entries, err := os.ReadDir(".")
+	const tmpl = `{{range .TestGoFiles}}{{.}}
+{{end}}{{range .XTestGoFiles}}{{.}}
+{{end}}`
+	out, err := exec.Command("go", "list", "-f", tmpl, ".").Output()
 	if err != nil {
-		t.Fatalf("read package directory: %v", err)
+		t.Fatalf("go list -f TestGoFiles: %v", err)
 	}
-	wanted := []string{}
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), "_test.go") {
-			wanted = append(wanted, entry.Name())
+	names := []string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if name := strings.TrimSpace(line); name != "" {
+			names = append(names, name)
 		}
 	}
-	if len(wanted) == 0 {
-		t.Fatal("no _test.go files found; the enumeration is broken and an empty walk would accept any probe name")
+	if len(names) == 0 {
+		t.Fatal("go list reported no test files for this package; the enumeration is broken and an " +
+			"empty probe set would accept any name")
 	}
+
 	fset := token.NewFileSet()
 	declared, probes = map[string]bool{}, map[string]bool{}
-	parsed := 0
-	for _, name := range wanted {
+	for _, name := range names {
 		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
-		parsed++
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || !strings.HasPrefix(fn.Name.Name, "Test") || fn.Body == nil {
@@ -586,9 +626,17 @@ func packageTestFunctions(t *testing.T) (declared, probes map[string]bool) {
 			})
 		}
 	}
-	if parsed != len(wanted) {
-		t.Fatalf("parsed %d of %d _test.go files: a partial enumeration would accept a probe name it "+
-			"never looked for", parsed, len(wanted))
+
+	// EXACT RECONCILIATION against the filesystem, in the direction that
+	// matters: every file go list named must exist, and the files it did NOT
+	// name are the build-excluded ones. A file on disk that go list omits is
+	// the case this whole function exists for, so it is not an error -- but a
+	// file go list names that is missing on disk means the two views have
+	// diverged and neither can be trusted.
+	for _, name := range names {
+		if _, err := os.Stat(name); err != nil {
+			t.Fatalf("go list named %s but it is not on disk: %v", name, err)
+		}
 	}
 	return declared, probes
 }
@@ -606,15 +654,18 @@ type assembledResultArmCase struct {
 	// cohorts of different sizes.
 	spec attributionFixtureSpec
 	// measuresNarrowedCohort says the event measured the RE-SYNTHESIZED
-	// document rather than the one synthesis first ran against. On that arm
-	// the cohort size is a production decision this test does not
-	// independently know, so the member bucket is bounded rather than exact
-	// -- stated here rather than papered over.
+	// document rather than the one synthesis first ran against. That arm's
+	// cohort size is read from the LAST cohort synthesis was handed, captured
+	// at the synthesizer seam -- so it is exact, like every other arm.
 	measuresNarrowedCohort bool
 	// drive runs the scenario. It returns the SERVED result when the arm
 	// serves one, and served=false when the answer was refused or the retry
 	// failed, in which case there is no served document to count.
-	drive func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) (result InvestigationResult, served bool)
+	// drive runs the scenario. It returns the SERVED result when the arm
+	// serves one; when it does not, cohortSizes carries the member count of
+	// every cohort synthesis was handed, observed at the synthesizer seam
+	// before any event exists.
+	drive func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (result InvestigationResult, served bool)
 }
 
 func assembledResultArmCases() []assembledResultArmCase {
@@ -623,8 +674,8 @@ func assembledResultArmCases() []assembledResultArmCase {
 			name:          "measured fit",
 			discriminator: "overrun=fits",
 			spec:          defaultAttributionSpec(),
-			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) (InvestigationResult, bool) {
-				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(200, 0))
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(200, 0), cohortSizes)
 				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
 				if err != nil {
 					t.Fatalf("Investigate() error = %v, want a served answer", err)
@@ -636,8 +687,8 @@ func assembledResultArmCases() []assembledResultArmCase {
 			name:          "planned refusal, nothing to narrow",
 			discriminator: "retry_declined=nothing_to_narrow",
 			spec:          attributionFixtureSpec{members: 1, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 4, memberDrivers: 1},
-			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) (InvestigationResult, bool) {
-				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(1, 0))
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(1, 0), cohortSizes)
 				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
 					t.Fatal("Investigate() returned no error, want a planned budget refusal")
 				}
@@ -648,8 +699,8 @@ func assembledResultArmCases() []assembledResultArmCase {
 			name:          "retry synthesis FAILED",
 			discriminator: "retry_failed=true",
 			spec:          defaultAttributionSpec(),
-			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) (InvestigationResult, bool) {
-				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(10, time.Second))
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(10, time.Second), cohortSizes)
 				attempts := 0
 				engine.synthesizer = chaos4809FailOnSecondCall(engine.synthesizer, &attempts)
 				_, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
@@ -670,8 +721,8 @@ func assembledResultArmCases() []assembledResultArmCase {
 			discriminator:          "retry_attempted=true retry_fit=false retry_failed=false",
 			measuresNarrowedCohort: true,
 			spec:                   attributionFixtureSpec{members: 3, globalFindings: 6, groupDrivers: 4, multiGroupDrivers: 5, memberDrivers: 1},
-			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) (InvestigationResult, bool) {
-				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(10, time.Second))
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(10, time.Second), cohortSizes)
 				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
 					t.Fatal("Investigate() returned no error, want a refusal after a retry that did not fit")
 				}
@@ -689,8 +740,8 @@ func assembledResultArmCases() []assembledResultArmCase {
 				members: 1, globalFindings: 3, groupDrivers: 5, multiGroupDrivers: 6,
 				memberDrivers: 1, candidates: 7,
 			},
-			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) (InvestigationResult, bool) {
-				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(20, 0))
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(20, 0), cohortSizes)
 				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
 				if err != nil {
 					t.Fatalf("Investigate() error = %v, want an answer SERVED by the candidate reduction", err)
@@ -806,7 +857,8 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 		t.Run(one.name, func(t *testing.T) {
 			t.Parallel()
 			var sink bytes.Buffer
-			result, servedDocument := one.drive(t, &sink, one.spec)
+			cohortSizes := []int{}
+			result, servedDocument := one.drive(t, &sink, one.spec, &cohortSizes)
 
 			line := ""
 			for _, candidate := range strings.Split(sink.String(), "\n") {
@@ -829,7 +881,6 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 			// the fixture's own literal.
 			candidatesInDoc := one.spec.candidates
 			membersMeasured := one.spec.members
-			memberExact := true
 			switch {
 			case servedDocument:
 				candidatesInDoc = len(result.SubjectResolution.Candidates)
@@ -837,17 +888,26 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 					membersMeasured = len(result.Cohort.Members)
 				}
 			case one.measuresNarrowedCohort:
-				// The only arm whose measured cohort size is a production
-				// decision with no served document to read it from. Its
-				// member bucket is bounded, not pinned -- said plainly
-				// rather than pinned to a number off the line.
-				memberExact = false
+				// The arm that measures the RE-SYNTHESIZED document and
+				// serves nothing. Its cohort is the LAST one synthesis was
+				// handed -- captured at the synthesizer seam, before any
+				// event exists, so an edit to the emitter cannot move it.
+				// This is what makes the member bucket exact here rather
+				// than bounded: a review showed a bounded check admits a
+				// mutant that raises the member count and the total together.
+				if len(cohortSizes) < 2 {
+					t.Fatalf("this arm must have re-synthesized, so synthesis should have been handed at "+
+						"least two cohorts; it saw %d -- the fixture did not reach the retry", len(cohortSizes))
+				}
+				membersMeasured = cohortSizes[len(cohortSizes)-1]
+				if membersMeasured >= cohortSizes[0] {
+					t.Fatalf("the retry was handed %d members and the first pass %d: the cohort did not "+
+						"narrow, so this arm is not doing what the case claims", membersMeasured, cohortSizes[0])
+				}
 			}
 
 			want := one.spec.expect(membersMeasured, candidatesInDoc)
-			if memberExact {
-				want.assertPairwiseDistinct(t, one.name)
-			}
+			want.assertPairwiseDistinct(t, one.name)
 
 			fields := attributionFieldsOf(t, line)
 
@@ -862,19 +922,10 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 						name, fields[name], want.byBucket()[name], candidatesInDoc, line)
 				}
 			}
-			if memberExact {
-				if fields["member"] != want.member {
-					t.Errorf("attribution_member = %d, want %d -- from the fixture's own items and the %d "+
-						"members the measured document carries, never from this line\nline: %s",
-						fields["member"], want.member, membersMeasured, line)
-				}
-			} else {
-				floor, ceiling := 1+one.spec.memberDrivers, one.spec.members+one.spec.memberDrivers
-				if fields["member"] < floor || fields["member"] >= ceiling {
-					t.Errorf("attribution_member = %d, want in [%d,%d) -- this arm measured a NARROWED cohort, "+
-						"so the exact count is a production decision, but it must be at least one member "+
-						"and fewer than the fixture supplied\nline: %s", fields["member"], floor, ceiling, line)
-				}
+			if fields["member"] != want.member {
+				t.Errorf("attribution_member = %d, want %d -- from the fixture's own items and the %d "+
+					"members the measured document carries, never from this line\nline: %s",
+					fields["member"], want.member, membersMeasured, line)
 			}
 
 			// The line must AGREE with the independent expectation. This is
@@ -902,7 +953,7 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 				t.Errorf("the four attribution dimensions sum to %d but measured_items is %d on the same line: "+
 					"this arm's split describes a different document from its own count\nline: %s", sum, measured, line)
 			}
-			if memberExact && measured != want.total() {
+			if measured != want.total() {
 				t.Errorf("measured_items = %d, want %d from the fixture and the served document\nline: %s",
 					measured, want.total(), line)
 			}
