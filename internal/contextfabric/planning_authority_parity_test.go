@@ -155,26 +155,36 @@ const (
 	// on some cells and carries none of it on its own.
 	causeNotRequiredByAnyObligation lossCause = "not_required_by_any_obligation"
 
-	// causeComputedObligationInputsUndeclared: this frame DOES derive a
-	// computed obligation, and a computed row carries a server STEP but
-	// no fact kinds -- design 13.15.2's R8 row: "`ranking` is COMPUTED
-	// (13.2.3 kinds table), not read". So the derivation cannot currently
-	// say which facts the step consumes, and the lost kinds may be
-	// exactly those inputs.
+	// causeComputedStepInputUnserved: the lost kind IS a declared input of a
+	// computed step this frame derives, and NO read row serves it. Retiring
+	// the authority would remove the only thing planning to read a fact the
+	// computation consumes.
 	//
-	// NOT SUPERIOR. This is the gap that must close before the authority
-	// is retired, and it is the conservative default: any loss on a frame
-	// with a computed obligation lands here, including losses that are
-	// really the previous cause in disguise. Erring toward "not retirable"
-	// is the only safe direction for a proof whose output is a deletion
-	// order.
-	causeComputedObligationInputsUndeclared lossCause = "computed_obligation_inputs_undeclared"
+	// THIS TOKEN REPLACES `computed_obligation_inputs_undeclared`, and the
+	// replacement is the §13.2.3 amendment's whole effect on this proof.
+	// Before the amendment a computed row named its server step and nothing
+	// else, so this classifier could not ask whether a lost kind was an
+	// input -- it had to assume every loss on a frame with a computation
+	// might be one, and said so with a token that named the GAP rather than
+	// the defect. Now the step declares what it consumes, the question is
+	// answerable per cell, and the losses that were never inputs fall
+	// through to the superior cause above.
+	//
+	// STILL NOT SUPERIOR, and deliberately so. Declaring an input makes the
+	// NEED legible; it does not plan a read for it. A cell here is one where
+	// the computation's input is declared and unserved, so retiring the
+	// authority still changes what gets read. Erring toward "not retirable"
+	// remains the only safe direction for a proof whose output is a deletion
+	// order. What must change to clear such a cell is now NAMEABLE, which it
+	// was not before: either a producer serves the kind for that subject, or
+	// the computed step's declared input is planned as a read of its own.
+	causeComputedStepInputUnserved lossCause = "computed_step_input_unserved"
 )
 
 var lossCauses = [...]lossCause{
 	causeUnavailableNamedInstead,
 	causeNotRequiredByAnyObligation,
-	causeComputedObligationInputsUndeclared,
+	causeComputedStepInputUnserved,
 }
 
 // supersedingCauses are the causes under which the derived rows are ruled
@@ -186,36 +196,63 @@ var supersedingCauses = map[lossCause]bool{
 	causeNotRequiredByAnyObligation: true,
 }
 
-// classifyLoss decides the cause from the frame's OWN derived rows.
+// classifyLoss decides the cause from the frame's OWN derived rows and the
+// SPECIFIC kinds this cell lost.
 //
 // It reads the rows rather than the frame's vocabulary, so it cannot
 // disagree with the derivation it is explaining -- and it never consults
 // the authority, so the explanation is not computed by the thing it is
 // about.
-func classifyLoss(rows []contextfabric.DerivedRequirement) lossCause {
+//
+// WHAT THE §13.2.3 AMENDMENT CHANGED HERE, and it is the only reason this
+// function takes `lost` at all. The pre-amendment version could ask only
+// "does this frame derive ANY computation?", because a computed row named no
+// inputs; one computation anywhere meant every loss on the frame had to be
+// treated as a possible input of it. Now the step declares what it consumes,
+// so the question is asked of THE KINDS ACTUALLY LOST, per cell. A loss that
+// is not an input of any computation this frame derives falls through to the
+// superior cause it always belonged to.
+func classifyLoss(rows []contextfabric.DerivedRequirement, lost []contextfabric.FactKind) lossCause {
 	if len(rows) == 0 {
 		// No rows at all is not a shape any frame in the corpus has (O9
 		// fails a frame that derives none), but a future frame that
 		// derived nothing must not read as superior.
-		return causeComputedObligationInputsUndeclared
+		return causeComputedStepInputUnserved
 	}
 	served := 0
-	computed := 0
+	// declaredInputs is the union of every computed row's DECLARED inputs.
+	// Read off the ROWS, never re-derived from the step table: the rows are
+	// what the artifact and any consumer see, so a classifier consulting the
+	// table again could disagree with the thing it claims to explain.
+	declaredInputs := map[contextfabric.FactKind]bool{}
+	// servedByARead is every kind a READ row names. A computed step's input
+	// that appears here is already planned for; one that does not is the
+	// blocking case.
+	servedByARead := map[contextfabric.FactKind]bool{}
 	for _, row := range rows {
 		if row.Served() {
 			served++
 		}
-		if row.Step != "" {
-			computed++
+		for _, kind := range row.InputFactKinds {
+			declaredInputs[kind] = true
+		}
+		for _, kind := range row.FactKinds {
+			servedByARead[kind] = true
 		}
 	}
 	if served == 0 {
 		return causeUnavailableNamedInstead
 	}
-	if computed == 0 {
-		return causeNotRequiredByAnyObligation
+	for _, kind := range lost {
+		if declaredInputs[kind] && !servedByARead[kind] {
+			// One unserved input is enough. A cell that lost several kinds
+			// of which only one is an unserved input still blocks: the
+			// retirement is a single act, and it would take that read with
+			// it.
+			return causeComputedStepInputUnserved
+		}
 	}
-	return causeComputedObligationInputsUndeclared
+	return causeNotRequiredByAnyObligation
 }
 
 // authorityReach says WHEN an authority's inputs exist, which is what
@@ -593,7 +630,7 @@ func computeParityCell(
 		cell.verdict = verdictSubsumed
 	default:
 		cell.verdict = verdictNotSubsumed
-		cell.cause = classifyLoss(rows)
+		cell.cause = classifyLoss(rows, cell.lost)
 	}
 	return cell
 }
@@ -711,7 +748,7 @@ func TestEverySupersedingCauseIsQuotedAgainstARule(t *testing.T) {
 	// The conservative default must NOT be superseding, or every loss on
 	// a frame with a computed obligation would silently authorize a
 	// deletion.
-	if supersedingCauses[causeComputedObligationInputsUndeclared] {
+	if supersedingCauses[causeComputedStepInputUnserved] {
 		t.Error("the conservative default cause is superseding -- the classifier's fallback would authorize retiring an authority")
 	}
 }
@@ -945,32 +982,57 @@ func TestEverySinkAuthorityDeclaresItsArgumentGroup(t *testing.T) {
 // and the ones the fourteen frames cannot reach are driven directly here with
 // constructed inputs:
 //
-//	site                                     branch                    corpus reach
-//	classifyLoss                             len(rows) == 0            NEVER  <- the finding
-//	classifyLoss                             served == 0               B5
-//	classifyLoss                             computed == 0             reached
-//	classifyLoss                             fallthrough               reached
-//	contributeStatusComposition              no coordinates            NEVER
-//	contributeFamilyDefinition               family not found          UNREACHABLE (proven below)
-//	contributeCohortRankingInjection         family not found          UNREACHABLE (proven below)
-//	contributeCohortRankingInjection         non-cohort axis           reached
-//	computeParityCell                        every verdict branch      reached
+//	site                                     branch                              corpus reach
+//	classifyLoss                             len(rows) == 0                      NEVER  <- the finding
+//	classifyLoss                             served == 0                         B5
+//	classifyLoss                             lost kind is an UNSERVED input      C4
+//	classifyLoss                             lost kind is an input, but SERVED   NEVER  <- new, see below
+//	classifyLoss                             fallthrough (not an input at all)   reached
+//	contributeStatusComposition              no coordinates                      NEVER
+//	contributeFamilyDefinition               family not found                    UNREACHABLE (proven below)
+//	contributeCohortRankingInjection         family not found                    UNREACHABLE (proven below)
+//	contributeCohortRankingInjection         non-cohort axis                     reached
+//	computeParityCell                        every verdict branch                reached
 //
 // "UNREACHABLE" is a stronger claim than "never reached", so it carries its
 // own proof rather than a fixture: the family lookup is TOTAL over the closed
 // vocabulary, which makes those two branches provably dead code instead of
 // untested code. Those are different findings and are not collapsed.
+//
+// THE NEW CORPUS-UNREACHABLE BRANCH, recorded rather than left implicit. The
+// §13.2.3 amendment split the old "a computation is present" branch in two:
+// a lost kind that is a declared input AND unserved (blocking), and one that
+// is a declared input but ALREADY SERVED by a read row (not blocking -- the
+// plan reads it anyway, so retiring the authority takes nothing). No corpus
+// frame reaches the second: a kind served by a read row is in `derived`, so
+// it is never in `lost` to begin with. It is driven directly below, because a
+// branch whose only argument for correctness is "the caller cannot reach it"
+// is exactly the shape round 1's surviving mutation lived in.
 // ---------------------------------------------------------------------------
 
 // parityTestRow builds one derived-requirement row with just the fields
 // classifyLoss reads, so a branch can be driven without a frame that
 // produces it.
-func parityTestRow(step contextfabric.ComputedObligationStep, unavailable contextfabric.RequirementUnavailableReason) contextfabric.DerivedRequirement {
-	return contextfabric.DerivedRequirement{Step: step, Unavailable: unavailable}
+//
+// inputs are the computed step's DECLARED inputs and reads are what the row
+// serves; both are needed since the amendment, because the classifier now
+// compares the two rather than merely counting computations.
+func parityTestRow(
+	step contextfabric.ComputedObligationStep,
+	unavailable contextfabric.RequirementUnavailableReason,
+	inputs []contextfabric.FactKind,
+	reads []contextfabric.FactKind,
+) contextfabric.DerivedRequirement {
+	return contextfabric.DerivedRequirement{
+		Step:           step,
+		Unavailable:    unavailable,
+		InputFactKinds: inputs,
+		FactKinds:      reads,
+	}
 }
 
 // TestClassifyLossLandsInEveryBranch drives every branch of the classifier,
-// including the two the corpus cannot produce.
+// including the ones the corpus cannot produce.
 //
 // The zero-rows case asserts the PROPERTY the surviving mutation broke, not
 // merely the current constant: whatever that branch returns, it must not be
@@ -978,9 +1040,13 @@ func parityTestRow(step contextfabric.ComputedObligationStep, unavailable contex
 // pin the letter and miss a future cause that is renamed into the
 // superseding set.
 func TestClassifyLossLandsInEveryBranch(t *testing.T) {
+	health := contextfabric.FactHealth
+	deficiencies := contextfabric.FactOperationalDeficiencies
+
 	cases := []struct {
 		name string
 		rows []contextfabric.DerivedRequirement
+		lost []contextfabric.FactKind
 		want lossCause
 	}{
 		{
@@ -989,41 +1055,75 @@ func TestClassifyLossLandsInEveryBranch(t *testing.T) {
 			// future frame that derived nothing must not read as superior.
 			name: "no rows at all (unreachable from the corpus)",
 			rows: nil,
-			want: causeComputedObligationInputsUndeclared,
+			lost: []contextfabric.FactKind{health},
+			want: causeComputedStepInputUnserved,
 		},
 		{
 			name: "every row unavailable",
-			rows: []contextfabric.DerivedRequirement{parityTestRow("", "no_declaring_producer")},
+			rows: []contextfabric.DerivedRequirement{parityTestRow("", "no_declaring_producer", nil, nil)},
+			lost: []contextfabric.FactKind{health},
 			want: causeUnavailableNamedInstead,
 		},
 		{
 			name: "served reads, no computed obligation",
-			rows: []contextfabric.DerivedRequirement{parityTestRow("", "")},
+			rows: []contextfabric.DerivedRequirement{parityTestRow("", "", nil, []contextfabric.FactKind{health})},
+			lost: []contextfabric.FactKind{deficiencies},
 			want: causeNotRequiredByAnyObligation,
 		},
 		{
-			name: "a computed obligation is present",
-			rows: []contextfabric.DerivedRequirement{parityTestRow("", ""), parityTestRow("rank_cohort", "")},
-			want: causeComputedObligationInputsUndeclared,
+			// THE BLOCKING CASE. The computation declares the lost kind as
+			// an input and no read row serves it, so retiring the authority
+			// would remove the only thing planning to read it.
+			name: "lost kind is an UNSERVED declared input",
+			rows: []contextfabric.DerivedRequirement{
+				parityTestRow("", "", nil, []contextfabric.FactKind{health}),
+				parityTestRow("rank_cohort", "", []contextfabric.FactKind{deficiencies}, nil),
+			},
+			lost: []contextfabric.FactKind{deficiencies},
+			want: causeComputedStepInputUnserved,
 		},
 		{
-			// A mixed frame: some rows unavailable, some served, one
-			// computed. served != 0 so it must not take the unavailable
-			// branch.
-			name: "mixed availability with a computed obligation",
+			// CORPUS-UNREACHABLE: a kind a read row serves is in `derived`,
+			// so it never appears in `lost`. Driven anyway, because the
+			// branch decides a retirement.
+			name: "lost kind is a declared input that a read row already serves",
 			rows: []contextfabric.DerivedRequirement{
-				parityTestRow("", "no_declaring_producer"),
-				parityTestRow("", ""),
-				parityTestRow("membership_cardinality", ""),
+				parityTestRow("", "", nil, []contextfabric.FactKind{deficiencies}),
+				parityTestRow("rank_cohort", "", []contextfabric.FactKind{deficiencies}, nil),
 			},
-			want: causeComputedObligationInputsUndeclared,
+			lost: []contextfabric.FactKind{deficiencies},
+			want: causeNotRequiredByAnyObligation,
+		},
+		{
+			// A computation whose step declares NO fact input cannot make
+			// any loss blocking. This is the branch that clears the counting
+			// frames, and it is the amendment's whole retirement effect.
+			name: "a computation that declares no fact input",
+			rows: []contextfabric.DerivedRequirement{
+				parityTestRow("", "", nil, []contextfabric.FactKind{health}),
+				parityTestRow("membership_cardinality", "", nil, nil),
+			},
+			lost: []contextfabric.FactKind{deficiencies},
+			want: causeNotRequiredByAnyObligation,
+		},
+		{
+			// Several lost kinds, ONE of them an unserved input. The
+			// retirement is a single act, so one is enough to block.
+			name: "mixed loss where only one kind is an unserved input",
+			rows: []contextfabric.DerivedRequirement{
+				parityTestRow("", "no_declaring_producer", nil, nil),
+				parityTestRow("", "", nil, []contextfabric.FactKind{health}),
+				parityTestRow("rank_cohort", "", []contextfabric.FactKind{deficiencies}, nil),
+			},
+			lost: []contextfabric.FactKind{health, deficiencies},
+			want: causeComputedStepInputUnserved,
 		},
 	}
 
 	reached := 0
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := classifyLoss(testCase.rows)
+			got := classifyLoss(testCase.rows, testCase.lost)
 			if got != testCase.want {
 				t.Fatalf("classifyLoss = %q, want %q", got, testCase.want)
 			}
@@ -1036,7 +1136,7 @@ func TestClassifyLossLandsInEveryBranch(t *testing.T) {
 
 	// The property, stated separately from the constant: the branch that
 	// handles a shape nobody has seen must never authorize a retirement.
-	if supersedingCauses[classifyLoss(nil)] {
+	if supersedingCauses[classifyLoss(nil, []contextfabric.FactKind{contextfabric.FactHealth})] {
 		t.Fatal("the zero-rows branch returns a SUPERSEDING cause -- a frame that derives nothing would rule every authority's whole contribution 'superior' and authorize retiring it")
 	}
 }

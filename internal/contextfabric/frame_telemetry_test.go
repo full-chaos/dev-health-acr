@@ -67,6 +67,11 @@ var requirementDerivationLogKeys = map[string]string{
 	"UnavailableCells": "requirement_unavailable_",
 	"Quantifiers":      "requirement_quantifier_",
 	"Roles":            "requirement_role_",
+	// The §13.2.3 amendment's fields. The two arrays use key PREFIXES, one
+	// key per closed-vocabulary member, the same shape as the three above.
+	"ComputedRowsWithDeclaredInputs": "requirement_computed_rows_with_inputs",
+	"ComputedInputClasses":           "requirement_computed_input_class_",
+	"ComputedInputKinds":             "requirement_computed_input_kind_",
 }
 
 // TestEveryRequirementSummaryFieldReachesTheLogLine is the structural half
@@ -345,6 +350,17 @@ func TestFrameValidationTelemetryLeaksNoQuestionContent(t *testing.T) {
 	}
 	for _, role := range SubjectRoleVocabulary() {
 		allowed["requirement_role_"+string(role)] = true
+	}
+	// The §13.2.3 amendment's keys, derived from their vocabularies for the
+	// same reason as the three loops above. Note what is and is not allowed
+	// here: a COUNT per closed-vocabulary fact kind, never a kind LIST --
+	// a list would carry the cardinality and ordering this event exists to
+	// keep out.
+	for _, class := range ComputedStepInputClassVocabulary() {
+		allowed["requirement_computed_input_class_"+string(class)] = true
+	}
+	for _, kind := range contractsv1.ContextFabricFactKindVocabulary() {
+		allowed["requirement_computed_input_kind_"+string(kind)] = true
 	}
 	for key := range records[0] {
 		if !allowed[key] {

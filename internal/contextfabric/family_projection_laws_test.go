@@ -368,6 +368,15 @@ var requirementFieldSources = map[string]string{
 	"Quantifier":  "the obligation's measured serving cardinality",
 	"Unavailable": "the cause attribution over the registry declarations",
 	"Dimensions":  "the serving FactKinds' FactCapability.Dimension declarations",
+	// The §13.2.3 amendment. Both derive from the SAME single source -- the
+	// step's input declaration -- and they are two fields rather than one
+	// for the reason L3 prefers a split: the class answers "where do the
+	// inputs come from" and the kinds answer "which ones", and a step that
+	// reads no fact has an answer to the first and none to the second. One
+	// field would have to encode "reads nothing" as an empty list, which is
+	// indistinguishable from "not declared yet".
+	"InputClass":     "the computed step's declared input class",
+	"InputFactKinds": "the computed step's declared input fact kinds",
 }
 
 // TestLawL5EveryRequirementFieldNamesADerivationRule is law L5.

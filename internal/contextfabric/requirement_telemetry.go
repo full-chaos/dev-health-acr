@@ -1,5 +1,9 @@
 package contextfabric
 
+import (
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
+
 // Telemetry for the obligation -> requirement derivation. Design §13.15's
 // telemetry bar: rows, cells, and unavailable reasons as CLOSED TOKENS.
 //
@@ -60,6 +64,33 @@ type RequirementDerivationSummary struct {
 	// SubjectRoleVocabulary position.
 	Roles [SubjectRoleCount]int
 
+	// ComputedRowsWithDeclaredInputs is how many computed rows carried an
+	// input declaration -- the denominator for the two arrays below, and
+	// the number an operator reads to tell "no computed row declared
+	// inputs" from "no computed row was derived at all".
+	ComputedRowsWithDeclaredInputs int
+	// ComputedInputClasses counts declared computed rows per input class,
+	// indexed by ComputedStepInputClassVocabulary position.
+	ComputedInputClasses [ComputedStepInputClassCount]int
+	// ComputedInputKinds counts, per fact kind, how many computed rows
+	// declared that kind as an INPUT. Indexed by the contracts' closed
+	// fact-kind vocabulary position.
+	//
+	// A HISTOGRAM, NOT A LIST, and the distinction is this file's own rule
+	// rather than a workaround for it. "No fact-kind list" above forbids a
+	// variable-length per-row list, which would carry cardinality and let a
+	// reader correlate a row with a subject. A fixed-length count over the
+	// closed vocabulary carries neither, and it gives the property the
+	// other arrays here exist for: a kind no step consumes is present and
+	// ZERO, so "nothing declared this kind" is an observed zero rather than
+	// an absent key.
+	//
+	// This is what makes the amendment's resolved inputs readable from the
+	// run's own artifacts, which is the same-change telemetry bar. The
+	// consumer is FrameValidationEvent.RequirementDerivation
+	// (frame_telemetry.go), already recorded on every validated frame.
+	ComputedInputKinds [contractsv1.ContextFabricFactKindCount]int
+
 	// Version is RequirementDerivationVersion, so an event can be read
 	// against the table that produced it.
 	Version string
@@ -92,6 +123,22 @@ func RequirementDerivationSummaryFrom(rows []DerivedRequirement) RequirementDeri
 		if index, ok := subjectRoleIndex(row.Role); ok {
 			summary.Roles[index]++
 		}
+		// Counted off the ROW, not re-derived from the step: the row is
+		// what a persisted artifact and the parity proof read, so telemetry
+		// that consulted the table again could disagree with the thing it
+		// claims to describe.
+		if row.InputClass == "" {
+			continue
+		}
+		summary.ComputedRowsWithDeclaredInputs++
+		if index, ok := computedStepInputClassIndex(row.InputClass); ok {
+			summary.ComputedInputClasses[index]++
+		}
+		for _, kind := range row.InputFactKinds {
+			if index, ok := factKindIndex(kind); ok {
+				summary.ComputedInputKinds[index]++
+			}
+		}
 	}
 	return summary
 }
@@ -118,6 +165,15 @@ func unavailableReasonIndex(value RequirementUnavailableReason) (int, bool) {
 
 func quantifierIndex(value CompletionQuantifier) (int, bool) {
 	for index, member := range completionQuantifiers {
+		if member == value {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+func computedStepInputClassIndex(value ComputedStepInputClass) (int, bool) {
+	for index, member := range computedStepInputClasses {
 		if member == value {
 			return index, true
 		}

@@ -418,16 +418,197 @@ type ComputedObligationStep string
 
 const (
 	// ComputedStepRankCohort is RankCohort's five-signal ordering. It
-	// depends on the read obligation principal_drivers.
+	// consumes five NAMED FACT KINDS, one per signal family -- see
+	// computedStepInputs, which declares them, and the note there on the
+	// earlier claim that this step "depends on the read obligation
+	// principal_drivers". It does not read an obligation.
 	ComputedStepRankCohort ComputedObligationStep = "rank_cohort"
 	// ComputedStepMembershipCardinality counts the discovered, scoped or
-	// grouped member set. It depends on membership, not on a fact read.
+	// grouped member set. It consumes NO fact -- declared positively as
+	// ComputedInputResolvedMemberSet rather than as an empty kinds list, so
+	// that "reads nothing" cannot be read as "nothing declared yet".
 	ComputedStepMembershipCardinality ComputedObligationStep = "membership_cardinality"
 )
 
 var computedObligationSteps = map[AnswerObligation]ComputedObligationStep{
 	ObligationRanking: ComputedStepRankCohort,
 	ObligationCount:   ComputedStepMembershipCardinality,
+}
+
+// computedObligationStepVocabulary is the closed step list, in design order.
+//
+// A fixed-length array rather than a slice for the reason the telemetry
+// arrays give: a step added to the vocabulary changes the array length, and
+// every read of it fails to compile rather than silently counting one fewer
+// member.
+var computedObligationStepVocabulary = [...]ComputedObligationStep{
+	ComputedStepRankCohort,
+	ComputedStepMembershipCardinality,
+}
+
+// ComputedObligationStepCount is two.
+const ComputedObligationStepCount = len(computedObligationStepVocabulary)
+
+// ComputedObligationStepVocabulary returns the closed step list.
+func ComputedObligationStepVocabulary() [ComputedObligationStepCount]ComputedObligationStep {
+	return computedObligationStepVocabulary
+}
+
+// ComputedStepInputClass says WHERE a computed step's inputs come from.
+//
+// THE AMENDMENT TO §13.2.3, AND WHY IT NEEDS A CLASS RATHER THAN JUST A LIST.
+// §13.2.3 required a computed obligation to name its server STEP and stopped
+// there, so a computed requirement row could say what would satisfy it and
+// never what it consumes. The six-authority parity proof could therefore not
+// rule that a lost fact kind was NOT an input of a computed step, and had to
+// treat every loss on such a frame as possibly load-bearing -- which is why
+// no authority was retirable on that evidence.
+//
+// A bare kinds list would not close it. The two live steps do not have the
+// same SHAPE of input: rank_cohort consumes canonical facts, and
+// membership_cardinality consumes the resolved member set and reads no fact
+// at all. Spelling the second as "an empty kinds list" would make it read
+// exactly like "nobody has declared this yet" -- the silent emptiness this
+// whole seam exists to forbid, reproduced inside its own fix. The class makes
+// "consumes no fact" a POSITIVE statement.
+//
+// Closed vocabulary, telemetry-safe: these are class names, never prose.
+type ComputedStepInputClass string
+
+const (
+	// ComputedInputFactKinds: the step consumes already-read canonical
+	// facts, of the kinds it names.
+	ComputedInputFactKinds ComputedStepInputClass = "fact_kinds"
+	// ComputedInputResolvedMemberSet: the step consumes the resolved member
+	// set and reads no fact. A kind lost on a frame whose only computation
+	// is of this class is therefore not an input of anything, which is what
+	// lets the parity proof rule on the loss instead of assuming.
+	ComputedInputResolvedMemberSet ComputedStepInputClass = "resolved_member_set"
+)
+
+var computedStepInputClasses = [...]ComputedStepInputClass{
+	ComputedInputFactKinds,
+	ComputedInputResolvedMemberSet,
+}
+
+// ComputedStepInputClassCount is two.
+const ComputedStepInputClassCount = len(computedStepInputClasses)
+
+// ComputedStepInputClassVocabulary returns the closed class list.
+func ComputedStepInputClassVocabulary() [ComputedStepInputClassCount]ComputedStepInputClass {
+	return computedStepInputClasses
+}
+
+// ValidComputedStepInputClass reports membership. The empty value is not a
+// member, so an undeclared row and a declared one are distinguishable.
+func ValidComputedStepInputClass(value ComputedStepInputClass) bool {
+	for _, member := range computedStepInputClasses {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
+// ComputedStepInputs is what a computed step CONSUMES.
+//
+// FactKinds is non-empty exactly when Class is ComputedInputFactKinds; the
+// registry test asserts both directions, because a fact-reading step with no
+// kinds is an undeclared input wearing a declaration.
+type ComputedStepInputs struct {
+	Class     ComputedStepInputClass
+	FactKinds []FactKind
+}
+
+// computedStepInputs is the declaration table.
+//
+// rank_cohort's kinds are cohortRankingFormulaKinds ITSELF, not a copy of it.
+// That set is RankCohort's five signal families -- investmentMixSignal reads
+// FactInvestment, healthRiskSignal FactHealth, deficiencySeveritySignal
+// FactOperationalDeficiencies, readinessGapSignal FactReadiness,
+// workloadPressureSignal FactWorkload -- and it is already named once in this
+// package, where the engine's unconditional cohort injection reads it. Two
+// hand-maintained copies of one formula's inputs would drift, and this
+// package has paid for that shape more than once.
+//
+// A CORRECTION THIS TABLE RECORDS. ComputedStepRankCohort's own comment said
+// it "depends on the read obligation principal_drivers". RankCohort reads no
+// obligation: it reads five named fact kinds directly, and principal_drivers
+// is served by a different and wider set. The declaration is built from what
+// the step EXECUTES, and the docstring is corrected to match rather than the
+// other way round.
+var computedStepInputs = map[ComputedObligationStep]ComputedStepInputs{
+	ComputedStepRankCohort: {
+		Class:     ComputedInputFactKinds,
+		FactKinds: cohortRankingFormulaKinds,
+	},
+	ComputedStepMembershipCardinality: {
+		Class: ComputedInputResolvedMemberSet,
+	},
+}
+
+// InputsForComputedStep returns what a computed step consumes, and whether
+// the step is declared at all.
+//
+// The returned FactKinds is a COPY, sorted in fact-kind vocabulary order.
+// Both matter: the backing array is cohortRankingFormulaKinds, which the
+// ENGINE reads when it injects the cohort ranking requirements, so a caller
+// that sorted the returned slice in place would reorder what production plans
+// to read. Sorting here rather than at each call site means the requirement
+// rows, the regenerated artifact and the telemetry histogram all see one
+// order, which is what makes two runs of one frame diffable.
+func InputsForComputedStep(step ComputedObligationStep) (ComputedStepInputs, bool) {
+	declared, ok := computedStepInputs[step]
+	if !ok {
+		return ComputedStepInputs{}, false
+	}
+	return ComputedStepInputs{
+		Class:     declared.Class,
+		FactKinds: sortedFactKinds(declared.FactKinds),
+	}, true
+}
+
+// sortedFactKinds returns a deduplicated copy in fact-kind VOCABULARY order.
+//
+// Vocabulary order, not lexical: it is the order every other closed-vocabulary
+// rendering in this package uses, and a kind renamed in a later contract
+// revision must not silently reorder a persisted artifact.
+func sortedFactKinds(kinds []FactKind) []FactKind {
+	if len(kinds) == 0 {
+		return nil
+	}
+	seen := make(map[FactKind]bool, len(kinds))
+	out := make([]FactKind, 0, len(kinds))
+	for _, member := range contractsv1.ContextFabricFactKindVocabulary() {
+		for _, kind := range kinds {
+			if kind == member && !seen[member] {
+				seen[member] = true
+				out = append(out, member)
+			}
+		}
+	}
+	// A kind outside the closed vocabulary would otherwise vanish here,
+	// which would make a declaration error read as a shorter list. Append
+	// any such kind in input order so the totality test can see it.
+	for _, kind := range kinds {
+		if !seen[kind] {
+			seen[kind] = true
+			out = append(out, kind)
+		}
+	}
+	return out
+}
+
+// factKindIndex resolves a kind's position in the closed vocabulary, for the
+// telemetry histogram. The second return distinguishes "index 0" from "not a
+// member", which a bare int cannot.
+func factKindIndex(value FactKind) (int, bool) {
+	for index, member := range contractsv1.ContextFabricFactKindVocabulary() {
+		if member == value {
+			return index, true
+		}
+	}
+	return 0, false
 }
 
 // StepForComputedObligation returns the server step for a computed
