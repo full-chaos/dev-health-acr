@@ -203,9 +203,17 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		// silent drop this field exists to close.
 		PriorSubjectReceiptDispositions: append([]contractsv1.ContextFabricPriorSubjectReceiptEntry(nil), result.SubjectResolution.PriorSubjectReceiptDispositions...),
 		RenderShapes:                    renderShapes,
-		// Completeness (CHAOS-4413): copied verbatim, never re-derived from
-		// this projection's own budget-clamped KeyFacts -- see
-		// ContextFabricAnswerCompleteness's own doc comment.
+		// Completeness (CHAOS-4413): the CENSUS half is still copied
+		// verbatim and never re-derived from this projection's own
+		// budget-clamped KeyFacts -- the counts describe the canonical
+		// answer, which is the question they answer.
+		//
+		// The OUTCOME half is not copied through unchanged. This
+		// projection narrows the document after the canonical block was
+		// stamped, so appendProjectionOutcomes below appends a row per cut
+		// it makes and re-derives the state from the whole set. Copying a
+		// state across a surface that narrows again is how a served answer
+		// comes to claim a completeness its own document contradicts.
 		Completeness: result.Completeness,
 	}
 	projection.ProjectionBudget = contractsv1.ContextFabricProjectionBudget{
@@ -232,7 +240,10 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	if projection.CommittedSubjects == nil {
 		projection.CommittedSubjects = []contractsv1.ContextFabricSubjectRef{}
 	}
-	return projection
+	// AFTER the budget is final, and after every cut this function makes.
+	// Order is the mechanism: a row appended before the last cut would
+	// describe a document that is not the one served.
+	return appendProjectionOutcomes(projection)
 }
 
 // MarkFullResultOmitted records that a caller asked for the full canonical
@@ -249,6 +260,15 @@ func MarkFullResultOmitted(projection *contractsv1.ContextFabricAnswerProjection
 	}
 	projection.ProjectionBudget.FullResultOmitted = true
 	projection.ProjectionBudget.Truncated = true
+	// This runs AFTER Project has already appended and derived, so the drop
+	// it records is appended here rather than there -- and the state is
+	// re-derived, because a projection that dropped the caller's requested
+	// copy and left the state alone would be the copied-completeness defect
+	// in the one place it is easiest to miss: a mutator, outside the
+	// function that owns the invariant.
+	projection.Completeness.Outcomes = append(projection.Completeness.Outcomes,
+		projectionOutcomeRow(contractsv1.ContextFabricAnswerImpactDepth, 1))
+	projection.Completeness.State = contractsv1.DeriveContextFabricAnswerCompletenessState(projection.Completeness.Outcomes)
 }
 
 func declaresDrop(budget contractsv1.ContextFabricProjectionBudget) bool {

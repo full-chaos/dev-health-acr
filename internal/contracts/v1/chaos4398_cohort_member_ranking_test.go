@@ -634,6 +634,7 @@ func baseCohortResultWithClaims(driver ContextFabricCohortMemberDriver, claims [
 		},
 		Completeness: ContextFabricAnswerCompleteness{
 			TerminalStatus: ContextFabricInvestigationComplete, ClaimedFactsCount: len(claims), RowsCount: rows,
+			State: ContextFabricAnswerCompletenessNotDerived,
 		},
 	}
 }

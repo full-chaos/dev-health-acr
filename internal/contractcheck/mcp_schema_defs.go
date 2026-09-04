@@ -48,11 +48,16 @@ var contextFabricCommonDefsRewrites = map[string]string{
 	"#/$defs/CommitDecisionDigest": "#/$defs/context_fabric_common.v1/$defs/CommitDecisionDigest",
 	"#/$defs/FactRequirement":      "#/$defs/context_fabric_common.v1/$defs/FactRequirement",
 	"#/$defs/RelationshipEdge":     "#/$defs/context_fabric_common.v1/$defs/RelationshipEdge",
-	"#/$defs/ScalarValue":          "#/$defs/context_fabric_common.v1/$defs/ScalarValue",
-	"#/$defs/SubjectCandidate":     "#/$defs/context_fabric_common.v1/$defs/SubjectCandidate",
-	"#/$defs/SubjectHint":          "#/$defs/context_fabric_common.v1/$defs/SubjectHint",
-	"#/$defs/SubjectRef":           "#/$defs/context_fabric_common.v1/$defs/SubjectRef",
-	"#/$defs/TimeContext":          "#/$defs/context_fabric_common.v1/$defs/TimeContext",
+	// S7c: AnswerCompleteness.outcomes[] points at this row definition, so
+	// it needs the same relocation every other locally-$ref'd def gets --
+	// without it an offline client resolves the pointer against the
+	// WRAPPER's root, where nothing of that name exists.
+	"#/$defs/PlanRequirementOutcomeRow": "#/$defs/context_fabric_common.v1/$defs/PlanRequirementOutcomeRow",
+	"#/$defs/ScalarValue":               "#/$defs/context_fabric_common.v1/$defs/ScalarValue",
+	"#/$defs/SubjectCandidate":          "#/$defs/context_fabric_common.v1/$defs/SubjectCandidate",
+	"#/$defs/SubjectHint":               "#/$defs/context_fabric_common.v1/$defs/SubjectHint",
+	"#/$defs/SubjectRef":                "#/$defs/context_fabric_common.v1/$defs/SubjectRef",
+	"#/$defs/TimeContext":               "#/$defs/context_fabric_common.v1/$defs/TimeContext",
 	// CHAOS-3900 W1: five more locally-$ref'd defs (TimeContext.evidence_window
 	// -> RequestedEvidenceWindow; RequestedEvidenceWindow/EffectiveEvidenceWindow/
 	// WindowOption -> RelativeWindowID; WindowClarification -> WindowOption).
@@ -223,6 +228,9 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	"#/$defs/RenderShapeRule":    "#/$defs/context_fabric_answer_projection.v1/$defs/RenderShapeRule",
 	// CHAOS-4413: completeness' own new projection-local $defs entry.
 	"#/$defs/AnswerCompleteness": "#/$defs/context_fabric_answer_projection.v1/$defs/AnswerCompleteness",
+	// S7c: the row AnswerCompleteness.outcomes[] points at, relocated the
+	// same way for the same reason.
+	"#/$defs/PlanRequirementOutcomeRow": "#/$defs/context_fabric_answer_projection.v1/$defs/PlanRequirementOutcomeRow",
 	// CHAOS-4636: the grouped cohort's own new projection-local $defs entry.
 	"#/$defs/ProjectedCohortGroup": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedCohortGroup",
 	// CHAOS-4690: coverage_details' own new projection-local $defs entry.

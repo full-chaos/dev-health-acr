@@ -23,11 +23,28 @@ func ComputeAnswerCompleteness(result InvestigationResult) contractsv1.ContextFa
 	for _, fact := range result.ClaimedFacts {
 		rows += len(fact.Rows)
 	}
+	// The outcome set is CARRIED, never rebuilt here, and the state is
+	// DERIVED from it on every call.
+	//
+	// That is the whole ordering discipline of the outcome layer in two
+	// lines. Stages append rows to the block; this function runs last, at
+	// the surface that serves the answer, and computes the state from
+	// whatever the set holds by then. Because it re-derives rather than
+	// copies, a stage that narrows the document after an earlier
+	// completeness was stamped cannot leave a stale state behind -- the
+	// narrowing is itself a row, and the state moves with it.
+	//
+	// It also means this function must never DROP rows: rebuilding the
+	// block without them would silently delete another stage's disclosure,
+	// which is the one thing the append invariant forbids.
+	outcomes := result.Completeness.Outcomes
 	return contractsv1.ContextFabricAnswerCompleteness{
 		TerminalStatus:    result.Status,
 		TerminalReason:    answerTerminalReason(result),
 		ClaimedFactsCount: len(result.ClaimedFacts),
 		RowsCount:         rows,
+		State:             contractsv1.DeriveContextFabricAnswerCompletenessState(outcomes),
+		Outcomes:          outcomes,
 	}
 }
 

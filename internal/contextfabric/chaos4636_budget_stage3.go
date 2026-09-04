@@ -149,13 +149,27 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		declined = RetryDeclinedInsufficientDeadline
 	}
 	if declined != RetryDeclinedNotApplicable {
+		// Before refusing: the cohort lever declined, but the cohort is
+		// not the only thing charged against the item budget. Narrow what
+		// CAN be narrowed without orphaning prose, disclose it by name,
+		// and serve.
+		//
+		// This is the arm the acceptance question lands on. A
+		// single-subject investigation has no cohort, so `declined` is
+		// always nothing_to_narrow here and the refusal was reached
+		// without any content reduction ever being attempted.
+		attempt := e.planCandidateNarrowing(plan, params.Frame, result, budget, measurement, overrun)
+		if attempt.Served {
+			e.recordCandidateNarrowing(ctx, principal, plan, attempt, overrun, grouped, narrowed.Basis, before, after, declined, false, false)
+			return attempt.Result, firstPass, nil
+		}
 		// CHAOS-4809 PATH 2: BOTH counts, as narrowSynthesisInput actually
 		// computed them. This used to pass `before` for both, so a refusal
 		// that had already run a real overlap-aware set-cover selection
 		// published it as a no-op -- the basis field naming an order and the
 		// count pair denying that anything happened, with no way for a
 		// reader to tell which to believe.
-		return InvestigationResult{}, assemblyTelemetry{}, e.planRefusal(ctx, principal, plan, measurement, overrun, false, grouped, narrowed.Basis, before, after, declined)
+		return InvestigationResult{}, assemblyTelemetry{}, e.planRefusal(ctx, principal, plan, measurement, overrun, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined)
 	}
 
 	e.recordPlanNarrowingStep(plan, PlanNarrowing{
@@ -221,6 +235,30 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		return InvestigationResult{}, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("measure re-synthesized result: %w", err))
 	}
 	retryOverrun := retryMeasurement.Overrun(budget)
+	// The outcome layer's attempt runs BEFORE this event is built, because
+	// the event's own `refusal_planned` field is a claim about what happens
+	// next. Emitting it first published refusal_planned=true for every
+	// investigation the reduction went on to SERVE with a 200 -- a refusal
+	// counter counting answers that were never refused, and the exact
+	// telemetry-describes-a-different-artifact class the deferred emitters
+	// in this file already fix elsewhere.
+	outcomeAttempt := outcomeNarrowingAttempt{}
+	if retryOverrun != contractsv1.ContextFabricBudgetFits {
+		outcomeAttempt = e.planCandidateNarrowing(plan, params.Frame, retried, budget, retryMeasurement, retryOverrun)
+	}
+	// ONE decision event per investigation. When the reduction rescues a
+	// retry that did not fit, the event that describes the SERVED answer is
+	// recordCandidateNarrowing's, so emitting this one too would count the
+	// same investigation twice -- exactly the contract this function's own
+	// header states, broken by the reordering above. Found by adversarial
+	// review; the first version of that test counted only the narrowing
+	// events and so could not see the extra one.
+	if outcomeAttempt.Served {
+		e.recordCandidateNarrowing(ctx, principal, plan, outcomeAttempt, retryOverrun, grouped, narrowed.Basis, before, after, RetryDeclinedNotApplicable, true, false)
+		retryRanked := narrowed.Ranked
+		retryPending.CohortRanked = &retryRanked
+		return outcomeAttempt.Result, retryPending, nil
+	}
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, narrowed.Basis)
 	event.MeasuredItems = retryMeasurement.Items.Budgeted()
 	event.MeasuredBytes = retryMeasurement.Bytes
@@ -231,7 +269,12 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	event.RetryAttempted = true
 	event.RetryFit = retryOverrun == contractsv1.ContextFabricBudgetFits
 	event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+	// The reduction did not serve -- that path returned above -- so a retry
+	// that did not fit is a planned refusal.
 	event.RefusalPlanned = !event.RetryFit
+	// WHY the outcome layer did not save it: "the lever did not apply" and
+	// "the lever ran and was not enough" are different operator problems.
+	event.OutcomeReductionDeclined = outcomeAttempt.Declined
 	if event.RefusalPlanned {
 		// Only when a refusal is actually planned. Recording the axis on a
 		// fitting retry would make the counter say the caller was given
@@ -241,6 +284,10 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	e.recordPlanNarrowing(ctx, principal, event)
 
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
+		// The rescued case returned above, before this event was emitted.
+		// What is left is a retry that did not fit and a reduction that
+		// could not save it.
+		//
 		// ONE bounded retry, never k of them. Decision D5 rejected further
 		// retries explicitly: they inherit the same deadline problem and
 		// merely move the terminal case, arriving at the same unanswered
@@ -410,7 +457,7 @@ func (e *Engine) retryDeadlineAvailable(ctx context.Context) bool {
 // false -- the selection was computed and then discarded -- and a reader
 // needs both halves, because "we would have narrowed to four" and "we
 // answered over four" are different statements about the run.
-func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason) error {
+func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason, reductionDeclined OutcomeReductionDeclined) error {
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, selected, grouped, false, overrun, basis)
 	event.MeasuredItems = measurement.Items.Budgeted()
 	event.MeasuredBytes = measurement.Bytes
@@ -424,6 +471,11 @@ func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, p
 	event.RefusalPlanned = true
 	event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 	event.RetryDeclined = declined
+	// WHY the outcome layer did not save this answer. Without it the refusal
+	// says only that one happened, and "the byte axis overran", "there were
+	// no candidates", and "the candidate cut ran and was not enough" are one
+	// undifferentiated absence.
+	event.OutcomeReductionDeclined = reductionDeclined
 	event.NarrowerContinuationAxis = narrowerContinuationAxisFor(*plan)
 	e.recordPlanNarrowing(ctx, principal, event)
 	return e.refusalFrom(plan, measurement, overrun, retryAttempted)

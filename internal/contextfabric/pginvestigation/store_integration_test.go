@@ -33,7 +33,7 @@ import (
 // actually test.
 func validResult(resultID string) contextfabric.InvestigationResult {
 	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project-" + resultID, Label: "Project " + resultID}
-	return contextfabric.InvestigationResult{
+	built := contextfabric.InvestigationResult{
 		SchemaVersion: contextfabric.InvestigationResultSchemaV1,
 		ResultID:      resultID,
 		RequestID:     "request-" + resultID,
@@ -62,9 +62,15 @@ func validResult(resultID string) contextfabric.InvestigationResult {
 			ServiceVersion: "test", ContractVersion: contextfabric.InvestigationResultSchemaV1, Backend: "test",
 			ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1", ModelIdentity: "test/model-v1",
 		},
-		Warnings:     []string{},
-		Completeness: contextfabric.AnswerCompleteness{TerminalStatus: contextfabric.InvestigationComplete},
+		Warnings: []string{},
 	}
+	// From the PRODUCER, not by hand. The block's `state` is a closed
+	// vocabulary whose Go zero value is not a member, so an omitted state
+	// is an invalid fixture that reads as a complete one -- and this file's
+	// own header already requires every fixture here to satisfy
+	// InvestigationResult.Validate().
+	built.Completeness = contextfabric.ComputeAnswerCompleteness(built)
+	return built
 }
 
 func newInvestigationTestDatabase(t *testing.T, ctx context.Context) *sql.DB {

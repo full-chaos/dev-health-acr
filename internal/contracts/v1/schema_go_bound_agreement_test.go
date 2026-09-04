@@ -452,6 +452,16 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// Validate numerically checks; the values below already agree with
 		// Go today. A genuine schema/Go value disagreement found during the
 		// audit is NOT here -- see knownDisagreements below.
+		// S7c outcome layer. Every one of these is numerically checked by
+		// Go: validateAnswerOutcomes bounds the set against
+		// ContextFabricPlanRequirementOutcomeMaxCount, and
+		// ValidateContextFabricPlanRequirementOutcomeRow bounds the two
+		// identity strings and rejects a negative served or declared.
+		"common#$defs.AnswerCompleteness.properties.outcomes.maxItems":                 200,
+		"common#$defs.PlanRequirementOutcomeRow.properties.requirement.maxLength":      256,
+		"common#$defs.PlanRequirementOutcomeRow.properties.obligation.maxLength":       64,
+		"common#$defs.PlanRequirementOutcomeRow.properties.served.minimum":             0,
+		"common#$defs.PlanRequirementOutcomeRow.properties.declared.minimum":           0,
 		"common#$defs.AcceptedGrammar.properties.pattern_id.maxLength":                 128,
 		"common#$defs.AcceptedGrammar.properties.pattern_id.minLength":                 1,
 		"common#$defs.AnchorBoundReceipt.properties.receipt_id.maxLength":              256,

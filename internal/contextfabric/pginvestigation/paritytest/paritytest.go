@@ -83,7 +83,7 @@ func ValidResult(resultID, question string) contextfabric.InvestigationResult {
 // care about its content.
 func result(resultID, question string) contextfabric.InvestigationResult {
 	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project-" + resultID, Label: "Project " + resultID}
-	return contextfabric.InvestigationResult{
+	built := contextfabric.InvestigationResult{
 		SchemaVersion: contextfabric.InvestigationResultSchemaV1,
 		ResultID:      resultID,
 		RequestID:     "request-" + resultID,
@@ -112,9 +112,20 @@ func result(resultID, question string) contextfabric.InvestigationResult {
 			ServiceVersion: "test", ContractVersion: contextfabric.InvestigationResultSchemaV1, Backend: "test",
 			ProjectionVersion: "v1", QueryVersion: "v1", InterpretationVersion: "v1", SynthesisVersion: "v1", CanonicalServiceVersion: "v1", ModelIdentity: "test/model-v1",
 		},
-		Warnings:     []string{},
-		Completeness: contextfabric.AnswerCompleteness{TerminalStatus: contextfabric.InvestigationComplete},
+		Warnings: []string{},
 	}
+	// The completeness block comes from ITS PRODUCER, never hand-built.
+	//
+	// Hand-building it means naming every required field from memory, and
+	// the block's own `state` is a closed vocabulary whose Go ZERO VALUE is
+	// not a member -- so a fixture that simply omits it is invalid in a way
+	// a reader cannot see. That is what happened: this fixture set an empty
+	// state and every parity case failed on save with `completeness state ""
+	// is not a vocabulary member`, in CI's container job only, because the
+	// store validates on the way in. Calling the producer means the next
+	// required field this block gains arrives here for free.
+	built.Completeness = contextfabric.ComputeAnswerCompleteness(built)
+	return built
 }
 
 // Cases is the shared parity table: save+get roundtrip, cross-org

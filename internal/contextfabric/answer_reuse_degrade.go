@@ -617,7 +617,73 @@ func discloseReuseNarrowing(result InvestigationResult, counts reuseStripCounts)
 
 	coverage.Partial = true
 	result.Coverage = coverage
+
+	// APPEND. The reuse degrade is a narrowing stage between planning and
+	// the served document, so it owes the outcome set a row of its own.
+	//
+	// Without one, a stored answer whose requirements all read `satisfied`
+	// served a genuinely smaller document while still claiming `complete`:
+	// the serve path re-derives completeness from the CARRIED rows, and
+	// carried rows know nothing about a cut made after they were written.
+	// That is measure-then-shrink, on the one surface this layer originally
+	// did not cover, and it is worse than the assembly case this seam
+	// started from -- assembly at least refused, and this path serves.
+	//
+	// The coverage detail above and this row are NOT redundant. The detail
+	// says how much evidence went; the row says which REQUIREMENT is now
+	// only partly met and what the reader loses by it, which is the whole
+	// distinction between a counter and a named outcome.
+	result.Completeness.Outcomes = appendOutcomeRows(result.Completeness.Outcomes,
+		reuseNarrowingOutcomeRow(result, counts))
+	// DERIVE LAST, and derive it HERE as well as at the serving surface.
+	//
+	// The serving surface re-derives too, so this looks redundant and is
+	// not: degradeReusedResult validates the degraded payload before
+	// anything is served, and a block whose state still says `complete`
+	// while its own rows now say otherwise fails that validation -- the
+	// single-authority check is enforced at the wire boundary. Appending
+	// without re-deriving would turn every degraded reuse into a REFUSAL,
+	// which is a silent regression dressed as caution: the caller loses a
+	// usable narrowed answer to fix a disclosure gap.
+	result.Completeness = ComputeAnswerCompleteness(result)
 	return result, disclosure
+}
+
+// reuseNarrowingOutcomeRow names what the reuse degrade removed.
+//
+// CAUSE: the shipped `reuse_auxiliary_refs_stripped` coverage code, the same
+// one the structured disclosure beside it carries. No new cause vocabulary,
+// and the row cannot drift from the detail because both name one token.
+//
+// IMPACT is decided by WHAT was lost, not by how much. References alone
+// means the same subjects reached the caller carrying less evidence behind
+// them -- `depth`. A dropped candidate, member, driver, finding or path
+// means the caller is shown FEWER things -- `scope`. Reporting one for the
+// other would tell a reader to look for a loss of the wrong kind.
+//
+// SERVED/DECLARED count the evidence-reference set before and after, which
+// is the quantity the strip actually computed. It is a real reduction by
+// construction: this function is only reached when counts are non-empty.
+func reuseNarrowingOutcomeRow(result InvestigationResult, counts reuseStripCounts) RequirementOutcomeRow {
+	served := len(collectEvidenceRefs(resultEvidenceSurface(result)))
+	requirement, obligation := subjectScopeRequirement(result.Completeness.Outcomes)
+	impact := contractsv1.ContextFabricAnswerImpactDepth
+	if counts.objectDrops() > 0 {
+		impact = contractsv1.ContextFabricAnswerImpactScope
+	}
+	return RequirementOutcomeRow{
+		Stage:         contractsv1.ContextFabricOutcomeStageReuse,
+		Requirement:   requirement,
+		Obligation:    obligation,
+		Outcome:       contractsv1.ContextFabricRequirementNarrowed,
+		Impact:        impact,
+		CauseCoverage: contractsv1.ContextFabricCoverageDetailReuseAuxiliaryRefsStripped,
+		// Observed: the authorization recheck itself established that these
+		// references are no longer visible. Nothing here defaulted.
+		CauseObserved: true,
+		Served:        served,
+		Declared:      served + counts.Refs(),
+	}
 }
 
 // composeReuseNarrowingReason is the composed legacy string. It states the
