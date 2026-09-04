@@ -162,6 +162,19 @@ type PlanNarrowingEvent struct {
 	// the event so that a served answer's completeness can be counted
 	// without joining against the stored result.
 	OutcomeCompletenessState contractsv1.ContextFabricAnswerCompletenessState
+	// OutcomeReductionDeclined names WHY the outcome layer's candidate
+	// reduction did not serve this answer, from its own closed vocabulary.
+	//
+	// It is the companion OutcomeNarrowedInsteadOfRefused needed and did not
+	// have. That boolean being false covered three situations with three
+	// different fixes -- the overrun was on the byte axis, where this lever
+	// has no exact arithmetic; there were no candidates to cut; the cut ran
+	// and the document still did not fit -- and an operator could not tell
+	// them apart from the run's own artifacts, which is the bar
+	// AGENTS.md's diagnosis-in-artifacts rule sets. Empty on a served
+	// answer, and on every event from a stage that never reached the
+	// decision.
+	OutcomeReductionDeclined OutcomeReductionDeclined
 }
 
 // RetryDeclinedReason is the CLOSED vocabulary of why the re-synthesis did

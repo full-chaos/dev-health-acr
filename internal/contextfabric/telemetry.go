@@ -905,6 +905,7 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"outcome_items_served", event.OutcomeItemsServed,
 		"outcome_items_declared", event.OutcomeItemsDeclared,
 		"outcome_completeness_state", string(event.OutcomeCompletenessState),
+		"outcome_reduction_declined", string(event.OutcomeReductionDeclined),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric plan narrowing", args...)

@@ -128,6 +128,83 @@ type candidateNarrowing struct {
 	Narrowed bool
 }
 
+// OutcomeReductionDeclined is the CLOSED vocabulary of why the outcome
+// layer's candidate reduction did not serve an answer.
+//
+// It exists because the alternative was a silent fallback. Before it, every
+// run in which the reduction did not save the answer emitted
+// `outcome_narrowed_instead_of_refused=false` -- the same value a run emits
+// when the reduction was never applicable at all. One value stood for "the
+// byte axis overran, so this lever does not apply", "there were no
+// candidates to cut", and "the cut RAN and the document still did not fit",
+// which have three different fixes and no way to tell apart from the run's
+// own artifacts. That is exactly the branch-reaches-a-default-in-silence
+// shape this repository's diagnosis-in-artifacts rule forbids.
+type OutcomeReductionDeclined string
+
+const (
+	// OutcomeReductionNotApplicable is the zero value: the reduction served
+	// the answer, or this run never reached an arm that would attempt it.
+	OutcomeReductionNotApplicable OutcomeReductionDeclined = ""
+	// OutcomeReductionNotItemsAxis: the answer overran on BYTES. The
+	// reduction's arithmetic is exact on the items axis and has no
+	// equivalent on the byte axis, so the planned refusal stands by design
+	// rather than by omission.
+	OutcomeReductionNotItemsAxis OutcomeReductionDeclined = "not_items_axis"
+	// OutcomeReductionNoItemBudget: this engine was given no item ceiling,
+	// so there is no allowance to compute. A deployment-configuration
+	// signal, not an answer-shape one.
+	OutcomeReductionNoItemBudget OutcomeReductionDeclined = "no_item_budget"
+	// OutcomeReductionNothingReducible: the resolver committed without
+	// leaving alternatives, so the one collection this layer may cut is
+	// already empty. The overrun is entirely in terms the composed judgment
+	// cites, which this seam may not drop.
+	OutcomeReductionNothingReducible OutcomeReductionDeclined = "nothing_reducible"
+	// OutcomeReductionWouldNotReduce: the ceiling already admits every
+	// declared candidate, so cutting the list would drop content without
+	// fixing anything -- and would publish a narrowing that did not help as
+	// though it had.
+	//
+	// UNREACHABLE from both live call sites today, and deliberately kept.
+	// Both callers pair an `overrun` with the measurement it was derived
+	// from, and `overrun == items` means that measurement's own
+	// `Budgeted() > MaxItems`, which forces `allowance < declared` by
+	// arithmetic. That is why a mutant deleting this guard survived the
+	// battery: no behavioural test can kill it, because no live input
+	// reaches it. It stays because it is the only thing standing between a
+	// caller that ever passes a mismatched (result, measurement) pair and
+	// an out-of-range slice panic -- measured, not assumed: with the guard
+	// removed the direct test panics `slice bounds out of range [:24] with
+	// capacity 4`. It is covered by that function-level test rather than an
+	// end-to-end one.
+	OutcomeReductionWouldNotReduce OutcomeReductionDeclined = "would_not_reduce"
+	// OutcomeReductionInsufficient: the cut RAN, and the served document
+	// still did not fit. The refusal stands, and this token is what tells
+	// an operator the lever was pulled and was not enough -- rather than
+	// leaving that run indistinguishable from one where it was never
+	// applicable.
+	OutcomeReductionInsufficient OutcomeReductionDeclined = "insufficient"
+	// OutcomeReductionUnmeasurable: the narrowed document could not be
+	// marshaled. A server defect, kept distinct from every over-budget
+	// reason so a serialization bug is never counted as an answer that was
+	// too big.
+	OutcomeReductionUnmeasurable OutcomeReductionDeclined = "unmeasurable"
+)
+
+// OutcomeReductionDeclinedVocabulary is the closed set, for the enumeration
+// tests that keep a token from shipping unreachable or unnamed.
+func OutcomeReductionDeclinedVocabulary() []OutcomeReductionDeclined {
+	return []OutcomeReductionDeclined{
+		OutcomeReductionNotApplicable,
+		OutcomeReductionNotItemsAxis,
+		OutcomeReductionNoItemBudget,
+		OutcomeReductionNothingReducible,
+		OutcomeReductionWouldNotReduce,
+		OutcomeReductionInsufficient,
+		OutcomeReductionUnmeasurable,
+	}
+}
+
 // narrowCandidatesToBudget reduces the ONE collection assembly may reduce
 // without orphaning prose, and returns what it did.
 //
@@ -146,10 +223,20 @@ type candidateNarrowing struct {
 // honest alternatives are a guess dressed as arithmetic or an iterated
 // shrink loop. Both are refused here: a byte overrun keeps the existing
 // planned refusal, and the residual is stated rather than hidden.
-func narrowCandidatesToBudget(result InvestigationResult, budget ResponseBudget, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun) (InvestigationResult, candidateNarrowing) {
+func narrowCandidatesToBudget(result InvestigationResult, budget ResponseBudget, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun) (InvestigationResult, candidateNarrowing, OutcomeReductionDeclined) {
 	declared := len(result.SubjectResolution.Candidates)
-	if overrun != contractsv1.ContextFabricBudgetOverrunItems || budget.MaxItems <= 0 || declared == 0 {
-		return result, candidateNarrowing{Served: declared, Declared: declared}
+	unchanged := candidateNarrowing{Served: declared, Declared: declared}
+	// Each precondition returns its OWN token. Collapsing them into one
+	// "not applicable" would put three different operator actions --
+	// reconfigure the ceiling, accept a byte-axis refusal, accept that the
+	// resolver left nothing to cut -- behind a single value.
+	switch {
+	case overrun != contractsv1.ContextFabricBudgetOverrunItems:
+		return result, unchanged, OutcomeReductionNotItemsAxis
+	case budget.MaxItems <= 0:
+		return result, unchanged, OutcomeReductionNoItemBudget
+	case declared == 0:
+		return result, unchanged, OutcomeReductionNothingReducible
 	}
 	fixed := measurement.Items.Budgeted() - declared
 	allowance := budget.MaxItems - fixed
@@ -160,7 +247,11 @@ func narrowCandidatesToBudget(result InvestigationResult, budget ResponseBudget,
 		// The candidates are not what pushed this over. Reducing them
 		// would drop content without fixing anything, and would publish a
 		// narrowing that did not help as though it had.
-		return result, candidateNarrowing{Served: declared, Declared: declared}
+		//
+		// Unreachable from either live call site -- see
+		// OutcomeReductionWouldNotReduce for the arithmetic and for why the
+		// guard is kept and tested directly rather than end-to-end.
+		return result, unchanged, OutcomeReductionWouldNotReduce
 	}
 	// The LEADING allowance, in the order the resolver returned them --
 	// which is its own ranking. No re-ordering: sorting the survivors would
@@ -171,7 +262,7 @@ func narrowCandidatesToBudget(result InvestigationResult, budget ResponseBudget,
 	resolution := result.SubjectResolution
 	resolution.Candidates = kept
 	result.SubjectResolution = resolution
-	return result, candidateNarrowing{Served: allowance, Declared: declared, Narrowed: true}
+	return result, candidateNarrowing{Served: allowance, Declared: declared, Narrowed: true}, OutcomeReductionNotApplicable
 }
 
 // candidateNarrowingOutcomeRow names what narrowCandidatesToBudget did.
@@ -236,42 +327,62 @@ func appendOutcomeRows(existing []RequirementOutcomeRow, added ...RequirementOut
 	return out
 }
 
-// narrowInsteadOfRefusing is the decision this seam adds to stage 3.
+// outcomeNarrowingAttempt is one run of the outcome layer's reduction: what
+// it produced, what it did, and -- when it did not serve -- why.
+//
+// It is a VALUE rather than a pair of return flags because the decision and
+// the telemetry that describes it are now taken at different moments: stage 3
+// must know whether an answer will be served BEFORE it emits the event whose
+// `refusal_planned` field claims one will not be. Returning the attempt lets
+// the caller order those two correctly; a function that emitted as it decided
+// could not.
+type outcomeNarrowingAttempt struct {
+	// Result is the narrowed, re-finalized document. Only meaningful when
+	// Served is true.
+	Result InvestigationResult
+	// Narrowing is the reduction's own served/declared numbers.
+	Narrowing candidateNarrowing
+	// Measurement is the measurement of the document that will actually be
+	// served -- never the pre-narrowing one.
+	Measurement ResponseMeasurement
+	// Declined names why nothing is served, and is empty when something is.
+	Declined OutcomeReductionDeclined
+	// Served reports whether Result fits the budget and may be returned to
+	// the caller.
+	Served bool
+}
+
+// planCandidateNarrowing is the decision this seam adds to stage 3, WITHOUT
+// its telemetry.
 //
 // It runs at the two points that used to refuse unconditionally: when the
 // cohort lever declined, and when the one bounded retry still did not fit.
 // At both it asks the question the stage never asked -- is there anything
 // charged against this budget that can be reduced without orphaning prose --
-// and serves a narrowed, DISCLOSED answer when there is.
+// and produces a narrowed, DISCLOSED answer when there is.
 //
-// It returns false when there is not, and the caller's planned refusal
-// stands. That refusal is a real terminal case, not an aspiration: an answer
-// whose remaining content is all cited by its own judgment cannot be made
-// smaller here without describing content that is no longer present.
+// It declines with a NAMED reason when there is not, and the caller's planned
+// refusal stands. That refusal is a real terminal case, not an aspiration: an
+// answer whose remaining content is all cited by its own judgment cannot be
+// made smaller here without describing content that is no longer present.
+// What is new is that the refusal now says which of the reasons it was.
 //
 // The order matters and is not incidental. The document is narrowed, the
 // outcome row is APPENDED, and only then is the result re-finalized so
 // completeness is derived from the extended set. Deriving before appending
 // would be the measure-then-shrink defect this layer exists to remove,
 // reproduced inside the fix for it.
-func (e *Engine) narrowInsteadOfRefusing(
-	ctx context.Context,
-	principal storage.Principal,
+func (e *Engine) planCandidateNarrowing(
 	plan *AnswerPlan,
 	frame *QuestionFrame,
 	result InvestigationResult,
 	budget ResponseBudget,
 	measurement ResponseMeasurement,
 	overrun contractsv1.ContextFabricBudgetOverrun,
-	grouped bool,
-	basis contractsv1.ContextFabricNarrowingBasis,
-	before, after int,
-	declined RetryDeclinedReason,
-	retryAttempted bool,
-) (InvestigationResult, bool) {
-	narrowedResult, narrowing := narrowCandidatesToBudget(result, budget, measurement, overrun)
+) outcomeNarrowingAttempt {
+	narrowedResult, narrowing, declined := narrowCandidatesToBudget(result, budget, measurement, overrun)
 	if !narrowing.Narrowed {
-		return InvestigationResult{}, false
+		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: declined}
 	}
 	requirement, obligation := subjectScopeRequirement(narrowedResult.Completeness.Outcomes)
 	row := candidateNarrowingOutcomeRow(narrowing, overrun, requirement, obligation)
@@ -283,10 +394,45 @@ func (e *Engine) narrowInsteadOfRefusing(
 	// that still exceeds the ceiling, having announced that it was
 	// narrowed to fit, would be worse than refusing.
 	servedMeasurement, err := contractsv1.MeasureContextFabricResponse(narrowedResult)
-	if err != nil || servedMeasurement.Overrun(budget) != contractsv1.ContextFabricBudgetFits {
-		return InvestigationResult{}, false
+	if err != nil {
+		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: OutcomeReductionUnmeasurable}
 	}
+	if servedMeasurement.Overrun(budget) != contractsv1.ContextFabricBudgetFits {
+		// The lever was pulled and was not enough. Saying so is the whole
+		// difference between this refusal and one where the lever never
+		// applied: an operator reading the artifacts can tell that the
+		// candidate list was not the binding term here.
+		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: OutcomeReductionInsufficient}
+	}
+	return outcomeNarrowingAttempt{
+		Result:      narrowedResult,
+		Narrowing:   narrowing,
+		Measurement: servedMeasurement,
+		Served:      true,
+	}
+}
 
+// recordCandidateNarrowing emits the decision-basis event for an attempt
+// that SERVED.
+//
+// Separated from the decision above so stage 3 can emit the retry's own
+// event first, with an accurate `refusal_planned`. When the two were fused,
+// a retry that did not fit published `refusal_planned=true` and this event
+// published `outcome_narrowed_instead_of_refused=true` for the same
+// investigation, which was served with a 200 -- a refusal counter counting
+// answers that were never refused.
+func (e *Engine) recordCandidateNarrowing(
+	ctx context.Context,
+	principal storage.Principal,
+	plan *AnswerPlan,
+	attempt outcomeNarrowingAttempt,
+	overrun contractsv1.ContextFabricBudgetOverrun,
+	grouped bool,
+	basis contractsv1.ContextFabricNarrowingBasis,
+	before, after int,
+	declined RetryDeclinedReason,
+	retryAttempted bool,
+) {
 	e.recordPlanNarrowingStep(plan, PlanNarrowing{
 		Stage:   contractsv1.ContextFabricPlanNarrowingAssembledResult,
 		Basis:   planStageBasis(contractsv1.ContextFabricPlanNarrowingAssembledResult, grouped, basis),
@@ -296,8 +442,8 @@ func (e *Engine) narrowInsteadOfRefusing(
 		Overrun: overrun,
 	})
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, basis)
-	event.MeasuredItems = servedMeasurement.Items.Budgeted()
-	event.MeasuredBytes = servedMeasurement.Bytes
+	event.MeasuredItems = attempt.Measurement.Items.Budgeted()
+	event.MeasuredBytes = attempt.Measurement.Bytes
 	event.PredictedItems = PredictedItemsForPlan(*plan, after)
 	event.RetryAttempted = retryAttempted
 	event.RetryFit = true
@@ -308,9 +454,8 @@ func (e *Engine) narrowInsteadOfRefusing(
 	// falls and an operator cannot tell whether questions stopped
 	// overrunning or started being narrowed.
 	event.OutcomeNarrowedInsteadOfRefused = true
-	event.OutcomeItemsServed = narrowing.Served
-	event.OutcomeItemsDeclared = narrowing.Declared
-	event.OutcomeCompletenessState = narrowedResult.Completeness.State
+	event.OutcomeItemsServed = attempt.Narrowing.Served
+	event.OutcomeItemsDeclared = attempt.Narrowing.Declared
+	event.OutcomeCompletenessState = attempt.Result.Completeness.State
 	e.recordPlanNarrowing(ctx, principal, event)
-	return narrowedResult, true
 }
