@@ -122,40 +122,82 @@ func TestPlanCarryOutcome_ReportedFromTheEngineOnHitAndOnDrift(t *testing.T) {
 // and reads the bytes that came out, because a recording double proves the
 // engine called SOMETHING, never that the shipped sink emits anything usable.
 //
+// BOTH ARMS RUN AT THE REAL SINK, and the drift arm is the one that matters.
+// The recording-double test above already covers the drift outcome, but a
+// double cannot fail if the shipped sink drops the value, renames the key, or
+// filters the line by level -- and the refusal is the reading an operator
+// actually needs, because it is the only evidence the containment refused
+// anything at all. Proving the sink only on the happy path would leave the
+// refusal channel untested, which is how a "disclosure" nobody can observe
+// ships as if it existed.
+//
 // The key allow-list is asserted rather than the message alone: a renamed key
-// silently breaks every downstream query while the line still appears.
+// silently breaks every downstream query while the line still appears. The
+// arms are also asserted to DIFFER on the outcome value first, so a sink that
+// emitted a constant string would fail rather than satisfy both rows.
 func TestPlanCarryOutcome_ReachesTheRealSink(t *testing.T) {
 	t.Parallel()
 
-	var buf bytes.Buffer
-	// Info level: the line is logged at Info, so a Warn-only handler would
-	// drop it and this test would pass by never seeing anything.
-	sink := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-
-	request := validInvestigationRequest()
-	prior := carriablePlanResult("result_plan_carry_src", request.Question)
-	request.ParentResultID = prior.ResultID
-	store := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}
-
-	if _, err := planCarryOutcomeEngine(t, store, sink).Investigate(context.Background(), acceptancePrincipal(), request); err != nil {
-		t.Fatalf("Investigate() error = %v", err)
-	}
-
-	logged := buf.String()
-	if !strings.Contains(logged, "context fabric plan carry outcome") {
-		t.Fatalf("no plan-carry-outcome line reached the real sink; engine output was:\n%s", logged)
-	}
-	// A DISTINCT message from "context fabric plan carry" (the applied-carry
-	// line). Folding the two would make the attempt counter and the applied
-	// counter the same number and destroy the hit rate this line publishes.
-	for _, want := range []string{
-		`"outcome":"` + string(PlanCarryHit) + `"`,
-		`"source_result_id":"` + prior.ResultID + `"`,
-		`"seed_source":"` + string(CarrySeedParentField) + `"`,
+	for _, tc := range []struct {
+		name          string
+		priorQuestion func(requestQuestion string) string
+		wantOutcome   PlanCarryOutcome
+		// wantSourceResultID is asserted in BOTH directions: present on a hit
+		// (it is the join key), empty on a refusal (naming an origin the
+		// engine refused to carry from would read as provenance for a value
+		// that was never used).
+		wantSource bool
+	}{
+		{name: "hit", priorQuestion: func(q string) string { return q }, wantOutcome: PlanCarryHit, wantSource: true},
+		{name: "refused for question drift", priorQuestion: func(string) string { return driftQuestion }, wantOutcome: PlanCarryMissQuestionDrift, wantSource: false},
 	} {
-		if !strings.Contains(logged, want) {
-			t.Errorf("plan-carry-outcome line is missing %s -- a key that never reaches the sink is a field, not telemetry:\n%s", want, logged)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The two arms must be distinguishable by the outcome value, or a
+			// sink emitting a constant would satisfy both. Asserted here
+			// rather than assumed from the table.
+			if PlanCarryHit == PlanCarryMissQuestionDrift {
+				t.Fatal("the two arms' outcome values are identical, so neither arm can detect a sink that emits a constant")
+			}
+
+			var buf bytes.Buffer
+			// Info level: the line is logged at Info, so a Warn-only handler
+			// would drop it and this test would pass by never seeing anything.
+			sink := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+			request := validInvestigationRequest()
+			prior := carriablePlanResult("result_plan_carry_src", tc.priorQuestion(request.Question))
+			request.ParentResultID = prior.ResultID
+			store := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}
+
+			if _, err := planCarryOutcomeEngine(t, store, sink).Investigate(context.Background(), acceptancePrincipal(), request); err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+
+			logged := buf.String()
+			// A DISTINCT message from "context fabric plan carry" (the
+			// applied-carry line). Folding the two would make the attempt
+			// counter and the applied counter the same number and destroy the
+			// hit rate this line publishes.
+			if !strings.Contains(logged, "context fabric plan carry outcome") {
+				t.Fatalf("no plan-carry-outcome line reached the real sink; engine output was:\n%s", logged)
+			}
+			want := []string{
+				`"outcome":"` + string(tc.wantOutcome) + `"`,
+				`"seed_source":"` + string(CarrySeedParentField) + `"`,
+			}
+			if tc.wantSource {
+				want = append(want, `"source_result_id":"`+prior.ResultID+`"`)
+			} else {
+				want = append(want, `"source_result_id":""`)
+			}
+			for _, fragment := range want {
+				if !strings.Contains(logged, fragment) {
+					t.Errorf("plan-carry-outcome line is missing %s -- a key that never reaches the sink is a field, not telemetry:\n%s", fragment, logged)
+				}
+			}
+		})
 	}
 }
 
