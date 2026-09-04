@@ -78,6 +78,27 @@ type PlanNarrowingEvent struct {
 	MeasuredBytes      int64
 	MaxItems           int
 	MaxSerializedBytes int64
+	// Attribution is the per-bucket split of MeasuredItems -- what the
+	// items that were charged were ABOUT (S5, observing half).
+	//
+	// It answers the question the totals cannot. An operator reading
+	// `measured_items=34 max_items=30` today knows the answer was four
+	// items too big and nothing about where the thirty-four went; with the
+	// split they can see whether one group's items dominated, whether the
+	// cohort rows alone consumed the ceiling, or whether cross-cutting
+	// drivers are being counted in a bucket nobody expected. That is the
+	// difference between a number to escalate and a number to act on.
+	//
+	// Counts only, from a CLOSED vocabulary of four buckets: no group
+	// label, no subject id, no question text -- the same discipline every
+	// other dimension on this event holds.
+	//
+	// It is stamped through recordMeasurement, together with MeasuredItems
+	// and MeasuredBytes, and never assigned on its own. Three numbers that
+	// describe one document must come from one measurement, or an arm can
+	// carry two of them and drop the third -- which is exactly the shape
+	// this seam's review history is made of.
+	Attribution contractsv1.ContextFabricItemAttribution
 	// PredictedItems is what the plan EXPECTED this cohort to cost: one item
 	// per cohort member plus the SynthesisHeadroom the profile reserved for
 	// what synthesis adds. It is the plan's OWN arithmetic, beside what stage 3
@@ -253,6 +274,27 @@ func PlanNarrowingEventFrom(plan AnswerPlan, stage contractsv1.ContextFabricPlan
 		MaxItems:           plan.Budget.MaxItems,
 		MaxSerializedBytes: plan.Budget.MaxSerializedBytes,
 	}
+}
+
+// recordMeasurement stamps the THREE numbers that describe one measured
+// document -- the charged item total, the serialized size, and the per-bucket
+// split of that same total -- from a single ContextFabricResponseMeasurement.
+//
+// It exists because this seam's whole failure history is arms that carry some
+// of a group of related fields and not the rest: stage three emits its
+// assembled-result event from five distinct places, and every one of them used
+// to write MeasuredItems and MeasuredBytes as two independent assignments. A
+// third field written the same way is a sixth chance to add an arm that
+// forgets it, and no compiler or reviewer catches a missing assignment.
+//
+// So the three are written together, from ONE measurement, at ONE call site
+// per arm. TestEveryAssembledResultArmStampsItsMeasurementThroughOnePath walks
+// the package's syntax tree and fails if any arm assigns MeasuredItems
+// directly again.
+func (e *PlanNarrowingEvent) recordMeasurement(measurement contractsv1.ContextFabricResponseMeasurement) {
+	e.MeasuredItems = measurement.Items.Budgeted()
+	e.MeasuredBytes = measurement.Bytes
+	e.Attribution = measurement.Attribution
 }
 
 // planStageBasis names the order a stage takes members in. It is derived
