@@ -63,10 +63,7 @@ func attributionGroupRef(index int) SubjectRef {
 // PUTS IN rather than from the production attribution function.
 //
 // Deriving it from AttributeContextFabricResultItems would let the same defect
-// decide both sides of the comparison. Every number below is counted off the
-// synthesizer literal in attributionEngine, and the four are deliberately
-// PAIRWISE DISTINCT so that a swap between any two dimensions on the emitted
-// line fails rather than cancelling out.
+// decide both sides of the comparison.
 type attributionFixtureCounts struct {
 	global     int
 	member     int
@@ -78,6 +75,75 @@ func (c attributionFixtureCounts) total() int {
 	return c.global + c.member + c.group + c.multiGroup
 }
 
+func (c attributionFixtureCounts) byBucket() map[string]int {
+	return map[string]int{"global": c.global, "member": c.member, "group": c.group, "multi_group": c.multiGroup}
+}
+
+// assertPairwiseDistinct is a FIXTURE PRECONDITION, and it earns its place
+// twice over.
+//
+// Two buckets expected to hold the same count cannot detect a swap between
+// them, and an adversarial round exploited exactly that gap on the arms whose
+// assertion was a sum: moving the member count into the global bucket and
+// zeroing member left the total unchanged and every test green. Distinct
+// expected values are what make the per-bucket assertions below able to see a
+// redistribution, so the fixture is required to provide them and says which
+// two clash when it does not.
+func (c attributionFixtureCounts) assertPairwiseDistinct(t *testing.T, context string) {
+	t.Helper()
+	seen := map[int]string{}
+	for name, value := range c.byBucket() {
+		if value == 0 {
+			t.Fatalf("%s: the fixture puts nothing in the %s bucket, so a line that dropped it would pass", context, name)
+		}
+		if other, clash := seen[value]; clash {
+			t.Fatalf("%s: buckets %s and %s both expect %d -- a redistribution between them preserves the "+
+				"total and would pass unnoticed. Change the fixture spec for this arm.", context, name, other, value)
+		}
+		seen[value] = name
+	}
+}
+
+// attributionFixtureSpec declares how many items of each kind the fixture's
+// synthesis returns.
+//
+// It is a PER-ARM input rather than one shared constant because each arm
+// measures a different document -- the retry arms measure the pre-narrowing
+// result, the retry-still-over arm the re-synthesized one -- so the member
+// count differs, and the four expected values have to be pairwise distinct on
+// every arm separately.
+type attributionFixtureSpec struct {
+	members           int
+	globalFindings    int
+	groupDrivers      int
+	multiGroupDrivers int
+	memberDrivers     int
+}
+
+// expect is what the split must be for a document carrying membersMeasured
+// cohort rows.
+//
+// Arithmetic over the fixture's OWN literals. It never calls
+// AttributeContextFabricResultItems, so the expectation and the value under
+// test cannot share a defect; and membersMeasured comes from the arm's own
+// emitted line (its before/after counts), not from a number written here.
+func (s attributionFixtureSpec) expect(membersMeasured int) attributionFixtureCounts {
+	return attributionFixtureCounts{
+		global: s.globalFindings,
+		// The cohort member ROWS plus the drivers about a member. The rows
+		// are the item class the earlier design of this seam charged and
+		// never accounted for, so they are counted explicitly.
+		member:     membersMeasured + s.memberDrivers,
+		group:      s.groupDrivers,
+		multiGroup: s.multiGroupDrivers,
+	}
+}
+
+// defaultAttributionSpec is the shape the served and refusal tests use.
+func defaultAttributionSpec() attributionFixtureSpec {
+	return attributionFixtureSpec{members: 3, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 2, memberDrivers: 1}
+}
+
 // attributionEngine builds an engine whose synthesis returns a result with a
 // KNOWN item in every bucket, logging through a real slog handler so a test
 // can read the formatted line.
@@ -86,9 +152,10 @@ func (c attributionFixtureCounts) total() int {
 // because that one emits claims only: every charged item lands in the member
 // bucket, three of the four dimensions read zero, and a test over four zeros
 // cannot tell a correct split from a dropped one.
-func attributionEngine(t *testing.T, cohort *Cohort, sink *bytes.Buffer, options EngineOptions) (*Engine, attributionFixtureCounts) {
+func attributionEngine(t *testing.T, spec attributionFixtureSpec, sink *bytes.Buffer, options EngineOptions) (*Engine, attributionFixtureSpec) {
 	t.Helper()
 
+	cohort := attributionCohort(spec.members)
 	memberRef := cohort.Members[0].Subject
 	stranger := SubjectRef{Kind: SubjectRepository, CanonicalID: "repo_unowned", Label: "repo_unowned"}
 
@@ -113,37 +180,34 @@ func attributionEngine(t *testing.T, cohort *Cohort, sink *bytes.Buffer, options
 			Subjects: subjects, EvidenceRefIDs: []string{attributionEvidenceRef},
 		}
 	}
-	drivers := []DriverJudgment{
-		// group: exactly one group named, three of them.
-		driver("d_group_0", []SubjectRef{attributionGroupRef(0)}),
-		driver("d_group_1", []SubjectRef{attributionGroupRef(1)}),
-		driver("d_group_2", []SubjectRef{attributionGroupRef(0)}),
-		// multi_group: both groups named, two of them.
-		driver("d_multi_0", []SubjectRef{attributionGroupRef(0), attributionGroupRef(1)}),
-		driver("d_multi_1", []SubjectRef{attributionGroupRef(1), attributionGroupRef(0)}),
-		// member: one driver about a cohort member.
-		driver("d_member_0", []SubjectRef{memberRef}),
+	drivers := []DriverJudgment{}
+	for index := 0; index < spec.groupDrivers; index++ {
+		// group: exactly ONE group named. Alternating which group keeps
+		// this from being a single-group special case.
+		drivers = append(drivers, driver("d_group_"+strconv.Itoa(index), []SubjectRef{attributionGroupRef(index % 2)}))
 	}
-	findings := []Finding{
-		// global: a subject the cohort does not contain, and three naming
-		// nothing at all.
-		finding("f_global_0", []SubjectRef{stranger}),
-		finding("f_global_1", nil),
-		finding("f_global_2", nil),
-		finding("f_global_3", nil),
-		// The fifth is not padding: it is what makes the global count (5)
-		// differ from the member count (4), so a swap between those two
-		// dimensions on the emitted line fails instead of cancelling out.
-		finding("f_global_4", nil),
+	for index := 0; index < spec.multiGroupDrivers; index++ {
+		// multi_group: both groups named. The order alternates so a rule
+		// that keyed on first-named rather than on distinct-count would
+		// show up as an inconsistency rather than a uniform shift.
+		refs := []SubjectRef{attributionGroupRef(0), attributionGroupRef(1)}
+		if index%2 == 1 {
+			refs = []SubjectRef{attributionGroupRef(1), attributionGroupRef(0)}
+		}
+		drivers = append(drivers, driver("d_multi_"+strconv.Itoa(index), refs))
 	}
-	want := attributionFixtureCounts{
-		global: len(findings),
-		// The cohort member ROWS plus the one driver about a member. The
-		// rows are the item class the earlier design of this seam charged
-		// and never accounted for, so they are counted explicitly here.
-		member:     len(cohort.Members) + 1,
-		group:      3,
-		multiGroup: 2,
+	for index := 0; index < spec.memberDrivers; index++ {
+		drivers = append(drivers, driver("d_member_"+strconv.Itoa(index), []SubjectRef{memberRef}))
+	}
+	findings := []Finding{}
+	for index := 0; index < spec.globalFindings; index++ {
+		// global: the first names a subject the cohort does not contain
+		// (the fail-safe direction), the rest name nothing at all.
+		var subjects []SubjectRef
+		if index == 0 {
+			subjects = []SubjectRef{stranger}
+		}
+		findings = append(findings, finding("f_global_"+strconv.Itoa(index), subjects))
 	}
 
 	graphCohort := cohort
@@ -189,7 +253,7 @@ func attributionEngine(t *testing.T, cohort *Cohort, sink *bytes.Buffer, options
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
-	return engine, want
+	return engine, spec
 }
 
 // assembledResultLine returns the single assembled-result plan-narrowing line.
@@ -257,8 +321,9 @@ func measuredItemsOf(t *testing.T, line string) int {
 func TestTheServedAnswerLineSaysWhatItsChargedItemsWereAbout(t *testing.T) {
 	t.Parallel()
 	var sink bytes.Buffer
-	cohort := attributionCohort(3)
-	engine, want := attributionEngine(t, cohort, &sink, budgetStageOptions(200, 0))
+	spec := defaultAttributionSpec()
+	engine, _ := attributionEngine(t, spec, &sink, budgetStageOptions(200, 0))
+	want := spec.expect(spec.members)
 
 	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
 	if err != nil {
@@ -271,35 +336,21 @@ func TestTheServedAnswerLineSaysWhatItsChargedItemsWereAbout(t *testing.T) {
 	// drivers and claims on some cohorts. If that ever starts happening
 	// here, this test must be re-derived rather than have its numbers
 	// nudged, and this is where it says so.
-	if got := len(result.Drivers); got != 6 {
-		t.Fatalf("the served result carries %d drivers, want the 6 the fixture supplied: "+
+	wantDrivers := spec.groupDrivers + spec.multiGroupDrivers + spec.memberDrivers
+	if got := len(result.Drivers); got != wantDrivers {
+		t.Fatalf("the served result carries %d drivers, want the %d the fixture supplied: "+
 			"something between synthesis and assembly is adding or dropping items, so the "+
-			"expectation below no longer describes this answer", got)
+			"expectation below no longer describes this answer", got, wantDrivers)
 	}
 	if got := len(result.ClaimedFacts); got != 0 {
 		t.Fatalf("the served result carries %d claimed facts, want 0: same reason as above", got)
 	}
-	// The four expected values must DIFFER pairwise, or a swap between two
-	// dimensions on the line would pass unnoticed.
-	seen := map[int]string{}
-	for name, value := range map[string]int{
-		"global": want.global, "member": want.member, "group": want.group, "multi_group": want.multiGroup,
-	} {
-		if value == 0 {
-			t.Fatalf("the fixture puts nothing in the %s bucket: the test would pass on a line that dropped it", name)
-		}
-		if other, clash := seen[value]; clash {
-			t.Fatalf("buckets %s and %s both expect %d: a swap between them could not be detected", name, other, value)
-		}
-		seen[value] = name
-	}
+	want.assertPairwiseDistinct(t, "served arm")
 
 	line := assembledResultLine(t, sink.String())
 	fields := attributionFieldsOf(t, line)
 
-	for name, wantCount := range map[string]int{
-		"global": want.global, "member": want.member, "group": want.group, "multi_group": want.multiGroup,
-	} {
+	for name, wantCount := range want.byBucket() {
 		if fields[name] != wantCount {
 			t.Errorf("attribution_%s = %d, want %d (counted off the fixture, not recomputed)\nline: %s",
 				name, fields[name], wantCount, line)
@@ -331,10 +382,11 @@ func TestTheServedAnswerLineSaysWhatItsChargedItemsWereAbout(t *testing.T) {
 func TestARefusalLineAlsoSaysWhatItsChargedItemsWereAbout(t *testing.T) {
 	t.Parallel()
 	var sink bytes.Buffer
-	cohort := attributionCohort(3)
 	// A ceiling of one item is under every fixture bucket, so the answer
 	// cannot fit, cannot be narrowed into fitting, and reaches the refusal.
-	engine, want := attributionEngine(t, cohort, &sink, budgetStageOptions(1, 0))
+	spec := defaultAttributionSpec()
+	engine, _ := attributionEngine(t, spec, &sink, budgetStageOptions(1, 0))
+	want := spec.expect(spec.members)
 
 	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
 		t.Fatal("Investigate() returned no error; this fixture is meant to reach a budget refusal")
@@ -387,15 +439,28 @@ var armsWithNoBehaviouralCase = []string{
 		"fixture family cannot produce without entering the subject-clarification flow",
 }
 
-// assembledResultArmCase is one scenario, the arm it must reach, and how to
-// recognise that arm on the emitted line.
+// assembledResultArmCase is one scenario, the arm it must reach, how to
+// recognise that arm on the emitted line, and which cohort that arm measured.
 type assembledResultArmCase struct {
 	name string
 	// discriminator is the substring that identifies THIS arm's line. A
 	// scenario that does not produce one is a fixture that silently landed
 	// somewhere else, which is a failure and not a skip.
 	discriminator string
-	drive         func(t *testing.T, sink *bytes.Buffer)
+	// spec is per-arm because the expected bucket values must be pairwise
+	// DISTINCT on the document THIS arm measured, and the arms measure
+	// cohorts of different sizes. One shared spec would collide on some of
+	// them, and a collision is what lets a redistribution pass.
+	spec attributionFixtureSpec
+	// measuresNarrowedCohort says which cohort the document this arm
+	// measured contained: the re-synthesized, narrowed one (the line's
+	// `after`) or the one synthesis first ran against (its `before`).
+	//
+	// It is a CLAIM about the production code, not a convenience, and the
+	// per-bucket assertion enforces it: state it wrongly and the member
+	// count will not match what the line reports.
+	measuresNarrowedCohort bool
+	drive                  func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec)
 }
 
 func assembledResultArmCases() []assembledResultArmCase {
@@ -403,8 +468,9 @@ func assembledResultArmCases() []assembledResultArmCase {
 		{
 			name:          "measured fit",
 			discriminator: "overrun=fits",
-			drive: func(t *testing.T, sink *bytes.Buffer) {
-				engine, _ := attributionEngine(t, attributionCohort(3), sink, budgetStageOptions(200, 0))
+			spec:          defaultAttributionSpec(),
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) {
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(200, 0))
 				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err != nil {
 					t.Fatalf("Investigate() error = %v, want a served answer", err)
 				}
@@ -413,8 +479,11 @@ func assembledResultArmCases() []assembledResultArmCase {
 		{
 			name:          "planned refusal, nothing to narrow",
 			discriminator: "retry_declined=nothing_to_narrow",
-			drive: func(t *testing.T, sink *bytes.Buffer) {
-				engine, _ := attributionEngine(t, attributionCohort(1), sink, budgetStageOptions(1, 0))
+			// One member, so the member bucket is small; the group and
+			// multi_group counts are raised to keep all four distinct.
+			spec: attributionFixtureSpec{members: 1, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 4, memberDrivers: 1},
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) {
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(1, 0))
 				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
 					t.Fatal("Investigate() returned no error, want a planned budget refusal")
 				}
@@ -422,13 +491,13 @@ func assembledResultArmCases() []assembledResultArmCase {
 		},
 		{
 			name: "retry synthesis FAILED",
-			// This is the arm an adversarial review reached by aliasing
-			// past the one-stamp pin. It emitted a correct measured_items
-			// beside four zero dimensions and nothing objected, because no
-			// behavioural case drove it.
+			// This is the arm an adversarial review reached twice: first by
+			// aliasing past the one-stamp pin, then by redistributing two
+			// buckets while preserving the total. Both are visible now.
 			discriminator: "retry_failed=true",
-			drive: func(t *testing.T, sink *bytes.Buffer) {
-				engine, _ := attributionEngine(t, attributionCohort(3), sink, budgetStageOptions(10, time.Second))
+			spec:          defaultAttributionSpec(),
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) {
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(10, time.Second))
 				attempts := 0
 				engine.synthesizer = chaos4809FailOnSecondCall(engine.synthesizer, &attempts)
 				_, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
@@ -446,8 +515,12 @@ func assembledResultArmCases() []assembledResultArmCase {
 		{
 			name:          "retry ran and still did not fit",
 			discriminator: "retry_attempted=true retry_fit=false retry_failed=false",
-			drive: func(t *testing.T, sink *bytes.Buffer) {
-				engine, _ := attributionEngine(t, attributionCohort(3), sink, budgetStageOptions(10, time.Second))
+			// The ONLY arm whose event measures the re-synthesized document,
+			// so its member count is the line's `after`.
+			measuresNarrowedCohort: true,
+			spec:                   attributionFixtureSpec{members: 3, globalFindings: 6, groupDrivers: 4, multiGroupDrivers: 5, memberDrivers: 1},
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec) {
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(10, time.Second))
 				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
 					t.Fatal("Investigate() returned no error, want a refusal after a retry that did not fit")
 				}
@@ -456,24 +529,54 @@ func assembledResultArmCases() []assembledResultArmCase {
 	}
 }
 
+var beforeAfterPattern = regexp.MustCompile(`before=(-?\d+) after=(-?\d+)`)
+
+// cohortCountsOf reads the member counts the arm's own line reports.
+//
+// Taking them from the LINE rather than from the fixture is what keeps the
+// expectation honest across arms that narrowed: the arm says how many members
+// the document it measured contained, and the fixture says what each member
+// costs.
+func cohortCountsOf(t *testing.T, line string) (before, after int) {
+	t.Helper()
+	match := beforeAfterPattern.FindStringSubmatch(line)
+	if match == nil {
+		t.Fatalf("the emitted line carries no before/after member counts: %s", line)
+	}
+	before, err := strconv.Atoi(match[1])
+	if err != nil {
+		t.Fatalf("before is not an integer: %v", err)
+	}
+	after, err = strconv.Atoi(match[2])
+	if err != nil {
+		t.Fatalf("after is not an integer: %v", err)
+	}
+	return before, after
+}
+
 // TestEveryAssembledResultArmEmitsASplitThatDescribesIt is the behavioural
 // counterpart to the structural one-stamp pin, and it is the load-bearing one.
 //
-// WHY IT EXISTS, and it is worth stating because the structural pin was
-// written FIRST and looked sufficient. An adversarial round defeated that pin
-// with two lines -- `attribution := &event.Attribution; *attribution = ...{}`
-// -- because the pin matches assignments whose left-hand side is a selector,
-// and a write through a pointer alias is not one. The mutation compiled, vetted
-// and left every test green: the retry-synthesis-failure arm emitted a correct
-// measured_items beside four zeroes.
+// WHY IT EXISTS, and why it asserts the four VALUES rather than their sum.
+// Two adversarial rounds attacked this seam and both found the same shape one
+// level apart. The first zeroed an arm's split through a pointer alias the
+// static walk could not see; the answer was to drive every arm rather than to
+// patch the walk. The second then redistributed two buckets on an arm --
 //
-// The pin was not the real gap. The real gap was that three of the five arms
-// had no behavioural case at all, so the pin was the ONLY thing standing
-// between a zeroed arm and a green suite -- and a static check is exactly the
-// wrong thing to make load-bearing, because the set of ways to evade one is
-// open. This test closes it from the other side: it drives each arm through
-// the public entry point and reads what the engine emitted, so an arm that
-// stops describing its own document fails no matter HOW it was made to.
+//	event.Attribution.Global += event.Attribution.Member
+//	event.Attribution.Member = 0
+//
+// -- which leaves the TOTAL unchanged, so an assertion on the sum passes while
+// the line now says the answer's items were about something they were not.
+// Both findings are the same defect class: a guarantee held on some arms and
+// not on others. First it was coverage, then it was assertion strength.
+//
+// So every arm now gets the same strength: the four expected values, derived
+// from the fixture's own item literals and the member count THAT ARM'S LINE
+// reports, with a precondition that the four differ pairwise so a
+// redistribution cannot cancel out. Nothing here calls
+// AttributeContextFabricResultItems -- the expectation and the value under test
+// must not be able to share a defect.
 //
 // The arms are reconciled against the production call-site count, so this is a
 // population rather than a list.
@@ -514,7 +617,7 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 		t.Run(one.name, func(t *testing.T) {
 			t.Parallel()
 			var sink bytes.Buffer
-			one.drive(t, &sink)
+			one.drive(t, &sink, one.spec)
 
 			// REACH CHECK, hard failure. A fixture that landed on a
 			// different arm would otherwise assert about a line this
@@ -532,16 +635,31 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 					"it claims to test.\nemitted:\n%s", one.discriminator, sink.String())
 			}
 
+			before, after := cohortCountsOf(t, line)
+			membersMeasured := before
+			if one.measuresNarrowedCohort {
+				membersMeasured = after
+			}
+			want := one.spec.expect(membersMeasured)
+			want.assertPairwiseDistinct(t, one.name)
+
 			fields := attributionFieldsOf(t, line)
+			for name, wantCount := range want.byBucket() {
+				if fields[name] != wantCount {
+					t.Errorf("attribution_%s = %d, want %d -- counted off the fixture's own items and the %d "+
+						"cohort members this arm's line reports, never recomputed from the production split\nline: %s",
+						name, fields[name], wantCount, membersMeasured, line)
+				}
+			}
+
 			sum := fields["global"] + fields["member"] + fields["group"] + fields["multi_group"]
 			measured := measuredItemsOf(t, line)
 			if sum != measured {
 				t.Errorf("the four attribution dimensions sum to %d but measured_items is %d on the same line: "+
 					"this arm's split describes a different document from its own count\nline: %s", sum, measured, line)
 			}
-			if measured > 0 && sum == 0 {
-				t.Errorf("this arm charged %d items and reported an all-zero split -- the one reading that "+
-					"cannot be true\nline: %s", measured, line)
+			if measured != want.total() {
+				t.Errorf("measured_items = %d, want %d from the fixture\nline: %s", measured, want.total(), line)
 			}
 		})
 	}
