@@ -235,56 +235,81 @@ func TestEveryProviderDisclosesShapeRejectionAlongsideItsOwnSubjectKind(t *testi
 		t.Fatalf("devhealthfacts.NewProviders() returned %d providers, want %d -- if a provider was deliberately added or removed, update this pin AND add/remove its well-shaped constructor in wellShapedSubjectByKind", len(providers), wantProviderCount)
 	}
 
+	exercisedPairs := 0
 	for _, provider := range providers {
 		capability := provider.Capability()
-		t.Run(string(capability.Name), func(t *testing.T) {
-			if len(capability.SupportedSubjectKinds) == 0 {
-				t.Fatalf("provider %s declares no SupportedSubjectKinds", capability.Name)
-			}
-			kind := capability.SupportedSubjectKinds[0]
-			wellShaped, ok := wellShapedSubjectByKind[kind]
-			if !ok {
-				t.Fatalf("no well-shaped constructor registered for subject kind %q (provider %s) -- add one to wellShapedSubjectByKind", kind, capability.Name)
-			}
-			shapeRejected := contextfabric.SubjectRef{Kind: kind, CanonicalID: "shape-rejected-sibling", Label: "shape-rejected-sibling"}
+		if len(capability.SupportedSubjectKinds) == 0 {
+			t.Fatalf("provider %s declares no SupportedSubjectKinds", capability.Name)
+		}
+		// codex terra xhigh r2 (EXECUTED): a table that only ever drives
+		// SupportedSubjectKinds[0] leaves every OTHER declared kind's own
+		// rejectedCount accumulation branch completely unexercised -- for a
+		// multi-kind provider (e.g. IdentityProvider: repository AND work
+		// item, each with its OWN "ids, bySubject, kindRejected :=
+		// v2Index/subjectIndex(...); rejectedCount += kindRejected" site) a
+		// mutation that breaks ONLY the non-first kind's accumulation
+		// compiled and survived this table entirely. Iterate every
+		// declared kind, not just the first, so every accumulation site
+		// gets its own subtest.
+		for _, kind := range capability.SupportedSubjectKinds {
+			kind := kind
+			exercisedPairs++
+			t.Run(string(capability.Name)+"/"+string(kind), func(t *testing.T) {
+				wellShaped, ok := wellShapedSubjectByKind[kind]
+				if !ok {
+					t.Fatalf("no well-shaped constructor registered for subject kind %q (provider %s) -- add one to wellShapedSubjectByKind", kind, capability.Name)
+				}
+				shapeRejected := contextfabric.SubjectRef{Kind: kind, CanonicalID: "shape-rejected-sibling", Label: "shape-rejected-sibling"}
 
-			result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
-				Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
-				Kind: capability.Kind, Subjects: []contextfabric.SubjectRef{wellShaped(), shapeRejected},
+				result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+					Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+					Kind: capability.Kind, Subjects: []contextfabric.SubjectRef{wellShaped(), shapeRejected},
+				})
+				if err != nil {
+					t.Fatalf("ReadFacts() error = %v", err)
+				}
+
+				if result.State != contextfabric.SourceTruncated {
+					t.Fatalf("State = %q, want %q: this provider's own shape-rejected %s sibling was not disclosed", result.State, contextfabric.SourceTruncated, kind)
+				}
+				if !strings.Contains(result.Reason, "subject_id_shape_rejected") {
+					t.Fatalf("Reason = %q, want it to contain %q", result.Reason, "subject_id_shape_rejected")
+				}
+				if result.OmittedCount != 1 {
+					t.Fatalf("OmittedCount = %d, want 1", result.OmittedCount)
+				}
+
+				var found bool
+				for _, record := range handler.snapshot() {
+					if record.Message != "context_fabric_subject_id_shape_rejected" {
+						continue
+					}
+					attrs := recordAttrs(record)
+					producer, ok := attrs["producer"]
+					if !ok || producer.String() != capability.Name {
+						continue
+					}
+					recordedKind, ok := attrs["kind"]
+					if !ok || recordedKind.String() != string(capability.Kind) {
+						continue
+					}
+					found = true
+				}
+				if !found {
+					t.Fatalf("no context_fabric_subject_id_shape_rejected slog record emitted for producer=%s kind=%s", capability.Name, capability.Kind)
+				}
 			})
-			if err != nil {
-				t.Fatalf("ReadFacts() error = %v", err)
-			}
-
-			if result.State != contextfabric.SourceTruncated {
-				t.Fatalf("State = %q, want %q: this provider's own shape-rejected sibling was not disclosed", result.State, contextfabric.SourceTruncated)
-			}
-			if !strings.Contains(result.Reason, "subject_id_shape_rejected") {
-				t.Fatalf("Reason = %q, want it to contain %q", result.Reason, "subject_id_shape_rejected")
-			}
-			if result.OmittedCount != 1 {
-				t.Fatalf("OmittedCount = %d, want 1", result.OmittedCount)
-			}
-
-			var found bool
-			for _, record := range handler.snapshot() {
-				if record.Message != "context_fabric_subject_id_shape_rejected" {
-					continue
-				}
-				attrs := recordAttrs(record)
-				producer, ok := attrs["producer"]
-				if !ok || producer.String() != capability.Name {
-					continue
-				}
-				recordedKind, ok := attrs["kind"]
-				if !ok || recordedKind.String() != string(capability.Kind) {
-					continue
-				}
-				found = true
-			}
-			if !found {
-				t.Fatalf("no context_fabric_subject_id_shape_rejected slog record emitted for producer=%s kind=%s", capability.Name, capability.Kind)
-			}
-		})
+		}
+	}
+	// Salted positive: a (provider, kind) pair count that stayed at 21
+	// would mean the inner loop silently degenerated back to "first kind
+	// only" -- this package's providers declare 35 (provider, kind) pairs
+	// in total (most support 1-3 kinds each), so this must exceed the
+	// provider count.
+	if exercisedPairs <= wantProviderCount {
+		t.Fatalf("exercisedPairs = %d, want > %d (provider count) -- the per-kind loop did not run for any multi-kind provider", exercisedPairs, wantProviderCount)
+	}
+	if exercisedPairs != 35 {
+		t.Fatalf("exercisedPairs = %d, want exactly 35 -- a provider's SupportedSubjectKinds list changed; update this pin", exercisedPairs)
 	}
 }
