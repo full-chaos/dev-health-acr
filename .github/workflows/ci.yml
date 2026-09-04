@@ -336,8 +336,9 @@ jobs:
     # skip this job too on the leg that was never going to run anyway.
     needs: [mirror-preflight-hosted, mirror-preflight-self-hosted]
     if: >-
-      needs.mirror-preflight-hosted.result == 'success'
-      || needs.mirror-preflight-self-hosted.result == 'success'
+      always()
+      && (needs.mirror-preflight-hosted.result == 'success'
+      || needs.mirror-preflight-self-hosted.result == 'success')
     env:
       # CHAOS-4855: redirect every registry-less Docker Hub pull this suite
       # makes (postgres, clickhouse, falkordb, and testcontainers-go's own
@@ -462,8 +463,9 @@ jobs:
     # whichever leg succeeded.
     needs: [mirror-preflight-hosted, mirror-preflight-self-hosted]
     if: >-
-      needs.mirror-preflight-hosted.result == 'success'
-      || needs.mirror-preflight-self-hosted.result == 'success'
+      always()
+      && (needs.mirror-preflight-hosted.result == 'success'
+      || needs.mirror-preflight-self-hosted.result == 'success')
     strategy:
       fail-fast: false
       matrix:
@@ -994,8 +996,9 @@ jobs:
     # whichever leg succeeded.
     needs: [mirror-preflight-hosted, mirror-preflight-self-hosted]
     if: >-
-      needs.mirror-preflight-hosted.result == 'success'
-      || needs.mirror-preflight-self-hosted.result == 'success'
+      always()
+      && (needs.mirror-preflight-hosted.result == 'success'
+      || needs.mirror-preflight-self-hosted.result == 'success')
     env:
       # CHAOS-4855: golang (Dockerfile), tonistiigi/binfmt, moby/buildkit,
       # aquasec/trivy, anchore/syft, and the verify.sh postgres probe all
@@ -1077,8 +1080,9 @@ jobs:
     # whichever leg succeeded.
     needs: [mirror-preflight-hosted, mirror-preflight-self-hosted]
     if: >-
-      needs.mirror-preflight-hosted.result == 'success'
-      || needs.mirror-preflight-self-hosted.result == 'success'
+      always()
+      && (needs.mirror-preflight-hosted.result == 'success'
+      || needs.mirror-preflight-self-hosted.result == 'success')
     env:
       # CHAOS-4855: see container-contract-smoke above.
       # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
@@ -1148,8 +1152,9 @@ jobs:
     # whichever leg succeeded.
     needs: [mirror-preflight-hosted, mirror-preflight-self-hosted]
     if: >-
-      needs.mirror-preflight-hosted.result == 'success'
-      || needs.mirror-preflight-self-hosted.result == 'success'
+      always()
+      && (needs.mirror-preflight-hosted.result == 'success'
+      || needs.mirror-preflight-self-hosted.result == 'success')
     env:
       # CHAOS-4855: see container-contract-smoke above.
       # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
