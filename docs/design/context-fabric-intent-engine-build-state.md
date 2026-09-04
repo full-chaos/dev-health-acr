@@ -59,8 +59,29 @@ One row per seam. "Shipped" means merged and confirmed on `origin/main`.
 
 ## 14.2 Decisions since D5
 
-Written in §10's form: the choice, the options and what each costs, the ruling, who ruled and when,
-and where it is recorded.
+§10's form is the target: the choice, the options and what each costs, the ruling, who ruled and
+when, and where it is recorded. **Four of these eight do not reach it, and saying which is part of
+the record rather than a gap to paper over.**
+
+| | D6 | D7 | D8 | D9 | D10 | D11 | D12 | D13 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| costed options | ✓ | ✓ | ✓ | ✓ | — | — | — | — |
+| named decider + date | ✓ | ✓ | ✓ | — | — | — | — | — |
+
+**D6, D7 and D8 are decisions in §10's full sense** — a live choice, options costed on both sides, a
+named ruler and a date. **D9 carries costed options but no named ruler**: it is a lane-level
+engineering ruling recorded on its ticket and its pull request, not an owner ruling, and the page
+should not dress it as one. **D10 through D13 are not choices at all.** They are amendments and
+records: an allow-list replacing a deny-list, a disclosure mechanism, a negative result about a CI
+migration, and a folded-in erratum. Each has a rationale but no rejected alternative that was ever
+live, so an options table would be manufactured. A costed-options table that only costs the losers
+is not a decision record, it is a justification — so where there was no real contest, this section
+says so instead of inventing one.
+
+One consequence worth stating plainly: **D9's own chosen option is described by what it buys, not by
+what it costs.** Its cost is real and is stated in the section body rather than the table — the
+gap-fill runs on every serve, adds up to 46,648 bytes to a document that may already be near its
+ceiling, and moves the budget assertion later than it used to run.
 
 ### D6 — chain-identity containment: per-hop property, or one choke point per axis?
 
@@ -133,7 +154,8 @@ only**, and the corpus cannot exercise it: no corpus row reaches a turn that nam
 *and* has a confirmed kind behind it, so the chain had to be constructed synthetically. Four
 further defects were found in the containment design's own review and **deferred regardless of the
 ruling**: a pre-validation structure veto still records a disproved receipt as ancestry
-(`engine.go:1152`, MEDIUM); two arms of the laundering test **pass without the behaviour
+(`internal/contextfabric/engine.go:1172` on `origin/main` — the lane's note cited `:1152`, which was
+its own commit's line, MEDIUM); two arms of the laundering test **pass without the behaviour
 happening** — the lane's own note reads *"The F1 results I reported are weaker than I presented
 them"*; an AST forwarding check proves "read", not "forwarded"; and a stale count comment beside a
 pin.
@@ -255,9 +277,14 @@ existed to protect.
 > the fixture), and four of the five fresh-result exits never being measured at all. Six of the
 > nine post-plan exits funnel through it today.
 
-**Requirement rows are stamped at exactly one site** — `engine.go:1507`, where the plan is created
-— so every terminal downstream of planning carries them. That is why the population is "every exit"
-and not "the exit that derives them". An earlier revision of the branch claimed a **single**
+**Requirement rows are stamped at exactly one site** — the same place the plan itself is created,
+so every terminal downstream of planning carries them. That is why the population is "every exit"
+and not "the exit that derives them". Two anchors, because they are two different lines and an
+earlier revision of this section ran them together: on `origin/main` the plan is created at
+`internal/contextfabric/engine.go:1486` (`plan := PlanAnswer(PlanAnswerInput{`); the stamp that
+attaches the requirement rows to it, `plan.Requirements = …`, sits at `:1507` **on the open
+plan-rows change only** — line 1507 of `origin/main` is an unrelated comment. An earlier revision of
+the branch claimed a **single**
 derivation in capitals; that claim is **withdrawn** — there are two call sites (the plan site, and
 the outcome seed in `finalizeResult`), and they agree because the derivation is a pure
 deterministic function of the same frame and registry both times, checked in fact by a join test on
@@ -278,18 +305,30 @@ in both directions: every attributed outcome identity must name a planned requir
 planned requirement must be accounted for. Both arrays are bounded at **200**
 (`ContextFabricPlanRequirementsMaxCount`, `ContextFabricPlanRequirementOutcomeMaxCount`).
 
-**Four reducing sites, one derivation.** A sweep of every site that reduces a requirement and
-states `served` and `declared` found four, and they are named rather than described: candidate
-narrowing (`requirement_outcomes.go`) names a **ceiling**; the projection
+**Four reducing sites, one derivation — the derivation is an OPEN CHANGE.** A sweep of every site
+that reduces a requirement and states `served` and `declared` found four, and they are named rather
+than described: candidate narrowing (`requirement_outcomes.go`) names a **ceiling**; the projection
 (`answerprojection/outcome_append.go`) names a **byte ceiling**; the membership count
 (`membership_cardinality.go`) carries a **basis and a ceiling**; the reuse degrade
 (`answer_reuse_degrade.go`) names a **coverage code and nothing else**. A two-cause refinement could
-represent three of four. The refinement therefore mirrors the enclosing row's full cause model —
-ordering, ceiling, coverage, at least one required — and **one** derivation
-(`ContextFabricReductionRefinement` / `ContextFabricWithReductionRefinement` in
-`internal/contracts/v1/context_fabric_requirement_outcome.go`) reads a row's own counts and causes
-and returns the step they imply. Four hand-built chains would have been four chances for a step to
-contradict the row it sits on.
+represent three of four.
+
+**The four sites do not all append the same number of rows, and the difference is deliberate.**
+Three append one row each. The projection appends **one row per non-zero omission** — it iterates
+its own omission set and appends a row for each — because it cuts by a byte budget over the finished
+document and does not know which requirement a dropped item was serving. Its rows therefore carry
+**no requirement identity at all**, which the code states positively rather than leaving to
+inference: attaching the nearest plausible requirement would be a wrong attribution, and a reader
+acts on those. Verified on `origin/main` at
+`internal/contextfabric/answerprojection/outcome_append.go` (`appendProjectionOutcomes`).
+
+The refinement mirrors the enclosing row's full cause model — ordering, ceiling, coverage, at least
+one required — and **one** derivation reads a row's own counts and causes and returns the step they
+imply. Four hand-built chains would have been four chances for a step to contradict the row it sits
+on. **This derivation is NOT on `origin/main`.** The field, its validator and the
+`ContextFabricReductionRefinement` / `ContextFabricWithReductionRefinement` helpers in
+`internal/contracts/v1/context_fabric_requirement_outcome.go` all arrive with the open plan-rows
+change; reading `origin/main` for either name returns nothing.
 
 **Bounded growth, measured.**
 
@@ -627,6 +666,14 @@ eight "survivors" were unproven, and a zero-RUN result is now a harness error by
 §11's form: what it changed, the review rounds and their verdicts, and the merge. All merge SHAs
 were confirmed ancestors of `origin/main` on 2026-09-04.
 
+> **Every date in this section is UTC**, taken from the forge's own merge timestamps, which is also
+> what the session merge ledger recorded. This needs saying because the commit metadata carries a
+> `-07:00` offset, so `git show -s --format=%cd` prints a **local** date one calendar day earlier
+> for nine of these rows: `12a3f7e8`, `d54d4358`, `7cdbb041`, `905571e2`, `f3243226`, `3f325aad`,
+> `c39f3364`, `054ff82e` and `5631984f` all read `2026-09-03` locally and `2026-09-04` in UTC.
+> Neither reading is wrong; an undeclared one is. The dates below are not changed — the timezone is
+> now stated, so a reader checking with `git show` knows why the two disagree.
+
 | PR | seam | change | rounds / verdicts | merge · date |
 | --- | --- | --- | --- | --- |
 | #406 | S7b-i kind offer | thread the declared kind into the kind-offer material | binding CI 22/22 | `248d7ca0` · 09-03 |
@@ -687,11 +734,11 @@ flowchart TB
     RANK --> SYN
     SYN --> ASM["assembled result"]
 
-    subgraph reduce["the four reducing sites — each appends ONE outcome row, and its refinement step is DERIVED from that row's own counts and causes"]
-        R1["candidate narrowing<br/>basis: ceiling"]
-        R2["projection trim<br/>basis: byte ceiling"]
-        R3["membership count<br/>basis plus ceiling"]
-        R4["reuse degrade<br/>basis: coverage code"]
+    subgraph reduce["the four reducing sites. Three append ONE outcome row each; the projection appends ONE PER NON-ZERO OMISSION. The DERIVED refinement step on those rows is an OPEN CHANGE, not on main."]
+        R1["candidate narrowing<br/>basis: ceiling<br/>one row"]
+        R2["projection trim<br/>basis: byte ceiling<br/>one row PER non-zero omission"]
+        R3["membership count<br/>basis plus ceiling<br/>one row"]
+        R4["reuse degrade<br/>basis: coverage code<br/>one row"]
     end
 
     ASM --> R1
