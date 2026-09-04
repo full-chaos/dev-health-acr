@@ -1094,11 +1094,31 @@ func contextFabricReuseModelIdentities(lookup func(string) (string, bool)) []str
 	return identities
 }
 
+// newInvestigationResultID mints the identifier every stored investigation
+// result is addressed by. 16 bytes of crypto/rand, hex-encoded: 128 bits.
+//
+// The entropy matters more than it used to. A result id is a BEARER
+// REFERENCE under the chain-identity field -- a caller who names a prior
+// result id inherits that result's confirmed axes -- so a predictable id
+// would be an in-org privilege-escalation primitive, not merely an ugly
+// identifier.
+//
+// crypto/rand.Read's error is deliberately NOT handled, and that is a
+// statement about the toolchain rather than an oversight: since Go 1.24 it
+// never returns a non-nil error. On an entropy failure it calls fatal() and
+// terminates the process (go.dev/issue/66821) -- the toolchain source ends
+// that path with panic("unreachable"). go.mod requires go 1.27.0.
+//
+// This function previously carried a `result_fallback_<UnixNano>` fallback
+// on that error branch. It was removed rather than repaired: the value was
+// guessable, and the branch was unreachable, so the fallback could never
+// have executed but did advertise a degraded-entropy mode that does not
+// exist. Crashing on an entropy failure is the correct behaviour for an
+// identifier with a security property; silently minting a weaker id is not.
 func newInvestigationResultID() string {
 	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		return fmt.Sprintf("result_fallback_%d", time.Now().UnixNano())
-	}
+	//nolint:errcheck // see the doc comment: this error is unreachable by construction.
+	rand.Read(buf)
 	return "result_" + hex.EncodeToString(buf)
 }
 
