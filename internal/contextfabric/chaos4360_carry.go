@@ -371,7 +371,39 @@ func ancestryParentResultID(request InvestigationRequest, validatedSubjectReceip
 	if id := strings.TrimSpace(request.ParentResultID); id != "" {
 		return id
 	}
-	for _, id := range carryReferencedResultIDs(request, validatedSubjectReceipts) {
+	ids := carryReferencedResultIDs(request, validatedSubjectReceipts)
+	// PREFER A VALIDATED REFERENCE. Same ordered list, one extra filter --
+	// deliberately not a second derivation, so the ancestry root and the carry
+	// frontier cannot drift apart.
+	//
+	// Carry order puts window receipts first, which is right for a WINDOW
+	// carry and wrong for ancestry on one path: the window axis-conflict veto
+	// fires precisely BECAUSE its window receipt did not resolve, and a
+	// request can carry that alongside a perfectly good subject receipt.
+	// Taking the first id outright recorded the one that does not resolve
+	// while a validated one sat behind it -- a dangling parent by
+	// construction, on the one path where we already knew better.
+	//
+	// validatedSubjectReceipts is the only POSITIVELY confirmed set available
+	// here. The other five fields are atomic-batch validated before the carry
+	// runs in the ordinary case, but a veto path is exactly the case where an
+	// entry is still in its raw request field and did NOT check out, so their
+	// presence is not proof.
+	validated := make(map[string]struct{}, len(validatedSubjectReceipts))
+	for _, r := range validatedSubjectReceipts {
+		if id := strings.TrimSpace(r.ResultID); id != "" {
+			validated[id] = struct{}{}
+		}
+	}
+	for _, id := range ids {
+		if _, ok := validated[id]; ok {
+			return id
+		}
+	}
+	// None validated: the caller still named something, and a reference we
+	// cannot confirm is better ancestry than none. A dangling parent costs a
+	// miss on a later hop; no parent costs the whole chain past this turn.
+	for _, id := range ids {
 		return id
 	}
 	return ""

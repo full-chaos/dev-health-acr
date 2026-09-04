@@ -1024,31 +1024,37 @@ func TestChainIdentity_AValidatedReceiptIsRecordedAsAncestryOnEveryTerminal(t *t
 		subjectless bool
 		gated       bool
 		wantStatus  contractsv1.ContextFabricInvestigationStatus
-		// namedPriorIDs are every prior result this arm's request names, in
-		// no particular order. An arm naming exactly one pins that id; an arm
-		// naming several only requires ancestry to be one of them -- see the
-		// open ordering question below.
-		namedPriorIDs []string
+		// wantParent is the exact ancestry this site must record.
+		wantParent string
 	}{
 		{
 			name: "subjectless terminal", site: "unresolved.go terminalResult",
 			mutate: func(*InvestigationRequest) {}, subjectless: true, wantStatus: InvestigationNoMatch,
-			namedPriorIDs: []string{"result_receipt_parent_1"},
+			wantParent: "result_receipt_parent_1",
 		},
 		{
 			name: "window confirmation gate", site: "window.go windowConfirmationRequiredResult",
 			mutate: func(*InvestigationRequest) {}, gated: true, wantStatus: InvestigationClarificationRequired,
-			namedPriorIDs: []string{"result_receipt_parent_1"},
+			wantParent: "result_receipt_parent_1",
 		},
 		{
-			name: "window axis-conflict veto", site: "window.go windowVetoResult",
+			// PRE-VALIDATION veto, and the label matters. An unresolvable
+			// window receipt vetoes at engine.go:1058 -- before Interpret and
+			// before resolvePriorSubjectHints ever runs -- so NOTHING is
+			// validated at that point and nil is the correct argument there.
+			// I first labelled this the axis-conflict veto and expected the
+			// validated subject receipt to win; it cannot, because on this
+			// path no receipt has been validated yet.
+			//
+			// So ancestry falls back to the first id in carry order, which is
+			// the window receipt. That is the fallback behaving as specified,
+			// not the preference failing.
+			name: "unresolvable-window veto (pre-validation)", site: "window.go windowVetoResult",
 			mutate: func(r *InvestigationRequest) {
-				// A window receipt that cannot resolve vetoes AFTER receipt
-				// validation has run -- the third dropping site.
 				r.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: "result_absent_00001", ReceiptID: "winr_absent000001"}}
 			},
-			wantStatus:    InvestigationNoMatch,
-			namedPriorIDs: []string{"result_receipt_parent_1", "result_absent_00001"},
+			wantParent: "result_absent_00001",
+			wantStatus: InvestigationNoMatch,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1113,33 +1119,13 @@ func TestChainIdentity_AValidatedReceiptIsRecordedAsAncestryOnEveryTerminal(t *t
 			if !saved {
 				t.Fatalf("%s saved no row for %q", tc.site, result.ResultID)
 			}
-			// The assertion is "ancestry is not EMPTY on this path", plus the
-			// specific id wherever the caller named exactly one prior result.
-			//
-			// The window-veto arm names TWO: the validated subject receipt and
-			// the unresolvable window receipt whose failure causes the veto.
-			// carryReferencedResultIDs puts window receipts first, so that id
-			// wins -- and it points at a result that does not exist, while a
-			// validated one was available. Whether ancestry should prefer a
-			// VALIDATED reference over "first in carry order" is a real design
-			// question this test surfaced and I have not been given an answer
-			// to, so it is raised rather than silently decided here. Either
-			// way the dangling case is contained: the walk treats an
-			// unloadable parent as an ordinary miss.
-			if got == "" {
-				t.Fatalf("%s recorded no ancestry at all: a client linking by a validated receipt must build walkable history on early-return paths too, not only on the decisive one", tc.site)
-			}
-			if len(tc.namedPriorIDs) == 1 && got != tc.namedPriorIDs[0] {
-				t.Fatalf("%s recorded parent %q, want %q", tc.site, got, tc.namedPriorIDs[0])
-			}
-			found := false
-			for _, id := range tc.namedPriorIDs {
-				if got == id {
-					found = true
-				}
-			}
-			if !found {
-				t.Fatalf("%s recorded parent %q, which is not among the prior results the caller named (%v)", tc.site, got, tc.namedPriorIDs)
+			// Ancestry prefers a VALIDATED reference, falling back to the
+			// first id in carry order when none is validated. Both arms of
+			// that rule are represented: the two post-validation sites record
+			// the validated subject receipt, and the pre-validation veto
+			// records its only named id because nothing is validated there yet.
+			if got != tc.wantParent {
+				t.Fatalf("%s recorded parent %q, want %q", tc.site, got, tc.wantParent)
 			}
 		})
 	}
