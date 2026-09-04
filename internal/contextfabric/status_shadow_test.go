@@ -118,10 +118,16 @@ func TestEveryServerStatusBasisHasAFixtureThatLandsInIt(t *testing.T) {
 			frameObligations: append(baselineObligations(), ObligationReadiness),
 		},
 		{
-			basis:            ServerStatusBasisUnobservable,
-			why:              "the frame requires `count`, which this derivation cannot observe in a served result. Review found this reported as `served` -- the shadow asserting an answer complete on the strength of not having looked",
+			basis:            ServerStatusBasisCountAbsent,
+			why:              "the FRAME derives `count` and the answer states no counted cardinality. This was the `unobservable` fixture until the server step was wired: while the cardinality was prose the instrument could only DECLINE, and now that it is a field on the answer an absent one is a fact about the ANSWER",
 			result:           withPlan(nil, InvestigationResult{Status: InvestigationComplete, ClaimedFacts: oneFact()}),
 			frameObligations: []AnswerObligation{ObligationCount, ObligationEvidence, ObligationCoverage},
+		},
+		{
+			basis:            ServerStatusBasisUnobservable,
+			why:              "the frame requires `state`, which this derivation cannot observe in a served result -- the state is prose, and judging it would mean modelling what synthesis should have said. Review found an unobservable obligation reported as `served`: the shadow asserting an answer complete on the strength of not having looked",
+			result:           withPlan(nil, InvestigationResult{Status: InvestigationComplete, ClaimedFacts: oneFact()}),
+			frameObligations: []AnswerObligation{ObligationState, ObligationEvidence, ObligationCoverage},
 		},
 		{
 			basis: ServerStatusBasisCoverageDegraded,
@@ -447,9 +453,19 @@ func TestEveryObligationDeclaresWhetherTheShadowObservesIt(t *testing.T) {
 // TestAnUnobservableRequiredObligationIsNeverCalledServed is review finding
 // R3-b, pinned.
 //
-// A frame requiring `count` has no arm to fall into, so every predicate
-// reached the end and the shadow claimed `served` -- asserting an answer
-// complete on the strength of not having looked.
+// An obligation with no arm to fall into let every predicate reach the end,
+// and the shadow claimed `served` -- asserting an answer complete on the
+// strength of not having looked.
+//
+// IT WAS WRITTEN AGAINST `count`, AND `count` IS NOW OBSERVABLE: the server
+// computes the cardinality and states it on the answer, so a missing count is
+// reported as a gap in the ANSWER rather than a limit of the instrument. The
+// finding this pins is about the unobservable CLASS, not about `count`
+// specifically, so it is re-pointed at `state` -- still unobservable, and for
+// a reason that is not going to change here (the state is prose, and judging
+// it would mean modelling what synthesis should have said). Re-pointed rather
+// than deleted: the class is exactly as reachable as it was, and deleting the
+// only fixture in a tier is how a tier dies quietly.
 func TestAnUnobservableRequiredObligationIsNeverCalledServed(t *testing.T) {
 	t.Parallel()
 	plan := AnswerPlan{Family: QuestionFamilyDiscoveredCohortRanking}
@@ -457,9 +473,9 @@ func TestAnUnobservableRequiredObligationIsNeverCalledServed(t *testing.T) {
 		Status: InvestigationComplete, AnswerPlan: &plan, ClaimedFacts: oneFact(),
 	}
 
-	shadow := DeriveServerStatus(result, []AnswerObligation{ObligationCount, ObligationEvidence, ObligationCoverage})
+	shadow := DeriveServerStatus(result, []AnswerObligation{ObligationState, ObligationEvidence, ObligationCoverage})
 	if shadow.Basis == ServerStatusBasisServed {
-		t.Fatal("a frame requiring `count` -- which this derivation cannot observe -- was reported `served`")
+		t.Fatal("a frame requiring `state` -- which this derivation cannot observe -- was reported `served`")
 	}
 	if shadow.Basis != ServerStatusBasisUnobservable {
 		t.Fatalf("basis %q, want %q", shadow.Basis, ServerStatusBasisUnobservable)

@@ -2103,6 +2103,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// the demands it holds the answer against are the ones the served
 		// plan actually states.
 		e.telemetry.RecordServerStatusShadow(ctx, principal, DeriveServerStatus(result, familyOutcome.FrameObligations))
+		// The `membership_cardinality` step's result, from the SAME
+		// once-per-served-result point and for the same reason: the step
+		// runs inside finalizeResult, which runs again on a retry, and a
+		// cardinality counted twice is a count an operator cannot trust.
+		//
+		// It READS the served document's own row rather than recomputing
+		// the number for the log line. A telemetry value derived
+		// independently of the field it describes can disagree with it, and
+		// then the run's own artifacts hold two answers to "how many".
+		if event, counted := membershipCardinalityEventFrom(result, plan.Family); counted {
+			e.telemetry.RecordMembershipCardinality(ctx, principal, event)
+		}
 	}
 	// CHAOS-4690: the SINGLE stamp point for the decisive path -- AFTER
 	// finalizeResult/fitAssembledResult (fitAssembledResult can re-run

@@ -1364,7 +1364,15 @@ func renderParityArtifact(cells []parityCell) string {
 	out.WriteString("# `retirable_on_this_evidence` requires: every cell is subsumed, not_applicable,\n")
 	out.WriteString("# or a loss under a SUPERSEDING cause. One blocking loss anywhere is enough to\n")
 	out.WriteString("# withhold it. This verdict does NOT discharge design 13.9's B7/B9 gates, which\n")
-	out.WriteString("# are a labelled-set before/after programme on the rig, not a table test.\n\n")
+	out.WriteString("# are a labelled-set before/after programme on the rig, not a table test.\n")
+	out.WriteString("#\n")
+	out.WriteString("# `RETIRABLE on this evidence` IS NOT A RETIREMENT, AND NOTHING HERE RETIRES\n")
+	out.WriteString("# ANYTHING. It says one thing only: on the corpus above, this authority's\n")
+	out.WriteString("# contribution is either reproduced by the derived rows or lost under a cause\n")
+	out.WriteString("# ruled superior. Removing the authority is a SEPARATE change, gated on the\n")
+	out.WriteString("# B7/B9 rig programme named above, and it carries its own before/after\n")
+	out.WriteString("# measurement on real answers -- which this table, computed from frames\n")
+	out.WriteString("# alone, cannot stand in for.\n\n")
 	for _, authority := range planningAuthorities() {
 		blocking, superior, cells4 := 0, 0, 0
 		nonReproducible := false

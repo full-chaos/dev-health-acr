@@ -19,6 +19,7 @@ package contextfabric
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -95,8 +96,9 @@ func countingCohort(kind SubjectKind, size int) *Cohort {
 //
 // maxMembers is threaded onto the request so a caller can force the engine's
 // own narrowing to run; zero means "wide enough that nothing narrows".
-func runCountingInvestigation(t *testing.T, cohortSize int, maxMembers int) InvestigationResult {
+func runCountingInvestigation(t *testing.T, cohortSize int, maxMembers int) (InvestigationResult, *recordingTelemetry) {
 	t.Helper()
+	telemetry := &recordingTelemetry{}
 	frame := countingFrame(SubjectTeam)
 	cohort := countingCohort(SubjectTeam, cohortSize)
 	anchor := SubjectRef{Kind: SubjectOrganization, CanonicalID: "org_1", Label: "Org"}
@@ -151,7 +153,7 @@ func runCountingInvestigation(t *testing.T, cohortSize int, maxMembers int) Inve
 			}, nil
 		}),
 		Results:      &resultStoreStub{},
-		Telemetry:    &recordingTelemetry{},
+		Telemetry:    telemetry,
 		Requirements: registryDeriver{},
 	}, EngineOptions{
 		ServiceVersion: "acr-test",
@@ -180,7 +182,7 @@ func runCountingInvestigation(t *testing.T, cohortSize int, maxMembers int) Inve
 		t.Fatalf("Investigate() status = %q, want %q -- this fixture never reached assembly, so it proves nothing",
 			result.Status, InvestigationComplete)
 	}
-	return result
+	return result, telemetry
 }
 
 // TestTheCountObligationReachesTheServedDocumentAsACountableField is THE
@@ -198,7 +200,7 @@ func runCountingInvestigation(t *testing.T, cohortSize int, maxMembers int) Inve
 func TestTheCountObligationReachesTheServedDocumentAsACountableField(t *testing.T) {
 	t.Parallel()
 	const members = 3
-	result := runCountingInvestigation(t, members, 0)
+	result, _ := runCountingInvestigation(t, members, 0)
 
 	rows := countOutcomeRows(result, contractsv1.ContextFabricOutcomeStageAssembledResult)
 	if len(rows) == 0 {
@@ -252,7 +254,7 @@ func TestANarrowedMemberSetIsCountedAsALowerBound(t *testing.T) {
 	t.Parallel()
 	const discovered = 8
 	const ceiling = 3
-	result := runCountingInvestigation(t, discovered, ceiling)
+	result, _ := runCountingInvestigation(t, discovered, ceiling)
 
 	rows := countOutcomeRows(result, contractsv1.ContextFabricOutcomeStageAssembledResult)
 	if len(rows) != 1 {
@@ -352,5 +354,133 @@ func TestAnAnswerMissingItsCountIsNeitherServedNorDeclined(t *testing.T) {
 		t.Fatal("a frame requiring `count`, answered without one, was DECLINED as unobservable -- " +
 			"the derivation can observe a served count now, so an absent one is a finding about the ANSWER, " +
 			"not a limit of the instrument")
+	}
+}
+
+// TestTheCountReachesTelemetryFromTheServedDocument is the same-change
+// telemetry bar, verified at the CONSUMER.
+//
+// It drives Engine.Investigate and reads the recorder back. A recorder
+// nothing reads is a discarding fake -- deleting the production emit would
+// leave a package of green tests -- so the assertion is on what the sink
+// RECEIVED, and the battery mutates the emit away to prove it.
+//
+// It also asserts the event AGREES with the served document. The line is
+// built by reading the row rather than recounting the cohort precisely so
+// the two cannot disagree; a test that only checked the number was plausible
+// would not notice if they did.
+func TestTheCountReachesTelemetryFromTheServedDocument(t *testing.T) {
+	t.Parallel()
+	const members = 5
+	result, telemetry := runCountingInvestigation(t, members, 0)
+
+	if len(telemetry.membershipCardinalities) != 1 {
+		t.Fatalf("membership cardinality events = %d, want exactly 1 for one served answer -- "+
+			"zero means the count reached the reader with nothing in the run's own artifacts to diagnose it, "+
+			"and more than one means a retry double-counted",
+			len(telemetry.membershipCardinalities))
+	}
+	event := telemetry.membershipCardinalities[0]
+
+	rows := countOutcomeRows(result, contractsv1.ContextFabricOutcomeStageAssembledResult)
+	if len(rows) != 1 {
+		t.Fatalf("assembled-result `count` rows = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if event.Served != row.Served || event.Declared != row.Declared {
+		t.Fatalf("telemetry served/declared = %d/%d, served document says %d/%d -- "+
+			"the run's artifacts hold two answers to `how many`",
+			event.Served, event.Declared, row.Served, row.Declared)
+	}
+	if event.Outcome != row.Outcome || event.Requirement != row.Requirement {
+		t.Fatalf("telemetry outcome/requirement = %q/%q, served document says %q/%q",
+			event.Outcome, event.Requirement, row.Outcome, row.Requirement)
+	}
+	if event.Served != members {
+		t.Fatalf("telemetry served = %d, want the %d members the fixture resolved", event.Served, members)
+	}
+	// The coverage half. A cardinality without it reads as a claim about the
+	// population, which the step does not make.
+	if result.Cohort == nil {
+		t.Fatal("the fixture served no cohort")
+	}
+	if event.CohortComplete != result.Cohort.Complete || event.CohortTruncated != result.Cohort.Truncated {
+		t.Fatalf("telemetry cohort_complete/cohort_truncated = %v/%v, served cohort says %v/%v",
+			event.CohortComplete, event.CohortTruncated, result.Cohort.Complete, result.Cohort.Truncated)
+	}
+}
+
+// TestMembershipCardinalityLineCarriesItsRequiredKeys is the REQUIRED half of
+// the log line's key set.
+//
+// `cohort_complete`/`cohort_truncated` are required rather than optional, and
+// that is the point of the line: the step counts the RESOLVED member set, so
+// a number without those two reads as a population claim it does not make.
+func TestMembershipCardinalityLineCarriesItsRequiredKeys(t *testing.T) {
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordMembershipCardinality(
+			context.Background(), storage.Principal{OrgID: "org_sink_test"},
+			MembershipCardinalityEvent{
+				Family:      QuestionFamilyScopedCohortStatus,
+				Requirement: "count/member/team",
+				Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+				Served:      4, Declared: 4, CohortComplete: true,
+			})
+	})
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1", len(records))
+	}
+	for _, required := range []string{
+		"org_id", "family", "requirement", "outcome", "served", "declared",
+		"cohort_complete", "cohort_truncated",
+	} {
+		if _, present := records[0][required]; !present {
+			t.Errorf("the membership cardinality line is missing key %q", required)
+		}
+	}
+	// The narrowing keys are absent on an exact count, so a reader filtering
+	// on `basis` sees reductions alone.
+	if _, present := records[0]["basis"]; present {
+		t.Error("an exact count named a narrowing basis; no selection ran")
+	}
+}
+
+// TestMembershipCardinalityLineCarriesNoKeyOutsideItsAllowList is the
+// ALLOW-LIST half. Counts, closed enums and a server-derived requirement
+// coordinate only -- no subject label, no question, no member id.
+func TestMembershipCardinalityLineCarriesNoKeyOutsideItsAllowList(t *testing.T) {
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordMembershipCardinality(
+			context.Background(), storage.Principal{OrgID: "org_sink_test"},
+			MembershipCardinalityEvent{
+				Family:      QuestionFamilyScopedCohortStatus,
+				Requirement: "count/member/team",
+				Outcome:     contractsv1.ContextFabricRequirementNarrowed,
+				Served:      3, Declared: 8,
+				Basis:           contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical,
+				Overrun:         contractsv1.ContextFabricBudgetOverrunItems,
+				CohortTruncated: true,
+			})
+	})
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1", len(records))
+	}
+	allowed := map[string]bool{
+		"time": true, "level": true, "msg": true, "request_id": true,
+		"org_id": true, "family": true, "requirement": true, "outcome": true,
+		"served": true, "declared": true, "cohort_complete": true,
+		"cohort_truncated": true, "basis": true, "overrun": true,
+	}
+	for key := range records[0] {
+		if !allowed[key] {
+			t.Fatalf("membership cardinality telemetry emits unpermitted key %q -- if this field is genuinely safe, add it to the allow-list deliberately", key)
+		}
+	}
+	// The allow-list is only half a guard if the line could be empty: the
+	// narrowing keys must actually be PRESENT on a narrowed count.
+	for _, required := range []string{"basis", "overrun"} {
+		if _, present := records[0][required]; !present {
+			t.Errorf("a narrowed count did not name %q", required)
+		}
 	}
 }
