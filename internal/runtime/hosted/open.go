@@ -687,7 +687,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// caller opts in.
 	deploymentDefaultRuntime := request.options.ModelRuntimeOverride
 	if deploymentDefaultRuntime == nil {
-		deploymentDefaultRuntime, err = newContextFabricModelRuntime(ctx, os.LookupEnv, engineTelemetry)
+		deploymentDefaultRuntime, err = newContextFabricModelRuntime(ctx, os.LookupEnv, engineTelemetry, request.options.Logger)
 		if err != nil {
 			return nil, nil, nil, nil, nil, nil, err
 		}
