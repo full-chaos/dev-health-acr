@@ -1731,11 +1731,188 @@ over-quota counts at assembly for this layer to act on. The candidates-only
 reduction term above is S7c's; nothing here allocates, predicts or
 apportions.
 
+**Half of that seam has landed and half has not — see 10c**, which carries the
+per-bucket item attribution now on every assembled-result line, and the reasons
+the apportioning half was deliberately left out rather than shipped.
+
 **What this does NOT deliver.** Assembly still MEASURES and then reduces.
 Bounding assembly BY CONSTRUCTION — planning against declared caps so the
 unfittable shape is never created — is a separate, larger change. A post-hoc
 cap on candidates that called itself a plan would be that change renamed
 rather than made.
+
+### 10c — Item attribution: what the charged items were about, and why the allocator that would apportion them was not built
+
+**What landed.** `AttributeContextFabricResultItems` splits exactly the
+quantity `CountContextFabricResultItems(...).Budgeted()` reports into four
+buckets from a closed vocabulary — `global`, `member`, `group`,
+`multi_group` — and `MeasureContextFabricResponse` computes the split and the
+count from ONE document in ONE call, so the two can never describe different
+answers. The four counts ride on every `assembled_result` plan-narrowing line,
+served and refused alike.
+
+```mermaid
+flowchart TD
+    R["assembled InvestigationResult"] --> M["MeasureContextFabricResponse(result)<br/>contracts/v1 — one document, one call"]
+    M --> C["Items — per-COLLECTION counts<br/>Budgeted() = Total() − Paths"]
+    M --> A["Attribution — per-BUCKET counts<br/>global · member · group · multi_group"]
+    VOCAB["ContextFabricItemBucketVocabulary()<br/>closed, four members"] -.->|"the only names a bucket can have"| A
+    C --> INV{"Attribution.Total() == Items.Budgeted()"}
+    A --> INV
+    INV -->|"holds by construction: same result, same call"| STAMP
+
+    STAMP["PlanNarrowingEvent.recordMeasurement(measurement)<br/><b>the ONE stamping path</b><br/>MeasuredItems · MeasuredBytes · Attribution together"]
+    ARM1["arm 1 — measured FIT"] --> STAMP
+    ARM2["arm 2 — retry synthesis FAILED"] --> STAMP
+    ARM3["arm 3 — retry did not fit"] --> STAMP
+    ARM4["arm 4 — planned REFUSAL"] --> STAMP
+    ARM5["arm 5 — outcome layer served a narrowing"] --> STAMP
+    STAMP --> LINE["context fabric plan narrowing<br/>stage=assembled_result<br/>measured_items · predicted_items ·<br/>attribution_global · attribution_member ·<br/>attribution_group · attribution_multi_group"]
+
+    A -.->|"NEVER apportions · NEVER reserves · NEVER bounds"| X["✗"]
+```
+
+**Why one stamping path.** The five arms above each construct their own event.
+Every decision dimension this seam has added was, at some point, present on
+some arms and absent from others — written at three sites and read at none,
+then reaching the served emitter and dropped on both refusal arms, then dropped
+on the retry-that-fits path. Each fix was correct for the arm it addressed and
+the omission moved one branch over. So the three numbers that describe one
+measured document are written together by one method, and an AST walk over the
+package fails the build if any arm assigns them directly again. That is a
+structural remedy for a class four behavioural tests did not catch.
+
+**Why the buckets, and not a flat total.** `measured_items=34 max_items=30`
+tells an operator the answer was four items too big and nothing about where
+the thirty-four went. Whether one group's items dominated, whether the cohort
+rows alone consumed the ceiling, or whether cross-cutting drivers are landing
+in a bucket nobody expected are different problems with different fixes, and
+none of them is visible in a per-collection breakdown, because a collection
+count does not know what an item is ABOUT.
+
+**Attribution is not pricing.** An item naming several groups is ONE item and
+is charged ONCE, to `multi_group`. What such an item would COST under some
+per-group apportioning rule is a separate question, and answering it here would
+break the totals-sum invariant the moment the rule changed. The invariant is
+the only property this split must hold, so nothing that could threaten it lives
+in the same function.
+
+---
+
+#### The allocator: a decision, recorded
+
+The change that added the split was scoped to add an ALLOCATOR beside it — a
+function apportioning `MaxItems` into per-bucket pools, publishing a per-group
+`itemsPerGroup`, deriving the narration budget from the plan instead of the
+static contract caps, and exposing per-group over-quota counts for enforcement
+to act on. **That half was cut and is not in this codebase.** It was cut
+because three consecutive adversarial reviews of it each found the same two
+classes, and the fourth attempt would have been the fourth patch to a shape
+whose failure mode is structural. The reasoning is written down here rather
+than left in a branch, because the next person to reach for a per-group quota
+will reach for the same shape.
+
+**The shape that failed: partition with a remainder.** The allocator published
+
+```
+Reserved + NarrationBudget + TotalPooled() + Remainder == MaxItems
+```
+
+as an exact invariant, swept over ceilings {1, 2, 5, 30, 45, 300} × groups 0–4
+× members 0–10. It is exact, it is well tested, and it is **structurally
+incapable of catching a wrong pool**, for two independent reasons.
+
+1. **`Remainder` is defined as whatever is left.** Any error in any pool is
+   absorbed by it and the equation still balances. The only thing between that
+   and a silent under-allocation is the remainder's own bound — which was set
+   to the bucket VOCABULARY size (4) where the correct bound is the number of
+   pools actually active (2 when there are no groups), so the guard was
+   weakest in exactly the regime the live defect lived in. A mutation that
+   under-allocated the member pool by one passed both packages green.
+2. **It is an invariant over the PLAN, not over the RESULT.** It says the
+   allocator's own numbers add up. It says nothing about whether the answer
+   that gets built stays inside them — and `Budgeted()` charges quantities the
+   partition never modelled. An answer with ten cohort member rows, nine global
+   items, nine member-attributed items and six narration items satisfies every
+   published pool and totals **34 against a ceiling of 30**.
+
+**The class history, because one instance reads as carelessness and four read
+as a property of the design.**
+
+| class | round 1 | round 2 | round 3 |
+|---|---|---|---|
+| **A — a charged quantity with no pool** | narration: the whole budget apportioned, then narration given a share on top (39 vs 30) | the **member bucket** had no pool at all (34 vs 30) | member **ROWS** are charged to `Budgeted()` and never debited (34 vs 30) |
+| **B — a quota written, never read at the line** | written at 3 sites, read at **none** | reached the served emitter, dropped on **both refusal arms** (round 1's pin was lexical, so it proved the text existed, not that anything consumed it) | both arms pinned only lexically again; and the **retry-that-FITS** path emitted zeros |
+
+Four findings in each round. Each fix was correct for the instance it
+addressed, and the class simply moved. The second revision made *"a bucket in
+the vocabulary with no pool"* structurally unexpressible by deriving the pools
+from the bucket vocabulary itself — and class A promptly reappeared as a
+charged quantity **that is not a bucket at all**. That is the lesson in one
+sentence: **an invariant that can only see the quantities it enumerated will
+keep missing the ones it did not.**
+
+**The candidate shape, for whoever builds it: a LEDGER, asserted on the real
+result.** Instead of apportioning a budget into pools up front, record every
+quantity that reaches `Budgeted()` — member rows, narration, and each bucket —
+as a DEBIT against one budget, and make the invariant
+
+```
+Σ debits == CountContextFabricResultItems(result).Budgeted()
+```
+
+checked on the **served document**, never on the plan. This closes class A by
+construction: a charged quantity with no debit makes the sum disagree, and the
+sum is checked against what was actually measured, so a quantity nobody
+modelled cannot hide. It also removes the second-authority problem — exposure
+and allocation read one structure rather than computing the same number twice.
+
+Its honest costs: a ledger is a *reconciliation*, and deciding a per-group
+quota before synthesis runs still requires a forward projection, so a ledger
+validates an allocator rather than replacing one. It also needs a ruling on
+what happens when the ledger disagrees, and that is ENFORCEMENT, which §10a
+draws as S7c's. The attribution above is the ledger's measuring half, built
+first and on its own, which is why it asserts its total against `Budgeted()`
+rather than against any plan.
+
+**What stays broken, said plainly rather than left to be rediscovered.**
+Narration still reads the static contract caps — 50 drivers and 250 claimed
+facts — which say what a document may legally CARRY and nothing about what the
+item budget can AFFORD. Measured by calling the function itself:
+`cohortDriverNarrationBudget(50, 4, 250, 0)` returns 15 members at 3 drivers
+each, so with four drivers from synthesis it authorises **45 narrated judgments
+and as many minted claims — 90 items on top of synthesis' four, against a
+ceiling of 30**. (A live cohort narrates only members carrying a ranked driver,
+so a given run charges less than the authorisation; the authorisation is what
+the caps permit and what the item budget never sees.) It is a second spender on
+one ceiling and it is the largest single source of the overrun. **It is not
+fixed here and it is tracked separately**; the split above is what makes it
+visible from a run's own artifacts for the first time, which is the whole
+reason this half was worth shipping before the half that would bound it.
+
+**And one arithmetic fact that reframes the fix for whoever takes it on.**
+`planBudget` sets `MaxMembers = MaxItems − SynthesisHeadroom`, and the grouped
+headroom is a CONSTANT 20:
+
+```
+ceiling 30 (the rig default)  → MaxMembers 10 → 20 items left for everything else
+ceiling 45 (the prod overlay) → MaxMembers 25 → 20 items left for everything else
+```
+
+The non-member allowance is **20 at both ceilings** — five per group at four
+groups, identically. Raising `MaxItems` buys member slots and exactly zero
+extra items for drivers, claims, findings and candidates, so no amount of
+raising the ceiling relieves the per-group squeeze. Group-aware headroom
+(equivalently: lowering `MaxMembers` when groups are present) is the lever;
+expecting a bigger ceiling to make grouped answers fit is an arithmetic mistake
+rather than a measurement question.
+
+**Update rule.** Any change to the bucket vocabulary,
+`AttributeContextFabricResultItems`, `MeasureContextFabricResponse`'s
+measurement shape, or the arms that stamp it updates this sub-diagram in the
+same PR. A new spender on the item budget is the class this section exists to
+record: it belongs in one place that can see every claimant, never given a
+ceiling of its own.
 
 ### 10b — The grouping REFUSAL, and how its disclosure reaches the reader
 
