@@ -50,7 +50,10 @@ not repeated here.
 flowchart TD
   ASKDEV["Ask Dev UI<br/>StructureNeedsPanel.tsx (ask-dev repo)<br/>renders kind/anchor/handle/window/candidate offers"] --> API["POST /api/v1/context-fabric/investigations<br/>internal/api/context_fabric_routes.go"]
   API --> ENGINE["Engine.Investigate<br/>engine.go:435"]
-  ENGINE --> INTERP["Interpret (model call)<br/>RuntimeQuestionInterpreter.Interpret<br/>model_runtime.go:510"]
+  ENGINE --> REUSEGATE{"answer-reuse bypass<br/>reuseBypassReason (answer_reuse.go)<br/>runs BEFORE Interpret -- that ordering<br/>IS AC-3782-1's zero-model-call guarantee"}
+  REUSEGATE -->|"bypass: this turn confirmed structure,<br/>named a prior-subject receipt, or names<br/>ANY prior result the carries can walk<br/>(keyed on carryReferencedResultIDs --<br/>the carries' own seed population, so the<br/>two cannot drift). Reason counted on<br/>cf answer reuse bypass"| INTERP
+  REUSEGATE -->|"no bypass: tryReuse.<br/>a HIT RETURNS TO THE CALLER here --<br/>zero model calls, and before every<br/>carry below, which is why a carriable<br/>turn must never reach this arm.<br/>A miss falls through"| INTERP
+  INTERP["Interpret (model call)<br/>RuntimeQuestionInterpreter.Interpret<br/>model_runtime.go:510"]
   INTERP --> PLANSTAGE["<b>PlanAnswer</b> -- deterministic, NO model call<br/>chaos4636_answer_plan.go (CHAOS-4636 / S5)<br/>family definition x interpretation x budget<br/>-> AnswerPlan (persisted on the result)"]
   PLANSTAGE --> PLANCARRY{"plan carry, ONE hop<br/>resolveCarriedPlan (chaos4636_plan_carry.go)<br/>-- ONLY when this turn resolved no family<br/>carries family / group kind / narrowing basis<br/><b>NEVER the member list</b> (check 18)"}
   PLANCARRY --> STRUCT
@@ -234,6 +237,26 @@ would miss identically. This mechanism therefore fixes every LINKED chain
 and does not, by itself, close the measured row: that needs chain identity
 a client can supply without a receipt, which is a contract question ruled
 separately. `subject_anchor`/`subject_handle` carry remains unbuilt.
+
+**Answer reuse is attempted before every carry, so the bypass must cover the
+whole carriable population.** `tryReuse` runs before `Interpret` — that
+ordering is the entire mechanism behind AC-3782-1's zero-model-call guarantee
+and is not negotiable — while both carries run long after it. A reuse hit
+therefore returns before any carried value exists, so the ONLY protection for
+a turn that would have inherited a confirmed axis is not consulting the cache
+at all. That bypass originally named two conditions: a non-empty
+`structureCanon.Confirmed`, and `PriorSubjectReceipts`. It was under-inclusive
+in a way invisible from the call site: `window` is a member of the SAME closed
+`ContextFabricStructureNeedKind` vocabulary the first condition is about, but a
+window confirmed by receipt is canonicalized into `windowCanon.ConfirmedMember`
+rather than into `structureCanon.Confirmed`. So confirming any of the other
+four members bypassed reuse and confirming the window axis did not — and a turn
+linked to its predecessor only by a `winr_` receipt could be served a stored
+answer produced before that predecessor's `expected_kind` was ever confirmed.
+`reuseBypassReason` now keys the third arm on `carryReferencedResultIDs`, the
+carries' own seed population, so the bypass and the carry can never again name
+different sets; the closed `AnswerReuseBypassReason` counter reports which arm
+fired, a branch that was previously silent.
 
 ---
 
