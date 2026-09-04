@@ -3,11 +3,15 @@ package contextfabric
 import (
 	"bytes"
 	"context"
+	"errors"
+	"go/parser"
+	"go/token"
 	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -367,5 +371,178 @@ func TestARefusalLineAlsoSaysWhatItsChargedItemsWereAbout(t *testing.T) {
 		t.Errorf("attribution_group=%d attribution_multi_group=%d on the refusal line, want both non-zero "+
 			"(the fixture put %d and %d there)\nline: %s",
 			fields["group"], fields["multi_group"], want.group, want.multiGroup, line)
+	}
+}
+
+// armsWithNoBehaviouralCase names the assembled-result arms no scenario below
+// reaches, and it is ENFORCED rather than merely disclosed.
+//
+// A gap written only in a comment is indistinguishable from an omission, so
+// the count is reconciled against the number of `recordMeasurement` call sites
+// the package actually has. Covering one of these without removing it from the
+// list fails; adding a sixth arm without covering it fails too.
+var armsWithNoBehaviouralCase = []string{
+	"the outcome layer serving a candidate narrowing (recordCandidateNarrowing): " +
+		"reaching it needs resolution candidates present in the served result, which this " +
+		"fixture family cannot produce without entering the subject-clarification flow",
+}
+
+// assembledResultArmCase is one scenario, the arm it must reach, and how to
+// recognise that arm on the emitted line.
+type assembledResultArmCase struct {
+	name string
+	// discriminator is the substring that identifies THIS arm's line. A
+	// scenario that does not produce one is a fixture that silently landed
+	// somewhere else, which is a failure and not a skip.
+	discriminator string
+	drive         func(t *testing.T, sink *bytes.Buffer)
+}
+
+func assembledResultArmCases() []assembledResultArmCase {
+	return []assembledResultArmCase{
+		{
+			name:          "measured fit",
+			discriminator: "overrun=fits",
+			drive: func(t *testing.T, sink *bytes.Buffer) {
+				engine, _ := attributionEngine(t, attributionCohort(3), sink, budgetStageOptions(200, 0))
+				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err != nil {
+					t.Fatalf("Investigate() error = %v, want a served answer", err)
+				}
+			},
+		},
+		{
+			name:          "planned refusal, nothing to narrow",
+			discriminator: "retry_declined=nothing_to_narrow",
+			drive: func(t *testing.T, sink *bytes.Buffer) {
+				engine, _ := attributionEngine(t, attributionCohort(1), sink, budgetStageOptions(1, 0))
+				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
+					t.Fatal("Investigate() returned no error, want a planned budget refusal")
+				}
+			},
+		},
+		{
+			name: "retry synthesis FAILED",
+			// This is the arm an adversarial review reached by aliasing
+			// past the one-stamp pin. It emitted a correct measured_items
+			// beside four zero dimensions and nothing objected, because no
+			// behavioural case drove it.
+			discriminator: "retry_failed=true",
+			drive: func(t *testing.T, sink *bytes.Buffer) {
+				engine, _ := attributionEngine(t, attributionCohort(3), sink, budgetStageOptions(10, time.Second))
+				attempts := 0
+				engine.synthesizer = chaos4809FailOnSecondCall(engine.synthesizer, &attempts)
+				_, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+				if err == nil {
+					t.Fatal("Investigate() returned no error, want the retry's own propagated failure")
+				}
+				if errors.Is(err, ErrAnswerExceedsBudget) {
+					t.Fatalf("error = %v, want the retry's OWN fault, not a budget refusal -- this fixture must reach the retry-FAILURE arm", err)
+				}
+				if attempts != 2 {
+					t.Fatalf("synthesis attempted %d times, want 2 -- the retry must have RUN for this arm to be under test", attempts)
+				}
+			},
+		},
+		{
+			name:          "retry ran and still did not fit",
+			discriminator: "retry_attempted=true retry_fit=false retry_failed=false",
+			drive: func(t *testing.T, sink *bytes.Buffer) {
+				engine, _ := attributionEngine(t, attributionCohort(3), sink, budgetStageOptions(10, time.Second))
+				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
+					t.Fatal("Investigate() returned no error, want a refusal after a retry that did not fit")
+				}
+			},
+		},
+	}
+}
+
+// TestEveryAssembledResultArmEmitsASplitThatDescribesIt is the behavioural
+// counterpart to the structural one-stamp pin, and it is the load-bearing one.
+//
+// WHY IT EXISTS, and it is worth stating because the structural pin was
+// written FIRST and looked sufficient. An adversarial round defeated that pin
+// with two lines -- `attribution := &event.Attribution; *attribution = ...{}`
+// -- because the pin matches assignments whose left-hand side is a selector,
+// and a write through a pointer alias is not one. The mutation compiled, vetted
+// and left every test green: the retry-synthesis-failure arm emitted a correct
+// measured_items beside four zeroes.
+//
+// The pin was not the real gap. The real gap was that three of the five arms
+// had no behavioural case at all, so the pin was the ONLY thing standing
+// between a zeroed arm and a green suite -- and a static check is exactly the
+// wrong thing to make load-bearing, because the set of ways to evade one is
+// open. This test closes it from the other side: it drives each arm through
+// the public entry point and reads what the engine emitted, so an arm that
+// stops describing its own document fails no matter HOW it was made to.
+//
+// The arms are reconciled against the production call-site count, so this is a
+// population rather than a list.
+func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
+	t.Parallel()
+	cases := assembledResultArmCases()
+
+	// The population check. `recordMeasurement` call sites are the arms that
+	// emit a measured assembled-result event; every one is either driven
+	// below or named in the enforced gap list.
+	sites := 0
+	fset := token.NewFileSet()
+	for _, name := range packageProductionFiles(t) {
+		parsed, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		sites += countRecordMeasurementCalls(parsed)
+	}
+	if got := len(cases) + len(armsWithNoBehaviouralCase); got != sites {
+		t.Fatalf("this test accounts for %d arms (%d driven + %d named as uncovered) but the package has "+
+			"%d recordMeasurement call sites: an arm is neither covered nor disclosed",
+			got, len(cases), len(armsWithNoBehaviouralCase), sites)
+	}
+
+	// Two scenarios sharing a discriminator would silently test one arm
+	// twice while leaving another untouched.
+	seen := map[string]string{}
+	for _, one := range cases {
+		if other, clash := seen[one.discriminator]; clash {
+			t.Fatalf("scenarios %q and %q share the discriminator %q, so one arm is untested",
+				one.name, other, one.discriminator)
+		}
+		seen[one.discriminator] = one.name
+	}
+
+	for _, one := range cases {
+		t.Run(one.name, func(t *testing.T) {
+			t.Parallel()
+			var sink bytes.Buffer
+			one.drive(t, &sink)
+
+			// REACH CHECK, hard failure. A fixture that landed on a
+			// different arm would otherwise assert about a line this
+			// scenario is not responsible for.
+			line := ""
+			for _, candidate := range strings.Split(sink.String(), "\n") {
+				if strings.Contains(candidate, "context fabric plan narrowing") &&
+					strings.Contains(candidate, "stage=assembled_result") &&
+					strings.Contains(candidate, one.discriminator) {
+					line = candidate
+				}
+			}
+			if line == "" {
+				t.Fatalf("no assembled_result line carrying %q was emitted: this fixture did not reach the arm "+
+					"it claims to test.\nemitted:\n%s", one.discriminator, sink.String())
+			}
+
+			fields := attributionFieldsOf(t, line)
+			sum := fields["global"] + fields["member"] + fields["group"] + fields["multi_group"]
+			measured := measuredItemsOf(t, line)
+			if sum != measured {
+				t.Errorf("the four attribution dimensions sum to %d but measured_items is %d on the same line: "+
+					"this arm's split describes a different document from its own count\nline: %s", sum, measured, line)
+			}
+			if measured > 0 && sum == 0 {
+				t.Errorf("this arm charged %d items and reported an all-zero split -- the one reading that "+
+					"cannot be true\nline: %s", measured, line)
+			}
+		})
 	}
 }

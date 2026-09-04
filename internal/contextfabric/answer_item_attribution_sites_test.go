@@ -10,27 +10,43 @@ import (
 	"testing"
 )
 
-// The three numbers that describe one measured document are stamped in ONE
-// place, and this test is what keeps it that way.
+// A STRUCTURAL AID, NOT THE GUARANTEE. Read this before trusting it.
 //
-// WHY A STRUCTURAL PIN AND NOT A BEHAVIOURAL ONE. Stage three emits its
-// assembled-result event from five distinct arms -- the measured fit, the
-// retry-synthesis failure, the retry that did not fit, the planned refusal,
-// and the outcome layer's served narrowing. Every one of them used to write
-// MeasuredItems and MeasuredBytes as two free-standing assignments. This
-// seam's entire review history is a decision dimension present on some arms
-// and absent from others: written at three sites and read at none, then
-// reaching the served emitter and dropped on both refusal arms, then dropped
-// on the retry-fit path. Each fix was correct for the arm it addressed and the
-// omission moved one branch over.
+// Stage three emits its assembled-result event from five arms -- the measured
+// fit, the retry-synthesis failure, the retry that did not fit, the planned
+// refusal, and the outcome layer's served narrowing. Every one used to write
+// MeasuredItems and MeasuredBytes as two free-standing assignments, and this
+// seam's whole review history is a dimension present on some arms and absent
+// from others. Routing them through one `recordMeasurement` removes the easy
+// version of that mistake, and this walk keeps the routing in place.
 //
-// A behavioural test can only cover the arms someone thought to drive. This
-// one quantifies over ALL of them, from the syntax tree, so a sixth arm added
-// next year cannot stamp two of the three numbers and leave the third at zero.
+// WHAT IT ENFORCES: no function in this package's non-test files ASSIGNS to
+// MeasuredItems, MeasuredBytes or Attribution outside `recordMeasurement`, and
+// none takes the ADDRESS of one of those fields. Both are checked on the
+// syntax tree rather than by text search, because a substring pin passes on a
+// commented-out assignment and fails on the word appearing in a comment, and
+// both mistakes have been made here.
 //
-// It is an AST walk rather than a text search on purpose: a substring pin
-// passes on a commented-out assignment and fails on the word appearing in a
-// comment, and both mistakes have been made in this package.
+// WHAT IT CANNOT ENFORCE, stated because a guard that overclaims is worse than
+// one that admits its edge. The set of ways to write to a struct field is
+// open: an alias to the whole event, a slice or map of events, reflection, a
+// helper in another package handed a pointer. An adversarial review defeated
+// the FIRST version of this walk in two lines --
+//
+//	attribution := &event.Attribution
+//	*attribution = contractsv1.ContextFabricItemAttribution{}
+//
+// -- because the left-hand side of that assignment is a star expression, not a
+// selector. The address-taking check below closes exactly that shape and makes
+// no claim beyond it.
+//
+// SO THIS IS NOT WHAT PROVES THE VALUES ARE RIGHT.
+// TestEveryAssembledResultArmEmitsASplitThatDescribesIt drives each arm through
+// the public entry point and reads what the engine emitted; it fails whatever
+// route was used to corrupt a stamp, and it is the load-bearing test. The real
+// defect that review found was not the walk's blind spot -- it was that three
+// of the five arms had no behavioural case at all, which is what made a static
+// check load-bearing in the first place.
 
 // measurementFieldNames are the fields that must move together, because they
 // describe one document and a reader given two of them and a stale third
@@ -47,6 +63,10 @@ type measurementStamp struct {
 	function string
 	field    string
 	line     int
+	// via names HOW the field was reached, so the failure message tells a
+	// reader which of the two shapes fired rather than leaving them to
+	// guess from a line number.
+	via string
 }
 
 // findMeasurementStamps walks a parsed file and reports every assignment to a
@@ -75,6 +95,28 @@ func findMeasurementStamps(fset *token.FileSet, file *ast.File, name string) []m
 					line:     fset.Position(selector.Pos()).Line,
 				})
 			}
+			return true
+		})
+		// Address-taking, checked separately because it is not an
+		// assignment: `&event.Attribution` hands a writer a route the
+		// assignment walk above cannot see. Anywhere outside
+		// recordMeasurement it is treated as a stamp.
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			unary, isUnary := node.(*ast.UnaryExpr)
+			if !isUnary || unary.Op != token.AND {
+				return true
+			}
+			selector, isSelector := unary.X.(*ast.SelectorExpr)
+			if !isSelector || !measurementFieldNames[selector.Sel.Name] {
+				return true
+			}
+			stamps = append(stamps, measurementStamp{
+				file:     name,
+				function: fn.Name.Name,
+				field:    selector.Sel.Name,
+				line:     fset.Position(selector.Pos()).Line,
+				via:      "address-of",
+			})
 			return true
 		})
 	}
@@ -164,10 +206,13 @@ func TestEveryAssembledResultArmStampsItsMeasurementThroughOnePath(t *testing.T)
 	}
 
 	for _, offender := range offenders {
-		t.Errorf("%s:%d in %s assigns %s directly instead of through recordMeasurement -- "+
-			"the three numbers that describe one document must be written together, or this arm can "+
-			"carry two of them and a zero for the third",
-			offender.file, offender.line, offender.function, offender.field)
+		how := offender.via
+		if how == "" {
+			how = "assigns"
+		}
+		t.Errorf("%s:%d in %s %s %s outside recordMeasurement -- the three numbers that describe one "+
+			"document must be written together, or this arm can carry two of them and a zero for the third",
+			offender.file, offender.line, offender.function, how, offender.field)
 	}
 }
 
@@ -203,6 +248,35 @@ func someNewArm(event *PlanNarrowingEvent, measurement ResponseMeasurement) {
 	}
 	if !found["MeasuredItems"] || !found["MeasuredBytes"] {
 		t.Fatalf("the detector missed a direct assignment it must catch; it found %v", found)
+	}
+
+	// THE SHAPE AN ADVERSARIAL REVIEW ACTUALLY USED. The first version of
+	// this walk only matched assignments whose left-hand side is a selector,
+	// so taking the address of a guarded field and writing through the alias
+	// was invisible to it and to every behavioural test then present. This
+	// control is the reason the address-of arm exists, and it fails if that
+	// arm is ever removed.
+	const aliasing = `package contextfabric
+
+func anotherNewArm(event *PlanNarrowingEvent, measurement ResponseMeasurement) {
+	event.recordMeasurement(measurement)
+	attribution := &event.Attribution
+	*attribution = contractsv1.ContextFabricItemAttribution{}
+}
+`
+	parsedAliasing, err := parser.ParseFile(fset, "aliasing.go", aliasing, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse aliasing source: %v", err)
+	}
+	viaAddress := false
+	for _, stamp := range findMeasurementStamps(fset, parsedAliasing, "aliasing.go") {
+		if stamp.via == "address-of" && stamp.field == "Attribution" {
+			viaAddress = true
+		}
+	}
+	if !viaAddress {
+		t.Fatal("the detector did not flag `&event.Attribution`: the aliasing route a review used to " +
+			"zero an arm's split is invisible to it again")
 	}
 
 	// And the converse: an assignment INSIDE recordMeasurement is not an
