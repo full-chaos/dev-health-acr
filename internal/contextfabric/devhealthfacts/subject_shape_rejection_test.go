@@ -108,3 +108,44 @@ func TestInvestmentProviderReportsSubjectIDShapeRejectionNotNoData(t *testing.T)
 		t.Fatalf("no context_fabric_subject_id_shape_rejected slog record emitted with producer=devhealthfacts.investment kind=%s rejected=1", contextfabric.FactInvestment)
 	}
 }
+
+// TestStatusProviderKeepsRealFactsWhileDisclosingAShapeRejectedSibling covers
+// the v2Index half of the same mechanism (subjectIndex's investment test
+// above only exercises the prefix-strip half) AND the partial-coverage case
+// subjectIndex/v2Index's own "omit rather than guess" doc comments promise:
+// a wrongly-shaped subject requested ALONGSIDE a well-shaped one must not
+// cost the well-shaped subject its fact. Disclosure is additive, never a
+// refusal of the whole read.
+func TestStatusProviderKeepsRealFactsWhileDisclosingAShapeRejectedSibling(t *testing.T) {
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM work_items", rows: [][]any{{"WIDGET-101", "in_progress", "repo-1"}}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactStatus)
+
+	// A well-shaped work item (real data) alongside a work item subject
+	// whose CanonicalID never got the "work_item.v2:" form at all -- the
+	// v2Index analogue of CHAOS-5026's "CHAOS" example.
+	malformed := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "WIDGET-999", Label: "WIDGET-999"}
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactStatus, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101"), malformed},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+
+	// The real subject's fact must survive: shape rejection of its sibling
+	// is disclosed ADDITIVELY, never as a refusal of the whole read.
+	if len(result.Facts) != 1 || result.Facts[0].Subject.CanonicalID != "work_item.v2:repo-1:WIDGET-101" {
+		t.Fatalf("Facts = %#v, want exactly the well-shaped subject's fact to survive", result.Facts)
+	}
+	if result.State != contextfabric.SourceTruncated {
+		t.Fatalf("State = %q, want %q: a partially shape-rejected read is a disclosed partial coverage, not a clean available/no_data read", result.State, contextfabric.SourceTruncated)
+	}
+	if !strings.Contains(result.Reason, "subject_id_shape_rejected") {
+		t.Fatalf("Reason = %q, want it to contain %q", result.Reason, "subject_id_shape_rejected")
+	}
+	if result.OmittedCount != 1 {
+		t.Fatalf("OmittedCount = %d, want 1", result.OmittedCount)
+	}
+}
