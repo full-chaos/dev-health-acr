@@ -219,9 +219,52 @@ func appendMembershipCardinality(rows []RequirementOutcomeRow, cohort *Cohort, n
 	}
 	cardinality, counted := ComputeMembershipCardinality(cohort, narrowing)
 	if !counted {
-		return rows, MembershipCardinality{}, false
+		// STATE the absence rather than saying nothing.
+		//
+		// This branch was silent, and silence was the bug (codex round 2).
+		// `organization_scope` is not a cohort variant, so no member set is
+		// ever discovered for it, while a count coordinate at the member
+		// role is perfectly legal there. The frame derived a `count`, the
+		// planning seed marked it `satisfied` because the registry CAN
+		// serve it, and nothing afterwards said otherwise -- so a complete
+		// answer carried a count requirement, no countable result, and a
+		// declaration claiming the server computes one.
+		//
+		// "Absent, never zero" was right about not inventing a number and
+		// wrong about staying quiet. A requirement the answer could not
+		// meet is stated as unmet; the completeness state derived from the
+		// set then reads degraded, which is what it is.
+		return appendOutcomeRows(rows, unservedCardinalityOutcomeRow(requirement, obligation)), MembershipCardinality{}, false
 	}
 	return appendOutcomeRows(rows, membershipCardinalityOutcomeRow(cardinality, requirement, obligation)), cardinality, true
+}
+
+// unservedCardinalityOutcomeRow states a count requirement that had no member
+// set to count.
+//
+// It carries 0/0 because nothing was counted -- not a zero-member population,
+// which is a different answer and gets a `satisfied` 0/0 row from the normal
+// path. The two are told apart by the OUTCOME token, which is the whole
+// reason that vocabulary is closed.
+//
+// The cause is taken from the derivation's own mapping for this concept
+// rather than picked by hand here: `computed_population_absent` is already
+// the reason a computed obligation with no population carries, and routing
+// through the same table means one record of that fact, not two.
+func unservedCardinalityOutcomeRow(requirement, obligation string) RequirementOutcomeRow {
+	return RequirementOutcomeRow{
+		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
+		Requirement: requirement,
+		Obligation:  obligation,
+		Outcome:     contractsv1.ContextFabricRequirementUnavailable,
+		// Dimension: the reader asked how many and gets no answer at all --
+		// not fewer things (scope) and not less detail about them (depth).
+		Impact:        contractsv1.ContextFabricAnswerImpactDimension,
+		CauseCoverage: unavailableRequirementCause(RequirementReasonComputedPopulationAbsent),
+		// Observed: assembly looked for a member set and there was none.
+		// Nothing here defaulted.
+		CauseObserved: true,
+	}
 }
 
 // membershipCardinalityEventFrom builds the telemetry event by READING the

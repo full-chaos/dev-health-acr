@@ -238,6 +238,13 @@ func TestTheCountObligationReachesTheServedDocumentAsACountableField(t *testing.
 		t.Fatalf("count row outcome = %q, want %q: nothing narrowed this member set, so the count is exact over it",
 			row.Outcome, contractsv1.ContextFabricRequirementSatisfied)
 	}
+	// The mirror of the narrowed case: a lossless row names no cause, so it
+	// must not claim an observed one. The validator enforces the pairing;
+	// asserting it here is what makes the builder's OWN choice covered
+	// rather than only the validator's reaction to it.
+	if row.CauseObserved {
+		t.Fatal("an exact count claims an observed cause while naming none")
+	}
 	// The identity's third segment is the counted subject kind. A count
 	// whose reader cannot tell WHAT was counted is not an answer.
 	wantIdentity := string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam)
@@ -292,6 +299,13 @@ func TestANarrowedMemberSetIsCountedAsALowerBound(t *testing.T) {
 	}
 	if row.CauseOverrun == "" && row.CauseNarrowing == "" && row.CauseCoverage == "" {
 		t.Fatal("a narrowed count names no cause -- that is the generic truncation bit the outcome layer exists to replace")
+	}
+	// CauseObserved distinguishes a cause a mechanism REPORTED from one the
+	// assembly layer defaulted to. It is written by this builder and was
+	// asserted nowhere -- the same field-completeness gap codex round 2
+	// found on the telemetry side, third instance.
+	if !row.CauseObserved {
+		t.Fatal("a narrowed count reports its cause as DEFAULTED; the plan recorded the narrowing that produced it")
 	}
 	if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(row); err != nil {
 		t.Fatalf("the narrowed count row this engine served does not validate: %v", err)
@@ -435,6 +449,30 @@ func TestTheCountReachesTelemetryFromTheServedDocument(t *testing.T) {
 	if event.Outcome != row.Outcome || event.Requirement != row.Requirement {
 		t.Fatalf("telemetry outcome/requirement = %q/%q, served document says %q/%q",
 			event.Outcome, event.Requirement, row.Outcome, row.Requirement)
+	}
+	// EVERY FIELD THE BUILDER COPIES, not the ones that came to mind.
+	// Codex round 2 found the cause fields unasserted here: setting both to
+	// empty in production kept `3/8` on the line and silently dropped the
+	// basis that explains WHY it was reduced, and the whole package accepted
+	// it. The earlier sweep after the first telemetry finding asked "can the
+	// fixture discriminate these two values" and never asked "does this
+	// assertion cover every field the builder writes" -- the wrong question,
+	// so it found nothing.
+	if event.Basis != row.CauseNarrowing {
+		t.Fatalf("telemetry basis = %q, served row says %q -- the operator's line lost the decision basis "+
+			"that explains why the count was reduced", event.Basis, row.CauseNarrowing)
+	}
+	if event.Overrun != row.CauseOverrun {
+		t.Fatalf("telemetry overrun = %q, served row says %q", event.Overrun, row.CauseOverrun)
+	}
+	if event.Family == "" {
+		t.Fatal("telemetry names no family, so a regression cannot be attributed to a family-table row")
+	}
+	// The basis must actually be PRESENT on this narrowed fixture, or the
+	// pair above is two empty strings agreeing with each other -- exactly
+	// the vacuity the first telemetry finding was about.
+	if row.CauseNarrowing == "" {
+		t.Fatal("the narrowed fixture carries no narrowing basis, so the basis assertion above is vacuous")
 	}
 	if event.Served != ceiling || event.Declared != discovered {
 		t.Fatalf("telemetry served/declared = %d/%d, want %d/%d -- the members the answer carries, "+
@@ -1135,5 +1173,142 @@ func TestAnAnswerThatDerivedNoCountStatesNone(t *testing.T) {
 		t.Fatalf("positive control: a seeded count row produced counted=%v rows=%d served=%d, want true/2/3 -- "+
 			"without this the assertions above cannot tell a correct gate from one that never appends",
 			counted, len(rows), cardinality.Served)
+	}
+}
+
+// TestACountThatCannotBeServedSaysSo is codex round-2 finding 1, pinned.
+//
+// THE DEFECT, and it is the founding defect of this change one level in.
+// `organization_scope` is not a cohort variant, so no member set is ever
+// discovered for it -- while a count coordinate at the MEMBER role is
+// perfectly legal there ("how many repositories are in the organization").
+// The frame therefore derives a `count` requirement, the seed marks it
+// `satisfied` because the registry CAN serve it, assembly finds no member
+// set and appended nothing, and the served answer came back complete with a
+// count requirement and no countable result. The step's declaration says the
+// server executes it; for that whole frame shape, nothing did.
+//
+// Silence was the bug. "Absent, never zero" was right about not inventing a
+// number and wrong about saying nothing: a requirement the answer could not
+// meet has to be STATED as unmet, or the planning row's `satisfied` is the
+// last word and it is false.
+//
+// The cause is routed through the derivation's OWN mapping for exactly this
+// concept (`computed_population_absent`), not a second hand-picked code, so
+// the two cannot drift.
+func TestACountThatCannotBeServedSaysSo(t *testing.T) {
+	t.Parallel()
+	seeded := []RequirementOutcomeRow{{
+		Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
+		Requirement: string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectRepository),
+		Obligation:  string(ObligationCount),
+		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+		Impact:      contractsv1.ContextFabricAnswerImpactNone,
+	}}
+
+	rows, _, counted := appendMembershipCardinality(seeded, nil, nil)
+	if counted {
+		t.Fatal("a nil member set reported a counted cardinality")
+	}
+	if len(rows) != 2 {
+		t.Fatalf("a derived count with no resolvable member set produced %d rows, want 2 -- the planning row "+
+			"says `satisfied` because the registry CAN serve it, and with nothing appended that claim is the "+
+			"last word the answer carries about a requirement it never met", len(rows))
+	}
+	stated := rows[1]
+	if stated.Stage != contractsv1.ContextFabricOutcomeStageAssembledResult {
+		t.Fatalf("stage = %q, want %q", stated.Stage, contractsv1.ContextFabricOutcomeStageAssembledResult)
+	}
+	if stated.Outcome != contractsv1.ContextFabricRequirementUnavailable {
+		t.Fatalf("outcome = %q, want %q -- nothing was counted, and `narrowed` would claim a reduction that "+
+			"never happened while `satisfied` would claim a count that does not exist",
+			stated.Outcome, contractsv1.ContextFabricRequirementUnavailable)
+	}
+	if stated.Impact == contractsv1.ContextFabricAnswerImpactNone {
+		t.Fatal("an unavailable count claims no impact; the reader asked how many and is told nothing")
+	}
+	if stated.Served != 0 || stated.Declared != 0 {
+		t.Fatalf("an unavailable count carries numbers %d/%d -- nothing was counted, so inventing one is the "+
+			"confident wrong answer this whole change exists to avoid", stated.Served, stated.Declared)
+	}
+	// The cause must come from the derivation's own mapping for this
+	// concept, so a second authority for "the population is absent" cannot
+	// appear beside the first.
+	if want := unavailableRequirementCause(RequirementReasonComputedPopulationAbsent); stated.CauseCoverage != want {
+		t.Fatalf("cause = %q, want %q -- the derivation already maps `computed_population_absent`, and a "+
+			"hand-picked second code here is how two records of one fact begin to drift",
+			stated.CauseCoverage, want)
+	}
+	if !stated.CauseObserved {
+		t.Fatal("an unavailable count reports its cause as DEFAULTED; assembly looked for a member set and found none")
+	}
+	if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(stated); err != nil {
+		t.Fatalf("the unavailable row does not validate: %v", err)
+	}
+
+	// And the whole set must now read as degraded rather than complete: an
+	// answer that could not meet a required obligation is not complete.
+	if got := contractsv1.DeriveContextFabricAnswerCompletenessState(rows); got != contractsv1.ContextFabricAnswerCompletenessDegraded {
+		t.Fatalf("completeness state = %q, want degraded -- the answer carries an unmet requirement", got)
+	}
+}
+
+// TestTheCardinalityEventCopiesEveryFieldItClaimsTo is the field-completeness
+// half, and it exists because the end-to-end fixture cannot populate one of
+// them.
+//
+// The engine's own narrowing records a basis but no overrun (only the budget
+// stage sets one), so the end-to-end assertion on `Overrun` compares two
+// empty strings and cannot discriminate a builder that drops the field. This
+// drives the builder DIRECTLY with a row carrying both cause fields, which is
+// the only way to make that one assertion mean something.
+//
+// Stated rather than hidden: the direct test is weaker than the end-to-end
+// one -- it proves the builder copies, not that the engine reaches it. The
+// end-to-end test above is what proves the reach; this is what proves the
+// copy is total.
+func TestTheCardinalityEventCopiesEveryFieldItClaimsTo(t *testing.T) {
+	t.Parallel()
+	row := RequirementOutcomeRow{
+		Stage:          contractsv1.ContextFabricOutcomeStageAssembledResult,
+		Requirement:    "count/member/team",
+		Obligation:     string(ObligationCount),
+		Outcome:        contractsv1.ContextFabricRequirementNarrowed,
+		Impact:         contractsv1.ContextFabricAnswerImpactScope,
+		CauseNarrowing: contractsv1.ContextFabricNarrowingBasisAttentionRank,
+		CauseOverrun:   contractsv1.ContextFabricBudgetOverrunItems,
+		CauseObserved:  true,
+		Served:         2, Declared: 9,
+	}
+	result := InvestigationResult{
+		Cohort:       &Cohort{Kind: SubjectTeam, Complete: false, Truncated: true},
+		Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: []RequirementOutcomeRow{row}},
+	}
+
+	event, ok := membershipCardinalityEventFrom(result, QuestionFamilyScopedCohortStatus)
+	if !ok {
+		t.Fatal("the builder found no count row on a document that carries one")
+	}
+	// Each field is checked against a value DISTINCT from every other field's,
+	// so a builder that crossed two of them fails rather than coincidentally
+	// agreeing.
+	for _, check := range []struct {
+		field string
+		got   any
+		want  any
+	}{
+		{"Family", event.Family, QuestionFamilyScopedCohortStatus},
+		{"Requirement", event.Requirement, row.Requirement},
+		{"Outcome", event.Outcome, row.Outcome},
+		{"Served", event.Served, row.Served},
+		{"Declared", event.Declared, row.Declared},
+		{"Basis", event.Basis, row.CauseNarrowing},
+		{"Overrun", event.Overrun, row.CauseOverrun},
+		{"CohortComplete", event.CohortComplete, false},
+		{"CohortTruncated", event.CohortTruncated, true},
+	} {
+		if check.got != check.want {
+			t.Errorf("event.%s = %v, want %v -- the builder does not copy this field", check.field, check.got, check.want)
+		}
 	}
 }
