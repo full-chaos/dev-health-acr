@@ -832,12 +832,15 @@ func requireGroundedClaims(name, category string, scopeSubjects []SubjectRef, fa
 }
 
 // canonicalSubjectLabels binds every canonical ID the investigation input
-// actually named to the ONE label that ID carries in the input: graph
-// resolution (candidates and committed subjects), the discovered cohort,
-// relationship path nodes, and canonical fact subjects are all sources of
-// truth, in that order, first-write-wins (an investigation's own inputs
-// are expected to already agree; this is not a conflict-resolution
-// policy). See requireBoundLabel.
+// actually named to the ONE label that ID carries in the input, first-write-
+// wins (an investigation's own inputs are expected to already agree; this is
+// not a conflict-resolution policy). See requireBoundLabel.
+//
+// Its sources are resolution CANDIDATES plus, in published order, every
+// source forEachCitableSynthesisSubject visits. It does not enumerate those
+// itself: an admitted subject with no binding is citable under a forged
+// label, so admission and binding share one walk rather than two lists that
+// have already drifted apart three times.
 func canonicalSubjectLabels(input SynthesisInput) map[string]string {
 	labels := make(map[string]string)
 	set := func(subject SubjectRef) {
@@ -846,39 +849,23 @@ func canonicalSubjectLabels(input SynthesisInput) map[string]string {
 			labels[key] = subject.Label
 		}
 	}
+	// Resolution.Candidates are bound here and ONLY here: they are shown to
+	// the model and deliberately not citable (see
+	// synthesisUncitableShownSubjects), so they need a bound label -- a
+	// rejection should say "shown, uncitable on purpose", not be preceded by
+	// a forged-label acceptance -- while staying out of the admission set.
+	// Binding is therefore a SUPERSET of admission, which is the only
+	// direction that is safe: a bound-but-unadmitted subject is rejected by
+	// the caller's membership check, whereas an admitted-but-unbound one is
+	// citable under any label the model invents.
 	for _, candidate := range input.Graph.Resolution.Candidates {
 		set(candidate.Subject)
 	}
-	for _, subject := range input.Graph.Resolution.Committed {
-		set(subject)
-	}
-	if input.Graph.Cohort != nil {
-		for _, member := range input.Graph.Cohort.Members {
-			set(member.Subject)
-		}
-		// CHAOS-4962: synthesisSubjects now admits the group entity, so its
-		// label must be bound here in the same change. Admitting a subject
-		// without binding its label reopens CHAOS-3755 H3 (a real, in-bounds
-		// subject presented under a forged name) on precisely the entity a
-		// grouped answer is organised around -- one team's data shown under
-		// another team's name.
-		for _, group := range input.Graph.Cohort.Groups {
-			set(group.Subject)
-		}
-	}
-	for _, path := range input.Graph.Paths {
-		for _, node := range path.Nodes {
-			set(node)
-		}
-	}
-	for _, fact := range input.Facts.Facts {
-		set(fact.Subject)
-	}
-	for _, candidate := range input.Graph.DriverCandidates {
-		for _, subject := range candidate.AffectedSubjects {
-			set(subject)
-		}
-	}
+	// Everything citable comes from the ONE walk synthesisSubjects uses, so
+	// an admission cannot be added without its binding. See
+	// forEachCitableSynthesisSubject for why this is structural rather than
+	// two lists kept in step by hand.
+	forEachCitableSynthesisSubject(input, set)
 	return labels
 }
 
@@ -2796,41 +2783,74 @@ func sourceStatePriority(state SourceState) int {
 // were servable by ACR and uncitable by the model at the same time.
 func synthesisSubjects(input SynthesisInput) map[string]struct{} {
 	result := make(map[string]struct{})
-	for _, subject := range input.Graph.Resolution.Committed {
+	forEachCitableSynthesisSubject(input, func(subject SubjectRef) {
 		result[subjectKeyForModel(subject)] = struct{}{}
+	})
+	return result
+}
+
+// forEachCitableSynthesisSubject visits every subject the investigation
+// COMMITTED to, once per occurrence, in the published order. It is the ONE
+// definition of the admission set: synthesisSubjects derives the allow-set
+// from it and canonicalSubjectLabels derives the label bindings from it.
+//
+// WHY ONE WALK RATHER THAN TWO LISTS. Admitting a subject and binding its
+// label are two halves of one decision, and the branch has now split them
+// three times -- each time by adding a source to one list and not the other.
+// Groups were caught before merge; EDGE ENDPOINTS were not: they were
+// admitted to the allow-set and left out of canonicalSubjectLabels, so
+// requireBoundLabel (which only fires for an id it already has a binding
+// for) never ran on them and a model could cite a real, in-bounds endpoint
+// under an arbitrary FALSE label -- CHAOS-3755 H3 reopened, found by
+// adversarial review rather than by the guard written for exactly this.
+//
+// Fixing the instance would have left the class: the NEXT source added to
+// one list and not the other reopens it again. So the two lists are gone.
+// A source added here is admitted and bound in the same edit, and there is
+// no second site at which to forget. TestEveryAdmittedSynthesisSubjectIsLabelBound
+// pins the property; TestSubjectAdmissionAndLabelBindingShareOneWalk pins
+// the structure, so a future edit cannot quietly reintroduce a private
+// enumeration in either consumer.
+//
+// Resolution.Candidates and Cohort.Exclusions are NOT here on purpose --
+// they are shown-but-uncitable (see synthesisUncitableShownSubjects) and
+// binding without admitting is the safe direction, handled by
+// canonicalSubjectLabels itself.
+func forEachCitableSynthesisSubject(input SynthesisInput, visit func(SubjectRef)) {
+	for _, subject := range input.Graph.Resolution.Committed {
+		visit(subject)
 	}
 	if input.Graph.Cohort != nil {
 		for _, member := range input.Graph.Cohort.Members {
-			result[subjectKeyForModel(member.Subject)] = struct{}{}
+			visit(member.Subject)
 		}
+		// CHAOS-4962: the group entity -- the team in "project statuses for
+		// each team" -- lives only in Cohort.Groups[].Subject and was
+		// admitted by nothing, which is the defect this branch exists to fix.
 		for _, group := range input.Graph.Cohort.Groups {
-			result[subjectKeyForModel(group.Subject)] = struct{}{}
+			visit(group.Subject)
+		}
+	}
+	for _, path := range input.Graph.Paths {
+		for _, node := range path.Nodes {
+			visit(node)
+		}
+		// An edge's endpoints are the same engine-minted path structure its
+		// nodes are: the investigation committed to them by building the
+		// edge, and the payload serializes them.
+		for _, edge := range path.Edges {
+			visit(edge.From)
+			visit(edge.To)
 		}
 	}
 	for _, fact := range input.Facts.Facts {
-		result[subjectKeyForModel(fact.Subject)] = struct{}{}
-	}
-	for _, path := range input.Graph.Paths {
-		for _, subject := range path.Nodes {
-			result[subjectKeyForModel(subject)] = struct{}{}
-		}
-		// An edge's endpoints are the same engine-minted path structure its
-		// nodes are -- the investigation committed to them by building the
-		// edge. They were serialized to the model and admitted by nothing,
-		// which is this branch's own defect appearing one field over for the
-		// third time; found by adversarial review, not by the guard that was
-		// supposed to catch exactly this.
-		for _, edge := range path.Edges {
-			result[subjectKeyForModel(edge.From)] = struct{}{}
-			result[subjectKeyForModel(edge.To)] = struct{}{}
-		}
+		visit(fact.Subject)
 	}
 	for _, candidate := range input.Graph.DriverCandidates {
 		for _, subject := range candidate.AffectedSubjects {
-			result[subjectKeyForModel(subject)] = struct{}{}
+			visit(subject)
 		}
 	}
-	return result
 }
 
 // synthesisUncitableShownSubjects is every subject the payload SHOWS the

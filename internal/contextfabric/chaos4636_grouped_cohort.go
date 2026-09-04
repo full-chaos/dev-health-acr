@@ -1,7 +1,6 @@
 package contextfabric
 
 import (
-	"fmt"
 	"sort"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -566,6 +565,32 @@ func RemovedCohortMembers(before, after []CohortMember) []CohortMember {
 // Both kinds are closed-vocabulary subject kinds, so the sentence carries no
 // model text and no corpus content -- the same rule every other disclosure
 // composer on this path follows.
+//
+// TWO THINGS THIS GOT WRONG, both found by codex round 3 and both the same
+// mistake: treating the disclosure as if writing it were the whole job.
+//
+//  1. The string was composed HERE with a local Sprintf, so nothing could
+//     recognise it as service-authored. appendBoundedLimitations never
+//     displaces a service disclosure -- it displaces the last MODEL-authored
+//     caveat -- and it decides which is which by asking the contract. An
+//     unregistered disclosure is, to that rule, a model caveat. With a full
+//     limitation list and an unaffirmed committed subject, the
+//     commit-affirmation composer that runs later therefore displaced THIS
+//     sentence to make room for its own, and the served flat answer stated
+//     nothing at all about having been answered on a different axis than the
+//     one asked for. That defeats the ruling this function exists to
+//     implement: the degrade is never silent. The string now comes from
+//     contractsv1.ContextFabricGroupingRefusalLimitation, which is also what
+//     the contract's recogniser parses.
+//
+//  2. The displacement count was discarded into `_`. A displaced model
+//     caveat is gone from the stored answer and cannot be inferred
+//     downstream -- a displaced list and a list that had room are the same
+//     length and end the same way -- so LimitationsDisplaced is the only
+//     record it existed. Every other composer on this path accounts it; this
+//     one silently under-reported by exactly the caveat it dropped, which
+//     also puts the result's own count at odds with the validator's
+//     coherence rule.
 func applyGroupingRefusalDisclosure(result *InvestigationResult, outcome CohortGroupingOutcome) {
 	if result == nil || outcome.Refusal != CohortGroupingRefusalGroupKindSourceMismatch {
 		return
@@ -574,8 +599,10 @@ func applyGroupingRefusalDisclosure(result *InvestigationResult, outcome CohortG
 	// collection has a contract cap, and this package's own closure test
 	// rejects any limitations-destined write that bypasses it. Caught here by
 	// that test rather than by a reviewer, which is the guard working.
-	result.Limitations, _ = appendBoundedLimitations(result.Limitations, []string{fmt.Sprintf(
-		"This question asked for a breakdown by %s, but the available facts group by %s, so the answer is presented ungrouped.",
-		outcome.PlannedKind, outcome.SourceKind)})
+	composed, displaced := appendBoundedLimitations(result.Limitations, []string{
+		contractsv1.ContextFabricGroupingRefusalLimitation(outcome.PlannedKind, outcome.SourceKind),
+	})
+	result.Limitations = composed
+	result.LimitationsDisplaced += displaced
 	result.Coverage.Partial = true
 }
