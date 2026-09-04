@@ -1453,6 +1453,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	var kindCarry kindCarryResult
 	if !statedExpectedKindThisTurn(request, structureCanon) {
 		kindCarry = e.resolveCarriedKind(carryCtx, principal, request, priorValidatedReceipts, binding)
+		// Compare and drop BEFORE the disclosure is composed and before the
+		// outcome is recorded, so all three views agree.
+		kindCarry = applyCarryDrop(structureCanon.Confirmed, kindCarry)
 		e.recordKindCarry(ctx, principal, kindCarry)
 	}
 	carriedStructureEntries := []*contractsv1.ContextFabricConfirmedStructureEntry{

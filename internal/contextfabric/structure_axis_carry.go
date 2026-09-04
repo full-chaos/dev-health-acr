@@ -90,6 +90,14 @@ const (
 	// operator: "there was nothing to carry" versus "there was something and
 	// it had already been refused".
 	KindCarryMissVetoedCarrier KindCarryOutcome = "miss_vetoed_carrier"
+	// KindCarryDroppedRedeemedKindDiffers: the walk found a kind, and this
+	// turn's own receipts named a DIFFERENT one on the same axis, so the
+	// carried value stood down. Not a miss -- the chain really did carry
+	// something and it really was found -- which is why it has its own value
+	// rather than being folded into a miss reason: an operator counting
+	// carry hit rate needs to see that the mechanism worked and deferred,
+	// not that it failed to find anything.
+	KindCarryDroppedRedeemedKindDiffers KindCarryOutcome = "dropped_redeemed_kind_differs"
 	// KindCarryMissConflictingKinds: two or more of the SAME depth's
 	// directly-reachable candidates carried genuinely DIFFERENT confirmed
 	// kinds. The six receipt fields validate independently of one another,
@@ -101,7 +109,12 @@ const (
 
 // kindCarryResult is resolveCarriedKind's return shape.
 type kindCarryResult struct {
-	Kind           contractsv1.ContextFabricSubjectKind
+	Kind contractsv1.ContextFabricSubjectKind
+	// RedeemedKind is set ONLY on a drop: the kind this turn's own receipt
+	// named, which disagreed with Kind. Carried so the telemetry can report
+	// BOTH sides of the disagreement -- "dropped" alone does not tell an
+	// operator whether the caller pivoted or the chain was stale.
+	RedeemedKind   contractsv1.ContextFabricSubjectKind
 	SourceResultID string
 	Outcome        KindCarryOutcome
 	ChainDepth     int
@@ -371,35 +384,44 @@ func statedExpectedKindThisTurn(request InvestigationRequest, canon requestStruc
 	if len(request.ExpectedKinds) > 0 {
 		return true
 	}
-	// ANY receipt redeemed this turn that names a KIND counts as the caller
-	// stating one, not just a kind receipt (design review S2). Every redeemed
-	// member records its offer's own kind on AppliedKind (structure.go), and
-	// two of them are the caller picking a subject OF a kind: a candidate
-	// receipt names a specific ranked subject, an anchor receipt names the
-	// scope anchor. The failure this prevents is the sharpest the carry has,
-	// because the value at risk is one the caller chose explicitly THIS turn:
-	// pick a team candidate from a prior result whose own kind was never
-	// confirmed, and the walk descends past it, inherits `project` from
-	// further back, and narrows the pool until the chosen team candidate is
-	// filtered out of it.
-	//
-	// Blocking outright rather than comparing values: when the carried kind
-	// AGREES with what the receipt named, blocking costs only the extra
-	// narrowing, and the caller has already committed to a specific subject
-	// anyway. A compare-and-conflict branch would buy that narrowing back at
-	// the price of a second failure mode, on the one path where the caller's
-	// own choice is what is at stake.
-	for _, c := range canon.Confirmed {
-		if c.AppliedKind != "" {
-			return true
-		}
-	}
+	// A receipt that merely PICKS A SUBJECT no longer blocks here. It used to,
+	// and that was too blunt: on a turn linked by a candidate receipt whose
+	// candidate does not commit, blocking the walk left the pool mixed, the
+	// kind offer was re-raised, and the loop this mechanism closes re-opened.
+	// Those members are now COMPARATORS instead -- see subjectAxisRedeemedKind
+	// and effectiveConfirmedKind. Agreement keeps the carry; only a genuine
+	// disagreement drops it.
 	for _, e := range canon.Explicit {
 		if e.Member == contractsv1.ContextFabricStructureNeedExpectedKind {
 			return true
 		}
 	}
 	return false
+}
+
+// subjectAxisRedeemedKinds returns the kinds this turn's own receipts named
+// for a SOUGHT subject: subject_candidate (a specific ranked subject) and
+// subject_handle (a keyed source row). Both describe a subject the caller is
+// asking about, so both are comparable with a carried expected_kind.
+//
+// subject_anchor is DELIBERATELY EXCLUDED. Its kind is the SCOPE anchor's own
+// kind, a different axis: it becomes an AnchorBinding used as the shadow
+// evidence round's anchor discriminator (resolve.go) and never filters the
+// candidate pool. "Which repositories does the Ops Team own" carries a TEAM
+// anchor and seeks REPOSITORY subjects, so treating the anchor as a comparator
+// would drop the carry on precisely the scoped questions this mechanism exists
+// for -- a disagreement invented out of two axes that never disagreed.
+func subjectAxisRedeemedKinds(confirmed []confirmedStructureMember) []contractsv1.ContextFabricSubjectKind {
+	var kinds []contractsv1.ContextFabricSubjectKind
+	for _, c := range confirmed {
+		switch c.Member {
+		case contractsv1.ContextFabricStructureNeedSubjectCandidate, contractsv1.ContextFabricStructureNeedSubjectHandle:
+			if c.AppliedKind != "" {
+				kinds = append(kinds, c.AppliedKind)
+			}
+		}
+	}
+	return kinds
 }
 
 func effectiveConfirmedKind(confirmed []confirmedStructureMember, carry kindCarryResult) *ConfirmedExpectedKind {
@@ -410,6 +432,45 @@ func effectiveConfirmedKind(confirmed []confirmedStructureMember, carry kindCarr
 		return nil
 	}
 	return &ConfirmedExpectedKind{Kind: carry.Kind}
+}
+
+// applyCarryDrop is COMPARE AND DROP, and it is the single place the decision
+// is made -- deliberately, because the drop has to be visible in three places
+// at once and they must not be able to disagree: the resolution must not use
+// the kind, the wire must not disclose it as applied, and the telemetry must
+// record that the mechanism worked and then deferred. Flipping the outcome
+// here achieves all three, because effectiveConfirmedKind and
+// composeCarriedKindEntry both already key off it and recordKindCarry reports
+// it. Deciding it inside effectiveConfirmedKind instead would fix only the
+// first, and would leave a dropped carry disclosed on the wire as applied --
+// the round-1 disclosure class read backwards.
+//
+// A subject-axis receipt redeemed this turn naming a DIFFERENT kind means the
+// caller just picked something the carried kind would filter out of the pool,
+// so the carried value stands down and the turn resolves as if there were
+// none. Not a veto and not a conflict terminal: the caller's own pick stands,
+// unfiltered.
+//
+// Two subject-axis members disagreeing with EACH OTHER are covered by the same
+// rule, since at least one differs from the carried kind. That is deliberate:
+// an inherited value has no business breaking a tie between two things the
+// caller said on this turn, even when it matches one of them.
+func applyCarryDrop(confirmed []confirmedStructureMember, carry kindCarryResult) kindCarryResult {
+	if carry.Outcome != KindCarryHit || carry.Kind == "" {
+		return carry
+	}
+	for _, redeemed := range subjectAxisRedeemedKinds(confirmed) {
+		if redeemed != carry.Kind {
+			return kindCarryResult{
+				Kind:           carry.Kind,
+				RedeemedKind:   redeemed,
+				SourceResultID: carry.SourceResultID,
+				Outcome:        KindCarryDroppedRedeemedKindDiffers,
+				ChainDepth:     carry.ChainDepth,
+			}
+		}
+	}
+	return carry
 }
 
 // composeCarriedKindEntry renders the wire disclosure for a carried kind:
