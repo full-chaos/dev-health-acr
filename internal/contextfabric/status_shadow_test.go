@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"reflect"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -327,7 +328,9 @@ func TestTheStatusShadowDoesNotTouchTheServedDocument(t *testing.T) {
 	if result.Status != InvestigationComplete {
 		t.Fatalf("the served status moved to %q", result.Status)
 	}
-	if before != after {
+	// reflect.DeepEqual, not !=: the block carries the outcome set and is
+	// no longer comparable. Same assertion -- nothing in it moved.
+	if !reflect.DeepEqual(before, after) {
 		t.Fatalf("the completeness block moved: %+v -> %+v", before, after)
 	}
 	if after.TerminalStatus != InvestigationComplete {

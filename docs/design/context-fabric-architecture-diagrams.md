@@ -1355,7 +1355,7 @@ here.
 
 ---
 
-## 9 — Answer completeness promotion (CHAOS-4413)
+## 9 — Answer completeness promotion (CHAOS-4413), and the outcome set that now derives it (S7c)
 
 **What it answers.** "Did this answer stop early, and why — and how much of
 an answer is actually here?"
@@ -1400,6 +1400,35 @@ flowchart TD
     CAC --> CFC["claimed_facts_count ← len(ClaimedFacts)"]
     CAC --> RWC["rows_count ← Σ len(fact.Rows)"]
 
+    subgraph outcomes["S7c — the outcome set: what became of each requirement"]
+        SEED["seedRequirementOutcomes(frame, deriver)<br/>calls the SHIPPED RequirementDeriver.DeriveRequirements —<br/>one authority, never a second derivation rule"]
+        SEED --> ROWS["PlanRequirementOutcomeRow[]<br/>stage · requirement · obligation · outcome · impact<br/>· cause_* · served/declared"]
+        ROWS --> OC{"outcome, closed ×5"}
+        OC --> OSAT["satisfied"]
+        OC --> ONAR["narrowed"]
+        OC --> OUNA["unavailable"]
+        OC --> ONAT["not_attempted — UNREACHABLE in this slice"]
+        OC --> ONAP["not_applicable — UNREACHABLE in this slice"]
+        ROWS --> IC{"impact, closed ×4:<br/>what the reader LOSES"}
+        IC --> INONE["none"]
+        IC --> ISCOPE["scope"]
+        IC --> IDEPTH["depth"]
+        IC --> IDIM["dimension"]
+        DERIVE["DeriveAnswerCompletenessState(rows)<br/>TOTAL over the whole set — degraded is absorbing"]
+        ROWS --> DERIVE
+        DERIVE --> SCOMP["complete"]
+        DERIVE --> SPART["partial"]
+        DERIVE --> SDEG["degraded"]
+        DERIVE --> SND["not_derived — the fourth state.<br/>An EMPTY set derives 'complete' vacuously under any<br/>total function over the other three, so an answer whose<br/>outcomes were never derived would claim the strongest<br/>completeness there is"]
+    end
+    CAC --> SEED
+    SCOMP --> ST
+    SPART --> ST
+    SDEG --> ST
+    SND --> ST
+    ROWS --> OUTROWS["completeness.outcomes[]<br/>optional, append-only"]
+    ST["completeness.state<br/>REQUIRED, closed ×4"]
+
     TS --> OUT["result.completeness<br/>REQUIRED field, exact-equality validated"]
     TREMPTY --> OUT
     RC --> OUT
@@ -1409,15 +1438,21 @@ flowchart TD
     RU --> OUT
     CFC --> OUT
     RWC --> OUT
+    ST --> OUT
+    OUTROWS --> OUT
 
-    OUT --> PROJ["answerprojection.Project<br/>copied verbatim — NOT re-derived from<br/>the projection's own budget-clamped key_facts"]
+    OUT --> REUSE["the REUSE degrade — a narrowing stage like any other.<br/>Strips evidence this caller may no longer see and, when<br/>stripping empties an object the contract requires to carry<br/>evidence, DROPS whole candidates, members, drivers,<br/>findings and paths. APPENDS one row (stage=reuse,<br/>cause=reuse_auxiliary_refs_stripped) and re-derives.<br/>Impact is decided by WHAT was lost: depth for references<br/>alone, scope when whole objects went."]
+    REUSE --> OUT
+    OUT --> PROJ["answerprojection.Project — APPENDS a row per cut it makes,<br/>then RE-DERIVES state from the extended set.<br/>SUPERSEDES 'copied verbatim, never re-derived' for the<br/>outcome layer only: a copied block cannot carry a NAME it<br/>never had, and naming the reduced requirement is the point.<br/>The counts below are still copied verbatim, un-clamped."]
     OUT --> HARNESS["cmd/acr-trial-merge-two-turn's chaos4525StampTerminal<br/>now reads result.completeness — no longer a side channel"]
     OUT --> ASKDEV["ask-dev renders result.completeness<br/>(pin bump required before this is consumed)"]
 
     classDef fixed fill:#123d1c,stroke:#3fa45b,color:#e8ffe8
     classDef gate fill:#3d2a12,stroke:#c08a3e,color:#fff3e0
-    class OUT,PROJ,HARNESS,ASKDEV fixed
-    class TR,TRWHICH gate
+    classDef unreachable fill:#3a1b1b,stroke:#a4453f,color:#ffe8e8
+    class OUT,PROJ,REUSE,HARNESS,ASKDEV,ST,OUTROWS fixed
+    class TR,TRWHICH,OC,IC gate
+    class ONAT,ONAP unreachable
 ```
 
 **The two things this diagram is making non-obvious-but-true.**
@@ -1437,13 +1472,63 @@ flowchart TD
    much did the investigation actually produce". A consumer that wants the
    full total reads `completeness`, not `len(key_facts)`.
 
+3. **Completeness is DERIVED LAST, from the outcome set, at the surface that
+   serves the answer.** Two invariants hold the layer together, and together
+   they forbid the failure it exists to prevent — measuring completeness and
+   then shrinking the document somewhere the measurement cannot see:
+
+   > **APPEND.** Every narrowing stage between planning and the served
+   > document appends outcome rows. No stage rewrites or removes another
+   > stage's row.
+   > **DERIVE LAST.** Completeness is a pure function of the whole set,
+   > computed at the surface that serves the answer.
+
+   The shrink is *itself* a row the measurement reads. This is why the
+   `answerprojection.Project` edge above changed direction: under a census the
+   old copy-verbatim rule was coherent, because counters travel with the
+   document they describe. Under an outcome set it is not — every row could
+   read `satisfied` while the served document had lost members and whole
+   groups.
+
+4. **`not_derived` is a state, not a missing field.** No frame, or no
+   deriver, and the answer says its outcomes were never derived rather than
+   that nothing was lost. The two unreachable outcome tokens
+   (`not_attempted`, `not_applicable`) are marked as such deliberately: both
+   need the post-resolution requirement-refinement step, which belongs to the
+   requirement-derivation seam, and a vocabulary member no producer can reach
+   is a promise rather than a member.
+
+5. **The stage vocabulary has FOUR members, and the fourth is the one that
+   proves the rule.** `planning`, `assembled_result`, `projection`, `reuse`.
+   The reuse degrade was missed on the first pass and found by adversarial
+   review, serving an answer that had lost six of seven evidence references
+   and three whole objects while still reporting `complete`. It is a WORSE
+   instance than the assembly case this layer was built for — assembly
+   refused, reuse serves — and it gets its own member rather than borrowing
+   `assembled_result` because a reader must be able to tell which surface cut
+   the answer: a budget the caller can widen is a different problem from an
+   authorization that changed underneath a cached answer.
+
+   The reuse stage also re-derives INSIDE the degrade, not only at the
+   serving surface. That looks redundant and is not: the degrade validates
+   the payload before anything is served, and the single-authority check
+   rejects a block whose state disagrees with its own rows — so appending
+   without re-deriving would turn every degraded reuse into a refusal,
+   trading a usable narrowed answer for a disclosure gap.
+
 **Update rule.** A new `Investigate()` exit path (a sixth veto/terminal
 shape) must stamp `Completeness` before its own `Validate`, in the same PR,
-and add its box to this diagram.
+and add its box to this diagram. **Any narrowing surface between planning and
+the served document APPENDS its own outcome rows and re-derives the state —
+it never rewrites another stage's row — declares its own member of the stage
+vocabulary, and adds itself to this diagram in the same PR.** The reuse stage
+is here because that rule was applied to a surface nobody had counted as a
+narrowing stage; the next one will be found the same way if it is not
+declared.
 
 ---
 
-## 10 — The grouped cohort and the three-stage budget (CHAOS-4636 / S5)
+## 10 — The grouped cohort and the three-stage budget (CHAOS-4636 / S5), and stage 3's two decision arms (S7c)
 
 ```mermaid
 erDiagram
@@ -1477,6 +1562,19 @@ erDiagram
     int After
     bool Groups "true only if GROUPS were dropped -- D2 makes this rare"
     BudgetOverrun Overrun "items / bytes; absent at stage 1, which measures nothing"
+  }
+  ANSWER_PLAN ||--o{ PLAN_REQUIREMENT_OUTCOME : "discloses (S7c, append-only)"
+  PLAN_REQUIREMENT_OUTCOME {
+    OutcomeStage Stage "planning / assembled_result / projection / reuse -- ITS OWN vocabulary, NOT the plan's"
+    string Requirement "the obligation/role/subject COORDINATE, never a minted id"
+    AnswerObligation Obligation "wire-mirrored, both-directions parity test"
+    PlanRequirementOutcome Outcome "satisfied / narrowed / unavailable / not_attempted / not_applicable"
+    AnswerImpactKind Impact "none / scope / depth / dimension -- what the READER loses"
+    BudgetOverrun CauseOverrun "the DECLARED CEILING, not a selection order: no selection ran"
+    CoverageDetailCode CauseCoverage "carried from the derivation's own reason, never re-classified"
+    bool CauseObserved "false means DEFAULTED -- a defaulted cause may never read as an observed one"
+    int Served "must be strictly less than Declared on a narrowed row"
+    int Declared
   }
   COHORT ||--o{ COHORT_MEMBER : "flattened union (authoritative)"
   COHORT ||--o{ COHORT_GROUP : "group axis, absent on every flat cohort"
@@ -1532,6 +1630,102 @@ the answer because synthesis is what *creates* the drivers, findings and claims
 the budget charges. Only stage 3 can measure, and it measures with a
 `contracts/v1` function both planes import — the route's 413 gate is an
 assertion over the same numbers, not a second measurement.
+
+### 10a — Stage 3's decision arms after S7c: narrow instead of refusing
+
+**What it answers.** "This answer is over the ceiling. What happens next, and
+if we still refuse, WHY did every lever fail?"
+
+Before S7c the answer was short: the cohort is the only lever stage 3 has, so
+a single-subject question arrived at `!canNarrow` with its entire repertoire
+empty and refused — while the unresolved `SubjectResolution.Candidates`,
+charged against that same ceiling, sat untouched.
+
+```mermaid
+flowchart TD
+    M["MeasureContextFabricResponse(result)<br/>contracts/v1 — the SAME function the route's 413 gate uses"]
+    M --> OV{"Overrun(budget)"}
+    OV -->|fits| SERVE1["serve; emit the FIT event —<br/>the denominator for every narrowing rate"]
+    OV -->|items or bytes| NSI["narrowSynthesisInput(params, plan)"]
+    NSI --> CAN{"canNarrow?<br/>false when Cohort == nil or ≤1 member"}
+
+    CAN -->|"no — declined:<br/>nothing_to_narrow / no_reserve /<br/>insufficient_deadline"| ARM1["ARM 1 — planCandidateNarrowing"]
+    CAN -->|yes| RETRY["ONE bounded retry:<br/>re-synthesize over the halved cohort"]
+    RETRY --> RM{"retry Overrun(budget)"}
+    RM -->|fits| SERVE2["serve the retry"]
+    RM -->|"still over"| ARM2["ARM 2 — planCandidateNarrowing"]
+
+    ARM1 --> RED
+    ARM2 --> RED
+    RED{"narrowCandidatesToBudget:<br/>allowance = MaxItems − (Budgeted − declared)"}
+    RED -->|"declared candidates cut to the allowance"| APPEND["APPEND one outcome row:<br/>outcome=narrowed, impact=scope,<br/>cause_overrun=items, stage=assembled_result"]
+    APPEND --> FIN["finalizeResult → completeness RE-DERIVED<br/>from the extended set (never before the append)"]
+    FIN --> REM{"re-measure — the stage's OWN fit check"}
+    REM -->|"fits HERE"| SERVE3["narrowed and DISCLOSED<br/>outcome_reduction_applied=true<br/>outcome_reduction_inner_fit=true"]
+    REM -->|"still over"| DECL
+    SERVE3 --> FINAL{"the FINAL byte assertion, after the plan<br/>re-stamp and the display labels — both add bytes,<br/>so THIS is the first measurement of the document<br/>the route actually serializes"}
+    FINAL -->|fits| SERVE200["serve 200"]
+    FINAL -->|"over on bytes"| LATE413["413 — measured window ~9,550-9,599 bytes.<br/>The reduction dimensions stay TRUE: the cut WAS<br/>applied and it DID pass the stage's own fit.<br/>The refusal carries its own telemetry."]
+
+    RED -->|"precondition failed"| DECL
+    DECL{"OutcomeReductionDeclined —<br/>closed vocabulary, on the refusal event"}
+    DECL --> D1["not_items_axis — a BYTE overrun.<br/>The arithmetic is exact on items and has no<br/>equivalent here; the alternatives are a guess<br/>dressed as arithmetic or an iterated shrink loop"]
+    DECL --> D2["nothing_reducible — the resolver left no alternatives"]
+    DECL --> D3["insufficient — the cut RAN and was not enough"]
+    DECL --> D4["no_item_budget / would_not_reduce —<br/>total-function guards, unreachable from either call site"]
+    D1 --> REFUSE
+    D2 --> REFUSE
+    D3 --> REFUSE
+    D4 --> REFUSE
+    REFUSE["planRefusal → AnswerBudgetRefusal → 413<br/>refusal_planned=true, and it NAMES which lever failed"]
+
+    classDef fixed fill:#123d1c,stroke:#3fa45b,color:#e8ffe8
+    classDef gate fill:#3d2a12,stroke:#c08a3e,color:#fff3e0
+    classDef unreachable fill:#3a1b1b,stroke:#a4453f,color:#ffe8e8
+    class SERVE1,SERVE2,SERVE3,SERVE200,APPEND,FIN fixed
+    class OV,CAN,RM,RED,REM,DECL,FINAL gate
+    class D4 unreachable
+```
+
+**Why the candidates and nothing else.** Drivers, findings and claimed facts
+are cited by the composed judgment; dropping one leaves prose describing
+content that is no longer present, which this seam may not introduce.
+Resolution candidates are alternatives the resolver did NOT commit to —
+nothing in the answer cites them — so removing them changes how many options
+the caller is shown and nothing else. That is a real loss, which is why it is
+disclosed as one rather than performed silently.
+
+**Why the reduction's dimensions stop short of the final outcome.** The
+stage's fit check is not the last word: the plan re-stamp (carrying the
+narrowing step just appended) and the coverage display labels both add bytes
+afterwards, so the final assertion is the first measurement of the document
+the route serializes. An earlier revision published a single
+`outcome_narrowed_instead_of_refused` flag, which asserted the answer was
+SERVED — something this emitter cannot observe, and measurably false in the
+~50-byte window drawn above. The dimensions now report what the stage itself
+decided; the refusal, when it comes, carries its own telemetry.
+
+**Why `refusal_planned` is decided AFTER the arm, not before.** The retry
+arm used to build and emit its event before asking the outcome layer, so every
+investigation the reduction went on to serve with a 200 also published
+`refusal_planned=true` — a refusal counter counting answers that were never
+refused. The decision is now taken first and the event describes the answer
+that is actually served.
+
+**Enforcement versus quota, as the boundary is drawn.** S7c owns
+ENFORCEMENT — what happens when a quota is blown — for every shape, grouped
+included, because the outcome set is the single disclosure authority. The
+QUOTA side (per-group item attribution, the single allocator, `itemsPerGroup`,
+`predicted_items`) belongs to the allocator seam, which will expose per-group
+over-quota counts at assembly for this layer to act on. The candidates-only
+reduction term above is S7c's; nothing here allocates, predicts or
+apportions.
+
+**What this does NOT deliver.** Assembly still MEASURES and then reduces.
+Bounding assembly BY CONSTRUCTION — planning against declared caps so the
+unfittable shape is never created — is a separate, larger change. A post-hoc
+cap on candidates that called itself a plan would be that change renamed
+rather than made.
 
 ### 10b — The grouping REFUSAL, and how its disclosure reaches the reader
 
@@ -1618,8 +1812,9 @@ runs on a composed result, or any change to the recognition rule updates this
 sub-diagram in the same PR. An **interpolated** disclosure additionally needs a
 sole composer and a parse-based recogniser; a list of constants cannot hold it.
 
-**Update rule.** Any change to `PlanAnswer`, the narrowing stages, or
-`ContextFabricCohortGroup` updates this diagram in the same PR.
+**Update rule.** Any change to `PlanAnswer`, the narrowing stages,
+`ContextFabricCohortGroup`, the outcome row, or stage 3's decision arms
+updates this diagram in the same PR.
 
 ---
 

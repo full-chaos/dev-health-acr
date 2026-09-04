@@ -535,6 +535,7 @@
   "completeness": {
     "terminal_status": "complete",
     "claimed_facts_count": 5,
-    "rows_count": 4
+    "rows_count": 4,
+    "state": "not_derived"
   }
 }

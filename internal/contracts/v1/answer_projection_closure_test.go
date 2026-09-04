@@ -303,7 +303,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// surface below gains NOTHING: the canonical result carries no
 		// projection budget, since the budget describes what a PROJECTION
 		// dropped and the canonical result is what it was projected from.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 215},
+		// S7c: 215 -> 224 -- completeness.state plus the eight string
+		// leaves of a requirement outcome row.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 224},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -346,7 +348,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// as the answer_projection surface above.
 		// CHAOS-4682: 306 -> 313 -- the same seven new time_series_rows/
 		// time_series_table leaves as the answer_projection surface above.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 313},
+		// S7c: 313 -> 322 -- the same nine new completeness leaves as the
+		// answer_projection surface above.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 322},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -437,6 +441,20 @@ func trustedBecauseClosed(path string) bool {
 		// from a hypothetical member-level "kind" this type does not carry,
 		// never a different (freer) shape.
 		"candidate_kind",
+		// S7c: every leaf of a requirement outcome row is validated
+		// against a closed vocabulary by
+		// ValidateContextFabricPlanRequirementOutcomeRow before a result is
+		// stored -- "impact", "stage" and the three cause fields directly,
+		// "obligation" against the mirrored answer-obligation vocabulary,
+		// and "requirement" structurally: exactly three "/"-separated
+		// segments whose first must equal the row's own obligation. None
+		// can carry model prose; the whole block is engine-stamped and no
+		// model-output DTO is schema-inferred from it.
+		// ("stage" is already listed below, for the plan's own narrowing
+		// steps; the outcome row's leaf is the SAME closed
+		// ContextFabricPlanNarrowingStage vocabulary.)
+		"impact", "cause_overrun", "cause_coverage",
+		"cause_narrowing", "obligation", "requirement",
 		// CHAOS-4087: "commit_gate" (ContextFabricCommitDecisionDigest) is a
 		// closed-vocabulary string validated against its own registry
 		// (validCommitGate) before a result is stored -- never model prose,

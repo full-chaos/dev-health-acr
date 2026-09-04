@@ -287,7 +287,10 @@ func TestReuseHitBackfillsCompletenessOnALegacyStoredRow(t *testing.T) {
 		t.Fatal("premise: this must be a reuse hit")
 	}
 	want := ComputeAnswerCompleteness(candidate)
-	if result.Completeness != want {
+	// reflect.DeepEqual, not !=: the completeness block carries the outcome
+	// set, so it is no longer comparable. The assertion is unchanged --
+	// the WHOLE block must equal the recomputed one, outcome rows included.
+	if !reflect.DeepEqual(result.Completeness, want) {
 		t.Fatalf("result.Completeness = %+v, want backfilled %+v -- a reuse hit must never re-serve a legacy zero-value completeness block", result.Completeness, want)
 	}
 	if err := result.Validate(); err != nil {

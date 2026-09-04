@@ -1118,7 +1118,7 @@ func expectedTerminalReason(r ContextFabricInvestigationResult) ContextFabricTer
 
 func (r ContextFabricInvestigationResult) validateCompleteness(bounds contextFabricBounds) error {
 	c := r.Completeness
-	if !bounds.completenessRequired && c == (ContextFabricAnswerCompleteness{}) {
+	if !bounds.completenessRequired && c.IsZero() {
 		return nil
 	}
 	if c.TerminalStatus != r.Status {
@@ -1146,6 +1146,41 @@ func (r ContextFabricInvestigationResult) validateCompleteness(bounds contextFab
 	}
 	if c.RowsCount != rows {
 		return fmt.Errorf("rows_count %d must equal the summed claimed-fact row counts %d", c.RowsCount, rows)
+	}
+	return validateAnswerOutcomes(c, bounds)
+}
+
+// validateAnswerOutcomes enforces the outcome layer's two invariants at the
+// wire boundary, so a document cannot carry a completeness its own rows
+// contradict.
+//
+// bounds.completenessRequired is FALSE on stored reads for the same reason
+// it is false above: results are immutable and every row persisted before
+// the outcome layer existed carries an empty set and an empty state. A
+// FRESHLY produced result has no such excuse -- the engine derives the state
+// from the rows in one call, immediately before Validate -- so an empty
+// state there reads as a half-stamped block, not as a legacy gap.
+func validateAnswerOutcomes(c ContextFabricAnswerCompleteness, bounds contextFabricBounds) error {
+	if len(c.Outcomes) > ContextFabricPlanRequirementOutcomeMaxCount {
+		return fmt.Errorf("outcomes exceeds v1 bounds")
+	}
+	for index, row := range c.Outcomes {
+		if err := ValidateContextFabricPlanRequirementOutcomeRow(row); err != nil {
+			return fmt.Errorf("outcomes[%d]: %w", index, err)
+		}
+	}
+	if !bounds.completenessRequired && c.State == "" && len(c.Outcomes) == 0 {
+		return nil
+	}
+	if !ValidContextFabricAnswerCompletenessState(c.State) {
+		return fmt.Errorf("completeness state %q is not a vocabulary member", c.State)
+	}
+	// The single-authority check. State is a pure function of the rows, so
+	// re-running that function here and requiring equality is what stops a
+	// producer from stamping a state and then changing the document, or
+	// from copying a state across a surface that narrowed again.
+	if want := DeriveContextFabricAnswerCompletenessState(c.Outcomes); c.State != want {
+		return fmt.Errorf("completeness state %q does not match the state derived from its own outcome rows (want %q)", c.State, want)
 	}
 	return nil
 }

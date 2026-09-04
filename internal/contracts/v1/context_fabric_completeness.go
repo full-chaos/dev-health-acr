@@ -99,4 +99,49 @@ type ContextFabricAnswerCompleteness struct {
 	// RowsCount sums every claimed fact's own Rows table length across the
 	// whole result.
 	RowsCount int `json:"rows_count"`
+	// State is what the outcome set below adds up to, DERIVED from it by
+	// DeriveContextFabricAnswerCompletenessState and never authored
+	// independently. The validator requires exact agreement, the same
+	// discipline TerminalReason already gets: a state that disagreed with
+	// its own rows would let a consumer reading the summary draw a
+	// different picture than the rows it summarizes.
+	//
+	// `not_derived` when Outcomes is empty. That is a real state, not a
+	// gap: an answer whose outcomes were never derived must not be able to
+	// claim the strongest completeness there is.
+	State ContextFabricAnswerCompletenessState `json:"state,omitempty"`
+	// Outcomes is the ONE authority for what this answer was supposed to
+	// contain and what became of it.
+	//
+	// Every narrowing stage between planning and the served document
+	// APPENDS to it; no stage rewrites or removes another stage's row.
+	// State is then derived from the whole set at the surface that serves
+	// the answer. That ordering is the whole mechanism: it makes it
+	// impossible to measure completeness and then shrink the document
+	// somewhere the measurement cannot see, because the shrink is itself
+	// one of the rows the measurement reads.
+	//
+	// This SUPERSEDES, for the outcome layer only, the earlier rule that a
+	// projected view copies the completeness block verbatim and never
+	// re-derives it. That rule was coherent under its own assumption --
+	// that narrowing is disclosed by COUNTERS, which travel with the
+	// document they describe. A copied completeness cannot carry a NAME it
+	// never had, and naming the reduced requirement is what this layer is
+	// for. A projected surface appends its own cuts as rows and re-derives
+	// State; it never edits a canonical row, so the two surfaces cannot
+	// disagree about what the investigation established.
+	Outcomes []ContextFabricPlanRequirementOutcomeRow `json:"outcomes,omitempty"`
+}
+
+// IsZero reports whether the block is entirely unstamped.
+//
+// It exists because Outcomes makes ContextFabricAnswerCompleteness
+// non-comparable, and the legacy read path needs exactly the test the `==`
+// against a zero value used to perform: every row persisted before this
+// field existed carries the zero block, results are immutable, and that one
+// shape is excused on read.
+func (c ContextFabricAnswerCompleteness) IsZero() bool {
+	return c.TerminalStatus == "" && c.TerminalReason == "" &&
+		c.ClaimedFactsCount == 0 && c.RowsCount == 0 &&
+		c.State == "" && len(c.Outcomes) == 0
 }

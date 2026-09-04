@@ -777,11 +777,20 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// disposition recorded when the declaration slice shipped without
 		// telemetry.
 		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, Sink: receiptSink, FamilyTelemetry: engineTelemetry, FrameTelemetry: engineTelemetry, Requirements: factRegistry},
-		Graph:       graphReader,
-		Facts:       factRegistry,
-		Synthesizer: contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry},
-		Results:     investigationStore,
-		ReuseGate:   investigationStore,
+		// The SAME factRegistry again, for the engine's own derivation of
+		// this turn's requirement rows at assembly. It is wired rather
+		// than discovered for the reason stated above, and it is wired at
+		// all for a second one: an outcome layer whose deriver is nil
+		// derives no rows, and every answer would then serve the
+		// `not_derived` completeness state -- the layer present in the
+		// contract and dead in production, which is the disposition this
+		// file's own comment records happening once already.
+		Requirements: factRegistry,
+		Graph:        graphReader,
+		Facts:        factRegistry,
+		Synthesizer:  contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry},
+		Results:      investigationStore,
+		ReuseGate:    investigationStore,
 		// CHAOS-3782 Codex round-1 F1: same *pginvestigation.Store also
 		// implements SourceWatermarkSnapshotter, so Engine can capture
 		// the reuse snapshot itself, before the graph read, rather than

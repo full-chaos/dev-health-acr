@@ -246,6 +246,22 @@ type EngineDependencies struct {
 	// attempted, exactly as if the feature did not exist: every option's
 	// Label stands alone, byte-identical to before this ticket.
 	OfferPhraser OfferPhraser
+	// Requirements (S7c) derives this turn's requirement rows from the
+	// validated question frame, so the served answer can say what it was
+	// SUPPOSED to contain and what became of each part.
+	//
+	// AN EXPLICITLY-WIRED FIELD, and optional -- the same discipline the
+	// telemetry sinks beside it follow, for the recorded reason that an
+	// optional dependency reached by type assertion failed every assertion
+	// in production and the whole signal disappeared with tests passing
+	// throughout.
+	//
+	// Left nil, no requirement rows are derived and the served completeness
+	// says `not_derived`. That is the honest reading: an answer whose
+	// outcomes were never derived must not claim that nothing was lost.
+	// *FactCapabilityRegistry implements it, and hosted/open.go wires the
+	// registry it already builds.
+	Requirements RequirementDeriver
 }
 
 // EngineTelemetry receives content-safe operational counters from Engine.
@@ -931,6 +947,7 @@ type Engine struct {
 	priorConsultant            PriorConsultant
 	priorHandleGrammarChecker  HandleGrammarChecker
 	offerPhraser               OfferPhraser
+	requirements               RequirementDeriver
 	regimeAOffersDisabled      bool
 	maxItems                   int
 	maxSerializedBytes         int64
@@ -968,6 +985,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		priorConsultant:            dependencies.PriorConsultant,
 		priorHandleGrammarChecker:  dependencies.PriorHandleGrammarChecker,
 		offerPhraser:               dependencies.OfferPhraser,
+		requirements:               dependencies.Requirements,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
 		reuseRetrievalIdentity:   options.ReuseRetrievalIdentity,
 		reusePromptVersions:      options.ReusePromptVersions,

@@ -193,7 +193,7 @@ func validAnswerProjection() ContextFabricAnswerProjection {
 			SynthesisVersion: "synthesis-v1", CanonicalServiceVersion: "ops-v1",
 		},
 		ProjectionBudget: ContextFabricProjectionBudget{},
-		Completeness:     ContextFabricAnswerCompleteness{TerminalStatus: ContextFabricInvestigationComplete, ClaimedFactsCount: 1},
+		Completeness:     ContextFabricAnswerCompleteness{TerminalStatus: ContextFabricInvestigationComplete, ClaimedFactsCount: 1, State: ContextFabricAnswerCompletenessNotDerived},
 	}
 }
 
@@ -450,6 +450,12 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 		// does (settled design §7.2), not a narrowed copy.
 		"CoverageDetail",
 		"EffectiveEvidenceWindow", "HandleOption", "KindOption",
+		// S7c: PlanRequirementOutcomeRow joins deliberately. The
+		// projection carries the SAME outcome rows the canonical result
+		// does and appends its own cuts to them -- it does not hold a
+		// narrowed copy, because a second copy would be a second
+		// authority for what became of each requirement.
+		"PlanRequirementOutcomeRow",
 		"PriorSubjectReceiptDisposition", "PriorSubjectReceiptDispositionEntry",
 		"RelativeWindowID",
 		// CHAOS-4415: the eight render-shape shapes join the intersection

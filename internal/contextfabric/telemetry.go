@@ -923,6 +923,16 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		// -- the field it replaces held an English sentence, which could not
 		// be a log dimension without becoming unbounded-cardinality prose.
 		"narrower_continuation_axis", string(event.NarrowerContinuationAxis),
+		// S7c: the narrow-instead-of-refuse decision, its numbers, and
+		// what the served answer claims about its own completeness. All
+		// closed tokens and counts, same discipline as every dimension
+		// above.
+		"outcome_reduction_applied", event.OutcomeReductionApplied,
+		"outcome_reduction_inner_fit", event.OutcomeReductionInnerFit,
+		"outcome_items_served", event.OutcomeItemsServed,
+		"outcome_items_declared", event.OutcomeItemsDeclared,
+		"outcome_completeness_state", string(event.OutcomeCompletenessState),
+		"outcome_reduction_declined", string(event.OutcomeReductionDeclined),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric plan narrowing", args...)
