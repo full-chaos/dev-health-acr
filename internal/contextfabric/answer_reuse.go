@@ -290,6 +290,83 @@ const (
 	AnswerReuseMissDegradeInvalid AnswerReuseOutcome = "miss_degrade_invalid"
 )
 
+// AnswerReuseBypassReason is the closed vocabulary naming WHY a request
+// never reached the reuse lookup at all (CHAOS-4998). It is deliberately
+// NOT an AnswerReuseOutcome: a bypass is not a reuse outcome, and folding
+// it into RecordAnswerReuse's stream would silently change the meaning of
+// that stream's denominator -- the hit rate every containment measurement
+// (CHAOS-4831) is read against.
+//
+// Before this existed the bypass was SILENT: when it fired, tryReuse was
+// never called, so no outcome was recorded at all and "reuse skipped
+// because this request confirmed structure" was indistinguishable from
+// "reuse gate disabled", "no candidate", or "answer reuse not configured".
+// That is precisely the branch-reaches-a-fallback-silently shape AGENTS.md's
+// diagnosability bar forbids.
+type AnswerReuseBypassReason string
+
+const (
+	// AnswerReuseBypassConfirmedStructure: this turn confirmed at least one
+	// structure member by receipt (structureCanon.Confirmed non-empty) --
+	// CHAOS-3900 P1/DP11's original bypass.
+	AnswerReuseBypassConfirmedStructure AnswerReuseBypassReason = "confirmed_structure"
+	// AnswerReuseBypassPriorSubjectReceipts: this turn named a prior-subject
+	// receipt -- CHAOS-3478's arm of the same bypass.
+	AnswerReuseBypassPriorSubjectReceipts AnswerReuseBypassReason = "prior_subject_receipts"
+	// AnswerReuseBypassPriorResultReference: this turn named a prior result
+	// through some OTHER receipt namespace -- in practice PriorWindowReceipts,
+	// the one namespace whose confirmation lands in windowCanon.ConfirmedMember
+	// rather than in structureCanon.Confirmed and so was covered by neither
+	// arm above. This is the arm CHAOS-4998 adds, and its count is the
+	// measurement of what widening the bypass actually costs.
+	AnswerReuseBypassPriorResultReference AnswerReuseBypassReason = "prior_result_reference"
+)
+
+// reuseBypassReason decides whether this request may consult the reuse
+// lookup at all, and names the FIRST reason it may not, in a fixed order --
+// so the three counts partition the bypassed population instead of
+// overlapping tallies a reader cannot add up. "" means no bypass: go ahead
+// and try reuse.
+//
+// WHY THE THIRD ARM IS KEYED ON carryReferencedResultIDs RATHER THAN ON A
+// LIST OF FIELDS. The population that must not be served a cached answer is
+// exactly the population the same-conversation carries can walk -- a request
+// that names a prior result may inherit a confirmed axis from it, and every
+// carry runs LONG after this point (engine.go's own call sites), so a reuse
+// hit here returns before any carried value exists. carryReferencedResultIDs
+// IS that population, by construction: it is the carries' own seed. Keying
+// on it means the two can never drift, and a receipt namespace added later
+// is covered on the day it is added rather than on the day someone notices.
+// A hand-enumerated field list is how this defect happened: the bypass named
+// two fields, the carry seed grew to six, and nothing connected them.
+//
+// The nil second argument is CORRECT BY CONSTRUCTION, not a shortcut.
+// carryReferencedResultIDs' only use for it is the VALIDATED subset of
+// request.PriorSubjectReceipts (a strict subset -- see its own doc comment),
+// and this arm is reached only after the PriorSubjectReceipts arm above has
+// already proved that field empty. An empty field cannot have a non-empty
+// validated subset, so there is nothing for nil to lose. That reasoning is
+// pinned by a test rather than left standing on this comment.
+func reuseBypassReason(request InvestigationRequest, structureCanon requestStructureCanonicalization) AnswerReuseBypassReason {
+	if len(structureCanon.Confirmed) > 0 {
+		return AnswerReuseBypassConfirmedStructure
+	}
+	if len(request.PriorSubjectReceipts) > 0 {
+		return AnswerReuseBypassPriorSubjectReceipts
+	}
+	if len(carryReferencedResultIDs(request, nil)) > 0 {
+		return AnswerReuseBypassPriorResultReference
+	}
+	return ""
+}
+
+func (e *Engine) recordReuseBypass(ctx context.Context, principal storage.Principal, reason AnswerReuseBypassReason) {
+	if e.telemetry == nil {
+		return
+	}
+	e.telemetry.RecordAnswerReuseBypass(ctx, principal, reason)
+}
+
 // tryReuse implements CHAOS-3782 (TRD §19.7). It is called from
 // Investigate BEFORE QuestionInterpreter.Interpret -- see the call site's
 // comment for why that ordering is what makes AC-3782-1's zero-model-call
@@ -629,12 +706,26 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	//
 	// CHAOS-3900 P1.D: nil, not derived from any structureCanon -- and
 	// provably always nil here, not merely defaulted: this recheck runs
-	// only from inside tryReuse, and canonicalizeStructure's own
-	// reuse-bypass (engine.go) means tryReuse is NEVER called at all
-	// once a request has confirmed structure. A non-nil
-	// ConfirmedExpectedKind reaching this call site would mean the
-	// bypass itself had broken. CHAOS-4042: ConfirmedAnchorSelection is
-	// nil here for the identical reason.
+	// only from inside tryReuse, and the reuse bypass (reuseBypassReason,
+	// this file) means tryReuse is NEVER called at all once a request has
+	// confirmed structure. A non-nil ConfirmedExpectedKind reaching this
+	// call site would mean the bypass itself had broken. CHAOS-4042:
+	// ConfirmedAnchorSelection is nil here for the identical reason.
+	//
+	// CHAOS-4998 WIDENED WHAT THAT SENTENCE COVERS, and the distinction is
+	// worth stating because the old wording made a narrower promise than a
+	// reader would take from it. The conclusion (always nil) is unchanged;
+	// the reason is now bigger. The bypass used to name only
+	// structureCanon.Confirmed and PriorSubjectReceipts, so a kind that
+	// this turn would have INHERITED -- carried from a prior result the
+	// request named through a window receipt -- was not excluded by it, and
+	// the honest reading of the old comment was "nil because no kind exists
+	// yet at this point in the request", which is a statement about
+	// ORDERING and would stop being true the moment any carry moved
+	// earlier. The bypass now covers every request that names a prior
+	// result at all, so nil here is a statement about the POPULATION that
+	// can reach this code: a request with any carriable axis never gets
+	// here. That is the version that survives a reordering.
 	// CHAOS-4085: the commit basis is discarded here on purpose. This
 	// recheck asks only "is every subject the stored answer speaks for
 	// still resolvable and still authorized for THIS principal" -- it never

@@ -134,6 +134,17 @@ func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal st
 	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", args...)
 }
 
+// RecordAnswerReuseBypass (CHAOS-4998) logs at Info under its OWN message,
+// distinct from the reuse-outcome line above so the bypassed population can
+// be counted apart from the attempted one rather than polluting that
+// stream's hit-rate denominator. reason is a closed AnswerReuseBypassReason
+// -- content-safe by construction, never question text, a subject label or
+// a receipt id.
+func (t SlogEngineTelemetry) RecordAnswerReuseBypass(ctx context.Context, principal storage.Principal, reason AnswerReuseBypassReason) {
+	args := append([]any{"org_id", principal.OrgID, "reason", string(reason)}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric answer reuse bypass", args...)
+}
+
 // AnswerReuseContainmentEvent is one reuse attempt's containment
 // measurement -- see EngineTelemetry.RecordAnswerReuseContainment for why
 // this is a measurement rather than another outcome label. Every field is
