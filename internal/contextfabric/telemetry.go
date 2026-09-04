@@ -927,7 +927,8 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		// what the served answer claims about its own completeness. All
 		// closed tokens and counts, same discipline as every dimension
 		// above.
-		"outcome_narrowed_instead_of_refused", event.OutcomeNarrowedInsteadOfRefused,
+		"outcome_reduction_applied", event.OutcomeReductionApplied,
+		"outcome_reduction_inner_fit", event.OutcomeReductionInnerFit,
 		"outcome_items_served", event.OutcomeItemsServed,
 		"outcome_items_declared", event.OutcomeItemsDeclared,
 		"outcome_completeness_state", string(event.OutcomeCompletenessState),

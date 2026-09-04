@@ -589,7 +589,8 @@
           "required": [
             "terminal_status",
             "claimed_facts_count",
-            "rows_count"
+            "rows_count",
+            "state"
           ],
           "type": "object"
         },

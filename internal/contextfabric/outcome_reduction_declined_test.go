@@ -29,7 +29,7 @@ import (
 //
 //   2. The defect the mutant was pointing at is one boundary up. Every run
 //      where the reduction did NOT save the answer emitted
-//      `outcome_narrowed_instead_of_refused=false` -- the same value emitted
+//      `outcome_reduction_applied=false` -- the same value emitted
 //      when the lever never applied at all. "The overrun was on the byte
 //      axis", "there were no candidates to cut" and "the cut ran and the
 //      document still did not fit" were one undifferentiated absence, with
@@ -84,7 +84,7 @@ func TestAnOverrunOnATermOtherThanCandidatesIsRefusedWithTheRealCauseNamed(t *te
 			var refusal *PlanNarrowingEvent
 			for index := range telemetry.planNarrowings {
 				event := &telemetry.planNarrowings[index]
-				if event.OutcomeNarrowedInsteadOfRefused {
+				if event.OutcomeReductionApplied {
 					t.Fatalf("an event claims the answer was narrowed instead of refused, but the answer WAS refused; a narrowing that did not help must never be published as one")
 				}
 				if event.RefusalPlanned {
@@ -201,7 +201,7 @@ func TestARetryThatIsRescuedByTheReductionPlansNoRefusal(t *testing.T) {
 		if event.RefusalPlanned {
 			t.Fatalf("an event plans a refusal for an investigation that was SERVED; refusal_planned must be decided after the outcome layer has been asked, not before")
 		}
-		if event.OutcomeNarrowedInsteadOfRefused {
+		if event.OutcomeReductionApplied {
 			served++
 			if event.OutcomeReductionDeclined != OutcomeReductionNotApplicable {
 				t.Fatalf("a served narrowing names a decline reason %q; the reason field belongs to the runs that did NOT serve", event.OutcomeReductionDeclined)
@@ -355,4 +355,98 @@ func outcomeCohortEngineWithCandidates(t *testing.T, cohort *Cohort, claimsPerMe
 		t.Fatalf("NewEngine() error = %v", err)
 	}
 	return engine
+}
+
+// The reduction's own dimension must stay TRUE even when the final byte
+// assertion refuses the answer afterwards.
+//
+// This pins the window adversarial review found. The assembly stage's fit
+// check measures the document BEFORE the plan is re-stamped with the
+// narrowing step it just appended, and before the coverage display labels
+// are applied; both add bytes. So a reduced answer can pass the inner fit
+// and still be refused by the FINAL assertion, which is the only measurement
+// taken against the document the route actually serializes.
+//
+// The earlier name for this dimension, `outcome_narrowed_instead_of_refused`,
+// asserted the final outcome -- something the emitter cannot observe -- and
+// was therefore FALSE in this window. The dimension now reports what its own
+// stage decided: the reduction was applied and it fitted HERE. That claim is
+// true whichever way the final assertion goes, and the refusal carries its
+// own telemetry for the outcome.
+//
+// The sweep is the test rather than a single ceiling because the window is
+// narrow (~50 bytes at this shape) and a hardcoded number would stop
+// exercising it the moment the fixture's serialized size moved. The bounds
+// are asserted to actually straddle the window, so the test cannot pass
+// vacuously by sitting entirely on one side of it.
+func TestTheReductionDimensionStaysTrueWhenTheFinalAssertionRefuses(t *testing.T) {
+	t.Parallel()
+	sawItemsRefusal, sawLateByteRefusal, sawServed := false, false, false
+	for _, maxBytes := range []int64{9000, 9400, 9500, 9550, 9560, 9570, 9580, 9590, 9600, 9700, 10000} {
+		calls := 0
+		telemetry := &recordingTelemetry{}
+		engine := outcomeAssemblySingleSubjectEngineWithDrivers(t, 18, 12, 5, EngineOptions{
+			ServiceVersion: "acr-test", MaxItems: 30, MaxSerializedBytes: maxBytes,
+			SynthesisDeadlineReserve: time.Second,
+			Now:                      func() time.Time { return time.Unix(200, 0).UTC() },
+			NewResultID:              func() string { return "result_99999999" },
+		}, &calls, telemetry)
+
+		_, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+
+		applied := 0
+		for index := range telemetry.planNarrowings {
+			event := &telemetry.planNarrowings[index]
+			if !event.OutcomeReductionApplied {
+				continue
+			}
+			applied++
+			// The claim the dimension makes, checked in EVERY case
+			// including the ones that go on to refuse: the reduction ran
+			// and passed the stage's own fit.
+			if !event.OutcomeReductionInnerFit {
+				t.Fatalf("maxBytes=%d: reduction reported applied without its inner fit", maxBytes)
+			}
+			if event.OutcomeItemsServed >= event.OutcomeItemsDeclared {
+				t.Fatalf("maxBytes=%d: served/declared = %d/%d is not a reduction", maxBytes, event.OutcomeItemsServed, event.OutcomeItemsDeclared)
+			}
+		}
+		if applied > 1 {
+			t.Fatalf("maxBytes=%d: %d reduction events for one investigation", maxBytes, applied)
+		}
+
+		var refusal AnswerBudgetRefusal
+		switch {
+		case !errors.Is(err, ErrAnswerExceedsBudget):
+			if err != nil {
+				t.Fatalf("maxBytes=%d: Investigate() error = %v", maxBytes, err)
+			}
+			sawServed = true
+			if applied != 1 {
+				t.Fatalf("maxBytes=%d: a served narrowed answer recorded %d reduction events, want 1", maxBytes, applied)
+			}
+		case errors.As(err, &refusal) && refusal.Overrun == contractsv1.ContextFabricBudgetOverrunItems:
+			// Refused on items before the reduction was ever reached.
+			sawItemsRefusal = true
+			if applied != 0 {
+				t.Fatalf("maxBytes=%d: an items refusal recorded %d reduction events; the reduction was never applied", maxBytes, applied)
+			}
+		case errors.As(err, &refusal) && refusal.Overrun == contractsv1.ContextFabricBudgetOverrunBytes:
+			// THE WINDOW. The reduction was applied and fitted here; the
+			// final assertion, measuring the document that will actually be
+			// serialized, refused on bytes. Both records are true.
+			sawLateByteRefusal = true
+			if applied != 1 {
+				t.Fatalf("maxBytes=%d: a late byte refusal recorded %d reduction events, want the 1 that genuinely happened", maxBytes, applied)
+			}
+		default:
+			t.Fatalf("maxBytes=%d: unclassified outcome err=%v overrun=%q", maxBytes, err, refusal.Overrun)
+		}
+	}
+	// Non-vacuity: the sweep must actually straddle all three regimes. If a
+	// fixture change moved the serialized size, this fails rather than
+	// quietly testing one side of a window that is no longer there.
+	if !sawItemsRefusal || !sawLateByteRefusal || !sawServed {
+		t.Fatalf("the sweep did not straddle the window: items-refusal=%v late-byte-refusal=%v served=%v", sawItemsRefusal, sawLateByteRefusal, sawServed)
+	}
 }

@@ -143,14 +143,39 @@ type PlanNarrowingEvent struct {
 	NarrowerContinuationAxis NarrowingContinuationAxis
 	// The outcome layer's own decision dimensions (S7c).
 	//
-	// OutcomeNarrowedInsteadOfRefused is the event this seam adds: a run
-	// reached a point that used to refuse and served a narrowed, disclosed
-	// answer instead. It is recorded as its own dimension rather than
-	// inferred from refusal_planned being false, because the refusal rate
-	// falling has two possible causes -- questions that stopped
-	// overrunning, and questions that started being narrowed -- and an
-	// operator needs to tell them apart.
-	OutcomeNarrowedInsteadOfRefused bool
+	// OutcomeReductionApplied is the event this seam adds: a run reached a
+	// point that used to refuse unconditionally, the candidate reduction was
+	// APPLIED, and the reduced document passed the assembly stage's own fit
+	// check. It is recorded as its own dimension rather than inferred from
+	// refusal_planned being false, because the refusal rate falling has two
+	// possible causes -- questions that stopped overrunning, and questions
+	// that started being narrowed -- and an operator needs to tell them
+	// apart.
+	//
+	// IT IS DELIBERATELY NOT A CLAIM ABOUT THE FINAL OUTCOME, and the name
+	// says so. An earlier revision called this
+	// `outcome_narrowed_instead_of_refused`, which asserted that the answer
+	// was served rather than refused -- something this emitter cannot know.
+	// The assembly fit check measures the document BEFORE the plan re-stamp
+	// and before the coverage display labels, both of which add bytes, so
+	// the FINAL byte assertion can still refuse an answer this stage fitted.
+	// Measured, not argued: at the acceptance shape there is a ~50-byte
+	// window (9,550-9,599) where the reduction is applied, its inner fit
+	// passes, and the caller receives a byte-axis 413.
+	//
+	// The dimension is now true in that window -- the reduction WAS applied
+	// and it DID pass the inner fit -- and the refusal that follows carries
+	// its own refusal telemetry, which is the record of the final outcome.
+	// A counter that claims an outcome its emitter cannot observe is the
+	// defect; a counter that reports what its own stage decided is not.
+	OutcomeReductionApplied bool
+	// OutcomeReductionInnerFit reports the result of the assembly stage's
+	// own fit check on the reduced document. Always true where
+	// OutcomeReductionApplied is true -- a reduction that did not fit is
+	// declined, not applied -- and carried explicitly so the pair reads as
+	// "applied, and fitted HERE" rather than leaving a reader to infer
+	// which measurement the claim is about.
+	OutcomeReductionInnerFit bool
 	// OutcomeItemsServed/OutcomeItemsDeclared are the reduction's own
 	// numbers. They are DISTINCT from Before/After, which count cohort
 	// members: overloading those would put two quantities behind one name,
@@ -165,7 +190,7 @@ type PlanNarrowingEvent struct {
 	// OutcomeReductionDeclined names WHY the outcome layer's candidate
 	// reduction did not serve this answer, from its own closed vocabulary.
 	//
-	// It is the companion OutcomeNarrowedInsteadOfRefused needed and did not
+	// It is the companion OutcomeReductionApplied needed and did not
 	// have. That boolean being false covered three situations with three
 	// different fixes -- the overrun was on the byte axis, where this lever
 	// has no exact arithmetic; there were no candidates to cut; the cut ran

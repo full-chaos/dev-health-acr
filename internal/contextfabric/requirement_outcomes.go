@@ -133,7 +133,7 @@ type candidateNarrowing struct {
 //
 // It exists because the alternative was a silent fallback. Before it, every
 // run in which the reduction did not save the answer emitted
-// `outcome_narrowed_instead_of_refused=false` -- the same value a run emits
+// `outcome_reduction_applied=false` -- the same value a run emits
 // when the reduction was never applicable at all. One value stood for "the
 // byte axis overran, so this lever does not apply", "there were no
 // candidates to cut", and "the cut RAN and the document still did not fit",
@@ -418,7 +418,7 @@ func (e *Engine) planCandidateNarrowing(
 // Separated from the decision above so stage 3 can emit the retry's own
 // event first, with an accurate `refusal_planned`. When the two were fused,
 // a retry that did not fit published `refusal_planned=true` and this event
-// published `outcome_narrowed_instead_of_refused=true` for the same
+// published `outcome_reduction_applied=true` for the same
 // investigation, which was served with a 200 -- a refusal counter counting
 // answers that were never refused.
 func (e *Engine) recordCandidateNarrowing(
@@ -458,7 +458,12 @@ func (e *Engine) recordCandidateNarrowing(
 	// that used to refuse and served instead. Without it the refusal rate
 	// falls and an operator cannot tell whether questions stopped
 	// overrunning or started being narrowed.
-	event.OutcomeNarrowedInsteadOfRefused = true
+	event.OutcomeReductionApplied = true
+	// The inner fit, named as the inner fit. planCandidateNarrowing only
+	// returns Served when its own re-measurement fits, so this is true
+	// wherever the dimension above is -- carried explicitly so the pair
+	// states WHICH measurement passed rather than implying the final one.
+	event.OutcomeReductionInnerFit = true
 	event.OutcomeItemsServed = attempt.Narrowing.Served
 	event.OutcomeItemsDeclared = attempt.Narrowing.Declared
 	event.OutcomeCompletenessState = attempt.Result.Completeness.State
