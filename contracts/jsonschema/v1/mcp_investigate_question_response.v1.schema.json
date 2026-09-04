@@ -2441,7 +2441,8 @@
               "enum": [
                 "planning",
                 "assembled_result",
-                "projection"
+                "projection",
+                "reuse"
               ],
               "description": "Which stage produced this row. Its own vocabulary, not the plan's cohort-narrowing stages: those name the three points at which the cohort is narrowed and have no member for planning or for the projection, so borrowing them would force every row to claim a stage it did not come from."
             },
@@ -7658,7 +7659,8 @@
               "enum": [
                 "planning",
                 "assembled_result",
-                "projection"
+                "projection",
+                "reuse"
               ],
               "description": "Which stage produced this row. Its own vocabulary, not the plan's cohort-narrowing stages: those name the three points at which the cohort is narrowed and have no member for planning or for the projection, so borrowing them would force every row to claim a stage it did not come from."
             },

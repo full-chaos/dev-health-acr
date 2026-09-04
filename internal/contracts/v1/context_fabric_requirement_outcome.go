@@ -100,7 +100,7 @@ func ValidContextFabricPlanRequirementOutcome(value ContextFabricPlanRequirement
 }
 
 // ContextFabricOutcomeStage says WHICH stage produced an outcome row.
-// CLOSED, three members.
+// CLOSED, four members.
 //
 // It is its own vocabulary rather than a reuse of
 // ContextFabricPlanNarrowingStage, and the reason is a shape rule this layer
@@ -129,12 +129,34 @@ const (
 	// completeness would otherwise have been computed, and a copied state
 	// would describe a document the caller never receives.
 	ContextFabricOutcomeStageProjection ContextFabricOutcomeStage = "projection"
+	// ContextFabricOutcomeStageReuse: the row was appended when a REUSED
+	// answer was degraded because evidence it carried is no longer visible
+	// to this caller.
+	//
+	// This member exists because the reuse degrade is a narrowing stage
+	// between planning and the served document, and the APPEND invariant
+	// applies to every such stage. It strips evidence references and, when
+	// stripping empties an object the contract requires to carry evidence,
+	// drops whole candidates, cohort members, drivers, findings and paths.
+	// Without a row for it, a stored answer whose requirements all read
+	// `satisfied` served a genuinely smaller document while still claiming
+	// `complete` -- the same measure-then-shrink defect this layer exists
+	// to forbid, on the one surface the layer originally did not cover.
+	//
+	// It is a WORSE instance than the assembly case, which is why it gets
+	// its own member rather than borrowing `assembled_result`: assembly at
+	// least refused, and this path serves. A reader must be able to tell
+	// which surface cut the answer, because the two have different causes
+	// and different remedies -- a budget the caller can widen, versus an
+	// authorization that changed underneath a cached answer.
+	ContextFabricOutcomeStageReuse ContextFabricOutcomeStage = "reuse"
 )
 
 var contextFabricOutcomeStages = [...]ContextFabricOutcomeStage{
 	ContextFabricOutcomeStagePlanning,
 	ContextFabricOutcomeStageAssembledResult,
 	ContextFabricOutcomeStageProjection,
+	ContextFabricOutcomeStageReuse,
 }
 
 // ContextFabricOutcomeStageCount is the vocabulary size.
