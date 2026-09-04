@@ -830,3 +830,80 @@ func TestATruncatedCohortsCountIsNotAPopulationClaim(t *testing.T) {
 			event.Outcome, event.Served, row.Outcome, row.Served)
 	}
 }
+
+// TestAReusedAnswersCountStillDescribesTheMembersItCarries guards the count
+// against the one surface that shrinks a served document AFTER the count was
+// computed.
+//
+// WHY THIS TEST EXISTS AT ALL. The reuse degrade re-checks authorization on a
+// STORED answer and strips evidence the caller may no longer see; where
+// stripping empties an object the contract requires to carry evidence, it
+// drops the whole object -- candidates, drivers, findings, paths, and it has
+// a branch for cohort MEMBERS. The count row is computed at assembly and
+// stored with the answer, so a path that removed members afterwards would
+// serve a cardinality describing a member set the caller never receives:
+// measure-then-shrink, on a surface that SERVES rather than refuses.
+//
+// MEASURED, NOT ASSUMED: it cannot happen today. The degrade strips
+// `member.EvidenceRefIDs`, and those are OPTIONAL on a cohort member -- both
+// nil and an empty slice validate -- so stripping can never turn a valid
+// member invalid, `strippingBrokeIt` is never true for a member, and the
+// member-drop branch beside it is unreachable from this path. That is a fact
+// about the contract's bounds, not about this change, and it is the reason
+// no re-statement of the count is wired into the degrade.
+//
+// It is guarded rather than trusted because the bound could move: make member
+// evidence required, and members become droppable, and this count goes stale
+// silently. This test reds the moment that happens.
+func TestAReusedAnswersCountStillDescribesTheMembersItCarries(t *testing.T) {
+	t.Parallel()
+	stored := storedResultWithCandidateEvidence()
+	stored.Cohort = &Cohort{
+		Kind: SubjectTeam, Rationale: "reuse guard", Complete: true,
+		Members: []CohortMember{
+			{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team:A", Label: "A"},
+				Rank: 1, InclusionReasons: []string{"matched"}},
+			{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: "team:B", Label: "B"},
+				Rank: 2, InclusionReasons: []string{"matched"}},
+		},
+	}
+	stored.Completeness.Outcomes = append(stored.Completeness.Outcomes,
+		RequirementOutcomeRow{
+			Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
+			Requirement: string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam),
+			Obligation:  string(ObligationCount),
+			Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+			Impact:      contractsv1.ContextFabricAnswerImpactNone,
+			Served:      2, Declared: 2,
+		})
+	stored.Completeness = ComputeAnswerCompleteness(stored)
+
+	degraded, counts, _, ok := degradeReusedResult(stored, map[string]struct{}{reuseNodeRef: {}})
+	if !ok {
+		t.Fatal("degrade refused; this fixture is meant to degrade")
+	}
+	// The fixture must actually STRIP something, or the guard runs against a
+	// path that did nothing and proves nothing about it.
+	if counts.Refs() == 0 && counts.objectDrops() == 0 {
+		t.Fatal("the degrade removed nothing, so this fixture does not exercise the path it guards")
+	}
+	if degraded.Cohort == nil {
+		t.Fatal("the degraded answer carries no cohort")
+	}
+
+	rows := countOutcomeRows(degraded, contractsv1.ContextFabricOutcomeStageAssembledResult)
+	if len(rows) != 1 {
+		t.Fatalf("assembled-result `count` rows after degrade = %d, want 1", len(rows))
+	}
+	if got, want := rows[0].Served, len(degraded.Cohort.Members); got != want {
+		t.Fatalf("the served count says %d and the served answer carries %d members -- the reuse degrade "+
+			"shrank the member set after the count was computed, so the caller is told a cardinality "+
+			"for a set they did not receive", got, want)
+	}
+	if counts.DroppedMembers != 0 {
+		t.Fatalf("the reuse degrade dropped %d cohort member(s). That branch was unreachable when the count "+
+			"was wired -- member evidence refs are optional, so stripping cannot invalidate a member -- and "+
+			"the count row is NOT re-stated on this path. If members are droppable now, the count needs a "+
+			"reuse-stage row and this test is the thing that noticed", counts.DroppedMembers)
+	}
+}
