@@ -1057,6 +1057,35 @@ func renderParityArtifact(cells []parityCell) string {
 	out.WriteString(fmt.Sprintf("#   %d cells = %d frames x %d authorities\n", len(cells), len(traceFrames()), len(planningAuthorities())))
 	out.WriteString(fmt.Sprintf("#   subsumed %d / not_subsumed %d / not_applicable %d / disclosed drops %d\n", subsumed, notSubsumed, notApplicable, dropped))
 	out.WriteString(fmt.Sprintf("#   of the %d not_subsumed cells, %d are ruled SUPERIOR and %d BLOCK retirement\n", notSubsumed, superiorTotal, notSubsumed-superiorTotal))
+
+	// THE REFUTED PROPERTY, reported rather than asserted.
+	//
+	// "Every authority whose inputs exist on the validated frame is
+	// subsumed by the derived rows" is the property this proof was written
+	// to assert. It was written first, run, and it FAILED. It is recorded
+	// here as a standing number rather than shipped as a permanently red
+	// gate, so that a future slice can watch it fall to zero -- which is
+	// exactly what closing the blocking cause would do.
+	preResolutionCells, preResolutionLosses := 0, 0
+	reachByID := map[string]authorityReach{}
+	for _, authority := range planningAuthorities() {
+		reachByID[authority.id] = authority.reach
+	}
+	for _, cell := range cells {
+		if reachByID[cell.authorityID] != reachPreResolution {
+			continue
+		}
+		preResolutionCells++
+		if cell.verdict == verdictNotSubsumed {
+			preResolutionLosses++
+		}
+	}
+	out.WriteString("#\n")
+	out.WriteString("# REFUTED PROPERTY (reported, not asserted -- see the file header)\n")
+	out.WriteString("#   \"every pre-resolution authority is subsumed by the derived rows\"\n")
+	out.WriteString(fmt.Sprintf("#   FAILS on %d of %d pre-resolution cells. This proof was written to assert it;\n", preResolutionLosses, preResolutionCells))
+	out.WriteString("#   the measurement stands and the assertion moved to oracle O9's shape. Closing\n")
+	out.WriteString("#   the blocking cause drives this number toward the superior-only remainder.\n")
 	return out.String()
 }
 

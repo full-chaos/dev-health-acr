@@ -162,3 +162,9 @@
 #   98 cells = 14 frames x 7 authorities
 #   subsumed 18 / not_subsumed 14 / not_applicable 10 / disclosed drops 56
 #   of the 14 not_subsumed cells, 8 are ruled SUPERIOR and 6 BLOCK retirement
+#
+# REFUTED PROPERTY (reported, not asserted -- see the file header)
+#   "every pre-resolution authority is subsumed by the derived rows"
+#   FAILS on 14 of 42 pre-resolution cells. This proof was written to assert it;
+#   the measurement stands and the assertion moved to oracle O9's shape. Closing
+#   the blocking cause drives this number toward the superior-only remainder.
