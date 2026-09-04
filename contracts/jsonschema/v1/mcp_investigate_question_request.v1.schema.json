@@ -63,6 +63,12 @@
       },
       "maxItems": 20
     },
+    "parent_result_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 256,
+      "description": "Result id of the investigation this turn follows. Optional. Seeds the same-conversation carry walk only; it never binds the named result's subjects into this turn. Bounded identically to prior_*_receipts[].result_id so the two can never disagree about what a well-formed result id is."
+    },
     "expected_kinds": {
       "type": "array",
       "items": {
