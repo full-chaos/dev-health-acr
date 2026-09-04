@@ -50,6 +50,10 @@ package contextfabric
 // contract change; widening the interpreter interface would have been a
 // shipped-surface change; neither is acceptable for a shadow measurement.
 
+import (
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
+
 // ServerStatusBasis names the FACT that drove the server-derived status.
 // Closed vocabulary, telemetry-safe: no question text, no subject, no
 // model prose.
@@ -87,6 +91,18 @@ const (
 	// ServerStatusBasisReadinessAbsent: the FRAME derives readiness and the
 	// answer lists no readiness gap.
 	ServerStatusBasisReadinessAbsent ServerStatusBasis = "required_readiness_absent"
+
+	// ServerStatusBasisCountAbsent: the FRAME derives `count` and the
+	// answer carries no counted cardinality.
+	//
+	// It exists because `count` became OBSERVABLE. While the cardinality was
+	// prose, a frame requiring it could only be DECLINED -- the instrument
+	// could not see what it was asked to check. Now the server computes the
+	// count and states it on the answer, so a missing one is a fact about
+	// the ANSWER and must be reported as one. Folding it back into
+	// `unobservable` would put a real gap into the bucket reserved for
+	// limits of the instrument, and the flip decision reads that bucket.
+	ServerStatusBasisCountAbsent ServerStatusBasis = "required_count_absent"
 
 	// ServerStatusBasisCoverageDegraded: the coverage block declares a
 	// degraded reason. The engine's own disclosure that it did not see
@@ -145,6 +161,7 @@ var serverStatusBases = [...]ServerStatusBasis{
 	ServerStatusBasisRankingAbsent,
 	ServerStatusBasisRemainingWorkAbsent,
 	ServerStatusBasisReadinessAbsent,
+	ServerStatusBasisCountAbsent,
 	ServerStatusBasisCoverageDegraded,
 	ServerStatusBasisLimitationDisclosed,
 	ServerStatusBasisServed,
@@ -212,10 +229,45 @@ var obligationObservations = map[AnswerObligation]obligationObservation{
 	ObligationState:               {false, "no distinct result field -- the state is prose, and judging it would mean modelling what synthesis should have said"},
 	ObligationCompletion:          {false, "no distinct result field"},
 	ObligationHealth:              {false, "no distinct result field -- the health reading is carried inside the state prose"},
-	ObligationCount:               {false, "no distinct result field -- a cardinality is carried in the answer text, not in a countable field"},
+	ObligationCount:               {true, "result.Completeness.Outcomes -- the count requirement's assembled-result row, whose Served is the counted cardinality"},
 	ObligationAllocationBreakdown: {false, "carried inside claimed-fact rows, which this derivation does not interpret"},
 	ObligationTrendSeries:         {false, "would require reading the time-series pair, which is outside this slice's boundary"},
 	ObligationPeriodDelta:         {false, "no distinct result field"},
+}
+
+// servedACountedCardinality reports whether the answer states a cardinality
+// the server computed.
+//
+// It reads the SERVED document's own outcome rows, which is where
+// finalizeResult states the `membership_cardinality` step's result. It does
+// NOT re-count the cohort: a shadow that computed its own number would be
+// measuring its own arithmetic rather than what the answer told the reader,
+// and the two could then disagree without anything failing.
+func servedACountedCardinality(result InvestigationResult) bool {
+	for _, row := range result.Completeness.Outcomes {
+		if row.Stage != contractsv1.ContextFabricOutcomeStageAssembledResult {
+			continue
+		}
+		if row.Obligation != string(ObligationCount) {
+			continue
+		}
+		// A ROW'S PRESENCE IS NOT ITS OUTCOME, and this asked only whether
+		// one existed.
+		//
+		// Assembly states an UNAVAILABLE count where no member set could be
+		// resolved -- which is the honest report, and the row it produces
+		// says the count was NOT produced. Reading "a count row exists" as
+		// "the answer states its count" made the shadow report `served` on
+		// an answer whose own completeness reads `degraded`: this
+		// derivation's founding defect, claiming served on the strength of
+		// not having looked properly, one level in.
+		//
+		// `narrowed` DOES count: a count over a reduced set is still a
+		// cardinality the answer states, and it says so in its own numbers.
+		return row.Outcome == contractsv1.ContextFabricRequirementSatisfied ||
+			row.Outcome == contractsv1.ContextFabricRequirementNarrowed
+	}
+	return false
 }
 
 // unobservedRequiredObligation returns the first required obligation this
@@ -375,6 +427,9 @@ func serverStatusBasis(result InvestigationResult, plan AnswerPlan, frameObligat
 	}
 	if required[ObligationReadiness] && len(result.ReadinessGaps) == 0 {
 		return ServerStatusBasisReadinessAbsent
+	}
+	if required[ObligationCount] && !servedACountedCardinality(result) {
+		return ServerStatusBasisCountAbsent
 	}
 	if len(result.Coverage.DegradedReasons) > 0 {
 		return ServerStatusBasisCoverageDegraded

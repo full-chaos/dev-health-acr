@@ -70,7 +70,7 @@ C6  [explicit_set two named team operands, compare + trend, time_series, dims=in
   trend_series           operand   team           each_operand    corroborated  flow health readiness workload
 
 C7  [organization scope, count, MemberKind=repository]
-  count                  member    repository     each_member     exact         step:membership_cardinality
+  count                  member    repository     each_member     none          UNAVAILABLE computed_population_absent
 
 B5  [organization scope, assess_state]
   health                 subject   organization   single_subject  none          UNAVAILABLE no_declaring_producer
@@ -80,10 +80,11 @@ C2s  [explicit_set (named team operand, SCOPED project operand), compare]  (ADDE
   state                  operand   project        each_operand    corroborated  flow health investment landscape readiness workload
   state                  operand   team           each_operand    corroborated  flow health investment landscape readiness workload
 
-# MEASUREMENT (recorded thirteen frames): 34 requirement cells derived over 13 frames; 30 served, 4 unserved.
-# MEASUREMENT (whole corpus): 36 requirement cells derived over 14 frames; 32 served, 4 unserved.
+# MEASUREMENT (recorded thirteen frames): 34 requirement cells derived over 13 frames; 29 served, 5 unserved.
+# MEASUREMENT (whole corpus): 36 requirement cells derived over 14 frames; 31 served, 5 unserved.
 #
 # cause distribution over the unserved cells:
 #   allocation_breakdown   table_shape_undeclared     2
+#   count                  computed_population_absent 1
 #   health                 no_declaring_producer      1
 #   state                  no_declaring_producer      1

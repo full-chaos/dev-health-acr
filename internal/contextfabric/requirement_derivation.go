@@ -305,14 +305,18 @@ func (r DerivedRequirement) Served() bool {
 // map iteration order.
 func DeriveRequirements(frame QuestionFrame, seed ObligationSeed, capabilities []FactCapability) []DerivedRequirement {
 	coordinates := DeriveRequirementCoordinates(frame)
+	// Whether THIS FRAME can produce a resolved member set at all. Only a
+	// cohort variant is ever discovered into one, so an organization-scope
+	// frame naming a member kind states a population nothing retrieves.
+	memberSetResolvable := frame.SubjectExpression.IsCohortVariant()
 	rows := make([]DerivedRequirement, 0, len(coordinates))
 	for _, coordinate := range coordinates {
-		rows = append(rows, deriveRequirement(coordinate, seed, capabilities))
+		rows = append(rows, deriveRequirement(coordinate, seed, capabilities, memberSetResolvable))
 	}
 	return rows
 }
 
-func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, capabilities []FactCapability) DerivedRequirement {
+func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, capabilities []FactCapability, memberSetResolvable bool) DerivedRequirement {
 	kind, _ := KindOfObligation(coordinate.Obligation)
 	row := DerivedRequirement{
 		RequirementCoordinate: coordinate,
@@ -342,6 +346,33 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 			// unavailable.
 			row.Quantifier = CompletionQuantifierNone
 			row.Unavailable = RequirementReasonNoDeclaringProducer
+			return row
+		}
+		// A STEP THAT CONSUMES THE RESOLVED MEMBER SET NEEDS A FRAME THAT
+		// PRODUCES ONE, and only a cohort variant does.
+		//
+		// Found by an adversarial round on the wiring slice. An
+		// organization-scope frame naming a member kind ("how many
+		// repositories are in the organization") derives this coordinate
+		// legitimately -- the member ROLE names a population -- but nothing
+		// discovers that population, so the step has no input and the cell
+		// cannot be served. The row said `served` anyway, on the strength of
+		// naming a step, and a complete answer then carried a count
+		// requirement with no countable result.
+		//
+		// It reuses the reason a computed obligation with no population
+		// already carries rather than minting a second token for the same
+		// fact, and it is the SAME token the served answer's own outcome row
+		// now carries when assembly finds no member set. One record, read in
+		// two places.
+		if inputs, declared := InputsForComputedStep(step); declared &&
+			inputs.Class == ComputedInputResolvedMemberSet && !memberSetResolvable {
+			row.Quantifier = CompletionQuantifierNone
+			row.Unavailable = RequirementReasonComputedPopulationAbsent
+			// Step stays EMPTY, and that is the row invariant rather than an
+			// omission: exactly one of FactKinds / Step / Unavailable is
+			// meaningful, and a row that named both a step and a reason it
+			// cannot run would be two answers to what became of the cell.
 			return row
 		}
 		row.Step = step

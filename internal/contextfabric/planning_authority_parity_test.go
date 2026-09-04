@@ -200,6 +200,32 @@ const (
 	// is nameable: wire the step, i.e. satisfy `count` from the resolved
 	// member set as a server result rather than as narrated prose.
 	causeComputedStepNotWired lossCause = "computed_step_not_wired"
+
+	// causeComputedPopulationUnavailable: this frame derives a computed
+	// obligation whose POPULATION cannot be resolved, so the step has no
+	// input on this frame and the cell is unavailable.
+	//
+	// FOUND BY THE SECOND ADVERSARIAL ROUND ON THE WIRING SLICE, and it is
+	// the same rule as `computed_step_not_wired` narrowed from the STEP to
+	// the FRAME. That cause asks "does anything execute this step at all";
+	// this one asks "can it execute on THIS frame". An organization-scope
+	// frame naming a member kind derives `count` legitimately and nothing
+	// discovers the population, so the value still reaches the reader by
+	// narration over whatever facts were read -- and under that mechanism
+	// retiring an authority's reads CAN change the answer, which is exactly
+	// what a SUPERIOR ruling asserts it cannot.
+	//
+	// NOT SUPERIOR, for the reason the execution cause is not: a declaration
+	// that the server executes a step is evidence about the answer only
+	// where the step can actually run. Reading the per-step declaration
+	// alone and clearing these cells is how the withdrawn "authorities 1 and
+	// 5a are retirable" measurement was produced the first time; reading it
+	// per frame is what stops that recurring one level in.
+	//
+	// What must change is nameable: give the organization scope a member-set
+	// source, or stop deriving a countable population where none can be
+	// resolved.
+	causeComputedPopulationUnavailable lossCause = "computed_population_unavailable"
 )
 
 var lossCauses = [...]lossCause{
@@ -207,6 +233,7 @@ var lossCauses = [...]lossCause{
 	causeNotRequiredByAnyObligation,
 	causeComputedStepInputUnserved,
 	causeComputedStepNotWired,
+	causeComputedPopulationUnavailable,
 }
 
 // supersedingCauses are the causes under which the derived rows are ruled
@@ -254,6 +281,11 @@ func classifyLoss(rows []contextfabric.DerivedRequirement, lost []contextfabric.
 	// declaredOnly records whether ANY computation on this frame is named but
 	// unexecuted. Read off the ROWS, like everything else here.
 	declaredOnly := false
+	// populationUnavailable records whether ANY computation on this frame
+	// came back unavailable because its population cannot be resolved. Also
+	// read off the rows: the derivation already decided it, and deciding it
+	// a second time here is how two authorities for one fact begin.
+	populationUnavailable := false
 	for _, row := range rows {
 		if row.Served() {
 			served++
@@ -261,12 +293,32 @@ func classifyLoss(rows []contextfabric.DerivedRequirement, lost []contextfabric.
 		if row.StepExecution == contextfabric.ComputedStepDeclaredOnly {
 			declaredOnly = true
 		}
+		if row.Kind == contextfabric.ObligationKindComputed && !row.Served() &&
+			row.Unavailable == contextfabric.RequirementReasonComputedPopulationAbsent {
+			populationUnavailable = true
+		}
 		for _, kind := range row.InputFactKinds {
 			declaredInputs[kind] = true
 		}
 		for _, kind := range row.FactKinds {
 			servedByARead[kind] = true
 		}
+	}
+	if populationUnavailable {
+		// FIRST, and ahead of the all-unavailable superior ruling, because
+		// that ruling would otherwise absorb this case and clear the cell.
+		//
+		// `unavailable_named_instead` is superior on the reasoning that
+		// naming a closed reason beats emitting a requirement guaranteed to
+		// be pruned -- the authority's extra kinds buy the reader nothing
+		// because NOTHING answers that obligation. That reasoning does not
+		// hold here: the count still reaches the reader, by the model
+		// narrating over whatever facts were read. So the authority's reads
+		// can still change the answer, and clearing the cell would authorize
+		// removing them on evidence that does not cover the mechanism
+		// actually producing the value. That is precisely how the withdrawn
+		// retirable measurement was produced the first time.
+		return causeComputedPopulationUnavailable
 	}
 	if served == 0 {
 		return causeUnavailableNamedInstead
@@ -1364,7 +1416,15 @@ func renderParityArtifact(cells []parityCell) string {
 	out.WriteString("# `retirable_on_this_evidence` requires: every cell is subsumed, not_applicable,\n")
 	out.WriteString("# or a loss under a SUPERSEDING cause. One blocking loss anywhere is enough to\n")
 	out.WriteString("# withhold it. This verdict does NOT discharge design 13.9's B7/B9 gates, which\n")
-	out.WriteString("# are a labelled-set before/after programme on the rig, not a table test.\n\n")
+	out.WriteString("# are a labelled-set before/after programme on the rig, not a table test.\n")
+	out.WriteString("#\n")
+	out.WriteString("# `RETIRABLE on this evidence` IS NOT A RETIREMENT, AND NOTHING HERE RETIRES\n")
+	out.WriteString("# ANYTHING. It says one thing only: on the corpus above, this authority's\n")
+	out.WriteString("# contribution is either reproduced by the derived rows or lost under a cause\n")
+	out.WriteString("# ruled superior. Removing the authority is a SEPARATE change, gated on the\n")
+	out.WriteString("# B7/B9 rig programme named above, and it carries its own before/after\n")
+	out.WriteString("# measurement on real answers -- which this table, computed from frames\n")
+	out.WriteString("# alone, cannot stand in for.\n\n")
 	for _, authority := range planningAuthorities() {
 		blocking, superior, cells4 := 0, 0, 0
 		nonReproducible := false
