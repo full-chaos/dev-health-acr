@@ -86,16 +86,16 @@
   C3    6   dropped_pending_mechanism        -                                      lost=[-] gained=[-]
   C4    1   subsumed                         -                                      lost=[-] gained=[-]
   C4    2   advisory_by_rule                 -                                      lost=[-] gained=[-]
-  C4    3   not_subsumed                     computed_obligation_inputs_undeclared  lost=[operational_deficiencies] gained=[flow landscape]
+  C4    3   not_subsumed                     computed_step_input_unserved           lost=[operational_deficiencies] gained=[flow landscape]
   C4    4   not_reproducible_by_construction -                                      lost=[operational_deficiencies] gained=[flow landscape]
   C4    5a  subsumed                         -                                      lost=[-] gained=[flow investment landscape readiness]
   C4    5b  not_reproducible_by_construction -                                      lost=[-] gained=[-]
   C4    6   dropped_pending_mechanism        -                                      lost=[-] gained=[-]
-  C5    1   not_subsumed                     computed_obligation_inputs_undeclared  lost=[flow health investment landscape readiness workload] gained=[-]
+  C5    1   not_subsumed                     computed_step_not_wired                lost=[flow health investment landscape readiness workload] gained=[-]
   C5    2   advisory_by_rule                 -                                      lost=[-] gained=[-]
-  C5    3   not_subsumed                     computed_obligation_inputs_undeclared  lost=[health investment operational_deficiencies readiness workload] gained=[-]
+  C5    3   not_subsumed                     computed_step_not_wired                lost=[health investment operational_deficiencies readiness workload] gained=[-]
   C5    4   not_reproducible_by_construction -                                      lost=[health investment operational_deficiencies readiness workload] gained=[-]
-  C5    5a  not_subsumed                     computed_obligation_inputs_undeclared  lost=[health workload] gained=[-]
+  C5    5a  not_subsumed                     computed_step_not_wired                lost=[health workload] gained=[-]
   C5    5b  not_reproducible_by_construction -                                      lost=[-] gained=[-]
   C5    6   dropped_pending_mechanism        -                                      lost=[-] gained=[-]
   C6    1   subsumed                         -                                      lost=[-] gained=[-]
@@ -105,11 +105,11 @@
   C6    5a  not_applicable                   -                                      lost=[-] gained=[flow health investment landscape readiness workload]
   C6    5b  not_reproducible_by_construction -                                      lost=[-] gained=[-]
   C6    6   dropped_pending_mechanism        -                                      lost=[-] gained=[-]
-  C7    1   not_subsumed                     computed_obligation_inputs_undeclared  lost=[health identity metrics] gained=[-]
+  C7    1   not_subsumed                     computed_step_not_wired                lost=[health identity metrics] gained=[-]
   C7    2   advisory_by_rule                 -                                      lost=[-] gained=[-]
   C7    3   not_applicable                   -                                      lost=[-] gained=[-]
   C7    4   not_reproducible_by_construction -                                      lost=[-] gained=[-]
-  C7    5a  not_subsumed                     computed_obligation_inputs_undeclared  lost=[health] gained=[-]
+  C7    5a  not_subsumed                     computed_step_not_wired                lost=[health] gained=[-]
   C7    5b  not_reproducible_by_construction -                                      lost=[-] gained=[-]
   C7    6   dropped_pending_mechanism        -                                      lost=[-] gained=[-]
   B5    1   not_subsumed                     unavailable_named_instead (SUPERIOR)   lost=[status] gained=[-]
@@ -141,7 +141,8 @@
 
   unavailable_named_instead                  1  derivation ruled SUPERIOR
   not_required_by_any_obligation             7  derivation ruled SUPERIOR
-  computed_obligation_inputs_undeclared      6  blocks retirement
+  computed_step_input_unserved               1  blocks retirement
+  computed_step_not_wired                    5  blocks retirement
 
 ## RETIREMENT VERDICT, PER AUTHORITY
 #

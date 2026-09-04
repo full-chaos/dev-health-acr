@@ -861,6 +861,20 @@ func requirementDerivationLogAttrs(summary RequirementDerivationSummary) []any {
 	for index, role := range SubjectRoleVocabulary() {
 		args = append(args, "requirement_role_"+string(role), summary.Roles[index])
 	}
+	// The §13.2.3 amendment's resolved inputs. Emitted as counts over the
+	// closed vocabularies, every member present including the zeroes, for
+	// the reason the loops above exist: an absent key cannot be told apart
+	// from a tier that never ran.
+	args = append(args, "requirement_computed_rows_with_inputs", summary.ComputedRowsWithDeclaredInputs)
+	for index, class := range ComputedStepInputClassVocabulary() {
+		args = append(args, "requirement_computed_input_class_"+string(class), summary.ComputedInputClasses[index])
+	}
+	for index, kind := range contractsv1.ContextFabricFactKindVocabulary() {
+		args = append(args, "requirement_computed_input_kind_"+string(kind), summary.ComputedInputKinds[index])
+	}
+	for index, execution := range ComputedStepExecutionVocabulary() {
+		args = append(args, "requirement_computed_step_"+string(execution), summary.ComputedStepExecutions[index])
+	}
 	return args
 }
 

@@ -1034,7 +1034,7 @@ does not carry.**
 
 ```mermaid
 flowchart TB
-    A["DiscoverContext<br/>graphrank.DiscoveredCohort<br/>(pool order only)"] --> B["ReadFacts<br/>CanonicalFactRequest.Cohort<br/>already wired (fact_planner.go);<br/>5 ranking kinds INJECTED (§3a)"]
+    A["DiscoverContext<br/>graphrank.DiscoveredCohort<br/>(pool order only)"] --> B["ReadFacts<br/>CanonicalFactRequest.Cohort<br/>already wired (fact_planner.go);<br/>5 ranking kinds INJECTED (§3a)<br/>= rank_cohort's declared inputs (§11)"]
     B --> C{"graphContext.Cohort != nil?"}
     C -- no --> F["Synthesize<br/>(single-subject path, unchanged)"]
     C -- yes --> D["RankCohort(cohort, facts.Facts, facts.Coverage)<br/>NEW, engine.go, between B and F"]
@@ -1620,6 +1620,81 @@ sole composer and a parse-based recogniser; a list of constants cannot hold it.
 
 **Update rule.** Any change to `PlanAnswer`, the narrowing stages, or
 `ContextFabricCohortGroup` updates this diagram in the same PR.
+
+---
+
+## 11 — Obligation → requirement derivation, and what a COMPUTED obligation consumes
+
+The requirement layer crosses a validated frame's derived obligation set with
+the registry's own declarations and produces one row per cell. Each obligation
+is classified READ or COMPUTED (the §13.2.3 kinds table): a read row names the
+fact kinds that can serve it, a computed row names the SERVER STEP that
+satisfies it.
+
+**The amendment this diagram records (§13.2.3, seam S7b-ii).** A computed row
+used to name its step and nothing else. The derivation's own rule said a
+computed obligation "is unavailable only when ITS INPUTS ARE" — while naming
+no inputs, so nothing could act on it. The six-authority parity proof was the
+first thing that had to: it could not rule that a fact kind lost by retiring a
+planning authority was *not* an input of a computed step, so it had to assume
+every such loss might be, and **no authority was retirable on that evidence.**
+
+A computed step now declares what it consumes, as a CLASS plus (for the
+fact-reading class) the kinds:
+
+```mermaid
+flowchart TB
+    OB["frame's derived obligation"] --> K{"KindOfObligation<br/>(§13.2.3 kinds table)"}
+
+    K -- read --> R1["seed.KindsFor(obligation, subject)<br/>from the producers' own declarations"]
+    R1 --> RR["row.FactKinds = serving kinds<br/>row.Dimensions = their declared dimensions"]
+
+    K -- computed --> S["StepForComputedObligation<br/>rank_cohort | membership_cardinality"]
+    S --> I["InputsForComputedStep<br/>THE AMENDMENT"]
+    I --> IC{"input CLASS"}
+    IC -- fact_kinds --> IK["row.InputFactKinds<br/>= cohortRankingFormulaKinds<br/>(health, workload, readiness,<br/>operational_deficiencies, investment)"]
+    IC -- resolved_member_set --> IN["no fact input<br/>row.InputFactKinds empty,<br/>stated POSITIVELY by the class"]
+    IK --> CR["row.FactKinds stays EMPTY<br/>a computed cell plans no read of its own"]
+    IN --> CR
+
+    RR --> T["RequirementDerivationSummary<br/>+ requirement_computed_input_kind_* counts<br/>(histogram over the closed vocabulary,<br/>zeroes included)"]
+    CR --> T
+```
+
+**Why the class exists, rather than just a kinds list.** `membership_cardinality`
+counts the resolved member set and reads no fact. Spelling that as an empty
+kinds list would be indistinguishable from "nobody has declared this step's
+inputs yet" — the silent emptiness the seam exists to forbid, reproduced
+inside its own fix. The class makes "consumes no fact" an assertion.
+
+**Why the inputs are NOT folded into `FactKinds`.** `FactKinds` means *kinds
+that can SERVE this cell*, and every existing reader — the plan projection
+included — treats it as a planned read. A computation's inputs are facts some
+*other* cell is responsible for reading. Two fields keep both statements true
+at once: this cell reads nothing, AND these are the kinds its step consumes.
+
+**Where `rank_cohort`'s inputs come from.** Not from its docstring, which
+claimed it "depends on the read obligation `principal_drivers`". `RankCohort`
+reads no obligation: its five signal families each read one named fact kind
+(`investmentMixSignal` → `FactInvestment`, `healthRiskSignal` → `FactHealth`,
+`deficiencySeveritySignal` → `FactOperationalDeficiencies`,
+`readinessGapSignal` → `FactReadiness`, `workloadPressureSignal` →
+`FactWorkload`). Those five are `cohortRankingFormulaKinds`, already named
+once in this package — the SAME set §7's diagram shows the engine injecting
+unconditionally whenever the resolved graph context carries a cohort. The
+declaration references that variable rather than restating it, so the engine's
+injection and the step's declared inputs cannot drift.
+
+**Declaring an input is not planning a read**, and the parity proof depends on
+the difference. A lost kind that is a declared input *and* unserved by any read
+row still blocks a retirement (`computed_step_input_unserved`), because
+retiring the authority would remove the only thing planning to read it. What
+changed is that this is now decided per cell against the declaration, instead
+of assumed for every loss on any frame with a computation.
+
+**Update rule.** Any change to the obligation kinds table, the computed-step
+table, the input declaration, or `DerivedRequirement`'s fields updates this
+diagram in the same PR.
 
 ---
 
