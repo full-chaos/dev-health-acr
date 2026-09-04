@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -145,6 +146,18 @@ type windowCarryResult struct {
 	// referenced result(s) to find the hit -- 0 means a directly-referenced
 	// prior result itself carried the confirmed window.
 	ChainDepth int
+	// ViaStoredAncestry is true when the hit was reached through a stored
+	// parent edge rather than a confirmation edge -- i.e. the walk only got
+	// there because ancestry is persisted on every Save.
+	//
+	// A SEPARATE dimension from CarrySeedSource on purpose: seed source says
+	// how the REQUEST was linked, this says how the WALK arrived. They answer
+	// different questions and can disagree -- a parent_field-seeded request
+	// can hit at depth 0 without ancestry mattering at all, and only the
+	// deeper hops distinguish "the field linked this chain" from "persisted
+	// ancestry is what kept the chain walkable". Without this, the rig cannot
+	// tell whether the traversal fix is doing any work.
+	ViaStoredAncestry bool
 }
 
 // carryReferencedResultIDs collects the distinct, non-empty ResultID values
@@ -387,6 +400,9 @@ func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Pri
 		return windowCarryResult{Outcome: WindowCarryMissNoReference}
 	}
 	visited := make(map[string]struct{}, carryChainMaxVisited)
+	// reachedViaAncestry records which frontier ids were reachable ONLY
+	// because a stored parent pointed at them -- see ViaStoredAncestry.
+	reachedViaAncestry := make(map[string]struct{}, carryChainMaxVisited)
 	var sawUnloadable, sawStaleEpoch, capExceeded bool
 	for depth := 0; depth < carryChainMaxDepth && len(frontier) > 0; depth++ {
 		var next []string
@@ -417,6 +433,7 @@ func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Pri
 				break
 			}
 			visited[resultID] = struct{}{}
+			_, viaAncestry := reachedViaAncestry[resultID]
 			fetched, err := carryLoadResult(ctx, e.results, principal, resultID)
 			if err != nil {
 				sawUnloadable = true
@@ -437,7 +454,7 @@ func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Pri
 				if origin := carriedWindowOrigin(prior); origin != "" {
 					sourceResultID = origin
 				}
-				hits = append(hits, windowCarryResult{Window: window, SourceResultID: sourceResultID, Outcome: WindowCarryHit, ChainDepth: depth})
+				hits = append(hits, windowCarryResult{Window: window, SourceResultID: sourceResultID, Outcome: WindowCarryHit, ChainDepth: depth, ViaStoredAncestry: viaAncestry})
 				continue
 			}
 			for _, entry := range prior.ConfirmedStructure {
@@ -467,6 +484,12 @@ func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Pri
 			// without re-ordering what was already reachable.
 			if id := strings.TrimSpace(fetched.ParentResultID); id != "" {
 				if _, ok := visited[id]; !ok {
+					// Only marked when NO confirmation edge already produced
+					// this id: the flag must mean "ancestry is why this was
+					// reachable", not merely "ancestry also pointed here".
+					if !slices.Contains(next, id) {
+						reachedViaAncestry[id] = struct{}{}
+					}
 					next = append(next, id)
 				}
 			}
@@ -625,5 +648,5 @@ func (e *Engine) recordWindowCarry(ctx context.Context, principal storage.Princi
 	if e.telemetry == nil || carry.Outcome == WindowCarryNotAttempted {
 		return
 	}
-	e.telemetry.RecordWindowCarry(ctx, principal, carry.Outcome, carry.ChainDepth, seedSource)
+	e.telemetry.RecordWindowCarry(ctx, principal, carry.Outcome, carry.ChainDepth, seedSource, carry.ViaStoredAncestry)
 }

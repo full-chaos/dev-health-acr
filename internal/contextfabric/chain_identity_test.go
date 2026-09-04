@@ -118,6 +118,18 @@ func TestChainIdentity_ATurnLinkedOnlyByParentResultIDCarriesTheConfirmedKind(t 
 	if !sawTeam {
 		t.Errorf("ResolveSubjects saw ConfirmedExpectedKind %+v, want a non-nil team: the carried kind must reach the pool filter, which is what makes the carry change an answer rather than only a disclosure", graph.seen)
 	}
+
+	// NEGATIVE HALF of the ancestry-hop label, and the reason it is worth
+	// anything. This chain hits at depth 0 -- the named parent itself carries
+	// the confirmed kind -- so stored ancestry played no part. A flag that
+	// were always true on a hit would pass the traversal test just as well
+	// and measure nothing; the two tests together are what make it a
+	// discriminator rather than a decoration.
+	for _, c := range telemetry.kindCarries {
+		if c.outcome == KindCarryHit && c.viaStoredAncestry {
+			t.Errorf("kind carry %+v is flagged via_stored_ancestry, but this hit is at depth 0 on the directly-named parent -- ancestry was not what made it reachable", c)
+		}
+	}
 }
 
 // TestChainIdentity_ParentResultIDNeverBindsThePriorSubjects is the mandatory
@@ -945,6 +957,23 @@ func TestChainIdentity_AWalkContinuesThroughATurnThatCarriedNothing(t *testing.T
 	if !carried {
 		t.Errorf("ConfirmedStructure = %+v, want a source=carried expected_kind entry inherited from turn 1", result.ConfirmedStructure)
 	}
+
+	// The hit must be ATTRIBUTABLE to stored ancestry, not merely to have
+	// happened. Turn 2 carried nothing, so ancestry is the only edge that
+	// could have reached turn 1 -- and a rig cannot tell whether the
+	// traversal fix is doing any work unless the telemetry says so. Seed
+	// source cannot answer this: it reports how the REQUEST was linked
+	// (parent_field here) and would read identically for a depth-0 hit where
+	// ancestry mattered not at all.
+	ancestryHit := false
+	for _, c := range telemetry.kindCarries {
+		if c.outcome == KindCarryHit && c.viaStoredAncestry {
+			ancestryHit = true
+		}
+	}
+	if !ancestryHit {
+		t.Errorf("kind carries = %+v, want a hit flagged via_stored_ancestry: this hit was only reachable through turn 2's persisted parent, and unless the telemetry distinguishes it, a rig cannot tell traversal from a depth-0 carry that never needed ancestry", telemetry.kindCarries)
+	}
 }
 
 // ancestryLinkedStore returns durable parents on Get, which staticResultStore
@@ -965,79 +994,153 @@ func (s *ancestryLinkedStore) Get(ctx context.Context, principal storage.Princip
 	return stored, nil
 }
 
-// TestChainIdentity_AValidatedReceiptIsRecordedAsAncestryOnATerminal covers
-// the receipt FALLBACK on a path that returns early.
+// TestChainIdentity_AValidatedReceiptIsRecordedAsAncestryOnEveryTerminal
+// covers the receipt FALLBACK on each of the three paths that were dropping
+// it -- one arm per site, because one arm covering three sites is what let
+// two of them go unnoticed in the first place.
 //
 // parent_result_id is the ancestry root when supplied; receipt-derived roots
-// are the fallback, so that existing clients which link by redeeming an offer
-// still build walkable history instead of ancestry existing only for callers
-// who adopted the new field. That fallback was being dropped on three
+// are the fallback, so existing clients that link by redeeming an offer still
+// build walkable history. That fallback was discarded on three
 // post-validation terminals, which passed nil for the validated receipts even
-// though the caller had them in scope -- so precisely the clients the fallback
-// exists for got no ancestry on any turn that ended in a veto or a terminal.
+// though the caller had them in scope -- so precisely the clients the
+// fallback exists for got no ancestry on any turn ending in a veto or a
+// terminal.
 //
 // The reasoning that produced the bug is worth recording: "these paths run
 // before receipt validation, so nil is correct" is TRUE for the structure
-// veto and FALSE for these three. A single sentence covering five call sites
-// was right about two of them.
-func TestChainIdentity_AValidatedReceiptIsRecordedAsAncestryOnATerminal(t *testing.T) {
+// veto and FALSE for these three. One sentence covering five call sites was
+// right about two of them.
+func TestChainIdentity_AValidatedReceiptIsRecordedAsAncestryOnEveryTerminal(t *testing.T) {
 	t.Parallel()
 
-	prior := validInvestigationResult()
-	prior.ResultID = "result_receipt_parent_1"
-	// The receipt must match a CANDIDATE in the prior result, not merely a
-	// committed subject: an unmatched receipt classifies skipped_no_match and
-	// is deliberately never validated, so it must not seed ancestry either.
-	// My first fixture set only Committed and the test failed -- correctly,
-	// because the receipt never validated. That is the behaviour working, not
-	// a second bug.
 	ops := SubjectRef{Kind: SubjectTeam, CanonicalID: "team_ops", Label: "Ops"}
-	prior.SubjectResolution = SubjectResolution{
-		Candidates: []SubjectCandidate{{
-			ReceiptID: "receipt_abc12345678", Subject: ops, State: ResolutionCommitted,
-			MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 1,
-		}},
-		Committed: []SubjectRef{ops},
-	}
-	seed := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}
-	store := newAncestryRecordingStore(seed)
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 
-	request := validInvestigationRequest()
-	// Linked by a prior-subject receipt ONLY -- no parent_result_id, which is
-	// exactly the existing-client shape the fallback serves.
-	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: prior.ResultID, ReceiptID: "receipt_abc12345678"}}
+	for _, tc := range []struct {
+		name        string
+		site        string
+		mutate      func(*InvestigationRequest)
+		subjectless bool
+		gated       bool
+		wantStatus  contractsv1.ContextFabricInvestigationStatus
+		// namedPriorIDs are every prior result this arm's request names, in
+		// no particular order. An arm naming exactly one pins that id; an arm
+		// naming several only requires ancestry to be one of them -- see the
+		// open ordering question below.
+		namedPriorIDs []string
+	}{
+		{
+			name: "subjectless terminal", site: "unresolved.go terminalResult",
+			mutate: func(*InvestigationRequest) {}, subjectless: true, wantStatus: InvestigationNoMatch,
+			namedPriorIDs: []string{"result_receipt_parent_1"},
+		},
+		{
+			name: "window confirmation gate", site: "window.go windowConfirmationRequiredResult",
+			mutate: func(*InvestigationRequest) {}, gated: true, wantStatus: InvestigationClarificationRequired,
+			namedPriorIDs: []string{"result_receipt_parent_1"},
+		},
+		{
+			name: "window axis-conflict veto", site: "window.go windowVetoResult",
+			mutate: func(r *InvestigationRequest) {
+				// A window receipt that cannot resolve vetoes AFTER receipt
+				// validation has run -- the third dropping site.
+				r.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: "result_absent_00001", ReceiptID: "winr_absent000001"}}
+			},
+			wantStatus:    InvestigationNoMatch,
+			namedPriorIDs: []string{"result_receipt_parent_1", "result_absent_00001"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	fresh := validInvestigationResult()
-	engine := mustReuseTestEngine(t, EngineDependencies{
-		// Empty committed set routes through the subjectless terminal, one of
-		// the three paths that was dropping the fallback.
-		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}},
-		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
-			return CanonicalFactBundle{}, nil
-		}),
-		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
-			return fresh, nil
-		}),
-		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
-			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
-		}),
-		Results: store,
-	})
+			prior := validInvestigationResult()
+			prior.ResultID = "result_receipt_parent_1"
+			// The receipt must match a CANDIDATE, not merely a committed
+			// subject: an unmatched receipt classifies skipped_no_match and is
+			// deliberately never validated, so it must not seed ancestry
+			// either. My first fixture set only Committed and the test failed
+			// -- correctly. That was the behaviour working, not a second bug.
+			prior.SubjectResolution = SubjectResolution{
+				Candidates: []SubjectCandidate{{
+					ReceiptID: "receipt_abc12345678", Subject: ops, State: ResolutionCommitted,
+					MatchReasons: []string{"Exact canonical subject hint matched the organization graph."}, Confidence: 1,
+				}},
+				Committed: []SubjectRef{ops},
+			}
+			store := newAncestryRecordingStore(&staticResultStore{
+				results: map[string]InvestigationResult{prior.ResultID: prior},
+			})
 
-	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
-	if err != nil {
-		t.Fatalf("Investigate() error = %v", err)
-	}
-	// Reachability guard: this must genuinely be the subjectless terminal, or
-	// the arm is re-testing the decisive path.
-	if result.Status != InvestigationNoMatch {
-		t.Fatalf("Status = %q, want %q -- this fixture no longer reaches the subjectless terminal", result.Status, InvestigationNoMatch)
-	}
-	got, saved := store.saved[result.ResultID]
-	if !saved {
-		t.Fatalf("the terminal saved no row for %q", result.ResultID)
-	}
-	if got != prior.ResultID {
-		t.Fatalf("terminal recorded parent %q, want %q: a client linking by a validated receipt must build walkable history on early-return paths too, not only on the decisive one", got, prior.ResultID)
+			request := validInvestigationRequest()
+			// Linked by a prior-subject receipt ONLY -- the existing-client
+			// shape the fallback serves. No parent_result_id anywhere.
+			request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: prior.ResultID, ReceiptID: "receipt_abc12345678"}}
+			tc.mutate(&request)
+
+			committed := []SubjectRef{project}
+			if tc.subjectless {
+				committed = []SubjectRef{}
+			}
+			interpretation := InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}
+			if tc.gated {
+				interpretation = bootstrapInterpretation()
+			}
+			fresh := validInvestigationResult()
+
+			engine := mustReuseTestEngine(t, EngineDependencies{
+				Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
+				Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+					return CanonicalFactBundle{}, nil
+				}),
+				Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+					return fresh, nil
+				}),
+				Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+					return interpretation, nil
+				}),
+				Results: store,
+			})
+
+			result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+			if err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			if result.Status != tc.wantStatus {
+				t.Fatalf("Status = %q, want %q -- this arm no longer reaches %s", result.Status, tc.wantStatus, tc.site)
+			}
+			got, saved := store.saved[result.ResultID]
+			if !saved {
+				t.Fatalf("%s saved no row for %q", tc.site, result.ResultID)
+			}
+			// The assertion is "ancestry is not EMPTY on this path", plus the
+			// specific id wherever the caller named exactly one prior result.
+			//
+			// The window-veto arm names TWO: the validated subject receipt and
+			// the unresolvable window receipt whose failure causes the veto.
+			// carryReferencedResultIDs puts window receipts first, so that id
+			// wins -- and it points at a result that does not exist, while a
+			// validated one was available. Whether ancestry should prefer a
+			// VALIDATED reference over "first in carry order" is a real design
+			// question this test surfaced and I have not been given an answer
+			// to, so it is raised rather than silently decided here. Either
+			// way the dangling case is contained: the walk treats an
+			// unloadable parent as an ordinary miss.
+			if got == "" {
+				t.Fatalf("%s recorded no ancestry at all: a client linking by a validated receipt must build walkable history on early-return paths too, not only on the decisive one", tc.site)
+			}
+			if len(tc.namedPriorIDs) == 1 && got != tc.namedPriorIDs[0] {
+				t.Fatalf("%s recorded parent %q, want %q", tc.site, got, tc.namedPriorIDs[0])
+			}
+			found := false
+			for _, id := range tc.namedPriorIDs {
+				if got == id {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("%s recorded parent %q, which is not among the prior results the caller named (%v)", tc.site, got, tc.namedPriorIDs)
+			}
+		})
 	}
 }

@@ -534,7 +534,7 @@ type EngineTelemetry interface {
 	// a carry hit rate can be ATTRIBUTED rather than merely observed -- see
 	// CarrySeedSource. Reported on every outcome, hit or miss, so both share
 	// a denominator per source.
-	RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource)
+	RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource, viaStoredAncestry bool)
 	// RecordKindCarry reports the outcome of ONE same-conversation
 	// expected_kind carry attempt -- see KindCarryOutcome's own doc comment
 	// for the closed vocabulary (structure_axis_carry.go). Called at most
@@ -552,7 +552,7 @@ type EngineTelemetry interface {
 	// disagreed. They are in the signature rather than a side channel because
 	// a drop reported without both sides is a decision an operator cannot
 	// check.
-	RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource)
+	RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource, viaStoredAncestry bool)
 	// RecordStructureNeedsDisclosed (CHAOS-3900 P1.F, design brief §2.1's
 	// cf_structure_needs_disclosed{member}) reports one member appearing
 	// in a composed StructureNeeds.Missing -- called once per member,

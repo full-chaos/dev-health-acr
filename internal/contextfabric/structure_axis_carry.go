@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -125,6 +126,18 @@ type kindCarryResult struct {
 	SourceResultID string
 	Outcome        KindCarryOutcome
 	ChainDepth     int
+	// ViaStoredAncestry is true when the hit was reached through a stored
+	// parent edge rather than a confirmation edge -- i.e. the walk only got
+	// there because ancestry is persisted on every Save.
+	//
+	// A SEPARATE dimension from CarrySeedSource on purpose: seed source says
+	// how the REQUEST was linked, this says how the WALK arrived. They answer
+	// different questions and can disagree -- a parent_field-seeded request
+	// can hit at depth 0 without ancestry mattering at all, and only the
+	// deeper hops distinguish "the field linked this chain" from "persisted
+	// ancestry is what kept the chain walkable". Without this, the rig cannot
+	// tell whether the traversal fix is doing any work.
+	ViaStoredAncestry bool
 }
 
 // resolveCarriedKind walks this conversation's own prior-result chain for
@@ -162,6 +175,9 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 		return kindCarryResult{Outcome: KindCarryMissNoReference}
 	}
 	visited := make(map[string]struct{}, carryChainMaxVisited)
+	// reachedViaAncestry records which frontier ids were reachable ONLY
+	// because a stored parent pointed at them -- see ViaStoredAncestry.
+	reachedViaAncestry := make(map[string]struct{}, carryChainMaxVisited)
 	var sawUnloadable, sawStaleEpoch, capExceeded, sawVetoedCarrier bool
 	for depth := 0; depth < carryChainMaxDepth && len(frontier) > 0; depth++ {
 		var next []string
@@ -195,6 +211,7 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 				break
 			}
 			visited[resultID] = struct{}{}
+			_, viaAncestry := reachedViaAncestry[resultID]
 			fetched, err := carryLoadResult(ctx, e.results, principal, resultID)
 			if err != nil {
 				sawUnloadable = true
@@ -221,7 +238,7 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 				if origin := carriedKindOrigin(prior); origin != "" {
 					sourceResultID = origin
 				}
-				hits = append(hits, kindCarryResult{Kind: kind, SourceResultID: sourceResultID, Outcome: KindCarryHit, ChainDepth: depth})
+				hits = append(hits, kindCarryResult{Kind: kind, SourceResultID: sourceResultID, Outcome: KindCarryHit, ChainDepth: depth, ViaStoredAncestry: viaAncestry})
 				continue
 			}
 			for _, entry := range prior.ConfirmedStructure {
@@ -251,6 +268,12 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 			// without re-ordering what was already reachable.
 			if id := strings.TrimSpace(fetched.ParentResultID); id != "" {
 				if _, ok := visited[id]; !ok {
+					// Only marked when NO confirmation edge already produced
+					// this id: the flag must mean "ancestry is why this was
+					// reachable", not merely "ancestry also pointed here".
+					if !slices.Contains(next, id) {
+						reachedViaAncestry[id] = struct{}{}
+					}
 					next = append(next, id)
 				}
 			}
@@ -549,7 +572,7 @@ func (e *Engine) recordKindCarry(ctx context.Context, principal storage.Principa
 	// operator reading "hit" alone cannot tell a chain carrying `repository`
 	// from one carrying `team`. redeemedKind is empty except on a drop, where
 	// it is the only place the disagreement is recorded.
-	e.telemetry.RecordKindCarry(ctx, principal, carry.Outcome, carry.ChainDepth, carry.Kind, carry.RedeemedKind, seedSource)
+	e.telemetry.RecordKindCarry(ctx, principal, carry.Outcome, carry.ChainDepth, carry.Kind, carry.RedeemedKind, seedSource, carry.ViaStoredAncestry)
 }
 
 // carryResultCacheKey scopes the per-request carry load cache below.

@@ -438,17 +438,19 @@ type coverageDisclosurePhrasingRecord struct {
 // windowCarryRecord (CHAOS-4360) mirrors priorSubjectReceiptSkipReasonRecord's
 // own shape one field pair over.
 type windowCarryRecord struct {
-	outcome    WindowCarryOutcome
-	chainDepth int
-	seedSource CarrySeedSource
+	outcome           WindowCarryOutcome
+	chainDepth        int
+	seedSource        CarrySeedSource
+	viaStoredAncestry bool
 }
 
 type kindCarryRecord struct {
-	outcome      KindCarryOutcome
-	chainDepth   int
-	carriedKind  contractsv1.ContextFabricSubjectKind
-	redeemedKind contractsv1.ContextFabricSubjectKind
-	seedSource   CarrySeedSource
+	outcome           KindCarryOutcome
+	chainDepth        int
+	carriedKind       contractsv1.ContextFabricSubjectKind
+	redeemedKind      contractsv1.ContextFabricSubjectKind
+	seedSource        CarrySeedSource
+	viaStoredAncestry bool
 }
 
 type priorConsultedRecord struct {
@@ -550,12 +552,12 @@ func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ s
 	r.windowCanonicalizationOutcomes = append(r.windowCanonicalizationOutcomes, outcome)
 }
 
-func (r *recordingTelemetry) RecordWindowCarry(_ context.Context, _ storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource) {
-	r.windowCarries = append(r.windowCarries, windowCarryRecord{outcome, chainDepth, seedSource})
+func (r *recordingTelemetry) RecordWindowCarry(_ context.Context, _ storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource, viaStoredAncestry bool) {
+	r.windowCarries = append(r.windowCarries, windowCarryRecord{outcome, chainDepth, seedSource, viaStoredAncestry})
 }
 
-func (r *recordingTelemetry) RecordKindCarry(_ context.Context, _ storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource) {
-	r.kindCarries = append(r.kindCarries, kindCarryRecord{outcome, chainDepth, carriedKind, redeemedKind, seedSource})
+func (r *recordingTelemetry) RecordKindCarry(_ context.Context, _ storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource, viaStoredAncestry bool) {
+	r.kindCarries = append(r.kindCarries, kindCarryRecord{outcome, chainDepth, carriedKind, redeemedKind, seedSource, viaStoredAncestry})
 }
 
 func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {
