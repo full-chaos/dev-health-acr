@@ -558,37 +558,69 @@ func TestCompletenessFillsOnlyTheUnaccountedRequirements(t *testing.T) {
 	}
 }
 
-// The two seeds must agree ROW FOR ROW.
+// The two seeds AGREE ON IDENTITY AND DISAGREE ON OUTCOME, and both halves
+// matter.
 //
-// One is built from the derivation, the other from what the plan publishes.
-// They were briefly two copies of the same code in two packages; they are now
-// one builder, and this is the assertion that keeps them one. It compares the
-// whole rows rather than the identities, because a drift in the CAUSE mapping
-// -- the part most likely to be extended -- would leave the identities equal.
-func TestBothSeedsProduceIdenticalPlanningRows(t *testing.T) {
+// This test used to assert the two produced identical rows. That was right
+// while both described the same situation and is wrong now: a seed row is
+// written where the derivation RAN, and a gap row where the turn ended before
+// anything ran. Requiring them to be equal is what let the gap rows inherit
+// `satisfied` and claim a requirement had been served in full on exits that
+// read nothing.
+//
+// What must STILL hold is the identity half. Both name the requirement the
+// plan names, so there is one authority for WHICH requirement a row is about;
+// only the account of what became of it differs.
+func TestTheSeedAndTheGapRowAgreeOnIdentityAndDisagreeOnOutcome(t *testing.T) {
 	t.Parallel()
 	rows := twoRequirementRows()
-	// The fixture must exercise the unavailable arm, or the cause mapping
-	// this test exists to protect is never reached.
-	rows[1].Unavailable = RequirementReasonComputedPopulationAbsent
-
 	fromDerivation := SeedRequirementOutcomes(rows)
 	fromPlan := SeedOutcomesFromPublishedPlanRequirements(PlanRequirementsFromDerived(rows))
 
-	unavailable := 0
-	for _, row := range fromDerivation {
-		if row.Outcome == contractsv1.ContextFabricRequirementUnavailable {
-			unavailable++
-			if row.CauseCoverage == "" {
-				t.Errorf("row %q is unavailable with no coverage cause; the mapping fixture is not exercising the table", row.Requirement)
+	if len(fromDerivation) != len(fromPlan) || len(fromPlan) == 0 {
+		t.Fatalf("seed produced %d rows and the gap path %d; they must describe the same requirements",
+			len(fromDerivation), len(fromPlan))
+	}
+	compared := 0
+	for index := range fromPlan {
+		seed, gap := fromDerivation[index], fromPlan[index]
+		compared++
+		if seed.Requirement != gap.Requirement || seed.Obligation != gap.Obligation {
+			t.Errorf("row %d: seed names %q/%q and the gap row names %q/%q; the two must agree on WHICH requirement",
+				index, seed.Requirement, seed.Obligation, gap.Requirement, gap.Obligation)
+		}
+		if seed.Outcome == contractsv1.ContextFabricRequirementSatisfied {
+			if gap.Outcome != contractsv1.ContextFabricRequirementNotAttempted {
+				t.Errorf("row %d: the seed says %q and the gap row says %q; a requirement the turn never reached was not served in full",
+					index, seed.Outcome, gap.Outcome)
+			}
+			if gap.CauseCoverage != contractsv1.ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt {
+				t.Errorf("row %d: the gap row names cause %q, want the code that says the answer ended first",
+					index, gap.CauseCoverage)
+			}
+			if gap.CauseObserved {
+				t.Errorf("row %d: the gap row claims its cause was OBSERVED; nothing observed it, the answer ended first", index)
 			}
 		}
+		if seed.Outcome == contractsv1.ContextFabricRequirementUnavailable && !reflect.DeepEqual(seed, gap) {
+			t.Errorf("row %d: an unservable requirement is reported differently by the two paths:\n seed: %+v\n gap:  %+v",
+				index, seed, gap)
+		}
 	}
-	if unavailable == 0 {
-		t.Fatal("no seeded row is unavailable; the cause mapping was never reached and this test proved nothing")
+	if compared == 0 {
+		t.Fatal("no row reached the comparison; this test proved nothing")
 	}
-	if !reflect.DeepEqual(fromDerivation, fromPlan) {
-		t.Errorf("the derivation-side and plan-side seeds disagree:\n derivation: %+v\n plan: %+v", fromDerivation, fromPlan)
+	// THE GAP PATH MUST NEVER MINT `satisfied`, over every row it produced --
+	// stated separately, because the per-row checks above only look at rows
+	// the seed happened to mark satisfied.
+	for index, gap := range fromPlan {
+		if gap.Outcome == contractsv1.ContextFabricRequirementSatisfied {
+			t.Errorf("gap row %d claims %q; a row minted where nothing ran cannot report a requirement served in full",
+				index, gap.Outcome)
+		}
+		if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(gap); err != nil {
+			t.Errorf("gap row %d does not validate: %v", index, err)
+		}
 	}
 }
 
@@ -653,5 +685,79 @@ func TestFinalizeServedAccountsForPlanRequirementsItStampsItself(t *testing.T) {
 	}
 	if unaccounted == 0 && len(served.Completeness.Outcomes) == 0 {
 		t.Fatal("the served document carries no outcome rows at all; the loop above asserted nothing")
+	}
+}
+
+// A REQUIREMENT THE TURN NEVER REACHED IS NOT REPORTED AS SERVED — driven
+// through the funnel the exits actually use, not by building a row.
+//
+// The four veto exits do not each get their own case here, and that is a
+// measured choice rather than a shortcut: every one of them reaches this
+// document through `finalizeServed` — structure.go:1348, window.go:1269,
+// window.go:1602 and unresolved.go:439 — and that is the same funnel the
+// stamp-before-derive ordering is pinned at below. Driving the funnel
+// exercises what all four share; giving each exit a near-identical case would
+// assert the same thing four times and still not prove they share it.
+//
+// The fixture does NOT pre-stamp the plan, for the reason the ordering test
+// gives: a fixture that stamps its own plan cannot observe the ordering it
+// depends on.
+func TestARequirementTheTurnNeverReachedIsNotReportedAsServed(t *testing.T) {
+	t.Parallel()
+	rows := twoRequirementRows()
+	plan := AnswerPlan{
+		Family:        contractsv1.ContextFabricQuestionFamilySubjectInvestigation,
+		FamilySource:  contractsv1.ContextFabricQuestionFamilySourceStructurePrecedence,
+		FamilyVersion: "v1",
+		Requirements:  PlanRequirementsFromDerived(rows),
+	}
+	// The veto shape: a terminal that read nothing, with no outcome rows.
+	result := InvestigationResult{ResultID: "r-veto", Status: InvestigationNoMatch}
+	result.Completeness = ComputeAnswerCompleteness(result)
+	if len(result.Completeness.Outcomes) != 0 || result.AnswerPlan != nil {
+		t.Fatalf("fixture is not the never-attempted shape: %d rows, plan set=%v",
+			len(result.Completeness.Outcomes), result.AnswerPlan != nil)
+	}
+
+	engine := &Engine{}
+	served, err := engine.finalizeServed(context.Background(), storage.Principal{}, BudgetAssertWindowVeto,
+		result, &plan, ResponseBudget{MaxItems: 1000, MaxSerializedBytes: 1 << 20})
+	if err != nil {
+		t.Fatalf("finalizeServed returned %v", err)
+	}
+
+	servable := 0
+	for _, row := range served.Completeness.Outcomes {
+		if row.Outcome == contractsv1.ContextFabricRequirementSatisfied {
+			t.Errorf("the served document reports requirement %q as satisfied; this exit read nothing", row.Requirement)
+		}
+		if row.Outcome == contractsv1.ContextFabricRequirementNotAttempted {
+			servable++
+			if row.CauseCoverage != contractsv1.ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt {
+				t.Errorf("requirement %q is not_attempted but names cause %q", row.Requirement, row.CauseCoverage)
+			}
+			if row.CauseObserved {
+				t.Errorf("requirement %q claims an OBSERVED cause; the answer ended before anything observed it", row.Requirement)
+			}
+		}
+	}
+	// The loop must have REACHED the arm under test, or a document with no
+	// servable requirement would pass having asserted nothing.
+	if servable == 0 {
+		t.Fatal("no requirement was reported as never-attempted; the fixture never reached the arm this test exists for")
+	}
+	// Every row must be a LEGAL row — the repair must not trade a false
+	// statement for an invalid one.
+	//
+	// The ROWS, not the whole document: this fixture is a bare terminal built
+	// to exercise the never-attempted path, and it carries none of the
+	// identity a full document needs (schema version, request id, generated-at,
+	// question). Validating the whole thing here would be testing the fixture's
+	// completeness rather than the repair. The served document as a whole is
+	// validated by the test that drives the public entry point.
+	for index, row := range served.Completeness.Outcomes {
+		if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(row); err != nil {
+			t.Errorf("outcome row %d does not validate: %v", index, err)
+		}
 	}
 }

@@ -455,7 +455,8 @@
                 "graph_cohort_denied_by_authorization",
                 "graph_unknown_relationship_type",
                 "graph_validity_unbounded",
-                "reuse_auxiliary_refs_stripped"
+                "reuse_auxiliary_refs_stripped",
+                "answer_terminated_before_attempt"
               ],
               "type": "string"
             },
@@ -5069,7 +5070,8 @@
                 "graph_cohort_denied_by_authorization",
                 "graph_unknown_relationship_type",
                 "graph_validity_unbounded",
-                "reuse_auxiliary_refs_stripped"
+                "reuse_auxiliary_refs_stripped",
+                "answer_terminated_before_attempt"
               ],
               "type": "string"
             },
