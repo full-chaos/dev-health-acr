@@ -159,6 +159,11 @@ func TestComputedStepInputReadsHonoursBothGuards(t *testing.T) {
 	unavailable.StepExecution = ""
 	unavailable.Unavailable = contextfabric.RequirementReasonComputedPopulationAbsent
 
+	// The shape the derivation never builds: unavailable AND still naming an
+	// executed step. Only the Served() guard excludes it.
+	unavailableWithStep := served
+	unavailableWithStep.Unavailable = contextfabric.RequirementReasonComputedPopulationAbsent
+
 	readRow := contextfabric.DerivedRequirement{
 		Kind:      contextfabric.ObligationKindRead,
 		FactKinds: []contextfabric.FactKind{health},
@@ -182,6 +187,20 @@ func TestComputedStepInputReadsHonoursBothGuards(t *testing.T) {
 		{
 			name: "the SAME row unavailable: the computation cannot happen, so its inputs are not fetched",
 			rows: []contextfabric.DerivedRequirement{readRow, unavailable},
+			want: nil,
+		},
+		{
+			// THE SERVED GUARD ON ITS OWN. The derivation clears Step and
+			// StepExecution on an unavailable row -- "a row that named both a
+			// step and a reason it cannot run would be two answers to what
+			// became of the cell" -- so the execution guard above already
+			// excludes every unavailable row the derivation builds, and a
+			// fixture of that shape cannot tell the two guards apart. This
+			// row is the shape the derivation NEVER builds, and it is here
+			// because ComputedStepInputReads is exported: a caller can hand
+			// it any row, and a guard no fixture reaches is untested code.
+			name: "an unavailable row that ALSO names an executed step plans nothing",
+			rows: []contextfabric.DerivedRequirement{readRow, unavailableWithStep},
 			want: nil,
 		},
 		{

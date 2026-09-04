@@ -437,9 +437,12 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 // TWO GUARDS, both of which decide a read and neither of which is inferable
 // from the other:
 //
-//   - The row must be SERVED. An unavailable computed cell names no step and
-//     runs nothing, so reading its declared inputs would fetch facts for a
-//     computation that cannot happen.
+//   - The row must be SERVED. An unavailable cell runs nothing, so reading its
+//     declared inputs would fetch facts for a computation that cannot happen.
+//     The derivation clears Step and StepExecution on an unavailable row, so
+//     this guard is DEFENCE IN DEPTH against a row built by hand -- and it is
+//     pinned by a fixture of exactly that shape rather than left as a rule no
+//     test can reach.
 //   - The step must be SERVER-EXECUTED. `declared_only` is the case D13 was
 //     written about: a step named by the vocabulary and run by nothing. Its
 //     inputs are exactly the read nobody needs, and planning them would be
@@ -454,7 +457,7 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 func ComputedStepInputReads(rows []DerivedRequirement) []FactKind {
 	var kinds []FactKind
 	for _, row := range rows {
-		if !row.Served() || row.Step == "" || row.StepExecution != ComputedStepServerExecuted {
+		if !row.Served() || row.StepExecution != ComputedStepServerExecuted {
 			continue
 		}
 		kinds = append(kinds, row.InputFactKinds...)
