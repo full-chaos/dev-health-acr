@@ -19,6 +19,7 @@ package contextfabric
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -723,36 +724,50 @@ func TestComputeMembershipCardinalityReadsOnlyMemberNarrowings(t *testing.T) {
 func TestFinalizingTwiceStatesOneCardinality(t *testing.T) {
 	t.Parallel()
 	frame := countingFrame(SubjectTeam)
-	cohort := countingCohort(SubjectTeam, 4)
-	engine := newCountingEngine(t, cohort, frame, &recordingTelemetry{})
+	engine := newCountingEngine(t, countingCohort(SubjectTeam, 4), frame, &recordingTelemetry{})
 
 	plan := AnswerPlan{Family: QuestionFamilyScopedCohortStatus, FamilyVersion: QuestionFamilyTableVersion}
-	result := InvestigationResult{
-		Status: InvestigationComplete, ResultID: "result_50210002", Cohort: cohort,
-		Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
-	}
 
-	once := engine.finalizeResult(result, plan, frame)
-	if got := len(countOutcomeRows(once, contractsv1.ContextFabricOutcomeStageAssembledResult)); got != 1 {
-		t.Fatalf("after ONE finalization: %d count rows, want 1", got)
-	}
-	twice := engine.finalizeResult(once, plan, frame)
-	rows := countOutcomeRows(twice, contractsv1.ContextFabricOutcomeStageAssembledResult)
-	if len(rows) != 1 {
-		t.Fatalf("after TWO finalizations: %d count rows, want 1 -- re-entry appended a second cardinality "+
-			"for the same requirement, and a reader now has two answers to one question", len(rows))
-	}
-	// The surviving row must be the real one, not a zeroed placeholder: a
-	// guard that kept exactly one row by keeping the WRONG one would pass a
-	// bare count check.
-	if rows[0].Served != 4 || rows[0].Declared != 4 {
-		t.Fatalf("the surviving row says %d/%d, want 4/4", rows[0].Served, rows[0].Declared)
-	}
-	// And the seed rows must not have been duplicated either -- the same
-	// re-entry runs through seedRequirementOutcomes' own guard.
-	planningCount := len(countOutcomeRows(twice, contractsv1.ContextFabricOutcomeStagePlanning))
-	if planningCount != 1 {
-		t.Fatalf("planning-stage `count` rows = %d, want 1", planningCount)
+	// A ZERO-MEMBER cohort is a case in its own right, and codex round 1
+	// found it missing. A resolved-but-empty population genuinely counts
+	// zero -- it is not the ABSENT case, which is a nil cohort -- so it
+	// gets a row like any other, and the guard has to suppress a duplicate
+	// for it too. Testing only a populated cohort let a mutant that
+	// suppressed duplicates ONLY when `Declared > 0` survive the whole
+	// package suite: the guard looked right and was untested at zero.
+	for _, size := range []int{4, 0} {
+		size := size
+		t.Run(fmt.Sprintf("%d members", size), func(t *testing.T) {
+			cohort := countingCohort(SubjectTeam, size)
+			result := InvestigationResult{
+				Status: InvestigationComplete, ResultID: "result_50210002", Cohort: cohort,
+				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+			}
+
+			once := engine.finalizeResult(result, plan, frame)
+			if got := len(countOutcomeRows(once, contractsv1.ContextFabricOutcomeStageAssembledResult)); got != 1 {
+				t.Fatalf("after ONE finalization: %d count rows, want 1", got)
+			}
+			twice := engine.finalizeResult(once, plan, frame)
+			rows := countOutcomeRows(twice, contractsv1.ContextFabricOutcomeStageAssembledResult)
+			if len(rows) != 1 {
+				t.Fatalf("after TWO finalizations: %d count rows, want 1 -- re-entry appended a second "+
+					"cardinality for the same requirement, and a reader now has two answers to one question",
+					len(rows))
+			}
+			// The surviving row must be the real one, not a zeroed
+			// placeholder: a guard that kept exactly one row by keeping the
+			// WRONG one would pass a bare count check.
+			if rows[0].Served != size || rows[0].Declared != size {
+				t.Fatalf("the surviving row says %d/%d, want %d/%d",
+					rows[0].Served, rows[0].Declared, size, size)
+			}
+			// And the seed rows must not have been duplicated either -- the
+			// same re-entry runs through seedRequirementOutcomes' own guard.
+			if planning := len(countOutcomeRows(twice, contractsv1.ContextFabricOutcomeStagePlanning)); planning != 1 {
+				t.Fatalf("planning-stage `count` rows = %d, want 1", planning)
+			}
+		})
 	}
 }
 
@@ -905,5 +920,143 @@ func TestAReusedAnswersCountStillDescribesTheMembersItCarries(t *testing.T) {
 			"was wired -- member evidence refs are optional, so stripping cannot invalidate a member -- and "+
 			"the count row is NOT re-stated on this path. If members are droppable now, the count needs a "+
 			"reuse-stage row and this test is the thing that noticed", counts.DroppedMembers)
+	}
+}
+
+// TestAReusedAnswerStatesItsCardinality is codex round-1 finding 1, pinned.
+//
+// THE DEFECT. Wiring the step made `count` a server result and flipped its
+// declaration to `server_executed`. The reuse path serves a STORED document
+// unchanged, and a document stored before the step was wired carries no
+// assembled-result count row -- so a counting question answered from cache
+// serves a cohort and no cardinality, while the declaration says the server
+// computes one. The declaration would be false for every reused answer.
+//
+// THE FIX IS A BACKFILL, NOT A VERSION FENCE, and the precedent is four
+// lines away: the same serving path already recomputes `Completeness` for
+// rows persisted before that block existed, on the reasoning that a pure
+// function of fields the row already carries is a backfill and never an
+// invention. The cardinality is exactly that -- it counts the member set the
+// stored document itself carries. Fencing the reuse key instead would throw
+// away every cached answer to re-derive something already derivable from it.
+//
+// It lands as an `assembled_result` row because that is what it describes:
+// the member set of the assembled document being served. The idempotence
+// guard makes it a no-op for a document stored after the wiring, so the
+// backfill cannot double-state a cardinality.
+func TestAReusedAnswerStatesItsCardinality(t *testing.T) {
+	t.Parallel()
+	project, candidate := reusableCandidate()
+
+	// The PRE-WIRE stored shape: planning rows (the derivation seeded them),
+	// a real cohort, and NO assembled-result count row -- exactly what a row
+	// persisted before this change looks like.
+	candidate.Cohort = countingCohort(SubjectTeam, 3)
+	candidate.Completeness.Outcomes = []RequirementOutcomeRow{{
+		Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
+		Requirement: string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam),
+		Obligation:  string(ObligationCount),
+		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+		Impact:      contractsv1.ContextFabricAnswerImpactNone,
+	}}
+	candidate.Completeness = ComputeAnswerCompleteness(candidate)
+	if len(countOutcomeRows(candidate, contractsv1.ContextFabricOutcomeStageAssembledResult)) != 0 {
+		t.Fatal("the stored fixture already carries an assembled-result count row; it does not model a pre-wire row")
+	}
+
+	// The reuse recheck re-authorizes EVERY subject the stored document
+	// names, cohort members included, so the resolver has to still commit
+	// them or the fixture takes a fresh path and proves nothing. That guard
+	// is the reason this test asserts `served.Reused` before anything else.
+	committed := []SubjectRef{project}
+	for _, member := range candidate.Cohort.Members {
+		committed = append(committed, member.Subject)
+	}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph:   graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
+		Results: &resultStoreStub{},
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return candidate, true, nil
+		}),
+	})
+	served, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !served.Reused {
+		t.Fatal("the fixture did not take the reuse path, so it proves nothing about it")
+	}
+	if served.Cohort == nil || len(served.Cohort.Members) != 3 {
+		t.Fatalf("served cohort = %#v, want the stored 3-member cohort", served.Cohort)
+	}
+
+	rows := countOutcomeRows(served, contractsv1.ContextFabricOutcomeStageAssembledResult)
+	if len(rows) != 1 {
+		t.Fatalf("a REUSED answer to a counting question states %d cardinalities, want 1 -- it serves a "+
+			"three-member cohort and no count, while the step's declaration says the server computes one",
+			len(rows))
+	}
+	if rows[0].Served != 3 || rows[0].Declared != 3 {
+		t.Fatalf("reused count says %d/%d, want 3/3 -- the members the served document carries",
+			rows[0].Served, rows[0].Declared)
+	}
+	if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(rows[0]); err != nil {
+		t.Fatalf("the backfilled row does not validate: %v", err)
+	}
+}
+
+// TestAnAnswerThatDerivedNoCountStatesNone pins the gate that keeps every
+// non-answering exit from claiming a cardinality.
+//
+// The serving-exit sweep after codex round 1 found a third path carrying a
+// cohort: the subjectless terminal forwards `graphContext.Cohort` while every
+// answer-bearing field stays empty by construction. It must NOT state a count
+// -- it did not answer the question, it asked for clarification or reported
+// no match -- and it does not, because it never reaches finalizeResult and so
+// never seeds requirement rows, and this gate appends nothing without one.
+//
+// That is a STRUCTURAL reason rather than luck, and this test is what keeps it
+// structural: seed a count row on such a path and the cardinality would start
+// appearing on terminals, which is why the gate is pinned here rather than
+// left as a property of who happens to call what.
+func TestAnAnswerThatDerivedNoCountStatesNone(t *testing.T) {
+	t.Parallel()
+	cohort := countingCohort(SubjectTeam, 3)
+
+	// No requirement rows at all: the shape every terminal exit has.
+	rows, _, counted := appendMembershipCardinality(nil, cohort, nil)
+	if counted || len(rows) != 0 {
+		t.Fatalf("a result with no derived requirements stated a cardinality (%d rows) -- an exit that did "+
+			"not answer the question must not claim a count of the cohort it happens to carry", len(rows))
+	}
+
+	// Rows, but none of them a `count`: a frame that asked for something else.
+	other := []RequirementOutcomeRow{{
+		Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
+		Requirement: string(ObligationState) + "/" + string(SubjectRoleSubject) + "/" + string(SubjectTeam),
+		Obligation:  string(ObligationState),
+		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+		Impact:      contractsv1.ContextFabricAnswerImpactNone,
+	}}
+	rows, _, counted = appendMembershipCardinality(other, cohort, nil)
+	if counted || len(rows) != len(other) {
+		t.Fatalf("a frame that derived no `count` obligation was given a cardinality anyway (%d rows)", len(rows))
+	}
+
+	// The POSITIVE control, in the same test: with a seeded count row the
+	// gate DOES append. Without it, both assertions above would pass on a
+	// gate that never appends anything at all.
+	seeded := []RequirementOutcomeRow{{
+		Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
+		Requirement: string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam),
+		Obligation:  string(ObligationCount),
+		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+		Impact:      contractsv1.ContextFabricAnswerImpactNone,
+	}}
+	rows, cardinality, counted := appendMembershipCardinality(seeded, cohort, nil)
+	if !counted || len(rows) != 2 || cardinality.Served != 3 {
+		t.Fatalf("positive control: a seeded count row produced counted=%v rows=%d served=%d, want true/2/3 -- "+
+			"without this the assertions above cannot tell a correct gate from one that never appends",
+			counted, len(rows), cardinality.Served)
 	}
 }

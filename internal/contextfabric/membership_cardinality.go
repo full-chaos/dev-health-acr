@@ -260,3 +260,18 @@ func membershipCardinalityEventFrom(result InvestigationResult, family QuestionF
 	}
 	return MembershipCardinalityEvent{}, false
 }
+
+// reusedPlanNarrowing returns the narrowing steps the STORED document
+// recorded, so a backfilled cardinality describes that document's own
+// history rather than this turn's.
+//
+// Nil-safe on the plan: a row persisted before the answer plan existed
+// carries none, and a cardinality with no narrowing history is exact over
+// the member set the document carries -- which is the honest reading, since
+// nothing this turn narrowed it.
+func reusedPlanNarrowing(reused InvestigationResult) []contractsv1.ContextFabricPlanNarrowing {
+	if reused.AnswerPlan == nil {
+		return nil
+	}
+	return reused.AnswerPlan.Narrowing
+}

@@ -1215,6 +1215,28 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// makes an old row's projection/re-serve pass the SAME
 			// required-field validation a brand-new answer must pass,
 			// instead of 500ing the moment a bounded consumer projects it.
+			//
+			// The SAME argument covers the cardinality, and codex round 1
+			// found this path serving without it. A row persisted before
+			// the `membership_cardinality` step was wired carries no
+			// assembled-result count, so a counting question answered from
+			// cache served a cohort and no number -- while the step's own
+			// declaration says the server computes one. That declaration is
+			// what the planning-authority parity proof reads, so leaving it
+			// false on the reuse path would make the proof's evidence false
+			// for every reused answer.
+			//
+			// A BACKFILL, not a reuse-key fence, for the reason the
+			// paragraph above gives: the cardinality is a pure function of
+			// the member set the stored document ALREADY CARRIES, so
+			// computing it here invents nothing. Fencing the key instead
+			// would discard every cached answer to re-derive something
+			// already derivable from it. The idempotence guard makes this a
+			// no-op for a row stored after the wiring, so a document can
+			// never end up stating two cardinalities.
+			if backfilled, _, _ := appendMembershipCardinality(reused.Completeness.Outcomes, reused.Cohort, reusedPlanNarrowing(reused)); len(backfilled) > 0 {
+				reused.Completeness.Outcomes = backfilled
+			}
 			reused.Completeness = ComputeAnswerCompleteness(reused)
 			// chris's promise of record, verbatim: "reuse and stored reads
 			// are re-validated against the current budget and refuse if they
