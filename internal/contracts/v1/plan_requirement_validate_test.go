@@ -491,6 +491,24 @@ func TestRequirementRefinementChainIsEnforced(t *testing.T) {
 			want: "refinement stage \"later\" is not a vocabulary member",
 		},
 		{
+			name: "a refinement naming no cause at all",
+			breach: func(r *ContextFabricPlanRequirementOutcomeRow) {
+				// Basis is OPTIONAL, so an empty one is legal on its own --
+				// but a reduction must still say what forced it, or the row
+				// is the generic truncation this layer replaces.
+				r.Refinements[0].Basis = ""
+				r.Refinements[0].Overrun = ""
+			},
+			want: "names no cause; a reduction must say what forced it",
+		},
+		{
+			name: "an overrun from no vocabulary",
+			breach: func(r *ContextFabricPlanRequirementOutcomeRow) {
+				r.Refinements[0].Overrun = "disk_space"
+			},
+			want: "refinement overrun \"disk_space\" is not a vocabulary member",
+		},
+		{
 			name: "a basis from no vocabulary",
 			breach: func(r *ContextFabricPlanRequirementOutcomeRow) {
 				r.Refinements[0].Basis = "whatever_fit"
@@ -570,4 +588,125 @@ func TestTooManyRefinementsAreRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "more than the") {
 		t.Fatalf("rejected for the wrong reason: %v", err)
 	}
+}
+
+// THE JOIN, enforced at the DOCUMENT level.
+//
+// Round 1 finding: the two arrays were each validated alone, so a document
+// whose plan described one requirement while its outcome row named a
+// different one passed. Both halves were individually well formed; nothing
+// compared them. Publishing two joinable arrays and never checking the join
+// is publishing a relationship that holds only by construction.
+func TestTheRequirementJoinIsEnforcedOnTheWholeDocument(t *testing.T) {
+	t.Parallel()
+	planned := validReadRequirement()
+
+	// POSITIVE CONTROL: the matching pair validates. Without it the breach
+	// below could be rejected by any unrelated rule and read as success.
+	matched := resultWithRequirementJoin(t, planned, planned.Requirement)
+	if err := matched.Validate(); err != nil {
+		t.Fatalf("a document whose plan and outcome name the SAME requirement must be valid: %v", err)
+	}
+
+	// The breach: same obligation, DIFFERENT subject kind, so the identity
+	// differs in exactly one segment and every per-array rule still holds.
+	mismatched := resultWithRequirementJoin(t, planned, "state/subject/repository")
+	err := mismatched.Validate()
+	if err == nil {
+		t.Fatal("a document naming an outcome for a requirement its own plan does not describe was accepted")
+	}
+	if !strings.Contains(err.Error(), "which the answer plan does not describe") {
+		t.Fatalf("rejected for the wrong reason: %v", err)
+	}
+
+	// ATTRIBUTION: restore only the identity and the document is valid again,
+	// so the rejection was caused by the join and not by something else the
+	// mutation disturbed.
+	restored := resultWithRequirementJoin(t, planned, planned.Requirement)
+	if err := restored.Validate(); err != nil {
+		t.Fatalf("restoring the identity must make the document valid again: %v", err)
+	}
+}
+
+// The OTHER direction: a planned requirement no outcome accounts for.
+func TestAPlannedRequirementWithNoOutcomeIsRejected(t *testing.T) {
+	t.Parallel()
+	planned := validReadRequirement()
+	other := validComputedRequirement()
+
+	doc := resultWithRequirementJoin(t, planned, planned.Requirement)
+	// Add a SECOND plan requirement that no outcome row mentions. The two
+	// must differ, or this is the matched case again.
+	if planned.Requirement == other.Requirement {
+		t.Fatal("the two plan rows share an identity; this direction cannot be tested")
+	}
+	doc.AnswerPlan.Requirements = append(doc.AnswerPlan.Requirements, other)
+
+	err := doc.Validate()
+	if err == nil {
+		t.Fatal("a plan requirement that no outcome row accounts for was accepted")
+	}
+	if !strings.Contains(err.Error(), "which no outcome row accounts for") {
+		t.Fatalf("rejected for the wrong reason: %v", err)
+	}
+}
+
+// The join must be VACUOUS, not violated, where either array is absent: a turn
+// that derived nothing has neither, and a result written before this layer
+// existed has neither.
+func TestTheJoinIsVacuousWhenEitherArrayIsAbsent(t *testing.T) {
+	t.Parallel()
+	planned := validReadRequirement()
+
+	noPlanRows := resultWithRequirementJoin(t, planned, planned.Requirement)
+	noPlanRows.AnswerPlan.Requirements = nil
+	if err := noPlanRows.Validate(); err != nil {
+		t.Errorf("a document with outcome rows and no plan requirements must stay valid: %v", err)
+	}
+
+	// An outcome row with an EMPTY requirement is an unattributed narrowing,
+	// which is a legal state and must not be forced to join anything.
+	unattributed := resultWithRequirementJoin(t, planned, "")
+	if err := unattributed.Validate(); err != nil {
+		t.Errorf("an unattributed outcome row must not be forced to join: %v", err)
+	}
+}
+
+// resultWithRequirementJoin builds a VALID minimal document carrying one plan
+// requirement and one outcome row, with the outcome's identity supplied by the
+// caller so a test can make the two agree or disagree.
+//
+// It starts from the irreducible fixture rather than a hand-built result: that
+// fixture is derived from the bound table and is known valid, so a failure
+// here is attributable to the join rather than to a field this helper forgot.
+// A hand-built document would fail for reasons unrelated to what is under test
+// and read as a passing breach.
+func resultWithRequirementJoin(t *testing.T, planned ContextFabricPlanRequirement, outcomeIdentity string) ContextFabricInvestigationResult {
+	t.Helper()
+	r := buildFromTable(t, func(b answerBound) func(*ContextFabricInvestigationResult) { return b.Min })
+
+	plan := ContextFabricAnswerPlan{
+		Family:        ContextFabricQuestionFamilySubjectInvestigation,
+		FamilySource:  ContextFabricQuestionFamilySourceStructurePrecedence,
+		FamilyVersion: "join-v1",
+		Requirements:  []ContextFabricPlanRequirement{planned},
+	}
+	r.AnswerPlan = &plan
+
+	row := ContextFabricPlanRequirementOutcomeRow{
+		Stage:   ContextFabricOutcomeStagePlanning,
+		Outcome: ContextFabricRequirementSatisfied,
+		Impact:  ContextFabricAnswerImpactNone,
+	}
+	if outcomeIdentity != "" {
+		row.Requirement = outcomeIdentity
+		// The row's own rule requires obligation and identity to be present
+		// together and to agree on the first segment, so derive the
+		// obligation FROM the identity rather than hardcoding it -- a
+		// hardcoded one would make this helper reject for its own reason.
+		row.Obligation = strings.SplitN(outcomeIdentity, "/", 2)[0]
+	}
+	r.Completeness.Outcomes = []ContextFabricPlanRequirementOutcomeRow{row}
+	r.Completeness.State = DeriveContextFabricAnswerCompletenessState(r.Completeness.Outcomes)
+	return r
 }

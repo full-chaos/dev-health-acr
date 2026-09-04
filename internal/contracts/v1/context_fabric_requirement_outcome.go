@@ -429,10 +429,27 @@ type ContextFabricRequirementRefinement struct {
 	// Stage is which stage took this step. Its vocabulary is the enclosing
 	// row's own.
 	Stage ContextFabricOutcomeStage `json:"stage"`
-	// Basis is the declared selection order that chose the survivors, from
-	// the same vocabulary the plan's narrowing steps and the row's
-	// CauseNarrowing use.
-	Basis ContextFabricNarrowingBasis `json:"basis"`
+	// Basis is the declared selection order that chose the survivors, and
+	// Overrun is the declared ceiling that forced the reduction. AT LEAST
+	// ONE, never neither -- and Basis is OPTIONAL, which is the correction
+	// that made this type producible at all.
+	//
+	// The first revision required a Basis. That made the record
+	// unproducible at the only site in this service that actually reduces
+	// anything: candidateNarrowingOutcomeRow truncates a candidate list at
+	// its own declared order and its own header refuses to name a selection
+	// basis, because "naming a selection basis here would state that an
+	// order chose the survivors when a ceiling did". A required Basis
+	// therefore demanded the one cause that site will not invent, and the
+	// field shipped with nothing able to write it.
+	//
+	// The shape now mirrors the enclosing row, which had solved this
+	// already: that row carries three cause fields and requires at least
+	// one, rather than insisting on a particular kind of cause. A reduction
+	// caused by a ceiling says so; a reduction caused by an ordering says
+	// that instead.
+	Basis   ContextFabricNarrowingBasis `json:"basis,omitempty"`
+	Overrun ContextFabricBudgetOverrun  `json:"overrun,omitempty"`
 	// Before and After are counts of the thing that was narrowed.
 	Before int `json:"before"`
 	After  int `json:"after"`
@@ -443,8 +460,19 @@ func (r ContextFabricRequirementRefinement) Validate() error {
 	if !ValidContextFabricOutcomeStage(r.Stage) {
 		return fmt.Errorf("refinement stage %q is not a vocabulary member", r.Stage)
 	}
-	if !ValidContextFabricNarrowingBasis(r.Basis) {
+	if r.Basis != "" && !ValidContextFabricNarrowingBasis(r.Basis) {
 		return fmt.Errorf("refinement basis %q is not a vocabulary member", r.Basis)
+	}
+	if r.Overrun != "" && !ValidContextFabricBudgetOverrun(r.Overrun) {
+		return fmt.Errorf("refinement overrun %q is not a vocabulary member", r.Overrun)
+	}
+	// A reduction with no named cause is the generic truncation this whole
+	// layer exists to replace, moved one level down. Both directions of the
+	// enclosing row's own cause rule, minus the "must name none when
+	// lossless" half, which cannot arise here: a refinement that reduced
+	// nothing is already refused below.
+	if r.Basis == "" && r.Overrun == "" {
+		return fmt.Errorf("refinement at stage %q names no cause; a reduction must say what forced it", r.Stage)
 	}
 	if r.Before < 0 || r.After < 0 || r.After > r.Before {
 		return fmt.Errorf("refinement must reduce a non-negative count, got before=%d after=%d", r.Before, r.After)

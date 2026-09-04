@@ -2685,7 +2685,22 @@
         },
         "basis": {
           "type": "string",
-          "description": "The declared selection order that chose the survivors. Published as a bare string, matching cause_narrowing on the enclosing row: the answer-projection document is self-contained and defines no narrowing-basis vocabulary, and the two definitions of this shape must be identical across documents. The Go validator enforces membership in the closed vocabulary on both surfaces."
+          "enum": [
+            "canonical_id_lexical",
+            "largest_group_round_robin",
+            "attention_rank",
+            "overlap_aware_set_cover"
+          ],
+          "description": "The declared selection order that chose the survivors, when a selection ran. Absent when a ceiling forced the reduction and no order was consulted."
+        },
+        "overrun": {
+          "type": "string",
+          "enum": [
+            "fits",
+            "items",
+            "bytes"
+          ],
+          "description": "The declared ceiling that forced the reduction, when a ceiling did. A refinement must name at least one of basis and overrun: a reduction with no cause is the generic truncation this layer exists to replace."
         },
         "before": {
           "type": "integer",
@@ -2698,7 +2713,6 @@
       },
       "required": [
         "stage",
-        "basis",
         "before",
         "after"
       ]

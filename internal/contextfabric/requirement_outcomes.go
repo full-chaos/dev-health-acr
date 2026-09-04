@@ -303,6 +303,26 @@ func candidateNarrowingOutcomeRow(narrowing candidateNarrowing, overrun contract
 		CauseObserved: true,
 		Served:        narrowing.Served,
 		Declared:      narrowing.Declared,
+		// THE REDUCTION STEP ITSELF, recorded rather than left to be
+		// inferred from the two counts.
+		//
+		// Served and Declared are a before and an after with everything
+		// between them erased. This says WHICH stage cut, and what forced
+		// it -- the ceiling, named from the same overrun vocabulary the
+		// row's own cause field uses, and deliberately NOT a selection
+		// basis: no selection ran here, the list was truncated at its own
+		// declared order, and this function's header refuses to claim
+		// otherwise.
+		//
+		// One step, because this stage cuts once. The chain therefore runs
+		// exactly from Declared to Served, which is what the validator
+		// requires of it.
+		Refinements: []contractsv1.ContextFabricRequirementRefinement{{
+			Stage:   contractsv1.ContextFabricOutcomeStageAssembledResult,
+			Overrun: overrun,
+			Before:  narrowing.Declared,
+			After:   narrowing.Served,
+		}},
 	}
 }
 

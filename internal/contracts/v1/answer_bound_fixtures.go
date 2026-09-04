@@ -428,10 +428,15 @@ func maximalRefinements(declared, served int) []ContextFabricRequirementRefineme
 			after = served
 		}
 		out = append(out, ContextFabricRequirementRefinement{
-			Stage:  stages[i%len(stages)],
-			Basis:  ContextFabricNarrowingBasisCanonicalIDLexical,
-			Before: before,
-			After:  after,
+			Stage: stages[i%len(stages)],
+			// BOTH causes, because the maximal fixture measures the largest
+			// legal encoding and a refinement may carry either or both. The
+			// validator requires at least one; carrying one would understate
+			// the maximum.
+			Basis:   longestNarrowingBasis(),
+			Overrun: longestBudgetOverrun(),
+			Before:  before,
+			After:   after,
 		})
 		before = after
 	}
@@ -845,3 +850,26 @@ const (
 	clarificationPromptMaxRunes       = 2000 // validate_context_fabric_result.go:108
 	candidateEvidenceRefsMaxCount     = 100  // contextFabricWriteBounds.candidateEvidenceRefs
 )
+
+// longestNarrowingBasis and longestBudgetOverrun pick the worst-case member of
+// their vocabularies by MEASURING them, never by naming one: a hand-picked
+// "longest" silently understates the maximum the day a longer member ships.
+func longestNarrowingBasis() ContextFabricNarrowingBasis {
+	longest := ContextFabricNarrowingBasis("")
+	for _, member := range ContextFabricNarrowingBasisVocabulary() {
+		if len(member) > len(longest) {
+			longest = member
+		}
+	}
+	return longest
+}
+
+func longestBudgetOverrun() ContextFabricBudgetOverrun {
+	longest := ContextFabricBudgetOverrun("")
+	for _, member := range ContextFabricBudgetOverrunVocabulary() {
+		if len(member) > len(longest) {
+			longest = member
+		}
+	}
+	return longest
+}

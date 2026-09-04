@@ -1412,6 +1412,9 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 			return fmt.Errorf("answer_plan: %w", err)
 		}
 	}
+	if err := validateRequirementJoin(r); err != nil {
+		return err
+	}
 	if r.Cohort != nil {
 		if err := r.Cohort.validate(bounds); err != nil {
 			return fmt.Errorf("cohort: %w", err)
@@ -1743,4 +1746,70 @@ func sameOptionalTime(a, b *time.Time) bool {
 		return a == nil && b == nil
 	}
 	return a.Equal(*b)
+}
+
+// validateRequirementJoin enforces that the plan's requirement rows and the
+// completeness block's outcome rows describe THE SAME requirements.
+//
+// It exists because validating the two arrays separately is not the same as
+// validating the document. Each array's own rules were enforced -- every plan
+// row well formed and uniquely identified, every outcome row well formed and
+// agreeing with its own obligation -- and a document whose plan described
+// `state/subject/project` beside an outcome row naming
+// `state/subject/repository` still passed, because nothing compared them.
+// That is the whole value of publishing both: they are joinable, and a join
+// that only holds by construction is a join no reader can rely on.
+//
+// BOTH DIRECTIONS, because each catches a different defect. An outcome naming
+// a requirement the plan does not describe means the identity came from
+// somewhere other than the derivation. A plan requirement no outcome accounts
+// for means a row was planned and then dropped before the seed. Checking one
+// direction would leave the other silent.
+//
+// VACUOUS BY DESIGN when either array is absent, and that is not a hole. A
+// turn that derived no requirements has neither, and a result written before
+// this layer existed has neither; requiring one to imply the other would make
+// every such document invalid. The rule binds exactly when both are present,
+// which is when a reader would actually try to join them.
+func validateRequirementJoin(r ContextFabricInvestigationResult) error {
+	if r.AnswerPlan == nil || len(r.AnswerPlan.Requirements) == 0 {
+		return nil
+	}
+	attributed := 0
+	for _, row := range r.Completeness.Outcomes {
+		if row.Requirement != "" {
+			attributed++
+		}
+	}
+	if attributed == 0 {
+		// Every outcome row is unattributed, which is a legal state: a
+		// narrowing that could not be tied to a requirement says so by
+		// leaving the field empty rather than by guessing one.
+		return nil
+	}
+
+	planned := make(map[string]bool, len(r.AnswerPlan.Requirements))
+	for _, requirement := range r.AnswerPlan.Requirements {
+		planned[requirement.Requirement] = true
+	}
+	accounted := make(map[string]bool, len(r.Completeness.Outcomes))
+	for _, row := range r.Completeness.Outcomes {
+		if row.Requirement == "" {
+			continue
+		}
+		if !planned[row.Requirement] {
+			return fmt.Errorf(
+				"completeness names an outcome for requirement %q, which the answer plan does not describe",
+				row.Requirement)
+		}
+		accounted[row.Requirement] = true
+	}
+	for _, requirement := range r.AnswerPlan.Requirements {
+		if !accounted[requirement.Requirement] {
+			return fmt.Errorf(
+				"answer plan describes requirement %q, which no outcome row accounts for",
+				requirement.Requirement)
+		}
+	}
+	return nil
 }

@@ -394,13 +394,22 @@ const irreducibleAnswerBytes = 1023
 // its maximum LEGAL encoding (the longest obligation, then two escaped
 // segments filling the 256-character bound) and all three cause vocabularies
 // present at their longest member.
+// 521367470 -> 521103416 (-264054), and a DECREASE is the point rather than a
+// regression. Round 1's join finding produced a document-level rule: every
+// outcome identity must name a requirement the plan describes. A plan
+// requirement's identity is structurally short -- three segments, each a
+// member of a closed vocabulary -- so the outcome row's own 256-rune identity
+// bound is UNREACHABLE in a document that carries both arrays, and the earlier
+// pin was measuring a shape no valid document can take. It also gains the
+// refinement chain's second cause field. The net is smaller and correct.
+//
 // 521187082 -> 521367470 (+180388): the plan-requirement layer. The plan now
 // carries 200 requirement rows at their own ceiling, and each of the 200
 // outcome rows carries a full-length refinement chain. Both are new bounded
 // arrays on this document, so the maximum grew by construction rather than by
 // a bound drifting -- and the irreducible floor above did NOT move, because
 // both arrays are omitempty and the smallest answer has neither.
-const maximalAnswerBytes = 521367470
+const maximalAnswerBytes = 521103416
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
@@ -586,21 +595,29 @@ func maximalOutcomeRows(n int) []ContextFabricPlanRequirementOutcomeRow {
 			longestBasis = basis
 		}
 	}
-	// The longest obligation the mirrored vocabulary holds, so the identity
-	// below is both maximal AND legal: the validator requires the identity's
-	// first segment to equal the row's own obligation.
-	longestObligation := ""
-	for _, obligation := range ContextFabricAnswerObligationVocabulary() {
-		if len(obligation) > len(longestObligation) {
-			longestObligation = obligation
-		}
-	}
-	// obligation + "/" + role + "/" + kind, filling the identity bound
-	// exactly. Split evenly; the remainder goes to the first segment.
-	remaining := ContextFabricRequirementIdentityMaxLength - len(longestObligation) - 2
-	role, kind := remaining-remaining/2, remaining/2
-	identity := longestObligation + "/" + escaped(role) + "/" + escaped(kind)
+	// THE IDENTITIES COME FROM THE PLAN, and that is a correction the join
+	// rule forced rather than a preference.
+	//
+	// An earlier revision padded the identity to its 256-rune bound, which is
+	// legal for a row read in isolation. It is NOT legal in a document whose
+	// plan also carries requirements: the join requires every outcome
+	// identity to name a requirement the plan describes, and a plan
+	// requirement's identity is structurally short -- three segments, each a
+	// member of a closed vocabulary. So the 256 bound on this field is
+	// reachable only when the plan carries no requirements at all, and a
+	// maximal document that carries both cannot also max this field. Stating
+	// that plainly is better than a fixture that quietly measures an
+	// unreachable shape.
+	//
+	// Cycling modulo the plan's length keeps every count legal, including the
+	// past-max case: two outcome rows may name one requirement (a stage
+	// appended to it), so the over-count fixture still rejects on the COUNT
+	// bound rather than on the join.
+	planRows := maximalPlanRequirements()
 	for index := 0; index < n; index++ {
+		planned := planRows[index%len(planRows)]
+		identity := planned.Requirement
+		longestObligation := planned.Obligation
 		rows = append(rows, ContextFabricPlanRequirementOutcomeRow{
 			Stage:          ContextFabricOutcomeStageAssembledResult,
 			Requirement:    identity,

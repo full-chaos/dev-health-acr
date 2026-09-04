@@ -261,3 +261,75 @@ func planRequirementEngine(t *testing.T, deriver RequirementDeriver, calls *int,
 	}
 	return engine
 }
+
+// THE REFINEMENT MUST REACH THE SERVED DOCUMENT, not merely exist as a type.
+//
+// Round 1's finding was that nothing in production wrote one: the field, its
+// validator, its entries in six schema documents and a whole test suite
+// existed for a value no code path produced, and the only assignment anywhere
+// was in a store-parity fixture. A field nothing writes is not an audit; it is
+// a promise.
+//
+// This drives the real over-budget path — the one narrowing this service
+// actually performs — and reads the refinement off the answer a caller
+// receives. It is the consumer-side assertion, because a producer-side one
+// would have passed against the same defect.
+func TestANarrowedAnswerCarriesTheRefinementThatProducedIt(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	telemetry := &recordingTelemetry{}
+	// The acceptance shape: 18 candidates + 12 facts + 5 drivers = 35 charged
+	// items against a 30-item ceiling, which forces the candidate cut.
+	engine := outcomeAssemblySingleSubjectEngineWithDrivers(t, 18, 12, 5, budgetStageOptions(30, time.Second), &calls, telemetry)
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+
+	// The narrowing must actually have happened, or the assertion below is
+	// about a document that was never cut and proves nothing.
+	var narrowed []contractsv1.ContextFabricPlanRequirementOutcomeRow
+	for _, row := range result.Completeness.Outcomes {
+		if row.Outcome == contractsv1.ContextFabricRequirementNarrowed {
+			narrowed = append(narrowed, row)
+		}
+	}
+	if len(narrowed) == 0 {
+		t.Fatalf("no narrowed outcome row on the served answer; the fixture did not exercise the cut (outcomes: %d)",
+			len(result.Completeness.Outcomes))
+	}
+
+	for _, row := range narrowed {
+		if len(row.Refinements) == 0 {
+			t.Fatalf("a narrowed row served %d of %d and recorded NO refinement; "+
+				"the two counts are a before and an after with the step between them erased",
+				row.Served, row.Declared)
+		}
+		step := row.Refinements[0]
+		// The cause must be the CEILING, not a selection order: no selection
+		// ran here, and claiming one would state that an order chose the
+		// survivors when a ceiling did.
+		if step.Overrun == "" {
+			t.Error("the refinement names no overrun; a ceiling forced this cut and the row must say so")
+		}
+		if step.Basis != "" {
+			t.Errorf("the refinement claims selection basis %q, but this cut truncated at the declared order and no selection ran", step.Basis)
+		}
+		if step.Stage != contractsv1.ContextFabricOutcomeStageAssembledResult {
+			t.Errorf("refinement stage = %q, want assembled_result", step.Stage)
+		}
+		// The chain must reconcile with the row's own numbers -- which is the
+		// property that makes it an audit rather than a decoration.
+		if step.Before != row.Declared || step.After != row.Served {
+			t.Errorf("refinement runs %d->%d but the row declared %d and served %d",
+				step.Before, step.After, row.Declared, row.Served)
+		}
+	}
+
+	// And the whole document must still satisfy its own contract, including
+	// the chain-reconciliation rule the validator enforces.
+	if err := result.Validate(); err != nil {
+		t.Fatalf("the served answer does not satisfy its own contract: %v", err)
+	}
+}
