@@ -245,6 +245,38 @@ type DerivedRequirement struct {
 	// Empty for a read obligation.
 	Step ComputedObligationStep
 
+	// InputClass and InputFactKinds are the §13.2.3 amendment: WHAT THE
+	// COMPUTATION CONSUMES. Both are empty on a read obligation and on an
+	// unavailable one.
+	//
+	// THEY ARE DELIBERATELY NOT FactKinds. FactKinds means "kinds that can
+	// SERVE this cell", and every existing reader -- the plan projection
+	// included -- treats it as a planned READ. A computation's inputs are
+	// facts some OTHER cell is responsible for reading; folding them into
+	// FactKinds would make a computed row look like it planned reads of its
+	// own, which is the mis-typing round 4 recorded as N3 arriving from the
+	// opposite direction. Separate fields keep both statements true at once:
+	// this cell reads nothing, AND these are the kinds its step consumes.
+	//
+	// Why the class is not inferable from the list: a step that consumes no
+	// fact would otherwise be indistinguishable from a step nobody has
+	// declared inputs for. See ComputedStepInputClass.
+	InputClass ComputedStepInputClass
+	// InputFactKinds are the kinds the step consumes, sorted in fact-kind
+	// vocabulary order and deduplicated, so two runs of one frame produce
+	// the same bytes in the regenerated artifact.
+	InputFactKinds []FactKind
+	// StepExecution says whether a server function actually RUNS this step.
+	// Empty on a read obligation and on an unavailable one.
+	//
+	// It is on the row because a consumer reasoning about what the answer
+	// depends on needs both halves together: a step that consumes nothing
+	// and a step nobody executes are indistinguishable from the input fields
+	// alone, and treating the second like the first is what would let an
+	// unexecuted step's "consumes nothing" authorize retiring the thing that
+	// actually causes the facts to be read.
+	StepExecution ComputedStepExecution
+
 	Scope      CompletionScope
 	Quantifier CompletionQuantifier
 
@@ -313,6 +345,16 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 			return row
 		}
 		row.Step = step
+		// The §13.2.3 amendment: the row records what the step CONSUMES,
+		// not only what satisfies it. A step with no declaration would
+		// leave the row exactly as it was before the amendment -- silently
+		// -- so the vocabulary test asserts totality over the step list
+		// rather than letting this branch fail open.
+		if inputs, declared := InputsForComputedStep(step); declared {
+			row.InputClass = inputs.Class
+			row.InputFactKinds = inputs.FactKinds
+			row.StepExecution = inputs.Execution
+		}
 		row.Quantifier = quantifierForComputed(coordinate.Obligation)
 		return row
 	}

@@ -73,8 +73,9 @@ list_needs() {
 # returns 0 silently on success.
 
 check_verify_job_exists() {
-  local file="$1"
-  list_jobs "$file" | grep -qx verify || {
+  local file="$1" jobs
+  jobs="$(list_jobs "$file")"
+  grep -qx verify <<<"$jobs" || {
     printf 'no top-level "verify" job found in %s\n' "$file" >&2
     return 1
   }
@@ -124,11 +125,11 @@ check_gate_rejects_nonsuccess() {
   local file="$1"
   local block status=0
   block="$(job_block "$file" verify)"
-  printf '%s\n' "$block" | grep -qF '!= success' || {
+  grep -qF '!= success' <<<"$block" || {
     printf 'verify job is missing a "!= success" check\n' >&2
     status=1
   }
-  printf '%s\n' "$block" | grep -qF 'at least one lane did not succeed' || {
+  grep -qF 'at least one lane did not succeed' <<<"$block" || {
     printf 'verify job is missing the "at least one lane did not succeed" failure message\n' >&2
     status=1
   }
@@ -142,9 +143,10 @@ check_gate_rejects_nonsuccess() {
 # missing tarball at runtime. This pins them to one job.
 check_container_oci_scan_same_job() {
   local file="$1"
-  local job scan_job=""
+  local job scan_job="" block
   while IFS= read -r job; do
-    if job_block "$file" "$job" | grep -qF 'make container-scan'; then
+    block="$(job_block "$file" "$job")"
+    if grep -qF 'make container-scan' <<<"$block"; then
       scan_job="$job"
       break
     fi
@@ -155,7 +157,8 @@ check_container_oci_scan_same_job() {
     return 1
   fi
 
-  job_block "$file" "$scan_job" | grep -qF 'make container-oci' || {
+  block="$(job_block "$file" "$scan_job")"
+  grep -qF 'make container-oci' <<<"$block" || {
     printf 'job "%s" runs "make container-scan" without "make container-oci": scan consumes the .tmp/container-oci/*.tar archives oci publishes, so they must stay in one job\n' \
       "$scan_job" >&2
     return 1
@@ -171,7 +174,7 @@ check_container_oci_scan_same_job() {
 # catch (it proves the union is total; it can't tell a genuinely-run job
 # apart from an isolation list edited to match one that no longer exists).
 check_isolated_devhealthschema_job() {
-  local file="$1" isolated job found_job=""
+  local file="$1" isolated job found_job="" block
   isolated="$("$repo_root/scripts/ci/test-shard.sh" isolated)"
   if [ -z "$isolated" ]; then
     printf 'scripts/ci/test-shard.sh isolated printed nothing\n' >&2
@@ -179,7 +182,8 @@ check_isolated_devhealthschema_job() {
   fi
 
   while IFS= read -r job; do
-    if job_block "$file" "$job" | grep -qF 'test-shard.sh isolated'; then
+    block="$(job_block "$file" "$job")"
+    if grep -qF 'test-shard.sh isolated' <<<"$block"; then
       found_job="$job"
       break
     fi
@@ -191,7 +195,8 @@ check_isolated_devhealthschema_job() {
     return 1
   fi
 
-  job_block "$file" "$found_job" | grep -qE 'GOTEST_TIMEOUT=|-timeout[= ]' || {
+  block="$(job_block "$file" "$found_job")"
+  grep -qE 'GOTEST_TIMEOUT=|-timeout[= ]' <<<"$block" || {
     printf 'job "%s" runs the isolated package(s) without its own explicit timeout override\n' \
       "$found_job" >&2
     return 1
@@ -212,14 +217,14 @@ check_go_cache() {
   while IFS= read -r job; do
     local block
     block="$(job_block "$file" "$job")"
-    if printf '%s' "$block" | grep -qE 'runs-on: *\[self-hosted'; then
-      if printf '%s' "$block" | grep -q 'cache: true'; then
+    if grep -qE 'runs-on: *\[self-hosted' <<<"$block"; then
+      if grep -q 'cache: true' <<<"$block"; then
         printf 'self-hosted job "%s" has setup-go cache: true -- it shares a GOMODCACHE/GOCACHE mount with every other pool job; a cache restore here can race and corrupt it\n' \
           "$job" >&2
         status=1
       fi
     else
-      if printf '%s' "$block" | grep -q 'cache: false'; then
+      if grep -q 'cache: false' <<<"$block"; then
         printf 'hosted job "%s" has setup-go cache: false -- only self-hosted legs skip setup-go'"'"'s cache (they share a hostPath mount instead)\n' \
           "$job" >&2
         status=1
@@ -298,18 +303,18 @@ check_endpoint_profile_gate_step() {
 
   local key
   for key in ACR_ENDPOINT_PROFILE_SCHEMA ACR_CREDENTIAL_CLASSES ACR_CREDENTIAL_CLASSES_SCHEMA; do
-    if ! printf '%s' "$block" | grep -q "$key:"; then
+    if ! grep -q "$key:" <<<"$block"; then
       printf 'the endpoint-profile gate step does not set %s -- the gate cannot validate an input it is not given\n' "$key" >&2
       return 1
     fi
   done
 
-  if ! printf '%s' "$block" | grep -q 'ACR_CONTRACT_GATE: required'; then
+  if ! grep -q 'ACR_CONTRACT_GATE: required' <<<"$block"; then
     printf 'the endpoint-profile gate step does not set ACR_CONTRACT_GATE: required -- without it the real-tree proof SKIPS instead of failing when its inputs are missing\n' >&2
     return 1
   fi
 
-  if ! printf '%s' "$block" | grep -q 'go test ./ci/checkendpointprofiles/'; then
+  if ! grep -q 'go test ./ci/checkendpointprofiles/' <<<"$block"; then
     printf 'the endpoint-profile gate step does not run go test ./ci/checkendpointprofiles/ -- it sets the environment for a proof it never invokes\n' >&2
     return 1
   fi
@@ -347,7 +352,9 @@ check_pin_requires_full_sha() {
     return 1
   fi
   # Strip comments so a decoy in a comment cannot satisfy the check.
-  if ! printf '%s' "$block" | sed 's/#.*$//' | grep -qF '[0-9a-f]{40}'; then
+  local stripped
+  stripped="$(printf '%s' "$block" | sed 's/#.*$//')"
+  if ! grep -qF '[0-9a-f]{40}' <<<"$stripped"; then
     printf 'the pin-validation step does not require a full 40-hex commit SHA in its own command (a comment does not count) -- a branch name would resolve and silently float\n' >&2
     return 1
   fi
@@ -381,7 +388,7 @@ check_pin_binds_checkout_ref() {
   # pass on any workflow at all -- the same "guard present but property not
   # held" failure this function exists to catch.
   # shellcheck disable=SC2016
-  if ! printf '%s' "$block" | grep -qF 'ref: ${{ steps.ops-pin.outputs.sha }}'; then
+  if ! grep -qF 'ref: ${{ steps.ops-pin.outputs.sha }}' <<<"$block"; then
     # shellcheck disable=SC2016
     printf 'the ops-contract checkout does not use the validated pin (expected ref: ${{ steps.ops-pin.outputs.sha }}) -- the full-SHA check would pass while CI followed a floating ref\n' >&2
     return 1
@@ -436,22 +443,22 @@ check_v16_pairs() {
     # expression evaluator -- but pins the known-correct textual pattern
     # (both directions of the switch check, plus the fork-PR carve-out on
     # both legs) so a hand-edit that drops one clause is caught.
-    if ! printf '%s' "$hosted_block" | grep -qF "vars.SELF_HOSTED_RUNNERS != 'enabled'"; then
+    if ! grep -qF "vars.SELF_HOSTED_RUNNERS != 'enabled'" <<<"$hosted_block"; then
       printf 'v1.6 pair "%s": hosted leg "%s" if: is missing the SELF_HOSTED_RUNNERS != enabled clause\n' \
         "$base" "$hosted_key" >&2
       status=1
     fi
-    if ! printf '%s' "$hosted_block" | grep -qF 'head.repo.full_name != github.repository'; then
+    if ! grep -qF 'head.repo.full_name != github.repository' <<<"$hosted_block"; then
       printf 'v1.6 pair "%s": hosted leg "%s" if: is missing the fork-PR carve-out (forks must always fall back to hosted)\n' \
         "$base" "$hosted_key" >&2
       status=1
     fi
-    if ! printf '%s' "$pool_block" | grep -qF "vars.SELF_HOSTED_RUNNERS == 'enabled'"; then
+    if ! grep -qF "vars.SELF_HOSTED_RUNNERS == 'enabled'" <<<"$pool_block"; then
       printf 'v1.6 pair "%s": self-hosted leg "%s" if: is missing the SELF_HOSTED_RUNNERS == enabled clause\n' \
         "$base" "$pool_key" >&2
       status=1
     fi
-    if ! printf '%s' "$pool_block" | grep -qF 'head.repo.full_name == github.repository'; then
+    if ! grep -qF 'head.repo.full_name == github.repository' <<<"$pool_block"; then
       printf 'v1.6 pair "%s": self-hosted leg "%s" if: is missing the fork-PR exclusion (forks must never reach the pool)\n' \
         "$base" "$pool_key" >&2
       status=1
@@ -470,16 +477,16 @@ check_verify_pair_logic() {
   local file="$1" block status=0
   block="$(job_block "$file" verify)"
 
-  if ! printf '%s' "$block" | grep -qF 'PAIRS'; then
+  if ! grep -qF 'PAIRS' <<<"$block"; then
     printf 'verify job has no PAIRS-driven pair check -- the v1.6 hosted/self-hosted pairs would be asserted as if they were plain single jobs, and a by-design skip on the leg that did not run would fail the whole gate\n' >&2
     return 1
   fi
   # shellcheck disable=SC2016
-  if ! printf '%s' "$block" | grep -qF '!= success ] && [ "$hosted_result" != skipped'; then
+  if ! grep -qF '!= success ] && [ "$hosted_result" != skipped' <<<"$block"; then
     printf 'verify'"'"'s pair check does not tolerate a skipped hosted leg\n' >&2
     status=1
   fi
-  if ! printf '%s' "$block" | grep -qF 'neither'; then
+  if ! grep -qF 'neither' <<<"$block"; then
     printf 'verify has no "neither ... ran" guard -- if both pair members were somehow skipped, the gate would not notice that lane never ran at all\n' >&2
     status=1
   fi
@@ -507,19 +514,19 @@ check_pair_consumers_guard_cancellation() {
     block="$(job_block "$file" "$job")"
     needs_list="$(printf '%s' "$block" | list_needs)"
     for base in $V16_PAIR_BASES; do
-      if printf '%s\n' "$needs_list" | grep -qxE "${base}-hosted|${base}-self-hosted"; then
+      if grep -qxE "${base}-hosted|${base}-self-hosted" <<<"$needs_list"; then
         depends_on_pair=1
       fi
     done
     [ "$depends_on_pair" -eq 1 ] || continue
 
-    if ! printf '%s' "$block" | grep -qE '^ {4}if: '; then
+    if ! grep -qE '^ {4}if: ' <<<"$block"; then
       printf '%s: depends on a v1.6 pair member but has no if: -- the default needs skip-cascade would wrongly skip it whenever the pair leg that never ran (by design) reports skipped\n' \
         "$job" >&2
       status=1
       continue
     fi
-    if ! printf '%s' "$block" | grep -qF '!cancelled()'; then
+    if ! grep -qF '!cancelled()' <<<"$block"; then
       printf '%s: if: does not guard with !cancelled() -- always() (or a bare needs-result expression with no status-check function at all) either spins this job up on a cancelled/superseded run, or silently skips it on every run regardless of the pair'"'"'s actual result\n' \
         "$job" >&2
       status=1
@@ -785,3 +792,59 @@ assert_check_fails 'a mirror-preflight consumer dropped the !cancelled() guard e
   check_pair_consumers_guard_cancellation "$consumer_bare_or"
 
 printf 'PASS: all negative controls correctly failed their check\n'
+
+# ---- SIGPIPE/pipefail regression control ---------------------------------
+# Every `job_block ... | grep -q ...` pipeline used to feed the awk writer
+# straight into grep -q's stdin. grep -q exits on its FIRST match and closes
+# the pipe; if the matched job block is bigger than the 64KB pipe buffer and
+# the match falls early in it, awk can still be writing when the pipe closes,
+# gets SIGPIPE, and (under `set -o pipefail`) turns a MATCHING check into a
+# false failure (pipeline status 141) -- a race, not a deterministic bug, so
+# it reproduced only on large blocks (e.g. PR #424 tip 4f9748e8) and never on
+# main's smaller ones. The fix captures each job block into a variable first
+# ($(...) always reads to EOF, no early-exit reader) and greps the variable
+# via a here-string. This proves that shape holds on a block far bigger than
+# the 64KB pipe buffer with the pattern on the block's FIRST line -- the
+# shape most likely to race -- run repeatedly to rule out a lucky pass.
+assert_check_passes() {
+  local desc="$1" fn="$2" file="$3" runs="$4" i rc
+  for ((i = 1; i <= runs; i++)); do
+    if ! "$fn" "$file" 2>/dev/null; then
+      rc=$?
+      printf 'REGRESSION CONTROL FAILED: %s -- "%s" failed on run %d/%d (rc=%d) against a file it must deterministically PASS\n' \
+        "$desc" "$fn" "$i" "$runs" "$rc" >&2
+      exit 1
+    fi
+  done
+}
+
+large_block_early_match="$tmpdir/large-block-early-match.yml"
+{
+  # Strip the real job that runs container-scan/-oci so the synthetic job
+  # below is the only one check_container_oci_scan_same_job can match.
+  awk '/make container-scan/ { next } /make container-oci/ { next } { print }' "$workflow"
+  printf '  zzz-oversized-scan-regression:\n'
+  printf '    runs-on: ubuntu-24.04\n'
+  printf '    steps:\n'
+  # Pattern on the block's FIRST content line: grep -q can match and exit
+  # almost immediately, before the rest of the >64KB block is written.
+  printf '      - run: make container-scan\n'
+  printf '      - run: make container-oci\n'
+  for ((i = 1; i <= 20000; i++)); do
+    printf '      # padding line %d xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n' "$i"
+  done
+} > "$large_block_early_match"
+
+block_size="$(job_block "$large_block_early_match" zzz-oversized-scan-regression | wc -c | tr -d '[:space:]')"
+if [ "$block_size" -le 65536 ]; then
+  printf 'REGRESSION CONTROL SETUP FAILED: synthetic job block is only %s bytes, need > 65536 to cross the pipe buffer\n' \
+    "$block_size" >&2
+  exit 1
+fi
+
+assert_check_passes \
+  ">64KB job block (${block_size} bytes) with an early-line match must PASS check_container_oci_scan_same_job on every run, not just most" \
+  check_container_oci_scan_same_job "$large_block_early_match" 20
+
+printf 'PASS: >64KB early-match job block passed check_container_oci_scan_same_job deterministically across 20 runs (%s bytes)\n' \
+  "$block_size"

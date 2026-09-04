@@ -1,5 +1,7 @@
 package v1
 
+import "strings"
+
 // The retrieval-degradation limitation lives here, in the contract, rather
 // than in the engine that writes it (CHAOS-3746, option (a)).
 //
@@ -188,14 +190,90 @@ const ContextFabricFactScopeActivityProxyLimitation = "Some evidence in this ans
 // attributed by inference, not asserted.
 const ContextFabricFactScopeAttributedPrimaryTeamLimitation = "Some evidence in this answer was associated with its team by a computed attribution rather than one directly asserted by a data source, so that association may be imprecise."
 
+// contextFabricGroupingRefusalLimitationPrefix, -Middle and -Suffix are the
+// three FIXED segments of the grouping-refusal disclosure. It is the one
+// disclosure in this file that is INTERPOLATED, and that is chris's own
+// ruling rather than an oversight: a reader told only "the answer is
+// presented ungrouped" cannot tell whether the axis they asked for was
+// missing or merely different, so the sentence names both kinds. Both are
+// closed-vocabulary subject kinds, so it still carries no model text and no
+// corpus content -- which is the property the "fixed and non-interpolated"
+// discipline elsewhere in this file exists to guarantee, reached by a
+// different route.
+const (
+	contextFabricGroupingRefusalLimitationPrefix = "This question asked for a breakdown by "
+	contextFabricGroupingRefusalLimitationMiddle = ", but the available facts group by "
+	contextFabricGroupingRefusalLimitationSuffix = ", so the answer is presented ungrouped."
+)
+
+// ContextFabricGroupingRefusalLimitation composes CHAOS-4636's disclosure
+// that a grouped question was answered ungrouped because the planned group
+// kind and the fact source's own kind disagree.
+//
+// THE SOLE COMPOSER, and that matters more here than for a constant. Because
+// this string is interpolated it cannot be recognised by the equality check
+// every other disclosure uses, so recognition is a PARSE
+// (IsContextFabricGroupingRefusalLimitation) over exactly the segments this
+// function writes. A second, hand-rolled Sprintf at a call site would produce
+// a string the parser might not accept -- and an unrecognised service
+// disclosure is silently displaceable, which is the round-3 finding.
+func ContextFabricGroupingRefusalLimitation(plannedKind, sourceKind ContextFabricSubjectKind) string {
+	return contextFabricGroupingRefusalLimitationPrefix + string(plannedKind) +
+		contextFabricGroupingRefusalLimitationMiddle + string(sourceKind) +
+		contextFabricGroupingRefusalLimitationSuffix
+}
+
+// IsContextFabricGroupingRefusalLimitation reports whether a limitation is
+// one ContextFabricGroupingRefusalLimitation could have composed.
+//
+// WHY A PARSE AND NOT A PREFIX MATCH. Everything that consults the
+// service-authored registry is deciding whether a string may be DISPLACED to
+// make room for another disclosure. A loose match would let a model-authored
+// caveat that merely opens with this wording become undisplaceable and take a
+// real caveat's place; a prefix match would do exactly that. So both
+// interpolated segments must be members of the CLOSED subject-kind registry,
+// which is a set the model never writes into. The empty kind is not a member,
+// so a half-composed sentence is not recognised either.
+func IsContextFabricGroupingRefusalLimitation(limitation string) bool {
+	body, ok := strings.CutPrefix(limitation, contextFabricGroupingRefusalLimitationPrefix)
+	if !ok {
+		return false
+	}
+	body, ok = strings.CutSuffix(body, contextFabricGroupingRefusalLimitationSuffix)
+	if !ok {
+		return false
+	}
+	plannedKind, sourceKind, ok := strings.Cut(body, contextFabricGroupingRefusalLimitationMiddle)
+	if !ok {
+		return false
+	}
+	// Exactly one separator. A second occurrence would mean the kinds are
+	// not what Cut returned, and guessing which split was intended is
+	// precisely the ambiguity a closed vocabulary lets us refuse instead.
+	if strings.Contains(sourceKind, contextFabricGroupingRefusalLimitationMiddle) {
+		return false
+	}
+	return ValidContextFabricSubjectKind(ContextFabricSubjectKind(plannedKind)) &&
+		ValidContextFabricSubjectKind(ContextFabricSubjectKind(sourceKind))
+}
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
-// A NEW DISCLOSURE BELONGS IN THIS LIST. Everything that reasons about
-// "did the service write this, or did the model?" derives from here --
-// the engine's displacement rule (which never displaces a service
-// disclosure) and the validator's coherence rule (which accepts a positive
-// displaced count only when one is present).
+// A NEW FIXED DISCLOSURE BELONGS IN THIS LIST. Everything that reasons
+// about "did the service write this, or did the model?" asks
+// IsContextFabricServiceAuthoredLimitation -- the engine's displacement
+// rule (which never displaces a service disclosure) and the validator's
+// coherence rule (which accepts a positive displaced count only when one is
+// present) -- and that predicate is this list PLUS the interpolated
+// grouping-refusal family, which no list of constants can hold.
+//
+// A NEW INTERPOLATED DISCLOSURE therefore needs its own composer, its own
+// parse-based recogniser, and a line in that predicate. It is more work than
+// adding a constant on purpose: the round-3 finding was an interpolated
+// disclosure that nobody could recognise, so it was displaced by the next
+// composer and the served answer carried no statement that the question had
+// been answered on a different axis than it asked for.
 func ContextFabricServiceAuthoredLimitations() []string {
 	return []string{
 		ContextFabricRetrievalDegradedLimitation,
@@ -218,7 +296,14 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 			return true
 		}
 	}
-	return false
+	// The grouping-refusal disclosure is interpolated, so it can only be
+	// recognised by parsing it -- see
+	// IsContextFabricGroupingRefusalLimitation. This predicate, NOT the
+	// fixed list above, is the authority every consumer asks; the list
+	// remains what it says it is (the fixed disclosures) and
+	// ContextFabricServiceAuthoredLimitations' own callers use it only to
+	// enumerate those.
+	return IsContextFabricGroupingRefusalLimitation(limitation)
 }
 
 // HasContextFabricServiceAuthoredLimitation reports whether any entry is
