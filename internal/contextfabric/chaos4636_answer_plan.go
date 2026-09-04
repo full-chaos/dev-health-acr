@@ -400,6 +400,20 @@ func stampAnswerPlan(result InvestigationResult, plan AnswerPlan) InvestigationR
 // that event once, for the result it actually serves.
 func (e *Engine) finalizeResult(result InvestigationResult, plan AnswerPlan, frame *QuestionFrame) InvestigationResult {
 	stamped := plan
+	// This turn's requirement rows, derived ONCE and projected twice: onto
+	// the plan as what the answer was PLANNED to contain, and onto the
+	// outcome set as the seed for what became of each.
+	//
+	// One derivation is what makes the two published arrays joinable. They
+	// carry the same coordinate identity, and deriving separately would
+	// give that identity two authorities.
+	requirements := deriveTurnRequirements(frame, e.requirements)
+	// Stamped every pass, unlike the outcome seed below. The plan's
+	// requirements are a pure function of the frame and the registry --
+	// the same rows on a retry as on the first attempt -- so writing them
+	// again cannot change the document, while the outcome set must not be
+	// re-seeded because later stages have appended to it.
+	stamped.Requirements = planRequirements(requirements)
 	result.AnswerPlan = &stamped
 	renderShapes, _ := SelectRenderShapes(result, frame)
 	result.RenderShapes = renderShapes
@@ -411,7 +425,7 @@ func (e *Engine) finalizeResult(result InvestigationResult, plan AnswerPlan, fra
 	// only into an empty set is what makes "stages append, nothing
 	// rewrites" true of the code rather than of the intention.
 	if len(result.Completeness.Outcomes) == 0 {
-		result.Completeness.Outcomes = seedRequirementOutcomes(frame, e.requirements)
+		result.Completeness.Outcomes = seedRequirementOutcomesFrom(requirements)
 	}
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result

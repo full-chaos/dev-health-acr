@@ -184,6 +184,23 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.AnswerPlanBudget.properties.synthesis_headroom.minimum":   0,
 		"common#$defs.PlanNarrowing.properties.before.minimum":                  0,
 		"common#$defs.PlanNarrowing.properties.after.minimum":                   0,
+		// The plan-requirement layer's own bounds, mapped explicitly for the
+		// same reason the answer plan's are: Go rejects each with a clause of
+		// its own (ContextFabricPlanRequirement.Validate,
+		// ValidateContextFabricPlanRequirements and
+		// ContextFabricRequirementRefinement.Validate), so a catch-all
+		// excusing them as "bounded by a shared helper" would describe
+		// something untrue.
+		"common#$defs.AnswerPlan.properties.requirements.maxItems":               ContextFabricPlanRequirementsMaxCount,
+		"common#$defs.PlanRequirement.properties.requirement.maxLength":          ContextFabricRequirementIdentityMaxLength,
+		"common#$defs.PlanRequirement.properties.requirement.minLength":          1,
+		"common#$defs.PlanRequirement.properties.obligation.maxLength":           ContextFabricRequirementObligationMaxLength,
+		"common#$defs.PlanRequirement.properties.obligation.minLength":           1,
+		"common#$defs.PlanRequirement.properties.fact_kinds.maxItems":            ContextFabricFactKindCount,
+		"common#$defs.PlanRequirement.properties.input_fact_kinds.maxItems":      ContextFabricFactKindCount,
+		"common#$defs.PlanRequirementOutcomeRow.properties.refinements.maxItems": ContextFabricRequirementRefinementMaxCount,
+		"common#$defs.RequirementRefinement.properties.before.minimum":           0,
+		"common#$defs.RequirementRefinement.properties.after.minimum":            0,
 		// CHAOS-4636: a group's Total is its member count BEFORE narrowing,
 		// and ContextFabricCohortGroup.Validate rejects a total below the
 		// members it lists -- which makes a negative total impossible by a

@@ -126,6 +126,11 @@ var contextFabricCommonDefsRewrites = map[string]string{
 	"#/$defs/RenderShapeRule":      "#/$defs/context_fabric_common.v1/$defs/RenderShapeRule",
 	// CHAOS-4690: Coverage.details' own new common $defs entry.
 	"#/$defs/CoverageDetail": "#/$defs/context_fabric_common.v1/$defs/CoverageDetail",
+	// The plan-requirement layer's two new common $defs entries: the
+	// derived requirement row the plan publishes, and the per-requirement
+	// refinement step an outcome row records.
+	"#/$defs/PlanRequirement":       "#/$defs/context_fabric_common.v1/$defs/PlanRequirement",
+	"#/$defs/RequirementRefinement": "#/$defs/context_fabric_common.v1/$defs/RequirementRefinement",
 }
 
 // contextFabricResultDefsRewrites relocates the cross-file pointers
@@ -235,6 +240,9 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	"#/$defs/ProjectedCohortGroup": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedCohortGroup",
 	// CHAOS-4690: coverage_details' own new projection-local $defs entry.
 	"#/$defs/CoverageDetail": "#/$defs/context_fabric_answer_projection.v1/$defs/CoverageDetail",
+	// The refinement step PlanRequirementOutcomeRow.refinements[] points
+	// at, relocated the same way for the same reason.
+	"#/$defs/RequirementRefinement": "#/$defs/context_fabric_answer_projection.v1/$defs/RequirementRefinement",
 }
 
 var mcpResponseDefsSyncs = []mcpResponseDefsSync{

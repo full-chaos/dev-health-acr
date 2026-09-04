@@ -2649,6 +2649,14 @@
         "declared": {
           "type": "integer",
           "minimum": 0
+        },
+        "refinements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RequirementRefinement"
+          },
+          "maxItems": 4,
+          "description": "The reduction steps behind served and declared, in order. Those two numbers are a before and an after with everything between them erased; these say which stage cut what, and on what basis."
         }
       },
       "required": [
@@ -2658,6 +2666,41 @@
         "cause_observed",
         "served",
         "declared"
+      ]
+    },
+    "RequirementRefinement": {
+      "description": "One recorded reduction of one requirement: which stage narrowed it, on what declared basis, and from what count to what count. Modelled on the plan's own narrowing record, one level down. Stages append; the chain runs from the row's declared count to its served count, so a reduction nobody recorded leaves a gap.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stage": {
+          "type": "string",
+          "enum": [
+            "planning",
+            "assembled_result",
+            "projection",
+            "reuse"
+          ],
+          "description": "Which stage took this step. The enclosing row's own vocabulary, not the plan's cohort-narrowing stages: those have no member for planning, the projection or a reuse degrade."
+        },
+        "basis": {
+          "type": "string",
+          "description": "The declared selection order that chose the survivors. A bare string here because this document is self-contained and carries no narrowing-basis definition; the canonical common schema references its own."
+        },
+        "before": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "after": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "stage",
+        "basis",
+        "before",
+        "after"
       ]
     }
   }

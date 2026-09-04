@@ -416,6 +416,21 @@ type ContextFabricAnswerPlan struct {
 	// Narrowing records every step actually taken, in order. Empty means
 	// the answer fit as planned.
 	Narrowing []ContextFabricPlanNarrowing `json:"narrowing,omitempty"`
+	// Requirements are the DERIVED REQUIREMENT ROWS this turn planned: one
+	// per obligation/role/subject coordinate, each naming what could serve
+	// it and -- for a computation -- what that step consumes and whether
+	// anything runs it.
+	//
+	// They are on the PLAN because that is what they are: derived once,
+	// before any narrowing, from the frame and the registry's own
+	// declarations. The outcome rows beside them say what BECAME of each;
+	// these say what each WAS. Without them a reader of the artifact learns
+	// that a requirement was narrowed without learning what it was narrowed
+	// from, and the derivation that knew is discarded after the turn.
+	//
+	// Joined to the outcome rows by the coordinate string both carry. See
+	// ContextFabricPlanRequirement.
+	Requirements []ContextFabricPlanRequirement `json:"requirements,omitempty"`
 }
 
 // Narrowed reports whether the plan had to act. It is the one-line question a
@@ -479,6 +494,24 @@ func (p ContextFabricAnswerPlan) Validate() error {
 		if err := step.Validate(); err != nil {
 			return fmt.Errorf("narrowing: %w", err)
 		}
+	}
+	// The member-kind boundary is NOT enforceable here, and saying so is
+	// the honest form of the disclosure.
+	//
+	// The rule is that a requirement row must not capture the plan's
+	// MemberKind, which is written after subject resolution while these
+	// rows are derived before it. But a member-role requirement's subject
+	// kind may legitimately EQUAL the member kind -- the frame can declare
+	// the same kind the resolution later confirms -- so no predicate over
+	// one finished document can tell a captured value from a coincident
+	// one. It is a property of the DERIVATION, not of the artifact.
+	//
+	// It is therefore pinned where it is decidable: a test derives the rows
+	// for one frame with MemberKind set and unset and asserts the two
+	// arrays are byte-identical. A comment claiming this validator enforced
+	// it would be a disclosure nothing verifies.
+	if err := ValidateContextFabricPlanRequirements(p.Requirements); err != nil {
+		return fmt.Errorf("requirements: %w", err)
 	}
 	return nil
 }

@@ -65,10 +65,17 @@ func requirementIdentity(requirement DerivedRequirement) string {
 // `not_derived` completeness state, which says the outcomes were never
 // derived rather than claiming everything was fine.
 func seedRequirementOutcomes(frame *QuestionFrame, deriver RequirementDeriver) []RequirementOutcomeRow {
-	if frame == nil || deriver == nil {
-		return nil
-	}
-	requirements := deriver.DeriveRequirements(*frame)
+	return seedRequirementOutcomesFrom(deriveTurnRequirements(frame, deriver))
+}
+
+// seedRequirementOutcomesFrom is the seed over rows ALREADY DERIVED.
+//
+// It is split out so the caller that also publishes the plan's requirement
+// array derives ONCE and projects the same rows twice. Two derivation calls
+// would put two authorities behind the identity that joins the two published
+// arrays, and they would agree right up until the derivation stopped being a
+// pure function of its inputs.
+func seedRequirementOutcomesFrom(requirements []DerivedRequirement) []RequirementOutcomeRow {
 	if len(requirements) == 0 {
 		return nil
 	}

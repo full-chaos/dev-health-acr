@@ -545,10 +545,14 @@ func deriveCompletenessMinimal(r *ContextFabricInvestigationResult) {
 // deriveCompletenessMaximal fills the outcome set to its declared ceiling,
 // every string at its own maximum and every optional cause present.
 //
-// The rows are UNAVAILABLE rather than narrowed because that is the largest
-// legal row: it carries a cause from each of the three cause vocabularies at
-// once, which a narrowed row may also do, and it has no served-below-declared
-// constraint to satisfy while doing it.
+// The rows are NARROWED rather than unavailable, and that is a change from
+// this fixture's first revision. Unavailable WAS the largest legal row while
+// the only optional content was the three cause vocabularies, which a
+// narrowed row may carry too. Once a row could also carry a refinement chain
+// it stopped being so: a chain is only legal on a row that lost something and
+// only reconciles against a real reduction, so an unavailable row with
+// served=declared=0 can hold no refinements at all. A narrowed row carries
+// every cause AND the full chain, which strictly dominates.
 func deriveCompletenessMaximal(r *ContextFabricInvestigationResult) {
 	deriveCompleteness(r, maximalOutcomeRows(ContextFabricPlanRequirementOutcomeMaxCount))
 }
@@ -595,14 +599,20 @@ func maximalOutcomeRows(n int) []ContextFabricPlanRequirementOutcomeRow {
 			Stage:          ContextFabricOutcomeStageAssembledResult,
 			Requirement:    identity,
 			Obligation:     longestObligation,
-			Outcome:        ContextFabricRequirementUnavailable,
+			Outcome:        ContextFabricRequirementNarrowed,
 			Impact:         ContextFabricAnswerImpactDimension,
 			CauseOverrun:   ContextFabricBudgetOverrunBytes,
 			CauseCoverage:  longestCoverage,
 			CauseNarrowing: longestBasis,
 			CauseObserved:  true,
-			Served:         0,
-			Declared:       0,
+			// Declared must exceed Served by at least the chain length,
+			// because every refinement strictly reduces. These are the
+			// smallest numbers that admit a full-length chain; the counts
+			// themselves are integers with no length bound, so nothing is
+			// lost by keeping them small.
+			Served:      1,
+			Declared:    1 + ContextFabricRequirementRefinementMaxCount,
+			Refinements: maximalRefinements(1+ContextFabricRequirementRefinementMaxCount, 1),
 		})
 	}
 	return rows
