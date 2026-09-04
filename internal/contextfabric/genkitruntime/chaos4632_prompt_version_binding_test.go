@@ -82,7 +82,7 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v13 -> v14 (CHAOS-4690 Commit F): the coverage_disclosures
 			// paragraph. See DefaultSynthesisPromptVersion's own doc
 			// comment for what changed and why.
-			digest: "f29c3351272cffa109843d398a9fca9d3b4f2a4be51848a7b74b9309340d36a4",
+			digest: "fee5e7edd2f3d8fe299b36c09a218a20cd29d4e98b4b2bdad9b8ddce13ee005c",
 		},
 		{
 			name:    "interpretation model-output schema",

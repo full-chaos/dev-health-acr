@@ -35,7 +35,13 @@ func TestDefaultSynthesisPromptVersionBumpedForModelFacingFactsChange(t *testing
 	// assert the EXACT current value, never a loose inequality -- so it
 	// still catches a typo or an accidental double-bump on the next
 	// change too.
-	const wantVersion = "context-fabric-synthesis.v14"
+	// v14 -> v15 (S5 quota side): the payload gained answer_budget and the
+	// system prompt gained the paragraph that tells the model what it is
+	// for. Both are model-facing changes, so the constant moves for the
+	// same reason it moved at v13 -> v14 -- a stored answer generated
+	// before the model was told its budget must not satisfy a reuse lookup
+	// as though it had been.
+	const wantVersion = "context-fabric-synthesis.v15"
 	if DefaultSynthesisPromptVersion != wantVersion {
 		t.Fatalf("DefaultSynthesisPromptVersion = %q, want %q (moved off the pre-CHAOS-4355-follow-up v12 value now that modelFacingFacts changes the prompt payload)", DefaultSynthesisPromptVersion, wantVersion)
 	}

@@ -219,8 +219,13 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	commitBases := params.CommitBases
 	commitDigests := params.CommitDigests
 
+	// The SAME allocator every other spender reads (S5, quota side). Derived
+	// once, here, and carried into the payload -- a second derivation at the
+	// prompt site is exactly how the budget came to have two spenders.
+	synthesisAllocation := AllocateItems(params.Plan, groupCountOf(graphContext.Cohort), cohortMemberCount(graphContext.Cohort))
 	result, err := e.synthesizer.Synthesize(ctx, principal, SynthesisInput{
-		Request: request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
+		Allocation: synthesisAllocation,
+		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
 	})
 	if err != nil {
 		return InvestigationResult{}, assemblyTelemetry{}, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
@@ -386,8 +391,11 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// be tracked independently of the driver budget, not assumed to always
 	// have headroom).
 	if graphContext.Cohort != nil {
-		allocation := AllocateItems(params.Plan, len(graphContext.Cohort.Groups), cohortMemberCount(graphContext.Cohort))
-		narrated, mintedClaims, narrationEvent := narrateCohortDriverJudgments(graphContext.Cohort, result.Drivers, len(result.ClaimedFacts), cohortSignalCitations, allocation)
+		// synthesisAllocation, NOT a second derivation. Two AllocateItems
+		// calls in one function would be two authorities over one number --
+		// the exact defect this allocator exists to remove, reintroduced at
+		// the site that removes it.
+		narrated, mintedClaims, narrationEvent := narrateCohortDriverJudgments(graphContext.Cohort, result.Drivers, len(result.ClaimedFacts), cohortSignalCitations, synthesisAllocation)
 		// codex R1 (CHAOS-4398 PR3b), team-lead ruling: every narration-
 		// minted claim must pass the SAME grounding check a model-authored
 		// claim gets from SynthesisDraft.ValidateAgainst -- which this

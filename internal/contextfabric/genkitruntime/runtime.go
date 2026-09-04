@@ -357,7 +357,16 @@ const (
 	// told this field exists must not satisfy a reuse lookup as though it
 	// were generated under the new prompt (same standing rule as v6-v13
 	// above).
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v14"
+	// v14 -> v15 (S5, quota side): the payload gained `answer_budget` and
+	// the system prompt gained the paragraph that tells the model what it
+	// is for. Both are model-facing, so the constant moves for exactly the
+	// reason it moved at v13 -> v14: this version is a conjunctive ReuseKey
+	// dimension and the reuse lookup runs BEFORE Interpret, so a stored
+	// answer produced while the model was NOT told its budget must not be
+	// served as though it had been. That is the whole point of the bump --
+	// the answers the change exists to improve are precisely the ones a
+	// stale reuse key would keep serving unchanged.
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v15"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation
@@ -2214,6 +2223,34 @@ type synthesisInput struct {
 	DriverCandidates []contextfabric.DriverJudgment    `json:"driver_candidates"`
 	Facts            []contextfabric.CanonicalFact     `json:"canonical_facts"`
 	Coverage         contextfabric.Coverage            `json:"coverage"`
+	// AnswerBudget is the per-request quota the ONE item allocator
+	// published (S5, quota side). Omitted entirely when no budget is in
+	// force, so the model is never shown a quota of zero where it should
+	// see no quota at all.
+	AnswerBudget *synthesisAnswerBudget `json:"answer_budget,omitempty"`
+}
+
+// synthesisAnswerBudget is the model-facing view of the allocator's quota.
+//
+// COUNTS ONLY, and only the ones a model can act on. It names no group, no
+// subject and no internal reason -- a prompt payload is answer-facing, and
+// the operator-facing detail lives on the narrowing telemetry.
+//
+// WHY THE MODEL IS TOLD AT ALL. The model decides how many drivers, findings
+// and claims to write, so a per-group quota it never sees can only be
+// discovered afterwards, as an overrun. A number in the prompt is not an
+// enforcement mechanism -- S7c owns enforcement -- but it is the only way
+// prediction and outcome can converge rather than being reconciled after the
+// fact.
+type synthesisAnswerBudget struct {
+	// ItemsPerGroup is the per-group allowance, omitted when the answer has
+	// no group axis.
+	ItemsPerGroup int `json:"items_per_group,omitempty"`
+	// Groups is how many groups that allowance is repeated across.
+	Groups int `json:"groups,omitempty"`
+	// Global is the allowance for items belonging to the answer as a whole
+	// rather than to any one group.
+	Global int `json:"global"`
 }
 
 // synthesisInputFromDomain composes the exact bounded-JSON payload
@@ -2227,6 +2264,25 @@ func synthesisInputFromDomain(orgID string, input contextfabric.SynthesisInput) 
 		Resolution: input.Graph.Resolution, Cohort: input.Graph.Cohort,
 		Paths: input.Graph.Paths, DriverCandidates: input.Graph.DriverCandidates,
 		Facts: modelFacingFacts(input.Facts.Facts), Coverage: contextfabric.MergeCoverage(orgID, input.Graph.Coverage, input.Facts.Coverage),
+		AnswerBudget: modelFacingAnswerBudget(input.Allocation),
+	}
+}
+
+// modelFacingAnswerBudget projects the allocator's quota into the payload, or
+// nil when no budget is in force.
+//
+// NIL, NOT A ZEROED STRUCT. An omitted field says "no quota"; a present field
+// full of zeros says "a quota of zero", and a model shown the latter has been
+// told to write nothing at all. That distinction is the same one
+// QuotaExposure keeps on the enforcement side, and it is worth keeping twice.
+func modelFacingAnswerBudget(allocation contextfabric.ItemAllocation) *synthesisAnswerBudget {
+	if allocation.MaxItems <= 0 {
+		return nil
+	}
+	return &synthesisAnswerBudget{
+		ItemsPerGroup: allocation.ItemsPerGroup,
+		Groups:        allocation.Groups,
+		Global:        allocation.Global,
 	}
 }
 

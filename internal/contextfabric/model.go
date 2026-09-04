@@ -879,4 +879,16 @@ type SynthesisInput struct {
 	Interpretation InterpretedQuestion  `json:"interpretation"`
 	Graph          GraphContext         `json:"graph"`
 	Facts          CanonicalFactBundle  `json:"facts"`
+	// Allocation is the ONE item allocator's published quota for this
+	// request (S5, quota side).
+	//
+	// It is carried into synthesis because a bound the model is not told
+	// about is not a bound, it is a surprise: the model decides how many
+	// drivers, findings and claims to write, so a per-group quota it never
+	// sees can only be discovered afterwards, as an overrun. Telling it the
+	// number is what makes measured follow predicted.
+	//
+	// A zero Allocation means no quota is in force, and the prompt then
+	// states no per-group number rather than stating zero.
+	Allocation ItemAllocation `json:"allocation"`
 }
