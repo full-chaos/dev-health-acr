@@ -37,7 +37,22 @@ jobs:
   # the race -- mirror-images.yml still runs on its own schedule independent
   # of this workflow -- it makes the failure legible and immediate rather
   # than nine confusing ones.
-  mirror-preflight:
+  # Runner-routing contract v1.6. Repo variable SELF_HOSTED_RUNNERS gates
+  # which of the two jobs below runs; both carry `name: mirror-preflight`
+  # so the check reported to a PR is stable across the flip. The `if:`
+  # pair is an exact complement (never both true, never both false,
+  # fork PRs always fall back to hosted regardless of the switch), so
+  # exactly one leg runs on every workflow run. No poller: same-workflow
+  # jobs read each other's result via `needs` directly (see
+  # scripts/ci/test-workflow-contract.sh's pair checks, and `verify`
+  # below), so there is nothing to wait on or claim -- this replaces the
+  # v1.5.1 cross-workflow wait/claim pattern (see #399/#402/#404/#410).
+  mirror-preflight-hosted:
+    name: mirror-preflight
+    if: >-
+      vars.SELF_HOSTED_RUNNERS != 'enabled'
+      || (github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
     steps:
       # actions/checkout v7.0.0
@@ -55,64 +70,45 @@ jobs:
       - name: Verify every mirrored image is resolvable before any job pulls one
         run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
 
-  scripts:
-    runs-on: ubuntu-latest
-    # Narrower than the workflow default (contents+packages): this job pulls
-    # no packages, and needs `actions: read` only to see the sibling run's
-    # job list.
+  # The self-hosted leg. Read-only `docker buildx imagetools inspect`
+  # only -- no image pull/run -- so it needs only the declared-present
+  # Docker daemon; buildx ships with the actions-runner base image's
+  # docker CLI. Measured pool wall under load: 36s-41s across this
+  # lane's earlier runs; timeout sized well above that.
+  mirror-preflight-self-hosted:
+    name: mirror-preflight
+    if: >-
+      vars.SELF_HOSTED_RUNNERS == 'enabled'
+      && (github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, oci-arc-runners]
+    timeout-minutes: 15
     permissions:
       contents: read
-      actions: read
+      packages: read
     steps:
-      # actions/checkout v7.0.0. Unconditional, and FIRST -- see
-      # race-devhealthschema's identical comment: the wait step below runs
-      # scripts/ci/self-hosted-attempt.sh out of this workspace.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
-      # Runner-routing contract v1.5.1: this job is also the GitHub-hosted
-      # fallback leg for the self-hosted attempt `scripts-self-hosted` in the
-      # sibling `ci-self-hosted` workflow. Same shape as race-devhealthschema
-      # below -- see that job's own comments for the full outcome vocabulary.
-      - name: Wait for the self-hosted attempt, or claim the work here
-        id: wait
-        if: >-
-          vars.SELF_HOSTED_RUNNERS == 'enabled'
-          && (github.event_name != 'pull_request'
-          || github.event.pull_request.head.repo.full_name == github.repository)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          EVENT: ${{ github.event_name }}
-          REF: ${{ github.head_ref || github.ref_name }}
-          WORKFLOW_NAME: ci-self-hosted
-          WORKFLOW_PATH: .github/workflows/ci-self-hosted.yml
-          JOB_NAME: scripts-self-hosted
-          QUEUE_TIMEOUT_MINUTES: 5
-          # Kept in sync by hand with scripts-self-hosted's timeout-minutes
-          # (15) in ci-self-hosted.yml, plus the script's own 3-minute
-          # reporting-lag buffer: 12 + 3 = 15.
-          ATTEMPT_TIMEOUT_MINUTES: 12
-        run: scripts/ci/self-hosted-attempt.sh wait
-      - name: Decide whether this leg owns the real work
-        id: own
-        env:
-          OUTCOME: ${{ steps.wait.outputs.outcome }}
-        run: |
-          set -euo pipefail
-          if [ -z "${OUTCOME}" ] || [ "${OUTCOME}" = unclaimed ]; then
-            echo "run_here=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "run_here=false" >>"$GITHUB_OUTPUT"
-            printf 'self-hosted attempt reached a terminal state (%s); not repeating its work here\n' "${OUTCOME}"
-          fi
-      - name: Fail this leg if the self-hosted attempt itself failed
-        if: steps.own.outputs.run_here == 'false' && steps.wait.outputs.outcome == 'claimed-failure'
-        run: |
-          echo "the self-hosted attempt (scripts-self-hosted in the ci-self-hosted workflow) did not succeed; failing this leg so the required gate reflects it" >&2
-          exit 1
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify every mirrored image is resolvable before any job pulls one
+        run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
+
+  scripts-hosted:
+    name: scripts
+    if: >-
+      vars.SELF_HOSTED_RUNNERS != 'enabled'
+      || (github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name != github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
       - name: Check release setup script modes
-        if: steps.own.outputs.run_here == 'true'
         run: |
           test -x scripts/release/setup-cosign-key.sh
           test -x scripts/release/export-tag-signing-key.sh
@@ -128,50 +124,40 @@ jobs:
           test -x scripts/release/verify-mcp-binary-approval.sh
           test -x scripts/release/write-container-release-manifest.sh
       - name: Shellcheck CI release publisher
-        if: steps.own.outputs.run_here == 'true'
         run: |
           # SC2016: jq receives named arguments whose $names must remain literal
           # inside single-quoted jq programs rather than expand in the shell.
           shellcheck -x -e SC2016 scripts/release/publish-ci-release.sh
       - name: Shellcheck release policy contract tests
-        if: steps.own.outputs.run_here == 'true'
         run: |
           # SC2016: this test intentionally searches source files for literal
           # shell and jq variables such as $tag, $name, and $release_digest.
           shellcheck -x -e SC2016 scripts/release/test_release_scripts.sh
       - name: Shellcheck existing release scripts
-        if: steps.own.outputs.run_here == 'true'
         run: |
           find scripts/release -maxdepth 1 -type f -name '*.sh' \
             ! -name 'publish-ci-release.sh' \
             ! -name 'test_release_scripts.sh' -print0 \
             | xargs -0 shellcheck -x
       - name: Shellcheck container scripts
-        if: steps.own.outputs.run_here == 'true'
         run: |
           # SC2016: test-contract.sh intentionally greps scan.sh for literal
           # shell variables such as $trivy_db_mirror and $metadata.
           find scripts/container -type f -name '*.sh' -print0 \
             | xargs -0 shellcheck -x -e SC2016
       - name: Shellcheck CI workflow scripts
-        if: steps.own.outputs.run_here == 'true'
         run: |
           find scripts/ci -type f -name '*.sh' -print0 \
             | xargs -0 shellcheck -x
       - name: Test release asset assembly
-        if: steps.own.outputs.run_here == 'true'
         run: scripts/release/test-assemble-release-assets.sh
       - name: Test container release manifest
-        if: steps.own.outputs.run_here == 'true'
         run: scripts/release/test-container-release-manifest.sh
       - name: Test private image publisher
-        if: steps.own.outputs.run_here == 'true'
         run: scripts/release/test-publish-private-image.sh
       - name: Test release policy contracts
-        if: steps.own.outputs.run_here == 'true'
         run: scripts/release/test_release_scripts.sh
       - name: Test optional MCP binary approval gate
-        if: steps.own.outputs.run_here == 'true'
         run: |
           approval_gates=scripts/release/test-remote-gates.sh
           "$approval_gates" --mode dry-run \
@@ -179,17 +165,7 @@ jobs:
           "$approval_gates" --mode reject-invalid \
             --fixtures testdata/release-approvals
       - name: Verify CI workflow contract
-        if: steps.own.outputs.run_here == 'true'
         run: scripts/ci/test-workflow-contract.sh
-      # The self-hosted routing's run-selection and status-reading logic,
-      # its timeout branches, and the cross-file agreement between ci.yml
-      # and ci-self-hosted.yml. Every check has a negative control, because
-      # every defect this can carry is silent: a lookup that matches nothing
-      # makes the hosted leg quietly do all the work forever while every
-      # report says the routing works.
-      - name: Verify the self-hosted attempt selector
-        if: steps.own.outputs.run_here == 'true'
-        run: scripts/ci/test-self-hosted-attempt.sh
       # CHAOS-4855 R3: mirror-preflight and resolve-mirrored-images.sh only
       # verify the images this list's author already knew to add -- neither
       # notices a NEW or reintroduced bare-tag testcontainers image
@@ -200,7 +176,106 @@ jobs:
       # the module via `git grep` and fails naming the file:line if it is
       # not both digest-pinned and present in the mirror list.
       - name: Verify every testcontainers image is pinned and mirrored
-        if: steps.own.outputs.run_here == 'true'
+        run: scripts/ci/test-testcontainers-image-pins.sh
+
+  # The self-hosted leg. Go-less: no setup-go, so the arm64 check reads
+  # `uname -m` (arm64 Linux reports `aarch64`) rather than `go env GOARCH`
+  # the way the Go-backed jobs below do. shellcheck is the one tool this
+  # job needs that the declared pool toolset does not carry and the ARC
+  # image does not bake in -- GitHub-hosted `ubuntu-latest` ships it by
+  # default, which is why the hosted leg never installs it. Installed
+  # here the same guarded way the pool jobs below install psql: skip the
+  # network call when it is already present, fail loudly (not skip) when
+  # apt cannot provide it either. Measured pool wall under load: 21s-51s
+  # across this lane's earlier runs; timeout sized well above that.
+  scripts-self-hosted:
+    name: scripts
+    if: >-
+      vars.SELF_HOSTED_RUNNERS == 'enabled'
+      && (github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, oci-arc-runners]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      - name: Confirm this runner is actually arm64
+        run: |
+          set -euo pipefail
+          arch="$(uname -m)"
+          if [ "${arch}" != aarch64 ]; then
+            echo "expected uname -m=aarch64 on oci-arc-runners, got '${arch}'" >&2
+            exit 1
+          fi
+      - name: Install shellcheck (present on GitHub-hosted ubuntu-latest, not on this pool image)
+        run: |
+          set -euo pipefail
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck --version
+            exit 0
+          fi
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y shellcheck
+          shellcheck --version
+      - name: Check release setup script modes
+        run: |
+          test -x scripts/release/setup-cosign-key.sh
+          test -x scripts/release/export-tag-signing-key.sh
+          test -x scripts/release/publish-private-release.sh
+          test -x scripts/release/publish-private-image.sh
+          test -x scripts/release/publish-ci-release.sh
+          test -x scripts/release/revoke-private-release.sh
+          test -x scripts/release/assemble-release-assets.sh
+          test -x scripts/release/test-assemble-release-assets.sh
+          test -x scripts/release/test-container-release-manifest.sh
+          test -x scripts/release/test-publish-private-image.sh
+          test -x scripts/release/test_release_scripts.sh
+          test -x scripts/release/verify-mcp-binary-approval.sh
+          test -x scripts/release/write-container-release-manifest.sh
+      - name: Shellcheck CI release publisher
+        run: |
+          # SC2016: jq receives named arguments whose $names must remain literal
+          # inside single-quoted jq programs rather than expand in the shell.
+          shellcheck -x -e SC2016 scripts/release/publish-ci-release.sh
+      - name: Shellcheck release policy contract tests
+        run: |
+          # SC2016: this test intentionally searches source files for literal
+          # shell and jq variables such as $tag, $name, and $release_digest.
+          shellcheck -x -e SC2016 scripts/release/test_release_scripts.sh
+      - name: Shellcheck existing release scripts
+        run: |
+          find scripts/release -maxdepth 1 -type f -name '*.sh' \
+            ! -name 'publish-ci-release.sh' \
+            ! -name 'test_release_scripts.sh' -print0 \
+            | xargs -0 shellcheck -x
+      - name: Shellcheck container scripts
+        run: |
+          # SC2016: test-contract.sh intentionally greps scan.sh for literal
+          # shell variables such as $trivy_db_mirror and $metadata.
+          find scripts/container -type f -name '*.sh' -print0 \
+            | xargs -0 shellcheck -x -e SC2016
+      - name: Shellcheck CI workflow scripts
+        run: |
+          find scripts/ci -type f -name '*.sh' -print0 \
+            | xargs -0 shellcheck -x
+      - name: Test release asset assembly
+        run: scripts/release/test-assemble-release-assets.sh
+      - name: Test container release manifest
+        run: scripts/release/test-container-release-manifest.sh
+      - name: Test private image publisher
+        run: scripts/release/test-publish-private-image.sh
+      - name: Test release policy contracts
+        run: scripts/release/test_release_scripts.sh
+      - name: Test optional MCP binary approval gate
+        run: |
+          approval_gates=scripts/release/test-remote-gates.sh
+          "$approval_gates" --mode dry-run \
+            --fixtures testdata/release-approvals
+          "$approval_gates" --mode reject-invalid \
+            --fixtures testdata/release-approvals
+      - name: Verify CI workflow contract
+        run: scripts/ci/test-workflow-contract.sh
+      - name: Verify every testcontainers image is pinned and mirrored
         run: scripts/ci/test-testcontainers-image-pins.sh
 
   lint:
@@ -235,20 +310,37 @@ jobs:
       - name: Check known Go vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
 
-  # Runner-routing contract: unit stays HOSTED-ONLY. Routed to the pool in
-  # an earlier version of this PR; a real pool run (after fixing the
-  # concurrency-driven test-timeout failure with GOFLAGS=-timeout=25m)
-  # still failed with 3 internal/sidecar CodeGraph-guard test failures
-  # ("codegraph index missing" / a writable-managed-root assertion) not
-  # seen on hosted -- looks like an environment difference in the
-  # self-hosted checkout (permissions/ownership, or an absent index the
-  # hosted runner has some other way of providing), not a concurrency
-  # artifact and not something this lane chased further. Reverted to
-  # hosted-only; scripts/build/mirror-preflight/race-devhealthschema stay
-  # routed.
+  # Runner-routing contract: unit stays HOSTED-ONLY under v1.6 too. Routed
+  # to the pool in an earlier version of #410; a real pool run (after
+  # fixing the concurrency-driven test-timeout failure with
+  # GOFLAGS=-timeout=25m) still failed with 3 internal/sidecar
+  # CodeGraph-guard test failures ("codegraph index missing" / a
+  # writable-managed-root assertion) not seen on hosted -- looks like an
+  # environment difference in the self-hosted checkout (permissions/
+  # ownership, or an absent index the hosted runner has some other way of
+  # providing), not a concurrency artifact and not something this lane
+  # chased further. Per chris's routing ruling (pool stays at 8 runners,
+  # final; hosted is the designated overflow; route only what measurably
+  # beats hosted under load), `unit` and the race matrix below stay
+  # hosted-only by default -- their pool fix is a follow-up, not a
+  # blocker for this migration. scripts/build/mirror-preflight/contracts/
+  # race-devhealthschema are the v1.6-migrated pairs (see each job's own
+  # comment).
   unit:
     runs-on: ubuntu-latest
-    needs: mirror-preflight
+    # v1.6 split mirror-preflight into two jobs sharing one name (see
+    # below); exactly one runs per workflow run and the other is
+    # `skipped` by design. This job runs on every workflow run
+    # regardless of the switch, so it needs whichever leg actually ran
+    # to have succeeded -- the default `needs:` skip-cascade would wrongly
+    # skip this job too on the leg that was never going to run anyway.
+    needs:
+      - mirror-preflight-hosted
+      - mirror-preflight-self-hosted
+    if: >-
+      !cancelled()
+      && (needs.mirror-preflight-hosted.result == 'success'
+      || needs.mirror-preflight-self-hosted.result == 'success')
     env:
       # CHAOS-4855: redirect every registry-less Docker Hub pull this suite
       # makes (postgres, clickhouse, falkordb, and testcontainers-go's own
@@ -368,7 +460,16 @@ jobs:
   # under contention. Revisit once the shards can run serially against the
   # pool or the pool has headroom measured under realistic concurrent load.
   race:
-    needs: mirror-preflight
+    # See `unit`'s identical comment: mirror-preflight is now a v1.6 pair,
+    # exactly one leg runs, this job runs unconditionally and needs
+    # whichever leg succeeded.
+    needs:
+      - mirror-preflight-hosted
+      - mirror-preflight-self-hosted
+    if: >-
+      !cancelled()
+      && (needs.mirror-preflight-hosted.result == 'success'
+      || needs.mirror-preflight-self-hosted.result == 'success')
     strategy:
       fail-fast: false
       matrix:
@@ -457,125 +558,109 @@ jobs:
   # and only here; scripts/ci/test-shard-closure.sh proves the two together
   # still cover the whole module exactly once.
   #
-  # Runner-routing contract v1: this job is also the GitHub-hosted FALLBACK
-  # LEG for the self-hosted attempt in the sibling `ci-self-hosted` workflow,
-  # and it is the sole source of truth for this lane's result. Nothing about
-  # its identity changes -- same job key, same display name, same runner,
-  # same command -- so `verify`, branch protection and
-  # scripts/ci/test-workflow-contract.sh all see exactly what they saw
-  # before. With the repository variable SELF_HOSTED_RUNNERS unset (the
-  # default), the wait step below is skipped outright, no API call is made,
-  # and this job runs precisely as it always has.
-  #
-  # When the switch IS on, the wait step polls the sibling run in two
-  # phases (scripts/ci/self-hosted-attempt.sh holds the logic and the
-  # reasoning) and reports one of three outcomes:
-  #   unclaimed        the attempt never left the queue inside the 5-minute
-  #                    bound -- this leg does the work itself, so a dead or
-  #                    saturated self-hosted pool costs latency, never a red
-  #                    build. This is the takeover chris asked for.
-  #   claimed-success  the attempt passed; this leg skips its own work and
-  #                    reports that success.
-  #   claimed-failure  the attempt actually ran and did not pass; this leg
-  #                    FAILS. That is deliberate and is the one case people
-  #                    expect to be a takeover and is not: an attempt that
-  #                    ran and failed has found something, and re-running it
-  #                    on a hosted runner would mask exactly the arm64
-  #                    behaviour this routing exists to learn about. Only a
-  #                    never-started attempt is taken over.
-  race-devhealthschema:
+  # Runner-routing contract v1.6: this job now shares its identity with a
+  # `-self-hosted` twin below via a `name:` override and mutually
+  # exclusive `if:` gates -- see that job's own comment for the pool leg,
+  # and `verify`'s comment for the aggregator-side of the pair. No poller:
+  # this replaces the v1.5.1 cross-workflow wait/claim pattern
+  # (#399/#402/#404/#410), which is retired in this same change.
+  race-devhealthschema-hosted:
     name: race (devhealthschema, isolated scope)
+    if: >-
+      vars.SELF_HOSTED_RUNNERS != 'enabled'
+      || (github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
-    # Narrower than the workflow default (contents+packages): this job pulls
-    # no packages, and needs `actions: read` only to see the sibling run's
-    # job list.
-    permissions:
-      contents: read
-      actions: read
     steps:
-      # actions/checkout v7.0.0. Unconditional, and FIRST, because the wait
-      # step below runs scripts/ci/self-hosted-attempt.sh out of this
-      # workspace -- gating the checkout on the outcome of a step that needs
-      # the checkout is a cycle. It costs a few seconds on the path where
-      # the self-hosted attempt already did the work, which is the cheapest
-      # part of this job by a wide margin.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
-      # Contract v1's two gates, identical to the sibling workflow's: the
-      # variable must be the literal string `enabled`, and fork pull requests
-      # never reach self-hosted capacity. Skipping this step (rather than
-      # branching inside it) is what makes the switch-off path cost nothing
-      # at all -- no token use, no API call, no added wall-clock.
-      - name: Wait for the self-hosted attempt, or claim the work here
-        id: wait
-        if: >-
-          vars.SELF_HOSTED_RUNNERS == 'enabled'
-          && (github.event_name != 'pull_request'
-          || github.event.pull_request.head.repo.full_name == github.repository)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          # The PR head SHA on a pull request, the pushed SHA otherwise --
-          # always the full 40 characters, which the script re-validates
-          # before it queries: `?head_sha=` with an abbreviated SHA returns
-          # an empty list, and an empty list is indistinguishable from a
-          # self-hosted pool that is down.
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          EVENT: ${{ github.event_name }}
-          REF: ${{ github.head_ref || github.ref_name }}
-          WORKFLOW_NAME: ci-self-hosted
-          WORKFLOW_PATH: .github/workflows/ci-self-hosted.yml
-          JOB_NAME: race-devhealthschema-self-hosted
-          QUEUE_TIMEOUT_MINUTES: 5
-          # Kept in sync by hand with the attempt job's own timeout-minutes
-          # in ci-self-hosted.yml; the script allows this plus three minutes
-          # of reporting lag before calling a started-but-unfinished attempt
-          # a failure.
-          ATTEMPT_TIMEOUT_MINUTES: 22
-        run: scripts/ci/self-hosted-attempt.sh wait
-      # An empty outcome means the step above was skipped -- switch off, or a
-      # fork PR -- which is the same instruction as `unclaimed`: do the work.
-      - name: Decide whether this leg owns the real work
-        id: own
-        env:
-          OUTCOME: ${{ steps.wait.outputs.outcome }}
-        run: |
-          set -euo pipefail
-          if [ -z "${OUTCOME}" ] || [ "${OUTCOME}" = unclaimed ]; then
-            echo "run_here=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "run_here=false" >>"$GITHUB_OUTPUT"
-            printf 'self-hosted attempt reached a terminal state (%s); not repeating its work here\n' "${OUTCOME}"
-          fi
-      - name: Fail this leg if the self-hosted attempt itself failed
-        if: steps.own.outputs.run_here == 'false' && steps.wait.outputs.outcome == 'claimed-failure'
-        run: |
-          echo "the self-hosted attempt (race-devhealthschema-self-hosted in the ci-self-hosted workflow) did not succeed; failing this leg so the required gate reflects it" >&2
-          exit 1
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
-        if: steps.own.outputs.run_here == 'true'
         with:
           go-version: '1.27.0'
           cache: true
       - name: Run isolated devhealthschema race suite
-        if: steps.own.outputs.run_here == 'true'
         run: |
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated)"
           printf 'isolated packages:\n%s\n' "$packages"
           make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=900s
 
-  build:
+  # The self-hosted leg -- the pilot for the whole v1.5.1/v1.6 routing
+  # (#399/#402/#404), the one heavy acr job with no image-architecture
+  # risk: it starts no containers, logs in to no registry, needs no psql
+  # client. Measured pool wall under load: 9m51s-11m30s across this
+  # lane's history; 25min timeout already carries ample headroom (kept
+  # unchanged from v1.5.1's tuned value).
+  race-devhealthschema-self-hosted:
+    name: race (devhealthschema, isolated scope)
+    if: >-
+      vars.SELF_HOSTED_RUNNERS == 'enabled'
+      && (github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, oci-arc-runners]
+    timeout-minutes: 25
+    steps:
+      # actions/checkout v7.0.0 -- the same pin the hosted leg uses. On a
+      # pull request this checks out the merge ref, exactly as the hosted
+      # leg does, so both legs test the identical tree.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # cache:false -- the pool mounts a shared GOMODCACHE/GOCACHE hostPath
+      # (helm rev 6) that every self-hosted job reads and writes
+      # concurrently; setup-go's own cache restore/save races that live
+      # mount and can corrupt it for every other job on the pool. The
+      # mount already provides the cache; this only installs the toolchain.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.0'
+          cache: false
+      # A mislabeled or reassigned runner would make this job's result mean
+      # something other than what it claims. The pool is arm64-only by
+      # construction (OCI Ampere), so anything else is a misconfiguration to
+      # fail loudly on, not to quietly validate the wrong architecture.
+      - name: Confirm this runner is actually arm64
+        run: |
+          set -euo pipefail
+          uname -m
+          arch="$(go env GOARCH)"
+          if [ "${arch}" != "arm64" ]; then
+            echo "expected GOARCH=arm64 on oci-arc-runners, got '${arch}'" >&2
+            exit 1
+          fi
+      # The result-line count is the salted positive, and it is keyed on the
+      # POPULATION rather than on a pattern: `go test` exits 0 having run
+      # nothing when its package list is empty, so an edit to test-shard.sh's
+      # isolated_packages that emptied this set would leave this job green
+      # having proved nothing. Asserting one `ok` line per package proves
+      # every package the shard list names actually produced a result.
+      - name: Run the isolated devhealthschema race suite on arm64
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh isolated)"
+          printf 'isolated packages:\n%s\n' "$packages"
+          expected="$(printf '%s' "$packages" | wc -w | tr -d '[:space:]')"
+          if [ "$expected" -eq 0 ]; then
+            echo "test-shard.sh isolated printed no packages -- refusing to report a pass over an empty set" >&2
+            exit 1
+          fi
+          out="${RUNNER_TEMP}/race-output.txt"
+          make test-race GOTEST_PKGS="$packages" GOTEST_TIMEOUT=900s 2>&1 | tee "$out"
+          passed="$(grep -c '^ok' "$out" || true)"
+          printf 'packages expected: %s, packages reporting ok: %s\n' "$expected" "$passed"
+          if [ "$passed" -ne "$expected" ]; then
+            echo "expected one result line per isolated package; a package that produced no result means this job proved less than it claims" >&2
+            exit 1
+          fi
+
+  build-hosted:
+    name: build
+    if: >-
+      vars.SELF_HOSTED_RUNNERS != 'enabled'
+      || (github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
-    needs: mirror-preflight
-    # Narrower than the workflow default's implicit contents+packages: this
-    # job also needs `actions: read` to see the self-hosted sibling run's
-    # job list (the wait step below).
-    permissions:
-      contents: read
-      actions: read
-      packages: read
+    needs: mirror-preflight-hosted
     env:
       # CHAOS-4855: `make hosted-integration` below sets ACR_HOSTED_INTEGRATION=1,
       # which starts real postgres/clickhouse testcontainers fixtures
@@ -585,54 +670,11 @@ jobs:
       # ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner>.
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
     steps:
-      # actions/checkout v7.0.0. Unconditional, and FIRST -- the wait step
-      # below runs scripts/ci/self-hosted-attempt.sh out of this workspace.
+      # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
-      # Runner-routing contract v1.5.1: this job is also the GitHub-hosted
-      # fallback leg for the self-hosted attempt `build-self-hosted` in the
-      # sibling `ci-self-hosted` workflow -- same shape as race-devhealthschema.
-      - name: Wait for the self-hosted attempt, or claim the work here
-        id: wait
-        if: >-
-          vars.SELF_HOSTED_RUNNERS == 'enabled'
-          && (github.event_name != 'pull_request'
-          || github.event.pull_request.head.repo.full_name == github.repository)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          EVENT: ${{ github.event_name }}
-          REF: ${{ github.head_ref || github.ref_name }}
-          WORKFLOW_NAME: ci-self-hosted
-          WORKFLOW_PATH: .github/workflows/ci-self-hosted.yml
-          JOB_NAME: build-self-hosted
-          QUEUE_TIMEOUT_MINUTES: 5
-          # Kept in sync by hand with build-self-hosted's timeout-minutes (15)
-          # in ci-self-hosted.yml, plus the script's own 3-minute
-          # reporting-lag buffer: 12 + 3 = 15.
-          ATTEMPT_TIMEOUT_MINUTES: 12
-        run: scripts/ci/self-hosted-attempt.sh wait
-      - name: Decide whether this leg owns the real work
-        id: own
-        env:
-          OUTCOME: ${{ steps.wait.outputs.outcome }}
-        run: |
-          set -euo pipefail
-          if [ -z "${OUTCOME}" ] || [ "${OUTCOME}" = unclaimed ]; then
-            echo "run_here=true" >>"$GITHUB_OUTPUT"
-          else
-            echo "run_here=false" >>"$GITHUB_OUTPUT"
-            printf 'self-hosted attempt reached a terminal state (%s); not repeating its work here\n' "${OUTCOME}"
-          fi
-      - name: Fail this leg if the self-hosted attempt itself failed
-        if: steps.own.outputs.run_here == 'false' && steps.wait.outputs.outcome == 'claimed-failure'
-        run: |
-          echo "the self-hosted attempt (build-self-hosted in the ci-self-hosted workflow) did not succeed; failing this leg so the required gate reflects it" >&2
-          exit 1
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
-        if: steps.own.outputs.run_here == 'true'
         with:
           go-version: '1.27.0'
           cache: true
@@ -640,26 +682,78 @@ jobs:
       # repo (CHAOS-4855) -- this authenticates only to the ghcr mirror, which
       # GITHUB_TOKEN already has read access to.
       - name: Log in to GitHub Container Registry
-        if: steps.own.outputs.run_here == 'true'
         uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Cross-compile supported targets
-        if: steps.own.outputs.run_here == 'true'
         run: make crosscompile
       - name: Build all shipped commands
-        if: steps.own.outputs.run_here == 'true'
         run: make build
       - name: Test deterministic native-client harness
-        if: steps.own.outputs.run_here == 'true'
         run: make clients-real
       - name: Test hosted runtime with disposable dependencies
-        if: steps.own.outputs.run_here == 'true'
         run: make hosted-integration
 
-  contracts:
+  # The self-hosted leg. Same four make targets as hosted, in the same
+  # order. Measured pool wall under load: 4m30s-4m52s across this lane's
+  # history; timeout sized well above that.
+  build-self-hosted:
+    name: build
+    if: >-
+      vars.SELF_HOSTED_RUNNERS == 'enabled'
+      && (github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository)
+    needs: mirror-preflight-self-hosted
+    runs-on: [self-hosted, oci-arc-runners]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # cache:false -- the pool mounts a shared GOMODCACHE/GOCACHE hostPath
+      # (helm rev 6) that every self-hosted job reads and writes
+      # concurrently; setup-go's own cache restore/save races that live
+      # mount and can corrupt it for every other job on the pool. The
+      # mount already provides the cache; this only installs the toolchain.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.0'
+          cache: false
+      - name: Confirm this runner is actually arm64
+        run: |
+          set -euo pipefail
+          arch="$(go env GOARCH)"
+          if [ "${arch}" != "arm64" ]; then
+            echo "expected GOARCH=arm64 on oci-arc-runners, got '${arch}'" >&2
+            exit 1
+          fi
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cross-compile supported targets
+        run: make crosscompile
+      - name: Build all shipped commands
+        run: make build
+      - name: Test deterministic native-client harness
+        run: make clients-real
+      - name: Test hosted runtime with disposable dependencies
+        run: make hosted-integration
+
+  contracts-hosted:
+    name: contracts
+    if: >-
+      vars.SELF_HOSTED_RUNNERS != 'enabled'
+      || (github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
     steps:
       # actions/checkout v7.0.0
@@ -821,9 +915,96 @@ jobs:
           ACR_CONTRACT_GATE: required
         run: go test ./ci/checkendpointprofiles/...
 
+  # The self-hosted leg. Container-free (no docker login, no
+  # testcontainers) -- confirmed by grepping the job and every `make`
+  # target it runs for docker/testcontainers references, none found.
+  # Same steps as hosted, same order, including the sparse checkout of
+  # the public full-chaos/dev-health-ops repo (no token needed) and the
+  # `git fetch` probe against it -- both plain network operations, no
+  # different on arm64. Measured pool wall under load: 8m23s in this
+  # lane's earlier (reverted, pre-v1.6) revision; timeout sized from that.
+  contracts-self-hosted:
+    name: contracts
+    if: >-
+      vars.SELF_HOSTED_RUNNERS == 'enabled'
+      && (github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, oci-arc-runners]
+    timeout-minutes: 17
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # cache:false -- see race-devhealthschema-self-hosted's comment above
+      # for why (shared GOMODCACHE/GOCACHE hostPath mount, helm rev 6).
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.0'
+          cache: false
+      - name: Confirm this runner is actually arm64
+        run: |
+          set -euo pipefail
+          arch="$(go env GOARCH)"
+          if [ "${arch}" != "arm64" ]; then
+            echo "expected GOARCH=arm64 on oci-arc-runners, got '${arch}'" >&2
+            exit 1
+          fi
+      - name: Verify canonical receipts
+        run: make canonical-receipts
+      - name: Verify wire contracts
+        run: make contract-test
+      - name: Verify CodeGraph contract
+        run: make codegraph-contract
+      - name: Verify trial shard layout
+        run: make shard-plan
+      - name: Verify full-stack offline contract
+        run: make fullstack-contract
+      - name: Read the pinned ops-owned contract commit
+        id: ops-pin
+        run: echo "sha=$(tr -d '[:space:]' < ci/ops-contract.pin)" >> "$GITHUB_OUTPUT"
+      - name: Verify the pin names an immutable commit, not a floating ref
+        run: |
+          set -euo pipefail
+          sha="${{ steps.ops-pin.outputs.sha }}"
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "ci/ops-contract.pin must name a full 40-character lowercase commit SHA. It currently holds: $sha" >&2
+            exit 1
+          fi
+          if git fetch --depth 1 https://github.com/full-chaos/dev-health-ops.git "$sha" >/dev/null 2>&1; then
+            exit 0
+          fi
+          echo "ci/ops-contract.pin names $sha, which does not exist on full-chaos/dev-health-ops's remote (git fetch found nothing)." >&2
+          exit 1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: full-chaos/dev-health-ops
+          ref: ${{ steps.ops-pin.outputs.sha }}
+          path: .ops-contract
+          persist-credentials: false
+          sparse-checkout: |
+            contracts/auth/v1/endpoint-profile.schema.json
+            contracts/auth/v1/credential-classes.json
+            contracts/auth/v1/credential-classes.schema.json
+          sparse-checkout-cone-mode: false
+      - name: Verify endpoint-profile inventory against the pinned ops contract
+        env:
+          ACR_ENDPOINT_PROFILE_SCHEMA: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/endpoint-profile.schema.json
+          ACR_CREDENTIAL_CLASSES: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/credential-classes.json
+          ACR_CREDENTIAL_CLASSES_SCHEMA: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/credential-classes.schema.json
+          ACR_CONTRACT_GATE: required
+        run: go test ./ci/checkendpointprofiles/...
+
   container-contract-smoke:
     runs-on: ubuntu-24.04
-    needs: mirror-preflight
+    # See `unit`'s identical comment: mirror-preflight is now a v1.6 pair,
+    # exactly one leg runs, this job runs unconditionally and needs
+    # whichever leg succeeded.
+    needs:
+      - mirror-preflight-hosted
+      - mirror-preflight-self-hosted
+    if: >-
+      !cancelled()
+      && (needs.mirror-preflight-hosted.result == 'success'
+      || needs.mirror-preflight-self-hosted.result == 'success')
     env:
       # CHAOS-4855: golang (Dockerfile), tonistiigi/binfmt, moby/buildkit,
       # aquasec/trivy, anchore/syft, and the verify.sh postgres probe all
@@ -900,7 +1081,16 @@ jobs:
 
   container-reproducible:
     runs-on: ubuntu-24.04
-    needs: mirror-preflight
+    # See `unit`'s identical comment: mirror-preflight is now a v1.6 pair,
+    # exactly one leg runs, this job runs unconditionally and needs
+    # whichever leg succeeded.
+    needs:
+      - mirror-preflight-hosted
+      - mirror-preflight-self-hosted
+    if: >-
+      !cancelled()
+      && (needs.mirror-preflight-hosted.result == 'success'
+      || needs.mirror-preflight-self-hosted.result == 'success')
     env:
       # CHAOS-4855: see container-contract-smoke above.
       # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
@@ -965,7 +1155,16 @@ jobs:
 
   container-oci-scan:
     runs-on: ubuntu-24.04
-    needs: mirror-preflight
+    # See `unit`'s identical comment: mirror-preflight is now a v1.6 pair,
+    # exactly one leg runs, this job runs unconditionally and needs
+    # whichever leg succeeded.
+    needs:
+      - mirror-preflight-hosted
+      - mirror-preflight-self-hosted
+    if: >-
+      !cancelled()
+      && (needs.mirror-preflight-hosted.result == 'success'
+      || needs.mirror-preflight-self-hosted.result == 'success')
     env:
       # CHAOS-4855: see container-contract-smoke above.
       # CHAOS-4855 R1: ghcr.io/<owner>/<repo>, not the flat ghcr.io/<owner> --
@@ -1066,16 +1265,33 @@ jobs:
     # any result that is not `success`, so a skipped or cancelled lane can
     # never read as green. scripts/ci/test-workflow-contract.sh enforces that
     # every job is listed here, so adding a lane cannot silently escape it.
-    if: always()
+    #
+    # Runner-routing contract v1.6: five of the lanes below (mirror-preflight,
+    # scripts, build, contracts, race-devhealthschema) are now PAIRS -- a
+    # `-hosted` and a `-self-hosted` job key sharing one `name:` -- with
+    # mutually exclusive, exhaustive `if:` gates, so exactly one of each pair
+    # runs per workflow run and the other reports `skipped`. Both keys of
+    # every pair are listed in `needs` below (scripts/ci/test-workflow-contract.sh
+    # pins this), and the assertion script below treats a pair as satisfied
+    # when exactly one member succeeded, and fails if either member reports
+    # anything other than success/skipped, or if BOTH report skipped (which
+    # would mean that lane never ran at all). Ported from ask-dev PR #43's
+    # aggregator logic, generalized from one pair to five.
+    if: '!cancelled()'
     needs:
-      - mirror-preflight
-      - scripts
+      - mirror-preflight-hosted
+      - mirror-preflight-self-hosted
+      - scripts-hosted
+      - scripts-self-hosted
       - lint
       - unit
       - race
-      - race-devhealthschema
-      - build
-      - contracts
+      - race-devhealthschema-hosted
+      - race-devhealthschema-self-hosted
+      - build-hosted
+      - build-self-hosted
+      - contracts-hosted
+      - contracts-self-hosted
       - container-contract-smoke
       - container-reproducible
       - container-oci-scan
@@ -1084,13 +1300,41 @@ jobs:
       - name: Assert every lane succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
+          # v1.6 pair base names -- the job-key prefix shared by each
+          # `<base>-hosted` / `<base>-self-hosted` pair.
+          PAIRS: mirror-preflight scripts build contracts race-devhealthschema
         run: |
           set -euo pipefail
           failed=0
+
+          for base in $PAIRS; do
+            hosted_result="$(printf '%s' "$NEEDS" | jq -r --arg k "${base}-hosted" '.[$k].result // "missing"')"
+            pool_result="$(printf '%s' "$NEEDS" | jq -r --arg k "${base}-self-hosted" '.[$k].result // "missing"')"
+            printf '%s-hosted: %s\n' "$base" "$hosted_result"
+            printf '%s-self-hosted: %s\n' "$base" "$pool_result"
+            if [ "$hosted_result" != success ] && [ "$hosted_result" != skipped ]; then
+              failed=1
+            fi
+            if [ "$pool_result" != success ] && [ "$pool_result" != skipped ]; then
+              failed=1
+            fi
+            if [ "$hosted_result" = skipped ] && [ "$pool_result" = skipped ]; then
+              printf 'neither %s-hosted nor %s-self-hosted ran\n' "$base" "$base" >&2
+              failed=1
+            fi
+          done
+
+          # Every other lane must be a literal success -- the pairs above are
+          # the only jobs allowed to report `skipped` and still pass.
           while IFS=$'\t' read -r job result; do
+            case " $PAIRS " in
+              *" ${job%-hosted} "*) continue ;;
+              *" ${job%-self-hosted} "*) continue ;;
+            esac
             printf '%s: %s\n' "$job" "$result"
             if [ "$result" != success ]; then failed=1; fi
           done < <(printf '%s' "$NEEDS" | jq -r 'to_entries[] | [.key, .value.result] | @tsv')
+
           test "$(printf '%s' "$NEEDS" | jq -r 'length')" -gt 0 || {
             printf 'no lane results were reported\n' >&2; exit 1; }
           test "$failed" -eq 0 || { printf 'at least one lane did not succeed\n' >&2; exit 1; }
