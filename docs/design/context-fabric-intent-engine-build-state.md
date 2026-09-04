@@ -817,22 +817,29 @@ serveability, not from a read; `Served()` is just `Unavailable == ""`; nothing o
 appends an assembled-result row for a READ requirement, so a seeded planning-stage row can be the
 LAST row an identity ever gets. `DeriveContextFabricAnswerCompletenessState` returns `complete` from
 satisfied-only rows. Mitigated today because Ask Dev's `CompletenessPanel` does not read `state`
-(see H8's sibling finding below), but any other consumer of the published field is reading a claim
-the server cannot back. the read-requirement evaluator ticket (Backlog, parent the requirement-derivation ticket): append one evaluated row per served,
-server-executed read requirement, and refuse `complete` from planning-only rows. the narration-count ticket is
-sequenced behind it — see H18.
+(see H21's sibling finding below), but any other consumer of the published field is reading a claim
+the server cannot back. the read-requirement evaluator ticket (Backlog, parent the requirement-derivation ticket): append one evaluated row for EVERY
+`Kind == read` requirement — not only the served, server-executed case — with the row's outcome
+following the evidence: available/stale reads `satisfied`, truncated/pruned reads `narrowed` with a
+coverage code, and no_data/unavailable/unconfigured reads `unavailable` with a coverage code. A
+narrower remedy that only covers the served-and-executed case would leave a failed read represented
+by nothing but the planning-stage `satisfied` seed — the exact defect this hole exists to close.
+the narration-count ticket is sequenced behind it — see H18.
 
-**H17 — the gap-fill mints `satisfied` on exits that read nothing at all; #430 is held on it
-(E-1).** the plan-requirement-rows ticket's gap-fill (`accountForPublishedPlanRequirements` →
-`SeedOutcomesFromPublishedPlanRequirements`) reuses the planning-stage seed's default. By
-construction it only ever fires on exits where the seed never ran — the two window vetoes, the
-structure veto, the subjectless terminal — so its `Satisfied` default is wrong on every row it adds.
-The immediate fix chris is holding the plan-requirement-rows ticket/#430 for: widen `not_attempted`'s doc comment to "a cap
-**or a veto** prevented the attempt" (wire token unchanged) so `DeriveState` reads `partial` instead
-of `complete` on these exits. That is a stopgap on the existing five-token vocabulary, not the
-honest fix — the honest fix is an evaluator that can tell "never read" apart from "read and
-satisfied" by cause, which needs a new coverage code and is the read-requirement evaluator ticket's scope, the same ticket as
-H16.
+**H17 — fixed for veto exits on the plan-requirement-rows ticket (E-1 option (a), chris 2026-09-04 15:15 PDT); the same
+gap remains at the ORIGINAL seed, and closing it there is the read-requirement evaluator ticket's scope.** The gap-fill
+(`accountForPublishedPlanRequirements` → `SeedOutcomesFromPublishedPlanRequirements`) used to reuse
+the planning-stage seed's `Satisfied` default on exits that read nothing at all — the two window
+vetoes, the structure veto, the subjectless terminal. **This is now a semantic code change, not a
+doc-comment widening**: a requirement the turn never reached is built by a SEPARATE function,
+`unattemptedRequirementRow`, which emits `Outcome: not_attempted` with a new coverage code,
+`answer_terminated_before_attempt` (`CauseObserved: false` — nothing was actually read), rather than
+`Satisfied`. `DeriveContextFabricAnswerCompletenessState` already maps `not_attempted` to `partial`,
+so a veto exit reports `partial`, not `complete`, once the plan-requirement-rows ticket merges. **What this does NOT fix:**
+`planningStageOutcomeRow` — the seed used wherever a read requirement IS attempted, not vetoed —
+still defaults a fresh row to `Satisfied` before any read runs; no evaluator yet checks that the
+read actually happened and succeeded. That is H16's problem restated at the seed rather than the
+gap-fill, and closing it is the read-requirement evaluator ticket's scope, the same ticket as H16.
 
 **H18 — a count over a truncated or clamped population reads `satisfied`/`exact` → `complete`
 (astra P1, the count population-qualification ticket).** `ComputeMembershipCardinality` initializes `Served = Declared = len(Members)`
@@ -859,8 +866,8 @@ still authors no user language, per the standing rule.
 
 **H20 — a regex is a second, undeclared authority for what kind was asked (the kind-noun demotion ticket).** Ask Dev's
 `kind-nouns.ts` pattern-matches project/repository/team nouns to `expected_kinds` on chat and
-workbench, entering the request as `question_stated`; MCP and every other surface keep the same hint
-at `inferred_default`/`explicit_unattributed` — a deliberate DP12(b) split
+workbench, entering the request as `question_stated` — the same authority every surface OTHER than
+MCP carries. **Only MCP** demotes the hint to `inferred_default`/`explicit_unattributed` — a deliberate DP12(b) split
 (`investigation-request.ts:1533`), not an accident, but the regex's own motivating defects — the kind
 offer omitting the declared kind (the repository-question kind-offer ticket, the named-subject kind-offer ticket) — are now both Done. the kind-noun demotion ticket (Backlog, Ask
 Dev): demote the regex hint to
