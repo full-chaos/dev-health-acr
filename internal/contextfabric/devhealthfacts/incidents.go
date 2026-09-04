@@ -43,7 +43,7 @@ func (p *IncidentsProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := subjectIndex(query.Subjects, "incident:")
+	ids, bySubject, rejected := subjectIndex(query.Subjects, "incident:")
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-4377: the SQL build + scan half (the status/severity Tier
 	// B/Tier C split, the soft-delete guard) moved to
@@ -86,5 +86,6 @@ func (p *IncidentsProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	if timeBound.active && retentionReason == "" {
 		result.Reason = incidentSeverityOmittedReason
 	}
+	applySubjectShapeRejection(&result, "devhealthfacts.incidents", contextfabric.FactIncidents, rejected)
 	return result, nil
 }

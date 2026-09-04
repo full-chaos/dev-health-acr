@@ -51,46 +51,51 @@ func (p *DeploymentsProvider) ReadFacts(ctx context.Context, principal storage.P
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
+	rejectedCount := 0
 	// See ci.go's identical comment: the coarser grain wins only once a
 	// repository aggregate ACTUALLY CONTRIBUTED a fact, not merely because
 	// one was attempted.
 	grain := grainExact
 
 	if deploymentSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectDeployment); len(deploymentSubjects) > 0 {
-		rowCount, scanErr := p.readDeploymentStatus(ctx, orgID, deploymentSubjects, &facts, timeBound)
+		rowCount, rejected, scanErr := p.readDeploymentStatus(ctx, orgID, deploymentSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query deployments", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		rejectedCount += rejected
 	}
 
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
-		rowCount, scanErr := p.readRepositoryAggregate(ctx, orgID, repoSubjects, &facts, timeBound)
+		rowCount, rejected, scanErr := p.readRepositoryAggregate(ctx, orgID, repoSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query deployment metrics", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		rejectedCount += rejected
 		if rowCount > 0 {
 			grain = grainDaily
 		}
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}, nil
+	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}
+	applySubjectShapeRejection(&result, "devhealthfacts.deployments", contextfabric.FactDeployments, rejectedCount)
+	return result, nil
 }
 
 // readDeploymentStatus is CHAOS-3780's original deployments read. The
 // SQL/scan half now lives in readers.ReadDeploymentStatus (CHAOS-4377); see
 // that function's doc comment for the CHAOS-3781 Tier B status-derivation
 // reasoning this method used to carry inline.
-func (p *DeploymentsProvider) readDeploymentStatus(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
-	ids, bySubject := v2Index(subjects, identity.KindDeployment)
+func (p *DeploymentsProvider) readDeploymentStatus(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
+	ids, bySubject, rejected := v2Index(subjects, identity.KindDeployment)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, rejected, nil
 	}
 	rows, err := readers.ReadDeploymentStatus(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
-		return 0, err
+		return 0, rejected, err
 	}
 	for _, r := range rows {
 		subject, ok := bySubject[r.RepoID+":"+r.DeploymentID]
@@ -106,21 +111,21 @@ func (p *DeploymentsProvider) readDeploymentStatus(ctx context.Context, orgID st
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityDeployment, r.RepoID+":"+r.DeploymentID)},
 		})
 	}
-	return len(rows), nil
+	return len(rows), rejected, nil
 }
 
 // readRepositoryAggregate reads deploy_metrics_daily (latest day per
 // repository) -- CHAOS-4347's repository-scoped deployment aggregate. The
 // SQL/scan half, including the row_number()/cityHash64 tiebreak reasoning,
 // now lives in readers.ReadDeployMetricsDaily (CHAOS-4377).
-func (p *DeploymentsProvider) readRepositoryAggregate(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
-	ids, bySubject := subjectIndex(subjects, repositoryPrefix)
+func (p *DeploymentsProvider) readRepositoryAggregate(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
+	ids, bySubject, rejected := subjectIndex(subjects, repositoryPrefix)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, rejected, nil
 	}
 	rows, err := readers.ReadDeployMetricsDaily(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
-		return 0, err
+		return 0, rejected, err
 	}
 	for _, r := range rows {
 		subject, ok := bySubject[r.RepoID]
@@ -143,5 +148,5 @@ func (p *DeploymentsProvider) readRepositoryAggregate(ctx context.Context, orgID
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, r.RepoID)},
 		})
 	}
-	return len(rows), nil
+	return len(rows), rejected, nil
 }

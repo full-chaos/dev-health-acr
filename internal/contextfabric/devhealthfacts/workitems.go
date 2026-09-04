@@ -33,7 +33,7 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := v2Index(query.Subjects, identity.KindWorkItem)
+	ids, bySubject, rejected := v2Index(query.Subjects, identity.KindWorkItem)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-4377: the SQL build + scan half moved to
 	// github.com/full-chaos/dev-health-go/readers.ReadWorkItemStatus.
@@ -53,7 +53,9 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 		})
 	}
 	state, emptyReason := currentAxisReadState(len(facts))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}, nil
+	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}
+	applySubjectShapeRejection(&result, "devhealthfacts.status", contextfabric.FactStatus, rejected)
+	return result, nil
 }
 
 // WorkProvider implements contextfabric.FactProvider for FactWork -- minimal
@@ -77,7 +79,7 @@ func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principa
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := v2Index(query.Subjects, identity.KindWorkItem)
+	ids, bySubject, rejected := v2Index(query.Subjects, identity.KindWorkItem)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-4377: the SQL build + scan half moved to
 	// github.com/full-chaos/dev-health-go/readers.ReadWorkItemTitle.
@@ -97,7 +99,9 @@ func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principa
 		})
 	}
 	state, emptyReason := currentAxisReadState(len(facts))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}, nil
+	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}
+	applySubjectShapeRejection(&result, "devhealthfacts.work", contextfabric.FactWork, rejected)
+	return result, nil
 }
 
 // ActualCompletionProvider implements contextfabric.FactProvider for
@@ -133,7 +137,7 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := v2Index(query.Subjects, identity.KindWorkItem)
+	ids, bySubject, rejected := v2Index(query.Subjects, identity.KindWorkItem)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-4377: the SQL build + scan half (the isNotNull/ifNull
 	// coalescing, the Tier B "was it done at T" derivation) moved to
@@ -158,5 +162,7 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 		})
 	}
 	state, retentionReason := timeBound.retentionState(len(rows))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery}, nil
+	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery}
+	applySubjectShapeRejection(&result, "devhealthfacts.actual_completion", contextfabric.FactActualCompletion, rejected)
+	return result, nil
 }

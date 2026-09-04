@@ -81,30 +81,37 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
 	omittedUnrepresentableCount := 0
+	rejectedCount := 0
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
-		rowCount, omitted, scanErr := p.readTeamInvestment(ctx, orgID, teamSubjects, &facts, timeBound)
+		rowCount, omitted, rejected, scanErr := p.readTeamInvestment(ctx, orgID, teamSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team investment", scanErr)
 		}
 		omittedUnrepresentableCount += omitted
+		rejectedCount += rejected
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
 		// CHAOS-4398 §0: the CANONICAL theme/subcategory read, a
 		// deliberately SEPARATE call from readTeamInvestment above -- see
 		// readTeamThemeMix's own doc comment for why this is a new
 		// producer join, not a reuse of the legacy investment_metrics_daily
 		// path.
+		//
+		// It shares readTeamInvestment's own teamSubjects, so it would
+		// double-count the SAME rejected subjects if it also reported them;
+		// only readTeamInvestment's count is folded in above (CHAOS-5026).
 		if scanErr := p.readTeamThemeMix(ctx, orgID, teamSubjects, &facts, timeBound); scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team theme mix", scanErr)
 		}
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, omitted, breakdownTruncated, scanErr := p.readProjectInvestment(ctx, orgID, projectSubjects, &facts, timeBound)
+		rowCount, omitted, rejected, breakdownTruncated, scanErr := p.readProjectInvestment(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project investment", scanErr)
 		}
 		omittedUnrepresentableCount += omitted
+		rejectedCount += rejected
 		truncated = truncated || rowCount >= maxFactRowsPerQuery || breakdownTruncated
 	}
 
@@ -115,7 +122,13 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if omittedUnrepresentableCount > 0 && retentionReason == "" {
 		retentionReason = unrepresentableValueReason
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}, nil
+	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}
+	// CHAOS-5026: a team/project subject named without its "team:"/project
+	// v2 shape reads no differently from a subject with genuinely no
+	// investment data unless this is applied -- see subjectIndex/v2Index's
+	// own doc comments.
+	applySubjectShapeRejection(&result, "devhealthfacts.investment", contextfabric.FactInvestment, rejectedCount)
+	return result, nil
 }
 
 // readTeamInvestment is CHAOS-3780's original investment_metrics_daily read.
@@ -125,13 +138,12 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 // full tiebreak reasoning. This adapter keeps the CanonicalFact-building
 // half, factored out so ReadFacts can branch by subject kind the same way
 // metrics.go/health.go already do.
-func (p *InvestmentProvider) readTeamInvestment(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
-	ids, bySubject := subjectIndex(subjects, teamPrefix)
+func (p *InvestmentProvider) readTeamInvestment(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount, omittedUnrepresentableCount, rejected int, err error) {
+	ids, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	rows, err := readers.ReadTeamInvestment(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, rejected, err
 	}
-	omittedUnrepresentableCount := 0
 	for _, r := range rows {
 		// churn_loc is UInt64 and is NOT wrapped with toInt64 in SQL
 		// (round-3 F2): the wrap turned a value above MaxInt64 negative,
@@ -163,7 +175,7 @@ func (p *InvestmentProvider) readTeamInvestment(ctx context.Context, orgID strin
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.TeamID)},
 		})
 	}
-	return len(rows), omittedUnrepresentableCount, nil
+	return len(rows), omittedUnrepresentableCount, rejected, nil
 }
 
 // canonicalInvestmentThemes is the fixed 5-theme taxonomy
@@ -244,7 +256,12 @@ var canonicalInvestmentThemes = [...]string{
 // team-attribution-family change bigger than this producer. Follow-up:
 // CHAOS-4404.
 func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) error {
-	ids, bySubject := subjectIndex(subjects, teamPrefix)
+	// rejected is intentionally discarded here: subjects is the SAME
+	// teamSubjects slice ReadFacts already passed to readTeamInvestment,
+	// whose own subjectIndex call already counted and reported every
+	// shape-rejected id (CHAOS-5026) -- counting it again here would
+	// double it.
+	ids, bySubject, _ := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
 		return nil
 	}
@@ -374,14 +391,14 @@ func (p *InvestmentProvider) readTeamThemeMix(ctx context.Context, orgID string,
 // grouping/breakdown-table construction the reader deliberately leaves to
 // its caller. See this file's package-level doc comment for why counts are
 // never summed across teams here (unlike metrics.go's commit counts).
-func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount, omittedUnrepresentableCount int, breakdownTruncated bool, err error) {
-	ids, bySubject := v2Index(subjects, identity.KindProject)
+func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount, omittedUnrepresentableCount, rejected int, breakdownTruncated bool, err error) {
+	ids, bySubject, rejected := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, 0, false, nil
+		return 0, 0, rejected, false, nil
 	}
 	scanned, err := readers.ReadProjectInvestment(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, rejected, false, err
 	}
 	rowCount = len(scanned)
 	byProject := make(map[string][]readers.InvestmentProjectRow)
@@ -484,5 +501,5 @@ func (p *InvestmentProvider) readProjectInvestment(ctx context.Context, orgID st
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
-	return rowCount, omittedUnrepresentableCount, breakdownTruncated, nil
+	return rowCount, omittedUnrepresentableCount, rejected, breakdownTruncated, nil
 }

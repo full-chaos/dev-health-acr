@@ -174,6 +174,7 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
+	rejectedCount := 0
 
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
 		// rowCount deliberately NOT compared against maxFactRowsPerQuery
@@ -183,31 +184,36 @@ func (p *MetricsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 		// legitimately-wide repository series is expected and NOT evidence
 		// of dropped data -- breakdownTruncated (capFactValueRows' own
 		// per-fact signal) is the accurate truncation report here.
-		_, breakdownTruncated, scanErr := p.readRepositoryMetrics(ctx, orgID, repoSubjects, &facts, timeBound, query.Time.EvidenceWindow)
+		_, rejected, breakdownTruncated, scanErr := p.readRepositoryMetrics(ctx, orgID, repoSubjects, &facts, timeBound, query.Time.EvidenceWindow)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query repository metrics", scanErr)
 		}
 		truncated = truncated || breakdownTruncated
+		rejectedCount += rejected
 	}
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
-		rowCount, scanErr := p.readTeamMetrics(ctx, orgID, teamSubjects, &facts, timeBound)
+		rowCount, rejected, scanErr := p.readTeamMetrics(ctx, orgID, teamSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team metrics", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		rejectedCount += rejected
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, scanErr := p.readProjectMetrics(ctx, orgID, projectSubjects, &facts, timeBound)
+		rowCount, rejected, scanErr := p.readProjectMetrics(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project metrics", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		rejectedCount += rejected
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}, nil
+	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}
+	applySubjectShapeRejection(&result, "devhealthfacts.metrics", contextfabric.FactMetrics, rejectedCount)
+	return result, nil
 }
 
 // repositoryMetricsDayRow is one repo_metrics_daily row within the series
@@ -243,10 +249,10 @@ type repositoryMetricsDayRow struct {
 // intraday-rerun tiebreak, but PARTITION BY (repo_id, day) instead of
 // repo_id alone, so every distinct day survives instead of only the
 // latest.
-func (p *MetricsProvider) readRepositoryMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidenceWindow *contractsv1.ContextFabricRequestedEvidenceWindow) (rowCount int, breakdownTruncated bool, err error) {
-	ids, bySubject := subjectIndex(subjects, repositoryPrefix)
+func (p *MetricsProvider) readRepositoryMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, evidenceWindow *contractsv1.ContextFabricRequestedEvidenceWindow) (rowCount int, rejected int, breakdownTruncated bool, err error) {
+	ids, bySubject, rejected := subjectIndex(subjects, repositoryPrefix)
 	if len(ids) == 0 {
-		return 0, false, nil
+		return 0, rejected, false, nil
 	}
 	var dayPredicate string
 	var extra []readers.Binding
@@ -373,7 +379,7 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 		return nil
 	}, extra...)
 	if scanErr != nil {
-		return rowCount, false, scanErr
+		return rowCount, rejected, false, scanErr
 	}
 	for _, repoID := range repoOrder {
 		subject := bySubject[repoID]
@@ -450,20 +456,20 @@ LIMIT ` + strconv.Itoa(MetricsSeriesPerRepositoryRowCap) + ` BY repo_id`
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, repoID)},
 		})
 	}
-	return rowCount, breakdownTruncated, nil
+	return rowCount, rejected, breakdownTruncated, nil
 }
 
 // readTeamMetrics reads team_metrics_daily directly -- a genuinely
 // team-scoped rollup, not a proxy through any repository the team touches.
 // The SQL/scan half now lives in readers.ReadTeamMetrics (CHAOS-4377).
-func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
-	ids, bySubject := subjectIndex(subjects, teamPrefix)
+func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
+	ids, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, rejected, nil
 	}
 	rows, err := readers.ReadTeamMetrics(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
-		return 0, err
+		return 0, rejected, err
 	}
 	for _, r := range rows {
 		subject, ok := bySubject[r.TeamID]
@@ -483,7 +489,7 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.TeamID)},
 		})
 	}
-	return len(rows), nil
+	return len(rows), rejected, nil
 }
 
 // readProjectMetrics rolls FactMetrics up for a project through
@@ -498,14 +504,14 @@ func (p *MetricsProvider) readTeamMetrics(ctx context.Context, orgID string, sub
 // aggregation now live in readers.ReadProjectMetricsBreakdown and
 // readers.RollupProjectMetrics respectively (CHAOS-4377). This method only
 // builds the CanonicalFact/FactValue shape on top.
-func (p *MetricsProvider) readProjectMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
-	ids, bySubject := v2Index(subjects, identity.KindProject)
+func (p *MetricsProvider) readProjectMetrics(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
+	ids, bySubject, rejected := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, rejected, nil
 	}
 	breakdown, err := readers.ReadProjectMetricsBreakdown(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
-		return 0, err
+		return 0, rejected, err
 	}
 	rowCount := len(breakdown)
 	for _, rollup := range readers.RollupProjectMetrics(breakdown) {
@@ -568,5 +574,5 @@ func (p *MetricsProvider) readProjectMetrics(ctx context.Context, orgID string, 
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
-	return rowCount, nil
+	return rowCount, rejected, nil
 }

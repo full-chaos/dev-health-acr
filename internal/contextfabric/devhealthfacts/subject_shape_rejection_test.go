@@ -1,0 +1,110 @@
+package devhealthfacts_test
+
+import (
+	"context"
+	"log/slog"
+	"strings"
+	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+// TestInvestmentProviderReportsSubjectIDShapeRejectionNotNoData is CHAOS-5026's
+// red-first pin. subjectIndex used to strip the "team:" prefix off a
+// subject's CanonicalID and silently skip any subject that never carried it,
+// so a caller passing "CHAOS" where "team:CHAOS" was required read back
+// facts=0 state=no_data -- indistinguishable from a team that genuinely has
+// no investment data (lane-s7b-ii-pr3, 2026-09-04, executing
+// InvestmentProvider).
+//
+// This drives the PUBLIC provider entry point (InvestmentProvider.ReadFacts
+// via devhealthfacts.NewProviders), never a struct literal or a direct call
+// to an unexported helper, and it asserts the two states DIFFER before
+// asserting anything about what the rejected one actually is -- a red that
+// only checked the rejected case in isolation could pass by coincidence if
+// the fix also broke the positive control.
+func TestInvestmentProviderReportsSubjectIDShapeRejectionNotNoData(t *testing.T) {
+	handler := &recordingSlogHandler{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	client := &fakeClient{}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+
+	// Positive control: a correctly-shaped team subject with genuinely no
+	// rows (fakeClient's default response for a statement with no
+	// registered table match is an empty scanner). This is the TRUE
+	// no_data case the shape-rejected read must remain distinguishable
+	// from.
+	noDataResult, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{teamSubject("real-team-with-no-data")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() (well-shaped, no data) error = %v", err)
+	}
+	if noDataResult.State != contextfabric.SourceNoData {
+		t.Fatalf("positive control broke: well-shaped no-data read State = %q, want %q", noDataResult.State, contextfabric.SourceNoData)
+	}
+	if strings.Contains(noDataResult.Reason, "subject_id_shape_rejected") {
+		t.Fatalf("positive control broke: well-shaped no-data read Reason = %q must not carry the shape-rejection token", noDataResult.Reason)
+	}
+
+	// The actual case: a team subject whose CanonicalID never got the
+	// "team:" prefix -- CHAOS-5026's own example.
+	shapeRejected := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "CHAOS", Label: "CHAOS"}
+	rejectedResult, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{shapeRejected},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() (shape-rejected) error = %v", err)
+	}
+
+	// Assert the two states/reasons differ FIRST: this is the harm this
+	// ticket exists to fix, stated as its own assertion before anything
+	// else about the rejected case is checked.
+	if rejectedResult.State == noDataResult.State && rejectedResult.Reason == noDataResult.Reason {
+		t.Fatalf("CHAOS-5026 regression: shape-rejected read (State=%q Reason=%q) is INDISTINGUISHABLE from a genuinely empty well-shaped read (State=%q Reason=%q)",
+			rejectedResult.State, rejectedResult.Reason, noDataResult.State, noDataResult.Reason)
+	}
+	if rejectedResult.State == contextfabric.SourceNoData {
+		t.Fatalf("shape-rejected read State = %q, want anything other than no_data: a wrongly-shaped subject id must never present as an ordinary empty read", rejectedResult.State)
+	}
+	if !strings.Contains(rejectedResult.Reason, "subject_id_shape_rejected") {
+		t.Fatalf("shape-rejected read Reason = %q, want it to contain the positive reason %q", rejectedResult.Reason, "subject_id_shape_rejected")
+	}
+	if rejectedResult.OmittedCount != 1 {
+		t.Fatalf("shape-rejected read OmittedCount = %d, want 1: the count must travel with the reason", rejectedResult.OmittedCount)
+	}
+
+	// Telemetry, same change: the reason and count must reach an actually
+	// EMITTED slog record, verified at this same public entry point --
+	// never a direct call to the unexported recorder.
+	var found bool
+	for _, record := range handler.snapshot() {
+		if record.Message != "context_fabric_subject_id_shape_rejected" {
+			continue
+		}
+		attrs := recordAttrs(record)
+		producer, ok := attrs["producer"]
+		if !ok || producer.String() != "devhealthfacts.investment" {
+			continue
+		}
+		kind, ok := attrs["kind"]
+		if !ok || kind.String() != string(contextfabric.FactInvestment) {
+			continue
+		}
+		rejected, ok := attrs["rejected"]
+		if !ok || rejected.Int64() != 1 {
+			continue
+		}
+		found = true
+	}
+	if !found {
+		t.Fatalf("no context_fabric_subject_id_shape_rejected slog record emitted with producer=devhealthfacts.investment kind=%s rejected=1", contextfabric.FactInvestment)
+	}
+}

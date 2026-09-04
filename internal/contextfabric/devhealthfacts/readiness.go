@@ -72,25 +72,30 @@ func (p *ReadinessProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
+	rejectedCount := 0
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
-		rowCount, rowsOmitted, scanErr := p.readTeamReadiness(ctx, orgID, teamSubjects, &facts, timeBound)
+		rowCount, rowsOmitted, rejected, scanErr := p.readTeamReadiness(ctx, orgID, teamSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team readiness", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery || rowsOmitted > 0
+		rejectedCount += rejected
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, breakdownTruncated, scanErr := p.readProjectReadiness(ctx, orgID, projectSubjects, &facts, timeBound)
+		rowCount, rejected, breakdownTruncated, scanErr := p.readProjectReadiness(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project readiness", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery || breakdownTruncated
+		rejectedCount += rejected
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}, nil
+	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}
+	applySubjectShapeRejection(&result, "devhealthfacts.readiness", contextfabric.FactReadiness, rejectedCount)
+	return result, nil
 }
 
 // readinessDailyRow is one (subject, day)'s SUMMED
@@ -196,11 +201,11 @@ ORDER BY team_id, day DESC`)
 // full tiebreak reasoning. This adapter keeps the CanonicalFact-building
 // half, factored out so ReadFacts can branch by subject kind the same way
 // metrics.go/health.go already do.
-func (p *ReadinessProvider) readTeamReadiness(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, omittedRows int, err error) {
-	ids, bySubject := subjectIndex(subjects, teamPrefix)
+func (p *ReadinessProvider) readTeamReadiness(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, omittedRows int, rejected int, err error) {
+	ids, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	rows, err := readers.ReadTeamReadiness(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, rejected, err
 	}
 	// CHAOS-4645, design doc §5.2: a second, ADDITIVE query for the dated
 	// series -- every existing scalar field below is computed byte-identically
@@ -212,7 +217,7 @@ func (p *ReadinessProvider) readTeamReadiness(ctx context.Context, orgID string,
 	// TestRankCohortReadinessUntouchedByDailySeriesField.
 	dailyByTeam, seriesErr := p.queryTeamReadinessDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
-		return 0, 0, seriesErr
+		return 0, 0, rejected, seriesErr
 	}
 	// codex CHAOS-4645 round-1 P2 (EXECUTED): see flow.go's readTeamFlow
 	// identical note -- the daily-series query's own withRowLimit(200) cap,
@@ -281,7 +286,7 @@ func (p *ReadinessProvider) readTeamReadiness(ctx context.Context, orgID string,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, r.TeamID)},
 		})
 	}
-	return rowCount, omittedRows, nil
+	return rowCount, omittedRows, rejected, nil
 }
 
 // queryProjectReadinessDailySeries is queryTeamReadinessDailySeries'
@@ -328,14 +333,14 @@ ORDER BY p.id, ec.day DESC`)
 // readers.ReadProjectReadiness; this adapter does the Go-side
 // grouping/breakdown-table construction the reader deliberately leaves to
 // its caller.
-func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, breakdownTruncated bool, err error) {
-	ids, bySubject := v2Index(subjects, identity.KindProject)
+func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, rejected int, breakdownTruncated bool, err error) {
+	ids, bySubject, rejected := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, false, nil
+		return 0, rejected, false, nil
 	}
 	scanned, err := readers.ReadProjectReadiness(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
-		return 0, false, err
+		return 0, rejected, false, err
 	}
 	// CHAOS-4645, design doc §5.2: additive, off the SAME project-identity
 	// join -- never changing an existing field.
@@ -365,7 +370,7 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 	// missing for it to work on project subjects too.
 	dailyByProject, seriesErr := p.queryProjectReadinessDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
-		return 0, false, seriesErr
+		return 0, rejected, false, seriesErr
 	}
 	rowCount = len(scanned)
 	// codex CHAOS-4645 round-1 P2 (EXECUTED): see readTeamReadiness's
@@ -487,5 +492,5 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
-	return rowCount, breakdownTruncated, nil
+	return rowCount, rejected, breakdownTruncated, nil
 }

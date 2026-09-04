@@ -49,16 +49,27 @@ func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.
 	// subjects whose raw ID equals the caller's own org -- there is nothing
 	// else to scope an "ids IN (...)" clause against, and the WHERE
 	// org_id = {org_id:String} clause below is itself the whole scope.
-	orgSubjectIDs, bySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization), organizationPrefix)
+	orgSubjectIDs, bySubject, rejected := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectOrganization), organizationPrefix)
 	if len(orgSubjectIDs) == 0 {
-		return contextfabric.FactProviderResult{Facts: nil, State: contextfabric.SourceAvailable, Version: QueryVersion}, nil
+		// CHAOS-5026: only ever reached when every requested organization
+		// subject was rejected for shape (subjectsOfKind already narrowed to
+		// SubjectOrganization, and this provider supports no other kind) --
+		// a genuinely EMPTY query.Subjects also lands here with rejected=0,
+		// which applySubjectShapeRejection's own no-op-on-zero guard keeps
+		// silent, matching this branch's pre-existing "nothing asked, report
+		// available" contract.
+		result := contextfabric.FactProviderResult{Facts: nil, State: contextfabric.SourceAvailable, Version: QueryVersion}
+		applySubjectShapeRejection(&result, "devhealthfacts.source_health", contextfabric.FactSourceHealth, rejected)
+		return result, nil
 	}
 	subject, requested := bySubject[orgID]
 	if !requested {
 		// The caller asked about a different organization's subject than
 		// principal.OrgID names -- never honor it (org scoping is
 		// structural, never caller-supplied).
-		return contextfabric.FactProviderResult{Facts: nil, State: contextfabric.SourceAvailable, Version: QueryVersion}, nil
+		result := contextfabric.FactProviderResult{Facts: nil, State: contextfabric.SourceAvailable, Version: QueryVersion}
+		applySubjectShapeRejection(&result, "devhealthfacts.source_health", contextfabric.FactSourceHealth, rejected)
+		return result, nil
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, maxFactRowsPerQuery)
 	// CHAOS-4377: the SQL build + scan half (the row_number tiebreak
@@ -102,5 +113,7 @@ func (p *SourceHealthProvider) ReadFacts(ctx context.Context, principal storage.
 	if omittedUnrepresentableCount > 0 && retentionReason == "" {
 		retentionReason = unrepresentableValueReason
 	}
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery, OmittedCount: omittedUnrepresentableCount}, nil
+	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery, OmittedCount: omittedUnrepresentableCount}
+	applySubjectShapeRejection(&result, "devhealthfacts.source_health", contextfabric.FactSourceHealth, rejected)
+	return result, nil
 }

@@ -53,7 +53,7 @@ func (p *OperationalDeficienciesProvider) ReadFacts(ctx context.Context, princip
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := subjectIndex(query.Subjects, teamPrefix)
+	ids, bySubject, rejected := subjectIndex(query.Subjects, teamPrefix)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// row_number() windows over EVERY row for (team_id, rule_id) -- fired
 	// is never part of that WHERE -- so rn=1 is always the truly latest
@@ -111,5 +111,7 @@ WHERE rn = 1 AND fired = 1`)
 		return contextfabric.FactProviderResult{}, readFailure("query team operational deficiencies", scanErr)
 	}
 	state, retentionReason := timeBound.retentionState(rowCount)
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: rowCount >= maxFactRowsPerQuery}
+	applySubjectShapeRejection(&result, "devhealthfacts.operational_deficiencies", contextfabric.FactOperationalDeficiencies, rejected)
+	return result, nil
 }

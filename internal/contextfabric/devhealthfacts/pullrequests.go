@@ -20,7 +20,7 @@ const pullRequestPrefix = "pull_request:"
 // git_pull_requests row has no single-column primary key), which is exactly
 // what remains after trimming pullRequestPrefix off
 // "pull_request:<repoID>:<number>".
-func pullRequestSubjectIndex(subjects []contextfabric.SubjectRef) ([]string, map[string]contextfabric.SubjectRef) {
+func pullRequestSubjectIndex(subjects []contextfabric.SubjectRef) ([]string, map[string]contextfabric.SubjectRef, int) {
 	return subjectIndex(subjects, pullRequestPrefix)
 }
 
@@ -46,7 +46,7 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := pullRequestSubjectIndex(query.Subjects)
+	ids, bySubject, rejected := pullRequestSubjectIndex(query.Subjects)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-4377: the SQL build + scan half (the "merged wins over closed"
 	// derivation, the existence guard, the UInt32 Scan quirk) moved to
@@ -75,7 +75,9 @@ func (p *PullRequestsProvider) ReadFacts(ctx context.Context, principal storage.
 		})
 	}
 	state, retentionReason := timeBound.retentionState(len(rows))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery}, nil
+	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery}
+	applySubjectShapeRejection(&result, "devhealthfacts.pull_requests", contextfabric.FactPullRequests, rejected)
+	return result, nil
 }
 
 // ReviewsProvider implements contextfabric.FactProvider for FactReviews from
@@ -100,7 +102,7 @@ func (p *ReviewsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := v2Index(query.Subjects, identity.KindPullRequestReview)
+	ids, bySubject, rejected := v2Index(query.Subjects, identity.KindPullRequestReview)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-4377: the SQL build + scan half moved to
 	// github.com/full-chaos/dev-health-go/readers.ReadPullRequestReviews;
@@ -121,5 +123,7 @@ func (p *ReviewsProvider) ReadFacts(ctx context.Context, principal storage.Princ
 		})
 	}
 	state, retentionReason := timeBound.retentionState(len(rows))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery}, nil
+	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery}
+	applySubjectShapeRejection(&result, "devhealthfacts.reviews", contextfabric.FactReviews, rejected)
+	return result, nil
 }

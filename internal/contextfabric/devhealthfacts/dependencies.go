@@ -47,7 +47,7 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := v2Index(query.Subjects, identity.KindWorkItem)
+	ids, bySubject, rejected := v2Index(query.Subjects, identity.KindWorkItem)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// blockerRelationshipType is an internal Go constant, not a caller
 	// supplied value, so it is safe to inline as a SQL string literal here
@@ -85,7 +85,9 @@ WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_w
 		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", scanErr)
 	}
 	state, emptyReason := currentAxisReadState(len(facts))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: rowCount >= maxFactRowsPerQuery}
+	applySubjectShapeRejection(&result, "devhealthfacts.blockers", contextfabric.FactBlockers, rejected)
+	return result, nil
 }
 
 // RequiredChildrenProvider implements contextfabric.FactProvider for
@@ -113,7 +115,7 @@ func (p *RequiredChildrenProvider) ReadFacts(ctx context.Context, principal stor
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject := v2Index(query.Subjects, identity.KindWorkItem)
+	ids, bySubject, rejected := v2Index(query.Subjects, identity.KindWorkItem)
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// See BlockersProvider's doc comment on the same JOIN: work_item_dependencies
 	// has no repo_id of its own, so the source's repo_id is resolved via
@@ -147,5 +149,7 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 		return contextfabric.FactProviderResult{}, readFailure("query work item required children", scanErr)
 	}
 	state, emptyReason := currentAxisReadState(len(facts))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: rowCount >= maxFactRowsPerQuery}, nil
+	result := contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: rowCount >= maxFactRowsPerQuery}
+	applySubjectShapeRejection(&result, "devhealthfacts.required_children", contextfabric.FactRequiredChildren, rejected)
+	return result, nil
 }
