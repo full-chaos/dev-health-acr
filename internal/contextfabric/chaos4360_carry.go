@@ -161,11 +161,22 @@ type windowCarryResult struct {
 }
 
 // carryReferencedResultIDs collects the distinct, non-empty ResultID values
-// named by ANY of the six prior-receipt fields on request PLUS the top-level
-// parent_result_id, in a fixed, deterministic order (window first: most
-// semantically related to a window carry, so a request naming several
-// different prior results tries the most likely one first; parent_result_id
-// last, see its own comment below) -- first occurrence wins on a duplicate.
+// named by ANY of the six prior-receipt fields on request, in a fixed,
+// deterministic field order (window first: most semantically related to a
+// window carry, so a request naming several different prior results tries the
+// most likely one first) -- first occurrence wins on a duplicate.
+//
+// RECEIPTS ONLY. parent_result_id is deliberately NOT collected here, and
+// that separation is the whole containment design (CHAOS-5003). The two
+// linkages carry different evidence and get different treatment: a receipt is
+// an ACCEPTANCE of an offer the server chose to show this caller, so a carry
+// rooted in one is ungated; parent_result_id is a bearer reference to any
+// result id in the caller's own org, so a carry rooted in one is gated on
+// question identity at the producer. Merging them into a single frontier is
+// what made "is this hit parent-rooted?" a property that had to be propagated
+// edge by edge -- and a property propagated edge by edge is a property that
+// gets forgotten on the next edge someone adds. Two seeds, two walks, and the
+// answer falls out of WHICH WALK produced the hit. See resolveCarriedWindow.
 //
 // validatedSubjectReceipts (codex R1 P1, fixed): the SIX fields are not
 // symmetric. PriorKindReceipts/PriorAnchorReceipts/PriorHandleReceipts/
@@ -226,25 +237,81 @@ func carryReferencedResultIDs(request InvestigationRequest, validatedSubjectRece
 	add(request.PriorKindReceipts)
 	add(request.PriorAnchorReceipts)
 	add(request.PriorHandleReceipts)
-	// parent_result_id is added LAST, and the position is a decision rather
-	// than an afterthought. This order decides which prior result a carry
-	// tries FIRST when a request names several, so putting the new field
-	// anywhere but the end would re-rank the five receipt fields against each
-	// other for existing callers -- a behaviour change for requests that do
-	// not use this field at all. Appending is purely additive: a request
-	// without a parent walks exactly the frontier it walked before.
-	//
-	// It also happens to be the right precedence on the merits. A receipt is
-	// an ACCEPTANCE of a specific offer the caller was shown; parent_result_id
-	// is the weaker claim "this is the turn I follow". When a caller has done
-	// both, the thing they explicitly accepted should be consulted first.
-	if id := strings.TrimSpace(request.ParentResultID); id != "" {
-		if _, ok := seen[id]; !ok {
-			seen[id] = struct{}{}
-			ids = append(ids, id)
-		}
-	}
 	return ids
+}
+
+// carryParentSeed is the caller-supplied ancestry root, trimmed: the ONE id
+// that seeds the gated second walk on every axis.
+//
+// It is its own function rather than an inline TrimSpace so that "the ids the
+// receipts named" and "the id the request field named" are two distinct values
+// at every site that handles them, and no site can merge them by accident. The
+// compiler cannot enforce that, but a named function makes the merge visible
+// in review, which is one more line of defence than the previous shape had.
+func carryParentSeed(request InvestigationRequest) string {
+	return strings.TrimSpace(request.ParentResultID)
+}
+
+// carryOriginVerdict is the result of the same-question comparison at a carry
+// producer. THREE states, not a bool, because "the origin answered a different
+// question" and "we could not read the origin to find out" are different facts
+// and must not share a telemetry label. Both refuse the carry; only one of
+// them is drift.
+type carryOriginVerdict int
+
+const (
+	// carryOriginSameQuestion: the origin answered THIS question. Carry.
+	carryOriginSameQuestion carryOriginVerdict = iota
+	// carryOriginDrifted: the origin answered a DIFFERENT question. Refuse,
+	// and say so -- this is the containment doing its job.
+	carryOriginDrifted
+	// carryOriginUnverifiable: the origin could not be read, or the hit named
+	// no origin at all. Refuse, but report unloadable rather than drift: a
+	// predicate that could not be evaluated means NOT PROVEN, never "proceed",
+	// and never a claim about what the origin said.
+	carryOriginUnverifiable
+)
+
+// carryOriginSameQuestionVerdict is THE same-question containment. It is the
+// ONLY place any axis enforces it, and it is enforced on a VALUE rather than
+// on a path.
+//
+// WHY THIS SHAPE, stated because three previous attempts had the other one.
+// The containment used to be a property of EDGES: each hop in the walk asked
+// "am I descending from the caller-supplied parent?" and re-applied the rule
+// where the answer was yes. That requires enumerating every route by which a
+// parent root can reach a value, and it escaped three review rounds in three
+// different places (stored-ancestry edges; confirmation edges below a parent
+// root; the plan carry, which had no gate at all). The failure mode is
+// structural, not a series of oversights: the set of routes is open, and a
+// rule that must be re-stated on each new route is a rule that will be missed
+// on the next one.
+//
+// Here the comparison is made ONCE, against the hit's own SourceResultID --
+// the ORIGIN the carried value was confirmed at, not the hop the walk happened
+// to reach it through. Every axis already computes that origin (carriedWindowOrigin /
+// carriedKindOrigin resolve it through however many carried hops precede it),
+// so the route becomes irrelevant by construction: a value confirmed against a
+// different question is refused no matter how many hops, ancestry edges or
+// confirmation edges lie between the caller's parent and it. There is nothing
+// to propagate, so there is nothing to forget to propagate.
+//
+// Reads through the per-request carry memo (carryLoadResult), so on the common
+// path -- the origin is the parent the walk just loaded -- it costs no extra
+// store round trip.
+func (e *Engine) carryOriginSameQuestionVerdict(ctx context.Context, principal storage.Principal, request InvestigationRequest, originResultID string) carryOriginVerdict {
+	origin := strings.TrimSpace(originResultID)
+	if origin == "" || e.results == nil {
+		return carryOriginUnverifiable
+	}
+	stored, err := carryLoadResult(ctx, e.results, principal, origin)
+	if err != nil {
+		return carryOriginUnverifiable
+	}
+	if QuestionHash(stored.Result.Question) != QuestionHash(request.Question) {
+		return carryOriginDrifted
+	}
+	return carryOriginSameQuestion
 }
 
 // CarrySeedSource names HOW this turn reached its prior result, as a closed,
@@ -277,10 +344,8 @@ const (
 // whether a carry succeeded, so the measure stays independent of the outcome
 // it is used to explain.
 func carrySeedSource(request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt) CarrySeedSource {
-	hasField := strings.TrimSpace(request.ParentResultID) != ""
-	stripped := request
-	stripped.ParentResultID = ""
-	hasReceipt := len(carryReferencedResultIDs(stripped, validatedSubjectReceipts)) > 0
+	hasField := carryParentSeed(request) != ""
+	hasReceipt := len(carryReferencedResultIDs(request, validatedSubjectReceipts)) > 0
 	switch {
 	case hasField && hasReceipt:
 		return CarrySeedBoth
@@ -291,55 +356,6 @@ func carrySeedSource(request InvestigationRequest, validatedSubjectReceipts []Bo
 	default:
 		return CarrySeedNone
 	}
-}
-
-// carryFrontier builds the carry walk's starting set and applies the ONE
-// guard that is specific to the caller-supplied root: the same-question gate.
-//
-// THE RULE IS DELIBERATELY TWO-TIER, and the asymmetry is the point rather
-// than an inconsistency to tidy away later.
-//
-// A RECEIPT is an ACCEPTANCE of a specific offer the server showed this
-// caller. Redeeming one says "I picked that option", and a caller who picks
-// an option and then asks a genuinely different follow-up -- "what about last
-// quarter?" against the same chain -- is doing something legitimate that
-// works today. Gating receipts on question equality would break it, and
-// breaking a working conversation to harden a different mechanism is a bad
-// trade.
-//
-// parent_result_id is a WEAKER claim ("this is the turn I follow") and a
-// bearer reference: any result id in the caller's own org is nameable. It has
-// no offer behind it that the server chose to show, so question equality is
-// the cheapest available evidence that the named result is actually part of
-// THIS conversation rather than an unrelated investigation whose confirmed
-// axes would be inherited by accident. A drifted parent is dropped from the
-// frontier and reported, never silently walked.
-//
-// Reads through the per-request carry memo, so the gate costs no extra store
-// round-trip on a turn the walk was going to load that result on anyway.
-func (e *Engine) carryFrontier(ctx context.Context, principal storage.Principal, request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt) (frontier []string, parentDrifted bool) {
-	ids := carryReferencedResultIDs(request, validatedSubjectReceipts)
-	parent := strings.TrimSpace(request.ParentResultID)
-	if parent == "" || e.results == nil {
-		return ids, false
-	}
-	stored, err := carryLoadResult(ctx, e.results, principal, parent)
-	if err != nil {
-		// Unloadable is NOT drift. Leave the id in the frontier so the walk
-		// reaches its own miss_unloadable rather than reporting a mismatch
-		// this function never actually observed.
-		return ids, false
-	}
-	if QuestionHash(stored.Result.Question) == QuestionHash(request.Question) {
-		return ids, false
-	}
-	filtered := ids[:0:0]
-	for _, id := range ids {
-		if id != parent {
-			filtered = append(filtered, id)
-		}
-	}
-	return filtered, true
 }
 
 // receiptValidation is the state of prior-subject-receipt validation at an
@@ -389,6 +405,41 @@ func vetoingWindowReceiptID(request InvestigationRequest, veto windowVetoReason)
 	for _, receipt := range request.PriorWindowReceipts {
 		if id := strings.TrimSpace(receipt.ResultID); id != "" {
 			return id
+		}
+	}
+	return ""
+}
+
+// vetoingStructureReceiptID is vetoingWindowReceiptID's STRUCTURE twin, and
+// it exists because the first version of this change shipped only the window
+// half (codex r3, MEDIUM).
+//
+// Same argument, one member over: the pre-validation structure veto fires
+// BEFORE resolvePriorSubjectHints, so "prefer a validated reference" cannot
+// help there -- nothing is validated yet. But a confirmation veto does not
+// merely leave the named receipt unconfirmed, it DISPROVES it: the veto exists
+// precisely because that receipt could not be resolved. Recording it as this
+// turn's ancestry guarantees the next turn's walk stops at miss_unloadable,
+// recreating the chain hole the whole mechanism exists to close.
+//
+// Only the confirmation vetoes qualify. structureVetoStaleSupersededOffer says
+// the OFFER was claimed by a later result, not that the named prior result is
+// unreadable, so refusing its id there would throw away usable ancestry.
+//
+// THE THREE FIELDS ARE SCANNED IN carryReferencedResultIDs' OWN ORDER (kind,
+// anchor, handle) rather than an order invented here, so the id this refuses
+// is the id ancestryRoot's fallback would otherwise have picked.
+func vetoingStructureReceiptID(request InvestigationRequest, veto structureVetoReason) string {
+	switch veto {
+	case structureVetoConfirmationUnresolved, structureVetoConfirmationConflict:
+	default:
+		return ""
+	}
+	for _, batch := range [][]BoundSubjectReceipt{request.PriorKindReceipts, request.PriorAnchorReceipts, request.PriorHandleReceipts} {
+		for _, receipt := range batch {
+			if id := strings.TrimSpace(receipt.ResultID); id != "" {
+				return id
+			}
 		}
 	}
 	return ""
@@ -464,40 +515,105 @@ func ancestryRoot(request InvestigationRequest, validation receiptValidation, re
 // site) -- fails closed on every ambiguity (no reference, an unloadable
 // candidate, a stale graph epoch, or a chain exhausted before a hit): "no
 // carry" is always a safe, disclosed answer, never a guess.
+//
+// THIS IS THE WINDOW AXIS'S CHOKE POINT (CHAOS-5003). Every windowCarryResult
+// carrying WindowCarryHit that reaches a caller passes through here, and the
+// same-question containment is applied here and nowhere else. The walk itself
+// (walkCarriedWindow) knows nothing about parents, receipts or question
+// hashes; it is a pure "reach a confirmed window from these seeds" traversal.
+//
+// TWO WALKS, SEEDED SEPARATELY, and that is what makes "is this hit
+// parent-rooted?" answerable without tagging a single edge:
+//
+//  1. Seed from RECEIPTS only. A hit here is receipt-rooted -- the caller
+//     redeemed an offer the server chose to show them -- and is returned
+//     UNGATED. A caller who accepts an offer and then asks a genuinely
+//     different follow-up ("what about last quarter?") is doing something
+//     legitimate that has worked since CHAOS-4360, and gating it would break
+//     a working conversation to harden a different mechanism.
+//  2. Only if (1) found nothing AND the request carries parent_result_id:
+//     seed from the PARENT only. A hit here is parent-rooted by construction,
+//     because nothing else seeded the walk, and it is GATED on the origin's
+//     question hash.
+//
+// The provenance is a property of WHICH WALK RAN, so there is nothing to
+// carry along an edge and nothing to forget to carry. That is the entire
+// difference from the shape this replaces, and the reason it is a property
+// rather than a habit.
+//
+// PRECEDENCE, stated because it is a deliberate behaviour choice: a
+// receipt-rooted hit WINS outright -- the parent chain is not consulted at
+// all, so a parent-chain candidate can no longer contend with a receipt
+// candidate for miss_conflicting_windows. That follows from the two-tier rule
+// itself (a receipt is the stronger link), and it is the same precedence
+// ancestryRoot already applies in the other direction.
+//
+// COST: at most two traversals, each bounded by the existing
+// carryChainMaxDepth/carryChainMaxVisited, and the second runs only when the
+// first missed and a parent field is present. Both read through the
+// per-request memo (carryLoadResult), so the second walk re-loads nothing the
+// first already fetched.
 func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Principal, request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt, binding ResolvedGraphBinding) windowCarryResult {
 	if e.results == nil {
 		return windowCarryResult{Outcome: WindowCarryMissNoReference}
 	}
-	frontier, parentDrifted := e.carryFrontier(ctx, principal, request, validatedSubjectReceipts)
-	if len(frontier) == 0 {
-		// Drift is reported in preference to "no reference": the caller DID
-		// name a prior result, and telling them it was ignored for naming a
-		// different question is a different and more actionable fact than
-		// telling them they named nothing.
-		if parentDrifted {
-			return windowCarryResult{Outcome: WindowCarryMissQuestionDrift}
+	receiptSeeds := carryReferencedResultIDs(request, validatedSubjectReceipts)
+	parent := carryParentSeed(request)
+	receiptWalk := windowCarryResult{Outcome: WindowCarryMissNoReference}
+	if len(receiptSeeds) > 0 {
+		receiptWalk = e.walkCarriedWindow(ctx, principal, binding, receiptSeeds)
+		if receiptWalk.Outcome == WindowCarryHit {
+			return receiptWalk
 		}
+	}
+	if parent == "" {
+		return receiptWalk
+	}
+	parentWalk := e.walkCarriedWindow(ctx, principal, binding, []string{parent})
+	if parentWalk.Outcome != WindowCarryHit {
+		// WHICH MISS TO REPORT. The parent walk's outcome wins only when the
+		// receipt walk never ran; otherwise the receipt walk's does, because
+		// the receipt link is the stronger claim and its failure is the more
+		// actionable fact -- a caller who redeemed an offer and got nothing
+		// back wants to know why THAT failed, not why a weaker secondary
+		// reference also failed. Stated at each producer rather than shared,
+		// because the three axes' outcome vocabularies are separate types and
+		// a shared helper would only be able to compare them by convention.
+		if receiptWalk.Outcome == WindowCarryMissNoReference {
+			return parentWalk
+		}
+		return receiptWalk
+	}
+	// THE CHOKE POINT. The hit's SourceResultID is the ORIGIN the window was
+	// confirmed at -- carriedWindowOrigin has already resolved it through
+	// however many carried hops precede it -- so this refuses a drifted origin
+	// no matter which route the walk took to reach it.
+	switch e.carryOriginSameQuestionVerdict(ctx, principal, request, parentWalk.SourceResultID) {
+	case carryOriginSameQuestion:
+		return parentWalk
+	case carryOriginDrifted:
+		return windowCarryResult{Outcome: WindowCarryMissQuestionDrift}
+	default:
+		// Unverifiable: the origin could not be read. Refuse, but report what
+		// actually happened rather than claiming the origin said something.
+		return windowCarryResult{Outcome: WindowCarryMissUnloadable}
+	}
+}
+
+// walkCarriedWindow traverses the prior-result chain from the given seeds
+// looking for the nearest confirmed window. PURE TRAVERSAL: it does not know
+// how its seeds were derived and does not apply the same-question rule --
+// that belongs to resolveCarriedWindow, its sole caller, so that the rule has
+// exactly one site (CHAOS-5003).
+func (e *Engine) walkCarriedWindow(ctx context.Context, principal storage.Principal, binding ResolvedGraphBinding, seeds []string) windowCarryResult {
+	frontier := seeds
+	if len(frontier) == 0 {
 		return windowCarryResult{Outcome: WindowCarryMissNoReference}
 	}
 	visited := make(map[string]struct{}, carryChainMaxVisited)
 	// reachedViaAncestry records which frontier ids were reachable ONLY
 	// because a stored parent pointed at them -- see ViaStoredAncestry.
 	reachedViaAncestry := make(map[string]struct{}, carryChainMaxVisited)
-	// fromParentRoot tracks which branch of the walk descends from the
-	// caller-supplied parent_result_id, so the same-question rule can be
-	// re-applied on THAT branch's stored-ancestry edges without touching
-	// receipt-rooted branches -- a receipt is an accepted offer and a
-	// different follow-up question against it stays legitimate.
-	//
-	// Without this, the drift gate is enforced exactly one hop deep and
-	// launderable at two: a turn refused for drift still persists the refused
-	// parent, and a later turn naming THAT result inherits the same value
-	// through the ancestry edge. Gating the direct root alone is not a
-	// barrier, it is a speed bump.
-	fromParentRoot := make(map[string]struct{}, carryChainMaxVisited)
-	if id := strings.TrimSpace(request.ParentResultID); id != "" {
-		fromParentRoot[id] = struct{}{}
-	}
 	var sawUnloadable, sawStaleEpoch, capExceeded bool
 	for depth := 0; depth < carryChainMaxDepth && len(frontier) > 0; depth++ {
 		var next []string
@@ -577,21 +693,15 @@ func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Pri
 			// confirmation edges so a chain that does have wire-visible
 			// provenance still prefers it -- this widens what is reachable
 			// without re-ordering what was already reachable.
+			//
+			// NO SAME-QUESTION CHECK HERE, and its absence is the design
+			// (CHAOS-5003). An edge-level check is what this file used to do
+			// and what escaped three review rounds; the containment now lives
+			// at the producer, on the ORIGIN of whatever value this walk
+			// eventually returns, so widening reachability here cannot widen
+			// what a drifted parent can inherit.
 			if id := strings.TrimSpace(fetched.ParentResultID); id != "" {
-				_, onParentBranch := fromParentRoot[resultID]
-				if onParentBranch {
-					// Defence in depth: re-apply the same-question rule to this
-					// edge. The direct gate already refused a drifted parent;
-					// this refuses a drifted GRANDparent reached through one.
-					if next, err := carryLoadResult(ctx, e.results, principal, id); err != nil ||
-						QuestionHash(next.Result.Question) != QuestionHash(request.Question) {
-						id = ""
-					}
-				}
-				if _, ok := visited[id]; id != "" && !ok {
-					if onParentBranch {
-						fromParentRoot[id] = struct{}{}
-					}
+				if _, ok := visited[id]; !ok {
 					// Only marked when NO confirmation edge already produced
 					// this id: the flag must mean "ancestry is why this was
 					// reachable", not merely "ancestry also pointed here".

@@ -75,6 +75,14 @@ const (
 	// under an arbitrary one of two real, disagreeing readings. A genuine
 	// conflict fails closed, exactly like every other carry ambiguity.
 	PlanCarryMissConflictingPlans PlanCarryOutcome = "miss_conflicting_plans"
+	// PlanCarryMissQuestionDrift: the carry was rooted in parent_result_id and
+	// the origin it reached answered a DIFFERENT question, so continuing its
+	// reading of the question would be continuing a conversation this request
+	// is not part of. The kind and window axes' own identical member; the plan
+	// axis had NO such gate at all until CHAOS-5003, which is exactly the miss
+	// a per-path containment cannot prevent -- nobody enumerated this producer,
+	// so no path-level rule was ever written for it.
+	PlanCarryMissQuestionDrift PlanCarryOutcome = "miss_question_drift"
 )
 
 // planCarryResult is resolveCarriedPlan's return shape.
@@ -106,7 +114,46 @@ func (e *Engine) resolveCarriedPlan(ctx context.Context, principal storage.Princ
 	// validated subject receipts, never the raw request field, which is the
 	// codex R1 P1 fix carryReferencedResultIDs' own doc comment records: an
 	// unmatched receipt must not be able to seed a carry.
-	referenced := carryReferencedResultIDs(request, validatedSubjectReceipts)
+	receiptSeeds := carryReferencedResultIDs(request, validatedSubjectReceipts)
+	parent := carryParentSeed(request)
+	receiptWalk := planCarryResult{Outcome: PlanCarryMissNoReference}
+	if len(receiptSeeds) > 0 {
+		receiptWalk = e.walkCarriedPlan(ctx, principal, binding, preloaded, receiptSeeds)
+		if receiptWalk.Outcome == PlanCarryHit {
+			return receiptWalk
+		}
+	}
+	if parent == "" {
+		return receiptWalk
+	}
+	parentWalk := e.walkCarriedPlan(ctx, principal, binding, preloaded, []string{parent})
+	if parentWalk.Outcome != PlanCarryHit {
+		// resolveCarriedWindow's own which-miss-to-report rule.
+		if receiptWalk.Outcome == PlanCarryMissNoReference {
+			return parentWalk
+		}
+		return receiptWalk
+	}
+	// THE CHOKE POINT. This axis is ONE HOP by design (see the file header),
+	// so SourceResultID is the prior result itself -- there is no deeper
+	// origin to resolve, and the comparison is against the very result the
+	// caller named.
+	switch e.carryOriginSameQuestionVerdict(ctx, principal, request, parentWalk.SourceResultID) {
+	case carryOriginSameQuestion:
+		return parentWalk
+	case carryOriginDrifted:
+		return planCarryResult{Outcome: PlanCarryMissQuestionDrift}
+	default:
+		return planCarryResult{Outcome: PlanCarryMissUnloadable}
+	}
+}
+
+// walkCarriedPlan reads a carriable plan out of the given seeds. PURE
+// TRAVERSAL (one hop, per this file's header): it does not know how its seeds
+// were derived and does not apply the same-question rule -- that belongs to
+// resolveCarriedPlan, its sole caller (CHAOS-5003).
+func (e *Engine) walkCarriedPlan(ctx context.Context, principal storage.Principal, binding ResolvedGraphBinding, preloaded map[string]InvestigationResult, seeds []string) planCarryResult {
+	referenced := seeds
 	if len(referenced) == 0 {
 		return planCarryResult{Outcome: PlanCarryMissNoReference}
 	}
@@ -269,6 +316,17 @@ func PlanCarryEventFrom(replaced QuestionFamily, carried QuestionFamilyOutcome, 
 		SourceResultID: carry.SourceResultID,
 		Route:          carried.Route,
 	}
+}
+
+// recordPlanCarryOutcome reports carry.Outcome to telemetry -- a no-op when
+// telemetry is unconfigured or carry was never attempted, mirroring
+// recordWindowCarry's and recordKindCarry's own "once per non-zero signal"
+// shape exactly.
+func (e *Engine) recordPlanCarryOutcome(ctx context.Context, principal storage.Principal, carry planCarryResult, seedSource CarrySeedSource) {
+	if e.telemetry == nil || carry.Outcome == PlanCarryNotAttempted {
+		return
+	}
+	e.telemetry.RecordPlanCarryOutcome(ctx, principal, carry.Outcome, carry.SourceResultID, seedSource)
 }
 
 // applyAndRecordCarry applies a carry and, when one applied, emits the ONE

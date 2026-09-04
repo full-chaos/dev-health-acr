@@ -779,6 +779,22 @@ type EngineTelemetry interface {
 	// line: re-emitting that one would double-count the flip counters the
 	// whole slice exists to make readable.
 	RecordPlanCarry(ctx context.Context, principal storage.Principal, event PlanCarryEvent)
+	// RecordPlanCarryOutcome (CHAOS-5003) reports the OUTCOME of one plan
+	// carry attempt -- hit and every miss reason -- exactly as
+	// RecordWindowCarry and RecordKindCarry do for their axes.
+	//
+	// WHY IT WAS MISSING AND WHY THAT MATTERED. RecordPlanCarry above fires
+	// only on an APPLIED carry, so the plan axis published a numerator with
+	// no denominator: a refusal was indistinguishable from a turn that never
+	// attempted a carry, and the axis's miss vocabulary (PlanCarryOutcome)
+	// had no consumer at all. That is the same blind spot that let the plan
+	// axis ship with no same-question containment -- an axis nothing reports
+	// on is an axis nobody enumerates. The two are fixed in one change on
+	// purpose.
+	//
+	// Content-safe by construction: a closed outcome vocabulary, a closed
+	// seed-source vocabulary, one result id.
+	RecordPlanCarryOutcome(ctx context.Context, principal storage.Principal, outcome PlanCarryOutcome, sourceResultID string, seedSource CarrySeedSource)
 	// RecordModelRowsStripped (CHAOS-4355 follow-up, cf_model_rows_stripped)
 	// reports the count of ClaimedFacts entries whose model-authored Rows
 	// was cleared before draft.ValidateAgainst ran, so an operator can tell
@@ -1149,7 +1165,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// resolvePriorSubjectHints (this call site's own ordering), the
 		// same "nothing attempted yet" convention every other
 		// pre-receipt-resolution veto in this file uses.
-		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, echoEntries, binding, nil, nil, ancestryRoot(request, receiptsNotYetValidated()))
+		// vetoingStructureReceiptID (codex r3, MEDIUM): the window twin above
+		// refuses the receipt its own veto DISPROVED and this path did not.
+		// Same shape, one member over -- recording a disproved receipt as
+		// ancestry guarantees the next turn's walk stops at miss_unloadable.
+		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, echoEntries, binding, nil, nil, ancestryRoot(request, receiptsNotYetValidated(), vetoingStructureReceiptID(request, structureCanon.Veto)))
 	}
 
 	// CHAOS-3782 answer reuse. This MUST run before Interpret -- that
@@ -1402,6 +1422,27 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// taint-gated, conflict-fails-closed -- and never the member list, which
 	// would carry an authorization decision (North Star check 18).
 	planCarry := e.resolveCarriedPlan(ctx, principal, request, priorValidatedReceipts, binding, priorLoadedResults)
+	// CHAOS-5003: the plan axis reports its own carry OUTCOME, not only the
+	// applied-carry event. Before this it reported nothing on a miss, so the
+	// axis that turned out to have no containment at all was also the axis an
+	// operator could not see refuse anything -- the two gaps had one cause,
+	// which was that nobody had enumerated this producer.
+	e.recordPlanCarryOutcome(ctx, principal, planCarry, carrySeedSource(request, priorValidatedReceipts))
+	// A parent the drift gate REFUSED must not become durable ancestry.
+	// Recording it leaves laundering material behind -- the next turn naming
+	// THIS result reaches the refused one through the ancestry edge. The
+	// producer choke point already refuses a drifted ORIGIN at any depth, so
+	// this is defence in depth rather than the barrier; it is kept because
+	// removing the material is strictly better than only refusing to use it.
+	//
+	// DECLARED HERE because the plan axis resolves FIRST (this call site) and
+	// the window/kind axes resolve several hundred lines below; each axis ORs
+	// its own refusal in as it decides. One variable, three writers, and every
+	// ancestryRoot call site downstream reads the merged answer.
+	driftRefusedParent := ""
+	if planCarry.Outcome == PlanCarryMissQuestionDrift {
+		driftRefusedParent = carryParentSeed(request)
+	}
 	familyOutcome = e.applyAndRecordCarry(ctx, principal, familyOutcome, planCarry)
 	plan := PlanAnswer(PlanAnswerInput{
 		Family:           familyOutcome,
@@ -1525,13 +1566,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// value the gate rejected arrives one hop deeper. Refusing to write it
 	// removes the material rather than relying on the edge re-check alone;
 	// the two together are why the barrier holds at any depth.
-	driftRefusedParent := ""
+	//
+	// SECOND WRITER of driftRefusedParent (declared at the plan carry above,
+	// which resolves first). ALL THREE axes refuse the same parent id, so the
+	// merge is an OR rather than an overwrite -- an earlier axis's refusal
+	// must not be erased by a later axis that did not drift.
 	if windowCarry.Outcome == WindowCarryMissQuestionDrift || kindCarry.Outcome == KindCarryMissQuestionDrift {
-		driftRefusedParent = strings.TrimSpace(request.ParentResultID)
+		driftRefusedParent = carryParentSeed(request)
 	}
-	{
-		e.recordKindCarry(ctx, principal, kindCarry, carrySeedSource(request, priorValidatedReceipts))
-	}
+	e.recordKindCarry(ctx, principal, kindCarry, carrySeedSource(request, priorValidatedReceipts))
 	carriedStructureEntries := []*contractsv1.ContextFabricConfirmedStructureEntry{
 		composeCarriedWindowEntry(windowCarry),
 		composeCarriedKindEntry(kindCarry),

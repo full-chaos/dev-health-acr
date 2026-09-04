@@ -112,8 +112,9 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 	// each hold their own independent CHECK) added 0034, and CHAOS-4398
 	// PR3's R4 ruling (ranking_formula_version reuse-key dimension) added
 	// 0035, and CHAOS-4634 S4 (question_family_version reuse-key dimension,
-	// per the CHAOS-4632/S2 note deferring it here) added 0036, so the
-	// embedded set is now 36 files. A future migration must
+	// per the CHAOS-4632/S2 note deferring it here) added 0036, and the
+	// durable chain-identity work (context_fabric_result parent_result_id)
+	// added 0037, so the embedded set is now 37 files. A future migration must
 	// bump this literal too -- see expectedMigrationVersions in
 	// migrations/postgres/runner_integration_test.go for the same
 	// convention, held in one place there.

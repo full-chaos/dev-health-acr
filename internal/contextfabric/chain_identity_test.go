@@ -409,6 +409,82 @@ func TestChainIdentity_EverySaveBearingReturnRecordsAncestry(t *testing.T) {
 	}
 }
 
+// TestChainIdentity_AConfirmationVetoNeverRecordsTheReceiptItDisproved pins
+// BOTH pre-validation confirmation vetoes, and the second one is the point.
+//
+// The first version of this change shipped the window half only. The two
+// vetoes are the same shape one member over: each fires BEFORE
+// resolvePriorSubjectHints, so "prefer a validated reference" cannot help --
+// nothing is validated yet -- and each names a receipt its own veto DISPROVED.
+// Recording a disproved id as this turn's ancestry is not merely useless: it
+// guarantees the NEXT turn's walk stops at miss_unloadable, recreating exactly
+// the chain hole durable ancestry exists to close.
+//
+// WHY BOTH ARMS RUN HERE RATHER THAN ONE. A per-instance fix on the window
+// path is what left the structure path open; a table that enumerates the veto
+// family makes the third member (if one is ever added) an obvious omission
+// rather than an invisible one. Each arm asserts the SPECIFIC disproved id is
+// absent AND that the arm reached its intended veto, so a fixture that stopped
+// vetoing cannot pass by recording nothing for an unrelated reason.
+func TestChainIdentity_AConfirmationVetoNeverRecordsTheReceiptItDisproved(t *testing.T) {
+	t.Parallel()
+
+	const absentResult = "result_absent_00001"
+
+	for _, tc := range []struct {
+		name   string
+		site   string
+		mutate func(*InvestigationRequest)
+	}{
+		{
+			name: "structure confirmation veto", site: "engine.go structureVetoResult call site",
+			mutate: func(r *InvestigationRequest) {
+				r.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: absentResult, ReceiptID: "kindr_absent00001"}}
+			},
+		},
+		{
+			name: "window confirmation veto", site: "engine.go windowVetoResult call site",
+			mutate: func(r *InvestigationRequest) {
+				r.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: absentResult, ReceiptID: "winr_absent000001"}}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			request, seed := chainIdentityFixture()
+			// NO parent_result_id. With one present it would be the ancestry
+			// root outright and the receipt fallback -- the code path under
+			// test -- would never run, so the arm would pass without
+			// exercising anything.
+			request.ParentResultID = ""
+			tc.mutate(&request)
+
+			store := newAncestryRecordingStore(seed)
+			result, err := ancestryTestEngine(t, store).Investigate(context.Background(), reusePrincipal(), request)
+			if err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			// REACHABILITY GUARD: a confirmation veto terminates as no_match.
+			// Without this an arm whose fixture stopped vetoing would run the
+			// decisive path, record a legitimately empty ancestry, and pass.
+			if result.Status != InvestigationNoMatch {
+				t.Fatalf("Status = %q, want %q -- this arm no longer reaches %s, so it proves nothing about that return", result.Status, InvestigationNoMatch, tc.site)
+			}
+			// PRESENCE FIRST: an absent map entry reads as "", which is not
+			// the disproved id, so the assertion below would pass on a turn
+			// that never saved at all.
+			got, saved := store.saved[result.ResultID]
+			if !saved {
+				t.Fatalf("%s saved no row for %q: this test asserts what ancestry was PERSISTED, so a turn that never persisted proves nothing about it", tc.site, result.ResultID)
+			}
+			if got == absentResult {
+				t.Fatalf("%s recorded parent %q -- the veto that produced this result exists precisely because that receipt could not be resolved, so persisting it guarantees the next turn's walk stops at miss_unloadable", tc.site, got)
+			}
+		})
+	}
+}
+
 func ancestryTestEngine(t *testing.T, store InvestigationResultStore) *Engine {
 	t.Helper()
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
@@ -1195,7 +1271,17 @@ func TestChainIdentity_DriftCannotBeLaunderedThroughAnAncestryEdge(t *testing.T)
 		if err != nil {
 			t.Fatalf("Investigate() error = %v", err)
 		}
-		if got := store.saved[result.ResultID]; got == turnA.ResultID {
+		// PRESENCE FIRST (codex r3, LOW -- this arm used to pass without the
+		// behaviour happening). store.saved is a map[string]string, so an
+		// ABSENT entry reads as "", which is not turnA.ResultID and satisfied
+		// the check below. A turn that never reached Save therefore proved the
+		// gate held when it had proved nothing at all. Assert the Save
+		// happened before asserting anything about what it wrote.
+		got, saved := store.saved[result.ResultID]
+		if !saved {
+			t.Fatalf("no Save recorded for result %q: this arm asserts what ancestry was PERSISTED, so a turn that never persisted proves nothing about it", result.ResultID)
+		}
+		if got == turnA.ResultID {
 			t.Fatalf("recorded parent %q: the drift gate refused this parent, and persisting it anyway leaves exactly the edge a later turn walks to reach the value the gate rejected", got)
 		}
 	})
@@ -1233,6 +1319,13 @@ func TestChainIdentity_DriftCannotBeLaunderedThroughAnAncestryEdge(t *testing.T)
 		result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
 		if err != nil {
 			t.Fatalf("Investigate() error = %v", err)
+		}
+		// REACH GUARD (codex r3, LOW -- this arm used to pass vacuously). An
+		// empty kindCarries slice satisfies the loop below, so a fixture that
+		// never attempted a carry at all read exactly like a carry the gate
+		// refused. Require the attempt before grading its outcome.
+		if len(telemetry.kindCarries) == 0 {
+			t.Fatalf("no kind carry attempted: this arm asserts the walk REFUSED a laundered value, which is unprovable on a turn where the walk never ran")
 		}
 		for _, c := range telemetry.kindCarries {
 			if c.outcome == KindCarryHit {

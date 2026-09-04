@@ -403,8 +403,9 @@ type recordingTelemetry struct {
 	// windowCarries (CHAOS-4360) mirrors the SAME list-not-count discipline:
 	// a test asserts the exact outcome/chain-depth pair, never merely that
 	// something fired.
-	windowCarries []windowCarryRecord
-	kindCarries   []kindCarryRecord
+	windowCarries     []windowCarryRecord
+	kindCarries       []kindCarryRecord
+	planCarryOutcomes []planCarryOutcomeRecord
 	// modelRowsStripped (CHAOS-4355 follow-up) mirrors the SAME
 	// list-not-count discipline.
 	modelRowsStripped []int
@@ -451,6 +452,17 @@ type kindCarryRecord struct {
 	redeemedKind      contractsv1.ContextFabricSubjectKind
 	seedSource        CarrySeedSource
 	viaStoredAncestry bool
+}
+
+// planCarryOutcomeRecord (CHAOS-5003) is the plan axis's counterpart to
+// windowCarryRecord/kindCarryRecord. Every field the production emit writes
+// is stored, so a test can read back what the sink RECEIVED rather than
+// asserting that a call happened -- a recorder that stores less than the
+// production line emits cannot detect a dropped field.
+type planCarryOutcomeRecord struct {
+	outcome        PlanCarryOutcome
+	sourceResultID string
+	seedSource     CarrySeedSource
 }
 
 type priorConsultedRecord struct {
@@ -688,6 +700,10 @@ func (r *recordingTelemetry) RecordServerStatusShadow(_ context.Context, _ stora
 
 func (r *recordingTelemetry) RecordPlanCarry(_ context.Context, _ storage.Principal, event PlanCarryEvent) {
 	r.planCarries = append(r.planCarries, event)
+}
+
+func (r *recordingTelemetry) RecordPlanCarryOutcome(_ context.Context, _ storage.Principal, outcome PlanCarryOutcome, sourceResultID string, seedSource CarrySeedSource) {
+	r.planCarryOutcomes = append(r.planCarryOutcomes, planCarryOutcomeRecord{outcome, sourceResultID, seedSource})
 }
 
 func (r *recordingTelemetry) RecordCohortRanked(_ context.Context, _ storage.Principal, event CohortRankedEvent) {

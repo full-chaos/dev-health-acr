@@ -140,59 +140,79 @@ type kindCarryResult struct {
 	ViaStoredAncestry bool
 }
 
-// resolveCarriedKind walks this conversation's own prior-result chain for
-// the nearest receipt-confirmed expected_kind. Fails closed on every
-// ambiguity -- no reference, an unloadable candidate, a stale graph epoch, a
-// chain exhausted before a hit, two carriers that disagree, or a depth that
-// found a hit but could not be scanned to the end: "no carry" is always a
-// safe, disclosed answer, never a guess.
+// resolveCarriedKind resolves the nearest receipt-confirmed expected_kind
+// this conversation already established. Fails closed on every ambiguity --
+// no reference, an unloadable candidate, a stale graph epoch, a chain
+// exhausted before a hit, two carriers that disagree, or a depth that found a
+// hit but could not be scanned to the end: "no carry" is always a safe,
+// disclosed answer, never a guess.
 //
-// THAT LAST CASE IS WHERE THIS DIVERGES FROM resolveCarriedWindow, deliberately
-// (codex round 1, finding 2). The window carry returns its first agreeing hit
-// even when the visit cap cut the depth short or a sibling at that depth was
-// unreadable, so an unexamined same-depth candidate could disagree and never
-// be seen. The same shape was inherited here and is fixed here only: changing
-// the window axis is a behaviour change to already-shipped carry semantics and
-// belongs in its own change, not smuggled into this one.
-//
-// The walk is resolveCarriedWindow's, hop for hop and bound for bound --
-// same seeding (carryReferencedResultIDs), same epoch taint gate, same
-// carryChainMaxDepth/carryChainMaxVisited, same whole-depth scan before any
-// decision. What differs is only WHERE the confirmation lives: a window
-// rides EffectiveEvidenceWindow, a kind rides a ConfirmedStructure entry.
+// THIS IS THE KIND AXIS'S CHOKE POINT (CHAOS-5003), the exact counterpart of
+// resolveCarriedWindow's -- read that function's doc comment for why the two
+// walks are seeded separately and why the same-question rule lives at the
+// producer instead of on the edges. Everything said there is true here; only
+// WHERE the confirmation lives differs (a window rides
+// EffectiveEvidenceWindow, a kind rides a ConfirmedStructure entry).
 func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Principal, request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt, binding ResolvedGraphBinding) kindCarryResult {
 	if e.results == nil {
 		return kindCarryResult{Outcome: KindCarryMissNoReference}
 	}
-	frontier, parentDrifted := e.carryFrontier(ctx, principal, request, validatedSubjectReceipts)
-	if len(frontier) == 0 {
-		// Drift is reported in preference to "no reference" -- see the window
-		// axis's own identical branch for why the distinction is worth a
-		// separate label.
-		if parentDrifted {
-			return kindCarryResult{Outcome: KindCarryMissQuestionDrift}
+	receiptSeeds := carryReferencedResultIDs(request, validatedSubjectReceipts)
+	parent := carryParentSeed(request)
+	receiptWalk := kindCarryResult{Outcome: KindCarryMissNoReference}
+	if len(receiptSeeds) > 0 {
+		receiptWalk = e.walkCarriedKind(ctx, principal, binding, receiptSeeds)
+		if receiptWalk.Outcome == KindCarryHit {
+			return receiptWalk
 		}
+	}
+	if parent == "" {
+		return receiptWalk
+	}
+	parentWalk := e.walkCarriedKind(ctx, principal, binding, []string{parent})
+	if parentWalk.Outcome != KindCarryHit {
+		// Which miss to report -- resolveCarriedWindow's own rule, stated
+		// here too because the two axes' outcome vocabularies are separate
+		// types and a shared helper could only compare them by convention.
+		if receiptWalk.Outcome == KindCarryMissNoReference {
+			return parentWalk
+		}
+		return receiptWalk
+	}
+	// THE CHOKE POINT. SourceResultID is the ORIGIN the kind was confirmed at
+	// (carriedKindOrigin has already resolved it through however many carried
+	// hops precede it), so a drifted origin is refused regardless of the route.
+	switch e.carryOriginSameQuestionVerdict(ctx, principal, request, parentWalk.SourceResultID) {
+	case carryOriginSameQuestion:
+		return parentWalk
+	case carryOriginDrifted:
+		return kindCarryResult{Outcome: KindCarryMissQuestionDrift}
+	default:
+		return kindCarryResult{Outcome: KindCarryMissUnloadable}
+	}
+}
+
+// walkCarriedKind traverses the prior-result chain from the given seeds
+// looking for the nearest confirmed expected_kind. PURE TRAVERSAL: it does
+// not know how its seeds were derived and does not apply the same-question
+// rule -- that belongs to resolveCarriedKind, its sole caller (CHAOS-5003).
+//
+// WHERE IT DIVERGES FROM walkCarriedWindow, deliberately (codex round 1,
+// finding 2): the window walk returns its first agreeing hit even when the
+// visit cap cut the depth short or a sibling at that depth was unreadable, so
+// an unexamined same-depth candidate could disagree and never be seen. The
+// same shape was inherited here and is fixed here only; changing the window
+// axis is a behaviour change to already-shipped carry semantics and belongs
+// in its own change, not smuggled into this one.
+func (e *Engine) walkCarriedKind(ctx context.Context, principal storage.Principal, binding ResolvedGraphBinding, seeds []string) kindCarryResult {
+	frontier := seeds
+	if len(frontier) == 0 {
 		return kindCarryResult{Outcome: KindCarryMissNoReference}
 	}
 	visited := make(map[string]struct{}, carryChainMaxVisited)
 	// reachedViaAncestry records which frontier ids were reachable ONLY
 	// because a stored parent pointed at them -- see ViaStoredAncestry.
 	reachedViaAncestry := make(map[string]struct{}, carryChainMaxVisited)
-	// fromParentRoot tracks which branch of the walk descends from the
-	// caller-supplied parent_result_id, so the same-question rule can be
-	// re-applied on THAT branch's stored-ancestry edges without touching
-	// receipt-rooted branches -- a receipt is an accepted offer and a
-	// different follow-up question against it stays legitimate.
-	//
-	// Without this, the drift gate is enforced exactly one hop deep and
-	// launderable at two: a turn refused for drift still persists the refused
-	// parent, and a later turn naming THAT result inherits the same value
-	// through the ancestry edge. Gating the direct root alone is not a
-	// barrier, it is a speed bump.
-	fromParentRoot := make(map[string]struct{}, carryChainMaxVisited)
-	if id := strings.TrimSpace(request.ParentResultID); id != "" {
-		fromParentRoot[id] = struct{}{}
-	}
 	var sawUnloadable, sawStaleEpoch, capExceeded, sawVetoedCarrier bool
 	for depth := 0; depth < carryChainMaxDepth && len(frontier) > 0; depth++ {
 		var next []string
@@ -281,21 +301,11 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 			// confirmation edges so a chain that does have wire-visible
 			// provenance still prefers it -- this widens what is reachable
 			// without re-ordering what was already reachable.
+			//
+			// NO SAME-QUESTION CHECK HERE, and its absence is the design
+			// (CHAOS-5003) -- see walkCarriedWindow's identical block.
 			if id := strings.TrimSpace(fetched.ParentResultID); id != "" {
-				_, onParentBranch := fromParentRoot[resultID]
-				if onParentBranch {
-					// Defence in depth: re-apply the same-question rule to this
-					// edge. The direct gate already refused a drifted parent;
-					// this refuses a drifted GRANDparent reached through one.
-					if next, err := carryLoadResult(ctx, e.results, principal, id); err != nil ||
-						QuestionHash(next.Result.Question) != QuestionHash(request.Question) {
-						id = ""
-					}
-				}
-				if _, ok := visited[id]; id != "" && !ok {
-					if onParentBranch {
-						fromParentRoot[id] = struct{}{}
-					}
+				if _, ok := visited[id]; !ok {
 					// Only marked when NO confirmation edge already produced
 					// this id: the flag must mean "ancestry is why this was
 					// reachable", not merely "ancestry also pointed here".

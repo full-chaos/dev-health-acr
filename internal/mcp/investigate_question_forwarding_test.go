@@ -11,19 +11,40 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// forwardedFields returns every field name read off an `input`-rooted selector
-// in EXECUTABLE code in the given file -- `input.Foo`, and nothing else.
+// hostedRequestTypeName is the composite literal this check anchors on: the
+// hosted request the MCP surface builds. Named once so the walk and its
+// negative-control fixtures cannot drift apart.
+const hostedRequestTypeName = "ContextFabricInvestigationRequest"
+
+// forwardedFields returns every field name that an `input`-rooted selector
+// FORWARDS INTO the hosted request literal in the given file -- that is, every
+// `input.Foo` appearing as (or inside) the VALUE of a keyed element of a
+// `…ContextFabricInvestigationRequest{…}` composite literal.
 //
-// An AST walk rather than a text search, and the difference is the whole
-// point. The first version of this test grepped the source for `input.<Field>`,
-// which a COMMENT satisfies just as well as a mapping does. A check that
-// documentation can satisfy is not a check: a field could be dropped from the
-// conversion and left mentioned in a doc comment, and the test would pass while
-// the field silently never reached the engine -- the exact defect this file
-// exists to prevent, reintroduced by the instrument meant to prevent it.
+// TWO THINGS IT DELIBERATELY REFUSES TO COUNT, each because a weaker version
+// of this walk counted them and was wrong:
 //
-// go/parser discards comments unless asked for them, so a mention in prose
-// contributes no selector and cannot be mistaken for a use.
+//  1. A MENTION IN A COMMENT. The first version grepped the source for
+//     `input.<Field>`, which a comment satisfies just as well as a mapping
+//     does, so a field could be dropped from the conversion and left named in
+//     a doc comment while the test stayed green -- the exact defect this file
+//     exists to prevent, reintroduced by the instrument meant to prevent it.
+//     go/parser discards comments unless asked for them, so prose contributes
+//     no selector.
+//
+//  2. A BARE READ (codex r3, LOW). The second version collected every
+//     `input.Foo` selector anywhere in the file, which proves the field is
+//     READ, not that it is FORWARDED. `_ = input.ParentResultID`, a log line,
+//     a length check, or a validation branch all satisfy "read" while the
+//     hosted request never receives the value -- and "silently dropped before
+//     the engine ever sees it" is precisely the failure being tested for. So
+//     the walk now anchors on the hosted request literal and collects only
+//     selectors that reach one of its keyed values.
+//
+// The value subtree is searched rather than matched exactly, so a wrapped or
+// converted forward (`someTranslation(input.Foo)`, `&input.Foo`) still counts:
+// the property under test is that the value reaches the literal, not that it
+// arrives untouched.
 func forwardedFields(t *testing.T, filename string) map[string]bool {
 	t.Helper()
 	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
@@ -31,17 +52,52 @@ func forwardedFields(t *testing.T, filename string) map[string]bool {
 		t.Fatalf("parsing %s: %v", filename, err)
 	}
 	found := map[string]bool{}
+	literals := 0
 	ast.Inspect(file, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok || !isHostedRequestLiteral(lit.Type) {
 			return true
 		}
-		if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "input" {
-			found[sel.Sel.Name] = true
+		literals++
+		for _, elt := range lit.Elts {
+			kv, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				// A positional literal cannot be attributed to a field name by
+				// this walk. Fail loudly rather than under-report: an
+				// unattributable element is an unproven one.
+				t.Fatalf("%s: %s literal has a positional element; this walk attributes forwards by field name and cannot read one", filename, hostedRequestTypeName)
+			}
+			ast.Inspect(kv.Value, func(v ast.Node) bool {
+				sel, ok := v.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "input" {
+					found[sel.Sel.Name] = true
+				}
+				return true
+			})
 		}
 		return true
 	})
+	if literals == 0 {
+		t.Fatalf("%s: found no %s composite literal -- the anchor this walk depends on is absent, so an empty result means the walk is broken, not that nothing is forwarded", filename, hostedRequestTypeName)
+	}
 	return found
+}
+
+// isHostedRequestLiteral matches both the qualified spelling this package uses
+// (`contractsv1.ContextFabricInvestigationRequest`) and a bare one, so the walk
+// survives an import-alias change without silently reporting zero.
+func isHostedRequestLiteral(expr ast.Expr) bool {
+	switch typ := expr.(type) {
+	case *ast.SelectorExpr:
+		return typ.Sel.Name == hostedRequestTypeName
+	case *ast.Ident:
+		return typ.Name == hostedRequestTypeName
+	default:
+		return false
+	}
 }
 
 // TestInvestigateQuestion_EveryRequestFieldIsForwarded closes a defect CLASS
@@ -75,7 +131,7 @@ func TestInvestigateQuestion_EveryRequestFieldIsForwarded(t *testing.T) {
 	// parse/walk is broken and every result below is meaningless rather than
 	// reassuring.
 	if !forwarded["Question"] {
-		t.Fatal("the AST walk found no input.Question selector -- the parse or the walk is broken, so every result below proves nothing")
+		t.Fatal("the AST walk found no input.Question forwarded into the hosted request literal -- the parse or the walk is broken, so every result below proves nothing")
 	}
 
 	requestType := reflect.TypeOf(contractsv1.MCPInvestigateQuestionRequest{})
@@ -88,7 +144,7 @@ func TestInvestigateQuestion_EveryRequestFieldIsForwarded(t *testing.T) {
 		}
 		checked++
 		if !forwarded[field.Name] {
-			t.Errorf("MCPInvestigateQuestionRequest.%s is never read in the MCP-to-engine conversion: a caller can send it, it can validate, and it is silently dropped before the engine ever sees it", field.Name)
+			t.Errorf("MCPInvestigateQuestionRequest.%s never reaches the hosted request literal in the MCP-to-engine conversion: a caller can send it, it can validate, and it is silently dropped before the engine ever sees it", field.Name)
 		}
 	}
 	if checked == 0 {
@@ -97,24 +153,38 @@ func TestInvestigateQuestion_EveryRequestFieldIsForwarded(t *testing.T) {
 	t.Logf("checked %d forwarded fields via AST selectors", checked)
 }
 
-// TestForwardedFields_IgnoresCommentMentions is the NEGATIVE CONTROL for the
-// check above, and it is what makes the AST walk worth doing.
+// TestForwardedFields_RejectsMentionsAndBareReads is the NEGATIVE CONTROL for
+// the check above, and it is what makes the AST walk worth doing.
 //
 // Without it, "the test passes" is equally consistent with "the AST walk is
-// correct" and "the walk matches anything at all". This feeds it a file whose
-// only mention of a field is inside a comment and requires the walk to report
-// nothing -- the precise false positive the previous text-search version had.
-func TestForwardedFields_IgnoresCommentMentions(t *testing.T) {
+// correct" and "the walk matches anything at all". This feeds it one file
+// containing all three shapes at once and requires the walk to separate them:
+//
+//	Forwarded -- reaches a keyed value of the hosted literal.       MUST be found.
+//	Mentioned -- appears only inside a comment.                     MUST NOT be found.
+//	BareRead  -- read in executable code, never reaching the literal. MUST NOT be found.
+//
+// The third row is the one added after codex r3: the previous walk reported
+// it, which meant the forwarding test could be satisfied by a field that was
+// read and thrown away.
+func TestForwardedFields_RejectsMentionsAndBareReads(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	path := dir + "/commented.go"
 	source := `package sample
 
-func convert(input struct{ Real, Mentioned string }) string {
+type ContextFabricInvestigationRequest struct{ Question string }
+
+type in struct{ Forwarded, Mentioned, BareRead string }
+
+func convert(input in) ContextFabricInvestigationRequest {
 	// input.Mentioned is deliberately only named here, in prose, exactly as a
 	// stale doc comment would name a field whose mapping had been deleted.
-	return input.Real
+	_ = input.BareRead
+	return ContextFabricInvestigationRequest{
+		Question: input.Forwarded,
+	}
 }
 `
 	if err := writeFile(path, source); err != nil {
@@ -123,11 +193,14 @@ func convert(input struct{ Real, Mentioned string }) string {
 
 	found := forwardedFields(t, path)
 
-	if !found["Real"] {
-		t.Error("the walk missed input.Real, which IS used in executable code -- it is under-matching, so its negatives mean nothing")
+	if !found["Forwarded"] {
+		t.Error("the walk missed input.Forwarded, which DOES populate the hosted request literal -- it is under-matching, so its negatives mean nothing")
 	}
 	if found["Mentioned"] {
 		t.Error("the walk reported input.Mentioned, which appears ONLY in a comment: a dropped mapping left mentioned in prose would pass the forwarding test, which is the false green this walk replaced")
+	}
+	if found["BareRead"] {
+		t.Error("the walk reported input.BareRead, which is read and discarded: proving a field is READ is not proving it is FORWARDED, and `_ = input.Field` satisfying this check is the codex r3 finding")
 	}
 }
 

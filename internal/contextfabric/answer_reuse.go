@@ -347,6 +347,17 @@ const (
 // already proved that field empty. An empty field cannot have a non-empty
 // validated subset, so there is nothing for nil to lose. That reasoning is
 // pinned by a test rather than left standing on this comment.
+//
+// CHAOS-5003 ADDED A SECOND SEED, so the third arm names two things. The
+// carries are now seeded from receipts AND from the top-level
+// parent_result_id, walked separately (see resolveCarriedWindow), and
+// carryReferencedResultIDs deliberately covers only the first of those. The
+// population this arm must match is still "every request a carry can walk",
+// which is now the UNION -- so parent_result_id is tested here explicitly.
+// Adding the seed to carryReferencedResultIDs instead would have been the
+// shorter diff and the wrong one: merging the two seeds into one list is
+// precisely what made the same-question containment a per-path property, and
+// this bypass is not worth reintroducing that.
 func reuseBypassReason(request InvestigationRequest, structureCanon requestStructureCanonicalization) AnswerReuseBypassReason {
 	if len(structureCanon.Confirmed) > 0 {
 		return AnswerReuseBypassConfirmedStructure
@@ -354,7 +365,7 @@ func reuseBypassReason(request InvestigationRequest, structureCanon requestStruc
 	if len(request.PriorSubjectReceipts) > 0 {
 		return AnswerReuseBypassPriorSubjectReceipts
 	}
-	if len(carryReferencedResultIDs(request, nil)) > 0 {
+	if len(carryReferencedResultIDs(request, nil)) > 0 || carryParentSeed(request) != "" {
 		return AnswerReuseBypassPriorResultReference
 	}
 	return ""

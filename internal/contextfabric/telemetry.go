@@ -1016,3 +1016,18 @@ func (t SlogEngineTelemetry) RecordPlanCarry(ctx context.Context, principal stor
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric plan carry", args...)
 }
+
+// RecordPlanCarryOutcome (CHAOS-5003) logs at Info, mirroring
+// RecordWindowCarry and RecordKindCarry: a closed outcome vocabulary and a
+// closed seed-source vocabulary, content-safe by construction -- never a
+// question, subject label or family. A DISTINCT message from "context fabric
+// plan carry" above, which fires only on an applied carry: folding the two
+// would make the applied-carry counter and the attempt counter the same
+// number and destroy the hit rate this line exists to publish.
+//
+// source_result_id is empty on every miss and is the origin on a hit -- the
+// join key that ties this line to the applied-carry line for the same turn.
+func (t SlogEngineTelemetry) RecordPlanCarryOutcome(ctx context.Context, principal storage.Principal, outcome PlanCarryOutcome, sourceResultID string, seedSource CarrySeedSource) {
+	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "source_result_id", sourceResultID, "seed_source", string(seedSource)}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric plan carry outcome", args...)
+}
