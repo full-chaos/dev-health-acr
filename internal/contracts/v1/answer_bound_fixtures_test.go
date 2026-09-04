@@ -218,9 +218,10 @@ func answerBoundTable() []answerBound {
 				v.ServiceVersion = escaped(257)
 				r.Versions = v
 			}},
-		{Field: "Completeness", Why: "a census of the document; its counts must equal what the document carries, so it is derived rather than bounded",
-			Min: deriveCompleteness,
-			Max: deriveCompleteness},
+		{Field: "Completeness", Why: "PART census, PART bounded array. The four counts are derived -- they must equal what the document carries -- but `outcomes` is a genuinely bounded list (ContextFabricPlanRequirementOutcomeMaxCount, validateAnswerOutcomes), so the two sides of this entry are NOT the same function. They were, when the block held only the census; leaving them so would have hidden a bounded array inside a field the table calls derived, and the maximal fixture would no longer have measured the maximal answer",
+			Min:     deriveCompletenessMinimal,
+			Max:     deriveCompletenessMaximal,
+			PastMax: deriveCompletenessPastMax},
 
 		// --- optional pointers and collections: absent is the byte minimum ---
 		{Field: "AnswerPlan", Why: "optional pointer, so absent is the byte minimum; when present it carries every fact kind and up to ContextFabricPlanNarrowingMaxCount narrowing steps",
@@ -379,12 +380,21 @@ func buildFromTable(t *testing.T, pick func(answerBound) func(*ContextFabricInve
 // this number, so a Min that was not actually minimal could not fail anything --
 // and two of them were not. The contract constant PR-a pins is derived from
 // this value, so a silent drift here would ship a wrong floor.
-const irreducibleAnswerBytes = 1001
+// 1001 -> 1023 (+22), S7c: the completeness block gained a required `state`,
+// so the smallest valid answer carries `"state":"not_derived"`. The outcome
+// set contributes nothing here -- it is omitempty and the irreducible answer
+// has no rows.
+const irreducibleAnswerBytes = 1023
 
 // maximalAnswerBytes is the largest document this table can construct. It is a
 // LOWER bound on the true maximum -- see the lower-bound axes named in the
 // table entries -- which is all the no-static-constant conclusion needs.
-const maximalAnswerBytes = 520841850
+// 520841850 -> 521187082 (+345232), S7c: the maximal answer now carries the
+// outcome set at its declared ceiling -- 200 rows, each with the identity at
+// its maximum LEGAL encoding (the longest obligation, then two escaped
+// segments filling the 256-character bound) and all three cause vocabularies
+// present at their longest member.
+const maximalAnswerBytes = 521187082
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
@@ -505,7 +515,7 @@ func isDerivedField(field string) bool {
 // deriveCompleteness recomputes the census from the document itself, matching
 // validateCompleteness exactly: the status, the terminal reason the document's
 // own disclosures imply, the claimed-fact count, and the summed row count.
-func deriveCompleteness(r *ContextFabricInvestigationResult) {
+func deriveCompleteness(r *ContextFabricInvestigationResult, outcomes []ContextFabricPlanRequirementOutcomeRow) {
 	rows := 0
 	for _, fact := range r.ClaimedFacts {
 		rows += len(fact.Rows)
@@ -515,7 +525,87 @@ func deriveCompleteness(r *ContextFabricInvestigationResult) {
 		TerminalReason:    expectedTerminalReason(*r),
 		ClaimedFactsCount: len(r.ClaimedFacts),
 		RowsCount:         rows,
+		Outcomes:          outcomes,
+		// DERIVED from the rows just placed, by the same function the
+		// validator runs. Writing a literal here would make the fixture
+		// its own authority for a value the validator recomputes, which is
+		// how a fixture and the thing it is a fixture for drift apart.
+		State: DeriveContextFabricAnswerCompletenessState(outcomes),
 	}
+}
+
+// deriveCompletenessMinimal is the smallest legal block: the census, and NO
+// outcome rows. `outcomes` is omitempty, so an empty set costs nothing; the
+// whole of this block's contribution to the irreducible answer is the
+// required `state`.
+func deriveCompletenessMinimal(r *ContextFabricInvestigationResult) {
+	deriveCompleteness(r, nil)
+}
+
+// deriveCompletenessMaximal fills the outcome set to its declared ceiling,
+// every string at its own maximum and every optional cause present.
+//
+// The rows are UNAVAILABLE rather than narrowed because that is the largest
+// legal row: it carries a cause from each of the three cause vocabularies at
+// once, which a narrowed row may also do, and it has no served-below-declared
+// constraint to satisfy while doing it.
+func deriveCompletenessMaximal(r *ContextFabricInvestigationResult) {
+	deriveCompleteness(r, maximalOutcomeRows(ContextFabricPlanRequirementOutcomeMaxCount))
+}
+
+// deriveCompletenessPastMax steps one row beyond the ceiling. Validate must
+// reject it.
+func deriveCompletenessPastMax(r *ContextFabricInvestigationResult) {
+	deriveCompleteness(r, maximalOutcomeRows(ContextFabricPlanRequirementOutcomeMaxCount+1))
+}
+
+// maximalOutcomeRows builds n rows at their largest legal encoding.
+func maximalOutcomeRows(n int) []ContextFabricPlanRequirementOutcomeRow {
+	rows := make([]ContextFabricPlanRequirementOutcomeRow, 0, n)
+	// The longest members of each closed vocabulary, so the fixture measures
+	// the worst case rather than the first case.
+	longestCoverage := ContextFabricCoverageDetailCode("")
+	for _, code := range ContextFabricCoverageDetailCodeVocabulary() {
+		if len(code) > len(longestCoverage) {
+			longestCoverage = code
+		}
+	}
+	longestBasis := ContextFabricNarrowingBasis("")
+	for _, basis := range ContextFabricNarrowingBasisVocabulary() {
+		if len(basis) > len(longestBasis) {
+			longestBasis = basis
+		}
+	}
+	// The longest obligation the mirrored vocabulary holds, so the identity
+	// below is both maximal AND legal: the validator requires the identity's
+	// first segment to equal the row's own obligation.
+	longestObligation := ""
+	for _, obligation := range ContextFabricAnswerObligationVocabulary() {
+		if len(obligation) > len(longestObligation) {
+			longestObligation = obligation
+		}
+	}
+	// obligation + "/" + role + "/" + kind, filling the identity bound
+	// exactly. Split evenly; the remainder goes to the first segment.
+	remaining := ContextFabricRequirementIdentityMaxLength - len(longestObligation) - 2
+	role, kind := remaining-remaining/2, remaining/2
+	identity := longestObligation + "/" + escaped(role) + "/" + escaped(kind)
+	for index := 0; index < n; index++ {
+		rows = append(rows, ContextFabricPlanRequirementOutcomeRow{
+			Stage:          ContextFabricPlanNarrowingAssembledResult,
+			Requirement:    identity,
+			Obligation:     longestObligation,
+			Outcome:        ContextFabricRequirementUnavailable,
+			Impact:         ContextFabricAnswerImpactDimension,
+			CauseOverrun:   ContextFabricBudgetOverrunBytes,
+			CauseCoverage:  longestCoverage,
+			CauseNarrowing: longestBasis,
+			CauseObserved:  true,
+			Served:         0,
+			Declared:       0,
+		})
+	}
+	return rows
 }
 
 // expectedRejection is the oracle finding 4 of round 1 said was missing: a
@@ -548,6 +638,7 @@ var expectedRejection = map[string]string{
 	"Versions":                "version metadata violates v1 bounds",
 	"AnswerPlan":              "narrowing steps",
 	"Cohort":                  "cohort violates v1 bounds",
+	"Completeness":            "outcomes exceeds v1 bounds",
 	"EvidenceRefLabels":       "names no evidence ref on the result",
 	"Temporal":                "temporal label is only meaningful",
 	"EffectiveEvidenceWindow": "all_time must not carry explicit bounds",

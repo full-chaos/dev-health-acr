@@ -625,6 +625,7 @@
     "terminal_status": "partial",
     "terminal_reason": "degraded_reason_disclosed",
     "claimed_facts_count": 1,
-    "rows_count": 0
+    "rows_count": 0,
+    "state": "not_derived"
   }
 }

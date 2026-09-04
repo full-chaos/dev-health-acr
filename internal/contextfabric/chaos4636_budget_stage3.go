@@ -149,6 +149,18 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		declined = RetryDeclinedInsufficientDeadline
 	}
 	if declined != RetryDeclinedNotApplicable {
+		// Before refusing: the cohort lever declined, but the cohort is
+		// not the only thing charged against the item budget. Narrow what
+		// CAN be narrowed without orphaning prose, disclose it by name,
+		// and serve.
+		//
+		// This is the arm the acceptance question lands on. A
+		// single-subject investigation has no cohort, so `declined` is
+		// always nothing_to_narrow here and the refusal was reached
+		// without any content reduction ever being attempted.
+		if narrowedResult, ok := e.narrowInsteadOfRefusing(ctx, principal, plan, params.Frame, result, budget, measurement, overrun, grouped, narrowed.Basis, before, after, declined, false); ok {
+			return narrowedResult, firstPass, nil
+		}
 		// CHAOS-4809 PATH 2: BOTH counts, as narrowSynthesisInput actually
 		// computed them. This used to pass `before` for both, so a refusal
 		// that had already run a real overlap-aware set-cover selection
@@ -241,6 +253,15 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	e.recordPlanNarrowing(ctx, principal, event)
 
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
+		// The retry narrowed the cohort and the answer still does not fit.
+		// Same question as the declined arm, one pass later: the charged
+		// terms the cohort lever cannot reach are still there, so try them
+		// before refusing.
+		if narrowedResult, ok := e.narrowInsteadOfRefusing(ctx, principal, plan, params.Frame, retried, budget, retryMeasurement, retryOverrun, grouped, narrowed.Basis, before, after, RetryDeclinedNotApplicable, true); ok {
+			retryRanked := narrowed.Ranked
+			retryPending.CohortRanked = &retryRanked
+			return narrowedResult, retryPending, nil
+		}
 		// ONE bounded retry, never k of them. Decision D5 rejected further
 		// retries explicitly: they inherit the same deadline problem and
 		// merely move the terminal case, arriving at the same unanswered

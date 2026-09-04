@@ -1284,6 +1284,7 @@
   "completeness": {
     "terminal_status": "complete",
     "claimed_facts_count": 6,
-    "rows_count": 8
+    "rows_count": 8,
+    "state": "not_derived"
   }
 }

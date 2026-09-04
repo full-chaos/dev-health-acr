@@ -223,6 +223,24 @@
                 "no_match"
               ],
               "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "not_derived",
+                "complete",
+                "partial",
+                "degraded"
+              ],
+              "description": "What the outcome set below adds up to, DERIVED from it and never authored independently: complete when every row is satisfied or not_applicable, partial when any row is narrowed or not_attempted and none is unavailable, degraded when any row is unavailable, and not_derived when there are no rows at all. not_derived is a real state, not a gap -- an empty set would otherwise derive complete vacuously, letting an answer whose outcomes were never derived claim the strongest completeness there is."
+            },
+            "outcomes": {
+              "type": "array",
+              "maxItems": 200,
+              "description": "The ONE authority for what this answer was supposed to contain and what became of it. Every narrowing stage between planning and the served document APPENDS to it; no stage rewrites or removes another stage's row, and state above is derived from the whole set at the surface that serves the answer. That ordering is what makes it impossible to measure completeness and then shrink the document somewhere the measurement cannot see.",
+              "items": {
+                "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/PlanRequirementOutcomeRow"
+              }
             }
           },
           "required": [
@@ -2412,6 +2430,89 @@
             "label"
           ],
           "type": "object"
+        },
+        "PlanRequirementOutcomeRow": {
+          "description": "One requirement outcome: what the answer was supposed to contain, what became of it, and what the reader loses where it did not happen. Every field is a closed token or an integer -- never free text, which the degraded-reason and limitation channels already carry.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "stage": {
+              "type": "string",
+              "enum": [
+                "cardinality",
+                "synthesis_input",
+                "assembled_result"
+              ],
+              "description": "Which narrowing stage produced this row. Present on every row, including a seed row, so a reader can see that later stages APPENDED rather than rewrote."
+            },
+            "requirement": {
+              "type": "string",
+              "maxLength": 256,
+              "description": "The requirement's own identity (obligation/role/subject kind). Absent when the served document was narrowed on a turn for which no requirement rows were derived -- an honest state, and one the reader can tell apart because state is then not_derived."
+            },
+            "obligation": {
+              "type": "string",
+              "maxLength": 64,
+              "description": "The requirement's obligation, copied so a reader of the row alone knows what was at stake. Present exactly when requirement is."
+            },
+            "outcome": {
+              "type": "string",
+              "enum": [
+                "satisfied",
+                "narrowed",
+                "unavailable",
+                "not_applicable",
+                "not_attempted"
+              ]
+            },
+            "impact": {
+              "type": "string",
+              "enum": [
+                "none",
+                "scope",
+                "depth",
+                "dimension"
+              ],
+              "description": "What the reader loses. none exactly when the outcome is satisfied or not_applicable; any other outcome carries a real impact."
+            },
+            "cause_overrun": {
+              "type": "string",
+              "enum": [
+                "fits",
+                "items",
+                "bytes"
+              ],
+              "description": "The declared ceiling that forced the reduction, when a ceiling did."
+            },
+            "cause_coverage": {
+              "type": "string",
+              "description": "A coverage event that caused it, from the published coverage detail code vocabulary."
+            },
+            "cause_narrowing": {
+              "type": "string",
+              "description": "The selection order that chose the survivors, when a selection ran."
+            },
+            "cause_observed": {
+              "type": "boolean",
+              "description": "Whether the named cause was REPORTED by a mechanism or DEFAULTED to. Without it a defaulted cause reads as an observed one."
+            },
+            "served": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "declared": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "stage",
+            "outcome",
+            "impact",
+            "cause_observed",
+            "served",
+            "declared"
+          ]
         }
       },
       "additionalProperties": false,

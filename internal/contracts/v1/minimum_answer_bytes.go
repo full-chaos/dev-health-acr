@@ -38,4 +38,18 @@ package v1
 // the premise of the work built on top of it. A static constant derived from a
 // measured artifact must be compared against every EXISTING bound before any
 // validator is pointed at it.
-const ContextFabricMinimumAnswerBytes = 1001
+//
+// 1001 -> 1023, S7c (+22 bytes). The completeness block gained a required
+// `state`, so the smallest valid answer now carries `"state":"not_derived"`
+// and cannot be smaller. The outcome set itself contributes nothing to the
+// floor -- it is omitempty and the irreducible answer has no rows -- so the
+// whole of the increase is the one field every answer must carry.
+//
+// It is stated as a move rather than edited quietly because this number's
+// own history is the argument for doing so: it moved five times, four of
+// them wrongly, and the fifth move inverted the premise of the work built on
+// it. The move is safe against every existing bound, which is the check that
+// history demands: the smallest budget a caller may request is
+// ContextFabricSerializedBytesMin at 8192, so 1023 still leaves 7169 bytes
+// of headroom and no request, config or MCP surface changes meaning.
+const ContextFabricMinimumAnswerBytes = 1023

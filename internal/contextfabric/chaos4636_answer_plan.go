@@ -403,6 +403,16 @@ func (e *Engine) finalizeResult(result InvestigationResult, plan AnswerPlan, fra
 	result.AnswerPlan = &stamped
 	renderShapes, _ := SelectRenderShapes(result, frame)
 	result.RenderShapes = renderShapes
+	// Seed the outcome set from this turn's requirement rows, ONCE.
+	//
+	// Idempotent on purpose: this function runs again on a retry pass and
+	// again after assembly narrows, and re-seeding would either duplicate
+	// the seed rows or overwrite the rows a later stage appended. Seeding
+	// only into an empty set is what makes "stages append, nothing
+	// rewrites" true of the code rather than of the intention.
+	if len(result.Completeness.Outcomes) == 0 {
+		result.Completeness.Outcomes = seedRequirementOutcomes(frame, e.requirements)
+	}
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result
 }

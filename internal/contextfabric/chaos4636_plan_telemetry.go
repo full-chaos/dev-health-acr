@@ -141,6 +141,27 @@ type PlanNarrowingEvent struct {
 	// text, which is the same rule this repository applies to every other
 	// decision-basis field.
 	NarrowerContinuationAxis NarrowingContinuationAxis
+	// The outcome layer's own decision dimensions (S7c).
+	//
+	// OutcomeNarrowedInsteadOfRefused is the event this seam adds: a run
+	// reached a point that used to refuse and served a narrowed, disclosed
+	// answer instead. It is recorded as its own dimension rather than
+	// inferred from refusal_planned being false, because the refusal rate
+	// falling has two possible causes -- questions that stopped
+	// overrunning, and questions that started being narrowed -- and an
+	// operator needs to tell them apart.
+	OutcomeNarrowedInsteadOfRefused bool
+	// OutcomeItemsServed/OutcomeItemsDeclared are the reduction's own
+	// numbers. They are DISTINCT from Before/After, which count cohort
+	// members: overloading those would put two quantities behind one name,
+	// and a reader could not tell which a given event meant.
+	OutcomeItemsServed   int
+	OutcomeItemsDeclared int
+	// OutcomeCompletenessState is what the served answer claims about
+	// itself, from the closed vocabulary the outcome set derives. It is on
+	// the event so that a served answer's completeness can be counted
+	// without joining against the stored result.
+	OutcomeCompletenessState contractsv1.ContextFabricAnswerCompletenessState
 }
 
 // RetryDeclinedReason is the CLOSED vocabulary of why the re-synthesis did
