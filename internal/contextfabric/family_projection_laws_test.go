@@ -377,6 +377,7 @@ var requirementFieldSources = map[string]string{
 	// indistinguishable from "not declared yet".
 	"InputClass":     "the computed step's declared input class",
 	"InputFactKinds": "the computed step's declared input fact kinds",
+	"StepExecution":  "the computed step's declared execution (server-executed / declared-only)",
 }
 
 // TestLawL5EveryRequirementFieldNamesADerivationRule is law L5.

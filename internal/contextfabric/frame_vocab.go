@@ -510,6 +510,63 @@ func ValidComputedStepInputClass(value ComputedStepInputClass) bool {
 	return false
 }
 
+// ComputedStepExecution says whether the server ACTUALLY RUNS a step, or
+// merely names it.
+//
+// WHY THIS EXISTS, and it is the second half of the §13.2.3 amendment rather
+// than an extra. Declaring that a step consumes no fact is a statement about
+// THAT STEP. It is only evidence about the ANSWER if that step is the thing
+// producing the answer. Where a computed obligation is named but nothing
+// executes it, the value still reaches the user -- today, through the model's
+// narration over whatever facts the plan happened to read (see
+// status_shadow.go's `count` row: "a cardinality is carried in the answer
+// text, not in a countable field"). Under that mechanism a loss of read facts
+// CAN change the answer, so "the step consumes nothing" does not license
+// retiring whatever caused those facts to be read.
+//
+// Found by an adversarial review round on this change, which is exactly the
+// mirror of the rule this amendment already states in the other direction:
+// declaring an INPUT is not planning a read, and declaring NO input is not
+// proof the answer needs nothing.
+//
+// Closed vocabulary, telemetry-safe.
+type ComputedStepExecution string
+
+const (
+	// ComputedStepServerExecuted: a server function computes this step, so
+	// its declared inputs describe what the answer is actually built from.
+	ComputedStepServerExecuted ComputedStepExecution = "server_executed"
+	// ComputedStepDeclaredOnly: the step is named by the vocabulary but no
+	// server code satisfies the obligation with it. The value reaches the
+	// answer some other way, so this step's input declaration says nothing
+	// about what the answer depends on.
+	ComputedStepDeclaredOnly ComputedStepExecution = "declared_only"
+)
+
+var computedStepExecutions = [...]ComputedStepExecution{
+	ComputedStepServerExecuted,
+	ComputedStepDeclaredOnly,
+}
+
+// ComputedStepExecutionCount is two.
+const ComputedStepExecutionCount = len(computedStepExecutions)
+
+// ComputedStepExecutionVocabulary returns the closed execution list.
+func ComputedStepExecutionVocabulary() [ComputedStepExecutionCount]ComputedStepExecution {
+	return computedStepExecutions
+}
+
+// ValidComputedStepExecution reports membership; the empty value is not one,
+// so "undeclared" stays distinguishable from either answer.
+func ValidComputedStepExecution(value ComputedStepExecution) bool {
+	for _, member := range computedStepExecutions {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
 // ComputedStepInputs is what a computed step CONSUMES.
 //
 // FactKinds is non-empty exactly when Class is ComputedInputFactKinds; the
@@ -518,6 +575,12 @@ func ValidComputedStepInputClass(value ComputedStepInputClass) bool {
 type ComputedStepInputs struct {
 	Class     ComputedStepInputClass
 	FactKinds []FactKind
+	// Execution says whether a server function actually runs this step. It
+	// is NOT derivable from Class or FactKinds -- a step that consumes
+	// nothing and a step nobody executes look identical from the input side,
+	// and conflating them is what would let an unexecuted step's "consumes
+	// nothing" authorize a retirement.
+	Execution ComputedStepExecution
 }
 
 // computedStepInputs is the declaration table.
@@ -541,9 +604,22 @@ var computedStepInputs = map[ComputedObligationStep]ComputedStepInputs{
 	ComputedStepRankCohort: {
 		Class:     ComputedInputFactKinds,
 		FactKinds: cohortRankingFormulaKinds,
+		// RankCohort is wired between ReadFacts and Synthesize (engine.go's
+		// Investigate) and computes the ordering from already-read facts.
+		Execution: ComputedStepServerExecuted,
 	},
 	ComputedStepMembershipCardinality: {
 		Class: ComputedInputResolvedMemberSet,
+		// NOTHING satisfies `count` with this step today. The name exists in
+		// the vocabulary; no production call site computes a cardinality for
+		// the obligation (cohortMemberCount serves BUDGET fitting, not the
+		// answer), and status_shadow.go records `count` as unobserved
+		// because "a cardinality is carried in the answer text, not in a
+		// countable field". Declared honestly rather than aspirationally:
+		// marking it executed would make this table assert something the
+		// tree does not do, and the parity proof would retire authorities on
+		// the strength of it.
+		Execution: ComputedStepDeclaredOnly,
 	},
 }
 
@@ -565,6 +641,7 @@ func InputsForComputedStep(step ComputedObligationStep) (ComputedStepInputs, boo
 	return ComputedStepInputs{
 		Class:     declared.Class,
 		FactKinds: sortedFactKinds(declared.FactKinds),
+		Execution: declared.Execution,
 	}, true
 }
 

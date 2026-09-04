@@ -72,6 +72,7 @@ var requirementDerivationLogKeys = map[string]string{
 	"ComputedRowsWithDeclaredInputs": "requirement_computed_rows_with_inputs",
 	"ComputedInputClasses":           "requirement_computed_input_class_",
 	"ComputedInputKinds":             "requirement_computed_input_kind_",
+	"ComputedStepExecutions":         "requirement_computed_step_",
 }
 
 // TestEveryRequirementSummaryFieldReachesTheLogLine is the structural half
@@ -361,6 +362,9 @@ func TestFrameValidationTelemetryLeaksNoQuestionContent(t *testing.T) {
 	}
 	for _, kind := range contractsv1.ContextFabricFactKindVocabulary() {
 		allowed["requirement_computed_input_kind_"+string(kind)] = true
+	}
+	for _, execution := range ComputedStepExecutionVocabulary() {
+		allowed["requirement_computed_step_"+string(execution)] = true
 	}
 	for key := range records[0] {
 		if !allowed[key] {

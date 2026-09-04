@@ -179,12 +179,34 @@ const (
 	// was not before: either a producer serves the kind for that subject, or
 	// the computed step's declared input is planned as a read of its own.
 	causeComputedStepInputUnserved lossCause = "computed_step_input_unserved"
+
+	// causeComputedStepNotWired: this frame derives a computed obligation
+	// whose server step is DECLARED ONLY -- named by the vocabulary, executed
+	// by nothing. Its "consumes no fact kinds" declaration is therefore not
+	// evidence about what the ANSWER depends on.
+	//
+	// FOUND BY AN ADVERSARIAL ROUND ON THIS CHANGE, and it is the mirror of
+	// the rule this slice already states in the other direction. Declaring an
+	// INPUT is not planning a read; declaring NO input is not proof the answer
+	// needs nothing. `count` is satisfied today by the model narrating over
+	// whatever facts the plan read (status_shadow.go records it as unobserved:
+	// "a cardinality is carried in the answer text, not in a countable
+	// field"), so retiring whatever caused those facts to be read CAN change
+	// the answer, and a SUPERIOR ruling asserts precisely that it cannot.
+	//
+	// NOT SUPERIOR. Without this the five counting-frame cells clear on the
+	// strength of a step nothing runs, and the proof -- whose output is a
+	// deletion order -- authorizes removing a real fact read. What must change
+	// is nameable: wire the step, i.e. satisfy `count` from the resolved
+	// member set as a server result rather than as narrated prose.
+	causeComputedStepNotWired lossCause = "computed_step_not_wired"
 )
 
 var lossCauses = [...]lossCause{
 	causeUnavailableNamedInstead,
 	causeNotRequiredByAnyObligation,
 	causeComputedStepInputUnserved,
+	causeComputedStepNotWired,
 }
 
 // supersedingCauses are the causes under which the derived rows are ruled
@@ -229,9 +251,15 @@ func classifyLoss(rows []contextfabric.DerivedRequirement, lost []contextfabric.
 	// that appears here is already planned for; one that does not is the
 	// blocking case.
 	servedByARead := map[contextfabric.FactKind]bool{}
+	// declaredOnly records whether ANY computation on this frame is named but
+	// unexecuted. Read off the ROWS, like everything else here.
+	declaredOnly := false
 	for _, row := range rows {
 		if row.Served() {
 			served++
+		}
+		if row.StepExecution == contextfabric.ComputedStepDeclaredOnly {
+			declaredOnly = true
 		}
 		for _, kind := range row.InputFactKinds {
 			declaredInputs[kind] = true
@@ -251,6 +279,12 @@ func classifyLoss(rows []contextfabric.DerivedRequirement, lost []contextfabric.
 			// it.
 			return causeComputedStepInputUnserved
 		}
+	}
+	if declaredOnly {
+		// Checked AFTER the input test so the more specific cause wins: a
+		// frame carrying both an unserved input and an unwired step is
+		// reported as the input defect, which is the one with a named fix.
+		return causeComputedStepNotWired
 	}
 	return causeNotRequiredByAnyObligation
 }
@@ -1023,11 +1057,30 @@ func parityTestRow(
 	inputs []contextfabric.FactKind,
 	reads []contextfabric.FactKind,
 ) contextfabric.DerivedRequirement {
+	return parityTestRowExec(step, unavailable, inputs, reads, contextfabric.ComputedStepServerExecuted)
+}
+
+// parityTestRowExec is parityTestRow with the step's EXECUTION stated. The
+// plain form defaults to server-executed so the older cases keep asserting
+// what they were written to assert; a case about the unwired branch says so.
+func parityTestRowExec(
+	step contextfabric.ComputedObligationStep,
+	unavailable contextfabric.RequirementUnavailableReason,
+	inputs []contextfabric.FactKind,
+	reads []contextfabric.FactKind,
+	execution contextfabric.ComputedStepExecution,
+) contextfabric.DerivedRequirement {
+	if step == "" {
+		// A read row has no step and therefore no execution; stamping one
+		// would make the fixture assert a shape the derivation never builds.
+		execution = ""
+	}
 	return contextfabric.DerivedRequirement{
 		Step:           step,
 		Unavailable:    unavailable,
 		InputFactKinds: inputs,
 		FactKinds:      reads,
+		StepExecution:  execution,
 	}
 }
 
@@ -1098,13 +1151,42 @@ func TestClassifyLossLandsInEveryBranch(t *testing.T) {
 			// A computation whose step declares NO fact input cannot make
 			// any loss blocking. This is the branch that clears the counting
 			// frames, and it is the amendment's whole retirement effect.
-			name: "a computation that declares no fact input",
+			// A step that consumes no fact AND IS EXECUTED clears the loss:
+			// the server computes the answer from the member set, so the lost
+			// reads served no purpose the frame states.
+			name: "an EXECUTED computation that declares no fact input",
 			rows: []contextfabric.DerivedRequirement{
 				parityTestRow("", "", nil, []contextfabric.FactKind{health}),
 				parityTestRow("membership_cardinality", "", nil, nil),
 			},
 			lost: []contextfabric.FactKind{deficiencies},
 			want: causeNotRequiredByAnyObligation,
+		},
+		{
+			// THE SAME STEP, DECLARED ONLY. Identical from the input side --
+			// which is the whole reason execution cannot be inferred from the
+			// inputs -- and it must NOT clear: nothing runs the step, so the
+			// value reaches the answer by narration over the read facts, and
+			// removing those reads can change it.
+			name: "a DECLARED-ONLY computation that declares no fact input",
+			rows: []contextfabric.DerivedRequirement{
+				parityTestRow("", "", nil, []contextfabric.FactKind{health}),
+				parityTestRowExec("membership_cardinality", "", nil, nil, contextfabric.ComputedStepDeclaredOnly),
+			},
+			lost: []contextfabric.FactKind{deficiencies},
+			want: causeComputedStepNotWired,
+		},
+		{
+			// Both defects on one frame: the more specific cause wins, so the
+			// report names the one with a named fix.
+			name: "an unserved input beats an unwired step",
+			rows: []contextfabric.DerivedRequirement{
+				parityTestRow("", "", nil, []contextfabric.FactKind{health}),
+				parityTestRow("rank_cohort", "", []contextfabric.FactKind{deficiencies}, nil),
+				parityTestRowExec("membership_cardinality", "", nil, nil, contextfabric.ComputedStepDeclaredOnly),
+			},
+			lost: []contextfabric.FactKind{deficiencies},
+			want: causeComputedStepInputUnserved,
 		},
 		{
 			// Several lost kinds, ONE of them an unserved input. The

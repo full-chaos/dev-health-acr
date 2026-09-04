@@ -90,6 +90,14 @@ type RequirementDerivationSummary struct {
 	// consumer is FrameValidationEvent.RequirementDerivation
 	// (frame_telemetry.go), already recorded on every validated frame.
 	ComputedInputKinds [contractsv1.ContextFabricFactKindCount]int
+	// ComputedStepExecutions counts declared computed rows per step
+	// execution, indexed by ComputedStepExecutionVocabulary position.
+	//
+	// Worth its own array rather than being folded into the class counts: a
+	// declared-only step is an OPERATIONAL fact (an obligation the server
+	// names but does not satisfy), and an operator reading a run should be
+	// able to see it without knowing which steps happen to be wired today.
+	ComputedStepExecutions [ComputedStepExecutionCount]int
 
 	// Version is RequirementDerivationVersion, so an event can be read
 	// against the table that produced it.
@@ -139,6 +147,9 @@ func RequirementDerivationSummaryFrom(rows []DerivedRequirement) RequirementDeri
 				summary.ComputedInputKinds[index]++
 			}
 		}
+		if index, ok := computedStepExecutionIndex(row.StepExecution); ok {
+			summary.ComputedStepExecutions[index]++
+		}
 	}
 	return summary
 }
@@ -165,6 +176,15 @@ func unavailableReasonIndex(value RequirementUnavailableReason) (int, bool) {
 
 func quantifierIndex(value CompletionQuantifier) (int, bool) {
 	for index, member := range completionQuantifiers {
+		if member == value {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+func computedStepExecutionIndex(value ComputedStepExecution) (int, bool) {
+	for index, member := range computedStepExecutions {
 		if member == value {
 			return index, true
 		}

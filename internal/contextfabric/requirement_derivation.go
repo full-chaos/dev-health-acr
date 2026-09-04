@@ -266,6 +266,16 @@ type DerivedRequirement struct {
 	// vocabulary order and deduplicated, so two runs of one frame produce
 	// the same bytes in the regenerated artifact.
 	InputFactKinds []FactKind
+	// StepExecution says whether a server function actually RUNS this step.
+	// Empty on a read obligation and on an unavailable one.
+	//
+	// It is on the row because a consumer reasoning about what the answer
+	// depends on needs both halves together: a step that consumes nothing
+	// and a step nobody executes are indistinguishable from the input fields
+	// alone, and treating the second like the first is what would let an
+	// unexecuted step's "consumes nothing" authorize retiring the thing that
+	// actually causes the facts to be read.
+	StepExecution ComputedStepExecution
 
 	Scope      CompletionScope
 	Quantifier CompletionQuantifier
@@ -343,6 +353,7 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 		if inputs, declared := InputsForComputedStep(step); declared {
 			row.InputClass = inputs.Class
 			row.InputFactKinds = inputs.FactKinds
+			row.StepExecution = inputs.Execution
 		}
 		row.Quantifier = quantifierForComputed(coordinate.Obligation)
 		return row

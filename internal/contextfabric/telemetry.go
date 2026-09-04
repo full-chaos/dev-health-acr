@@ -861,6 +861,9 @@ func requirementDerivationLogAttrs(summary RequirementDerivationSummary) []any {
 	for index, kind := range contractsv1.ContextFabricFactKindVocabulary() {
 		args = append(args, "requirement_computed_input_kind_"+string(kind), summary.ComputedInputKinds[index])
 	}
+	for index, execution := range ComputedStepExecutionVocabulary() {
+		args = append(args, "requirement_computed_step_"+string(execution), summary.ComputedStepExecutions[index])
+	}
 	return args
 }
 

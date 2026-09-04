@@ -38,6 +38,12 @@ func TestEveryComputedStepDeclaresItsInputs(t *testing.T) {
 		if !ValidComputedStepInputClass(inputs.Class) {
 			t.Errorf("computed step %q declares input class %q, which is not in the closed vocabulary", step, inputs.Class)
 		}
+		// Execution is required, and the empty value is NOT a member: an
+		// undeclared execution must not read as either answer. A step that
+		// forgot to say would otherwise default to the permissive one.
+		if !ValidComputedStepExecution(inputs.Execution) {
+			t.Errorf("computed step %q declares execution %q, which is not in the closed vocabulary -- an undeclared execution must not read as server-executed", step, inputs.Execution)
+		}
 		// The class and the kinds must agree in BOTH directions. A
 		// fact-reading step with no kinds is an undeclared input wearing a
 		// declaration; a non-fact-reading step WITH kinds is a declaration
@@ -361,4 +367,92 @@ func kindsInVocabularyOrder(kinds []FactKind) bool {
 		last = index
 	}
 	return true
+}
+
+// TestSortedFactKindsPreservesAKindOutsideTheVocabulary is the POSITIVE FIXTURE
+// for a tier that had none.
+//
+// FOUND BY A CODEX ROUND AS A SURVIVING MUTATION, and re-executed here before
+// being ledgered: deleting `sortedFactKinds`'s unknown-kind preservation loop
+// left the entire package suite green, because every kind in the live
+// declaration table is a vocabulary member and nothing ever reached the branch.
+// That is the "a gate tier with no positive fixture can be dead for its whole
+// life and read as green" failure, arriving inside the very change that adds
+// the tier.
+//
+// WHY THE BRANCH MATTERS, which is what makes this worth a test rather than a
+// deletion: the branch exists so a declaration naming a kind outside the closed
+// vocabulary produces a LONGER list containing the bad kind, which the totality
+// test can see and fail on. Without it the bad kind is silently dropped, the
+// list reads as merely shorter, and a declaration error becomes invisible --
+// and a dropped input is precisely what makes the parity classifier rule a loss
+// "not required" and authorize a retirement that removes a real read.
+func TestSortedFactKindsPreservesAKindOutsideTheVocabulary(t *testing.T) {
+	outsider := FactKind("zz_not_in_the_vocabulary")
+	if _, member := factKindIndex(outsider); member {
+		t.Fatalf("%q is in the vocabulary, so this test cannot exercise the branch it exists for", outsider)
+	}
+
+	got := sortedFactKinds([]FactKind{FactWorkload, outsider, FactHealth})
+
+	if len(got) != 3 {
+		t.Fatalf("sortedFactKinds dropped a declared input: got %v, want all three kinds", got)
+	}
+	if !containsKind(got, outsider) {
+		t.Fatalf("sortedFactKinds dropped %q -- a declaration error must read as a WRONG list, never as a shorter one", outsider)
+	}
+	// The vocabulary members still lead, in vocabulary order, and the
+	// outsider is appended rather than interleaved -- otherwise the ordering
+	// guarantee the artifact depends on would hold only for valid tables.
+	if !kindsInVocabularyOrder(got[:2]) {
+		t.Errorf("known kinds are not in vocabulary order: %v", got)
+	}
+	if got[2] != outsider {
+		t.Errorf("the out-of-vocabulary kind is not appended last: %v", got)
+	}
+}
+
+// TestComputedStepExecutionMatchesTheTree pins each step's declared execution
+// against whether the tree actually runs it.
+//
+// This is the assertion an adversarial round forced. `membership_cardinality`
+// was declared with an input class and no execution statement, and the parity
+// proof read "consumes no fact" as evidence about the ANSWER -- clearing five
+// blocking cells and reporting two planning authorities retirable. Nothing
+// executes that step: the cardinality reaches the user through narration, so
+// the reads those authorities cause can still change the answer.
+//
+// The pin is deliberately asymmetric. `rank_cohort` is asserted EXECUTED
+// because `RankCohort` exists and the engine calls it; `membership_cardinality`
+// is asserted DECLARED-ONLY, and that assertion is what has to be revisited by
+// whoever wires it. Flipping it without wiring the step re-opens the defect.
+func TestComputedStepExecutionMatchesTheTree(t *testing.T) {
+	rank, ok := InputsForComputedStep(ComputedStepRankCohort)
+	if !ok {
+		t.Fatal("rank_cohort has no declaration")
+	}
+	if rank.Execution != ComputedStepServerExecuted {
+		t.Errorf("rank_cohort execution = %q, want %q -- RankCohort is wired between the fact read and synthesis", rank.Execution, ComputedStepServerExecuted)
+	}
+
+	count, ok := InputsForComputedStep(ComputedStepMembershipCardinality)
+	if !ok {
+		t.Fatal("membership_cardinality has no declaration")
+	}
+	if count.Execution != ComputedStepDeclaredOnly {
+		t.Errorf("membership_cardinality execution = %q, want %q -- no production call site satisfies `count` with this step; if that changed, wire it and update this pin deliberately", count.Execution, ComputedStepDeclaredOnly)
+	}
+
+	// The corroboration, read off the shadow layer's own record rather than
+	// asserted here: `count` is listed as an obligation this derivation
+	// cannot observe, because a cardinality is carried in the answer text
+	// rather than in a countable result field. Two independent statements of
+	// the same fact, in the two places that each need it.
+	observation, declared := obligationObservations[ObligationCount]
+	if !declared {
+		t.Fatal("obligationObservations has no row for `count`")
+	}
+	if observation.observed {
+		t.Error("`count` is recorded as OBSERVED in the shadow layer while its step is declared-only -- the two records disagree, and one of them is authorizing retirements")
+	}
 }
