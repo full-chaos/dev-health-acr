@@ -1660,9 +1660,12 @@ flowchart TD
     RED{"narrowCandidatesToBudget:<br/>allowance = MaxItems − (Budgeted − declared)"}
     RED -->|"declared candidates cut to the allowance"| APPEND["APPEND one outcome row:<br/>outcome=narrowed, impact=scope,<br/>cause_overrun=items, stage=assembled_result"]
     APPEND --> FIN["finalizeResult → completeness RE-DERIVED<br/>from the extended set (never before the append)"]
-    FIN --> REM{"re-measure what will ACTUALLY be served"}
-    REM -->|fits| SERVE3["serve 200, narrowed and DISCLOSED<br/>outcome_narrowed_instead_of_refused=true"]
+    FIN --> REM{"re-measure — the stage's OWN fit check"}
+    REM -->|"fits HERE"| SERVE3["narrowed and DISCLOSED<br/>outcome_reduction_applied=true<br/>outcome_reduction_inner_fit=true"]
     REM -->|"still over"| DECL
+    SERVE3 --> FINAL{"the FINAL byte assertion, after the plan<br/>re-stamp and the display labels — both add bytes,<br/>so THIS is the first measurement of the document<br/>the route actually serializes"}
+    FINAL -->|fits| SERVE200["serve 200"]
+    FINAL -->|"over on bytes"| LATE413["413 — measured window ~9,550-9,599 bytes.<br/>The reduction dimensions stay TRUE: the cut WAS<br/>applied and it DID pass the stage's own fit.<br/>The refusal carries its own telemetry."]
 
     RED -->|"precondition failed"| DECL
     DECL{"OutcomeReductionDeclined —<br/>closed vocabulary, on the refusal event"}
@@ -1679,8 +1682,8 @@ flowchart TD
     classDef fixed fill:#123d1c,stroke:#3fa45b,color:#e8ffe8
     classDef gate fill:#3d2a12,stroke:#c08a3e,color:#fff3e0
     classDef unreachable fill:#3a1b1b,stroke:#a4453f,color:#ffe8e8
-    class SERVE1,SERVE2,SERVE3,APPEND,FIN fixed
-    class OV,CAN,RM,RED,REM,DECL gate
+    class SERVE1,SERVE2,SERVE3,SERVE200,APPEND,FIN fixed
+    class OV,CAN,RM,RED,REM,DECL,FINAL gate
     class D4 unreachable
 ```
 
@@ -1691,6 +1694,16 @@ Resolution candidates are alternatives the resolver did NOT commit to —
 nothing in the answer cites them — so removing them changes how many options
 the caller is shown and nothing else. That is a real loss, which is why it is
 disclosed as one rather than performed silently.
+
+**Why the reduction's dimensions stop short of the final outcome.** The
+stage's fit check is not the last word: the plan re-stamp (carrying the
+narrowing step just appended) and the coverage display labels both add bytes
+afterwards, so the final assertion is the first measurement of the document
+the route serializes. An earlier revision published a single
+`outcome_narrowed_instead_of_refused` flag, which asserted the answer was
+SERVED — something this emitter cannot observe, and measurably false in the
+~50-byte window drawn above. The dimensions now report what the stage itself
+decided; the refusal, when it comes, carries its own telemetry.
 
 **Why `refusal_planned` is decided AFTER the arm, not before.** The retry
 arm used to build and emit its event before asking the outcome layer, so every

@@ -413,7 +413,11 @@ func (e *Engine) planCandidateNarrowing(
 }
 
 // recordCandidateNarrowing emits the decision-basis event for an attempt
-// that SERVED.
+// whose reduction was APPLIED and passed this stage's own fit check.
+//
+// Not "an attempt that served": the final byte assertion runs later, after
+// the plan re-stamp and the display labels have both added bytes, and it can
+// still refuse. What this event records is what this stage decided.
 //
 // Separated from the decision above so stage 3 can emit the retry's own
 // event first, with an accurate `refusal_planned`. When the two were fused,
@@ -455,9 +459,13 @@ func (e *Engine) recordCandidateNarrowing(
 	event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 	event.RetryDeclined = declined
 	// The decision itself, as its own dimension: this run reached a point
-	// that used to refuse and served instead. Without it the refusal rate
-	// falls and an operator cannot tell whether questions stopped
-	// overrunning or started being narrowed.
+	// that used to refuse unconditionally, and the reduction was applied
+	// instead. Without it the refusal rate falls and an operator cannot
+	// tell whether questions stopped overrunning or started being narrowed.
+	//
+	// It does NOT claim the answer was served -- see the field's own doc
+	// comment for the window where it is applied, fits here, and is still
+	// refused by the final assertion.
 	event.OutcomeReductionApplied = true
 	// The inner fit, named as the inner fit. planCandidateNarrowing only
 	// returns Served when its own re-measurement fits, so this is true
