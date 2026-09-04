@@ -309,30 +309,62 @@ func TestEveryComputedObligationNamesItsServerStep(t *testing.T) {
 	capabilities := liveCapabilityList(t)
 	seed := contextfabric.GenerateObligationSeed(capabilities)
 
-	computed := 0
+	computed, servedComputed, unavailableComputed := 0, 0, 0
 	for _, testCase := range traceFrames() {
 		for _, row := range contextfabric.DeriveRequirements(testCase.frame, seed, capabilities) {
 			if row.Kind != contextfabric.ObligationKindComputed {
 				continue
 			}
 			computed++
-			if !row.Served() {
-				t.Errorf("%s: computed %s@%s is unavailable (%s)", testCase.id, row.Obligation, row.Subject, row.Unavailable)
-			}
 			want, named := contextfabric.StepForComputedObligation(row.Obligation)
 			if !named {
 				t.Errorf("%s: %s is classified computed but names no step in the vocabulary", testCase.id, row.Obligation)
 				continue
 			}
+			// A COMPUTED CELL EITHER NAMES ITS STEP OR NAMES A CLOSED REASON
+			// IT CANNOT RUN -- exactly the disjunction the READ clause above
+			// has always had, and never a silent third state.
+			//
+			// The clause used to demand a step unconditionally. An
+			// adversarial round showed that is too strong: an
+			// organization-scope frame names a member kind, so the coordinate
+			// is legitimate, but nothing discovers that population -- the
+			// step has no input and the cell cannot be served. Demanding a
+			// step there forced the row to CLAIM a server for work nothing
+			// could do, which is the same over-claim the execution
+			// declaration was added to stop, one level in. Naming the reason
+			// is strictly more than naming an unrunnable step.
+			if !row.Served() {
+				if row.Unavailable == "" {
+					t.Errorf("%s: computed %s@%s is unserved and names no reason -- the silent emptiness this gate exists to forbid",
+						testCase.id, row.Obligation, row.Subject)
+				}
+				if row.Step != "" {
+					t.Errorf("%s: computed %s@%s names BOTH a step and a reason it cannot run -- two answers to what became of the cell",
+						testCase.id, row.Obligation, row.Subject)
+				}
+				unavailableComputed++
+				continue
+			}
 			if row.Step != want {
 				t.Errorf("%s: %s@%s names step %q, want %q", testCase.id, row.Obligation, row.Subject, row.Step, want)
 			}
+			servedComputed++
 		}
 	}
 	if computed == 0 {
 		t.Fatal("no computed obligation reached the assertions; Q2, C4, C5 and C7 all derive one, so the corpus or the derivation is wrong")
 	}
-	t.Logf("O9: %d computed requirement cells, each naming its server step", computed)
+	// BOTH sides of the disjunction must be populated, or the clause is
+	// one-sided: all-served would make the unavailable arm dead, and
+	// all-unavailable would mean no frame in the corpus can run a
+	// computation at all.
+	if servedComputed == 0 || unavailableComputed == 0 {
+		t.Fatalf("computed cells are one-sided: %d served, %d unavailable -- one arm of this clause is untested",
+			servedComputed, unavailableComputed)
+	}
+	t.Logf("O9: %d computed requirement cells -- %d name their server step, %d name a closed reason they cannot run",
+		computed, servedComputed, unavailableComputed)
 }
 
 // TestStateCompositionParityAgainstTheLiveRegistry is the N2 parity
