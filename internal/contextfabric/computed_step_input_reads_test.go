@@ -265,3 +265,66 @@ func containsFactKind(kinds []contextfabric.FactKind, want contextfabric.FactKin
 	}
 	return false
 }
+
+// TestOnACohortFamilyTheInputConsumerAddsNothing is the 413 claim, asserted
+// rather than argued.
+//
+// The growth statement this change ships says the plan gains ZERO bytes on a
+// cohort turn, because rank_cohort's declared inputs ARE
+// cohortRankingFormulaKinds and the family already injects them. That is a
+// number a PR body and a budget argument rest on, so it is measured here: the
+// plan's fact kinds must be IDENTICAL, in content and in order, with the
+// requirement rows supplied and without them.
+//
+// Order matters as much as membership. planFactKinds is first-kind-wins and
+// downstream dedup keeps the first entry, so a union that produced the same
+// SET in a different order would change which entry survives and change the
+// serialized bytes -- which a set comparison would not see.
+func TestOnACohortFamilyTheInputConsumerAddsNothing(t *testing.T) {
+	capabilities := liveCapabilityList(t)
+	seed := contextfabric.GenerateObligationSeed(capabilities)
+	frame := traceFrameByID(t, "C4")
+	rows := contextfabric.DeriveRequirements(frame, seed, capabilities)
+
+	planned := contextfabric.ComputedStepInputReads(rows)
+	if len(planned) == 0 {
+		t.Fatal("the frame declares no computed-step input, so there is no growth to measure and this test asserted nothing")
+	}
+
+	family := contextfabric.QuestionFamilyDiscoveredCohortRanking
+	definition, found := contextfabric.LookupQuestionFamily(family)
+	if !found {
+		t.Fatalf("family %q is not in the registry", family)
+	}
+	if !contextfabric.IsCohortSubjectAxisForTest(definition.SubjectAxis) {
+		t.Fatalf("family %q is not a cohort family (axis %q); this test measures the cohort case and would measure nothing here", family, definition.SubjectAxis)
+	}
+
+	input := contextfabric.PlanAnswerInput{
+		Family:           contextfabric.QuestionFamilyOutcome{Family: family, Source: contextfabric.QuestionFamilySourceModel},
+		Budget:           contextfabric.ResponseBudget{MaxItems: 30, MaxSerializedBytes: 1 << 20},
+		MaxCohortMembers: 50,
+	}
+	without := contextfabric.PlanAnswer(input)
+	input.Requirements = rows
+	with := contextfabric.PlanAnswer(input)
+
+	if len(without.FactKinds) != len(with.FactKinds) {
+		t.Fatalf("cohort plan gained %d fact kinds from the requirement rows (%v -> %v); the zero-growth claim is false",
+			len(with.FactKinds)-len(without.FactKinds), without.FactKinds, with.FactKinds)
+	}
+	for index := range without.FactKinds {
+		if without.FactKinds[index] != with.FactKinds[index] {
+			t.Fatalf("cohort plan fact kinds REORDERED at %d: %v -> %v; first-kind-wins downstream makes order a byte difference", index, without.FactKinds, with.FactKinds)
+		}
+	}
+	// NON-VACUITY. If the control plan were empty the equality above would
+	// hold for a consumer that did nothing at all, so the kinds this test
+	// claims are already present must actually be present.
+	for _, kind := range planned {
+		if !containsFactKind(without.FactKinds, kind) {
+			t.Fatalf("the cohort family does NOT already plan %q, so the zero-growth claim rests on nothing", kind)
+		}
+	}
+	t.Logf("cohort family %s: %d fact kinds with and without the rows, declared inputs %v all already present", family, len(with.FactKinds), planned)
+}
