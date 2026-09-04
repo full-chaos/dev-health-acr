@@ -387,8 +387,23 @@ func TestAnAnswerMissingItsCountIsNeitherServedNorDeclined(t *testing.T) {
 // would not notice if they did.
 func TestTheCountReachesTelemetryFromTheServedDocument(t *testing.T) {
 	t.Parallel()
-	const members = 5
-	result, telemetry := runCountingInvestigation(t, members, 0)
+	// A NARROWED shape, deliberately, and this is the whole point of the
+	// fixture rather than a detail.
+	//
+	// The first version of this test ran an EXACT count, where served and
+	// declared are the same number. A mutation swapping one for the other in
+	// the event builder was therefore invisible -- the battery reported it
+	// SURVIVED, and it was right to. Two fields that happen to hold the same
+	// value in a fixture cannot discriminate a swap between them, which is
+	// the mirror of the aliasing trap where every identifier in a fixture is
+	// deliberately distinct.
+	//
+	// The discriminating power is asserted below BEFORE the agreement is,
+	// so a future change that makes this fixture stop narrowing fails here
+	// rather than silently going vacuous again.
+	const discovered = 8
+	const ceiling = 3
+	result, telemetry := runCountingInvestigation(t, discovered, ceiling)
 
 	if len(telemetry.membershipCardinalities) != 1 {
 		t.Fatalf("membership cardinality events = %d, want exactly 1 for one served answer -- "+
@@ -403,6 +418,14 @@ func TestTheCountReachesTelemetryFromTheServedDocument(t *testing.T) {
 		t.Fatalf("assembled-result `count` rows = %d, want 1", len(rows))
 	}
 	row := rows[0]
+	// THE FIXTURE MUST BE ABLE TO TELL THE TWO FIELDS APART. Asserted first:
+	// an agreement check over two equal numbers proves nothing about which
+	// of them the builder read.
+	if row.Served == row.Declared {
+		t.Fatalf("the served row says %d/%d -- served and declared are equal, so this fixture cannot "+
+			"discriminate a swap between them and every agreement assertion below is vacuous",
+			row.Served, row.Declared)
+	}
 	if event.Served != row.Served || event.Declared != row.Declared {
 		t.Fatalf("telemetry served/declared = %d/%d, served document says %d/%d -- "+
 			"the run's artifacts hold two answers to `how many`",
@@ -412,8 +435,9 @@ func TestTheCountReachesTelemetryFromTheServedDocument(t *testing.T) {
 		t.Fatalf("telemetry outcome/requirement = %q/%q, served document says %q/%q",
 			event.Outcome, event.Requirement, row.Outcome, row.Requirement)
 	}
-	if event.Served != members {
-		t.Fatalf("telemetry served = %d, want the %d members the fixture resolved", event.Served, members)
+	if event.Served != ceiling || event.Declared != discovered {
+		t.Fatalf("telemetry served/declared = %d/%d, want %d/%d -- the members the answer carries, "+
+			"over the members the turn found", event.Served, event.Declared, ceiling, discovered)
 	}
 	// The coverage half. A cardinality without it reads as a claim about the
 	// population, which the step does not make.
