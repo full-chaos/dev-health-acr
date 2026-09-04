@@ -160,7 +160,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// without any content reduction ever being attempted.
 		attempt := e.planCandidateNarrowing(plan, params.Frame, result, budget, measurement, overrun)
 		if attempt.Served {
-			e.recordCandidateNarrowing(ctx, principal, plan, attempt, overrun, grouped, narrowed.Basis, before, after, declined, false)
+			e.recordCandidateNarrowing(ctx, principal, plan, attempt, overrun, grouped, narrowed.Basis, before, after, declined, false, false)
 			return attempt.Result, firstPass, nil
 		}
 		// CHAOS-4809 PATH 2: BOTH counts, as narrowSynthesisInput actually
@@ -246,6 +246,19 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
 		outcomeAttempt = e.planCandidateNarrowing(plan, params.Frame, retried, budget, retryMeasurement, retryOverrun)
 	}
+	// ONE decision event per investigation. When the reduction rescues a
+	// retry that did not fit, the event that describes the SERVED answer is
+	// recordCandidateNarrowing's, so emitting this one too would count the
+	// same investigation twice -- exactly the contract this function's own
+	// header states, broken by the reordering above. Found by adversarial
+	// review; the first version of that test counted only the narrowing
+	// events and so could not see the extra one.
+	if outcomeAttempt.Served {
+		e.recordCandidateNarrowing(ctx, principal, plan, outcomeAttempt, retryOverrun, grouped, narrowed.Basis, before, after, RetryDeclinedNotApplicable, true, false)
+		retryRanked := narrowed.Ranked
+		retryPending.CohortRanked = &retryRanked
+		return outcomeAttempt.Result, retryPending, nil
+	}
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, narrowed.Basis)
 	event.MeasuredItems = retryMeasurement.Items.Budgeted()
 	event.MeasuredBytes = retryMeasurement.Bytes
@@ -256,10 +269,11 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	event.RetryAttempted = true
 	event.RetryFit = retryOverrun == contractsv1.ContextFabricBudgetFits
 	event.DeadlineReserved = e.synthesisDeadlineReserve > 0
-	event.RefusalPlanned = !event.RetryFit && !outcomeAttempt.Served
-	// Named on the refusal arm AND on the served arm's own retry event: a
-	// reader must be able to tell "the lever did not apply" from "the lever
-	// ran and was not enough" without re-reading source.
+	// The reduction did not serve -- that path returned above -- so a retry
+	// that did not fit is a planned refusal.
+	event.RefusalPlanned = !event.RetryFit
+	// WHY the outcome layer did not save it: "the lever did not apply" and
+	// "the lever ran and was not enough" are different operator problems.
 	event.OutcomeReductionDeclined = outcomeAttempt.Declined
 	if event.RefusalPlanned {
 		// Only when a refusal is actually planned. Recording the axis on a
@@ -270,16 +284,10 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	e.recordPlanNarrowing(ctx, principal, event)
 
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
-		// The retry narrowed the cohort and the answer still does not fit.
-		// Same question as the declined arm, one pass later: the charged
-		// terms the cohort lever cannot reach are still there, and the
-		// attempt above already asked them.
-		if outcomeAttempt.Served {
-			e.recordCandidateNarrowing(ctx, principal, plan, outcomeAttempt, retryOverrun, grouped, narrowed.Basis, before, after, RetryDeclinedNotApplicable, true)
-			retryRanked := narrowed.Ranked
-			retryPending.CohortRanked = &retryRanked
-			return outcomeAttempt.Result, retryPending, nil
-		}
+		// The rescued case returned above, before this event was emitted.
+		// What is left is a retry that did not fit and a reduction that
+		// could not save it.
+		//
 		// ONE bounded retry, never k of them. Decision D5 rejected further
 		// retries explicitly: they inherit the same deadline problem and
 		// merely move the terminal case, arriving at the same unanswered

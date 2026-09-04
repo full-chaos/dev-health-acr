@@ -214,6 +214,27 @@ func TestARetryThatIsRescuedByTheReductionPlansNoRefusal(t *testing.T) {
 	if served != 1 {
 		t.Fatalf("%d events report a narrowing instead of a refusal, want exactly 1", served)
 	}
+
+	// ONE stage-3 decision event per investigation, which is this file's own
+	// stated contract: fitAssembledResult "returns the held telemetry
+	// belonging to the result it ACTUALLY SERVES, so the caller emits each
+	// per-investigation decision event exactly once."
+	//
+	// Counting only the narrowing events missed the defect: the retry arm
+	// emitted its own assembled_result event AND then the reduction emitted
+	// a second one, so a single investigation was counted twice in stage-3
+	// telemetry. Every narrowing-rate denominator built on that counter was
+	// wrong for exactly the runs this seam rescues -- and a test that counts
+	// only the events it expects can never see an extra one.
+	assembled := 0
+	for _, event := range telemetry.planNarrowings {
+		if event.Stage == contractsv1.ContextFabricPlanNarrowingAssembledResult {
+			assembled++
+		}
+	}
+	if assembled != 1 {
+		t.Fatalf("%d assembled_result events for ONE investigation, want exactly 1 -- the served answer is right but the run is double-counted in stage-3 telemetry", assembled)
+	}
 	if calls != 2 {
 		t.Fatalf("synthesizer called %d times, want 2 -- one bounded retry, and the candidate cut must not re-run synthesis", calls)
 	}

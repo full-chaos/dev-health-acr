@@ -432,6 +432,7 @@ func (e *Engine) recordCandidateNarrowing(
 	before, after int,
 	declined RetryDeclinedReason,
 	retryAttempted bool,
+	retryFit bool,
 ) {
 	e.recordPlanNarrowingStep(plan, PlanNarrowing{
 		Stage:   contractsv1.ContextFabricPlanNarrowingAssembledResult,
@@ -446,7 +447,11 @@ func (e *Engine) recordCandidateNarrowing(
 	event.MeasuredBytes = attempt.Measurement.Bytes
 	event.PredictedItems = PredictedItemsForPlan(*plan, after)
 	event.RetryAttempted = retryAttempted
-	event.RetryFit = true
+	// The RETRY's own outcome, not this reduction's. Hardcoding true said a
+	// re-synthesis had fitted the answer on exactly the runs where it had
+	// not and the candidate cut was what rescued them -- a second way for
+	// this event to describe an artifact other than the one served.
+	event.RetryFit = retryFit
 	event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 	event.RetryDeclined = declined
 	// The decision itself, as its own dimension: this run reached a point
