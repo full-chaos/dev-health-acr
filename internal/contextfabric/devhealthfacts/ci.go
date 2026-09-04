@@ -39,7 +39,7 @@ func (p *ContinuousIntegrationProvider) Capability() contextfabric.FactCapabilit
 	})
 }
 
-func (p *ContinuousIntegrationProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *ContinuousIntegrationProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -50,6 +50,20 @@ func (p *ContinuousIntegrationProvider) ReadFacts(ctx context.Context, principal
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
+	rejectedCount := 0
+	// CHAOS-5026: a defer, not a final-line call, so EVERY return path in
+	// this function -- including one a future edit adds -- passes through
+	// the disclosure, not just the one return statement someone remembered
+	// to add it to (exactly the shape source_health.go's ReadFacts got
+	// wrong: a 3rd success-shaped return with no call of its own). Skipped
+	// when err != nil: an error return's FactProviderResult is never read
+	// by the caller (Go convention), and the raw error already reports a
+	// state at least as severe as SourceTruncated would.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.continuous_integration", contextfabric.FactContinuousIntegration, rejectedCount)
+		}
+	}()
 	// grain starts at the run-status shape's exact precision and widens to
 	// daily only once a repository aggregate ACTUALLY CONTRIBUTED a fact
 	// (rowCount > 0) -- widening merely because a repository subject was
@@ -63,40 +77,43 @@ func (p *ContinuousIntegrationProvider) ReadFacts(ctx context.Context, principal
 	grain := grainExact
 
 	if runSubjects := subjectsOfKind(query.Subjects, contractsv1.ContextFabricSubjectCIRun); len(runSubjects) > 0 {
-		rowCount, scanErr := p.readRunStatus(ctx, orgID, runSubjects, &facts, timeBound)
+		rowCount, rejected, scanErr := p.readRunStatus(ctx, orgID, runSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query ci pipeline runs", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		rejectedCount += rejected
 	}
 
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
-		rowCount, scanErr := p.readRepositoryAggregate(ctx, orgID, repoSubjects, &facts, timeBound)
+		rowCount, rejected, scanErr := p.readRepositoryAggregate(ctx, orgID, repoSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query ci metrics", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		rejectedCount += rejected
 		if rowCount > 0 {
 			grain = grainDaily
 		}
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}, nil
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grain), Truncated: truncated}
+	return result, nil
 }
 
 // readRunStatus is CHAOS-3780's original ci_pipeline_runs read. The SQL/scan
 // half now lives in readers.ReadRunStatus (CHAOS-4377); see that function's
 // doc comment for the CHAOS-3781 Tier B status-derivation reasoning this
 // method used to carry inline.
-func (p *ContinuousIntegrationProvider) readRunStatus(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
-	ids, bySubject := v2Index(subjects, identity.KindCIPipelineRun)
+func (p *ContinuousIntegrationProvider) readRunStatus(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
+	ids, bySubject, rejected := v2Index(subjects, identity.KindCIPipelineRun)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, rejected, nil
 	}
 	rows, err := readers.ReadRunStatus(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
-		return 0, err
+		return 0, rejected, err
 	}
 	for _, r := range rows {
 		subject, ok := bySubject[r.RepoID+":"+r.RunID]
@@ -109,21 +126,21 @@ func (p *ContinuousIntegrationProvider) readRunStatus(ctx context.Context, orgID
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityCI, r.RepoID+":"+r.RunID)},
 		})
 	}
-	return len(rows), nil
+	return len(rows), rejected, nil
 }
 
 // readRepositoryAggregate reads cicd_metrics_daily (latest day per
 // repository) -- CHAOS-4347's repository-scoped CI aggregate. The SQL/scan
 // half, including the row_number()/cityHash64 tiebreak reasoning, now lives
 // in readers.ReadCICDMetricsDaily (CHAOS-4377).
-func (p *ContinuousIntegrationProvider) readRepositoryAggregate(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, error) {
-	ids, bySubject := subjectIndex(subjects, repositoryPrefix)
+func (p *ContinuousIntegrationProvider) readRepositoryAggregate(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
+	ids, bySubject, rejected := subjectIndex(subjects, repositoryPrefix)
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, rejected, nil
 	}
 	rows, err := readers.ReadCICDMetricsDaily(ctx, p.facts.client, orgID, ids, timeBound.neutral())
 	if err != nil {
-		return 0, err
+		return 0, rejected, err
 	}
 	for _, r := range rows {
 		subject, ok := bySubject[r.RepoID]
@@ -149,5 +166,5 @@ func (p *ContinuousIntegrationProvider) readRepositoryAggregate(ctx context.Cont
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, r.RepoID)},
 		})
 	}
-	return len(rows), nil
+	return len(rows), rejected, nil
 }

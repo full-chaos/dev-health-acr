@@ -59,7 +59,7 @@ func (p *LandscapeProvider) Capability() contextfabric.FactCapability {
 	return capability
 }
 
-func (p *LandscapeProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *LandscapeProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -71,30 +71,41 @@ func (p *LandscapeProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
 	omittedRows := 0
+	rejectedCount := 0
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.landscape", contextfabric.FactLandscape, rejectedCount)
+		}
+	}()
 
 	if teamSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectTeam); len(teamSubjects) > 0 {
-		rowCount, rowsOmitted, scanErr := p.readTeamLandscape(ctx, orgID, teamSubjects, &facts, timeBound)
+		rowCount, rowsOmitted, rejected, scanErr := p.readTeamLandscape(ctx, orgID, teamSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team landscape", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery || rowsOmitted > 0
 		omittedRows += rowsOmitted
+		rejectedCount += rejected
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, rowsOmitted, scanErr := p.readProjectLandscape(ctx, orgID, projectSubjects, &facts, timeBound)
+		rowCount, rowsOmitted, rejected, scanErr := p.readProjectLandscape(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project landscape", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery || rowsOmitted > 0
 		omittedRows += rowsOmitted
+		rejectedCount += rejected
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
 	// CHAOS-4521b: this source has no project dimension, so an all-project
 	// read that came back empty says something more specific than "no rows".
 	retentionReason = explainTeamScopedProjectAbsence(timeBound, state, retentionReason, query.Subjects)
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated, OmittedCount: omittedRows}, nil
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated, OmittedCount: omittedRows}
+	return result, nil
 }
 
 // landscapeAreaRow is one (map_name, as_of_day) area's aggregate for a
@@ -124,10 +135,10 @@ func (r landscapeAreaRow) toFactValueRow() contextfabric.FactValueRow {
 // readTeamLandscape aggregates ic_landscape_rolling_30d to (team_id,
 // map_name) at each team's own latest retained as_of_day -- never averaged
 // or summed ACROSS as_of_day, and never emitted per-identity.
-func (p *LandscapeProvider) readTeamLandscape(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
-	ids, bySubject := subjectIndex(subjects, teamPrefix)
+func (p *LandscapeProvider) readTeamLandscape(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, int, error) {
+	ids, bySubject, rejected := subjectIndex(subjects, teamPrefix)
 	if len(ids) == 0 {
-		return 0, 0, nil
+		return 0, 0, rejected, nil
 	}
 	statement := withRowLimit(`SELECT toString(team_id), map_name, toString(as_of_day), toInt64(count()), toInt64(sum(churn_loc_30d)), toInt64(sum(delivery_units_30d)), avg(cycle_p50_30d_hours), toInt64(max(wip_max_30d))
 FROM (
@@ -159,7 +170,7 @@ ORDER BY team_id, map_name`)
 		return nil
 	}, timeBound.bindings()...)
 	if scanErr != nil {
-		return rowCount, 0, scanErr
+		return rowCount, 0, rejected, scanErr
 	}
 	totalOmitted := 0
 	for _, teamID := range teamOrder {
@@ -200,7 +211,7 @@ ORDER BY team_id, map_name`)
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 		})
 	}
-	return rowCount, totalOmitted, nil
+	return rowCount, totalOmitted, rejected, nil
 }
 
 // readProjectLandscape rolls FactLandscape up for a project through
@@ -209,10 +220,10 @@ ORDER BY team_id, map_name`)
 // instant) owning the project contributes its own (team_id, map_name)
 // landscape aggregate -- see metrics.go's readProjectMetrics for why the
 // join is on (provider, project_key), never project_id.
-func (p *LandscapeProvider) readProjectLandscape(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, error) {
-	ids, bySubject := v2Index(subjects, identity.KindProject)
+func (p *LandscapeProvider) readProjectLandscape(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (int, int, int, error) {
+	ids, bySubject, rejected := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, 0, nil
+		return 0, 0, rejected, nil
 	}
 	ownershipPredicate := " AND valid_from <= now64(3) AND valid_to IS NULL"
 	if timeBound.active {
@@ -259,7 +270,7 @@ ORDER BY p.id, il.team_id, il.map_name`)
 		return nil
 	}, timeBound.bindings()...)
 	if scanErr != nil {
-		return rowCount, 0, scanErr
+		return rowCount, 0, rejected, scanErr
 	}
 	totalOmitted := 0
 	for _, projectKey := range projectOrder {
@@ -308,5 +319,5 @@ ORDER BY p.id, il.team_id, il.map_name`)
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
-	return rowCount, totalOmitted, nil
+	return rowCount, totalOmitted, rejected, nil
 }

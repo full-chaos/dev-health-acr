@@ -202,23 +202,36 @@ func subjectsOfKind(subjects []contextfabric.SubjectRef, kind contextfabric.Subj
 // guarantees the fact's Subject is byte-for-byte the same value the
 // registry already validated into its allowed set, Label included.
 //
-// A subject whose CanonicalID doesn't carry prefix is skipped, not errored:
-// callers only ever receive subjects contextfabric.buildFactQuery already
-// filtered to this provider's SupportedSubjectKinds, so this only guards
-// against a malformed id, and skipping it just means that one subject gets
-// no fact entry -- the same "partial coverage is fine" contract a zero-row
-// query result gets.
-func subjectIndex(subjects []contextfabric.SubjectRef, prefix string) (ids []string, bySubject map[string]contextfabric.SubjectRef) {
+// A subject whose CanonicalID doesn't carry prefix is skipped from ids/
+// bySubject, not errored: callers only ever receive subjects
+// contextfabric.buildFactQuery already filtered to this provider's
+// SupportedSubjectKinds, so this only guards against a malformed id.
+//
+// CHAOS-5026: skipping it is NOT silent, though. Before this ticket, a
+// caller passing "CHAOS" where this provider needed "team:CHAOS" (a wrongly
+// shaped id, never actually a subject with no data) produced exactly the
+// same ids=nil, bySubject=empty result a genuinely-empty request would --
+// so the eventual FactProviderResult read state=no_data, indistinguishable
+// from a team that really has none. rejected is every subject this call
+// skipped for that reason; callers MUST fold it into their result via
+// applySubjectShapeRejection (or an equivalent positive disclosure) rather
+// than let it vanish into an ordinary zero-row read. Returning it as an
+// explicit third value -- rather than a bool or a discarded count -- means
+// every existing two-value call site fails to COMPILE until it decides what
+// to do with the count (the same "make it a value the compiler enumerates"
+// discipline this package's identity-widening already uses elsewhere).
+func subjectIndex(subjects []contextfabric.SubjectRef, prefix string) (ids []string, bySubject map[string]contextfabric.SubjectRef, rejected int) {
 	bySubject = make(map[string]contextfabric.SubjectRef, len(subjects))
 	for _, subject := range subjects {
 		raw := strings.TrimPrefix(subject.CanonicalID, prefix)
 		if raw == "" || raw == subject.CanonicalID {
+			rejected++
 			continue
 		}
 		bySubject[raw] = subject
 		ids = append(ids, raw)
 	}
-	return ids, bySubject
+	return ids, bySubject, rejected
 }
 
 // v2Index recovers this package's ClickHouse lookup key for a CHAOS-3898
@@ -245,24 +258,29 @@ func subjectIndex(subjects []contextfabric.SubjectRef, prefix string) (ids []str
 //
 // A subject whose CanonicalID doesn't parse as kind's "<kind>.v2:" form is
 // skipped, not errored, matching subjectIndex's "omit rather than guess"
-// contract for a malformed id.
-func v2Index(subjects []contextfabric.SubjectRef, kind string) (ids []string, bySubject map[string]contextfabric.SubjectRef) {
+// contract for a malformed id -- and, per CHAOS-5026, rejected counts it the
+// same way subjectIndex does, for the same reason: without it, a caller
+// passing a pre-migration or malformed id reads identically to a subject
+// with genuinely no data.
+func v2Index(subjects []contextfabric.SubjectRef, kind string) (ids []string, bySubject map[string]contextfabric.SubjectRef, rejected int) {
 	bySubject = make(map[string]contextfabric.SubjectRef, len(subjects))
 	for _, subject := range subjects {
 		segments, ok := identity.Segments(kind, subject.CanonicalID)
 		if !ok || len(segments) < 2 {
+			rejected++
 			continue
 		}
 		repoID := segments[0]
 		rawID := segments[len(segments)-1]
 		if repoID == "" || rawID == "" {
+			rejected++
 			continue
 		}
 		key := repoID + ":" + rawID
 		bySubject[key] = subject
 		ids = append(ids, key)
 	}
-	return ids, bySubject
+	return ids, bySubject, rejected
 }
 
 // pullRequestKey builds the same "repoID:number" composite row key
@@ -835,6 +853,87 @@ func disclosedDualTableDrop(producer string, kind contextfabric.FactKind, legacy
 	}
 	recordFactBytesBoundExceeded(producer, kind)
 	return true, len(timeSeriesRows) + preCapOmitted, factBytesBoundExceededReason
+}
+
+// subjectIDShapeRejectedReason is CHAOS-5026's closed-vocabulary reason a
+// provider discloses when subjectIndex/v2Index could not match one or more
+// requested subjects to this provider's own row-key shape (e.g. "CHAOS"
+// passed where "team:CHAOS" was required) -- the SAME token
+// recordSubjectIDShapeRejected's telemetry event uses, so a log line and a
+// served answer name the identical cause. A fixed literal, never
+// interpolating the subject id or the count -- OmittedCount already carries
+// the count, and a bare subject id must never reach a public reason string.
+const subjectIDShapeRejectedReason = "subject_id_shape_rejected"
+
+// recordSubjectIDShapeRejected emits the CHAOS-5026 decision-basis
+// telemetry line for a provider that could not match one or more requested
+// subjects to its row-key shape -- the same disclosure discipline this
+// package's other decision branches use (see recordFactBytesBoundExceeded).
+// producer and kind are both closed, low-cardinality vocabulary; rejected is
+// a count, never a subject id or CanonicalID.
+func recordSubjectIDShapeRejected(producer string, kind contextfabric.FactKind, rejected int) {
+	slog.Warn("context_fabric_subject_id_shape_rejected",
+		"producer", producer,
+		"kind", string(kind),
+		"rejected", rejected,
+	)
+}
+
+// applySubjectShapeRejection folds rejected (the count subjectIndex/v2Index
+// returned for subjects whose CanonicalID did not carry this provider's
+// row-key shape) into result, CHAOS-5026's fix for subjectIndex's own
+// "skipped, not errored" contract: a skip must never be OBSERVATIONALLY
+// silent, even though it is deliberately not an error.
+//
+// Routed through the exact SAME OmittedCount/Reason mechanism CHAOS-4785's
+// disclosedDualTableDrop already uses for a dropped table (shared.go's
+// FactProviderResult.OmittedCount doc comment: "rows the provider DROPPED
+// rather than reported") -- a shape-rejected subject is precisely that: a
+// row this provider will never surface for that subject, dropped before the
+// query even ran. mergeFactProviderResult (fact_registry.go) turns a
+// nonzero OmittedCount into contextfabric.SourceTruncated, a state already
+// distinct from contextfabric.SourceNoData in the existing, published
+// vocabulary -- so this needs no new wire enum value: "rejected" and
+// "no_data" are ALREADY different values the instant this function is
+// called, and every existing switch over SourceState (validFactSourceState,
+// stateRejectsFacts, coverage rendering, sourceStatePriority) already
+// handles both.
+//
+// Called ONCE per ReadFacts, after every subjectIndex/v2Index call within it
+// has been aggregated into one rejected count, and AFTER the state/reason
+// for the MATCHED subjects has already been decided: rejection is disclosed
+// ADDITIVELY, never replacing an available/stale result for the subjects
+// that WERE found -- the same "partial coverage is fine" contract a
+// zero-row query result already gets.
+//
+// State is promoted to contextfabric.SourceTruncated and Truncated is set
+// HERE, at the provider, rather than left for fact_registry.go's
+// mergeFactProviderResult to infer solely from OmittedCount: every sibling
+// provider in this package that already produces an OmittedCount (flow.go,
+// health.go, landscape.go, readiness.go, ci.go, deployments.go,
+// source_health.go) sets its own Truncated flag alongside it rather than
+// relying on the registry alone, and a state a caller can observe by
+// calling FactProvider.ReadFacts directly -- never only after it survives
+// an unrelated merge step -- is what makes "rejected" and "no_data"
+// verifiably different values at THIS seam, not just downstream of it.
+// SourceTruncated is legal here: stateRejectsFacts (fact_registry.go) does
+// not include it, so it may carry zero OR more facts, matching a provider
+// that found real data for its well-shaped subjects and lost only the
+// rejected ones.
+func applySubjectShapeRejection(result *contextfabric.FactProviderResult, producer string, kind contextfabric.FactKind, rejected int) {
+	if rejected <= 0 {
+		return
+	}
+	recordSubjectIDShapeRejected(producer, kind, rejected)
+	result.OmittedCount += rejected
+	result.Truncated = true
+	result.State = contextfabric.SourceTruncated
+	switch {
+	case strings.TrimSpace(result.Reason) == "":
+		result.Reason = subjectIDShapeRejectedReason
+	case !strings.Contains(result.Reason, subjectIDShapeRejectedReason):
+		result.Reason = subjectIDShapeRejectedReason + "; " + result.Reason
+	}
 }
 
 func stringOrNull(value string) contextfabric.FactValue {
