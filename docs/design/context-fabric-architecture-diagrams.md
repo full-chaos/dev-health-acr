@@ -1868,11 +1868,16 @@ rather than against any plan.
 **What stays broken, said plainly rather than left to be rediscovered.**
 Narration still reads the static contract caps — 50 drivers and 250 claimed
 facts — which say what a document may legally CARRY and nothing about what the
-item budget can AFFORD. On a 16-member fixture that authorises 32 judgments
-plus 32 minted claims: 64 items on top of synthesis, against a ceiling of 30.
-It is a second spender on one ceiling and it is the largest single source of
-the overrun. It is not fixed here, and the split above is what makes it
-VISIBLE from a run's own artifacts for the first time.
+item budget can AFFORD. Measured by calling the function itself:
+`cohortDriverNarrationBudget(50, 4, 250, 0)` returns 15 members at 3 drivers
+each, so with four drivers from synthesis it authorises **45 narrated judgments
+and as many minted claims — 90 items on top of synthesis' four, against a
+ceiling of 30**. (A live cohort narrates only members carrying a ranked driver,
+so a given run charges less than the authorisation; the authorisation is what
+the caps permit and what the item budget never sees.) It is a second spender on
+one ceiling and it is the largest single source of the overrun. It is not fixed
+here, and the split above is what makes it VISIBLE from a run's own artifacts
+for the first time.
 
 **And one arithmetic fact that reframes the fix for whoever takes it on.**
 `planBudget` sets `MaxMembers = MaxItems − SynthesisHeadroom`, and the grouped
