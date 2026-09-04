@@ -556,3 +556,112 @@ func TestTheCountRowsBudgetCostIsBoundedAndCharged(t *testing.T) {
 		delta, withCount.Items.Budgeted(), withCount.Bytes,
 		withoutCount.Items.Budgeted(), withoutCount.Bytes)
 }
+
+// TestComputeMembershipCardinalityReadsOnlyMemberNarrowings isolates the
+// step's own rules, one fixture per rule.
+//
+// WHY THIS EXISTS SEPARATELY FROM THE ENGINE-DRIVEN TESTS. The engine
+// fixtures above exercise the common shapes, and they do NOT reach the
+// stage-1 case at all: a request whose cohort ceiling is already below the
+// plan's budget records no `cardinality` step, so the exclusion that keeps a
+// CEILING pair from being read as member counts is unreachable end to end.
+// A rule no fixture reaches is a rule pinned by nothing -- it would survive
+// being deleted, and the first question with a real pre-read clamp would
+// publish "declared 50, served 3" for a three-member organization.
+//
+// Each row differs from the exact case in ONE respect, so a mutation that
+// collapses two rules into one still fails at least one row.
+func TestComputeMembershipCardinalityReadsOnlyMemberNarrowings(t *testing.T) {
+	t.Parallel()
+	cohort := countingCohort(SubjectTeam, 3)
+
+	cases := []struct {
+		name         string
+		cohort       *Cohort
+		narrowing    []contractsv1.ContextFabricPlanNarrowing
+		wantCounted  bool
+		wantServed   int
+		wantDeclared int
+		why          string
+	}{
+		{
+			name:   "no resolved member set is ABSENT, never a count of zero",
+			cohort: nil, wantCounted: false,
+			why: "a population that could not be resolved and one that is genuinely empty are different answers",
+		},
+		{
+			name:   "nothing narrowed, so the count is exact over the resolved set",
+			cohort: cohort, wantCounted: true, wantServed: 3, wantDeclared: 3,
+		},
+		{
+			name:   "a stage-1 CEILING pair is not a member count",
+			cohort: cohort,
+			narrowing: []contractsv1.ContextFabricPlanNarrowing{{
+				Stage:  contractsv1.ContextFabricPlanNarrowingCardinality,
+				Before: 50, After: 10,
+			}},
+			wantCounted: true, wantServed: 3, wantDeclared: 3,
+			why: "stage 1 records the requested ceiling and the clamp, not members; reading it would publish `declared 50` for a three-member cohort",
+		},
+		{
+			name:   "a GROUP narrowing counts groups, not members",
+			cohort: cohort,
+			narrowing: []contractsv1.ContextFabricPlanNarrowing{{
+				Stage:  contractsv1.ContextFabricPlanNarrowingSynthesisInput,
+				Before: 9, After: 4, Groups: true,
+			}},
+			wantCounted: true, wantServed: 3, wantDeclared: 3,
+			why: "the group axis was narrowed; the member count is untouched by it",
+		},
+		{
+			name:   "a member narrowing supplies the declared population",
+			cohort: cohort,
+			narrowing: []contractsv1.ContextFabricPlanNarrowing{{
+				Stage:  contractsv1.ContextFabricPlanNarrowingSynthesisInput,
+				Before: 8, After: 3,
+				Basis: contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical,
+			}},
+			wantCounted: true, wantServed: 3, wantDeclared: 8,
+		},
+		{
+			name:   "the EARLIEST member narrowing wins, because its Before is the largest count observed",
+			cohort: cohort,
+			narrowing: []contractsv1.ContextFabricPlanNarrowing{
+				{Stage: contractsv1.ContextFabricPlanNarrowingCardinality, Before: 50, After: 12},
+				{Stage: contractsv1.ContextFabricPlanNarrowingSynthesisInput, Before: 12, After: 6,
+					Basis: contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical},
+				{Stage: contractsv1.ContextFabricPlanNarrowingAssembledResult, Before: 6, After: 3,
+					Basis: contractsv1.ContextFabricNarrowingBasisAttentionRank},
+			},
+			wantCounted: true, wantServed: 3, wantDeclared: 12,
+			why: "12 is the largest member count this turn actually saw; 50 is a ceiling and 6 is mid-narrowing",
+		},
+	}
+
+	reached := 0
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, counted := ComputeMembershipCardinality(testCase.cohort, testCase.narrowing)
+			if counted != testCase.wantCounted {
+				t.Fatalf("counted = %v, want %v (%s)", counted, testCase.wantCounted, testCase.why)
+			}
+			if !counted {
+				if got.Served != 0 || got.Declared != 0 {
+					t.Fatalf("an absent count carried numbers %d/%d", got.Served, got.Declared)
+				}
+				return
+			}
+			if got.Served != testCase.wantServed || got.Declared != testCase.wantDeclared {
+				t.Fatalf("served/declared = %d/%d, want %d/%d (%s)",
+					got.Served, got.Declared, testCase.wantServed, testCase.wantDeclared, testCase.why)
+			}
+			if got.Kind != SubjectTeam {
+				t.Fatalf("counted kind = %q, want %q -- a count whose reader cannot tell WHAT was counted is not an answer", got.Kind, SubjectTeam)
+			}
+		})
+		reached++
+	}
+	if reached != len(cases) {
+		t.Fatalf("%d of %d rows reached their assertions", reached, len(cases))
+	}
+}
