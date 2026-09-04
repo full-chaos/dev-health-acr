@@ -46,7 +46,7 @@ func multiTeamFact(memberID string, teams ...string) []CanonicalFact {
 func TestBuildCohortGroupsListsAMemberUnderEveryOwningTeam(t *testing.T) {
 	t.Parallel()
 	facts := multiTeamFact("project_shared", "team_a", "team_b")
-	groups, ungrouped := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, planFixtureCohort("project_shared"), facts)
+	groups, ungrouped, _ := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, planFixtureCohort("project_shared"), facts)
 	if ungrouped != 0 {
 		t.Fatalf("ungrouped = %d, want 0", ungrouped)
 	}

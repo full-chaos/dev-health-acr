@@ -149,7 +149,7 @@ func TestBuildCohortGroupsReadsTheOwningTeamOffMemberFacts(t *testing.T) {
 		planFixtureFacts("project_b", "team_2", "Growth"),
 		planFixtureFacts("project_c", "team_1", "Platform"),
 	}
-	groups, ungrouped := BuildCohortGroups(plan, cohort, facts)
+	groups, ungrouped, _ := BuildCohortGroups(plan, cohort, facts)
 	if ungrouped != 0 {
 		t.Fatalf("ungrouped = %d, want 0", ungrouped)
 	}
@@ -181,7 +181,7 @@ func TestBuildCohortGroupsReadsTheOwningTeamOffMemberFacts(t *testing.T) {
 func TestBuildCohortGroupsLeavesAnUnplaceableMemberUngrouped(t *testing.T) {
 	t.Parallel()
 	cohort := planFixtureCohort("project_a", "project_orphan")
-	groups, ungrouped := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, cohort,
+	groups, ungrouped, _ := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, cohort,
 		[]CanonicalFact{planFixtureFacts("project_a", "team_1", "Platform")})
 	if ungrouped != 1 {
 		t.Fatalf("ungrouped = %d, want 1", ungrouped)
@@ -211,7 +211,7 @@ func TestHealthScopeRowsOnlyGroupOnTeamScope(t *testing.T) {
 		}}},
 		SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1",
 	}
-	groups, _ := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, planFixtureCohort("project_a"), []CanonicalFact{fact})
+	groups, _, _ := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, planFixtureCohort("project_a"), []CanonicalFact{fact})
 	if len(groups) != 1 || groups[0].Subject.CanonicalID != "team_9" {
 		t.Fatalf("groups = %#v, want the scope=\"team\" row's id", groups)
 	}

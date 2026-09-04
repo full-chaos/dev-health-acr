@@ -324,6 +324,17 @@ type GroupedCohortCompletenessEvent struct {
 	// touched" countable without re-deriving it from PreGroupingComplete
 	// and GroupCount at query time.
 	GroupsMarkedIncomplete int
+	// Refusal names why grouping built NOTHING, when it refused. Empty on
+	// every ordinary emission. Emitting the refusal on this same event,
+	// rather than minting a second one, keeps "what happened to the group
+	// axis this request planned" answerable from one line: group_count 0
+	// with a refusal is a refusal, and group_count 0 without one is the
+	// pre-existing nothing-could-be-placed degrade.
+	Refusal CohortGroupingRefusal
+	// PlannedGroupKind is the kind the PLAN asked for, carried only with a
+	// refusal so a reader can see the disagreement without joining lines. It
+	// is a closed-vocabulary subject kind, never model text.
+	PlannedGroupKind SubjectKind
 	// Complete/Truncated are the FINAL cohort-level flags after
 	// ApplyGroupedCohortCompleteness folded the pre-grouping state and the
 	// groups together.

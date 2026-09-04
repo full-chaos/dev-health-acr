@@ -478,6 +478,34 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		return rejectSynthesis(RejectionReasonDeterministicAnswerMissing, "deterministic answer is required")
 	}
 	allowedSubjects := synthesisSubjects(input)
+	// allowedSubjects is what the model may cite; payloadSubjects is
+	// everything it was SHOWN; uncitableShown is the part of the latter that
+	// is deliberately not the former. The three subject-scope rejections
+	// below classify the rejecting subject against all three -- telemetry
+	// only, no effect on the decision. See SynthesisSubjectScopeBasis.
+	// Computed LAZILY: the census marshals the payload, and an answer that
+	// validates cleanly must not pay for diagnosis it never needs. Only a
+	// subject-scope rejection reaches scopeBasis, and rejections are the
+	// minority path.
+	var payloadSubjects map[string]struct{}
+	var uncitableShown map[string]struct{}
+	censusOK, censusDone := false, false
+	scopeBasis := func(subject SubjectRef) SynthesisSubjectScopeBasis {
+		if !censusDone {
+			payloadSubjects, censusOK = synthesisPayloadSubjects(input)
+			uncitableShown = synthesisUncitableShownSubjects(input)
+			censusDone = true
+		}
+		if !censusOK {
+			// No census, no claim -- but SAY so. An empty set would classify
+			// every rejected subject as "absent", blaming the model on the
+			// strength of a measurement that did not happen; an omitted field
+			// would hide the broken instrument behind a shape that also means
+			// "not a subject-scope rejection".
+			return synthesisSubjectScopeBasisUnavailable()
+		}
+		return synthesisSubjectScopeBasis(subject, payloadSubjects, uncitableShown)
+	}
 	// canonicalLabels binds every subject the model can legally reference
 	// to the ONE label the investigation input actually carries for that
 	// canonical ID (graph resolution, cohort, paths, and canonical facts
@@ -534,6 +562,18 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 			allowedEvidence[evidenceRefID] = struct{}{}
 		}
 	}
+	// CHAOS-4962, the same display/validate asymmetry on the evidence axis:
+	// the payload hands the model the engine's own driver candidates, each
+	// carrying its EvidenceRefIDs, and answer_reuse_degrade serves those
+	// candidates verbatim as the answer's Drivers -- so their evidence was
+	// simultaneously good enough for ACR to publish and "unknown" when the
+	// model cited it. Engine-minted, exactly like the path/fact/cohort refs
+	// above; admitting them widens nothing the model could forge.
+	for _, candidate := range input.Graph.DriverCandidates {
+		for _, evidenceRefID := range candidate.EvidenceRefIDs {
+			allowedEvidence[evidenceRefID] = struct{}{}
+		}
+	}
 	for _, evidenceRefID := range d.EvidenceRefIDs {
 		if _, ok := allowedEvidence[evidenceRefID]; !ok {
 			return rejectSynthesis(RejectionReasonEvidenceUnknown, "synthesis references unknown evidence %q", evidenceRefID)
@@ -583,7 +623,7 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		}
 		claimedByID[claim.ClaimID] = claim
 		if _, ok := allowedSubjects[subjectKeyForModel(claim.Subject)]; !ok {
-			return rejectSynthesis(RejectionReasonClaimSubjectOutOfScope, "claimed fact references subject outside the investigation")
+			return rejectSynthesisSubject(RejectionReasonClaimSubjectOutOfScope, scopeBasis(claim.Subject), "claimed fact references subject outside the investigation")
 		}
 		if err := requireBoundLabel("claimed fact", claim.Subject, canonicalLabels); err != nil {
 			return rejectSynthesis(RejectionReasonClaimSubjectLabelMismatch, "%w", err)
@@ -604,7 +644,7 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		}
 		for _, subject := range driver.AffectedSubjects {
 			if _, ok := allowedSubjects[subjectKeyForModel(subject)]; !ok {
-				return rejectSynthesis(RejectionReasonDriverSubjectOutOfScope, "driver references subject outside the investigation")
+				return rejectSynthesisSubject(RejectionReasonDriverSubjectOutOfScope, scopeBasis(subject), "driver references subject outside the investigation")
 			}
 			if err := requireBoundLabel("driver", subject, canonicalLabels); err != nil {
 				return rejectSynthesis(RejectionReasonDriverSubjectLabelMismatch, "%w", err)
@@ -622,6 +662,15 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		}
 		if err := requireGroundedClaims("driver", driver.Category, driver.AffectedSubjects, allowedSubjects, driver.ClaimedFactIDs, claimedByID); err != nil {
 			return rejectSynthesis(RejectionReasonDriverClaimUngrounded, "%w", err)
+		}
+		// The RELATIONAL rule. Everything above is per-subject, and the
+		// allow-sets are global, so a driver naming Team A and also naming a
+		// project owned by Team B passes every one of them while asserting
+		// that the second is the first's business. Membership is the only
+		// thing that can refute it, and the cohort's own groups are the only
+		// place membership is recorded.
+		if err := requireGroupMembershipClosure(driver.AffectedSubjects, input.Graph.Cohort); err != nil {
+			return rejectSynthesis(RejectionReasonDriverGroupMemberForeign, "driver: %w", err)
 		}
 	}
 	// Fixed slice, NOT a map: a map's iteration order is randomized per
@@ -649,7 +698,7 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 			}
 			for _, subject := range finding.Subjects {
 				if _, ok := allowedSubjects[subjectKeyForModel(subject)]; !ok {
-					return rejectSynthesis(RejectionReasonFindingSubjectOutOfScope, "%s references subject outside the investigation", name)
+					return rejectSynthesisSubject(RejectionReasonFindingSubjectOutOfScope, scopeBasis(subject), "%s references subject outside the investigation", name)
 				}
 				if err := requireBoundLabel(name, subject, canonicalLabels); err != nil {
 					return rejectSynthesis(RejectionReasonFindingSubjectLabelMismatch, "%w", err)
@@ -690,6 +739,70 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 // InvestigationResult.Validate() (classified ErrInvalidResult -> 500)
 // lets the route correctly attribute a closure-violating draft to the
 // model, not to ACR.
+// requireGroupMembershipClosure rejects a driver that names a cohort GROUP
+// alongside a subject that group does not contain.
+//
+// The rule, stated once: if a driver names a group, every OTHER subject it
+// names must be that group's own member, or the group itself. A driver naming
+// no group is untouched, so single-subject answers and flat cohorts behave
+// exactly as they did.
+//
+// Naming SEVERAL groups is allowed and means the union of their members --
+// "these two teams both have the same problem" is a legitimate driver, and the
+// contract already permits a member to belong to more than one group
+// (ownership is a relation, not a partition). What is refused is naming a
+// group and a subject belonging to NO named group.
+//
+// Subjects that are not cohort members at all -- a path node, a committed
+// resolution subject -- are not group-scoped and are not judged here; this
+// rule is about member attribution, and treating an unrelated subject as a
+// membership violation would reject legitimate context.
+func requireGroupMembershipClosure(subjects []SubjectRef, cohort *Cohort) error {
+	if cohort == nil || len(cohort.Groups) == 0 {
+		return nil
+	}
+	named := make(map[string]struct{}, len(subjects))
+	for _, subject := range subjects {
+		named[subjectKeyForModel(subject)] = struct{}{}
+	}
+	// Which groups this driver actually names, and the union of their members.
+	permitted := make(map[string]struct{})
+	namesAGroup := false
+	for _, group := range cohort.Groups {
+		if _, ok := named[subjectKeyForModel(group.Subject)]; !ok {
+			continue
+		}
+		namesAGroup = true
+		permitted[subjectKeyForModel(group.Subject)] = struct{}{}
+		for _, memberID := range group.MemberCanonicalIDs {
+			for _, member := range cohort.Members {
+				if member.Subject.CanonicalID == memberID {
+					permitted[subjectKeyForModel(member.Subject)] = struct{}{}
+				}
+			}
+		}
+	}
+	if !namesAGroup {
+		return nil
+	}
+	// Every cohort MEMBER this driver names must be inside that union. A
+	// non-member subject is out of this rule's scope entirely.
+	members := make(map[string]struct{}, len(cohort.Members))
+	for _, member := range cohort.Members {
+		members[subjectKeyForModel(member.Subject)] = struct{}{}
+	}
+	for _, subject := range subjects {
+		key := subjectKeyForModel(subject)
+		if _, isMember := members[key]; !isMember {
+			continue
+		}
+		if _, ok := permitted[key]; !ok {
+			return fmt.Errorf("names a group and also cohort member %q, which belongs to no group it named", subject.CanonicalID)
+		}
+	}
+	return nil
+}
+
 func requireGroundedClaims(name, category string, scopeSubjects []SubjectRef, fallbackAllowed map[string]struct{}, claimedFactIDs []string, claimed map[string]ClaimedFact) error {
 	scoped := fallbackAllowed
 	if len(scopeSubjects) > 0 {
@@ -719,12 +832,15 @@ func requireGroundedClaims(name, category string, scopeSubjects []SubjectRef, fa
 }
 
 // canonicalSubjectLabels binds every canonical ID the investigation input
-// actually named to the ONE label that ID carries in the input: graph
-// resolution (candidates and committed subjects), the discovered cohort,
-// relationship path nodes, and canonical fact subjects are all sources of
-// truth, in that order, first-write-wins (an investigation's own inputs
-// are expected to already agree; this is not a conflict-resolution
-// policy). See requireBoundLabel.
+// actually named to the ONE label that ID carries in the input, first-write-
+// wins (an investigation's own inputs are expected to already agree; this is
+// not a conflict-resolution policy). See requireBoundLabel.
+//
+// Its sources are resolution CANDIDATES plus, in published order, every
+// source forEachCitableSynthesisSubject visits. It does not enumerate those
+// itself: an admitted subject with no binding is citable under a forged
+// label, so admission and binding share one walk rather than two lists that
+// have already drifted apart three times.
 func canonicalSubjectLabels(input SynthesisInput) map[string]string {
 	labels := make(map[string]string)
 	set := func(subject SubjectRef) {
@@ -733,25 +849,23 @@ func canonicalSubjectLabels(input SynthesisInput) map[string]string {
 			labels[key] = subject.Label
 		}
 	}
+	// Resolution.Candidates are bound here and ONLY here: they are shown to
+	// the model and deliberately not citable (see
+	// synthesisUncitableShownSubjects), so they need a bound label -- a
+	// rejection should say "shown, uncitable on purpose", not be preceded by
+	// a forged-label acceptance -- while staying out of the admission set.
+	// Binding is therefore a SUPERSET of admission, which is the only
+	// direction that is safe: a bound-but-unadmitted subject is rejected by
+	// the caller's membership check, whereas an admitted-but-unbound one is
+	// citable under any label the model invents.
 	for _, candidate := range input.Graph.Resolution.Candidates {
 		set(candidate.Subject)
 	}
-	for _, subject := range input.Graph.Resolution.Committed {
-		set(subject)
-	}
-	if input.Graph.Cohort != nil {
-		for _, member := range input.Graph.Cohort.Members {
-			set(member.Subject)
-		}
-	}
-	for _, path := range input.Graph.Paths {
-		for _, node := range path.Nodes {
-			set(node)
-		}
-	}
-	for _, fact := range input.Facts.Facts {
-		set(fact.Subject)
-	}
+	// Everything citable comes from the ONE walk synthesisSubjects uses, so
+	// an admission cannot be added without its binding. See
+	// forEachCitableSynthesisSubject for why this is structural rather than
+	// two lists kept in step by hand.
+	forEachCitableSynthesisSubject(input, set)
 	return labels
 }
 
@@ -2636,25 +2750,257 @@ func sourceStatePriority(state SourceState) int {
 	}
 }
 
+// synthesisSubjects is the allow-set ValidateAgainst checks every
+// model-referenced subject against.
+//
+// THE RULE, stated once here because three separate widenings have now been
+// argued case by case: a subject is citable iff the investigation COMMITTED
+// to it as part of the answer's own scope -- committed resolution, cohort
+// members, cohort GROUPS, path nodes, canonical fact subjects, and the
+// engine's own driver candidates. Every one of those is engine-minted, so
+// admitting them widens nothing the model could forge; that is the same
+// reasoning CHAOS-4522's cohort-evidence widening records a few dozen lines
+// up in ValidateAgainst.
+//
+// The deliberate EXCLUSION is Resolution.Candidates: an unresolved
+// alternative is shown to the model for disambiguation, and a driver
+// asserting something about a candidate the investigation never committed
+// to would present a resolution that did not happen. Candidates stay out,
+// and synthesisPayloadSubjects below is what makes that exclusion
+// observable rather than silent.
+//
+// The GROUPS branch is the CHAOS-4962 defect. A grouped cohort's group
+// entity -- the team in "project statuses for each team" -- lives only in
+// Cohort.Groups[].Subject (see ContextFabricCohortGroup.Subject's own doc
+// comment: "the group entity itself (the team), not one of its members").
+// The whole cohort, groups included, is serialized into the synthesis
+// payload, so the model was shown each team, asked a question whose subject
+// IS the teams, and had every driver about one rejected here. That was 14
+// of the 27 grouped synthesis rejections in the rig log and appeared on no
+// other family. The DRIVER CANDIDATES branch is the same class: the engine
+// hands the model its own candidate drivers, and answer_reuse_degrade
+// already serves those verbatim as the answer's Drivers, so their subjects
+// were servable by ACR and uncitable by the model at the same time.
 func synthesisSubjects(input SynthesisInput) map[string]struct{} {
 	result := make(map[string]struct{})
-	for _, subject := range input.Graph.Resolution.Committed {
+	forEachCitableSynthesisSubject(input, func(subject SubjectRef) {
 		result[subjectKeyForModel(subject)] = struct{}{}
+	})
+	return result
+}
+
+// forEachCitableSynthesisSubject visits every subject the investigation
+// COMMITTED to, once per occurrence, in the published order. It is the ONE
+// definition of the admission set: synthesisSubjects derives the allow-set
+// from it and canonicalSubjectLabels derives the label bindings from it.
+//
+// WHY ONE WALK RATHER THAN TWO LISTS. Admitting a subject and binding its
+// label are two halves of one decision, and the branch has now split them
+// three times -- each time by adding a source to one list and not the other.
+// Groups were caught before merge; EDGE ENDPOINTS were not: they were
+// admitted to the allow-set and left out of canonicalSubjectLabels, so
+// requireBoundLabel (which only fires for an id it already has a binding
+// for) never ran on them and a model could cite a real, in-bounds endpoint
+// under an arbitrary FALSE label -- CHAOS-3755 H3 reopened, found by
+// adversarial review rather than by the guard written for exactly this.
+//
+// Fixing the instance would have left the class: the NEXT source added to
+// one list and not the other reopens it again. So the two lists are gone.
+// A source added here is admitted and bound in the same edit, and there is
+// no second site at which to forget. TestEveryAdmittedSynthesisSubjectIsLabelBound
+// pins the property; TestSubjectAdmissionAndLabelBindingShareOneWalk pins
+// the structure, so a future edit cannot quietly reintroduce a private
+// enumeration in either consumer.
+//
+// Resolution.Candidates and Cohort.Exclusions are NOT here on purpose --
+// they are shown-but-uncitable (see synthesisUncitableShownSubjects) and
+// binding without admitting is the safe direction, handled by
+// canonicalSubjectLabels itself.
+func forEachCitableSynthesisSubject(input SynthesisInput, visit func(SubjectRef)) {
+	for _, subject := range input.Graph.Resolution.Committed {
+		visit(subject)
 	}
 	if input.Graph.Cohort != nil {
 		for _, member := range input.Graph.Cohort.Members {
-			result[subjectKeyForModel(member.Subject)] = struct{}{}
+			visit(member.Subject)
+		}
+		// CHAOS-4962: the group entity -- the team in "project statuses for
+		// each team" -- lives only in Cohort.Groups[].Subject and was
+		// admitted by nothing, which is the defect this branch exists to fix.
+		for _, group := range input.Graph.Cohort.Groups {
+			visit(group.Subject)
+		}
+	}
+	for _, path := range input.Graph.Paths {
+		for _, node := range path.Nodes {
+			visit(node)
+		}
+		// An edge's endpoints are the same engine-minted path structure its
+		// nodes are: the investigation committed to them by building the
+		// edge, and the payload serializes them.
+		for _, edge := range path.Edges {
+			visit(edge.From)
+			visit(edge.To)
 		}
 	}
 	for _, fact := range input.Facts.Facts {
-		result[subjectKeyForModel(fact.Subject)] = struct{}{}
+		visit(fact.Subject)
 	}
-	for _, path := range input.Graph.Paths {
-		for _, subject := range path.Nodes {
-			result[subjectKeyForModel(subject)] = struct{}{}
+	for _, candidate := range input.Graph.DriverCandidates {
+		for _, subject := range candidate.AffectedSubjects {
+			visit(subject)
 		}
 	}
+}
+
+// synthesisUncitableShownSubjects is every subject the payload SHOWS the
+// model that is deliberately NOT citable. Both entries are policy, not
+// oversight, and each needs its reason stated here:
+//
+//   - Resolution.Candidates: an unresolved alternative, offered for
+//     disambiguation. A driver asserting something about a candidate the
+//     investigation never committed to presents a resolution that did not
+//     happen.
+//   - Cohort.Exclusions: a subject the cohort explicitly REMOVED, carrying
+//     the reason it was removed (ContextFabricCohortExclusion). Citing one
+//     asserts a membership the engine denied.
+//
+// Keeping this list separate from the allow-set is what lets a rejection say
+// "shown, and uncitable on purpose" rather than collapsing that into the
+// same signal as "shown, and we should have admitted it" -- which is a real
+// distinction, because only the second is an ACR defect.
+func synthesisUncitableShownSubjects(input SynthesisInput) map[string]struct{} {
+	result := make(map[string]struct{})
+	for _, candidate := range input.Graph.Resolution.Candidates {
+		result[subjectKeyForModel(candidate.Subject)] = struct{}{}
+	}
+	if input.Graph.Cohort != nil {
+		for _, exclusion := range input.Graph.Cohort.Exclusions {
+			result[subjectKeyForModel(exclusion.Subject)] = struct{}{}
+		}
+	}
+	// PRECEDENCE: citable wins. The census is keyed by (kind, id) and so
+	// cannot remember which ROLE an occurrence came from; a subject appearing
+	// in two roles would otherwise be judged by whichever list happened to
+	// contain it. A subject the investigation COMMITTED to -- a committed
+	// resolution subject, a cohort member, a group, a path node, a fact
+	// subject -- stays citable even if it also appears as a candidate or an
+	// exclusion. Those entries say "not resolved" and "not a member of this
+	// cohort"; neither says "may not be discussed", and revoking a committed
+	// subject on that basis refuses a subject the answer is genuinely about.
+	for key := range synthesisSubjects(input) {
+		delete(result, key)
+	}
 	return result
+}
+
+// synthesisSubjectScopeBasisUnavailable is the basis reported when the census
+// could not be taken. A function rather than a bare constant so every caller
+// routes through one place if that policy ever changes.
+func synthesisSubjectScopeBasisUnavailable() SynthesisSubjectScopeBasis {
+	return SubjectScopeBasisUnavailable
+}
+
+// synthesisPayloadSubjects is every subject the synthesis PAYLOAD serializes
+// to the model, taken from the SERIALIZED FORM by shape rather than from a
+// hand-written list of paths.
+//
+// Two hand enumerations preceded this and both were incomplete, each caught by
+// a separate adversarial round. The first derived the payload set from the
+// allow-set, so it was structurally blind to anything the allow-set omitted --
+// and Cohort.Exclusions was omitted by both. The second enumerated sources
+// explicitly and still missed relationship-edge endpoints, which are subjects
+// the payload carries and the list did not name. The lesson is not "enumerate
+// harder": a census maintained by hand alongside a serializer it does not
+// share a definition with will drift again, and each drift produces the exact
+// false telemetry this field exists to prevent -- blaming the model for citing
+// something we showed it.
+//
+// So this walks the marshalled JSON and collects every object carrying both
+// "kind" and "canonical_id" -- the SubjectRef shape. Edge endpoints, cohort
+// exclusions, commit-decision digests and anything added later are all found
+// by shape, with no list to keep in sync.
+//
+// RESIDUAL, stated precisely because the previous two versions understated
+// theirs: what stays hand-maintained is the set of TOP-LEVEL payload members
+// below, which must mirror genkitruntime.synthesisInput. That is a far more
+// stable and reviewable surface than a list of nested subject paths -- a new
+// top-level member is a visible change to the serializer, whereas a new nested
+// SubjectRef is not -- but it is not nothing, and it is the remaining way this
+// can drift.
+//
+// It returns ok=false when the payload cannot be marshalled. Callers must then
+// report NO basis at all rather than defaulting: an empty census would
+// classify every rejected subject as "absent", which is the model-blaming
+// answer, and asserting that on the strength of a failed measurement is
+// exactly the shape this file's telemetry exists to stop.
+func synthesisPayloadSubjects(input SynthesisInput) (map[string]struct{}, bool) {
+	payload := struct {
+		Interpretation   InterpretedQuestion `json:"interpretation"`
+		Resolution       SubjectResolution   `json:"subject_resolution"`
+		Cohort           *Cohort             `json:"cohort,omitempty"`
+		Paths            []RelationshipPath  `json:"paths"`
+		DriverCandidates []DriverJudgment    `json:"driver_candidates"`
+		Facts            []CanonicalFact     `json:"canonical_facts"`
+		Coverage         Coverage            `json:"coverage"`
+	}{
+		Interpretation:   input.Interpretation,
+		Resolution:       input.Graph.Resolution,
+		Cohort:           input.Graph.Cohort,
+		Paths:            input.Graph.Paths,
+		DriverCandidates: input.Graph.DriverCandidates,
+		Facts:            input.Facts.Facts,
+		Coverage:         input.Graph.Coverage,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, false
+	}
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, false
+	}
+	result := make(map[string]struct{})
+	collectSubjectShapedValues(decoded, result)
+	return result, true
+}
+
+// collectSubjectShapedValues walks a decoded JSON tree and records every
+// object that carries both a string "kind" and a string "canonical_id".
+//
+// It keys by the SAME composite the allow-set uses (kind + id), so a subject
+// found here and a subject admitted there are comparable. Matching on shape
+// rather than on field path is the whole point: it cannot miss a nesting it
+// was never told about.
+func collectSubjectShapedValues(node any, into map[string]struct{}) {
+	switch value := node.(type) {
+	case map[string]any:
+		kind, kindOK := value["kind"].(string)
+		canonicalID, idOK := value["canonical_id"].(string)
+		if kindOK && idOK && canonicalID != "" {
+			into[string(SubjectKind(kind))+"\x00"+canonicalID] = struct{}{}
+		}
+		for _, child := range value {
+			collectSubjectShapedValues(child, into)
+		}
+	case []any:
+		for _, child := range value {
+			collectSubjectShapedValues(child, into)
+		}
+	}
+}
+
+// synthesisSubjectScopeBasis classifies a subject a subject-scope rule just
+// rejected, for telemetry only -- it never changes the decision.
+func synthesisSubjectScopeBasis(subject SubjectRef, payload, uncitable map[string]struct{}) SynthesisSubjectScopeBasis {
+	key := subjectKeyForModel(subject)
+	if _, shown := payload[key]; !shown {
+		return SubjectScopeAbsentFromPayload
+	}
+	if _, policy := uncitable[key]; policy {
+		return SubjectScopeShownUncitableByPolicy
+	}
+	return SubjectScopeShownShouldBeCitable
 }
 
 // cloneSlice returns an independent copy of values. Unlike

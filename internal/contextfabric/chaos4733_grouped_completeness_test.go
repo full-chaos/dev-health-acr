@@ -51,7 +51,7 @@ func TestGroupedCohortCompletenessNeverRegressesFromGroupsAlone(t *testing.T) {
 		planFixtureFacts("project_b", "team_2", "Growth"),
 		planFixtureFacts("project_c", "team_1", "Platform"),
 	}
-	groups, ungrouped := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, cohort, facts)
+	groups, ungrouped, _ := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, cohort, facts)
 	if ungrouped != 0 {
 		t.Fatalf("ungrouped = %d, want 0 -- every member placed cleanly", ungrouped)
 	}
@@ -121,7 +121,7 @@ func TestGroupedCohortCompletenessTableIsConservative(t *testing.T) {
 			cohort.Truncated = tc.preTruncated
 			facts := []CanonicalFact{planFixtureFacts("project_a", "team_1", "Platform")}
 
-			groups, _ := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, cohort, facts)
+			groups, _, _ := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, cohort, facts)
 			if len(groups) != 1 {
 				t.Fatalf("groups = %d, want 1", len(groups))
 			}
@@ -163,7 +163,7 @@ func TestGroupedCohortCompletenessMutationProof(t *testing.T) {
 	cohort := planFixtureCohort("only_member")
 	cohort.Complete = false
 	cohort.Truncated = true
-	groups, _ := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, cohort,
+	groups, _, _ := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, cohort,
 		[]CanonicalFact{planFixtureFacts("only_member", "team_1", "Platform")})
 	if len(groups) != 1 {
 		t.Fatalf("groups = %d, want 1", len(groups))
