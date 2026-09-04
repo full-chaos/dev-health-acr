@@ -876,6 +876,58 @@ func TestMergeSinkArityPinsTheAuthorityRoster(t *testing.T) {
 	}
 }
 
+// TestEverySinkAuthorityDeclaresItsArgumentGroup closes the hole the
+// mutation battery found in the arity pin.
+//
+// The battery mutated authority 1's `sinkArgument` from 1 to 0 and the
+// whole suite stayed GREEN: group 1 still had authority 2 in it, so the
+// derived arity was unchanged, and the artifact does not print the field.
+// A surviving mutation is a finding, not a pass -- the property it deleted
+// was pinned by nothing.
+//
+// The invariant is a RELATION BETWEEN TWO ROSTER FIELDS, not a second table
+// of the answers. Each field exists for its own reason (`reach` decides the
+// verdict class; `sinkArgument` records how the kinds reach the read), so
+// neither is free to be edited into agreement with the other:
+//
+//	sinkArgument == 0  IFF  reach == reachPriorTurn
+//
+// Every authority reaches the fact read through the merge sink except the
+// carried plan, which acts UPSTREAM on the family -- and that is exactly
+// why it contributes no fact kinds of its own. If a future authority ever
+// acts upstream WITHOUT being a prior-turn source, this test is where that
+// shows up, and it should be widened deliberately rather than relaxed.
+func TestEverySinkAuthorityDeclaresItsArgumentGroup(t *testing.T) {
+	checked := 0
+	groups := map[int]bool{}
+	for _, authority := range planningAuthorities() {
+		checked++
+		upstream := authority.reach == reachPriorTurn
+		switch {
+		case upstream && authority.sinkArgument != 0:
+			t.Errorf("authority %s acts upstream of the sink (reach %q) but declares sink group %d", authority.id, authority.reach, authority.sinkArgument)
+		case !upstream && authority.sinkArgument == 0:
+			t.Errorf("authority %s reaches the fact read (reach %q) but declares NO sink argument group -- the arity pin cannot see it, and the fact kinds it contributes have no stated route into the read",
+				authority.id, authority.reach)
+		}
+		if authority.sinkArgument != 0 {
+			groups[authority.sinkArgument] = true
+		}
+	}
+	if checked == 0 {
+		t.Fatal("the roster is empty -- this test proved nothing")
+	}
+
+	// The groups must be exactly 1..N with no gaps: they are ARGUMENT
+	// POSITIONS of a real call, so a typo'd 7 is not a new authority, it
+	// is a wrong position that would inflate the arity pin.
+	for position := 1; position <= len(groups); position++ {
+		if !groups[position] {
+			t.Errorf("sink argument groups are not contiguous from 1: group %d is empty while %d groups are declared -- a group number is an argument POSITION, not a label", position, len(groups))
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // THE ARTIFACT
 // ---------------------------------------------------------------------------
