@@ -8612,7 +8612,7 @@ func runTwoTurnInferredTierArmWithPairRetry(t *testing.T, ctx context.Context, i
 // stored-result constructor for the anchor member's confirmed-wrong arm
 // (design brief §5 head).
 type twoTurnResultStoreSaver interface {
-	Save(context.Context, storage.Principal, contextfabric.InvestigationResult, contextfabric.SourceWatermarkSnapshot, contextfabric.RebuildEpoch, string, contextfabric.ReuseRetrievalIdentity, contextfabric.ReusePromptVersions, contextfabric.ReuseVersionAuthorities, int64) error
+	Save(context.Context, storage.Principal, contextfabric.InvestigationResult, contextfabric.SourceWatermarkSnapshot, contextfabric.RebuildEpoch, string, contextfabric.ReuseRetrievalIdentity, contextfabric.ReusePromptVersions, contextfabric.ReuseVersionAuthorities, int64, string) error
 }
 
 // --- live anchor-term lookup (orchestrator ruling, 2026-08-20) ---
@@ -8838,7 +8838,7 @@ func seedAnchorNegativeResult(ctx context.Context, store twoTurnResultStoreSaver
 	}
 	timeAxisKey := contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext)
 	if serr := store.Save(ctx, principal, result, nil, nil, timeAxisKey,
-		contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0); serr != nil {
+		contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""); serr != nil {
 		return "", fmt.Errorf("save seeded anchor-negative result: %w", serr)
 	}
 	return resultID, nil

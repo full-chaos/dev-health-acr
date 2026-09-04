@@ -672,6 +672,42 @@ type ContextFabricInvestigationRequest struct {
 	// accept another's prefix either -- see Validate's closed
 	// structure-receipt-prefix check.
 	PriorCandidateReceipts []ContextFabricBoundSubjectReceipt `json:"prior_candidate_receipts,omitempty"`
+	// ParentResultID names the investigation result THIS turn follows, for a
+	// client that has a conversation but no receipt to redeem.
+	//
+	// WHY A FIELD AND NOT A SIXTH RECEIPT NAMESPACE. Every prior_*_receipts
+	// field answers "which OFFER did the caller accept" -- each one names a
+	// specific already-minted option inside a stored result, and redeeming it
+	// CONFIRMS an axis. This field answers a different and weaker question:
+	// "which turn came before this one." An offer-driven client that was
+	// offered nothing has nothing to redeem, and on the measured chain that
+	// is exactly what happens -- turn 3 names no prior result at all, so
+	// every same-conversation carry misses with miss_no_reference and the
+	// server asks a question it already has the answer to. A receipt cannot
+	// express "I am continuing" because a receipt is an acceptance, and there
+	// was nothing to accept.
+	//
+	// WHAT IT GRANTS: nothing by itself. It SEEDS the same-conversation carry
+	// walk (carryReferencedResultIDs) beside the receipt-borne ids, and
+	// nothing else. It is deliberately NOT a subject hint -- naming a prior
+	// result must never bind that result's subjects into this turn, which is
+	// why resolvePriorSubjectHints reads request.PriorSubjectReceipts and
+	// never this field. Every guard the receipt path already applies to a
+	// referenced prior result applies here unchanged: an org-scoped store
+	// read, the graph-epoch taint gate, and the requirement that the named
+	// result actually carry a confirmed value on the axis being carried.
+	//
+	// BEARER SEMANTICS, stated rather than left implicit: within one
+	// organization this is a bearer reference -- a caller who names any
+	// result id belonging to their org inherits that result's confirmed axes.
+	// The containment is that result ids carry 128 bits of entropy
+	// (newInvestigationResultID) and that the guards above are applied on
+	// every hop, not that the id is secret from anyone entitled to the org.
+	// Bounded exactly like a receipt's own ResultID (8..256) rather than
+	// pinned to the generator's current shape, so this field and
+	// prior_*_receipts[].result_id can never disagree about what a
+	// well-formed result id is.
+	ParentResultID string `json:"parent_result_id,omitempty"`
 	// ExpectedKinds and SubjectHandles (CHAOS-3972 P3, pivot-intent design
 	// brief §2.3/§2.0) are the caller's own EXPLICIT structure fields --
 	// the wire concept structure.go's own P1.B scope note deferred to this

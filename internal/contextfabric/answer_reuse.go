@@ -47,6 +47,28 @@ func QuestionHash(question string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// IdentitylessQuestionHash is the ONE hash every question with no identity
+// produces: the digest of the empty canonical form. "?", "!!" and "..." all
+// canonicalize to "" (CanonicalizeQuestion strips trailing terminal
+// punctuation), so they share it -- they are not the same question, they are
+// questions this hash cannot tell apart.
+//
+// EXPORTED AS A PREDICATE, NOT LEFT TO EACH CALLER, because the same defect
+// has now been found at three separate seams: answer reuse (fixed at its own
+// earlier review), the same-question carry containment, and the structure
+// priors path. Each had its own spelling of "is this question usable?", and
+// two of the three simply did not ask. A named predicate beside the hash it
+// concerns is the closest this package can get to making the question
+// unavoidable at the next seam that keys on a question.
+//
+// Note this is a property of the HASH, so it is checkable at a site that only
+// ever sees a hash -- which is exactly the situation the priors read path is
+// in, and why a guard phrased over the question text could not have been
+// applied there without changing a signature.
+func IdentitylessQuestionHash(questionHash string) bool {
+	return questionHash == QuestionHash("")
+}
+
 func collapseInternalWhitespace(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
@@ -347,6 +369,17 @@ const (
 // already proved that field empty. An empty field cannot have a non-empty
 // validated subset, so there is nothing for nil to lose. That reasoning is
 // pinned by a test rather than left standing on this comment.
+//
+// CHAOS-5003 ADDED A SECOND SEED, so the third arm names two things. The
+// carries are now seeded from receipts AND from the top-level
+// parent_result_id, walked separately (see resolveCarriedWindow), and
+// carryReferencedResultIDs deliberately covers only the first of those. The
+// population this arm must match is still "every request a carry can walk",
+// which is now the UNION -- so parent_result_id is tested here explicitly.
+// Adding the seed to carryReferencedResultIDs instead would have been the
+// shorter diff and the wrong one: merging the two seeds into one list is
+// precisely what made the same-question containment a per-path property, and
+// this bypass is not worth reintroducing that.
 func reuseBypassReason(request InvestigationRequest, structureCanon requestStructureCanonicalization) AnswerReuseBypassReason {
 	if len(structureCanon.Confirmed) > 0 {
 		return AnswerReuseBypassConfirmedStructure
@@ -354,7 +387,7 @@ func reuseBypassReason(request InvestigationRequest, structureCanon requestStruc
 	if len(request.PriorSubjectReceipts) > 0 {
 		return AnswerReuseBypassPriorSubjectReceipts
 	}
-	if len(carryReferencedResultIDs(request, nil)) > 0 {
+	if len(carryReferencedResultIDs(request, nil)) > 0 || carryParentSeed(request) != "" {
 		return AnswerReuseBypassPriorResultReference
 	}
 	return ""

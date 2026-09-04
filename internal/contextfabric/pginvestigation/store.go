@@ -110,7 +110,7 @@ func NewStore(db *sql.DB, opts ...StoreOption) (*Store, error) {
 // identical payload is treated as success (idempotent retry); a replay
 // under the same result_id with a DIFFERENT payload is rejected, since that
 // would silently overwrite an immutable record.
-func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, retrieval contextfabric.ReuseRetrievalIdentity, promptVersions contextfabric.ReusePromptVersions, versionAuthorities contextfabric.ReuseVersionAuthorities, graphEpoch int64) error {
+func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, retrieval contextfabric.ReuseRetrievalIdentity, promptVersions contextfabric.ReusePromptVersions, versionAuthorities contextfabric.ReuseVersionAuthorities, graphEpoch int64, parentResultID string) error {
 	if s == nil || s.db == nil {
 		return errors.New("pginvestigation: store is not configured")
 	}
@@ -123,6 +123,15 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	// invalid result before it is ever persisted -- an immutable row that
 	// fails the same contract the public API enforces on every returned
 	// result can never be corrected later.
+	// The same rule the migration's CHECK constraints enforce, applied in Go
+	// too. The database is still the authority -- this is not a substitute for
+	// it -- but a Go-side check turns a constraint violation into a named,
+	// testable error instead of a driver error surfaced from the insert, and
+	// it is what keeps this adapter's behaviour identical to the in-memory
+	// one's (which had no equivalent at all until now).
+	if err := contextfabric.ValidateStoredParentResultID(resultID, parentResultID); err != nil {
+		return fmt.Errorf("pginvestigation: %w", err)
+	}
 	if err := contextfabric.ValidateResult(result); err != nil {
 		return fmt.Errorf("pginvestigation: invalid investigation result: %w", err)
 	}
@@ -234,17 +243,27 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	// answer reuse happens to be enabled on this Store.
 	graphEpochColumn := sql.NullInt64{Int64: graphEpoch, Valid: true}
 
+	// "" means "no recorded parent" and is stored as NULL, never as an empty
+	// string: the column's CHECK requires 8..256 characters when present, and
+	// NULL is the value every sibling nullable column already uses for
+	// "absent". A stored empty string would violate the constraint AND blur
+	// "first turn" into "parent recorded as nothing".
+	var parentResultIDColumn any
+	if trimmed := strings.TrimSpace(parentResultID); trimmed != "" {
+		parentResultIDColumn = trimmed
+	}
+
 	insertArgs := []any{
 		resultID, orgID, payload, result.GeneratedAt,
 		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch, timeAxisKey,
 		embedRetrievalIdentity, retrievalPolicyVersion, interpretationPromptVersion, synthesisPromptVersion,
 		queryVersion, canonicalServiceVersion, modelOutputSchemaVersion, identityNormalizationVersion, graphEpochColumn,
-		windowInferenceVersion, commitGateVersion, rankingFormulaVersion, questionFamilyVersion,
+		windowInferenceVersion, commitGateVersion, rankingFormulaVersion, questionFamilyVersion, parentResultIDColumn,
 	}
 	const insertResultSQL = `
 INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version, question_family_version)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version, question_family_version, parent_result_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
 ON CONFLICT (result_id) DO NOTHING`
 
 	// CHAOS-3927 P4 (design brief §2.1): claims is empty for the
@@ -461,11 +480,12 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-SELECT payload, graph_epoch, created_at FROM acr.context_fabric_investigation_results WHERE result_id = $1 AND org_id = $2`, resultID, orgID)
+SELECT payload, graph_epoch, created_at, parent_result_id FROM acr.context_fabric_investigation_results WHERE result_id = $1 AND org_id = $2`, resultID, orgID)
 	var payload []byte
 	var graphEpoch sql.NullInt64
 	var createdAt time.Time
-	switch err := row.Scan(&payload, &graphEpoch, &createdAt); {
+	var parentResultID sql.NullString
+	switch err := row.Scan(&payload, &graphEpoch, &createdAt, &parentResultID); {
 	case errors.Is(err, sql.ErrNoRows):
 		return contextfabric.StoredInvestigationResult{}, ErrNotFound
 	case err != nil:
@@ -506,7 +526,7 @@ SELECT payload, graph_epoch, created_at FROM acr.context_fabric_investigation_re
 	if graphEpoch.Valid {
 		graphEpochPtr = &graphEpoch.Int64
 	}
-	return contextfabric.StoredInvestigationResult{Result: result, GraphEpoch: graphEpochPtr, SavedAt: createdAt}, nil
+	return contextfabric.StoredInvestigationResult{Result: result, GraphEpoch: graphEpochPtr, SavedAt: createdAt, ParentResultID: parentResultID.String}, nil
 }
 
 // reuseColumnsFor computes the CHAOS-3782 reuse-key column values Save

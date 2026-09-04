@@ -88,8 +88,21 @@ func handleInvestigateQuestion(ctx context.Context, boot *Bootstrap, req *mcpsdk
 		// mapped the four older fields, so a valid candr_ receipt reached
 		// here and was silently dropped rather than forwarded.
 		PriorCandidateReceipts: input.PriorCandidateReceipts,
-		ExpectedKinds:          input.ExpectedKinds,
-		SubjectHandles:         input.SubjectHandles,
+		// ParentResultID: the same straight-through mapping, and the SECOND
+		// time this exact class has bitten -- the comment above records codex
+		// catching prior_candidate_receipts dropped here in the same way. A
+		// field can be on the tool schema, on MCPInvestigateQuestionRequest,
+		// and validated, and still never reach the engine, because nothing
+		// structurally connects "the type has a field" to "the conversion
+		// copies it". The contract-parity gate cannot see this: it compares
+		// schemas to Go types, not mapping functions.
+		//
+		// TestInvestigateQuestion_EveryRequestFieldIsForwarded now enumerates
+		// the struct by reflection and fails on any unmapped field, so the
+		// class is closed rather than this one instance.
+		ParentResultID: input.ParentResultID,
+		ExpectedKinds:  input.ExpectedKinds,
+		SubjectHandles: input.SubjectHandles,
 		// Fixed rather than caller-driven because the tool schema
 		// deliberately exposes no axis field -- a SURFACE decision, not a
 		// capability one. CHAOS-3781 made all three historical axes

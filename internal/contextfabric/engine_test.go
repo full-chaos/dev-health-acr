@@ -103,7 +103,7 @@ type resultStoreStub struct {
 	savedEpoch    RebuildEpoch
 }
 
-func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64) error {
+func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64, _ string) error {
 	s.saved = result
 	s.savedSnapshot = reuseSnapshot
 	s.savedEpoch = reuseEpoch
@@ -136,7 +136,7 @@ type staticResultStore struct {
 	saved *InvestigationResult
 }
 
-func (s *staticResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64) error {
+func (s *staticResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64, _ string) error {
 	s.saved = &result
 	return nil
 }
@@ -404,8 +404,9 @@ type recordingTelemetry struct {
 	// windowCarries (CHAOS-4360) mirrors the SAME list-not-count discipline:
 	// a test asserts the exact outcome/chain-depth pair, never merely that
 	// something fired.
-	windowCarries []windowCarryRecord
-	kindCarries   []kindCarryRecord
+	windowCarries     []windowCarryRecord
+	kindCarries       []kindCarryRecord
+	planCarryOutcomes []planCarryOutcomeRecord
 	// modelRowsStripped (CHAOS-4355 follow-up) mirrors the SAME
 	// list-not-count discipline.
 	modelRowsStripped []int
@@ -439,15 +440,30 @@ type coverageDisclosurePhrasingRecord struct {
 // windowCarryRecord (CHAOS-4360) mirrors priorSubjectReceiptSkipReasonRecord's
 // own shape one field pair over.
 type windowCarryRecord struct {
-	outcome    WindowCarryOutcome
-	chainDepth int
+	outcome           WindowCarryOutcome
+	chainDepth        int
+	seedSource        CarrySeedSource
+	viaStoredAncestry bool
 }
 
 type kindCarryRecord struct {
-	outcome      KindCarryOutcome
-	chainDepth   int
-	carriedKind  contractsv1.ContextFabricSubjectKind
-	redeemedKind contractsv1.ContextFabricSubjectKind
+	outcome           KindCarryOutcome
+	chainDepth        int
+	carriedKind       contractsv1.ContextFabricSubjectKind
+	redeemedKind      contractsv1.ContextFabricSubjectKind
+	seedSource        CarrySeedSource
+	viaStoredAncestry bool
+}
+
+// planCarryOutcomeRecord (CHAOS-5003) is the plan axis's counterpart to
+// windowCarryRecord/kindCarryRecord. Every field the production emit writes
+// is stored, so a test can read back what the sink RECEIVED rather than
+// asserting that a call happened -- a recorder that stores less than the
+// production line emits cannot detect a dropped field.
+type planCarryOutcomeRecord struct {
+	outcome        PlanCarryOutcome
+	sourceResultID string
+	seedSource     CarrySeedSource
 }
 
 type priorConsultedRecord struct {
@@ -549,12 +565,12 @@ func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ s
 	r.windowCanonicalizationOutcomes = append(r.windowCanonicalizationOutcomes, outcome)
 }
 
-func (r *recordingTelemetry) RecordWindowCarry(_ context.Context, _ storage.Principal, outcome WindowCarryOutcome, chainDepth int) {
-	r.windowCarries = append(r.windowCarries, windowCarryRecord{outcome, chainDepth})
+func (r *recordingTelemetry) RecordWindowCarry(_ context.Context, _ storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource, viaStoredAncestry bool) {
+	r.windowCarries = append(r.windowCarries, windowCarryRecord{outcome, chainDepth, seedSource, viaStoredAncestry})
 }
 
-func (r *recordingTelemetry) RecordKindCarry(_ context.Context, _ storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind) {
-	r.kindCarries = append(r.kindCarries, kindCarryRecord{outcome, chainDepth, carriedKind, redeemedKind})
+func (r *recordingTelemetry) RecordKindCarry(_ context.Context, _ storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource, viaStoredAncestry bool) {
+	r.kindCarries = append(r.kindCarries, kindCarryRecord{outcome, chainDepth, carriedKind, redeemedKind, seedSource, viaStoredAncestry})
 }
 
 func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {
@@ -693,6 +709,10 @@ func (r *recordingTelemetry) RecordServerStatusShadow(_ context.Context, _ stora
 
 func (r *recordingTelemetry) RecordPlanCarry(_ context.Context, _ storage.Principal, event PlanCarryEvent) {
 	r.planCarries = append(r.planCarries, event)
+}
+
+func (r *recordingTelemetry) RecordPlanCarryOutcome(_ context.Context, _ storage.Principal, outcome PlanCarryOutcome, sourceResultID string, seedSource CarrySeedSource) {
+	r.planCarryOutcomes = append(r.planCarryOutcomes, planCarryOutcomeRecord{outcome, sourceResultID, seedSource})
 }
 
 func (r *recordingTelemetry) RecordCohortRanked(_ context.Context, _ storage.Principal, event CohortRankedEvent) {
@@ -860,7 +880,7 @@ type bindingEpochDeltaOrderingStore struct {
 	bindingCallCountObserved bool
 }
 
-func (s *bindingEpochDeltaOrderingStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities, int64) error {
+func (s *bindingEpochDeltaOrderingStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities, int64, string) error {
 	s.graph.bindingCallCountMu.Lock()
 	s.bindingCallCountAtSave = s.graph.bindingCallCount
 	s.bindingCallCountObserved = true
