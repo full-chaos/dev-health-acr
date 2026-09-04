@@ -19,15 +19,30 @@ import (
 // Setup: a prior turn's WindowClarification offers a winr_ receipt for
 // trailing_90d. A SEPARATE row is already cached under the plain "current"
 // TimeAxisKey -- exactly what an earlier, unconfirmed (or windowless)
-// question would have saved under. This test proves that a request
-// REDEEMING the winr_ receipt is looked up under a DIFFERENT key (its own
-// FROZEN bounds -- windowKeyComponent(effective, windowKeyFrozen), W1
-// round 4/5 -- since a receipt confirms one specific already-minted
-// option, not a re-derivable-from-RelativeID value), so the reuse gate's
-// own "current" row can never be
-// served to it -- the receipt-resolution-BEFORE-reuse ordering
-// (canonicalizeEvidenceWindow, called before tryReuse in Investigate) is
-// what makes this true structurally, not by chance.
+// question would have saved under. A request REDEEMING the winr_ receipt
+// must never be served that row.
+//
+// SUPERSEDED MECHANISM, STRONGER GUARANTEE (CHAOS-4998). W1 held this by
+// KEYING: the redeeming request was looked up under its own FROZEN bounds
+// rather than under "current", so the pre-confirmation row could not match.
+// This test therefore used to assert on the key the reuse gate was consulted
+// WITH, which required the gate to be consulted at all. It no longer is: a
+// request naming a prior result through a window receipt now bypasses the
+// reuse lookup entirely (reuseBypassReason, answer_reuse.go), because
+// redeeming that receipt also makes the request eligible for a
+// same-conversation carry whose value does not exist yet at lookup time.
+//
+// The acceptance criterion is held MORE strongly than before -- the request
+// cannot hit the pre-confirmation row, or any other row -- so this test now
+// asserts the gate is never consulted, which is the stronger statement. What
+// it can no longer observe is the frozen-key DERIVATION, and that assertion
+// is not dropped: it moves to
+// TestCHAOS3900_ConfirmedWindowKeysOnItsOwnFrozenBounds below, which pins the
+// same expected key string at canonicalizeEvidenceWindow, where the
+// derivation actually lives and where it is still reachable. That derivation
+// still matters after this ticket because windowCanon.KeyComponent is what
+// SAVE keys on, even though no lookup consults it for a receipt-redeeming
+// request any more.
 func TestCHAOS3900_OrderingPin_ConfirmedWindowNeverHitsPreConfirmationCacheRow(t *testing.T) {
 	t.Parallel()
 
@@ -77,21 +92,77 @@ func TestCHAOS3900_OrderingPin_ConfirmedWindowNeverHitsPreConfirmationCacheRow(t
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
-	if len(gateKeys) != 1 {
-		t.Fatalf("reuse gate called %d times, want exactly 1", len(gateKeys))
-	}
-	if gateKeys[0] == "current" {
-		t.Fatalf("reuse lookup key = %q: a confirmed-window request keyed IDENTICALLY to the pre-confirmation row -- the ordering invariant is broken", gateKeys[0])
-	}
-	wantKey := "current+w:abs:" + formatUnixNano(frozenStart) + ":" + formatUnixNano(frozenEnd)
-	if gateKeys[0] != wantKey {
-		t.Errorf("reuse lookup key = %q, want %q (the receipt's own FROZEN bounds, not a re-derivable rel:trailing_90d)", gateKeys[0], wantKey)
+	if len(gateKeys) != 0 {
+		t.Fatalf("reuse gate consulted with keys %q, want none: a request redeeming a window receipt names a prior result the same-conversation carries can walk, so it must not reach the reuse lookup at all", gateKeys)
 	}
 	if result.Reused {
 		t.Fatalf("result.Reused = true: a confirmed-window request was served the pre-confirmation cache row %q", preConfirmationCandidate.ResultID)
 	}
 	if result.ResultID != freshTestResultID {
 		t.Errorf("result.ResultID = %q, want the fresh result %q", result.ResultID, freshTestResultID)
+	}
+}
+
+// TestCHAOS3900_ConfirmedWindowKeysOnItsOwnFrozenBounds is the re-homed half
+// of the ordering pin above: the frozen-key DERIVATION, asserted where it
+// lives rather than where it used to be observable.
+//
+// A receipt confirms one specific already-minted option, so the key must be
+// that option's own bounds (abs:) and never a re-derivable rel:trailing_90d
+// -- two different frozen intervals can share one RelativeID, and keying on
+// the id would collide them. windowKeyComponent's own encoding is unit-tested
+// elsewhere in this file; what is pinned HERE is the engine wiring that gets
+// a redeemed receipt's bounds into KeyComponent under the FROZEN encoding.
+//
+// This is still load-bearing after CHAOS-4998 even though no reuse LOOKUP
+// consults it for such a request any more: Save keys on the same
+// KeyComponent, so a wrong derivation here would store the answer under a
+// key no later turn could find.
+func TestCHAOS3900_ConfirmedWindowKeysOnItsOwnFrozenBounds(t *testing.T) {
+	t.Parallel()
+
+	frozenStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	frozenEnd := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	priorResult := validInvestigationResult()
+	priorResult.ResultID = "result_prior_window_0001"
+	priorResult.WindowClarification = &WindowClarification{Options: []WindowOption{
+		{ReceiptID: "winr_confirm0001", OptionID: "opt_90d", Label: "the last 90 days", RelativeID: RelativeWindowTrailing90D, Start: &frozenStart, End: &frozenEnd},
+	}}
+	store := &staticResultStore{results: map[string]InvestigationResult{priorResult.ResultID: priorResult}}
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return validInvestigationResult(), nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: store,
+	})
+
+	request := validInvestigationRequest()
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "winr_confirm0001"}}
+
+	canon := engine.canonicalizeEvidenceWindow(context.Background(), reusePrincipal(), request)
+	if canon.Veto != "" {
+		t.Fatalf("canonicalizeEvidenceWindow veto = %q, want none -- the fixture must actually redeem the receipt for this pin to prove anything", canon.Veto)
+	}
+	if canon.Effective == nil {
+		t.Fatal("canonicalizeEvidenceWindow.Effective = nil, want the receipt's confirmed window")
+	}
+	// The "w:" namespace prefix is composeTimeAxisKey's, not
+	// windowKeyComponent's -- asserted on both halves below so a change that
+	// moved the prefix between them could not pass by cancelling out.
+	wantComponent := "abs:" + formatUnixNano(frozenStart) + ":" + formatUnixNano(frozenEnd)
+	if canon.KeyComponent != wantComponent {
+		t.Errorf("KeyComponent = %q, want %q (the receipt's own FROZEN bounds, not a re-derivable rel:trailing_90d)", canon.KeyComponent, wantComponent)
+	}
+	if got, want := composeTimeAxisKey("current", canon.KeyComponent), "current+w:"+wantComponent; got != want {
+		t.Errorf("composeTimeAxisKey = %q, want %q -- the end-to-end key string the superseded ordering pin used to assert at the reuse gate", got, want)
 	}
 }
 
