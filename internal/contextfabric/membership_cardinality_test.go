@@ -484,3 +484,75 @@ func TestMembershipCardinalityLineCarriesNoKeyOutsideItsAllowList(t *testing.T) 
 		}
 	}
 }
+
+// TestTheCountRowsBudgetCostIsBoundedAndCharged is the response-shape
+// measurement this change owes.
+//
+// The rule it satisfies: any change that grows the served shape measures the
+// result against every per-request budget and states the numbers. It ASSERTS
+// them rather than logging them -- a number a downstream depends on that is
+// only printed is narration, and this one is a pin on how much one counted
+// requirement costs a caller.
+//
+// THE ITEMS AXIS IS UNAFFECTED, and that is a fact about the charging rule
+// rather than an assumption: CountContextFabricResultItems charges
+// candidates, drivers, paths, remaining work, readiness gaps, conflicts,
+// claimed facts and cohort members. An outcome row is none of those, so a
+// counted answer is charged exactly what the same answer without the count
+// would be. The bytes axis does grow, by one row, and this bounds it.
+func TestTheCountRowsBudgetCostIsBoundedAndCharged(t *testing.T) {
+	t.Parallel()
+	result, _ := runCountingInvestigation(t, 3, 0)
+
+	withCount, err := contractsv1.MeasureContextFabricResponse(result)
+	if err != nil {
+		t.Fatalf("MeasureContextFabricResponse() error = %v", err)
+	}
+
+	// The same served document with the count row removed -- the honest
+	// counterfactual, built by subtraction from what the engine produced
+	// rather than by constructing a second fixture that could differ in
+	// some other way.
+	stripped := result
+	kept := make([]RequirementOutcomeRow, 0, len(result.Completeness.Outcomes))
+	removed := 0
+	for _, row := range result.Completeness.Outcomes {
+		if row.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult &&
+			row.Obligation == string(ObligationCount) {
+			removed++
+			continue
+		}
+		kept = append(kept, row)
+	}
+	if removed != 1 {
+		t.Fatalf("removed %d count rows building the counterfactual, want 1", removed)
+	}
+	stripped.Completeness.Outcomes = kept
+	withoutCount, err := contractsv1.MeasureContextFabricResponse(stripped)
+	if err != nil {
+		t.Fatalf("MeasureContextFabricResponse(stripped) error = %v", err)
+	}
+
+	if withCount.Items != withoutCount.Items {
+		t.Fatalf("item counts differ with and without the count row (%+v vs %+v) -- "+
+			"an outcome row is not a charged item, so this change must not move the items axis",
+			withCount.Items, withoutCount.Items)
+	}
+	delta := withCount.Bytes - withoutCount.Bytes
+	if delta <= 0 {
+		t.Fatalf("the count row cost %d bytes; a row that costs nothing was not serialized", delta)
+	}
+	// The pin. If a field is added to the row, or the requirement identity
+	// grows, this moves -- and it should be updated in the commit that
+	// causes it, with the new number stated.
+	const countRowByteCeiling = 256
+	if delta > countRowByteCeiling {
+		t.Fatalf("the count row cost %d bytes, over the %d-byte ceiling this change pinned. "+
+			"If a field was added on purpose, update the ceiling in the same commit and say so",
+			delta, countRowByteCeiling)
+	}
+	t.Logf("BUDGET: one counted requirement costs %d bytes and 0 charged items "+
+		"(items %d, bytes %d with the count; items %d, bytes %d without)",
+		delta, withCount.Items.Budgeted(), withCount.Bytes,
+		withoutCount.Items.Budgeted(), withoutCount.Bytes)
+}
