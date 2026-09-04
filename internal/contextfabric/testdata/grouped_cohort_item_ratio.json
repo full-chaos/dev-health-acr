@@ -1,0 +1,97 @@
+{
+  "authority": "acr-api log lines \"context fabric plan narrowing\", stage=assembled_result, family=grouped_cohort_status, joined by request_id. Ten-member rows: the kiac acceptance rig (acr-api pid 86199, build 814f0cc8-kiac). Seven-member rows: lane-4962-grouped-413 private leg :18092 (build 78b389d0-kiac, a revision that clamped the cohort to 7). Both against org 70d529e0-3c06-4597-8480-794fd02328b6, ClickHouse db dh_0830, real data. members is the event's `before` (the cohort synthesis actually ran against); items is `measured_items` (the engine's own budgeted count, Paths excluded).",
+  "why_this_exists": "This file records a REFUTATION, and it is the evidence behind the predicted_items telemetry field. planSynthesisHeadroom reserves a CONSTANT item allowance for what synthesis adds, so a natural hypothesis is that synthesis output scales with the member count and the reservation should be a per-member RATE. A revision of this package did exactly that and clamped the cohort to 7 members. These rows are why that was reverted: at 7 members the totals (21-41) OVERLAP the 10-member totals (28-39) completely, and the implied per-member rate went UP as the cohort shrank (2.80-3.90 at ten, 3.00-5.86 at seven). Total item count is largely INSENSITIVE to member count, so no clamp on members can bound it. The dominant term is whatever synthesis chooses to emit per group, which the plan does not control.",
+  "collected": "2026-09-03",
+  "family": "grouped_cohort_status",
+  "profile": "PlanBudgetGroupedCohort",
+  "max_items_in_force": 30,
+  "max_serialized_bytes_in_force": 262144,
+  "rows": [
+    {
+      "request_id": "req_bd20d866d069c06d0ee81ae3463f0d1c",
+      "members": 10,
+      "items": 31,
+      "bytes": 70780,
+      "overrun": "items"
+    },
+    {
+      "request_id": "req_b07bdc15b331f6876facb1db6397b823",
+      "members": 10,
+      "items": 28,
+      "bytes": 78497,
+      "overrun": "fits"
+    },
+    {
+      "request_id": "req_371cbc6b9eaa96f51386f3b2be59d4dc",
+      "members": 10,
+      "items": 32,
+      "bytes": 82601,
+      "overrun": "items"
+    },
+    {
+      "request_id": "req_46ee4ab658f24434d94d534d1aca784b",
+      "members": 10,
+      "items": 34,
+      "bytes": 92713,
+      "overrun": "items"
+    },
+    {
+      "request_id": "req_5aec126f0bf855dcfe063c26fdf7ce7c",
+      "members": 10,
+      "items": 34,
+      "bytes": 91553,
+      "overrun": "items"
+    },
+    {
+      "request_id": "req_b445528e8e63fe5191b45f1eb519b913",
+      "members": 10,
+      "items": 32,
+      "bytes": 81296,
+      "overrun": "items"
+    },
+    {
+      "request_id": "req_77031712014f40a535052f4507ba86b4",
+      "members": 10,
+      "items": 39,
+      "bytes": 109527,
+      "overrun": "items"
+    },
+    {
+      "request_id": "req_0adf1bdc68e81a190f4cfd7eb3e64962",
+      "members": 7,
+      "items": 21,
+      "overrun": "fits",
+      "bytes": 80759
+    },
+    {
+      "request_id": "req_76086e6894e5e565b534ffdbddcf1f09",
+      "members": 7,
+      "items": 37,
+      "overrun": "items",
+      "bytes": 141842
+    },
+    {
+      "request_id": "req_bbb3a39f41a8f05da4bdab3a3b1a3356",
+      "members": 7,
+      "items": 27,
+      "overrun": "fits",
+      "bytes": 92007
+    },
+    {
+      "request_id": "req_99e193a74b7ddf865f1db3a7992c9c5d",
+      "members": 7,
+      "items": 41,
+      "overrun": "items",
+      "bytes": 132654
+    },
+    {
+      "request_id": "req_ede0363b21f67d7c5cb1b1667c2652fc",
+      "members": 7,
+      "items": 31,
+      "overrun": "items",
+      "bytes": 134165
+    }
+  ],
+  "reading": "Ten members: 28, 31, 32, 32, 34, 34, 39 (1 of 7 fit a 30-item ceiling). Seven members: 21, 27, 31, 37, 41 (2 of 5 fit). Cutting the cohort by 30% did not move the distribution in this sample. Bytes never bind on either population: the largest row is 141842 of 262144 (54%), so the item ceiling is the only binding axis and narrowing on bytes would narrow on the wrong quantity.",
+  "claim": "NARROW, and deliberately narrower than the earlier wording (codex round 3). What these rows SUPPORT: a 7-member grouped answer still overruns a 30-item ceiling, and the observed 7-member totals are not proportionally smaller than the 10-member ones -- so clamping member count did not buy the fit it was built to buy, and the specific per-member rate derived from the 10-member rows (3.90) does not predict the 7-member rows. What these rows DO NOT establish: that total items are insensitive to member count IN GENERAL. n=7 at ten members and n=5 at seven, from two different builds and runs, over one org's data. Treat this as a refutation of one specific clamp, not as a general law; widening the claim needs more cohort sizes and more replicates."
+}

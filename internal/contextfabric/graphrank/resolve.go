@@ -901,7 +901,16 @@ type ResolutionTraceEvent struct {
 	// on a precondition the way the coverage floor and confirmed-kind
 	// rescue are), so this stage fires every time deps.ResolutionTracer is
 	// non-nil, corpus-wide, not only for the previously-flagged subset.
-	KindOfferExplicitHintCount       int
+	KindOfferExplicitHintCount int
+	// KindOfferDeclaredHintCount (CHAOS-4967 codex round 1, P2) mirrors
+	// KindOfferExplicitHintCount for the SAME reason -- a reader tracing
+	// why KindOfferDistinctKindCount came back N needs to know how many of
+	// those N kinds are frame-declared (kindOfferDiagnostics.DeclaredHintCount,
+	// chaos3900_structure_offers.go) versus pool-derived, exactly the way
+	// ExplicitHintCount already separates caller-declared from pool-derived.
+	// No BeforeRepair companion, matching ExplicitHintCount's own shape --
+	// only DistinctKindCount/SuppressedByCardinality get before/after pairs.
+	KindOfferDeclaredHintCount       int
 	KindOfferDistinctKindCount       int
 	KindOfferSuppressedByCardinality bool
 	// KindOfferCandidateOfferCount/KindOfferOfferKind (stage=="kind_offer"
@@ -1451,7 +1460,7 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// carried frame. A nil frame yields no kind hints, which is the same
 	// fail-safe the deleted keyword matcher documented for a question whose
 	// text gave no signal -- "no hint, no call", byte-identical pool.
-	resolution, offerMaterial, _, _, err := ResolveSubjectsWithCommitBasis(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, nil)
+	resolution, offerMaterial, _, _, err := ResolveSubjectsWithCommitBasis(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, nil, "")
 	return resolution, offerMaterial, err
 }
 
@@ -1472,10 +1481,10 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 // bases, at the SAME three write points -- see
 // contextfabric.CommitDecisionDigest's own doc comment for why this is a
 // wire-safe companion set rather than a widened CommitBasisSet.
-func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, frame *contextfabric.QuestionFrame) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
+func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, frame *contextfabric.QuestionFrame, scopeAnchorKind contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
 	bases := make(contextfabric.CommitBasisSet)
 	digests := make(contextfabric.CommitDecisionDigestSet)
-	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases, digests, frame)
+	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases, digests, frame, scopeAnchorKind)
 	if err != nil {
 		// An error path commits nothing, so a basis (or digest) some
 		// partial pass happened to record describes a resolution no
@@ -1485,7 +1494,7 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 	return resolution, offerMaterial, bases, digests, nil
 }
 
-func resolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, commitBases contextfabric.CommitBasisSet, commitDigests contextfabric.CommitDecisionDigestSet, frame *contextfabric.QuestionFrame) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
+func resolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, commitBases contextfabric.CommitBasisSet, commitDigests contextfabric.CommitDecisionDigestSet, frame *contextfabric.QuestionFrame, scopeAnchorKind contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, errors.New("authenticated organization is required")
 	}
@@ -1922,7 +1931,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// exact-name) matters for retrievalSourceFor's own event-order read
 	// (chaos4234_regime_a_harness_test.go) -- see that function's doc
 	// comment for the precedence this ordering establishes.
-	if hinted := hintedPoolKinds(request, confirmedKind, frame); len(hinted) > 0 {
+	if hinted := hintedPoolKinds(request, confirmedKind, frame, scopeAnchorKind); len(hinted) > 0 {
 		hintedTraversalDegraded, hintedAuthzDropped, hintedTruncated, hintedDegraded, hintedErr := applyKindHintedPoolSearch(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, hinted)
 		if hintedErr != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, hintedErr
@@ -2297,7 +2306,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if offersOnly && firstPassTracer != nil {
 		firstPassTracer = offersOnlyDecisionTracer{real: firstPassTracer}
 	}
-	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false)
+	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, scopeAnchorKind))
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
@@ -2458,7 +2467,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				scopedPool, scopedObservationParentKey, scopedObservationBlocked, request.Options.MaxSubjectCandidates,
 				request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
 				unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, aliasIdentityComplete,
-				scopedDecisionTracer, request.RequestID, "", true, false,
+				scopedDecisionTracer, request.RequestID, "", true, false, nil,
 			)
 			if len(scopedResolution.Committed) > 0 {
 				resolution = scopedResolution
@@ -2552,7 +2561,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// the failure mode this vocabulary exists to prevent.
 				var censusBases contextfabric.CommitBasisSet
 				var censusDigests contextfabric.CommitDecisionDigestSet
-				resolution, censusBases, censusDigests = ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false)
+				resolution, censusBases, censusDigests = ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil)
 				commitBases.ResetTo(censusBases)
 				commitDigests.ResetTo(censusDigests)
 				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
@@ -2673,13 +2682,26 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// kindOfferCandidates once ResolveFromMergedCandidatesWithGateAndBasis's
 	// own MaxSubjectCandidates ranking/truncation has run.
 	beforeKinds, afterKinds := projectKindOfferKinds(kindOfferCandidates, candidatesBySubject, len(resolution.Committed))
+	// CHAOS-4967: the frame's own declared member/group kind(s) -- the SAME
+	// closed-vocabulary field hintedPoolKinds/frameKindHints already reads
+	// for RETRIEVAL (chaos4348_reachability.go, this file's own call at
+	// hintedPoolKinds() above) -- now also reach the OFFER composer. Before
+	// this, a children_of_scope/discovered_kind/grouped_members question
+	// whose kind-hinted lexical search found nothing (no named entity to
+	// match) offered whatever kind an ordinary text search happened to
+	// surface and never the kind the frame itself already declared. See
+	// kindOfferMaterial's own doc comment for why this is a THIRD,
+	// distinctly-behaved input, never folded into explicitKinds. Read once
+	// and reused for both calls below, mirroring beforeKinds/afterKinds'
+	// own "computed once, read twice" shape.
+	declaredKinds := frameKindHints(frame)
 	// beforeOffer is discarded -- only beforeDiag's counts are kept, as the
 	// PRE-repair telemetry twin below. Calling kindOfferMaterial twice
 	// (once per kind list) keeps both diagnostics computed by the
 	// IDENTICAL cardinality-check logic, rather than duplicating that
 	// check by hand and risking the two readings drifting apart.
-	_, beforeDiag := kindOfferMaterial(beforeKinds, request.ExpectedKinds)
-	kindOffer, kindOfferDiag := kindOfferMaterial(afterKinds, request.ExpectedKinds)
+	_, beforeDiag := kindOfferMaterial(beforeKinds, request.ExpectedKinds, declaredKinds)
+	kindOffer, kindOfferDiag := kindOfferMaterial(afterKinds, request.ExpectedKinds, declaredKinds)
 	// CHAOS-4012: the SAME union kindOfferMaterial read (pre-repair) above
 	// is also the read-only pool candidateOfferMaterial ranks over -- one
 	// candidate pool, two independent offer axes, never two different
@@ -2738,6 +2760,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 			RequestID: request.RequestID, Stage: "kind_offer",
 			KindOfferExplicitHintCount:                   kindOfferDiag.ExplicitHintCount,
+			KindOfferDeclaredHintCount:                   kindOfferDiag.DeclaredHintCount,
 			KindOfferDistinctKindCount:                   kindOfferDiag.DistinctKindCount,
 			KindOfferSuppressedByCardinality:             kindOfferDiag.SuppressedByCardinality,
 			KindOfferCandidateOfferCount:                 candidateOfferDiag.CandidateOfferCount,

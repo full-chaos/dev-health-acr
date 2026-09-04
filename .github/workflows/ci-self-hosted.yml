@@ -35,13 +35,18 @@ permissions:
   contents: read
 
 # A group of its own, so this workflow can neither cancel nor be cancelled by
-# ci.yml's `ci-${{ github.workflow }}-${{ github.ref }}`. The two runs are
-# independent: a new push cancels this run and ci.yml's run separately, each
-# by its own group, which is what keeps a superseded attempt from holding an
-# ephemeral ARC runner while its replacement queues behind it.
+# ci.yml's own group. The two runs are independent: a new push cancels this
+# run and ci.yml's run separately, each by its own group, which is what
+# keeps a superseded attempt from holding an ephemeral ARC runner while its
+# replacement queues behind it.
+#
+# Cancel unconditionally, push included: main is fast-forward-only from
+# squash merges, so an in-progress attempt for a superseded main commit is
+# moot the moment a newer push lands -- letting it finish only holds a pool
+# runner nobody will read the result of.
 concurrency:
-  group: ci-self-hosted-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-self-hosted-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # The attempt for ci.yml's `race-devhealthschema` job.
@@ -76,12 +81,19 @@ jobs:
       # do, so both legs test the identical tree.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
-      # actions/setup-go v6.5.0 -- same pin, same version, same cache
-      # setting as ci.yml's race-devhealthschema job.
+      # actions/setup-go v6.5.0 -- same pin and version as ci.yml's
+      # race-devhealthschema job, but cache:false here (not matching the
+      # hosted leg): actions/setup-go's cache restores/saves a tarball
+      # under GOCACHE/GOMODCACHE, and this pool now has BOTH mounted from
+      # a shared hostPath (helm rev 6) that every self-hosted job reads
+      # and writes concurrently -- a setup-go cache restore step racing
+      # against that live shared mount can corrupt it for every other job
+      # on the pool, not just this one. The mount itself already provides
+      # the cache; this step now only installs the Go toolchain.
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.0'
-          cache: true
+          cache: false
 
       # A mislabeled or reassigned runner would make this job's result mean
       # something other than what it claims. The pool is arm64-only by

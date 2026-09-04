@@ -18,7 +18,7 @@ func resolveWithBasis(searchTruncated bool, vectorArmSimilarity map[string]float
 	return ResolveFromMergedCandidatesWithGateAndBasis(
 		bySubject, map[string]string{}, map[string]bool{}, 10, true, searchTruncated,
 		vectorArmSimilarity, threshold, false, 10, 20, true,
-		DefaultCommitGatePolicy(), identity, terms, aliasIdentityComplete, nil, "", "", false, false)
+		DefaultCommitGatePolicy(), identity, terms, aliasIdentityComplete, nil, "", "", false, false, nil)
 }
 
 // tiedTopCandidates reproduces the v9 trial's case-61 RESOLUTION shape: a
@@ -286,7 +286,7 @@ func TestChaos4085_BasisDiscardingWrappersStayBehaviourallyIdentical(t *testing.
 	viaBasis, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(
 		bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
 		tiedTopSimilarities(), 0.25, false, 10, 20, true,
-		DefaultCommitGatePolicy(), nil, nil, false, nil, "", "", false, false)
+		DefaultCommitGatePolicy(), nil, nil, false, nil, "", "", false, false, nil)
 
 	if len(viaWrapper.Committed) != len(viaBasis.Committed) {
 		t.Fatalf("wrapper committed %v, implementation committed %v", viaWrapper.Committed, viaBasis.Committed)
@@ -312,7 +312,7 @@ func TestChaos4085_DecisionTraceCarriesBasisAndTieFlags(t *testing.T) {
 		lone := corroborationCandidate("traced_lone", 0.80, contextfabric.MatchLexical)
 		bySubject := map[string]contextfabric.SubjectCandidate{SubjectKey(lone.Subject): lone}
 		ResolveFromMergedCandidatesWithGateAndBasis(bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
-			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-basis", "", false, false)
+			nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-basis", "", false, false, nil)
 
 		event, ok := tracer.decision()
 		if !ok {
@@ -337,7 +337,7 @@ func TestChaos4085_DecisionTraceCarriesBasisAndTieFlags(t *testing.T) {
 			bySubject[SubjectKey(candidate.Subject)] = candidate
 		}
 		ResolveFromMergedCandidatesWithGateAndBasis(bySubject, map[string]string{}, map[string]bool{}, 10, true, true, /* searchTruncated */
-			tiedTopSimilarities(), 0.25, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-tied", "", false, false)
+			tiedTopSimilarities(), 0.25, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-tied", "", false, false, nil)
 
 		event, ok := tracer.decision()
 		if !ok {
@@ -361,7 +361,7 @@ func TestChaos4085_DecisionTraceCarriesBasisAndTieFlags(t *testing.T) {
 			bySubject[SubjectKey(candidate.Subject)] = candidate
 		}
 		ResolveFromMergedCandidatesWithGateAndBasis(bySubject, map[string]string{}, map[string]bool{}, 10, true, false, /* searchTruncated */
-			tiedTopSimilarities(), 0.25, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-untied", "", false, false)
+			tiedTopSimilarities(), 0.25, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-untied", "", false, false, nil)
 
 		event, ok := tracer.decision()
 		if !ok {

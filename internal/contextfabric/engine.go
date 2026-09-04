@@ -843,6 +843,16 @@ type EngineTelemetry interface {
 // person-to-person rankings" guardrail's team-to-team analogue does not
 // license leaking WHICH team ranked where into an operator log line.
 type CohortRankedEvent struct {
+	// CohortKind is the subject kind of the cohort that was ranked and
+	// served -- a closed-vocabulary value, content-safe by the same
+	// reasoning as every other field here.
+	//
+	// It rides on the served-answer line because "which cohort kinds does
+	// this system actually SERVE" had no answer in the record: the served
+	// side carried counts, and the graph side carried a refusal basis with
+	// no kind. An operator watching a newly admitted kind reach production
+	// had nothing to watch.
+	CohortKind          SubjectKind
 	MemberCount         int
 	FormulaVersion      string
 	DegradedMemberCount int
@@ -1499,7 +1509,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// CARRIED, NOT RE-DERIVED (CHAOS-4736 bar 5): resolution gets this
 	// turn's validated frame so the kind-hinted pool search reads declared
 	// kinds instead of guessing at the question's words.
-	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed), familyOutcome.Frame)
+	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, confirmedExpectedKind(structureCanon.Confirmed), confirmedAnchorSelection(structureCanon.Confirmed), familyOutcome.Frame, ScopeAnchorRetrievalKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind))
 	if err != nil {
 		// CHAOS-4077: a never-projected org (ResolveSubjects queried a
 		// graph key that has never been created) degrades to the SAME

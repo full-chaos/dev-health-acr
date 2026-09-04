@@ -124,7 +124,12 @@ func TestChaos4085_ProductionTraceEmitsTheTieFlagOnANonCommittedOutcome(t *testi
 func TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics(t *testing.T) {
 	record := captureTraceJSON(t, ResolutionTraceEvent{
 		RequestID: "request_sink_0003", Stage: "kind_offer",
-		KindOfferExplicitHintCount:       1,
+		KindOfferExplicitHintCount: 1,
+		// CHAOS-4967 codex round 1, P2: deliberately DIFFERENT from
+		// KindOfferExplicitHintCount's 1, so the assertion below proves the
+		// sink carries THIS field's own number, not a coincidental
+		// same-value match with explicit_hint_count.
+		KindOfferDeclaredHintCount:       2,
 		KindOfferDistinctKindCount:       1,
 		KindOfferSuppressedByCardinality: true,
 		KindOfferCandidateOfferCount:     5,
@@ -153,6 +158,12 @@ func TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics(t *testing.T) {
 
 	if got, ok := record["explicit_hint_count"].(float64); !ok || got != 1 {
 		t.Fatalf("explicit_hint_count = %v, want 1", record["explicit_hint_count"])
+	}
+	// CHAOS-4967 codex round 1, P2: declared_hint_count must reach the
+	// PRODUCTION sink too -- same file-doc-comment obligation as every
+	// field above.
+	if got, ok := record["declared_hint_count"].(float64); !ok || got != 2 {
+		t.Fatalf("declared_hint_count = %v, want 2", record["declared_hint_count"])
 	}
 	if got, ok := record["distinct_kind_count"].(float64); !ok || got != 1 {
 		t.Fatalf("distinct_kind_count = %v, want 1", record["distinct_kind_count"])

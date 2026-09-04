@@ -198,6 +198,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		t.logger.DebugContext(ctx, "context fabric resolution trace: kind offer",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"explicit_hint_count", event.KindOfferExplicitHintCount,
+			"declared_hint_count", event.KindOfferDeclaredHintCount,
 			"distinct_kind_count", event.KindOfferDistinctKindCount,
 			"suppressed_by_cardinality", event.KindOfferSuppressedByCardinality,
 			"candidate_offer_count", event.KindOfferCandidateOfferCount,
@@ -234,6 +235,20 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"request_id", event.RequestID, "stage", event.Stage,
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"rank", event.Rank, "survived", event.Survived, "coverage_bypass", event.CoverageBypass)
+	case "reserved_kind_admitted":
+		// One event per candidate that phase 4's kind reserve kept past the
+		// flat cut (resolution.go, reservedPrefix). It is the operator-visible
+		// half of the reserve: its presence means a kind the FRAME OR RECEIPT
+		// declared would otherwise have been truncated out of the offered
+		// candidate list entirely, which is the defect the reserve exists to
+		// stop. Absence means the reserve was inert on this resolution --
+		// either nothing was reserved, or the ranking already kept the kind.
+		// Rank is the candidate's PRE-CUT rank, so the distance past `max`
+		// says how badly the kind lost the ranking race.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: reserved kind admitted",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
+			"rank", event.Rank, "survived", event.Survived)
 	case "confirmed_kind_scope":
 		// CHAOS-4154: the operator-visible half of the confirmed-kind
 		// truncation-scoping mechanism -- this event's own presence in a

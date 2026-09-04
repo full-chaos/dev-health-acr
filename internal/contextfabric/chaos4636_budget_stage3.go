@@ -122,6 +122,11 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			contractsv1.ContextFabricBudgetFits, params.GroupedNarrowingBasis)
 		fit.MeasuredItems = measurement.Items.Budgeted()
 		fit.MeasuredBytes = measurement.Bytes
+		// Predicted beside measured on the SAME line, for the cohort synthesis
+		// actually ran against. A fit is where the rate is confirmed; a
+		// refusal is where it has already failed, so recording it only on
+		// refusals would show the rate exclusively when it was wrong.
+		fit.PredictedItems = PredictedItemsForPlan(*plan, cohortMemberCount(params.Graph.Cohort))
 		fit.DeadlineReserved = e.synthesisDeadlineReserve > 0
 		e.recordPlanNarrowing(ctx, principal, fit)
 		return result, firstPass, nil
@@ -191,6 +196,9 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, narrowed.Basis)
 		event.MeasuredItems = measurement.Items.Budgeted()
 		event.MeasuredBytes = measurement.Bytes
+		// The measurement here is the FIRST synthesis's, taken against the
+		// pre-narrowing cohort, so the prediction pairs with `before`.
+		event.PredictedItems = PredictedItemsForPlan(*plan, before)
 		event.RetryAttempted = true
 		event.RetryFit = false
 		event.RetryFailed = true
@@ -216,6 +224,10 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, narrowed.Basis)
 	event.MeasuredItems = retryMeasurement.Items.Budgeted()
 	event.MeasuredBytes = retryMeasurement.Bytes
+	// `after`, not `before`: this event measures the RE-synthesized answer,
+	// which ran against the narrowed cohort. Predicting from `before` would
+	// pair a measurement of one cohort with an expectation for a larger one.
+	event.PredictedItems = PredictedItemsForPlan(*plan, after)
 	event.RetryAttempted = true
 	event.RetryFit = retryOverrun == contractsv1.ContextFabricBudgetFits
 	event.DeadlineReserved = e.synthesisDeadlineReserve > 0
@@ -293,7 +305,14 @@ func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) narr
 		// Nothing left to narrow. A cohort of one is the smallest answer
 		// that is still an answer to the question asked; zero members is a
 		// different question.
-		return narrowedInput{Graph: graph, Facts: facts}
+		//
+		// Before/After carry the REAL count, not zero. Nothing narrowed, so
+		// they are equal -- but they still describe a cohort that exists and
+		// that synthesis measured an answer against. Returning the zero value
+		// published `before:0, after:0` on every singleton refusal, and any
+		// per-member quantity derived from that count inherits the error.
+		trivial := cohortMemberCount(graph.Cohort)
+		return narrowedInput{Graph: graph, Facts: facts, Before: trivial, After: trivial}
 	}
 	before := len(graph.Cohort.Members)
 	target := before / 2
@@ -395,6 +414,11 @@ func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, p
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, selected, grouped, false, overrun, basis)
 	event.MeasuredItems = measurement.Items.Budgeted()
 	event.MeasuredBytes = measurement.Bytes
+	// `members` is the cohort synthesis ran against, which is the count the
+	// measurement describes -- NOT `selected`, which is what the declined
+	// retry would have narrowed to. Predicting from `selected` would publish a
+	// number for an answer that was never assembled.
+	event.PredictedItems = PredictedItemsForPlan(*plan, members)
 	event.RetryAttempted = retryAttempted
 	event.RetryFit = false
 	event.RefusalPlanned = true
