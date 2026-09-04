@@ -777,6 +777,7 @@
                   "landscape"
                 ]
               },
+              "uniqueItems": true,
               "maxItems": 22
             },
             "step": {
@@ -832,6 +833,7 @@
                   "landscape"
                 ]
               },
+              "uniqueItems": true,
               "maxItems": 22,
               "description": "The fact kinds the step CONSUMES. Deliberately not fact_kinds: those are the kinds that can SERVE this cell, and a computation's inputs are facts some other cell is responsible for reading."
             },

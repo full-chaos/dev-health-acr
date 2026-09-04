@@ -340,6 +340,9 @@ func (r ContextFabricPlanRequirement) Validate() error {
 			return fmt.Errorf("plan requirement fact kind %q is not a vocabulary member", kind)
 		}
 	}
+	if duplicate, found := firstDuplicateFactKind(r.FactKinds); found {
+		return fmt.Errorf("plan requirement declares fact kind %q twice; the list names what CAN serve the requirement, and naming a kind twice states nothing the first naming did not", duplicate)
+	}
 	if len(r.InputFactKinds) > ContextFabricFactKindCount {
 		return fmt.Errorf("plan requirement declares more input fact kinds than the closed vocabulary has")
 	}
@@ -347,6 +350,9 @@ func (r ContextFabricPlanRequirement) Validate() error {
 		if !validFactKind(kind) {
 			return fmt.Errorf("plan requirement input fact kind %q is not a vocabulary member", kind)
 		}
+	}
+	if duplicate, found := firstDuplicateFactKind(r.InputFactKinds); found {
+		return fmt.Errorf("plan requirement declares input fact kind %q twice; the list names what the step CONSUMES, and naming a kind twice states nothing the first naming did not", duplicate)
 	}
 	if r.Step != "" && !ValidContextFabricComputedObligationStep(r.Step) {
 		return fmt.Errorf("plan requirement step %q is not a vocabulary member", r.Step)
@@ -461,4 +467,41 @@ func ValidateContextFabricPlanRequirements(rows []ContextFabricPlanRequirement) 
 		seen[row.Requirement] = true
 	}
 	return nil
+}
+
+// firstDuplicateFactKind reports the first kind that appears twice.
+//
+// WHY UNIQUENESS IS A RULE AND NOT A TIDINESS PREFERENCE. Both kind lists are
+// SETS in meaning: `fact_kinds` names what can serve a requirement,
+// `input_fact_kinds` names what a step consumes. Naming a member twice states
+// nothing the first naming did not, so a repeated entry carries no
+// information -- and it is not harmless, because the count of these lists is
+// read as a cardinality. The obligation seed's own doc comment already says
+// so from the other side: a duplicated fact kind there inflates Cardinality,
+// which is what sets the completion quantifier.
+//
+// It was found from the BYTE side rather than the semantic one. The bounds
+// were COUNT and MEMBERSHIP only, so a list repeating the longest vocabulary
+// member was legal and strictly longer than one naming each member once --
+// which made the "maximal" bound fixture smaller than a legal document, the
+// one direction a ceiling must never be wrong in.
+//
+// ONE helper called from both sites, deliberately. The two lists had
+// identical count-and-membership guards written twice, and the review that
+// found this named only the input side; a second copy of this rule is how the
+// two would come to disagree. The cause table earlier in this package is the
+// precedent -- it was briefly duplicated across two packages and would have
+// drifted on the first new token.
+//
+// Linear over a vocabulary bounded at ContextFabricFactKindCount, so a map
+// would allocate more than it saves.
+func firstDuplicateFactKind(kinds []ContextFabricFactKind) (ContextFabricFactKind, bool) {
+	for i := 1; i < len(kinds); i++ {
+		for j := 0; j < i; j++ {
+			if kinds[i] == kinds[j] {
+				return kinds[i], true
+			}
+		}
+	}
+	return "", false
 }
