@@ -239,9 +239,14 @@ func TestKindCarry_AReceiptThatStatesAKindThisTurnBlocksTheCarry(t *testing.T) {
 	if !statedExpectedKindThisTurn(InvestigationRequest{}, anchorPick) {
 		t.Fatal("statedExpectedKindThisTurn(anchor receipt naming a team) = false, want true")
 	}
-	// A confirmed member carrying NO kind must still not block: subject_handle
-	// can be redeemed without the offer naming a kind, and blocking on it
-	// would cost carries for nothing.
+	// A confirmed member carrying NO kind must still not block. This shape is
+	// NOT reachable in production and the case is deliberately defensive: the
+	// contract FORBIDS it, because every option validator rejects an empty
+	// kind (validate_context_fabric_structure.go), so a redeemed member always
+	// carries one. The guard and this case exist so that if that invariant is
+	// ever relaxed, a kindless member fails open into "states nothing to
+	// protect" rather than silently blocking every carry -- and so a reader
+	// does not mistake the guard for a live branch.
 	kindlessHandle := requestStructureCanonicalization{
 		Confirmed: []confirmedStructureMember{{
 			Member:       contractsv1.ContextFabricStructureNeedSubjectHandle,
@@ -373,5 +378,30 @@ func TestResolveCarriedKind_NamesTheOriginalConfirmationAcrossHops(t *testing.T)
 	entry := composeCarriedKindEntry(got)
 	if entry == nil || entry.PriorResultID != "result_origin" {
 		t.Fatalf("composeCarriedKindEntry() = %#v, want prior_result_id = result_origin", entry)
+	}
+
+	// THREE hops, which is the induction step rather than a second example.
+	// Two hops can be satisfied by a rule that reaches back exactly one level;
+	// only a third shows the origin is preserved by every hop rather than
+	// merely recovered by the first. Each carrier here re-discloses the SAME
+	// origin, which is what a correct implementation persists, so a rule that
+	// walked back a fixed distance would land on result_carrier here.
+	secondCarrier := validInvestigationResult()
+	secondCarrier.ResultID = "result_carrier_two"
+	secondCarrier.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{{
+		Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam),
+		Source: contractsv1.ContextFabricStructureSourceCarried, PriorResultID: "result_origin",
+		Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+	}}
+	store.results["result_carrier_two"] = secondCarrier
+	request3 := validInvestigationRequest()
+	request3.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_carrier_two", ReceiptID: "candr_carrier_two_01"}}
+
+	got3 := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request3, nil, ResolvedGraphBinding{Epoch: 0})
+	if got3.Outcome != KindCarryHit || got3.Kind != contractsv1.ContextFabricSubjectTeam {
+		t.Fatalf("three-hop resolveCarriedKind() = %#v, want a hit carrying team", got3)
+	}
+	if got3.SourceResultID != "result_origin" {
+		t.Fatalf("three-hop SourceResultID = %q, want %q: the origin must survive EVERY hop, not just the first", got3.SourceResultID, "result_origin")
 	}
 }

@@ -75,12 +75,12 @@ type confirmedStructureMember struct {
 	Member       contractsv1.ContextFabricStructureNeedKind
 	AppliedValue string
 	// AppliedKind (CHAOS-3972 P3, codex xhigh review round 1 finding 3) is
-	// the confirmed offer's own Kind. It is populated for EVERY member whose
-	// matched offer names one -- the redemption loop below sets it
-	// unconditionally from the matcher's own kind -- so subject_handle,
-	// subject_anchor and subject_candidate all carry it. It is empty for
-	// expected_kind, where AppliedValue IS already the kind, and for any
-	// member whose offer named no kind.
+	// the confirmed offer's own Kind. It is populated for EVERY redeemed
+	// member -- the redemption loop below sets it unconditionally from the
+	// matcher's own kind, and every option validator rejects an empty kind
+	// (validate_context_fabric_structure.go), so subject_handle,
+	// subject_anchor and subject_candidate ALWAYS carry one. It is empty only
+	// for expected_kind, where AppliedValue IS already the kind.
 	//
 	// This comment previously said "populated for subject_handle" only, with
 	// subject_anchor called out as empty, and named resolveExplicitStructure's
