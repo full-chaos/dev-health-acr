@@ -104,8 +104,13 @@ check_needs_matches_jobs() {
 
 check_verify_if_always() {
   local file="$1"
-  job_block "$file" verify | grep -Eq '^ {4}if: always\(\)' || {
-    printf 'verify job is missing "if: always()"\n' >&2
+  # `!cancelled()`, not `always()`: verify must still run and report on a
+  # lane that failed (that is the whole point of the gate), but must NOT
+  # spin up on a run that was cancelled/superseded (#414's
+  # cancel-in-progress) -- `always()` does not distinguish those two
+  # cases, `!cancelled()` does.
+  job_block "$file" verify | grep -Eq "^ {4}if: '!cancelled\(\)'" || {
+    printf 'verify job is missing "if: '"'"'!cancelled()'"'"'"\n' >&2
     return 1
   }
 }
@@ -481,6 +486,48 @@ check_verify_pair_logic() {
   return "$status"
 }
 
+# EXECUTED, not hypothetical: the first version of the mirror-preflight
+# fan-out consumers' `if:` used `always() && (...)`, and every one of
+# them silently skipped on EVERY run, switch on or off -- a bare `if:
+# <expr>` implicitly ANDs with success() over the job's own `needs:`, and
+# since one pair member always resolves to `skipped` by design, that
+# implicit check failed regardless of the OR logic actually written.
+# `always()` "fixed" that but is itself wrong in a different way: it also
+# proceeds when the WORKFLOW RUN was cancelled (#414's
+# cancel-in-progress), spinning up pool/hosted work for a superseded run
+# nobody will read. `!cancelled()` is the one status-check function that
+# is both an explicit override (so the real OR logic actually runs) and
+# correctly stops on cancellation. Every job that consumes a v1.6 pair's
+# result (its `needs:` names a `<base>-hosted` or `<base>-self-hosted`
+# key) must gate on it.
+check_pair_consumers_guard_cancellation() {
+  local file="$1" status=0 job
+  while IFS= read -r job; do
+    local block needs_list depends_on_pair=0 base
+    block="$(job_block "$file" "$job")"
+    needs_list="$(printf '%s' "$block" | list_needs)"
+    for base in $V16_PAIR_BASES; do
+      if printf '%s\n' "$needs_list" | grep -qxE "${base}-hosted|${base}-self-hosted"; then
+        depends_on_pair=1
+      fi
+    done
+    [ "$depends_on_pair" -eq 1 ] || continue
+
+    if ! printf '%s' "$block" | grep -qE '^ {4}if: '; then
+      printf '%s: depends on a v1.6 pair member but has no if: -- the default needs skip-cascade would wrongly skip it whenever the pair leg that never ran (by design) reports skipped\n' \
+        "$job" >&2
+      status=1
+      continue
+    fi
+    if ! printf '%s' "$block" | grep -qF '!cancelled()'; then
+      printf '%s: if: does not guard with !cancelled() -- always() (or a bare needs-result expression with no status-check function at all) either spins this job up on a cancelled/superseded run, or silently skips it on every run regardless of the pair'"'"'s actual result\n' \
+        "$job" >&2
+      status=1
+    fi
+  done < <(list_jobs "$file")
+  return "$status"
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -496,6 +543,7 @@ run_all_checks() {
   check_pin_binds_checkout_ref "$file"
   check_v16_pairs "$file"
   check_verify_pair_logic "$file"
+  check_pair_consumers_guard_cancellation "$file"
 }
 
 # ---- positive run -------------------------------------------------------
@@ -524,10 +572,17 @@ needs_missing_job="$tmpdir/needs-missing-job.yml"
 awk '/^ {6}- build-hosted$/ { next } { print }' "$workflow" > "$needs_missing_job"
 assert_check_fails 'dropped "build-hosted" from verify.needs' check_needs_matches_jobs "$needs_missing_job"
 
-# (b) remove "if: always()" from verify.
+# (b) remove "if: '!cancelled()'" from verify.
 missing_if_always="$tmpdir/missing-if-always.yml"
-awk '/^ {4}if: always\(\)$/ { next } { print }' "$workflow" > "$missing_if_always"
-assert_check_fails 'removed if: always() from verify' check_verify_if_always "$missing_if_always"
+awk '!done && /^ {4}if: .!cancelled\(\)./ { done=1; next } { print }' "$workflow" > "$missing_if_always"
+assert_check_fails 'removed if: !cancelled() from verify' check_verify_if_always "$missing_if_always"
+
+# (b2) verify reverts to the older `always()` gate -- would spin up (and,
+# via its own steps, potentially report on) a cancelled/superseded run.
+verify_uses_always="$tmpdir/verify-uses-always.yml"
+awk '!done && /^ {4}if: .!cancelled\(\)./ { sub(/if: .!cancelled\(\)./, "if: always()"); done=1 } { print }' \
+  "$workflow" > "$verify_uses_always"
+assert_check_fails 'verify reverted to if: always()' check_verify_if_always "$verify_uses_always"
 
 # (c) flip a HOSTED job's "cache: true" to "cache: false" -- hosted legs
 # have no shared mount and should keep using setup-go's own cache.
@@ -706,5 +761,27 @@ pair_check_removed="$tmpdir/pair-check-removed.yml"
 awk '!/PAIRS/ { print }' "$workflow" > "$pair_check_removed"
 assert_check_fails 'removed every reference to PAIRS from verify'"'"'s pair check' \
   check_verify_pair_logic "$pair_check_removed"
+
+# (x) reproduce the EXECUTED regression directly: a mirror-preflight
+# consumer's if: reverts to `always()` -- would spin up unit on a
+# cancelled/superseded run.
+consumer_uses_always="$tmpdir/consumer-uses-always.yml"
+awk '!done && /^      !cancelled\(\)$/ { sub(/!cancelled\(\)/, "always()"); done=1 } { print }' \
+  "$workflow" > "$consumer_uses_always"
+assert_check_fails 'a mirror-preflight consumer reverted to always()' \
+  check_pair_consumers_guard_cancellation "$consumer_uses_always"
+
+# (y) reproduce the OTHER direction of the same regression: a consumer's
+# if: drops the status-check function entirely and goes straight to the
+# bare OR -- GitHub implicitly ANDs that with success() over needs:, so
+# it silently skips on every run since one pair member is always skipped.
+consumer_bare_or="$tmpdir/consumer-bare-or.yml"
+awk '
+  !done && /^      !cancelled\(\)$/ { done=1; next }
+  !done2 && done && /^      && \(needs\./ { sub(/^      && /, "      "); done2=1 }
+  { print }
+' "$workflow" > "$consumer_bare_or"
+assert_check_fails 'a mirror-preflight consumer dropped the !cancelled() guard entirely' \
+  check_pair_consumers_guard_cancellation "$consumer_bare_or"
 
 printf 'PASS: all negative controls correctly failed their check\n'

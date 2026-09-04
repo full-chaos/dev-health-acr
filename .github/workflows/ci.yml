@@ -334,9 +334,11 @@ jobs:
     # regardless of the switch, so it needs whichever leg actually ran
     # to have succeeded -- the default `needs:` skip-cascade would wrongly
     # skip this job too on the leg that was never going to run anyway.
-    needs: [mirror-preflight-hosted, mirror-preflight-self-hosted]
+    needs:
+      - mirror-preflight-hosted
+      - mirror-preflight-self-hosted
     if: >-
-      always()
+      !cancelled()
       && (needs.mirror-preflight-hosted.result == 'success'
       || needs.mirror-preflight-self-hosted.result == 'success')
     env:
@@ -461,9 +463,11 @@ jobs:
     # See `unit`'s identical comment: mirror-preflight is now a v1.6 pair,
     # exactly one leg runs, this job runs unconditionally and needs
     # whichever leg succeeded.
-    needs: [mirror-preflight-hosted, mirror-preflight-self-hosted]
+    needs:
+      - mirror-preflight-hosted
+      - mirror-preflight-self-hosted
     if: >-
-      always()
+      !cancelled()
       && (needs.mirror-preflight-hosted.result == 'success'
       || needs.mirror-preflight-self-hosted.result == 'success')
     strategy:
@@ -994,9 +998,11 @@ jobs:
     # See `unit`'s identical comment: mirror-preflight is now a v1.6 pair,
     # exactly one leg runs, this job runs unconditionally and needs
     # whichever leg succeeded.
-    needs: [mirror-preflight-hosted, mirror-preflight-self-hosted]
+    needs:
+      - mirror-preflight-hosted
+      - mirror-preflight-self-hosted
     if: >-
-      always()
+      !cancelled()
       && (needs.mirror-preflight-hosted.result == 'success'
       || needs.mirror-preflight-self-hosted.result == 'success')
     env:
@@ -1078,9 +1084,11 @@ jobs:
     # See `unit`'s identical comment: mirror-preflight is now a v1.6 pair,
     # exactly one leg runs, this job runs unconditionally and needs
     # whichever leg succeeded.
-    needs: [mirror-preflight-hosted, mirror-preflight-self-hosted]
+    needs:
+      - mirror-preflight-hosted
+      - mirror-preflight-self-hosted
     if: >-
-      always()
+      !cancelled()
       && (needs.mirror-preflight-hosted.result == 'success'
       || needs.mirror-preflight-self-hosted.result == 'success')
     env:
@@ -1150,9 +1158,11 @@ jobs:
     # See `unit`'s identical comment: mirror-preflight is now a v1.6 pair,
     # exactly one leg runs, this job runs unconditionally and needs
     # whichever leg succeeded.
-    needs: [mirror-preflight-hosted, mirror-preflight-self-hosted]
+    needs:
+      - mirror-preflight-hosted
+      - mirror-preflight-self-hosted
     if: >-
-      always()
+      !cancelled()
       && (needs.mirror-preflight-hosted.result == 'success'
       || needs.mirror-preflight-self-hosted.result == 'success')
     env:
@@ -1267,7 +1277,7 @@ jobs:
     # anything other than success/skipped, or if BOTH report skipped (which
     # would mean that lane never ran at all). Ported from ask-dev PR #43's
     # aggregator logic, generalized from one pair to five.
-    if: always()
+    if: '!cancelled()'
     needs:
       - mirror-preflight-hosted
       - mirror-preflight-self-hosted
