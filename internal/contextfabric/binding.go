@@ -76,6 +76,24 @@ type StoredInvestigationResult struct {
 	Result     InvestigationResult
 	GraphEpoch *int64
 	SavedAt    time.Time
+	// ParentResultID is the result THIS result followed -- durable chain
+	// identity, recorded by every Save regardless of whether any axis was
+	// carried or disclosed.
+	//
+	// It lives HERE, on the persistence carrier, rather than on
+	// InvestigationResult itself, for the same reason GraphEpoch does: only
+	// the SERVER walks this chain (the carry resolvers read it through an
+	// org-scoped Get), so putting it on the result payload would widen the
+	// wire contract for a value no client consumes -- and would fail every
+	// consumer pinning the result schema with additionalProperties:false
+	// until its pin was bumped. A carry's ORIGIN is disclosed separately and
+	// already has a wire home: ContextFabricConfirmedStructureEntry.PriorResultID.
+	//
+	// Empty means "no recorded parent" -- a first turn, a pre-migration row,
+	// or a store that does not persist ancestry. It never means "unknown,
+	// assume something": the walk fails closed on an empty parent exactly as
+	// it does on a missing reference.
+	ParentResultID string
 }
 
 // ReuseMissReason classifies WHY AnswerReuseGate.FindReusable found no

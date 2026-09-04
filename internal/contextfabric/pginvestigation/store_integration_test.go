@@ -121,13 +121,13 @@ func TestStore_saveAndGetReturnContextCanceledWithoutWrappingAsUnavailable(t *te
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 
-	saveErr := store.Save(cancelled, storage.Principal{OrgID: "org-1"}, validResult("result-cancelled-save"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
+	saveErr := store.Save(cancelled, storage.Principal{OrgID: "org-1"}, validResult("result-cancelled-save"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "")
 	require.Error(t, saveErr)
 	require.True(t, errors.Is(saveErr, context.Canceled), "save error should be context.Canceled, got %v", saveErr)
 	require.False(t, errors.Is(saveErr, contextfabric.ErrUnavailable), "a canceled context is not a bounded dependency failure")
 
 	// Seed a row (with a live context) so Get has something to reach for.
-	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-cancelled-get"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0))
+	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-cancelled-get"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""))
 
 	_, getErr := store.Get(cancelled, storage.Principal{OrgID: "org-1"}, "result-cancelled-get")
 	require.Error(t, getErr)
@@ -140,13 +140,13 @@ func TestStore_saveAndGetReturnUnavailableOnDeadlineExceeded(t *testing.T) {
 	db := newInvestigationTestDatabase(t, ctx)
 	store, err := pginvestigation.NewStore(db)
 	require.NoError(t, err)
-	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-deadline-seed"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0))
+	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-deadline-seed"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""))
 
 	expired, cancel := context.WithTimeout(ctx, time.Nanosecond)
 	defer cancel()
 	time.Sleep(time.Millisecond)
 
-	saveErr := store.Save(expired, storage.Principal{OrgID: "org-1"}, validResult("result-deadline-save"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
+	saveErr := store.Save(expired, storage.Principal{OrgID: "org-1"}, validResult("result-deadline-save"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "")
 	require.Error(t, saveErr)
 	require.True(t, errors.Is(saveErr, context.DeadlineExceeded), "save error should be context.DeadlineExceeded, got %v", saveErr)
 
@@ -160,7 +160,7 @@ func TestStore_getUnknownResultIDIsIndistinguishableFromWrongOrg(t *testing.T) {
 	db := newInvestigationTestDatabase(t, ctx)
 	store, err := pginvestigation.NewStore(db)
 	require.NoError(t, err)
-	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-non-enumerating"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0))
+	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-non-enumerating"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""))
 
 	_, wrongOrgErr := store.Get(ctx, storage.Principal{OrgID: "org-2"}, "result-non-enumerating")
 	_, unknownIDErr := store.Get(ctx, storage.Principal{OrgID: "org-2"}, "result-does-not-exist")
@@ -306,14 +306,14 @@ func TestStore_structureSupersessionClaims(t *testing.T) {
 			require.False(t, superseded, "IsStructureSuperseded before any Save must be false")
 
 			winner := resultWithConfirmedStructure("result-supersession-winner-"+string(member), member, priorResultID, "kindr_winner00000001")
-			require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0))
+			require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""))
 
 			superseded, err = store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
 			require.NoError(t, err)
 			require.True(t, superseded, "IsStructureSuperseded after the winning Save must be true")
 
 			loser := resultWithConfirmedStructure("result-supersession-loser-"+string(member), member, priorResultID, "kindr_loser000000001")
-			saveErr := store.Save(ctx, principal, loser, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
+			saveErr := store.Save(ctx, principal, loser, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "")
 			require.Error(t, saveErr, "a second Save redeeming the SAME (org, prior_result_id, member) must fail")
 			var conflict *contextfabric.ErrStructureOfferSuperseded
 			require.ErrorAs(t, saveErr, &conflict)
@@ -334,7 +334,7 @@ func TestStore_structureSupersessionClaims(t *testing.T) {
 			// is already held by the SAME result_id, matching the design brief's
 			// own "receipts are NOT consumed by a failed round" symmetry the other
 			// direction: a successful round replaying itself is not a conflict.
-			require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0))
+			require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""))
 		})
 	}
 }
@@ -479,7 +479,7 @@ VALUES ($1, $2, $3, $4)`, malformed.resultID, principal.OrgID, []byte(malformed.
 	// rejected -- exactly the double-redemption the finding described,
 	// now closed.
 	racer := resultWithConfirmedStructure("result-racer-post-backfill-01", member, priorResultID, "ancr_racer000000001")
-	racerErr := store.Save(ctx, principal, racer, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
+	racerErr := store.Save(ctx, principal, racer, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "")
 	var conflict *contextfabric.ErrStructureOfferSuperseded
 	require.ErrorAs(t, racerErr, &conflict)
 	require.Equal(t, []contextfabric.StructureNeedKind{member}, conflict.Members)

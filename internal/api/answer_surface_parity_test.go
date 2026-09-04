@@ -54,7 +54,7 @@ func TestAnswerSurfaceParityBetweenRealAPIAndRealMCP(t *testing.T) {
 	}
 
 	store := memoryinvestigation.NewStore()
-	if err := store.Save(context.Background(), storage.Principal{OrgID: callerOrgID}, result, contextfabric.SourceWatermarkSnapshot{}, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0); err != nil {
+	if err := store.Save(context.Background(), storage.Principal{OrgID: callerOrgID}, result, contextfabric.SourceWatermarkSnapshot{}, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""); err != nil {
 		t.Fatalf("seed result: %v", err)
 	}
 	investigator := investigatorFunc(func(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InvestigationResult, error) {
@@ -430,7 +430,7 @@ type legacyResultStore struct {
 	result contractsv1.ContextFabricInvestigationResult
 }
 
-func (s legacyResultStore) Save(context.Context, storage.Principal, contextfabric.InvestigationResult, contextfabric.SourceWatermarkSnapshot, contextfabric.RebuildEpoch, string, contextfabric.ReuseRetrievalIdentity, contextfabric.ReusePromptVersions, contextfabric.ReuseVersionAuthorities, int64) error {
+func (s legacyResultStore) Save(context.Context, storage.Principal, contextfabric.InvestigationResult, contextfabric.SourceWatermarkSnapshot, contextfabric.RebuildEpoch, string, contextfabric.ReuseRetrievalIdentity, contextfabric.ReusePromptVersions, contextfabric.ReuseVersionAuthorities, int64, string) error {
 	return nil
 }
 

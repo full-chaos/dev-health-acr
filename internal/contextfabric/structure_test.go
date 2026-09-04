@@ -816,7 +816,7 @@ type supersessionRacingResultStore struct {
 	conflictMembers []contractsv1.ContextFabricStructureNeedKind
 }
 
-func (s *supersessionRacingResultStore) Save(ctx context.Context, principal storage.Principal, result InvestigationResult, snap SourceWatermarkSnapshot, epoch RebuildEpoch, axisKey string, retrieval ReuseRetrievalIdentity, prompts ReusePromptVersions, authorities ReuseVersionAuthorities, graphEpoch int64) error {
+func (s *supersessionRacingResultStore) Save(ctx context.Context, principal storage.Principal, result InvestigationResult, snap SourceWatermarkSnapshot, epoch RebuildEpoch, axisKey string, retrieval ReuseRetrievalIdentity, prompts ReusePromptVersions, authorities ReuseVersionAuthorities, graphEpoch int64, _ string) error {
 	s.saveCalls++
 	if s.saveCalls == 1 {
 		members := s.conflictMembers
@@ -825,7 +825,7 @@ func (s *supersessionRacingResultStore) Save(ctx context.Context, principal stor
 		}
 		return &ErrStructureOfferSuperseded{Members: members}
 	}
-	return s.staticResultStore.Save(ctx, principal, result, snap, epoch, axisKey, retrieval, prompts, authorities, graphEpoch)
+	return s.staticResultStore.Save(ctx, principal, result, snap, epoch, axisKey, retrieval, prompts, authorities, graphEpoch, "")
 }
 
 // TestCHAOS3927P4_SaveTimeSupersessionConflict_EchoesEveryLostMember is

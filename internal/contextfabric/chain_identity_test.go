@@ -246,3 +246,108 @@ func TestChainIdentity_ParentResultIDJoinsTheReuseBypass(t *testing.T) {
 		t.Errorf("bypass reasons = %v, want %q: the bypass must be attributable to the prior-result reference, not merely to have happened", telemetry.answerReuseBypasses, AnswerReuseBypassPriorResultReference)
 	}
 }
+
+// ancestryRecordingStore records the parentResultID every Save was handed,
+// keyed by the result id being saved. Asserting on the Save ARGUMENT rather
+// than on a round-tripped Get keeps this a test about the ENGINE (does it
+// stamp ancestry on this path?) rather than about a store's persistence.
+type ancestryRecordingStore struct {
+	*staticResultStore
+	saved map[string]string
+}
+
+func newAncestryRecordingStore(seed *staticResultStore) *ancestryRecordingStore {
+	return &ancestryRecordingStore{staticResultStore: seed, saved: map[string]string{}}
+}
+
+func (s *ancestryRecordingStore) Save(ctx context.Context, principal storage.Principal, result InvestigationResult, snap SourceWatermarkSnapshot, epoch RebuildEpoch, axisKey string, retrieval ReuseRetrievalIdentity, prompts ReusePromptVersions, authorities ReuseVersionAuthorities, graphEpoch int64, parentResultID string) error {
+	s.saved[result.ResultID] = parentResultID
+	return s.staticResultStore.Save(ctx, principal, result, snap, epoch, axisKey, retrieval, prompts, authorities, graphEpoch, parentResultID)
+}
+
+// TestChainIdentity_AncestryIsRecordedEvenWhenTheTurnIsVetoed is the design
+// review's durability requirement, and it is the part of this ticket most
+// likely to be got wrong by building only what the happy path needs.
+//
+// A request-only parent pointer is not durable chain identity. Ancestry is
+// only walkable if EVERY turn recorded its parent -- and several engine paths
+// return BEFORE any carry runs: the four pre-carry veto/terminal returns and
+// the answer-reuse hit. Those are exactly the paths a reader forgets, because
+// no carry happened on them and nothing about a carry is on screen.
+//
+// The failure they cause is not local. A chain whose MIDDLE turn recorded no
+// parent has a hole in it, and every turn after the hole is cut off from
+// everything before it -- so a clarification loop that hits one veto in the
+// middle loses its whole history, which is precisely the situation where the
+// history was worth keeping.
+//
+// COVERAGE LIMIT, stated rather than left to be discovered: this exercises
+// the DECISIVE path and ONE veto path (the structure veto, reached by a kind
+// receipt that names a prior result the store does not hold). The other three
+// Save-bearing returns pass the same helper at the same position and are NOT
+// independently pinned here.
+func TestChainIdentity_AncestryIsRecordedEvenWhenTheTurnIsVetoed(t *testing.T) {
+	t.Parallel()
+
+	t.Run("decisive path", func(t *testing.T) {
+		t.Parallel()
+		request, seed := chainIdentityFixture()
+		store := newAncestryRecordingStore(seed)
+		engine := ancestryTestEngine(t, store)
+
+		result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		if got := store.saved[result.ResultID]; got != request.ParentResultID {
+			t.Fatalf("Save recorded parent %q for %q, want %q", got, result.ResultID, request.ParentResultID)
+		}
+	})
+
+	t.Run("pre-carry veto path", func(t *testing.T) {
+		t.Parallel()
+		request, seed := chainIdentityFixture()
+		// A kind receipt naming a prior result the store does not hold vetoes
+		// the whole request before any carry runs -- the shape that would
+		// leave a hole in the chain.
+		request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_absent_00001", ReceiptID: "kindr_absent00001"}}
+		store := newAncestryRecordingStore(seed)
+		engine := ancestryTestEngine(t, store)
+
+		result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		// Guard: if this stopped being a veto the assertion below would be
+		// testing the decisive path twice and would not know it.
+		if result.Status != InvestigationNoMatch {
+			t.Fatalf("result.Status = %q, want %q -- the fixture must actually reach the veto path for this test to prove anything", result.Status, InvestigationNoMatch)
+		}
+		got, saved := store.saved[result.ResultID]
+		if !saved {
+			t.Fatalf("the vetoed turn %q was never saved, so no ancestry could be recorded for it", result.ResultID)
+		}
+		if got != request.ParentResultID {
+			t.Fatalf("vetoed turn recorded parent %q, want %q: a turn that was vetoed on an unrelated axis still has a real predecessor, and a later turn must be able to walk back THROUGH it", got, request.ParentResultID)
+		}
+	})
+}
+
+func ancestryTestEngine(t *testing.T, store InvestigationResultStore) *Engine {
+	t.Helper()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	freshResult := validInvestigationResult()
+	return mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results: store,
+	})
+}

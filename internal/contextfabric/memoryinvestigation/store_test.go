@@ -61,7 +61,7 @@ func TestStore_getDefensiveCopyDoesNotLeakStoredState(t *testing.T) {
 		Warnings: []string{},
 	}
 	original.Completeness = contextfabric.ComputeAnswerCompleteness(original)
-	if err := store.Save(ctx, principal, original, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0); err != nil {
+	if err := store.Save(ctx, principal, original, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
@@ -88,7 +88,7 @@ func TestStore_saveRespectsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	store := memoryinvestigation.NewStore()
-	err := store.Save(ctx, storage.Principal{OrgID: "org-1"}, contextfabric.InvestigationResult{ResultID: "result-cancelled"}, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
+	err := store.Save(ctx, storage.Principal{OrgID: "org-1"}, contextfabric.InvestigationResult{ResultID: "result-cancelled"}, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("save: want context.Canceled, got %v", err)
 	}
@@ -174,7 +174,7 @@ func TestStore_structureSupersessionClaims(t *testing.T) {
 			}
 
 			winner := resultWithConfirmedStructure("result-supersession-winner-"+string(member), member, priorResultID, "kindr_winner00000001")
-			if err := store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0); err != nil {
+			if err := store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""); err != nil {
 				t.Fatalf("save winner: %v", err)
 			}
 
@@ -187,7 +187,7 @@ func TestStore_structureSupersessionClaims(t *testing.T) {
 			}
 
 			loser := resultWithConfirmedStructure("result-supersession-loser-"+string(member), member, priorResultID, "kindr_loser000000001")
-			saveErr := store.Save(ctx, principal, loser, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0)
+			saveErr := store.Save(ctx, principal, loser, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "")
 			if saveErr == nil {
 				t.Fatal("a second Save redeeming the SAME (org, prior_result_id, member) must fail")
 			}
@@ -212,7 +212,7 @@ func TestStore_structureSupersessionClaims(t *testing.T) {
 			}
 
 			// An idempotent replay of the winner itself must still succeed.
-			if err := store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0); err != nil {
+			if err := store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""); err != nil {
 				t.Fatalf("idempotent replay of winner: %v", err)
 			}
 		})

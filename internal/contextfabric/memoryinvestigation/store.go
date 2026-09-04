@@ -38,6 +38,15 @@ var ErrNotFound = fmt.Errorf("memoryinvestigation: investigation result not foun
 type entry struct {
 	orgID   string
 	payload []byte
+	// parentResultID mirrors pginvestigation's own parent_result_id column
+	// (migration 0037). This store implements no answer reuse and therefore
+	// drops every reuse dimension, but ancestry is NOT a reuse dimension --
+	// it is what makes a conversation walkable backwards, and the carry
+	// resolvers read it through Get on whichever store is configured. A
+	// store that dropped it would silently support only receipt-linked
+	// chains, which is the exact gap the chain-identity field exists to
+	// close.
+	parentResultID string
 }
 
 // structureSupersessionClaimKey is the in-memory twin of
@@ -81,7 +90,7 @@ func NewStore() *Store {
 // (contextfabric.AnswerReuseGate), so there is no reuse-key bookkeeping to
 // populate; Get correspondingly always returns a nil GraphEpoch on its
 // StoredInvestigationResult carrier.
-func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, _ contextfabric.ReuseRetrievalIdentity, _ contextfabric.ReusePromptVersions, _ contextfabric.ReuseVersionAuthorities, _ int64) error {
+func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, _ contextfabric.ReuseRetrievalIdentity, _ contextfabric.ReusePromptVersions, _ contextfabric.ReuseVersionAuthorities, _ int64, parentResultID string) error {
 	if s == nil {
 		return errors.New("memoryinvestigation: store is not configured")
 	}
@@ -163,7 +172,7 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		key := structureSupersessionClaimKey{orgID: orgID, priorResultID: claim.priorResultID, member: claim.member}
 		s.claims[key] = resultID
 	}
-	s.results[resultID] = entry{orgID: orgID, payload: payload}
+	s.results[resultID] = entry{orgID: orgID, payload: payload, parentResultID: strings.TrimSpace(parentResultID)}
 	return nil
 }
 
@@ -267,7 +276,7 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	// implement answer reuse at all), so GraphEpoch is always nil -- every
 	// consumer (starting with the §2.2 ingress taint gate) must already
 	// treat that as "cannot prove", never a silent pass.
-	return contextfabric.StoredInvestigationResult{Result: result}, nil
+	return contextfabric.StoredInvestigationResult{Result: result, ParentResultID: stored.parentResultID}, nil
 }
 
 // rejectExplicitNullDegradedReasons reports whether payload contains a

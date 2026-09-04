@@ -1273,7 +1273,7 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 		// exact request would have used (see timeAxisKeySource above) --
 		// never on a window key component: a window veto is never itself
 		// a reusable answer (its own status is a refusal, not a judgment).
-		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(timeAxisKeySource), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
+		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(timeAxisKeySource), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch, ancestryParentResultID(request, nil)); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 	}
@@ -1597,7 +1597,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
 	if e.results != nil {
-		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(timeAxisKeySource), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
+		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(timeAxisKeySource), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch, ancestryParentResultID(request, nil)); err != nil {
 			// CHAOS-3927 P4 (codex xhigh review round 1, confirmed): a
 			// gate-2 Save carrying confirmed structure can lose the SAME
 			// atomic claim race every other structure-bearing Save call

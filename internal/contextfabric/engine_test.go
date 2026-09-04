@@ -103,7 +103,7 @@ type resultStoreStub struct {
 	savedEpoch    RebuildEpoch
 }
 
-func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64) error {
+func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64, _ string) error {
 	s.saved = result
 	s.savedSnapshot = reuseSnapshot
 	s.savedEpoch = reuseEpoch
@@ -136,7 +136,7 @@ type staticResultStore struct {
 	saved *InvestigationResult
 }
 
-func (s *staticResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64) error {
+func (s *staticResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64, _ string) error {
 	s.saved = &result
 	return nil
 }
@@ -851,7 +851,7 @@ type bindingEpochDeltaOrderingStore struct {
 	bindingCallCountObserved bool
 }
 
-func (s *bindingEpochDeltaOrderingStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities, int64) error {
+func (s *bindingEpochDeltaOrderingStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities, int64, string) error {
 	s.graph.bindingCallCountMu.Lock()
 	s.bindingCallCountAtSave = s.graph.bindingCallCount
 	s.bindingCallCountObserved = true

@@ -447,7 +447,7 @@ func (e *Engine) terminalResult(
 		// introduce a difference, and a terminal result saved under a key no
 		// lookup will ever form is a row the clarification loop cannot reach.
 		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
-		if err := e.results.Save(ctx, principal, result, watermark, epoch, composeTimeAxisKey(TimeAxisKeyFor(request.TimeContext), windowCanon.KeyComponent), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch); err != nil {
+		if err := e.results.Save(ctx, principal, result, watermark, epoch, composeTimeAxisKey(TimeAxisKeyFor(request.TimeContext), windowCanon.KeyComponent), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch, ancestryParentResultID(request, nil)); err != nil {
 			// CHAOS-3927 P4 (codex round-2 adversarial review fix): a
 			// subjectless terminal can carry confirmed structure exactly
 			// like a synthesized answer can (result.ConfirmedStructure

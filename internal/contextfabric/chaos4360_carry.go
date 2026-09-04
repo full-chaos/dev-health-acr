@@ -227,6 +227,41 @@ func carryReferencedResultIDs(request InvestigationRequest, validatedSubjectRece
 	return ids
 }
 
+// ancestryParentResultID picks the ONE prior result this turn records as its
+// parent -- durable chain identity, written by every Save regardless of
+// whether any axis was carried, disclosed, or even attempted.
+//
+// parent_result_id is the SINGLE ancestry root when the caller supplies it:
+// it is the caller stating outright which turn they are continuing, which is
+// a stronger and less ambiguous claim than anything inferred. Receipt-derived
+// roots are the FALLBACK, for the many existing clients that link by
+// redeeming an offer and will never send the new field -- without that
+// fallback, ancestry would only exist for callers who had already adopted it,
+// and the chains most in need of walking (the ones a struggling clarification
+// loop produces) would be exactly the ones with no history.
+//
+// The fallback takes the FIRST id in carryReferencedResultIDs' own fixed
+// order rather than inventing a second ordering, so "which prior result did
+// this turn follow" and "which prior result does a carry try first" can never
+// answer differently. Returns "" when the turn names nothing -- a first turn,
+// recorded as having no parent rather than as having an unknown one.
+//
+// A false or unrelated parent is CONTAINED, not prevented: nothing here
+// verifies the named result, because verification belongs to the walk that
+// reads it (org-scoped Get, the graph-epoch taint gate, and the requirement
+// that the named result actually carry a confirmed value). Recording an
+// unusable pointer costs a miss on a later hop; refusing to record one costs
+// a chain that cannot be walked at all.
+func ancestryParentResultID(request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt) string {
+	if id := strings.TrimSpace(request.ParentResultID); id != "" {
+		return id
+	}
+	for _, id := range carryReferencedResultIDs(request, validatedSubjectReceipts) {
+		return id
+	}
+	return ""
+}
+
 // resolveCarriedWindow implements CHAOS-4360's same-conversation window
 // carry: see this file's own package-level doc comment for the mechanism
 // and the defect it closes. Called ONLY when this turn's own window
