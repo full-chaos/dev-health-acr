@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -292,4 +293,90 @@ func TestSlogGroupedCohortCompletenessFailsClosedOnAnUnknownRefusal(t *testing.T
 	if !strings.Contains(line, "grouping_refusal=unclassified") {
 		t.Errorf("line does not report the unknown refusal as unclassified.\nline: %s", line)
 	}
+}
+
+// limitationComposerAssemblyOrder is the order §10b of the architecture
+// diagrams draws, and the order its reasoning depends on.
+//
+// WHY THIS IS PINNED FROM SOURCE. The diagram originally said the refusal
+// disclosure could be displaced by "commit affirmation, temporal, fact scope"
+// running later. Only ONE of those three runs later; the other two run BEFORE
+// the refusal and can only contribute to the list it finds already full. The
+// error was caught in review, and it is the same species as the defect this
+// whole file exists for: a claim about ordering that nothing checked.
+//
+// The property that matters is not the exact sequence — it is that
+// **commit affirmation is the only composer after the grouping refusal**,
+// because that is what makes "the composer that displaced it" a determinate
+// statement rather than a guess among three candidates.
+var limitationComposerAssemblyOrder = []string{
+	"withRetrievalDegradation",
+	"appendTemporalLimitations",
+	"applySynthesisStatusOverride",
+	"applyFactScopeDisclosure",
+	"applyGroupingRefusalDisclosure",
+	"applyCommitAffirmation",
+}
+
+// TestLimitationComposersRunInTheDocumentedOrder reads synthesizeAndAssemble's
+// own source, in the manner this package already established, rather than
+// standing up a fixture that observes six composers.
+func TestLimitationComposersRunInTheDocumentedOrder(t *testing.T) {
+	t.Parallel()
+	source, err := os.ReadFile("chaos4636_synthesis_assembly.go")
+	if err != nil {
+		t.Fatalf("read assembly source: %v", err)
+	}
+	body := string(source)
+
+	positions := make(map[string]int, len(limitationComposerAssemblyOrder))
+	for _, composer := range limitationComposerAssemblyOrder {
+		// The CALL, not a mention in a comment.
+		index := strings.Index(body, composer+"(")
+		for index >= 0 && strings.Contains(lineContaining(body, index), "//") &&
+			strings.Index(strings.TrimSpace(lineContaining(body, index)), "//") == 0 {
+			next := strings.Index(body[index+1:], composer+"(")
+			if next < 0 {
+				index = -1
+				break
+			}
+			index += 1 + next
+		}
+		if index < 0 {
+			t.Fatalf("%s is never called in synthesizeAndAssemble's file: the documented composer chain no longer exists as drawn", composer)
+		}
+		positions[composer] = index
+	}
+
+	for i := 1; i < len(limitationComposerAssemblyOrder); i++ {
+		earlier, later := limitationComposerAssemblyOrder[i-1], limitationComposerAssemblyOrder[i]
+		if positions[earlier] >= positions[later] {
+			t.Errorf("%s no longer runs before %s: architecture diagram §10b draws this order and its reasoning about which composer can displace the grouping-refusal disclosure depends on it",
+				earlier, later)
+		}
+	}
+
+	// The load-bearing half, stated on its own so a failure says WHY it
+	// matters: nothing may be inserted between the refusal and commit
+	// affirmation without revisiting §10b's claim that exactly one composer
+	// runs later.
+	refusal := positions["applyGroupingRefusalDisclosure"]
+	for _, composer := range limitationComposerAssemblyOrder {
+		if composer == "applyGroupingRefusalDisclosure" || composer == "applyCommitAffirmation" {
+			continue
+		}
+		if positions[composer] > refusal {
+			t.Errorf("%s now runs AFTER the grouping refusal: §10b says commit affirmation is the ONLY later composer, which is what makes the displacement attributable to it", composer)
+		}
+	}
+}
+
+// lineContaining returns the whole source line holding index.
+func lineContaining(body string, index int) string {
+	start := strings.LastIndex(body[:index], "\n") + 1
+	end := strings.Index(body[index:], "\n")
+	if end < 0 {
+		return body[start:]
+	}
+	return body[start : index+end]
 }

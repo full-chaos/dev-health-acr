@@ -1551,10 +1551,27 @@ flowchart TD
     REG -.->|"answers 'service or model?'"| DROP
     REG -.->|"coherence oracle for a positive count"| VAL
 
-    COUNT --> LATER["LATER composers on the SAME result<br/>(commit affirmation, temporal, fact scope)"]
+    COUNT --> LATER["commit affirmation — the ONLY composer<br/>that runs AFTER this one, and the one<br/>that displaced this disclosure"]
     LATER --> DEDUP
     COUNT --> VAL["result Validate → served answer"]
 ```
+
+**Assembly order, because "a later composer" is only checkable if the order is
+written down.** Every one of these appends through the bounded appender, in
+this sequence inside `synthesizeAndAssemble`:
+
+```mermaid
+flowchart LR
+    RD["1 retrieval degradation"] --> TL["2 temporal"] --> SO["3 status override"]
+    SO --> FS["4 fact scope"] --> GR["5 GROUPING REFUSAL"] --> CA["6 commit affirmation"]
+    CA --> V["Validate → Save → served"]
+```
+
+So the grouping refusal is fifth of six, and **commit affirmation is the only
+composer that runs after it** — which is precisely why that one, and no other,
+was able to displace it. Retrieval degradation, temporal and fact scope all run
+BEFORE the refusal and can only contribute to the list it finds already full;
+they are not candidates for having dropped it.
 
 **The defect this drawing would have prevented.** The refusal sentence is
 **interpolated** — it names the axis asked for and the axis the facts support —
