@@ -4384,8 +4384,8 @@
           "description": "Which stage took this step. The enclosing row's own vocabulary, not the plan's cohort-narrowing stages: those have no member for planning, the projection or a reuse degrade."
         },
         "basis": {
-          "$ref": "#/$defs/NarrowingBasis",
-          "description": "The declared selection order that chose the survivors."
+          "type": "string",
+          "description": "The declared selection order that chose the survivors. Published as a bare string, matching cause_narrowing on the enclosing row: the answer-projection document is self-contained and defines no narrowing-basis vocabulary, and the two definitions of this shape must be identical across documents. The Go validator enforces membership in the closed vocabulary on both surfaces."
         },
         "before": {
           "type": "integer",

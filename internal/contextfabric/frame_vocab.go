@@ -378,6 +378,37 @@ const (
 	ObligationKindAnswerContract AnswerObligationKind = "answer_contract"
 )
 
+var answerObligationKinds = [...]AnswerObligationKind{
+	ObligationKindRead,
+	ObligationKindComputed,
+	ObligationKindAnswerContract,
+}
+
+// AnswerObligationKindCount is three.
+const AnswerObligationKindCount = len(answerObligationKinds)
+
+// AnswerObligationKindVocabulary returns the closed vocabulary in design
+// order.
+//
+// It exists because the kind reaches the WIRE on a plan requirement row, and
+// a wire mirror can only be held equal to its domain in both directions if
+// the domain publishes a list to compare against. Before this, the three
+// constants had no closed list, so a fourth could have been added with
+// nothing to notice that the mirror had not gained it.
+func AnswerObligationKindVocabulary() [AnswerObligationKindCount]AnswerObligationKind {
+	return answerObligationKinds
+}
+
+// ValidAnswerObligationKind reports membership; the empty value is not one.
+func ValidAnswerObligationKind(value AnswerObligationKind) bool {
+	for _, member := range answerObligationKinds {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
 // obligationKinds is §13.2.3's kinds table, verbatim. Every member of
 // AnswerObligationVocabulary has exactly one entry; the registry test
 // asserts totality, because an obligation with no kind is precisely the

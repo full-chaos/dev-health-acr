@@ -65,17 +65,21 @@ func requirementIdentity(requirement DerivedRequirement) string {
 // `not_derived` completeness state, which says the outcomes were never
 // derived rather than claiming everything was fine.
 func seedRequirementOutcomes(frame *QuestionFrame, deriver RequirementDeriver) []RequirementOutcomeRow {
-	return seedRequirementOutcomesFrom(deriveTurnRequirements(frame, deriver))
+	return SeedRequirementOutcomes(deriveTurnRequirements(frame, deriver))
 }
 
-// seedRequirementOutcomesFrom is the seed over rows ALREADY DERIVED.
+// SeedRequirementOutcomes is the seed over rows ALREADY DERIVED.
 //
-// It is split out so the caller that also publishes the plan's requirement
-// array derives ONCE and projects the same rows twice. Two derivation calls
-// would put two authorities behind the identity that joins the two published
-// arrays, and they would agree right up until the derivation stopped being a
-// pure function of its inputs.
-func seedRequirementOutcomesFrom(requirements []DerivedRequirement) []RequirementOutcomeRow {
+// Exported for the same reason PlanRequirementsFromDerived is: it is the other
+// projection of one derivation, and a caller building a document outside the
+// engine must build these rows through it rather than by hand.
+//
+// It is split out from seedRequirementOutcomes so a caller that already holds
+// the derived rows does not re-derive them. The two published arrays are
+// evaluated at two different points in the turn and agree because the
+// derivation is pure -- see PlanRequirementsFromDerived's header for why that
+// is a property to state carefully rather than a single call to claim.
+func SeedRequirementOutcomes(requirements []DerivedRequirement) []RequirementOutcomeRow {
 	if len(requirements) == 0 {
 		return nil
 	}

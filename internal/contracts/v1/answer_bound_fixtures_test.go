@@ -394,7 +394,13 @@ const irreducibleAnswerBytes = 1023
 // its maximum LEGAL encoding (the longest obligation, then two escaped
 // segments filling the 256-character bound) and all three cause vocabularies
 // present at their longest member.
-const maximalAnswerBytes = 521187082
+// 521187082 -> 521367470 (+180388): the plan-requirement layer. The plan now
+// carries 200 requirement rows at their own ceiling, and each of the 200
+// outcome rows carries a full-length refinement chain. Both are new bounded
+// arrays on this document, so the maximum grew by construction rather than by
+// a bound drifting -- and the irreducible floor above did NOT move, because
+// both arrays are omitempty and the smallest answer has neither.
+const maximalAnswerBytes = 521367470
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
@@ -1052,4 +1058,55 @@ var unsaturatedByDesign = map[string]string{
 // knows which disclosed axes the probe actually reached.
 func TestDisclosedLowerBoundAxesAreNamed(t *testing.T) {
 	t.Logf("%d disclosed lower-bound axes", len(unsaturatedByDesign))
+}
+
+// TestTheMaximalFixtureActuallyCarriesTheNewBoundedArrays is a POSITIVE
+// FIXTURE for a tier the saturation probe cannot reach.
+//
+// It exists because of a measurement, not a suspicion. The full bound suite
+// was run with `answer_plan.requirements` left EMPTY in the maximal fixture
+// and TestMaximalIsSaturated PASSED; it was run again with the array filled to
+// its bound and passed identically. The probe is therefore blind to an empty
+// slice of VALIDATED STRUCTS: it grows a slice by appending a zero element,
+// the zero element fails that struct's own validator, the document is invalid,
+// and "cannot grow while staying valid" is indistinguishable from "already at
+// its bound". A new bounded struct array can be added to this document and
+// left unmeasured with every existing guard green.
+//
+// So the count is asserted directly. This is the same rule the disclosed
+// lower-bound axes are held to one level up: a tier with no positive fixture
+// can be dead for its whole life and read as green.
+func TestTheMaximalFixtureActuallyCarriesTheNewBoundedArrays(t *testing.T) {
+	t.Parallel()
+	plan := maximalPlan()
+	if got := len(plan.Requirements); got != ContextFabricPlanRequirementsMaxCount {
+		t.Errorf("maximal plan carries %d requirement rows, want %d -- the maximal document is understating the wire maximum",
+			got, ContextFabricPlanRequirementsMaxCount)
+	}
+	// The rows must be DISTINCT, or the array is at its count bound while
+	// describing one requirement 200 times, which no valid document can be.
+	identities := map[string]bool{}
+	for _, row := range plan.Requirements {
+		identities[row.Requirement] = true
+	}
+	if len(identities) != len(plan.Requirements) {
+		t.Errorf("maximal plan carries %d rows but only %d distinct identities", len(plan.Requirements), len(identities))
+	}
+	if err := ValidateContextFabricPlanRequirements(plan.Requirements); err != nil {
+		t.Errorf("maximal plan requirements do not validate: %v", err)
+	}
+
+	rows := maximalOutcomeRows(2)
+	if len(rows) != 2 {
+		t.Fatalf("built %d outcome rows, want 2", len(rows))
+	}
+	for index, row := range rows {
+		if got := len(row.Refinements); got != ContextFabricRequirementRefinementMaxCount {
+			t.Errorf("maximal outcome row %d carries %d refinements, want %d",
+				index, got, ContextFabricRequirementRefinementMaxCount)
+		}
+		if err := ValidateContextFabricPlanRequirementOutcomeRow(row); err != nil {
+			t.Errorf("maximal outcome row %d does not validate: %v", index, err)
+		}
+	}
 }

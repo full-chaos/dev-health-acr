@@ -22,18 +22,40 @@ import (
 // contracts/v1 and the dependency cannot run the other way; the mirrors are
 // held equal in both directions by the parity test in this package.
 //
-// ONE DERIVATION, TWO ARRAYS. The plan requirements and the seed outcome rows
-// are projected from the SAME []DerivedRequirement, in one call, so the two
-// published arrays cannot describe different turns. Deriving twice would put
-// two authorities behind one join.
+// TWO PROJECTIONS OF ONE PURE DERIVATION, and the distinction matters enough
+// to state precisely rather than to claim more than is true.
+//
+// The plan's requirement rows and the seed outcome rows are built at two
+// different points -- the rows are stamped onto the plan where the plan is
+// created, and the outcome set is seeded during finalization -- so
+// DeriveRequirements is called twice per turn, not once. They cannot disagree
+// because the derivation is a pure, deterministic function of the frame and
+// the registry's declarations, evaluated on the same frame both times.
+//
+// An earlier revision of this file derived once and projected twice, which
+// reads better and was wrong: finalizeResult takes the plan BY VALUE, and the
+// engine re-stamps the plan from its own variable after the budget fit, so
+// rows written onto finalization's copy were discarded and the served document
+// carried a full outcome set beside an empty requirement array. Purity is what
+// makes two evaluation points safe; the join test on the served document is
+// what checks the two agree in fact rather than in argument.
 
-// planRequirements projects the derivation's rows onto the wire type.
+// PlanRequirementsFromDerived projects the derivation's rows onto the wire type.
+//
+// Exported because it is one of the two projections of the derivation -- the
+// other being SeedRequirementOutcomes -- and a caller outside the engine
+// that needs to build a document carrying these rows must build them THROUGH
+// this function rather than by hand. The store validates on the way in, and a
+// hand-built row whose closed-vocabulary field holds a Go zero value is
+// invalid in a way a reader cannot see: that is not hypothetical, it is how
+// every case in the shared store parity table failed once, in CI's container
+// job only.
 //
 // Returns nil for an empty input rather than an empty slice: nil encodes as
 // an absent key under omitempty, an empty slice as `[]`, and "the derivation
 // produced nothing" is the same statement as "there is no array here". The
 // byte-minimality probe over the irreducible answer reads the difference.
-func planRequirements(rows []DerivedRequirement) []contractsv1.ContextFabricPlanRequirement {
+func PlanRequirementsFromDerived(rows []DerivedRequirement) []contractsv1.ContextFabricPlanRequirement {
 	if len(rows) == 0 {
 		return nil
 	}

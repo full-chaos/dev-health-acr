@@ -2525,7 +2525,7 @@
           ]
         },
         "RequirementRefinement": {
-          "description": "One recorded reduction of one requirement: which stage narrowed it, on what declared basis, and from what count to what count. Modelled on the plan's own narrowing record, one level down. Stages append; the chain runs from the row's declared count to its served count, so a reduction nobody recorded leaves a gap.",
+          "description": "One recorded reduction of one requirement: which stage narrowed it, on what declared basis, and from what count to what count. Modelled on PlanNarrowing, the established shape for a disclosed narrowing, one level down. Stages append; the chain runs from the row's declared count to its served count, so a reduction nobody recorded leaves a gap.",
           "type": "object",
           "additionalProperties": false,
           "properties": {
@@ -2541,7 +2541,7 @@
             },
             "basis": {
               "type": "string",
-              "description": "The declared selection order that chose the survivors. A bare string here because this document is self-contained and carries no narrowing-basis definition; the canonical common schema references its own."
+              "description": "The declared selection order that chose the survivors. Published as a bare string, matching cause_narrowing on the enclosing row: the answer-projection document is self-contained and defines no narrowing-basis vocabulary, and the two definitions of this shape must be identical across documents. The Go validator enforces membership in the closed vocabulary on both surfaces."
             },
             "before": {
               "type": "integer",
@@ -6140,8 +6140,8 @@
               "description": "Which stage took this step. The enclosing row's own vocabulary, not the plan's cohort-narrowing stages: those have no member for planning, the projection or a reuse degrade."
             },
             "basis": {
-              "$ref": "#/$defs/context_fabric_common.v1/$defs/NarrowingBasis",
-              "description": "The declared selection order that chose the survivors."
+              "description": "The declared selection order that chose the survivors. Published as a bare string, matching cause_narrowing on the enclosing row: the answer-projection document is self-contained and defines no narrowing-basis vocabulary, and the two definitions of this shape must be identical across documents. The Go validator enforces membership in the closed vocabulary on both surfaces.",
+              "type": "string"
             },
             "before": {
               "type": "integer",

@@ -208,6 +208,16 @@ func ValidContextFabricRequirementUnavailableReason(value string) bool {
 	return stringInVocabulary(value, contextFabricRequirementUnavailableReasons[:])
 }
 
+// ContextFabricPlanRequirementMirroredVocabularyCount is how many domain
+// vocabularies this file mirrors onto the wire.
+//
+// It is published so the domain-side parity test can assert its own table is
+// COMPLETE rather than merely correct: a mirror added here without a row in
+// that table would otherwise be checked by nothing, and a parity test that
+// silently covers seven of eight is the shape a closed-vocabulary gate exists
+// to prevent. Raise it in the same change that adds a mirror.
+const ContextFabricPlanRequirementMirroredVocabularyCount = 8
+
 // ContextFabricPlanRequirementsMaxCount bounds how many requirement rows one
 // plan may publish.
 //

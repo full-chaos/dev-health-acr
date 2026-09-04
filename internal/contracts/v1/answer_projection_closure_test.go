@@ -303,9 +303,14 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// surface below gains NOTHING: the canonical result carries no
 		// projection budget, since the budget describes what a PROJECTION
 		// dropped and the canonical result is what it was projected from.
+		// Plan-requirement layer: 224 -> 226. The projection embeds the
+		// outcome row, which gained a refinement chain, and a refinement
+		// carries exactly two STRING leaves -- stage and basis. before and
+		// after are integers and are not walked here. The projection has no
+		// answer plan, so it gains none of the requirement-row leaves.
 		// S7c: 215 -> 224 -- completeness.state plus the eight string
 		// leaves of a requirement outcome row.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 224},
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 226},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -348,9 +353,17 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// as the answer_projection surface above.
 		// CHAOS-4682: 306 -> 313 -- the same seven new time_series_rows/
 		// time_series_table leaves as the answer_projection surface above.
+		// Plan-requirement layer: 322 -> 337, and the +15 accounts exactly.
+		// TWO come from the refinement chain on the outcome row (stage,
+		// basis), the same two the projection gains above. THIRTEEN come from
+		// answer_plan.requirements[], which the projection does not carry:
+		// requirement, obligation, role, subject, kind, fact_kinds[], step,
+		// step_execution, input_class, input_fact_kinds[], scope, quantifier,
+		// unavailable. Every one is SERVER-DERIVED -- none is model-authorable
+		// and none belongs in the untrusted set.
 		// S7c: 313 -> 322 -- the same nine new completeness leaves as the
 		// answer_projection surface above.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 322},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 337},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -455,6 +468,23 @@ func trustedBecauseClosed(path string) bool {
 		// ContextFabricPlanNarrowingStage vocabulary.)
 		"impact", "cause_overrun", "cause_coverage",
 		"cause_narrowing", "obligation", "requirement",
+		// Plan-requirement layer: every remaining leaf of a derived
+		// requirement row. Each is validated against a MIRRORED closed
+		// vocabulary by ContextFabricPlanRequirement.Validate before a result
+		// is stored -- "subject" against the subject-kind enum, "scope",
+		// "quantifier", "step", "step_execution", "input_class" and
+		// "unavailable" against their own mirrors, and "input_fact_kinds"
+		// element-wise against the fact-kind vocabulary. ("role", "kind" and
+		// "fact_kinds" are covered by leaves already listed above, which is
+		// why they are absent here rather than forgotten.)
+		//
+		// None is model-authorable, and that is a property of the producer
+		// rather than a hope: these rows are projected by the SERVER from
+		// DeriveRequirements, which reads the frame and the registry's own
+		// capability declarations and consults no model output. No
+		// model-output DTO is schema-inferred from this block.
+		"subject", "scope", "quantifier", "step", "step_execution",
+		"input_class", "input_fact_kinds", "unavailable",
 		// CHAOS-4087: "commit_gate" (ContextFabricCommitDecisionDigest) is a
 		// closed-vocabulary string validated against its own registry
 		// (validCommitGate) before a result is stored -- never model prose,
