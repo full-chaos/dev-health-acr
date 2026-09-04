@@ -1035,12 +1035,29 @@ both fatal to every discovered-cohort answer on real data (HTTP 422
 flowchart LR
     IN["synthesisInputFromDomain<br/>SHOWS the model:<br/>Cohort (members + evidence_ref_ids),<br/>Resolution, Paths, DriverCandidates,<br/>modelFacingFacts(Facts)"] --> M["model drafts<br/>claims / drivers / findings"]
     M --> V["SynthesisDraft.ValidateAgainst"]
-    V --> S["allowedSubjects = synthesisSubjects<br/>Committed + <b>Cohort.Members[].Subject</b><br/>+ Facts[].Subject + Paths[].Nodes"]
-    V --> E["allowedEvidence<br/>Paths + Graph + Facts + Candidates<br/>+ <b>Cohort.Members[].EvidenceRefIDs</b><br/>(ADDED, CHAOS-4522 — was missing)"]
+    V --> S["allowedSubjects = synthesisSubjects<br/>ONE walk: forEachCitableSynthesisSubject<br/>Committed + <b>Cohort.Members[].Subject</b><br/>+ <b>Cohort.Groups[].Subject</b> + Paths[].Nodes<br/>+ <b>Paths[].Edges[].From/To</b> + Facts[].Subject<br/>+ <b>DriverCandidates[].AffectedSubjects</b>"]
+    S --> L["canonicalSubjectLabels = Candidates<br/>+ the SAME walk<br/>(binding ⊇ admission, by construction)"]
+    V --> U["shown-but-uncitable, on purpose:<br/>Resolution.Candidates · Cohort.Exclusions<br/>(citable wins when a subject is both)"]
+    V --> E["allowedEvidence<br/>Paths + Graph + Facts + Candidates<br/>+ <b>Cohort.Members[].EvidenceRefIDs</b><br/>+ <b>DriverCandidates[].EvidenceRefIDs</b>"]
     V --> G2["groundClaim(Facts, claim)<br/>closes over <b>EVERY</b> fact sharing<br/>(Kind, Subject)<br/>(was: FIRST match only)"]
     G2 --> R["attachCanonicalRows uses the fact<br/>that GROUNDED the claim"]
-    V -. rejects .-> T["rejection_reason<br/>(closed vocab, CHAOS-4522)<br/>+ fact_group_max"]
+    V -. rejects .-> T["rejection_reason (closed vocab)<br/>+ fact_group_max<br/>+ <b>subject_scope_basis</b>: absent /<br/>shown_uncitable_by_policy /<br/><b>shown_should_be_citable</b> = OUR defect"]
 ```
+
+**Why admission and label binding are ONE walk.** A subject admitted to
+`allowedSubjects` with no entry in `canonicalSubjectLabels` is citable under
+any label the model invents: `requireBoundLabel` is deliberately a no-op for an
+id it holds no binding for, because an unbound id is out of bounds and the
+membership check has already rejected it. Two hand-maintained lists drifted
+apart three times — groups, the payload census, and finally edge endpoints,
+which shipped admitted-and-unbound and were caught by adversarial review. So
+both consumers now derive from `forEachCitableSynthesisSubject` and a source
+added later is admitted and bound in the same edit. Resolution candidates are
+the one deliberate asymmetry: bound but NOT admitted, which is the safe
+direction.
+
+**Where a refusal on the grouped axis is disclosed:** see §10b, which draws the
+grouping refusal and the single bounded path into the answer's `Limitations`.
 
 - **Grounding.** `ClaimedFact` addresses a fact by `(Kind, Subject, Field)`
   only — `CanonicalFact` carries no identifier — and the lookup returned the
