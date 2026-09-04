@@ -563,6 +563,13 @@ right closure, or does it plan reads nobody needs?*
 > published array. The parity proof's `derivedFactKinds` and `classifyLoss` CALL that same function
 > rather than hand-rolling a union, so the proof reads the plan that exists.
 
+**Status, 2026-09-04: the ruling is decided; its code is an OPEN CHANGE.** `ComputedStepInputReads`,
+its two guards, `planFactKinds`'s third widening source and the proof numbers below are verified on
+branch `s7b-ii-computed-inputs` (PR #432, stacked on the plan-requirement-rows change PR #430) at its
+current tip `0cce5c69` — **none of this is on `origin/main` yet.** Reading `origin/main` for
+`ComputedStepInputReads` returns nothing. The decision itself (what gets planned, and why) is ruled;
+the mechanism and the measured result are this open change's own until it merges.
+
 **Two guards, and neither follows from the other.** The row must be SERVED — an unavailable cell
 runs nothing, so reading its declared inputs fetches facts for a computation that cannot happen —
 and the step must be SERVER-EXECUTED (`declared_only` is exactly the read nobody needs). Each guard
@@ -663,8 +670,8 @@ input" the right closure, or does it plan reads nobody needs?**
 available either invent an answer obligation or borrow one whose seed is wider than the need. The
 right closure is a CONSUMER of the declaration the row already carries: `planFactKinds` reads
 `ComputedStepInputReads` as a third widening source. `computed_step_input_unserved` is 0 on the
-proof as of D14; the two remaining blocking cells are a different cause
-(`computed_population_unavailable`).
+proof as of D14, **on PR #432 — not yet on `origin/main`**, see D14's status note; the two remaining
+blocking cells are a different cause (`computed_population_unavailable`).
 
 **H2 — the allocator, and the narration over-spend under it (the item-allocator ticket, the narration over-charge ticket).** The
 apportioning half of the grouped budget is unbuilt after three failed attempts under two shapes.
