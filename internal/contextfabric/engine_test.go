@@ -318,6 +318,13 @@ type recordingTelemetry struct {
 	answerReuseOutcomes         []AnswerReuseOutcome
 	answerReuseContainment      []AnswerReuseContainmentEvent
 
+	// answerReuseBypasses (CHAOS-4998) records every reuse BYPASS reason, in
+	// call order. Separate from answerReuseOutcomes for the same reason the
+	// two telemetry streams are separate: a bypass is not an outcome, and a
+	// test that conflated them could not tell "reuse missed" from "reuse was
+	// never attempted".
+	answerReuseBypasses []AnswerReuseBypassReason
+
 	// budgetAssertions (Y3) records every FINAL budget assertion verbatim --
 	// list, not count, so a test asserts the exact stage and the exact
 	// measurement, per the same discipline the fields around it hold.
@@ -491,6 +498,10 @@ type dualTableFactsRecord struct {
 
 func (r *recordingTelemetry) RecordAnswerReuse(_ context.Context, _ storage.Principal, outcome AnswerReuseOutcome) {
 	r.answerReuseOutcomes = append(r.answerReuseOutcomes, outcome)
+}
+
+func (r *recordingTelemetry) RecordAnswerReuseBypass(_ context.Context, _ storage.Principal, reason AnswerReuseBypassReason) {
+	r.answerReuseBypasses = append(r.answerReuseBypasses, reason)
 }
 
 func (r *recordingTelemetry) RecordAnswerReuseContainment(_ context.Context, _ storage.Principal, event AnswerReuseContainmentEvent) {

@@ -70,6 +70,60 @@ const (
 type cohortGroupAssignment struct {
 	canonicalID string
 	label       string
+	// kind is the subject kind the SOURCE says this group is, decided where
+	// the row was accepted rather than anywhere later. groupAssignmentsFromValue
+	// admits a row only when its scope column says "team" and reads
+	// team_id/team_name, so every assignment it produces is a team by
+	// construction -- this field simply stops that knowledge being thrown
+	// away and re-derived from somewhere less trustworthy.
+	kind SubjectKind
+}
+
+// CohortGroupingRefusal is the CLOSED vocabulary naming why grouping refused
+// to build, for telemetry. Empty means it did not refuse.
+type CohortGroupingRefusal string
+
+const (
+	// CohortGroupingRefusalNone is the absence of a refusal.
+	CohortGroupingRefusalNone CohortGroupingRefusal = ""
+	// CohortGroupingRefusalGroupKindSourceMismatch: the plan's declared group
+	// kind is not the kind the facts actually group by.
+	//
+	// The plan's GroupKind comes from the model's own question frame; a
+	// group's canonical id and label come from a canonical fact row. Stamping
+	// the former onto the latter produces a subject whose identity half is
+	// model-chosen and half source-chosen -- e.g. {repository, team_security}
+	// from rows that are unambiguously team rows. That identity exists in no
+	// source, and once group subjects became citable it would have been a
+	// forgery route into a served answer. Fail closed: build nothing.
+	CohortGroupingRefusalGroupKindSourceMismatch CohortGroupingRefusal = "group_kind_source_mismatch"
+)
+
+// canonicalCohortGroupingRefusals maps each member to ITSELF, so a telemetry
+// lookup returns a compile-time constant rather than the caller's own value --
+// the same reasoning every other closed vocabulary in this package documents.
+var canonicalCohortGroupingRefusals = map[CohortGroupingRefusal]CohortGroupingRefusal{
+	CohortGroupingRefusalNone:                    CohortGroupingRefusalNone,
+	CohortGroupingRefusalGroupKindSourceMismatch: CohortGroupingRefusalGroupKindSourceMismatch,
+}
+
+// CohortGroupingOutcome carries WHY grouping refused and the two kinds that
+// disagreed, so a caller can both log the refusal and DISCLOSE it to the
+// reader without re-deriving either kind. Both kinds are closed-vocabulary
+// subject kinds; neither is model text.
+type CohortGroupingOutcome struct {
+	Refusal CohortGroupingRefusal
+	// PlannedKind is what the question frame asked to group by.
+	PlannedKind SubjectKind
+	// SourceKind is what the facts actually group by. Zero unless a refusal
+	// names a mismatch.
+	SourceKind SubjectKind
+}
+
+// ValidCohortGroupingRefusal reports membership of the closed vocabulary.
+func ValidCohortGroupingRefusal(reason CohortGroupingRefusal) bool {
+	_, ok := canonicalCohortGroupingRefusals[reason]
+	return ok
 }
 
 // BuildCohortGroups partitions cohort by the group kind the plan declared,
@@ -103,9 +157,9 @@ type cohortGroupAssignment struct {
 // rewrite: cohort.Complete can come back true after grouping only if it was
 // already true before grouping, and cohort.Truncated never comes back false
 // if it was already true.
-func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (groups []contractsv1.ContextFabricCohortGroup, ungrouped int) {
+func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (groups []contractsv1.ContextFabricCohortGroup, ungrouped int, outcome CohortGroupingOutcome) {
 	if plan.GroupKind == "" || cohort == nil || len(cohort.Members) == 0 {
-		return nil, 0
+		return nil, 0, CohortGroupingOutcome{}
 	}
 	assignments := groupAssignmentsByMember(facts)
 	// Preserve the cohort's own member order inside each group, and order
@@ -115,11 +169,25 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 	order := make([]string, 0, len(cohort.Members))
 	byGroup := make(map[string][]string, len(cohort.Members))
 	labels := make(map[string]string, len(cohort.Members))
+	kinds := make(map[string]SubjectKind, len(cohort.Members))
 	for _, member := range cohort.Members {
 		placed := assignments[SubjectMapKey(member.Subject)]
 		if len(placed) == 0 {
 			ungrouped++
 			continue
+		}
+		// The kind check is per assignment and fails the WHOLE grouping, not
+		// just this member: a grouped answer that silently kept the members
+		// whose source happened to agree would present a partial group axis
+		// as a complete one.
+		for _, assignment := range placed {
+			if assignment.kind != plan.GroupKind {
+				return nil, 0, CohortGroupingOutcome{
+					Refusal:     CohortGroupingRefusalGroupKindSourceMismatch,
+					PlannedKind: plan.GroupKind,
+					SourceKind:  assignment.kind,
+				}
+			}
 		}
 		// EVERY owning group, not the first one seen. A project genuinely
 		// owned by two teams belongs under both, and dropping one would be
@@ -132,15 +200,39 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 			if _, known := byGroup[assignment.canonicalID]; !known {
 				order = append(order, assignment.canonicalID)
 				labels[assignment.canonicalID] = assignment.label
+				kinds[assignment.canonicalID] = assignment.kind
 			}
 			byGroup[assignment.canonicalID] = append(byGroup[assignment.canonicalID], member.Subject.CanonicalID)
 		}
 	}
 	if len(order) == 0 {
-		return nil, ungrouped
+		return nil, ungrouped, CohortGroupingOutcome{}
 	}
 	sort.Strings(order)
-	groups = make([]contractsv1.ContextFabricCohortGroup, 0, len(order))
+	groups = buildGroupsFrom(cohort, order, byGroup, labels, kinds)
+	return groups, ungrouped, CohortGroupingOutcome{}
+}
+
+// groupAssignmentsByMember reads the owning group out of each fact's declared
+// tables, keyed by the fact's own subject.
+//
+// It reads DECLARED tables (FactValue.Table) and falls back to the sibling
+// Rows the same producers still populate, because CHAOS-4633's migration is
+// deliberately dual-write: a producer emits both, and reading only one of
+// them would make this depend on which phase of that migration is deployed.
+// buildGroupsFrom constructs the group entries from assignments the caller's
+// kind guard has already admitted.
+//
+// It deliberately does NOT receive the plan. A group subject's Kind is the
+// SOURCE's kind and nothing else, and the cheapest way to guarantee that is to
+// put the plan's kind out of scope entirely -- a stamp cannot regress to a
+// value it cannot name. Adversarial review observed that reverting the stamp to
+// plan.GroupKind was an EQUIVALENT mutant while the guard stood, meaning the
+// guard was carrying the whole property on its own. This makes source authority
+// structural instead: the defect is now unexpressible here rather than merely
+// unreachable.
+func buildGroupsFrom(cohort *Cohort, order []string, byGroup map[string][]string, labels map[string]string, kinds map[string]SubjectKind) []contractsv1.ContextFabricCohortGroup {
+	groups := make([]contractsv1.ContextFabricCohortGroup, 0, len(order))
 	for _, canonicalID := range order {
 		members := byGroup[canonicalID]
 		label := labels[canonicalID]
@@ -148,7 +240,7 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 			label = canonicalID
 		}
 		groups = append(groups, contractsv1.ContextFabricCohortGroup{
-			Subject:            SubjectRef{Kind: plan.GroupKind, CanonicalID: canonicalID, Label: label},
+			Subject:            SubjectRef{Kind: kinds[canonicalID], CanonicalID: canonicalID, Label: label},
 			MemberCanonicalIDs: members,
 			// Total is the group's membership AS DISCOVERED. It is not a
 			// claim about how many projects the team owns in the world:
@@ -186,16 +278,9 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 			Truncated: false,
 		})
 	}
-	return groups, ungrouped
+	return groups
 }
 
-// groupAssignmentsByMember reads the owning group out of each fact's declared
-// tables, keyed by the fact's own subject.
-//
-// It reads DECLARED tables (FactValue.Table) and falls back to the sibling
-// Rows the same producers still populate, because CHAOS-4633's migration is
-// deliberately dual-write: a producer emits both, and reading only one of
-// them would make this depend on which phase of that migration is deployed.
 func groupAssignmentsByMember(facts []CanonicalFact) map[string][]cohortGroupAssignment {
 	assignments := make(map[string][]cohortGroupAssignment, len(facts))
 	seen := make(map[string]map[string]struct{}, len(facts))
@@ -245,7 +330,10 @@ func groupAssignmentsFromValue(value FactValue) []cohortGroupAssignment {
 			continue
 		}
 		label, _ := firstRowString(row, groupLabelColumnCandidates)
-		found = append(found, cohortGroupAssignment{canonicalID: canonicalID, label: label})
+		// SubjectTeam, not the plan's kind: the scope filter above admitted
+		// this row precisely because it declares itself a team row, and the
+		// columns just read are team columns.
+		found = append(found, cohortGroupAssignment{canonicalID: canonicalID, label: label, kind: SubjectTeam})
 	}
 	return found
 }
@@ -464,4 +552,57 @@ func RemovedCohortMembers(before, after []CohortMember) []CohortMember {
 		removed = append(removed, member)
 	}
 	return removed
+}
+
+// applyGroupingRefusalDisclosure states on the WIRE that a grouped question
+// was answered ungrouped, and why.
+//
+// Telemetry alone is not disclosure: an operator reading logs is not the
+// person reading the answer, and a reader who asked for a per-team breakdown
+// and silently received a flat list has been told something false by omission.
+// The refusal already logs its reason; this is the half the caller sees.
+//
+// Both kinds are closed-vocabulary subject kinds, so the sentence carries no
+// model text and no corpus content -- the same rule every other disclosure
+// composer on this path follows.
+//
+// TWO THINGS THIS GOT WRONG, both found by codex round 3 and both the same
+// mistake: treating the disclosure as if writing it were the whole job.
+//
+//  1. The string was composed HERE with a local Sprintf, so nothing could
+//     recognise it as service-authored. appendBoundedLimitations never
+//     displaces a service disclosure -- it displaces the last MODEL-authored
+//     caveat -- and it decides which is which by asking the contract. An
+//     unregistered disclosure is, to that rule, a model caveat. With a full
+//     limitation list and an unaffirmed committed subject, the
+//     commit-affirmation composer that runs later therefore displaced THIS
+//     sentence to make room for its own, and the served flat answer stated
+//     nothing at all about having been answered on a different axis than the
+//     one asked for. That defeats the ruling this function exists to
+//     implement: the degrade is never silent. The string now comes from
+//     contractsv1.ContextFabricGroupingRefusalLimitation, which is also what
+//     the contract's recogniser parses.
+//
+//  2. The displacement count was discarded into `_`. A displaced model
+//     caveat is gone from the stored answer and cannot be inferred
+//     downstream -- a displaced list and a list that had room are the same
+//     length and end the same way -- so LimitationsDisplaced is the only
+//     record it existed. Every other composer on this path accounts it; this
+//     one silently under-reported by exactly the caveat it dropped, which
+//     also puts the result's own count at odds with the validator's
+//     coherence rule.
+func applyGroupingRefusalDisclosure(result *InvestigationResult, outcome CohortGroupingOutcome) {
+	if result == nil || outcome.Refusal != CohortGroupingRefusalGroupKindSourceMismatch {
+		return
+	}
+	// Through the BOUNDED appender, not a raw append: the limitations
+	// collection has a contract cap, and this package's own closure test
+	// rejects any limitations-destined write that bypasses it. Caught here by
+	// that test rather than by a reviewer, which is the guard working.
+	composed, displaced := appendBoundedLimitations(result.Limitations, []string{
+		contractsv1.ContextFabricGroupingRefusalLimitation(outcome.PlannedKind, outcome.SourceKind),
+	})
+	result.Limitations = composed
+	result.LimitationsDisplaced += displaced
+	result.Coverage.Partial = true
 }
