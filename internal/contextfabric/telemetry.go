@@ -293,8 +293,8 @@ func (t SlogEngineTelemetry) RecordWindowCanonicalization(ctx context.Context, p
 // this stream's own hit-rate denominator (RecordWindowCarry's own doc
 // comment, engine.go, for why it fires only on the carry-eligible
 // population).
-func (t SlogEngineTelemetry) RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int) {
-	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "chain_depth", chainDepth}, requestIDLogAttrs(ctx)...)
+func (t SlogEngineTelemetry) RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource) {
+	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "chain_depth", chainDepth, "seed_source", string(seedSource)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric window carry", args...)
 }
 
@@ -303,9 +303,9 @@ func (t SlogEngineTelemetry) RecordWindowCarry(ctx context.Context, principal st
 // construction -- never a question, subject label, or canonical id. A
 // distinct message from the window carry's so the two axes' hit rates can
 // be counted apart.
-func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind) {
+func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource) {
 	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "chain_depth", chainDepth,
-		"carried_kind", string(carriedKind), "redeemed_kind", string(redeemedKind)}, requestIDLogAttrs(ctx)...)
+		"carried_kind", string(carriedKind), "redeemed_kind", string(redeemedKind), "seed_source", string(seedSource)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric kind carry", args...)
 }
 

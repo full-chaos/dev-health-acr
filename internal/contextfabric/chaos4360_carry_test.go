@@ -156,7 +156,7 @@ func TestWindowCarry_TurnThreeCommitsWithCarriedWindow(t *testing.T) {
 	if !found {
 		t.Fatalf("ConfirmedStructure = %#v, want an entry %#v disclosing the carry", result.ConfirmedStructure, wantEntry)
 	}
-	if len(telemetry.windowCarries) != 1 || telemetry.windowCarries[0] != (windowCarryRecord{WindowCarryHit, 0}) {
+	if len(telemetry.windowCarries) != 1 || telemetry.windowCarries[0] != (windowCarryRecord{WindowCarryHit, 0, CarrySeedReceipt}) {
 		t.Fatalf("telemetry.windowCarries = %#v, want exactly one hit at depth 0", telemetry.windowCarries)
 	}
 	if len(telemetry.windowCanonicalizationOutcomes) == 0 || telemetry.windowCanonicalizationOutcomes[len(telemetry.windowCanonicalizationOutcomes)-1] != WindowCanonicalizationCarried {

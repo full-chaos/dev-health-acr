@@ -1,8 +1,14 @@
 package contextfabric
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
+
+	"errors"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -407,5 +413,281 @@ func ancestryTestEngine(t *testing.T, store InvestigationResultStore) *Engine {
 			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
 		}),
 		Results: store,
+	})
+}
+
+// orgScopedResultStore is staticResultStore with the org check the real
+// stores enforce and the shared test double does NOT.
+//
+// This matters more than a test-double detail. staticResultStore.Get ignores
+// its principal entirely, so no test built on it can distinguish "the carry
+// respects org isolation" from "the carry never checks". That was tolerable
+// while every referenced result id arrived inside a receipt the caller had
+// been shown; parent_result_id makes a result id a caller-supplied bearer
+// reference, and org isolation stops being incidental. Both real
+// implementations scope Get by org (pginvestigation's SELECT carries
+// `AND org_id = $2`; memoryinvestigation compares stored.orgID), so this
+// double matches production rather than inventing a stricter rule.
+type orgScopedResultStore struct {
+	*staticResultStore
+	orgID string
+}
+
+func (s *orgScopedResultStore) Get(ctx context.Context, principal storage.Principal, resultID string) (StoredInvestigationResult, error) {
+	if principal.OrgID != s.orgID {
+		return StoredInvestigationResult{}, errors.New("investigation result not found")
+	}
+	return s.staticResultStore.Get(ctx, principal, resultID)
+}
+
+// TestChainIdentity_ContainmentGuardsApplyToTheCallerSuppliedRoot pins the
+// guards the bearer model rests on, applied to the NEW seed path.
+//
+// parent_result_id is a bearer reference within an organization: a caller who
+// names a result id inherits that result's confirmed axes. What keeps that
+// acceptable is not that the id is secret -- it is that every hop re-checks
+// what it is about to trust. The walk already applied these guards to
+// receipt-borne ids; these arms prove the caller-supplied root does not get a
+// weaker path to the same data, which is exactly the regression a new seed
+// site invites.
+//
+// Both arms assert the carry MISSES and, more importantly, that it misses
+// with the RIGHT reason -- a carry that failed for an unrelated reason would
+// pass a bare "no hit" assertion while proving nothing about containment.
+func TestChainIdentity_ContainmentGuardsApplyToTheCallerSuppliedRoot(t *testing.T) {
+	t.Parallel()
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+
+	build := func(t *testing.T, store InvestigationResultStore, telemetry *recordingTelemetry) *Engine {
+		t.Helper()
+		fresh := validInvestigationResult()
+		return mustReuseTestEngine(t, EngineDependencies{
+			Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+			Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+				return CanonicalFactBundle{}, nil
+			}),
+			Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+				return fresh, nil
+			}),
+			Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+				return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+			}),
+			Results:   store,
+			Telemetry: telemetry,
+		})
+	}
+
+	assertMiss := func(t *testing.T, telemetry *recordingTelemetry, result InvestigationResult, want KindCarryOutcome, why string) {
+		t.Helper()
+		var got []KindCarryOutcome
+		for _, c := range telemetry.kindCarries {
+			got = append(got, c.outcome)
+			if c.outcome == KindCarryHit {
+				t.Fatalf("kind carry HIT: %s", why)
+			}
+		}
+		found := false
+		for _, o := range got {
+			if o == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("kind carry outcomes = %v, want %q -- missing for the wrong reason proves nothing about containment", got, want)
+		}
+		for _, entry := range result.ConfirmedStructure {
+			if entry.Source == contractsv1.ContextFabricStructureSourceCarried {
+				t.Errorf("ConfirmedStructure carries %#v: %s", entry, why)
+			}
+		}
+	}
+
+	t.Run("a parent in another org is not reachable", func(t *testing.T) {
+		t.Parallel()
+		request, seed := chainIdentityFixture()
+		store := &orgScopedResultStore{staticResultStore: seed, orgID: "org_somebody_else"}
+		telemetry := &recordingTelemetry{}
+
+		result, err := build(t, store, telemetry).Investigate(context.Background(), reusePrincipal(), request)
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		assertMiss(t, telemetry, result, KindCarryMissUnloadable,
+			"naming a result id belonging to another organization must never inherit that result's confirmed axes")
+	})
+
+	t.Run("a parent from a retired graph epoch is not trusted", func(t *testing.T) {
+		t.Parallel()
+		request, seed := chainIdentityFixture()
+		stale := int64(41)
+		seed.graphEpoch = &stale // this investigation binds epoch 0
+		telemetry := &recordingTelemetry{}
+
+		result, err := build(t, seed, telemetry).Investigate(context.Background(), reusePrincipal(), request)
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		assertMiss(t, telemetry, result, KindCarryMissStaleGraphEpoch,
+			"a parent generated under a different graph epoch describes a graph this turn is not reading, and must not be carried from")
+	})
+}
+
+// TestChainIdentity_TheBypassReasonReachesTheRealSink closes the gap the
+// prior slice's codex round identified and team-lead carried into this one.
+//
+// That slice verified the SINK in isolation (call RecordAnswerReuseBypass,
+// assert the log line) and the ENGINE against a recording double. Neither
+// exercised the wiring BETWEEN them, so the engine could have been handing
+// the real sink nothing at all and both tests would still have passed --
+// the reviewer said as much, and confirmed the wiring only by reading source.
+//
+// This drives a real Engine, with a real SlogEngineTelemetry, through a real
+// bypass, and reads the bytes that came out the other end. That is the only
+// version of this test that can fail if the wiring breaks.
+func TestChainIdentity_TheBypassReasonReachesTheRealSink(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	// Info level: the bypass line is logged at Info, so a Warn-only handler
+	// would drop it and this test would pass by never seeing anything.
+	sink := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	request, seed := chainIdentityFixture()
+	_, candidate := reusableCandidate()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	fresh := validInvestigationResult()
+	gateCalls := 0
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return fresh, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results:   seed,
+		Telemetry: sink,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			gateCalls++
+			return candidate, true, nil
+		}),
+	})
+
+	if _, err := engine.Investigate(context.Background(), reusePrincipal(), request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+
+	// Reachability guard: if the request stopped bypassing, there would be no
+	// bypass line to find and the assertions below would be vacuous.
+	if gateCalls != 0 {
+		t.Fatalf("ReuseGate was called %d times, want 0 -- this request no longer bypasses, so it cannot exercise the bypass telemetry", gateCalls)
+	}
+
+	logged := buf.String()
+	if !strings.Contains(logged, "context fabric answer reuse bypass") {
+		t.Fatalf("no bypass line reached the real sink; engine output was:\n%s", logged)
+	}
+	if !strings.Contains(logged, `"reason":"`+string(AnswerReuseBypassPriorResultReference)+`"`) {
+		t.Errorf("bypass line does not carry reason=%q -- the engine reached the sink but not with the arm that actually fired:\n%s", AnswerReuseBypassPriorResultReference, logged)
+	}
+}
+
+// TestChainIdentity_CarryTelemetryAttributesHowTheChainWasLinked pins the
+// measurement that makes this ticket's own rig result interpretable.
+//
+// Without a seed-source label, a rig run showing the loop closing cannot say
+// WHY. A carry hit rate that improves after this ships is consistent with two
+// completely different stories: the chain-identity field linked turns that
+// previously named nothing, or those turns were carrying by receipt all along
+// and something else changed. The first is this ticket working; the second is
+// this ticket being irrelevant. One label separates them, and no amount of
+// re-reading the outcome counts can.
+//
+// The label is derived from the REQUEST, never from whether the carry
+// succeeded, so the measure stays independent of the outcome it explains.
+// Both arms therefore assert the label on a turn that HITS and the label is
+// checked against the linkage, not against the result.
+func TestChainIdentity_CarryTelemetryAttributesHowTheChainWasLinked(t *testing.T) {
+	t.Parallel()
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+
+	run := func(t *testing.T, mutate func(*InvestigationRequest, *staticResultStore)) *recordingTelemetry {
+		t.Helper()
+		request, seed := chainIdentityFixture()
+		mutate(&request, seed)
+		telemetry := &recordingTelemetry{}
+		fresh := validInvestigationResult()
+		engine := mustReuseTestEngine(t, EngineDependencies{
+			Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+			Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+				return CanonicalFactBundle{}, nil
+			}),
+			Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+				return fresh, nil
+			}),
+			Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+				return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+			}),
+			Results:   seed,
+			Telemetry: telemetry,
+		})
+		if _, err := engine.Investigate(context.Background(), reusePrincipal(), request); err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		return telemetry
+	}
+
+	assertSeed := func(t *testing.T, telemetry *recordingTelemetry, want CarrySeedSource) {
+		t.Helper()
+		if len(telemetry.kindCarries) == 0 {
+			t.Fatal("no kind-carry telemetry was recorded, so this arm proves nothing about attribution")
+		}
+		for _, c := range telemetry.kindCarries {
+			if c.seedSource != want {
+				t.Errorf("kind carry recorded seed_source %q, want %q", c.seedSource, want)
+			}
+		}
+	}
+
+	t.Run("linked only by the field", func(t *testing.T) {
+		t.Parallel()
+		// chainIdentityFixture links by parent_result_id and nothing else --
+		// the population that could not carry at all before this ticket.
+		assertSeed(t, run(t, func(*InvestigationRequest, *staticResultStore) {}), CarrySeedParentField)
+	})
+
+	t.Run("linked only by a receipt", func(t *testing.T) {
+		t.Parallel()
+		assertSeed(t, run(t, func(r *InvestigationRequest, seed *staticResultStore) {
+			// A window receipt that genuinely redeems: the prior result must
+			// carry the matching WindowOption, or the request vetoes before
+			// any carry runs and this arm silently measures nothing. The
+			// guard in assertSeed caught exactly that on the first attempt.
+			start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+			end := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+			prior := seed.results["result_prior_chain_0001"]
+			prior.WindowClarification = &WindowClarification{Options: []WindowOption{
+				{ReceiptID: "winr_confirm0001", OptionID: "opt_90d", Label: "the last 90 days", RelativeID: RelativeWindowTrailing90D, Start: &start, End: &end},
+			}}
+			seed.results["result_prior_chain_0001"] = prior
+
+			r.ParentResultID = ""
+			r.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_chain_0001", ReceiptID: "winr_confirm0001"}}
+		}), CarrySeedReceipt)
+	})
+
+	t.Run("linked by neither", func(t *testing.T) {
+		t.Parallel()
+		// The miss_no_reference population -- the baseline the field must
+		// shrink, and the one a rig table is read against.
+		assertSeed(t, run(t, func(r *InvestigationRequest, _ *staticResultStore) {
+			r.ParentResultID = ""
+		}), CarrySeedNone)
 	})
 }

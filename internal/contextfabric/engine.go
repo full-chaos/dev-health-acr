@@ -514,7 +514,11 @@ type EngineTelemetry interface {
 	// fires for IS the carry-eligible population the N-turn harness'
 	// "carry hit rate" measures. chainDepth is meaningful only when
 	// outcome==hit (0 for every miss).
-	RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int)
+	// seedSource (CHAOS-5003) names HOW the turn reached its prior result, so
+	// a carry hit rate can be ATTRIBUTED rather than merely observed -- see
+	// CarrySeedSource. Reported on every outcome, hit or miss, so both share
+	// a denominator per source.
+	RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource)
 	// RecordKindCarry reports the outcome of ONE same-conversation
 	// expected_kind carry attempt -- see KindCarryOutcome's own doc comment
 	// for the closed vocabulary (structure_axis_carry.go). Called at most
@@ -532,7 +536,7 @@ type EngineTelemetry interface {
 	// disagreed. They are in the signature rather than a side channel because
 	// a drop reported without both sides is a decision an operator cannot
 	// check.
-	RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind)
+	RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource)
 	// RecordStructureNeedsDisclosed (CHAOS-3900 P1.F, design brief §2.1's
 	// cf_structure_needs_disclosed{member}) reports one member appearing
 	// in a composed StructureNeeds.Missing -- called once per member,
@@ -1473,7 +1477,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// doc comment (chaos4360_carry.go) for why an unmatched
 		// PriorSubjectReceipts entry must not be able to seed the walk.
 		windowCarry = e.resolveCarriedWindow(carryCtx, principal, request, priorValidatedReceipts, binding)
-		e.recordWindowCarry(ctx, principal, windowCarry)
+		e.recordWindowCarry(ctx, principal, windowCarry, carrySeedSource(request, priorValidatedReceipts))
 		if windowCarry.Outcome == WindowCarryHit {
 			effectiveWindow = windowCarry.Window
 		}
@@ -1496,7 +1500,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// Compare and drop BEFORE the disclosure is composed and before the
 		// outcome is recorded, so all three views agree.
 		kindCarry = applyCarryDrop(structureCanon.Confirmed, kindCarry)
-		e.recordKindCarry(ctx, principal, kindCarry)
+		e.recordKindCarry(ctx, principal, kindCarry, carrySeedSource(request, priorValidatedReceipts))
 	}
 	carriedStructureEntries := []*contractsv1.ContextFabricConfirmedStructureEntry{
 		composeCarriedWindowEntry(windowCarry),

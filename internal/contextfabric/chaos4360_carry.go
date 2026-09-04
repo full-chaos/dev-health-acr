@@ -227,6 +227,52 @@ func carryReferencedResultIDs(request InvestigationRequest, validatedSubjectRece
 	return ids
 }
 
+// CarrySeedSource names HOW this turn reached its prior result, as a closed,
+// content-safe label. Without it a carry hit rate cannot be attributed: a rig
+// run that shows the loop closing cannot say whether the chain-identity field
+// is what closed it or whether those turns were carrying by receipt all
+// along, which is precisely the question the field was built to answer.
+//
+// Reported on every carry outcome, hit or miss, so hits and misses share a
+// denominator per source rather than being counted against different ones.
+type CarrySeedSource string
+
+const (
+	// CarrySeedNone: the request named no prior result at all -- the
+	// miss_no_reference population, and the baseline the field must shrink.
+	CarrySeedNone CarrySeedSource = "none"
+	// CarrySeedReceipt: linked only by a redeemed receipt, the pre-existing
+	// mechanism.
+	CarrySeedReceipt CarrySeedSource = "receipt"
+	// CarrySeedParentField: linked ONLY by parent_result_id -- a turn that
+	// could not have carried anything before this ticket.
+	CarrySeedParentField CarrySeedSource = "parent_field"
+	// CarrySeedBoth: linked by both. Counted apart from either rather than
+	// folded into one, because a chain that would have carried anyway tells
+	// you nothing about the field's own contribution.
+	CarrySeedBoth CarrySeedSource = "both"
+)
+
+// carrySeedSource derives the label from the request alone -- never from
+// whether a carry succeeded, so the measure stays independent of the outcome
+// it is used to explain.
+func carrySeedSource(request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt) CarrySeedSource {
+	hasField := strings.TrimSpace(request.ParentResultID) != ""
+	stripped := request
+	stripped.ParentResultID = ""
+	hasReceipt := len(carryReferencedResultIDs(stripped, validatedSubjectReceipts)) > 0
+	switch {
+	case hasField && hasReceipt:
+		return CarrySeedBoth
+	case hasField:
+		return CarrySeedParentField
+	case hasReceipt:
+		return CarrySeedReceipt
+	default:
+		return CarrySeedNone
+	}
+}
+
 // ancestryParentResultID picks the ONE prior result this turn records as its
 // parent -- durable chain identity, written by every Save regardless of
 // whether any axis was carried, disclosed, or even attempted.
@@ -492,9 +538,9 @@ func appendCarriedStructureEntry(entries []contractsv1.ContextFabricConfirmedStr
 // telemetry is unconfigured or carry was never attempted (WindowCarryNotAttempted),
 // mirroring every other "once per non-zero signal" telemetry call in this
 // package.
-func (e *Engine) recordWindowCarry(ctx context.Context, principal storage.Principal, carry windowCarryResult) {
+func (e *Engine) recordWindowCarry(ctx context.Context, principal storage.Principal, carry windowCarryResult, seedSource CarrySeedSource) {
 	if e.telemetry == nil || carry.Outcome == WindowCarryNotAttempted {
 		return
 	}
-	e.telemetry.RecordWindowCarry(ctx, principal, carry.Outcome, carry.ChainDepth)
+	e.telemetry.RecordWindowCarry(ctx, principal, carry.Outcome, carry.ChainDepth, seedSource)
 }

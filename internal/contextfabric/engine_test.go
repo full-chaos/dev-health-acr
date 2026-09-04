@@ -440,6 +440,7 @@ type coverageDisclosurePhrasingRecord struct {
 type windowCarryRecord struct {
 	outcome    WindowCarryOutcome
 	chainDepth int
+	seedSource CarrySeedSource
 }
 
 type kindCarryRecord struct {
@@ -447,6 +448,7 @@ type kindCarryRecord struct {
 	chainDepth   int
 	carriedKind  contractsv1.ContextFabricSubjectKind
 	redeemedKind contractsv1.ContextFabricSubjectKind
+	seedSource   CarrySeedSource
 }
 
 type priorConsultedRecord struct {
@@ -548,12 +550,12 @@ func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ s
 	r.windowCanonicalizationOutcomes = append(r.windowCanonicalizationOutcomes, outcome)
 }
 
-func (r *recordingTelemetry) RecordWindowCarry(_ context.Context, _ storage.Principal, outcome WindowCarryOutcome, chainDepth int) {
-	r.windowCarries = append(r.windowCarries, windowCarryRecord{outcome, chainDepth})
+func (r *recordingTelemetry) RecordWindowCarry(_ context.Context, _ storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource) {
+	r.windowCarries = append(r.windowCarries, windowCarryRecord{outcome, chainDepth, seedSource})
 }
 
-func (r *recordingTelemetry) RecordKindCarry(_ context.Context, _ storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind) {
-	r.kindCarries = append(r.kindCarries, kindCarryRecord{outcome, chainDepth, carriedKind, redeemedKind})
+func (r *recordingTelemetry) RecordKindCarry(_ context.Context, _ storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource) {
+	r.kindCarries = append(r.kindCarries, kindCarryRecord{outcome, chainDepth, carriedKind, redeemedKind, seedSource})
 }
 
 func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {
