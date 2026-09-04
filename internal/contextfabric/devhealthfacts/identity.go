@@ -28,9 +28,9 @@ func (p *IdentityProvider) Capability() contextfabric.FactCapability {
 	return newCapability(contextfabric.FactIdentity, "devhealthfacts.identity", []contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectWorkItem})
 }
 
-func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := refuseHistoricalFact(query); unsupported {
-		return result, nil
+func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
+	if refused, unsupported := refuseHistoricalFact(query); unsupported {
+		return refused, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
@@ -38,8 +38,17 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
+	rejectedCount := 0
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.identity", contextfabric.FactIdentity, rejectedCount)
+		}
+	}()
 
-	repoIDs, repoBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), "repository:")
+	repoIDs, repoBySubject, repoRejected := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), "repository:")
+	rejectedCount += repoRejected
 	if len(repoIDs) > 0 {
 		// CHAOS-4377: the SQL build + scan half moved to
 		// github.com/full-chaos/dev-health-go/readers.ReadRepositoryIdentity.
@@ -67,7 +76,8 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 		truncated = truncated || len(rows) >= maxFactRowsPerQuery
 	}
 
-	workItemIDs, workItemBySubject := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
+	workItemIDs, workItemBySubject, workItemRejected := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
+	rejectedCount += workItemRejected
 	if len(workItemIDs) > 0 {
 		// CHAOS-4377: the SQL build + scan half moved to
 		// github.com/full-chaos/dev-health-go/readers.ReadWorkItemIdentity.
@@ -93,7 +103,8 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	}
 
 	state, emptyReason := currentAxisReadState(len(facts))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: truncated}, nil
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: truncated}
+	return result, nil
 }
 
 // MembershipProvider implements contextfabric.FactProvider for
@@ -117,9 +128,9 @@ func (p *MembershipProvider) Capability() contextfabric.FactCapability {
 	return newCapability(contextfabric.FactMembership, "devhealthfacts.membership", []contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectWorkItem})
 }
 
-func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
-	if result, unsupported := refuseHistoricalFact(query); unsupported {
-		return result, nil
+func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
+	if refused, unsupported := refuseHistoricalFact(query); unsupported {
+		return refused, nil
 	}
 	orgID, err := requireOrgID(principal.OrgID)
 	if err != nil {
@@ -127,8 +138,17 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
+	rejectedCount := 0
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.membership", contextfabric.FactMembership, rejectedCount)
+		}
+	}()
 
-	repoIDs, repoBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), "repository:")
+	repoIDs, repoBySubject, repoRejected := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), "repository:")
+	rejectedCount += repoRejected
 	if len(repoIDs) > 0 {
 		// CHAOS-4377: the SQL build + scan half moved to
 		// github.com/full-chaos/dev-health-go/readers.ReadRepositoryIDs.
@@ -150,7 +170,8 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		truncated = truncated || len(rows) >= maxFactRowsPerQuery
 	}
 
-	workItemIDs, workItemBySubject := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
+	workItemIDs, workItemBySubject, workItemRejected := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
+	rejectedCount += workItemRejected
 	if len(workItemIDs) > 0 {
 		// CHAOS-4377: the SQL build + scan half moved to
 		// github.com/full-chaos/dev-health-go/readers.ReadWorkItemRepository.
@@ -176,5 +197,6 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	}
 
 	state, emptyReason := currentAxisReadState(len(facts))
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: truncated}, nil
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: truncated}
+	return result, nil
 }

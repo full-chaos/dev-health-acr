@@ -84,7 +84,7 @@ func (p *HealthProvider) Capability() contextfabric.FactCapability {
 	return capability
 }
 
-func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (contextfabric.FactProviderResult, error) {
+func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
 		return unsupportedResult, nil
@@ -95,8 +95,17 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
+	rejectedCount := 0
+	// CHAOS-5026: deferred so every return path passes through the
+	// disclosure -- see ci.go's identical note.
+	defer func() {
+		if err == nil {
+			applySubjectShapeRejection(&result, "devhealthfacts.health", contextfabric.FactHealth, rejectedCount)
+		}
+	}()
 
-	repoIDs, repoBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), repositoryPrefix)
+	repoIDs, repoBySubject, repoRejected := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectRepository), repositoryPrefix)
+	rejectedCount += repoRejected
 	if len(repoIDs) > 0 {
 		rowCount, dailyOmitted, scanErr := p.readScope(ctx, orgID, "repo", repoIDs, repoBySubject, contractsv1.ContextFabricEvidenceEntityRepository, &facts, timeBound)
 		if scanErr != nil {
@@ -105,7 +114,8 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 		truncated = truncated || rowCount >= maxFactRowsPerQuery || dailyOmitted > 0
 	}
 
-	teamIDs, teamBySubject := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectTeam), teamPrefix)
+	teamIDs, teamBySubject, teamRejected := subjectIndex(subjectsOfKind(query.Subjects, contextfabric.SubjectTeam), teamPrefix)
+	rejectedCount += teamRejected
 	if len(teamIDs) > 0 {
 		rowCount, dailyOmitted, scanErr := p.readScope(ctx, orgID, "team", teamIDs, teamBySubject, contractsv1.ContextFabricEvidenceEntityTeam, &facts, timeBound)
 		if scanErr != nil {
@@ -115,18 +125,20 @@ func (p *HealthProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, breakdownTruncated, scanErr := p.readProjectHealth(ctx, orgID, projectSubjects, &facts, timeBound)
+		rowCount, rejected, breakdownTruncated, scanErr := p.readProjectHealth(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project health", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery || breakdownTruncated
+		rejectedCount += rejected
 	}
 
 	state, retentionReason := timeBound.retentionState(len(facts))
 	// CHAOS-4521b: this source has no project dimension, so an all-project
 	// read that came back empty says something more specific than "no rows".
 	retentionReason = explainTeamScopedProjectAbsence(timeBound, state, retentionReason, query.Subjects)
-	return contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}, nil
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}
+	return result, nil
 }
 
 // readScope runs the compounding_risk_daily query for one scope ('repo' or
@@ -453,10 +465,10 @@ type healthRollupRow struct {
 // repo layer one hop further via team_repo_ownership, both landing in one
 // renderable risk_breakdown table per project, tagged by scope. Neither
 // layer is summed or averaged into a single project-level risk score.
-func (p *HealthProvider) readProjectHealth(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, breakdownTruncated bool, err error) {
-	ids, bySubject := v2Index(subjects, identity.KindProject)
+func (p *HealthProvider) readProjectHealth(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound) (rowCount int, rejected int, breakdownTruncated bool, err error) {
+	ids, bySubject, rejected := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, false, nil
+		return 0, rejected, false, nil
 	}
 	ownershipPredicate := ownershipValidityPredicate(timeBound)
 	// Round-1 P2: the team/repo UNION ALL is wrapped in an outer SELECT
@@ -517,7 +529,7 @@ ORDER BY project_key, scope, scope_id`)
 		return nil
 	}, timeBound.bindings()...)
 	if scanErr != nil {
-		return rowCount, false, scanErr
+		return rowCount, rejected, false, scanErr
 	}
 	// CHAOS-4645, design doc §5.2: additive, off the SAME two-layer
 	// ownership join, never changing an existing field -- health carries a
@@ -545,7 +557,7 @@ ORDER BY project_key, scope, scope_id`)
 	// itself reviewed and tested on its own.
 	dailyByProject, seriesErr := p.queryProjectHealthDailySeries(ctx, orgID, ids, timeBound)
 	if seriesErr != nil {
-		return rowCount, false, seriesErr
+		return rowCount, rejected, false, seriesErr
 	}
 	// codex CHAOS-4645 round-1 P2 (EXECUTED): see readScope's identical note
 	// -- the daily-series query's own withRowLimit(200) cap, shared across
@@ -655,7 +667,7 @@ ORDER BY project_key, scope, scope_id`)
 			EvidenceRefIDs: evidenceRefIDs,
 		})
 	}
-	return rowCount, breakdownTruncated, nil
+	return rowCount, rejected, breakdownTruncated, nil
 }
 
 // queryProjectHealthDailySeries is queryTeamHealthDailySeries' project-rollup
