@@ -1493,6 +1493,74 @@ the budget charges. Only stage 3 can measure, and it measures with a
 `contracts/v1` function both planes import — the route's 413 gate is an
 assertion over the same numbers, not a second measurement.
 
+### 10b — The grouping REFUSAL, and how its disclosure reaches the reader
+
+The group axis is read off the members' own facts, so the plan's declared
+`GroupKind` and the kind the fact rows actually carry can disagree. When they
+do, grouping is refused **wholesale** — keeping the members whose source
+happened to agree would present a partial axis as a complete one — and the
+question is answered flat.
+
+A flat answer to a grouped question is only honest if the reader is told. That
+is the half this sub-diagram exists to make visible, because it is the half
+that broke: the disclosure was composed correctly and then silently **dropped**
+by a later composer, and nothing in this document showed that such a thing
+could happen.
+
+```mermaid
+flowchart TD
+    PLAN["AnswerPlan.GroupKind<br/>(the model's question frame)"]
+    ROWS["group assignment rows<br/>(kind read where the row was ACCEPTED)"]
+    PLAN --> CMP{"kinds agree?"}
+    ROWS --> CMP
+    CMP -->|yes| BUILD["build groups<br/>COHORT_GROUP per group"]
+    CMP -->|"no"| REFUSE["REFUSE WHOLESALE<br/>outcome.Refusal = group_kind_source_mismatch<br/>+ planned_group_kind on grouping telemetry"]
+
+    REFUSE --> FLAT["answer is composed FLAT"]
+    REFUSE --> DISC["applyGroupingRefusalDisclosure"]
+
+    subgraph bounded["appendBoundedLimitations — the ONE path into Limitations"]
+        DEDUP["dedup → normalize to cap → append"]
+        FULL{"list at the contract cap?"}
+        DROP["displace the LAST MODEL-AUTHORED caveat<br/>never a service disclosure"]
+        COUNT["displaced count → result.LimitationsDisplaced"]
+        DEDUP --> FULL
+        FULL -->|yes| DROP --> COUNT
+        FULL -->|no| COUNT
+    end
+
+    DISC -->|"sentence from contracts/v1<br/>ContextFabricGroupingRefusalLimitation(planned, source)"| DEDUP
+    REG["IsContextFabricServiceAuthoredLimitation<br/>= fixed list OR a PARSE of the interpolated sentence<br/>(both kinds must be closed-vocabulary members)"]
+    REG -.->|"answers 'service or model?'"| DROP
+    REG -.->|"coherence oracle for a positive count"| VAL
+
+    COUNT --> LATER["LATER composers on the SAME result<br/>(commit affirmation, temporal, fact scope)"]
+    LATER --> DEDUP
+    COUNT --> VAL["result Validate → served answer"]
+```
+
+**The defect this drawing would have prevented.** The refusal sentence is
+**interpolated** — it names the axis asked for and the axis the facts support —
+so the exact-match registry of service-authored disclosures could not hold it.
+To the displacement rule an unrecognised disclosure is a model caveat, so on a
+full limitation list the commit-affirmation composer displaced it and the
+served flat answer said nothing about having been answered on a different axis.
+The dotted edges are the fix: recognition is a **parse** whose two interpolated
+segments must be closed subject-kind vocabulary members, so a model caveat that
+merely opens with the same wording cannot become undisplaceable and take a real
+caveat's slot.
+
+**Two properties worth reading off the shape.** Every arrow into `Limitations`
+passes through the bounded appender — there is no second door — and every
+displacement is counted, because a displaced list and a list that simply had
+room are the same length and end the same way, so the count is the only record
+the dropped caveat existed.
+
+**Update rule.** Any new service-authored disclosure, any new composer that
+runs on a composed result, or any change to the recognition rule updates this
+sub-diagram in the same PR. An **interpolated** disclosure additionally needs a
+sole composer and a parse-based recogniser; a list of constants cannot hold it.
+
 **Update rule.** Any change to `PlanAnswer`, the narrowing stages, or
 `ContextFabricCohortGroup` updates this diagram in the same PR.
 
