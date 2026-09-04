@@ -261,11 +261,10 @@ func TestEveryAssembledResultArmStampsItsMeasurementThroughOnePath(t *testing.T)
 	// equal the arms this package accounts for -- driven plus registered
 	// uncovered -- so adding or losing one fails here and in the behavioural
 	// test together.
-	accounted := len(assembledResultArmCases()) + len(armsWithNoBehaviouralCase)
-	if calls != accounted {
-		t.Errorf("found %d recordMeasurement call sites but the package accounts for %d arms "+
-			"(%d driven + %d registered uncovered): an arm was added without a case, or one stopped "+
-			"stamping its measurement", calls, accounted, len(assembledResultArmCases()), len(armsWithNoBehaviouralCase))
+	driven := len(assembledResultArmCases())
+	if calls != driven {
+		t.Errorf("found %d recordMeasurement call sites but only %d arms are driven: an arm was added "+
+			"without a behavioural case, or one stopped stamping its measurement", calls, driven)
 	}
 
 	for _, offender := range offenders {

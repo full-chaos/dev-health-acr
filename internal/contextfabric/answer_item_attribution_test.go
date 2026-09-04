@@ -4,12 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"log/slog"
-	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -455,192 +450,6 @@ func TestARefusalLineAlsoSaysWhatItsChargedItemsWereAbout(t *testing.T) {
 	}
 }
 
-// uncoveredArm is an assembled-result arm no scenario below drives.
-//
-// IT IS A CLAIM, AND A CLAIM NEEDS A PROBE. The first version was a bare
-// string, and a review proved the string false: it asserted that no fixture in
-// this family could reach the candidate-reduction arm, and an existing test in
-// this very package already reached it. The damage was not the wrong sentence
-// -- it was that the arm-count reconciliation BALANCED around it while that arm
-// was reached and unasserted, because the arithmetic checked the COUNT and
-// never the CLAIM.
-//
-// The second version required the entry to name a test that EXISTS. A review
-// defeated that too: naming any passing test satisfied it, so a "probe" that
-// could never fail was accepted.
-//
-// So an entry must now name a test that FAILS IF THE ARM EXECUTES, and the
-// checker requires that test to call assertArmNeverExecuted -- the one helper
-// that can express it. Both failure modes are planted as controls in
-// TestEveryUncoveredArmClaimCarriesAReachProbe: a name that does not exist, and
-// a name that exists but is not a probe.
-type uncoveredArm struct {
-	what string
-	// reachProbeTest names a Test function in this package that calls
-	// assertArmNeverExecuted for this arm. Checked against the syntax tree,
-	// not taken on trust.
-	reachProbeTest string
-}
-
-// armsWithNoBehaviouralCase is EMPTY: every assembled-result arm is driven by a
-// case below. It stays as a mechanism because the next arm added may not be
-// reachable at once, and the rule for registering one is written above rather
-// than rediscovered.
-var armsWithNoBehaviouralCase = []uncoveredArm{}
-
-// assertArmNeverExecuted is the only shape a reach probe may take.
-//
-// It fails when the named arm executed during the package's own tests. A probe
-// author wires observed to whatever records execution -- a counter incremented
-// in the arm, or a recovered panic. The point is that the assertion is
-// UNCONDITIONAL and negative: a probe that cannot fail is not a probe, which is
-// exactly what the previous version of this rule accepted.
-func assertArmNeverExecuted(t *testing.T, arm string, observed int) {
-	t.Helper()
-	if observed != 0 {
-		t.Fatalf("arm %q executed %d times under this package's tests, so it is REACHABLE and must be "+
-			"driven by a case in assembledResultArmCases rather than registered as uncovered", arm, observed)
-	}
-}
-
-// TestEveryUncoveredArmClaimCarriesAReachProbe enforces the rule, and proves it
-// is enforceable by planting both ways it can be broken.
-func TestEveryUncoveredArmClaimCarriesAReachProbe(t *testing.T) {
-	t.Parallel()
-	declared, probes := packageTestFunctions(t)
-
-	for _, arm := range armsWithNoBehaviouralCase {
-		switch {
-		case arm.reachProbeTest == "":
-			t.Errorf("uncovered arm %q names no reach probe", arm.what)
-		case !declared[arm.reachProbeTest]:
-			t.Errorf("uncovered arm %q names reach probe %q, which is not a Test function in this package",
-				arm.what, arm.reachProbeTest)
-		case !probes[arm.reachProbeTest]:
-			t.Errorf("uncovered arm %q names %q as its reach probe, but that test never calls "+
-				"assertArmNeverExecuted -- a test that cannot fail when the arm executes is not a probe, "+
-				"and accepting one is how a false unreachability claim shipped before",
-				arm.what, arm.reachProbeTest)
-		}
-	}
-
-	// CONTROL 1: a name that does not exist must be rejected.
-	if declared["TestThisNameIsDeliberatelyNotDeclaredAnywhere"] {
-		t.Fatal("the control name exists; pick another")
-	}
-	// CONTROL 2, and this is the one the previous version failed: a test that
-	// EXISTS but is not a probe must be rejected. Any test in this file that
-	// does not call assertArmNeverExecuted will do.
-	const existsButIsNotAProbe = "TestEveryAssembledResultArmEmitsASplitThatDescribesIt"
-	if !declared[existsButIsNotAProbe] {
-		t.Fatalf("control test %q is missing; the control cannot run", existsButIsNotAProbe)
-	}
-	if probes[existsButIsNotAProbe] {
-		t.Fatalf("control test %q calls assertArmNeverExecuted, so it cannot serve as the "+
-			"exists-but-is-not-a-probe control", existsButIsNotAProbe)
-	}
-	// And the checker must recognise a REAL probe, or every entry would be
-	// rejected and the rule would be unusable.
-	if !probes["TestTheReachProbeShapeIsRecognised"] {
-		t.Fatal("the reference probe is not recognised as one; the checker cannot tell a probe from a " +
-			"non-probe, which makes the rule either vacuous or unusable")
-	}
-	// CONTROL 3, the one a review used to defeat the previous rule: a test
-	// that is a probe in every visible respect but is NOT COMPILED. It lives
-	// at answer_item_attribution_neverbuilt_test.go under `//go:build never`.
-	// If it appears here, the probe set came from the filesystem rather than
-	// from the compiler, and a probe that never runs would be accepted as
-	// proof that an arm is unreachable.
-	const neverBuilt = "TestABuildConstrainedProbeMustNotCount"
-	if declared[neverBuilt] || probes[neverBuilt] {
-		t.Fatalf("%s is build-excluded (//go:build never) yet appears in the probe set: the enumeration "+
-			"is reading the filesystem instead of the compiler's view, so a probe that can never run "+
-			"would satisfy an unreachability claim", neverBuilt)
-	}
-}
-
-// TestTheReachProbeShapeIsRecognised is the reference probe: it exists so the
-// checker above has a positive example, and it demonstrates the shape a real
-// entry must use. No arm is currently uncovered, so it observes zero by
-// construction.
-func TestTheReachProbeShapeIsRecognised(t *testing.T) {
-	t.Parallel()
-	assertArmNeverExecuted(t, "reference probe (no arm is currently uncovered)", 0)
-}
-
-// packageTestFunctions returns every Test function the COMPILER will build for
-// this package, and which of them call assertArmNeverExecuted.
-//
-// THE FILE LIST COMES FROM `go list`, NOT FROM THE FILESYSTEM, and that is the
-// whole point. The previous version walked os.ReadDir and parsed whatever
-// ended in _test.go, without applying build constraints -- so a file tagged
-// `//go:build never` registered as a valid reach probe even though `go test`
-// never compiles it, and a probe that cannot run cannot fail. A review found
-// that; answer_item_attribution_neverbuilt_test.go is the permanent control
-// that keeps it found.
-//
-// `go list` answers with the build context the test binary is actually
-// compiled under, so the probe set is the set that can really execute.
-func packageTestFunctions(t *testing.T) (declared, probes map[string]bool) {
-	t.Helper()
-	const tmpl = `{{range .TestGoFiles}}{{.}}
-{{end}}{{range .XTestGoFiles}}{{.}}
-{{end}}`
-	out, err := exec.Command("go", "list", "-f", tmpl, ".").Output()
-	if err != nil {
-		t.Fatalf("go list -f TestGoFiles: %v", err)
-	}
-	names := []string{}
-	for _, line := range strings.Split(string(out), "\n") {
-		if name := strings.TrimSpace(line); name != "" {
-			names = append(names, name)
-		}
-	}
-	if len(names) == 0 {
-		t.Fatal("go list reported no test files for this package; the enumeration is broken and an " +
-			"empty probe set would accept any name")
-	}
-
-	fset := token.NewFileSet()
-	declared, probes = map[string]bool{}, map[string]bool{}
-	for _, name := range names {
-		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
-		}
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || !strings.HasPrefix(fn.Name.Name, "Test") || fn.Body == nil {
-				continue
-			}
-			declared[fn.Name.Name] = true
-			ast.Inspect(fn.Body, func(node ast.Node) bool {
-				call, isCall := node.(*ast.CallExpr)
-				if !isCall {
-					return true
-				}
-				if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "assertArmNeverExecuted" {
-					probes[fn.Name.Name] = true
-				}
-				return true
-			})
-		}
-	}
-
-	// EXACT RECONCILIATION against the filesystem, in the direction that
-	// matters: every file go list named must exist, and the files it did NOT
-	// name are the build-excluded ones. A file on disk that go list omits is
-	// the case this whole function exists for, so it is not an error -- but a
-	// file go list names that is missing on disk means the two views have
-	// diverged and neither can be trusted.
-	for _, name := range names {
-		if _, err := os.Stat(name); err != nil {
-			t.Fatalf("go list named %s but it is not on disk: %v", name, err)
-		}
-	}
-	return declared, probes
-}
-
 // assembledResultArmCase is one scenario, the arm it must reach, how to
 // recognise that arm on the emitted line, and where its expectation comes from.
 type assembledResultArmCase struct {
@@ -837,11 +646,22 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 
 	// The population check: every recordMeasurement call site is either
 	// driven below or registered as uncovered with a probe.
+	// EVERY arm is driven. There is no uncovered-arm register any more: it
+	// held an empty list, and the rule guarding it was defeated four times
+	// running -- name exists, then names a probe, then the probe is compiled,
+	// then the probe's assertion actually runs. Each fix was a tighter
+	// source-reading check on a claim that only execution can settle.
+	//
+	// It guarded nothing: all five arms are driven end to end below, and this
+	// exact reconciliation is what carries the guarantee. If an arm is ever
+	// added that cannot be driven, this fails immediately and loudly, which is
+	// the honest signal -- and the standing rule then requires a reach probe
+	// whose EXECUTION is observable, not one recognised by reading its text.
 	sites := recordMeasurementSiteCount(t)
-	if got := len(cases) + len(armsWithNoBehaviouralCase); got != sites {
-		t.Fatalf("this test accounts for %d arms (%d driven + %d registered uncovered) but the package has "+
-			"%d recordMeasurement sites: an arm is neither covered nor disclosed",
-			got, len(cases), len(armsWithNoBehaviouralCase), sites)
+	if len(cases) != sites {
+		t.Fatalf("this test drives %d arms but the package has %d recordMeasurement sites: an arm was "+
+			"added without a case, or one stopped stamping its measurement. Every arm must be driven; "+
+			"there is no register for an undriven one", len(cases), sites)
 	}
 
 	seen := map[string]string{}
