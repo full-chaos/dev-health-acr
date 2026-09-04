@@ -1126,6 +1126,18 @@ func TestTheReductionDerivationMintsAStepOnlyForNarrowed(t *testing.T) {
 // left out may be longer than one taken. A byte count would pin today's
 // arithmetic and would have to be re-derived on every vocabulary change; this
 // stays true across them.
+//
+// WHAT THIS TEST DOES NOT COVER, stated because its earlier comment implied
+// otherwise and a review round found the gap. It compares only DIFFERENT
+// coordinates: the pool comes from the same constructor it audits, and rows
+// whose coordinate is already taken are skipped before the comparison. A
+// longer row at the SAME coordinate is invisible here, and one existed --
+// the kind lists were bounded by count and membership and not by uniqueness,
+// so repeating the longest member was legal and longer. That axis is now a
+// validator rule and is asserted by
+// TestTheFullVocabularyIsTheLongestLegalKindList, which builds its expected
+// maximum from the vocabulary rather than from the constructor. This test is
+// the COORDINATE axis only, and says so.
 func TestTheMaximalRequirementFixtureTakesTheLongestCoordinates(t *testing.T) {
 	t.Parallel()
 	kinds := ContextFabricFactKindVocabulary()
@@ -1181,5 +1193,111 @@ func TestTheMaximalRequirementFixtureTakesTheLongestCoordinates(t *testing.T) {
 	}
 	if compared == 0 {
 		t.Fatal("no unchosen coordinate reached the comparison; this test proved nothing")
+	}
+}
+
+// THE KIND LISTS ARE SETS, AND THE FULL VOCABULARY IS THE MAXIMUM.
+//
+// This is the axis the coordinate-selection test structurally cannot see. That
+// test builds its candidate pool with `maximalPlanRequirementAt` and skips any
+// row whose coordinate is already taken, so it only ever compares DIFFERENT
+// coordinates -- a longer row at the SAME coordinate is invisible to it. A
+// review round found exactly that: `input_fact_kinds` was bounded by count and
+// membership and NOT by uniqueness, so a list repeating the longest vocabulary
+// member was legal and 298 bytes longer per row, 59,600 across the bound. The
+// "maximal" fixture was therefore smaller than a legal document.
+//
+// THE EXPECTED MAXIMUM IS BUILT HERE, FROM THE VOCABULARY, BY A DIRECT STRUCT
+// LITERAL. It must not come from the constructor: auditing the constructor
+// with the constructor is the defect that produced this test, and repeating it
+// would produce a test that agrees with whatever the builder happens to do.
+//
+// Under uniqueness over a closed vocabulary the argument is short: every legal
+// list is a set of distinct members, so none can exceed all of them. The test
+// measures that rather than restating it.
+func TestTheFullVocabularyIsTheLongestLegalKindList(t *testing.T) {
+	t.Parallel()
+	kinds := ContextFabricFactKindVocabulary()
+
+	// Built by hand from the vocabulary, NOT via maximalPlanRequirementAt.
+	full := ContextFabricPlanRequirement{
+		Requirement: "state/subject/project", Obligation: "state",
+		Role: "subject", Subject: ContextFabricSubjectKind("project"),
+		Kind: contextFabricObligationKindComputed,
+		Step: "membership_cardinality", StepExecution: "server_executed",
+		InputClass:     contextFabricComputedInputFactKinds,
+		InputFactKinds: append([]ContextFabricFactKind{}, kinds[:]...),
+		Scope:          "single_subject", Quantifier: "corroborated",
+	}
+	if err := full.Validate(); err != nil {
+		t.Fatalf("the full-vocabulary row does not validate: %v", err)
+	}
+
+	// A PROPER SUBSET IS STRICTLY SHORTER, so "all of them" is measured as the
+	// maximum rather than asserted. Without this the test would pass on a
+	// vocabulary of one.
+	if len(kinds) < 2 {
+		t.Fatalf("the fact-kind vocabulary has %d members; a subset comparison needs at least two", len(kinds))
+	}
+	subset := full
+	subset.InputFactKinds = append([]ContextFabricFactKind{}, kinds[:len(kinds)-1]...)
+	if err := subset.Validate(); err != nil {
+		t.Fatalf("the subset row does not validate, so the comparison is not between two legal rows: %v", err)
+	}
+	if planRequirementSerializedLength(subset) >= planRequirementSerializedLength(full) {
+		t.Errorf("a proper subset serializes to %d bytes and the full vocabulary to %d; the full list is not the longer one",
+			planRequirementSerializedLength(subset), planRequirementSerializedLength(full))
+	}
+
+	// RED PROOF THAT THE RULE BITES. The variant the review found -- the same
+	// LENGTH, every entry the longest member -- must now be REJECTED, and the
+	// rejection must name the duplicated kind. Without this case the test
+	// passes whether or not the uniqueness rule landed at all.
+	longest := ContextFabricFactKind("")
+	for _, kind := range kinds {
+		if len(kind) > len(longest) {
+			longest = kind
+		}
+	}
+	repeated := full
+	repeated.InputFactKinds = make([]ContextFabricFactKind, len(kinds))
+	for index := range repeated.InputFactKinds {
+		repeated.InputFactKinds[index] = longest
+	}
+	// It must be the LONGER shape, or it is not the thing that broke the pin.
+	if planRequirementSerializedLength(repeated) <= planRequirementSerializedLength(full) {
+		t.Fatalf("the repeated-kind row is %d bytes against the full vocabulary's %d; it is not the longer shape the pin needed protecting from",
+			planRequirementSerializedLength(repeated), planRequirementSerializedLength(full))
+	}
+	err := repeated.Validate()
+	if err == nil {
+		t.Fatal("a row repeating one input fact kind was accepted; the list is a set and the longest legal list is the whole vocabulary")
+	}
+	if !strings.Contains(err.Error(), string(longest)) {
+		t.Errorf("the rejection does not name the duplicated kind %q: %v", longest, err)
+	}
+
+	// AND THE SAME RULE ON THE OTHER ARRAY. `fact_kinds` had the identical
+	// count-and-membership-only guard; a fix landing on one array and not the
+	// other is how this branch has gone wrong before.
+	read := ContextFabricPlanRequirement{
+		Requirement: "state/subject/project", Obligation: "state",
+		Role: "subject", Subject: ContextFabricSubjectKind("project"),
+		Kind:      "read",
+		FactKinds: []ContextFabricFactKind{kinds[0], kinds[0]},
+		Scope:     "single_subject", Quantifier: "at_least_one",
+	}
+	readErr := read.Validate()
+	if readErr == nil {
+		t.Fatal("a row repeating one fact kind was accepted; the uniqueness rule reached input_fact_kinds only")
+	}
+	if !strings.Contains(readErr.Error(), string(kinds[0])) {
+		t.Errorf("the fact_kinds rejection does not name the duplicated kind %q: %v", kinds[0], readErr)
+	}
+	// The SAME row with the duplicate removed must be valid, or the rejection
+	// above cannot be attributed to uniqueness.
+	read.FactKinds = []ContextFabricFactKind{kinds[0]}
+	if err := read.Validate(); err != nil {
+		t.Fatalf("removing only the duplicate left the row invalid (%v); the rejection was not the uniqueness rule", err)
 	}
 }

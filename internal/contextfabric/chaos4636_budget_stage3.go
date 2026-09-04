@@ -120,8 +120,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			cohortMemberCount(params.Graph.Cohort), cohortMemberCount(params.Graph.Cohort),
 			params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0, false,
 			contractsv1.ContextFabricBudgetFits, params.GroupedNarrowingBasis)
-		fit.MeasuredItems = measurement.Items.Budgeted()
-		fit.MeasuredBytes = measurement.Bytes
+		fit.recordMeasurement(measurement)
 		// Predicted beside measured on the SAME line, for the cohort synthesis
 		// actually ran against. A fit is where the rate is confirmed; a
 		// refusal is where it has already failed, so recording it only on
@@ -208,8 +207,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// so it was the one path publishing a selection as a no-op while a
 		// real answer had genuinely been attempted over the narrowed set.
 		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, narrowed.Basis)
-		event.MeasuredItems = measurement.Items.Budgeted()
-		event.MeasuredBytes = measurement.Bytes
+		event.recordMeasurement(measurement)
 		// The measurement here is the FIRST synthesis's, taken against the
 		// pre-narrowing cohort, so the prediction pairs with `before`.
 		event.PredictedItems = PredictedItemsForPlan(*plan, before)
@@ -260,8 +258,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		return outcomeAttempt.Result, retryPending, nil
 	}
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, narrowed.Basis)
-	event.MeasuredItems = retryMeasurement.Items.Budgeted()
-	event.MeasuredBytes = retryMeasurement.Bytes
+	event.recordMeasurement(retryMeasurement)
 	// `after`, not `before`: this event measures the RE-synthesized answer,
 	// which ran against the narrowed cohort. Predicting from `before` would
 	// pair a measurement of one cohort with an expectation for a larger one.
@@ -459,8 +456,7 @@ func (e *Engine) retryDeadlineAvailable(ctx context.Context) bool {
 // answered over four" are different statements about the run.
 func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason, reductionDeclined OutcomeReductionDeclined) error {
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, selected, grouped, false, overrun, basis)
-	event.MeasuredItems = measurement.Items.Budgeted()
-	event.MeasuredBytes = measurement.Bytes
+	event.recordMeasurement(measurement)
 	// `members` is the cohort synthesis ran against, which is the count the
 	// measurement describes -- NOT `selected`, which is what the declined
 	// retry would have narrowed to. Predicting from `selected` would publish a
