@@ -33,63 +33,121 @@ import (
 // ItemAllocation is the quota this allocator published for one request, and
 // the single source every spender reads.
 //
-// Every field is a DECISION with an arithmetic consequence, which is why they
-// are published together rather than recomputed at each site: a second
-// derivation of any one of them is how the budget came to have two spenders in
-// the first place.
+// ONE POOL PER BUCKET, DERIVED FROM THE VOCABULARY. Pools is indexed by
+// position in ContextFabricItemBucketVocabulary(), so a bucket cannot exist
+// without a pool -- that is not a convention, it is the shape of the type.
+//
+// WHY IT IS BUILT THIS WAY, stated because two rounds of review found the same
+// class here. The first version apportioned a hand-written list of claimants:
+// a global pool and a per-group pool. Round 1 found that NARRATION was not in
+// that list, so every spender together could claim 39 items against a ceiling
+// of 30. I added narration. Round 2 then found that MEMBER-attributed items
+// were not in it either -- members were charged one item each for their cohort
+// row while member-attributed drivers and claims had no pool at all, measured
+// at 34 items against 30. Two rounds, one class, each fix leaving the next,
+// because the list was being re-derived by hand every time.
+//
+// So the list is gone. The buckets come from the closed vocabulary that
+// already defines what an item can BE, and every active one gets a pool.
+// Adding a fifth bucket to that vocabulary gives it a pool automatically; it
+// cannot be forgotten, because there is no longer anywhere to forget it.
 type ItemAllocation struct {
 	// MaxItems is the effective ceiling this allocation was computed
 	// against, carried so a consumer cannot pair a quota with a different
 	// budget than the one that produced it.
 	MaxItems int
 	// Reserved is the deterministic, engine-authored output held back
-	// before any model headroom: limitations, disclosures and narration
-	// are charged here, not discovered later.
+	// before anything else: limitations and disclosures are charged here,
+	// not discovered later.
 	Reserved int
-	// Global is the allowance for items belonging to the answer rather
-	// than to any group.
-	Global int
-	// Groups is how many groups the quota was split across, zero for an
-	// ungrouped answer.
+	// Pools is the allowance for each bucket, indexed by its position in
+	// ContextFabricItemBucketVocabulary(). A bucket that cannot receive
+	// items in this answer (group and multi_group on an ungrouped answer)
+	// holds zero and its share goes to the buckets that can.
+	Pools [contractsv1.ContextFabricItemBucketCount]int
+	// Groups is how many groups the group pool is split across, zero for
+	// an ungrouped answer.
 	Groups int
-	// ItemsPerGroup is the published per-group quota -- the number the
-	// model prompt states, so the model is asked for what will fit.
+	// ItemsPerGroup is the published per-group quota -- the group pool
+	// divided across the groups. It is the number the model prompt states.
+	//
+	// ZERO IS A REAL QUOTA, not an absent one. On a budget too small to
+	// give a group anything, every charged item is over quota, and round 2
+	// found the exposure silently skipping exactly that case.
 	ItemsPerGroup int
-	// Remainder is what integer division could not distribute evenly. It
-	// is published rather than silently dropped or silently given to the
-	// first group.
+	// Remainder is what integer division could not distribute evenly. It is
+	// published rather than handed to a bucket or a group, because either
+	// would make the quota depend on an order this system does not promise
+	// to keep stable.
 	Remainder int
 	// MultiGroupCharge is the declared rule for an item naming several
 	// groups. Published because the two rules give different answers to
 	// "does this fit" and the counts alone cannot say which one ran.
 	MultiGroupCharge contractsv1.ContextFabricMultiGroupCharge
-	// NarrationBudget is how many ITEMS narration may spend. This is the
-	// CHAOS-5008 fix: narration used to charge against the static contract
-	// caps (50 drivers / 250 claims), which it could satisfy while
-	// spending more than twice the whole plan ceiling.
+	// NarrationBudget is how many ITEMS narration may spend. Narration is a
+	// claimant on the pool alongside the buckets, never a second helping of
+	// it -- that was round 1's finding.
 	NarrationBudget int
 }
 
+// Pool returns the allowance for one bucket, or zero for a value outside the
+// closed vocabulary.
+func (a ItemAllocation) Pool(bucket contractsv1.ContextFabricItemBucket) int {
+	for index, member := range contractsv1.ContextFabricItemBucketVocabulary() {
+		if member == bucket {
+			return a.Pools[index]
+		}
+	}
+	return 0
+}
+
+// TotalPooled is every bucket's allowance summed.
+func (a ItemAllocation) TotalPooled() int {
+	total := 0
+	for _, pool := range a.Pools {
+		total += pool
+	}
+	return total
+}
+
 // allocatorReservedDeterministic is the item allowance held back for
-// engine-authored output before any group quota is computed.
+// engine-authored output before any bucket is apportioned.
 //
 // A STARTING VALUE, not a derivation, and labelled as such for the same reason
 // planSynthesisHeadroom labels its own table: the honest magnitude comes from
 // the rig, and this is what moves when the measurement says so.
 const allocatorReservedDeterministic = 2
 
+// activeBuckets are the buckets that can receive items in this answer.
+//
+// An ungrouped answer has no group and no multi_group items by construction,
+// so giving those buckets a share would strand a third of the budget on
+// collections that cannot be filled. Their share goes to the buckets that can
+// receive items instead.
+func activeBuckets(groups int) []contractsv1.ContextFabricItemBucket {
+	active := []contractsv1.ContextFabricItemBucket{
+		contractsv1.ContextFabricItemBucketGlobal,
+		contractsv1.ContextFabricItemBucketMember,
+	}
+	if groups > 0 {
+		active = append(active,
+			contractsv1.ContextFabricItemBucketGroup,
+			contractsv1.ContextFabricItemBucketMultiGroup)
+	}
+	return active
+}
+
 // AllocateItems computes the ONE quota for a request.
 //
 // groups is the number of group entities the cohort carries (zero when the
-// answer has no group axis); members is the cohort size the plan admitted.
+// answer has no group axis); members is the cohort size the plan admitted, and
+// is used only to bound the member pool's own floor -- member ROWS are charged
+// to the member bucket like every other member-attributed item, which is the
+// unification round 2's finding forced.
 //
-// The invariant it maintains, checked by TestTheAllocatorRespectsTheInvariant:
+// The invariant, checked by TestEverySpenderFitsInsideTheCeiling:
 //
-//	Reserved + Global + (Groups * ItemsPerGroup) + Remainder
-//	         + NarrationBudget + members  <=  MaxItems
-//
-// NarrationBudget is INSIDE the invariant, and its absence from the first
-// version is precisely what let the allocator permit an overrun.
+//	Reserved + NarrationBudget + TotalPooled() + Remainder  ==  MaxItems
 //
 // An unbounded budget (MaxItems <= 0) yields a zero allocation, which every
 // consumer reads as "no quota in force" -- never as "a quota of zero".
@@ -97,9 +155,6 @@ func AllocateItems(plan AnswerPlan, groups, members int) ItemAllocation {
 	maxItems := plan.Budget.MaxItems
 	if maxItems <= 0 {
 		return ItemAllocation{MultiGroupCharge: contractsv1.ContextFabricMultiGroupChargeEveryGroup}
-	}
-	if members < 0 {
-		members = 0
 	}
 	if groups < 0 {
 		groups = 0
@@ -109,82 +164,50 @@ func AllocateItems(plan AnswerPlan, groups, members int) ItemAllocation {
 		MaxItems: maxItems,
 		Reserved: allocatorReservedDeterministic,
 		Groups:   groups,
-		// EVERY_GROUP is the default because it cannot under-count what a
-		// group is responsible for: a shared pool can hide a cross-cutting
-		// item from both groups' quotas and let the total overrun while
-		// every per-group number still looks compliant.
+		// EVERY_GROUP cannot under-count what a group is responsible for:
+		// a shared pool can hide a cross-cutting item from every group's
+		// quota and let the total overrun while each per-group number
+		// still looks compliant.
 		MultiGroupCharge: contractsv1.ContextFabricMultiGroupChargeEveryGroup,
 	}
-
-	// Members are charged before anything else, because they are: one item
-	// per member is spent by the cohort row itself before a single driver
-	// or claim exists.
-	available := maxItems - allocation.Reserved - members
-	if available < 0 {
-		available = 0
+	if allocation.Reserved > maxItems {
+		allocation.Reserved = maxItems
 	}
 
-	// NARRATION IS CARVED OUT OF THE POOL FIRST, NOT ADDED ON TOP.
-	//
-	// The first version of this function assigned the WHOLE pool to
-	// Global + per-group + remainder and THEN handed narration half of the
-	// per-group pool -- so every spender together could claim more than the
-	// ceiling while each individual number looked compliant. At MaxItems=30
-	// with two groups and one member that reached 39 against 30.
-	//
-	// That is CHAOS-5008's own shape reintroduced by the repair for it: a
-	// spender the others cannot see. It is fixed by making narration a
-	// FIRST-CLASS CLAIMANT on the pool rather than a second helping of it,
-	// and by putting narration INSIDE the published invariant
-	// (TestTheAllocatorDoesNotDoubleReserveNarration sums every spender),
-	// so the same omission cannot recur invisibly.
-	allocation.NarrationBudget = narrationItemBudget(available)
-	available -= allocation.NarrationBudget
+	afterReserved := maxItems - allocation.Reserved
+	active := activeBuckets(groups)
 
-	if groups == 0 {
-		allocation.Global = available
-		return allocation
+	// Narration is ONE CLAIMANT ALONGSIDE THE BUCKETS, which is what makes
+	// the invariant hold: it is carved from the same pool, never added to a
+	// pool already fully apportioned.
+	allocation.NarrationBudget = afterReserved / (len(active) + 1)
+	spendable := afterReserved - allocation.NarrationBudget
+
+	base := spendable / len(active)
+	for _, bucket := range active {
+		for index, member := range contractsv1.ContextFabricItemBucketVocabulary() {
+			if member == bucket {
+				allocation.Pools[index] = base
+			}
+		}
 	}
+	allocation.Remainder = spendable - (base * len(active))
 
-	// Global first, then the rest splits across groups. A grouped answer
-	// still carries candidates and unattributed findings, and a quota that
-	// forgot them would be apportioning items that are already spent.
-	allocation.Global = available / (groups + 1)
-	perGroupPool := available - allocation.Global
-	allocation.ItemsPerGroup = perGroupPool / groups
-	// Remainder is published, not distributed. Handing it to the first
-	// group would make the quota depend on group ORDER, and group order is
-	// not a property this system promises to be stable.
-	allocation.Remainder = perGroupPool - (allocation.ItemsPerGroup * groups)
+	if groups > 0 {
+		allocation.ItemsPerGroup = allocation.Pool(contractsv1.ContextFabricItemBucketGroup) / groups
+	}
 	return allocation
 }
 
-// narrationItemBudget is narration's OWN share of the spendable allowance, in
-// ITEMS, carved out before anything else is apportioned.
+// NarrationDriverAllowance converts the allocator's ITEM budget into the
+// number of members narration may narrate.
 //
-// A THIRD of the pool, not a half. Narration is one claimant among three --
-// itself, the global pool, and the groups -- and handing it half left too
-// little for the axis a grouped answer is actually about. The fraction is a
-// starting value the rig is expected to move, like planSynthesisHeadroom's own
-// table; what is NOT negotiable is that it comes OUT of the pool rather than
-// being added to an already-full one.
-func narrationItemBudget(available int) int {
-	if available <= 0 {
-		return 0
-	}
-	return available / 3
-}
-
-// NarrationDriverAllowance converts the allocator's ITEM budget into the two
-// counts the narration composer actually needs.
-//
-// Each narrated member costs driversPerNarratedMember driver judgments AND one
-// minted claim per driver, so a narrated member charges 2x its drivers against
-// the item budget. That doubling is what the static-cap version never saw.
+// Each narrated member costs driversPerMember driver judgments AND one minted
+// claim per driver, so a narrated member charges 2x its drivers against the
+// item budget. That doubling is what the static-cap version never saw.
 func (a ItemAllocation) NarrationDriverAllowance(driversPerMember int) (membersToNarrate int) {
 	if a.MaxItems <= 0 || a.NarrationBudget <= 0 || driversPerMember <= 0 {
 		return 0
 	}
-	costPerMember := driversPerMember * 2
-	return a.NarrationBudget / costPerMember
+	return a.NarrationBudget / (driversPerMember * 2)
 }

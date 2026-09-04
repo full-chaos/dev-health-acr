@@ -472,7 +472,12 @@ func exposeQuota(allocation ItemAllocation, result InvestigationResult) QuotaExp
 		ItemsPerGroup: allocation.ItemsPerGroup,
 		Groups:        allocation.Groups,
 	}
-	if allocation.Groups == 0 || allocation.ItemsPerGroup <= 0 || result.Cohort == nil {
+	// A per-group quota of ZERO is a REAL quota, and review found this
+	// returning early on it: on a budget too small to give a group anything,
+	// every charged item is over quota, and reporting zero groups over was
+	// the one answer that could not be right. Only an ABSENT quota
+	// (no group axis) or an absent cohort means there is nothing to measure.
+	if allocation.Groups == 0 || result.Cohort == nil {
 		return exposure
 	}
 	// MEASURE PER GROUP, under the rule the allocator DECLARED.

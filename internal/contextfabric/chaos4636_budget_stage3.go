@@ -169,7 +169,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// published it as a no-op -- the basis field naming an order and the
 		// count pair denying that anything happened, with no way for a
 		// reader to tell which to believe.
-		return InvestigationResult{}, assemblyTelemetry{}, e.planRefusal(ctx, principal, plan, measurement, overrun, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined)
+		return InvestigationResult{}, assemblyTelemetry{}, e.planRefusal(ctx, principal, plan, measurement, overrun, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined, attempt.Quota)
 	}
 
 	e.recordPlanNarrowingStep(plan, PlanNarrowing{
@@ -267,6 +267,12 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// pair a measurement of one cohort with an expectation for a larger one.
 	event.PredictedItems = PredictedItemsForPlan(*plan, after)
 	event.RetryAttempted = true
+	// The quota this retry was measured against. Review found this arm's
+	// event carrying zeros while the attempt held the real exposure -- the
+	// same omission as the declined arm, one branch over.
+	event.QuotaItemsPerGroup = outcomeAttempt.Quota.ItemsPerGroup
+	event.QuotaGroups = outcomeAttempt.Quota.Groups
+	event.QuotaOverQuota = outcomeAttempt.Quota.OverQuota
 	event.RetryFit = retryOverrun == contractsv1.ContextFabricBudgetFits
 	event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 	// The reduction did not serve -- that path returned above -- so a retry
@@ -457,7 +463,12 @@ func (e *Engine) retryDeadlineAvailable(ctx context.Context) bool {
 // false -- the selection was computed and then discarded -- and a reader
 // needs both halves, because "we would have narrowed to four" and "we
 // answered over four" are different statements about the run.
-func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason, reductionDeclined OutcomeReductionDeclined) error {
+// planRefusal now carries the QUOTA EXPOSURE, and that is the whole point of
+// the parameter: a refusal is the case where a per-group breach matters MOST,
+// and review found the refusal lines emitting zeros for it while the served
+// narrowing line carried the real numbers. An enforcement layer told nothing
+// on the one path that refuses has been told nothing.
+func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason, reductionDeclined OutcomeReductionDeclined, quota QuotaExposure) error {
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, selected, grouped, false, overrun, basis)
 	event.MeasuredItems = measurement.Items.Budgeted()
 	event.MeasuredBytes = measurement.Bytes
@@ -468,6 +479,9 @@ func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, p
 	event.PredictedItems = PredictedItemsForPlan(*plan, members)
 	event.RetryAttempted = retryAttempted
 	event.RetryFit = false
+	event.QuotaItemsPerGroup = quota.ItemsPerGroup
+	event.QuotaGroups = quota.Groups
+	event.QuotaOverQuota = quota.OverQuota
 	event.RefusalPlanned = true
 	event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 	event.RetryDeclined = declined

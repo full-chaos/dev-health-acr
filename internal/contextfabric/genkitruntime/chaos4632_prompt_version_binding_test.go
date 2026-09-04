@@ -79,10 +79,11 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			name:    "synthesis system prompt",
 			version: DefaultSynthesisPromptVersion,
 			content: synthesisSystemPrompt,
-			// v13 -> v14 (CHAOS-4690 Commit F): the coverage_disclosures
-			// paragraph. See DefaultSynthesisPromptVersion's own doc
-			// comment for what changed and why.
-			digest: "fee5e7edd2f3d8fe299b36c09a218a20cd29d4e98b4b2bdad9b8ddce13ee005c",
+			// v15 -> v16 (S5, quota side): the answer_budget paragraph
+			// gained per_member and says the member rows are charged
+			// before the model writes. See DefaultSynthesisPromptVersion's
+			// own doc comment for what changed and why.
+			digest: "844b8b9c91d9427611cebf751560156f1209e2bf9f7c6054262347adeb58d59d",
 		},
 		{
 			name:    "interpretation model-output schema",

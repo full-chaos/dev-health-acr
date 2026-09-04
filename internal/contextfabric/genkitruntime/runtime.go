@@ -20,6 +20,7 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/invopop/jsonschema"
 	orderedmap "github.com/wk8/go-ordered-map/v2"
@@ -366,7 +367,13 @@ const (
 	// served as though it had been. That is the whole point of the bump --
 	// the answers the change exists to improve are precisely the ones a
 	// stale reuse key would keep serving unchanged.
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v15"
+	// v15 -> v16 (S5, quota side): `answer_budget` gained `per_member` and
+	// the prompt paragraph names it. Review found the allocator had no pool
+	// for member-attributed items at all, so the budget the model was shown
+	// omitted a bucket it can write into. A payload shape change is
+	// model-facing, so the constant moves again for the same reuse-key
+	// reason recorded at v14 -> v15 above.
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v16"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation
@@ -2249,8 +2256,18 @@ type synthesisAnswerBudget struct {
 	// Groups is how many groups that allowance is repeated across.
 	Groups int `json:"groups,omitempty"`
 	// Global is the allowance for items belonging to the answer as a whole
-	// rather than to any one group.
+	// rather than to any member or group.
 	Global int `json:"global"`
+	// PerMember is the allowance for items about the cohort's MEMBERS --
+	// the member rows themselves and any driver, finding or claim about
+	// one.
+	//
+	// It is here because review found it missing: the allocator apportioned
+	// a global and a per-group pool and nothing for members, so
+	// member-attributed drivers and claims had no allowance and the answer
+	// overran while every published number looked compliant. A budget that
+	// omits a bucket the model can write into is not a budget.
+	PerMember int `json:"per_member"`
 }
 
 // synthesisInputFromDomain composes the exact bounded-JSON payload
@@ -2282,7 +2299,8 @@ func modelFacingAnswerBudget(allocation contextfabric.ItemAllocation) *synthesis
 	return &synthesisAnswerBudget{
 		ItemsPerGroup: allocation.ItemsPerGroup,
 		Groups:        allocation.Groups,
-		Global:        allocation.Global,
+		Global:        allocation.Pool(contractsv1.ContextFabricItemBucketGlobal),
+		PerMember:     allocation.Pool(contractsv1.ContextFabricItemBucketMember),
 	}
 }
 

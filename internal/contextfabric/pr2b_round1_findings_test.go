@@ -1,11 +1,15 @@
 package contextfabric
 
 import (
+	"bytes"
+	"context"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // Round-1 findings, all four confirmed by re-derivation before any fix.
@@ -28,17 +32,37 @@ import (
 // that cannot see the others.
 func TestTheAllocatorDoesNotDoubleReserveNarration(t *testing.T) {
 	t.Parallel()
-	for _, maxItems := range []int{30, 45, 300} {
+	// The sweep now includes the DEGENERATE regime (1, 2, 5) where the
+	// reserved allowance alone meets or exceeds the budget. Round 2 found a
+	// bounded quota of zero being mishandled there, and the old sweep of
+	// {30, 45, 300} could not reach it.
+	for _, maxItems := range []int{1, 2, 5, 30, 45, 300} {
 		for groups := 0; groups <= 4; groups++ {
 			for members := 0; members <= 10; members++ {
 				a := AllocateItems(groupedAllocationPlan(maxItems), groups, members)
-				total := a.Reserved + a.Global + (a.Groups * a.ItemsPerGroup) + a.Remainder + a.NarrationBudget + members
-				if total > maxItems {
-					t.Fatalf("maxItems=%d groups=%d members=%d: every spender together claims %d "+
-						"(reserved %d + global %d + %dx%d groups + remainder %d + narration %d + members %d). "+
-						"Narration is allocated ON TOP of an already fully-allocated pool, so the quota permits an overrun.",
+				// EXACT partition, not an upper bound. "<=" would pass on an
+				// allocation that quietly strands budget, and every pool is
+				// derived from the bucket vocabulary now, so there is no
+				// claimant left outside this sum to excuse a gap.
+				total := a.Reserved + a.TotalPooled() + a.Remainder + a.NarrationBudget
+				if total != maxItems {
+					t.Fatalf("maxItems=%d groups=%d members=%d: every spender together accounts for %d "+
+						"(reserved %d + pools %v + remainder %d + narration %d). The pools must partition the "+
+						"ceiling EXACTLY -- a claimant outside them is a spender the others cannot see.",
 						maxItems, groups, members, total,
-						a.Reserved, a.Global, a.Groups, a.ItemsPerGroup, a.Remainder, a.NarrationBudget, members)
+						a.Reserved, a.Pools, a.Remainder, a.NarrationBudget)
+				}
+				// EVERY bucket that can receive items must HAVE a pool when
+				// there is anything to give. This is the class guard: the
+				// first two versions of this allocator each forgot a
+				// different claimant.
+				for _, bucket := range activeBuckets(groups) {
+					if a.TotalPooled() > 0 && a.Pool(bucket) == 0 && maxItems > 8 {
+						t.Fatalf("maxItems=%d groups=%d: bucket %q has NO pool while others do (%v) -- "+
+							"a bucket the answer can write into with no allowance is exactly the class "+
+							"this allocator was redesigned to make unexpressible",
+							maxItems, groups, bucket, a.Pools)
+					}
 				}
 			}
 		}
@@ -110,38 +134,74 @@ func TestExposureImplementsTheDeclaredMultiGroupRule(t *testing.T) {
 // is passed IN, never that the exposure is read OUT. Writing a pin at the wrong
 // end of a data path is the lesson; this one pins the READ.
 func TestQuotaExposureIsActuallyRead(t *testing.T) {
-	// Read from SOURCE rather than asserting a struct field exists. A test
-	// naming a field the fix adds would fail at the parent as a BUILD ERROR,
-	// and a red-first that fails only because it does not compile proves
-	// nothing.
-	sources := map[string]string{}
-	for _, name := range []string{"requirement_outcomes.go", "chaos4636_plan_telemetry.go", "telemetry.go"} {
-		body, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
+	t.Parallel()
+	// REPLACES A LEXICAL PIN, and the replacement is the finding.
+	//
+	// The first version of this test read the package source and asserted
+	// that the string "attempt.Quota" appeared somewhere. It passed while
+	// the quota reached the SERVED narrowing emitter and NEITHER refusal
+	// arm -- so on a refusal, the case where a per-group breach matters
+	// most, the emitted line carried zeros. A pin that proves a string
+	// exists proves nothing about a consumer.
+	//
+	// So this asserts the EMITTED LINE, for every emitter that can carry it.
+	for _, emitter := range []struct {
+		name  string
+		event PlanNarrowingEvent
+	}{
+		{"served narrowing", PlanNarrowingEvent{QuotaItemsPerGroup: 9, QuotaGroups: 2, QuotaOverQuota: 1}},
+		{"refusal", PlanNarrowingEvent{RefusalPlanned: true, QuotaItemsPerGroup: 9, QuotaGroups: 2, QuotaOverQuota: 1}},
+	} {
+		var buf bytes.Buffer
+		telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil)))
+		telemetry.RecordPlanNarrowing(context.Background(), storage.Principal{OrgID: "org_1"}, emitter.event)
+
+		line := buf.String()
+		for _, want := range []string{
+			"quota_items_per_group=9",
+			"quota_groups=2",
+			"quota_over_quota=1",
+		} {
+			if !strings.Contains(line, want) {
+				t.Errorf("%s line does not carry %q -- enforcement is handed no per-group numbers on this path.\nline: %s",
+					emitter.name, want, line)
+			}
 		}
-		sources[name] = string(body)
 	}
+}
 
-	// WRITTEN: the three sites that populate it.
-	writes := strings.Count(sources["requirement_outcomes.go"], "Quota:     exposeQuota") +
-		strings.Count(sources["requirement_outcomes.go"], "Quota: exposeQuota")
-	if writes == 0 {
-		t.Fatal("nothing writes QuotaExposure any more; this guard is watching nothing")
+// TestBothRefusalArmsCarryTheQuotaToTheLine pins the CALL SITES of the two
+// refusal paths, which is where the quota was actually being dropped.
+//
+// The served emitter copied attempt.Quota; planRefusal built its event without
+// it, and the retry-refusal arm built its own event without it too. Two
+// consumers, both silent, while a source-grep pin stayed green.
+func TestBothRefusalArmsCarryTheQuotaToTheLine(t *testing.T) {
+	source, err := os.ReadFile("chaos4636_budget_stage3.go")
+	if err != nil {
+		t.Fatalf("read stage-3 source: %v", err)
 	}
-
-	// READ: something must consume `attempt.Quota` and carry it onward.
-	if !strings.Contains(sources["requirement_outcomes.go"], "attempt.Quota") {
-		t.Error("QuotaExposure is written but NEVER READ: recordCandidateNarrowing does not consume " +
-			"attempt.Quota, so S7c cannot act on a per-group breach and the whole seam is inert. " +
-			"A value written at three sites and read at none is dead code wearing a boundary's name.")
+	body := string(source)
+	// The declined arm passes the exposure INTO planRefusal...
+	if !strings.Contains(body, "attempt.Declined, attempt.Quota)") {
+		t.Error("the declined refusal arm does not pass the quota into planRefusal: a refusal from that arm " +
+			"emits zeros for the per-group numbers while the attempt holds the real ones")
 	}
-	// EMITTED: and it must reach the wire, or an operator cannot diagnose one.
-	if !strings.Contains(sources["chaos4636_plan_telemetry.go"], "Quota") {
-		t.Error("PlanNarrowingEvent carries no quota field: a per-group breach cannot be diagnosed from the run's own artifacts")
+	// ...planRefusal stamps them...
+	if !strings.Contains(body, "event.QuotaItemsPerGroup = quota.ItemsPerGroup") {
+		t.Error("planRefusal does not stamp the quota onto its event")
 	}
-	if !strings.Contains(sources["telemetry.go"], "quota_items_per_group") {
-		t.Error("the emitted narrowing line carries no quota dimensions")
+	// ...and the retry-refusal arm stamps its own.
+	if !strings.Contains(body, "event.QuotaItemsPerGroup = outcomeAttempt.Quota.ItemsPerGroup") {
+		t.Error("the retry-refusal arm does not stamp the quota onto its event: the same omission, one branch over")
+	}
+	// The served emitter's own read, so all three consumers are covered.
+	outcomes, err := os.ReadFile("requirement_outcomes.go")
+	if err != nil {
+		t.Fatalf("read outcomes source: %v", err)
+	}
+	if !strings.Contains(string(outcomes), "attempt.Quota.ItemsPerGroup") {
+		t.Error("the served narrowing emitter does not read attempt.Quota")
 	}
 }
 
@@ -194,5 +254,65 @@ func TestNarrationAllocatorStillNamesThePlanWhenThePlanBinds(t *testing.T) {
 	if event.Allocator != CohortDriverNarrationAllocatorPlanBudget {
 		t.Fatalf("Allocator = %q at MaxItems=30, want %q: here the item budget is far tighter than the caps",
 			event.Allocator, CohortDriverNarrationAllocatorPlanBudget)
+	}
+}
+
+// TestABoundedZeroQuotaIsMeasuredNotSkipped is round 2's second P1.
+//
+// `exposeQuota` returned early whenever ItemsPerGroup <= 0, which silently
+// covered the case where the quota is genuinely ZERO -- a budget too small to
+// give a group anything. There, EVERY charged item is over quota, and
+// reporting zero groups over was the one answer that could not be right.
+//
+// It is my own absent-vs-zero distinction violated in the other direction: an
+// absent quota (no group axis) means nothing to measure; a quota OF zero means
+// everything is over.
+func TestABoundedZeroQuotaIsMeasuredNotSkipped(t *testing.T) {
+	t.Parallel()
+	group := SubjectRef{Kind: SubjectTeam, CanonicalID: "team_one", Label: "One"}
+	result := InvestigationResult{
+		Cohort:  &Cohort{Groups: []contractsv1.ContextFabricCohortGroup{{Subject: group}}},
+		Drivers: []DriverJudgment{{DriverID: "d1", AffectedSubjects: []SubjectRef{group}}},
+	}
+	// A ceiling smaller than the deterministic reserve: the group's quota is
+	// a real zero.
+	allocation := AllocateItems(AnswerPlan{Budget: AnswerPlanBudget{MaxItems: 1}}, 1, 1)
+	if allocation.ItemsPerGroup != 0 {
+		t.Fatalf("fixture drift: ItemsPerGroup = %d, this test is about a quota of zero", allocation.ItemsPerGroup)
+	}
+	exposure := exposeQuota(allocation, result)
+	if exposure.OverQuota != 1 {
+		t.Fatalf("OverQuota = %d, want 1: one driver names the group and its quota is ZERO, so it is over. "+
+			"Skipping the measurement because the quota is zero reports the one answer that cannot be true.",
+			exposure.OverQuota)
+	}
+}
+
+// TestNoDriversIsANamedOutcomeNotUnclassified is round 2's P2.
+//
+// The ordinary no-driver path left the allocator empty, and the emitter
+// converts any non-vocabulary value to `unclassified` -- the word reserved for
+// corrupt or future enum input. Conflating a documented normal outcome with
+// corruption makes the fail-closed signal useless: an operator filtering for
+// real corruption would drown in ordinary no-driver runs.
+func TestNoDriversIsANamedOutcomeNotUnclassified(t *testing.T) {
+	t.Parallel()
+	_, _, event := narrateCohortDriverJudgments(nil, nil, 0, nil, ItemAllocation{})
+	if event.Outcome != CohortDriverNarrationNoDrivers {
+		t.Fatalf("fixture drift: outcome = %q", event.Outcome)
+	}
+	if event.Allocator != CohortDriverNarrationAllocatorNotApplicable {
+		t.Fatalf("Allocator = %q on the no-drivers path, want %q", event.Allocator, CohortDriverNarrationAllocatorNotApplicable)
+	}
+
+	var buf bytes.Buffer
+	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil)))
+	telemetry.RecordCohortDriverNarration(context.Background(), storage.Principal{OrgID: "org_1"}, event)
+	line := buf.String()
+	if strings.Contains(line, "narration_allocator=unclassified") {
+		t.Errorf("a normal no-drivers run is logged as `unclassified`, which is the word for corrupt input.\nline: %s", line)
+	}
+	if !strings.Contains(line, "narration_allocator=not_applicable") {
+		t.Errorf("line does not name the no-drivers state.\nline: %s", line)
 	}
 }

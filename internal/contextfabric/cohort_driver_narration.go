@@ -136,7 +136,7 @@ var cohortSignalDisplayName = map[string]string{
 // narrateCohortDriverJudgments already handles it.
 func narrateCohortDriverJudgments(cohort *Cohort, synthesisDrivers []DriverJudgment, synthesisClaimedFactCount int, citations cohortMemberSignalCitations, allocation ItemAllocation) ([]DriverJudgment, []ClaimedFact, CohortDriverNarrationEvent) {
 	if cohort == nil || !cohortHasAnyRankedDriver(cohort) {
-		return nil, nil, CohortDriverNarrationEvent{Outcome: CohortDriverNarrationNoDrivers}
+		return nil, nil, CohortDriverNarrationEvent{Outcome: CohortDriverNarrationNoDrivers, Allocator: CohortDriverNarrationAllocatorNotApplicable}
 	}
 	// CHAOS-5008. The contract caps below are a CEILING, never the budget:
 	// they bound what the result document may legally carry, and satisfying
@@ -337,11 +337,22 @@ const (
 	// caps bounded it, because no item budget was in force (an unbounded
 	// plan). Legitimate, and distinct from the defect it used to hide.
 	CohortDriverNarrationAllocatorStaticCaps CohortDriverNarrationAllocator = "static_caps"
+	// CohortDriverNarrationAllocatorNotApplicable means no budget bound
+	// anything because narration was never attempted -- the cohort carried
+	// no ranked driver at all.
+	//
+	// It exists because the empty value was being reported as
+	// `unclassified`, which is the vocabulary's word for a corrupted or
+	// future enum value. Conflating a documented normal outcome with
+	// corrupt input makes the fail-closed signal useless: an operator
+	// filtering for real corruption would drown in ordinary no-driver runs.
+	CohortDriverNarrationAllocatorNotApplicable CohortDriverNarrationAllocator = "not_applicable"
 )
 
-var cohortDriverNarrationAllocators = [2]CohortDriverNarrationAllocator{
+var cohortDriverNarrationAllocators = [3]CohortDriverNarrationAllocator{
 	CohortDriverNarrationAllocatorPlanBudget,
 	CohortDriverNarrationAllocatorStaticCaps,
+	CohortDriverNarrationAllocatorNotApplicable,
 }
 
 // CohortDriverNarrationAllocatorCount is the closed vocabulary's size.

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // T6, the prompt half of the quota (S5, quota side).
@@ -33,8 +34,19 @@ func TestThePayloadStatesTheAllocatorsOwnNumber(t *testing.T) {
 		t.Errorf("items_per_group = %d, allocator published %d: the prompt states a number the allocator did not",
 			payload.AnswerBudget.ItemsPerGroup, allocation.ItemsPerGroup)
 	}
-	if payload.AnswerBudget.Groups != allocation.Groups || payload.AnswerBudget.Global != allocation.Global {
-		t.Errorf("payload budget %+v does not match the allocation %+v", payload.AnswerBudget, allocation)
+	if payload.AnswerBudget.Groups != allocation.Groups {
+		t.Errorf("groups = %d, allocator published %d", payload.AnswerBudget.Groups, allocation.Groups)
+	}
+	// EVERY bucket the model can write into must reach the payload. The
+	// member pool is here because review found the allocator had none at
+	// all, so member-attributed drivers and claims were unbudgeted.
+	if payload.AnswerBudget.Global != allocation.Pool(contractsv1.ContextFabricItemBucketGlobal) {
+		t.Errorf("global = %d, allocator published %d",
+			payload.AnswerBudget.Global, allocation.Pool(contractsv1.ContextFabricItemBucketGlobal))
+	}
+	if payload.AnswerBudget.PerMember != allocation.Pool(contractsv1.ContextFabricItemBucketMember) {
+		t.Errorf("per_member = %d, allocator published %d",
+			payload.AnswerBudget.PerMember, allocation.Pool(contractsv1.ContextFabricItemBucketMember))
 	}
 }
 
@@ -67,6 +79,7 @@ func TestTheSystemPromptExplainsTheBudgetItIsGiven(t *testing.T) {
 		"answer_budget",
 		"answer_budget.items_per_group",
 		"answer_budget.global",
+		"answer_budget.per_member",
 		// The charge rule the allocator declares must be the one the model
 		// is told, or the model optimises against different arithmetic.
 		"counts against each group it names",

@@ -1748,10 +1748,11 @@ synthesis, against a ceiling of 30.
 ```mermaid
 flowchart TD
     PLAN["AnswerPlan.Budget<br/>MaxItems · SynthesisHeadroom"] --> ALLOC["AllocateItems(plan, groups, members)<br/><b>the ONE allocator</b>"]
+    VOCAB["ContextFabricItemBucketVocabulary()<br/>global · member · group · multi_group"] ==>|"pools are DERIVED from it"| ALLOC
     ALLOC --> RES["Reserved<br/>(deterministic engine output)"]
-    ALLOC --> GLOB["Global<br/>(candidates · unattributed findings)"]
-    ALLOC --> PER["ItemsPerGroup × Groups<br/>+ Remainder (published, never distributed)"]
-    ALLOC --> NARR["NarrationBudget"]
+    ALLOC --> POOLS["Pools[bucket] — ONE PER BUCKET<br/>a bucket with no pool is unexpressible"]
+    POOLS --> PER["ItemsPerGroup = Pools[group] / Groups<br/>+ Remainder (published, never distributed)"]
+    ALLOC --> NARR["NarrationBudget<br/>(a claimant, not a second helping)"]
 
     NARR --> MIN{"min(static contract caps,<br/>allocator item budget)"}
     CAPS["ContextFabricDriversMaxCount 50<br/>ContextFabricClaimedFactsMaxCount 250<br/><i>a document ceiling, never a budget</i>"] --> MIN
@@ -1761,6 +1762,31 @@ flowchart TD
     ALLOC ==>|"quota passed IN as inputs"| S7C["narrowCandidatesToBudget (S7c)<br/><b>the SOLE enforcer</b><br/>allowance = MaxItems − (Budgeted − declared)"]
     ALLOC -.->|"NEVER truncates · NEVER writes a limitation · NEVER refuses"| X["✗"]
 ```
+
+**Why the pools are derived from the vocabulary, and not from a list.** Two
+review rounds found the same class here. The first version apportioned a
+hand-written list of claimants — a global pool and a per-group pool. Round 1
+found NARRATION missing from it, so every spender together could claim 39 items
+against a ceiling of 30. Narration was added. Round 2 then found MEMBER-attributed
+items missing too: members were charged one item each for their cohort row while
+member-attributed drivers and claims had no pool at all, measured at 34 against
+30. Two rounds, one class, each fix leaving the next, because the list was being
+re-derived by hand every time.
+
+So the list is gone. `Pools` is indexed by position in
+`ContextFabricItemBucketVocabulary()`, the closed vocabulary that already
+defines what an item can BE. Every bucket that can receive items in a given
+answer gets a pool; a fifth bucket added to that vocabulary gets one
+automatically. **A bucket with no pool is no longer something to remember — it
+is unexpressible.** The invariant test sweeps ceilings {1, 2, 5, 30, 45, 300}
+including the degenerate regime where the reserve alone exceeds the budget, and
+asserts the pools partition the ceiling EXACTLY rather than merely fitting
+inside it.
+
+**A per-group quota of ZERO is a real quota.** On a budget too small to give a
+group anything, every charged item is over quota. Skipping the measurement
+because the number is zero reports the one answer that cannot be true; only an
+ABSENT quota (no group axis) means there is nothing to measure.
 
 **One authority per number.** The allocator decides the QUOTA and hands its
 numbers to enforcement as inputs; `narrowCandidatesToBudget` remains the only

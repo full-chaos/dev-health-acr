@@ -74,24 +74,29 @@ func TestNarrationCannotSpendPastThePlanItemBudget(t *testing.T) {
 	judgments, minted, event := narrateCohortDriverJudgments(
 		ranked, make([]DriverJudgment, synthesisDrivers), synthesisClaims, citations, allocation)
 
-	// NOT a "must emit" precondition any more, and the correction is worth
-	// recording rather than quietly deleting. This originally asserted that
-	// narration emits here -- true of the DEFECTIVE behaviour, which narrated
-	// 16 members at this fixture. Once narration was carved OUT of the pool
-	// rather than added on top (round-1 P1a), the arithmetic at this ceiling
-	// is: 16 members spend 16 of 30, reserved takes 2, leaving 12 for global
-	// AND narration AND groups; narration's third of that is 4, and one
-	// narrated member costs 6 (three drivers plus a minted claim each). So
-	// narration correctly DECLINES.
+	// NO OUTCOME PRECONDITION, and this is the THIRD time this assertion has
+	// had to move under a fix -- which is itself the argument for removing it
+	// rather than re-tuning it again.
 	//
-	// Declining is the right answer here, not a regression -- and keeping the
-	// "must emit" assertion would have forced the overrun back in to satisfy
-	// it. What must hold is the BUDGET, whether narration emits or not.
-	if event.Outcome != CohortDriverNarrationBudgetExhausted {
-		t.Fatalf("event.Outcome = %q, want %q: at a 30-item ceiling already spending 16 on members, "+
-			"narration cannot afford a single member and must say so",
-			event.Outcome, CohortDriverNarrationBudgetExhausted)
-	}
+	// It first asserted narration EMITS (true of the defective behaviour,
+	// which narrated 16 members here). When narration was carved out of the
+	// pool it became budget_exhausted, and the assertion was flipped. When
+	// the allocator was redesigned to apportion per bucket, members stopped
+	// being subtracted before narration's share, narration's pool rose to 9,
+	// and one narrated member (6 items) became affordable again -- so it is
+	// back to emitting, for a third distinct reason.
+	//
+	// Every one of those outcomes was CORRECT for its arithmetic. The outcome
+	// is a property of the regime, not of the defect; the BUDGET is the
+	// property this test exists for, and it is asserted below unconditionally.
+	// Pinning the regime instead just guarantees another edit next time the
+	// arithmetic moves, and each such edit is a chance to weaken the real
+	// assertion by accident.
+	//
+	// Narration emitting at all is controlled separately, by
+	// TestNarrationStillNarratesWhenTheBudgetAllowsIt, so removing the
+	// precondition here cannot let a narrate-nothing mutant through.
+	_ = event
 
 	// Narration's own charge against the item budget: every narrated driver
 	// judgment and every minted claim is a charged item

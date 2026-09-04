@@ -27,18 +27,22 @@ func groupedAllocationPlan(maxItems int) AnswerPlan {
 // synthesis is asked for anything, or the quota is advice.
 func TestTheAllocatorRespectsTheInvariant(t *testing.T) {
 	t.Parallel()
-	for _, maxItems := range []int{30, 45} {
+	// The ceiling sweep INCLUDES the degenerate regime: at 1 and 2 the
+	// reserved allowance alone meets or exceeds the budget, which is where
+	// review found a bounded quota of zero being treated as unmeasured.
+	for _, maxItems := range []int{1, 2, 5, 30, 45, 300} {
 		for groups := 0; groups <= 6; groups++ {
 			for members := 0; members <= 12; members++ {
 				allocation := AllocateItems(groupedAllocationPlan(maxItems), groups, members)
-				spent := allocation.Reserved + allocation.Global +
-					(allocation.Groups * allocation.ItemsPerGroup) + allocation.Remainder + members
-				if spent > maxItems {
-					t.Fatalf("maxItems=%d groups=%d members=%d: allocation spends %d "+
-						"(reserved %d + global %d + %d groups x %d + remainder %d + members %d), over the ceiling",
+				spent := allocation.Reserved + allocation.NarrationBudget +
+					allocation.TotalPooled() + allocation.Remainder
+				if spent != maxItems {
+					t.Fatalf("maxItems=%d groups=%d members=%d: allocation accounts for %d "+
+						"(reserved %d + narration %d + pools %d + remainder %d) -- the pools must partition "+
+						"the ceiling EXACTLY, or some claimant is unbudgeted or double-counted",
 						maxItems, groups, members, spent,
-						allocation.Reserved, allocation.Global, allocation.Groups,
-						allocation.ItemsPerGroup, allocation.Remainder, members)
+						allocation.Reserved, allocation.NarrationBudget,
+						allocation.TotalPooled(), allocation.Remainder)
 				}
 			}
 		}
@@ -82,13 +86,12 @@ func TestRemainderIsPublishedAndDeterministic(t *testing.T) {
 	// whole pool — which was true only while narration was being allocated
 	// on top, i.e. only while the double-reservation defect existed. Adding
 	// narration here is restoring the identity, not relaxing it.
-	pool := first.Global + (first.Groups * first.ItemsPerGroup) + first.Remainder + first.NarrationBudget
-	if want := first.MaxItems - first.Reserved - 7; pool != want {
-		t.Fatalf("global+groups+remainder+narration = %d, want the whole spendable pool %d: an item went missing in the split", pool, want)
+	accounted := first.TotalPooled() + first.Remainder + first.NarrationBudget
+	if want := first.MaxItems - first.Reserved; accounted != want {
+		t.Fatalf("pools+remainder+narration = %d, want the whole post-reserve budget %d: an item went missing in the split", accounted, want)
 	}
-	if first.Remainder < 0 || first.Remainder >= first.Groups {
-		t.Fatalf("Remainder = %d with %d groups: a remainder at or above the group count means the split under-allocated",
-			first.Remainder, first.Groups)
+	if first.Remainder < 0 || first.Remainder >= contractsv1.ContextFabricItemBucketCount {
+		t.Fatalf("Remainder = %d: a remainder at or above the bucket count means the split under-allocated", first.Remainder)
 	}
 }
 
@@ -99,7 +102,7 @@ func TestRemainderIsPublishedAndDeterministic(t *testing.T) {
 func TestAnUnboundedBudgetIsNoQuotaRatherThanAQuotaOfZero(t *testing.T) {
 	t.Parallel()
 	allocation := AllocateItems(AnswerPlan{Budget: AnswerPlanBudget{MaxItems: 0}}, 4, 8)
-	if allocation.MaxItems != 0 || allocation.ItemsPerGroup != 0 || allocation.NarrationBudget != 0 {
+	if allocation.MaxItems != 0 || allocation.ItemsPerGroup != 0 || allocation.NarrationBudget != 0 || allocation.TotalPooled() != 0 {
 		t.Fatalf("unbounded budget produced a quota: %+v", allocation)
 	}
 	// And the consumer must read it as "no quota": narration is unbounded.
