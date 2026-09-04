@@ -2025,6 +2025,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 
 	assemblyParams := synthesisAssemblyParams{
+		Plan:    plan,
 		Request: request, Interpretation: interpretation, Frame: familyOutcome.Frame,
 		Graph: graphContext, Facts: facts,
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,

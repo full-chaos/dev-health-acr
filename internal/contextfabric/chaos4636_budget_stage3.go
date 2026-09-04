@@ -158,7 +158,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// single-subject investigation has no cohort, so `declined` is
 		// always nothing_to_narrow here and the refusal was reached
 		// without any content reduction ever being attempted.
-		attempt := e.planCandidateNarrowing(plan, params.Frame, result, budget, measurement, overrun)
+		attempt := e.planCandidateNarrowing(plan, params.Frame, result, budget, measurement, overrun, AllocateItems(*plan, groupCountOf(params.Graph.Cohort), cohortMemberCount(params.Graph.Cohort)))
 		if attempt.Served {
 			e.recordCandidateNarrowing(ctx, principal, plan, attempt, overrun, grouped, narrowed.Basis, before, after, declined, false, false)
 			return attempt.Result, firstPass, nil
@@ -244,7 +244,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// in this file already fix elsewhere.
 	outcomeAttempt := outcomeNarrowingAttempt{}
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
-		outcomeAttempt = e.planCandidateNarrowing(plan, params.Frame, retried, budget, retryMeasurement, retryOverrun)
+		outcomeAttempt = e.planCandidateNarrowing(plan, params.Frame, retried, budget, retryMeasurement, retryOverrun, AllocateItems(*plan, groupCountOf(narrowed.Graph.Cohort), cohortMemberCount(narrowed.Graph.Cohort)))
 	}
 	// ONE decision event per investigation. When the reduction rescues a
 	// retry that did not fit, the event that describes the SERVED answer is
@@ -522,4 +522,13 @@ func narrowerContinuationAxisFor(plan AnswerPlan) NarrowingContinuationAxis {
 		return NarrowingContinuationNone
 	}
 	return definition.NarrowerContinuationAxis
+}
+
+// groupCountOf is how many group entities a cohort carries, zero for a nil
+// cohort or one with no group axis.
+func groupCountOf(cohort *Cohort) int {
+	if cohort == nil {
+		return 0
+	}
+	return len(cohort.Groups)
 }

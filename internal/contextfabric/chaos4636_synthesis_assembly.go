@@ -98,6 +98,12 @@ type synthesisAssemblyParams struct {
 	// so the ANSWER can disclose it. Zero on every request that grouped, and
 	// on every request that never planned a group axis.
 	GroupingRefusal CohortGroupingOutcome
+	// Plan is the answer plan this pass was budgeted against. Carried so
+	// the ONE item allocator (AllocateItems) can be derived HERE, from the
+	// same plan every other spender reads, rather than each spender
+	// consulting a ceiling of its own -- which is exactly how narration
+	// came to charge the static contract caps (CHAOS-5008).
+	Plan AnswerPlan
 	// Retry marks the SECOND pass. It exists so the doubled emissions above
 	// are attributable rather than silent.
 	Retry bool
@@ -380,7 +386,8 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// be tracked independently of the driver budget, not assumed to always
 	// have headroom).
 	if graphContext.Cohort != nil {
-		narrated, mintedClaims, narrationEvent := narrateCohortDriverJudgments(graphContext.Cohort, result.Drivers, len(result.ClaimedFacts), cohortSignalCitations)
+		allocation := AllocateItems(params.Plan, len(graphContext.Cohort.Groups), cohortMemberCount(graphContext.Cohort))
+		narrated, mintedClaims, narrationEvent := narrateCohortDriverJudgments(graphContext.Cohort, result.Drivers, len(result.ClaimedFacts), cohortSignalCitations, allocation)
 		// codex R1 (CHAOS-4398 PR3b), team-lead ruling: every narration-
 		// minted claim must pass the SAME grounding check a model-authored
 		// claim gets from SynthesisDraft.ValidateAgainst -- which this

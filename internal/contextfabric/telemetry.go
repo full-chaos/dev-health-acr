@@ -570,6 +570,17 @@ func (t SlogEngineTelemetry) RecordCohortDriverNarration(ctx context.Context, pr
 		// pre-narration DirectJudgment/DeterministicAnswer for this
 		// investigation, never the prose itself.
 		"answer_narrative_recomposed", event.AnswerNarrativeRecomposed,
+		// narration_allocator (CHAOS-5008) is the CONSUMER-side proof of
+		// the fix, and it is why the counts above are not enough: a
+		// narration bounded by the item budget and one bounded by the
+		// static contract caps can emit identical counts on a small
+		// cohort, so a regression to the caps would be invisible in the
+		// artifacts. This names which budget actually applied. Routed
+		// through the closed vocabulary so a value escaping it is reported
+		// as unclassified rather than emitted verbatim -- the same
+		// fail-closed posture every other closed enum in this file takes.
+		"narration_allocator", string(validNarrationAllocatorOrUnclassified(event.Allocator)),
+		"narration_allocated_items", event.AllocatedItems,
 	}, requestIDLogAttrs(ctx)...)...)
 }
 
@@ -1015,4 +1026,14 @@ func (t SlogEngineTelemetry) RecordPlanCarry(ctx context.Context, principal stor
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric plan carry", args...)
+}
+
+// validNarrationAllocatorOrUnclassified fails closed on a value outside the
+// closed vocabulary, so a corrupted or future enum value cannot reach a log
+// field as free text.
+func validNarrationAllocatorOrUnclassified(allocator CohortDriverNarrationAllocator) CohortDriverNarrationAllocator {
+	if ValidCohortDriverNarrationAllocator(allocator) {
+		return allocator
+	}
+	return CohortDriverNarrationAllocator("unclassified")
 }

@@ -134,16 +134,38 @@ var cohortSignalDisplayName = map[string]string{
 // one: a FUTURE signal path that introduces a null citation must also add
 // the Standing=withheld routing this comment describes, not assume
 // narrateCohortDriverJudgments already handles it.
-func narrateCohortDriverJudgments(cohort *Cohort, synthesisDrivers []DriverJudgment, synthesisClaimedFactCount int, citations cohortMemberSignalCitations) ([]DriverJudgment, []ClaimedFact, CohortDriverNarrationEvent) {
+func narrateCohortDriverJudgments(cohort *Cohort, synthesisDrivers []DriverJudgment, synthesisClaimedFactCount int, citations cohortMemberSignalCitations, allocation ItemAllocation) ([]DriverJudgment, []ClaimedFact, CohortDriverNarrationEvent) {
 	if cohort == nil || !cohortHasAnyRankedDriver(cohort) {
 		return nil, nil, CohortDriverNarrationEvent{Outcome: CohortDriverNarrationNoDrivers}
 	}
+	// CHAOS-5008. The contract caps below are a CEILING, never the budget:
+	// they bound what the result document may legally carry, and satisfying
+	// them says nothing about whether the ITEM budget can afford it. This
+	// composer used to consult them alone, and would authorise 16 members x
+	// 3 drivers = 48 judgments plus 48 minted claims -- 96 items, or 68 in
+	// the measured fixture -- against a plan ceiling of 30, because 50 and
+	// 250 were the only numbers it looked at.
+	//
+	// The allocator is now the authority and the caps are the second, weaker
+	// bound. Both are applied and the SMALLER wins, so neither the item
+	// budget nor the document contract can be overrun.
 	membersToNarrate, driversPerMember := cohortDriverNarrationBudget(
 		contractsv1.ContextFabricDriversMaxCount, len(synthesisDrivers),
 		contractsv1.ContextFabricClaimedFactsMaxCount, synthesisClaimedFactCount,
 	)
+	allocator := CohortDriverNarrationAllocatorStaticCaps
+	if allocation.MaxItems > 0 {
+		allocator = CohortDriverNarrationAllocatorPlanBudget
+		if allocated := allocation.NarrationDriverAllowance(driversPerMember); allocated < membersToNarrate {
+			membersToNarrate = allocated
+		}
+	}
 	if membersToNarrate == 0 {
-		return nil, nil, CohortDriverNarrationEvent{Outcome: CohortDriverNarrationBudgetExhausted}
+		return nil, nil, CohortDriverNarrationEvent{
+			Outcome:        CohortDriverNarrationBudgetExhausted,
+			Allocator:      allocator,
+			AllocatedItems: allocation.NarrationBudget,
+		}
 	}
 	// selectMembersForDriverNarration returns copies in AttentionRank
 	// order -- used here only to fix the NARRATION ORDER (so Standing=
@@ -242,6 +264,8 @@ func narrateCohortDriverJudgments(cohort *Cohort, synthesisDrivers []DriverJudgm
 		MembersNarrated:          narratedMembers,
 		MembersSkippedNoEvidence: skippedNoEvidence,
 		DriversSkipped:           driversSkipped,
+		Allocator:                allocator,
+		AllocatedItems:           allocation.NarrationBudget,
 	}
 }
 
@@ -284,6 +308,51 @@ const (
 	CohortDriverNarrationNoDrivers CohortDriverNarrationOutcome = "no_drivers"
 )
 
+// CohortDriverNarrationAllocator is the CLOSED vocabulary naming which budget
+// bounded a narration.
+//
+// WHY IT EXISTS AT ALL. Before CHAOS-5008, narration consulted only the static
+// contract caps (50 drivers / 250 claims) and would authorise 68 items against
+// a 30-item ceiling. After the fix it takes the SMALLER of that ceiling and the
+// allocator's item budget. Both paths can emit identical counts on a small
+// cohort, so without this field a reader cannot tell a fixed narration from an
+// unfixed one, and a regression would be invisible in the artifacts -- which is
+// exactly the diagnosability bar the standing telemetry order sets.
+type CohortDriverNarrationAllocator string
+
+const (
+	// CohortDriverNarrationAllocatorPlanBudget means the ONE allocator's
+	// item budget bounded this narration. The post-CHAOS-5008 steady state.
+	CohortDriverNarrationAllocatorPlanBudget CohortDriverNarrationAllocator = "plan_budget"
+	// CohortDriverNarrationAllocatorStaticCaps means the static contract
+	// caps bounded it, because no item budget was in force (an unbounded
+	// plan). Legitimate, and distinct from the defect it used to hide.
+	CohortDriverNarrationAllocatorStaticCaps CohortDriverNarrationAllocator = "static_caps"
+)
+
+var cohortDriverNarrationAllocators = [2]CohortDriverNarrationAllocator{
+	CohortDriverNarrationAllocatorPlanBudget,
+	CohortDriverNarrationAllocatorStaticCaps,
+}
+
+// CohortDriverNarrationAllocatorCount is the closed vocabulary's size.
+const CohortDriverNarrationAllocatorCount = len(cohortDriverNarrationAllocators)
+
+// CohortDriverNarrationAllocatorVocabulary returns it in published order.
+func CohortDriverNarrationAllocatorVocabulary() [CohortDriverNarrationAllocatorCount]CohortDriverNarrationAllocator {
+	return cohortDriverNarrationAllocators
+}
+
+// ValidCohortDriverNarrationAllocator reports membership; empty is not one.
+func ValidCohortDriverNarrationAllocator(value CohortDriverNarrationAllocator) bool {
+	for _, member := range cohortDriverNarrationAllocators {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
 // CohortDriverNarrationEvent is narrateCohortDriverJudgments' content-safe
 // telemetry payload -- counts and a closed outcome only, never a team name,
 // a score, or narration prose (the same "no person-to-person rankings"
@@ -291,6 +360,18 @@ const (
 type CohortDriverNarrationEvent struct {
 	Outcome          CohortDriverNarrationOutcome
 	JudgmentsEmitted int
+	// Allocator names WHICH budget bounded this narration (CHAOS-5008).
+	// It is the CONSUMER-side proof of the fix: the counts alone cannot
+	// distinguish a narration the item budget bounded from one the static
+	// contract caps bounded, and those are the two behaviours whose
+	// difference is the whole point. A closed vocabulary, so a dashboard
+	// can filter on it.
+	Allocator CohortDriverNarrationAllocator
+	// AllocatedItems is the item allowance the ONE allocator published for
+	// narration, zero when no item budget was in force. Recorded beside
+	// the counts so an operator can see the bound that applied rather than
+	// inferring it from what was emitted.
+	AllocatedItems int
 	// FactsMinted (team-lead standing order) is how many ContextFabricClaimedFact
 	// entries this call minted -- always <= JudgmentsEmitted (one claim per
 	// narrated judgment, minting follows citation per this composer's own

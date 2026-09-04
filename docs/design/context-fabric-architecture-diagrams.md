@@ -1716,10 +1716,73 @@ that is actually served.
 ENFORCEMENT — what happens when a quota is blown — for every shape, grouped
 included, because the outcome set is the single disclosure authority. The
 QUOTA side (per-group item attribution, the single allocator, `itemsPerGroup`,
-`predicted_items`) belongs to the allocator seam, which will expose per-group
+`predicted_items`) belongs to the allocator seam, which exposes per-group
 over-quota counts at assembly for this layer to act on. The candidates-only
 reduction term above is S7c's; nothing here allocates, predicts or
-apportions.
+apportions. **The allocator seam has now landed — see §10c.**
+
+### 10c — The ONE item allocator, and why raising the ceiling does not help
+
+**The arithmetic first, because it reframes the problem.** `planBudget` sets
+`MaxMembers = MaxItems − SynthesisHeadroom`, and the grouped headroom is a
+CONSTANT 20:
+
+```
+ceiling 30 (the rig default)  → MaxMembers 10 → 20 items left for everything else
+ceiling 45 (the prod overlay) → MaxMembers 25 → 20 items left for everything else
+```
+
+**The non-member allowance is 20 at BOTH ceilings** — 5 per group at four
+groups, identically. Raising `MaxItems` buys member slots and *exactly zero*
+extra items for drivers, claims, findings and candidates. So the per-group
+squeeze is a function of the constant headroom, **not** of the ceiling, and no
+amount of raising the ceiling relieves it. Group-aware headroom (equivalently:
+lowering `MaxMembers` when groups are present) is the only lever.
+
+**Two spenders became one.** Narration used to consult only the static contract
+caps — 50 drivers and 250 claims — which say what the document may legally
+CARRY and nothing about what the item budget can AFFORD. Measured on a 16-member
+fixture it authorised 32 judgments plus 32 minted claims: 64 items on top of
+synthesis, against a ceiling of 30.
+
+```mermaid
+flowchart TD
+    PLAN["AnswerPlan.Budget<br/>MaxItems · SynthesisHeadroom"] --> ALLOC["AllocateItems(plan, groups, members)<br/><b>the ONE allocator</b>"]
+    ALLOC --> RES["Reserved<br/>(deterministic engine output)"]
+    ALLOC --> GLOB["Global<br/>(candidates · unattributed findings)"]
+    ALLOC --> PER["ItemsPerGroup × Groups<br/>+ Remainder (published, never distributed)"]
+    ALLOC --> NARR["NarrationBudget"]
+
+    NARR --> MIN{"min(static contract caps,<br/>allocator item budget)"}
+    CAPS["ContextFabricDriversMaxCount 50<br/>ContextFabricClaimedFactsMaxCount 250<br/><i>a document ceiling, never a budget</i>"] --> MIN
+    MIN --> NARRATE["narrateCohortDriverJudgments"]
+    NARRATE -.->|"narration_allocator=plan_budget<br/>narration_allocated_items=N"| TEL["telemetry — the CONSUMER-side<br/>proof of which budget applied"]
+
+    ALLOC ==>|"quota passed IN as inputs"| S7C["narrowCandidatesToBudget (S7c)<br/><b>the SOLE enforcer</b><br/>allowance = MaxItems − (Budgeted − declared)"]
+    ALLOC -.->|"NEVER truncates · NEVER writes a limitation · NEVER refuses"| X["✗"]
+```
+
+**One authority per number.** The allocator decides the QUOTA and hands its
+numbers to enforcement as inputs; `narrowCandidatesToBudget` remains the only
+place the allowance is computed. Two authorities over one number is a defect no
+compiler catches and a reviewer sees only by reading both sites in one sitting,
+so it is pinned from source by
+`TestTheAllowanceArithmeticIsComputedInExactlyOnePlace`.
+
+**Attribution, because a per-group quota is unmeasurable without it.**
+`AttributeContextFabricResultItems` splits exactly the quantity
+`CountContextFabricResultItems(...).Budgeted()` reports into four buckets —
+`global`, `member`, `group`, `multi_group` — with the invariant that the two
+totals are equal. An item naming several groups is ONE item charged ONCE to
+`multi_group`; how the allocator then *prices* it across quotas is a separate
+declared decision (`ContextFabricMultiGroupCharge`, default `every_group`,
+because a shared pool can hide a cross-cutting item from every group's quota
+while each per-group number still looks compliant).
+
+**Update rule.** Any change to `AllocateItems`, the attribution buckets, the
+narration budget, or the quota→enforcement hand-off updates this sub-diagram in
+the same PR. A new spender on the item budget is added to the allocator, never
+given a ceiling of its own — that is the defect this section exists to record.
 
 **What this does NOT deliver.** Assembly still MEASURES and then reduces.
 Bounding assembly BY CONSTRUCTION — planning against declared caps so the

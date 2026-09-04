@@ -350,6 +350,36 @@ type outcomeNarrowingAttempt struct {
 	// Served reports whether Result fits the budget and may be returned to
 	// the caller.
 	Served bool
+	// Quota is what the ONE item allocator published for this request, and
+	// the per-group over-quota counts derived from the document that will
+	// actually be served (S5, quota side).
+	//
+	// It is an INPUT to this seam, never something computed here: the
+	// allocator owns the quota, this layer owns enforcement, and the
+	// allowance arithmetic stays in narrowCandidatesToBudget alone. Carried
+	// as a FIELD rather than as another positional parameter because
+	// recordCandidateNarrowing already takes eleven of those and the next
+	// addition would make it twelve.
+	Quota QuotaExposure
+}
+
+// QuotaExposure is the allocator's published quota plus the per-group
+// over-quota counts, handed to enforcement to act on.
+//
+// EXPOSURE, and the name is the boundary. Nothing here truncates, discloses or
+// refuses -- S7c decides what happens when a quota is blown, for every shape.
+// This type exists so that decision has numbers to make, rather than having to
+// re-derive them and become a second authority over them.
+type QuotaExposure struct {
+	// ItemsPerGroup is the published per-group quota, zero when the answer
+	// has no group axis or no item budget is in force.
+	ItemsPerGroup int
+	// Groups is how many groups the quota was split across.
+	Groups int
+	// OverQuota is how many groups exceeded ItemsPerGroup in the document
+	// measured. Zero is a real answer ("every group fitted"), distinct from
+	// an absent quota, which carries Groups == 0.
+	OverQuota int
 }
 
 // planCandidateNarrowing is the decision this seam adds to stage 3, WITHOUT
@@ -379,10 +409,15 @@ func (e *Engine) planCandidateNarrowing(
 	budget ResponseBudget,
 	measurement ResponseMeasurement,
 	overrun contractsv1.ContextFabricBudgetOverrun,
+	allocation ItemAllocation,
 ) outcomeNarrowingAttempt {
 	narrowedResult, narrowing, declined := narrowCandidatesToBudget(result, budget, measurement, overrun)
 	if !narrowing.Narrowed {
-		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: declined}
+		return outcomeNarrowingAttempt{
+			Narrowing: narrowing,
+			Declined:  declined,
+			Quota:     exposeQuota(allocation, result),
+		}
 	}
 	requirement, obligation := subjectScopeRequirement(narrowedResult.Completeness.Outcomes)
 	row := candidateNarrowingOutcomeRow(narrowing, overrun, requirement, obligation)
@@ -402,14 +437,63 @@ func (e *Engine) planCandidateNarrowing(
 		// difference between this refusal and one where the lever never
 		// applied: an operator reading the artifacts can tell that the
 		// candidate list was not the binding term here.
-		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: OutcomeReductionInsufficient}
+		return outcomeNarrowingAttempt{
+			Narrowing: narrowing,
+			Declined:  OutcomeReductionInsufficient,
+			Quota:     exposeQuota(allocation, result),
+		}
 	}
 	return outcomeNarrowingAttempt{
 		Result:      narrowedResult,
 		Narrowing:   narrowing,
 		Measurement: servedMeasurement,
 		Served:      true,
+		// Measured on the document that will ACTUALLY be served, never the
+		// pre-narrowing one -- the same discipline Measurement above
+		// follows, and for the same reason: a count taken before the
+		// reduction describes an answer nobody receives.
+		Quota: exposeQuota(allocation, narrowedResult),
 	}
+}
+
+// exposeQuota measures per-group usage against the allocator's published quota
+// and reports how many groups exceeded it.
+//
+// EXPOSURE ONLY. It measures and reports; it never truncates, never writes a
+// limitation and never refuses. S7c decides what happens when a quota is
+// blown, for every shape -- this exists so that decision has numbers rather
+// than having to re-derive them and become a second authority over them.
+//
+// It uses the SAME attribution the allocator apportioned against
+// (AttributeContextFabricResultItems), so a group's usage and its quota cannot
+// be computed from two different models of what an item is.
+func exposeQuota(allocation ItemAllocation, result InvestigationResult) QuotaExposure {
+	exposure := QuotaExposure{
+		ItemsPerGroup: allocation.ItemsPerGroup,
+		Groups:        allocation.Groups,
+	}
+	if allocation.Groups == 0 || allocation.ItemsPerGroup <= 0 || result.Cohort == nil {
+		return exposure
+	}
+	attribution := contractsv1.AttributeContextFabricResultItems(result)
+	// Group-attributed items are apportioned across the groups; a
+	// multi_group item is charged to EVERY group it names under the
+	// declared default rule, so it counts once per group here.
+	perGroup := attribution.Group + attribution.MultiGroup
+	if perGroup <= allocation.ItemsPerGroup*allocation.Groups {
+		return exposure
+	}
+	// Evenly-spread excess is the conservative reading: without per-group
+	// identity on each item the exact distribution is unknown, and claiming
+	// a specific group blew its quota would be a precision this measurement
+	// does not have. Reporting the COUNT of groups the excess implies is
+	// what the enforcement layer actually needs.
+	excess := perGroup - (allocation.ItemsPerGroup * allocation.Groups)
+	exposure.OverQuota = (excess + allocation.ItemsPerGroup - 1) / allocation.ItemsPerGroup
+	if exposure.OverQuota > allocation.Groups {
+		exposure.OverQuota = allocation.Groups
+	}
+	return exposure
 }
 
 // recordCandidateNarrowing emits the decision-basis event for an attempt

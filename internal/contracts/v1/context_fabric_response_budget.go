@@ -182,3 +182,251 @@ func (m ContextFabricResponseMeasurement) Overrun(budget ContextFabricResponseBu
 func (m ContextFabricResponseMeasurement) Fits(budget ContextFabricResponseBudget) bool {
 	return m.Overrun(budget) == ContextFabricBudgetFits
 }
+
+// ContextFabricItemBucket is the CLOSED vocabulary naming which pool an item
+// charges against when a cohort has a GROUP axis (CHAOS-4636 / S5, quota side).
+//
+// WHY ATTRIBUTION HAS TO EXIST BEFORE A PER-GROUP QUOTA CAN.
+// ContextFabricResultItemCounts above is a per-COLLECTION breakdown -- drivers,
+// claims, members -- and every one of those totals is flat across the whole
+// answer. "Five items per group" is not a statement any of those numbers can
+// support or refute, because none of them knows which group an item belongs
+// to. A quota published against an unattributed total would be a number that
+// looks like a bound and enforces nothing.
+//
+// Closed, and spelled rather than left to a bare string, for the same reason
+// every other vocabulary in this file is: it reaches telemetry, and a
+// dashboard filtering on a typo is worse than one filtering on nothing.
+type ContextFabricItemBucket string
+
+const (
+	// ContextFabricItemBucketGlobal is an item that belongs to the answer
+	// rather than to any group: resolution candidates, and findings that
+	// name no member and no group. It is charged once, never per group.
+	ContextFabricItemBucketGlobal ContextFabricItemBucket = "global"
+	// ContextFabricItemBucketMember is an item attributable to exactly one
+	// cohort MEMBER -- the member row itself, a driver whose affected
+	// subjects are members, a claim whose subject is a member.
+	ContextFabricItemBucketMember ContextFabricItemBucket = "member"
+	// ContextFabricItemBucketGroup is an item naming exactly one GROUP
+	// subject. These became possible only when the group entity became
+	// citable (lever 3): before that, a driver about a team was rejected,
+	// so this bucket would have been empty by construction.
+	ContextFabricItemBucketGroup ContextFabricItemBucket = "group"
+	// ContextFabricItemBucketMultiGroup is an item naming SEVERAL groups.
+	// It is a member of this vocabulary rather than an error because the
+	// relational citation rule deliberately permits it: ownership is a
+	// relation, not a partition, so one driver may legitimately be about
+	// two teams. An allocator that could not express this would have to
+	// either reject a valid answer or silently pick one group for it.
+	ContextFabricItemBucketMultiGroup ContextFabricItemBucket = "multi_group"
+)
+
+var contextFabricItemBuckets = [4]ContextFabricItemBucket{
+	ContextFabricItemBucketGlobal,
+	ContextFabricItemBucketMember,
+	ContextFabricItemBucketGroup,
+	ContextFabricItemBucketMultiGroup,
+}
+
+// ContextFabricItemBucketCount is the closed vocabulary's size.
+const ContextFabricItemBucketCount = len(contextFabricItemBuckets)
+
+// ContextFabricItemBucketVocabulary returns the closed bucket vocabulary in
+// published order, as an array so the value is copied to the caller.
+func ContextFabricItemBucketVocabulary() [ContextFabricItemBucketCount]ContextFabricItemBucket {
+	return contextFabricItemBuckets
+}
+
+// ValidContextFabricItemBucket reports membership of the closed vocabulary.
+// The empty value is not a member.
+func ValidContextFabricItemBucket(value ContextFabricItemBucket) bool {
+	for _, member := range contextFabricItemBuckets {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
+// ContextFabricItemAttribution is the per-bucket split of the SAME quantity
+// ContextFabricResultItemCounts.Budgeted() reports.
+//
+// THE INVARIANT THAT MAKES IT WORTH HAVING: Total() here equals Budgeted()
+// there. If the two can disagree, the quota is apportioning a number the
+// budget does not enforce, and the whole exercise measures nothing. Paths are
+// excluded from both, for the one reason stated on Budgeted().
+type ContextFabricItemAttribution struct {
+	Global     int `json:"global"`
+	Member     int `json:"member"`
+	Group      int `json:"group"`
+	MultiGroup int `json:"multi_group"`
+}
+
+// Total is every attributed item. It is defined to equal
+// ContextFabricResultItemCounts.Budgeted() for the same result.
+func (a ContextFabricItemAttribution) Total() int {
+	return a.Global + a.Member + a.Group + a.MultiGroup
+}
+
+// ContextFabricMultiGroupCharge is the CLOSED vocabulary for how an item
+// naming several groups is charged.
+//
+// It is a DECLARED DECISION rather than an implementation detail, because the
+// two rules give different answers to "does this cohort fit" and a reader of
+// the telemetry cannot reconstruct which one ran from the counts alone.
+type ContextFabricMultiGroupCharge string
+
+const (
+	// ContextFabricMultiGroupChargeEveryGroup charges the item to every
+	// group it names. Conservative: the sum of per-group charges then
+	// exceeds the item count, so a quota built on it can never under-count
+	// what a group is responsible for.
+	ContextFabricMultiGroupChargeEveryGroup ContextFabricMultiGroupCharge = "every_group"
+	// ContextFabricMultiGroupChargeSharedPool charges it once, to a pool
+	// outside the per-group quotas. Cheaper, and it lets one cross-cutting
+	// driver survive that every_group would price out of several groups at
+	// once.
+	ContextFabricMultiGroupChargeSharedPool ContextFabricMultiGroupCharge = "shared_pool"
+)
+
+var contextFabricMultiGroupCharges = [2]ContextFabricMultiGroupCharge{
+	ContextFabricMultiGroupChargeEveryGroup,
+	ContextFabricMultiGroupChargeSharedPool,
+}
+
+// ContextFabricMultiGroupChargeCount is the closed vocabulary's size.
+const ContextFabricMultiGroupChargeCount = len(contextFabricMultiGroupCharges)
+
+// ContextFabricMultiGroupChargeVocabulary returns it in published order.
+func ContextFabricMultiGroupChargeVocabulary() [ContextFabricMultiGroupChargeCount]ContextFabricMultiGroupCharge {
+	return contextFabricMultiGroupCharges
+}
+
+// ValidContextFabricMultiGroupCharge reports membership. Empty is not a member.
+func ValidContextFabricMultiGroupCharge(value ContextFabricMultiGroupCharge) bool {
+	for _, member := range contextFabricMultiGroupCharges {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
+// AttributeContextFabricResultItems splits the SAME quantity
+// CountContextFabricResultItems(...).Budgeted() reports into the four buckets a
+// per-group quota is apportioned over.
+//
+// THE INVARIANT, and it is what makes this function worth having rather than a
+// second opinion about the same result: for every result,
+//
+//	AttributeContextFabricResultItems(r).Total() == CountContextFabricResultItems(r).Budgeted()
+//
+// If those can disagree, the quota apportions a number the budget does not
+// enforce and every per-group figure is decoration.
+// TestEveryChargedItemIsAttributedToExactlyOneBucket pins it.
+//
+// EXACTLY ONE BUCKET PER ITEM. An item naming several groups is charged to
+// MultiGroup once -- not once per group. How the ALLOCATOR then prices a
+// multi-group item across quotas is a separate, declared decision
+// (ContextFabricMultiGroupCharge); conflating the two would make the totals
+// stop summing to Budgeted() the moment the pricing rule changed, which is the
+// one property this function exists to hold.
+//
+// Paths are excluded, for the single reason stated on Budgeted().
+func AttributeContextFabricResultItems(result ContextFabricInvestigationResult) ContextFabricItemAttribution {
+	members := map[string]struct{}{}
+	groups := map[string]struct{}{}
+	if result.Cohort != nil {
+		for _, member := range result.Cohort.Members {
+			members[contextFabricSubjectBucketKey(member.Subject)] = struct{}{}
+		}
+		for _, group := range result.Cohort.Groups {
+			groups[contextFabricSubjectBucketKey(group.Subject)] = struct{}{}
+		}
+	}
+
+	attribution := ContextFabricItemAttribution{}
+	// Cohort member rows: one item each, member-attributed by definition.
+	if result.Cohort != nil {
+		attribution.Member += len(result.Cohort.Members)
+	}
+	// Resolution candidates belong to the ANSWER, never to a group: they
+	// are alternatives the investigation did not commit to, so charging one
+	// to a group would price a group for a subject it does not own.
+	attribution.Global += len(result.SubjectResolution.Candidates)
+
+	for _, driver := range result.Drivers {
+		attribution.charge(contextFabricSubjectsBucket(driver.AffectedSubjects, members, groups))
+	}
+	for _, findings := range [][]ContextFabricFinding{result.RemainingWork, result.ReadinessGaps, result.Conflicts} {
+		for _, finding := range findings {
+			attribution.charge(contextFabricSubjectsBucket(finding.Subjects, members, groups))
+		}
+	}
+	for _, claim := range result.ClaimedFacts {
+		attribution.charge(contextFabricSubjectsBucket([]ContextFabricSubjectRef{claim.Subject}, members, groups))
+	}
+	return attribution
+}
+
+// charge adds one item to the named bucket.
+func (a *ContextFabricItemAttribution) charge(bucket ContextFabricItemBucket) {
+	switch bucket {
+	case ContextFabricItemBucketMember:
+		a.Member++
+	case ContextFabricItemBucketGroup:
+		a.Group++
+	case ContextFabricItemBucketMultiGroup:
+		a.MultiGroup++
+	default:
+		a.Global++
+	}
+}
+
+// contextFabricSubjectsBucket decides ONE bucket for an item from the subjects
+// it names.
+//
+// Precedence, and each step is a decision rather than an ordering convenience:
+//   - two or more DISTINCT groups named  -> multi_group. Counted by distinct
+//     group, so a driver naming the same group twice is not promoted out of
+//     the group bucket by a duplicate.
+//   - exactly one group named            -> group, EVEN IF members are also
+//     named. A driver about a team that cites its projects is an item about
+//     the team; charging it to a member would leave the group's own quota
+//     unable to see the item that is most characteristically its own.
+//   - otherwise a member named           -> member.
+//   - nothing recognised                 -> global. Fail-safe direction: an
+//     unrecognised subject charges the shared pool rather than silently
+//     inflating some group's usage.
+func contextFabricSubjectsBucket(subjects []ContextFabricSubjectRef, members, groups map[string]struct{}) ContextFabricItemBucket {
+	namedGroups := map[string]struct{}{}
+	sawMember := false
+	for _, subject := range subjects {
+		key := contextFabricSubjectBucketKey(subject)
+		if _, isGroup := groups[key]; isGroup {
+			namedGroups[key] = struct{}{}
+			continue
+		}
+		if _, isMember := members[key]; isMember {
+			sawMember = true
+		}
+	}
+	switch {
+	case len(namedGroups) > 1:
+		return ContextFabricItemBucketMultiGroup
+	case len(namedGroups) == 1:
+		return ContextFabricItemBucketGroup
+	case sawMember:
+		return ContextFabricItemBucketMember
+	default:
+		return ContextFabricItemBucketGlobal
+	}
+}
+
+// contextFabricSubjectBucketKey keys a subject by kind AND canonical id, the
+// same composite the synthesis allow-set uses, so a member and a group that
+// happen to share an id are never confused for one another.
+func contextFabricSubjectBucketKey(subject ContextFabricSubjectRef) string {
+	return string(subject.Kind) + "\x00" + subject.CanonicalID
+}
