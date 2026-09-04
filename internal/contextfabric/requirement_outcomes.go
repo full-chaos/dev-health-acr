@@ -447,8 +447,7 @@ func (e *Engine) recordCandidateNarrowing(
 		Overrun: overrun,
 	})
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, basis)
-	event.MeasuredItems = attempt.Measurement.Items.Budgeted()
-	event.MeasuredBytes = attempt.Measurement.Bytes
+	event.recordMeasurement(attempt.Measurement)
 	event.PredictedItems = PredictedItemsForPlan(*plan, after)
 	event.RetryAttempted = retryAttempted
 	// The RETRY's own outcome, not this reduction's. Hardcoding true said a

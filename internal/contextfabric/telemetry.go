@@ -909,6 +909,22 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		// -- see PlanNarrowingEvent.PredictedItems. Zero only when there is no
 		// cohort to predict for.
 		"predicted_items", event.PredictedItems,
+		// The per-bucket split of measured_items (S5, observing half):
+		// WHAT the charged items were about, from the closed four-member
+		// bucket vocabulary. measured_items says how big the answer was;
+		// these four say where it went, which is the difference between a
+		// number an operator can escalate and one they can act on. The four
+		// sum to measured_items by construction -- they are computed from
+		// the same document in the same measurement -- so a line where they
+		// do not is itself the signal.
+		//
+		// Counts only. No group label, no subject id: the bucket names are
+		// a closed vocabulary and the values are integers, so this stays a
+		// bounded set of dimensions.
+		"attribution_global", event.Attribution.Global,
+		"attribution_member", event.Attribution.Member,
+		"attribution_group", event.Attribution.Group,
+		"attribution_multi_group", event.Attribution.MultiGroup,
 		"measured_bytes", event.MeasuredBytes,
 		"max_items", event.MaxItems,
 		"max_serialized_bytes", event.MaxSerializedBytes,
