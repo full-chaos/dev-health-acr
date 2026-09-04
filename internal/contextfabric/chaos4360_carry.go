@@ -122,6 +122,13 @@ const (
 	// disagreeing time windows. A genuine conflict fails closed, exactly
 	// like every other carry ambiguity.
 	WindowCarryMissConflictingWindows WindowCarryOutcome = "miss_conflicting_windows"
+	// WindowCarryMissQuestionDrift: the request named a prior result through
+	// parent_result_id, but that result answered a DIFFERENT question, so it
+	// is not part of this conversation in any sense that would justify
+	// inheriting its window. Applies to the caller-supplied root ONLY -- a
+	// receipt is an accepted offer and a different follow-up question against
+	// it stays legitimate (see carryFrontier).
+	WindowCarryMissQuestionDrift WindowCarryOutcome = "miss_question_drift"
 )
 
 // windowCarryResult is resolveCarriedWindow's own return shape.
@@ -273,6 +280,55 @@ func carrySeedSource(request InvestigationRequest, validatedSubjectReceipts []Bo
 	}
 }
 
+// carryFrontier builds the carry walk's starting set and applies the ONE
+// guard that is specific to the caller-supplied root: the same-question gate.
+//
+// THE RULE IS DELIBERATELY TWO-TIER, and the asymmetry is the point rather
+// than an inconsistency to tidy away later.
+//
+// A RECEIPT is an ACCEPTANCE of a specific offer the server showed this
+// caller. Redeeming one says "I picked that option", and a caller who picks
+// an option and then asks a genuinely different follow-up -- "what about last
+// quarter?" against the same chain -- is doing something legitimate that
+// works today. Gating receipts on question equality would break it, and
+// breaking a working conversation to harden a different mechanism is a bad
+// trade.
+//
+// parent_result_id is a WEAKER claim ("this is the turn I follow") and a
+// bearer reference: any result id in the caller's own org is nameable. It has
+// no offer behind it that the server chose to show, so question equality is
+// the cheapest available evidence that the named result is actually part of
+// THIS conversation rather than an unrelated investigation whose confirmed
+// axes would be inherited by accident. A drifted parent is dropped from the
+// frontier and reported, never silently walked.
+//
+// Reads through the per-request carry memo, so the gate costs no extra store
+// round-trip on a turn the walk was going to load that result on anyway.
+func (e *Engine) carryFrontier(ctx context.Context, principal storage.Principal, request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt) (frontier []string, parentDrifted bool) {
+	ids := carryReferencedResultIDs(request, validatedSubjectReceipts)
+	parent := strings.TrimSpace(request.ParentResultID)
+	if parent == "" || e.results == nil {
+		return ids, false
+	}
+	stored, err := carryLoadResult(ctx, e.results, principal, parent)
+	if err != nil {
+		// Unloadable is NOT drift. Leave the id in the frontier so the walk
+		// reaches its own miss_unloadable rather than reporting a mismatch
+		// this function never actually observed.
+		return ids, false
+	}
+	if QuestionHash(stored.Result.Question) == QuestionHash(request.Question) {
+		return ids, false
+	}
+	filtered := ids[:0:0]
+	for _, id := range ids {
+		if id != parent {
+			filtered = append(filtered, id)
+		}
+	}
+	return filtered, true
+}
+
 // ancestryParentResultID picks the ONE prior result this turn records as its
 // parent -- durable chain identity, written by every Save regardless of
 // whether any axis was carried, disclosed, or even attempted.
@@ -319,8 +375,15 @@ func (e *Engine) resolveCarriedWindow(ctx context.Context, principal storage.Pri
 	if e.results == nil {
 		return windowCarryResult{Outcome: WindowCarryMissNoReference}
 	}
-	frontier := carryReferencedResultIDs(request, validatedSubjectReceipts)
+	frontier, parentDrifted := e.carryFrontier(ctx, principal, request, validatedSubjectReceipts)
 	if len(frontier) == 0 {
+		// Drift is reported in preference to "no reference": the caller DID
+		// name a prior result, and telling them it was ignored for naming a
+		// different question is a different and more actionable fact than
+		// telling them they named nothing.
+		if parentDrifted {
+			return windowCarryResult{Outcome: WindowCarryMissQuestionDrift}
+		}
 		return windowCarryResult{Outcome: WindowCarryMissNoReference}
 	}
 	visited := make(map[string]struct{}, carryChainMaxVisited)

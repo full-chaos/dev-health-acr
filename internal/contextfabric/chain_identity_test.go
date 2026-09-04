@@ -691,3 +691,152 @@ func TestChainIdentity_CarryTelemetryAttributesHowTheChainWasLinked(t *testing.T
 		}), CarrySeedNone)
 	})
 }
+
+// countingResultStore counts Get calls so the memo claim ("the gate costs no
+// extra store round-trip") is measured rather than asserted.
+type countingResultStore struct {
+	*staticResultStore
+	gets int
+}
+
+func (s *countingResultStore) Get(ctx context.Context, principal storage.Principal, resultID string) (StoredInvestigationResult, error) {
+	s.gets++
+	return s.staticResultStore.Get(ctx, principal, resultID)
+}
+
+// TestChainIdentity_QuestionDriftGatesTheCallerSuppliedRootOnly pins the
+// two-tier rule, and the second arm is the more important of the two.
+//
+// A RECEIPT is an ACCEPTANCE of a specific offer the server showed this
+// caller. A caller who redeems one and then asks a genuinely different
+// follow-up -- "what about last quarter?" against the same chain -- is doing
+// something that works today, and gating receipts on question equality would
+// break it. parent_result_id is the weaker claim ("this is the turn I
+// follow") and a bearer reference: any result id in the caller's own org is
+// nameable, with no offer behind it that the server chose to show. Question
+// equality is the cheapest available evidence that the named result is part
+// of THIS conversation rather than an unrelated investigation whose confirmed
+// axes would be inherited by accident.
+//
+// So the asymmetry is deliberate. The control arm exists to make sure the
+// gate never grows to cover receipts by accident -- that regression would be
+// invisible in the drift arm alone, which would keep passing.
+func TestChainIdentity_QuestionDriftGatesTheCallerSuppliedRootOnly(t *testing.T) {
+	t.Parallel()
+
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+
+	run := func(t *testing.T, mutate func(*InvestigationRequest, *staticResultStore)) (*recordingTelemetry, InvestigationResult, *countingResultStore) {
+		t.Helper()
+		request, seed := chainIdentityFixture()
+		mutate(&request, seed)
+		store := &countingResultStore{staticResultStore: seed}
+		telemetry := &recordingTelemetry{}
+		fresh := validInvestigationResult()
+		engine := mustReuseTestEngine(t, EngineDependencies{
+			Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+			Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+				return CanonicalFactBundle{}, nil
+			}),
+			Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+				return fresh, nil
+			}),
+			Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+				return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+			}),
+			Results:   store,
+			Telemetry: telemetry,
+		})
+		result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		return telemetry, result, store
+	}
+
+	t.Run("a parent answering a different question is dropped", func(t *testing.T) {
+		t.Parallel()
+		telemetry, result, _ := run(t, func(r *InvestigationRequest, seed *staticResultStore) {
+			prior := seed.results[r.ParentResultID]
+			prior.Question = "how many pull requests did the platform team merge last quarter?"
+			seed.results[r.ParentResultID] = prior
+		})
+
+		drift := false
+		var got []KindCarryOutcome
+		for _, c := range telemetry.kindCarries {
+			got = append(got, c.outcome)
+			if c.outcome == KindCarryMissQuestionDrift {
+				drift = true
+			}
+			if c.outcome == KindCarryHit {
+				t.Fatal("kind carry HIT: an unrelated investigation's confirmed kind was inherited by a turn that merely named its id")
+			}
+		}
+		if !drift {
+			t.Errorf("kind carry outcomes = %v, want %q -- missing for a vaguer reason would hide WHY the carry was refused", got, KindCarryMissQuestionDrift)
+		}
+		for _, entry := range result.ConfirmedStructure {
+			if entry.Source == contractsv1.ContextFabricStructureSourceCarried {
+				t.Errorf("ConfirmedStructure carries %#v from a drifted parent", entry)
+			}
+		}
+	})
+
+	t.Run("a receipt against a different question still carries", func(t *testing.T) {
+		t.Parallel()
+		// THE BEHAVIOUR-PRESERVING CONTROL. Same drift, linked by a redeemed
+		// receipt instead of the field: this must keep working exactly as it
+		// does today.
+		telemetry, _, _ := run(t, func(r *InvestigationRequest, seed *staticResultStore) {
+			start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+			end := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+			prior := seed.results[r.ParentResultID]
+			prior.Question = "how many pull requests did the platform team merge last quarter?"
+			prior.WindowClarification = &WindowClarification{Options: []WindowOption{
+				{ReceiptID: "winr_confirm0001", OptionID: "opt_90d", Label: "the last 90 days", RelativeID: RelativeWindowTrailing90D, Start: &start, End: &end},
+			}}
+			seed.results[r.ParentResultID] = prior
+
+			r.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: r.ParentResultID, ReceiptID: "winr_confirm0001"}}
+			r.ParentResultID = ""
+		})
+
+		hit := false
+		var got []KindCarryOutcome
+		for _, c := range telemetry.kindCarries {
+			got = append(got, c.outcome)
+			if c.outcome == KindCarryHit {
+				hit = true
+			}
+			if c.outcome == KindCarryMissQuestionDrift {
+				t.Fatal("the drift gate fired on a RECEIPT-linked chain: redeeming an offer and then asking a different follow-up is legitimate today and must keep working")
+			}
+		}
+		if !hit {
+			t.Errorf("kind carry outcomes = %v, want a hit -- a receipt-linked chain must be unaffected by the drift gate", got)
+		}
+	})
+
+	t.Run("the gate adds no store read", func(t *testing.T) {
+		t.Parallel()
+		// The memo claim, MEASURED rather than asserted.
+		//
+		// The number below is 2, not 1, and the difference matters. Two reads
+		// of the parent happen on this path: one the drift gate and the carry
+		// walk SHARE through the per-request carry memo, and one that is
+		// pre-existing and unrelated to either. I measured the baseline by
+		// short-circuiting the gate and re-running this exact fixture: two
+		// reads with the gate, two without. The gate contributes ZERO.
+		//
+		// So this pins "the gate is free", which is the property the ruling
+		// asked for. Pinning an absolute 1 would have pinned an unrelated
+		// read out of existence and failed for a reason that has nothing to
+		// do with this code -- which is exactly what it did on first writing.
+		// If the gate ever starts loading outside the memo, this goes to 3.
+		_, _, store := run(t, func(*InvestigationRequest, *staticResultStore) {})
+		if store.gets != 2 {
+			t.Errorf("store.Get called %d times, want 2 (one memo-shared read plus one pre-existing): a change here means the drift gate stopped reading through the per-request carry memo", store.gets)
+		}
+	})
+}

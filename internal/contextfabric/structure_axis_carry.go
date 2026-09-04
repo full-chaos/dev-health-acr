@@ -105,6 +105,13 @@ const (
 	// under whichever loaded first would silently pick one of two real,
 	// disagreeing confirmations. A genuine conflict fails closed.
 	KindCarryMissConflictingKinds KindCarryOutcome = "miss_conflicting_kinds"
+	// KindCarryMissQuestionDrift: the request named a prior result through
+	// parent_result_id, but that result answered a DIFFERENT question, so it
+	// is not part of this conversation in any sense that would justify
+	// inheriting its confirmed kind. Caller-supplied root ONLY -- a receipt is
+	// an accepted offer and a different follow-up question against it stays
+	// legitimate (see carryFrontier, chaos4360_carry.go).
+	KindCarryMissQuestionDrift KindCarryOutcome = "miss_question_drift"
 )
 
 // kindCarryResult is resolveCarriedKind's return shape.
@@ -144,8 +151,14 @@ func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Princ
 	if e.results == nil {
 		return kindCarryResult{Outcome: KindCarryMissNoReference}
 	}
-	frontier := carryReferencedResultIDs(request, validatedSubjectReceipts)
+	frontier, parentDrifted := e.carryFrontier(ctx, principal, request, validatedSubjectReceipts)
 	if len(frontier) == 0 {
+		// Drift is reported in preference to "no reference" -- see the window
+		// axis's own identical branch for why the distinction is worth a
+		// separate label.
+		if parentDrifted {
+			return kindCarryResult{Outcome: KindCarryMissQuestionDrift}
+		}
 		return kindCarryResult{Outcome: KindCarryMissNoReference}
 	}
 	visited := make(map[string]struct{}, carryChainMaxVisited)
