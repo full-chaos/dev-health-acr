@@ -253,3 +253,85 @@ func TestACensusQualifiedRowDerivesPartialCompleteness(t *testing.T) {
 		t.Fatalf("a set carrying a census-qualified count derives %q, want %q", got, ContextFabricAnswerCompletenessPartial)
 	}
 }
+
+// The three tests below plant the defect the ROW-CLASS conjuncts exist to
+// catch, and they exist because the first version of this exception did not
+// have them.
+//
+// The original three conjuncts (equal counts, an observed cause, a census
+// code) all describe whether the row is HONEST. None of them says WHOSE row
+// it is. So the exception was available to any narrowed row that could
+// arrange those three -- a `state` obligation, a seed row at the `planning`
+// stage, a row claiming `impact: depth` while naming a scope loss -- none of
+// which is a count taken over a population, and every one of which would have
+// been admitted with equal counts against the reduction rule.
+//
+// That is the same defect this whole change removes, one layer up: a
+// predicate standing for more states than it names. The producer sets stage,
+// obligation and impact on the single site that emits this shape, so scoping
+// to them costs no legitimate row.
+
+// TestTheCensusExceptionIsScopedToTheAssembledResultStage plants a seed row.
+//
+// A `planning` row is written BEFORE anything was read. It cannot have taken
+// a count over a population, so a census cause on one describes a measurement
+// that had not happened yet.
+func TestTheCensusExceptionIsScopedToTheAssembledResultStage(t *testing.T) {
+	t.Parallel()
+	row := censusQualifiedCountRow()
+	row.Stage = ContextFabricOutcomeStagePlanning
+
+	err := ValidateContextFabricPlanRequirementOutcomeRow(row)
+	if err == nil {
+		t.Fatal("a PLANNING row took the census exception; the exception is for a count that was actually taken, " +
+			"and a planning row is written before anything is read")
+	}
+	if !strings.Contains(err.Error(), "is not a reduction") {
+		t.Fatalf("rejected for the wrong reason: %v (want the reduction rule)", err)
+	}
+}
+
+// TestTheCensusExceptionIsScopedToTheCountObligation plants a different
+// obligation on an otherwise identical row.
+//
+// Only a count is a value computed OVER a population. A `state` obligation
+// serving everything it declared narrowed nothing, and admitting it would
+// make the reduction rule optional for every obligation that can name a
+// census code.
+func TestTheCensusExceptionIsScopedToTheCountObligation(t *testing.T) {
+	t.Parallel()
+	row := censusQualifiedCountRow()
+	row.Requirement = "state/subject/team"
+	row.Obligation = "state"
+
+	err := ValidateContextFabricPlanRequirementOutcomeRow(row)
+	if err == nil {
+		t.Fatal("a STATE obligation took the census exception; only a count is a value computed over a population, " +
+			"so only a count can be qualified by one")
+	}
+	if !strings.Contains(err.Error(), "is not a reduction") {
+		t.Fatalf("rejected for the wrong reason: %v (want the reduction rule)", err)
+	}
+}
+
+// TestTheCensusExceptionIsScopedToAScopeImpact plants an impact that
+// contradicts the cause.
+//
+// `depth` means less evidence per subject; `scope` means fewer subjects than
+// exist. An incomplete population is a SCOPE loss by definition, so a row
+// naming a census cause while reporting `depth` states two different losses
+// and the exception must not choose one for it.
+func TestTheCensusExceptionIsScopedToAScopeImpact(t *testing.T) {
+	t.Parallel()
+	row := censusQualifiedCountRow()
+	row.Impact = ContextFabricAnswerImpactDepth
+
+	err := ValidateContextFabricPlanRequirementOutcomeRow(row)
+	if err == nil {
+		t.Fatal("a row reporting impact DEPTH took the census exception while naming a population cause; " +
+			"an unseen population is a scope loss, not a per-subject depth loss")
+	}
+	if !strings.Contains(err.Error(), "is not a reduction") {
+		t.Fatalf("rejected for the wrong reason: %v (want the reduction rule)", err)
+	}
+}

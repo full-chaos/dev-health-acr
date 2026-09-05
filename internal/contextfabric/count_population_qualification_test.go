@@ -437,3 +437,52 @@ func TestTheQualifiedCountReachesTheOperator(t *testing.T) {
 			event.Served, event.Declared, row.Served, row.Declared)
 	}
 }
+
+// TestAnEmptyIncompletePopulationIsStillQualified covers the arm every other
+// test in this file leaves open: a cohort with NO members whose census was
+// nevertheless incomplete.
+//
+// Zero is the number most likely to be special-cased into a bug here. A
+// predicate written as "incomplete AND we actually resolved someone" reads
+// plausibly — it sounds like it is avoiding a qualification on an empty
+// answer — and it is wrong in exactly the direction this whole change exists
+// to fix: a question whose discovery was truncated and which then matched
+// nobody would report `satisfied` over 0 of 0, and the answer would call
+// itself complete. "We found no teams" and "we found no teams, and we could
+// not see all of them" are different answers, and the second is the one this
+// row has to be able to say.
+//
+// Tested at the pure function rather than end to end because the count row
+// itself is only appended for a resolved population; the classification is
+// what has to hold at zero, and it is the classification a member-count
+// conjunct would break. The complement is asserted in the same test so this
+// cannot pass by the field being true for everything.
+func TestAnEmptyIncompletePopulationIsStillQualified(t *testing.T) {
+	t.Parallel()
+	empty := countingCohort(SubjectTeam, 0)
+	empty.Complete = false
+	empty.Truncated = false
+
+	cardinality, counted := ComputeMembershipCardinality(empty, nil)
+	if !counted {
+		t.Fatal("an empty cohort reported NO cardinality; empty and absent are different answers and this one " +
+			"is present with zero members, not missing")
+	}
+	if cardinality.Served != 0 || cardinality.Declared != 0 {
+		t.Fatalf("an empty cohort counted %d/%d, want 0/0", cardinality.Served, cardinality.Declared)
+	}
+	if !cardinality.PopulationIncomplete {
+		t.Error("an EMPTY cohort over an incomplete census was read as a full census: a count of zero taken over " +
+			"a population the answer never saw all of is not an exact zero, and reporting it as one is the same " +
+			"false `satisfied` this change removes at every other size")
+	}
+	// The complement: an empty cohort whose census WAS complete is a genuine,
+	// exact zero and must not be qualified.
+	genuine := countingCohort(SubjectTeam, 0)
+	genuine.Complete = true
+	genuine.Truncated = false
+	if plain, _ := ComputeMembershipCardinality(genuine, nil); plain.PopulationIncomplete {
+		t.Error("a complete census that matched nobody was reported as an incomplete population; an exact zero " +
+			"is an answer, and qualifying it would make every empty result look degraded")
+	}
+}
