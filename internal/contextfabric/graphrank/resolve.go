@@ -2764,11 +2764,23 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// which axis (or both, or neither) actually fired without cross-
 	// referencing KindOfferSuppressedByCardinality and
 	// CandidateOfferCount by hand.
+	//
+	// CHAOS-5218 (review round 2, P2): this switch used to ask
+	// "!SuppressedByCardinality", i.e. it enumerated the ONE reason the kind
+	// axis might not have fired. Adding a second suppression reason silently
+	// broke it -- a fully suppressed offer reported offer_kind="kind", telling
+	// an operator the kind axis fired when it had been withdrawn. A deny-list
+	// over reasons admits the next reason by default, exactly like a
+	// classification deny-list admits the next enum member. So the question is
+	// asked of the OUTCOME instead: the kind axis fired iff it actually
+	// produced options. That is correct for both current suppressions and for
+	// any future one, and it cannot drift out of step with them.
+	kindOfferFired := len(kindOffer.KindOptions) > 0
 	offerKind := ""
 	switch {
-	case !kindOfferDiag.SuppressedByCardinality && candidateOfferDiag.OfferKind == "candidate":
+	case kindOfferFired && candidateOfferDiag.OfferKind == "candidate":
 		offerKind = "both"
-	case !kindOfferDiag.SuppressedByCardinality:
+	case kindOfferFired:
 		offerKind = "kind"
 	case candidateOfferDiag.OfferKind == "candidate":
 		offerKind = "candidate"

@@ -161,6 +161,54 @@ func TestKindOfferMaterial_DeclaredKindPresentInPoolIsStillOfferedFirst(t *testi
 	}
 }
 
+// TestKindOfferMaterial_DuplicateDeclaredKindsAreCountedOnce pins the dedup
+// inside the declared loop (review round 2, named mutant 2). Nothing tested it,
+// because frameKindHints happens to return distinct kinds today -- so the guard
+// was resting on a caller's current behaviour rather than on its own contract,
+// and deleting it would have survived. This function takes a caller-supplied
+// slice; it owns its own dedup.
+func TestKindOfferMaterial_DuplicateDeclaredKindsAreCountedOnce(t *testing.T) {
+	t.Parallel()
+	poolKinds := []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectTeam,
+		contractsv1.ContextFabricSubjectPullRequest,
+	}
+	declaredKinds := []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectProject,
+		contractsv1.ContextFabricSubjectProject,
+	}
+
+	_, diag := kindOfferMaterial(poolKinds, nil, declaredKinds, heldFromKinds(poolKinds...))
+	if diag.DeclaredWithheldNotInPoolCount != 1 {
+		t.Fatalf("diag.DeclaredWithheldNotInPoolCount = %d, want 1 -- the same declared kind twice is ONE withheld kind, not two", diag.DeclaredWithheldNotInPoolCount)
+	}
+	if !reflect.DeepEqual(diag.DeclaredWithheldNotInPoolKinds, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectProject}) {
+		t.Fatalf("diag.DeclaredWithheldNotInPoolKinds = %v, want [project] once", diag.DeclaredWithheldNotInPoolKinds)
+	}
+
+	// The served side of the same guard: a duplicated SERVED declared kind must
+	// mint ONE option. A duplicate KindOption would also breach the receipt-id
+	// uniqueness the structure contract validates.
+	served := []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectTeam,
+		contractsv1.ContextFabricSubjectPullRequest,
+	}
+	material, diag := kindOfferMaterial(served, nil, []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectTeam,
+		contractsv1.ContextFabricSubjectTeam,
+	}, heldFromKinds(served...))
+	if diag.DeclaredHintCount != 1 {
+		t.Fatalf("diag.DeclaredHintCount = %d, want 1 for a duplicated served declared kind", diag.DeclaredHintCount)
+	}
+	occurrences := map[contractsv1.ContextFabricSubjectKind]int{}
+	for _, option := range material.KindOptions {
+		occurrences[option.Kind]++
+	}
+	if occurrences[contractsv1.ContextFabricSubjectTeam] != 1 {
+		t.Fatalf("KindOptions = %+v, want exactly one team option", material.KindOptions)
+	}
+}
+
 // TestKindOfferMaterial_NilPoolHeldKindsWithholdsDeclaredKinds pins the
 // fail-closed reading of a missing membership set. The alternative -- treat
 // "no information" as "present" -- is the CHAOS-5218 defect itself, so a
@@ -388,6 +436,16 @@ func TestResolveSubjects_QbScopedShapeRaisesNoNeedAndKeepsThePoolAcrossTurns(t *
 	if len(offers) != 1 || offers[0].KindOfferDeclaredWithheldNotInPoolCount != 1 || !offers[0].KindOfferSuppressedByUnservableDeclaredKind {
 		t.Fatalf("kind_offer events = %+v, want exactly 1 carrying withheld count 1 and the suppression reason", offers)
 	}
+	// Review round 2, P2: offer_kind must not claim the kind axis fired when it
+	// was suppressed. It is derived from whether options were actually produced,
+	// so it and KindOptions can never disagree -- asserted together, which makes
+	// this a pin on the DERIVATION rather than on one reading of it.
+	if offers[0].KindOfferOfferKind == "kind" || offers[0].KindOfferOfferKind == "both" {
+		t.Fatalf("kind_offer offer_kind = %q, want it NOT to claim the kind axis fired -- the offer was suppressed and carries zero options", offers[0].KindOfferOfferKind)
+	}
+	if len(offer.KindOptions) != 0 {
+		t.Fatalf("offer.KindOptions = %+v, want none -- offer_kind and KindOptions must agree", offer.KindOptions)
+	}
 	// codex round 1, named mutants 1 and 2: the withheld event also CARRIES the
 	// declared-hint and distinct-kind counts, and nothing asserted them, so
 	// deleting either assignment survived. Asserted here, and asserted again at
@@ -538,6 +596,19 @@ func TestResolveSubjects_PartialWithholdingCarriesItsCountsNonZero(t *testing.T)
 	if withheld[0].KindOfferDeclaredWithheldNotInPoolCount != 1 {
 		t.Fatalf("withheld count = %d, want 1 (project)", withheld[0].KindOfferDeclaredWithheldNotInPoolCount)
 	}
+	// The other direction of the offer_kind derivation (review round 2, P2):
+	// here the kind axis DID fire, so offer_kind must say so. Asserting only the
+	// suppressed direction would pass for a constant "".
+	offers := tracer.eventsByStage("kind_offer")
+	if len(offers) != 1 {
+		t.Fatalf("got %d kind_offer events, want exactly 1", len(offers))
+	}
+	if offers[0].KindOfferOfferKind != "kind" && offers[0].KindOfferOfferKind != "both" {
+		t.Fatalf("kind_offer offer_kind = %q, want it to report the kind axis as fired -- one declared kind was served and options were produced", offers[0].KindOfferOfferKind)
+	}
+	if len(offer.KindOptions) == 0 {
+		t.Fatal("offer.KindOptions is empty while offer_kind reports the kind axis fired -- the two must agree")
+	}
 	if !reflect.DeepEqual(withheld[0].KindOfferDeclaredWithheldKinds, []string{string(contractsv1.ContextFabricSubjectProject)}) {
 		t.Fatalf("withheld kinds = %v, want [project]", withheld[0].KindOfferDeclaredWithheldKinds)
 	}
@@ -556,11 +627,15 @@ func TestChaos5218_ProductionSinkEmitsTheWithholdingAtTheProductionLogLevel(t *t
 	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	NewSlogResolutionTracer(logger).Trace(ResolutionTraceEvent{
 		RequestID: "req_5218_sink", Stage: "kind_offer_withheld",
-		KindOfferDeclaredWithheldNotInPoolCount:     1,
-		KindOfferDeclaredWithheldKinds:              []string{string(contractsv1.ContextFabricSubjectProject)},
+		// Review round 2, named mutant 3: every count on this line carries a
+		// DISTINCT value. With two of them equal, swapping one field for the
+		// other in the sink is invisible.
+		KindOfferDeclaredWithheldNotInPoolCount:     2,
+		KindOfferDeclaredWithheldKinds:              []string{string(contractsv1.ContextFabricSubjectProject), string(contractsv1.ContextFabricSubjectRepository)},
 		KindOfferSuppressedByUnservableDeclaredKind: true,
+		KindOfferSuppressedByCardinality:            false,
 		KindOfferDeclaredHintCount:                  1,
-		KindOfferDistinctKindCount:                  2,
+		KindOfferDistinctKindCount:                  3,
 	})
 	line := strings.TrimSpace(buffer.String())
 	if line == "" {
@@ -577,12 +652,12 @@ func TestChaos5218_ProductionSinkEmitsTheWithholdingAtTheProductionLogLevel(t *t
 	if got := record["request_id"]; got != "req_5218_sink" {
 		t.Fatalf("request_id = %v, want req_5218_sink -- the line must be joinable to its request", got)
 	}
-	if got := record["withheld_count"]; got != float64(1) {
-		t.Fatalf("withheld_count = %v, want 1", got)
+	if got := record["withheld_count"]; got != float64(2) {
+		t.Fatalf("withheld_count = %v, want 2", got)
 	}
 	kinds, ok := record["withheld_kinds"].([]any)
-	if !ok || len(kinds) != 1 || kinds[0] != string(contractsv1.ContextFabricSubjectProject) {
-		t.Fatalf("withheld_kinds = %v, want [project]", record["withheld_kinds"])
+	if !ok || len(kinds) != 2 || kinds[0] != string(contractsv1.ContextFabricSubjectProject) || kinds[1] != string(contractsv1.ContextFabricSubjectRepository) {
+		t.Fatalf("withheld_kinds = %v, want [project repository]", record["withheld_kinds"])
 	}
 	// codex round 1, named mutant 3: nothing asserted the SERIALIZED
 	// declared_hint_count, so deleting it from the sink survived. Both counts are
@@ -590,8 +665,13 @@ func TestChaos5218_ProductionSinkEmitsTheWithholdingAtTheProductionLogLevel(t *t
 	if got := record["declared_hint_count"]; got != float64(1) {
 		t.Fatalf("declared_hint_count = %v, want 1", got)
 	}
-	if got := record["distinct_kind_count"]; got != float64(2) {
-		t.Fatalf("distinct_kind_count = %v, want 2", got)
+	if got := record["distinct_kind_count"]; got != float64(3) {
+		t.Fatalf("distinct_kind_count = %v, want 3", got)
+	}
+	// Review round 2, named mutant 4: the OTHER suppression token must be
+	// asserted too, or swapping one for the other in the sink is invisible.
+	if got := record["suppressed_by_cardinality"]; got != false {
+		t.Fatalf("suppressed_by_cardinality = %v, want false -- this stage was reached by the unservable-declared-kind reason, not by cardinality", got)
 	}
 	if got := record["suppressed_by_unservable_declared_kind"]; got != true {
 		t.Fatalf("suppressed_by_unservable_declared_kind = %v, want true -- asserted at a NON-ZERO value, since a bool asserted false would pass for a dropped assignment", got)
