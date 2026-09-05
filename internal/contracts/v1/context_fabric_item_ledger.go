@@ -104,10 +104,13 @@ type ContextFabricItemDebit struct {
 	Ordinal int `json:"ordinal"`
 	// DeclaredID is the id the answer itself gives this item -- driver_id,
 	// finding_id, claim_id, receipt_id -- or, for the cohort member rows
-	// which carry none, the subject key. It is diagnosis, and it is what the
-	// duplicate check keys on; it is never the OCCURRENCE key, because a
-	// producer that repeats an id must still be counted twice here rather
-	// than collapsing two items into one.
+	// which carry none, the subject key.
+	//
+	// DIAGNOSIS ONLY. It is deliberately NOT the occurrence key and is
+	// deliberately not checked for uniqueness: a producer that repeats an id
+	// must still be counted twice here rather than collapsing two charged
+	// items into one, and refusing the answer over it would turn a producer
+	// defect into a server error -- see the note below the reconciler.
 	DeclaredID string `json:"declared_id"`
 	// Bucket is WHAT this item is about, carried from
 	// contextFabricSubjectsBucket rather than re-derived. Two derivations of
@@ -143,9 +146,10 @@ const (
 	// AttributeContextFabricResultItems disagree, so the ledger and the
 	// published attribution describe the same answer differently.
 	ContextFabricLedgerBucketDisagreement ContextFabricLedgerStatus = "bucket_split_disagreement"
-	// ContextFabricLedgerDuplicateOccurrence: two occurrences in one
-	// collection declare the same id, so any consumer keying on that id sees
-	// one item where the budget charges two.
+	// ContextFabricLedgerDuplicateOccurrence: a collection's occurrence keys
+	// are not the dense range 0..n-1 -- an ordinal repeated, or one missing.
+	// That is one occurrence dropped and another charged twice, which is the
+	// shape every total in this package survives unchanged.
 	ContextFabricLedgerDuplicateOccurrence ContextFabricLedgerStatus = "duplicate_occurrence"
 )
 
@@ -386,7 +390,6 @@ func contextFabricSubjectsDebit(
 // about WHICH items exist and a count is a statement about how many, and the
 // first explains the second wherever both are true.
 func contextFabricReconcile(ledger ContextFabricItemLedger) (ContextFabricLedgerStatus, string) {
-	seen := map[ContextFabricChargedCollection]map[string]struct{}{}
 	ordinals := map[ContextFabricChargedCollection]map[int]struct{}{}
 	perCollection := map[ContextFabricChargedCollection]int{}
 	perBucket := ContextFabricItemAttribution{}
@@ -410,19 +413,6 @@ func contextFabricReconcile(ledger ContextFabricItemLedger) (ContextFabricLedger
 				string(debit.Collection) + "#" + strconv.Itoa(debit.Ordinal)
 		}
 		byOrdinal[debit.Ordinal] = struct{}{}
-		if !contextFabricCollectionHasUniqueIDs(debit.Collection) || debit.DeclaredID == "" {
-			continue
-		}
-		ids, ok := seen[debit.Collection]
-		if !ok {
-			ids = map[string]struct{}{}
-			seen[debit.Collection] = ids
-		}
-		if _, duplicate := ids[debit.DeclaredID]; duplicate {
-			return ContextFabricLedgerDuplicateOccurrence,
-				string(debit.Collection) + ":" + debit.DeclaredID
-		}
-		ids[debit.DeclaredID] = struct{}{}
 	}
 
 	// DENSE ordinals: a collection charging n occurrences must charge
@@ -479,37 +469,23 @@ func contextFabricAttributionBucket(attribution ContextFabricItemAttribution, bu
 	}
 }
 
-// contextFabricCollectionHasUniqueIDs reports whether a collection's items
-// declare an id the answer contract requires to be unique.
+// A REPEATED DECLARED ID IS NOT AN ACCOUNTING DEFECT, and this file briefly
+// treated it as one.
 //
-// An ALLOW-LIST, so a new collection is not silently enrolled in a duplicate
-// check its items were never promised to satisfy. Drivers, findings and claims
-// carry ids the synthesis contract requires to be unique within an answer;
-// cohort member rows are keyed by subject and a cohort carrying one member
-// twice is a real defect. Resolution candidates are NOT checked: nothing
-// promises the resolver returns each subject once, and a false accounting
-// defect is worse than an unchecked duplicate, because it turns a servable
-// answer into a server error.
-func contextFabricCollectionHasUniqueIDs(collection ContextFabricChargedCollection) bool {
-	switch collection {
-	case ContextFabricChargedDrivers,
-		ContextFabricChargedRemainingWork,
-		ContextFabricChargedReadinessGaps,
-		ContextFabricChargedConflicts,
-		ContextFabricChargedClaimedFacts,
-		ContextFabricChargedCohortMembers:
-		return true
-	case ContextFabricChargedCandidates:
-		// Keyed on ReceiptID, which validate_context_fabric_result.go
-		// already requires to be unique across candidates. A debit whose
-		// receipt is empty is skipped by the caller, so a result measured
-		// BEFORE validation cannot raise a false accounting defect on a
-		// field validation has not yet required.
-		return true
-	default:
-		return false
-	}
-}
+// The reasoning was that drivers, findings and claims carry ids the synthesis
+// contract requires to be unique within an answer, so a repeat means two
+// charged items look like one to any id-keyed consumer. The reasoning is sound
+// and the consequence was wrong: an accounting defect is a SERVER error, and
+// this seam's own rule is that a false one costs a served answer. Executing it
+// proved the point immediately -- a real engine fixture assembles two claimed
+// facts sharing `claim_workload_a`, so every answer of that shape became a 500
+// on a 43-debit account that balanced perfectly.
+//
+// The account does not need it. What makes this ledger occurrence-level is the
+// (Collection, Ordinal) key, checked above for uniqueness AND density: an
+// occurrence dropped and another charged twice moves that key whatever the ids
+// say. A repeated id is a PRODUCER defect for validation to reject, and it is
+// carried on the debit as diagnosis so a reader can still see it.
 
 // contextFabricCensusByCollection projects the per-collection census onto the
 // charged-collection vocabulary.

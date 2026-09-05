@@ -268,59 +268,79 @@ func TestADroppedRowPairedWithADoubledDebitIsVisible(t *testing.T) {
 		t.Fatalf("the tamper changed the total (%d then %d); it must not, or this test is not testing "+
 			"what a total cannot see", reconciled.Total(), tampered.Total())
 	}
+	// The OCCURRENCE KEY reports it, and names which occurrence went missing.
+	// The collection count is also wrong here, but the ordinal check runs
+	// first and is the more precise diagnosis: it says WHICH item, where a
+	// count says only how many.
 	status, disagreement := contextFabricReconcile(tampered)
-	if status != ContextFabricLedgerCollectionDisagreement {
-		t.Fatalf("status = %q, want %q", status, ContextFabricLedgerCollectionDisagreement)
+	if status != ContextFabricLedgerDuplicateOccurrence {
+		t.Fatalf("status = %q, want %q", status, ContextFabricLedgerDuplicateOccurrence)
 	}
-	if disagreement != string(ContextFabricChargedCohortMembers) {
-		t.Errorf("disagreement = %q, want %q", disagreement, ContextFabricChargedCohortMembers)
+	if disagreement != string(ContextFabricChargedCohortMembers)+"#0" {
+		t.Errorf("disagreement = %q, want the missing cohort_members occurrence", disagreement)
 	}
 }
 
-// TestADuplicateDeclaredIDIsAnAccountingDefect covers the other occurrence-level
-// break: two items in one collection declaring the same id, where any consumer
-// keyed on that id sees one item and the budget charges two.
-func TestADuplicateDeclaredIDIsAnAccountingDefect(t *testing.T) {
+// TestARepeatedDeclaredIDStillCharesTwoItems is the FALSE POSITIVE this file
+// briefly shipped, pinned so it cannot come back.
+//
+// An earlier revision refused an answer whose driver, finding or claim ids
+// repeated, on the reasoning that two charged items then look like one to any
+// id-keyed consumer. Executing it found a real engine fixture that assembles
+// two claimed facts sharing one id, so every answer of that shape became a
+// server error on an account that balanced perfectly. An accounting defect is a
+// 500; a false one costs a served answer. A repeated id is a producer defect
+// for validation to reject.
+func TestARepeatedDeclaredIDStillChargesTwoItems(t *testing.T) {
 	t.Parallel()
-	result := ledgerGroupedFixture()
-	result.Drivers = append(result.Drivers, ContextFabricDriverJudgment{
-		DriverID:         "driver_global", // already used by the fixture
-		AffectedSubjects: nil,
-	})
+	member := ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_a"}
+	result := ContextFabricInvestigationResult{
+		Cohort: &ContextFabricCohort{Members: []ContextFabricCohortMember{{Subject: member}}},
+		ClaimedFacts: []ContextFabricClaimedFact{
+			{ClaimID: "claim_repeated", Subject: member},
+			{ClaimID: "claim_repeated", Subject: member},
+		},
+	}
 	ledger := ReconcileContextFabricResultItems(result)
 
-	if ledger.Status != ContextFabricLedgerDuplicateOccurrence {
-		t.Fatalf("status = %q, want %q", ledger.Status, ContextFabricLedgerDuplicateOccurrence)
+	if !ledger.Reconciled() {
+		t.Fatalf("a repeated claim id was reported as an accounting defect (%q, %q): that is a false "+
+			"positive, and it costs a served answer", ledger.Status, ledger.Disagreement)
 	}
-	if ledger.Disagreement == "" {
-		t.Error("a duplicate occurrence was reported without naming which id, so it is not diagnosable")
+	// BOTH are charged: the repeat collapses nothing.
+	claims := 0
+	ordinals := map[int]int{}
+	for _, debit := range ledger.Debits {
+		if debit.Collection != ContextFabricChargedClaimedFacts {
+			continue
+		}
+		claims++
+		ordinals[debit.Ordinal]++
 	}
+	if claims != 2 {
+		t.Fatalf("%d claim debits, want 2: a repeated id collapsed two charged items into one", claims)
+	}
+	if ordinals[0] != 1 || ordinals[1] != 1 {
+		t.Errorf("the two claims do not carry distinct occurrence keys: %v", ordinals)
+	}
+}
 
-	// Candidates are id-checked too, on the RECEIPT id, which
-	// validate_context_fabric_result.go already requires to be unique across
-	// candidates. An earlier revision excluded them on the belief that
-	// nothing promised uniqueness; something does, and the exclusion left
-	// the one collection where a dropped occurrence paired with a duplicated
-	// one reconciled.
-	duplicateCandidate := ledgerGroupedFixture()
-	duplicateCandidate.SubjectResolution.Candidates = append(
-		duplicateCandidate.SubjectResolution.Candidates,
-		duplicateCandidate.SubjectResolution.Candidates[0])
-	if repeat := ReconcileContextFabricResultItems(duplicateCandidate); repeat.Status != ContextFabricLedgerDuplicateOccurrence {
-		t.Errorf("a repeated candidate receipt reconciled (status %q); the collection whose ids are "+
-			"validated for uniqueness must be checked for it", repeat.Status)
+// TestACohortCarryingOneMemberTwiceChargesTwoRows is the same property for the
+// collection whose rows carry no id of their own: two rows are two occurrences
+// and two debits, keyed by ordinal, whatever their subjects say.
+func TestACohortCarryingOneMemberTwiceChargesTwoRows(t *testing.T) {
+	t.Parallel()
+	member := ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_a"}
+	result := ContextFabricInvestigationResult{
+		Cohort: &ContextFabricCohort{Members: []ContextFabricCohortMember{{Subject: member}, {Subject: member}}},
 	}
+	ledger := ReconcileContextFabricResultItems(result)
 
-	// The pre-validation control: a candidate with NO receipt yet is skipped
-	// rather than reported, because a result measured before validation must
-	// not raise a false accounting defect on a field validation has not yet
-	// required -- and a false defect costs a served answer.
-	unvalidated := ledgerGroupedFixture()
-	for index := range unvalidated.SubjectResolution.Candidates {
-		unvalidated.SubjectResolution.Candidates[index].ReceiptID = ""
+	if !ledger.Reconciled() {
+		t.Fatalf("status = %q disagreement = %q, want a reconciled account", ledger.Status, ledger.Disagreement)
 	}
-	if control := ReconcileContextFabricResultItems(unvalidated); !control.Reconciled() {
-		t.Errorf("candidates carrying no receipt yet were reported as an accounting defect (%q)", control.Status)
+	if ledger.Total() != 2 {
+		t.Fatalf("total = %d, want 2", ledger.Total())
 	}
 }
 
@@ -440,20 +460,6 @@ func TestAnItemNamingOneGroupTwiceParticipatesOnce(t *testing.T) {
 	if ledger.Debits[0].Bucket != ContextFabricItemBucketGroup {
 		t.Errorf("bucket = %q, want %q: a duplicate mention must not promote the item to multi_group",
 			ledger.Debits[0].Bucket, ContextFabricItemBucketGroup)
-	}
-}
-
-// TestACohortCarryingOneMemberTwiceIsAnAccountingDefect: member rows have no
-// id of their own and are keyed by subject, so a cohort holding the same
-// member twice charges two items that every id-keyed consumer sees as one.
-func TestACohortCarryingOneMemberTwiceIsAnAccountingDefect(t *testing.T) {
-	t.Parallel()
-	member := ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_a"}
-	result := ContextFabricInvestigationResult{
-		Cohort: &ContextFabricCohort{Members: []ContextFabricCohortMember{{Subject: member}, {Subject: member}}},
-	}
-	if ledger := ReconcileContextFabricResultItems(result); ledger.Status != ContextFabricLedgerDuplicateOccurrence {
-		t.Fatalf("status = %q, want %q", ledger.Status, ContextFabricLedgerDuplicateOccurrence)
 	}
 }
 
