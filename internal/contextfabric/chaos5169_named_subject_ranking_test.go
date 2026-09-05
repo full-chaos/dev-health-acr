@@ -508,3 +508,67 @@ func TestExplicitSetRankingWithoutAResolvedCohortIsUnavailable(t *testing.T) {
 	t.Logf("explicit-set ranking: plan kinds %v, reader received %v, plan row step=%q unavailable=%q",
 		result.AnswerPlan.FactKinds, sortedObservedKinds(observed), rankingRow.Step, rankingRow.Unavailable)
 }
+
+// TestStepNeedsAResolvedMemberSetReadsTheDeclaration pins the conjunct an
+// adversarial round proved undecidable through the derivation's own fixtures.
+//
+// The round deleted `inputs.RunsOverResolvedMemberSet &&` from the guard and
+// the mutant survived — correctly. Both steps in the declaration table set the
+// flag, so no frame-driven fixture can tell the guard "reads the declaration"
+// apart from "fires for every declared computed step". The predicate is
+// extracted precisely so a test can supply the case the table cannot: a step
+// that declares it does NOT run over the member set.
+//
+// Constructed inputs are legitimate here for the same reason they were for the
+// arm counters: the unit under test is a PURE FUNCTION, total over its
+// arguments, and the argument is its input rather than the decision it makes.
+func TestStepNeedsAResolvedMemberSetReadsTheDeclaration(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		inputs   ComputedStepInputs
+		declared bool
+		want     bool
+	}{
+		{
+			name:     "a step that runs over the member set needs one",
+			inputs:   ComputedStepInputs{Class: ComputedInputFactKinds, RunsOverResolvedMemberSet: true},
+			declared: true,
+			want:     true,
+		},
+		{
+			// THE CASE THE TABLE CANNOT PRODUCE TODAY, and the only one that
+			// discriminates: a declared, server-executed step that scores from
+			// facts alone. Without it the conjunct is untestable.
+			name:     "a step that does NOT run over the member set does not need one",
+			inputs:   ComputedStepInputs{Class: ComputedInputFactKinds, RunsOverResolvedMemberSet: false},
+			declared: true,
+			want:     false,
+		},
+		{
+			// A missing declaration must not read as "needs nothing" — that
+			// would silently serve a cell whose step cannot run.
+			name:     "an undeclared step needs nothing, because it declares nothing",
+			inputs:   ComputedStepInputs{RunsOverResolvedMemberSet: true},
+			declared: false,
+			want:     false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := stepNeedsAResolvedMemberSet(tc.inputs, tc.declared); got != tc.want {
+				t.Errorf("stepNeedsAResolvedMemberSet(%+v, %v) = %v, want %v", tc.inputs, tc.declared, got, tc.want)
+			}
+		})
+	}
+
+	// The SHIPPED table must still route through the true arm, or the guard
+	// is correct about a declaration production never makes.
+	for _, step := range ComputedObligationStepVocabulary() {
+		inputs, declared := InputsForComputedStep(step)
+		if !stepNeedsAResolvedMemberSet(inputs, declared) {
+			t.Errorf("shipped step %q does not need a resolved member set; if that is now true, the guard no longer covers it and this ticket's cell can lie again", step)
+		}
+	}
+}

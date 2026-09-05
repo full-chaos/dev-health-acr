@@ -252,3 +252,74 @@ func TestTheArmCountersRefuseANonComputedRow(t *testing.T) {
 		t.Error("neither row contributed an unplanned input kind, so the zero asserted above cannot discriminate")
 	}
 }
+
+// TestTheArmCountersCoverEveryRoleThatCanRefuseAPopulation closes the round-2
+// mutant `&& row.Role == SubjectRoleSubject`, which survived.
+//
+// It survived because every earlier fixture here refuses a population at the
+// SUBJECT role — a named subject, and the organization as a subject. But the
+// derivation refuses populations at two more roles, and both are reachable:
+// `organization_scope` WITH a member kind refuses at the MEMBER role, and an
+// explicit set refuses at the OPERAND role. A role restriction on the counters
+// would silently drop those, and an operator would read zero for a decision
+// that fired.
+//
+// The roles are read off the DERIVED ROWS rather than asserted from a list, so
+// this cannot pass by agreeing with a hand-typed expectation that has drifted
+// from what the derivation actually produces.
+func TestTheArmCountersCoverEveryRoleThatCanRefuseAPopulation(t *testing.T) {
+	t.Parallel()
+
+	kind := SubjectTeam
+	cases := []struct {
+		name     string
+		frame    QuestionFrame
+		wantRole SubjectRole
+	}{
+		{
+			name:     "organization scope with a member kind refuses at the MEMBER role",
+			frame:    frameWith([]InvestigationGoal{GoalRankOrSurvey}, orgExpression(&kind), TemporalIntentCurrent, nil),
+			wantRole: SubjectRoleMember,
+		},
+		{
+			name:     "an explicit set refuses at the OPERAND role",
+			frame:    *explicitSetRankingFrame(),
+			wantRole: SubjectRoleOperand,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := DeriveRequirements(tc.frame, GenerateObligationSeed(nil), nil)
+
+			// REACH, before any count is read: the fixture must actually
+			// produce an unavailable ranking row AT THE ROLE this case is
+			// about, or the counter assertion below is vacuous.
+			found := false
+			for _, row := range rows {
+				if row.Obligation != ObligationRanking || row.Served() {
+					continue
+				}
+				if row.Role == tc.wantRole && row.Unavailable == RequirementReasonComputedPopulationAbsent {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("no unavailable `ranking` row at role %q for this frame -- the fixture does not exhibit the case, so the counter assertion would prove nothing", tc.wantRole)
+			}
+
+			summary := RequirementDerivationSummaryFrom(rows)
+			if summary.ComputedPopulationAbsentUnresolvableMemberSet == 0 {
+				t.Errorf("the `unresolvable_member_set` arm counted ZERO for a population refused at role %q -- a role restriction on the counters would read as a decision that never fired", tc.wantRole)
+			}
+			var unplanned int
+			for _, count := range summary.ComputedInputKindsUnplanned {
+				unplanned += count
+			}
+			if unplanned == 0 {
+				t.Errorf("no unplanned computed-step input kinds counted at role %q -- the cost of the refusal is invisible on the emitted line", tc.wantRole)
+			}
+			t.Logf("role %s: arm=%d unplanned_kinds=%d", tc.wantRole, summary.ComputedPopulationAbsentUnresolvableMemberSet, unplanned)
+		})
+	}
+}

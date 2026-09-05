@@ -411,8 +411,8 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 		// are": an unavailable row is not Served, so ComputedStepInputReads
 		// plans nothing for it and the seed says `unavailable` with a named
 		// cause instead of a silent `satisfied`.
-		if inputs, declared := InputsForComputedStep(step); declared &&
-			inputs.RunsOverResolvedMemberSet && !memberSetResolvable {
+		if inputs, declared := InputsForComputedStep(step); stepNeedsAResolvedMemberSet(inputs, declared) &&
+			!memberSetResolvable {
 			row.Quantifier = CompletionQuantifierNone
 			row.Unavailable = RequirementReasonComputedPopulationAbsent
 			// Step stays EMPTY, and that is the row invariant rather than an
@@ -558,6 +558,28 @@ func dimensionsOfFactKinds(kinds []FactKind, capabilities []FactCapability) []He
 		}
 	}
 	return out
+}
+
+// stepNeedsAResolvedMemberSet reports whether a computed step's own
+// declaration says it cannot run without a resolved member set.
+//
+// EXTRACTED SO THE CONJUNCT IS DECIDABLE, which is the whole reason this
+// function exists rather than the expression sitting inline. An adversarial
+// round deleted `inputs.RunsOverResolvedMemberSet &&` from the inline guard
+// and the mutant SURVIVED a fourteen-test suite -- correctly, because both
+// steps in the declaration table set the flag today, so the conjunct
+// discriminates nothing that any frame-driven fixture can reach. A conjunct
+// no fixture can isolate is not kept with a comment; it is re-pinned where it
+// IS decidable. This is a pure function, total over its arguments, so a unit
+// test can hand it a step that does NOT run over the member set -- the case
+// the table cannot currently produce -- and the guard's read of the
+// declaration stops being an untested assumption.
+//
+// `declared` is carried rather than assumed: a step absent from the table
+// declares nothing, and a missing declaration must not read as "needs
+// nothing" (which would silently serve a cell whose step cannot run).
+func stepNeedsAResolvedMemberSet(inputs ComputedStepInputs, declared bool) bool {
+	return declared && inputs.RunsOverResolvedMemberSet
 }
 
 // coordinateNamesAPopulation reports whether a coordinate names a set a
