@@ -305,35 +305,37 @@ func (r DerivedRequirement) Served() bool {
 // map iteration order.
 func DeriveRequirements(frame QuestionFrame, seed ObligationSeed, capabilities []FactCapability) []DerivedRequirement {
 	coordinates := DeriveRequirementCoordinates(frame)
-	// Whether THIS FRAME can produce a resolved member set at all. Only a
-	// cohort variant is ever discovered into one, so an organization-scope
-	// frame naming a member kind states a population nothing retrieves.
+	// Whether THIS FRAME can produce a resolved member set at all.
 	//
 	// COHORT-SHAPED IS NOT THE SAME AS COHORT-PRODUCING, and reading the
-	// shape alone was this predicate's own defect. `DiscoveredCohort` is the
-	// only production cohort producer, and it returns nil unless
-	// `cohortKindFromFrame` resolves a MEMBER KIND from the frame -- which
-	// reads `SubjectExpression.MemberKind()`. That method has no
-	// `explicit_set` case at all: an explicit set names OPERANDS, each with
-	// its own kind, and there is no single member kind a cohort could be
-	// built from. So "rank these two named teams" is a legal frame, is a
-	// cohort VARIANT, and can never produce a cohort -- leaving `ranking`
-	// served by a `rank_cohort` the engine can never invoke, which is
-	// exactly the cell this change exists to stop lying.
+	// shape alone was this predicate's first defect. `DiscoveredCohort` is
+	// the only production cohort producer and it builds nothing unless the
+	// frame is a cohort variant, declares a member kind, AND a discovery arm
+	// exists for that kind.
 	//
-	// The member-kind test is therefore taken from the frame layer that owns
-	// it, not re-derived here, and it is the SAME question the cohort
-	// producer asks one layer down. `graphrank` cannot be imported from here
-	// (it imports this package), so the shared authority is `MemberKind()`
-	// itself rather than `cohortKindFromFrame`.
+	// THIS LINE IS NOW A CALL RATHER THAN A CHAIN OF CONJUNCTS, and that is
+	// the change, not a tidy-up. The predicate was rebuilt here by hand and
+	// three review rounds each found the next missing condition -- what a
+	// step READS versus what it RUNS OVER, then expression SHAPE versus
+	// declaring a member kind, then declaring a member kind versus that kind
+	// being SERVABLE. The third gap was measured over the fifteen published
+	// subject kinds: this derivation served a ranking row for all fifteen
+	// while the discovery seam could serve three, so TWELVE cells claimed an
+	// ordering that nothing computed. The fix for a fourth gap would have
+	// been a COPY of the seam's deny-by-default allow-list, which is where
+	// the drift restarts.
+	//
+	// So the decision was moved DOWN, into this package beside the
+	// subject-kind vocabulary, and the discovery seam consumes it too --
+	// `graphrank` still cannot be imported from here, and now nothing needs
+	// to be. One predicate, two readers, no agreement to maintain.
 	//
 	// What this deliberately does NOT try to decide: whether discovery will
-	// actually FIND any members. That is a runtime fact, unknowable at
-	// derivation time, and a cohort variant whose search returns nothing is
-	// the outcome layer's account to give, not this one's.
-	memberKind, framesAMemberKind := frame.SubjectExpression.MemberKind()
-	_ = memberKind
-	memberSetResolvable := frame.SubjectExpression.IsCohortVariant() && framesAMemberKind
+	// actually FIND any members. A servable kind whose search returns
+	// nothing is a runtime fact, unknowable here by anyone, and it is
+	// corrected on the served document by `finalizeResult` -- see
+	// `appendUnresolvedMemberSetOutcomes`.
+	memberSetResolvable := CohortMemberSetResolvable(frame.SubjectExpression)
 	rows := make([]DerivedRequirement, 0, len(coordinates))
 	for _, coordinate := range coordinates {
 		rows = append(rows, deriveRequirement(coordinate, seed, capabilities, memberSetResolvable))

@@ -462,6 +462,30 @@ func (e *Engine) finalizeResult(result InvestigationResult, plan AnswerPlan, fra
 	// appendOutcomeRows like every other stage's row.
 	rows, _, _ := appendMembershipCardinality(result.Completeness.Outcomes, result.Cohort, plan.Narrowing)
 	result.Completeness.Outcomes = rows
+	// State every OTHER computed requirement whose server step runs over the
+	// resolved member set, on a document that resolved none.
+	//
+	// This is the condition no layer above can decide. The derivation refuses
+	// a computed step whose FRAME can never produce a member set -- not a
+	// cohort variant, no declared member kind, or a kind no discovery arm
+	// serves. What it cannot know is whether a perfectly servable search
+	// returns nothing, and a cohort that retains no members is a nil cohort
+	// here. The requirement was seeded `satisfied` on the strength of naming
+	// a step, the step never ran, and until this line nothing said so.
+	//
+	// IMMEDIATELY AFTER THE COUNT SIBLING, and the order is load-bearing: the
+	// count step can produce a satisfied or narrowed row carrying real
+	// numbers, which is a better account than a refusal, and the sweep's
+	// idempotence guard is what lets that row stand. Running the sweep first
+	// would append a refusal and leave the count step finding its row already
+	// present.
+	//
+	// BEFORE the read evaluations and the completeness derivation below, for
+	// the same reason they run where they do: a row appended after the state
+	// is derived is the measure-then-shrink defect this layer exists to
+	// remove.
+	result.Completeness.Outcomes = appendUnresolvedMemberSetOutcomes(
+		result.Completeness.Outcomes, result.Cohort)
 	// Say what the EVIDENCE made of each planned READ requirement.
 	//
 	// HERE, for the reason the cardinality above it runs here: the row must

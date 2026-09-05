@@ -42,6 +42,12 @@ var frameValidationEventLogKeys = map[string]string{
 	"EmittedShape":           "emitted_shape",
 	"DerivedShape":           "derived_shape",
 	"FrameVersion":           "frame_version",
+	// CohortDiscoverability names WHY the frame can or cannot produce a
+	// discovered cohort. One closed value, one key -- it disambiguates the
+	// `unresolvable_member_set` arm, whose two causes (an expression that
+	// enumerates nothing, and a declared member kind with no discovery arm)
+	// send an operator to opposite ends of the pipeline.
+	"CohortDiscoverability": "cohort_discoverability",
 	// RequirementDerivation is a STRUCT flattened across many keys, so this
 	// entry names the one key that is always present and
 	// requirementDerivationLogKeys below carries the rest. Mapping it to a

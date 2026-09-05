@@ -820,6 +820,16 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		"emitted_shape", string(event.EmittedShape),
 		"derived_shape", string(event.DerivedShape),
 		"frame_version", event.FrameVersion,
+		// WHY the frame can or cannot produce a discovered cohort. It
+		// disambiguates the `unresolvable_member_set` arm below, whose two
+		// causes -- an expression that enumerates nothing, and a declared
+		// member kind with no discovery arm -- send an operator to opposite
+		// ends of the pipeline. Emitted on EVERY frame-validation line,
+		// including a refused frame, where it is empty: the empty value is
+		// not a member of the vocabulary, so "no validated expression" and a
+		// real reason cannot be confused, and this line's own `outcome` key
+		// says which.
+		"cohort_discoverability", string(event.CohortDiscoverability),
 	}
 	args = append(args, requirementDerivationLogAttrs(event.RequirementDerivation)...)
 	args = append(args, requestIDLogAttrs(ctx)...)
