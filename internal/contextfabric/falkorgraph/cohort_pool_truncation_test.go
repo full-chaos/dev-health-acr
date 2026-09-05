@@ -402,3 +402,50 @@ func TestCohortPoolTruncationBasesAreDistinct(t *testing.T) {
 		}
 	}
 }
+
+// TestFormatCohortPoolTruncationArmsNormalizes pins the renderer's own
+// contract, at the level of the function rather than through a log line.
+//
+// The order is part of what this key promises: two lines describing the same
+// cut arms must be byte-identical, or an operator diffing them sees a
+// difference that is only iteration order. Asserting it here as well as on the
+// emitted line is deliberate -- the line test proves the production path is
+// correct today, this one proves the renderer cannot be made wrong by a future
+// caller handing it a different order.
+func TestFormatCohortPoolTruncationArmsNormalizes(t *testing.T) {
+	t.Parallel()
+	vocabulary := CohortPoolTruncationArmVocabulary()
+	if len(vocabulary) < 2 {
+		t.Fatal("fewer than two arms declared -- ordering cannot be tested")
+	}
+	canonical := formatCohortPoolTruncationArms(vocabulary)
+
+	reversed := make([]CohortPoolTruncationArm, 0, len(vocabulary))
+	for i := len(vocabulary) - 1; i >= 0; i-- {
+		reversed = append(reversed, vocabulary[i])
+	}
+	if got := formatCohortPoolTruncationArms(reversed); got != canonical {
+		t.Errorf("reversed input rendered as %q, want %q -- the caller's order reached the line", got, canonical)
+	}
+
+	// A repeated arm collapses: a line naming the same arm twice would read as
+	// two independent losses.
+	doubled := append(append([]CohortPoolTruncationArm{}, vocabulary...), vocabulary[0])
+	if got := formatCohortPoolTruncationArms(doubled); got != canonical {
+		t.Errorf("duplicated arm rendered as %q, want %q", got, canonical)
+	}
+
+	// An undeclared value never reaches the line.
+	withUnknown := append(append([]CohortPoolTruncationArm{}, vocabulary...), CohortPoolTruncationArm("not_a_declared_arm"))
+	got := formatCohortPoolTruncationArms(withUnknown)
+	if got != canonical {
+		t.Errorf("undeclared arm rendered as %q, want %q -- an unpublished value must never reach a closed-vocabulary key", got, canonical)
+	}
+	if strings.Contains(got, "not_a_declared_arm") {
+		t.Errorf("the undeclared value appears in %q", got)
+	}
+
+	if formatCohortPoolTruncationArms(nil) != "" {
+		t.Error("nil arms rendered non-empty")
+	}
+}

@@ -134,8 +134,21 @@ func cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncate
 }
 
 // formatCohortPoolTruncationArms renders the cut arms for the telemetry line:
-// a comma-joined list in vocabulary order, and the empty string when no arm
+// a comma-joined list in VOCABULARY order, and the empty string when no arm
 // was cut.
+//
+// It NORMALIZES rather than joining what it was handed. The first version
+// joined the caller's slice directly and its own doc comment claimed
+// vocabulary order anyway -- true only because cohortPoolTruncation happens to
+// build the slice in that order today. Any other caller, or a reordering of
+// that construction, would emit a different string for an identical outcome,
+// and two log lines describing the same state would not compare equal. The
+// order is part of this key's contract, so it is enforced here, at the one
+// place the string is produced, rather than assumed of every producer.
+//
+// Normalizing by ITERATING THE VOCABULARY also drops anything not declared and
+// collapses a repeated arm, so a malformed caller cannot put an unpublished
+// value on the line.
 //
 // The empty string is deliberate. A placeholder like "none" would collide with
 // the DECISION vocabulary's own `none` on a different key, and an operator
@@ -144,9 +157,15 @@ func formatCohortPoolTruncationArms(arms []CohortPoolTruncationArm) string {
 	if len(arms) == 0 {
 		return ""
 	}
-	parts := make([]string, 0, len(arms))
+	present := make(map[CohortPoolTruncationArm]struct{}, len(arms))
 	for _, arm := range arms {
-		parts = append(parts, string(arm))
+		present[arm] = struct{}{}
+	}
+	parts := make([]string, 0, len(arms))
+	for _, arm := range CohortPoolTruncationArmVocabulary() {
+		if _, cut := present[arm]; cut {
+			parts = append(parts, string(arm))
+		}
 	}
 	return strings.Join(parts, ",")
 }
