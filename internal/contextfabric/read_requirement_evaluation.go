@@ -85,10 +85,6 @@ type readEvidence struct {
 	// coverage layer's own detail where there is one, and only DEFAULTED from
 	// the source state where there is not. Empty when nothing was observed.
 	Cause contractsv1.ContextFabricCoverageDetailCode
-	// CauseCarried says which of those two it was, and it is what the row's
-	// `cause_observed` is built from. Carried means the layer that owns the
-	// concept reported it; defaulted means this file chose it.
-	CauseCarried bool
 	// UndeclaredCause is set when a detail carried a code outside the closed
 	// vocabulary. It is not a state this service can currently reach -- the
 	// fact registry mints declared codes only -- and it exists so that if it
@@ -226,7 +222,6 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 			worst = severity
 			if code, carried := carriedCause[kind]; carried {
 				evidence.Cause = code
-				evidence.CauseCarried = true
 			} else {
 				// NO DETAIL FOR THIS KIND. `Coverage.Details` is
 				// optional-first, so a document written before it existed
@@ -234,7 +229,6 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 				// says so: a defaulted cause reports CauseObserved false,
 				// which is exactly what that flag is for.
 				evidence.Cause = readCoverageCauseFor(state)
-				evidence.CauseCarried = false
 			}
 		}
 	}
@@ -254,7 +248,6 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 			}
 			if code, carried := carriedCause[kind]; carried {
 				evidence.Cause = code
-				evidence.CauseCarried = true
 				break
 			}
 		}
@@ -522,13 +515,22 @@ func readRequirementOutcomeRow(
 	}
 
 	row.CauseCoverage = evidence.Cause
-	// OBSERVED means the layer that OWNS the concept reported this cause.
-	// It is therefore exactly `CauseCarried`: true when the code came from
-	// the coverage detail, false when this file defaulted it from a source
-	// state or from the shortfall arm below. A defaulted cause reported as an
-	// observed one puts a false provenance on the only field a reader has for
-	// judging the cause.
-	row.CauseObserved = evidence.CauseCarried
+	// OBSERVED means something REPORTED this cause for this cell, as against
+	// this file inferring it. It is NOT the same question as which code was
+	// carried, and conflating the two was an over-correction worth recording:
+	//
+	// carrying the code from the coverage detail fixed WHICH MECHANISM the row
+	// names. It says nothing about provenance. A source state a provider
+	// actually returned -- `unavailable`, `no_data`, `unconfigured`,
+	// `truncated` -- is an OBSERVED fact whether or not a detail accompanied
+	// it, and mapping that state onto its code is a translation, not an
+	// invention. Reporting those as defaulted would understate provenance on
+	// exactly the rows where a provider did speak.
+	//
+	// The one arm that genuinely defaults is the shortfall below, where
+	// nothing reported anything and the evaluator infers a cause from
+	// counting. That arm sets the flag false itself.
+	row.CauseObserved = evidence.Cause != ""
 
 	// FACT-BEARING IS THE QUESTION, not "did every source serve".
 	//
