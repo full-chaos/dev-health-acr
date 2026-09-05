@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -470,9 +471,14 @@ type outcomeNarrowingAttempt struct {
 	Result InvestigationResult
 	// Narrowing is the reduction's own served/declared numbers.
 	Narrowing candidateNarrowing
-	// Measurement is the measurement of the document that will actually be
-	// served -- never the pre-narrowing one.
-	Measurement ResponseMeasurement
+	// Measured is the MEASURED ATTEMPT for the document that will actually
+	// be served -- never the pre-narrowing one.
+	//
+	// The whole attempt rather than a bare measurement, because the quota
+	// belongs to the same document as the count: three review rounds found
+	// arms that carried one and not the other, and a single object is what
+	// makes carrying half of it unexpressible.
+	Measured MeasuredAttempt
 	// Declined names why nothing is served, and is empty when something is.
 	Declined OutcomeReductionDeclined
 	// Served reports whether Result fits the budget and may be returned to
@@ -501,19 +507,25 @@ type outcomeNarrowingAttempt struct {
 // would be the measure-then-shrink defect this layer exists to remove,
 // reproduced inside the fix for it.
 func (e *Engine) planCandidateNarrowing(
+	ctx context.Context,
+	principal storage.Principal,
 	plan *AnswerPlan,
 	frame *QuestionFrame,
 	result InvestigationResult,
 	budget ResponseBudget,
-	measurement ResponseMeasurement,
-	overrun contractsv1.ContextFabricBudgetOverrun,
-) outcomeNarrowingAttempt {
-	narrowedResult, narrowing, declined := narrowCandidatesToBudget(result, budget, measurement, overrun)
+	measured MeasuredAttempt,
+) (outcomeNarrowingAttempt, error) {
+	narrowedResult, narrowing, declined := narrowCandidatesToBudget(result, budget, measured.Measurement, measured.Overrun)
 	if !narrowing.Narrowed {
-		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: declined}
+		// The attempt the caller was given is still the one that describes
+		// this document: a reduction that did not run leaves the measured
+		// attempt of the assembled result as the record of what happened.
+		// Carrying it here is what keeps the declining arms from emitting
+		// zeros they never measured.
+		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: declined, Measured: measured}, nil
 	}
 	requirement, obligation := subjectScopeRequirement(narrowedResult.Completeness.Outcomes)
-	row := candidateNarrowingOutcomeRow(narrowing, overrun, requirement, obligation)
+	row := candidateNarrowingOutcomeRow(narrowing, measured.Overrun, requirement, obligation)
 	narrowedResult.Completeness.Outcomes = appendOutcomeRows(narrowedResult.Completeness.Outcomes, row)
 	narrowedResult = e.finalizeResult(narrowedResult, *plan, frame)
 
@@ -521,23 +533,49 @@ func (e *Engine) planCandidateNarrowing(
 	// deliver a fitting document the refusal stands -- serving an answer
 	// that still exceeds the ceiling, having announced that it was
 	// narrowed to fit, would be worse than refusing.
-	servedMeasurement, err := contractsv1.MeasureContextFabricResponse(narrowedResult)
+	//
+	// A FULL re-measurement, ledger included: the reduction removed items,
+	// so the account of the served document is not the account of the one
+	// measured above. Reusing the earlier ledger here would be the
+	// "retaining an earlier balanced ledger beside a mutated result"
+	// residual, reproduced inside the fix for it.
+	served, err := e.measureAssembledAttempt(ctx, principal, "candidate_narrowing", measured.Allocation, narrowedResult, budget)
 	if err != nil {
-		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: OutcomeReductionUnmeasurable}
+		if errors.Is(err, ErrItemAccounting) {
+			// An account that does not reconcile is a SERVER defect and
+			// must reach the caller as one. It is not a declined
+			// reduction, and reporting it as one would let the answer be
+			// refused as oversized on the strength of a defect.
+			return outcomeNarrowingAttempt{Narrowing: narrowing}, err
+		}
+		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: OutcomeReductionUnmeasurable, Measured: measured}, nil
 	}
-	if servedMeasurement.Overrun(budget) != contractsv1.ContextFabricBudgetFits {
+	if served.Overrun != contractsv1.ContextFabricBudgetFits || !served.CertifiedFit() {
 		// The lever was pulled and was not enough. Saying so is the whole
 		// difference between this refusal and one where the lever never
 		// applied: an operator reading the artifacts can tell that the
 		// candidate list was not the binding term here.
-		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: OutcomeReductionInsufficient}
+		//
+		// BOTH AXES, and the certificate. The certificate is about ITEMS --
+		// a reconciled account inside a positive item ceiling -- and this
+		// stage must not announce a document as narrowed to fit when it
+		// still exceeds the BYTE ceiling. An earlier revision of this line
+		// checked only the certificate, and the existing byte-window sweep
+		// caught it immediately: a document that fitted on items and
+		// overran on bytes was served here and refused by the final
+		// assertion instead, which reclassifies the caller's refusal from
+		// items to bytes and announces a reduction that did not deliver a
+		// servable answer. The certificate is still required, because an
+		// unbounded budget and an unreconciled account are both "not
+		// overrun" and neither may be announced as a fit.
+		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: OutcomeReductionInsufficient, Measured: served}, nil
 	}
 	return outcomeNarrowingAttempt{
-		Result:      narrowedResult,
-		Narrowing:   narrowing,
-		Measurement: servedMeasurement,
-		Served:      true,
-	}
+		Result:    narrowedResult,
+		Narrowing: narrowing,
+		Measured:  served,
+		Served:    true,
+	}, nil
 }
 
 // recordCandidateNarrowing emits the decision-basis event for an attempt
@@ -575,7 +613,7 @@ func (e *Engine) recordCandidateNarrowing(
 		Overrun: overrun,
 	})
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, basis)
-	event.recordMeasurement(attempt.Measurement)
+	event.recordMeasurement(attempt.Measured)
 	event.PredictedItems = PredictedItemsForPlan(*plan, after)
 	event.RetryAttempted = retryAttempted
 	// The RETRY's own outcome, not this reduction's. Hardcoding true said a

@@ -2943,7 +2943,15 @@ func synthesisPayloadSubjects(input SynthesisInput) (map[string]struct{}, bool) 
 		DriverCandidates []DriverJudgment    `json:"driver_candidates"`
 		Facts            []CanonicalFact     `json:"canonical_facts"`
 		Coverage         Coverage            `json:"coverage"`
+		// AnswerBudget contributes NO subject-shaped values -- it is counts
+		// only -- so it cannot change what this census finds. It is mirrored
+		// here anyway because the stated residual is that this list must
+		// match the serializer, and a list that is "true except for the
+		// members that do not matter" is how the mirror drifts the first
+		// time a member that DOES matter is added.
+		AnswerBudget ItemAllocation `json:"answer_budget"`
 	}{
+		AnswerBudget:     input.Allocation,
 		Interpretation:   input.Interpretation,
 		Resolution:       input.Graph.Resolution,
 		Cohort:           input.Graph.Cohort,
