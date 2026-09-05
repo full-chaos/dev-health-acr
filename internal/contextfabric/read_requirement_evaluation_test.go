@@ -330,22 +330,67 @@ func TestTheSeedIsNeverTheLastRowForAServedReadRequirement(t *testing.T) {
 func TestFinalizingAServedTurnEvaluatesItsReadRequirements(t *testing.T) {
 	t.Parallel()
 	frame := teamStateFrame(t)
+	// A REGISTRY THAT CAN SERVE EVERY READ THE FRAME DERIVES, built from the
+	// obligation vocabulary rather than from a guess about which obligations
+	// this frame carries.
+	//
+	// The first version of this fixture declared `state` only. The frame also
+	// derives `health`, nothing declared a producer for it, and its seed came
+	// back `unavailable` -- which makes the whole set `degraded` for a reason
+	// that has nothing to do with the evaluator. The premise guard below
+	// caught that rather than the `complete` assertion failing mysteriously,
+	// which is what premise guards are for.
+	//
+	// Deriving the capability set from the vocabulary keeps it that way: an
+	// obligation ADDED to the read vocabulary later is served here
+	// automatically, instead of silently reintroducing the same unservable
+	// seed and turning this test red for an unrelated reason.
+	var reads []AnswerObligation
+	for obligation, kind := range contractsv1.ContextFabricAnswerObligationKindByObligation() {
+		if kind == string(ObligationKindRead) {
+			reads = append(reads, AnswerObligation(obligation))
+		}
+	}
+	if len(reads) == 0 {
+		t.Fatal("the obligation mirror classifies nothing as a read; this fixture would declare an empty registry")
+	}
+	servesEveryRead := func(kind FactKind) FactCapability {
+		return FactCapability{
+			Kind:                  kind,
+			SupportedSubjectKinds: []SubjectKind{SubjectTeam},
+			Obligations:           map[SubjectKind][]AnswerObligation{SubjectTeam: reads},
+		}
+	}
 	deriver := registryDeriver{capabilities: []FactCapability{
-		stateCapability("a", contractsv1.ContextFabricFactHealth),
-		stateCapability("b", contractsv1.ContextFabricFactWorkload),
+		servesEveryRead(contractsv1.ContextFabricFactHealth),
+		servesEveryRead(contractsv1.ContextFabricFactWorkload),
 	}}
 	engine := &Engine{requirements: deriver}
 
 	published := PlanRequirementsFromDerived(deriver.DeriveRequirements(frame))
-	reads := 0
+	// The identity the row assertions below are scoped to is read OFF THE
+	// PLAN rather than typed in, so a frame that stops deriving
+	// `state/subject/team` fails here by name instead of quietly matching no
+	// rows and reporting "0 assembled-result rows" as if the evaluator were
+	// broken.
+	readIdentity := ""
+	servable := 0
 	for _, requirement := range published {
-		if requirement.Kind == string(ObligationKindRead) && requirement.Served() {
-			reads++
+		if requirement.Kind != string(ObligationKindRead) || !requirement.Served() {
+			continue
+		}
+		servable++
+		if requirement.Obligation == string(ObligationState) {
+			readIdentity = requirement.Requirement
 		}
 	}
-	if reads == 0 {
+	if servable == 0 {
 		t.Fatal("the fixture publishes no servable READ requirement, so the evaluator would be " +
 			"skipped and every assertion below would pass on an empty set")
+	}
+	if readIdentity == "" {
+		t.Fatalf("the frame publishes %d servable read requirements but none for `state`; "+
+			"the row assertions below have nothing to scope to", servable)
 	}
 
 	served := engine.finalizeResult(InvestigationResult{
@@ -358,7 +403,7 @@ func TestFinalizingAServedTurnEvaluatesItsReadRequirements(t *testing.T) {
 
 	evaluated, seeded := 0, 0
 	for _, row := range served.Completeness.Outcomes {
-		if row.Requirement != "state/subject/team" {
+		if row.Requirement != readIdentity {
 			continue
 		}
 		switch row.Stage {
