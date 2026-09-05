@@ -19,6 +19,17 @@ set -euo pipefail
 #   index  1-based shard number to emit packages for (1 <= index <= total)
 #   total  total number of shards
 #
+# Usage: test-shard.sh --with-isolated <index> <total>
+#   Same round-robin, but over the WHOLE `go list ./...` -- isolated_packages
+#   included rather than excluded. This form exists for the non-race `unit`
+#   matrix in ci.yml. The isolation below is a -race cost decision and only a
+#   -race cost decision (see isolated_packages): the declaration-closure walk
+#   is expensive under the race detector, which is why it gets its own
+#   -timeout in its own race job. The plain coverage run has no such problem,
+#   and it used to cover the isolated package as part of `./...` -- so the
+#   unit matrix must keep covering it, or sharding `unit` would quietly drop
+#   a package from the non-race suite. Never use this form for a -race job.
+#
 # Usage: test-shard.sh isolated
 #   Prints the packages in isolated_packages (below) instead of sharding.
 
@@ -49,9 +60,10 @@ isolated_packages=(
 )
 
 usage() {
-  printf 'usage: %s <index> <total>\n' "${0##*/}" >&2
+  printf 'usage: %s [--with-isolated] <index> <total>\n' "${0##*/}" >&2
   printf '  index  1-based shard number (1 <= index <= total)\n' >&2
   printf '  total  total number of shards\n' >&2
+  printf '  --with-isolated  shard over the whole package list, isolated included\n' >&2
   printf 'usage: %s isolated\n' "${0##*/}" >&2
   printf '  prints the packages excluded from round-robin sharding\n' >&2
 }
@@ -72,6 +84,16 @@ main() {
   if [ "$#" -eq 1 ] && [ "$1" = "isolated" ]; then
     printf '%s\n' "${isolated_packages[*]}"
     return 0
+  fi
+
+  # --with-isolated keeps isolated_packages IN the round-robin instead of
+  # excluding them. Parsed as an explicit leading flag (not an optional third
+  # positional) so a caller that fat-fingers an extra argument still trips the
+  # arity check below rather than silently changing which packages run.
+  local include_isolated=0
+  if [ "$#" -ge 1 ] && [ "$1" = "--with-isolated" ]; then
+    include_isolated=1
+    shift
   fi
 
   if [ "$#" -ne 2 ]; then
@@ -162,7 +184,9 @@ main() {
   local -a shard_packages=()
   local pos=0 want=$((index - 1))
   for pkg in "${all_packages[@]}"; do
-    is_isolated "$pkg" && continue
+    if [ "$include_isolated" -eq 0 ] && is_isolated "$pkg"; then
+      continue
+    fi
     if [ "$((pos % total))" -eq "$want" ]; then
       shard_packages+=("$pkg")
     fi
