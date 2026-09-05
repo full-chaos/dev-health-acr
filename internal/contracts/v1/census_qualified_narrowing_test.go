@@ -362,3 +362,168 @@ func TestTheCountObligationConstantIsTheWireToken(t *testing.T) {
 		t.Fatal("the coverage obligation constant is not a member of the obligation mirror")
 	}
 }
+
+// TestTheCensusExceptionRejectsAMixedPopulationAndReductionCause plants the
+// defect the two EMPTINESS conjuncts exist to catch.
+//
+// `named` is an OR across the three cause fields, so a row may carry more than
+// one. That is right in general — a reduction can have both a basis and an
+// overrun — and it is wrong for THIS row. A narrowing basis says the survivors
+// were selected out of a larger set, and an overrun says a budget cut one
+// short; both assert a reduction, and both are contradicted by the equal counts
+// the census exception exists to permit. A row carrying one of those beside the
+// population cause states two incompatible stories and the exception must not
+// choose between them.
+//
+// The producer never writes this shape: it copies a basis and an overrun only
+// when a member step actually reduced the set, and that row takes the ordinary
+// narrowed path, not this one. So the refusal costs nothing real.
+func TestTheCensusExceptionRejectsAMixedPopulationAndReductionCause(t *testing.T) {
+	t.Parallel()
+	for _, probe := range []struct {
+		name  string
+		apply func(*ContextFabricPlanRequirementOutcomeRow)
+	}{
+		{"narrowing basis", func(r *ContextFabricPlanRequirementOutcomeRow) {
+			r.CauseNarrowing = ContextFabricNarrowingBasisCanonicalIDLexical
+		}},
+		{"budget overrun", func(r *ContextFabricPlanRequirementOutcomeRow) {
+			r.CauseOverrun = ContextFabricBudgetOverrunVocabulary()[0]
+		}},
+	} {
+		probe := probe
+		t.Run(probe.name, func(t *testing.T) {
+			t.Parallel()
+			row := censusQualifiedCountRow()
+			probe.apply(&row)
+
+			err := ValidateContextFabricPlanRequirementOutcomeRow(row)
+			if err == nil {
+				t.Fatalf("a census-qualified row also naming a %s was accepted; that cause asserts a reduction, "+
+					"and this row's equal counts assert there was none", probe.name)
+			}
+			if !strings.Contains(err.Error(), "is not a reduction") {
+				t.Fatalf("rejected for the wrong reason: %v (want the reduction rule)", err)
+			}
+		})
+	}
+}
+
+// The three walks below assert the exception admits EXACTLY ONE member of each
+// closed vocabulary it is scoped on.
+//
+// They exist because a per-member negative test only closes the member it
+// names. The first review round's fix was pinned by one `planning` row, one
+// `state` obligation and one `depth` impact — which leaves `reuse`, `coverage`,
+// `dimension` and every future member admitted by a widened conjunct that no
+// test would notice. A walk over the whole vocabulary is the allow-list form of
+// the same assertion, and it is the form that survives the vocabulary growing.
+
+// TestTheCensusExceptionAdmitsExactlyOneStage walks the stage vocabulary.
+func TestTheCensusExceptionAdmitsExactlyOneStage(t *testing.T) {
+	t.Parallel()
+	admitted := 0
+	for _, stage := range ContextFabricOutcomeStageVocabulary() {
+		row := censusQualifiedCountRow()
+		row.Stage = stage
+		err := ValidateContextFabricPlanRequirementOutcomeRow(row)
+		if stage == ContextFabricOutcomeStageAssembledResult {
+			if err != nil {
+				t.Errorf("the assembled-result stage was REFUSED: %v -- the exception admits no stage at all", err)
+				continue
+			}
+			admitted++
+			continue
+		}
+		if err == nil {
+			t.Errorf("stage %q took the census exception; only the stage that actually takes the count may", stage)
+			continue
+		}
+		if !strings.Contains(err.Error(), "is not a reduction") {
+			t.Errorf("stage %q was refused for the wrong reason: %v (want the reduction rule)", stage, err)
+		}
+	}
+	if admitted != 1 {
+		t.Errorf("the exception admitted %d stages, want exactly 1", admitted)
+	}
+}
+
+// TestTheCensusExceptionAdmitsExactlyOneObligation walks the obligation mirror.
+//
+// The requirement identity is the obligation/role/subject coordinate and its
+// first segment must equal the row's own obligation, so the identity moves with
+// the obligation here -- otherwise every case would be refused by the identity
+// rule and the walk would pass while proving nothing about the exception.
+func TestTheCensusExceptionAdmitsExactlyOneObligation(t *testing.T) {
+	t.Parallel()
+	admitted := 0
+	for _, obligation := range ContextFabricAnswerObligationVocabulary() {
+		row := censusQualifiedCountRow()
+		row.Obligation = obligation
+		row.Requirement = obligation + "/member/team"
+		err := ValidateContextFabricPlanRequirementOutcomeRow(row)
+		if obligation == ContextFabricAnswerObligationCount {
+			if err != nil {
+				t.Errorf("the count obligation was REFUSED: %v -- the exception admits no obligation at all", err)
+				continue
+			}
+			admitted++
+			continue
+		}
+		if err == nil {
+			t.Errorf("obligation %q took the census exception; only a count is a value computed over a population", obligation)
+			continue
+		}
+		if !strings.Contains(err.Error(), "is not a reduction") {
+			t.Errorf("obligation %q was refused for the wrong reason: %v (want the reduction rule)", obligation, err)
+		}
+	}
+	if admitted != 1 {
+		t.Errorf("the exception admitted %d obligations, want exactly 1", admitted)
+	}
+}
+
+// TestTheCensusExceptionAdmitsExactlyOneImpact walks the impact vocabulary.
+//
+// `none` is the one member refused by a DIFFERENT rule and it is called out
+// rather than folded in: `narrowed` with impact `none` fails the outcome/impact
+// pairing before the reduction rule is ever reached. Asserting the reduction
+// message for it would be asserting something untrue, and asserting only "some
+// error" would let the pairing rule stand in for the conjunct this test is
+// about.
+func TestTheCensusExceptionAdmitsExactlyOneImpact(t *testing.T) {
+	t.Parallel()
+	admitted := 0
+	for _, impact := range ContextFabricAnswerImpactKindVocabulary() {
+		row := censusQualifiedCountRow()
+		row.Impact = impact
+		err := ValidateContextFabricPlanRequirementOutcomeRow(row)
+		switch impact {
+		case ContextFabricAnswerImpactScope:
+			if err != nil {
+				t.Errorf("the scope impact was REFUSED: %v -- the exception admits no impact at all", err)
+				continue
+			}
+			admitted++
+		case ContextFabricAnswerImpactNone:
+			if err == nil {
+				t.Error("impact `none` on a narrowed row was accepted; the pairing rule alone should refuse it")
+				continue
+			}
+			if !strings.Contains(err.Error(), "not a legal pairing") {
+				t.Errorf("impact `none` was refused for the wrong reason: %v (want the pairing rule)", err)
+			}
+		default:
+			if err == nil {
+				t.Errorf("impact %q took the census exception; an unseen population is a scope loss", impact)
+				continue
+			}
+			if !strings.Contains(err.Error(), "is not a reduction") {
+				t.Errorf("impact %q was refused for the wrong reason: %v (want the reduction rule)", impact, err)
+			}
+		}
+	}
+	if admitted != 1 {
+		t.Errorf("the exception admitted %d impacts, want exactly 1", admitted)
+	}
+}

@@ -201,3 +201,67 @@ func TestTheCensusQualifiedCountCostsExactlyItsMeasuredBytes(t *testing.T) {
 		t.Fatal("the qualified encoding does not carry the cause the delta was measured for")
 	}
 }
+
+// TestThePopulationTruncatedDetailRefusesACount closes the field-rule half of
+// this code, which nothing asserted before.
+//
+// The rule for this code is `{}` — no fact kind, no scope, no narrowing, and
+// NO COUNT — and the count is the tempting one. The only number available is
+// the size of the set that WAS resolved, which the outcome row already carries
+// as `served`; putting it on the detail as well gives a reader two places to
+// learn one fact. The number this code is actually about, how large the
+// population is, is precisely the one nothing measured, so there is nothing
+// honest to put there.
+//
+// The minimal fixture omits the count, so a rule quietly widened to allow one
+// would keep every existing test green. This asserts the refusal directly, and
+// pairs it with the fixture as the positive control so it cannot pass by the
+// validator refusing everything.
+func TestThePopulationTruncatedDetailRefusesACount(t *testing.T) {
+	t.Parallel()
+	detail := validDetailForCode(ContextFabricCoverageDetailPopulationTruncated)
+	if err := detail.Validate(); err != nil {
+		t.Fatalf("positive control: the minimal fixture for this code does not validate: %v", err)
+	}
+
+	count := 4
+	detail.Count = &count
+	err := detail.Validate()
+	if err == nil {
+		t.Fatal("a population-truncated detail carrying a count was accepted; the only count available is the " +
+			"size of what WAS resolved, which the outcome row already states, and the number this code is about " +
+			"is the one nothing measured")
+	}
+	if !strings.Contains(err.Error(), "forbids count") {
+		t.Fatalf("refused for the wrong reason: %v (want the count field rule)", err)
+	}
+}
+
+// TestThePopulationTruncatedLabelSaysTheNumberIsAFloor pins the label's
+// CONTENT, not merely that it is non-empty and not the generic fallback.
+//
+// Those two weaker assertions already exist, and between them they still admit
+// a label that is well-formed and WRONG — "The population was read
+// successfully" is non-empty, in bounds, and not the fallback, while telling
+// the operator the opposite of what happened. This is operator-facing copy on
+// the one row whose entire purpose is to stop an answer reading as complete, so
+// the exact string is the contract and a golden is the right shape for it.
+//
+// The two negative assertions beside it say what the string must never become:
+// a failure report (everything here was read successfully, and a reader told
+// "could not be read" goes looking for a broken source) and a reassurance.
+func TestThePopulationTruncatedLabelSaysTheNumberIsAFloor(t *testing.T) {
+	t.Parallel()
+	const want = "The full set could not be listed, so this is at least this many"
+
+	got := ComposeCoverageDetailLabel(validDetailForCode(ContextFabricCoverageDetailPopulationTruncated))
+	if got != want {
+		t.Fatalf("the population-truncated label is %q, want %q -- this is operator-facing copy on the row whose "+
+			"whole purpose is to stop an answer reading as complete, so the string is the contract", got, want)
+	}
+	for _, reassuring := range []string{"successfully", "complete", "all of"} {
+		if strings.Contains(strings.ToLower(got), reassuring) {
+			t.Errorf("the label contains %q; a label that reassures is worse than no label on this row", reassuring)
+		}
+	}
+}
