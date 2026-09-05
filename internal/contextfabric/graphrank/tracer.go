@@ -208,6 +208,10 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"request_id", event.RequestID, "stage", event.Stage,
 			"explicit_hint_count", event.KindOfferExplicitHintCount,
 			"declared_hint_count", event.KindOfferDeclaredHintCount,
+			// CHAOS-5218: the decision basis for withdrawing an unservable
+			// frame-declared kind from the offer (a candidate-kind
+			// elimination). Always emitted, so 0 is a real reading.
+			"declared_withheld_not_in_pool_count", event.KindOfferDeclaredWithheldNotInPoolCount,
 			"distinct_kind_count", event.KindOfferDistinctKindCount,
 			"suppressed_by_cardinality", event.KindOfferSuppressedByCardinality,
 			"candidate_offer_count", event.KindOfferCandidateOfferCount,
@@ -230,6 +234,40 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"handle_offer_graph_derived_count", event.HandleOfferGraphDerivedCount,
 			"handle_offer_graph_derived_rejected_count", event.HandleOfferGraphDerivedRejectedCount,
 			"offered_under_window_gate", event.OfferedUnderWindowGate)
+	case "kind_offer_withheld":
+		// CHAOS-5218. Emitted ONLY when the offer withheld at least one
+		// frame-declared kind because the full merged pool held no candidate
+		// of that kind -- an outcome-affecting CANDIDATE-KIND ELIMINATION in
+		// AGENTS.md's own sense, not the per-resolution offer bookkeeping the
+		// unconditional "kind_offer" stage above carries.
+		//
+		// InfoContext, deliberately, where every other stage on this sink is
+		// DebugContext: the production default log level is slog.LevelInfo
+		// (internal/sidecar/config.go), so a Debug line does not exist in
+		// production at all -- which is exactly why no ResolutionTraceEvent
+		// line appears in any rig log today. An elimination that changes the
+		// answer a caller receives must be readable from an ordinary
+		// production log, the same posture
+		// contextfabric.SlogEngineTelemetry.RecordSubjectlessTerminal and
+		// falkorgraph.SlogTelemetry.RecordSubjectCandidatesAuthzDropped
+		// already take for their own "nothing is broken, but you must be able
+		// to see it" events. The ordinary counts stay on the Debug
+		// "kind_offer" line; this is the operator-visible half.
+		//
+		// request_id rides as an explicit field rather than through ctx join
+		// attrs because this sink's Trace method takes no context (it builds
+		// context.Background() above) -- an established shape of the
+		// ResolutionTracer interface, carried here rather than re-derived.
+		// withheld_kinds is closed-vocabulary subject-kind VALUES only, the
+		// same ruled exception boundary_kinds carries; never a canonical id,
+		// never candidate identity.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: kind offer withheld",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"withheld_count", event.KindOfferDeclaredWithheldNotInPoolCount,
+			"withheld_kinds", event.KindOfferDeclaredWithheldKinds,
+			"declared_hint_count", event.KindOfferDeclaredHintCount,
+			"distinct_kind_count", event.KindOfferDistinctKindCount,
+			"suppressed_by_cardinality", event.KindOfferSuppressedByCardinality)
 	case "anchor_offer":
 		// CHAOS-4210: unconditional, mirroring kind_offer's own "fires on
 		// EVERY resolution" discipline -- see

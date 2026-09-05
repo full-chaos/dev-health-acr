@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -22,11 +23,11 @@ func candidateOf(kind contractsv1.ContextFabricSubjectKind, id string) contextfa
 
 func TestKindOfferMaterial_EmptyPoolOffersNothing(t *testing.T) {
 	t.Parallel()
-	material, diag := kindOfferMaterial(nil, nil, nil)
+	material, diag := kindOfferMaterial(nil, nil, nil, nil)
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(nil, nil) = %+v, want empty (nothing to disambiguate)", material)
 	}
-	if diag != (kindOfferDiagnostics{ExplicitHintCount: 0, DistinctKindCount: 0, SuppressedByCardinality: true}) {
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DistinctKindCount: 0, SuppressedByCardinality: true}) {
 		t.Errorf("diag = %+v, want {0, 0, true} -- genuinely zero offerable kinds", diag)
 	}
 }
@@ -37,14 +38,14 @@ func TestKindOfferMaterial_SingleKindPoolOffersNothing(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_2"),
 	}
-	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil, nil)
+	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil, nil, heldFromKinds(distinctOfferableKinds(candidates)...))
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(single-kind pool) = %+v, want empty: nothing to disambiguate when every candidate is the same kind", material)
 	}
 	// CHAOS-4012 v20: this is the exact "in pool, still not offered" shape
 	// the ticket investigates -- DistinctKindCount==1, not 0, distinguishes
 	// it from the genuinely-empty-pool case above.
-	if diag != (kindOfferDiagnostics{ExplicitHintCount: 0, DistinctKindCount: 1, SuppressedByCardinality: true}) {
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DistinctKindCount: 1, SuppressedByCardinality: true}) {
 		t.Errorf("diag = %+v, want {0, 1, true} -- one distinct offerable kind present, still suppressed by cardinality", diag)
 	}
 }
@@ -59,14 +60,14 @@ func TestKindOfferMaterial_MultiKindPoolOffersDisambiguation(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
 	}
-	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil, nil)
+	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil, nil, heldFromKinds(distinctOfferableKinds(candidates)...))
 	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
 		t.Fatalf("material.Missing = %v, want exactly [expected_kind]", material.Missing)
 	}
 	if len(material.KindOptions) != 2 {
 		t.Fatalf("len(material.KindOptions) = %d, want 2", len(material.KindOptions))
 	}
-	if diag != (kindOfferDiagnostics{ExplicitHintCount: 0, DistinctKindCount: 2, SuppressedByCardinality: false}) {
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DistinctKindCount: 2, SuppressedByCardinality: false}) {
 		t.Errorf("diag = %+v, want {0, 2, false} -- not suppressed", diag)
 	}
 	seen := map[contractsv1.ContextFabricSubjectKind]bool{}
@@ -101,7 +102,7 @@ func TestKindOfferMaterial_DuplicateKindsCollapseToOneOption(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_3"),
 		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
 	}
-	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil, nil)
+	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil, nil, heldFromKinds(distinctOfferableKinds(candidates)...))
 	if len(material.KindOptions) != 2 {
 		t.Fatalf("len(material.KindOptions) = %d, want 2 (one per DISTINCT kind, not one per candidate)", len(material.KindOptions))
 	}
@@ -121,7 +122,7 @@ func TestKindOfferMaterial_NonOfferableKindsAreIgnoredForDisambiguation(t *testi
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectDocument, "doc_1"),
 	}
-	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil, nil)
+	material, diag := kindOfferMaterial(distinctOfferableKinds(candidates), nil, nil, heldFromKinds(distinctOfferableKinds(candidates)...))
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(pull_request + document) = %+v, want empty: document is not in the offerable expected_kind vocabulary", material)
 	}
@@ -134,19 +135,26 @@ func TestKindOfferMaterial_NonOfferableKindsAreIgnoredForDisambiguation(t *testi
 	}
 }
 
-// TestKindOfferMaterial_DeclaredKindRanksFirstAlongsidePool (CHAOS-4967)
-// reproduces the ticket's own rep 1 verbatim: a frame declaring member
-// kind `repository` (children_of_scope: "Which repositories does the
-// platform team own?") whose kind-hinted lexical search found nothing (no
-// named entity in a scope/cohort question for it to match), so the
-// ordinary pool contains only the OTHER kinds an unscoped text search
-// happened to surface -- ci_pipeline_run/project/pull_request/
-// pull_request_review, byte-identical to the ticket's own reported offer.
-// Before CHAOS-4967, kindOfferMaterial had no parameter carrying the
-// frame's declared kind at all, so KindOptions never contained repository
-// no matter what the frame declared; declaredKinds now ranks it first.
+// TestKindOfferMaterial_DeclaredKindRanksFirstAlongsidePool (CHAOS-4967,
+// SUPERSEDED IN PART by CHAOS-5218) covers both halves of the declared-kind
+// ranking rule on the SAME fixture shape, because CHAOS-4967's own rep 1 --
+// a frame declaring member kind `repository` ("Which repositories does the
+// platform team own?") whose kind-hinted lexical search found nothing, so the
+// pool holds only ci_pipeline_run/project/pull_request/pull_request_review --
+// turns out to be a CHAOS-5218 instance itself: `repository` has ZERO
+// candidates in that pool, so offering it (as this test used to assert)
+// hands the caller a receipt-bound option that
+// filterCandidatesByConfirmedKind will turn into an empty pool and a
+// guaranteed no_match one turn later.
+//
+// What CHAOS-4967 established and CHAOS-5218 KEEPS: a declared kind the pool
+// can actually serve ranks FIRST, ahead of every pool-derived kind. What
+// CHAOS-5218 changes: a declared kind the pool cannot serve is withheld and
+// counted, instead of ranked first.
 func TestKindOfferMaterial_DeclaredKindRanksFirstAlongsidePool(t *testing.T) {
 	t.Parallel()
+	// CHAOS-4967's rep 1 verbatim -- repository is DECLARED but absent from
+	// the pool. CHAOS-5218: withheld, and the offer is the pool's own kinds.
 	poolKinds := []contractsv1.ContextFabricSubjectKind{
 		contractsv1.ContextFabricSubjectCIRun,
 		contractsv1.ContextFabricSubjectProject,
@@ -154,18 +162,35 @@ func TestKindOfferMaterial_DeclaredKindRanksFirstAlongsidePool(t *testing.T) {
 		contractsv1.ContextFabricSubjectPullRequestReview,
 	}
 	declaredKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}
-	material, diag := kindOfferMaterial(poolKinds, nil, declaredKinds)
+	material, diag := kindOfferMaterial(poolKinds, nil, declaredKinds, heldFromKinds(poolKinds...))
 	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
-		t.Fatalf("material.Missing = %v, want [expected_kind] -- declared kind alongside a genuinely multi-kind pool must still raise the need", material.Missing)
+		t.Fatalf("material.Missing = %v, want [expected_kind] -- a genuinely multi-kind pool still raises the need", material.Missing)
 	}
+	if len(material.KindOptions) != 4 {
+		t.Fatalf("len(material.KindOptions) = %d, want 4 (the pool kinds only) -- CHAOS-5218: a declared kind with no candidate of its own is not offerable", len(material.KindOptions))
+	}
+	for _, opt := range material.KindOptions {
+		if opt.Kind == contractsv1.ContextFabricSubjectRepository {
+			t.Fatalf("KindOptions = %+v, want NO repository -- the pool holds none, so the offer cannot be honoured", material.KindOptions)
+		}
+	}
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 1, DistinctKindCount: 4, SuppressedByCardinality: false}) {
+		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:0 DeclaredWithheldNotInPoolCount:1 DistinctKindCount:4 SuppressedByCardinality:false}", diag)
+	}
+
+	// The CHAOS-4967 property CHAOS-5218 preserves, on the SAME fixture with
+	// repository ADDED to the pool: the declared kind is served, so it is
+	// offered and ranks FIRST.
+	servablePool := append(append([]contractsv1.ContextFabricSubjectKind{}, poolKinds...), contractsv1.ContextFabricSubjectRepository)
+	material, diag = kindOfferMaterial(servablePool, nil, declaredKinds, heldFromKinds(servablePool...))
 	if len(material.KindOptions) != 5 {
 		t.Fatalf("len(material.KindOptions) = %d, want 5 (the declared kind plus the 4 pool kinds)", len(material.KindOptions))
 	}
 	if got := material.KindOptions[0].Kind; got != contractsv1.ContextFabricSubjectRepository {
 		t.Fatalf("KindOptions[0].Kind = %q, want repository ranked FIRST -- CHAOS-4967's own defect was the declared kind absent from, not merely buried within, its own offer", got)
 	}
-	if diag != (kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 1, DistinctKindCount: 5, SuppressedByCardinality: false}) {
-		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:1 DistinctKindCount:5 SuppressedByCardinality:false}", diag)
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 1, DeclaredWithheldNotInPoolCount: 0, DistinctKindCount: 5, SuppressedByCardinality: false}) {
+		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:1 DeclaredWithheldNotInPoolCount:0 DistinctKindCount:5 SuppressedByCardinality:false}", diag)
 	}
 }
 
@@ -180,11 +205,11 @@ func TestKindOfferMaterial_DeclaredKindRanksFirstAlongsidePool(t *testing.T) {
 func TestKindOfferMaterial_DeclaredKindAloneSuppressesNeed(t *testing.T) {
 	t.Parallel()
 	declaredKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}
-	material, diag := kindOfferMaterial(nil, nil, declaredKinds)
+	material, diag := kindOfferMaterial(nil, nil, declaredKinds, nil)
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(nil pool, nil explicit, [repository] declared) = %+v, want empty -- a declared kind alone is not an ambiguity to disclose", material)
 	}
-	if diag != (kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 1, DistinctKindCount: 1, SuppressedByCardinality: true}) {
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 1, DistinctKindCount: 1, SuppressedByCardinality: true}) {
 		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:1 DistinctKindCount:1 SuppressedByCardinality:true}", diag)
 	}
 }
@@ -204,24 +229,46 @@ func TestKindOfferMaterial_TwoDeclaredKindsAloneSuppressesNeed(t *testing.T) {
 		contractsv1.ContextFabricSubjectTeam,
 		contractsv1.ContextFabricSubjectProject,
 	}
-	material, diag := kindOfferMaterial(nil, nil, declaredKinds)
+	material, diag := kindOfferMaterial(nil, nil, declaredKinds, nil)
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(nil pool, nil explicit, [team, project] declared) = %+v, want empty -- two already-declared axes are not an ambiguity to disclose", material)
 	}
-	if diag != (kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 2, DistinctKindCount: 2, SuppressedByCardinality: true}) {
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 2, DistinctKindCount: 2, SuppressedByCardinality: true}) {
 		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:2 DistinctKindCount:2 SuppressedByCardinality:true} -- DistinctKindCount is still 2 (both declared kinds ARE distinct offerable kinds), only SuppressedByCardinality changes", diag)
 	}
 
-	// The complement: the SAME two declared kinds alongside a pool that
-	// contributes a genuinely new, third kind must still raise -- pool
-	// contribution is what makes it a real ambiguity again.
+	// CHAOS-5218 SUPERSEDES the old complement here. It asserted that the same
+	// two declared kinds alongside a pool contributing ONE genuinely new kind
+	// (pull_request) raised the need with all three options. Neither declared
+	// kind has a candidate in that pool, so both are withheld, `ranked` is the
+	// lone pool kind, and the existing len(ranked)<2 gate suppresses -- the
+	// same outcome a single-kind pool has always had.
 	poolKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}
-	material, diag = kindOfferMaterial(poolKinds, nil, declaredKinds)
-	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
-		t.Fatalf("material.Missing = %v, want [expected_kind] -- two declared kinds PLUS a genuinely new pool kind must raise", material.Missing)
+	material, diag = kindOfferMaterial(poolKinds, nil, declaredKinds, heldFromKinds(poolKinds...))
+	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
+		t.Fatalf("kindOfferMaterial([pull_request] pool, nil explicit, [team, project] declared) = %+v, want empty -- neither declared kind is in the pool, so only pull_request remains and one kind is not an ambiguity", material)
 	}
-	if len(material.KindOptions) != 3 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectTeam || material.KindOptions[1].Kind != contractsv1.ContextFabricSubjectProject {
-		t.Fatalf("KindOptions = %+v, want [team, project, pull_request] -- both declared kinds ranked first, in declaredKinds order, pool kind last", material.KindOptions)
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 2, DistinctKindCount: 1, SuppressedByCardinality: true}) {
+		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:0 DeclaredWithheldNotInPoolCount:2 DistinctKindCount:1 SuppressedByCardinality:true}", diag)
+	}
+
+	// The complement CHAOS-5218 KEEPS: when the pool genuinely holds one of
+	// the declared kinds AND a second kind, the need is raised and the served
+	// declared kind ranks first -- pool contribution is still what makes it a
+	// real ambiguity, now measured per-kind instead of in aggregate.
+	servablePool := []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectTeam,
+		contractsv1.ContextFabricSubjectPullRequest,
+	}
+	material, diag = kindOfferMaterial(servablePool, nil, declaredKinds, heldFromKinds(servablePool...))
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
+		t.Fatalf("material.Missing = %v, want [expected_kind] -- a served declared kind plus a second pool kind must raise", material.Missing)
+	}
+	if len(material.KindOptions) != 2 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectTeam || material.KindOptions[1].Kind != contractsv1.ContextFabricSubjectPullRequest {
+		t.Fatalf("KindOptions = %+v, want [team, pull_request] -- the SERVED declared kind ranked first, the unservable one (project) withheld, pool kind last", material.KindOptions)
+	}
+	if diag.DeclaredHintCount != 1 || diag.DeclaredWithheldNotInPoolCount != 1 {
+		t.Errorf("diag = %+v, want DeclaredHintCount 1 (team, served) and DeclaredWithheldNotInPoolCount 1 (project, not in pool)", diag)
 	}
 }
 
@@ -2100,7 +2147,7 @@ func TestProjectKindOfferKinds_NoAbsentKindsIsANoOp(t *testing.T) {
 func TestKindOfferMaterial_ExplicitKindAlwaysOfferedEvenAloneInThePool(t *testing.T) {
 	t.Parallel()
 	// Empty pool, one explicit kind: still offered.
-	material, diag := kindOfferMaterial(nil, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}, nil)
+	material, diag := kindOfferMaterial(nil, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}, nil, nil)
 	if len(material.KindOptions) != 1 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectPullRequest {
 		t.Fatalf("material.KindOptions = %+v, want exactly the one explicit kind", material.KindOptions)
 	}
@@ -2111,7 +2158,7 @@ func TestKindOfferMaterial_ExplicitKindAlwaysOfferedEvenAloneInThePool(t *testin
 	// entirely -- ExplicitHintCount=1 alone is why this is not suppressed
 	// despite DistinctKindCount also reading 1 (the explicit kind is its
 	// own, and only, ranked entry here).
-	if diag != (kindOfferDiagnostics{ExplicitHintCount: 1, DistinctKindCount: 1, SuppressedByCardinality: false}) {
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 1, DistinctKindCount: 1, SuppressedByCardinality: false}) {
 		t.Errorf("diag = %+v, want {1, 1, false} -- an explicit hint is never suppressed", diag)
 	}
 	// Explicit kind ranked FIRST, ahead of pool-derived kinds.
@@ -2119,11 +2166,11 @@ func TestKindOfferMaterial_ExplicitKindAlwaysOfferedEvenAloneInThePool(t *testin
 		{Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectWorkItem}},
 		{Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectPullRequest}},
 	}
-	material, diag = kindOfferMaterial(distinctOfferableKinds(candidates), []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem}, nil)
+	material, diag = kindOfferMaterial(distinctOfferableKinds(candidates), []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem}, nil, heldFromKinds(distinctOfferableKinds(candidates)...))
 	if len(material.KindOptions) != 2 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectWorkItem {
 		t.Fatalf("material.KindOptions = %+v, want the explicit kind ranked first", material.KindOptions)
 	}
-	if diag != (kindOfferDiagnostics{ExplicitHintCount: 1, DistinctKindCount: 2, SuppressedByCardinality: false}) {
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 1, DistinctKindCount: 2, SuppressedByCardinality: false}) {
 		t.Errorf("diag = %+v, want {1, 2, false} -- explicit hint plus one NEW pool-derived kind (work_item already claimed by the hint)", diag)
 	}
 }
@@ -2158,4 +2205,17 @@ func TestHandleOfferMaterial_ExplicitHandleRequiresAWiredChecker(t *testing.T) {
 	if len(material.HandleOptions) != 0 {
 		t.Fatalf("material.HandleOptions = %+v, want empty (checker rejected the explicit value)", material.HandleOptions)
 	}
+}
+
+// heldFromKinds builds kindOfferMaterial's own poolHeldKinds set from a POOL
+// KIND list, for the unit tests that model the pool as kinds rather than as
+// candidates. Production builds the same set from the full candidate map
+// (poolHeldKindsOf, chaos3900_structure_offers.go); the two agree by
+// construction because both are "the offerable kinds this pool holds".
+func heldFromKinds(kinds ...contractsv1.ContextFabricSubjectKind) poolHeldKinds {
+	held := make(poolHeldKinds, len(kinds))
+	for _, kind := range kinds {
+		held[kind] = true
+	}
+	return held
 }

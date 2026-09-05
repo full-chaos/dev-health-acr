@@ -95,10 +95,16 @@ func TestHintedPoolKinds_NamedSubjectExpectedKindNowHintsRetrieval(t *testing.T)
 	}
 }
 
-// TestKindOfferMaterial_NamedSubjectDeclaredKind is the ticket's own
-// acceptance case end to end at the composer: the exact rig pool from
-// neg-single-subject-why, with the kind now reaching declaredKinds via the
-// fixed frameKindHints/MemberKind() path.
+// TestKindOfferMaterial_NamedSubjectDeclaredKind is CHAOS-4975's acceptance
+// case at the composer, SUPERSEDED IN PART by CHAOS-5218: the ticket's own rig
+// pool from neg-single-subject-why holds ci_pipeline_run/pull_request/
+// pull_request_review/repository and NO project, while the frame declares
+// project. CHAOS-4975 asserted project ranked first; CHAOS-5218 measured that
+// exact shape emptying the pool one turn later, so an unservable declared kind
+// is now withheld. The half CHAOS-4975 owns and CHAOS-5218 keeps -- a
+// named_subject frame's declared kind reaches declaredKinds at all, via the
+// fixed frameKindHints/MemberKind() path -- is asserted on the second fixture
+// below, where the pool actually holds it.
 func TestKindOfferMaterial_NamedSubjectDeclaredKind(t *testing.T) {
 	t.Parallel()
 	pool := []contractsv1.ContextFabricSubjectKind{
@@ -109,11 +115,36 @@ func TestKindOfferMaterial_NamedSubjectDeclaredKind(t *testing.T) {
 	}
 	declaredKinds := frameKindHints(namedSubjectFrame("acr", kindOf(contractsv1.ContextFabricSubjectProject)))
 
-	material, _ := kindOfferMaterial(pool, nil, declaredKinds)
+	material, diag := kindOfferMaterial(pool, nil, declaredKinds, heldFromKinds(pool...))
+	for _, opt := range material.KindOptions {
+		if opt.Kind == contractsv1.ContextFabricSubjectProject {
+			t.Fatalf("KindOptions = %v, want NO project -- CHAOS-5218: the rig pool holds none, so the offer could not be honoured", material.KindOptions)
+		}
+	}
+	if diag.DeclaredWithheldNotInPoolCount != 1 {
+		t.Fatalf("diag = %+v, want DeclaredWithheldNotInPoolCount 1 (project declared, absent from the pool)", diag)
+	}
+	hasRepository := false
+	for _, opt := range material.KindOptions {
+		if opt.Kind == contractsv1.ContextFabricSubjectRepository {
+			hasRepository = true
+		}
+	}
+	if !hasRepository {
+		t.Fatalf("KindOptions = %v, want repository still present -- withholding an unservable declared kind must not disturb the pool kinds", material.KindOptions)
+	}
+
+	// CHAOS-4975's own property, on the SAME fixture with project in the pool:
+	// a named_subject frame's declared kind reaches the offer and ranks first.
+	servable := append(append([]contractsv1.ContextFabricSubjectKind{}, pool...), contractsv1.ContextFabricSubjectProject)
+	material, diag = kindOfferMaterial(servable, nil, declaredKinds, heldFromKinds(servable...))
 	if len(material.KindOptions) == 0 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectProject {
 		t.Fatalf("KindOptions = %v, want project first", material.KindOptions)
 	}
-	hasRepository := false
+	if diag.DeclaredHintCount != 1 || diag.DeclaredWithheldNotInPoolCount != 0 {
+		t.Fatalf("diag = %+v, want DeclaredHintCount 1 and DeclaredWithheldNotInPoolCount 0", diag)
+	}
+	hasRepository = false
 	for _, opt := range material.KindOptions {
 		if opt.Kind == contractsv1.ContextFabricSubjectRepository {
 			hasRepository = true
