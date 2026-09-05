@@ -95,10 +95,16 @@ func TestHintedPoolKinds_NamedSubjectExpectedKindNowHintsRetrieval(t *testing.T)
 	}
 }
 
-// TestKindOfferMaterial_NamedSubjectDeclaredKind is the ticket's own
-// acceptance case end to end at the composer: the exact rig pool from
-// neg-single-subject-why, with the kind now reaching declaredKinds via the
-// fixed frameKindHints/MemberKind() path.
+// TestKindOfferMaterial_NamedSubjectDeclaredKind is CHAOS-4975's acceptance
+// case at the composer, SUPERSEDED IN PART by CHAOS-5218: the ticket's own rig
+// pool from neg-single-subject-why holds ci_pipeline_run/pull_request/
+// pull_request_review/repository and NO project, while the frame declares
+// project. CHAOS-4975 asserted project ranked first; CHAOS-5218 measured that
+// exact shape emptying the pool one turn later, so an unservable declared kind
+// is now withheld. The half CHAOS-4975 owns and CHAOS-5218 keeps -- a
+// named_subject frame's declared kind reaches declaredKinds at all, via the
+// fixed frameKindHints/MemberKind() path -- is asserted on the second fixture
+// below, where the pool actually holds it.
 func TestKindOfferMaterial_NamedSubjectDeclaredKind(t *testing.T) {
 	t.Parallel()
 	pool := []contractsv1.ContextFabricSubjectKind{
@@ -109,9 +115,28 @@ func TestKindOfferMaterial_NamedSubjectDeclaredKind(t *testing.T) {
 	}
 	declaredKinds := frameKindHints(namedSubjectFrame("acr", kindOf(contractsv1.ContextFabricSubjectProject)))
 
-	material, _ := kindOfferMaterial(pool, nil, declaredKinds)
+	material, diag := kindOfferMaterial(pool, nil, declaredKinds, heldFromKinds(pool...))
+	// CHAOS-5218: the rig pool holds no project, so the need is not raised at
+	// all rather than raised with a list that omits the kind the question named.
+	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
+		t.Fatalf("kindOfferMaterial() = %+v, want NO need raised", material)
+	}
+	if !diag.SuppressedByUnservableDeclaredKind {
+		t.Fatalf("diag = %+v, want SuppressedByUnservableDeclaredKind true", diag)
+	}
+	if diag.DeclaredWithheldNotInPoolCount != 1 {
+		t.Fatalf("diag = %+v, want DeclaredWithheldNotInPoolCount 1 (project declared, absent from the pool)", diag)
+	}
+
+	// CHAOS-4975's own property, on the SAME fixture with project in the pool:
+	// a named_subject frame's declared kind reaches the offer and ranks first.
+	servable := append(append([]contractsv1.ContextFabricSubjectKind{}, pool...), contractsv1.ContextFabricSubjectProject)
+	material, diag = kindOfferMaterial(servable, nil, declaredKinds, heldFromKinds(servable...))
 	if len(material.KindOptions) == 0 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectProject {
 		t.Fatalf("KindOptions = %v, want project first", material.KindOptions)
+	}
+	if diag.DeclaredHintCount != 1 || diag.DeclaredWithheldNotInPoolCount != 0 {
+		t.Fatalf("diag = %+v, want DeclaredHintCount 1 and DeclaredWithheldNotInPoolCount 0", diag)
 	}
 	hasRepository := false
 	for _, opt := range material.KindOptions {
@@ -135,11 +160,14 @@ func TestKindOfferMaterial_NamedSubjectDeclaredKindAloneNeverRaisesTheNeed(t *te
 	t.Parallel()
 	declaredKinds := frameKindHints(namedSubjectFrame("acr", kindOf(contractsv1.ContextFabricSubjectProject)))
 
-	material, diagnostics := kindOfferMaterial(nil, nil, declaredKinds)
+	material, diagnostics := kindOfferMaterial(nil, nil, declaredKinds, heldFromKinds())
 	if len(material.KindOptions) != 0 || material.Missing != nil {
 		t.Fatalf("kindOfferMaterial() = %+v, want a suppressed (empty) offer with an empty pool", material)
 	}
-	if !diagnostics.SuppressedByCardinality {
-		t.Fatalf("diagnostics.SuppressedByCardinality = false, want true")
+	// CHAOS-5218: with an empty pool the declared kind is unservable, and that
+	// reason fires ahead of the cardinality gate -- the OUTCOME this test exists
+	// for (no need raised) is unchanged.
+	if !diagnostics.SuppressedByUnservableDeclaredKind {
+		t.Fatalf("diagnostics = %+v, want SuppressedByUnservableDeclaredKind true", diagnostics)
 	}
 }

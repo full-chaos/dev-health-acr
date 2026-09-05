@@ -132,8 +132,18 @@ func TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics(t *testing.T) {
 		KindOfferDeclaredHintCount:       2,
 		KindOfferDistinctKindCount:       1,
 		KindOfferSuppressedByCardinality: true,
-		KindOfferCandidateOfferCount:     5,
-		KindOfferOfferKind:               "candidate",
+		// CHAOS-5218 (review round 3): this file's own doc comment is "If you
+		// add a field to ResolutionTraceEvent, assert it here too", and these
+		// two were added to the kind_offer stage without being asserted on this
+		// sink -- deleting either from the sink survived. Both carry NON-ZERO
+		// values: a count asserted at 0 or a bool asserted at false is
+		// satisfied by a dropped assignment. 4 is deliberately distinct from
+		// every other count on this event (1, 2, 1, 5, 2), so the assertion
+		// below proves the sink carries THIS field's own number.
+		KindOfferDeclaredWithheldNotInPoolCount:     4,
+		KindOfferSuppressedByUnservableDeclaredKind: true,
+		KindOfferCandidateOfferCount:                5,
+		KindOfferOfferKind:                          "candidate",
 		// CHAOS-4210: deliberately non-zero and distinct from
 		// KindOfferCandidateOfferCount, so the assertion below proves the
 		// sink carries THIS field's own number, not a coincidental
@@ -170,6 +180,17 @@ func TestChaos4085_ProductionTraceEmitsKindOfferDiagnostics(t *testing.T) {
 	}
 	if got, ok := record["suppressed_by_cardinality"].(bool); !ok || !got {
 		t.Fatalf("suppressed_by_cardinality = %v, want true", record["suppressed_by_cardinality"])
+	}
+	// CHAOS-5218 (review round 3, named mutants 1 and 2): the two fields this
+	// change adds to the kind_offer stage must reach the sink an operator reads.
+	// The event and the sink are two authorities; pinning the field on the
+	// event, or on the OTHER stage that carries the same field, does not pin it
+	// here.
+	if got, ok := record["declared_withheld_not_in_pool_count"].(float64); !ok || got != 4 {
+		t.Fatalf("declared_withheld_not_in_pool_count = %v, want 4", record["declared_withheld_not_in_pool_count"])
+	}
+	if got, ok := record["suppressed_by_unservable_declared_kind"].(bool); !ok || !got {
+		t.Fatalf("suppressed_by_unservable_declared_kind = %v, want true", record["suppressed_by_unservable_declared_kind"])
 	}
 	// CHAOS-4012 v22: the candidate-list axis's own pair, same sink.
 	if got, ok := record["candidate_offer_count"].(float64); !ok || got != 5 {

@@ -910,9 +910,36 @@ type ResolutionTraceEvent struct {
 	// ExplicitHintCount already separates caller-declared from pool-derived.
 	// No BeforeRepair companion, matching ExplicitHintCount's own shape --
 	// only DistinctKindCount/SuppressedByCardinality get before/after pairs.
-	KindOfferDeclaredHintCount       int
-	KindOfferDistinctKindCount       int
-	KindOfferSuppressedByCardinality bool
+	KindOfferDeclaredHintCount int
+	// KindOfferDeclaredWithheldNotInPoolCount (CHAOS-5218, stage=="kind_offer"
+	// ONLY) is kindOfferDiagnostics.DeclaredWithheldNotInPoolCount: how many
+	// frame-declared kinds this offer WITHHELD because the full merged pool
+	// held no candidate of that kind. A count only -- no kind name, no
+	// candidate identity -- matching every other field on this stage except
+	// boundary_kinds' own ruled exception. Non-zero is the decision basis for
+	// a candidate-kind elimination, so it rides the SAME unconditional
+	// kind_offer event rather than a gated one: a reader must be able to tell
+	// "declared nothing" from "declared a kind the engine cannot serve"
+	// without a harness.
+	KindOfferDeclaredWithheldNotInPoolCount int
+	// KindOfferDeclaredWithheldKinds (CHAOS-5218, stage=="kind_offer_withheld"
+	// ONLY) names WHICH frame-declared kinds were withheld, as
+	// closed-vocabulary subject-kind VALUES -- the same ruled exception to
+	// this event's "no kind name" discipline that KindOfferBoundaryKinds
+	// carries, for the same reason: an operator diagnosing a no_match needs to
+	// know which axis went missing from the offer, and a bare count cannot say.
+	// Never a canonical id, never candidate identity.
+	KindOfferDeclaredWithheldKinds []string
+	// KindOfferSuppressedByUnservableDeclaredKind (CHAOS-5218) is
+	// kindOfferDiagnostics.SuppressedByUnservableDeclaredKind: the frame declared
+	// at least one offerable kind, none of them could be offered, and no explicit
+	// caller hint was present, so the expected_kind need was not raised at all.
+	// Reported separately from KindOfferSuppressedByCardinality because the two
+	// answer different operator questions -- "nothing to disambiguate" versus
+	// "the kind this question is about cannot be served".
+	KindOfferSuppressedByUnservableDeclaredKind bool
+	KindOfferDistinctKindCount                  int
+	KindOfferSuppressedByCardinality            bool
 	// KindOfferCandidateOfferCount/KindOfferOfferKind (stage=="kind_offer"
 	// ONLY, CHAOS-4012 v22) describe candidateOfferMaterial's own
 	// independent axis (chaos3900_structure_offers.go): the ranked-
@@ -2695,13 +2722,23 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// and reused for both calls below, mirroring beforeKinds/afterKinds'
 	// own "computed once, read twice" shape.
 	declaredKinds := frameKindHints(frame)
+	// CHAOS-5218: which offerable kinds the offer boundary can actually serve.
+	// BOTH sources: candidatesBySubject (the untruncated map projectKindOfferKinds
+	// already reads as fullPool) AND kindOfferCandidates (which carries the
+	// coverage-floor and low-population-rescue finds that CHAOS-4038/CHAOS-4417
+	// keep OUT of candidatesBySubject by design). Never beforeKinds/afterKinds --
+	// see poolHeldKindsOf' own doc comment for why the truncated visible set is
+	// the wrong authority and why the offer-only finds must be included.
+	// Computed once and reused for both calls below, mirroring declaredKinds'
+	// own "read once, read twice" shape.
+	poolHeld := poolHeldKindsOf(candidatesBySubject, kindOfferCandidates)
 	// beforeOffer is discarded -- only beforeDiag's counts are kept, as the
 	// PRE-repair telemetry twin below. Calling kindOfferMaterial twice
 	// (once per kind list) keeps both diagnostics computed by the
 	// IDENTICAL cardinality-check logic, rather than duplicating that
 	// check by hand and risking the two readings drifting apart.
-	_, beforeDiag := kindOfferMaterial(beforeKinds, request.ExpectedKinds, declaredKinds)
-	kindOffer, kindOfferDiag := kindOfferMaterial(afterKinds, request.ExpectedKinds, declaredKinds)
+	_, beforeDiag := kindOfferMaterial(beforeKinds, request.ExpectedKinds, declaredKinds, poolHeld)
+	kindOffer, kindOfferDiag := kindOfferMaterial(afterKinds, request.ExpectedKinds, declaredKinds, poolHeld)
 	// CHAOS-4012: the SAME union kindOfferMaterial read (pre-repair) above
 	// is also the read-only pool candidateOfferMaterial ranks over -- one
 	// candidate pool, two independent offer axes, never two different
@@ -2727,11 +2764,23 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// which axis (or both, or neither) actually fired without cross-
 	// referencing KindOfferSuppressedByCardinality and
 	// CandidateOfferCount by hand.
+	//
+	// CHAOS-5218 (review round 2, P2): this switch used to ask
+	// "!SuppressedByCardinality", i.e. it enumerated the ONE reason the kind
+	// axis might not have fired. Adding a second suppression reason silently
+	// broke it -- a fully suppressed offer reported offer_kind="kind", telling
+	// an operator the kind axis fired when it had been withdrawn. A deny-list
+	// over reasons admits the next reason by default, exactly like a
+	// classification deny-list admits the next enum member. So the question is
+	// asked of the OUTCOME instead: the kind axis fired iff it actually
+	// produced options. That is correct for both current suppressions and for
+	// any future one, and it cannot drift out of step with them.
+	kindOfferFired := len(kindOffer.KindOptions) > 0
 	offerKind := ""
 	switch {
-	case !kindOfferDiag.SuppressedByCardinality && candidateOfferDiag.OfferKind == "candidate":
+	case kindOfferFired && candidateOfferDiag.OfferKind == "candidate":
 		offerKind = "both"
-	case !kindOfferDiag.SuppressedByCardinality:
+	case kindOfferFired:
 		offerKind = "kind"
 	case candidateOfferDiag.OfferKind == "candidate":
 		offerKind = "candidate"
@@ -2761,6 +2810,8 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			RequestID: request.RequestID, Stage: "kind_offer",
 			KindOfferExplicitHintCount:                   kindOfferDiag.ExplicitHintCount,
 			KindOfferDeclaredHintCount:                   kindOfferDiag.DeclaredHintCount,
+			KindOfferDeclaredWithheldNotInPoolCount:      kindOfferDiag.DeclaredWithheldNotInPoolCount,
+			KindOfferSuppressedByUnservableDeclaredKind:  kindOfferDiag.SuppressedByUnservableDeclaredKind,
 			KindOfferDistinctKindCount:                   kindOfferDiag.DistinctKindCount,
 			KindOfferSuppressedByCardinality:             kindOfferDiag.SuppressedByCardinality,
 			KindOfferCandidateOfferCount:                 candidateOfferDiag.CandidateOfferCount,
@@ -2808,6 +2859,26 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			HandleOfferCountBeforeGraphSource:            handleOfferDiag.CountBeforeGraphSource,
 			HandleOfferGraphDerivedCount:                 handleOfferDiag.GraphDerivedCount,
 			HandleOfferGraphDerivedRejectedCount:         handleOfferDiag.GraphDerivedRejectedCount,
+		})
+	}
+	// CHAOS-5218: the operator-visible half of the declared-kind withholding
+	// decision, emitted ONLY when the decision actually eliminated something.
+	// Gated on the count (not merely on a tracer being wired) because this is
+	// the elimination's own decision-basis record, not per-resolution
+	// bookkeeping: an unconditional Info line on every resolution would bury
+	// it. The Debug "kind_offer" line above still carries the count
+	// unconditionally, so a 0 reading remains observable at Debug. See the
+	// sink's own "kind_offer_withheld" case (tracer.go) for why this one stage
+	// logs at Info where every other stage logs at Debug.
+	if deps.ResolutionTracer != nil && kindOfferDiag.DeclaredWithheldNotInPoolCount > 0 {
+		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+			RequestID: request.RequestID, Stage: "kind_offer_withheld",
+			KindOfferDeclaredWithheldNotInPoolCount:     kindOfferDiag.DeclaredWithheldNotInPoolCount,
+			KindOfferSuppressedByUnservableDeclaredKind: kindOfferDiag.SuppressedByUnservableDeclaredKind,
+			KindOfferDeclaredWithheldKinds:              subjectKindStrings(kindOfferDiag.DeclaredWithheldNotInPoolKinds),
+			KindOfferDeclaredHintCount:                  kindOfferDiag.DeclaredHintCount,
+			KindOfferDistinctKindCount:                  kindOfferDiag.DistinctKindCount,
+			KindOfferSuppressedByCardinality:            kindOfferDiag.SuppressedByCardinality,
 		})
 	}
 	anchorOffer, anchorOfferDiag := anchorOfferMaterial(claimantsFromCandidateNodes(aliasClaimantsByTerm), claimantsFromCandidateNodes(authorizedClaimantNodes(principal, request.RequestedScope, aliasClaimantsByTerm)), aliasIdentityComplete, deps.AnchorMembershipOffersEnabled)
