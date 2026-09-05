@@ -1147,9 +1147,28 @@ func TestEverySourceStateIsRankedAndMapped(t *testing.T) {
 //     undeclared one; reading absence as a vocabulary violation would drop
 //     rows for documents that are merely older than the field.
 func TestAPartialCoverageDetailDoesNotSuppressTheRow(t *testing.T) {
-	t.Parallel()
+	// NOT PARALLEL, AND IT MUST STAY THAT WAY.
+	//
+	// The complement below drives the undeclared-code stop path, and that path
+	// DISCLOSES through the process-global `slog.Default()`. A sibling test,
+	// TestAnUndeclaredCauseCodeEmitsNoRow, swaps that global for its own buffer
+	// and asserts an EXACT count of one drop line on it. Run in parallel, this
+	// test's warning lands in the sibling's buffer and fails it at two -- and
+	// the two tests write the same buffer concurrently, which `-race` reports.
+	// Measured, not theorised: `-race -count=100 -parallel=2` over the two names
+	// fails with "emitted 2 times ... want exactly 1" plus "race detected".
+	//
+	// A test that reaches a global disclosure is a SEQUENTIAL test. The local
+	// buffer below is the second half of the fix: it keeps this test's own
+	// output out of whatever handler happens to be installed, so the isolation
+	// does not rest on ordering alone.
 	health := contractsv1.ContextFabricFactHealth
 	requirement := readRequirement(CompletionQuantifierAtLeastOne)
+
+	logs := &bytes.Buffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
 
 	// The premise, asserted rather than assumed, exactly as the stop-path test
 	// asserts it: if this token were ever declared, every fixture below would
@@ -1195,7 +1214,6 @@ func TestAPartialCoverageDetailDoesNotSuppressTheRow(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
 			rows := appendReadRequirementEvaluations(nil,
 				[]contractsv1.ContextFabricPlanRequirement{requirement}, withDetail(testCase.detail))
 			if len(rows) != 1 {
@@ -1228,26 +1246,38 @@ func TestAPartialCoverageDetailDoesNotSuppressTheRow(t *testing.T) {
 	}
 }
 
-// TestTheNarrowedCauseIsTheFirstDeclaredKindsCause pins WHICH narrowing names
-// the row's cause when more than one declared kind was narrowed.
+// TestTheNarrowedCauseIsTheCanonicallyFirstNarrowedKind pins WHICH narrowing
+// names the row's cause when more than one declared kind was narrowed.
 //
 // The row publishes ONE cause. When two kinds were both narrowed and the
 // coverage layer recorded a different code for each, something has to choose,
 // and the choice has to be a RULE rather than whichever entry the loop
-// happened to see last. The rule is the requirement's own declared order:
-// `FactKinds` is the plan's priority order for that cell, so the first
-// declared kind that was narrowed names the cause. Stopping at the first match
-// is what makes that true; without the stop the result is LAST-wins -- a
-// different published cause for identical evidence, chosen by the detail the
-// plan ranked LOWER.
+// happened to see last. The rule is: **the first narrowed kind in the
+// requirement's canonical vocabulary-ordered FactKinds names the cause -- a
+// deterministic tiebreak, NOT a priority claim.** Stopping at the first match
+// is what makes that true; without the stop it is last-wins, a different
+// published cause for identical evidence.
+//
+// THE DISTINCTION IS LOAD-BEARING AND AN EARLIER DRAFT OF THIS TEST GOT IT
+// WRONG. That draft called FactKinds "the plan's priority order for that cell"
+// and asserted the cause flips when the list is reversed. Both halves of that
+// are false. `sortedFactKinds` returns "a deduplicated copy in fact-kind
+// VOCABULARY order ... not lexical: a kind renamed in a later contract
+// revision must not silently reorder a persisted artifact" -- a CANONICAL
+// order chosen for artifact diffability, which no producer varies and which
+// says nothing about which kind matters more. Asserting over a reversed list
+// pinned behaviour production cannot construct, and justified it with a
+// sentence about a layer this file does not own. That is the same defect class
+// as the five findings this evaluator has already been corrected for, arriving
+// in a test comment instead of in the code.
 //
 // REACHABILITY, stated rather than assumed: `factDetailSpecForRead` mints
-// `fact_narrowed` for every narrowing today, so both codes are equal in
-// service and the choice is currently unobservable. It is pinned for the same
-// reason the undeclared-code stop path is pinned -- one producer change away
-// from mattering, and far cheaper to fix in place than to rediscover from a
-// field report about a cause that "changes for no reason".
-func TestTheNarrowedCauseIsTheFirstDeclaredKindsCause(t *testing.T) {
+// `fact_narrowed` for every narrowing today, so two different codes cannot
+// arise in service and the choice is currently unobservable. It is pinned for
+// the same reason the undeclared-code stop path is pinned -- one producer
+// change away from mattering, and far cheaper to fix in place than to
+// rediscover from a field report about a cause that "changes for no reason".
+func TestTheNarrowedCauseIsTheCanonicallyFirstNarrowedKind(t *testing.T) {
 	t.Parallel()
 	health := contractsv1.ContextFabricFactHealth
 	workload := contractsv1.ContextFabricFactWorkload
@@ -1268,55 +1298,43 @@ func TestTheNarrowedCauseIsTheFirstDeclaredKindsCause(t *testing.T) {
 			Label:        "narrowed",
 		}
 	}
+
+	// The requirement's kinds are left exactly as readRequirement declares
+	// them -- canonical order -- because that is the only order a plan carries.
+	requirement := readRequirement(CompletionQuantifierAtLeastOne)
+	if len(requirement.FactKinds) < 2 || requirement.FactKinds[0] != health || requirement.FactKinds[1] != workload {
+		t.Fatalf("the fixture requirement declares %v; this test needs health then workload in "+
+			"canonical order, or it is not measuring the tiebreak it names", requirement.FactKinds)
+	}
+
+	// THE DETAIL ARRAY IS IN THE OPPOSITE ORDER TO THE DECLARED KINDS, and that
+	// is what makes the assertion mean something. If the evaluator tracked the
+	// array it would answer `fact_scope_unexpanded`; it answers the canonically
+	// first NARROWED KIND's code instead. Deleting the stop after the first
+	// match makes the later kind win and this fails.
 	coverage := factCoverage(health, SourceAvailable, workload, SourceAvailable)
 	coverage.Details = append(coverage.Details,
-		narrowing(health, contractsv1.ContextFabricCoverageDetailFactNarrowed),
-		narrowing(workload, contractsv1.ContextFabricCoverageDetailFactScopeUnexpanded))
+		narrowing(workload, contractsv1.ContextFabricCoverageDetailFactScopeUnexpanded),
+		narrowing(health, contractsv1.ContextFabricCoverageDetailFactNarrowed))
 
-	// The DETAIL order is held constant across both halves below and only the
-	// REQUIREMENT's declared order is varied. That is the whole point: if the
-	// answer tracked the array it would not change, and both halves would want
-	// the same code, so the test would be measuring the fixture.
-	for _, testCase := range []struct {
-		name      string
-		factKinds []FactKind
-		want      contractsv1.ContextFabricCoverageDetailCode
-	}{
-		{
-			name:      "health declared first",
-			factKinds: []FactKind{health, workload},
-			want:      contractsv1.ContextFabricCoverageDetailFactNarrowed,
-		},
-		{
-			name:      "workload declared first",
-			factKinds: []FactKind{workload, health},
-			want:      contractsv1.ContextFabricCoverageDetailFactScopeUnexpanded,
-		},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			requirement := readRequirement(CompletionQuantifierAtLeastOne)
-			requirement.FactKinds = testCase.factKinds
-
-			rows := appendReadRequirementEvaluations(nil,
-				[]contractsv1.ContextFabricPlanRequirement{requirement}, coverage)
-			if len(rows) != 1 {
-				t.Fatalf("produced %d rows, want 1: %+v", len(rows), rows)
-			}
-			if rows[0].CauseCoverage != testCase.want {
-				t.Fatalf("cause = %q, want %q -- with both kinds narrowed the FIRST kind the "+
-					"requirement declares names the cause; the detail array order is identical in "+
-					"both halves of this test, so only the declared order can have decided this",
-					rows[0].CauseCoverage, testCase.want)
-			}
-			// The cause is CARRIED here, not defaulted -- a narrowed kind
-			// ranks at zero severity, so if the carry ever stopped happening
-			// the arm would default `fact_narrowed` and the first half above
-			// would still pass while measuring nothing.
-			if !rows[0].CauseObserved {
-				t.Fatalf("cause_observed = false: the code was defaulted, not carried from the "+
-					"planner's own detail, so this test would no longer discriminate")
-			}
-		})
+	rows := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{requirement}, coverage)
+	if len(rows) != 1 {
+		t.Fatalf("produced %d rows, want 1: %+v", len(rows), rows)
+	}
+	want := contractsv1.ContextFabricCoverageDetailFactNarrowed
+	if rows[0].CauseCoverage != want {
+		t.Fatalf("cause = %q, want %q -- with both kinds narrowed the CANONICALLY FIRST narrowed "+
+			"kind names the cause; the detail array is in the opposite order, so an evaluator "+
+			"reading the array rather than the declared kinds fails here",
+			rows[0].CauseCoverage, want)
+	}
+	// The cause is CARRIED here, not defaulted -- a narrowed kind ranks at zero
+	// severity, so if the carry ever stopped happening the arm would default
+	// `fact_narrowed` and the assertion above would still pass while measuring
+	// nothing.
+	if !rows[0].CauseObserved {
+		t.Fatalf("cause_observed = false: the code was defaulted, not carried from the planner's " +
+			"own detail, so this test would no longer discriminate")
 	}
 }
