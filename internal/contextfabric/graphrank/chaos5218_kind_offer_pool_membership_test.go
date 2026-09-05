@@ -196,14 +196,22 @@ func TestKindOfferMaterial_NilPoolHeldKindsWithholdsDeclaredKinds(t *testing.T) 
 	}
 }
 
-// TestPoolHeldKindsOf_ReadsTheFullPoolNotTheTruncatedVisibleSet is why the
-// membership set is its own argument rather than the poolKinds slice already
-// passed. projectKindOfferKinds returns before==after (the TRUNCATED visible
-// set) whenever committedCount > 0, but filterCandidatesByConfirmedKind
-// narrows the UNTRUNCATED map -- so a kind truncation cut out of the visible
-// set is still servable, and gating on the visible list would withdraw a
-// declared kind the engine could have honoured.
-func TestPoolHeldKindsOf_ReadsTheFullPoolNotTheTruncatedVisibleSet(t *testing.T) {
+// TestPoolHeldKindsOf_ReadsBothSourcesTheOfferBoundaryCanSee covers the two
+// reasons the membership set is its own argument rather than the poolKinds slice
+// already passed.
+//
+// (a) The UNTRUNCATED map. projectKindOfferKinds returns before==after (the
+// truncated visible set) whenever committedCount > 0, but
+// filterCandidatesByConfirmedKind narrows the untruncated map -- so a kind
+// truncation cut from the visible set is still servable and gating on the
+// visible list would withdraw a declared kind the engine could have honoured.
+//
+// (b) The OFFER-ONLY finds. CHAOS-4038's coverage floor and CHAOS-4417's
+// low-population rescue merge repository/project/team finds into a private
+// offerOnlyPool that candidatesBySubject never sees, then union them into
+// kindOfferCandidates so they CAN be offered. Reading only the pool would
+// withhold a kind those passes went and found on purpose -- codex round 1, P2.
+func TestPoolHeldKindsOf_ReadsBothSourcesTheOfferBoundaryCanSee(t *testing.T) {
 	t.Parallel()
 	teamCandidate := offerPoolCandidate(contextfabric.SubjectTeam, "team:CHAOS")
 	projectCandidate := offerPoolCandidate(contextfabric.SubjectProject, "project:atlas")
@@ -222,17 +230,70 @@ func TestPoolHeldKindsOf_ReadsTheFullPoolNotTheTruncatedVisibleSet(t *testing.T)
 		t.Fatalf("afterKinds = %v, want just [team] -- the truncated visible set", after)
 	}
 
-	held := poolHeldKindsOf(fullPool)
+	held := poolHeldKindsOf(fullPool, visible)
 	if !held[contractsv1.ContextFabricSubjectProject] {
 		t.Fatalf("poolHeldKindsOf = %v, want project HELD -- it is in the full pool even though truncation cut it from the visible set", held)
 	}
 	if !held[contractsv1.ContextFabricSubjectTeam] {
 		t.Fatalf("poolHeldKindsOf = %v, want team held", held)
 	}
-
-	// Negative control: a kind in NEITHER set is not held.
+	// Negative control: a kind in NEITHER source is not held.
 	if held[contractsv1.ContextFabricSubjectCIRun] {
 		t.Fatalf("poolHeldKindsOf = %v, want ci_pipeline_run NOT held", held)
+	}
+
+	// (b) An OFFER-ONLY candidate: present in the union the offer builders rank
+	// over, absent from the merged pool by CHAOS-4038/CHAOS-4417's own design.
+	offerOnlyRepo := offerPoolCandidate(contextfabric.SubjectRepository, "repository:acr")
+	if _, inPool := fullPool[SubjectKey(offerOnlyRepo.Subject)]; inPool {
+		t.Fatal("fixture error: the offer-only candidate must NOT be in the merged pool")
+	}
+	held = poolHeldKindsOf(fullPool, []contextfabric.SubjectCandidate{teamCandidate, offerOnlyRepo})
+	if !held[contractsv1.ContextFabricSubjectRepository] {
+		t.Fatalf("poolHeldKindsOf = %v, want repository HELD -- the coverage floor and the low-population rescue put it in the offer union ON PURPOSE, and reading only the merged pool would withhold the kind they went and found", held)
+	}
+	// Control on the same fixture: WITHOUT the offer-only candidate it is not
+	// held, so the assertion above measures the second source and not a set that
+	// happens to contain everything.
+	held = poolHeldKindsOf(fullPool, []contextfabric.SubjectCandidate{teamCandidate})
+	if held[contractsv1.ContextFabricSubjectRepository] {
+		t.Fatalf("control: poolHeldKindsOf = %v, want repository NOT held when nothing offers it", held)
+	}
+}
+
+// TestKindOfferMaterial_OfferOnlyDeclaredKindIsOfferedNotWithheld is the same
+// finding at the composer, on the shape that made it a defect under the
+// suppression rule: a frame-declared kind whose ONLY representation is an
+// offer-only find would otherwise be withheld, and with no other declared kind
+// surviving that withholding would suppress the entire need -- silently
+// discarding the very offer CHAOS-4038/CHAOS-4417 exist to produce.
+func TestKindOfferMaterial_OfferOnlyDeclaredKindIsOfferedNotWithheld(t *testing.T) {
+	t.Parallel()
+	teamCandidate := offerPoolCandidate(contextfabric.SubjectTeam, "team:CHAOS")
+	fullPool := map[string]contextfabric.SubjectCandidate{SubjectKey(teamCandidate.Subject): teamCandidate}
+	offerOnlyRepo := offerPoolCandidate(contextfabric.SubjectRepository, "repository:acr")
+	offerUnion := []contextfabric.SubjectCandidate{teamCandidate, offerOnlyRepo}
+
+	// poolKinds is what the offer builders see: both kinds.
+	poolKinds := distinctOfferableKinds(offerUnion)
+	declaredKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}
+
+	material, diag := kindOfferMaterial(poolKinds, nil, declaredKinds, poolHeldKindsOf(fullPool, offerUnion))
+	if diag.SuppressedByUnservableDeclaredKind {
+		t.Fatalf("diag = %+v, want the need RAISED -- the declared kind is in the offer union", diag)
+	}
+	if len(material.KindOptions) == 0 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectRepository {
+		t.Fatalf("KindOptions = %+v, want repository ranked FIRST as a declared kind, not demoted to a pool kind", material.KindOptions)
+	}
+	if diag.DeclaredWithheldNotInPoolCount != 0 {
+		t.Fatalf("diag = %+v, want DeclaredWithheldNotInPoolCount 0", diag)
+	}
+
+	// Control: with the offer-only find removed from BOTH sources, the same
+	// declared kind is unservable and the need is suppressed.
+	material, diag = kindOfferMaterial([]contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}, nil, declaredKinds, poolHeldKindsOf(fullPool, []contextfabric.SubjectCandidate{teamCandidate}))
+	if !diag.SuppressedByUnservableDeclaredKind || len(material.KindOptions) != 0 {
+		t.Fatalf("control: material = %+v diag = %+v, want suppressed", material, diag)
 	}
 }
 
@@ -327,6 +388,17 @@ func TestResolveSubjects_QbScopedShapeRaisesNoNeedAndKeepsThePoolAcrossTurns(t *
 	if len(offers) != 1 || offers[0].KindOfferDeclaredWithheldNotInPoolCount != 1 || !offers[0].KindOfferSuppressedByUnservableDeclaredKind {
 		t.Fatalf("kind_offer events = %+v, want exactly 1 carrying withheld count 1 and the suppression reason", offers)
 	}
+	// codex round 1, named mutants 1 and 2: the withheld event also CARRIES the
+	// declared-hint and distinct-kind counts, and nothing asserted them, so
+	// deleting either assignment survived. Asserted here, and asserted again at
+	// a NON-ZERO value in the partial-withholding test below -- a field pinned
+	// only at its zero value is satisfied by a dropped assignment.
+	if withheld[0].KindOfferDeclaredHintCount != 0 {
+		t.Fatalf("withheld event KindOfferDeclaredHintCount = %d, want 0 on the fully-suppressed shape", withheld[0].KindOfferDeclaredHintCount)
+	}
+	if withheld[0].KindOfferDistinctKindCount != 2 {
+		t.Fatalf("withheld event KindOfferDistinctKindCount = %d, want 2 (team and pull_request reached `ranked` before the suppression returned)", withheld[0].KindOfferDistinctKindCount)
+	}
 
 	// Turn 2: with no offer there is no kind to confirm, so the pool survives.
 	turnTwoDeps := newBackend().deps()
@@ -382,13 +454,82 @@ func TestResolveSubjects_ServedDeclaredKindStillReachesTheOfferAndCommits(t *tes
 	if err != nil {
 		t.Fatalf("turn 2 ResolveSubjectsWithCommitBasis() error = %v", err)
 	}
-	if len(resolution.Candidates) == 0 && len(resolution.Committed) == 0 {
-		t.Fatalf("turn 2 left an EMPTY pool (candidates %d, committed %d) -- confirming an offered, servable kind must not delete every candidate", len(resolution.Candidates), len(resolution.Committed))
+	// codex round 1, P3: the disjunction "candidates OR committed is non-empty"
+	// let this test pass without ever committing, which is the property its name
+	// claims. Assert the commit itself.
+	if len(resolution.Committed) != 1 {
+		t.Fatalf("turn 2 resolution.Committed = %#v, want exactly the confirmed-kind subject committed", resolution.Committed)
+	}
+	if resolution.Committed[0].Kind != contractsv1.ContextFabricSubjectProject || resolution.Committed[0].CanonicalID != "project:chaos" {
+		t.Fatalf("turn 2 committed %+v, want project:chaos -- the confirmed kind must survive its own filter and commit", resolution.Committed[0])
 	}
 	for _, candidate := range resolution.Candidates {
 		if candidate.Subject.Kind != contractsv1.ContextFabricSubjectProject {
 			t.Fatalf("turn 2 candidate %+v is not the confirmed kind -- the filter is still expected to narrow", candidate.Subject)
 		}
+	}
+}
+
+// TestResolveSubjects_PartialWithholdingCarriesItsCountsNonZero is the
+// non-zero half of the carried-field pins, and it exists because codex round 1
+// named "delete the KindOfferDeclaredHintCount assignment" and "delete the
+// KindOfferDistinctKindCount assignment" as mutants it expected to survive.
+// They did survive against the fully-suppressed fixture, where the expected
+// declared-hint count is 0 — and a field asserted at its ZERO value is satisfied
+// by a dropped assignment. A grouped frame declares BOTH axes (invariant I6:
+// always two different kinds), so with only ONE of them in the pool the event
+// carries DeclaredHintCount 1 and a withheld count of 1 at the same time.
+func TestResolveSubjects_PartialWithholdingCarriesItsCountsNonZero(t *testing.T) {
+	t.Parallel()
+	teamNode := candidateNode(contextfabric.SubjectTeam, "team:CHAOS", "CHAOS", 0.55, "*")
+	prNode := candidateNode(contextfabric.SubjectPullRequest, "pr:1", "CHAOS pull request", 0.5, "*")
+	backend := &fakeGraphBackend{
+		searchResults: map[string][]CandidateNode{"CHAOS": {teamNode, prNode}},
+	}
+	tracer := &chaos4120Tracer{}
+	deps := backend.deps()
+	deps.ResolutionTracer = tracer
+	// Declares team (in the pool) AND project (not in the pool).
+	frame := &contextfabric.QuestionFrame{
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind: contextfabric.SubjectExpressionGroupedMembers,
+			Grouped: &contextfabric.GroupedSetExpression{
+				GroupKind: contextfabric.SubjectTeam, MemberKind: contextfabric.SubjectProject,
+			},
+		},
+	}
+
+	_, offer, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("CHAOS"), deps, nil, nil, frame, "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	// The served declared kind means the need IS raised -- the partial case is
+	// deliberately not suppressed.
+	if len(offer.Missing) != 1 || offer.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
+		t.Fatalf("offer.Missing = %v, want [expected_kind] -- one declared kind is served", offer.Missing)
+	}
+	if len(offer.KindOptions) == 0 || offer.KindOptions[0].Kind != contractsv1.ContextFabricSubjectTeam {
+		t.Fatalf("offer.KindOptions = %+v, want the served declared kind (team) first", offer.KindOptions)
+	}
+
+	withheld := tracer.eventsByStage("kind_offer_withheld")
+	if len(withheld) != 1 {
+		t.Fatalf("got %d kind_offer_withheld events, want exactly 1", len(withheld))
+	}
+	if withheld[0].KindOfferSuppressedByUnservableDeclaredKind {
+		t.Fatalf("withheld event = %+v, want SuppressedByUnservableDeclaredKind FALSE on the partial case", withheld[0])
+	}
+	if withheld[0].KindOfferDeclaredHintCount != 1 {
+		t.Fatalf("withheld event KindOfferDeclaredHintCount = %d, want 1 (NON-ZERO: this is the assertion a dropped assignment must fail)", withheld[0].KindOfferDeclaredHintCount)
+	}
+	if withheld[0].KindOfferDistinctKindCount != 2 {
+		t.Fatalf("withheld event KindOfferDistinctKindCount = %d, want 2 (NON-ZERO: team plus pull_request)", withheld[0].KindOfferDistinctKindCount)
+	}
+	if withheld[0].KindOfferDeclaredWithheldNotInPoolCount != 1 {
+		t.Fatalf("withheld count = %d, want 1 (project)", withheld[0].KindOfferDeclaredWithheldNotInPoolCount)
+	}
+	if !reflect.DeepEqual(withheld[0].KindOfferDeclaredWithheldKinds, []string{string(contractsv1.ContextFabricSubjectProject)}) {
+		t.Fatalf("withheld kinds = %v, want [project]", withheld[0].KindOfferDeclaredWithheldKinds)
 	}
 }
 
@@ -408,7 +549,7 @@ func TestChaos5218_ProductionSinkEmitsTheWithholdingAtTheProductionLogLevel(t *t
 		KindOfferDeclaredWithheldNotInPoolCount:     1,
 		KindOfferDeclaredWithheldKinds:              []string{string(contractsv1.ContextFabricSubjectProject)},
 		KindOfferSuppressedByUnservableDeclaredKind: true,
-		KindOfferDeclaredHintCount:                  0,
+		KindOfferDeclaredHintCount:                  1,
 		KindOfferDistinctKindCount:                  2,
 	})
 	line := strings.TrimSpace(buffer.String())
@@ -432,6 +573,15 @@ func TestChaos5218_ProductionSinkEmitsTheWithholdingAtTheProductionLogLevel(t *t
 	kinds, ok := record["withheld_kinds"].([]any)
 	if !ok || len(kinds) != 1 || kinds[0] != string(contractsv1.ContextFabricSubjectProject) {
 		t.Fatalf("withheld_kinds = %v, want [project]", record["withheld_kinds"])
+	}
+	// codex round 1, named mutant 3: nothing asserted the SERIALIZED
+	// declared_hint_count, so deleting it from the sink survived. Both counts are
+	// carried at NON-ZERO values here for the same reason.
+	if got := record["declared_hint_count"]; got != float64(1) {
+		t.Fatalf("declared_hint_count = %v, want 1", got)
+	}
+	if got := record["distinct_kind_count"]; got != float64(2) {
+		t.Fatalf("distinct_kind_count = %v, want 2", got)
 	}
 	if got := record["suppressed_by_unservable_declared_kind"]; got != true {
 		t.Fatalf("suppressed_by_unservable_declared_kind = %v, want true -- asserted at a NON-ZERO value, since a bool asserted false would pass for a dropped assignment", got)

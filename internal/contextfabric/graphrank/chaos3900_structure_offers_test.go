@@ -279,6 +279,34 @@ func TestKindOfferMaterial_TwoDeclaredKindsAloneSuppressesNeed(t *testing.T) {
 	if diag.DeclaredHintCount != 1 || diag.DeclaredWithheldNotInPoolCount != 1 {
 		t.Errorf("diag = %+v, want DeclaredHintCount 1 (team, served) and DeclaredWithheldNotInPoolCount 1 (project, not in pool)", diag)
 	}
+
+	// CHAOS-4967's ORIGINAL property, restored as its own case (codex round 1,
+	// P3): when the pool serves BOTH declared kinds, BOTH rank ahead of the
+	// unrelated pool kind, in declaredKinds order. The partial fixture above
+	// cannot see this -- it only ever admits one declared kind, so a rule that
+	// dropped every declared kind after the first would pass it. That rule is
+	// exactly the mutant codex named.
+	bothServed := []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectTeam,
+		contractsv1.ContextFabricSubjectProject,
+		contractsv1.ContextFabricSubjectPullRequest,
+	}
+	material, diag = kindOfferMaterial(bothServed, nil, declaredKinds, heldFromKinds(bothServed...))
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
+		t.Fatalf("material.Missing = %v, want [expected_kind]", material.Missing)
+	}
+	if len(material.KindOptions) != 3 ||
+		material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectTeam ||
+		material.KindOptions[1].Kind != contractsv1.ContextFabricSubjectProject ||
+		material.KindOptions[2].Kind != contractsv1.ContextFabricSubjectPullRequest {
+		t.Fatalf("KindOptions = %+v, want [team, project, pull_request] -- BOTH declared kinds ranked first, in declaredKinds order, pool kind last", material.KindOptions)
+	}
+	if diag.DeclaredHintCount != 2 || diag.DeclaredWithheldNotInPoolCount != 0 {
+		t.Errorf("diag = %+v, want DeclaredHintCount 2 and DeclaredWithheldNotInPoolCount 0 -- both declared kinds served", diag)
+	}
+	if diag.SuppressedByUnservableDeclaredKind {
+		t.Errorf("diag = %+v, want SuppressedByUnservableDeclaredKind false", diag)
+	}
 }
 
 // TestCandidateOfferMaterial_EmptyPoolOffersNothing pins the "genuinely

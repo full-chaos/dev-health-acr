@@ -2722,14 +2722,16 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// and reused for both calls below, mirroring beforeKinds/afterKinds'
 	// own "computed once, read twice" shape.
 	declaredKinds := frameKindHints(frame)
-	// CHAOS-5218: which offerable kinds the FULL merged pool actually holds.
-	// Deliberately candidatesBySubject (the untruncated map projectKindOfferKinds
-	// already reads as fullPool), never beforeKinds/afterKinds -- see
-	// poolHeldKinds' own doc comment (chaos3900_structure_offers.go) for why the
-	// truncated visible set is the wrong authority for this question. Computed
-	// once and reused for both calls below, mirroring declaredKinds' own
-	// "read once, read twice" shape.
-	poolHeld := poolHeldKindsOf(candidatesBySubject)
+	// CHAOS-5218: which offerable kinds the offer boundary can actually serve.
+	// BOTH sources: candidatesBySubject (the untruncated map projectKindOfferKinds
+	// already reads as fullPool) AND kindOfferCandidates (which carries the
+	// coverage-floor and low-population-rescue finds that CHAOS-4038/CHAOS-4417
+	// keep OUT of candidatesBySubject by design). Never beforeKinds/afterKinds --
+	// see poolHeldKindsOf' own doc comment for why the truncated visible set is
+	// the wrong authority and why the offer-only finds must be included.
+	// Computed once and reused for both calls below, mirroring declaredKinds'
+	// own "read once, read twice" shape.
+	poolHeld := poolHeldKindsOf(candidatesBySubject, kindOfferCandidates)
 	// beforeOffer is discarded -- only beforeDiag's counts are kept, as the
 	// PRE-repair telemetry twin below. Calling kindOfferMaterial twice
 	// (once per kind list) keeps both diagnostics computed by the
