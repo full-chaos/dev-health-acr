@@ -358,13 +358,13 @@ func TestLawL2EverySetAxisIsDischargedByAName(t *testing.T) {
 // none -- and both are checked below by reflection, so a field added later
 // is covered without anyone remembering to cover it.
 var requirementFieldSources = map[string]string{
-	"Obligation":  "the frame's derived obligation set",
-	"Role":        "the subject expression's variant (role slot)",
-	"Subject":     "the role slot's subject kind",
-	"Kind":        "the obligation KIND table (read / computed / answer-contract)",
-	"FactKinds":   "the registry's producer declarations, via the obligation seed",
-	"Step":        "the computed-step name declared for the obligation",
-	"Scope":       "SubjectExpression.Kind",
+	"Obligation": "the frame's derived obligation set",
+	"Role":       "the subject expression's variant (role slot)",
+	"Subject":    "the role slot's subject kind",
+	"Kind":       "the obligation KIND table (read / computed / answer-contract)",
+	"FactKinds":  "the registry's producer declarations, via the obligation seed",
+	"Step":       "the computed-step name declared for the obligation",
+	"Scope":      "SubjectExpression.Kind",
 	// ON A SERVED ROW. An UNSERVED row carries `none` by the row invariant
 	// ("an unserved row has Unavailable non-empty and Quantifier `none`"),
 	// which is the absence of a quantifier rather than a second source for
