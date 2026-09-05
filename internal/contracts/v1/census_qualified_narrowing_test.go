@@ -364,7 +364,8 @@ func TestTheCountObligationConstantIsTheWireToken(t *testing.T) {
 }
 
 // TestTheCensusExceptionRejectsAMixedPopulationAndReductionCause plants the
-// defect the two EMPTINESS conjuncts exist to catch.
+// defect the two EMPTINESS conjuncts exist to catch, ACROSS BOTH WHOLE
+// VOCABULARIES.
 //
 // `named` is an OR across the three cause fields, so a row may carry more than
 // one. That is right in general — a reduction can have both a basis and an
@@ -375,38 +376,61 @@ func TestTheCountObligationConstantIsTheWireToken(t *testing.T) {
 // population cause states two incompatible stories and the exception must not
 // choose between them.
 //
+// It WALKS both closed vocabularies rather than naming one member of each, and
+// that is the third time this change has learned the same thing: a per-member
+// negative test closes only the member it names. The first version of this test
+// used one narrowing basis and one overrun, which would have left a conjunct
+// widened to admit any OTHER member passing every test in the file.
+//
 // The producer never writes this shape: it copies a basis and an overrun only
 // when a member step actually reduced the set, and that row takes the ordinary
 // narrowed path, not this one. So the refusal costs nothing real.
 func TestTheCensusExceptionRejectsAMixedPopulationAndReductionCause(t *testing.T) {
 	t.Parallel()
-	for _, probe := range []struct {
-		name  string
-		apply func(*ContextFabricPlanRequirementOutcomeRow)
-	}{
-		{"narrowing basis", func(r *ContextFabricPlanRequirementOutcomeRow) {
-			r.CauseNarrowing = ContextFabricNarrowingBasisCanonicalIDLexical
-		}},
-		{"budget overrun", func(r *ContextFabricPlanRequirementOutcomeRow) {
-			r.CauseOverrun = ContextFabricBudgetOverrunVocabulary()[0]
-		}},
-	} {
-		probe := probe
-		t.Run(probe.name, func(t *testing.T) {
-			t.Parallel()
+
+	t.Run("every narrowing basis", func(t *testing.T) {
+		t.Parallel()
+		bases := ContextFabricNarrowingBasisVocabulary()
+		if len(bases) == 0 {
+			t.Fatal("the narrowing vocabulary is empty, so this walk asserts nothing")
+		}
+		for _, basis := range bases {
 			row := censusQualifiedCountRow()
-			probe.apply(&row)
+			row.CauseNarrowing = basis
 
 			err := ValidateContextFabricPlanRequirementOutcomeRow(row)
 			if err == nil {
-				t.Fatalf("a census-qualified row also naming a %s was accepted; that cause asserts a reduction, "+
-					"and this row's equal counts assert there was none", probe.name)
+				t.Errorf("a census-qualified row also naming narrowing basis %q was accepted; that cause asserts "+
+					"a reduction, and this row's equal counts assert there was none", basis)
+				continue
 			}
 			if !strings.Contains(err.Error(), "is not a reduction") {
-				t.Fatalf("rejected for the wrong reason: %v (want the reduction rule)", err)
+				t.Errorf("basis %q was refused for the wrong reason: %v (want the reduction rule)", basis, err)
 			}
-		})
-	}
+		}
+	})
+
+	t.Run("every budget overrun", func(t *testing.T) {
+		t.Parallel()
+		overruns := ContextFabricBudgetOverrunVocabulary()
+		if len(overruns) == 0 {
+			t.Fatal("the overrun vocabulary is empty, so this walk asserts nothing")
+		}
+		for _, overrun := range overruns {
+			row := censusQualifiedCountRow()
+			row.CauseOverrun = overrun
+
+			err := ValidateContextFabricPlanRequirementOutcomeRow(row)
+			if err == nil {
+				t.Errorf("a census-qualified row also naming overrun %q was accepted; a budget that cut the answer "+
+					"short asserts a reduction, and this row's equal counts assert there was none", overrun)
+				continue
+			}
+			if !strings.Contains(err.Error(), "is not a reduction") {
+				t.Errorf("overrun %q was refused for the wrong reason: %v (want the reduction rule)", overrun, err)
+			}
+		}
+	})
 }
 
 // The three walks below assert the exception admits EXACTLY ONE member of each

@@ -486,3 +486,98 @@ func TestAnEmptyIncompletePopulationIsStillQualified(t *testing.T) {
 			"is an answer, and qualifying it would make every empty result look degraded")
 	}
 }
+
+// TestAOneMemberIncompletePopulationIsQualified covers the size the other
+// fixtures skip.
+//
+// The population arms here use 0, 4 and 8 members. One is the boundary a
+// plausible-looking predicate breaks on — "incomplete AND we resolved more than
+// one" reads like it is avoiding a qualification on a trivial answer, and a
+// single team found under a truncated search is exactly the case where the
+// reader most needs to be told the number is a floor: "1" reads as a complete
+// finding in a way "4 of many" does not.
+func TestAOneMemberIncompletePopulationIsQualified(t *testing.T) {
+	t.Parallel()
+	single := countingCohort(SubjectTeam, 1)
+	single.Complete = false
+	single.Truncated = false
+
+	cardinality, counted := ComputeMembershipCardinality(single, nil)
+	if !counted {
+		t.Fatal("a one-member cohort reported no cardinality")
+	}
+	if cardinality.Served != 1 || cardinality.Declared != 1 {
+		t.Fatalf("a one-member cohort counted %d/%d, want 1/1", cardinality.Served, cardinality.Declared)
+	}
+	if !cardinality.PopulationIncomplete {
+		t.Error("a ONE-member cohort over an incomplete census was read as a full census; one is the size where " +
+			"an unqualified count reads most like a complete finding")
+	}
+	// The complement at the same size, so this cannot pass by the field being
+	// true for every one-member cohort.
+	full := countingCohort(SubjectTeam, 1)
+	full.Complete = true
+	full.Truncated = false
+	if plain, _ := ComputeMembershipCardinality(full, nil); plain.PopulationIncomplete {
+		t.Error("a complete one-member census was read as incomplete")
+	}
+}
+
+// TestTheEmptyIncompletePopulationReachesTheRowAndTheState carries the empty
+// case THROUGH the row builder and the completeness derivation.
+//
+// The other empty-population test stops at the pure function, which is one
+// assertion short of the thing that matters: the classification could be right
+// while the row builder special-cased a zero count back to `satisfied` — and
+// `satisfied` is what the completeness derivation reads as contributing
+// nothing, so the answer would call itself complete over a census it never
+// finished. That is the original defect, at zero. Asserting the row and the
+// derived state is what closes it.
+func TestTheEmptyIncompletePopulationReachesTheRowAndTheState(t *testing.T) {
+	t.Parallel()
+	empty := countingCohort(SubjectTeam, 0)
+	empty.Complete = false
+	empty.Truncated = false
+
+	cardinality, counted := ComputeMembershipCardinality(empty, nil)
+	if !counted {
+		t.Fatal("an empty cohort reported no cardinality")
+	}
+	row := membershipCardinalityOutcomeRow(cardinality, "count/member/team", string(ObligationCount))
+
+	if row.Outcome != contractsv1.ContextFabricRequirementNarrowed {
+		t.Fatalf("the row for an empty INCOMPLETE population is %q, want %q -- a count of zero taken over a "+
+			"population nobody saw all of is not an exact zero",
+			row.Outcome, contractsv1.ContextFabricRequirementNarrowed)
+	}
+	if row.CauseCoverage != contractsv1.ContextFabricCoverageDetailPopulationTruncated {
+		t.Errorf("the row names cause %q, want the population code", row.CauseCoverage)
+	}
+	if !row.CauseObserved {
+		t.Error("the row does not claim an observed cause; the cohort reported its own incompleteness")
+	}
+	if row.Served != 0 || row.Declared != 0 {
+		t.Errorf("the row counts %d/%d, want 0/0", row.Served, row.Declared)
+	}
+
+	// The consequence, asserted rather than inferred: this row must not leave
+	// the answer reading complete.
+	state := contractsv1.DeriveContextFabricAnswerCompletenessState(
+		[]contractsv1.ContextFabricPlanRequirementOutcomeRow{row})
+	if state != contractsv1.ContextFabricAnswerCompletenessPartial {
+		t.Errorf("an answer carrying the empty-incomplete count derives %q, want %q", state,
+			contractsv1.ContextFabricAnswerCompletenessPartial)
+	}
+
+	// The complement: a genuinely complete empty census stays satisfied, or the
+	// assertions above would pass for a change that qualified every count.
+	genuine := countingCohort(SubjectTeam, 0)
+	genuine.Complete = true
+	genuine.Truncated = false
+	plain, _ := ComputeMembershipCardinality(genuine, nil)
+	plainRow := membershipCardinalityOutcomeRow(plain, "count/member/team", string(ObligationCount))
+	if plainRow.Outcome != contractsv1.ContextFabricRequirementSatisfied {
+		t.Errorf("a complete census that matched nobody produced %q, want satisfied; an exact zero is an answer",
+			plainRow.Outcome)
+	}
+}
