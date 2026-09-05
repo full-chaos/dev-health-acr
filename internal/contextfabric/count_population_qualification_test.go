@@ -173,6 +173,52 @@ func TestACountOverAnUpstreamTruncatedCensusIsNotSatisfied(t *testing.T) {
 	assertPopulationQualified(t, result, members)
 }
 
+// TestACohortClaimingBothCompleteAndTruncatedIsTreatedAsIncomplete closes the
+// one mutant the behavioural arms cannot kill.
+//
+// The predicate is `!Complete || Truncated`. Every production setter today
+// writes those two as complements — discovery sets `Complete: n < ceiling,
+// Truncated: n >= ceiling`, the reuse degrade sets `Complete=false,
+// Truncated=true` — so on reachable inputs `!Complete` alone decides every
+// case, and a mutant dropping `|| Truncated` changes no behaviour any
+// end-to-end fixture can observe. That mutant is REPORTED AS SURVIVING in the
+// battery rather than hidden, because a mutation that turns nothing red is a
+// finding about coverage, not a pass.
+//
+// This is the fixture that closes it, and the state it builds is REPRESENTABLE
+// rather than contrived: the published Cohort schema declares `complete` and
+// `truncated` as two independent booleans with no mutual-exclusion rule, and
+// the flat-cohort validator constrains the pair only when `groups` is present.
+// So a producer CAN emit both true, nothing on the wire refuses it, and the
+// question "what does the count step do then" has an answer that must not be
+// "treat it as a full census".
+//
+// It is deliberately built by hand rather than through a setter, because no
+// setter writes this pair — which is exactly why the guard exists and exactly
+// why no behavioural test reaches it.
+func TestACohortClaimingBothCompleteAndTruncatedIsTreatedAsIncomplete(t *testing.T) {
+	t.Parallel()
+	const members = 4
+	// Both true: self-contradictory, unwritten by any setter today, and
+	// admitted by the published schema. Fail closed -- anything that is not
+	// "complete and not truncated" is incomplete.
+	result, _ := runCensusInvestigation(t, members, 0, true, true)
+	row := theCountRow(t, result)
+
+	if row.Outcome != contractsv1.ContextFabricRequirementNarrowed {
+		t.Errorf("outcome = %q for a cohort claiming BOTH complete and truncated, want %q -- the pair is "+
+			"self-contradictory, so the only safe reading is the conservative one; taking `complete` at face "+
+			"value here would let a producer opt out of the qualification by also claiming completeness",
+			row.Outcome, contractsv1.ContextFabricRequirementNarrowed)
+	}
+	if row.CauseCoverage != populationTruncatedToken {
+		t.Errorf("cause_coverage = %q, want %q", row.CauseCoverage, populationTruncatedToken)
+	}
+	if got := result.Completeness.State; got != contractsv1.ContextFabricAnswerCompletenessPartial {
+		t.Errorf("completeness = %q, want %q", got, contractsv1.ContextFabricAnswerCompletenessPartial)
+	}
+}
+
 // TestACountOverACompleteCensusStaysSatisfied is the POSITIVE CONTROL, and it
 // is not optional.
 //
