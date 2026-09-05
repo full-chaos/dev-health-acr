@@ -185,37 +185,55 @@ func TestACountOverAnUpstreamTruncatedCensusIsNotSatisfied(t *testing.T) {
 // battery rather than hidden, because a mutation that turns nothing red is a
 // finding about coverage, not a pass.
 //
-// This is the fixture that closes it, and the state it builds is REPRESENTABLE
-// rather than contrived: the published Cohort schema declares `complete` and
-// `truncated` as two independent booleans with no mutual-exclusion rule, and
-// the flat-cohort validator constrains the pair only when `groups` is present.
-// So a producer CAN emit both true, nothing on the wire refuses it, and the
-// question "what does the count step do then" has an answer that must not be
-// "treat it as a full census".
+// THIS TEST IS FUNCTION-LEVEL, NOT END-TO-END, AND THE REASON IS THE FINDING.
 //
-// It is deliberately built by hand rather than through a setter, because no
-// setter writes this pair — which is exactly why the guard exists and exactly
-// why no behavioural test reaches it.
-func TestACohortClaimingBothCompleteAndTruncatedIsTreatedAsIncomplete(t *testing.T) {
+// The contradictory pair CANNOT REACH A SERVED DOCUMENT. The v1 cohort
+// validator refuses it outright — `(c.Complete && c.Truncated)` is one of the
+// disjuncts behind "cohort violates v1 bounds"
+// (validate_context_fabric_result.go:190) — so an engine-driven fixture
+// carrying it fails at Investigate() with a validation error and proves
+// nothing about the count step. That was measured, not reasoned: the first
+// version of this test drove the engine and reddened with exactly that error.
+//
+// It is worth stating how that mistake was made, because it is a shape this
+// package keeps paying for. The published JSON Schema declares `complete` and
+// `truncated` as two independent booleans with no mutual-exclusion rule, so
+// reading the schema alone says the state is representable. The GO VALIDATOR
+// is narrower than the schema, and it is the one that decides. A conclusion
+// drawn from the schema without the validator is the same blindness a
+// type-vs-validator parity check has.
+//
+// So the guard is unreachable end to end, and it is KEPT anyway, tested here
+// at the pure function that runs BEFORE validation — the same treatment, and
+// for the same reason, that `OutcomeReductionWouldNotReduce` gets one file
+// over: a guard no live input reaches is covered by a function-level test
+// rather than removed, because the thing it defends against is a caller that
+// hands it a value the wire would have refused.
+func TestTheCountStepTreatsAContradictoryCohortAsIncomplete(t *testing.T) {
 	t.Parallel()
-	const members = 4
-	// Both true: self-contradictory, unwritten by any setter today, and
-	// admitted by the published schema. Fail closed -- anything that is not
-	// "complete and not truncated" is incomplete.
-	result, _ := runCensusInvestigation(t, members, 0, true, true)
-	row := theCountRow(t, result)
+	// Built by hand and NOT served: no setter writes this pair and the
+	// validator refuses it, which is exactly why no behavioural arm reaches
+	// the disjunct that catches it.
+	cohort := countingCohort(SubjectTeam, 4)
+	cohort.Complete = true
+	cohort.Truncated = true
 
-	if row.Outcome != contractsv1.ContextFabricRequirementNarrowed {
-		t.Errorf("outcome = %q for a cohort claiming BOTH complete and truncated, want %q -- the pair is "+
-			"self-contradictory, so the only safe reading is the conservative one; taking `complete` at face "+
-			"value here would let a producer opt out of the qualification by also claiming completeness",
-			row.Outcome, contractsv1.ContextFabricRequirementNarrowed)
+	cardinality, counted := ComputeMembershipCardinality(cohort, nil)
+	if !counted {
+		t.Fatal("a cohort with members reported no cardinality")
 	}
-	if row.CauseCoverage != populationTruncatedToken {
-		t.Errorf("cause_coverage = %q, want %q", row.CauseCoverage, populationTruncatedToken)
+	if !cardinality.PopulationIncomplete {
+		t.Error("a cohort claiming BOTH complete and truncated was read as a full census -- the pair is " +
+			"self-contradictory and the only safe reading is the conservative one; taking `complete` at face " +
+			"value would let a producer opt out of the qualification by also claiming completeness")
 	}
-	if got := result.Completeness.State; got != contractsv1.ContextFabricAnswerCompletenessPartial {
-		t.Errorf("completeness = %q, want %q", got, contractsv1.ContextFabricAnswerCompletenessPartial)
+	// The complement, in the same test, so this cannot pass by the field
+	// being true for everything.
+	full := countingCohort(SubjectTeam, 4)
+	full.Complete = true
+	full.Truncated = false
+	if plain, _ := ComputeMembershipCardinality(full, nil); plain.PopulationIncomplete {
+		t.Error("a complete, untruncated census was read as incomplete")
 	}
 }
 
