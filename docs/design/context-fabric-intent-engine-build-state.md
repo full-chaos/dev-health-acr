@@ -65,10 +65,10 @@ One row per seam. "Shipped" means merged and confirmed on `origin/main`.
 when, and where it is recorded. **Four of these eight do not reach it, and saying which is part of
 the record rather than a gap to paper over.**
 
-| | D6 | D7 | D8 | D9 | D10 | D11 | D12 | D13 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| costed options | ✓ | ✓ | ✓ | ✓ | — | — | — | — |
-| named decider + date | ✓ | ✓ | ✓ | — | — | — | — | — |
+| | D6 | D7 | D8 | D9 | D10 | D11 | D12 | D13 | D14 | D15 | D16 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| costed options | ✓ | ✓ | ✓ | ✓ | — | — | — | — | ✓ | — | — |
+| named decider + date | ✓ | ✓ | ✓ | — | — | — | — | — | — | ✓‡ | ✓‡ |
 
 **D6, D7 and D8 are decisions in §10's full sense** — a live choice, options costed on both sides, a
 named ruler and a date. **D9 carries costed options but no named ruler**: it is a lane-level
@@ -79,6 +79,15 @@ migration, and a folded-in erratum. Each has a rationale but no rejected alterna
 live, so an options table would be manufactured. A costed-options table that only costs the losers
 is not a decision record, it is a justification — so where there was no real contest, this section
 says so instead of inventing one.
+
+**D14 is D9's shape, not D6-D8's.** Three options were costed directly on the computed-step-inputs ticket, but the
+ruling is a team-lead ruling made inside the seam the requirement-derivation ticket already owns — engineering-level, like
+D9, and the page does not dress it as an owner ruling either. **D15 and D16 are amendments chris did
+not actively rule on.** Both were put to him as a decision with a stated default in the
+astra-synthesis proposal (E-3, E-8); both defaults **stood by silence** at the 2026-09-04 15:00 PDT
+reply deadline. The `✓‡` marks that: a named decider and a date exist, but the decision was reached
+by a default standing unopposed, not by a costed, argued ruling — the same distinction D9 draws for
+"named decider" in the other direction, applied here to "how a decider decided."
 
 One consequence worth stating plainly: **D9's own chosen option is described by what it buys, not by
 what it costs.** Its cost is real and is stated in the section body rather than the table — the
@@ -210,15 +219,26 @@ tracked file on the observing branch and **196** on the branch that holds that w
 
 ---
 
-### D8 — the S7c reduction arm is unreachable through Ask Dev. Raise the client's candidate cap, or leave it?
+### D8 — the S7c reduction arm has not been observed to fire through Ask Dev. Raise the client's candidate cap, or leave it?
 
 **Context.** S7c's reduction arm drops unresolved `SubjectResolution.Candidates` when an answer
 overruns the item ceiling. It can only fire when candidate fan-out is large enough to matter. The
 Ask Dev client hardcodes `max_subject_candidates: 10` — verified by reading the client source at
 `src/lib/acr/client.ts:245` in the ask-dev checkout — while acr's contract ceiling is **50**
 (`internal/contracts/v1/validate_context_fabric_request.go:271`) and acr's own MCP default is **20**
-(`internal/mcp/investigate_question.go:37`, itself raised 10 → 20 earlier). So the arm never fires
-through the product surface.
+(`internal/mcp/investigate_question.go:37`, itself raised 10 → 20 earlier).
+
+**Correction (2026-09-04, astra-synthesis B-5).** This section previously said the client's cap of
+10 makes the arm "structurally unreachable" / that it "never fires through the product surface".
+That overclaimed the mechanism. The reducer's own arithmetic is
+`allowance = MaxItems − (Budgeted() − declared)` (`narrowCandidatesToBudget`,
+`internal/contextfabric/requirement_outcomes.go:241-242` on acr main `439ca3fb`, clamped at 0 on
+`:243-245`), and it narrows whenever `allowance < declared`. Reachability is a function of that
+arithmetic against whatever the other charged items total — not of the client's candidate cap in
+isolation. At ceiling 30 the arm fires whenever the other charged items exceed 20, at any candidate
+count above the resulting allowance, 10 included. The measured fact stands unchanged: 0 hits in
+1,246 archived artifacts. What changes is the reason given for the 0 — a config/traffic fact, not a
+structural one.
 
 **Measured** on `dh_0830`, org `70d529e0` (3 teams / 11 repos / 19 projects; 1,246 archived
 artifacts, 447 measured lines): the maximum candidate count ever seen through Ask Dev is **10**,
@@ -234,10 +254,10 @@ and `outcome_reduction_applied: true` has **0 hits ever**.
 > Filed as the client candidate-cap ticket, Backlog. The acceptance proof for the assembled-result narrowing ticket is taken on the acr path at
 > candidate counts 50/20 instead.
 
-**Consequence, stated plainly:** the assembled-result narrowing ticket's live proof is **NOT EVIDENCED** through Ask Dev, and
-that is now a structural fact rather than a missing run. The canned single-subject rig row has
-candidate fan-out 3, so the arm does not fire there either; a corpus case with fan-out ≥ 18 at
-`max_items` 30 is needed.
+**Consequence, stated plainly:** the assembled-result narrowing ticket's live proof is **NOT EVIDENCED** through Ask Dev at
+today's client cap and today's traffic — a config-and-traffic fact, not a structural one; the arm
+itself is reachable arithmetic away. The canned single-subject rig row has candidate fan-out 3, so
+the arm does not fire there either; a corpus case with fan-out ≥ 18 at `max_items` 30 is needed.
 
 ---
 
@@ -514,6 +534,128 @@ reading the design — which is the reason they are errata and not a disagreemen
 
 ---
 
+### D14 — computed-step inputs are planned by a CONSUMER, not by rows
+
+**Context.** The §13.2.3 amendment (D13) gave a computed obligation's row two new statements: what
+its server step CONSUMES, and whether anything EXECUTES it. It said in the same breath that
+declaring an input is not planning a read — correctly, because nothing read the declaration. The
+six-authority parity proof was the first thing that needed to: it recorded the gap as
+`computed_step_input_unserved` on C4 / authority 3, `operational_deficiencies` being a declared
+`rank_cohort` input that no derived read row served, so retiring authority 3 would have dropped a
+real read. That was the proof's last blocking cell outside the population causes. H1 below asked the
+question this decision answers: *is "derive a read row for every declared computed-step input" the
+right closure, or does it plan reads nobody needs?*
+
+| option | cost |
+| --- | --- |
+| a read row per declared input, under a NEW answer-obligation member | Rejected. A row needs a coordinate; a coordinate is `obligation/role/subject`; that string is the wire join key both published arrays carry, and `ranking/member/team` is already the computed row's identity. The frame layer offers no second role or subject for that cell, so a read row needs a fourteenth member in `AnswerObligation` — "the closed vocabulary of what an answer must ESTABLISH" (§13.2.2). A fact read only so RankCohort can order a cohort is not something the answer establishes; minting an obligation for it puts a non-answer into the answer's own vocabulary. |
+| a read row routed to an EXISTING obligation that serves the kind | Rejected, and it is H1's own worry realised. `principal_drivers/member/team` does serve `operational_deficiencies` for a team, but deriving that coordinate makes a rank-only answer responsible for ESTABLISHING drivers — changing what the question asked — and drags in every other kind that obligation's seed carries. That is planning reads nobody needs, measured rather than feared. |
+| **a CONSUMER of the declaration already on the row** | The declaration becomes the plan. No new row, no new vocabulary member, no wire change: `input_class`, `input_fact_kinds` and `step_execution` already exist and are unchanged. |
+
+> ### RULING by team-lead, 2026-09-04, inside the requirement-derivation ticket (S7b-ii) — **the declared inputs of a
+> SERVED, SERVER-EXECUTED computed row are planned as reads by the plan stage, and the six-authority
+> proof measures what the rows CAUSE TO BE READ.**
+>
+> `ComputedStepInputReads` (`internal/contextfabric/requirement_derivation.go`) is the single
+> source, deduplicated in fact-kind vocabulary order. `planFactKinds` consumes it as a third
+> widening source, running last so the existing first-kind-wins order is unchanged, and the engine
+> derives the turn's rows ONCE and reads them twice on adjacent lines — the plan input, then the
+> published array. The parity proof's `derivedFactKinds` CALLS that same function rather than
+> hand-rolling a union (`planning_authority_parity_test.go:639`); `classifyLoss` does not call it
+> directly, it takes the already-computed slice as its `derived` parameter
+> (`planning_authority_parity_test.go:264`), fed from `derivedFactKinds`'s own result at the one
+> call site that matters (`:716`). The "reads the plan that exists" property holds transitively
+> through `derivedFactKinds`, not by two independent calls.
+
+**Status, 2026-09-04: the ruling is decided; its code is an OPEN CHANGE.** `ComputedStepInputReads`,
+its two guards, `planFactKinds`'s third widening source and the proof numbers below are verified on
+branch `s7b-ii-computed-inputs` (PR #432, stacked on the plan-requirement-rows change PR #430) at its
+current tip `f38bdd95` — **none of this is on `origin/main` yet.** Reading `origin/main` for
+`ComputedStepInputReads` returns nothing. The decision itself (what gets planned, and why) is ruled;
+the mechanism and the measured result are this open change's own until it merges.
+
+**Two guards, and neither follows from the other.** The row must be SERVED — an unavailable cell
+runs nothing, so reading its declared inputs fetches facts for a computation that cannot happen —
+and the step must be SERVER-EXECUTED (`declared_only` is exactly the read nobody needs). Each guard
+is pinned by a fixture differing from the planned case in ONE field.
+
+**Result on the proof.** `computed_step_input_unserved` 1 → 0. 98 cells: subsumed 18 → 19,
+not_subsumed 14 → 13, blocking 3 → 2. The two remaining blocking cells are authorities 1 and 5a
+under `computed_population_unavailable`, the organization-scope population question — not this
+decision's ground. **What it retired: NOTHING** — authority 3 moves from `NOT RETIRABLE` to
+`RETIRABLE on this evidence`, and `RETIRABLE on this evidence IS NOT A RETIREMENT`; both retirements
+stay gated on §13.9's B7/B9 labelled-set rig programme, a separate ticket.
+
+**Budget.** +0 requirement rows, +0 charged items, +0 bytes on a cohort turn, at most +87 bytes on a
+non-cohort turn whose frame derives a served ranking — bounded for all time at the five kinds the
+step table declares.
+
+---
+
+### D15 — the completion quantifier is fixed by (obligation, dimension), never by producer count
+
+**Context.** `quantifierForCardinality` derives the evidence standard a read requirement must meet
+(`at_least_one` / `corroborated` / `exact` / `all`) from how many producers the registry currently
+declares for that fact kind — two or more declaring producers reads `corroborated`. §13.15.2 froze
+that as law L3: "`corroborated` cannot be met by a one-kind seed." The astra-synthesis review (E-3)
+found the inversion: **removing a producer lowers the evidence bar instead of raising a gap**, and a
+duplicate adapter can manufacture corroboration that never existed. On `origin/main`,
+`Quantifier` has exactly one consumer today — telemetry (`requirement_telemetry.go:128`,
+`telemetry.go:858`) — so the defect is latent; it becomes P1 the day D14/the read-requirement evaluator ticket starts enforcing
+it.
+
+> ### DECIDED by chris, by silence at the 2026-09-04 15:00 PDT reply deadline, on the
+> astra-synthesis decision table's stated default (E-3) — **amends §13.2.2a law L3 / §13.15.2:**
+>
+> *The completion quantifier of a read requirement is fixed by (obligation, dimension) — `count`
+> exact, `ranking` all, evidence-bearing reads `at_least_one` unless the obligation's table says
+> `corroborated` — and never by the number of declaring producers. The registry answers "which
+> producers can serve each part"; where fewer independent sources exist than the standard demands,
+> the evaluator emits a qualified `narrowed`/`unavailable` row with an observed cause, and the
+> standard is not lowered. Two fact kinds backed by one observation are one source; the registry
+> declares the observation key so the evaluator can tell.*
+>
+> This reverses §13.15.2's derived-L3 rule (quantifier from registry cardinality). No wire change:
+> the vocabulary is unchanged, only which value the derivation is allowed to compute. Enforcement
+> rides the read-requirement evaluator ticket, not this amendment; until then the law is stated but not checked.
+
+**Acceptance, folded into the read-requirement evaluator ticket's.** Removing a producer cannot improve completeness; a
+duplicate adapter cannot create corroboration; swapping equivalent producers changes no row.
+
+---
+
+### D16 — one `EffectiveContext`, resolved once, before `PlanAnswer`
+
+**Context.** S5's cross-turn carry resolves window, kind and plan independently, each at its own
+producer (D6). The astra-synthesis review (E-8) named the shape underneath the asymmetry D6/H7
+already recorded: `engine.go:1800-1801` applies a carried `NarrowingBasis` on any `PlanCarryHit`,
+while `applyCarriedPlan` (`chaos4636_plan_carry.go:258-264`) separately refuses the carried family
+when the turn resolved its own — two axes independently checked, at two different points, with no
+single place where "is this turn's context internally compatible" is asked once. the plan-carry asymmetry ticket tracks
+the concrete asymmetry; this decision is the design premise it closes inside, not a fourth
+per-axis gate.
+
+> ### DECIDED by chris, by silence at the 2026-09-04 15:00 PDT reply deadline, on the
+> astra-synthesis decision table's stated default (E-8) — **design amendment, recorded as the
+> design premise of the continuation-token ticket, not a new program:**
+>
+> *Before `PlanAnswer`, the engine resolves ONE `EffectiveContext` {subject/population bindings,
+> scope+window, comparison/ranking basis, validated frame, provenance and accepted overrides,
+> authorization} from the request, receipts and any accepted carry; axes may miss independently, but
+> compatibility is checked once at this point, so a refused plan carry cannot leave a carried
+> `NarrowingBasis` behind (closes the plan-carry asymmetry ticket by construction, not by a fourth gate). The
+> continuation token binds this context and the allowed continuation operations.*
+>
+> A `gpt-5.6-sol` xhigh design review is required at the continuation-token ticket's design stage — carry unification is
+> outside any named seam. Implementation has not started; it rides the continuation-token ticket (Backlog).
+
+**What stays open (E-9, deferred).** Whether a `drifted` question that names a recognised
+transition (a window shift, an operand selection) should be admitted as a typed transition rather
+than refused by containment is a separate product question. Chris's default was **defer**: keep
+refusing until the continuation-token ticket's design stage; recorded here as open rather than answered.
+
+---
+
 ## 14.3 Known holes and open questions — the list for an external reviewer
 
 Ordered by how much of the design rests on them. Nothing here is hidden in a ticket; each names
@@ -527,6 +669,13 @@ so retiring authority 3 would drop a real read (the computed-step-inputs ticket)
 of semantic truth" holds at the **semantic** layer and *not* at the planning layer, exactly as
 §13.8 row 3 says. **The reviewer's question: is "derive a read row for every declared computed-step
 input" the right closure, or does it plan reads nobody needs?**
+
+**Answered by D14.** No — a read ROW is not the right closure, because the only coordinates
+available either invent an answer obligation or borrow one whose seed is wider than the need. The
+right closure is a CONSUMER of the declaration the row already carries: `planFactKinds` reads
+`ComputedStepInputReads` as a third widening source. `computed_step_input_unserved` is 0 on the
+proof as of D14, **on PR #432 — not yet on `origin/main`**, see D14's status note; the two remaining
+blocking cells are a different cause (`computed_population_unavailable`).
 
 **H2 — the allocator, and the narration over-spend under it (the item-allocator ticket, the narration over-charge ticket).** The
 apportioning half of the grouped budget is unbuilt after three failed attempts under two shapes.
@@ -589,9 +738,14 @@ plan-carry asymmetry (the plan-carry asymmetry ticket) is a live inconsistency, 
 own. So on a turn that classified its own family the carried family is correctly refused and the
 carried `NarrowingBasis` still applies.
 
-**H8 — the assembled-result narrowing ticket's live proof is structurally unreachable through the product surface
-(the client candidate-cap ticket).** See D8. Ruled LEAVE. The acceptance proof exists on **one constructed input**;
-"a table test does not close it" is the PR's own phrasing. Two further cautions belong with it.
+**H8 — the assembled-result narrowing ticket's live proof has not been observed to fire through the product surface at today's
+client cap (the client candidate-cap ticket).** See D8. Ruled LEAVE. **Corrected 2026-09-04 (astra-synthesis B-5):** this
+entry, D8's own text and the client candidate-cap ticket's title previously said the arm was "structurally unreachable" /
+"cannot fire". The reducer's arithmetic (`allowance = MaxItems − (Budgeted − declared)`,
+`requirement_outcomes.go:241-246`) shows reachability depends on the other charged items, not on the
+client's cap alone — the measured 0-hits fact stands, the "structural" framing does not. The
+acceptance proof exists on **one constructed input**; "a table test does not close it" is the PR's
+own phrasing. Two further cautions belong with it.
 the assembled-result narrowing ticket's **own filed repro is no longer reproducible from any log on this host** — it ran on a
 different private rig and almost certainly through a path that did not send the client's cap. And
 the planning-narrowing telemetry line reading `after:18` **is not evidence of real candidate
@@ -660,6 +814,75 @@ reproduced before anything moved and all three held. One mutation battery run wa
 rather than green** (no `-v`, so no `=== RUN` lines existed; the count was recorded rather than
 gated on; `go test -run` exits 0 printing "no tests to run" when its regex selects nothing) —
 eight "survivors" were unproven, and a zero-RUN result is now a harness error by construction.
+
+**H16 — completeness can read `complete` while no requirement of the read kind was ever evaluated
+against evidence (astra P1, the read-requirement evaluator ticket).** `seedRequirementOutcomes` mints `Satisfied` from
+serveability, not from a read; `Served()` is just `Unavailable == ""`; nothing on `origin/main`
+appends an assembled-result row for a READ requirement, so a seeded planning-stage row can be the
+LAST row an identity ever gets. `DeriveContextFabricAnswerCompletenessState` returns `complete` from
+satisfied-only rows. Mitigated today because Ask Dev's `CompletenessPanel` does not read `state`
+(see H21's sibling finding below), but any other consumer of the published field is reading a claim
+the server cannot back. the read-requirement evaluator ticket (Backlog, parent the requirement-derivation ticket): append one evaluated row for EVERY
+`Kind == read` requirement — not only the served, server-executed case — with the row's outcome
+following the evidence: available/stale reads `satisfied`, truncated/pruned reads `narrowed` with a
+coverage code, and no_data/unavailable/unconfigured reads `unavailable` with a coverage code. A
+narrower remedy that only covers the served-and-executed case would leave a failed read represented
+by nothing but the planning-stage `satisfied` seed — the exact defect this hole exists to close.
+the narration-count ticket is sequenced behind it — see H18.
+
+**H17 — fixed for veto exits on the plan-requirement-rows ticket (E-1 option (a), chris 2026-09-04 15:15 PDT); the same
+gap remains at the ORIGINAL seed, and closing it there is the read-requirement evaluator ticket's scope.** The gap-fill
+(`accountForPublishedPlanRequirements` → `SeedOutcomesFromPublishedPlanRequirements`) used to reuse
+the planning-stage seed's `Satisfied` default on exits that read nothing at all — the two window
+vetoes, the structure veto, the subjectless terminal. **This is now a semantic code change, not a
+doc-comment widening**: a requirement the turn never reached is built by a SEPARATE function,
+`unattemptedRequirementRow`, which emits `Outcome: not_attempted` with a new coverage code,
+`answer_terminated_before_attempt` (`CauseObserved: false` — nothing was actually read), rather than
+`Satisfied`. `DeriveContextFabricAnswerCompletenessState` already maps `not_attempted` to `partial`,
+so a veto exit reports `partial`, not `complete`, once the plan-requirement-rows ticket merges. **What this does NOT fix:**
+`planningStageOutcomeRow` — the seed used wherever a read requirement IS attempted, not vetoed —
+still defaults a fresh row to `Satisfied` before any read runs; no evaluator yet checks that the
+read actually happened and succeeded. That is H16's problem restated at the seed rather than the
+gap-fill, and closing it is the read-requirement evaluator ticket's scope, the same ticket as H16.
+
+**H18 — a count over a truncated or clamped population reads `satisfied`/`exact` → `complete`
+(astra P1, the count population-qualification ticket).** `ComputeMembershipCardinality` initializes `Served = Declared = len(Members)`
+and consults neither `Cohort.Complete` nor `Cohort.Truncated` — the file's own comment calls the
+result "a lower bound … and this file does not pretend otherwise," but the emitted row does pretend:
+`Satisfied`, quantifier `exact`. Truncation setters with no member-narrowing step to catch them: the
+discovery clamp (`falkorgraph/reader.go:810-817`) and the reuse degrade
+(`answer_reuse_degrade.go:418-419`); the synthesis-input narrowing path is counted correctly today.
+The row validator's own lossless rule (D10) forbids `narrowed` with `Served == Declared`, so there is
+currently no legal row shape for "exact count, population unknown." the count population-qualification ticket (Backlog, parent
+the requirement-derivation ticket): a `population_truncated` coverage code, and a validator exception admitting `narrowed`
+with `Served == Declared` only under a census cause. **the narration-count ticket now waits on the read-requirement evaluator ticket and
+the count population-qualification ticket**: it consumes the served count, and must consume a qualified one.
+
+**H19 — the 413 refusal's typed continuation never reaches the user (the 413-continuation-rendering ticket).** acr already
+serves a closed, no-free-text payload on a 413 —
+`error.details{overrun, measured_items/bytes, max_items/serialized_bytes, question_family,
+retry_attempted, narrower_continuation{family, axis}}`
+(`internal/api/context_fabric_routes.go:279-303`) — but Ask Dev's `parseUpstreamError`
+(`src/lib/acr/client.ts:342-346`) never reads `details` and maps every 413 to a generic rejection
+message. No acr change and no pin bump (`details` is an open object). the 413-continuation-rendering ticket (Backlog, Ask Dev):
+render `narrower_continuation` as client-authored copy plus a one-click narrower re-ask — the engine
+still authors no user language, per the standing rule.
+
+**H20 — a regex is a second, undeclared authority for what kind was asked (the kind-noun demotion ticket).** Ask Dev's
+`kind-nouns.ts` pattern-matches project/repository/team nouns to `expected_kinds` on chat and
+workbench, entering the request as `question_stated` — the same authority every surface OTHER than
+MCP carries. **Only MCP** demotes the hint to `inferred_default`/`explicit_unattributed` — a deliberate DP12(b) split
+(`investigation-request.ts:1533`), not an accident, but the regex's own motivating defects — the kind
+offer omitting the declared kind (the repository-question kind-offer ticket, the named-subject kind-offer ticket) — are now both Done. the kind-noun demotion ticket (Backlog, Ask
+Dev): demote the regex hint to
+`explicit_unattributed` on every surface, then remove it once the kind-offer regressions still pass
+without it.
+
+**H21 — the completeness panel is staged behind H16/H18, not built early (the completeness-panel ticket).**
+`CompletenessPanel` today renders `terminal_status`, the item/row counts and `terminal_reason`, and
+reads neither `state` nor the outcome rows — deliberately: exposing them before H16 and H18 land
+would show a UI-visible field the server cannot yet back. the completeness-panel ticket (Backlog, Ask Dev, staged after
+the read-requirement evaluator ticket and the count population-qualification ticket): render `completeness.state` and the outcome rows beside `terminal_status`.
 
 ---
 
