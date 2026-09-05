@@ -163,6 +163,107 @@ func TestTheNotAPopulationArmStillFires(t *testing.T) {
 		t.Errorf("the `unresolvable_member_set` arm counted %d on a coordinate that names no population -- the two arms must partition, not overlap",
 			summary.ComputedPopulationAbsentUnresolvableMemberSet)
 	}
+	// THE COST MUST BE COUNTED FOR THIS ARM TOO. A round-3 mutant gated the
+	// unplanned-input lookup on `coordinateNamesAPopulation` and survived,
+	// because this test asserted the arm FIRES but never that its refusal was
+	// costed. Ranking the organization still names rank_cohort, so its declared
+	// inputs are still reads the answer did not get.
+	var unplanned int
+	for _, count := range summary.ComputedInputKindsUnplanned {
+		unplanned += count
+	}
+	if unplanned == 0 {
+		t.Error("the `not_a_population` arm fired but counted NO unplanned computed-step input kinds -- an operator sees the decision and not what it cost")
+	}
+}
+
+// TestTheArmsCountEveryComputedObligation closes a round-3 mutant that narrowed
+// the arm filter to `ObligationRanking` and survived.
+//
+// It survived because every arm fixture in this file is a RANKING cell. But
+// `count` is the other computed obligation and refuses populations through the
+// SAME token — the shipped guard makes `count` unavailable on an
+// organization-scope frame, and that row belongs in the same accounting. A
+// filter narrowed to one obligation would silently stop counting the other,
+// and the aggregate bucket would still count it, breaking the partition.
+func TestTheArmsCountEveryComputedObligation(t *testing.T) {
+	t.Parallel()
+
+	kind := SubjectTeam
+	frame := frameWith(
+		[]InvestigationGoal{GoalCountOrAggregate},
+		orgExpression(&kind),
+		TemporalIntentCurrent,
+		nil,
+	)
+	rows := DeriveRequirements(frame, GenerateObligationSeed(nil), nil)
+
+	// REACH: the fixture must produce an unavailable COUNT row carrying this
+	// reason, or the assertions below are about a row that does not exist.
+	found := false
+	for _, row := range rows {
+		if row.Obligation == ObligationCount && !row.Served() &&
+			row.Unavailable == RequirementReasonComputedPopulationAbsent {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no unavailable `count` row carrying %q -- this fixture cannot exhibit the case", RequirementReasonComputedPopulationAbsent)
+	}
+
+	summary := RequirementDerivationSummaryFrom(rows)
+	index, ok := unavailableReasonIndex(RequirementReasonComputedPopulationAbsent)
+	if !ok {
+		t.Fatal("computed_population_absent is not in the reason vocabulary")
+	}
+	if summary.UnavailableCells[index] == 0 {
+		t.Fatal("the aggregate bucket is zero, so the partition assertion below is vacuous")
+	}
+	if got := summary.ComputedPopulationAbsentNotAPopulation +
+		summary.ComputedPopulationAbsentUnresolvableMemberSet +
+		summary.ComputedPopulationAbsentNonComputedRow; got != summary.UnavailableCells[index] {
+		t.Errorf("on a COUNT refusal the split sums to %d but the aggregate is %d -- the arms must cover every computed obligation, not just ranking",
+			got, summary.UnavailableCells[index])
+	}
+	t.Logf("count refusal: aggregate=%d not_a_population=%d unresolvable=%d residual=%d",
+		summary.UnavailableCells[index], summary.ComputedPopulationAbsentNotAPopulation,
+		summary.ComputedPopulationAbsentUnresolvableMemberSet, summary.ComputedPopulationAbsentNonComputedRow)
+}
+
+// TestNoComputedCoordinateIsEverAtTheGroupRole pins the invariant that makes a
+// round-3 mutant INERT rather than leaving its survival unexplained.
+//
+// That mutant added `&& row.Role != SubjectRoleGroup` to the arm split and
+// survived. The reason is not a missing fixture: `attachesToRole` never routes
+// a COMPUTED obligation to the grouping axis — `count` and `ranking` attach to
+// the member slot, or to the subject/operand slots when there is none, and only
+// `state` reaches a group. So no computed row can ever carry that role, the
+// mutant's added conjunct is always true, and its survival says nothing.
+//
+// Asserted over the whole generated corpus rather than argued, so the day the
+// role table changes, this fails instead of the arm counters quietly losing a
+// class of row.
+func TestNoComputedCoordinateIsEverAtTheGroupRole(t *testing.T) {
+	t.Parallel()
+	frames := generateFrames(t)
+	checked := 0
+	for _, generated := range frames {
+		for _, coordinate := range DeriveRequirementCoordinates(generated.frame) {
+			kind, known := KindOfObligation(coordinate.Obligation)
+			if !known || kind != ObligationKindComputed {
+				continue
+			}
+			checked++
+			if coordinate.Role == SubjectRoleGroup {
+				t.Errorf("computed obligation %q derived at the GROUP role (%s) -- the arm split excludes nothing today because this cannot happen; if it can now, the counters lose that class",
+					coordinate.Obligation, generated)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no computed coordinate reached the assertion, so this proves nothing about the group role")
+	}
+	t.Logf("checked %d computed coordinates across the generated corpus; none at the group role", checked)
 }
 
 // TestTheArmCountersRefuseANonComputedRow makes the computed-kind conjunct
