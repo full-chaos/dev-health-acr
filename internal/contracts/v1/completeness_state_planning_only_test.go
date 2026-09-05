@@ -86,6 +86,42 @@ func TestAPlanningOnlyReadRequirementCannotReadComplete(t *testing.T) {
 			want: ContextFabricAnswerCompletenessPartial,
 		},
 		{
+			// A HALF-ATTRIBUTED row: an obligation with no requirement. The
+			// row validator refuses it (requirement and obligation must be
+			// present or absent together), so it never reaches the wire --
+			// but this is a PURE FUNCTION over whatever rows it is handed,
+			// and it must not read a nameless row as a requirement.
+			//
+			// This is the case the skip exists for, and the ONLY one. The
+			// fully unattributed row above is already excluded a step
+			// earlier, because an empty obligation is not classified as a
+			// read; without a case whose obligation IS a read, deleting the
+			// skip changes no observable behaviour and the guard is
+			// untested. Found by a deletion mutant surviving the battery.
+			name: "a half-attributed row cannot seed a requirement nobody named",
+			rows: []ContextFabricPlanRequirementOutcomeRow{
+				planningRow("state/subject/team", "state"),
+				evaluatedRow("state/subject/team", "state"),
+				{Stage: ContextFabricOutcomeStagePlanning, Obligation: "state",
+					Outcome: ContextFabricRequirementSatisfied, Impact: ContextFabricAnswerImpactNone},
+			},
+			want: ContextFabricAnswerCompletenessComplete,
+		},
+		{
+			// THE COMPLEMENT, asserted in the same run: give that row an
+			// identity and it DOES lower the state. Without this the case
+			// above could pass because the fixture never reached the
+			// predicate at all, which is the way a guard test quietly stops
+			// testing anything.
+			name: "the same row WITH an identity does lower the state",
+			rows: []ContextFabricPlanRequirementOutcomeRow{
+				planningRow("state/subject/team", "state"),
+				evaluatedRow("state/subject/team", "state"),
+				planningRow("health/subject/team", "state"),
+			},
+			want: ContextFabricAnswerCompletenessPartial,
+		},
+		{
 			name: "no rows at all is still not_derived",
 			rows: nil,
 			want: ContextFabricAnswerCompletenessNotDerived,

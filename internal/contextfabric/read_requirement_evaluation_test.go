@@ -312,6 +312,95 @@ func TestTheSeedIsNeverTheLastRowForAServedReadRequirement(t *testing.T) {
 	}
 }
 
+// TestFinalizingAServedTurnEvaluatesItsReadRequirements is the CALL-SITE test.
+//
+// Every other test in this file calls appendReadRequirementEvaluations
+// directly, which proves the evaluator is right and proves nothing about
+// whether anything CALLS it. A guard that cannot fire is not an assertion, and
+// the one line that wires this change into the served document -- the append in
+// finalizeResult -- was covered by nothing: deleting it left the whole package
+// suite green while every answer went back to deriving `complete` from seeds
+// alone, which is the entire defect.
+//
+// The ticket states that mutation as its acceptance criterion ("delete the
+// evaluator and the state cannot reach complete"), so it is tested here rather
+// than asserted in a comment. It drives finalizeResult through the real
+// derivation, over a registry that actually declares producers, so the rows it
+// reads are the rows the route serves.
+func TestFinalizingAServedTurnEvaluatesItsReadRequirements(t *testing.T) {
+	t.Parallel()
+	frame := teamStateFrame(t)
+	deriver := registryDeriver{capabilities: []FactCapability{
+		stateCapability("a", contractsv1.ContextFabricFactHealth),
+		stateCapability("b", contractsv1.ContextFabricFactWorkload),
+	}}
+	engine := &Engine{requirements: deriver}
+
+	published := PlanRequirementsFromDerived(deriver.DeriveRequirements(frame))
+	reads := 0
+	for _, requirement := range published {
+		if requirement.Kind == string(ObligationKindRead) && requirement.Served() {
+			reads++
+		}
+	}
+	if reads == 0 {
+		t.Fatal("the fixture publishes no servable READ requirement, so the evaluator would be " +
+			"skipped and every assertion below would pass on an empty set")
+	}
+
+	served := engine.finalizeResult(InvestigationResult{
+		Status:   InvestigationComplete,
+		ResultID: "result_51050001",
+		Coverage: factCoverage(
+			contractsv1.ContextFabricFactHealth, SourceAvailable,
+			contractsv1.ContextFabricFactWorkload, SourceAvailable),
+	}, AnswerPlan{Requirements: published}, &frame)
+
+	evaluated, seeded := 0, 0
+	for _, row := range served.Completeness.Outcomes {
+		if row.Requirement != "state/subject/team" {
+			continue
+		}
+		switch row.Stage {
+		case contractsv1.ContextFabricOutcomeStageAssembledResult:
+			evaluated++
+			if row.Outcome != contractsv1.ContextFabricRequirementSatisfied {
+				t.Fatalf("both declared kinds came back available and the evaluated row reads %q", row.Outcome)
+			}
+		case contractsv1.ContextFabricOutcomeStagePlanning:
+			seeded++
+		}
+	}
+	if evaluated != 1 {
+		t.Fatalf("the served document carries %d assembled-result rows for the read requirement, want 1 -- "+
+			"finalizeResult did not evaluate what the answer planned to read, so the seed is the last "+
+			"word on it and the state below is derived from serveability rather than from evidence",
+			evaluated)
+	}
+	// APPEND, not rewrite: the seed the planning stage wrote is still there.
+	if seeded != 1 {
+		t.Fatalf("%d planning rows survive for the read requirement, want 1", seeded)
+	}
+
+	// THE PREMISE, before the state assertion: every planning row is
+	// lossless. If the fixture's registry ever stops serving one of the
+	// frame's obligations, its seed reads `unavailable`, the derivation is
+	// `degraded` for a reason that has nothing to do with this evaluator, and
+	// a `complete` assertion below would fail while looking like a defect in
+	// the change under test.
+	for _, row := range served.Completeness.Outcomes {
+		if row.Stage == contractsv1.ContextFabricOutcomeStagePlanning &&
+			row.Outcome != contractsv1.ContextFabricRequirementSatisfied {
+			t.Fatalf("the fixture seeds a non-lossless row (%q for %q); the state assertion below "+
+				"would then be measuring the fixture, not the evaluator", row.Outcome, row.Requirement)
+		}
+	}
+	if served.Completeness.State != contractsv1.ContextFabricAnswerCompletenessComplete {
+		t.Fatalf("a turn that served every declared kind derives %q, want complete",
+			served.Completeness.State)
+	}
+}
+
 // TestEvaluatingTwiceAppendsOneRow is the re-entry guard.
 //
 // finalizeResult runs again on the synthesis retry and again after stage 3
