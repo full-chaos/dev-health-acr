@@ -57,16 +57,51 @@ import (
 
 // The references the probes remove. DISTINCT per carrier so a per-carrier
 // over-count cannot hide, and all legal ref ids (8-256 chars, trimmed, no '|').
+// EVERY member carries a matched PAIR: one reference the recheck cannot prove
+// (removed) and one it can (RETAINED). The symmetry is the point --
+// round 3 found that proving removal on one member and preservation on one
+// member left both `= nil` (erase everything) and `append(refs, extra)` (serve
+// an unproven reference) undetectable on the members that had neither.
 const (
-	countCurrencyMemberRef  = "evidence_member_currency_a"
-	countCurrencyRankedRef  = "evidence_member_currency_ranked_b"
+	countCurrencyGoneA = "evidence_member_currency_gone_a"
+	countCurrencyKeptA = "evidence_member_currency_kept_a"
+	countCurrencyGoneB = "evidence_member_currency_gone_b"
+	countCurrencyKeptB = "evidence_member_currency_kept_b"
+	countCurrencyGoneC = "evidence_member_currency_gone_c"
+	countCurrencyKeptC = "evidence_member_currency_kept_c"
+
 	countCurrencyFindingRef = "evidence_finding_currency_a"
-	// countCurrencyKeptRef stays VISIBLE to the recheck. Without a
-	// retained reference the cohort-arm control proves only that missing
-	// refs are ABSENT afterwards, which `member.EvidenceRefIDs = nil`
-	// satisfies just as well as the correct code does.
-	countCurrencyKeptRef = "evidence_member_currency_kept_c"
 )
+
+// currencyKeptRefs maps a member's canonical id to the reference that must
+// SURVIVE the degrade. The served list is asserted EXACTLY equal to it -- not
+// "contains", which cannot see an added reference.
+func currencyKeptRefs() map[string]string {
+	return map[string]string{
+		"team:CURRENCY_A": countCurrencyKeptA,
+		"team:CURRENCY_B": countCurrencyKeptB,
+		"team:CURRENCY_C": countCurrencyKeptC,
+	}
+}
+
+// currencyMissingRefs is every reference the recheck cannot prove, plus the
+// control finding's own.
+func currencyMissingRefs() map[string]struct{} {
+	return map[string]struct{}{
+		countCurrencyGoneA:      {},
+		countCurrencyGoneB:      {},
+		countCurrencyGoneC:      {},
+		countCurrencyFindingRef: {},
+	}
+}
+
+// currencyVisibleRefs is what the graph context proves visible: the answer's
+// own citation plus every RETAINED member reference.
+func currencyVisibleRefs() []string {
+	return []string{reuseCitationRef, countCurrencyKeptA, countCurrencyKeptB, countCurrencyKeptC}
+}
+
+func currencyScore(v float64) *float64 { return &v }
 
 // currencyUnrankedMember is the ordinary member shape: no ranking fields.
 func currencyUnrankedMember(refs ...string) CohortMember {
@@ -75,6 +110,48 @@ func currencyUnrankedMember(refs ...string) CohortMember {
 		Rank:             1,
 		InclusionReasons: []string{"matched"},
 		EvidenceRefIDs:   append([]string(nil), refs...),
+	}
+}
+
+// currencyRankedDriverMember is a ranked member carrying REAL driver metadata,
+// which round 3 found missing: the fixture had only the zero-signal legal
+// variant (`Score == nil`, no drivers), so any mutant keyed on `len(Drivers)`
+// could never fire.
+//
+// The numbers are not decorative -- the contract cross-checks all of them
+// (`validateDrivers`): the signal's Weight must be its canonical formula weight
+// (25 for health.compounding_risk), `WeightContributed` must equal
+// `100*Weight*Value/availableWeight` (100*25*0.5/25 = 50), the drivers must sum
+// to Score, every driver's family must appear in RankingBasis and vice versa,
+// DataCompleteness must be `degraded` for two drivers or fewer, and a non-nil
+// Score forces a qualified-or-provisional Outcome with MissingSignals non-empty
+// unless qualified. A fixture that gets any of these wrong is a document the
+// real validator rejects, so it could prove nothing about a real answer.
+func currencyRankedDriverMember(refs ...string) CohortMember {
+	return CohortMember{
+		Subject:          SubjectRef{Kind: SubjectTeam, CanonicalID: "team:CURRENCY_C", Label: "Currency C"},
+		Rank:             3,
+		InclusionReasons: []string{"matched"},
+		EvidenceRefIDs:   append([]string(nil), refs...),
+		RankingComputed:  true,
+		AttentionRank:    2,
+		DataCompleteness: contractsv1.ContextFabricCohortDataDegraded,
+		Outcome:          contractsv1.ContextFabricCohortOutcomeProvisional,
+		Score:            currencyScore(50),
+		RankingBasis:     []string{"health.compounding_risk"},
+		MissingSignals: []string{
+			"investment_mix",
+			"operational_deficiencies.severity",
+			"readiness.coverage_gap",
+			"workload.forecast_pressure",
+		},
+		Drivers: []contractsv1.ContextFabricCohortMemberDriver{{
+			Signal:            "health.compounding_risk",
+			Weight:            25,
+			Value:             0.5,
+			WeightContributed: 50,
+			Window:            contractsv1.ContextFabricCohortMemberDriverWindowCurrent,
+		}},
 	}
 }
 
@@ -137,13 +214,39 @@ func currencyRankedMember(refs ...string) CohortMember {
 func currencyCohort() *Cohort {
 	return &Cohort{
 		Kind: SubjectTeam, Rationale: "reuse currency probe", Complete: true,
+		// THREE members, each with a gone/kept reference pair: unranked, the
+		// zero-signal ranked variant, and a ranked member carrying real driver
+		// metadata. All three ranked shapes are legal and the degrade must
+		// treat them identically.
 		Members: []CohortMember{
-			// TWO references on this member: one the recheck cannot prove
-			// (removed) and one it can (RETAINED). Proving only removal is
-			// what let `member.EvidenceRefIDs = nil` survive.
-			currencyUnrankedMember(countCurrencyMemberRef, countCurrencyKeptRef),
-			currencyRankedMember(countCurrencyRankedRef),
+			currencyUnrankedMember(countCurrencyGoneA, countCurrencyKeptA),
+			currencyRankedMember(countCurrencyGoneB, countCurrencyKeptB),
+			currencyRankedDriverMember(countCurrencyGoneC, countCurrencyKeptC),
 		},
+	}
+}
+
+// assertServedMemberRefsAreExactlyTheKeptSet is the EXACT-equality assertion
+// round 3 asked for.
+//
+// "the missing ones are gone" plus "one retained one survives" is satisfied by
+// `append(refs, "evidence_unverified_extra")` -- a served reference the recheck
+// never proved, which is precisely what the degrade exists to prevent. Only
+// equality against the expected set catches an ADDED reference.
+func assertServedMemberRefsAreExactlyTheKeptSet(t *testing.T, where string, members []CohortMember) {
+	t.Helper()
+	want := currencyKeptRefs()
+	for _, member := range members {
+		expected, known := want[member.Subject.CanonicalID]
+		if !known {
+			t.Fatalf("%s: served member %s is not in the fixture's kept-reference table; the table and the "+
+				"cohort have drifted apart", where, member.Subject.CanonicalID)
+		}
+		if len(member.EvidenceRefIDs) != 1 || member.EvidenceRefIDs[0] != expected {
+			t.Errorf("%s: served member %s carries refs %v, want exactly [%s] -- anything else means the "+
+				"degrade removed a reference the recheck proved, or served one it did not",
+				where, member.Subject.CanonicalID, member.EvidenceRefIDs, expected)
+		}
 	}
 }
 
@@ -199,7 +302,7 @@ func currencyReuseEngine(t *testing.T, stored InvestigationResult, telemetry *re
 			// The stored answer's own citation and the RETAINED member
 			// reference stay visible; the candidate's node ref and the other
 			// member references do not.
-			context: productionShapedGraphContext([]string{reuseCitationRef, countCurrencyKeptRef}, nil),
+			context: productionShapedGraphContext(currencyVisibleRefs(), nil),
 		},
 		Results:   &resultStoreStub{},
 		Telemetry: telemetry,
@@ -324,14 +427,12 @@ func currencyFloatPtrEqual(a, b *float64) bool {
 func TestStrippingEveryEvidenceRefLeavesACohortMemberValid(t *testing.T) {
 	t.Parallel()
 
-	missing := map[string]struct{}{
-		countCurrencyMemberRef: {},
-		countCurrencyRankedRef: {},
-	}
+	missing := currencyMissingRefs()
 
 	for _, member := range []CohortMember{
-		currencyUnrankedMember(countCurrencyMemberRef),
-		currencyRankedMember(countCurrencyRankedRef),
+		currencyUnrankedMember(countCurrencyGoneA),
+		currencyRankedMember(countCurrencyGoneB),
+		currencyRankedDriverMember(countCurrencyGoneC),
 	} {
 		name := member.Subject.CanonicalID
 		// NON-VACUITY: valid BEFORE the strip, or `strippingBrokeIt` would be
@@ -435,7 +536,7 @@ func TestTheReuseDegradeNeverDropsACohortMember(t *testing.T) {
 		// The CONTROL carrier: required refs, so this one breaks.
 		EvidenceRefIDs: []string{countCurrencyFindingRef},
 	}}
-	stored.Completeness.Outcomes = append(stored.Completeness.Outcomes, currencyCountRows(2)...)
+	stored.Completeness.Outcomes = append(stored.Completeness.Outcomes, currencyCountRows(len(stored.Cohort.Members))...)
 	stored.Completeness = ComputeAnswerCompleteness(stored)
 
 	wantMembers := append([]CohortMember(nil), stored.Cohort.Members...)
@@ -449,17 +550,16 @@ func TestTheReuseDegradeNeverDropsACohortMember(t *testing.T) {
 				"watch disappear", member.Subject.CanonicalID)
 		}
 	}
-	if !containsRef(stored.Cohort.Members[0].EvidenceRefIDs, countCurrencyKeptRef) {
-		t.Fatalf("fixture member %s carries no RETAINED reference; without one, proving the missing refs "+
-			"are gone cannot tell correct stripping apart from erasing every member reference",
-			stored.Cohort.Members[0].Subject.CanonicalID)
+	kept := currencyKeptRefs()
+	for _, member := range stored.Cohort.Members {
+		if !containsRef(member.EvidenceRefIDs, kept[member.Subject.CanonicalID]) {
+			t.Fatalf("fixture member %s carries no RETAINED reference; without one on EVERY member, "+
+				"proving the missing refs are gone cannot tell correct stripping apart from erasing "+
+				"every member reference", member.Subject.CanonicalID)
+		}
 	}
 
-	missing := map[string]struct{}{
-		countCurrencyMemberRef:  {},
-		countCurrencyRankedRef:  {},
-		countCurrencyFindingRef: {},
-	}
+	missing := currencyMissingRefs()
 	degraded, counts, _, ok := degradeReusedResult(stored, missing)
 	if !ok {
 		t.Fatal("degradeReusedResult() refused; this fixture is meant to degrade")
@@ -497,12 +597,7 @@ func TestTheReuseDegradeNeverDropsACohortMember(t *testing.T) {
 	// reference, so correct stripping keeps it. `member.EvidenceRefIDs = nil`
 	// erases everything and satisfies the removal control above; only this
 	// assertion tells the two apart.
-	if !containsRef(degraded.Cohort.Members[0].EvidenceRefIDs, countCurrencyKeptRef) {
-		t.Fatalf("served member %s lost %q, a reference the recheck DID prove visible: the degrade "+
-			"removed more than the missing set, so 'the missing refs are gone' says nothing about "+
-			"whether stripping was correct",
-			degraded.Cohort.Members[0].Subject.CanonicalID, countCurrencyKeptRef)
-	}
+	assertServedMemberRefsAreExactlyTheKeptSet(t, "degrade", degraded.Cohort.Members)
 
 	// THE PREMISE OF THE REPORTED DEFECT, measured.
 	if counts.DroppedMembers != 0 {
@@ -547,7 +642,7 @@ func TestAServedReusedAnswersCountDescribesTheMembersItServes(t *testing.T) {
 
 	stored := storedResultWithCandidateEvidence()
 	stored.Cohort = currencyCohort()
-	stored.Completeness.Outcomes = append(stored.Completeness.Outcomes, currencyCountRows(2)...)
+	stored.Completeness.Outcomes = append(stored.Completeness.Outcomes, currencyCountRows(len(stored.Cohort.Members))...)
 	stored.Completeness = ComputeAnswerCompleteness(stored)
 	wantMembers := append([]CohortMember(nil), stored.Cohort.Members...)
 
@@ -590,17 +685,17 @@ func TestAServedReusedAnswersCountDescribesTheMembersItServes(t *testing.T) {
 
 	// The cohort arm ran on this path too -- no member may serve a reference
 	// the recheck could not prove.
+	gone := currencyMissingRefs()
 	for _, member := range result.Cohort.Members {
-		if containsRef(member.EvidenceRefIDs, countCurrencyMemberRef) ||
-			containsRef(member.EvidenceRefIDs, countCurrencyRankedRef) {
-			t.Fatalf("served member %s still carries a reference the recheck could not prove visible; "+
-				"the cohort arm did not run on the serving path", member.Subject.CanonicalID)
+		for _, ref := range member.EvidenceRefIDs {
+			if _, unproven := gone[ref]; unproven {
+				t.Fatalf("served member %s still carries %q, a reference the recheck could not prove "+
+					"visible; the cohort arm did not run on the serving path",
+					member.Subject.CanonicalID, ref)
+			}
 		}
 	}
-	if !containsRef(result.Cohort.Members[0].EvidenceRefIDs, countCurrencyKeptRef) {
-		t.Fatalf("served member %s lost %q, a reference the recheck DID prove visible",
-			result.Cohort.Members[0].Subject.CanonicalID, countCurrencyKeptRef)
-	}
+	assertServedMemberRefsAreExactlyTheKeptSet(t, "served", result.Cohort.Members)
 	if got, want := len(result.Cohort.Members), len(wantMembers); got != want {
 		t.Fatalf("the SERVED cohort carries %d members, want %d", got, want)
 	}
@@ -644,24 +739,46 @@ func TestAReusedAnswerWithAnUnauthorizedCohortMemberIsRefused(t *testing.T) {
 
 	stored := storedResultWithCandidateEvidence()
 	stored.Cohort = currencyCohort()
-	stored.Completeness.Outcomes = append(stored.Completeness.Outcomes, currencyCountRows(2)...)
+	stored.Completeness.Outcomes = append(stored.Completeness.Outcomes, currencyCountRows(len(stored.Cohort.Members))...)
 	stored.Completeness = ComputeAnswerCompleteness(stored)
 
-	// The RANKED member is no longer resolvable for this principal. Everything
-	// else is unchanged from the served case above, so the ONLY difference is
-	// this member's authorization.
-	denied := stored.Cohort.Members[1].Subject
-	telemetry := &recordingTelemetry{}
-	engine := currencyReuseEngine(t, stored, telemetry, denied)
-
-	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
-	if err == nil && result.Reused {
-		t.Fatalf("a stored answer whose cohort member %s no longer resolves for this principal was SERVED "+
-			"from the store; the recheck must refuse rather than serve a subject it could not "+
-			"re-authorize", denied.CanonicalID)
+	// EVERY member is denied in turn, one subtest each. Round 3: denying a
+	// single member cannot see a production loop that skips a DIFFERENT one --
+	// `range candidate.Cohort.Members[1:]` leaves member A unchecked while the
+	// denied member B is still checked, so a one-member test still refuses and
+	// the mutant lives. Denying each in turn is what makes every member's
+	// participation in the recheck load-bearing.
+	if len(stored.Cohort.Members) < 3 {
+		t.Fatalf("fixture carries %d cohort members; this test needs every member denied in turn and is "+
+			"only meaningful over more than one", len(stored.Cohort.Members))
 	}
-	if got := lastReuseOutcome(t, telemetry); got != AnswerReuseMissAuthorization {
-		t.Fatalf("reuse outcome = %q, want %q -- the miss must be attributed to authorization, or an "+
-			"operator cannot tell it from an ordinary cache miss", got, AnswerReuseMissAuthorization)
+
+	for _, member := range stored.Cohort.Members {
+		denied := member.Subject
+		t.Run(denied.CanonicalID, func(t *testing.T) {
+			t.Parallel()
+			// A FRESH stored result per subtest. The parallel subtests must not
+			// share one, or a mutation on the serving path in any of them would
+			// make the others' results depend on scheduling order.
+			stored := storedResultWithCandidateEvidence()
+			stored.Cohort = currencyCohort()
+			stored.Completeness.Outcomes = append(stored.Completeness.Outcomes,
+				currencyCountRows(len(stored.Cohort.Members))...)
+			stored.Completeness = ComputeAnswerCompleteness(stored)
+
+			telemetry := &recordingTelemetry{}
+			engine := currencyReuseEngine(t, stored, telemetry, denied)
+
+			result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+			if err == nil && result.Reused {
+				t.Fatalf("a stored answer whose cohort member %s no longer resolves for this principal was "+
+					"SERVED from the store; the recheck must refuse rather than serve a subject it could "+
+					"not re-authorize", denied.CanonicalID)
+			}
+			if got := lastReuseOutcome(t, telemetry); got != AnswerReuseMissAuthorization {
+				t.Fatalf("reuse outcome = %q, want %q -- the miss must be attributed to authorization, or "+
+					"an operator cannot tell it from an ordinary cache miss", got, AnswerReuseMissAuthorization)
+			}
+		})
 	}
 }
