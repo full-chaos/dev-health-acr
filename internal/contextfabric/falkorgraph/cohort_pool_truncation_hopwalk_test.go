@@ -588,3 +588,91 @@ func TestDiscoverContextHopWalkDeduplicatesEdgesAcrossFrontierNodes(t *testing.T
 			"and the member behind the unique edge did not fit", members)
 	}
 }
+
+// TestDiscoverContextHopWalkBudgetSpentMidHopWithNoNewFrontier isolates the
+// walk's INNER truncation assignment from its post-loop one.
+//
+// WHY IT EXISTS. The battery reported the inner `truncated = true` as a
+// SURVIVING mutant: on every fixture written so far, a walk that hits the
+// inner break also ends with a non-empty frontier, so the post-loop check
+// fires too and deleting the inner assignment changed nothing observable. A
+// surviving mutant is not a pass — either the code is subsumed and should go,
+// or the property needs a fixture that can decide it. This is that fixture,
+// and it shows the inner assignment is NOT subsumed.
+//
+// The isolating case is a budget spent MID-HOP that discovers no new
+// neighbour: the second hop's edges all point back at a node already visited,
+// so `next` comes out empty and the post-loop check — which requires an
+// unvisited frontier — cannot fire. The inner break is then the only thing
+// that knows candidates were left unexamined.
+func TestDiscoverContextHopWalkBudgetSpentMidHopWithNoNewFrontier(t *testing.T) {
+	t.Parallel()
+	fake := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"), strings.Contains(cypher, "$kinds"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			id, _ := params["id"].(string)
+			switch id {
+			case "p1":
+				return []row{{
+					"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_1"}},
+					"srcKind": "project", "srcId": "p1", "dstKind": "team", "dstId": "team_a",
+				}}, nil
+			case "team_a":
+				// Three edges, every endpoint ALREADY VISITED (team_a itself).
+				// They are real candidates that consume budget, but they add
+				// nothing to the next frontier — which is exactly what makes
+				// the post-loop check blind here.
+				rows := make([]row, 0, 3)
+				for i := 0; i < 3; i++ {
+					rows = append(rows, row{
+						"r": &edge{Properties: map[string]interface{}{
+							propRelationType: "BLOCKS", propRelationshipID: fmt.Sprintf("rel_self_%d", i),
+						}},
+						"srcKind": "team", "srcId": "team_a", "dstKind": "team", "dstId": "team_a",
+					})
+				}
+				return rows, nil
+			}
+			return nil, nil
+		default:
+			switch params["kind"] {
+			case "project":
+				return []row{fakeSubjectNodeRow("project", "p1", "Origin")}, nil
+			case "team":
+				id, _ := params["id"].(string)
+				return []row{fakeSubjectNodeRow("team", id, id)}, nil
+			}
+			return nil, nil
+		}
+	}}
+	// Budget 2: the origin's single edge, then ONE of team_a's three, then the
+	// break — with candidates still unexamined and no new frontier.
+	adapter, err := newWithAPI(Config{
+		Addr: "fake:6379", GraphPrefix: "acr-cf-fake", RequestTimeout: time.Second,
+		MaxAttempts: 1, MaxResults: 2, PoolSize: 1, AllowInsecure: true,
+	}, fake)
+	if err != nil {
+		t.Fatalf("newWithAPI() error = %v", err)
+	}
+
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, hopWalkTruncationRequest(50))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil {
+		t.Fatal("Cohort = nil -- the fixture never reached cohort assembly")
+	}
+	if len(result.Cohort.Members) >= 50 {
+		t.Fatalf("members (%d) reached MaxCohortMembers: the cap would carry this test", len(result.Cohort.Members))
+	}
+	if !result.Cohort.Truncated {
+		t.Error("Cohort.Truncated = false: the walk broke out of a hop with candidate edges still unexamined, " +
+			"and because that hop discovered no NEW neighbour the post-loop check cannot see it -- the inner " +
+			"assignment is the only thing that knows, which is what makes it not subsumed")
+	}
+	if result.Cohort.Complete {
+		t.Error("Cohort.Complete = true over a pool the walk stopped short of mid-hop")
+	}
+}
