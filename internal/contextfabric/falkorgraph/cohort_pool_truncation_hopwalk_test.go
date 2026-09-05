@@ -468,3 +468,84 @@ func TestDiscoverContextCensusKeepsBoundedDiscoveryMembers(t *testing.T) {
 			"while the census-sourced one is present, which is exactly what deleting the union produces")
 	}
 }
+
+// TestDiscoverContextHopWalkDeduplicatesEdgesAcrossFrontierNodes is r2 finding
+// 3 (P3), pinning a PRE-EXISTING line this branch did not write:
+// `seenEdge[ce.UUID] = true` inside the walk.
+//
+// Deleting it let the SAME edge, returned from two different frontier nodes,
+// be admitted twice — consuming the collect budget for one real edge and, at a
+// tight budget, squeezing out a member that would otherwise fit. Every
+// existing fixture returned unique edges from a single origin, so nothing
+// noticed.
+//
+// The assertion is on the ADMITTED SET rather than on a member count, because
+// the duplicate's cost depends on the budget and the budget is a Config value
+// this fixture does not own: a duplicated relationship id in the served paths
+// is the defect itself, at any budget.
+func TestDiscoverContextHopWalkDeduplicatesEdgesAcrossFrontierNodes(t *testing.T) {
+	t.Parallel()
+	const sharedEdgeID = "rel_shared_across_frontier"
+	fake := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"), strings.Contains(cypher, "$kinds"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			id, _ := params["id"].(string)
+			switch id {
+			case "p1":
+				// Two first-hop neighbours.
+				return []row{
+					{"r": &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_a"}},
+						"srcKind": "project", "srcId": "p1", "dstKind": "team", "dstId": "team_a"},
+					{"r": &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_b"}},
+						"srcKind": "project", "srcId": "p1", "dstKind": "team", "dstId": "team_b"},
+				}, nil
+			case "team_a", "team_b":
+				// BOTH return the SAME edge — the cross-frontier duplicate the
+				// dedup exists to collapse. A fixture whose ids were all
+				// distinct could never exercise it.
+				return []row{{
+					"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: sharedEdgeID}},
+					"srcKind": "team", "srcId": "team_a", "dstKind": "team", "dstId": "team_shared",
+				}}, nil
+			}
+			return nil, nil
+		default:
+			switch params["kind"] {
+			case "project":
+				return []row{fakeSubjectNodeRow("project", "p1", "Origin")}, nil
+			case "team":
+				id, _ := params["id"].(string)
+				return []row{fakeSubjectNodeRow("team", id, id)}, nil
+			}
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	request := hopWalkTruncationRequest(50)
+	request.Request.Options.MaxRelationshipPaths = 50
+
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+
+	seen := map[string]int{}
+	total := 0
+	for _, path := range result.Paths {
+		for _, e := range path.Edges {
+			seen[e.RelationshipID]++
+			total++
+		}
+	}
+	if total == 0 {
+		t.Fatal("no edges reached the served paths -- this fixture never exercised the walk, so it proves nothing about deduplication")
+	}
+	if seen[sharedEdgeID] == 0 {
+		t.Fatalf("the shared edge never reached the answer at all (admitted ids: %v) -- the fixture is not reaching the second hop, so the duplicate it exists to test was never possible", seen)
+	}
+	if got := seen[sharedEdgeID]; got != 1 {
+		t.Errorf("the edge returned from BOTH frontier nodes was admitted %d times, want 1 -- each duplicate consumes the collect budget for one real edge, and at a tight budget that is a cohort member squeezed out", got)
+	}
+}
