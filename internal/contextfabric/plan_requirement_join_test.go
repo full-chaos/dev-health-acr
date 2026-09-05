@@ -304,3 +304,28 @@ func twoRequirementRows() []DerivedRequirement {
 		},
 	}
 }
+
+// requirementRowsIncludingUnservable is twoRequirementRows plus a row the
+// derivation could NOT serve.
+//
+// A SEPARATE fixture rather than a third row on the shared one: the shared
+// fixture is used by tests that pair rows by index and by arm, and growing it
+// would change what those assert while looking like a fixture tweak.
+//
+// It exists because the unservable-preservation arm of the seed/gap agreement
+// test was UNREACHABLE — the shared fixture carries no unavailable row, so the
+// branch guarded on one never executed, and a change making the gap path mint
+// `satisfied` for an unservable requirement would have passed it. The review
+// found that; the fixture is the fix.
+func requirementRowsIncludingUnservable() []DerivedRequirement {
+	rows := twoRequirementRows()
+	return append(rows, DerivedRequirement{
+		RequirementCoordinate: RequirementCoordinate{
+			Obligation: ObligationState, Role: SubjectRoleSubject, Subject: SubjectRepository,
+		},
+		Kind:        ObligationKindRead,
+		Scope:       CompletionScopeSingleSubject,
+		Quantifier:  CompletionQuantifierNone,
+		Unavailable: RequirementReasonNoDeclaringProducer,
+	})
+}

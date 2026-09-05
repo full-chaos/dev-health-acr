@@ -1249,6 +1249,28 @@ func TestTheFullVocabularyIsTheLongestLegalKindList(t *testing.T) {
 			planRequirementSerializedLength(subset), planRequirementSerializedLength(full))
 	}
 
+	// AND THE CONSTRUCTOR MUST REACH THAT MAXIMUM.
+	//
+	// This is the half the review found missing, and its absence was an
+	// OVER-correction. The previous round found a test that audited the
+	// constructor with the constructor; the fix built an authority that does
+	// not use the constructor at all — and then never compared the two. So
+	// nothing tied `maximalPlanRequirementAt` to the maximum, and shortening
+	// its kind list would have left every assertion here unchanged.
+	//
+	// The comparison is against `full`, built by hand above from the
+	// vocabulary. That is the point: an authority that is not the thing it
+	// audits, and an audit that actually happens.
+	built := maximalPlanRequirementAt(full.Obligation, full.Role, full.Subject, kinds[:])
+	if len(built.InputFactKinds) != len(full.InputFactKinds) {
+		t.Errorf("the constructor names %d input fact kinds; the vocabulary has %d, and the longest legal list is all of them",
+			len(built.InputFactKinds), len(full.InputFactKinds))
+	}
+	if planRequirementSerializedLength(built) != planRequirementSerializedLength(full) {
+		t.Errorf("the constructor's row serializes to %d bytes and the authority-derived maximum to %d; the fixture does not reach the maximum it claims",
+			planRequirementSerializedLength(built), planRequirementSerializedLength(full))
+	}
+
 	// RED PROOF THAT THE RULE BITES. The variant the review found -- the same
 	// LENGTH, every entry the longest member -- must now be REJECTED, and the
 	// rejection must name the duplicated kind. Without this case the test

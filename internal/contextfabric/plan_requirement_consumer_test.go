@@ -573,9 +573,26 @@ func TestCompletenessFillsOnlyTheUnaccountedRequirements(t *testing.T) {
 // only the account of what became of it differs.
 func TestTheSeedAndTheGapRowAgreeOnIdentityAndDisagreeOnOutcome(t *testing.T) {
 	t.Parallel()
-	rows := twoRequirementRows()
+	// A fixture that CARRIES an unservable row. The shared two-row fixture has
+	// none, so the preservation arm below was unreachable and a change making
+	// the gap path mint `satisfied` for an unservable requirement would have
+	// passed this test. Found by review.
+	rows := requirementRowsIncludingUnservable()
 	fromDerivation := SeedRequirementOutcomes(rows)
 	fromPlan := SeedOutcomesFromPublishedPlanRequirements(PlanRequirementsFromDerived(rows))
+
+	// THE ARM'S INPUT MUST EXIST. Counted before the loop rather than inside
+	// it, so a fixture that quietly stopped carrying an unservable row fails
+	// here instead of skipping the branch in silence.
+	unservable := 0
+	for _, row := range fromDerivation {
+		if row.Outcome == contractsv1.ContextFabricRequirementUnavailable {
+			unservable++
+		}
+	}
+	if unservable == 0 {
+		t.Fatal("the fixture carries no unservable requirement; the preservation arm below cannot execute and would prove nothing")
+	}
 
 	if len(fromDerivation) != len(fromPlan) || len(fromPlan) == 0 {
 		t.Fatalf("seed produced %d rows and the gap path %d; they must describe the same requirements",
