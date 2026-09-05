@@ -58,8 +58,10 @@ const (
 	// A SPENT BUDGET IS TRUNCATION; A DEPTH BOUND IS NOT. The walk's maxHops
 	// limit DEFINES the pool -- what lies beyond two hops is out of scope,
 	// not missing -- while a spent collect budget with an unvisited frontier
-	// CLIPS a pool that was in scope. When both bind at once this arm
-	// discloses, because the budget's loss is real either way. That
+	// CLIPS a pool that was in scope. WHEN BOTH BIND AT ONCE THIS DISCLOSES,
+	// because the budget's loss is real either way; an attempt to suppress the
+	// both-bind case was reverted, since it re-introduced exactly the
+	// over-claim this arm exists to remove. That
 	// distinction is the semantic the count step leans on: it is what makes
 	// "not truncated" mean "nothing in scope was dropped" rather than
 	// "nothing at all exists beyond what you see".

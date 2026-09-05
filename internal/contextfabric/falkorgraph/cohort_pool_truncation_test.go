@@ -435,14 +435,22 @@ func TestFormatCohortPoolTruncationArmsNormalizes(t *testing.T) {
 		t.Errorf("duplicated arm rendered as %q, want %q", got, canonical)
 	}
 
-	// An undeclared value never reaches the line.
+	// An undeclared VALUE never reaches the line, but its PRESENCE does — see
+	// TestFormatCohortPoolTruncationArmsMarksAnUndeclaredArm. This assertion
+	// used to require the undeclared case to render identically to the clean
+	// one, i.e. to be dropped silently; that was the behaviour before the
+	// marker landed, and leaving it would have been two of this package's own
+	// tests asserting opposite things about one function.
 	withUnknown := append(append([]CohortPoolTruncationArm{}, vocabulary...), CohortPoolTruncationArm("not_a_declared_arm"))
 	got := formatCohortPoolTruncationArms(withUnknown)
-	if got != canonical {
-		t.Errorf("undeclared arm rendered as %q, want %q -- an unpublished value must never reach a closed-vocabulary key", got, canonical)
+	if !strings.HasPrefix(got, canonical) {
+		t.Errorf("undeclared arm rendered as %q, want it to still begin with the canonical declared list %q", got, canonical)
 	}
 	if strings.Contains(got, "not_a_declared_arm") {
-		t.Errorf("the undeclared value appears in %q", got)
+		t.Errorf("the undeclared value itself appears in %q -- only the marker may", got)
+	}
+	if !strings.Contains(got, cohortPoolTruncationUnknownArm) {
+		t.Errorf("rendered %q with no unknown-arm marker -- a dropped signal cannot be told from one never produced", got)
 	}
 
 	if formatCohortPoolTruncationArms(nil) != "" {

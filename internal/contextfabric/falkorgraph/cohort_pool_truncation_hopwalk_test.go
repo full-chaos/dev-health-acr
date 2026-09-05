@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -157,7 +158,14 @@ func TestDiscoverContextClippedHopWalkMakesTheCohortTruncated(t *testing.T) {
 func TestDiscoverContextWholeHopWalkLeavesTheCohortComplete(t *testing.T) {
 	t.Parallel()
 	telemetry := &recordingTelemetry{}
-	adapter := hopWalkTruncationAdapter(t, poolTruncationFulltextCollectLimit, telemetry)
+	// STRICTLY BELOW the budget, not exactly at it. The original fixture sat
+	// exactly ON the budget, and the r2 boundary fix correctly reclassified
+	// that as truncation: spending the budget with an unvisited frontier IS a
+	// clipped pool, whether or not visiting it would have found anything. The
+	// fixture's expectation was what was wrong, not the code -- so the fixture
+	// moved rather than the assertion being softened.
+	const belowBudget = poolTruncationFulltextCollectLimit - 1
+	adapter := hopWalkTruncationAdapter(t, belowBudget, telemetry)
 	request := hopWalkTruncationRequest(poolTruncationFulltextCollectLimit + 100)
 
 	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
@@ -167,9 +175,8 @@ func TestDiscoverContextWholeHopWalkLeavesTheCohortComplete(t *testing.T) {
 	if result.Cohort == nil {
 		t.Fatal("Cohort = nil -- the fixture never reached cohort assembly")
 	}
-	if len(result.Cohort.Members) != poolTruncationFulltextCollectLimit {
-		t.Fatalf("members = %d, want %d -- the two directions must retain the same members or they are not comparable",
-			len(result.Cohort.Members), poolTruncationFulltextCollectLimit)
+	if len(result.Cohort.Members) != belowBudget {
+		t.Fatalf("members = %d, want %d", len(result.Cohort.Members), belowBudget)
 	}
 	if result.Cohort.Truncated {
 		t.Error("Cohort.Truncated = true for a walk that admitted every edge it found -- a flag that is always set discloses nothing")
@@ -469,23 +476,15 @@ func TestDiscoverContextCensusKeepsBoundedDiscoveryMembers(t *testing.T) {
 	}
 }
 
-// TestDiscoverContextHopWalkDeduplicatesEdgesAcrossFrontierNodes is r2 finding
-// 3 (P3), pinning a PRE-EXISTING line this branch did not write:
-// `seenEdge[ce.UUID] = true` inside the walk.
+// smallBudgetAdapter is a fake adapter with a deliberately tiny collect
+// budget, so a wasted edge slot is observable in the cohort itself.
 //
-// Deleting it let the SAME edge, returned from two different frontier nodes,
-// be admitted twice — consuming the collect budget for one real edge and, at a
-// tight budget, squeezing out a member that would otherwise fit. Every
-// existing fixture returned unique edges from a single origin, so nothing
-// noticed.
-//
-// The assertion is on the ADMITTED SET rather than on a member count, because
-// the duplicate's cost depends on the budget and the budget is a Config value
-// this fixture does not own: a duplicated relationship id in the served paths
-// is the defect itself, at any budget.
-func TestDiscoverContextHopWalkDeduplicatesEdgesAcrossFrontierNodes(t *testing.T) {
-	t.Parallel()
-	const sharedEdgeID = "rel_shared_across_frontier"
+// The shared newFakeAdapter pins MaxResults at 25, which is larger than any
+// fixture here can fill with distinct edges -- so with it, a duplicate costs
+// nothing observable and the test would pass whether or not deduplication
+// happened.
+func smallBudgetAdapter(t *testing.T, maxResults int) *Adapter {
+	t.Helper()
 	fake := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
 		switch {
 		case strings.Contains(cypher, "fulltext"), strings.Contains(cypher, "$kinds"):
@@ -494,21 +493,28 @@ func TestDiscoverContextHopWalkDeduplicatesEdgesAcrossFrontierNodes(t *testing.T
 			id, _ := params["id"].(string)
 			switch id {
 			case "p1":
-				// Two first-hop neighbours.
 				return []row{
 					{"r": &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_a"}},
 						"srcKind": "project", "srcId": "p1", "dstKind": "team", "dstId": "team_a"},
 					{"r": &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_b"}},
 						"srcKind": "project", "srcId": "p1", "dstKind": "team", "dstId": "team_b"},
 				}, nil
-			case "team_a", "team_b":
-				// BOTH return the SAME edge — the cross-frontier duplicate the
-				// dedup exists to collapse. A fixture whose ids were all
-				// distinct could never exercise it.
+			case "team_a":
 				return []row{{
-					"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: sharedEdgeID}},
+					"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_shared"}},
 					"srcKind": "team", "srcId": "team_a", "dstKind": "team", "dstId": "team_shared",
 				}}, nil
+			case "team_b":
+				// The SAME edge id as team_a's, plus one unique edge. Ranking
+				// ties break on UUID ascending, and "rel_shared" sorts before
+				// "rel_unique", so the duplicate is examined first -- which is
+				// what makes the wasted slot decisive rather than incidental.
+				return []row{
+					{"r": &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_shared"}},
+						"srcKind": "team", "srcId": "team_a", "dstKind": "team", "dstId": "team_shared"},
+					{"r": &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_unique"}},
+						"srcKind": "team", "srcId": "team_b", "dstKind": "team", "dstId": "team_unique"},
+				}, nil
 			}
 			return nil, nil
 		default:
@@ -522,7 +528,39 @@ func TestDiscoverContextHopWalkDeduplicatesEdgesAcrossFrontierNodes(t *testing.T
 			return nil, nil
 		}
 	}}
-	adapter := newFakeAdapter(t, fake)
+	adapter, err := newWithAPI(Config{
+		Addr: "fake:6379", GraphPrefix: "acr-cf-fake", RequestTimeout: time.Second,
+		MaxAttempts: 1, MaxResults: maxResults, PoolSize: 1, AllowInsecure: true,
+	}, fake)
+	if err != nil {
+		t.Fatalf("newWithAPI() error = %v", err)
+	}
+	return adapter
+}
+
+// TestDiscoverContextHopWalkDeduplicatesEdgesAcrossFrontierNodes is r2 finding
+// 3 (P3), pinning a PRE-EXISTING line this branch did not write:
+// `seenEdge[ce.UUID] = true` inside the walk.
+//
+// Deleting it let the SAME edge, returned from two different frontier nodes,
+// be admitted twice -- consuming the collect budget for one real edge. Every
+// existing fixture returned unique edges from a single origin, so nothing
+// noticed.
+//
+// ASSERTED ON THE COHORT, not on served paths. The first version of this test
+// counted duplicate relationship ids in result.Paths and its own guard caught
+// it reporting on an EMPTY set: this fixture's team-to-team edges never reach
+// the served paths at all, so "no duplicates" there was true and meaningless.
+// A wasted edge slot is observable where it actually costs something -- a
+// member that does not fit.
+//
+// With a budget of 4: the origin's two edges fill two slots; deduplicated, the
+// second hop offers {shared, unique} and both fit, so team_unique is a member.
+// Without deduplication it offers {shared, shared, unique}, the duplicate takes
+// the last slot, and team_unique is lost.
+func TestDiscoverContextHopWalkDeduplicatesEdgesAcrossFrontierNodes(t *testing.T) {
+	t.Parallel()
+	adapter := smallBudgetAdapter(t, 4)
 	request := hopWalkTruncationRequest(50)
 	request.Request.Options.MaxRelationshipPaths = 50
 
@@ -530,29 +568,23 @@ func TestDiscoverContextHopWalkDeduplicatesEdgesAcrossFrontierNodes(t *testing.T
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
-
-	// The WIRE edge carries no relationship id (ContextFabricRelationshipEdge
-	// has Type/From/To and no identifier), so identity here is the endpoint
-	// pair plus the type. That is a sound key for THIS fixture and only
-	// because of how it is built -- every other edge has a distinct endpoint
-	// pair -- so the shared edge's own key is asserted to appear before its
-	// count is read, rather than assuming the key means what it should.
-	const sharedKey = "BLOCKS|team_a|team_shared"
-	seen := map[string]int{}
-	total := 0
-	for _, path := range result.Paths {
-		for _, e := range path.Edges {
-			seen[fmt.Sprintf("%s|%s|%s", e.Type, e.From.CanonicalID, e.To.CanonicalID)]++
-			total++
-		}
+	if result.Cohort == nil {
+		t.Fatal("Cohort = nil -- the fixture never reached cohort assembly and proves nothing")
 	}
-	if total == 0 {
-		t.Fatal("no edges reached the served paths -- this fixture never exercised the walk, so it proves nothing about deduplication")
+	members := map[string]bool{}
+	for _, m := range result.Cohort.Members {
+		members[m.Subject.CanonicalID] = true
 	}
-	if seen[sharedKey] == 0 {
-		t.Fatalf("the shared edge never reached the answer at all (admitted: %v) -- the fixture is not reaching the second hop, so the duplicate it exists to test was never possible", seen)
+	// Reach controls first: without these, an absent team_unique could mean
+	// the walk never got to the second hop at all.
+	if !members["team_a"] || !members["team_b"] {
+		t.Fatalf("the first-hop members are missing (%v) -- this fixture never exercised the walk", members)
 	}
-	if got := seen[sharedKey]; got != 1 {
-		t.Errorf("the edge returned from BOTH frontier nodes was admitted %d times, want 1 -- each duplicate consumes the collect budget for one real edge, and at a tight budget that is a cohort member squeezed out", got)
+	if !members["team_shared"] {
+		t.Fatalf("the second-hop shared member is missing (%v) -- the walk never reached the frontier where the duplicate lives", members)
+	}
+	if !members["team_unique"] {
+		t.Errorf("team_unique is absent (%v) -- the edge returned from BOTH frontier nodes consumed two of the four slots, "+
+			"and the member behind the unique edge did not fit", members)
 	}
 }

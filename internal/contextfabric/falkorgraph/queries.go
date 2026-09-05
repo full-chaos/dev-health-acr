@@ -1179,7 +1179,15 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 	// missing, it is out of scope) and is not. When both bind at once this
 	// discloses, because the budget's loss is real whether or not the depth
 	// bound would also have stopped the walk.
-	if collectLimit > 0 && len(edges) >= collectLimit && len(frontier) > 0 {
+	// NO DEPTH CONJUNCT HERE, deliberately. An earlier version of this check
+	// added `hop < maxHops`, reasoning that a walk stopped by its depth bound
+	// has lost nothing in scope. That contradicts the ruling this arm is
+	// built on: a depth bound DEFINES the pool and is not truncation, a spent
+	// budget with an unvisited frontier CLIPS it and is, and WHEN BOTH BIND AT
+	// ONCE THIS DISCLOSES. Suppressing the both-bind case is exactly the
+	// over-claim the whole change exists to remove -- the budget's loss is
+	// real whether or not the depth bound would also have stopped the walk.
+	if len(frontier) > 0 && collectLimit > 0 && len(edges) >= collectLimit {
 		truncated = true
 	}
 	sortCandidateNodesBySubjectKey(nodes)
