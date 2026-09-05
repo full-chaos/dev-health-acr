@@ -950,3 +950,80 @@ func TestTheOrdinaryGroupedEventPreservesItsCounts(t *testing.T) {
 		})
 	}
 }
+
+// groupedCohortEventFieldCoverage is the PER-ARM coverage registry for
+// GroupedCohortCompletenessEvent — the table that used to live in a comment,
+// now a value the struct itself is checked against.
+//
+// Each entry names the fixture where that field is asserted at a NON-ZERO
+// value, per emitting arm. That is the property rule :332 asks for and the one
+// this branch kept violating: a field asserted equal to its own zero value is
+// pinned by nothing, so "is there an assertion" is the wrong question. The
+// right one is "is there a fixture where the expected value is NOT the zero
+// value".
+var groupedCohortEventFieldCoverage = map[string]string{
+	"Family":                 "both arms: a family is always set, so every fixture pins it",
+	"PreGroupingComplete":    "ordinary: complete fixture · refusal: mismatch fixture (complete cohort)",
+	"PreGroupingTruncated":   "ordinary: truncated fixture · refusal: truncated-discovery fixture",
+	"GroupCount":             "ordinary: every fixture (groups built by construction)",
+	"GroupsMarkedIncomplete": "ordinary: the two incomplete fixtures (all groups inherit incompleteness)",
+	"Refusal":                "refusal: both the no-placement and mismatch fixtures",
+	"PlannedGroupKind":       "refusal: both fixtures",
+	"UngroupedMembers":       "refusal: no-placement fixture, at a non-zero count",
+	"SourceGroupKind":        "refusal: mismatch fixture; asserted ABSENT on no-placement, both directions",
+	"Complete":               "ordinary: complete fixture · refusal: mismatch fixture",
+	"Truncated":              "ordinary: truncated fixture · refusal: truncated-discovery fixture",
+}
+
+// TestEveryGroupedCohortEventFieldHasDeclaredCoverage walks the EVENT struct and
+// requires every field to appear in the registry above.
+//
+// WHY THIS EXISTS, and what it closes that the other reflection test cannot.
+// TestTheRefusalEventCarriesEveryOutcomeField walks CohortGroupingOutcome, so it
+// structurally cannot see an EVENT-ONLY field — which is exactly how `Family`
+// went unasserted through an entire review round, and how four more
+// ordinary-arm fields turned out to be unpinned only after a hand sweep. A hand
+// sweep is a table someone wrote; it does not fail when the struct changes.
+//
+// This does. Add a field to GroupedCohortCompletenessEvent tomorrow and this
+// test reds until a fixture is named for it. The registry IS the table, and the
+// struct is what checks it.
+//
+// WHAT IT DOES NOT DO, said plainly so it is not read as more than it is: it
+// checks that a field is DECLARED covered, not that the declaration is true.
+// The assertions live in the arm tests, and the mutation battery is what proves
+// those assertions discriminate. This closes drift between the struct and the
+// table; it cannot close a lie in the table.
+func TestEveryGroupedCohortEventFieldHasDeclaredCoverage(t *testing.T) {
+	t.Parallel()
+	eventType := reflect.TypeOf(GroupedCohortCompletenessEvent{})
+	if eventType.NumField() == 0 {
+		t.Fatal("GroupedCohortCompletenessEvent has no fields, so this walk proves nothing")
+	}
+	seen := 0
+	for i := 0; i < eventType.NumField(); i++ {
+		field := eventType.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		seen++
+		if _, declared := groupedCohortEventFieldCoverage[field.Name]; !declared {
+			t.Errorf("GroupedCohortCompletenessEvent.%s has NO declared coverage. Every field this event carries must be asserted at a NON-ZERO value on at least one fixture, PER EMITTING ARM -- a field asserted equal to its own zero value is pinned by nothing. Add the fixture, then add the row here naming it",
+				field.Name)
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no exported fields were walked; this registry check is vacuous")
+	}
+	// The other direction: a row for a field the struct no longer has is stale,
+	// and a stale row makes the table look more complete than it is.
+	for name := range groupedCohortEventFieldCoverage {
+		if _, ok := eventType.FieldByName(name); !ok {
+			t.Errorf("coverage registry names %q, which is not a field of GroupedCohortCompletenessEvent -- a stale row overstates what is pinned", name)
+		}
+	}
+	if seen != len(groupedCohortEventFieldCoverage) {
+		t.Errorf("walked %d exported event fields but the registry declares %d -- the table has drifted from the struct",
+			seen, len(groupedCohortEventFieldCoverage))
+	}
+}
