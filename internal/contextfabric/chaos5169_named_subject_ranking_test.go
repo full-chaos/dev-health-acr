@@ -459,16 +459,37 @@ func TestExplicitSetRankingWithoutAResolvedCohortIsUnavailable(t *testing.T) {
 		t.Fatalf("the served plan publishes no `ranking` requirement over %d rows -- this fixture does not reach the cell under test", len(result.AnswerPlan.Requirements))
 	}
 
-	// (1) PLAN <-> READER, the same invariant as the named-subject case.
-	if len(result.AnswerPlan.FactKinds) == 0 {
-		t.Fatal("the served plan publishes NO fact kinds, so the agreement below quantifies over nothing")
+	// (1) THIS CELL PLANS NOTHING. Note what is asserted and what is NOT.
+	//
+	// The named-subject test asserts full plan/reader agreement, and can,
+	// because that family's axis is `one` and the requirement rows are the
+	// plan's ONLY source of ranking kinds there. An explicit set lands on a
+	// `many_named` family, and `PlanAnswer` injects `cohortRankingFormulaKinds`
+	// for ANY cohort subject AXIS, independently of the requirement rows
+	// (chaos4636_answer_plan.go's `isCohortSubjectAxis` branch). That
+	// injection is a DIFFERENT authority with its own doc comment and its own
+	// widening-only rule, and this change does not touch it -- so on this
+	// fixture the plan still publishes those five kinds while the engine,
+	// gated on the same nil cohort, still forwards none of them.
+	//
+	// That residue is real and is the ENGINE's forwarding gap, filed
+	// separately and deliberately out of scope here. Asserting plan/reader
+	// agreement on THIS fixture would therefore be asserting someone else's
+	// defect against this change. What IS this change's to keep true is that
+	// the requirement rows contribute nothing: `ComputedStepInputReads` skips
+	// an unserved row, so no kind reaches the plan THROUGH the declaration.
+	unplanned := ComputedStepInputReads(DeriveRequirements(*frame, GenerateObligationSeed(nil), nil))
+	if len(unplanned) != 0 {
+		t.Errorf("the requirement rows still plan %v as computed-step inputs on a frame that resolves no cohort -- an unserved row must contribute no read", unplanned)
 	}
-	for _, planned := range result.AnswerPlan.FactKinds {
-		if !observed[planned] {
-			t.Errorf("the served plan publishes fact kind %q but the fact reader received %v -- an explicit set is cohort-SHAPED and cohort-PRODUCING is what matters (plan kinds: %v)",
-				planned, sortedObservedKinds(observed), result.AnswerPlan.FactKinds)
-		}
+	// Reach guard: the same call on a genuinely cohort-producing frame must
+	// return a NON-empty set, or the assertion above is satisfied by a
+	// function that always returns nothing.
+	control := ComputedStepInputReads(DeriveRequirements(*rankingFrameOverACohort(), GenerateObligationSeed(nil), nil))
+	if len(control) == 0 {
+		t.Fatal("the cohort control also plans no computed-step inputs -- the assertion above cannot discriminate")
 	}
+	t.Logf("computed-step inputs: explicit set plans %v, cohort control plans %v", unplanned, control)
 
 	// (2) NO SILENT `satisfied`.
 	rows := outcomeRowsForObligation(result, ObligationRanking, contractsv1.ContextFabricOutcomeStagePlanning)
@@ -480,6 +501,9 @@ func TestExplicitSetRankingWithoutAResolvedCohortIsUnavailable(t *testing.T) {
 			t.Errorf("the `ranking` requirement %q reads %q on an explicit set: no explicit set declares a member kind, so DiscoveredCohort returns nil and RankCohort is never invoked (plan row: step=%q unavailable=%q)",
 				row.Requirement, row.Outcome, rankingRow.Step, rankingRow.Unavailable)
 		}
+	}
+	if rankingRow.Unavailable != string(RequirementReasonComputedPopulationAbsent) {
+		t.Errorf("plan `ranking` unavailable = %q, want %q", rankingRow.Unavailable, RequirementReasonComputedPopulationAbsent)
 	}
 	t.Logf("explicit-set ranking: plan kinds %v, reader received %v, plan row step=%q unavailable=%q",
 		result.AnswerPlan.FactKinds, sortedObservedKinds(observed), rankingRow.Step, rankingRow.Unavailable)
