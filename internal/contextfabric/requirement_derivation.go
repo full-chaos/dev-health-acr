@@ -444,7 +444,11 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 	}
 	row.FactKinds = kinds
 	row.Dimensions = dimensionsOfFactKinds(kinds, capabilities)
-	row.Quantifier = quantifierForCardinality(len(kinds))
+	// The DECLARED standard for this obligation, never the count of kinds
+	// that happen to serve it -- see readQuantifiers for why the cardinality
+	// rule was reversed. `kinds` is still what the row publishes as its
+	// serving set; it just no longer decides how much of that set is enough.
+	row.Quantifier = quantifierForRead(coordinate.Obligation)
 	return row
 }
 
@@ -614,21 +618,69 @@ func quantifierForComputed(obligation AnswerObligation) CompletionQuantifier {
 	return CompletionQuantifierAll
 }
 
-// quantifierForCardinality is law L3's rule, derived from the MEASURED
-// cardinality of the generated seed.
+// readQuantifiers is the completion standard of each READ obligation.
 //
-// §13.15.2 records why the frozen constant could not stand: `state =
-// corroborated` "cannot be met by a one-kind seed anywhere", and its escape
-// clause ("or the registry declares only one kind") silently degraded it to
-// at_least_one wherever it bit -- a bar asserted and then quietly lowered.
-// Deriving it means the plan demands corroboration exactly where
-// corroboration is AVAILABLE and says at_least_one where it is not, which
-// is a claim a reader can check against the seed.
-func quantifierForCardinality(cardinality int) CompletionQuantifier {
-	if cardinality >= 2 {
-		return CompletionQuantifierCorroborated
+// KEYED ON THE OBLIGATION AND NOTHING ELSE. Not on the registry's cardinality
+// (see the superseded function above), and not on the requirement's derived
+// Dimensions either -- those are computed from the serving fact kinds' own
+// declarations, so keying on them would re-introduce the registry dependence
+// through a second door. The law is stated as (obligation, dimension); no read
+// obligation varies its standard by dimension today, so the dimension axis is
+// deliberately CONSTANT here rather than absent, and a test says so rather than
+// this comment.
+//
+// TOTAL over the read obligations, asserted by
+// TestEveryReadObligationDeclaresItsQuantifier rather than by a default arm,
+// because a default is exactly how a standard gets lowered without anyone
+// deciding to.
+//
+// THE VALUES REPRODUCE THE SHIPPED ARTIFACT for every obligation the corpus
+// exercises: `state`, `principal_drivers`, `trend_series` and `period_delta`
+// read `corroborated` and `health` reads `at_least_one` in
+// testdata/requirement_trace.txt today, and they still do. That byte-identity
+// is the evidence this change RE-DERIVES the same standards from an honest key
+// rather than re-deciding what they are.
+//
+// FOUR ENTRIES ARE NOT EXERCISED BY THAT ARTIFACT -- `completion`, `readiness`,
+// `remaining_work` and `allocation_breakdown` derive no served coordinate in
+// any of its thirteen frames. Their value is the law's stated default,
+// `at_least_one`, and that is a DECLARATION, not a measurement. Said plainly
+// because the alternative is a reader assuming all nine were checked against
+// something: if a future frame derives one of the four, its standard is a
+// decision to take deliberately then, not a number to inherit from whichever
+// producers happen to be registered that week.
+var readQuantifiers = map[AnswerObligation]CompletionQuantifier{
+	ObligationState:            CompletionQuantifierCorroborated,
+	ObligationPrincipalDrivers: CompletionQuantifierCorroborated,
+	ObligationTrendSeries:      CompletionQuantifierCorroborated,
+	ObligationPeriodDelta:      CompletionQuantifierCorroborated,
+
+	// One authoritative source is the standard for a single derived
+	// measure. It reads at_least_one in the artifact today for a DIFFERENT
+	// reason -- exactly one fact kind serves it -- and telling a decision
+	// apart from that coincidence is the whole point of the new key.
+	ObligationHealth: CompletionQuantifierAtLeastOne,
+
+	// The law's default, unexercised by the corpus. See the header.
+	ObligationCompletion:          CompletionQuantifierAtLeastOne,
+	ObligationReadiness:           CompletionQuantifierAtLeastOne,
+	ObligationRemainingWork:       CompletionQuantifierAtLeastOne,
+	ObligationAllocationBreakdown: CompletionQuantifierAtLeastOne,
+}
+
+// quantifierForRead returns the declared standard for a read obligation.
+//
+// An obligation absent from the table yields `none`, which is the honest
+// answer -- no standard was declared, so none is claimed. The read evaluator
+// skips a requirement whose quantifier it does not recognise rather than
+// defaulting it to one source, and the completeness derivation then reads that
+// requirement's planning-only rows as `partial`. So a gap in this table costs
+// an accurate CAUSE and never an unearned `complete`.
+func quantifierForRead(obligation AnswerObligation) CompletionQuantifier {
+	if quantifier, declared := readQuantifiers[obligation]; declared {
+		return quantifier
 	}
-	return CompletionQuantifierAtLeastOne
+	return CompletionQuantifierNone
 }
 
 // classifyUnavailable attributes an empty cell to the FIRST clause that

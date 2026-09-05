@@ -95,6 +95,26 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 		// consumer asks for it. ComputeAnswerCompleteness is a pure
 		// function of fields this row already carries, so this is a
 		// backfill, never an invention, and a no-op for any post-4413 row.
+		// The legacy completeness arm, OBSERVED WHERE IT IS CONSUMED.
+		//
+		// A result stored before the read-requirement evaluator existed can
+		// carry a state the amended derivation no longer produces. The
+		// stored-read validator admits exactly one such shape so the row
+		// stays readable; this line says when that actually happened, so the
+		// exemption's sunset is a measurement rather than a guess.
+		//
+		// HERE, and BEFORE the backfill below, because the backfill
+		// overwrites the very field this compares. Derived by RE-DERIVING
+		// rather than by threading a flag out of the validator: a positive
+		// signal computed from the document itself cannot report a state
+		// nothing actually held.
+		if state := result.Completeness.State; state != "" &&
+			state != contractsv1.DeriveContextFabricAnswerCompletenessState(result.Completeness.Outcomes) {
+			a.logger.InfoContext(r.Context(), "context fabric legacy completeness state admitted",
+				"request_id", RequestID(r.Context()),
+				"stored_state", string(state),
+				"outcome_rows", len(result.Completeness.Outcomes))
+		}
 		result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 		// The consumer projection is served from THIS route, through the
 		// same answerprojection.Project the MCP tool calls (CHAOS-3746

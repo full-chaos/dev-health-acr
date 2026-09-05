@@ -520,7 +520,138 @@ func (r ContextFabricRequirementRefinement) Validate() error {
 // the outcome set the single authority: any surface that serves an answer
 // calls this over the rows it holds, and two surfaces holding the same rows
 // cannot disagree.
+//
+// TWO PASSES, AND THE SECOND CAN ONLY LOWER THE FIRST. The outcome pass is the
+// original rule over the rows' own outcome tokens. The read pass then asks a
+// question the outcome pass cannot: did any READ requirement reach the served
+// document with nothing but its planning-stage seed behind it? A seed row says
+// the registry COULD serve the cell, never that anything was read -- so a set
+// of nothing but seeds derives `complete` vacuously, and an answer whose every
+// read failed could report the strongest completeness the vocabulary has.
+//
+// The second pass runs ONLY when the first says `complete`. `degraded` is
+// absorbing, `partial` already says a requirement was not served in full, and
+// `not_derived` says there were no rows at all; none of the three is made more
+// accurate by finding an unevaluated read. That ordering is what makes the
+// amendment expressible as ONE SENTENCE -- it turns some `complete` into
+// `partial` and changes nothing else -- and that sentence is what
+// DeriveContextFabricAnswerCompletenessStateBeforeReadEvaluation is allowed to
+// rely on.
 func DeriveContextFabricAnswerCompletenessState(rows []ContextFabricPlanRequirementOutcomeRow) ContextFabricAnswerCompletenessState {
+	state := DeriveContextFabricAnswerCompletenessStateBeforeReadEvaluation(rows)
+	if state != ContextFabricAnswerCompletenessComplete {
+		return state
+	}
+	if hasPlanningOnlyReadRequirement(rows) {
+		return ContextFabricAnswerCompletenessPartial
+	}
+	return state
+}
+
+// hasPlanningOnlyReadRequirement reports whether any READ requirement reached
+// this outcome set carrying nothing but planning-stage rows.
+//
+// GROUPED BY IDENTITY, because the question is about a requirement and not
+// about a row: a requirement whose seed row sits beside an assembled-result row
+// HAS been evaluated, and its seed is then the first entry of its account
+// rather than the whole of it.
+//
+// Rows with no identity are skipped and cannot make a set partial. The
+// projection's rows carry none by design -- it cuts by a byte budget over the
+// finished document and does not know which requirement a dropped item was
+// serving -- so treating an unattributed row as an unevaluated requirement
+// would attribute a projection cut to a requirement nobody named.
+//
+// READ obligations only. Nothing appends an assembled-result row for `ranking`
+// anywhere in this service today, so an unscoped rule would make every ranking
+// answer partial for a hole this change does not close. That computed half is
+// disclosed rather than silently covered.
+func hasPlanningOnlyReadRequirement(rows []ContextFabricPlanRequirementOutcomeRow) bool {
+	seeded := make(map[string]bool, len(rows))
+	evaluated := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		if row.Requirement == "" {
+			continue
+		}
+		if contextFabricAnswerObligationKindByObligation[row.Obligation] != contextFabricObligationKindRead {
+			continue
+		}
+		// AN ALLOW-LIST OVER THE STAGE, never "anything that is not
+		// planning". The same rule the refinement allow-list follows, for
+		// the same reason: the stage vocabulary is CLOSED, so a deny-list
+		// admits its next member by default -- and, more immediately, it
+		// admits the ZERO VALUE. A row carrying stage "" is malformed (the
+		// row validator refuses it), and reading a malformed row as PROOF
+		// THAT A REQUIREMENT WAS EVALUATED is the strongest possible
+		// conclusion from the weakest possible evidence. Under a deny-list
+		// one such row silently restores `complete`. Here it contributes to
+		// neither set, so the identity is neither seeded nor evaluated and
+		// cannot lower the state on the strength of a row nobody can
+		// validate.
+		switch row.Stage {
+		case ContextFabricOutcomeStagePlanning:
+			seeded[row.Requirement] = true
+		case ContextFabricOutcomeStageAssembledResult:
+			// ASSEMBLED RESULT ONLY. `projection` and `reuse` used to count
+			// here too, and that was wrong: a projection row is a BYTE-BUDGET
+			// CUT over a finished document and a reuse row is a DEGRADE of a
+			// stored one. Neither performed a read, so neither is evidence
+			// that a read requirement was evaluated -- and a lossless row
+			// from either stage, beside a lossless planning seed, would have
+			// derived `complete` for a requirement nothing ever read.
+			//
+			// Today's emitters produce narrowed rows at both stages, so the
+			// forged shape is not currently reachable. That is not a reason
+			// to accept it: a guard that holds only because no emitter has
+			// yet produced the admitting row is not a guard, it is a
+			// coincidence with a comment.
+			evaluated[row.Requirement] = true
+		}
+	}
+	for identity := range seeded {
+		if !evaluated[identity] {
+			return true
+		}
+	}
+	return false
+}
+
+// DeriveContextFabricAnswerCompletenessStateBeforeReadEvaluation is the
+// completeness derivation EXACTLY as it stood before the read-requirement
+// evaluator amended it.
+//
+// FROZEN. It is never extended, never corrected, and never consulted on a fresh
+// result. It exists for one reason: a document written under the old rule
+// carries a `State` this package's validator re-derives and requires to match,
+// and results are IMMUTABLE -- so changing the derivation without keeping the
+// old one makes every such stored document unreadable at
+// pginvestigation.Store.Get, which validates on every read. A migration cannot
+// help: the payload IS the document, and rewriting it would break the
+// immutability the store's whole contract rests on.
+//
+// WHAT IT EXCUSES, EXACTLY. The amended derivation runs this function first and
+// can only turn its `complete` into `partial` (see the amendment's own header),
+// so the two disagree on EXACTLY ONE shape: a set whose outcome tokens are all
+// lossless and which carries at least one READ requirement with only
+// planning-stage rows. Nothing else it admits differs from the amended rule,
+// which is what makes this a bounded exemption rather than a second opinion
+// about completeness.
+//
+// SUNSET. Delete this function, its call in validateAnswerOutcomes, and the
+// store-side disclosure when no stored result predates the amendment --
+// confirmed two ways, because either alone is a claim rather than a
+// measurement:
+//
+//	(1) SELECT min(created_at) FROM acr.context_fabric_investigation_results
+//	    is later than the deploy that carried the amendment, in every
+//	    environment that holds results; and
+//	(2) the store's legacy disclosure has been silent across a full retention
+//	    window.
+//
+// (1) is the fact and (2) is the confirmation that nothing reaches the arm by a
+// path (1) did not consider. A dead exemption nobody removes is how a second
+// authority becomes permanent.
+func DeriveContextFabricAnswerCompletenessStateBeforeReadEvaluation(rows []ContextFabricPlanRequirementOutcomeRow) ContextFabricAnswerCompletenessState {
 	if len(rows) == 0 {
 		return ContextFabricAnswerCompletenessNotDerived
 	}

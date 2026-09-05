@@ -55,6 +55,12 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		// outcome row already states, and the population size is the one
 		// quantity nothing measured.
 		d.Source = "context-fabric:cohort-census"
+	case ContextFabricCoverageDetailRequirementReadNotPlanned:
+		// Source only, and every other field deliberately absent, matching the
+		// field rule. No fact kind: naming one would describe a read that was
+		// never attempted. No source state: no source produced one. No count:
+		// nothing was read, so there is nothing to count.
+		d.Source = "context-fabric:answer-plan"
 	}
 	return d
 }
