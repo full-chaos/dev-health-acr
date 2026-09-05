@@ -514,7 +514,35 @@ type GraphTelemetry interface {
 	// graph. `discovered` is carried beside the basis so the two questions
 	// ("what decided" and "did anything come back") are never conflated in
 	// the reader.
-	RecordCohortKindBasis(ctx context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool)
+	//
+	// poolTruncation (CHAOS-5168) is the third such question -- "was the
+	// candidate pool whole" -- carried beside the other two for the same
+	// reason they are carried apart: a cohort under the member cap and a
+	// cohort assembled from a clipped pool are the same document to a
+	// reader, and before this the difference was diagnosable only by
+	// re-reading source. See CohortPoolTruncationBasis' own doc comment for
+	// the closed vocabulary and for why one of its members means "cut, and
+	// it did not matter".
+	// poolTruncationArms names WHICH retrieval arms were cut, beside the
+	// decision -- see CohortPoolTruncationArm. Reported separately rather
+	// than folded into the basis because arm COMBINATIONS grow 2^n and a
+	// vocabulary that enumerates them is a cross-product, not a vocabulary.
+	RecordCohortKindBasis(ctx context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis, poolTruncationArms []CohortPoolTruncationArm)
+	// RecordNeighborLookupFailed reports ONE neighbour the hop walk reached
+	// through an admitted edge and then could not read back.
+	//
+	// It exists because the count alone was not diagnosable: `failedLookups`
+	// reaches the answer as `endpoint_lookup_failed:<n>`, which says how many
+	// were lost and never which, so two different missing cohort members are
+	// indistinguishable in a run's own artifacts. The neighbour's subject uuid
+	// and the walk's origin are graph identifiers, never corpus content; the
+	// error is logged for its message, which is the part a count throws away.
+	//
+	// `site` names WHICH read failed. One counter has THREE producers, and the
+	// first version of this line instrumented one of them -- so a line could
+	// name the lost member while still leaving "never admitted" and "admitted
+	// then unconfirmable" indistinguishable. See NeighborLookupFailureSite.
+	RecordNeighborLookupFailed(ctx context.Context, orgID, originCanonicalID, neighborUUID string, site NeighborLookupFailureSite, err error)
 }
 
 // VectorFenceResult is CHAOS-3890's reason enum for the AC-3778-7 read
@@ -579,7 +607,10 @@ func (NoopTelemetry) RecordEdgesFilteredByReason(context.Context, string, int, i
 func (NoopTelemetry) RecordCohortDeniedByAuthorization(context.Context, string, int)       {}
 func (NoopTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bool, CohortExactNameCensusBasis) {
 }
-func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, contextfabric.SubjectKind, graphrank.CohortKindBasis, bool) {
+func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, contextfabric.SubjectKind, graphrank.CohortKindBasis, bool, CohortPoolTruncationBasis, []CohortPoolTruncationArm) {
+}
+
+func (NoopTelemetry) RecordNeighborLookupFailed(context.Context, string, string, string, NeighborLookupFailureSite, error) {
 }
 
 // SlogTelemetry is the production GraphTelemetry: structured operational logs
@@ -794,9 +825,21 @@ func graphRequestIDLogAttrs(ctx context.Context) []any {
 // degradation of this component -- it is this component correctly declining
 // to guess -- so it is reported at the same level as a successful discovery
 // and is distinguished by its basis, never by its log level.
-func (t SlogTelemetry) RecordCohortKindBasis(ctx context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool) {
-	args := []any{"org_id", orgID, "member_kind", string(declaredKind), "basis", string(basis), "discovered", discovered}
+func (t SlogTelemetry) RecordCohortKindBasis(ctx context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis, poolTruncationArms []CohortPoolTruncationArm) {
+	args := []any{"org_id", orgID, "member_kind", string(declaredKind), "basis", string(basis), "discovered", discovered,
+		"pool_truncation", string(poolTruncation), "pool_truncation_arms", formatCohortPoolTruncationArms(poolTruncationArms)}
 	t.logger().Info("context_fabric: cohort kind basis", append(args, graphRequestIDLogAttrs(ctx)...)...)
+}
+
+// RecordNeighborLookupFailed logs at Warn: unlike the cohort-kind basis, this
+// IS a degradation -- a subject that should have been in the answer is not,
+// and the operator needs it at the production level without raising verbosity.
+func (t SlogTelemetry) RecordNeighborLookupFailed(ctx context.Context, orgID, originCanonicalID, neighborUUID string, site NeighborLookupFailureSite, err error) {
+	args := []any{"org_id", orgID, "origin_canonical_id", originCanonicalID, "neighbor_uuid", neighborUUID, "site", string(site)}
+	if err != nil {
+		args = append(args, "error", err.Error())
+	}
+	t.logger().Warn("context_fabric: cohort neighbor lookup failed", append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 
 func (c Config) validate() error {
