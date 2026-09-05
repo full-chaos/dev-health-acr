@@ -828,30 +828,39 @@ func TestTheRefusalEventPreservesATruncatedDiscovery(t *testing.T) {
 	}
 }
 
-// TestTheOrdinaryGroupedEventPreservesItsCounts closes review round 2's F2 and
-// F3, both CONFIRMED by execution: deleting `GroupsMarkedIncomplete` or the
-// final `Complete` from the ORDINARY grouped emit killed nothing.
+// TestTheOrdinaryGroupedEventPreservesItsCounts pins EVERY field the ordinary
+// grouped emit assigns, each at a NON-ZERO value on at least one fixture.
 //
-// ASSERTIONS ONLY — this test adds no production line to the `len(groups) > 0`
-// branch, which this change otherwise does not touch. Both fields are
-// pre-existing; the gap is coverage, and the remedy is coverage.
+// It began as round 2's F2/F3 — `GroupsMarkedIncomplete` and the final
+// `Complete`, both CONFIRMED by execution to survive deletion. Generalising the
+// class before round 3 could re-find it showed the arm assigns SEVEN fields and
+// only three were covered, so the remaining four are pinned here too. Rule :332
+// owes them whether or not a mutation would survive today: every carried field
+// is asserted non-zero somewhere, per ARM.
 //
-// WHY A PAIR, not one fixture. It is the same lesson `Truncated` taught on the
-// refusal arm one round earlier, and it applies field by field:
+// PER ARM is the load-bearing words. Assertion COUNTS look healthy for all
+// eleven event fields — and they looked healthy when F2/F3 were live, because
+// those fields WERE asserted, on the REFUSAL arm, while this arm's separate
+// assignment went unpinned. Two literals, two independent obligations.
 //
-//   - `Complete` is asserted TRUE in one arm and FALSE in the other. A single
-//     fixture pins at most one of those, because the arm whose expected value
-//     is `false` is satisfied by the struct's zero value with nothing assigned.
-//   - `GroupsMarkedIncomplete` is asserted NON-ZERO. Against a complete cohort
-//     its true value is 0 — identical to the zero value — so an "expect 0"
-//     assertion could never have caught the deletion. The incomplete arm is the
-//     only one that discriminates, and the complete arm is kept beside it so a
-//     mutant that reports every group incomplete is caught too.
+// ASSERTIONS ONLY — no production line is added to the `len(groups) > 0`
+// branch, which this change otherwise does not touch. All seven fields are
+// pre-existing at the base; the gap was coverage, and the remedy is coverage.
 //
-// Groups inherit the cohort's discovery-level completeness (a member never
-// discovered could belong to any group), so an incomplete cohort yields groups
-// that are all incomplete — which is what makes the count non-zero here without
-// any production change.
+// WHY THREE FIXTURES. A field asserted equal to its own zero value is pinned by
+// nothing, so each needs one arm where its expected value is true or non-zero:
+//
+//	Family                  every arm (a family is always set)
+//	GroupCount              every arm (groups are built by construction here)
+//	PreGroupingComplete     the COMPLETE arm
+//	Complete                the COMPLETE arm
+//	GroupsMarkedIncomplete  the two INCOMPLETE arms (all groups inherit it)
+//	PreGroupingTruncated    the TRUNCATED arm
+//	Truncated               the TRUNCATED arm
+//
+// The complete arm is kept beside the others so a mutant that reports every
+// group incomplete, or that hard-codes truncation, is caught in the other
+// direction too.
 func TestTheOrdinaryGroupedEventPreservesItsCounts(t *testing.T) {
 	t.Parallel()
 	// Planned kind AGREES with the team-scoped rows, so groups are actually
@@ -863,14 +872,17 @@ func TestTheOrdinaryGroupedEventPreservesItsCounts(t *testing.T) {
 	cases := []struct {
 		name                 string
 		cohortComplete       bool
+		cohortTruncated      bool
 		wantComplete         bool
+		wantTruncated        bool
 		wantIncompleteGroups bool // true => must be NON-ZERO
 	}{
-		{"complete discovery", true, true, false},
-		{"incomplete discovery", false, false, true},
+		{"complete discovery", true, false, true, false, false},
+		{"incomplete discovery", false, false, false, false, true},
+		{"truncated discovery", false, true, false, true, true},
 	}
-	if len(cases) < 2 {
-		t.Fatal("this property needs a PAIR; one fixture pins at most one of the two fields")
+	if len(cases) < 3 {
+		t.Fatal("this property needs three fixtures; a field whose expected value is its own zero value is pinned by nothing")
 	}
 	for _, testCase := range cases {
 		testCase := testCase
@@ -878,7 +890,7 @@ func TestTheOrdinaryGroupedEventPreservesItsCounts(t *testing.T) {
 			t.Parallel()
 			telemetry := &recordingTelemetry{}
 			engine, request := groupingEngineFixtureWithCohortState(
-				t, telemetry, SubjectTeam, facts, testCase.cohortComplete, false)
+				t, telemetry, SubjectTeam, facts, testCase.cohortComplete, testCase.cohortTruncated)
 
 			result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
 			if err != nil {
@@ -894,23 +906,41 @@ func TestTheOrdinaryGroupedEventPreservesItsCounts(t *testing.T) {
 			}
 			event := telemetry.groupedCohortCompletenesses[0]
 
+			// Event-only field: the outcome-field reflection walk structurally
+			// cannot reach it, which is exactly how the refusal arm's copy went
+			// unasserted through an entire review round.
+			if event.Family != QuestionFamilyGroupedCohortStatus {
+				t.Errorf("event.Family = %q, want %q: a grouped-cohort event with an empty family is unattributable in telemetry",
+					event.Family, QuestionFamilyGroupedCohortStatus)
+			}
 			if event.GroupCount != len(result.Cohort.Groups) {
 				t.Errorf("event.GroupCount = %d, want %d", event.GroupCount, len(result.Cohort.Groups))
+			}
+			if event.PreGroupingComplete != testCase.cohortComplete {
+				t.Errorf("event.PreGroupingComplete = %v, want %v: this event exists to preserve the DISCOVERY-time state, and a zero value reports the opposite of what happened",
+					event.PreGroupingComplete, testCase.cohortComplete)
+			}
+			if event.PreGroupingTruncated != testCase.cohortTruncated {
+				t.Errorf("event.PreGroupingTruncated = %v, want %v", event.PreGroupingTruncated, testCase.cohortTruncated)
 			}
 			if event.Complete != testCase.wantComplete {
 				t.Errorf("event.Complete = %v, want %v: an ordinary grouped answer reporting the wrong final completeness tells an operator the cohort was fully seen when it was not, or the reverse",
 					event.Complete, testCase.wantComplete)
 			}
+			if event.Truncated != testCase.wantTruncated {
+				t.Errorf("event.Truncated = %v, want %v: a discovery-level truncation must survive the grouping fold, or the answer claims a cohort it never fully saw",
+					event.Truncated, testCase.wantTruncated)
+			}
 			if testCase.wantIncompleteGroups {
 				if event.GroupsMarkedIncomplete == 0 {
-					t.Error("event.GroupsMarkedIncomplete = 0 over an INCOMPLETE discovery whose every group therefore inherits incompleteness -- zero is also this field's zero value, so this is the only arm that can catch the field being dropped")
+					t.Error("event.GroupsMarkedIncomplete = 0 over an INCOMPLETE discovery whose every group therefore inherits incompleteness -- zero is also this field's zero value, so only this arm can catch the field being dropped")
 				}
 				if event.GroupsMarkedIncomplete != len(result.Cohort.Groups) {
 					t.Errorf("event.GroupsMarkedIncomplete = %d, want %d (every group inherits an incomplete discovery)",
 						event.GroupsMarkedIncomplete, len(result.Cohort.Groups))
 				}
 			} else if event.GroupsMarkedIncomplete != 0 {
-				t.Errorf("event.GroupsMarkedIncomplete = %d over a COMPLETE discovery, want 0 -- kept beside the non-zero arm so a mutant that reports every group incomplete is caught too",
+				t.Errorf("event.GroupsMarkedIncomplete = %d over a COMPLETE discovery, want 0 -- kept beside the non-zero arms so a mutant that reports every group incomplete is caught too",
 					event.GroupsMarkedIncomplete)
 			}
 			// No refusal happened, so the refusal-only fields stay absent.
