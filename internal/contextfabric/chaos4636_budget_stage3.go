@@ -117,7 +117,6 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// takes the same exit -- never the budget refusal.
 		return InvestigationResult{}, assemblyTelemetry{}, err
 	}
-	measurement := measured.Measurement
 	overrun := measured.Overrun
 	if overrun == contractsv1.ContextFabricBudgetFits {
 		// A FIT is a decision, and this event's own doc comment calls it

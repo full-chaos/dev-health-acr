@@ -507,7 +507,7 @@ func (e *Engine) planCandidateNarrowing(
 		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: declined, Measured: measured}, nil
 	}
 	requirement, obligation := subjectScopeRequirement(narrowedResult.Completeness.Outcomes)
-	row := candidateNarrowingOutcomeRow(narrowing, overrun, requirement, obligation)
+	row := candidateNarrowingOutcomeRow(narrowing, measured.Overrun, requirement, obligation)
 	narrowedResult.Completeness.Outcomes = appendOutcomeRows(narrowedResult.Completeness.Outcomes, row)
 	narrowedResult = e.finalizeResult(narrowedResult, *plan, frame)
 
