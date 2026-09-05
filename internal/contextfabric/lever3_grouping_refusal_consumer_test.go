@@ -68,10 +68,29 @@ func groupingRefusalEngineFixtureWithGroupKind(t *testing.T, telemetry EngineTel
 // dozen incidental ways and prove nothing about which of them decided.
 func groupingEngineFixture(t *testing.T, telemetry EngineTelemetry, plannedKind SubjectKind, facts []CanonicalFact) (*Engine, InvestigationRequest) {
 	t.Helper()
+	return groupingEngineFixtureWithCohortState(t, telemetry, plannedKind, facts, true, false)
+}
+
+// groupingEngineFixtureWithCohortState is the same fixture parameterised on the
+// cohort's DISCOVERY STATE as well.
+//
+// It exists because a mutation survived without it. The refusal event carries
+// Complete/Truncated/PreGroupingComplete/PreGroupingTruncated, and every
+// assertion on them ran against a cohort that was complete and untruncated --
+// so the two TRUNCATED assertions were "expect false" against a fixture whose
+// real value was false, and deleting the assignment left the zero value saying
+// exactly what the test wanted. The assertion could not discriminate; only the
+// two COMPLETE ones could, because there the fixture was true.
+//
+// A field asserted equal to its own zero value is pinned by nothing. The pair
+// of fixtures is the fix: each state field is true in one of them, so a dropped
+// assignment is wrong somewhere.
+func groupingEngineFixtureWithCohortState(t *testing.T, telemetry EngineTelemetry, plannedKind SubjectKind, facts []CanonicalFact, complete, truncated bool) (*Engine, InvestigationRequest) {
+	t.Helper()
 	first := SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}
 	second := SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}
 	cohort := &Cohort{
-		Kind: SubjectProject, Rationale: "kind census match", Complete: true,
+		Kind: SubjectProject, Rationale: "kind census match", Complete: complete, Truncated: truncated,
 		Members: []CohortMember{
 			{Subject: first, Rank: 1, InclusionReasons: []string{"matched"}},
 			{Subject: second, Rank: 2, InclusionReasons: []string{"matched"}},

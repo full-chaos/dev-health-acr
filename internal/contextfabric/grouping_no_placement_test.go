@@ -759,3 +759,60 @@ func TestANoPlacementRefusalNamesNoSourceKind(t *testing.T) {
 		t.Fatal("control failed: the emitter never writes source_group_kind at all, so the absence asserted above measured nothing")
 	}
 }
+
+// TestTheRefusalEventPreservesATruncatedDiscovery is the complement that makes
+// the truncated fields discriminate at all.
+//
+// Its sibling above asserts the state fields against a COMPLETE, UNTRUNCATED
+// cohort — so its two truncated assertions are "expect false" against a fixture
+// whose real value is false, and the struct's zero value satisfies them without
+// the engine assigning anything. A mutation deleting
+// `Truncated: graphContext.Cohort.Truncated` from the emit literal SURVIVED the
+// whole suite for exactly that reason, while the two COMPLETE assertions killed
+// their mutants because there the fixture was true.
+//
+// A field asserted equal to its own zero value is pinned by nothing. This test
+// inverts the fixture, so each of the four state fields is TRUE in one of the
+// pair and a dropped assignment is wrong in at least one place.
+//
+// It also matters on its own terms: a refusal over a TRUNCATED discovery is the
+// case where the state fields carry the most information — the operator is
+// being told both that the group axis was refused and that the cohort it was
+// refused over was never fully seen.
+func TestTheRefusalEventPreservesATruncatedDiscovery(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	// Same mismatch wiring, cohort INVERTED: incomplete and truncated.
+	engine, request := groupingEngineFixtureWithCohortState(t, telemetry, SubjectRepository,
+		[]CanonicalFact{
+			teamScopedFact("project_a", "team_security", "Security"),
+			teamScopedFact("project_b", "team_security", "Security"),
+		}, false, true)
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(telemetry.groupedCohortCompletenesses) != 1 {
+		t.Fatalf("groupedCohortCompletenesses = %d events, want exactly one", len(telemetry.groupedCohortCompletenesses))
+	}
+	event := telemetry.groupedCohortCompletenesses[0]
+
+	// Each of these is TRUE here and false in the sibling, so the pair leaves no
+	// field satisfied by its zero value in both.
+	if !event.Truncated {
+		t.Error("event.Truncated = false on a refusal over a TRUNCATED cohort -- the zero value silently reports a fully-seen cohort, and this is the assertion whose absence let a real mutant survive")
+	}
+	if !event.PreGroupingTruncated {
+		t.Error("event.PreGroupingTruncated = false on a refusal over a cohort discovery truncated")
+	}
+	if event.Complete {
+		t.Error("event.Complete = true on a refusal over an INCOMPLETE cohort")
+	}
+	if event.PreGroupingComplete {
+		t.Error("event.PreGroupingComplete = true on a refusal over an incomplete cohort")
+	}
+	// The refusal itself is unchanged by the discovery state.
+	if event.Refusal != CohortGroupingRefusalGroupKindSourceMismatch {
+		t.Errorf("event.Refusal = %q, want %q", event.Refusal, CohortGroupingRefusalGroupKindSourceMismatch)
+	}
+}
