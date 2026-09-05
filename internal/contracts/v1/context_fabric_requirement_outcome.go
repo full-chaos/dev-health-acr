@@ -666,11 +666,26 @@ func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequire
 	//	  single site that emits this shape (the membership-cardinality
 	//	  step), so narrowing to them costs nothing real and closes the
 	//	  false negative.
+	//	the OTHER two cause fields, empty. `named` is an OR across the
+	//	  three, so a row may legally carry more than one -- an ordinary
+	//	  reduction can have both a basis and an overrun. This row cannot.
+	//	  A narrowing basis says the survivors were selected out of a
+	//	  larger set and an overrun says a budget cut one short; both
+	//	  assert a reduction, and both are contradicted by the equal counts
+	//	  this exception exists to permit. A row carrying either beside the
+	//	  population cause tells two incompatible stories, and an exception
+	//	  that picked one of them would be choosing on the reader's behalf
+	//	  which of two contradictory claims to believe. The producer never
+	//	  writes that shape: it copies a basis and an overrun only when a
+	//	  member step actually reduced the set, and that row takes the
+	//	  ordinary narrowed path, not this one.
 	censusQualified := row.Stage == ContextFabricOutcomeStageAssembledResult &&
 		row.Obligation == ContextFabricAnswerObligationCount &&
 		row.Impact == ContextFabricAnswerImpactScope &&
 		row.Served == row.Declared &&
 		row.CauseObserved &&
+		row.CauseNarrowing == "" &&
+		row.CauseOverrun == "" &&
 		coverageDetailCodeQualifiesPopulation(row.CauseCoverage)
 	if row.Outcome == ContextFabricRequirementNarrowed && row.Declared > 0 && row.Served >= row.Declared && !censusQualified {
 		return fmt.Errorf("outcome narrowed served %d of %d declared, which is not a reduction", row.Served, row.Declared)
