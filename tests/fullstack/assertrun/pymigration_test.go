@@ -245,9 +245,11 @@ def upgrade(client):
 // CLOSED when one does, so a comment reading "... CREATE TABLE git_commits ..." would have
 // turned a required check red with no DDL behind it at all. Docstrings were already stripped;
 // comments are prose in exactly the same way.
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration parser under test,
+// never a fixture any Context Fabric reader queries -- it is a copy of the migration's own
+// COMMENT, and the point of the test is that no table is read out of it at all.
 func TestApplyMigrationPython_CommentProseIsNotDDL(t *testing.T) {
 	schema := newCHSchema()
-	schema.createTable("file_complexity_snapshots")
 
 	source := `
 import re
@@ -316,6 +318,9 @@ def upgrade(client):
 // rebuild, and its error strings mention it in prose. 075:257 and 084:323 each carry
 // `f"{table}: SHOW CREATE TABLE returned no DDL"`, which the residual scan read as a
 // `CREATE TABLE returned` statement.
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration parser under test,
+// never a fixture any Context Fabric reader queries. No table name appears in it at all -- the
+// statement under test is a SHOW, and the assertion is that nothing is read out of it.
 func TestApplyMigrationPython_ShowCreateTableIsARead(t *testing.T) {
 	schema := newCHSchema()
 	source := `
@@ -334,6 +339,9 @@ def _live_ddl(client, table):
 
 // TestPrecededBySHOW_RequiresAWordBoundary keeps the SHOW exclusion from swallowing a real
 // CREATE TABLE that merely follows an identifier ending in "show".
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration parser under test,
+// never a fixture any Context Fabric reader queries -- these are three-token fragments handed
+// to a string predicate, and the table they name is the placeholder "x".
 func TestPrecededBySHOW_RequiresAWordBoundary(t *testing.T) {
 	if !precededBySHOW("SHOW CREATE TABLE x", len("SHOW ")) {
 		t.Fatal("a real SHOW CREATE TABLE must be recognized")
@@ -346,24 +354,10 @@ func TestPrecededBySHOW_RequiresAWordBoundary(t *testing.T) {
 	}
 }
 
-// TestApplyMigrationPython_RealLiteralCreateTableIsStillReported proves comment stripping did
-// not buy its quiet by going blind: a genuine literal CREATE TABLE in code is still reported,
-// because this replay does not interpret one and must never pretend otherwise.
-func TestApplyMigrationPython_RealLiteralCreateTableIsStillReported(t *testing.T) {
-	schema := newCHSchema()
-	source := `
-def upgrade(client):
-    # This next one is real DDL, not narration.
-    client.command("""CREATE TABLE work_unit_supersessions (org_id String) ENGINE = MergeTree ORDER BY org_id""")
-`
-	unhandled := applyMigrationPython(schema, source, "099_real_create.py")
-	if len(unhandled) != 1 {
-		t.Fatalf("expected exactly one unhandled note for a real literal CREATE TABLE, got %v", unhandled)
-	}
-	if unhandled[0].Table != "work_unit_supersessions" {
-		t.Fatalf("the note must name the table it saw, got %+v", unhandled[0])
-	}
-}
+// (That comment stripping did not buy its quiet by going blind -- a genuine literal
+// CREATE TABLE in code is still reported -- is already covered by
+// TestApplyMigrationPython_LiteralNonShadowCreateAndDropTableReported below, which this change
+// deliberately leaves untouched rather than duplicating.)
 
 // TestStripPythonComments_DocstringsAreStrippedFirst pins the ordering applyMigrationPython
 // depends on. A "#" inside a docstring, on the same line as that docstring's closing quotes,
