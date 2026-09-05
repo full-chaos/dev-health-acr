@@ -329,6 +329,7 @@ type recordingTelemetry struct {
 	// list, not count, so a test asserts the exact stage and the exact
 	// measurement, per the same discipline the fields around it hold.
 	budgetAssertions []BudgetAssertionEvent
+	itemAccountings  []ItemAccountingEvent
 
 	// subjectlessTerminalReasons, priorSubjectReceiptSkipReasons, and
 	// answerReuseServedRequestIDs (CHAOS-3888) record every call's
@@ -636,6 +637,13 @@ func (r *recordingTelemetry) RecordMembershipCardinality(_ context.Context, _ st
 // measured, not merely that something was recorded.
 func (r *recordingTelemetry) RecordBudgetAssertion(_ context.Context, _ storage.Principal, event BudgetAssertionEvent) {
 	r.budgetAssertions = append(r.budgetAssertions, event)
+}
+
+// RecordItemAccounting records the whole event for the same reason as above: a
+// test must be able to assert WHICH stage found the disagreement and what it
+// named, not merely that something fired.
+func (r *recordingTelemetry) RecordItemAccounting(_ context.Context, _ storage.Principal, event ItemAccountingEvent) {
+	r.itemAccountings = append(r.itemAccountings, event)
 }
 
 // RecordCommitAffirmationRetraction (CHAOS-4085) is COUNTED here so a retry

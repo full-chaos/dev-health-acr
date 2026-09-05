@@ -570,6 +570,14 @@ func (t SlogEngineTelemetry) RecordCohortDriverNarration(ctx context.Context, pr
 		// pre-narration DirectJudgment/DeterministicAnswer for this
 		// investigation, never the prose itself.
 		"answer_narrative_recomposed", event.AnswerNarrativeRecomposed,
+		// narration_allocator is the CONSUMER-side proof that narration is
+		// bounded by the item budget rather than by the static contract
+		// caps: the two emit identical counts on a small cohort, so a
+		// regression to the caps would otherwise be invisible in the
+		// artifacts. Routed through the closed vocabulary so a value
+		// escaping it reports as unclassified rather than as free text.
+		"narration_allocator", string(validNarrationAllocatorOrUnclassified(event.Allocator)),
+		"narration_allocated_items", event.AllocatedItems,
 	}, requestIDLogAttrs(ctx)...)...)
 }
 
@@ -949,6 +957,20 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"outcome_items_declared", event.OutcomeItemsDeclared,
 		"outcome_completeness_state", string(event.OutcomeCompletenessState),
 		"outcome_reduction_declined", string(event.OutcomeReductionDeclined),
+		// The item ACCOUNT and the per-group quota for the document this
+		// line describes. quota_availability is what makes the four
+		// numbers readable: a zero allowance, no ceiling, no group axis
+		// and an account that did not reconcile used to be one
+		// indistinguishable zero, which is the whole of class B. Routed
+		// through a fail-closed helper so a value outside the closed
+		// vocabulary reports as unclassified rather than reaching the log
+		// as free text.
+		"ledger_status", string(validLedgerStatusOrUnclassified(event.LedgerStatus)),
+		"quota_availability", string(validQuotaAvailabilityOrUnclassified(event.QuotaAvailability)),
+		"quota_group_allowance", event.QuotaGroupAllowance,
+		"quota_groups_granted", event.QuotaGroupsGranted,
+		"quota_groups_measured", event.QuotaGroupsMeasured,
+		"quota_groups_over_allowance", event.QuotaGroupsOverAllowance,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric plan narrowing", args...)
@@ -1039,9 +1061,70 @@ func (t SlogEngineTelemetry) RecordBudgetAssertion(ctx context.Context, principa
 		"measured_bytes_post_label", event.MeasuredBytesPostLabel,
 		"max_items", event.MaxItems,
 		"max_serialized_bytes", event.MaxSerializedBytes,
+		// The FINISHED document's own account and the ledger-backed
+		// capacity verdict. `fits` and `certified_fit` are both here on
+		// purpose: an unbounded answer fits and is not certified, and a
+		// dashboard reading only the first cannot tell the two apart.
+		"ledger_status", string(validLedgerStatusOrUnclassified(event.LedgerStatus)),
+		"ledger_debits", event.LedgerDebits,
+		"capacity", string(validCapacityVerdictOrUnclassified(event.Capacity)),
+		"certified_fit", event.CertifiedFit,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric budget assertion", args...)
+}
+
+// RecordItemAccounting emits the one line that says an answer's own numbers do
+// not add up.
+//
+// At ERROR level, and that is the only level in this file that is: every other
+// event here describes a decision the engine is entitled to make, and this one
+// describes a server defect that turned a servable answer into an internal
+// error. An operator alerting on this is alerting on a bug in this program, not
+// on a caller asking too much.
+func (t SlogEngineTelemetry) RecordItemAccounting(ctx context.Context, principal storage.Principal, event ItemAccountingEvent) {
+	args := []any{
+		"org_id", principal.OrgID,
+		"accounting_stage", event.Stage,
+		"ledger_status", string(validLedgerStatusOrUnclassified(event.Status)),
+		// The collection or bucket that disagreed. A status without a name
+		// sends the reader back to the source; this is the field that makes
+		// the defect diagnosable from the artifact.
+		"ledger_disagreement", event.Disagreement,
+		"ledger_debits", event.Debits,
+		"budgeted_items", event.Budgeted,
+		"max_items", event.MaxItems,
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.ErrorContext(ctx, "context fabric item accounting disagreement", args...)
+}
+
+// validLedgerStatusOrUnclassified, validQuotaAvailabilityOrUnclassified and
+// validCapacityVerdictOrUnclassified fail CLOSED on a value outside their
+// closed vocabulary, so a corrupted or future enum value cannot reach a log
+// field as free text -- the same posture every other closed enum in this file
+// takes.
+func validLedgerStatusOrUnclassified(status contractsv1.ContextFabricLedgerStatus) contractsv1.ContextFabricLedgerStatus {
+	if contractsv1.ValidContextFabricLedgerStatus(status) {
+		return status
+	}
+	return contractsv1.ContextFabricLedgerStatus("unclassified")
+}
+
+func validQuotaAvailabilityOrUnclassified(availability ItemQuotaAvailability) ItemQuotaAvailability {
+	if ValidItemQuotaAvailability(availability) {
+		return availability
+	}
+	// The UNSET zero value lands here too, and that is the point: an
+	// attempt nobody measured must not emit as though it had been.
+	return ItemQuotaAvailability("unclassified")
+}
+
+func validCapacityVerdictOrUnclassified(verdict contractsv1.ContextFabricCapacityVerdict) contractsv1.ContextFabricCapacityVerdict {
+	if contractsv1.ValidContextFabricCapacityVerdict(verdict) {
+		return verdict
+	}
+	return contractsv1.ContextFabricCapacityVerdict("unclassified")
 }
 
 // RecordPlanCarry (CHAOS-4736, seam 7) logs at Info, once per applied carry.
@@ -1079,4 +1162,14 @@ func (t SlogEngineTelemetry) RecordPlanCarry(ctx context.Context, principal stor
 func (t SlogEngineTelemetry) RecordPlanCarryOutcome(ctx context.Context, principal storage.Principal, outcome PlanCarryOutcome, sourceResultID string, seedSource CarrySeedSource) {
 	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "source_result_id", sourceResultID, "seed_source", string(seedSource)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric plan carry outcome", args...)
+}
+
+// validNarrationAllocatorOrUnclassified fails closed on a value outside the
+// closed vocabulary, so a corrupted or future enum value cannot reach a log
+// field as free text.
+func validNarrationAllocatorOrUnclassified(allocator CohortDriverNarrationAllocator) CohortDriverNarrationAllocator {
+	if ValidCohortDriverNarrationAllocator(allocator) {
+		return allocator
+	}
+	return CohortDriverNarrationAllocator("unclassified")
 }

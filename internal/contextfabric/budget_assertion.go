@@ -138,6 +138,22 @@ type BudgetAssertionEvent struct {
 	// The ceilings this was measured against.
 	MaxItems           int
 	MaxSerializedBytes int64
+	// LedgerStatus is the FINISHED document's own accounting verdict, and
+	// LedgerDebits the number of charged occurrences it accounted for.
+	// Recorded on a fit as well as a failure, so "how often does the account
+	// reconcile" has a denominator.
+	LedgerStatus contractsv1.ContextFabricLedgerStatus
+	LedgerDebits int
+	// Capacity is the ledger-backed verdict, and CertifiedFit reports
+	// whether a real certificate was issued.
+	//
+	// It is NOT the negation of Overrun and the two are deliberately both
+	// here: an unbounded answer and an unreconciled one are each "not
+	// overrun", and neither is certified. A dashboard reading only Fits
+	// cannot tell "we checked it against a ceiling" from "there was no
+	// ceiling to check".
+	Capacity     contractsv1.ContextFabricCapacityVerdict
+	CertifiedFit bool
 }
 
 // assertFitsBudget measures result -- which must be the FINAL document, after
@@ -165,6 +181,37 @@ func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Princip
 		// same distinction fitAssembledResult already makes.
 		return stageError(StageValidation, err)
 	}
+	// RECONCILE THE FINISHED DOCUMENT, here, after every late writer.
+	//
+	// Stage three measured an earlier shape: the plan is stamped, the
+	// requirement gap-fill runs, completeness is re-derived and the display
+	// labels are composed AFTER it. An account reconciled against that
+	// earlier shape says nothing about the document the route will serialize,
+	// and "a late composer changes the result while the consumer holds an
+	// earlier, perfectly balanced ledger" is the residual this seam was
+	// warned about by name. The ledger is therefore re-derived from the
+	// document in hand, at the only point where nothing further can write.
+	ledger := contractsv1.ReconcileContextFabricResultItems(result)
+	if !ledger.Reconciled() {
+		accounting := ItemAccountingError{
+			Stage:        string(stage),
+			Status:       ledger.Status,
+			Disagreement: ledger.Disagreement,
+			Debits:       ledger.Total(),
+			Budgeted:     ledger.Counts.Budgeted(),
+		}
+		if e.telemetry != nil {
+			e.telemetry.RecordItemAccounting(ctx, principal, ItemAccountingEvent{
+				Stage:        string(stage),
+				Status:       ledger.Status,
+				Disagreement: ledger.Disagreement,
+				Debits:       ledger.Total(),
+				Budgeted:     ledger.Counts.Budgeted(),
+				MaxItems:     budget.MaxItems,
+			})
+		}
+		return stageError(StageValidation, accounting)
+	}
 	overrun := measurement.Overrun(budget)
 	event := BudgetAssertionEvent{
 		Stage:                  stage,
@@ -174,7 +221,18 @@ func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Princip
 		MeasuredBytesPostLabel: measurement.Bytes,
 		MaxItems:               budget.MaxItems,
 		MaxSerializedBytes:     budget.MaxSerializedBytes,
+		// The finished document's own account, on the line that describes
+		// the finished document. Recorded on a FIT as well as an overrun,
+		// for the same reason Fits itself is: an event that only fired on
+		// failure leaves "how often does the account reconcile"
+		// unanswerable from the artifacts.
+		LedgerStatus:  ledger.Status,
+		LedgerDebits:  ledger.Total(),
+		CertifiedFit:  false,
 	}
+	certificate, capacity := contractsv1.CertifyContextFabricCapacity(ledger, budget)
+	event.CertifiedFit = certificate.Certified()
+	event.Capacity = capacity
 	if e.telemetry != nil {
 		e.telemetry.RecordBudgetAssertion(ctx, principal, event)
 	}
