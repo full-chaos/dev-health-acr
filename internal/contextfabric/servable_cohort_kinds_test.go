@@ -87,12 +87,33 @@ func TestServableCohortKindsForAuditReportsTheTable(t *testing.T) {
 			t.Errorf("ServableCohortKindsForAudit() reported %q, which the table does not admit", kind)
 		}
 	}
-	// Sorted, so a caller iterating the result never depends on Go's
-	// randomized map order.
-	for i := 1; i < len(audited); i++ {
-		if audited[i-1] >= audited[i] {
-			t.Fatalf("ServableCohortKindsForAudit() returned %v, which is not strictly sorted; a caller iterating it would see map order", audited)
+	// SORTED, over 200 ITERATIONS. Go randomizes map iteration order, so a
+	// single read of a three-key map lands on the sorted order often enough
+	// that one check passes about half the time against a mutant that deletes
+	// the sort -- a coin flip is not an assertion. The loop is what makes the
+	// ordering claim decidable.
+	const iterations = 200
+	first := ServableCohortKindsForAudit()
+	for iteration := 0; iteration < iterations; iteration++ {
+		got := ServableCohortKindsForAudit()
+		for i := 1; i < len(got); i++ {
+			if got[i-1] >= got[i] {
+				t.Fatalf("iteration %d: ServableCohortKindsForAudit() returned %v, which is not strictly sorted; a caller iterating it would see map order", iteration, got)
+			}
 		}
+		if len(got) != len(first) {
+			t.Fatalf("iteration %d: length moved %d -> %d between calls", iteration, len(first), len(got))
+		}
+		for i := range first {
+			if got[i] != first[i] {
+				t.Fatalf("iteration %d: ServableCohortKindsForAudit() returned %v, the first call returned %v -- two calls in one process must agree", iteration, got, first)
+			}
+		}
+	}
+	// The loop is only evidence if the set has enough members for an order to
+	// exist at all: a one-element slice is sorted by construction.
+	if len(first) < 2 {
+		t.Fatalf("the allow-list holds %d kind(s); with fewer than two there is no order to assert and the loop above proves nothing", len(first))
 	}
 }
 
