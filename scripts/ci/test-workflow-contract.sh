@@ -211,6 +211,55 @@ check_isolated_devhealthschema_job() {
   printf 'isolated package(s) run in job "%s": %s\n' "$found_job" "$isolated"
 }
 
+# A main push whose run gets cancelled leaves that commit with NO terminal
+# verdict, which is invisible: the run simply is not there to read, and a lane
+# watching its own landing waits on nothing. This fired for real on 2026-09-05
+# (four consecutive main runs cancelled, 53 minutes without a verdict) because
+# the concurrency group fell back to `github.ref`, so every main push shared
+# one group.
+#
+# The fix pins the fallback to `github.sha` -- one group per main commit, which
+# cannot collide. This check exists because the alternative shape people reach
+# for first, `cancel-in-progress: false` on a ref-keyed group, LOOKS correct
+# and is not: GitHub holds at most one PENDING run per group, so a third
+# landing cancels the second while it waits. Reverting the fallback to
+# `github.ref` therefore has to fail here whether cancellation is on or off.
+check_main_runs_get_a_verdict() {
+  local file="$1" block group
+  block="$(awk '
+    /^concurrency:/ { grab=1; print; next }
+    grab && /^[^[:space:]#]/ { grab=0 }
+    grab { print }
+  ' "$file")"
+
+  if [ -z "$block" ]; then
+    printf 'no top-level concurrency: block in %s\n' "$file" >&2
+    return 1
+  fi
+
+  group="$(printf '%s\n' "$block" | sed -n -E 's/^[[:space:]]*group:[[:space:]]*(.*)$/\1/p' | head -n1)"
+  if [ -z "$group" ]; then
+    printf 'concurrency: block has no group:\n' >&2
+    return 1
+  fi
+
+  case "$group" in
+    *github.sha*) ;;
+    *)
+      printf 'concurrency group does not key main pushes on github.sha, so every main push shares one group and a landing can cancel the previous main commit'"'"'s run, leaving that sha with no terminal verdict: %s\n' \
+        "$group" >&2
+      return 1
+      ;;
+  esac
+
+  case "$group" in
+    *github.ref*)
+      printf 'concurrency group still falls back to github.ref; main pushes must be keyed per-sha: %s\n' "$group" >&2
+      return 1
+      ;;
+  esac
+}
+
 check_go_cache() {
   local file="$1"
   local status=0
@@ -583,6 +632,7 @@ run_all_checks() {
   check_verify_if_always "$file"
   check_gate_rejects_nonsuccess "$file"
   check_go_cache "$file"
+  check_main_runs_get_a_verdict "$file"
   check_race_shard_agreement "$file"
   check_unit_shard_agreement "$file"
   check_container_oci_scan_same_job "$file"
@@ -688,6 +738,38 @@ out_of_range_shard="$tmpdir/out-of-range-shard.yml"
 sed 's/shard: \[1, 2, 3, 4\]/shard: [1, 2, 5, 9]/' "$workflow" > "$out_of_range_shard"
 assert_check_fails 'used shard indices outside 1..total' \
   check_race_shard_agreement "$out_of_range_shard"
+
+# (i4) revert the concurrency group's fallback to github.ref while LEAVING
+# cancel-in-progress: true -- the exact shape that cancelled four consecutive
+# main runs on 2026-09-05.
+# NOTE on the sed form: the group line contains `||`, so `|` cannot be the
+# sed delimiter here. Address the group: line and swap only the token.
+main_group_by_ref="$tmpdir/main-group-by-ref.yml"
+sed '/^  group: ci-/ s/github\.sha/github.ref/' "$workflow" > "$main_group_by_ref"
+assert_check_fails 'reverted the concurrency group to a shared github.ref key for main' \
+  check_main_runs_get_a_verdict "$main_group_by_ref"
+
+# (i5) the same revert, but with cancellation turned OFF -- the shape that
+# looks like a fix and is not, because GitHub keeps only one PENDING run per
+# group and a third landing cancels the second while it waits. This control
+# is the reason the check keys on the group expression rather than on
+# cancel-in-progress.
+main_group_by_ref_no_cancel="$tmpdir/main-group-by-ref-no-cancel.yml"
+sed -e '/^  group: ci-/ s/github\.sha/github.ref/' \
+    -e 's/^  cancel-in-progress: true$/  cancel-in-progress: false/' \
+  "$workflow" > "$main_group_by_ref_no_cancel"
+assert_check_fails 'shared main group with cancellation merely disabled (still drops a pending run)' \
+  check_main_runs_get_a_verdict "$main_group_by_ref_no_cancel"
+
+# (i6) delete the concurrency block entirely.
+no_concurrency="$tmpdir/no-concurrency.yml"
+awk '
+  /^concurrency:/ { skip=1; next }
+  skip && /^[^[:space:]#]/ { skip=0 }
+  !skip { print }
+' "$workflow" > "$no_concurrency"
+assert_check_fails 'removed the concurrency block' \
+  check_main_runs_get_a_verdict "$no_concurrency"
 
 # (i2) shrink the UNIT matrix to 3 shards while test-shard.sh is still called
 # with total 4. Mutating only the unit job's own line matters here: the (d)/

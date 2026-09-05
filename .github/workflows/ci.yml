@@ -14,11 +14,31 @@ permissions:
   packages: read
 
 concurrency:
-  # Cancel unconditionally, push included: main is fast-forward-only from
-  # squash merges, so an in-progress run for a superseded main commit is
-  # moot the moment a newer push lands -- letting it finish only burns
-  # runner time (hosted or pool) nobody will read the result of.
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # PR runs share one group per PR and still cancel on a new push -- a
+  # superseded PR tip's run is genuinely moot.
+  #
+  # MAIN pushes get one group PER SHA, which is the whole point of the
+  # `github.sha` fallback here. It used to be `github.ref`, so every main
+  # push shared the single group `ci-refs/heads/main` and each landing
+  # cancelled the previous main commit's run. Measured 2026-09-05
+  # 21:28-21:55Z: four consecutive main runs cancelled, main had no
+  # verdict at all for 53 minutes, and a lane watching its own landing had
+  # nothing to watch.
+  #
+  # Why per-sha rather than simply turning cancellation off for pushes:
+  # with `cancel-in-progress: false` the group still serializes, and
+  # GitHub keeps at most ONE pending run per group -- a third landing
+  # cancels the second while it is still pending. That reproduces the
+  # exact defect (a main sha with no terminal verdict) precisely in the
+  # rapid-landing case that motivated this, just one run later. A distinct
+  # group per sha cannot collide at all, so every main commit runs and
+  # reaches a terminal conclusion regardless of landing rate.
+  #
+  # The cost is real and accepted: concurrent landings now run concurrent
+  # main CI rather than one at a time. That is the price of every main sha
+  # having a verdict; scripts/ci/test-workflow-contract.sh pins the shape
+  # so it cannot quietly revert to a shared main group.
+  group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
