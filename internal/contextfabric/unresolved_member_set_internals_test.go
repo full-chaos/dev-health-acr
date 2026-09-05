@@ -11,6 +11,7 @@ package contextfabric
 // variant of it that nobody ships.
 
 import (
+	"reflect"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -259,7 +260,12 @@ func TestTheTwoSiblingsEmitTheSameRowForAnAbsentMemberSet(t *testing.T) {
 	countRow := assembledRowFor(t, fromCountStep, "count/member/team")
 	sweepRow := assembledRowFor(t, fromSweep, "count/member/team")
 
-	if countRow != sweepRow {
+	// reflect.DeepEqual, not `!=`: the row carries a refinement SLICE, so it is
+	// not comparable with the equality operator at all -- the compiler says so,
+	// which is how this was caught. DeepEqual is also the comparison this
+	// assertion actually wants: two rows agree when every field agrees,
+	// including the slice a future refinement might land in.
+	if !reflect.DeepEqual(countRow, sweepRow) {
 		t.Fatalf("the count step and the sweep emit DIFFERENT rows for one absent member set:\n  count step: %+v\n  sweep:      %+v\n"+
 			"While they differ, the ORDER of the two calls in finalizeResult decides what a reader receives, and the "+
 			"comment at that call site says it does not", countRow, sweepRow)
