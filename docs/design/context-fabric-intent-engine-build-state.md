@@ -922,6 +922,7 @@ were confirmed ancestors of `origin/main` on 2026-09-04.
 | #429 | providers (the subject-id-shape ticket) | disclose shape-rejected subjects instead of `no_data` | r1 and r2 fixed (5 findings across `ReadFacts` return paths), r3 CLEAN; battery 8/8 | `347187320d6f` · 09-04 |
 | #427 | lever-3 PR2B (the grouped-budget ticket) | say what an answer's charged items were about — **observing half only** | **6 rounds**; each found a distinct instrument gap; battery 23/23 (M12 survived the first battery) | `255eb4121a82` · 09-04 |
 | **#430** | plan rows (the plan-requirement-rows ticket) | publish the derived requirement rows and say what refined each | r1 could not run Go (findings reasoned, all three reproduced and held); r2 NOT CLEAN; battery 25/25 final, one earlier run **VOID** | **OPEN** |
+| **#TBD** | grouped cohort (the no-placement disclosure ticket) | name the no-placement grouping outcome instead of returning a zero value; emit the telemetry line the branch never emitted, and disclose it to the reader | rounds pending | **OPEN** |
 
 Consumer pins in the same window: ask-dev #45 pinned acr `7c6eda59`; ask-dev #46 pinned
 `5a3ab55b`. PR #430 widens the published contract, so a further pin bump is **owed** before any

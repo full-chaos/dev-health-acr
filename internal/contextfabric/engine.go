@@ -2075,6 +2075,31 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// the plan stops claiming a group axis it did not deliver --
 			// a plan asserting groups the answer does not carry is exactly
 			// the planner defect the persisted plan exists to expose.
+			//
+			// THIS BRANCH USED TO EMIT NOTHING AT ALL -- not a zero-valued
+			// field on a line that was sent anyway, but no line -- so the
+			// only surviving trace of a grouped question answered flat was
+			// `plan.GroupKind = ""` below, which is indistinguishable from a
+			// plan that never asked for a group axis. Both consumers are
+			// served here for the same reason the mismatch branch above
+			// serves both: the operator reading logs is not the person
+			// reading the answer, and telemetry alone is not disclosure.
+			e.recordGroupedCohortCompleteness(ctx, principal, GroupedCohortCompletenessEvent{
+				Family:               plan.Family,
+				PreGroupingComplete:  preGroupingComplete,
+				PreGroupingTruncated: preGroupingTruncated,
+				GroupCount:           0,
+				Complete:             graphContext.Cohort.Complete,
+				Truncated:            graphContext.Cohort.Truncated,
+				Refusal:              groupingOutcome.Refusal,
+				PlannedGroupKind:     groupingOutcome.PlannedKind,
+				UngroupedMembers:     groupingOutcome.Ungrouped,
+			})
+			// Carried to assembly so the ANSWER discloses it too, exactly as
+			// the mismatch is. A reader who asked for a per-team breakdown
+			// and silently received a flat list has been told something false
+			// by omission, whichever of the two reasons produced the flatness.
+			groupingRefusalForDisclosure = groupingOutcome
 			plan.GroupKind = ""
 		}
 	}

@@ -414,6 +414,20 @@ type GroupedCohortCompletenessEvent struct {
 	// refusal so a reader can see the disagreement without joining lines. It
 	// is a closed-vocabulary subject kind, never model text.
 	PlannedGroupKind SubjectKind
+	// UngroupedMembers is how many members could not be placed on the planned
+	// axis, carried only with a refusal, for the same
+	// answerable-from-one-line reason PlannedGroupKind is.
+	//
+	// It is what separates the two refusals numerically as well as by name: a
+	// no_member_placed line reads group_count 0 with ungrouped_members equal
+	// to the cohort, while a group_kind_source_mismatch line reads
+	// ungrouped_members 0 because the mismatch returns before any member is
+	// counted. An operator can therefore tell "the facts named a different
+	// axis" from "the facts named no axis" without opening the artifact.
+	//
+	// A COUNT, not an identifier: closed-enums-and-counts-only, same as every
+	// other field on this event.
+	UngroupedMembers int
 	// Complete/Truncated are the FINAL cohort-level flags after
 	// ApplyGroupedCohortCompleteness folded the pre-grouping state and the
 	// groups together.

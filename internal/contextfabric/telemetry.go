@@ -982,7 +982,14 @@ func (t SlogEngineTelemetry) RecordGroupedCohortCompleteness(ctx context.Context
 			refusal = CohortGroupingRefusal("unclassified")
 		}
 		args = append(args, "grouping_refusal", string(refusal),
-			"planned_group_kind", string(event.PlannedGroupKind))
+			"planned_group_kind", string(event.PlannedGroupKind),
+			// INSIDE this guard, not beside it: an ordinary grouped answer's
+			// line must stay byte-for-byte what it was before any of these
+			// three fields existed, which is the property the comment above
+			// claims and TestSlogGroupedCohortCompletenessOmitsTheRefusalKeys
+			// WithoutARefusal enforces. Emitting a constant 0 on every
+			// grouped line would break it while looking harmless.
+			"ungrouped_members", event.UngroupedMembers)
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric grouped cohort completeness", args...)
