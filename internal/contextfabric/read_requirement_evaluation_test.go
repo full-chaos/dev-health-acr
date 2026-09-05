@@ -46,6 +46,65 @@ func factCoverage(pairs ...any) Coverage {
 	return coverage
 }
 
+// readSeed builds the planning-stage seed the way THE LIVE TURN builds it.
+//
+// THROUGH SeedRequirementOutcomes -- the DERIVATION-side seed -- and never
+// through the published-plan gap builder beside it, because the two no longer
+// produce the same row and only this one is on the path this evaluator runs
+// on.
+//
+// SeedOutcomesFromPublishedPlanRequirements is the NEVER-REACHED gap-row
+// builder: it mints `not_attempted` with impact `dimension` and the cause
+// `answer_terminated_before_attempt`, for requirements a vetoed turn never got
+// to. The derivation-side seed mints `satisfied` with impact `none`, for
+// requirements the registry CAN serve. finalizeResult appends this evaluator
+// onto the derivation-side seed; the gap builder only fills identities no row
+// accounts for, inside ComputeAnswerCompleteness.
+//
+// The distinction is not cosmetic, and getting it wrong HIDES THE THING UNDER
+// TEST. A `not_attempted`/`dimension` seed is already not-lossless, so the
+// completeness derivation's FIRST pass returns `partial` on its own and the
+// read pass this change adds is never consulted. An "evidence complete
+// therefore state complete" case built on the gap row derives `partial` for a
+// reason that has nothing to do with the evidence -- and, worse, a case built
+// on it that PASSED would be passing for the wrong reason. That is what
+// happened to the first draft of this file. The package's own
+// TestTheSeedAndTheGapRowAgreeOnIdentityAndDisagreeOnOutcome already states
+// the disagreement as a shipped invariant.
+//
+// The premise is ASSERTED rather than assumed, in all three parts -- one row,
+// the identity the PUBLISHED requirement names, and the outcome the live seed
+// carries -- so that if either builder moves again these tests fail here,
+// naming the seed, instead of failing downstream where it looks like a defect
+// in the evaluator.
+func readSeed(t *testing.T, published contractsv1.ContextFabricPlanRequirement) []RequirementOutcomeRow {
+	t.Helper()
+	seed := SeedRequirementOutcomes([]DerivedRequirement{{
+		RequirementCoordinate: RequirementCoordinate{
+			Obligation: ObligationState,
+			Role:       SubjectRoleSubject,
+			Subject:    SubjectTeam,
+		},
+		Kind:      ObligationKindRead,
+		FactKinds: published.FactKinds,
+	}})
+	if len(seed) != 1 {
+		t.Fatalf("the derivation-side seed produced %d rows, want exactly 1: %+v", len(seed), seed)
+	}
+	if seed[0].Requirement != published.Requirement || seed[0].Obligation != published.Obligation {
+		t.Fatalf("the seed names %q/%q and the published requirement names %q/%q; the two halves "+
+			"of one account must agree on the identity, or every join below is comparing two requirements",
+			seed[0].Requirement, seed[0].Obligation, published.Requirement, published.Obligation)
+	}
+	if seed[0].Stage != contractsv1.ContextFabricOutcomeStagePlanning ||
+		seed[0].Outcome != contractsv1.ContextFabricRequirementSatisfied ||
+		seed[0].Impact != contractsv1.ContextFabricAnswerImpactNone {
+		t.Fatalf("the live seed's premise moved: %+v, want one planning row reading satisfied/none -- "+
+			"these tests are written against the seed finalizeResult actually carries", seed[0])
+	}
+	return seed
+}
+
 // TestTheOutcomeRowFollowsTheEvidence is the acceptance table.
 //
 // The harm each case carries is stated positively -- the expected outcome, the
@@ -195,7 +254,7 @@ func TestTheStateFollowsTheEvidence(t *testing.T) {
 	health := contractsv1.ContextFabricFactHealth
 	workload := contractsv1.ContextFabricFactWorkload
 	requirement := readRequirement(CompletionQuantifierCorroborated)
-	seed := SeedOutcomesFromPublishedPlanRequirements([]contractsv1.ContextFabricPlanRequirement{requirement})
+	seed := readSeed(t, requirement)
 
 	for _, testCase := range []struct {
 		name     string
@@ -234,10 +293,7 @@ func TestTheStateFollowsTheEvidence(t *testing.T) {
 func TestTheSeedIsNeverTheLastRowForAServedReadRequirement(t *testing.T) {
 	t.Parallel()
 	requirement := readRequirement(CompletionQuantifierAtLeastOne)
-	seed := SeedOutcomesFromPublishedPlanRequirements([]contractsv1.ContextFabricPlanRequirement{requirement})
-	if len(seed) != 1 || seed[0].Outcome != contractsv1.ContextFabricRequirementSatisfied {
-		t.Fatalf("the fixture's premise moved: seed = %+v, want one satisfied planning row", seed)
-	}
+	seed := readSeed(t, requirement)
 
 	rows := appendReadRequirementEvaluations(seed,
 		[]contractsv1.ContextFabricPlanRequirement{requirement},
@@ -268,8 +324,7 @@ func TestEvaluatingTwiceAppendsOneRow(t *testing.T) {
 	published := []contractsv1.ContextFabricPlanRequirement{requirement}
 	coverage := factCoverage(contractsv1.ContextFabricFactHealth, SourceAvailable)
 
-	once := appendReadRequirementEvaluations(
-		SeedOutcomesFromPublishedPlanRequirements(published), published, coverage)
+	once := appendReadRequirementEvaluations(readSeed(t, requirement), published, coverage)
 	twice := appendReadRequirementEvaluations(once, published, coverage)
 
 	total := 0
