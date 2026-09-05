@@ -192,23 +192,14 @@ func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Princip
 	// warned about by name. The ledger is therefore re-derived from the
 	// document in hand, at the only point where nothing further can write.
 	ledger := contractsv1.ReconcileContextFabricResultItems(result)
-	if !ledger.Reconciled() {
-		accounting := ItemAccountingError{
-			Stage:        string(stage),
-			Status:       ledger.Status,
-			Disagreement: ledger.Disagreement,
-			Debits:       ledger.Total(),
-			Budgeted:     ledger.Counts.Budgeted(),
-		}
+	if accounting := itemAccountingErrorForLedger(string(stage), ledger); accounting != nil {
+		// Telemetry FIRST on the failure path, the same discipline the
+		// stage-three raise keeps, and built by the SAME constructor -- so
+		// the emitted line and the raised error can never disagree about
+		// the document they describe.
 		if e.telemetry != nil {
-			e.telemetry.RecordItemAccounting(ctx, principal, ItemAccountingEvent{
-				Stage:        string(stage),
-				Status:       ledger.Status,
-				Disagreement: ledger.Disagreement,
-				Debits:       ledger.Total(),
-				Budgeted:     ledger.Counts.Budgeted(),
-				MaxItems:     budget.MaxItems,
-			})
+			e.telemetry.RecordItemAccounting(ctx, principal,
+				itemAccountingEventFor(string(stage), ledger, budget.MaxItems))
 		}
 		return stageError(StageValidation, accounting)
 	}

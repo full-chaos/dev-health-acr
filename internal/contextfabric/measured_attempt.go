@@ -183,23 +183,12 @@ func MeasureAttempt(allocation ItemAllocation, result InvestigationResult, budge
 	incidence := ledger.GroupIncidenceCounts()
 	attempt.GroupsMeasured = len(incidence)
 
-	switch {
-	case !ledger.Reconciled():
-		// No quota statement is possible about a document whose account
-		// does not add up. Reporting zeros here is what "silently
-		// substitute zero exposure" means, and it is forbidden.
-		attempt.Availability = ItemQuotaAccountingDisagreement
+	attempt.Availability = classifyItemQuota(ledger.Reconciled(), allocation, attempt.GroupAllowance)
+	if attempt.Availability != ItemQuotaBounded && attempt.Availability != ItemQuotaBoundedZero {
+		// Nothing to measure against: there is no allowance (unbounded),
+		// no group axis (unavailable), or no statement to be made at all
+		// (accounting_disagreement).
 		return attempt, nil
-	case !allocation.InForce():
-		attempt.Availability = ItemQuotaUnbounded
-		return attempt, nil
-	case allocation.Groups <= 0:
-		attempt.Availability = ItemQuotaUnavailable
-		return attempt, nil
-	case attempt.GroupAllowance == 0:
-		attempt.Availability = ItemQuotaBoundedZero
-	default:
-		attempt.Availability = ItemQuotaBounded
 	}
 	// MEASURED PER GROUP, under the rule the allocator DECLARED. Comparing a
 	// SUM of incidences against an aggregate capacity is shared-pool
@@ -213,6 +202,37 @@ func MeasureAttempt(allocation ItemAllocation, result InvestigationResult, budge
 		}
 	}
 	return attempt, nil
+}
+
+// classifyItemQuota is the availability decision, as a PURE function of the
+// three things that decide it.
+//
+// It is separate from MeasureAttempt because of what a mutation battery found:
+// the accounting-disagreement arm was unreachable from any test. Every
+// InvestigationResult a test can build reconciles by construction -- the ledger
+// is three walks over the same document, so a disagreement is a defect in the
+// contracts package, never something a caller can hand in. Inlined in
+// MeasureAttempt the arm could be deleted with the whole package still green.
+//
+// Taking `reconciled` as an ARGUMENT rather than reading it from a ledger is
+// the point: the guard against a contracts-side defect becomes assertable
+// without one. The order of the arms is load-bearing and is asserted directly:
+// a document whose account does not add up gets NO quota statement, even when
+// a ceiling is in force and groups exist -- reporting zeros there is what
+// "silently substitute zero exposure" means, and it is forbidden.
+func classifyItemQuota(reconciled bool, allocation ItemAllocation, groupAllowance int) ItemQuotaAvailability {
+	switch {
+	case !reconciled:
+		return ItemQuotaAccountingDisagreement
+	case !allocation.InForce():
+		return ItemQuotaUnbounded
+	case allocation.Groups <= 0:
+		return ItemQuotaUnavailable
+	case groupAllowance == 0:
+		return ItemQuotaBoundedZero
+	default:
+		return ItemQuotaBounded
+	}
 }
 
 // groupCountOf is how many group entities a cohort carries, zero for a nil
@@ -253,14 +273,8 @@ func (e *Engine) measureAssembledAttempt(
 		// diagnosable from the run's own artifacts rather than by
 		// re-running with instrumentation added.
 		if e.telemetry != nil {
-			e.telemetry.RecordItemAccounting(ctx, principal, ItemAccountingEvent{
-				Stage:        stage,
-				Status:       attempt.Ledger.Status,
-				Disagreement: attempt.Ledger.Disagreement,
-				Debits:       attempt.Ledger.Total(),
-				Budgeted:     attempt.Ledger.Counts.Budgeted(),
-				MaxItems:     budget.MaxItems,
-			})
+			e.telemetry.RecordItemAccounting(ctx, principal,
+				itemAccountingEventFor(stage, attempt.Ledger, budget.MaxItems))
 		}
 		return MeasuredAttempt{}, stageError(StageValidation, accounting)
 	}
@@ -329,14 +343,45 @@ func (e ItemAccountingError) Is(target error) bool {
 // measurement has one: five arms decide on an assembled result, and a sixth
 // will be added. Every one of them raises through here.
 func itemAccountingErrorFor(stage string, attempt MeasuredAttempt) error {
-	if attempt.Reconciled() {
+	return itemAccountingErrorForLedger(stage, attempt.Ledger)
+}
+
+// itemAccountingErrorForLedger is the same constructor over the LEDGER alone,
+// for the site that has no measured attempt: the engine's final assertion
+// re-derives the ledger on the finished document and has nothing else.
+//
+// Both sites route through here, so the five fields an operator needs are
+// written once. They were written three times, and three copies of a field list
+// is how one of them ends up missing a field nobody notices until the defect it
+// was meant to diagnose actually happens.
+//
+// It takes the ledger rather than reading one, which is also what makes the
+// refusal assertable: every InvestigationResult a test can build reconciles by
+// construction, so a guard that only ever sees a real document can be deleted
+// with the whole package still green.
+func itemAccountingErrorForLedger(stage string, ledger contractsv1.ContextFabricItemLedger) error {
+	if ledger.Reconciled() {
 		return nil
 	}
 	return ItemAccountingError{
 		Stage:        stage,
-		Status:       attempt.Ledger.Status,
-		Disagreement: attempt.Ledger.Disagreement,
-		Debits:       attempt.Ledger.Total(),
-		Budgeted:     attempt.Ledger.Counts.Budgeted(),
+		Status:       ledger.Status,
+		Disagreement: ledger.Disagreement,
+		Debits:       ledger.Total(),
+		Budgeted:     ledger.Counts.Budgeted(),
+	}
+}
+
+// itemAccountingEventFor is the operator-facing record for the same
+// disagreement, from the same ledger, so the line and the error can never
+// describe different things.
+func itemAccountingEventFor(stage string, ledger contractsv1.ContextFabricItemLedger, maxItems int) ItemAccountingEvent {
+	return ItemAccountingEvent{
+		Stage:        stage,
+		Status:       ledger.Status,
+		Disagreement: ledger.Disagreement,
+		Debits:       ledger.Total(),
+		Budgeted:     ledger.Counts.Budgeted(),
+		MaxItems:     maxItems,
 	}
 }
