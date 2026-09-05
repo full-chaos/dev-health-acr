@@ -14,7 +14,7 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 "$root/scripts/docs/verify-mermaid.sh"
 
 # Negative control: a deliberately broken block (an unquoted flowchart edge
-# label containing a literal paren -- the same shape CHAOS-fixed in
+# label containing a literal paren -- the same shape fixed in
 # context-fabric-architecture-diagrams.md) must fail the check, naming the
 # fixture file and block.
 fixture="$root/testdata/docs-invalid-mermaid/broken-edge-label"
