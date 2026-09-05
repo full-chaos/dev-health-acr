@@ -308,7 +308,32 @@ func DeriveRequirements(frame QuestionFrame, seed ObligationSeed, capabilities [
 	// Whether THIS FRAME can produce a resolved member set at all. Only a
 	// cohort variant is ever discovered into one, so an organization-scope
 	// frame naming a member kind states a population nothing retrieves.
-	memberSetResolvable := frame.SubjectExpression.IsCohortVariant()
+	//
+	// COHORT-SHAPED IS NOT THE SAME AS COHORT-PRODUCING, and reading the
+	// shape alone was this predicate's own defect. `DiscoveredCohort` is the
+	// only production cohort producer, and it returns nil unless
+	// `cohortKindFromFrame` resolves a MEMBER KIND from the frame -- which
+	// reads `SubjectExpression.MemberKind()`. That method has no
+	// `explicit_set` case at all: an explicit set names OPERANDS, each with
+	// its own kind, and there is no single member kind a cohort could be
+	// built from. So "rank these two named teams" is a legal frame, is a
+	// cohort VARIANT, and can never produce a cohort -- leaving `ranking`
+	// served by a `rank_cohort` the engine can never invoke, which is
+	// exactly the cell this change exists to stop lying.
+	//
+	// The member-kind test is therefore taken from the frame layer that owns
+	// it, not re-derived here, and it is the SAME question the cohort
+	// producer asks one layer down. `graphrank` cannot be imported from here
+	// (it imports this package), so the shared authority is `MemberKind()`
+	// itself rather than `cohortKindFromFrame`.
+	//
+	// What this deliberately does NOT try to decide: whether discovery will
+	// actually FIND any members. That is a runtime fact, unknowable at
+	// derivation time, and a cohort variant whose search returns nothing is
+	// the outcome layer's account to give, not this one's.
+	memberKind, framesAMemberKind := frame.SubjectExpression.MemberKind()
+	_ = memberKind
+	memberSetResolvable := frame.SubjectExpression.IsCohortVariant() && framesAMemberKind
 	rows := make([]DerivedRequirement, 0, len(coordinates))
 	for _, coordinate := range coordinates {
 		rows = append(rows, deriveRequirement(coordinate, seed, capabilities, memberSetResolvable))

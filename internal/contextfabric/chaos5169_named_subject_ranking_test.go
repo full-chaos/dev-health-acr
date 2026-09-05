@@ -393,3 +393,94 @@ func TestCohortRankingStillPlansAndReadsItsDeclaredInputs(t *testing.T) {
 		t.Errorf("the fact reader received %v, missing the model's own %q -- the plan may only WIDEN what is read", sortedObservedKinds(observed), FactMetrics)
 	}
 }
+
+// explicitSetRankingFrame is "rank these two named teams": a legal frame, a
+// cohort VARIANT by shape, and one that can never produce a cohort.
+//
+// `MemberKind()` has no `explicit_set` case (frame.go's switch falls to its
+// default), so `cohortKindFromFrame` refuses the frame and `DiscoveredCohort`
+// -- the only production cohort producer -- returns nil before it looks at a
+// single node. The operands each carry their OWN kind; there is no single
+// member kind a cohort could be built from.
+func explicitSetRankingFrame() *QuestionFrame {
+	frame := frameWith(
+		[]InvestigationGoal{GoalRankOrSurvey},
+		SubjectExpression{
+			Kind: SubjectExpressionExplicitSet,
+			Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+				{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"a"}, ExpectedKind: kindPointer(SubjectTeam)}},
+				{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"b"}, ExpectedKind: kindPointer(SubjectTeam)}},
+			}},
+		},
+		TemporalIntentCurrent,
+		nil,
+	)
+	return &frame
+}
+
+// TestExplicitSetRankingWithoutAResolvedCohortIsUnavailable closes the round-1
+// finding, and it is the case that showed the first guard was keyed on the
+// wrong property.
+//
+// THE DEFECT THE FIRST FIX MISSED. `memberSetResolvable` read
+// `IsCohortVariant()` — a statement about the expression's SHAPE. An explicit
+// set IS a cohort variant, so the guard did not fire, and the `ranking` row
+// stayed served naming `rank_cohort`. But `DiscoveredCohort` returns nil for
+// any frame whose `MemberKind()` is absent, and no `explicit_set` has one — so
+// `graphContext.Cohort` is nil, `RankCohort` is never invoked, the engine
+// forwards no plan kinds, and the row's planning seed says `satisfied`. The
+// same lie as the named-subject case, one expression over, reached by keying
+// the guard on shape instead of on what the cohort producer actually requires.
+//
+// It asserts the SAME two properties as the named-subject test above, on this
+// fixture, for the same reason: a plan that publishes what the reader never
+// receives, and a computed cell that claims a computation nothing ran.
+func TestExplicitSetRankingWithoutAResolvedCohortIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	frame := explicitSetRankingFrame()
+	// The fixture must be cohort-SHAPED, or it is just the named-subject case
+	// again and proves nothing about the shape-vs-producer distinction.
+	if !frame.SubjectExpression.IsCohortVariant() {
+		t.Fatalf("fixture expression %q is NOT a cohort variant; this test cannot exhibit the shape-vs-producer gap", frame.SubjectExpression.Kind)
+	}
+	// ...and it must declare NO member kind, which is what actually stops a
+	// cohort being produced. Asserted rather than assumed: if `MemberKind()`
+	// ever gains an explicit-set case, this fixture stops being the case
+	// under test and must fail loudly rather than keep passing.
+	if kind, ok := frame.SubjectExpression.MemberKind(); ok {
+		t.Fatalf("the explicit-set fixture now declares member kind %q; DiscoveredCohort could build a cohort from it, so this test no longer exhibits the gap", kind)
+	}
+
+	result, observed, _ := rankingInvestigation(t, nil, frame, QuestionFamilyExplicitComparison, ShapeExplicitCohort)
+
+	rankingRow, published := planRequirementForObligation(result, ObligationRanking)
+	if !published {
+		t.Fatalf("the served plan publishes no `ranking` requirement over %d rows -- this fixture does not reach the cell under test", len(result.AnswerPlan.Requirements))
+	}
+
+	// (1) PLAN <-> READER, the same invariant as the named-subject case.
+	if len(result.AnswerPlan.FactKinds) == 0 {
+		t.Fatal("the served plan publishes NO fact kinds, so the agreement below quantifies over nothing")
+	}
+	for _, planned := range result.AnswerPlan.FactKinds {
+		if !observed[planned] {
+			t.Errorf("the served plan publishes fact kind %q but the fact reader received %v -- an explicit set is cohort-SHAPED and cohort-PRODUCING is what matters (plan kinds: %v)",
+				planned, sortedObservedKinds(observed), result.AnswerPlan.FactKinds)
+		}
+	}
+
+	// (2) NO SILENT `satisfied`.
+	rows := outcomeRowsForObligation(result, ObligationRanking, contractsv1.ContextFabricOutcomeStagePlanning)
+	if len(rows) == 0 {
+		t.Fatalf("the served document carries NO planning outcome row for `ranking` (%q)", rankingRow.Requirement)
+	}
+	for _, row := range rows {
+		if row.Outcome == contractsv1.ContextFabricRequirementSatisfied {
+			t.Errorf("the `ranking` requirement %q reads %q on an explicit set: no explicit set declares a member kind, so DiscoveredCohort returns nil and RankCohort is never invoked (plan row: step=%q unavailable=%q)",
+				row.Requirement, row.Outcome, rankingRow.Step, rankingRow.Unavailable)
+		}
+	}
+	t.Logf("explicit-set ranking: plan kinds %v, reader received %v, plan row step=%q unavailable=%q",
+		result.AnswerPlan.FactKinds, sortedObservedKinds(observed), rankingRow.Step, rankingRow.Unavailable)
+}
