@@ -560,13 +560,17 @@ right closure, or does it plan reads nobody needs?*
 > source, deduplicated in fact-kind vocabulary order. `planFactKinds` consumes it as a third
 > widening source, running last so the existing first-kind-wins order is unchanged, and the engine
 > derives the turn's rows ONCE and reads them twice on adjacent lines — the plan input, then the
-> published array. The parity proof's `derivedFactKinds` and `classifyLoss` CALL that same function
-> rather than hand-rolling a union, so the proof reads the plan that exists.
+> published array. The parity proof's `derivedFactKinds` CALLS that same function rather than
+> hand-rolling a union (`planning_authority_parity_test.go:639`); `classifyLoss` does not call it
+> directly, it takes the already-computed slice as its `derived` parameter
+> (`planning_authority_parity_test.go:264`), fed from `derivedFactKinds`'s own result at the one
+> call site that matters (`:716`). The "reads the plan that exists" property holds transitively
+> through `derivedFactKinds`, not by two independent calls.
 
 **Status, 2026-09-04: the ruling is decided; its code is an OPEN CHANGE.** `ComputedStepInputReads`,
 its two guards, `planFactKinds`'s third widening source and the proof numbers below are verified on
 branch `s7b-ii-computed-inputs` (PR #432, stacked on the plan-requirement-rows change PR #430) at its
-current tip `0cce5c69` — **none of this is on `origin/main` yet.** Reading `origin/main` for
+current tip `f38bdd95` — **none of this is on `origin/main` yet.** Reading `origin/main` for
 `ComputedStepInputReads` returns nothing. The decision itself (what gets planned, and why) is ruled;
 the mechanism and the measured result are this open change's own until it merges.
 
