@@ -91,7 +91,21 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/blocks" "$work/out"
 
-mapfile -t md_files < <(find "$docs_dir" -type f -name '*.md' | LC_ALL=C sort)
+# `find | sort` inside a process substitution (the previous form) never
+# propagates find's own exit status anywhere -- process substitution runs
+# in a detached subshell `set -o pipefail`/`set -e` cannot see into, so a
+# traversal error (an unreadable subdirectory, most commonly) is silently
+# dropped along with every file under it. Capture find's own exit status
+# directly instead.
+find_log="$work/find.log"
+find_rc=0
+find "$docs_dir" -type f -name '*.md' 2>"$find_log" | LC_ALL=C sort > "$work/mdlist.txt" || find_rc=$?
+if [ "$find_rc" -ne 0 ]; then
+  printf 'FAIL: find over %s exited %s -- results would be incomplete\n' "$docs_dir" "$find_rc" >&2
+  sed 's/^/    /' "$find_log" >&2
+  exit 1
+fi
+mapfile -t md_files < "$work/mdlist.txt"
 
 # One awk pass over every Markdown file: extracts each fenced ```mermaid
 # block to its own numbered file under $work/blocks and prints a manifest
@@ -99,18 +113,38 @@ mapfile -t md_files < <(find "$docs_dir" -type f -name '*.md' | LC_ALL=C sort)
 # single invocation (not one per file) lets a plain running counter number
 # blocks uniquely across the whole docs/ tree without passing state back
 # out of a subshell.
+#
+# The fence lines allow up to 3 leading spaces (CommonMark permits an
+# indented code fence; requiring column zero silently dropped a
+# Markdown-valid indented block, along with any defect inside it).
+#
+# check_unclosed() fires when a new file starts (FNR==1) or at end of
+# input: if a block was opened but never closed by that point, the
+# PREVIOUS file's fence never closed at all. Without this, an unclosed
+# fence just silently contributes no manifest row -- the malformed block
+# vanishes instead of failing.
 if [ "${#md_files[@]}" -gt 0 ]; then
   awk -v work="$work" '
-    FNR == 1 { in_block = 0 }
-    /^```mermaid[[:space:]]*$/ && !in_block {
+    function check_unclosed() {
+      if (in_block) {
+        printf "%s\t%d\n", cur_file, block_start_line >> (work "/unclosed.tsv")
+      }
+    }
+    FNR == 1 {
+      check_unclosed()
+      in_block = 0
+      cur_file = FILENAME
+    }
+    /^[[:space:]]{0,3}```mermaid[[:space:]]*$/ && !in_block {
       in_block = 1
       global_idx++
       body = ""
       first = ""
       start_line = FNR + 1
+      block_start_line = FNR
       next
     }
-    in_block && /^```[[:space:]]*$/ {
+    in_block && /^[[:space:]]{0,3}```[[:space:]]*$/ {
       in_block = 0
       out = work "/blocks/" global_idx ".mmd"
       printf "%s", body > out
@@ -123,7 +157,18 @@ if [ "${#md_files[@]}" -gt 0 ]; then
       body = body $0 "\n"
       next
     }
+    END { check_unclosed() }
   ' "${md_files[@]}" > "$work/manifest.tsv"
+fi
+
+if [ -s "$work/unclosed.tsv" ]; then
+  # SC2016: literal backticks in the message text, not shell expansion.
+  # shellcheck disable=SC2016
+  printf 'FAIL: unclosed ```mermaid fence(s) -- never reached a closing ``` line:\n' >&2
+  while IFS=$'\t' read -r file line; do
+    printf '    %s:%s\n' "${file#"$root"/}" "$line" >&2
+  done < "$work/unclosed.tsv"
+  exit 1
 fi
 
 block_count=0
@@ -135,13 +180,19 @@ if [ -s "$work/manifest.tsv" ]; then
     block_count=$((block_count + 1))
     rel_file="${file#"$root"/}"
     log="$work/out/${idx}.log"
-    if "${mmdc_cmd[@]}" -i "$work/blocks/${idx}.mmd" -o "$work/out/${idx}.svg" \
-        -p "$puppeteer_config" >"$log" 2>&1; then
+    svg="$work/out/${idx}.svg"
+    if "${mmdc_cmd[@]}" -i "$work/blocks/${idx}.mmd" -o "$svg" \
+        -p "$puppeteer_config" >"$log" 2>&1 && [ -s "$svg" ]; then
       printf 'ok: %s block #%s (line %s) renders\n' "$rel_file" "$idx" "$start_line"
     else
       fail_count=$((fail_count + 1))
-      printf 'FAIL: %s block #%s (line %s, first line: %s) failed to render\n' \
-        "$rel_file" "$idx" "$start_line" "$first_line" >&2
+      if [ ! -s "$svg" ]; then
+        printf 'FAIL: %s block #%s (line %s, first line: %s) reported success but produced no (or an empty) output file: %s\n' \
+          "$rel_file" "$idx" "$start_line" "$first_line" "$svg" >&2
+      else
+        printf 'FAIL: %s block #%s (line %s, first line: %s) failed to render\n' \
+          "$rel_file" "$idx" "$start_line" "$first_line" >&2
+      fi
       sed 's/^/    /' "$log" >&2
     fi
   done < "$work/manifest.tsv"
