@@ -424,6 +424,9 @@ func TestNeighborLookupFailedLineCarriesTheSite(t *testing.T) {
 		if got, _ := record["origin_canonical_id"].(string); got != "p1" {
 			t.Errorf("origin_canonical_id = %q, want p1", got)
 		}
+		if got, _ := record["org_id"].(string); got != "org_sink_test" {
+			t.Errorf("org_id = %q -- without it a lost member cannot be scoped to a tenant", got)
+		}
 		if got, _ := record["error"].(string); got != "injected" {
 			t.Errorf("error = %q -- the message is the part a count throws away", got)
 		}
@@ -453,5 +456,55 @@ func TestNeighborLookupFailureSiteVocabularyIsClosed(t *testing.T) {
 	}
 	if len(seen) != 2 {
 		t.Errorf("vocabulary has %d distinct members, want 2 -- if a third site was added, give it a fixture that reaches it before declaring it", len(seen))
+	}
+}
+
+// TestNeighborLookupFailedLineCarriesTheRequestID is r1 finding 2 AGAIN, on the
+// line this change added, and it exists because a review caught me repeating a
+// defect whose fix I had already written.
+//
+// r1's mutant was: delete graphRequestIDLogAttrs(ctx) from the sink and the
+// whole package stays green, because every sink test drives it with
+// context.Background(). I fixed that for the cohort-kind-basis line and wrote a
+// doc comment naming the failure mode -- then added a NEW sink line whose only
+// test drove it with context.Background(). The lesson did not transfer because
+// it lived in a comment on one test rather than in a check every new sink line
+// has to pass.
+//
+// The join key matters MORE here than on the basis line, not less: this line
+// reports a LOST COHORT MEMBER, so an operator holding a suspicious member
+// count needs to tie the loss to the investigation that produced it. Without
+// the request id, "cannot attribute" reads as "did not run" -- the exact
+// misreading this adapter has already paid for once.
+//
+// WithRequestID silently rejects a non-canonical id (`req_` plus exactly 32
+// lowercase hex) and returns the context UNCHANGED, so a readable label would
+// leave the context bare and this test would fail against correct production
+// code. The id below is canonical, and the fixture asserts that BEFORE it
+// asserts anything else.
+func TestNeighborLookupFailedLineCarriesTheRequestID(t *testing.T) {
+	t.Parallel()
+	const canonicalRequestID = "req_0123456789abcdef0123456789abcdef"
+	ctx := observability.WithRequestID(context.Background(), canonicalRequestID)
+	if _, ok := observability.RequestIDFromContext(ctx); !ok {
+		t.Fatalf("the fixture's own context carries no request id -- WithRequestID rejected %q, so this test would pass over correct code", canonicalRequestID)
+	}
+	record := captureNeighborLookupFailedLine(t, ctx, NeighborLookupFailureSiteNeighborReadback, errors.New("injected"))
+	if got := record["request_id"]; got != canonicalRequestID {
+		t.Errorf("request_id = %v, want %q -- a lost member that cannot be tied to its investigation is a count with extra steps",
+			got, canonicalRequestID)
+	}
+}
+
+// TestNeighborLookupFailedLineOmitsTheRequestIDWhenTheContextHasNone is the
+// complement: the key is ABSENT, never present-and-empty. A line that always
+// carries the key, sometimes blank, makes "no request id" and "the id was the
+// empty string" the same reading -- the same ambiguity the `site` vocabulary
+// and the `unknown_arm` marker exist to remove elsewhere in this change.
+func TestNeighborLookupFailedLineOmitsTheRequestIDWhenTheContextHasNone(t *testing.T) {
+	t.Parallel()
+	record := captureNeighborLookupFailedLine(t, context.Background(), NeighborLookupFailureSiteEdgeEndpoint, errors.New("injected"))
+	if _, present := record["request_id"]; present {
+		t.Errorf("request_id is present on a line emitted with no request id in context: %v", record["request_id"])
 	}
 }
