@@ -532,15 +532,24 @@ func (e *Engine) planCandidateNarrowing(
 		}
 		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: OutcomeReductionUnmeasurable, Measured: measured}, nil
 	}
-	if !served.CertifiedFit() {
+	if served.Overrun != contractsv1.ContextFabricBudgetFits || !served.CertifiedFit() {
 		// The lever was pulled and was not enough. Saying so is the whole
 		// difference between this refusal and one where the lever never
 		// applied: an operator reading the artifacts can tell that the
 		// candidate list was not the binding term here.
 		//
-		// CERTIFIED, not merely "not overrun": an unbounded budget and an
-		// unreconciled account are both "not overrun" and neither is a
-		// document this seam may announce as narrowed to fit.
+		// BOTH AXES, and the certificate. The certificate is about ITEMS --
+		// a reconciled account inside a positive item ceiling -- and this
+		// stage must not announce a document as narrowed to fit when it
+		// still exceeds the BYTE ceiling. An earlier revision of this line
+		// checked only the certificate, and the existing byte-window sweep
+		// caught it immediately: a document that fitted on items and
+		// overran on bytes was served here and refused by the final
+		// assertion instead, which reclassifies the caller's refusal from
+		// items to bytes and announces a reduction that did not deliver a
+		// servable answer. The certificate is still required, because an
+		// unbounded budget and an unreconciled account are both "not
+		// overrun" and neither may be announced as a fit.
 		return outcomeNarrowingAttempt{Narrowing: narrowing, Declined: OutcomeReductionInsufficient, Measured: served}, nil
 	}
 	return outcomeNarrowingAttempt{
