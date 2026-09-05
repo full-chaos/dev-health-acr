@@ -456,7 +456,8 @@
                 "graph_unknown_relationship_type",
                 "graph_validity_unbounded",
                 "reuse_auxiliary_refs_stripped",
-                "answer_terminated_before_attempt"
+                "answer_terminated_before_attempt",
+                "population_truncated"
               ],
               "type": "string"
             },
@@ -5071,7 +5072,8 @@
                 "graph_unknown_relationship_type",
                 "graph_validity_unbounded",
                 "reuse_auxiliary_refs_stripped",
-                "answer_terminated_before_attempt"
+                "answer_terminated_before_attempt",
+                "population_truncated"
               ],
               "type": "string"
             },

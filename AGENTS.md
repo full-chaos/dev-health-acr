@@ -129,7 +129,7 @@ Any externally visible field or endpoint change must update, in the same change:
 ## CONVENTIONS
 
 - JSON fields are snake_case; Go fields are PascalCase; contract names carry a major suffix such as `.v1`.
-- Additive optional fields may stay in v1. Removed fields, tighter requiredness, changed meaning, or enum changes require a new major contract.
+- Additive optional fields may stay in v1. Removed fields, tighter requiredness, or changed meaning require a new major contract. For enums the test is whether a conforming consumer breaks: **removing, renaming, or redefining a member requires a new major; adding a member stays within the major** — and an addition is only complete when every enumeration site moves with it (the Go vocabulary, every published JSON Schema that mirrors it, the embedded MCP copies, and the parity test that holds them equal) and the consumer pin is bumped before the new member is emitted. A consumer validating with `additionalProperties: false` against a stale schema fails closed on the first answer that carries a member it has not vendored, so the pin bump is part of the change, not a follow-up.
 - Use typed sentinel errors and safe classifications; external errors must not expose raw transports, payloads, paths, or credentials.
 - Structured logging uses `log/slog`; high-cardinality request IDs are correlation fields, never metric labels.
 - Tests live beside packages. Contract parity, adversarial, fuzz, integration, and real-binary MCP tests are intentional layers.

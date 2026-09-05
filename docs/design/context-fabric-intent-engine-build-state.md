@@ -853,10 +853,49 @@ result "a lower bound … and this file does not pretend otherwise," but the emi
 discovery clamp (`falkorgraph/reader.go:810-817`) and the reuse degrade
 (`answer_reuse_degrade.go:418-419`); the synthesis-input narrowing path is counted correctly today.
 The row validator's own lossless rule (D10) forbids `narrowed` with `Served == Declared`, so there is
-currently no legal row shape for "exact count, population unknown." the count population-qualification ticket (Backlog, parent
-the requirement-derivation ticket): a `population_truncated` coverage code, and a validator exception admitting `narrowed`
-with `Served == Declared` only under a census cause. **the narration-count ticket now waits on the read-requirement evaluator ticket and
-the count population-qualification ticket**: it consumes the served count, and must consume a qualified one.
+currently no legal row shape for "exact count, population unknown."
+
+**CLOSED by the count population-qualification ticket.** `ComputeMembershipCardinality` now carries
+`PopulationIncomplete`, read from the cohort as `!Complete || Truncated`, and a count over an
+incomplete population with no member-narrowing step emits `narrowed` / impact `scope` /
+`CauseCoverage: population_truncated` / `CauseObserved: true` with **equal served and declared** — so
+the answer reads `partial`. **The condition is a disjunction, not a `Truncated` check**, and that is
+the part worth carrying: `falkorgraph/reader.go:810-817` sets `Complete = false` WITHOUT setting
+`Truncated` on an upstream exact-name truncation, so a `Truncated`-only predicate reads that cohort
+as a full census and stays silent. It is fail-closed on the pair no setter writes today, so a future
+setter cannot introduce a third shape that reads as complete.
+
+The numbers stay EQUAL deliberately. Raising `Declared` to make the row look like an ordinary
+reduction would publish a population size nothing measured — a worse answer than the one being
+replaced — so the honest row is equal counts plus a cause naming the axis the loss is on. That is why
+the contract needed the exception rather than a bigger number: `ValidateContextFabricPlanRequirementOutcomeRow`
+admits `narrowed` with `Served == Declared` **only** when the cause is observed AND names a
+population-qualifying code (`coverageDetailCodeQualifiesPopulation`, an allow-list over the closed
+vocabulary). Each conjunct is pinned by its own planted-defect test: a defaulted cause would let any
+producer opt out of the reduction rule by naming a code it never measured, and a deny-list would
+admit the next code added by default.
+
+**Contract cost:** one enum member at the **8 sites the 6 published documents carry it**; the
+schema↔Go parity test (`expectedCoverageDetailEnumSites = 8`) is deliberately NOT edited — an edited
+pin proves nothing, and it is what turns the Go-side addition red until every document moves.
+OpenAPI, its YAML mirror and the goldens confirmed unchanged **by the generator**, not by a grep.
+**413: +39 bytes, at most once per turn** (the step refuses a second assembled-result `count` row for
+one requirement), asserted rather than logged; the maximal fixture is unchanged because
+`longestCoverageDetailCode()` measures the vocabulary and the new token is shorter than the incumbent
+longest.
+
+**Not measured, and why:** the pre-fix prevalence read the ticket proposed (rig logs,
+`outcome=satisfied` with `cohort_truncated=true`) is unobtainable — the rig serves `7c6eda59`, which
+predates `e5e78144`, the commit that introduced both the step and its telemetry line, so no binary
+the rig has run emits it. It becomes measurable after the rig advances, and the tally must use BOTH
+disjuncts (`cohort_truncated=true` OR `cohort_complete=false`) or it under-reports the same arm a
+`Truncated`-only predicate would.
+
+**Two residuals, disclosed rather than papered over:** the population is still not COUNTABLE — this
+says the resolved set is a subset, not of what size; and a count that a member step ALSO narrowed
+reports that step's own before/after, so its `declared` is the largest count the turn observed rather
+than the population. **the narration-count ticket waits on the read-requirement evaluator ticket**:
+it consumes the served count, and must consume the qualified one this closes.
 
 **H19 — the 413 refusal's typed continuation never reaches the user (the 413-continuation-rendering ticket).** acr already
 serves a closed, no-free-text payload on a 413 —
