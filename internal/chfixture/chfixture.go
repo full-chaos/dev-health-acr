@@ -3,8 +3,8 @@
 // integration fixture uses.
 //
 // CHAOS-4549 (chris, RULED 2026-08-29 "26"): acr's fixtures pinned
-// clickhouse/clickhouse-server:24.8 while prod runs 26.7.5.10 with the new
-// analyzer ON, on a floating tag (CHAOS-4519 -- prod's exact patch drifts,
+// clickhouse/clickhouse-server:24.8 while prod runs a 26.7.x patch with the
+// new analyzer ON, on a floating tag (CHAOS-4519 -- prod's exact patch drifts,
 // so "prod's version" is a moving target). Testing two majors behind what
 // ships is not cosmetic: it changes what SQL is accepted at all. CHAOS-4521b
 // shipped a multi-arm `JOIN ... ON (... OR ...)` that is valid on 26.7
@@ -34,10 +34,11 @@ import (
 )
 
 // Image is the ClickHouse server container image every acr testcontainers
-// fixture starts. Pinned to the exact patch prod ran when this ticket was
-// ruled (26.7.5.10) rather than a floating tag, so a CI run is reproducible;
-// bump it by hand as prod's floor advances -- see VersionFloor.
-const Image = "clickhouse/clickhouse-server:26.7.5.10"
+// fixture starts. Pinned to the minor line only (chris, 2026-09-05 ruling):
+// pinning minor-minor-minor puts CI behind bugfix and security updates for
+// no measured need, so this tracks "major.minor" and floats patch -- see
+// VersionFloor, which enforces the same "major.minor" floor at runtime.
+const Image = "clickhouse/clickhouse-server:26.7"
 
 // VersionFloor is the minimum accepted "major.minor" reported by
 // `SELECT version()`. Prod floats on a `latest`-style tag (CHAOS-4519), so
@@ -47,7 +48,7 @@ const Image = "clickhouse/clickhouse-server:26.7.5.10"
 const VersionFloor = "26.7"
 
 // AtLeastVersionFloor reports whether serverVersion -- ClickHouse's
-// `SELECT version()` string, e.g. "26.7.5.10" -- is at or above
+// `SELECT version()` string, e.g. "26.7.12.3" -- is at or above
 // VersionFloor by numeric (major, minor) comparison. A string prefix check
 // would wrongly reject "26.10.1.1" as "less than" "26.7.x" (lexical "10" <
 // "7"), so this parses both components as integers.
@@ -547,7 +548,8 @@ func (p *operandParser) skipSpace() {
 // found by this guard's own R1 sweep and, like the literal/multi-arg-call
 // operands above, already proven portable (it is on the current tip; the
 // existing pin sites' integration tests exercise readTeamThemeMix's join
-// against both 24.8 historically and 26.7.5.10 in this PR's own CI run).
+// against both 24.8 historically and a 26.7.x patch in this PR's own CI
+// run).
 func (p *operandParser) operand() bool {
 	if !p.baseOperand() {
 		return false
