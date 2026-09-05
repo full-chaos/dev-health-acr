@@ -2026,7 +2026,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// the pre-grouping, discovery-level state -- the exact signal that
 		// used to have no surviving representation once grouped.
 		preGroupingComplete, preGroupingTruncated := graphContext.Cohort.Complete, graphContext.Cohort.Truncated
-		groups, ungrouped, groupingOutcome := BuildCohortGroups(plan, graphContext.Cohort, facts.Facts)
+		// The unplaced COUNT is read off the outcome, not off the second return
+		// value: one carrier for the refusal and its number means the two cannot
+		// drift at this call site, which is how the count came to be dropped here
+		// while the refusal came through.
+		groups, _, groupingOutcome := BuildCohortGroups(plan, graphContext.Cohort, facts.Facts)
 		if len(groups) > 0 {
 			cohort := *graphContext.Cohort
 			cohort.Groups = groups
@@ -2048,12 +2052,37 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				Truncated:              cohort.Truncated,
 			})
 		} else if groupingOutcome.Refusal != CohortGroupingRefusalNone {
-			// Fail closed: the plan's group axis is not the axis the facts
-			// group by, so no group axis is delivered and the plan stops
-			// claiming one -- the same posture as the nothing-placed branch
-			// below, for a different and more serious reason. Recorded so an
-			// operator sees a refusal rather than inferring one from a
-			// grouped question that came back flat.
+			// ONE arm for EVERY refusal, and the reason there is only one is
+			// worth stating, because there used to be two.
+			//
+			// This condition is a gate, not a classification, and that is why
+			// `!= None` is right HERE while it is wrong in
+			// groupingRefusalDisclosure: an unknown future refusal must still
+			// produce a line -- the emitter routes it through the canonical
+			// table and reports `unclassified` -- whereas an unknown refusal
+			// must NOT produce a sentence, because no sentence was written for
+			// it. Failing closed means silence for the reader and a named
+			// unknown for the operator; they are opposite defaults for the
+			// same input, deliberately.
+			//
+			// WHAT THIS COST ONCE. The no-placement refusal was first added as
+			// a SECOND arm below this one, on the reasoning that it was a
+			// different case. It never ran: this condition already admitted it
+			// (a deny-list admits the next vocabulary member by default), so
+			// the second arm was dead code and the fields only it set --
+			// UngroupedMembers -- were silently dropped while Refusal and
+			// PlannedGroupKind came through, which is exactly the shape that
+			// makes such a bug survive review. Caught by the consumer test
+			// asserting every field the change writes, not by reading the diff.
+			//
+			// So: every field the outcome can carry is carried here, once.
+			// That sentence was FALSE when first written -- SourceKind was on
+			// the outcome and absent from the event, the same drop this comment
+			// describes, one field over. A prose claim of completeness is not
+			// completeness: TestTheRefusalEventCarriesEveryOutcomeField now
+			// enumerates the outcome's fields and fails when one has no mapping,
+			// so a field added to CohortGroupingOutcome later cannot silently
+			// stop at this literal.
 			e.recordGroupedCohortCompleteness(ctx, principal, GroupedCohortCompletenessEvent{
 				Family:               plan.Family,
 				PreGroupingComplete:  preGroupingComplete,
@@ -2063,20 +2092,24 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				Truncated:            graphContext.Cohort.Truncated,
 				Refusal:              groupingOutcome.Refusal,
 				PlannedGroupKind:     groupingOutcome.PlannedKind,
+				// Zero on a kind mismatch, which refuses before any member is
+				// counted; the cohort size when nothing could be placed. The
+				// two refusals are told apart numerically as well as by name.
+				UngroupedMembers: groupingOutcome.Ungrouped,
+				SourceGroupKind:  groupingOutcome.SourceKind,
 			})
 			// Carried to assembly so the ANSWER discloses it too. The plan
 			// stops claiming a group axis it did not deliver; the reader is
-			// told the same thing in words.
+			// told the same thing in words. Which sentence is an ALLOW-LIST
+			// decision made in groupingRefusalDisclosure, per member.
 			groupingRefusalForDisclosure = groupingOutcome
 			plan.GroupKind = ""
-		} else if ungrouped > 0 {
-			// The group axis was planned and NOTHING could be placed. The
-			// answer degrades to the flat cohort it would have been, and
-			// the plan stops claiming a group axis it did not deliver --
-			// a plan asserting groups the answer does not carry is exactly
-			// the planner defect the persisted plan exists to expose.
-			plan.GroupKind = ""
 		}
+		// There is no third arm. A cohort that reached here with members and a
+		// declared group kind and produced no groups ALWAYS names a refusal --
+		// pinned at the producer by TestEveryNoGroupsOutcomeNamesARefusal, so
+		// the guarantee is asserted rather than assumed by the shape of this
+		// if/else chain.
 	}
 	// stage2GroupedBasis is which grouped order (if any) THIS stage actually
 	// ran, hoisted above the block below so it survives to assemblyParams:

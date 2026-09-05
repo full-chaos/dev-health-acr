@@ -1009,7 +1009,22 @@ func (t SlogEngineTelemetry) RecordGroupedCohortCompleteness(ctx context.Context
 			refusal = CohortGroupingRefusal("unclassified")
 		}
 		args = append(args, "grouping_refusal", string(refusal),
-			"planned_group_kind", string(event.PlannedGroupKind))
+			"planned_group_kind", string(event.PlannedGroupKind),
+			// INSIDE this guard, not beside it: an ordinary grouped answer's
+			// line must stay byte-for-byte what it was before any of these
+			// three fields existed, which is the property the comment above
+			// claims and TestSlogGroupedCohortCompletenessOmitsTheRefusalKeys
+			// WithoutARefusal enforces. Emitting a constant 0 on every
+			// grouped line would break it while looking harmless.
+			"ungrouped_members", event.UngroupedMembers)
+		// Only when the source named an axis. A no-placement refusal has no
+		// source kind to report -- the facts were silent -- and emitting an
+		// empty value would make "the source disagreed" and "the source said
+		// nothing" look alike to a filter, which is the distinction this whole
+		// vocabulary exists to draw.
+		if event.SourceGroupKind != "" {
+			args = append(args, "source_group_kind", string(event.SourceGroupKind))
+		}
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric grouped cohort completeness", args...)
