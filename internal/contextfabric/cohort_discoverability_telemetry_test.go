@@ -233,3 +233,109 @@ func TestTheCohortDiscoverabilityKeyIsEmptyAndPresentOnARefusedFrame(t *testing.
 		t.Errorf("cohort_discoverability = %v on a refused frame, want empty", got)
 	}
 }
+
+// TestTheReasonIsReadFromTheVALIDATEDFrameNotTheProposedOne pins the
+// provenance of the value.
+//
+// FOUND BY AN ADVERSARIAL ROUND, as a SURVIVING mutant: swapping
+// `result.Frame.SubjectExpression` for `proposed.SubjectExpression` passed the
+// whole suite, because on every corpus frame normalization does not change the
+// subject expression in a way that changes discoverability. The round called it
+// presently unpinnable. It is not — it is unpinnable from a FRAME FIXTURE, and
+// decidable from constructed inputs, which is where it is pinned.
+//
+// The distinction is not cosmetic. `proposed` is what the MODEL said, before
+// validation; `result.Frame` is what the server acted on. Every other field on
+// this event is deliberately split along that line — `ProposedKind` and
+// `ProposedGoals` report the model's own words precisely so a reader can tell
+// them from the server's reading. A reason derived from the proposed
+// expression would be reporting the model's intent while the requirement rows
+// beside it on the same line describe the validated frame, and the two would
+// silently disagree the first time normalization touched a member kind.
+func TestTheReasonIsReadFromTheVALIDATEDFrameNotTheProposedOne(t *testing.T) {
+	t.Parallel()
+
+	// Two expressions with DIFFERENT discoverability, so the two sources
+	// cannot be confused: a discovered-kind cohort over a servable kind is
+	// discoverable; a named subject can never enumerate.
+	validated := discoveredExpression(SubjectTeam)
+	proposedExpr := namedExpression(SubjectTeam)
+
+	_, _, validatedReason := CohortMemberKindFor(validated)
+	_, _, proposedReason := CohortMemberKindFor(proposedExpr)
+	// The premise. If these ever agree the fixture discriminates nothing and
+	// the assertion below would pass for either source.
+	if validatedReason == proposedReason {
+		t.Fatalf("both fixture expressions yield reason %q, so this test cannot tell the validated frame from the proposed one", validatedReason)
+	}
+
+	proposedFrame := frameWith([]InvestigationGoal{GoalRankOrSurvey}, proposedExpr, TemporalIntentCurrent, nil)
+	validatedFrame := frameWith([]InvestigationGoal{GoalRankOrSurvey}, validated, TemporalIntentCurrent, nil)
+
+	// A result whose VALIDATED frame deliberately differs from the proposed
+	// one. Production normalization does not currently produce this divergence
+	// on any corpus frame -- which is exactly why no frame fixture can pin the
+	// distinction, and why it is constructed here.
+	result := FrameValidationResult{Outcome: FrameValidationOutcomeValid, Frame: validatedFrame}
+	event := FrameValidationEventFrom(proposedFrame, result, "", nil)
+
+	if event.CohortDiscoverability != validatedReason {
+		t.Errorf("event reason = %q, want %q (the VALIDATED frame's). Reading the proposed expression would report the model's intent while the requirement rows on the same line describe what the server acted on",
+			event.CohortDiscoverability, validatedReason)
+	}
+	if event.CohortDiscoverability == proposedReason {
+		t.Errorf("event reason = %q, which is the PROPOSED expression's reason -- the provenance is wrong", event.CohortDiscoverability)
+	}
+	// The proposed-side fields must still report the model's own words, or
+	// this fix would have moved the line the other way.
+	if event.ProposedKind != proposedFrame.SubjectExpression.Kind {
+		t.Errorf("ProposedKind = %q, want the PROPOSED expression's kind %q -- those fields exist to report what the model said", event.ProposedKind, proposedFrame.SubjectExpression.Kind)
+	}
+}
+
+// TestAValidFrameWithNoRequirementDeriverStillReportsTheReason closes the other
+// surviving mutant on this event.
+//
+// FOUND BY AN ADVERSARIAL ROUND: moving the assignment inside the
+// `requirements != nil` guard passed the suite. Every value case above builds
+// its event through a helper that passes real derived requirements, and the
+// only nil-requirements case is a REFUSED frame -- where an empty reason is
+// correct anyway. So a VALID frame served by a build with no requirement
+// deriver wired would have logged an empty reason, and nothing said so.
+//
+// The reason is a pure function of the validated expression. It has nothing to
+// do with whether a deriver ran, and coupling it to one would make an operator
+// read "no cohort decision was taken" on a turn where one certainly was.
+func TestAValidFrameWithNoRequirementDeriverStillReportsTheReason(t *testing.T) {
+	t.Parallel()
+	proposed := frameWith([]InvestigationGoal{GoalRankOrSurvey}, discoveredExpression(SubjectTeam), TemporalIntentCurrent, nil)
+	result := ValidateFrame(proposed, nil, "")
+	if result.Outcome != FrameValidationOutcomeValid {
+		t.Fatalf("the fixture frame does not validate (outcome %q); this test is about a VALID frame", result.Outcome)
+	}
+
+	// requirements NIL -- the "no deriver wired" path.
+	event := FrameValidationEventFrom(proposed, result, "", nil)
+
+	_, _, want := CohortMemberKindFor(result.Frame.SubjectExpression)
+	if want == "" {
+		t.Fatal("the fixture yields no reason at all, so the assertion below would be vacuous")
+	}
+	if event.CohortDiscoverability != want {
+		t.Errorf("with no requirement deriver the event reports reason %q, want %q -- the reason is a pure function of the validated expression and has nothing to do with whether a deriver ran",
+			event.CohortDiscoverability, want)
+	}
+
+	// And on the emitted line, not just the struct: the key must carry the
+	// value, at the production level, with the join attrs.
+	records := captureSlogJSONAtProductionLevel(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordFrameValidation(
+			canonicalRequestContext(), storage.Principal{OrgID: "org_sink_test"}, event)
+	})
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1", len(records))
+	}
+	if got := records[0]["cohort_discoverability"]; got != string(want) {
+		t.Errorf("emitted cohort_discoverability = %v, want %q", got, want)
+	}
+}

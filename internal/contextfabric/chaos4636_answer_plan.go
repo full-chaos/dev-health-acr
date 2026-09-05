@@ -473,12 +473,24 @@ func (e *Engine) finalizeResult(result InvestigationResult, plan AnswerPlan, fra
 	// here. The requirement was seeded `satisfied` on the strength of naming
 	// a step, the step never ran, and until this line nothing said so.
 	//
-	// IMMEDIATELY AFTER THE COUNT SIBLING, and the order is load-bearing: the
-	// count step can produce a satisfied or narrowed row carrying real
-	// numbers, which is a better account than a refusal, and the sweep's
-	// idempotence guard is what lets that row stand. Running the sweep first
-	// would append a refusal and leave the count step finding its row already
-	// present.
+	// IMMEDIATELY AFTER THE COUNT SIBLING -- and an adversarial round proved
+	// the stronger claim this comment used to make is FALSE, so it says the
+	// true one instead.
+	//
+	// The claim was that ordering is load-bearing because the count step can
+	// produce a richer row the sweep would otherwise pre-empt. It cannot,
+	// TODAY: both siblings key on the same `cohort != nil` predicate and,
+	// since the row builder was generalised, both emit the IDENTICAL row when
+	// it is nil. Swapping them produces a byte-identical document, and a
+	// reviewer's mutation that swapped them survived the whole suite.
+	//
+	// The order is kept because it is the SAFE one if the two predicates ever
+	// diverge -- the count step owns the richer account and should get first
+	// refusal on its own cell. But an ordering whose justification cannot
+	// fire is a claim nothing enforces, so the property that makes them
+	// interchangeable is now PINNED by a test rather than assumed here: see
+	// TestBothMemberSetSiblingsKeyOnOnePredicate. If they ever stop agreeing,
+	// that test fails and this comment becomes true again.
 	//
 	// BEFORE the read evaluations and the completeness derivation below, for
 	// the same reason they run where they do: a row appended after the state

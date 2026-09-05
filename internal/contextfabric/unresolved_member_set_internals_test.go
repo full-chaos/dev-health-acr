@@ -195,3 +195,90 @@ func TestTheRunsOverDeclarationIsPinnedWhereItIsDECIDABLE(t *testing.T) {
 		})
 	}
 }
+
+// TestBothMemberSetSiblingsKeyOnOnePredicate turns an unenforceable comment
+// into an enforced property.
+//
+// THE CLAIM THAT WAS FALSE. The call site in `finalizeResult` used to say the
+// ORDER of the two siblings is load-bearing, because the count step can produce
+// a richer row that the sweep would otherwise pre-empt. An adversarial round
+// swapped the two calls and the whole suite stayed green -- correctly, because
+// both siblings key on the SAME `cohort != nil` predicate and, since the row
+// builder was generalised, both emit the IDENTICAL row when it is nil. The
+// documents are byte-identical either way.
+//
+// The order is still the right one to keep: if the two predicates ever diverge,
+// the count step owns the richer account and should get first refusal on its
+// own cell. But an ordering whose justification cannot fire is a claim nothing
+// enforces. So the property that makes them interchangeable TODAY is pinned
+// here: the moment they disagree, this test fails and the ordering comment
+// becomes true again.
+func TestBothMemberSetSiblingsKeyOnOnePredicate(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name   string
+		cohort *Cohort
+	}{
+		{"absent member set", nil},
+		{"resolved but empty", &Cohort{Kind: SubjectTeam, Members: []CohortMember{}, Complete: true}},
+		{"resolved with members", countingCohort(SubjectTeam, 3)},
+		{"resolved, incomplete", &Cohort{Kind: SubjectTeam, Members: []CohortMember{}, Complete: false, Truncated: true}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			_, counted := ComputeMembershipCardinality(testCase.cohort, nil)
+			resolved := memberSetResolved(testCase.cohort)
+			if counted != resolved {
+				t.Fatalf("the two siblings disagree about this cohort: ComputeMembershipCardinality counted=%v, memberSetResolved=%v. "+
+					"They must key on ONE predicate, or the ORDER of the two calls in finalizeResult starts to matter and "+
+					"the comment there -- which says it does not -- becomes wrong", counted, resolved)
+			}
+		})
+	}
+}
+
+// TestTheTwoSiblingsEmitTheSameRowForAnAbsentMemberSet is the other half of the
+// interchangeability claim.
+//
+// Agreeing on the PREDICATE is not enough: if the two produced different rows
+// for the same absent member set, order would decide which one a reader
+// receives. They share `unresolvedMemberSetOutcomeRow`, and this asserts that
+// sharing rather than trusting it.
+func TestTheTwoSiblingsEmitTheSameRowForAnAbsentMemberSet(t *testing.T) {
+	t.Parallel()
+	planning := []RequirementOutcomeRow{{
+		Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
+		Requirement: "count/member/team",
+		Obligation:  string(ObligationCount),
+		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+	}}
+
+	fromCountStep, _, _ := appendMembershipCardinality(planning, nil, nil)
+	fromSweep := appendUnresolvedMemberSetOutcomes(planning, nil)
+
+	countRow := assembledRowFor(t, fromCountStep, "count/member/team")
+	sweepRow := assembledRowFor(t, fromSweep, "count/member/team")
+
+	if countRow != sweepRow {
+		t.Fatalf("the count step and the sweep emit DIFFERENT rows for one absent member set:\n  count step: %+v\n  sweep:      %+v\n"+
+			"While they differ, the ORDER of the two calls in finalizeResult decides what a reader receives, and the "+
+			"comment at that call site says it does not", countRow, sweepRow)
+	}
+}
+
+// assembledRowFor returns the single assembled-result row for a requirement,
+// failing loudly rather than returning a zero value that a comparison would
+// read as agreement.
+func assembledRowFor(t *testing.T, rows []RequirementOutcomeRow, requirement string) RequirementOutcomeRow {
+	t.Helper()
+	var found []RequirementOutcomeRow
+	for _, row := range rows {
+		if row.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult && row.Requirement == requirement {
+			found = append(found, row)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("want exactly 1 assembled row for %q, got %d -- two zero values would compare equal and read as agreement", requirement, len(found))
+	}
+	return found[0]
+}

@@ -105,3 +105,48 @@ func TestTheSeamRefusesEveryKindTheDerivationCallsUnservable(t *testing.T) {
 		t.Fatalf("swept %d kinds, the published vocabulary has %d", checked, contractsv1.ContextFabricSubjectKindCount)
 	}
 }
+
+// TestTheMappingDefaultArmFailsClosed pins the arm the vocabulary loop cannot
+// reach.
+//
+// FOUND BY AN ADVERSARIAL ROUND, as a SURVIVING mutant: changing the default
+// arm's return to `""` passed the whole suite. The loop above walks only
+// DECLARED reasons, and the default is by construction unreachable from those,
+// so the fail-closed guarantee the mapping's own comment makes was asserted
+// nowhere.
+//
+// It matters because the guarantee is not decoration. `cohortKindFromFrame`
+// hands its result straight to this seam's telemetry, so a default returning
+// the empty basis would publish a value `ValidCohortKindBasis` refuses -- an
+// undeclared token on an operator's log line, which is worse than a
+// slightly-wrong-but-declared one.
+func TestTheMappingDefaultArmFailsClosed(t *testing.T) {
+	t.Parallel()
+	// Values the vocabulary does not declare. The zero value is included on
+	// purpose: it is what a caller gets from an unset field, and it is the one
+	// an "is it valid" check is most likely to wave through.
+	for _, undeclared := range []contextfabric.CohortDiscoverability{
+		"",
+		"not_a_declared_reason",
+		"discoverable_but_misspelled",
+		contextfabric.CohortDiscoverability("member_kind_unservable_typo"),
+	} {
+		// The premise: this really is outside the vocabulary. Without it a
+		// renamed member would quietly turn these into declared values and the
+		// test would stop exercising the default arm at all.
+		if contextfabric.ValidCohortDiscoverability(undeclared) {
+			t.Fatalf("%q is a DECLARED reason, so it does not reach the default arm and this case proves nothing", undeclared)
+		}
+		basis := cohortKindBasisForDiscoverability(undeclared)
+		if !ValidCohortKindBasis(basis) {
+			t.Errorf("the default arm returned %q for undeclared reason %q; that is not a basis this seam declares, so it would reach an operator's log line as an undefined token", basis, undeclared)
+		}
+		if basis != CohortKindMemberKindUnservable {
+			t.Errorf("the default arm returned %q for undeclared reason %q, want %q -- the fail-closed choice is the REFUSING basis, never the discovering one", basis, undeclared, CohortKindMemberKindUnservable)
+		}
+		// The direction that would actually hurt: a default that discovers.
+		if basis == CohortKindFromFrameMemberKind {
+			t.Errorf("the default arm returned the DISCOVERING basis for undeclared reason %q -- an unknown reason must never read as 'a cohort was discovered'", undeclared)
+		}
+	}
+}

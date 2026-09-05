@@ -64,27 +64,39 @@ const (
 	// invent a set the question never asked for. This is the frame-side
 	// replacement for the old Shape gate.
 	CohortKindNotACohortVariant CohortKindBasis = "not_a_cohort_variant"
-	// CohortKindMemberKindUnservable: the frame declared a member kind the
-	// COHORT WIRE CONTRACT cannot carry, so no cohort is built.
+	// CohortKindMemberKindUnservable: the frame declared a member kind NO
+	// DISCOVERY ARM SERVES, so no cohort is built.
 	//
-	// FOUND ON THE RIG, not by reading code. contracts/v1's
-	// ContextFabricCohort.validate permits exactly two kinds -- team and
-	// project -- and refuses every other with "cohort violates v1 bounds".
-	// The deleted prose matcher could only ever RETURN those two (it
+	// FOUND ON THE RIG, not by reading code -- and the history matters
+	// because it is why this basis exists at all, so it is kept in the PAST
+	// TENSE it belongs in.
+	//
+	// contracts/v1's ContextFabricCohort.validate USED TO permit exactly two
+	// kinds, team and project, refusing every other with "cohort violates v1
+	// bounds". The deleted prose matcher could only ever RETURN those two (it
 	// returned project on a "project"/"initiative" hit and otherwise
 	// defaulted to team), so that bound was unreachable for the entire life
-	// of the old code. Reading the frame's declared MemberKind makes it
-	// reachable for the first time: a question about repositories now
-	// declares `repository`, discovery builds a repository cohort, and the
-	// validator refuses the whole ANSWER -- an HTTP 500, not a degraded
-	// answer. That is strictly worse than the wrong-kind cohort it replaced.
+	// of the old code. Reading the frame's declared MemberKind made it
+	// reachable for the first time: a question about repositories declared
+	// `repository`, discovery built a repository cohort, and the validator
+	// refused the whole ANSWER -- an HTTP 500, not a degraded answer, which
+	// is strictly worse than the wrong-kind cohort it replaced.
 	//
-	// So the consumer refuses FIRST, and says so. Widening the wire contract
-	// to carry more cohort kinds is a contract change with a schema, an
-	// OpenAPI document, an MCP manifest, fixtures and a consumer pin behind
-	// it; it is not this slice's to make, and it is tracked separately as
+	// THAT BOUND HAS SINCE WIDENED. `validate` now admits the full published
+	// subject-kind vocabulary (validate_context_fabric_result.go's
+	// `validContextFabricSubjectKind`), so the wire contract is no longer
+	// what refuses these kinds. This basis survives the widening because
+	// CARRIABLE AND DISCOVERABLE ARE DIFFERENT FACTS: the allow-list is
+	// deliberately narrower than the contract and grows only in the change
+	// that PROVES a discovery arm. Reporting an unservable kind here is what
+	// keeps that narrowness a countable decision rather than an empty cohort
+	// nobody can attribute.
+	//
+	// So the consumer refuses FIRST, and says so. Widening the ALLOW-LIST to
+	// carry more cohort kinds is a change that must prove an arm; it is not
+	// this slice's to make, and it is tracked separately as
 	// the repository-cohort work. Until then a cohort kind outside the
-	// contract is a REPORTED limitation with its own basis, which is what
+	// ALLOW-LIST is a REPORTED limitation with its own basis, which is what
 	// makes it countable rather than a crash.
 	CohortKindMemberKindUnservable CohortKindBasis = "member_kind_unservable"
 	// CohortKindNoMemberKind: the expression IS a cohort variant but
