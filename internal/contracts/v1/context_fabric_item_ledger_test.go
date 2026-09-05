@@ -44,7 +44,15 @@ func ledgerGroupedFixture() ContextFabricInvestigationResult {
 			{FindingID: "finding_group_two_more", Subjects: []ContextFabricSubjectRef{groupTwo}},
 		},
 		ReadinessGaps: []ContextFabricFinding{{FindingID: "finding_global"}},
-		Conflicts:     []ContextFabricFinding{{FindingID: "finding_member_b", Subjects: []ContextFabricSubjectRef{memberB}}},
+		// THREE conflicts against ONE readiness gap and TWO remaining-work
+		// findings: every finding collection carries a different count, so
+		// swapping any pair of them in the census projection breaks a
+		// comparison rather than cancelling out.
+		Conflicts: []ContextFabricFinding{
+			{FindingID: "finding_member_b", Subjects: []ContextFabricSubjectRef{memberB}},
+			{FindingID: "finding_member_b_more", Subjects: []ContextFabricSubjectRef{memberB}},
+			{FindingID: "finding_member_b_third", Subjects: []ContextFabricSubjectRef{memberB}},
+		},
 		ClaimedFacts:  []ContextFabricClaimedFact{{ClaimID: "claim_member_b", Subject: memberB}},
 		// Paths are charged by Total() and NOT by Budgeted(), so they must
 		// mint no debit. Present in the fixture so that exclusion is
@@ -55,8 +63,14 @@ func ledgerGroupedFixture() ContextFabricInvestigationResult {
 
 // TestEveryChargedOccurrenceHasExactlyOneDebit is the accounting check itself:
 // a bijection between charged occurrences and debits, proved against the two
-// INDEPENDENT derivations this package already publishes rather than against
-// the ledger's own walk.
+// derivations this package already publishes rather than against the ledger's
+// own walk.
+//
+// Their independence is PARTIAL and saying so matters: the walk and
+// AttributeContextFabricResultItems share contextFabricSubjectsBucket, and the
+// per-collection comparison shares CountContextFabricResultItems. What this
+// catches is a walk that stops agreeing with the summaries, or a ledger edited
+// after the fact -- not a bug inside a shared helper.
 func TestEveryChargedOccurrenceHasExactlyOneDebit(t *testing.T) {
 	t.Parallel()
 	result := ledgerGroupedFixture()
@@ -931,7 +945,7 @@ func TestEveryChargedItemCarriesItsDeclaredID(t *testing.T) {
 		ContextFabricChargedDrivers:       {"driver_member", "driver_group_one", "driver_both_groups", "driver_global"},
 		ContextFabricChargedRemainingWork: {"finding_group_two", "finding_group_two_more"},
 		ContextFabricChargedReadinessGaps: {"finding_global"},
-		ContextFabricChargedConflicts:     {"finding_member_b"},
+		ContextFabricChargedConflicts:     {"finding_member_b", "finding_member_b_more", "finding_member_b_third"},
 		ContextFabricChargedClaimedFacts:  {"claim_member_b"},
 	}
 	got := map[ContextFabricChargedCollection][]string{}
@@ -1099,5 +1113,125 @@ func TestRepeatedIDsAreOrderedAndAbsentWhenThereAreNone(t *testing.T) {
 	clean := ReconcileContextFabricResultItems(ledgerGroupedFixture())
 	if clean.RepeatedDeclaredIDs != nil {
 		t.Errorf("RepeatedDeclaredIDs = %#v on a clean result, want nil", clean.RepeatedDeclaredIDs)
+	}
+}
+
+// TestGroupIncidenceNamesOnlyGroups covers the confirmation pass's first named
+// survivor: without the non-group skip, a driver naming a member alongside a
+// group would list the member as a participating "group".
+func TestGroupIncidenceNamesOnlyGroups(t *testing.T) {
+	t.Parallel()
+	member := ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_a"}
+	group := ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team_one"}
+	stranger := ContextFabricSubjectRef{Kind: ContextFabricSubjectRepository, CanonicalID: "repo_x"}
+	result := ContextFabricInvestigationResult{
+		Cohort: &ContextFabricCohort{
+			Members: []ContextFabricCohortMember{{Subject: member}},
+			Groups:  []ContextFabricCohortGroup{{Subject: group, MemberCanonicalIDs: []string{"project_a"}}},
+		},
+		Drivers: []ContextFabricDriverJudgment{{
+			DriverID:         "driver_names_all_three",
+			AffectedSubjects: []ContextFabricSubjectRef{member, group, stranger},
+		}},
+	}
+	ledger := ReconcileContextFabricResultItems(result)
+	if !ledger.Reconciled() {
+		t.Fatalf("status = %q", ledger.Status)
+	}
+
+	incidence := ledger.GroupIncidenceCounts()
+	if len(incidence) != 1 {
+		t.Fatalf("incidence names %d subjects %v, want exactly the one declared group", len(incidence), incidence)
+	}
+	if incidence[contextFabricSubjectBucketKey(group)] != 1 {
+		t.Errorf("the declared group has incidence %d, want 1", incidence[contextFabricSubjectBucketKey(group)])
+	}
+	for _, notAGroup := range []ContextFabricSubjectRef{member, stranger} {
+		if _, present := incidence[contextFabricSubjectBucketKey(notAGroup)]; present {
+			t.Errorf("%q is not a declared group but appears in the incidence map", notAGroup.CanonicalID)
+		}
+	}
+}
+
+// TestAnItemWithNoDeclaredIDIsNeverReportedAsARepeat covers the second named
+// survivor. Candidates carry no receipt before validation, and several of them
+// share the empty string; without the skip they would be reported as repeating
+// one another.
+func TestAnItemWithNoDeclaredIDIsNeverReportedAsARepeat(t *testing.T) {
+	t.Parallel()
+	unvalidated := ledgerGroupedFixture()
+	for index := range unvalidated.SubjectResolution.Candidates {
+		unvalidated.SubjectResolution.Candidates[index].ReceiptID = ""
+	}
+	if len(unvalidated.SubjectResolution.Candidates) < 2 {
+		t.Fatal("this case needs at least two id-less candidates to be able to fail")
+	}
+	ledger := ReconcileContextFabricResultItems(unvalidated)
+	if !ledger.Reconciled() {
+		t.Fatalf("status = %q", ledger.Status)
+	}
+	for _, repeat := range ledger.RepeatedDeclaredIDs {
+		if repeat == string(ContextFabricChargedCandidates)+":" {
+			t.Fatalf("candidates carrying no receipt were reported as repeating one another: %v",
+				ledger.RepeatedDeclaredIDs)
+		}
+	}
+}
+
+// TestRepeatsAreOrderedAcrossCollectionsToo covers the third named survivor: a
+// map range over the collections would order the report differently run to run
+// once repeats exist in more than one of them.
+func TestRepeatsAreOrderedAcrossCollectionsToo(t *testing.T) {
+	t.Parallel()
+	member := ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_a"}
+	result := ContextFabricInvestigationResult{
+		Drivers: []ContextFabricDriverJudgment{
+			{DriverID: "driver_repeat"}, {DriverID: "driver_repeat"},
+		},
+		ClaimedFacts: []ContextFabricClaimedFact{
+			{ClaimID: "claim_repeat", Subject: member}, {ClaimID: "claim_repeat", Subject: member},
+		},
+	}
+	// Drivers precede claimed_facts in the published vocabulary, so the
+	// report is in that order on every run.
+	want := []string{
+		string(ContextFabricChargedDrivers) + ":driver_repeat",
+		string(ContextFabricChargedClaimedFacts) + ":claim_repeat",
+	}
+	for attempt := 0; attempt < 200; attempt++ {
+		got := ReconcileContextFabricResultItems(result).RepeatedDeclaredIDs
+		if len(got) != len(want) {
+			t.Fatalf("attempt %d: RepeatedDeclaredIDs = %v, want %v", attempt, got, want)
+		}
+		for index, id := range want {
+			if got[index] != id {
+				t.Fatalf("attempt %d: RepeatedDeclaredIDs = %v, want %v -- the report depends on map order",
+					attempt, got, want)
+			}
+		}
+	}
+}
+
+// TestCohortMemberDebitsDeclareTheirSubject covers the fifth named survivor.
+// Member rows carry no id of their own, so the subject key IS their diagnosis,
+// and nothing else asserted it.
+func TestCohortMemberDebitsDeclareTheirSubject(t *testing.T) {
+	t.Parallel()
+	result := ledgerGroupedFixture()
+	ledger := ReconcileContextFabricResultItems(result)
+
+	seen := 0
+	for _, debit := range ledger.Debits {
+		if debit.Collection != ContextFabricChargedCohortMembers {
+			continue
+		}
+		want := contextFabricSubjectBucketKey(result.Cohort.Members[debit.Ordinal].Subject)
+		if debit.DeclaredID != want {
+			t.Errorf("cohort member ordinal %d declares %q, want the subject key %q", debit.Ordinal, debit.DeclaredID, want)
+		}
+		seen++
+	}
+	if seen != len(result.Cohort.Members) {
+		t.Fatalf("examined %d member debits, the fixture carries %d rows", seen, len(result.Cohort.Members))
 	}
 }

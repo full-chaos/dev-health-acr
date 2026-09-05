@@ -430,8 +430,17 @@ func contextFabricSubjectsDebit(
 	return debit
 }
 
-// contextFabricReconcile is the accounting check: three independent derivations
-// of the same answer, compared.
+// contextFabricReconcile is the accounting check: three derivations of the same
+// answer, compared.
+//
+// NOT "three INDEPENDENT derivations", and the precision is the point. The debit
+// walk and AttributeContextFabricResultItems both classify through
+// contextFabricSubjectsBucket, because the ownership rule requires this layer to
+// CARRY that decision rather than re-derive it. So the bucket comparison detects
+// ledger mutation and any future divergence between the walk and the summary --
+// it cannot detect a bug INSIDE the shared classifier, which is covered by that
+// function's own direct tests. The per-collection comparison shares
+// CountContextFabricResultItems in the same way.
 //
 // ORDER MATTERS and is stated rather than incidental. Vocabulary validity comes
 // first, because a debit naming a collection nothing knows about cannot be
