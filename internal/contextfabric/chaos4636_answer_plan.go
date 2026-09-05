@@ -149,6 +149,23 @@ type PlanAnswerInput struct {
 	// MaxCohortMembers is the caller's own cohort cap. The plan never
 	// exceeds it, so a caller asking for fewer members always gets fewer.
 	MaxCohortMembers int
+	// Requirements are THIS TURN'S derived requirement rows, and they are an
+	// input to the plan rather than only an output stamped onto it.
+	//
+	// The rows are what say a computed obligation's server step consumes
+	// named fact kinds (the §13.2.3 amendment), and a declaration nothing
+	// reads plans nothing -- which is the blocking cell the parity proof
+	// recorded. planFactKinds reads them so the declaration becomes the
+	// plan, and it is passed in rather than derived here because the stage is
+	// pure over its input: PlanAnswer holds no frame, no registry and no
+	// deriver, and giving it one would make the plan a function of state it
+	// cannot see.
+	//
+	// EMPTY IS LEGAL AND MEANS EXACTLY WHAT IT SAYS: a turn with no validated
+	// frame derives no rows, so the plan's fact kinds are what they were
+	// before this field existed. That is the same honest absence
+	// deriveTurnRequirements already returns for a nil frame.
+	Requirements []DerivedRequirement
 }
 
 // PlanAnswer produces the plan. It never fails: an unresolved or
@@ -180,7 +197,7 @@ func PlanAnswer(input PlanAnswerInput) AnswerPlan {
 		RequireRanking: definition.RequireRanking,
 		RenderKinds:    append([]contractsv1.ContextFabricRenderKind(nil), definition.RenderKinds...),
 		Axes:           planWireAxes(definition),
-		FactKinds:      planFactKinds(definition, input.Interpretation),
+		FactKinds:      planFactKinds(definition, input.Interpretation, input.Requirements),
 		Budget:         planBudget(definition.Budget, input.Budget, input.MaxCohortMembers),
 	}
 	// The group axis is a MODEL-EMITTED signal, and only the grouped family
@@ -258,7 +275,7 @@ func planWireAxes(definition QuestionFamilyDefinition) []contractsv1.ContextFabr
 // absent. That is exactly the position the hardcoded ranking injection held
 // in engine.go before this stage existed, so the resulting set is unchanged
 // for every family that resolved to a cohort before.
-func planFactKinds(definition QuestionFamilyDefinition, interpretation InterpretedQuestion) []FactKind {
+func planFactKinds(definition QuestionFamilyDefinition, interpretation InterpretedQuestion, requirements []DerivedRequirement) []FactKind {
 	kinds := make([]FactKind, 0, len(interpretation.FactRequirements)+len(cohortRankingFormulaKinds))
 	seen := make(map[FactKind]struct{}, cap(kinds))
 	appendKind := func(kind FactKind) {
@@ -286,6 +303,23 @@ func planFactKinds(definition QuestionFamilyDefinition, interpretation Interpret
 		for _, kind := range cohortRankingFormulaKinds {
 			appendKind(kind)
 		}
+	}
+	// EVERY DECLARED INPUT OF A COMPUTED STEP THIS TURN'S ROWS SAY THE SERVER
+	// EXECUTES. Before this, a computed row declared what its step consumes
+	// and nothing read the declaration, so the facts were fetched only
+	// because a family's SubjectAxis happened to be a cohort -- which is why
+	// the parity proof could not retire that injection without dropping a
+	// real read.
+	//
+	// It is a WIDENING like the two above it, and it runs LAST for the same
+	// first-kind-wins reason: a kind the model or the family already named
+	// keeps that entry, with whatever Subjects or Parameters it carries. On
+	// every cohort frame in the corpus this adds nothing at all -- rank_cohort
+	// declares cohortRankingFormulaKinds ITSELF, so the two sources name the
+	// same five kinds -- and that identity is what makes the unconditional
+	// injection a candidate for retirement rather than a second spender.
+	for _, kind := range ComputedStepInputReads(requirements) {
+		appendKind(kind)
 	}
 	return kinds
 }

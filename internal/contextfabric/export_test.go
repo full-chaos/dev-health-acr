@@ -69,8 +69,18 @@ func ComposeStatusCategoryRequirementsForTest(requirements []FactRequirement, su
 // contribution, so an empty model side leaves exactly what the FAMILY
 // contributes. That separation is the only way the two can carry different
 // verdicts, and they do.
+//
+// NIL REQUIREMENTS, FOR THE SAME REASON AND IT MATTERS MORE. planFactKinds
+// now also unions the declared inputs of the turn's computed requirement
+// rows, and that third source is the DERIVATION's, not this authority's.
+// Handing the rows in here would make authority 3's measured contribution
+// include the very kinds the derived rows supply, so the parity cell would
+// compare the derivation against itself and report `subsumed` no matter what
+// the authority actually contributes -- the proof clearing its own blocking
+// cell by construction. The authority is what remains when the model side and
+// the row side are both empty.
 func PlanFactKindsForTest(definition QuestionFamilyDefinition, interpretation InterpretedQuestion) []FactKind {
-	return planFactKinds(definition, interpretation)
+	return planFactKinds(definition, interpretation, nil)
 }
 
 // CohortRankingFormulaKindsForTest returns a copy of AUTHORITY 4 --

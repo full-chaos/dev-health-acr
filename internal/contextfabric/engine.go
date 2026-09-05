@@ -1483,11 +1483,20 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		driftRefusedParent = carryParentSeed(request)
 	}
 	familyOutcome = e.applyAndRecordCarry(ctx, principal, familyOutcome, planCarry)
+	// DERIVED ONCE, AND READ TWICE ON THIS LINE AND THE NEXT. The rows are an
+	// INPUT to the plan (planFactKinds reads a computed step's declared inputs
+	// so the declaration actually plans the read) and they are the plan's own
+	// published requirement array. Deriving them twice here would be two
+	// authorities for one turn's rows in the same function -- the drift
+	// requirementIdentity's own doc comment refuses -- even though the
+	// derivation is pure and the two copies would agree today.
+	derivedRequirements := deriveTurnRequirements(familyOutcome.Frame, e.requirements)
 	plan := PlanAnswer(PlanAnswerInput{
 		Family:           familyOutcome,
 		Interpretation:   interpretation,
 		Budget:           e.effectiveResponseBudget(request),
 		MaxCohortMembers: request.Options.MaxCohortMembers,
+		Requirements:     derivedRequirements,
 	})
 	// The derived requirement rows belong to the PLAN VARIABLE, not to a copy
 	// of it.
@@ -1504,7 +1513,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// It is set once, here, because the rows are a constant of the turn: a
 	// pure function of the frame and the registry's declarations, fixed before
 	// any narrowing runs.
-	plan.Requirements = PlanRequirementsFromDerived(deriveTurnRequirements(familyOutcome.Frame, e.requirements))
+	plan.Requirements = PlanRequirementsFromDerived(derivedRequirements)
 	// CHAOS-3900 W1 (codex review finding, round 1): a question_stated/
 	// clarification_confirmed window was canonicalized above against the
 	// REQUEST's own current axis (canonicalizeEvidenceWindow only ever
