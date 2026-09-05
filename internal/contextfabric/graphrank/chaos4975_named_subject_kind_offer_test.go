@@ -138,7 +138,7 @@ func TestKindOfferMaterial_NamedSubjectDeclaredKind(t *testing.T) {
 	if diag.DeclaredHintCount != 1 || diag.DeclaredWithheldNotInPoolCount != 0 {
 		t.Fatalf("diag = %+v, want DeclaredHintCount 1 and DeclaredWithheldNotInPoolCount 0", diag)
 	}
-	hasRepository = false
+	hasRepository := false
 	for _, opt := range material.KindOptions {
 		if opt.Kind == contractsv1.ContextFabricSubjectRepository {
 			hasRepository = true
