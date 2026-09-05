@@ -223,7 +223,35 @@ func currencyCohort() *Cohort {
 			currencyRankedMember(countCurrencyGoneB, countCurrencyKeptB),
 			currencyRankedDriverMember(countCurrencyGoneC, countCurrencyKeptC),
 		},
+		// AN EXCLUSION, because `reuseSubjectsToRecheck` collects exclusion
+		// subjects too (`answer_reuse.go:900`) and a fixture without one cannot
+		// see that arm being skipped -- a stored answer naming an excluded
+		// subject this principal can no longer resolve would then be served
+		// without the subject ever being rechecked.
+		Exclusions: []CohortExclusion{{
+			Subject: currencyExcludedSubject(),
+			Reason:  "outside the requested window",
+		}},
 	}
+}
+
+// currencyExcludedSubject is the cohort's excluded subject. It is a SUBJECT the
+// recheck must re-authorize even though it is not a member.
+func currencyExcludedSubject() SubjectRef {
+	return SubjectRef{Kind: SubjectTeam, CanonicalID: "team:CURRENCY_X", Label: "Currency X"}
+}
+
+// currencyRecheckedSubjects is every subject the reuse recheck must ask about:
+// each member plus each exclusion. The refusal test denies each in turn.
+func currencyRecheckedSubjects(cohort *Cohort) []SubjectRef {
+	subjects := make([]SubjectRef, 0, len(cohort.Members)+len(cohort.Exclusions))
+	for _, member := range cohort.Members {
+		subjects = append(subjects, member.Subject)
+	}
+	for _, exclusion := range cohort.Exclusions {
+		subjects = append(subjects, exclusion.Subject)
+	}
+	return subjects
 }
 
 // assertServedMemberRefsAreExactlyTheKeptSet is the EXACT-equality assertion
@@ -282,8 +310,8 @@ func currencyReuseEngine(t *testing.T, stored InvestigationResult, telemetry *re
 	}
 	authorize(reuseDegradeSubject())
 	if stored.Cohort != nil {
-		for _, member := range stored.Cohort.Members {
-			authorize(member.Subject)
+		for _, subject := range currencyRecheckedSubjects(stored.Cohort) {
+			authorize(subject)
 		}
 	}
 	return mustReuseTestEngine(t, EngineDependencies{
@@ -373,15 +401,18 @@ func assertMemberIdentityPreserved(t *testing.T, where string, want, got CohortM
 			}
 		}
 	}
+	// CONTENTS, not lengths. A length-only comparison cannot see a changed
+	// driver value or score, and the `want` side must be a DEEP copy or it
+	// aliases the very storage production mutated.
 	if !currencyFloatPtrEqual(got.Score, want.Score) ||
-		len(got.RankingBasis) != len(want.RankingBasis) ||
-		len(got.Drivers) != len(want.Drivers) ||
+		!currencyStringsEqual(got.RankingBasis, want.RankingBasis) ||
+		!currencyDriversEqual(got.Drivers, want.Drivers) ||
 		!currencyStringsEqual(got.MissingSignals, want.MissingSignals) {
-		t.Errorf("%s: served member ranking detail = {score:%v basis:%v drivers:%d missing:%v}, "+
-			"want {score:%v basis:%v drivers:%d missing:%v} -- these are contract fields a reader "+
+		t.Errorf("%s: served member ranking detail = {score:%v basis:%v drivers:%+v missing:%v}, "+
+			"want {score:%v basis:%v drivers:%+v missing:%v} -- these are contract fields a reader "+
 			"acts on, and the degrade may change none of them",
-			where, got.Score, got.RankingBasis, len(got.Drivers), got.MissingSignals,
-			want.Score, want.RankingBasis, len(want.Drivers), want.MissingSignals)
+			where, got.Score, got.RankingBasis, got.Drivers, got.MissingSignals,
+			want.Score, want.RankingBasis, want.Drivers, want.MissingSignals)
 	}
 	if got.RankingComputed != want.RankingComputed ||
 		got.AttentionRank != want.AttentionRank ||
@@ -392,6 +423,44 @@ func assertMemberIdentityPreserved(t *testing.T, where string, want, got CohortM
 			where, got.RankingComputed, got.AttentionRank, got.DataCompleteness, got.Outcome,
 			want.RankingComputed, want.AttentionRank, want.DataCompleteness, want.Outcome)
 	}
+}
+
+// currencyDeepCopyMembers is what `append([]CohortMember(nil), ...)` is NOT.
+//
+// A plain append copies the STRUCTS but not what their slice fields point at,
+// so `want` and `got` share one `Drivers` backing array: production mutating
+// `member.Drivers[0]` changes BOTH sides and the comparison cannot see it.
+// Confirmed by execution -- a mutant setting `Drivers[0].Value` and `Score`
+// survived the shallow version.
+func currencyDeepCopyMembers(members []CohortMember) []CohortMember {
+	out := make([]CohortMember, 0, len(members))
+	for _, member := range members {
+		member.EvidenceRefIDs = append([]string(nil), member.EvidenceRefIDs...)
+		member.InclusionReasons = append([]string(nil), member.InclusionReasons...)
+		member.RankingBasis = append([]string(nil), member.RankingBasis...)
+		member.MissingSignals = append([]string(nil), member.MissingSignals...)
+		member.Drivers = append([]contractsv1.ContextFabricCohortMemberDriver(nil), member.Drivers...)
+		if member.Score != nil {
+			score := *member.Score
+			member.Score = &score
+		}
+		out = append(out, member)
+	}
+	return out
+}
+
+func currencyDriversEqual(a, b []contractsv1.ContextFabricCohortMemberDriver) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Signal != b[i].Signal || a[i].Weight != b[i].Weight ||
+			a[i].Value != b[i].Value || a[i].WeightContributed != b[i].WeightContributed ||
+			a[i].Window != b[i].Window {
+			return false
+		}
+	}
+	return true
 }
 
 func currencyStringsEqual(a, b []string) bool {
@@ -539,7 +608,7 @@ func TestTheReuseDegradeNeverDropsACohortMember(t *testing.T) {
 	stored.Completeness.Outcomes = append(stored.Completeness.Outcomes, currencyCountRows(len(stored.Cohort.Members))...)
 	stored.Completeness = ComputeAnswerCompleteness(stored)
 
-	wantMembers := append([]CohortMember(nil), stored.Cohort.Members...)
+	wantMembers := currencyDeepCopyMembers(stored.Cohort.Members)
 
 	// PRE-STATE for the cohort-arm controls: every member carries at least the
 	// reference that must disappear, and one carries a reference that must
@@ -619,6 +688,28 @@ func TestTheReuseDegradeNeverDropsACohortMember(t *testing.T) {
 			"member-drop branch", degraded.Cohort.Complete, degraded.Cohort.Truncated)
 	}
 
+	// THE REUSE-STAGE NARROWING ROW'S OWN NUMBERS. Nothing else in the suite
+	// pins them (checked), so an overstated `Declared` on that row -- a
+	// narrowing claiming to have removed more than it did -- was invisible to
+	// every test here while remaining internally consistent enough for the
+	// validator to accept it.
+	var reuseRows int
+	for _, row := range degraded.Completeness.Outcomes {
+		if row.Stage != contractsv1.ContextFabricOutcomeStageReuse {
+			continue
+		}
+		reuseRows++
+		if got, want := row.Declared-row.Served, counts.Refs(); got != want {
+			t.Errorf("the reuse-stage narrowing row claims %d references were removed (declared %d, "+
+				"served %d) while the degrade removed %d -- the row a reader consults for the size of "+
+				"the narrowing does not describe the narrowing that happened",
+				got, row.Declared, row.Served, want)
+		}
+	}
+	if reuseRows != 1 {
+		t.Fatalf("reuse-stage outcome rows = %d, want exactly 1", reuseRows)
+	}
+
 	// And therefore the served count still describes the members served.
 	rows := countOutcomeRows(degraded, contractsv1.ContextFabricOutcomeStageAssembledResult)
 	if len(rows) != 1 {
@@ -644,7 +735,7 @@ func TestAServedReusedAnswersCountDescribesTheMembersItServes(t *testing.T) {
 	stored.Cohort = currencyCohort()
 	stored.Completeness.Outcomes = append(stored.Completeness.Outcomes, currencyCountRows(len(stored.Cohort.Members))...)
 	stored.Completeness = ComputeAnswerCompleteness(stored)
-	wantMembers := append([]CohortMember(nil), stored.Cohort.Members...)
+	wantMembers := currencyDeepCopyMembers(stored.Cohort.Members)
 
 	// A missing top-level citation would REFUSE, which is a different test --
 	// the refs this drops are all auxiliary, so this degrades.
@@ -742,19 +833,23 @@ func TestAReusedAnswerWithAnUnauthorizedCohortMemberIsRefused(t *testing.T) {
 	stored.Completeness.Outcomes = append(stored.Completeness.Outcomes, currencyCountRows(len(stored.Cohort.Members))...)
 	stored.Completeness = ComputeAnswerCompleteness(stored)
 
-	// EVERY member is denied in turn, one subtest each. Round 3: denying a
-	// single member cannot see a production loop that skips a DIFFERENT one --
-	// `range candidate.Cohort.Members[1:]` leaves member A unchecked while the
-	// denied member B is still checked, so a one-member test still refuses and
-	// the mutant lives. Denying each in turn is what makes every member's
-	// participation in the recheck load-bearing.
-	if len(stored.Cohort.Members) < 3 {
-		t.Fatalf("fixture carries %d cohort members; this test needs every member denied in turn and is "+
-			"only meaningful over more than one", len(stored.Cohort.Members))
+	// EVERY RECHECKED SUBJECT is denied in turn, one subtest each -- members
+	// AND exclusions, because `reuseSubjectsToRecheck` collects both.
+	//
+	// Denying only ONE subject cannot see a production loop that skips a
+	// DIFFERENT one: `range candidate.Cohort.Members[1:]` leaves member A
+	// unchecked while the denied member B is still checked, and dropping the
+	// exclusions loop entirely is invisible to a fixture with no exclusions.
+	// Both survived until this was table-driven over the whole recheck set.
+	rechecked := currencyRecheckedSubjects(stored.Cohort)
+	if len(stored.Cohort.Members) < 3 || len(stored.Cohort.Exclusions) < 1 {
+		t.Fatalf("fixture carries %d members and %d exclusions; this test needs every RECHECKED subject "+
+			"denied in turn, and the exclusion arm is invisible without at least one exclusion",
+			len(stored.Cohort.Members), len(stored.Cohort.Exclusions))
 	}
 
-	for _, member := range stored.Cohort.Members {
-		denied := member.Subject
+	for _, subject := range rechecked {
+		denied := subject
 		t.Run(denied.CanonicalID, func(t *testing.T) {
 			t.Parallel()
 			// A FRESH stored result per subtest. The parallel subtests must not
@@ -771,9 +866,9 @@ func TestAReusedAnswerWithAnUnauthorizedCohortMemberIsRefused(t *testing.T) {
 
 			result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
 			if err == nil && result.Reused {
-				t.Fatalf("a stored answer whose cohort member %s no longer resolves for this principal was "+
+				t.Fatalf("a stored answer whose cohort subject %s no longer resolves for this principal was "+
 					"SERVED from the store; the recheck must refuse rather than serve a subject it could "+
-					"not re-authorize", denied.CanonicalID)
+					"not re-authorize -- members AND exclusions are both in the recheck set", denied.CanonicalID)
 			}
 			if got := lastReuseOutcome(t, telemetry); got != AnswerReuseMissAuthorization {
 				t.Fatalf("reuse outcome = %q, want %q -- the miss must be attributed to authorization, or "+
