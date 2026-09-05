@@ -259,3 +259,212 @@ func TestDiscoverContextEmitsCohortKindBasisWhenNoCohortIsBuilt(t *testing.T) {
 			line.poolTruncation, CohortPoolTruncationTruncated)
 	}
 }
+
+// hopWalkTwoHopAdapter builds a walk whose FIRST hop admits exactly
+// `firstHopEdges` edges and whose neighbours each carry one further edge, so
+// the second hop is reachable and non-empty.
+//
+// The two-hop shape is what makes the exact-budget boundary reachable at all,
+// and it is also the fixture the package was missing entirely: every prior
+// hop-walk fixture returned edges only for the origin, so second-hop traversal
+// was unpinned (r2 finding 1). One fixture, two properties.
+func hopWalkTwoHopAdapter(t *testing.T, firstHopEdges int, telemetry GraphTelemetry) *Adapter {
+	t.Helper()
+	first := make([]string, firstHopEdges)
+	for i := range first {
+		first[i] = fmt.Sprintf("team_%03d", i)
+	}
+	fake := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"), strings.Contains(cypher, "$kinds"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			id, _ := params["id"].(string)
+			if id == "p1" {
+				rows := make([]row, 0, firstHopEdges)
+				for i, tid := range first {
+					rows = append(rows, row{
+						"r": &edge{Properties: map[string]interface{}{
+							propRelationType: "BLOCKS", propRelationshipID: fmt.Sprintf("rel_a_%03d", i),
+						}},
+						"srcKind": "project", "srcId": "p1", "dstKind": "team", "dstId": tid,
+					})
+				}
+				return rows, nil
+			}
+			// Every first-hop team has ONE second-hop edge to a further team.
+			// Reached only if the walk actually visits the next frontier.
+			if strings.HasPrefix(id, "team_") && !strings.HasPrefix(id, "team_deep_") {
+				return []row{{
+					"r": &edge{Properties: map[string]interface{}{
+						propRelationType: "BLOCKS", propRelationshipID: "rel_b_" + id,
+					}},
+					"srcKind": "team", "srcId": id, "dstKind": "team", "dstId": "team_deep_" + id,
+				}}, nil
+			}
+			return nil, nil
+		default:
+			if params["kind"] == "project" {
+				return []row{fakeSubjectNodeRow("project", "p1", "Origin")}, nil
+			}
+			if params["kind"] == "team" {
+				id, _ := params["id"].(string)
+				return []row{fakeSubjectNodeRow("team", id, id)}, nil
+			}
+			return nil, nil
+		}
+	}}
+	if telemetry == nil {
+		return newFakeAdapter(t, fake)
+	}
+	return newFakeAdapterWithTelemetry(t, fake, telemetry)
+}
+
+// TestDiscoverContextHopWalkAtExactlyItsBudgetDisclosesTheUnvisitedFrontier is
+// r2 finding 1 (P1), and it is a boundary INSIDE the fix that closed r1's
+// finding 1.
+//
+// The truncation flag was set at the walk's INNER break, which fires only when
+// a hop still has candidates after the budget is spent. The OUTER loop has its
+// own budget exit, and a hop that admits EXACTLY collectLimit edges and
+// exhausts its candidate list reaches that exit with the inner break never
+// taken: an unvisited frontier, and a cohort that claimed completeness over
+// subjects the walk stopped short of.
+//
+// Exactly at the budget is the whole point of the fixture; one more or one
+// fewer takes a different path through the loop and proves nothing about this
+// boundary.
+func TestDiscoverContextHopWalkAtExactlyItsBudgetDisclosesTheUnvisitedFrontier(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	adapter := hopWalkTwoHopAdapter(t, poolTruncationFulltextCollectLimit, telemetry)
+	// The member cap is far above the budget, so the cohort's own cap can
+	// never be what discloses this.
+	request := hopWalkTruncationRequest(poolTruncationFulltextCollectLimit + 100)
+
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil {
+		t.Fatal("Cohort = nil -- the fixture never reached cohort assembly")
+	}
+	if len(result.Cohort.Members) >= request.Request.Options.MaxCohortMembers {
+		t.Fatalf("members (%d) reached MaxCohortMembers (%d): the cap would carry this test",
+			len(result.Cohort.Members), request.Request.Options.MaxCohortMembers)
+	}
+	if !result.Cohort.Truncated {
+		t.Error("Cohort.Truncated = false after the walk spent its edge budget with a frontier it never visited -- " +
+			"the inner break never fired because the hop's candidates ran out at exactly the budget, and the outer " +
+			"loop exited on the same budget without recording anything")
+	}
+	if result.Cohort.Complete {
+		t.Error("Cohort.Complete = true over a pool the walk stopped short of")
+	}
+	if len(telemetry.cohortKindBases) != 1 {
+		t.Fatalf("cohort kind basis lines = %d, want 1", len(telemetry.cohortKindBases))
+	}
+	if got := formatCohortPoolTruncationArms(telemetry.cohortKindBases[0].poolTruncationArms); got != string(CohortPoolTruncationArmHopWalk) {
+		t.Errorf("cut arms = %q, want %q", got, CohortPoolTruncationArmHopWalk)
+	}
+}
+
+// TestDiscoverContextHopWalkVisitsTheSecondHop is r2 finding 2 (P2), pinning a
+// PRE-EXISTING line this branch did not write: `next = append(next, neighbor)`.
+//
+// Deleting it kills second-hop traversal outright and every hop-walk fixture in
+// the package stayed green, because they all returned edges for the origin
+// alone. Pinned here rather than forwarded, because the two-hop fixture the
+// boundary test above needs is exactly the one this was missing.
+func TestDiscoverContextHopWalkVisitsTheSecondHop(t *testing.T) {
+	t.Parallel()
+	// A budget far above the two hops' combined edge count, so nothing is
+	// clipped and the only question is whether the second hop is walked.
+	adapter := hopWalkTwoHopAdapter(t, 3, nil)
+	request := hopWalkTruncationRequest(100)
+	request.Request.Options.MaxRelationshipPaths = 100
+
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil {
+		t.Fatal("Cohort = nil")
+	}
+	var deep int
+	for _, m := range result.Cohort.Members {
+		if strings.HasPrefix(m.Subject.CanonicalID, "team_deep_") {
+			deep++
+		}
+	}
+	if deep == 0 {
+		t.Error("no second-hop member reached the cohort -- the walk never advanced past its first frontier, " +
+			"and every other hop-walk fixture in this package would still pass")
+	}
+	if !result.Cohort.Complete || result.Cohort.Truncated {
+		t.Errorf("Complete=%v Truncated=%v: nothing was clipped on this fixture, so a two-hop walk that completes must claim completeness -- "+
+			"this is the complement that stops the boundary fix above from simply always disclosing",
+			result.Cohort.Complete, result.Cohort.Truncated)
+	}
+}
+
+// TestDiscoverContextCensusKeepsBoundedDiscoveryMembers is r2 finding 2 (P2),
+// pinning a PRE-EXISTING line this branch did not write:
+// `cohortNodes = append(cohortNodes, resolvedNodes...)`.
+//
+// Deleting it drops every member found by the bounded arms whenever the census
+// arm runs, and the package stayed green because the existing census fixtures
+// either have no bounded match or get the expected member from the census
+// itself. The reviewer is careful about the severity and so is this test: the
+// answer stays INCOMPLETE either way, so this is retrieval loss, not false
+// completeness — the assertion is about the member surviving the union, not
+// about a flag.
+func TestDiscoverContextCensusKeepsBoundedDiscoveryMembers(t *testing.T) {
+	t.Parallel()
+	fake := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, _ map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			// A lexical-only member: it exists in NO census row below, so it
+			// can only reach the cohort through the bounded-arm union.
+			r := fulltextRow("team", "team_lexical_only", "Lexical Only", "teams struggling", nil)
+			r["node"].(*node).Properties["authorization_repositories"] = "*"
+			return []row{r}, nil
+		case strings.Contains(cypher, "$kinds"):
+			r := fakeSubjectNodeRow("team", "team_from_census", "From Census")
+			r["n"].(*node).Properties["authorization_repositories"] = "*"
+			return []row{r}, nil
+		default:
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	// discovered_kind with NO committed subject: the census IS admitted here,
+	// which is the condition under which the union is the only thing carrying
+	// the lexical member.
+	request := cohortDiscoveryRequest(contextfabric.ShapeDiscoveredCohort)
+	request.Request.Options.MaxCohortMembers = 10
+
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil {
+		t.Fatal("Cohort = nil")
+	}
+	var lexical, census bool
+	for _, m := range result.Cohort.Members {
+		switch m.Subject.CanonicalID {
+		case "team_lexical_only":
+			lexical = true
+		case "team_from_census":
+			census = true
+		}
+	}
+	if !census {
+		t.Fatal("the census member is missing -- the fixture is not exercising the census arm and proves nothing about the union")
+	}
+	if !lexical {
+		t.Error("the bounded-arm member did not survive the census merge -- a subject the lexical arm found is absent from the cohort " +
+			"while the census-sourced one is present, which is exactly what deleting the union produces")
+	}
+}

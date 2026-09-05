@@ -50,9 +50,19 @@ const (
 	// than the collect budget and the remainder were dropped.
 	CohortPoolTruncationArmFulltext CohortPoolTruncationArm = "fulltext"
 	// CohortPoolTruncationArmHopWalk: the committed-origin walk spent its
-	// edge budget with candidate edges still unexamined. Their endpoints are
-	// lost to the cohort, because a neighbour is only ever discovered through
-	// an admitted edge -- see hopWalk's own doc comment.
+	// edge budget with candidate edges or an unvisited frontier still
+	// outstanding. Their endpoints are lost to the cohort, because a
+	// neighbour is only ever discovered through an admitted edge -- see
+	// hopWalk's own doc comment.
+	//
+	// A SPENT BUDGET IS TRUNCATION; A DEPTH BOUND IS NOT. The walk's maxHops
+	// limit DEFINES the pool -- what lies beyond two hops is out of scope,
+	// not missing -- while a spent collect budget with an unvisited frontier
+	// CLIPS a pool that was in scope. When both bind at once this arm
+	// discloses, because the budget's loss is real either way. That
+	// distinction is the semantic the count step leans on: it is what makes
+	// "not truncated" mean "nothing in scope was dropped" rather than
+	// "nothing at all exists beyond what you see".
 	CohortPoolTruncationArmHopWalk CohortPoolTruncationArm = "hop_walk"
 	// CohortPoolTruncationArmExactNameCensus: the exhaustive org-wide kind
 	// census hit its own row limit, so the census itself is not exhaustive
@@ -146,9 +156,19 @@ func cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncate
 // order is part of this key's contract, so it is enforced here, at the one
 // place the string is produced, rather than assumed of every producer.
 //
-// Normalizing by ITERATING THE VOCABULARY also drops anything not declared and
-// collapses a repeated arm, so a malformed caller cannot put an unpublished
-// value on the line.
+// Normalizing by ITERATING THE VOCABULARY collapses a repeated arm and keeps
+// an unpublished value off the line as a value. It does NOT drop it silently:
+// an undeclared arm renders as the single token
+// `cohortPoolTruncationUnknownArm` appended after the declared ones.
+//
+// The first version dropped it. That was wrong for the reason this whole
+// change exists: a signal that disappears is indistinguishable from a signal
+// that was never produced, so a caller emitting a value this vocabulary does
+// not know would have looked exactly like a caller emitting nothing. The
+// marker is deliberately NOT a vocabulary member -- adding one would make the
+// malformed case a legal classification. It is a fixed token that says "a
+// value arrived here that this vocabulary cannot name", which is a different
+// statement from any arm.
 //
 // The empty string is deliberate. A placeholder like "none" would collide with
 // the DECISION vocabulary's own `none` on a different key, and an operator
@@ -157,15 +177,35 @@ func formatCohortPoolTruncationArms(arms []CohortPoolTruncationArm) string {
 	if len(arms) == 0 {
 		return ""
 	}
+	declared := make(map[CohortPoolTruncationArm]struct{}, len(CohortPoolTruncationArmVocabulary()))
+	for _, arm := range CohortPoolTruncationArmVocabulary() {
+		declared[arm] = struct{}{}
+	}
 	present := make(map[CohortPoolTruncationArm]struct{}, len(arms))
+	unknown := false
 	for _, arm := range arms {
+		if _, ok := declared[arm]; !ok {
+			unknown = true
+			continue
+		}
 		present[arm] = struct{}{}
 	}
-	parts := make([]string, 0, len(arms))
+	parts := make([]string, 0, len(arms)+1)
 	for _, arm := range CohortPoolTruncationArmVocabulary() {
 		if _, cut := present[arm]; cut {
 			parts = append(parts, string(arm))
 		}
 	}
+	if unknown {
+		parts = append(parts, cohortPoolTruncationUnknownArm)
+	}
 	return strings.Join(parts, ",")
 }
+
+// cohortPoolTruncationUnknownArm is what an undeclared arm renders as: one
+// fixed, greppable token, never the value itself and never silence.
+//
+// It is NOT a member of CohortPoolTruncationArmVocabulary and must never
+// become one -- a marker that says "this vocabulary could not name what it was
+// handed" stops being that the moment it is itself nameable.
+const cohortPoolTruncationUnknownArm = "unknown_arm"

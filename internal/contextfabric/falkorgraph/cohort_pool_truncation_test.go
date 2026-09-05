@@ -449,3 +449,40 @@ func TestFormatCohortPoolTruncationArmsNormalizes(t *testing.T) {
 		t.Error("nil arms rendered non-empty")
 	}
 }
+
+// TestFormatCohortPoolTruncationArmsMarksAnUndeclaredArm is r2 finding 5.
+//
+// The renderer used to DROP an undeclared arm. That is the shape this whole
+// change exists to remove: a signal that disappears is indistinguishable from
+// a signal that was never produced, so a caller emitting a value the
+// vocabulary cannot name looked exactly like a caller emitting nothing.
+//
+// It now renders one fixed token instead. The token is deliberately NOT a
+// vocabulary member — asserted below, because making the malformed case a
+// legal classification would defeat the point.
+func TestFormatCohortPoolTruncationArmsMarksAnUndeclaredArm(t *testing.T) {
+	t.Parallel()
+	got := formatCohortPoolTruncationArms([]CohortPoolTruncationArm{
+		CohortPoolTruncationArmFulltext, CohortPoolTruncationArm("not_a_declared_arm"),
+	})
+	if !strings.Contains(got, cohortPoolTruncationUnknownArm) {
+		t.Errorf("rendered %q, want it to carry %q -- an undeclared value must be visible, not silently dropped",
+			got, cohortPoolTruncationUnknownArm)
+	}
+	if strings.Contains(got, "not_a_declared_arm") {
+		t.Errorf("rendered %q -- the undeclared VALUE itself must never reach the line, only the marker", got)
+	}
+	if !strings.Contains(got, string(CohortPoolTruncationArmFulltext)) {
+		t.Errorf("rendered %q -- a declared arm alongside an undeclared one must still be reported", got)
+	}
+	for _, arm := range CohortPoolTruncationArmVocabulary() {
+		if string(arm) == cohortPoolTruncationUnknownArm {
+			t.Fatalf("the unknown-arm marker %q is a vocabulary member -- it must not be, or the malformed case becomes a legal classification", cohortPoolTruncationUnknownArm)
+		}
+	}
+	// The marker must never appear when nothing undeclared was handed over,
+	// or it stops meaning anything.
+	if clean := formatCohortPoolTruncationArms(CohortPoolTruncationArmVocabulary()); strings.Contains(clean, cohortPoolTruncationUnknownArm) {
+		t.Errorf("rendered %q for an all-declared input -- the marker fires on nothing", clean)
+	}
+}

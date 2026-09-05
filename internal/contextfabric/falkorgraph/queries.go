@@ -1164,6 +1164,24 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 	// (reproducibility once the caller's cap makes order outcome-affecting)
 	// comes first, and a richer order can replace this key later without
 	// touching any consumer's contract.
+	// THE SECOND EXIT (CHAOS-5168 r2 finding 1). The flag above is set at the
+	// INNER break, which fires only when a hop still has candidates after the
+	// budget is spent. The OUTER loop has its own budget exit
+	// (`len(edges) < collectLimit`), and a hop that admits EXACTLY
+	// collectLimit edges and exhausts its candidate list reaches it with the
+	// inner break never taken -- leaving an unvisited frontier and, before
+	// this, truncated=false. A cohort built from that pool then claimed
+	// completeness over subjects the walk had stopped short of.
+	//
+	// BUDGET, NOT DEPTH. A spent collect budget with an unvisited frontier
+	// CLIPS the pool and is truncation; the maxHops bound DEFINES the pool
+	// (this walk is two hops by construction, and what lies beyond is not
+	// missing, it is out of scope) and is not. When both bind at once this
+	// discloses, because the budget's loss is real whether or not the depth
+	// bound would also have stopped the walk.
+	if collectLimit > 0 && len(edges) >= collectLimit && len(frontier) > 0 {
+		truncated = true
+	}
 	sortCandidateNodesBySubjectKey(nodes)
 	return nodes, edges, failedLookups, filterCounts, truncated, nil
 }
