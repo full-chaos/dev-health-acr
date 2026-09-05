@@ -550,33 +550,6 @@ func quantifierForComputed(obligation AnswerObligation) CompletionQuantifier {
 	return CompletionQuantifierAll
 }
 
-// quantifierForCardinality is law L3's rule, derived from the MEASURED
-// cardinality of the generated seed.
-//
-// §13.15.2 records why the frozen constant could not stand: `state =
-// corroborated` "cannot be met by a one-kind seed anywhere", and its escape
-// clause ("or the registry declares only one kind") silently degraded it to
-// at_least_one wherever it bit -- a bar asserted and then quietly lowered.
-// Deriving it means the plan demands corroboration exactly where
-// corroboration is AVAILABLE and says at_least_one where it is not, which
-// is a claim a reader can check against the seed.
-//
-// SUPERSEDED, and kept only so the supersession is legible: the design of
-// record's quantifier amendment reverses this rule. Deriving the standard from
-// how many producers the registry HAPPENS to declare means REMOVING a producer
-// LOWERS the bar instead of raising a gap, and a duplicate adapter manufactures
-// corroboration that never existed -- the completion standard becomes a
-// function of the deployment rather than of the question. readQuantifiers below
-// is the replacement. Nothing in production calls this any more; it is retained
-// for the test that records what the two rules say about each read obligation,
-// and is deleted when that record stops being interesting.
-func quantifierForCardinality(cardinality int) CompletionQuantifier {
-	if cardinality >= 2 {
-		return CompletionQuantifierCorroborated
-	}
-	return CompletionQuantifierAtLeastOne
-}
-
 // readQuantifiers is the completion standard of each READ obligation.
 //
 // KEYED ON THE OBLIGATION AND NOTHING ELSE. Not on the registry's cardinality

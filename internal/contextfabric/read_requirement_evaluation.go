@@ -80,9 +80,20 @@ type readEvidence struct {
 	// shape: it invites a later reader to add it back into a loss test.
 	Truncated int
 	Failed    int
-	// Cause is the coverage code the worst observation implies, by the
-	// precedence table below. Empty when nothing was observed.
+	// Cause is the coverage code for the worst observation: CARRIED from the
+	// coverage layer's own detail where there is one, and only DEFAULTED from
+	// the source state where there is not. Empty when nothing was observed.
 	Cause contractsv1.ContextFabricCoverageDetailCode
+	// CauseCarried says which of those two it was, and it is what the row's
+	// `cause_observed` is built from. Carried means the layer that owns the
+	// concept reported it; defaulted means this file chose it.
+	CauseCarried bool
+	// UndeclaredCause is set when a detail carried a code outside the closed
+	// vocabulary. It is not a state this service can currently reach -- the
+	// fact registry mints declared codes only -- and it exists so that if it
+	// ever becomes reachable the requirement emits NO row rather than a row
+	// naming a cause nobody declared.
+	UndeclaredCause bool
 }
 
 // canonicalFactSourcePrefix is how the fact registry names a canonical-fact
@@ -117,13 +128,44 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 	}
 
 	evidence := readEvidence{}
-	// The planner's own narrowing record, keyed by fact kind. Only the flag is
-	// taken; see readEvidence.Narrowed for why nothing else is.
+	// THE COVERAGE LAYER'S OWN RECORD, keyed by fact kind: its narrowing flag
+	// and its AUTHORITATIVE CAUSE CODE.
+	//
+	// The code is CARRIED, never re-derived from a source state. The design of
+	// record says so in as many words -- `CauseCoverage` is "carried from the
+	// derivation's own reason, never re-classified" -- and the seed path has
+	// always obeyed it (`unavailableRequirementCause` carries the derivation's
+	// own token). This path did not, and re-deriving from the state published
+	// the wrong MECHANISM: a scope-expansion failure, where no provider ran at
+	// all, was reported as `fact_provider_reported`.
+	//
+	// GATED BY THE DECLARED VOCABULARY, and the gate is derived from the
+	// vocabulary rather than hand-listed, so it cannot fall behind it. An
+	// undeclared code is NOT remapped onto a declared one -- a remap is how a
+	// code nobody declared becomes a code somebody did -- it is refused, and
+	// the requirement emits no row at all (see readRequirementOutcomeRow). A
+	// reach probe fails if that branch ever executes.
+	declaredCodes := map[contractsv1.ContextFabricCoverageDetailCode]bool{}
+	for _, code := range contractsv1.ContextFabricCoverageDetailCodeVocabulary() {
+		declaredCodes[code] = true
+	}
 	narrowedKinds := map[FactKind]bool{}
+	carriedCause := map[FactKind]contractsv1.ContextFabricCoverageDetailCode{}
 	for _, detail := range coverage.Details {
-		if detail.Narrowed && detail.FactKind != "" {
+		if detail.FactKind == "" {
+			continue
+		}
+		if detail.Narrowed {
 			narrowedKinds[detail.FactKind] = true
 		}
+		if detail.Code == "" {
+			continue
+		}
+		if !declaredCodes[detail.Code] {
+			evidence.UndeclaredCause = true
+			continue
+		}
+		carriedCause[detail.FactKind] = detail.Code
 	}
 
 	worst := 0
@@ -175,7 +217,39 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 		}
 		if severity := sourceStateSeverity(state); severity > worst {
 			worst = severity
-			evidence.Cause = readCoverageCauseFor(state)
+			if code, carried := carriedCause[kind]; carried {
+				evidence.Cause = code
+				evidence.CauseCarried = true
+			} else {
+				// NO DETAIL FOR THIS KIND. `Coverage.Details` is
+				// optional-first, so a document written before it existed
+				// carries none. The state mapping stands in, and the row
+				// says so: a defaulted cause reports CauseObserved false,
+				// which is exactly what that flag is for.
+				evidence.Cause = readCoverageCauseFor(state)
+				evidence.CauseCarried = false
+			}
+		}
+	}
+	// A NARROWED KIND RANKS AT ZERO SEVERITY, because its STATE is
+	// `available` -- the narrowing lives in the detail, not the state. So the
+	// worst-observation loop above never reaches for its cause, and without
+	// this the planner's own code would be dropped and the shortfall arm
+	// would default `fact_narrowed` with CauseObserved FALSE, understating a
+	// cause that was genuinely reported.
+	//
+	// Taken only when nothing worse already named a cause: a truncation or a
+	// failure outranks a narrowing, and the row names one mechanism.
+	if evidence.Cause == "" && evidence.Narrowed > 0 {
+		for _, kind := range requirement.FactKinds {
+			if !narrowedKinds[kind] {
+				continue
+			}
+			if code, carried := carriedCause[kind]; carried {
+				evidence.Cause = code
+				evidence.CauseCarried = true
+				break
+			}
 		}
 	}
 	return evidence
@@ -377,6 +451,24 @@ func readRequirementOutcomeRow(
 		return RequirementOutcomeRow{}, false
 	}
 
+	// AN UNDECLARED CAUSE CODE EMITS NO ROW.
+	//
+	// A code outside the closed vocabulary must not reach the wire, and it
+	// must not be REMAPPED onto a declared one either -- a remap is precisely
+	// how a code nobody declared becomes a code somebody did. So the
+	// requirement keeps its planning seed, which the completeness derivation
+	// reads as `partial`: the state stays honest and only the cause is lost,
+	// the same trade the not-read arm above makes.
+	//
+	// UNREACHABLE TODAY. The fact registry mints declared codes only. This
+	// exists so that if that ever stops being true, the failure is a missing
+	// disclosure rather than an invented one -- and
+	// TestAnUndeclaredCauseCodeEmitsNoRow is the reach probe that fails if the
+	// branch starts executing.
+	if evidence.UndeclaredCause {
+		return RequirementOutcomeRow{}, false
+	}
+
 	declared := evidence.Observed
 	if threshold > declared {
 		declared = threshold
@@ -406,43 +498,42 @@ func readRequirementOutcomeRow(
 		return row, true
 	}
 
-	// A PLANNER NARROWING IS DECIDED BEFORE THE SERVED==0 ARM BELOW, because
-	// a narrowed read is not an absent one. The kinds all returned data; what
-	// is short is the subject coverage inside them. Routing this through
-	// `unavailable` would tell the reader they got NONE of a cell they got
-	// part of.
-	//
-	// The cause is OBSERVED: the planner recorded the narrowing and the
-	// document carries the detail. That is the one thing `cause_observed`
-	// means, and here it is true for the same reason it was false on the
-	// shortfall arm further down -- something reported it.
-	if evidence.Narrowed > 0 && evidence.Truncated == 0 && evidence.Failed == 0 {
-		row.Outcome = contractsv1.ContextFabricRequirementNarrowed
-		row.Impact = contractsv1.ContextFabricAnswerImpactDepth
-		row.CauseCoverage = contractsv1.ContextFabricCoverageDetailFactNarrowed
-		row.CauseObserved = true
-		return contractsv1.ContextFabricWithReductionRefinement(row), true
-	}
-
 	row.CauseCoverage = evidence.Cause
-	// OBSERVED means a provider REPORTED this cause for these kinds -- the
-	// one thing this flag exists to distinguish from a cause chosen here.
-	// It therefore tracks whether the evidence actually produced one, and is
-	// NOT set unconditionally: the shortfall arm below defaults a cause with
-	// nothing observed behind it, and claiming otherwise would put a false
-	// provenance on the only field a reader has for judging the cause.
-	row.CauseObserved = evidence.Cause != ""
-	if evidence.Served == 0 {
-		// Nothing usable came back. Dimension: the reader asked for this
-		// and gets none of it -- not fewer things, and not less detail
-		// about the things that remain.
+	// OBSERVED means the layer that OWNS the concept reported this cause.
+	// It is therefore exactly `CauseCarried`: true when the code came from
+	// the coverage detail, false when this file defaulted it from a source
+	// state or from the shortfall arm below. A defaulted cause reported as an
+	// observed one puts a false provenance on the only field a reader has for
+	// judging the cause.
+	row.CauseObserved = evidence.CauseCarried
+
+	// FACT-BEARING IS THE QUESTION, not "did every source serve".
+	//
+	// `unavailable` means the reader asked for this cell and gets NONE of it.
+	// Three states return data and are therefore not that:
+	//   * a served kind, obviously;
+	//   * a NARROWED kind -- the provider returned data for fewer subjects
+	//     than planned;
+	//   * a TRUNCATED kind -- the fact registry drops over-budget facts and
+	//     marks the source truncated RATHER THAN failing the read, because
+	//     "a partial, explicitly-truncated answer is the honest outcome".
+	//
+	// Truncation used to fall through to `unavailable` here, which told a
+	// reader they got none of a cell they got part of, and degraded an answer
+	// the fact layer had deliberately kept partial rather than failed. That is
+	// the same defect as the prune: this file re-deciding a question another
+	// layer had already settled and documented.
+	factBearing := evidence.Served > 0 || evidence.Narrowed > 0 || evidence.Truncated > 0
+	if !factBearing {
+		// Nothing came back at all. Dimension: not fewer things, and not
+		// less detail about the things that remain -- none of it.
 		row.Outcome = contractsv1.ContextFabricRequirementUnavailable
 		row.Impact = contractsv1.ContextFabricAnswerImpactDimension
 		return row, true
 	}
-	// Served, over a reduced set of sources. Depth rather than scope: the
-	// subjects the answer covers are unchanged, and what stands behind them
-	// is thinner.
+	// Served, over less than the standard asked for. Depth rather than scope:
+	// the subjects the answer covers are unchanged, and what stands behind
+	// them is thinner.
 	row.Outcome = contractsv1.ContextFabricRequirementNarrowed
 	row.Impact = contractsv1.ContextFabricAnswerImpactDepth
 	if row.CauseCoverage == "" {

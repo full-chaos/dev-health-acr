@@ -112,6 +112,20 @@ func readSeed(t *testing.T, published contractsv1.ContextFabricPlanRequirement) 
 // `Narrowed` for the kinds whose subject set the planner cut. A fixture that
 // varied the state instead would be testing a different thing entirely, and
 // would not reproduce the shape that reads `satisfied` today.
+// codedCoverage is factCoverage plus the coverage layer's AUTHORITATIVE cause
+// code for a kind -- the field the row must carry rather than re-derive.
+func codedCoverage(code contractsv1.ContextFabricCoverageDetailCode, kind FactKind, pairs ...any) Coverage {
+	coverage := factCoverage(pairs...)
+	coverage.Details = append(coverage.Details, contractsv1.ContextFabricCoverageDetail{
+		DetailID: "detail_" + string(kind),
+		Source:   canonicalFactSourcePrefix + string(kind),
+		Code:     code,
+		FactKind: kind,
+		Label:    "coded",
+	})
+	return coverage
+}
+
 func narrowedCoverage(narrowed []FactKind, pairs ...any) Coverage {
 	coverage := factCoverage(pairs...)
 	for _, kind := range narrowed {
@@ -234,6 +248,61 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 			wantImpact:   contractsv1.ContextFabricAnswerImpactDimension,
 			wantCause:    contractsv1.ContextFabricCoverageDetailFactUnconfigured,
 			wantObserved: true, wantServed: 0, wantDeclared: 1,
+		},
+		{
+			// THE CAUSE IS CARRIED, NOT RE-DERIVED. A read that FAILED carries
+			// `fact_read_failed` in its detail; deriving from the state would
+			// publish `fact_provider_reported` and name the wrong mechanism.
+			name: "a read failure carries its own code", quantifier: CompletionQuantifierAtLeastOne,
+			coverage: codedCoverage(contractsv1.ContextFabricCoverageDetailFactReadFailed,
+				health, health, SourceUnavailable),
+			wantRow: true, wantOutcome: contractsv1.ContextFabricRequirementUnavailable,
+			wantImpact:   contractsv1.ContextFabricAnswerImpactDimension,
+			wantCause:    contractsv1.ContextFabricCoverageDetailFactReadFailed,
+			wantObserved: true, wantServed: 0, wantDeclared: 1, wantRefinements: 0,
+		},
+		{
+			// THE SHARPEST CASE: a scope expansion failed and NO PROVIDER RAN
+			// AT ALL. Re-deriving from the state claimed a provider reported
+			// something it never reported -- a false statement about which
+			// mechanism fired, on the field a reader uses to decide what to do.
+			name:       "a scope-expansion failure never claims a provider reported it",
+			quantifier: CompletionQuantifierAtLeastOne,
+			coverage: codedCoverage(contractsv1.ContextFabricCoverageDetailFactScopeUnexpanded,
+				health, health, SourceUnavailable),
+			wantRow: true, wantOutcome: contractsv1.ContextFabricRequirementUnavailable,
+			wantImpact:   contractsv1.ContextFabricAnswerImpactDimension,
+			wantCause:    contractsv1.ContextFabricCoverageDetailFactScopeUnexpanded,
+			wantObserved: true, wantServed: 0, wantDeclared: 1, wantRefinements: 0,
+		},
+		{
+			// TRUNCATION IS FACT-BEARING. The fact registry drops over-budget
+			// facts and marks the source truncated RATHER THAN failing the
+			// read, because "a partial, explicitly-truncated answer is the
+			// honest outcome". Publishing `unavailable` told the reader they
+			// got none of a cell they got part of, and degraded an answer the
+			// layer below had deliberately kept partial.
+			name:       "a truncated-only read is narrowed, never unavailable",
+			quantifier: CompletionQuantifierAtLeastOne,
+			coverage: codedCoverage(contractsv1.ContextFabricCoverageDetailFactProviderReported,
+				health, health, SourceTruncated),
+			wantRow: true, wantOutcome: contractsv1.ContextFabricRequirementNarrowed,
+			wantImpact:   contractsv1.ContextFabricAnswerImpactDepth,
+			wantCause:    contractsv1.ContextFabricCoverageDetailFactProviderReported,
+			wantObserved: true, wantServed: 0, wantDeclared: 1, wantRefinements: 1,
+		},
+		{
+			// THE COMPLEMENT of the case above: a state that is genuinely NOT
+			// fact-bearing still reaches `unavailable`. Without it the
+			// truncation case would pass on an evaluator that had simply
+			// stopped emitting `unavailable` at all.
+			name: "a no-data read is still unavailable", quantifier: CompletionQuantifierAtLeastOne,
+			coverage: codedCoverage(contractsv1.ContextFabricCoverageDetailFactProviderReported,
+				health, health, SourceNoData),
+			wantRow: true, wantOutcome: contractsv1.ContextFabricRequirementUnavailable,
+			wantImpact:   contractsv1.ContextFabricAnswerImpactDimension,
+			wantCause:    contractsv1.ContextFabricCoverageDetailFactProviderReported,
+			wantObserved: true, wantServed: 0, wantDeclared: 1, wantRefinements: 0,
 		},
 		{
 			// A PLANNER NARROWING, recorded in Coverage.Details while the
@@ -443,6 +512,55 @@ func TestTheSeedIsNeverTheLastRowForAServedReadRequirement(t *testing.T) {
 		t.Fatalf("%d assembled-result rows for %q, want exactly 1 -- the seed's `satisfied` is the "+
 			"last word on a read requirement, which is the defect this evaluator exists to close",
 			evaluated, requirement.Requirement)
+	}
+}
+
+// TestAnUndeclaredCauseCodeEmitsNoRow is the REACH PROBE for the stop path, and
+// it is written to fail loudly if that path ever becomes reachable in
+// production rather than only in a fixture.
+//
+// A cause code outside the closed vocabulary must not reach the wire, and it
+// must not be REMAPPED onto a declared one either -- a remap is how a code
+// nobody declared becomes a code somebody did. So the requirement emits no row
+// and keeps its planning seed, which derives `partial`: the state stays honest
+// and only the cause is lost.
+//
+// The COMPLEMENT is asserted in the same run. Without it this test would pass
+// on an evaluator that had stopped emitting rows altogether, which is the
+// failure mode a "no row" assertion invites.
+func TestAnUndeclaredCauseCodeEmitsNoRow(t *testing.T) {
+	t.Parallel()
+	requirement := readRequirement(CompletionQuantifierAtLeastOne)
+	health := contractsv1.ContextFabricFactHealth
+
+	// The premise, asserted rather than assumed: this code really is outside
+	// the declared vocabulary. If it were ever added, this fixture would stop
+	// exercising the branch and would silently prove nothing.
+	const undeclared = contractsv1.ContextFabricCoverageDetailCode("fact_invented_by_a_future_producer")
+	for _, declared := range contractsv1.ContextFabricCoverageDetailCodeVocabulary() {
+		if declared == undeclared {
+			t.Fatalf("%q is now a declared member; this fixture no longer reaches the stop path", undeclared)
+		}
+	}
+
+	rows := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{requirement},
+		codedCoverage(undeclared, health, health, SourceUnavailable))
+	if len(rows) != 0 {
+		t.Fatalf("an undeclared cause code produced %d rows: %+v -- it must reach the wire "+
+			"neither as itself nor remapped onto a declared code", len(rows), rows)
+	}
+
+	// COMPLEMENT: the same fixture with a DECLARED code does emit its row.
+	declaredRows := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{requirement},
+		codedCoverage(contractsv1.ContextFabricCoverageDetailFactReadFailed, health, health, SourceUnavailable))
+	if len(declaredRows) != 1 {
+		t.Fatalf("the same fixture with a DECLARED code produced %d rows, want 1 -- the assertion "+
+			"above would pass on an evaluator that had stopped emitting rows at all", len(declaredRows))
+	}
+	if declaredRows[0].CauseCoverage != contractsv1.ContextFabricCoverageDetailFactReadFailed {
+		t.Fatalf("the declared code was not carried: cause = %q", declaredRows[0].CauseCoverage)
 	}
 }
 
