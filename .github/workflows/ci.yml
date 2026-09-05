@@ -310,6 +310,35 @@ jobs:
       - name: Check known Go vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
 
+  # Renders every fenced ```mermaid block under docs/** with mermaid-cli so a
+  # diagram mermaid's own parser rejects fails CI instead of rotting silently
+  # (the standing diagram-update rule in
+  # docs/design/context-fabric-architecture-diagrams.md only covers content
+  # drift, not render-breaking syntax). Go-less and hosted-only on purpose:
+  # mermaid-cli's Puppeteer/Chromium dependency has no published linux-arm64
+  # build for many Chrome-for-Testing releases, so routing this to the
+  # self-hosted arm64 pool risks a false failure from a missing platform
+  # build, not a real diagram defect. scripts/docs/verify-mermaid.sh does the
+  # actual extraction/render/assert-nonzero-count work and takes --root for
+  # scripts/docs/test-verify-mermaid.sh's negative-control fixture; the
+  # mermaid-cli version is pinned once in scripts/docs/mermaid-cli-version.txt
+  # and read by both this job and the script so they cannot drift apart.
+  docs-mermaid:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-node v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - name: Install pinned mermaid-cli
+        run: npm install --no-save "@mermaid-js/mermaid-cli@$(cat scripts/docs/mermaid-cli-version.txt)"
+      - name: Shellcheck the mermaid render check
+        run: shellcheck -x scripts/docs/verify-mermaid.sh scripts/docs/test-verify-mermaid.sh
+      - name: Render every fenced mermaid block under docs/**, and prove the check rejects a broken one
+        run: scripts/docs/test-verify-mermaid.sh
+
   # Runner-routing contract: unit stays HOSTED-ONLY under v1.6 too. Routed
   # to the pool in an earlier version of #410; a real pool run (after
   # fixing the concurrency-driven test-timeout failure with
@@ -1284,6 +1313,7 @@ jobs:
       - scripts-hosted
       - scripts-self-hosted
       - lint
+      - docs-mermaid
       - unit
       - race
       - race-devhealthschema-hosted

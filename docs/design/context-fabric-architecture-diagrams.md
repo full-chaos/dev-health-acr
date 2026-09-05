@@ -925,7 +925,7 @@ sequenceDiagram
 
   C->>E: turn 3: PriorCandidateReceipts ONLY<br/>window NEVER re-sent (already applied)
   Note over E: nothing carries the confirmed window<br/>across this call server-side (CHAOS-4360 gap) --<br/>it arrives INFERRED again
-  E-->>C: window_canonicalization_outcome=gated_class_default (reverted!)<br/>window re-appears in missing; candidate receipt applies<br/>but resolution stays subjectless -- never decisive
+  E-->>C: window_canonicalization_outcome=gated_class_default (reverted!)<br/>window re-appears in missing -- candidate receipt applies<br/>but resolution stays subjectless -- never decisive
 ```
 
 **Carry measurement.** `ContextFabricConfirmedStructureEntry.Source`
@@ -1155,7 +1155,7 @@ flowchart LR
     WUI["work_unit_investments<br/>theme_distribution_json<br/>subcategory_distribution_json"] -->|ARRAY JOIN theme_kv| J
     WITA["work_item_team_attributions<br/>FINAL, is_primary=1,<br/>latest computed_at"] -->|majority vote per work unit,<br/>lexicographically-largest tie-break| J["ReadTeamThemeMix<br/>(dev-health-go/readers)"]
     J -->|current window| P["readTeamThemeMix<br/>(acr devhealthfacts/investment.go)<br/>normalizes to shares, sums to ~1.0"]
-    J -.->|SECOND explicit query,<br/>[start-duration, start)<br/>ONLY when window has an explicit start<br/>(CHAOS-4040: never inferred)| P
+    J -.->|"SECOND explicit query,<br/>[start-duration, start)<br/>ONLY when window has an explicit start<br/>(CHAOS-4040: never inferred)"| P
     P --> F2["FactInvestment (team)<br/>theme_*, theme_quality_bugfix,<br/>prior_theme_* (omitted if no prior data)"]
 ```
 
@@ -1182,8 +1182,8 @@ flowchart TB
     S["scoreMember<br/>(cohort_ranking.go)"] --> W["per available signal family:<br/>weightedSum += weight*value<br/>availableWeight += weight"]
     W --> SC["Score = 100*weightedSum/availableWeight"]
     W --> DR["Drivers: one entry per available family<br/>weight_contributed = 100*weight*value/availableWeight"]
-    DR -.->|Sum(weight_contributed) == Score,<br/>enforced by validateDrivers| SC
-    DR -.->|PR3: narrated result.Drivers cites<br/>a member driver by (team, signal),<br/>introduces no new numbers| ND["ContextFabricDriverJudgment<br/>(§5a budget/Standing rules, unchanged)"]
+    DR -.->|"Sum(weight_contributed) == Score,<br/>enforced by validateDrivers"| SC
+    DR -.->|"PR3: narrated result.Drivers cites<br/>a member driver by (team, signal),<br/>introduces no new numbers"| ND["ContextFabricDriverJudgment<br/>(§5a budget/Standing rules, unchanged)"]
 ```
 
 **Not yet built** (tracked follow-ups, subject-model-and-cohort-answers.md
