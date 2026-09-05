@@ -1094,17 +1094,24 @@ func TestRepeatedIDsAreOrderedAndAbsentWhenThereAreNone(t *testing.T) {
 			{ClaimID: "claim_alpha", Subject: member},
 		},
 	}
-	repeats := ReconcileContextFabricResultItems(result).RepeatedDeclaredIDs
 	want := []string{
 		string(ContextFabricChargedClaimedFacts) + ":claim_alpha",
 		string(ContextFabricChargedClaimedFacts) + ":claim_zulu",
 	}
-	if len(repeats) != len(want) {
-		t.Fatalf("RepeatedDeclaredIDs = %v, want %v", repeats, want)
-	}
-	for index, id := range want {
-		if repeats[index] != id {
-			t.Fatalf("RepeatedDeclaredIDs = %v, want %v (sorted, so the field is stable across runs)", repeats, want)
+	// REPEATEDLY, because the thing under test is stability. Reading the
+	// order once gives an unsorted implementation a coin-flip chance of
+	// looking correct, and a mutant that survives half the time is a mutant
+	// the battery cannot rely on killing.
+	for attempt := 0; attempt < 200; attempt++ {
+		repeats := ReconcileContextFabricResultItems(result).RepeatedDeclaredIDs
+		if len(repeats) != len(want) {
+			t.Fatalf("attempt %d: RepeatedDeclaredIDs = %v, want %v", attempt, repeats, want)
+		}
+		for index, id := range want {
+			if repeats[index] != id {
+				t.Fatalf("attempt %d: RepeatedDeclaredIDs = %v, want %v (sorted, so the field is stable "+
+					"across runs)", attempt, repeats, want)
+			}
 		}
 	}
 
