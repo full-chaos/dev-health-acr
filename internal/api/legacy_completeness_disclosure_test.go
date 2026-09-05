@@ -1,15 +1,12 @@
 package api
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
-	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // The legacy completeness arm, tested AT THE CONSUMER THAT RECEIVES IT.
@@ -27,28 +24,6 @@ import (
 // legacy row still serves, which is the entire point of the exemption) AND the
 // line must be emitted (an exemption nobody can observe is one nobody can
 // retire).
-
-// legacyResultStore hands back a document shaped the way an OLDER BINARY wrote
-// it, without validating on the way out.
-//
-// A stub rather than the real store, and that is a finding rather than a
-// shortcut: the legacy shape CANNOT be produced by this binary at all --
-// memoryinvestigation.Save runs the fresh-path validator, which refuses a state
-// the amended rule does not derive. That is correct (a fresh result has no
-// older-deployment excuse) and it means the only faithful way to present a
-// pre-amendment row to the route is to hand it one, exactly as a database row
-// written months ago would arrive.
-type legacyResultStore struct {
-	result contextfabric.InvestigationResult
-}
-
-func (s *legacyResultStore) Save(context.Context, storage.Principal, contextfabric.InvestigationResult, contextfabric.SourceWatermarkSnapshot, contextfabric.RebuildEpoch, string, contextfabric.ReuseRetrievalIdentity, contextfabric.ReusePromptVersions, contextfabric.ReuseVersionAuthorities, int64, string) error {
-	return nil
-}
-
-func (s *legacyResultStore) Get(context.Context, storage.Principal, string) (contextfabric.StoredInvestigationResult, error) {
-	return contextfabric.StoredInvestigationResult{Result: s.result}, nil
-}
 
 // completenessRows is the join both arrays must satisfy: one published plan
 // requirement and the outcome rows accounting for it.
@@ -127,7 +102,22 @@ func TestTheReadRouteDisclosesALegacyCompletenessState(t *testing.T) {
 					result.Completeness.State, amended, disagrees, testCase.wantDisclosure)
 			}
 
-			app, token, logs := newContextFabricTestAppWithResultsAndLogs(t, nil, &legacyResultStore{result: result})
+			// THE PACKAGE'S OWN legacyResultStore, not a second one beside
+			// it. It already exists in answer_surface_parity_test.go for the
+			// same reason this test needs one -- it serves a stored document
+			// WITHOUT re-validating it on the way out -- and a duplicate type
+			// would have been a second fixture drifting from the first.
+			//
+			// A stub rather than the real store, and that is a finding rather
+			// than a shortcut: the legacy shape CANNOT be produced by this
+			// binary at all, because memoryinvestigation.Save runs the
+			// fresh-path validator and that validator refuses a state the
+			// amended rule does not derive. Which is correct -- a result
+			// produced today has no older-deployment excuse -- and it means
+			// the only faithful way to present a pre-amendment row to the
+			// route is to hand it one, exactly as a database row written
+			// months ago arrives.
+			app, token, logs := newContextFabricTestAppWithResultsAndLogs(t, nil, legacyResultStore{result: result})
 			recorder := httptest.NewRecorder()
 			app.Handler().ServeHTTP(recorder, investigationResultRequest(t, token, result.ResultID))
 
