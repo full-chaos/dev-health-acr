@@ -356,6 +356,29 @@ jobs:
   # race-devhealthschema are the v1.6-migrated pairs (see each job's own
   # comment).
   unit:
+    # Sharded four ways for the same reason the race matrix below is: this
+    # job ran the whole `./...` coverage suite in one leg and was the
+    # critical path of every CI run (13m50s on main run 33991874730, with
+    # the next-longest lane 2m32s behind it). The mechanism is the race
+    # matrix's, reused rather than reinvented -- scripts/ci/test-shard.sh
+    # partitions `go list ./...` round-robin -- with one difference: this
+    # job passes --with-isolated, so internal/contextfabric/devhealthschema
+    # is sharded IN rather than excluded. That package is excluded from the
+    # race round-robin because its full-repo declaration walk is expensive
+    # under -race and it needs its own -timeout (see race-devhealthschema
+    # below, and isolated_packages in scripts/ci/test-shard.sh). This job
+    # runs no race detector, and the unsharded `./...` it replaces always
+    # covered that package -- dropping it here would silently shrink the
+    # non-race suite, with every shard still green.
+    # scripts/ci/test-shard-closure.sh proves, on a real `go list`, that the
+    # union of these four shards is exactly `go list ./...` with nothing
+    # doubled, and that the comparison saying so can actually reject a union
+    # with a package missing.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    name: unit (shard ${{ matrix.shard }} of 4)
     runs-on: ubuntu-latest
     # v1.6 split mirror-preflight into two jobs sharing one name (see
     # below); exactly one runs per workflow run and the other is
@@ -440,11 +463,20 @@ jobs:
       # below, the uploaded reports, and the non-race pass/fail signal all
       # come from this one run. The artifacts still upload with
       # `if: always()` so a failing run still leaves reports to inspect.
+      # The shard's package set is computed here rather than baked into the
+      # matrix so it is derived from the real `go list ./...` on the runner,
+      # the same way the race shards below derive theirs. test-shard.sh
+      # refuses to emit a partition at all if that listing fails, so a broken
+      # package can never quietly shrink this shard's suite; and this
+      # assignment runs before the `set +e` bracket below, so that refusal
+      # fails the step instead of being read as a test result.
       - name: Run Go tests with coverage and JUnit reporting
         id: go-tests
         run: |
+          packages="$(scripts/ci/test-shard.sh --with-isolated ${{ matrix.shard }} 4)"
+          printf 'unit shard %s/4 packages:\n%s\n' '${{ matrix.shard }}' "$packages"
           set +e
-          make test-coverage
+          make test-coverage GOTEST_PKGS="$packages"
           status=$?
           set -e
           failure="$(jq -r '
@@ -467,7 +499,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: go-coverage
+          name: go-coverage-shard-${{ matrix.shard }}
           path: .tmp/coverage/coverage.xml
           if-no-files-found: warn
           retention-days: 90
@@ -475,7 +507,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: go-junit
+          name: go-junit-shard-${{ matrix.shard }}
           path: .tmp/coverage/junit.xml
           if-no-files-found: warn
           retention-days: 90

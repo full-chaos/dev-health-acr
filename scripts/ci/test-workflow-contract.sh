@@ -201,6 +201,14 @@ check_isolated_devhealthschema_job() {
       "$found_job" >&2
     return 1
   }
+
+  # Name the job this resolved to. The scan takes the FIRST job in file order
+  # that invokes the isolated form, so which job that is, is load-bearing and
+  # invisible otherwise: the `unit` matrix sits above race-devhealthschema in
+  # this file, and a unit job that reached for the isolated form directly
+  # (rather than test-shard.sh's --with-isolated) would capture this check and
+  # move the timeout requirement onto a job that has, and needs, no -timeout.
+  printf 'isolated package(s) run in job "%s": %s\n' "$found_job" "$isolated"
 }
 
 check_go_cache() {
@@ -238,44 +246,77 @@ check_go_cache() {
   return "$status"
 }
 
-check_race_shard_agreement() {
-  local file="$1"
-  local race_block shard_line shard_inside shard_count shard_call total
-  race_block="$(job_block "$file" race)"
+# Both `race` and `unit` shard their suite with scripts/ci/test-shard.sh, so
+# both can drift the same way: a matrix whose indices no longer match the
+# `total` the script is invoked with runs a partition that is not a partition,
+# and every job still reports success. The check is written once and applied
+# to each sharded job by name.
+check_shard_agreement() {
+  local file="$1" job="$2"
+  local block shard_line shard_inside shard_count shard_call total
+  block="$(job_block "$file" "$job")"
 
-  shard_line="$(printf '%s\n' "$race_block" | grep -E 'shard: *\[' | head -n1 || true)"
+  shard_line="$(printf '%s\n' "$block" | grep -E 'shard: *\[' | head -n1 || true)"
   if [ -z "$shard_line" ]; then
-    printf 'race job has no "shard: [...]" matrix\n' >&2
+    printf '%s job has no "shard: [...]" matrix\n' "$job" >&2
     return 1
   fi
   shard_inside="$(printf '%s' "$shard_line" | sed -E 's/.*\[([^]]*)\].*/\1/')"
   shard_count="$(printf '%s' "$shard_inside" | awk -F',' '{print NF}')"
 
-  shard_call="$(printf '%s\n' "$race_block" | grep -E '^[[:space:]]*[a-z_]+="?\$\(scripts/ci/test-shard\.sh' | head -n1 || true)"
+  shard_call="$(printf '%s\n' "$block" | grep -E '^[[:space:]]*[a-z_]+="?\$\(scripts/ci/test-shard\.sh' | head -n1 || true)"
   if [ -z "$shard_call" ]; then
-    printf 'race job does not invoke scripts/ci/test-shard.sh\n' >&2
+    printf '%s job does not invoke scripts/ci/test-shard.sh\n' "$job" >&2
     return 1
   fi
   total="$(printf '%s\n' "$shard_call" | grep -oE '[0-9]+' | tail -n1 || true)"
 
   if [ -z "$total" ] || [ "$shard_count" != "$total" ]; then
-    printf 'race matrix has %s shard(s) but test-shard.sh is called with total=%s\n' \
-      "$shard_count" "${total:-<none>}" >&2
+    printf '%s matrix has %s shard(s) but test-shard.sh is called with total=%s\n' \
+      "$job" "$shard_count" "${total:-<none>}" >&2
     return 1
   fi
 
   # Counting entries is not enough: `shard: [1, 2, 3, 3]` has four entries and
   # would satisfy a count check while running shard 3 twice and shard 4 never,
-  # silently dropping that shard's packages from the race suite with every job
+  # silently dropping that shard's packages from the suite with every job
   # still green. Require the matrix to be exactly the set 1..total.
   local expected actual
   expected="$(seq 1 "$total" | LC_ALL=C sort)"
   actual="$(printf '%s' "$shard_inside" | tr ',' '\n' | tr -d '[:blank:]' | grep -v '^$' | LC_ALL=C sort)"
   if [ "$expected" != "$actual" ]; then
-    printf 'race matrix indices must be exactly 1..%s, got: %s\n' \
-      "$total" "$(printf '%s' "$shard_inside" | tr -d '[:space:]')" >&2
+    printf '%s matrix indices must be exactly 1..%s, got: %s\n' \
+      "$job" "$total" "$(printf '%s' "$shard_inside" | tr -d '[:space:]')" >&2
     return 1
   fi
+}
+
+check_race_shard_agreement() {
+  check_shard_agreement "$1" race
+}
+
+# `unit` is the non-race coverage suite. It must shard with --with-isolated:
+# scripts/ci/test-shard.sh's default form EXCLUDES the isolated package(s),
+# which exist only because their declaration walk is expensive under -race.
+# The unsharded `./...` this matrix replaced covered them, and no other
+# non-race job does, so a unit matrix on the default form would drop them
+# from the coverage suite while staying green -- and test-shard-closure.sh's
+# runtime union check would agree with it, because it reads the shape out of
+# this same invocation.
+check_unit_shard_agreement() {
+  local file="$1" block shard_call
+  check_shard_agreement "$file" unit || return 1
+
+  block="$(job_block "$file" unit)"
+  shard_call="$(printf '%s\n' "$block" | grep -E '^[[:space:]]*[a-z_]+="?\$\(scripts/ci/test-shard\.sh' | head -n1 || true)"
+  case "$shard_call" in
+    *--with-isolated*) ;;
+    *)
+      printf 'unit job shards with test-shard.sh but without --with-isolated, so the isolated package(s) would run in no non-race job: %s\n' \
+        "${shard_call:-<no invocation>}" >&2
+      return 1
+      ;;
+  esac
 }
 
 # The endpoint-profile contract gate is the one CI step that runs the
@@ -543,6 +584,7 @@ run_all_checks() {
   check_gate_rejects_nonsuccess "$file"
   check_go_cache "$file"
   check_race_shard_agreement "$file"
+  check_unit_shard_agreement "$file"
   check_container_oci_scan_same_job "$file"
   check_isolated_devhealthschema_job "$file"
   check_endpoint_profile_gate_step "$file"
@@ -646,6 +688,31 @@ out_of_range_shard="$tmpdir/out-of-range-shard.yml"
 sed 's/shard: \[1, 2, 3, 4\]/shard: [1, 2, 5, 9]/' "$workflow" > "$out_of_range_shard"
 assert_check_fails 'used shard indices outside 1..total' \
   check_race_shard_agreement "$out_of_range_shard"
+
+# (i2) shrink the UNIT matrix to 3 shards while test-shard.sh is still called
+# with total 4. Mutating only the unit job's own line matters here: the (d)/
+# (h)/(i) controls above rewrite every "shard: [1, 2, 3, 4]" line in the file
+# and are only ever handed to the race check, so they would not show that the
+# unit check reads the unit job rather than the first matrix in the file.
+unit_mismatched_shards="$tmpdir/unit-mismatched-shards.yml"
+awk '
+  /^  unit:/ { in_unit=1 }
+  in_unit && /^  [A-Za-z0-9_-]+:/ && !/^  unit:/ { in_unit=0 }
+  in_unit && /shard: \[1, 2, 3, 4\]/ { sub(/shard: \[1, 2, 3, 4\]/, "shard: [1, 2, 3]") }
+  { print }
+' "$workflow" > "$unit_mismatched_shards"
+assert_check_fails 'shrank the unit matrix to 3 shards without updating test-shard.sh total' \
+  check_unit_shard_agreement "$unit_mismatched_shards"
+
+# (i3) drop --with-isolated from the unit job's invocation. The matrix still
+# agrees with the total, so the shape check above is the only thing standing
+# between this and a coverage suite that silently stops running the isolated
+# package(s) -- test-shard-closure.sh reads the shape from this same line, so
+# it would call the shrunken union total and agree.
+unit_without_isolated="$tmpdir/unit-without-isolated.yml"
+sed 's|test-shard\.sh --with-isolated|test-shard.sh|' "$workflow" > "$unit_without_isolated"
+assert_check_fails 'dropped --with-isolated from the unit job'"'"'s test-shard.sh invocation' \
+  check_unit_shard_agreement "$unit_without_isolated"
 
 # (j) remove BOTH race-devhealthschema-{hosted,self-hosted} pair members
 # so the isolated package's dedicated scope silently disappears while
