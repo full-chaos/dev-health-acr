@@ -8,7 +8,11 @@ package v1
 // They are pinned by the mutation battery instead: deleting the vocabulary
 // member and widening the allow-list both have to turn something red here.
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 // TestThePopulationQualifyingCodeIsTheWireToken binds the Go constant to the
 // literal string the published schemas enumerate.
@@ -84,5 +88,116 @@ func TestPopulationQualifyingCodesAreAnAllowListOverTheWholeVocabulary(t *testin
 	// "refuses non-census members" from "refuses nothing it was asked about".
 	if coverageDetailCodeQualifiesPopulation(ContextFabricCoverageDetailCode("not_a_code_at_all")) {
 		t.Error("the allow-list admits a code that is not in the vocabulary at all")
+	}
+}
+
+// TestThePopulationQualifiedLabelIsNotTheGenericFallback pins that the code
+// has a label of its OWN.
+//
+// The totality walk beside it asserts the composed label is non-empty and
+// within bounds, and the `default` arm's "Coverage was limited" satisfies both.
+// So a change that deleted this code's case would leave every existing
+// assertion green while the reader lost the one sentence that says what
+// actually happened -- a fallback that reads as coverage rather than as a
+// count being a floor. This is the assertion that notices.
+func TestThePopulationQualifiedLabelIsNotTheGenericFallback(t *testing.T) {
+	t.Parallel()
+	const fallback = "Coverage was limited"
+
+	// Positive control: the fallback string is REACHABLE, so a test asserting
+	// "not the fallback" is asserting something a real defect could produce.
+	unknown := validDetailForCode(ContextFabricCoverageDetailFactPruned)
+	unknown.Code = ContextFabricCoverageDetailCode("no_such_code")
+	unknown.FactKind = ""
+	unknown.SourceState = ""
+	unknown.SupportedKinds = nil
+	if got := ComposeCoverageDetailLabel(unknown); got != fallback {
+		t.Fatalf("the control did not reach the fallback arm (got %q); this test cannot detect the defect it exists for", got)
+	}
+
+	detail := validDetailForCode(ContextFabricCoverageDetailPopulationTruncated)
+	label := ComposeCoverageDetailLabel(detail)
+	if label == fallback {
+		t.Fatal("the population-qualifying code composes the GENERIC fallback label: a reader is told coverage was " +
+			"limited when what happened is that the number they were given is a floor, not a total")
+	}
+	if strings.TrimSpace(label) == "" {
+		t.Fatal("the population-qualifying code composes an empty label")
+	}
+	if len([]rune(label)) > ContextFabricCoverageDetailLabelMaxLength {
+		t.Fatalf("the composed label is %d runes, over the %d bound", len([]rune(label)), ContextFabricCoverageDetailLabelMaxLength)
+	}
+}
+
+// TestTheCensusQualifiedCountCostsExactlyItsMeasuredBytes ASSERTS the wire cost
+// of the qualification instead of printing it.
+//
+// A number a downstream artifact depends on must be asserted in the test that
+// derives it, in the same test. The response-budget work downstream reasons
+// about this delta, and a measurement that is only logged cannot fail -- so a
+// change that quietly doubled the cost would be narration in a log nobody
+// diffs.
+//
+// It measures the two encodings against each other rather than pinning an
+// absolute size, because what the budget cares about is the DELTA a
+// qualification adds to a row that would have shipped anyway.
+//
+// If a field name, a token, or a tag changed on purpose, update the pin in the
+// same commit and say so in the message. Never update it to make this pass.
+func TestTheCensusQualifiedCountCostsExactlyItsMeasuredBytes(t *testing.T) {
+	t.Parallel()
+	// The row an exact count over a COMPLETE census ships today.
+	satisfied := ContextFabricPlanRequirementOutcomeRow{
+		Stage:       ContextFabricOutcomeStageAssembledResult,
+		Requirement: "count/member/team",
+		Obligation:  "count",
+		Outcome:     ContextFabricRequirementSatisfied,
+		Impact:      ContextFabricAnswerImpactNone,
+		Served:      5,
+		Declared:    5,
+	}
+	// The SAME row once the population is known to be incomplete. Identical in
+	// every other field, so the delta is the qualification and nothing else.
+	qualified := satisfied
+	qualified.Outcome = ContextFabricRequirementNarrowed
+	qualified.Impact = ContextFabricAnswerImpactScope
+	qualified.CauseCoverage = ContextFabricCoverageDetailPopulationTruncated
+	qualified.CauseObserved = true
+
+	// Both rows must be legal, or the measurement is of a document that cannot
+	// ship.
+	if err := ValidateContextFabricPlanRequirementOutcomeRow(satisfied); err != nil {
+		t.Fatalf("the satisfied baseline row is invalid: %v", err)
+	}
+	if err := ValidateContextFabricPlanRequirementOutcomeRow(qualified); err != nil {
+		t.Fatalf("the qualified row is invalid: %v", err)
+	}
+
+	before, err := json.Marshal(satisfied)
+	if err != nil {
+		t.Fatalf("marshal baseline: %v", err)
+	}
+	after, err := json.Marshal(qualified)
+	if err != nil {
+		t.Fatalf("marshal qualified: %v", err)
+	}
+
+	// +40 for `,"cause_coverage":"population_truncated"`, -1 for
+	// "satisfied"->"narrowed", +1 for "none"->"scope", -1 for the
+	// cause_observed value false->true. The field is not omitempty, so the
+	// flag costs a value change rather than a whole key.
+	const wantDelta = 39
+	if got := len(after) - len(before); got != wantDelta {
+		t.Fatalf("qualifying a count costs %d bytes on the wire, want %d\n baseline (%d B): %s\nqualified (%d B): %s\n"+
+			"if a field name or token changed on purpose, move this pin in the same commit and say so",
+			got, wantDelta, len(before), before, len(after), after)
+	}
+
+	// The delta is charged AT MOST ONCE PER TURN: the step refuses a second
+	// assembled-result count row for one requirement. Asserting the per-row
+	// cost without that would invite multiplying it by the 200-row bound,
+	// which is 195 rows more than any turn can produce here.
+	if !strings.Contains(string(after), `"cause_coverage":"population_truncated"`) {
+		t.Fatal("the qualified encoding does not carry the cause the delta was measured for")
 	}
 }
