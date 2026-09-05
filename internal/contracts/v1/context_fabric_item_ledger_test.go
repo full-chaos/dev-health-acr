@@ -1242,3 +1242,99 @@ func TestCohortMemberDebitsDeclareTheirSubject(t *testing.T) {
 		t.Fatalf("examined %d member debits, the fixture carries %d rows", seen, len(result.Cohort.Members))
 	}
 }
+
+// TestTheCertificateReportsBothNumbersDistinctly covers the second confirmation
+// pass's first two named survivors.
+//
+// Every earlier positive control certified at a ceiling EQUAL to the charged
+// total, so `Items()` and `MaxItems()` returning each other was invisible. They
+// are different facts -- what the answer spent, and what it was allowed to
+// spend -- and a consumer reading a certificate to report headroom gets the
+// wrong number if they are swapped.
+func TestTheCertificateReportsBothNumbersDistinctly(t *testing.T) {
+	t.Parallel()
+	ledger := ReconcileContextFabricResultItems(ledgerGroupedFixture())
+	spent := ledger.Total()
+	ceiling := spent + 7
+	if ceiling == spent {
+		t.Fatal("the ceiling must differ from the spend for this test to see a swap")
+	}
+
+	certificate, verdict := CertifyContextFabricCapacity(ledger, ContextFabricResponseBudget{MaxItems: ceiling})
+	if verdict != ContextFabricCapacityCertifiedFit || !certificate.Certified() {
+		t.Fatalf("verdict = %q certified = %v, want a certificate", verdict, certificate.Certified())
+	}
+	if certificate.Items() != spent {
+		t.Errorf("Items() = %d, want the charged total %d", certificate.Items(), spent)
+	}
+	if certificate.MaxItems() != ceiling {
+		t.Errorf("MaxItems() = %d, want the ceiling %d", certificate.MaxItems(), ceiling)
+	}
+	if certificate.Items() == certificate.MaxItems() {
+		t.Fatal("the two numbers came out equal, so this fixture cannot distinguish them")
+	}
+}
+
+// TestRepeatsAreReportedForEveryCollectionThatCarriesIDs covers the third and
+// fourth named survivors: skipping a collection in the observation loses the
+// signal for that collection ALONE, which no single-collection fixture notices.
+func TestRepeatsAreReportedForEveryCollectionThatCarriesIDs(t *testing.T) {
+	t.Parallel()
+	memberA := ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_a"}
+	result := ContextFabricInvestigationResult{
+		SubjectResolution: ContextFabricSubjectResolution{
+			Candidates: []ContextFabricSubjectCandidate{
+				{ReceiptID: "receipt_same", Subject: memberA},
+				{ReceiptID: "receipt_same", Subject: memberA},
+			},
+		},
+		Cohort: &ContextFabricCohort{
+			Members: []ContextFabricCohortMember{{Subject: memberA}, {Subject: memberA}},
+		},
+		Drivers: []ContextFabricDriverJudgment{
+			{DriverID: "driver_same"}, {DriverID: "driver_same"},
+		},
+	}
+	repeats := ReconcileContextFabricResultItems(result).RepeatedDeclaredIDs
+
+	// One entry per collection that carries ids, in vocabulary order:
+	// candidates, cohort members, drivers.
+	want := []string{
+		string(ContextFabricChargedCandidates) + ":receipt_same",
+		string(ContextFabricChargedCohortMembers) + ":" + contextFabricSubjectBucketKey(memberA),
+		string(ContextFabricChargedDrivers) + ":driver_same",
+	}
+	if len(repeats) != len(want) {
+		t.Fatalf("RepeatedDeclaredIDs = %v, want one entry per collection: %v", repeats, want)
+	}
+	for index, id := range want {
+		if repeats[index] != id {
+			t.Errorf("RepeatedDeclaredIDs[%d] = %q, want %q", index, repeats[index], id)
+		}
+	}
+}
+
+// TestTheCapacityVerdictsKeepTheirPublishedSpelling covers the fifth named
+// survivor. These strings reach telemetry as the `capacity` field, so a
+// dashboard filters on the SPELLING, not on the constant: renaming a value while
+// every test compares the constant to itself is invisible.
+//
+// SCOPED TO THE CAPACITY VERDICTS, deliberately. The same argument applies to
+// the ledger-status and charged-collection spellings, which also reach log
+// fields, and pinning those is left to the follow-up rather than widened in
+// here: this commit exists to kill the mutants the confirmation pass named, and
+// nothing else.
+func TestTheCapacityVerdictsKeepTheirPublishedSpelling(t *testing.T) {
+	t.Parallel()
+	for verdict, want := range map[ContextFabricCapacityVerdict]string{
+		ContextFabricCapacityCertifiedFit:     "certified_fit",
+		ContextFabricCapacityOverdraw:         "overdraw",
+		ContextFabricCapacityUnbounded:        "unbounded",
+		ContextFabricCapacityAccountingDefect: "accounting_defect",
+	} {
+		if string(verdict) != want {
+			t.Errorf("capacity verdict is spelled %q, want %q -- a dashboard filters on the string",
+				string(verdict), want)
+		}
+	}
+}
