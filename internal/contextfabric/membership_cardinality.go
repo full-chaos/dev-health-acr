@@ -15,15 +15,31 @@ import (
 // answer depends on, so "this step consumes no fact" could not license
 // retiring the thing that caused the facts to be read.
 //
-// WHAT IT DOES NOT CLOSE, stated here rather than left to be discovered.
-// The step's declared input is the RESOLVED MEMBER SET, and that is exactly
-// what it counts. Whether the resolved set is the whole population is a
-// COVERAGE question, and the answer already carries it: `Cohort.Complete`
-// and `Cohort.Truncated`. A count served over a cohort the graph read
-// stopped short of is a true count OF THE RESOLVED SET and a lower bound on
-// the population, and this file does not pretend otherwise. Making the
-// population itself countable needs a census the pre-read clamp currently
-// makes unobservable, which is its own change.
+// WHAT IT COUNTS, AND WHAT IT SAYS ABOUT THE POPULATION. The step's declared
+// input is the RESOLVED MEMBER SET, and that is exactly what it counts.
+// Whether the resolved set is the whole population is a COVERAGE question,
+// and the answer already carries it: `Cohort.Complete` and `Cohort.Truncated`.
+//
+// The step now CONSULTS those two. It used to only say so in this paragraph:
+// the file's prose called the number "a lower bound on the population" while
+// the row it emitted said `satisfied` with impact `none` and no cause, and the
+// completeness derivation read that as contributing nothing -- so an answer
+// whose discovery clamped at N stated an exact count over a population it had
+// stopped short of, and called itself `complete`. The disclosure existed only
+// where no consumer could reach it.
+//
+// A count over an incomplete population is now `narrowed` with the coverage
+// code `population_truncated`, equal served/declared, and the answer reads
+// `partial`. The two numbers are deliberately left equal -- see
+// membershipCardinalityOutcomeRow.
+//
+// WHAT IS STILL NOT CLOSED: the population itself is not COUNTABLE. This step
+// says the resolved set is a subset; it does not say of what size. Making the
+// population countable needs a census the pre-read clamp makes unobservable,
+// which is its own change. And a count that a member step ALSO narrowed
+// reports that step's own before/after, so its `declared` is the largest count
+// this turn observed rather than the population -- a residual disclosed here
+// rather than papered over, for the same reason the original limit was.
 //
 // AND THE ANSWER PROSE IS STILL THE MODEL'S. This step makes the count a
 // SERVER RESULT with a requirement identity; it does not stop synthesis from
@@ -64,6 +80,17 @@ type MembershipCardinality struct {
 	// Both empty when nothing narrowed.
 	Basis   contractsv1.ContextFabricNarrowingBasis
 	Overrun contractsv1.ContextFabricBudgetOverrun
+	// PopulationIncomplete reports that the member set counted above is NOT
+	// the whole population -- read from the cohort's own coverage flags,
+	// which are the authority this file's header already names.
+	//
+	// It is a THIRD statement, not a refinement of the two numbers, and that
+	// is the distinction the step turns on. Served and Declared describe the
+	// set the turn OBSERVED; this describes whether that set is the set the
+	// question asked about. A count can be exact over everything observed
+	// and still be a floor on the population, and the two numbers cannot say
+	// so between them.
+	PopulationIncomplete bool
 }
 
 // Narrowed reports whether the answer carries fewer members than were found.
@@ -89,6 +116,19 @@ func ComputeMembershipCardinality(cohort *Cohort, narrowing []contractsv1.Contex
 		Kind:     cohort.Kind,
 		Served:   len(cohort.Members),
 		Declared: len(cohort.Members),
+		// THE DISJUNCTION IS LOAD-BEARING, and a check on `Truncated` alone
+		// would be silently wrong on a real path. The graph reader sets
+		// `Complete = false` WITHOUT setting `Truncated` when its own node
+		// source was truncated upstream -- a truncated census with fewer
+		// than MaxCohortMembers matching members would otherwise report
+		// complete despite genuinely missing some. That cohort reads as a
+		// full census to a Truncated-only predicate.
+		//
+		// It is also fail-closed on the pair the setters never write
+		// together: anything other than "complete and not truncated" is
+		// treated as incomplete, so a future setter cannot introduce a
+		// third shape that silently reads as a full census.
+		PopulationIncomplete: !cohort.Complete || cohort.Truncated,
 	}
 	if step, found := firstMemberNarrowing(narrowing); found && step.Before > cardinality.Served {
 		cardinality.Declared = step.Before
@@ -190,6 +230,38 @@ func membershipCardinalityOutcomeRow(cardinality MembershipCardinality, requirem
 		Declared:    cardinality.Declared,
 	}
 	if !cardinality.Narrowed() {
+		if !cardinality.PopulationIncomplete {
+			return row
+		}
+		// EXACT OVER THE RESOLVED SET, AND A FLOOR ON THE POPULATION.
+		//
+		// Nothing narrowed the member set this turn, so the two numbers are
+		// equal and both are true -- and the answer still did not see the
+		// whole population, which the cohort itself reported. Reporting that
+		// as `satisfied` was the defect: `satisfied` means served in full at
+		// the declared scope, the completeness derivation reads it as
+		// contributing nothing, and the answer then called itself `complete`
+		// over a census it had stopped short of.
+		//
+		// The numbers are LEFT ALONE. Raising Declared to make this look
+		// like an ordinary reduction would publish a population size nothing
+		// measured; the honest row is equal counts plus a cause that says
+		// which axis the loss is on. That shape is legal only because of the
+		// census exception in the row validator, and this is the one site
+		// that produces it.
+		row.Outcome = contractsv1.ContextFabricRequirementNarrowed
+		// Scope: the reader is shown fewer of the counted things than exist.
+		row.Impact = contractsv1.ContextFabricAnswerImpactScope
+		row.CauseCoverage = contractsv1.ContextFabricCoverageDetailPopulationTruncated
+		// Observed: the cohort REPORTED its own incompleteness. Nothing here
+		// defaulted, and the validator's exception refuses a defaulted one.
+		row.CauseObserved = true
+		// No refinement, and not by omission: the derivation declines to mint
+		// one when Declared <= Served, because a refinement records a
+		// population shrinking from Before to After and nothing shrank
+		// between these two numbers. Calling the derivation anyway would be a
+		// second authority for that; leaving it out is the same statement,
+		// made once.
 		return row
 	}
 	row.Outcome = contractsv1.ContextFabricRequirementNarrowed

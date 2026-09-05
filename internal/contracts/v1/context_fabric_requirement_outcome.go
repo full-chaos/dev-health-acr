@@ -617,7 +617,30 @@ func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequire
 	// `narrowed` means SERVED, over a reduced set. A row claiming a
 	// narrowing that served everything it declared narrowed nothing, and a
 	// row that served none of it is not narrowed -- it is unavailable.
-	if row.Outcome == ContextFabricRequirementNarrowed && row.Declared > 0 && row.Served >= row.Declared {
+	//
+	// THE ONE EXCEPTION, and it is narrow by construction. A value computed
+	// over a population the answer did not see all of loses something on an
+	// axis these two numbers do not measure: the count over the RESOLVED set
+	// is exact, so served == declared is the truthful pair, while the answer
+	// is still not the census the question asked for. Before this, that
+	// state had no legal row shape at all -- so the honest outcome could not
+	// be written and a false `satisfied` stood by default, which is the
+	// defect the exception exists to remove.
+	//
+	// Three conjuncts, each carrying its own weight:
+	//
+	//	served == declared -- and not `>=`. Serving MORE than was declared is
+	//	  refused by its own bound above, and writing `==` here means this
+	//	  exception can never become the thing that lets such a row through.
+	//	CauseObserved -- a DEFAULTED cause would let any producer opt out of
+	//	  the reduction rule by naming a code it never measured, which is the
+	//	  assumption CauseObserved was added to make unsafe.
+	//	a population-qualifying code -- an allow-list, so a coverage code
+	//	  about a fact READ can never license equal counts.
+	censusQualified := row.Served == row.Declared &&
+		row.CauseObserved &&
+		coverageDetailCodeQualifiesPopulation(row.CauseCoverage)
+	if row.Outcome == ContextFabricRequirementNarrowed && row.Declared > 0 && row.Served >= row.Declared && !censusQualified {
 		return fmt.Errorf("outcome narrowed served %d of %d declared, which is not a reduction", row.Served, row.Declared)
 	}
 	return validateContextFabricRequirementRefinements(row)
