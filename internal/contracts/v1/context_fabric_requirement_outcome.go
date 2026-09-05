@@ -293,9 +293,26 @@ func ValidContextFabricAnswerCompletenessState(value ContextFabricAnswerComplete
 // written to prevent, and exactly the shape that has defeated one before.
 var contextFabricAnswerObligations = [...]string{
 	"state", "completion", "readiness", "health", "principal_drivers",
-	"ranking", "remaining_work", "evidence", "coverage", "count",
+	"ranking", "remaining_work", "evidence", ContextFabricAnswerObligationCoverage,
+	ContextFabricAnswerObligationCount,
 	"allocation_breakdown", "trend_series", "period_delta",
 }
+
+// ContextFabricAnswerObligationCount and ContextFabricAnswerObligationCoverage
+// are the two members of the obligation mirror that RULES elsewhere in this
+// file have to name.
+//
+// They exist so a rule can be written against the vocabulary instead of
+// against a string literal that happens to match it. A literal in a guard is
+// a second, silent copy of the vocabulary: it does not move when the mirror
+// moves, nothing relates the two, and the parity test that keeps the mirror
+// honest cannot see it. The array above is therefore written in terms of
+// these, not the other way round -- a constant the vocabulary does not
+// contain would not compile into it.
+const (
+	ContextFabricAnswerObligationCoverage = "coverage"
+	ContextFabricAnswerObligationCount    = "count"
+)
 
 // ContextFabricAnswerObligationVocabulary returns the mirrored vocabulary,
 // for the domain-side parity test.
@@ -637,7 +654,22 @@ func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequire
 	//	  assumption CauseObserved was added to make unsafe.
 	//	a population-qualifying code -- an allow-list, so a coverage code
 	//	  about a fact READ can never license equal counts.
-	censusQualified := row.Served == row.Declared &&
+	//	the row class itself -- stage, obligation and impact. The three
+	//	  conjuncts above say the row is HONEST; these three say the
+	//	  exception is being taken by the ONE producer it was written for.
+	//	  Without them the exception is a property of any narrowed row that
+	//	  can arrange equal counts and a census code: a `state` obligation,
+	//	  a `planning` seed row, an `impact: depth` row that claims a scope
+	//	  loss. None of those is a count over a population, and admitting
+	//	  them is the same one-token-two-states defect this exception exists
+	//	  to remove, moved up a layer. The producer sets all three on the
+	//	  single site that emits this shape (the membership-cardinality
+	//	  step), so narrowing to them costs nothing real and closes the
+	//	  false negative.
+	censusQualified := row.Stage == ContextFabricOutcomeStageAssembledResult &&
+		row.Obligation == ContextFabricAnswerObligationCount &&
+		row.Impact == ContextFabricAnswerImpactScope &&
+		row.Served == row.Declared &&
 		row.CauseObserved &&
 		coverageDetailCodeQualifiesPopulation(row.CauseCoverage)
 	if row.Outcome == ContextFabricRequirementNarrowed && row.Declared > 0 && row.Served >= row.Declared && !censusQualified {

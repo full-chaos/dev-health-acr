@@ -335,3 +335,30 @@ func TestTheCensusExceptionIsScopedToAScopeImpact(t *testing.T) {
 		t.Fatalf("rejected for the wrong reason: %v (want the reduction rule)", err)
 	}
 }
+
+// TestTheCountObligationConstantIsTheWireToken binds the constant the rule is
+// written against to its literal AND to the closed vocabulary.
+//
+// This is the single gap the literal-only discipline in the rest of this file
+// leaves. The guard above names a Go constant; the wire carries a string; the
+// mirror carries a third copy. Asserting all three in one place is what keeps
+// a rename of the constant from silently changing which rows the exception
+// admits while every other test goes on passing.
+func TestTheCountObligationConstantIsTheWireToken(t *testing.T) {
+	t.Parallel()
+	if ContextFabricAnswerObligationCount != "count" {
+		t.Fatalf("the count obligation constant is %q, want the wire token %q",
+			ContextFabricAnswerObligationCount, "count")
+	}
+	if !ValidContextFabricAnswerObligation(ContextFabricAnswerObligationCount) {
+		t.Fatal("the constant the census exception is written against is not a member of the obligation mirror; " +
+			"a rule keyed on a non-member can never fire")
+	}
+	if ContextFabricAnswerObligationCoverage != "coverage" {
+		t.Fatalf("the coverage obligation constant is %q, want the wire token %q",
+			ContextFabricAnswerObligationCoverage, "coverage")
+	}
+	if !ValidContextFabricAnswerObligation(ContextFabricAnswerObligationCoverage) {
+		t.Fatal("the coverage obligation constant is not a member of the obligation mirror")
+	}
+}
