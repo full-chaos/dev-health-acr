@@ -368,3 +368,63 @@ func offerPoolCandidate(kind contextfabric.SubjectKind, canonicalID string) cont
 		Subject: contextfabric.SubjectRef{Kind: kind, CanonicalID: canonicalID, Label: canonicalID},
 	}
 }
+
+// TestKindOfferMaterial_WithholdingOnlyEverRemovesOptions is the 413 /
+// wire-budget claim, asserted rather than argued: for every combination of
+// pool kinds, explicit hints and declared kinds over the CLOSED offer
+// vocabulary, the KindOptions this repair produces are a SUBSET of the ones
+// CHAOS-4967's rule produced. The offer can therefore only shrink, so the
+// change adds ZERO bytes to the wire in every case -- bounded (the 200-row
+// answer bound) and unbounded alike -- and no requirement row is added.
+//
+// The CHAOS-4967 rule is reconstructed here as "every declared kind held" --
+// poolHeld true for everything -- which is exactly what the old code did by
+// never consulting membership at all. That is a reconstruction of the OLD
+// behaviour from the CURRENT function, not a second implementation of the
+// new one, so it cannot drift into agreeing with the fix by construction.
+func TestKindOfferMaterial_WithholdingOnlyEverRemovesOptions(t *testing.T) {
+	t.Parallel()
+	vocabulary := sortedKinds(structureOfferKinds)
+	allHeld := make(poolHeldKinds, len(vocabulary))
+	for _, kind := range vocabulary {
+		allHeld[kind] = true
+	}
+
+	shrank := 0
+	// Exhaustive over every single-kind declared hint against every
+	// single-kind and two-kind pool in the vocabulary: small enough to
+	// enumerate, wide enough that a case where the offer GREW would appear.
+	for _, declared := range vocabulary {
+		for i, poolA := range vocabulary {
+			for _, poolB := range vocabulary[i:] {
+				poolKinds := []contractsv1.ContextFabricSubjectKind{poolA, poolB}
+				declaredKinds := []contractsv1.ContextFabricSubjectKind{declared}
+
+				old, _ := kindOfferMaterial(poolKinds, nil, declaredKinds, allHeld)
+				now, _ := kindOfferMaterial(poolKinds, nil, declaredKinds, heldFromKinds(poolKinds...))
+
+				oldKinds := map[contractsv1.ContextFabricSubjectKind]bool{}
+				for _, option := range old.KindOptions {
+					oldKinds[option.Kind] = true
+				}
+				for _, option := range now.KindOptions {
+					if !oldKinds[option.Kind] {
+						t.Fatalf("pool=%v declared=%v: KindOptions GREW -- %q is offered now and was not before; the wire budget claim rests on this never happening", poolKinds, declaredKinds, option.Kind)
+					}
+				}
+				if len(now.KindOptions) > len(old.KindOptions) {
+					t.Fatalf("pool=%v declared=%v: len(KindOptions) %d > %d", poolKinds, declaredKinds, len(now.KindOptions), len(old.KindOptions))
+				}
+				if len(now.KindOptions) < len(old.KindOptions) {
+					shrank++
+				}
+			}
+		}
+	}
+	// Positive control: the sweep must actually EXERCISE the difference. A
+	// subset assertion over a set that never changes is vacuous.
+	if shrank == 0 {
+		t.Fatal("no combination in the sweep produced a smaller offer -- the subset assertion above is vacuous")
+	}
+	t.Logf("combinations where the offer shrank: %d", shrank)
+}

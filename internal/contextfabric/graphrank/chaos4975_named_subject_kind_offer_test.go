@@ -166,7 +166,7 @@ func TestKindOfferMaterial_NamedSubjectDeclaredKindAloneNeverRaisesTheNeed(t *te
 	t.Parallel()
 	declaredKinds := frameKindHints(namedSubjectFrame("acr", kindOf(contractsv1.ContextFabricSubjectProject)))
 
-	material, diagnostics := kindOfferMaterial(nil, nil, declaredKinds, nil)
+	material, diagnostics := kindOfferMaterial(nil, nil, declaredKinds, heldFromKinds())
 	if len(material.KindOptions) != 0 || material.Missing != nil {
 		t.Fatalf("kindOfferMaterial() = %+v, want a suppressed (empty) offer with an empty pool", material)
 	}

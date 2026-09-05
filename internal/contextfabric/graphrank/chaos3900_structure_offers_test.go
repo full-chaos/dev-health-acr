@@ -174,8 +174,8 @@ func TestKindOfferMaterial_DeclaredKindRanksFirstAlongsidePool(t *testing.T) {
 			t.Fatalf("KindOptions = %+v, want NO repository -- the pool holds none, so the offer cannot be honoured", material.KindOptions)
 		}
 	}
-	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 1, DistinctKindCount: 4, SuppressedByCardinality: false}) {
-		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:0 DeclaredWithheldNotInPoolCount:1 DistinctKindCount:4 SuppressedByCardinality:false}", diag)
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 1, DeclaredWithheldNotInPoolKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}, DistinctKindCount: 4, SuppressedByCardinality: false}) {
+		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:0 DeclaredWithheldNotInPoolCount:1 DeclaredWithheldNotInPoolKinds:[repository] DistinctKindCount:4 SuppressedByCardinality:false}", diag)
 	}
 
 	// The CHAOS-4967 property CHAOS-5218 preserves, on the SAME fixture with
@@ -205,12 +205,18 @@ func TestKindOfferMaterial_DeclaredKindRanksFirstAlongsidePool(t *testing.T) {
 func TestKindOfferMaterial_DeclaredKindAloneSuppressesNeed(t *testing.T) {
 	t.Parallel()
 	declaredKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}
-	material, diag := kindOfferMaterial(nil, nil, declaredKinds, nil)
+	material, diag := kindOfferMaterial(nil, nil, declaredKinds, heldFromKinds())
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(nil pool, nil explicit, [repository] declared) = %+v, want empty -- a declared kind alone is not an ambiguity to disclose", material)
 	}
-	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 1, DistinctKindCount: 1, SuppressedByCardinality: true}) {
-		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:1 DistinctKindCount:1 SuppressedByCardinality:true}", diag)
+	// CHAOS-5218: an EMPTY pool holds no candidate of the declared kind
+	// either, so the kind is now WITHHELD rather than ranked-then-suppressed.
+	// The outcome this test exists for -- no need raised -- is unchanged; the
+	// diagnostics move because DistinctKindCount now reads 0 ("genuinely
+	// nothing offerable") instead of 1, which is the more accurate reading of
+	// an empty pool.
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 1, DeclaredWithheldNotInPoolKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}, DistinctKindCount: 0, SuppressedByCardinality: true}) {
+		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:0 DeclaredWithheldNotInPoolCount:1 DeclaredWithheldNotInPoolKinds:[repository] DistinctKindCount:0 SuppressedByCardinality:true}", diag)
 	}
 }
 
@@ -229,12 +235,13 @@ func TestKindOfferMaterial_TwoDeclaredKindsAloneSuppressesNeed(t *testing.T) {
 		contractsv1.ContextFabricSubjectTeam,
 		contractsv1.ContextFabricSubjectProject,
 	}
-	material, diag := kindOfferMaterial(nil, nil, declaredKinds, nil)
+	material, diag := kindOfferMaterial(nil, nil, declaredKinds, heldFromKinds())
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Errorf("kindOfferMaterial(nil pool, nil explicit, [team, project] declared) = %+v, want empty -- two already-declared axes are not an ambiguity to disclose", material)
 	}
-	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 2, DistinctKindCount: 2, SuppressedByCardinality: true}) {
-		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:2 DistinctKindCount:2 SuppressedByCardinality:true} -- DistinctKindCount is still 2 (both declared kinds ARE distinct offerable kinds), only SuppressedByCardinality changes", diag)
+	// CHAOS-5218: both declared kinds are withheld against an empty pool.
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 2, DeclaredWithheldNotInPoolKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectProject}, DistinctKindCount: 0, SuppressedByCardinality: true}) {
+		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:0 DeclaredWithheldNotInPoolCount:2 DeclaredWithheldNotInPoolKinds:[team project] DistinctKindCount:0 SuppressedByCardinality:true}", diag)
 	}
 
 	// CHAOS-5218 SUPERSEDES the old complement here. It asserted that the same
@@ -248,8 +255,8 @@ func TestKindOfferMaterial_TwoDeclaredKindsAloneSuppressesNeed(t *testing.T) {
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Fatalf("kindOfferMaterial([pull_request] pool, nil explicit, [team, project] declared) = %+v, want empty -- neither declared kind is in the pool, so only pull_request remains and one kind is not an ambiguity", material)
 	}
-	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 2, DistinctKindCount: 1, SuppressedByCardinality: true}) {
-		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:0 DeclaredWithheldNotInPoolCount:2 DistinctKindCount:1 SuppressedByCardinality:true}", diag)
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 2, DeclaredWithheldNotInPoolKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectProject}, DistinctKindCount: 1, SuppressedByCardinality: true}) {
+		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:0 DeclaredWithheldNotInPoolCount:2 DeclaredWithheldNotInPoolKinds:[team project] DistinctKindCount:1 SuppressedByCardinality:true}", diag)
 	}
 
 	// The complement CHAOS-5218 KEEPS: when the pool genuinely holds one of
