@@ -698,6 +698,17 @@ func TestTheRefusalEventCarriesTheSourceKindAndTheStateItWasBuiltFrom(t *testing
 	}
 	event := telemetry.groupedCohortCompletenesses[0]
 
+	// F1 (review round 2, CONFIRMED by execution): deleting `Family: plan.Family`
+	// from the refusal literal killed nothing. The emitter logs `family`, so a
+	// real refusal became unattributable in telemetry -- an operator could see
+	// that a grouped question was refused and not which family it was refused
+	// for. The reflection test cannot catch it: Family is an EVENT-only field
+	// with no counterpart on CohortGroupingOutcome, so it falls outside that
+	// walk by construction.
+	if event.Family != QuestionFamilyGroupedCohortStatus {
+		t.Errorf("event.Family = %q, want %q: a refusal with an empty family is unattributable in telemetry, and this is an event-only field the outcome-field reflection walk structurally cannot reach",
+			event.Family, QuestionFamilyGroupedCohortStatus)
+	}
 	if event.SourceGroupKind != SubjectTeam {
 		t.Errorf("event.SourceGroupKind = %q, want %q: the reader is told both kinds in the disclosure, and an operator told only the planned one cannot answer the question a mismatch actually raises -- where should I look instead",
 			event.SourceGroupKind, SubjectTeam)
@@ -814,5 +825,98 @@ func TestTheRefusalEventPreservesATruncatedDiscovery(t *testing.T) {
 	// The refusal itself is unchanged by the discovery state.
 	if event.Refusal != CohortGroupingRefusalGroupKindSourceMismatch {
 		t.Errorf("event.Refusal = %q, want %q", event.Refusal, CohortGroupingRefusalGroupKindSourceMismatch)
+	}
+}
+
+// TestTheOrdinaryGroupedEventPreservesItsCounts closes review round 2's F2 and
+// F3, both CONFIRMED by execution: deleting `GroupsMarkedIncomplete` or the
+// final `Complete` from the ORDINARY grouped emit killed nothing.
+//
+// ASSERTIONS ONLY — this test adds no production line to the `len(groups) > 0`
+// branch, which this change otherwise does not touch. Both fields are
+// pre-existing; the gap is coverage, and the remedy is coverage.
+//
+// WHY A PAIR, not one fixture. It is the same lesson `Truncated` taught on the
+// refusal arm one round earlier, and it applies field by field:
+//
+//   - `Complete` is asserted TRUE in one arm and FALSE in the other. A single
+//     fixture pins at most one of those, because the arm whose expected value
+//     is `false` is satisfied by the struct's zero value with nothing assigned.
+//   - `GroupsMarkedIncomplete` is asserted NON-ZERO. Against a complete cohort
+//     its true value is 0 — identical to the zero value — so an "expect 0"
+//     assertion could never have caught the deletion. The incomplete arm is the
+//     only one that discriminates, and the complete arm is kept beside it so a
+//     mutant that reports every group incomplete is caught too.
+//
+// Groups inherit the cohort's discovery-level completeness (a member never
+// discovered could belong to any group), so an incomplete cohort yields groups
+// that are all incomplete — which is what makes the count non-zero here without
+// any production change.
+func TestTheOrdinaryGroupedEventPreservesItsCounts(t *testing.T) {
+	t.Parallel()
+	// Planned kind AGREES with the team-scoped rows, so groups are actually
+	// built and the ordinary arm runs -- the refusal arms are not reached.
+	facts := []CanonicalFact{
+		teamScopedFact("project_a", "team_security", "Security"),
+		teamScopedFact("project_b", "team_security", "Security"),
+	}
+	cases := []struct {
+		name                 string
+		cohortComplete       bool
+		wantComplete         bool
+		wantIncompleteGroups bool // true => must be NON-ZERO
+	}{
+		{"complete discovery", true, true, false},
+		{"incomplete discovery", false, false, true},
+	}
+	if len(cases) < 2 {
+		t.Fatal("this property needs a PAIR; one fixture pins at most one of the two fields")
+	}
+	for _, testCase := range cases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			telemetry := &recordingTelemetry{}
+			engine, request := groupingEngineFixtureWithCohortState(
+				t, telemetry, SubjectTeam, facts, testCase.cohortComplete, false)
+
+			result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+			if err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			// Fixture control: the ORDINARY arm must actually have run, or every
+			// assertion below is about an event that was never emitted.
+			if result.Cohort == nil || len(result.Cohort.Groups) == 0 {
+				t.Fatalf("fixture drift: no groups were built, so the ordinary grouped arm never ran and this test measures nothing")
+			}
+			if len(telemetry.groupedCohortCompletenesses) != 1 {
+				t.Fatalf("groupedCohortCompletenesses = %d events, want exactly one", len(telemetry.groupedCohortCompletenesses))
+			}
+			event := telemetry.groupedCohortCompletenesses[0]
+
+			if event.GroupCount != len(result.Cohort.Groups) {
+				t.Errorf("event.GroupCount = %d, want %d", event.GroupCount, len(result.Cohort.Groups))
+			}
+			if event.Complete != testCase.wantComplete {
+				t.Errorf("event.Complete = %v, want %v: an ordinary grouped answer reporting the wrong final completeness tells an operator the cohort was fully seen when it was not, or the reverse",
+					event.Complete, testCase.wantComplete)
+			}
+			if testCase.wantIncompleteGroups {
+				if event.GroupsMarkedIncomplete == 0 {
+					t.Error("event.GroupsMarkedIncomplete = 0 over an INCOMPLETE discovery whose every group therefore inherits incompleteness -- zero is also this field's zero value, so this is the only arm that can catch the field being dropped")
+				}
+				if event.GroupsMarkedIncomplete != len(result.Cohort.Groups) {
+					t.Errorf("event.GroupsMarkedIncomplete = %d, want %d (every group inherits an incomplete discovery)",
+						event.GroupsMarkedIncomplete, len(result.Cohort.Groups))
+				}
+			} else if event.GroupsMarkedIncomplete != 0 {
+				t.Errorf("event.GroupsMarkedIncomplete = %d over a COMPLETE discovery, want 0 -- kept beside the non-zero arm so a mutant that reports every group incomplete is caught too",
+					event.GroupsMarkedIncomplete)
+			}
+			// No refusal happened, so the refusal-only fields stay absent.
+			if event.Refusal != CohortGroupingRefusalNone {
+				t.Errorf("event.Refusal = %q on a successfully grouped answer, want none", event.Refusal)
+			}
+		})
 	}
 }
