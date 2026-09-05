@@ -27,7 +27,7 @@ func teamStateFrame(t *testing.T) QuestionFrame {
 	return frameWith(
 		[]InvestigationGoal{GoalAssessState},
 		SubjectExpression{Kind: SubjectExpressionNamed, Named: &NamedSubjectExpression{
-			Handle: "team-one", ExpectedKind: &kind,
+			Terms: []string{"team-one"}, ExpectedKind: &kind,
 		}},
 		TemporalIntentCurrent,
 		nil,
@@ -78,13 +78,19 @@ func TestRemovingAProducerCannotLowerTheStandard(t *testing.T) {
 	richRow := derivedStateRow(t, DeriveRequirements(frame, GenerateObligationSeed(rich), rich))
 	thinRow := derivedStateRow(t, DeriveRequirements(frame, GenerateObligationSeed(thin), thin))
 
-	want := readQuantifiers[ObligationState]
+	// THE EXPECTATION IS A LITERAL, never `readQuantifiers[ObligationState]`.
+	// An expectation computed by the thing it checks is decided by the very
+	// mutation it exists to catch: emptying the table would move `want` along
+	// with the result and the test would still pass. It is also what lets this
+	// test compile and RUN at the base commit, where the table does not exist,
+	// so the red proof is a real failure rather than a build error.
+	const want = CompletionQuantifierCorroborated
 	if richRow.Quantifier != want {
-		t.Fatalf("with two declaring kinds the standard is %q, want the declared %q", richRow.Quantifier, want)
+		t.Fatalf("with two declaring kinds the standard is %q, want %q", richRow.Quantifier, want)
 	}
 	if thinRow.Quantifier != want {
-		t.Fatalf("REMOVING a producer changed the standard to %q, want the declared %q -- the bar is "+
-			"a property of the obligation, and a thinner registry raises a GAP, never a lower bar",
+		t.Fatalf("REMOVING a producer changed the standard to %q, want %q -- the bar is a property "+
+			"of the obligation, and a thinner registry raises a GAP, never a lower bar",
 			thinRow.Quantifier, want)
 	}
 	// The serving set itself is still allowed to shrink; it is the STANDARD
@@ -118,6 +124,14 @@ func TestADuplicateAdapterCannotManufactureCorroboration(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// BASE-COMPILABLE BOUNDARY. Everything ABOVE this line compiles and runs at the
+// base commit, so it can serve as a red-at-base proof: a real failure, not a
+// build error. Everything BELOW names a symbol this change introduces and can
+// only be proven by mutation. The red-on-base runner truncates each file here;
+// the boundary is a declared property of the file rather than a list kept
+// somewhere else that would drift from it.
+// ---------------------------------------------------------------------------
 // TestEveryReadObligationDeclaresItsQuantifier keeps the table TOTAL.
 //
 // A missing entry yields `none`, the read evaluator then skips that

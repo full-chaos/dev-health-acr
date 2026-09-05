@@ -101,47 +101,6 @@ func TestAPlanningOnlyReadRequirementCannotReadComplete(t *testing.T) {
 	}
 }
 
-// TestTheReadPassOnlyLOWERS is the property the frozen predicate's contract
-// rests on, asserted rather than argued.
-//
-// If the read pass could raise a state, the frozen function's "we disagree on
-// exactly one shape" claim would be false and the stored-path exemption would
-// admit shapes nobody enumerated.
-func TestTheReadPassOnlyLOWERS(t *testing.T) {
-	t.Parallel()
-	seeded := planningRow("state/subject/team", "state")
-	for _, name := range []struct {
-		label string
-		rows  []ContextFabricPlanRequirementOutcomeRow
-	}{
-		{"degraded stays degraded", []ContextFabricPlanRequirementOutcomeRow{seeded, legalUnavailableRow()}},
-		{"partial stays partial", []ContextFabricPlanRequirementOutcomeRow{seeded, legalRow()}},
-	} {
-		name := name
-		t.Run(name.label, func(t *testing.T) {
-			t.Parallel()
-			before := DeriveContextFabricAnswerCompletenessStateBeforeReadEvaluation(name.rows)
-			after := DeriveContextFabricAnswerCompletenessState(name.rows)
-			if before != after {
-				t.Fatalf("the read pass moved a non-complete state %q to %q; it may only lower "+
-					"`complete`, and the frozen predicate's exemption depends on that", before, after)
-			}
-		})
-	}
-}
-
-// legalUnavailableRow is a valid attributed unavailable row, for the
-// absorbing-state cases.
-func legalUnavailableRow() ContextFabricPlanRequirementOutcomeRow {
-	return ContextFabricPlanRequirementOutcomeRow{
-		Stage:         ContextFabricOutcomeStageAssembledResult,
-		Outcome:       ContextFabricRequirementUnavailable,
-		Impact:        ContextFabricAnswerImpactDimension,
-		CauseCoverage: ContextFabricCoverageDetailFactUnconfigured,
-		CauseObserved: true,
-	}
-}
-
 // TestAnUnknownStageContributesToNeitherSet is the stage ALLOW-LIST, and it
 // asserts BOTH directions.
 //
@@ -200,6 +159,55 @@ func TestAnUnknownStageContributesToNeitherSet(t *testing.T) {
 					"allow-list has dropped a real stage", stage, got)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BASE-COMPILABLE BOUNDARY. Everything ABOVE this line compiles and runs at the
+// base commit, so it can serve as a red-at-base proof: a real failure, not a
+// build error. Everything BELOW names a symbol this change introduces and can
+// only be proven by mutation. The red-on-base runner truncates each file here;
+// the boundary is a declared property of the file rather than a list kept
+// somewhere else that would drift from it.
+// ---------------------------------------------------------------------------
+// TestTheReadPassOnlyLOWERS is the property the frozen predicate's contract
+// rests on, asserted rather than argued.
+//
+// If the read pass could raise a state, the frozen function's "we disagree on
+// exactly one shape" claim would be false and the stored-path exemption would
+// admit shapes nobody enumerated.
+func TestTheReadPassOnlyLOWERS(t *testing.T) {
+	t.Parallel()
+	seeded := planningRow("state/subject/team", "state")
+	for _, name := range []struct {
+		label string
+		rows  []ContextFabricPlanRequirementOutcomeRow
+	}{
+		{"degraded stays degraded", []ContextFabricPlanRequirementOutcomeRow{seeded, legalUnavailableRow()}},
+		{"partial stays partial", []ContextFabricPlanRequirementOutcomeRow{seeded, legalRow()}},
+	} {
+		name := name
+		t.Run(name.label, func(t *testing.T) {
+			t.Parallel()
+			before := DeriveContextFabricAnswerCompletenessStateBeforeReadEvaluation(name.rows)
+			after := DeriveContextFabricAnswerCompletenessState(name.rows)
+			if before != after {
+				t.Fatalf("the read pass moved a non-complete state %q to %q; it may only lower "+
+					"`complete`, and the frozen predicate's exemption depends on that", before, after)
+			}
+		})
+	}
+}
+
+// legalUnavailableRow is a valid attributed unavailable row, for the
+// absorbing-state cases.
+func legalUnavailableRow() ContextFabricPlanRequirementOutcomeRow {
+	return ContextFabricPlanRequirementOutcomeRow{
+		Stage:         ContextFabricOutcomeStageAssembledResult,
+		Outcome:       ContextFabricRequirementUnavailable,
+		Impact:        ContextFabricAnswerImpactDimension,
+		CauseCoverage: ContextFabricCoverageDetailFactUnconfigured,
+		CauseObserved: true,
 	}
 }
 
