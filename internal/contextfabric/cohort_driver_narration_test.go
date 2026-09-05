@@ -165,7 +165,7 @@ func TestNarrateCohortDriverJudgments_EmitsAValidJudgmentCitingTheDriver(t *test
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
 	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
 
-	judgments, mintedClaims, event := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+	judgments, mintedClaims, event := narrateCohortDriverJudgments(ranked, nil, 0, citations, ItemAllocation{})
 	if event.Outcome != CohortDriverNarrationEmitted {
 		t.Fatalf("event.Outcome = %q, want %q", event.Outcome, CohortDriverNarrationEmitted)
 	}
@@ -245,7 +245,7 @@ func TestNarrateCohortDriverJudgments_SkipsMembersWithoutEvidence(t *testing.T) 
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
 	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
 
-	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations, ItemAllocation{})
 	if len(judgments) != 0 {
 		t.Fatalf("judgments = %+v, want empty (no evidence to cite)", judgments)
 	}
@@ -269,7 +269,7 @@ func TestNarrateCohortDriverJudgments_BudgetExhausted(t *testing.T) {
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
 	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
 
-	judgments, _, event := narrateCohortDriverJudgments(ranked, make([]DriverJudgment, 50), 0, citations) // synthesis alone used the whole budget
+	judgments, _, event := narrateCohortDriverJudgments(ranked, make([]DriverJudgment, 50), 0, citations, ItemAllocation{}) // synthesis alone used the whole budget
 	if len(judgments) != 0 {
 		t.Fatalf("judgments = %+v, want empty", judgments)
 	}
@@ -286,7 +286,7 @@ func TestNarrateCohortDriverJudgments_NoDriversAtAll(t *testing.T) {
 	t.Parallel()
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{rankTestMember("A")}}
 	ranked, _, citations := RankCohort(cohort, nil, deficiencyPrunedCoverage()) // zero signals available at all
-	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations, ItemAllocation{})
 	if len(judgments) != 0 {
 		t.Fatalf("judgments = %+v, want empty", judgments)
 	}
@@ -294,8 +294,8 @@ func TestNarrateCohortDriverJudgments_NoDriversAtAll(t *testing.T) {
 		t.Fatalf("event.Outcome = %q, want %q", event.Outcome, CohortDriverNarrationNoDrivers)
 	}
 
-	if judgments, _, event := narrateCohortDriverJudgments(nil, nil, 0, nil); len(judgments) != 0 || event.Outcome != CohortDriverNarrationNoDrivers {
-		t.Fatalf("narrateCohortDriverJudgments(nil, nil, 0, nil) = (%v, %+v), want (empty, no_drivers)", judgments, event)
+	if judgments, _, event := narrateCohortDriverJudgments(nil, nil, 0, nil, ItemAllocation{}); len(judgments) != 0 || event.Outcome != CohortDriverNarrationNoDrivers {
+		t.Fatalf("narrateCohortDriverJudgments(nil, ...) = (%v, %+v), want (empty, no_drivers)", judgments, event)
 	}
 }
 
@@ -333,7 +333,7 @@ func TestNarrateCohortDriverJudgments_MaxLengthSubjectLabelProducesAValidJudgmen
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
 	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
 
-	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations, ItemAllocation{})
 	if event.Outcome != CohortDriverNarrationEmitted || len(judgments) == 0 {
 		t.Fatalf("expected at least one narrated judgment, got event=%+v judgments=%v", event, judgments)
 	}
@@ -374,7 +374,7 @@ func TestNarrateCohortDriverJudgments_EpistemicStatusMatchesDerivation(t *testin
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
 	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
 
-	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations, ItemAllocation{})
 	if event.Outcome != CohortDriverNarrationEmitted || len(judgments) == 0 {
 		t.Fatalf("expected at least one narrated judgment, got event=%+v judgments=%v", event, judgments)
 	}
@@ -429,7 +429,7 @@ func TestNarrateCohortDriverJudgments_DeconflictsAGeneratedIDAlreadyTakenBySynth
 		Current:          true,
 	}
 
-	judgments, _, event := narrateCohortDriverJudgments(ranked, []DriverJudgment{synthesisDriver}, 0, citations)
+	judgments, _, event := narrateCohortDriverJudgments(ranked, []DriverJudgment{synthesisDriver}, 0, citations, ItemAllocation{})
 	if event.Outcome != CohortDriverNarrationEmitted || len(judgments) == 0 {
 		t.Fatalf("expected narrated judgments, got event=%+v judgments=%v", event, judgments)
 	}
@@ -533,7 +533,7 @@ func TestNarrateCohortDriverJudgments_CountsDriversSkippedForMissingCitation(t *
 		t.Fatal("premise broken: the scenario no longer ranks the available-zero deficiency driver, so no citation-skip branch is exercised")
 	}
 
-	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations, ItemAllocation{})
 
 	if got := event.DriversSkipped[string(CohortDriverSkipNoCitation)]; got != 1 {
 		t.Errorf("event.DriversSkipped[%q] = %d, want 1 -- the eliminated zero-fired deficiency driver must be counted with its reason", CohortDriverSkipNoCitation, got)
@@ -569,7 +569,7 @@ func TestNarrateCohortDriverJudgments_SkipCountsAreAbsentWhenNothingIsSkipped(t 
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
 	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
 
-	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+	judgments, _, event := narrateCohortDriverJudgments(ranked, nil, 0, citations, ItemAllocation{})
 	if len(judgments) == 0 {
 		t.Fatal("expected narrated judgments for a fully-citable member")
 	}

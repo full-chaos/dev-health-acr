@@ -260,7 +260,7 @@ func TestPlanRefusalPredictsForTheCohortItMeasured(t *testing.T) {
 	engine := &Engine{telemetry: telemetry}
 	err := engine.planRefusal(
 		context.Background(), storage.Principal{OrgID: "org_predicted_call_site"}, plan,
-		ResponseMeasurement{}, contractsv1.ContextFabricBudgetOverrunItems,
+		MeasuredAttempt{Availability: ItemQuotaUnavailable}, contractsv1.ContextFabricBudgetOverrunItems,
 		false, true, contractsv1.ContextFabricNarrowingBasisOverlapAwareSetCover,
 		synthesizedMembers, declinedRetryTarget, RetryDeclinedInsufficientDeadline,
 		OutcomeReductionNotItemsAxis,
