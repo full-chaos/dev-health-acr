@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"log/slog"
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -94,6 +95,11 @@ type readEvidence struct {
 	// ever becomes reachable the requirement emits NO row rather than a row
 	// naming a cause nobody declared.
 	UndeclaredCause bool
+	// UndeclaredCode is the offending token, kept so the log line can NAME it.
+	// It is a vocabulary token by construction -- never corpus content -- so
+	// it is safe to emit; a producer that minted it is identifiable from one
+	// grep rather than from a bisect.
+	UndeclaredCode contractsv1.ContextFabricCoverageDetailCode
 }
 
 // canonicalFactSourcePrefix is how the fact registry names a canonical-fact
@@ -163,6 +169,7 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 		}
 		if !declaredCodes[detail.Code] {
 			evidence.UndeclaredCause = true
+			evidence.UndeclaredCode = detail.Code
 			continue
 		}
 		carriedCause[detail.FactKind] = detail.Code
@@ -465,7 +472,23 @@ func readRequirementOutcomeRow(
 	// disclosure rather than an invented one -- and
 	// TestAnUndeclaredCauseCodeEmitsNoRow is the reach probe that fails if the
 	// branch starts executing.
+	//
+	// IT LOGS, and that is not optional. Dropping the row silently would make
+	// this a swallowed signal: the answer would go out one disclosure short
+	// with nothing anywhere saying why, and the reach probe only fires in a
+	// test run. The line names the requirement and the code so the producer
+	// that minted an undeclared code is identifiable from one grep, and the
+	// code is logged because it is a VOCABULARY TOKEN, not corpus content.
+	//
+	// slog.Default() rather than a threaded logger, matching this package's
+	// existing convention for a nil logger; the evaluator is a pure function
+	// on the finalization path and has no engine handle to take one from.
 	if evidence.UndeclaredCause {
+		slog.Default().Warn("context fabric read requirement dropped for an undeclared coverage code",
+			"requirement", requirement.Requirement,
+			"obligation", requirement.Obligation,
+			"undeclared_code", string(evidence.UndeclaredCode),
+			"observed_kinds", evidence.Observed)
 		return RequirementOutcomeRow{}, false
 	}
 

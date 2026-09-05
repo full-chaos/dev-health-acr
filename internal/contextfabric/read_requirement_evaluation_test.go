@@ -1,6 +1,9 @@
 package contextfabric
 
 import (
+	"bytes"
+	"log/slog"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -543,12 +546,35 @@ func TestAnUndeclaredCauseCodeEmitsNoRow(t *testing.T) {
 		}
 	}
 
+	// THE LINE IS READ BACK, not assumed. A dropped row with nothing in the
+	// log is a swallowed signal: the answer goes out one disclosure short and
+	// the only thing that would notice is this test, which does not run in
+	// production. So the drop is required to SAY SO, and the assertion is on
+	// the emitted text rather than on a counter.
+	logs := &bytes.Buffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
 	rows := appendReadRequirementEvaluations(nil,
 		[]contractsv1.ContextFabricPlanRequirement{requirement},
 		codedCoverage(undeclared, health, health, SourceUnavailable))
 	if len(rows) != 0 {
 		t.Fatalf("an undeclared cause code produced %d rows: %+v -- it must reach the wire "+
 			"neither as itself nor remapped onto a declared code", len(rows), rows)
+	}
+
+	const line = "context fabric read requirement dropped for an undeclared coverage code"
+	if !strings.Contains(logs.String(), line) {
+		t.Fatalf("the drop emitted no disclosure; a silently dropped row is a swallowed signal. logs: %s", logs.String())
+	}
+	// The line must NAME what was dropped and why, or it cannot drive the fix.
+	// A disclosure that says something happened without saying what is the
+	// generic bit this whole layer exists to replace.
+	for _, want := range []string{requirement.Requirement, string(undeclared)} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("the disclosure does not name %q: %s", want, logs.String())
+		}
 	}
 
 	// COMPLEMENT: the same fixture with a DECLARED code does emit its row.
@@ -561,6 +587,13 @@ func TestAnUndeclaredCauseCodeEmitsNoRow(t *testing.T) {
 	}
 	if declaredRows[0].CauseCoverage != contractsv1.ContextFabricCoverageDetailFactReadFailed {
 		t.Fatalf("the declared code was not carried: cause = %q", declaredRows[0].CauseCoverage)
+	}
+	// AND THE COMPLEMENT ON THE LINE ITSELF: a declared code must not emit the
+	// drop disclosure. Without this the assertion above would pass on an
+	// evaluator that logged it unconditionally.
+	if strings.Count(logs.String(), line) != 1 {
+		t.Fatalf("the drop disclosure was emitted %d times across both fixtures, want exactly 1 -- "+
+			"a declared code must not log a drop: %s", strings.Count(logs.String(), line), logs.String())
 	}
 }
 
@@ -854,6 +887,82 @@ func TestTheCanonicalFactPrefixMatchesTheProducer(t *testing.T) {
 	if !ok || kind != contractsv1.ContextFabricFactHealth {
 		t.Fatalf("the evaluator cannot read the producer's own source key %q (parsed %q, ok=%v)",
 			bundle.Coverage.Sources[0].Source, kind, ok)
+	}
+}
+
+// TestFactBearingAgreesWithTheRegistrysOwnRule is the AUDIT assertion: this
+// file's idea of "did anything come back" must be the fact registry's, not a
+// second opinion beside it.
+//
+// The registry owns the question. `stateRejectsFacts` names every state that
+// contributes no facts; its complement is therefore exactly the fact-bearing
+// set, and a read requirement whose evidence is fact-bearing must NOT publish
+// `unavailable`, which says the reader got none of the cell.
+//
+// This is the test that would have caught the truncation defect before a
+// reviewer did. `SourceTruncated` is absent from `stateRejectsFacts` -- the
+// registry drops over-budget facts and marks the source truncated RATHER THAN
+// failing the read -- and this evaluator was publishing `unavailable` for it
+// anyway. Quoting that comment in a fix is worth less than asserting against
+// the predicate, because the predicate moves and the quote does not.
+//
+// Driven through the whole evaluator rather than against an internal helper,
+// so it constrains what the DOCUMENT says rather than what an intermediate
+// counter holds.
+func TestFactBearingAgreesWithTheRegistrysOwnRule(t *testing.T) {
+	t.Parallel()
+	health := contractsv1.ContextFabricFactHealth
+	requirement := readRequirement(CompletionQuantifierAtLeastOne)
+
+	states := []SourceState{
+		SourceAvailable, SourceStale, SourceTruncated, SourceNoData,
+		SourceUnavailable, SourceUnconfigured, SourceUnauthorized,
+		SourceConflicted, SourceNotApplicable, SourcePruned,
+	}
+	// The set must be TOTAL over what a provider may return, or a state could
+	// drift out of both this test and the evaluator together.
+	checked := 0
+	for _, state := range states {
+		state := state
+		t.Run(string(state), func(t *testing.T) {
+			t.Parallel()
+			rows := appendReadRequirementEvaluations(nil,
+				[]contractsv1.ContextFabricPlanRequirement{requirement},
+				factCoverage(health, state))
+
+			// A PRUNE IS ITS OWN CASE and the two layers still agree: the
+			// registry says it contributes no facts, and this evaluator emits
+			// no row at all rather than an `unavailable` one, because a prune
+			// is not a loss. Asserted here so the prune cannot quietly rejoin
+			// the unavailable set.
+			if state == SourcePruned {
+				if len(rows) != 0 {
+					t.Fatalf("a pruned observation produced %d rows: %+v", len(rows), rows)
+				}
+				return
+			}
+			if len(rows) != 1 {
+				t.Fatalf("state %q produced %d rows, want 1", state, len(rows))
+			}
+
+			bearing := !stateRejectsFacts(state)
+			unavailable := rows[0].Outcome == contractsv1.ContextFabricRequirementUnavailable
+			if bearing == unavailable {
+				t.Fatalf("state %q: the registry says fact-bearing=%v, this evaluator published %q. "+
+					"A fact-bearing state must never read `unavailable` -- that tells a reader they got "+
+					"NONE of a cell they got part of -- and a state that rejects facts must not read as "+
+					"anything else", state, bearing, rows[0].Outcome)
+			}
+		})
+		checked++
+	}
+	if checked != len(states) {
+		t.Fatalf("checked %d states of %d", checked, len(states))
+	}
+	// POSITIVE CONTROL on the predicate itself: if `stateRejectsFacts` ever
+	// became constant, every assertion above would agree with it vacuously.
+	if !stateRejectsFacts(SourceUnavailable) || stateRejectsFacts(SourceAvailable) {
+		t.Fatal("stateRejectsFacts no longer discriminates; every assertion above is vacuous")
 	}
 }
 
