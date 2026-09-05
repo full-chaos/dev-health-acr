@@ -365,7 +365,14 @@ var requirementFieldSources = map[string]string{
 	"FactKinds":   "the registry's producer declarations, via the obligation seed",
 	"Step":        "the computed-step name declared for the obligation",
 	"Scope":       "SubjectExpression.Kind",
-	"Quantifier":  "the obligation's measured serving cardinality",
+	// ON A SERVED ROW. An UNSERVED row carries `none` by the row invariant
+	// ("an unserved row has Unavailable non-empty and Quantifier `none`"),
+	// which is the absence of a quantifier rather than a second source for
+	// one -- and servability IS topology-dependent, by design, in the
+	// derivation's population guard. Spelled out because the behavioural
+	// half below partitions on exactly this distinction, and the two halves
+	// of one law disagreeing is the state L3 exists to forbid.
+	"Quantifier":  "the obligation's measured serving cardinality (served rows; an unserved row carries `none` by the row invariant)",
 	"Unavailable": "the cause attribution over the registry declarations",
 	"Dimensions":  "the serving FactKinds' FactCapability.Dimension declarations",
 	// The §13.2.3 amendment. Both derive from the SAME single source -- the
