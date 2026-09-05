@@ -1489,6 +1489,22 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		Budget:           e.effectiveResponseBudget(request),
 		MaxCohortMembers: request.Options.MaxCohortMembers,
 	})
+	// The derived requirement rows belong to the PLAN VARIABLE, not to a copy
+	// of it.
+	//
+	// finalizeResult takes the plan by value and stage 3 may append narrowing
+	// steps to this variable, so the plan is RE-STAMPED from it after the fit
+	// ("the persisted plan must describe the answer that was actually
+	// produced"). Anything written onto finalizeResult's own copy is discarded
+	// at that re-stamp -- which is exactly what happened: the served document
+	// carried a full outcome set, seeded from these very rows, beside an empty
+	// requirement array. Writing them here means every later stamp of this
+	// plan carries them, and there is one place that decides.
+	//
+	// It is set once, here, because the rows are a constant of the turn: a
+	// pure function of the frame and the registry's declarations, fixed before
+	// any narrowing runs.
+	plan.Requirements = PlanRequirementsFromDerived(deriveTurnRequirements(familyOutcome.Frame, e.requirements))
 	// CHAOS-3900 W1 (codex review finding, round 1): a question_stated/
 	// clarification_confirmed window was canonicalized above against the
 	// REQUEST's own current axis (canonicalizeEvidenceWindow only ever

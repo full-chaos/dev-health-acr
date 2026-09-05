@@ -201,7 +201,10 @@ func membershipCardinalityOutcomeRow(cardinality MembershipCardinality, requirem
 	row.CauseNarrowing = cardinality.Basis
 	row.CauseOverrun = cardinality.Overrun
 	row.CauseObserved = true
-	return row
+	// The reduction step, derived from the row's own counts and the causes
+	// just carried onto it, so the step and the row cannot state different
+	// things about one narrowing.
+	return contractsv1.ContextFabricWithReductionRefinement(row)
 }
 
 // appendMembershipCardinality is the assembly-side wiring: run the step over

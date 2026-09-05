@@ -227,6 +227,27 @@ func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal
 	if plan != nil {
 		result = stampAnswerPlan(result, *plan)
 	}
+	// Re-derive completeness HERE, after the plan is on the result and before
+	// the budget is asserted.
+	//
+	// The veto exits call ComputeAnswerCompleteness themselves, but they call
+	// it BEFORE this function stamps the plan. Anything the derivation reads
+	// off the plan is therefore invisible to them -- which is how those exits
+	// came to serve, and save, a plan describing requirement rows that no
+	// outcome row accounted for. Re-deriving here is what makes this function
+	// the place the two published arrays are reconciled, rather than four
+	// places that each have to remember.
+	//
+	// BEFORE assertFitsBudget, deliberately: rows added by the re-derivation
+	// are bytes in the served document. Measuring first and completing the
+	// account afterwards would assert a budget against a document smaller
+	// than the one the route marshals -- the exact defect this function's
+	// header says it exists to prevent.
+	//
+	// Safe to run on the paths that already derived it: the derivation is
+	// pure and idempotent, so a second pass over an already-complete set
+	// returns the same set.
+	result.Completeness = ComputeAnswerCompleteness(result)
 	if err := e.assertFitsBudget(ctx, principal, stage, result, budget); err != nil {
 		return InvestigationResult{}, err
 	}

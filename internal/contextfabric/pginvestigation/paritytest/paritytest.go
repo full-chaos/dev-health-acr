@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -128,11 +129,94 @@ func result(resultID, question string) contextfabric.InvestigationResult {
 	return built
 }
 
+// resultWithPlanRequirements is `result` plus the plan-requirement layer: the
+// derived requirement rows on the answer plan and a refinement chain on the
+// outcome row that accounts for them.
+//
+// EVERY WIRE ROW IS BUILT THROUGH ITS PRODUCER, never by hand. Both stores
+// validate on the way in, and these rows carry closed vocabularies whose Go
+// zero value is not a member -- so a hand-built row is invalid in a way a
+// reader cannot see. That is not a hypothetical: the completeness block above
+// was hand-built once and every case in this table failed on save, in CI's
+// container job only.
+//
+// It exists as its own fixture rather than being folded into `result` so the
+// round-trip case for these arrays is NAMED in the table. A field that rides
+// along inside an unrelated case is covered by accident, and an accident is
+// not something a later change can be held to.
+func resultWithPlanRequirements(resultID, question string) contextfabric.InvestigationResult {
+	built := result(resultID, question)
+	derived := planRequirementFixtureRows()
+
+	plan := contextfabric.AnswerPlan{
+		Family:        contractsv1.ContextFabricQuestionFamilySubjectInvestigation,
+		FamilySource:  contractsv1.ContextFabricQuestionFamilySourceStructurePrecedence,
+		FamilyVersion: "parity-v1",
+		Budget:        contextfabric.AnswerPlanBudget{MaxItems: 30, MaxSerializedBytes: 1 << 20},
+		Requirements:  contextfabric.PlanRequirementsFromDerived(derived),
+	}
+	built.AnswerPlan = &plan
+
+	outcomes := contextfabric.SeedRequirementOutcomes(derived)
+	// Narrow the first row and record the chain that got it there, so the
+	// round trip carries a NON-EMPTY refinement array rather than only the
+	// seed rows. An array that is empty in the fixture is an array the parity
+	// case cannot prove round-trips.
+	outcomes[0].Outcome = contractsv1.ContextFabricRequirementNarrowed
+	outcomes[0].Impact = contractsv1.ContextFabricAnswerImpactScope
+	outcomes[0].CauseOverrun = contractsv1.ContextFabricBudgetOverrunItems
+	outcomes[0].CauseObserved = true
+	outcomes[0].Declared = 4
+	outcomes[0].Served = 2
+	outcomes[0].Refinements = []contractsv1.ContextFabricRequirementRefinement{
+		{Stage: contractsv1.ContextFabricOutcomeStageAssembledResult, Basis: contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical, Before: 4, After: 3},
+		{Stage: contractsv1.ContextFabricOutcomeStageProjection, Basis: contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical, Before: 3, After: 2},
+	}
+	built.Completeness.Outcomes = outcomes
+	// DERIVE LAST: completeness is a function of the whole outcome set and is
+	// recomputed after the rows are final, never carried from before them.
+	built.Completeness = contextfabric.ComputeAnswerCompleteness(built)
+	return built
+}
+
+// planRequirementFixtureRows is one READ row and one COMPUTED row with
+// distinct coordinates -- two ARMS, so a store that dropped one would fail
+// here rather than round-tripping a fixture that only ever exercised one.
+func planRequirementFixtureRows() []contextfabric.DerivedRequirement {
+	return []contextfabric.DerivedRequirement{
+		{
+			RequirementCoordinate: contextfabric.RequirementCoordinate{
+				Obligation: contextfabric.ObligationState,
+				Role:       contextfabric.SubjectRoleSubject,
+				Subject:    contextfabric.SubjectProject,
+			},
+			Kind:       contextfabric.ObligationKindRead,
+			FactKinds:  []contextfabric.FactKind{contextfabric.FactHealth, contextfabric.FactStatus},
+			Scope:      contextfabric.CompletionScopeSingleSubject,
+			Quantifier: contextfabric.CompletionQuantifierAtLeastOne,
+		},
+		{
+			RequirementCoordinate: contextfabric.RequirementCoordinate{
+				Obligation: contextfabric.ObligationCount,
+				Role:       contextfabric.SubjectRoleMember,
+				Subject:    contextfabric.SubjectRepository,
+			},
+			Kind:          contextfabric.ObligationKindComputed,
+			Step:          contextfabric.ComputedStepMembershipCardinality,
+			InputClass:    contextfabric.ComputedInputResolvedMemberSet,
+			StepExecution: contextfabric.ComputedStepDeclaredOnly,
+			Scope:         contextfabric.CompletionScopeEachMember,
+			Quantifier:    contextfabric.CompletionQuantifierExact,
+		},
+	}
+}
+
 // Cases is the shared parity table: save+get roundtrip, cross-org
 // not-found, unknown-id not-found, idempotent identical replay, and
 // rejected divergent replay.
 func Cases() []Case {
 	roundTrip := result("result-id-roundtrip", "what shipped this week?")
+	planRows := resultWithPlanRequirements("result-id-plan-rows", "which requirements did this turn plan?")
 	crossOrg := result("result-id-cross-org", "who owns this service?")
 	identicalA := result("result-id-idempotent", "is the rollout healthy?")
 	identicalB := identicalA
@@ -179,6 +263,11 @@ func Cases() []Case {
 			Name: "save and get round trip",
 			Save: []SaveStep{{Principal: orgA, Result: roundTrip}},
 			Get:  GetStep{Principal: orgA, ResultID: roundTrip.ResultID, Want: &roundTrip},
+		},
+		{
+			Name: "save and get round trip preserves the plan requirement rows and refinements",
+			Save: []SaveStep{{Principal: orgA, Result: planRows}},
+			Get:  GetStep{Principal: orgA, ResultID: planRows.ResultID, Want: &planRows},
 		},
 		{
 			Name: "get scoped to a different org returns not found",

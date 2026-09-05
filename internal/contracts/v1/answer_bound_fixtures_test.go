@@ -394,7 +394,40 @@ const irreducibleAnswerBytes = 1023
 // its maximum LEGAL encoding (the longest obligation, then two escaped
 // segments filling the 256-character bound) and all three cause vocabularies
 // present at their longest member.
-const maximalAnswerBytes = 521187082
+// 521144216 -> 521151843 (+7627): the plan's requirement array now takes the
+// 200 LONGEST coordinates rather than the first 200 the product walk emits.
+// The rows were each individually maximal in the fields the builder chose, and
+// the array was not: the coordinate is itself a byte cost, carried in three
+// fields and again in the concatenated identity, and 580 of the 780 product
+// members were never considered. The old fixture left "health/member/
+// pull_request" (589 bytes) out while taking "state/group/team" (569) -- so
+// the pinned number was BELOW a legal document, which is the one direction a
+// ceiling must never be wrong in. Selection is by measured serialized length,
+// ties broken on the identity so the fixture is deterministic.
+//
+// 521103416 -> 521144216 (+40800): the refinement's third cause. The fixture
+// carried basis and overrun and omitted coverage, which the refinement permits
+// alongside them -- so the previous number was not a maximum. Found by review;
+// the saturation probe structurally cannot find this class, because it grows an
+// empty closed-vocabulary field by writing a one-rune string, the document goes
+// invalid, and the field reads as already saturated.
+//
+// 521367470 -> 521103416 (-264054), and a DECREASE is the point rather than a
+// regression. Round 1's join finding produced a document-level rule: every
+// outcome identity must name a requirement the plan describes. A plan
+// requirement's identity is structurally short -- three segments, each a
+// member of a closed vocabulary -- so the outcome row's own 256-rune identity
+// bound is UNREACHABLE in a document that carries both arrays, and the earlier
+// pin was measuring a shape no valid document can take. It also gains the
+// refinement chain's second cause field. The net is smaller and correct.
+//
+// 521187082 -> 521367470 (+180388): the plan-requirement layer. The plan now
+// carries 200 requirement rows at their own ceiling, and each of the 200
+// outcome rows carries a full-length refinement chain. Both are new bounded
+// arrays on this document, so the maximum grew by construction rather than by
+// a bound drifting -- and the irreducible floor above did NOT move, because
+// both arrays are omitempty and the smallest answer has neither.
+const maximalAnswerBytes = 521151843
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
@@ -545,10 +578,14 @@ func deriveCompletenessMinimal(r *ContextFabricInvestigationResult) {
 // deriveCompletenessMaximal fills the outcome set to its declared ceiling,
 // every string at its own maximum and every optional cause present.
 //
-// The rows are UNAVAILABLE rather than narrowed because that is the largest
-// legal row: it carries a cause from each of the three cause vocabularies at
-// once, which a narrowed row may also do, and it has no served-below-declared
-// constraint to satisfy while doing it.
+// The rows are NARROWED rather than unavailable, and that is a change from
+// this fixture's first revision. Unavailable WAS the largest legal row while
+// the only optional content was the three cause vocabularies, which a
+// narrowed row may carry too. Once a row could also carry a refinement chain
+// it stopped being so: a chain is only legal on a row that lost something and
+// only reconciles against a real reduction, so an unavailable row with
+// served=declared=0 can hold no refinements at all. A narrowed row carries
+// every cause AND the full chain, which strictly dominates.
 func deriveCompletenessMaximal(r *ContextFabricInvestigationResult) {
 	deriveCompleteness(r, maximalOutcomeRows(ContextFabricPlanRequirementOutcomeMaxCount))
 }
@@ -576,33 +613,47 @@ func maximalOutcomeRows(n int) []ContextFabricPlanRequirementOutcomeRow {
 			longestBasis = basis
 		}
 	}
-	// The longest obligation the mirrored vocabulary holds, so the identity
-	// below is both maximal AND legal: the validator requires the identity's
-	// first segment to equal the row's own obligation.
-	longestObligation := ""
-	for _, obligation := range ContextFabricAnswerObligationVocabulary() {
-		if len(obligation) > len(longestObligation) {
-			longestObligation = obligation
-		}
-	}
-	// obligation + "/" + role + "/" + kind, filling the identity bound
-	// exactly. Split evenly; the remainder goes to the first segment.
-	remaining := ContextFabricRequirementIdentityMaxLength - len(longestObligation) - 2
-	role, kind := remaining-remaining/2, remaining/2
-	identity := longestObligation + "/" + escaped(role) + "/" + escaped(kind)
+	// THE IDENTITIES COME FROM THE PLAN, and that is a correction the join
+	// rule forced rather than a preference.
+	//
+	// An earlier revision padded the identity to its 256-rune bound, which is
+	// legal for a row read in isolation. It is NOT legal in a document whose
+	// plan also carries requirements: the join requires every outcome
+	// identity to name a requirement the plan describes, and a plan
+	// requirement's identity is structurally short -- three segments, each a
+	// member of a closed vocabulary. So the 256 bound on this field is
+	// reachable only when the plan carries no requirements at all, and a
+	// maximal document that carries both cannot also max this field. Stating
+	// that plainly is better than a fixture that quietly measures an
+	// unreachable shape.
+	//
+	// Cycling modulo the plan's length keeps every count legal, including the
+	// past-max case: two outcome rows may name one requirement (a stage
+	// appended to it), so the over-count fixture still rejects on the COUNT
+	// bound rather than on the join.
+	planRows := maximalPlanRequirements()
 	for index := 0; index < n; index++ {
+		planned := planRows[index%len(planRows)]
+		identity := planned.Requirement
+		longestObligation := planned.Obligation
 		rows = append(rows, ContextFabricPlanRequirementOutcomeRow{
 			Stage:          ContextFabricOutcomeStageAssembledResult,
 			Requirement:    identity,
 			Obligation:     longestObligation,
-			Outcome:        ContextFabricRequirementUnavailable,
+			Outcome:        ContextFabricRequirementNarrowed,
 			Impact:         ContextFabricAnswerImpactDimension,
 			CauseOverrun:   ContextFabricBudgetOverrunBytes,
 			CauseCoverage:  longestCoverage,
 			CauseNarrowing: longestBasis,
 			CauseObserved:  true,
-			Served:         0,
-			Declared:       0,
+			// Declared must exceed Served by at least the chain length,
+			// because every refinement strictly reduces. These are the
+			// smallest numbers that admit a full-length chain; the counts
+			// themselves are integers with no length bound, so nothing is
+			// lost by keeping them small.
+			Served:      1,
+			Declared:    1 + ContextFabricRequirementRefinementMaxCount,
+			Refinements: maximalRefinements(1+ContextFabricRequirementRefinementMaxCount, 1),
 		})
 	}
 	return rows
@@ -1042,4 +1093,55 @@ var unsaturatedByDesign = map[string]string{
 // knows which disclosed axes the probe actually reached.
 func TestDisclosedLowerBoundAxesAreNamed(t *testing.T) {
 	t.Logf("%d disclosed lower-bound axes", len(unsaturatedByDesign))
+}
+
+// TestTheMaximalFixtureActuallyCarriesTheNewBoundedArrays is a POSITIVE
+// FIXTURE for a tier the saturation probe cannot reach.
+//
+// It exists because of a measurement, not a suspicion. The full bound suite
+// was run with `answer_plan.requirements` left EMPTY in the maximal fixture
+// and TestMaximalIsSaturated PASSED; it was run again with the array filled to
+// its bound and passed identically. The probe is therefore blind to an empty
+// slice of VALIDATED STRUCTS: it grows a slice by appending a zero element,
+// the zero element fails that struct's own validator, the document is invalid,
+// and "cannot grow while staying valid" is indistinguishable from "already at
+// its bound". A new bounded struct array can be added to this document and
+// left unmeasured with every existing guard green.
+//
+// So the count is asserted directly. This is the same rule the disclosed
+// lower-bound axes are held to one level up: a tier with no positive fixture
+// can be dead for its whole life and read as green.
+func TestTheMaximalFixtureActuallyCarriesTheNewBoundedArrays(t *testing.T) {
+	t.Parallel()
+	plan := maximalPlan()
+	if got := len(plan.Requirements); got != ContextFabricPlanRequirementsMaxCount {
+		t.Errorf("maximal plan carries %d requirement rows, want %d -- the maximal document is understating the wire maximum",
+			got, ContextFabricPlanRequirementsMaxCount)
+	}
+	// The rows must be DISTINCT, or the array is at its count bound while
+	// describing one requirement 200 times, which no valid document can be.
+	identities := map[string]bool{}
+	for _, row := range plan.Requirements {
+		identities[row.Requirement] = true
+	}
+	if len(identities) != len(plan.Requirements) {
+		t.Errorf("maximal plan carries %d rows but only %d distinct identities", len(plan.Requirements), len(identities))
+	}
+	if err := ValidateContextFabricPlanRequirements(plan.Requirements); err != nil {
+		t.Errorf("maximal plan requirements do not validate: %v", err)
+	}
+
+	rows := maximalOutcomeRows(2)
+	if len(rows) != 2 {
+		t.Fatalf("built %d outcome rows, want 2", len(rows))
+	}
+	for index, row := range rows {
+		if got := len(row.Refinements); got != ContextFabricRequirementRefinementMaxCount {
+			t.Errorf("maximal outcome row %d carries %d refinements, want %d",
+				index, got, ContextFabricRequirementRefinementMaxCount)
+		}
+		if err := ValidateContextFabricPlanRequirementOutcomeRow(row); err != nil {
+			t.Errorf("maximal outcome row %d does not validate: %v", index, err)
+		}
+	}
 }

@@ -671,7 +671,7 @@ func reuseNarrowingOutcomeRow(result InvestigationResult, counts reuseStripCount
 	if counts.objectDrops() > 0 {
 		impact = contractsv1.ContextFabricAnswerImpactScope
 	}
-	return RequirementOutcomeRow{
+	row := RequirementOutcomeRow{
 		Stage:         contractsv1.ContextFabricOutcomeStageReuse,
 		Requirement:   requirement,
 		Obligation:    obligation,
@@ -684,6 +684,11 @@ func reuseNarrowingOutcomeRow(result InvestigationResult, counts reuseStripCount
 		Served:        served,
 		Declared:      served + counts.Refs(),
 	}
+	// The reduction step, derived from this row's own counts and cause. The
+	// cause here is a COVERAGE code -- no ceiling and no ordering -- which is
+	// why the refinement mirrors all three of the row's cause fields rather
+	// than only the two the assembly stage happens to use.
+	return contractsv1.ContextFabricWithReductionRefinement(row)
 }
 
 // composeReuseNarrowingReason is the composed legacy string. It states the

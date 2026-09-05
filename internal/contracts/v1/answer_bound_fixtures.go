@@ -1,7 +1,9 @@
 package v1
 
 import (
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -349,7 +351,167 @@ func maximalPlan() *ContextFabricAnswerPlan {
 			Before: 50, After: 10, Overrun: ContextFabricBudgetOverrunItems,
 		})
 	}
+	plan.Requirements = maximalPlanRequirements()
 	return &plan
+}
+
+// maximalPlanRequirements fills the plan's requirement array to its count
+// bound with rows that are each individually maximal.
+//
+// IDENTITIES MUST BE DISTINCT -- ValidateContextFabricPlanRequirements rejects
+// a repeat, because a duplicate would make the join to the outcome rows
+// ambiguous -- so the rows cannot simply be one row repeated. They are drawn
+// from the (obligation, role, subject kind) product, which has 13 x 4 x 15 =
+// 780 members against a bound of 200, so the pool cannot run out and cannot
+// collide.
+//
+// THE 200 LONGEST, MEASURED -- not the first 200 the product walk happens to
+// produce.
+//
+// This builder used to take the walk in order. Every row it produced was
+// individually maximal in the fields it CHOSE, and the array as a whole was
+// not, because the coordinate itself is a byte cost: the obligation, role and
+// subject strings are carried in three fields AND concatenated into the
+// identity, so they land in the document twice. 580 of the 780 members were
+// never considered, and a longer coordinate sitting outside the first 200 made
+// the "maximal" fixture smaller than a legal document -- which is the one
+// error a bound fixture must not make, because everything downstream reads it
+// as the ceiling.
+//
+// The length is MEASURED by serializing each candidate row, not estimated
+// from string lengths: the serialized form is what the bound is about, and an
+// estimate is a second model of it that can disagree.
+//
+// Ties are broken on the identity so the fixture is deterministic. Without
+// that, two coordinates of equal length could swap between runs and the byte
+// pins that read this fixture would drift for no reason.
+//
+// EVERY ROW IS A COMPUTATION, and that is a byte choice rather than a
+// semantic one: the three server arms are mutually exclusive, and the computed
+// arm is the larger of them (a step, an execution, an input class AND the full
+// input-kind list, against a read's kind list alone). Which arm is saturated
+// is disclosed in unsaturatedByDesign, because saturating one necessarily
+// leaves the others empty -- that is the invariant, not a gap in this builder.
+func maximalPlanRequirements() []ContextFabricPlanRequirement {
+	kinds := ContextFabricFactKindVocabulary()
+	obligations := ContextFabricAnswerObligationVocabulary()
+	roles := ContextFabricSubjectRoleVocabulary()
+	subjects := ContextFabricSubjectKindVocabulary()
+
+	pool := make([]ContextFabricPlanRequirement, 0, len(obligations)*len(roles)*len(subjects))
+	for _, obligation := range obligations {
+		for _, role := range roles {
+			for _, subject := range subjects {
+				pool = append(pool, maximalPlanRequirementAt(obligation, role, subject, kinds[:]))
+			}
+		}
+	}
+	sortPlanRequirementsLongestFirst(pool)
+	if len(pool) < ContextFabricPlanRequirementsMaxCount {
+		// Say so rather than returning a short array that would quietly
+		// measure something other than the bound.
+		panic(fmt.Sprintf("the coordinate product has %d members, fewer than the %d the bound requires",
+			len(pool), ContextFabricPlanRequirementsMaxCount))
+	}
+	return pool[:ContextFabricPlanRequirementsMaxCount]
+}
+
+// sortPlanRequirementsLongestFirst orders rows by MEASURED serialized length,
+// descending, breaking ties on the identity so the order is total and stable.
+//
+// Exported to the package rather than inlined because the test that guards
+// this choice -- "no unchosen coordinate is longer than a chosen one" -- must
+// measure with the SAME function the builder selects with. Two measurements
+// would be two models, and the test would then be checking one against the
+// other rather than checking the fixture.
+func sortPlanRequirementsLongestFirst(rows []ContextFabricPlanRequirement) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		left, right := planRequirementSerializedLength(rows[i]), planRequirementSerializedLength(rows[j])
+		if left != right {
+			return left > right
+		}
+		return rows[i].Requirement < rows[j].Requirement
+	})
+}
+
+// planRequirementSerializedLength is the row's cost in the document, measured.
+//
+// A row that cannot be marshalled would be a defect in the type rather than in
+// this fixture, and returning 0 for it would silently sort it last; the panic
+// makes that impossible to miss.
+func planRequirementSerializedLength(row ContextFabricPlanRequirement) int {
+	encoded, err := json.Marshal(row)
+	if err != nil {
+		panic(fmt.Sprintf("plan requirement %q does not marshal: %v", row.Requirement, err))
+	}
+	return len(encoded)
+}
+
+// maximalPlanRequirementAt builds the maximal row for ONE coordinate.
+func maximalPlanRequirementAt(obligation, role string, subject ContextFabricSubjectKind, kinds []ContextFabricFactKind) ContextFabricPlanRequirement {
+	row := ContextFabricPlanRequirement{
+		Obligation: obligation,
+		Role:       role,
+		Subject:    subject,
+		Kind:       contextFabricObligationKindComputed,
+		// The longest members of their vocabularies, so the row is at its
+		// byte maximum rather than merely valid.
+		Step:           "membership_cardinality",
+		StepExecution:  "server_executed",
+		InputClass:     contextFabricComputedInputFactKinds,
+		InputFactKinds: append([]ContextFabricFactKind{}, kinds...),
+		Scope:          "single_subject",
+		Quantifier:     "corroborated",
+	}
+	row.Requirement = row.Obligation + "/" + row.Role + "/" + string(row.Subject)
+	return row
+}
+
+// maximalRefinements fills one outcome row's refinement chain to its bound.
+//
+// The chain must RECONCILE with the row it sits on: it starts at Declared,
+// ends at Served, and each step continues the previous one. A builder that
+// produced a plausible-looking list without that arithmetic would be building
+// a fixture the validator rejects, which is how a bound fixture stops
+// measuring the bound and starts measuring itself.
+func maximalRefinements(declared, served int) []ContextFabricRequirementRefinement {
+	steps := ContextFabricRequirementRefinementMaxCount
+	if declared-served < steps {
+		// Each step must strictly reduce, so a chain longer than the total
+		// reduction cannot be built. Say so rather than emitting a shorter
+		// chain that silently fails to reach the bound.
+		return nil
+	}
+	stages := ContextFabricOutcomeStageVocabulary()
+	out := make([]ContextFabricRequirementRefinement, 0, steps)
+	before := declared
+	for i := 0; i < steps; i++ {
+		after := before - 1
+		if i == steps-1 {
+			after = served
+		}
+		out = append(out, ContextFabricRequirementRefinement{
+			Stage: stages[i%len(stages)],
+			// BOTH causes, because the maximal fixture measures the largest
+			// legal encoding and a refinement may carry either or both. The
+			// validator requires at least one; carrying one would understate
+			// the maximum.
+			// ALL THREE causes. The refinement requires at least one and
+			// permits every one, so a fixture carrying two was not maximal
+			// -- adding the third stays valid and adds bytes. Found by
+			// review, and the saturation probe structurally cannot find it:
+			// it grows an empty closed-vocabulary field by writing a
+			// one-rune string, which is not a vocabulary member, so the
+			// document goes invalid and the field reads as saturated.
+			Basis:    longestNarrowingBasis(),
+			Overrun:  longestBudgetOverrun(),
+			Coverage: longestCoverageDetailCode(),
+			Before:   before,
+			After:    after,
+		})
+		before = after
+	}
+	return out
 }
 
 // maximalLimitations fills the list to its count bound while satisfying the
@@ -759,3 +921,39 @@ const (
 	clarificationPromptMaxRunes       = 2000 // validate_context_fabric_result.go:108
 	candidateEvidenceRefsMaxCount     = 100  // contextFabricWriteBounds.candidateEvidenceRefs
 )
+
+// longestNarrowingBasis and longestBudgetOverrun pick the worst-case member of
+// their vocabularies by MEASURING them, never by naming one: a hand-picked
+// "longest" silently understates the maximum the day a longer member ships.
+func longestNarrowingBasis() ContextFabricNarrowingBasis {
+	longest := ContextFabricNarrowingBasis("")
+	for _, member := range ContextFabricNarrowingBasisVocabulary() {
+		if len(member) > len(longest) {
+			longest = member
+		}
+	}
+	return longest
+}
+
+func longestBudgetOverrun() ContextFabricBudgetOverrun {
+	longest := ContextFabricBudgetOverrun("")
+	for _, member := range ContextFabricBudgetOverrunVocabulary() {
+		if len(member) > len(longest) {
+			longest = member
+		}
+	}
+	return longest
+}
+
+// longestCoverageDetailCode picks the worst-case coverage token by MEASURING
+// the published vocabulary, for the same reason its two siblings do: a
+// hand-picked "longest" understates the maximum the day a longer member ships.
+func longestCoverageDetailCode() ContextFabricCoverageDetailCode {
+	longest := ContextFabricCoverageDetailCode("")
+	for _, member := range ContextFabricCoverageDetailCodeVocabulary() {
+		if len(member) > len(longest) {
+			longest = member
+		}
+	}
+	return longest
+}

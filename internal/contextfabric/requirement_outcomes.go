@@ -65,36 +65,138 @@ func requirementIdentity(requirement DerivedRequirement) string {
 // `not_derived` completeness state, which says the outcomes were never
 // derived rather than claiming everything was fine.
 func seedRequirementOutcomes(frame *QuestionFrame, deriver RequirementDeriver) []RequirementOutcomeRow {
-	if frame == nil || deriver == nil {
-		return nil
-	}
-	requirements := deriver.DeriveRequirements(*frame)
+	return SeedRequirementOutcomes(deriveTurnRequirements(frame, deriver))
+}
+
+// SeedRequirementOutcomes is the seed over rows ALREADY DERIVED.
+//
+// Exported for the same reason PlanRequirementsFromDerived is: it is the other
+// projection of one derivation, and a caller building a document outside the
+// engine must build these rows through it rather than by hand.
+//
+// It is split out from seedRequirementOutcomes so a caller that already holds
+// the derived rows does not re-derive them. The two published arrays are
+// evaluated at two different points in the turn and agree because the
+// derivation is pure -- see PlanRequirementsFromDerived's header for why that
+// is a property to state carefully rather than a single call to claim.
+func SeedRequirementOutcomes(requirements []DerivedRequirement) []RequirementOutcomeRow {
 	if len(requirements) == 0 {
 		return nil
 	}
 	rows := make([]RequirementOutcomeRow, 0, len(requirements))
 	for _, requirement := range requirements {
-		row := RequirementOutcomeRow{
-			// The seed rows belong to the stage that PLANNED them, so a
-			// reader can see which rows the plan carried and which a later
-			// stage appended.
-			Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
-			Requirement: requirementIdentity(requirement),
-			Obligation:  string(requirement.Obligation),
-			Outcome:     contractsv1.ContextFabricRequirementSatisfied,
-			Impact:      contractsv1.ContextFabricAnswerImpactNone,
-		}
-		if !requirement.Served() {
-			row.Outcome = contractsv1.ContextFabricRequirementUnavailable
-			row.Impact = contractsv1.ContextFabricAnswerImpactDimension
-			row.CauseCoverage = unavailableRequirementCause(requirement.Unavailable)
-			// Observed: the derivation reported this reason for this cell,
-			// it was not defaulted by anything here.
-			row.CauseObserved = true
-		}
-		rows = append(rows, row)
+		rows = append(rows, planningStageOutcomeRow(
+			requirementIdentity(requirement),
+			string(requirement.Obligation),
+			requirement.Unavailable,
+		))
 	}
 	return rows
+}
+
+// SeedOutcomesFromPublishedPlanRequirements builds the same planning-stage
+// rows from the requirement array a PLAN publishes, rather than from the
+// derivation the plan was projected out of.
+//
+// It exists because the two halves of the account were produced at two
+// different places, and only one of them ran on every exit. The requirement
+// rows are stamped where the plan is CREATED, so every terminal downstream of
+// planning carries them; the seed above ran inside finalization, which the
+// window- and structure-veto terminals never reach. Those terminals therefore
+// served -- and SAVED -- a plan describing requirements that no outcome row
+// accounted for, which the document-level join then refuses.
+//
+// The input is the published array precisely so this cannot become a second
+// opinion about what the requirements ARE. It reads what the plan already
+// says; a row it emits cannot describe a requirement the plan does not
+// publish, and it re-uses the SAME row builder and the SAME cause table as
+// the derivation-side seed, so the two cannot drift.
+func SeedOutcomesFromPublishedPlanRequirements(published []contractsv1.ContextFabricPlanRequirement) []RequirementOutcomeRow {
+	if len(published) == 0 {
+		return nil
+	}
+	rows := make([]RequirementOutcomeRow, 0, len(published))
+	for _, requirement := range published {
+		rows = append(rows, unattemptedRequirementRow(
+			requirement.Requirement,
+			requirement.Obligation,
+			// The plan carries the reason as its wire token. Converting it
+			// back is safe in the only sense that matters here: the cause
+			// table fails CLOSED, so a token it does not name yields the
+			// empty code rather than an invented one.
+			RequirementUnavailableReason(requirement.Unavailable),
+		))
+	}
+	return rows
+}
+
+// unattemptedRequirementRow builds the row for a requirement the turn NEVER
+// REACHED.
+//
+// A SEPARATE BUILDER, not a widened default, and that is the whole point. The
+// seed rows and these rows describe opposite situations: a seed row is written
+// where the derivation RAN and knows what it found, and one of these is
+// written where nothing ran at all. They shared `planningStageOutcomeRow`
+// briefly, and the shared default is `satisfied` -- so every row minted here
+// claimed the requirement had been served in full, on exactly the exits that
+// read nothing. Sharing a builder between two situations forced one default to
+// stand for both, and the wrong one won.
+//
+// `not_attempted` is not a lossless outcome, so the row must also carry a
+// non-none impact and name a cause. The cause is
+// `answer_terminated_before_attempt`, which exists for this and only this: the
+// nearest alternative would have said a fact was pruned when nothing was read.
+//
+// CauseObserved is FALSE, deliberately. That flag means the derivation
+// reported this reason for this cell. Nothing reported anything here -- the
+// answer ended first -- and claiming otherwise would be a smaller version of
+// the same lie this function was written to remove.
+//
+// An UNSERVABLE requirement keeps its own account: the plan already carries
+// the derivation's reason for it, and that reason is true whether or not the
+// turn was later vetoed, so it is reported as unavailable exactly as the seed
+// would have reported it.
+func unattemptedRequirementRow(identity, obligation string, unavailable RequirementUnavailableReason) RequirementOutcomeRow {
+	if unavailable != "" {
+		return planningStageOutcomeRow(identity, obligation, unavailable)
+	}
+	return RequirementOutcomeRow{
+		Stage:         contractsv1.ContextFabricOutcomeStagePlanning,
+		Requirement:   identity,
+		Obligation:    obligation,
+		Outcome:       contractsv1.ContextFabricRequirementNotAttempted,
+		Impact:        contractsv1.ContextFabricAnswerImpactDimension,
+		CauseCoverage: contractsv1.ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt,
+		CauseObserved: false,
+	}
+}
+
+// planningStageOutcomeRow is the one place a planning-stage seed row is built.
+//
+// Both seeds call it. That is the point: before it, the plan-side and
+// derivation-side seeds were two copies of the same nine lines, and the first
+// reason token added to the vocabulary would have been mapped by one of them
+// and missed by the other.
+func planningStageOutcomeRow(identity, obligation string, unavailable RequirementUnavailableReason) RequirementOutcomeRow {
+	row := RequirementOutcomeRow{
+		// The seed rows belong to the stage that PLANNED them, so a
+		// reader can see which rows the plan carried and which a later
+		// stage appended.
+		Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
+		Requirement: identity,
+		Obligation:  obligation,
+		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+		Impact:      contractsv1.ContextFabricAnswerImpactNone,
+	}
+	if unavailable != "" {
+		row.Outcome = contractsv1.ContextFabricRequirementUnavailable
+		row.Impact = contractsv1.ContextFabricAnswerImpactDimension
+		row.CauseCoverage = unavailableRequirementCause(unavailable)
+		// Observed: the derivation reported this reason for this cell,
+		// it was not defaulted by anything here.
+		row.CauseObserved = true
+	}
+	return row
 }
 
 // unavailableRequirementCause maps the derivation's own unavailable reason
@@ -277,7 +379,7 @@ func narrowCandidatesToBudget(result InvestigationResult, budget ResponseBudget,
 // not a silent gap: the completeness state derived from the set says
 // `not_derived` for exactly the turns where attribution was impossible.
 func candidateNarrowingOutcomeRow(narrowing candidateNarrowing, overrun contractsv1.ContextFabricBudgetOverrun, requirement string, obligation string) RequirementOutcomeRow {
-	return RequirementOutcomeRow{
+	row := RequirementOutcomeRow{
 		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
 		Requirement: requirement,
 		Obligation:  obligation,
@@ -293,6 +395,14 @@ func candidateNarrowingOutcomeRow(narrowing candidateNarrowing, overrun contract
 		Served:        narrowing.Served,
 		Declared:      narrowing.Declared,
 	}
+	// THE REDUCTION STEP ITSELF, derived from the row rather than built
+	// beside it. Served and Declared are a before and an after with the step
+	// between them erased; this says which stage cut and what forced it. The
+	// cause here is the ceiling, never a selection basis -- no selection ran,
+	// the list was truncated at its own declared order, and this function's
+	// header refuses to claim otherwise. Deriving it from the row is what
+	// keeps that true without restating it.
+	return contractsv1.ContextFabricWithReductionRefinement(row)
 }
 
 // subjectScopeRequirement finds the requirement row a candidate-list
