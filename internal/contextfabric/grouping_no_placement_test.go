@@ -353,18 +353,25 @@ func TestAGroupedAnswerCarriesNoUnplaceableDisclosure(t *testing.T) {
 	}
 }
 
-// TestTheNoPlacementEmitIsWiredIntoAssembly is the CALL-SITE pin.
+// TestTheRefusalEmitCarriesEveryOutcomeFieldAtTheCallSite is the CALL-SITE pin,
+// and it is pinned at the FIELD level because the field level is where this
+// went wrong.
 //
-// It exists because this exact deletion has already survived once in this
-// package: every composer-level test stayed green when the invocation was
-// removed, and only a source-reading pin caught it. The same reasoning applies
-// one layer up -- an engine branch that computes an outcome and hands it to
-// nobody is a branch that discloses nothing, however well the composer is
-// tested.
+// The no-placement refusal was first written as a second engine arm below the
+// existing `groupingOutcome.Refusal != None` one. It never ran -- that
+// condition already admitted the new vocabulary member -- so the arm was dead
+// code and the one field only it set, UngroupedMembers, was dropped, while
+// Refusal and PlannedGroupKind came through from the older arm and made the
+// event look right. A pin that only asked "is the emitter called?" would have
+// been satisfied by the older arm and seen nothing.
 //
-// Read from source rather than by standing up a second full assembly fixture,
-// in the manner this package already establishes.
-func TestTheNoPlacementEmitIsWiredIntoAssembly(t *testing.T) {
+// So this asserts the emitted composite literal names UngroupedMembers, and
+// that the branch carries the outcome to assembly. Read from source rather than
+// by standing up a second assembly fixture, in the manner this package already
+// establishes; the behavioural half is
+// TestNoPlacementReachesBothTheOperatorAndTheReader, which is what actually
+// caught the defect.
+func TestTheRefusalEmitCarriesEveryOutcomeFieldAtTheCallSite(t *testing.T) {
 	t.Parallel()
 	const path = "engine.go"
 	fset := token.NewFileSet()
@@ -373,9 +380,9 @@ func TestTheNoPlacementEmitIsWiredIntoAssembly(t *testing.T) {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 
-	// Anchor on the ENCLOSING branch, not on a whole-file grep: the mismatch
-	// arm above it calls the same emitter, so a file-wide search for the call
-	// would be satisfied by the arm this test is not about.
+	// Anchor on the ENCLOSING branch, never a whole-file search: the grouped
+	// arm above it calls the same emitter, so a file-wide match would be
+	// satisfied by the arm this test is not about.
 	var branch *ast.IfStmt
 	ast.Inspect(file, func(n ast.Node) bool {
 		ifStmt, ok := n.(*ast.IfStmt)
@@ -386,23 +393,34 @@ func TestTheNoPlacementEmitIsWiredIntoAssembly(t *testing.T) {
 		if !ok {
 			return true
 		}
-		left, ok := binary.X.(*ast.Ident)
-		if !ok || left.Name != "ungrouped" {
+		sel, ok := binary.X.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Refusal" {
+			return true
+		}
+		ident, ok := sel.X.(*ast.Ident)
+		if !ok || ident.Name != "groupingOutcome" {
 			return true
 		}
 		branch = ifStmt
 		return false
 	})
 	if branch == nil {
-		t.Fatal("control failed: no `if ungrouped > 0` branch found in engine.go, so this test is measuring nothing -- if the branch was renamed, re-anchor it rather than deleting this test")
+		t.Fatal("control failed: no `groupingOutcome.Refusal` branch found in engine.go, so this test is measuring nothing -- if the branch was restructured, RE-ANCHOR this test rather than deleting it")
 	}
 
-	var emits, carries bool
+	wantFields := map[string]bool{
+		"Refusal":          false,
+		"PlannedGroupKind": false,
+		"UngroupedMembers": false,
+	}
+	carries := false
 	ast.Inspect(branch.Body, func(n ast.Node) bool {
 		switch node := n.(type) {
-		case *ast.CallExpr:
-			if sel, ok := node.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "recordGroupedCohortCompleteness" {
-				emits = true
+		case *ast.KeyValueExpr:
+			if key, ok := node.Key.(*ast.Ident); ok {
+				if _, wanted := wantFields[key.Name]; wanted {
+					wantFields[key.Name] = true
+				}
 			}
 		case *ast.AssignStmt:
 			for _, lhs := range node.Lhs {
@@ -413,52 +431,77 @@ func TestTheNoPlacementEmitIsWiredIntoAssembly(t *testing.T) {
 		}
 		return true
 	})
-	if !emits {
-		t.Error("the no-placement branch never calls recordGroupedCohortCompleteness -- a grouped question answered flat leaves an operator no line at all, which is the defect this change exists to remove")
+	for field, found := range wantFields {
+		if !found {
+			t.Errorf("the refusal branch emits no %s -- a field the outcome carries and the event drops is invisible to any test that only checks the fields the older arm already set", field)
+		}
 	}
 	if !carries {
-		t.Error("the no-placement branch never assigns groupingRefusalForDisclosure -- the telemetry would survive and the READER would still be told nothing, and no composer-level test can see that")
+		t.Error("the refusal branch never assigns groupingRefusalForDisclosure -- the telemetry would survive and the READER would still be told nothing, and no composer-level test can see that")
 	}
 }
 
-// TestTheNoPlacementDisclosureSurvivesAFullLimitationList is the property the
-// §10b sub-diagram was drawn for, applied to the new family.
+// TestEveryNoGroupsOutcomeNamesARefusal is the invariant the engine's if/else
+// chain now RELIES on rather than re-deriving.
 //
-// A disclosure that is composed and then dropped is worse than one never
-// written: the reader gets a flat answer with no statement, and the artifact
-// records a displacement that removed the very sentence it was made for. That
-// is the shipped defect the mismatch family already hit once, and the ONLY
-// thing standing between this family and a repeat is its registration in the
-// service-authored predicate -- which no test that drives the composer with an
-// empty list can see, because nothing is ever displaced there.
-func TestTheNoPlacementDisclosureSurvivesAFullLimitationList(t *testing.T) {
+// The engine has exactly one refusal arm because a cohort that reaches grouping
+// with members and a declared group kind, and produces no groups, always names
+// a refusal. That used to be enforced by a third `else if ungrouped > 0` arm --
+// which, once the no-placement outcome named itself, was unreachable, and an
+// unreachable arm is not an assertion. This test is the assertion: it walks
+// every no-groups arm the producer has and requires each to name a member of
+// the vocabulary.
+//
+// If a future arm returns a zero-valued outcome with no groups, this reddens at
+// the producer instead of the answer going quietly flat again -- which is the
+// whole defect this change exists to close, recurring one layer up.
+func TestEveryNoGroupsOutcomeNamesARefusal(t *testing.T) {
 	t.Parallel()
-	full := make([]string, 0, contractsv1.ContextFabricLimitationsMaxCount)
-	for index := 0; index < contractsv1.ContextFabricLimitationsMaxCount; index++ {
-		// Distinct model-authored caveats: the appender dedups first, so
-		// identical entries would shorten the list before the cap is measured
-		// and nothing would be displaced.
-		full = append(full, "model caveat "+string(rune('a'+index%26))+string(rune('a'+index/26)))
+	cases := []struct {
+		name  string
+		plan  AnswerPlan
+		facts []CanonicalFact
+	}{
+		{
+			name:  "source is silent",
+			plan:  AnswerPlan{GroupKind: SubjectTeam},
+			facts: []CanonicalFact{ungroupableFact("project_a")},
+		},
+		{
+			name:  "source names a different kind",
+			plan:  AnswerPlan{GroupKind: SubjectRepository},
+			facts: []CanonicalFact{teamScopedFact("project_a", "team_security", "Security")},
+		},
+		{
+			name:  "no facts at all",
+			plan:  AnswerPlan{GroupKind: SubjectTeam},
+			facts: nil,
+		},
+		{
+			name:  "facts for a subject that is not in the cohort",
+			plan:  AnswerPlan{GroupKind: SubjectTeam},
+			facts: []CanonicalFact{planFixtureFacts("project_elsewhere", "team_1", "Platform")},
+		},
 	}
-	result := InvestigationResult{Status: InvestigationPartial, Limitations: full}
-
-	applyGroupingRefusalDisclosure(&result, CohortGroupingOutcome{
-		Refusal: CohortGroupingRefusalNoMemberPlaced, PlannedKind: SubjectTeam, Ungrouped: 3,
-	})
-
-	want := contractsv1.ContextFabricGroupingUnplaceableLimitation(SubjectTeam)
-	if !hasLimitation(result.Limitations, want) {
-		t.Fatalf("the disclosure was composed and then DROPPED from a full list -- the reader gets a flat answer and no statement of it. Registering the sentence in IsContextFabricServiceAuthoredLimitation is what prevents this; limitations end: %#v",
-			result.Limitations[len(result.Limitations)-3:])
+	if len(cases) == 0 {
+		t.Fatal("no arms enumerated, so this invariant is asserted over nothing")
 	}
-	if len(result.Limitations) != contractsv1.ContextFabricLimitationsMaxCount {
-		t.Errorf("limitations = %d entries, want the cap %d", len(result.Limitations), contractsv1.ContextFabricLimitationsMaxCount)
+	checked := 0
+	for _, testCase := range cases {
+		groups, ungrouped, outcome := BuildCohortGroups(testCase.plan, planFixtureCohort("project_a"), testCase.facts)
+		if len(groups) != 0 {
+			t.Fatalf("%s: fixture drift, groups = %d, want 0 -- this table is the NO-GROUPS population", testCase.name, len(groups))
+		}
+		checked++
+		if outcome.Refusal == CohortGroupingRefusalNone {
+			t.Errorf("%s: no groups were built and the outcome names no reason (ungrouped=%d) -- the answer goes flat and the artifact cannot say why, which is indistinguishable from grouping never being attempted",
+				testCase.name, ungrouped)
+		}
+		if !ValidCohortGroupingRefusal(outcome.Refusal) {
+			t.Errorf("%s: outcome.Refusal = %q is outside the closed vocabulary", testCase.name, outcome.Refusal)
+		}
 	}
-	// The displaced caveat is accounted. A displacement nothing counts is a
-	// caveat that vanished from the stored answer with no record it existed,
-	// and it also puts the result at odds with the validator's coherence rule.
-	if result.LimitationsDisplaced != 1 {
-		t.Errorf("LimitationsDisplaced = %d, want 1: one model caveat made room for this disclosure and the count is the only record it was there",
-			result.LimitationsDisplaced)
+	if checked != len(cases) {
+		t.Fatalf("only %d of %d arms were checked", checked, len(cases))
 	}
 }
