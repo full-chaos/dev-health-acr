@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -634,6 +635,34 @@ func TestAnUndeclaredCauseCodeEmitsNoRow(t *testing.T) {
 		}
 	}
 
+	// EVERY FIELD OF THE DISCLOSURE IS ASSERTED, AS A KEY:VALUE PAIR, and the
+	// pairing is the whole point.
+	//
+	// The substring checks above cannot see a FIELD disappear. `Obligation` is
+	// "state", and the requirement id is "state/subject/team", so a bare
+	// Contains("state") passes with the obligation attribute deleted -- the
+	// value is still in the line, inside a different field. Both field
+	// deletions survived the battery for exactly that reason.
+	//
+	// This is the drop path: the one place this evaluator swallows a row. That
+	// is only acceptable because it says so in a line a human can grep, and a
+	// line that names a requirement without saying which CELL it belonged to,
+	// or how much was observed before the drop, is most of the way back to the
+	// generic "something happened" logging this layer exists to replace. So
+	// each attribute is pinned individually, in the handler's own encoding.
+	for _, want := range []string{
+		fmt.Sprintf("%q:%q", "requirement", requirement.Requirement),
+		fmt.Sprintf("%q:%q", "obligation", requirement.Obligation),
+		fmt.Sprintf("%q:%q", "undeclared_code", string(undeclared)),
+		fmt.Sprintf("%q:%d", "observed_kinds", 1),
+	} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("the disclosure is missing the attribute %s -- a dropped row must say WHICH "+
+				"requirement, which CELL, which code and how much was observed, or it cannot "+
+				"drive a fix: %s", want, logs.String())
+		}
+	}
+
 	// COMPLEMENT: the same fixture with a DECLARED code does emit its row.
 	declaredRows := appendReadRequirementEvaluations(nil,
 		[]contractsv1.ContextFabricPlanRequirement{requirement},
@@ -870,6 +899,36 @@ func TestUnservableAndComputedRequirementsAreNotEvaluated(t *testing.T) {
 		t.Fatalf("a COMPUTED requirement carrying a READ quantifier and observed fact kinds was "+
 			"evaluated (%d rows) -- nothing downstream would have stopped it, so the kind guard is "+
 			"the only thing keeping a server step from being reported as a fact read", len(rows))
+	}
+
+	// AND THE UNSERVABLE CASE HAS THE SAME PROBLEM ITS COMPUTED SIBLING HAD.
+	//
+	// The `unservable` fixture above also carries quantifier `none` and no fact
+	// kinds, so the quantifier check suppresses it whether or not the SERVED
+	// half of the entry guard exists -- deleting `|| !requirement.Served()`
+	// left the whole suite green. This one is unservable and NOTHING ELSE: a
+	// read obligation, a quantifier the threshold table accepts, and declared
+	// kinds the coverage below actually observes. The derivation has already
+	// attributed that cell by writing `Unavailable`; re-deciding it here on the
+	// strength of observations that belong to some other requirement is the
+	// second-authority defect this evaluator is written not to become.
+	unservableButOtherwiseEligible := readRequirement(CompletionQuantifierAtLeastOne)
+	unservableButOtherwiseEligible.Unavailable = string(RequirementReasonNoDeclaringProducer)
+	unservableButOtherwiseEligible.FactKinds = []FactKind{contractsv1.ContextFabricFactHealth}
+	if unservableButOtherwiseEligible.Served() {
+		t.Fatalf("the premise moved: the fixture still reports Served() with Unavailable=%q, so it "+
+			"is not reaching the guard this case exists to measure", unservableButOtherwiseEligible.Unavailable)
+	}
+	if _, known := readQuantifierThreshold(unservableButOtherwiseEligible.Quantifier); !known {
+		t.Fatalf("the premise moved: %q is no longer a recognised read quantifier, so this fixture "+
+			"is stopped by the threshold check and measures nothing", unservableButOtherwiseEligible.Quantifier)
+	}
+	if rows := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{unservableButOtherwiseEligible}, coverage); len(rows) != 0 {
+		t.Fatalf("an UNSERVABLE requirement carrying a READ quantifier and observed fact kinds was "+
+			"evaluated (%d rows) -- nothing downstream would have stopped it, so the served half of "+
+			"the entry guard is the only thing keeping this evaluator from overriding the "+
+			"derivation's own attribution", len(rows))
 	}
 
 	// POSITIVE CONTROL: the same shape as a READ requirement DOES produce a
@@ -1340,30 +1399,42 @@ func TestAPartialCoverageDetailDoesNotSuppressTheRow(t *testing.T) {
 	}
 }
 
-// TestTheNarrowedCauseIsTheCanonicallyFirstNarrowedKind pins WHICH narrowing
-// names the row's cause when more than one declared kind was narrowed.
+// TestTheNarrowedCauseIsTheFirstNarrowedKindInPublishedOrder pins WHICH
+// narrowing names the row's cause when more than one declared kind was
+// narrowed.
 //
 // The row publishes ONE cause. When two kinds were both narrowed and the
 // coverage layer recorded a different code for each, something has to choose,
 // and the choice has to be a RULE rather than whichever entry the loop
 // happened to see last. The rule is: **the first narrowed kind in the
-// requirement's canonical vocabulary-ordered FactKinds names the cause -- a
-// deterministic tiebreak, NOT a priority claim.** Stopping at the first match
-// is what makes that true; without the stop it is last-wins, a different
-// published cause for identical evidence.
+// PUBLISHED REQUIREMENT ORDER names the cause -- the requirement's own
+// declared order, a deterministic tiebreak, NOT a priority claim.** Stopping at
+// the first match is what makes that true; without the stop it is last-wins, a
+// different published cause for identical evidence.
 //
-// THE DISTINCTION IS LOAD-BEARING AND AN EARLIER DRAFT OF THIS TEST GOT IT
-// WRONG. That draft called FactKinds "the plan's priority order for that cell"
-// and asserted the cause flips when the list is reversed. Both halves of that
-// are false. `sortedFactKinds` returns "a deduplicated copy in fact-kind
-// VOCABULARY order ... not lexical: a kind renamed in a later contract
-// revision must not silently reorder a persisted artifact" -- a CANONICAL
-// order chosen for artifact diffability, which no producer varies and which
-// says nothing about which kind matters more. Asserting over a reversed list
-// pinned behaviour production cannot construct, and justified it with a
-// sentence about a layer this file does not own. That is the same defect class
-// as the five findings this evaluator has already been corrected for, arriving
-// in a test comment instead of in the code.
+// TWO EARLIER DRAFTS OF THIS COMMENT WERE WRONG, IN THE SAME WAY, AND THAT IS
+// WHY THIS ONE NAMES NO MECHANISM IT HAS NOT TRACED.
+//
+// The first called FactKinds "the plan's priority order for that cell" and
+// asserted the cause flips when the list is reversed -- pinning behaviour
+// production cannot construct, justified by a claim about a layer this file
+// does not own. The second replaced that with "canonical vocabulary-ordered
+// FactKinds", citing `sortedFactKinds`. ALSO FALSE, and worse for being a
+// correction: `sortedFactKinds` is applied in `InputsForComputedStep`
+// (frame_vocab.go), to COMPUTED STEP INPUTS -- it never touches a read
+// requirement's FactKinds. The seed sorts LEXICALLY
+// (`kinds[i] < kinds[j]`, obligation_seed.go), and plan_requirements.go copies
+// the slice with `copyFactKinds` WITHOUT reordering. Lexical and vocabulary
+// order genuinely differ -- {health, flow} is [health flow] by vocabulary and
+// [flow health] lexically -- and this test's {health, workload} fixture sorts
+// identically under both, which is exactly why it could not catch its own
+// comment.
+//
+// So the order this evaluator reads is simply THE ORDER THE PUBLISHED
+// REQUIREMENT CARRIES. That is a true statement about the input, it needs no
+// claim about any producer's sorting, and it is what the loop actually does.
+// A comment naming a specific mechanism is an assertion and needs the same
+// evidence as code.
 //
 // REACHABILITY, stated rather than assumed: `factDetailSpecForRead` mints
 // `fact_narrowed` for every narrowing today, so two different codes cannot
@@ -1371,7 +1442,7 @@ func TestAPartialCoverageDetailDoesNotSuppressTheRow(t *testing.T) {
 // the same reason the undeclared-code stop path is pinned -- one producer
 // change away from mattering, and far cheaper to fix in place than to
 // rediscover from a field report about a cause that "changes for no reason".
-func TestTheNarrowedCauseIsTheCanonicallyFirstNarrowedKind(t *testing.T) {
+func TestTheNarrowedCauseIsTheFirstNarrowedKindInPublishedOrder(t *testing.T) {
 	t.Parallel()
 	health := contractsv1.ContextFabricFactHealth
 	workload := contractsv1.ContextFabricFactWorkload
@@ -1394,18 +1465,18 @@ func TestTheNarrowedCauseIsTheCanonicallyFirstNarrowedKind(t *testing.T) {
 	}
 
 	// The requirement's kinds are left exactly as readRequirement declares
-	// them -- canonical order -- because that is the only order a plan carries.
+	// them, because the published order is the only order this evaluator sees.
 	requirement := readRequirement(CompletionQuantifierAtLeastOne)
 	if len(requirement.FactKinds) < 2 || requirement.FactKinds[0] != health || requirement.FactKinds[1] != workload {
-		t.Fatalf("the fixture requirement declares %v; this test needs health then workload in "+
-			"canonical order, or it is not measuring the tiebreak it names", requirement.FactKinds)
+		t.Fatalf("the fixture requirement declares %v; this test needs health then workload as "+
+			"published, or it is not measuring the tiebreak it names", requirement.FactKinds)
 	}
 
 	// THE DETAIL ARRAY IS IN THE OPPOSITE ORDER TO THE DECLARED KINDS, and that
 	// is what makes the assertion mean something. If the evaluator tracked the
-	// array it would answer `fact_scope_unexpanded`; it answers the canonically
-	// first NARROWED KIND's code instead. Deleting the stop after the first
-	// match makes the later kind win and this fails.
+	// array it would answer `fact_scope_unexpanded`; it answers the first
+	// NARROWED KIND in published order instead. Deleting the stop after the
+	// first match makes the later kind win and this fails.
 	coverage := factCoverage(health, SourceAvailable, workload, SourceAvailable)
 	coverage.Details = append(coverage.Details,
 		narrowing(workload, contractsv1.ContextFabricCoverageDetailFactScopeUnexpanded),
@@ -1418,9 +1489,9 @@ func TestTheNarrowedCauseIsTheCanonicallyFirstNarrowedKind(t *testing.T) {
 	}
 	want := contractsv1.ContextFabricCoverageDetailFactNarrowed
 	if rows[0].CauseCoverage != want {
-		t.Fatalf("cause = %q, want %q -- with both kinds narrowed the CANONICALLY FIRST narrowed "+
-			"kind names the cause; the detail array is in the opposite order, so an evaluator "+
-			"reading the array rather than the declared kinds fails here",
+		t.Fatalf("cause = %q, want %q -- with both kinds narrowed the FIRST narrowed kind IN "+
+			"PUBLISHED ORDER names the cause; the detail array is in the opposite order, so an "+
+			"evaluator reading the array rather than the published kinds fails here",
 			rows[0].CauseCoverage, want)
 	}
 	// The cause is CARRIED here, not defaulted -- a narrowed kind ranks at zero
@@ -1441,9 +1512,9 @@ func TestTheNarrowedCauseIsTheCanonicallyFirstNarrowedKind(t *testing.T) {
 	// mechanism that did not produce it, which is the false-provenance defect
 	// this row's CauseObserved flag exists to prevent one field up.
 	//
-	// The fixture puts the non-narrowed kind FIRST in the declared order, so
+	// The fixture puts the non-narrowed kind FIRST in the published order, so
 	// the filter is the only thing that can skip it: drop the filter and the
-	// canonically-first kind wins on the strength of a code about a different
+	// first published kind wins on the strength of a code about a different
 	// thing.
 	mixed := factCoverage(health, SourceAvailable, workload, SourceAvailable)
 	mixed.Details = append(mixed.Details,
