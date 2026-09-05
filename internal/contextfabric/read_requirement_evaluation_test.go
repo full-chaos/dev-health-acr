@@ -841,6 +841,47 @@ func TestUnservableAndComputedRequirementsAreNotEvaluated(t *testing.T) {
 		t.Fatalf("a COMPUTED requirement was evaluated (%d rows) -- this evaluator observes fact "+
 			"reads and cannot observe a server step", len(rows))
 	}
+
+	// THE CASE ABOVE PASSES FOR THE WRONG REASON ON ITS OWN, and that is why
+	// this one exists.
+	//
+	// It carries quantifier `all`, which belongs to a computed obligation and
+	// which readQuantifierThreshold refuses a few lines further down. So the
+	// row is dropped by the QUANTIFIER check whether or not the kind check runs
+	// at all -- the assertion holds on an evaluator with no computed guard
+	// whatsoever, and measures the wrong gate.
+	//
+	// This one is a computed requirement that would otherwise sail through:
+	// declared fact kinds that the coverage below actually observes, and a READ
+	// quantifier the threshold table accepts. The ONLY thing standing between
+	// it and an assembled-result read row is the kind-and-served guard. A
+	// computed step is served by running it, not by reading a fact, so a read
+	// row here would attribute a server's work to a provider that did nothing.
+	computedButOtherwiseEligible := computed
+	computedButOtherwiseEligible.Quantifier = string(CompletionQuantifierAtLeastOne)
+	computedButOtherwiseEligible.FactKinds = []FactKind{contractsv1.ContextFabricFactHealth}
+	if _, known := readQuantifierThreshold(computedButOtherwiseEligible.Quantifier); !known {
+		t.Fatalf("the premise moved: %q is no longer a recognised read quantifier, so this fixture "+
+			"is stopped by the threshold check again and measures nothing",
+			computedButOtherwiseEligible.Quantifier)
+	}
+	if rows := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{computedButOtherwiseEligible}, coverage); len(rows) != 0 {
+		t.Fatalf("a COMPUTED requirement carrying a READ quantifier and observed fact kinds was "+
+			"evaluated (%d rows) -- nothing downstream would have stopped it, so the kind guard is "+
+			"the only thing keeping a server step from being reported as a fact read", len(rows))
+	}
+
+	// POSITIVE CONTROL: the same shape as a READ requirement DOES produce a
+	// row, so the two refusals above cannot be passing on an evaluator that
+	// stopped emitting rows at all.
+	served := computedButOtherwiseEligible
+	served.Kind = string(ObligationKindRead)
+	if rows := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{served}, coverage); len(rows) != 1 {
+		t.Fatalf("the same requirement as a READ produced %d rows, want 1 -- without this the "+
+			"refusals above would pass on an evaluator that appends nothing", len(rows))
+	}
 }
 
 // TestGraphSourcesAreNotReadAsFactEvidence keeps the evaluator's input scoped
@@ -919,6 +960,59 @@ func TestTheWorstObservationDecidesTheRow(t *testing.T) {
 					"the row must disclose it whichever order the merge produced", rows[0].Outcome)
 			}
 		})
+	}
+
+	// AND THE CAUSE FOLLOWS THE WORST OBSERVATION TOO, which the cases above
+	// cannot show.
+	//
+	// They vary one kind's observations, so both orders reach the same OUTCOME
+	// and the same single cause -- the assertion holds no matter which
+	// observation the ranking picked. The interesting case is TWO kinds failing
+	// at DIFFERENT severities with DIFFERENT carried codes: the row publishes
+	// one cause, and it must be the worst kind's, not the last one seen.
+	//
+	// The fixture is arranged so those two disagree. `health` is
+	// `unavailable` (severity 8) and is declared FIRST; `workload` is `no_data`
+	// (severity 4) and is declared SECOND. An evaluator that stops tracking the
+	// running maximum keeps overwriting and ends on `workload` -- the LESS
+	// severe kind naming the failure -- which reads as a milder answer than the
+	// evidence supports.
+	twoKinds := readRequirement(CompletionQuantifierAtLeastOne)
+	workload := contractsv1.ContextFabricFactWorkload
+	if len(twoKinds.FactKinds) < 2 || twoKinds.FactKinds[0] != health || twoKinds.FactKinds[1] != workload {
+		t.Fatalf("the fixture requirement declares %v; this case needs health then workload, or the "+
+			"severities below are not being compared in the order it claims", twoKinds.FactKinds)
+	}
+	if sourceStateSeverity(SourceUnavailable) <= sourceStateSeverity(SourceNoData) {
+		t.Fatalf("the premise moved: unavailable (%d) must outrank no_data (%d), or this case is "+
+			"asserting a preference the ranking does not express",
+			sourceStateSeverity(SourceUnavailable), sourceStateSeverity(SourceNoData))
+	}
+	coverage := factCoverage(health, SourceUnavailable, workload, SourceNoData)
+	coverage.Details = append(coverage.Details,
+		contractsv1.ContextFabricCoverageDetail{
+			DetailID: "detail_health", Source: canonicalFactSourcePrefix + string(health),
+			Code: contractsv1.ContextFabricCoverageDetailFactReadFailed, FactKind: health, Label: "worst",
+		},
+		contractsv1.ContextFabricCoverageDetail{
+			DetailID: "detail_workload", Source: canonicalFactSourcePrefix + string(workload),
+			Code: contractsv1.ContextFabricCoverageDetailFactProviderReported, FactKind: workload, Label: "milder",
+		})
+
+	rows := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{twoKinds}, coverage)
+	if len(rows) != 1 {
+		t.Fatalf("appended %d rows, want 1: %+v", len(rows), rows)
+	}
+	if rows[0].CauseCoverage != contractsv1.ContextFabricCoverageDetailFactReadFailed {
+		t.Fatalf("cause = %q, want %q -- the WORST observation names the cause; the milder kind is "+
+			"declared later, so an evaluator that stopped tracking the running maximum publishes "+
+			"the milder code and understates the failure",
+			rows[0].CauseCoverage, contractsv1.ContextFabricCoverageDetailFactReadFailed)
+	}
+	if !rows[0].CauseObserved {
+		t.Fatalf("cause_observed = false: the code was defaulted rather than carried, and both " +
+			"states default to the SAME code, so this case would stop discriminating")
 	}
 }
 
@@ -1336,5 +1430,45 @@ func TestTheNarrowedCauseIsTheCanonicallyFirstNarrowedKind(t *testing.T) {
 	if !rows[0].CauseObserved {
 		t.Fatalf("cause_observed = false: the code was defaulted, not carried from the planner's " +
 			"own detail, so this test would no longer discriminate")
+	}
+
+	// AND ONLY A NARROWED KIND MAY NAME A NARROWING'S CAUSE.
+	//
+	// This carry runs when nothing outranked zero severity, so every observed
+	// kind is `available` -- including kinds that were NOT narrowed and that
+	// carry a coverage code of their own. Those codes describe something else
+	// entirely. Letting one name the shortfall attributes the narrowing to a
+	// mechanism that did not produce it, which is the false-provenance defect
+	// this row's CauseObserved flag exists to prevent one field up.
+	//
+	// The fixture puts the non-narrowed kind FIRST in the declared order, so
+	// the filter is the only thing that can skip it: drop the filter and the
+	// canonically-first kind wins on the strength of a code about a different
+	// thing.
+	mixed := factCoverage(health, SourceAvailable, workload, SourceAvailable)
+	mixed.Details = append(mixed.Details,
+		contractsv1.ContextFabricCoverageDetail{
+			DetailID: "detail_" + string(health), Source: canonicalFactSourcePrefix + string(health),
+			Code: contractsv1.ContextFabricCoverageDetailFactProviderReported, FactKind: health,
+			SourceState: SourceAvailable, Label: "not narrowed",
+		},
+		narrowing(workload, contractsv1.ContextFabricCoverageDetailFactNarrowed))
+
+	mixedRows := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{requirement}, mixed)
+	if len(mixedRows) != 1 {
+		t.Fatalf("produced %d rows, want 1: %+v", len(mixedRows), mixedRows)
+	}
+	if mixedRows[0].CauseCoverage != contractsv1.ContextFabricCoverageDetailFactNarrowed {
+		t.Fatalf("cause = %q, want %q -- only the NARROWED kind may name a narrowing's cause; the "+
+			"non-narrowed kind is declared first and carries a code about something else, so an "+
+			"evaluator that skipped the narrowed-kind filter publishes it and attributes the "+
+			"shortfall to a mechanism that did not produce it",
+			mixedRows[0].CauseCoverage, contractsv1.ContextFabricCoverageDetailFactNarrowed)
+	}
+	if mixedRows[0].Outcome != contractsv1.ContextFabricRequirementNarrowed {
+		t.Fatalf("outcome = %q, want narrowed -- one kind served in full and one was narrowed; if "+
+			"this ever reads satisfied the cause assertion above is measuring a row nobody looks at",
+			mixedRows[0].Outcome)
 	}
 }
