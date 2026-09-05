@@ -308,7 +308,32 @@ func DeriveRequirements(frame QuestionFrame, seed ObligationSeed, capabilities [
 	// Whether THIS FRAME can produce a resolved member set at all. Only a
 	// cohort variant is ever discovered into one, so an organization-scope
 	// frame naming a member kind states a population nothing retrieves.
-	memberSetResolvable := frame.SubjectExpression.IsCohortVariant()
+	//
+	// COHORT-SHAPED IS NOT THE SAME AS COHORT-PRODUCING, and reading the
+	// shape alone was this predicate's own defect. `DiscoveredCohort` is the
+	// only production cohort producer, and it returns nil unless
+	// `cohortKindFromFrame` resolves a MEMBER KIND from the frame -- which
+	// reads `SubjectExpression.MemberKind()`. That method has no
+	// `explicit_set` case at all: an explicit set names OPERANDS, each with
+	// its own kind, and there is no single member kind a cohort could be
+	// built from. So "rank these two named teams" is a legal frame, is a
+	// cohort VARIANT, and can never produce a cohort -- leaving `ranking`
+	// served by a `rank_cohort` the engine can never invoke, which is
+	// exactly the cell this change exists to stop lying.
+	//
+	// The member-kind test is therefore taken from the frame layer that owns
+	// it, not re-derived here, and it is the SAME question the cohort
+	// producer asks one layer down. `graphrank` cannot be imported from here
+	// (it imports this package), so the shared authority is `MemberKind()`
+	// itself rather than `cohortKindFromFrame`.
+	//
+	// What this deliberately does NOT try to decide: whether discovery will
+	// actually FIND any members. That is a runtime fact, unknowable at
+	// derivation time, and a cohort variant whose search returns nothing is
+	// the outcome layer's account to give, not this one's.
+	memberKind, framesAMemberKind := frame.SubjectExpression.MemberKind()
+	_ = memberKind
+	memberSetResolvable := frame.SubjectExpression.IsCohortVariant() && framesAMemberKind
 	rows := make([]DerivedRequirement, 0, len(coordinates))
 	for _, coordinate := range coordinates {
 		rows = append(rows, deriveRequirement(coordinate, seed, capabilities, memberSetResolvable))
@@ -348,7 +373,7 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 			row.Unavailable = RequirementReasonNoDeclaringProducer
 			return row
 		}
-		// A STEP THAT CONSUMES THE RESOLVED MEMBER SET NEEDS A FRAME THAT
+		// A STEP THAT RUNS OVER THE RESOLVED MEMBER SET NEEDS A FRAME THAT
 		// PRODUCES ONE, and only a cohort variant does.
 		//
 		// Found by an adversarial round on the wiring slice. An
@@ -365,8 +390,29 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 		// fact, and it is the SAME token the served answer's own outcome row
 		// now carries when assembly finds no member set. One record, read in
 		// two places.
-		if inputs, declared := InputsForComputedStep(step); declared &&
-			inputs.Class == ComputedInputResolvedMemberSet && !memberSetResolvable {
+		//
+		// THE PREDICATE IS `RunsOverResolvedMemberSet`, NOT
+		// `Class == ComputedInputResolvedMemberSet`, and the difference is
+		// the whole of this cell's second defect. Class says what a step
+		// READS. rank_cohort reads FACT KINDS -- its Class is `fact_kinds` --
+		// and still runs only over a cohort, so the Class test covered
+		// membership_cardinality and let rank_cohort through. A NAMED subject
+		// is a population of one, so `coordinateNamesAPopulation` above
+		// admits `ranking/subject/<named>`, and the row was then SERVED: it
+		// named rank_cohort as its server, and `planningStageOutcomeRow`
+		// seeds a served row `satisfied`. But `IsCohortVariant` is false for
+		// `named_subject` (and for `organization_scope`), so the engine
+		// resolves no cohort, RankCohort is never invoked, and
+		// ComputedStepInputReads' five declared kinds are planned as reads
+		// the fact request -- gated on the same cohort pointer -- never
+		// carries. The cell claimed an ordering that nothing computed, over
+		// facts that nothing read. Both halves close here, at the layer that
+		// owns "a computed obligation is unavailable only when its inputs
+		// are": an unavailable row is not Served, so ComputedStepInputReads
+		// plans nothing for it and the seed says `unavailable` with a named
+		// cause instead of a silent `satisfied`.
+		if inputs, declared := InputsForComputedStep(step); stepNeedsAResolvedMemberSet(inputs, declared) &&
+			!memberSetResolvable {
 			row.Quantifier = CompletionQuantifierNone
 			row.Unavailable = RequirementReasonComputedPopulationAbsent
 			// Step stays EMPTY, and that is the row invariant rather than an
@@ -512,6 +558,28 @@ func dimensionsOfFactKinds(kinds []FactKind, capabilities []FactCapability) []He
 		}
 	}
 	return out
+}
+
+// stepNeedsAResolvedMemberSet reports whether a computed step's own
+// declaration says it cannot run without a resolved member set.
+//
+// EXTRACTED SO THE CONJUNCT IS DECIDABLE, which is the whole reason this
+// function exists rather than the expression sitting inline. An adversarial
+// round deleted `inputs.RunsOverResolvedMemberSet &&` from the inline guard
+// and the mutant SURVIVED a fourteen-test suite -- correctly, because both
+// steps in the declaration table set the flag today, so the conjunct
+// discriminates nothing that any frame-driven fixture can reach. A conjunct
+// no fixture can isolate is not kept with a comment; it is re-pinned where it
+// IS decidable. This is a pure function, total over its arguments, so a unit
+// test can hand it a step that does NOT run over the member set -- the case
+// the table cannot currently produce -- and the guard's read of the
+// declaration stops being an untested assumption.
+//
+// `declared` is carried rather than assumed: a step absent from the table
+// declares nothing, and a missing declaration must not read as "needs
+// nothing" (which would silently serve a cell whose step cannot run).
+func stepNeedsAResolvedMemberSet(inputs ComputedStepInputs, declared bool) bool {
+	return declared && inputs.RunsOverResolvedMemberSet
 }
 
 // coordinateNamesAPopulation reports whether a coordinate names a set a
