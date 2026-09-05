@@ -482,10 +482,14 @@ func TestTheStateFollowsTheEvidence(t *testing.T) {
 			// which is the whole of the fact layer's own rule.
 			contractsv1.ContextFabricAnswerCompletenessPartial},
 		{"nothing read at all", factCoverage(),
-			// No evaluated row exists, so the seed is the only row for this
-			// identity -- and a planning-only READ identity is exactly what
-			// the amended derivation refuses to call complete.
-			contractsv1.ContextFabricAnswerCompletenessPartial},
+			// DEGRADED now, and the change is the point. While the vocabulary
+			// had no member for an unread requirement this emitted no row, so
+			// the seed stood alone and the state was `partial` -- honest, but
+			// weaker than the evidence warranted. The row now names the cause,
+			// `unavailable` is absorbing, and the answer says the reader got
+			// none of a cell they asked for. The interim only ever lost the
+			// CAUSE; this is what recovering it is worth.
+			contractsv1.ContextFabricAnswerCompletenessDegraded},
 	} {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
@@ -853,8 +857,32 @@ func TestGraphSourcesAreNotReadAsFactEvidence(t *testing.T) {
 		{Source: "graph:cohort", State: SourceAvailable},
 		{Source: "canonical_fact:", State: SourceAvailable},
 	}}
-	if rows := appendReadRequirementEvaluations(nil, []contractsv1.ContextFabricPlanRequirement{requirement}, coverage); len(rows) != 0 {
-		t.Fatalf("a graph source (or an empty fact suffix) was read as fact evidence: %+v", rows)
+	// The assertion moved from "no row" to "the NOT-PLANNED row", and it is
+	// stronger for it. While the vocabulary had no member for an unread
+	// requirement, "no row" was the only way to say the graph source had not
+	// been counted. Now there is a row, and it must say the requirement was
+	// never looked at -- which is a POSITIVE statement that the graph source
+	// contributed nothing, where absence was only the lack of a statement.
+	rows := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{requirement}, coverage)
+	if len(rows) != 1 {
+		t.Fatalf("want exactly the not-planned row, got %d: %+v", len(rows), rows)
+	}
+	if rows[0].CauseCoverage != contractsv1.ContextFabricCoverageDetailRequirementReadNotPlanned {
+		t.Fatalf("a graph source (or an empty fact suffix) was read as fact evidence: %+v", rows[0])
+	}
+	if rows[0].Served != 0 {
+		t.Fatalf("a graph source was counted as a serving source: served=%d", rows[0].Served)
+	}
+	// THE COMPLEMENT: the same requirement WITH a real canonical-fact source
+	// does serve. Without it this test would pass on an evaluator that read
+	// nothing at all as fact evidence.
+	served := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{requirement},
+		factCoverage(contractsv1.ContextFabricFactHealth, SourceAvailable))
+	if len(served) != 1 || served[0].Outcome != contractsv1.ContextFabricRequirementSatisfied {
+		t.Fatalf("the complement did not serve: %+v -- this test would then be asserting that "+
+			"nothing is ever read as fact evidence", served)
 	}
 }
 

@@ -75,12 +75,21 @@ type readEvidence struct {
 	// rather than summed because they name different causes and a reader
 	// acts on the cause, not on the total.
 	//
-	// There is no Pruned counter. A pruned observation is not counted at
-	// all -- see evaluateReadRequirement for why a prune is not evidence in
-	// either direction. A zero-valued counter would have been the wrong
-	// shape: it invites a later reader to add it back into a loss test.
 	Truncated int
 	Failed    int
+	// Pruned counts pruned observations FOR ONE PURPOSE ONLY: to tell "the
+	// turn planned nothing that could serve this cell" apart from "everything
+	// it planned was pruned". Those are different answers and they had
+	// collapsed into one.
+	//
+	// IT MUST NEVER ENTER A LOSS TEST. A prune is not a loss -- see
+	// evaluateReadRequirement -- and this counter was deliberately removed
+	// once for exactly that reason. It is back because minting a
+	// `requirement_read_not_planned` row for an all-pruned requirement
+	// re-degraded what `factStateDegrades` refuses to degrade, which is the
+	// same defect arriving through a different door. Read the two uses below
+	// before adding a third.
+	Pruned int
 	// Cause is the coverage code for the worst observation: CARRIED from the
 	// coverage layer's own detail where there is one, and only DEFAULTED from
 	// the source state where there is not. Empty when nothing was observed.
@@ -200,6 +209,7 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 		// completeness derivation reads as `partial`. That is the honest
 		// floor: nothing was read, and nothing was lost either.
 		if state == SourcePruned {
+			evidence.Pruned++
 			continue
 		}
 		evidence.Observed++
@@ -458,6 +468,22 @@ func readRequirementOutcomeRow(
 	// Served/Declared are 0 and the requirement's own standard: zero sources
 	// served, against the number the completion quantifier demands. Both
 	// numbers are measured, neither is invented.
+	// AN ALL-PRUNED REQUIREMENT IS NOT AN UNPLANNED ONE, and the difference
+	// is the whole reason `Pruned` is counted.
+	//
+	// The planner CONSIDERED these kinds and proved they could not contribute;
+	// `factStateDegrades` refuses to degrade on that, deliberately. Minting a
+	// `requirement_read_not_planned` row here would say the turn never looked
+	// -- false -- and would drive the answer to `degraded`, re-degrading
+	// exactly what the fact layer protects. So it keeps its planning seed and
+	// reads `partial`, as it did before this code existed.
+	//
+	// This arm is BEFORE the not-planned row for that reason: reaching the
+	// row first is how the defect happened.
+	if evidence.Observed == 0 && evidence.Pruned > 0 {
+		return RequirementOutcomeRow{}, false
+	}
+
 	if evidence.Observed == 0 {
 		return RequirementOutcomeRow{
 			Stage:         contractsv1.ContextFabricOutcomeStageAssembledResult,
@@ -518,9 +544,10 @@ func readRequirementOutcomeRow(
 		Declared:    declared,
 	}
 
-	// `Pruned` is deliberately absent from this conjunction: a pruned kind
-	// never reaches the counters at all (see evaluateReadRequirement), so a
-	// prune can neither lower this row nor be silently forgiven by it.
+	// `Pruned` is deliberately absent from this conjunction. It is counted
+	// now, but ONLY to tell an unplanned requirement from an all-pruned one;
+	// adding it here would make a prune a loss, which is the thing the fact
+	// layer refuses to do and this evaluator twice re-did by accident.
 	lossless := evidence.Served >= threshold &&
 		evidence.Truncated == 0 && evidence.Failed == 0 && evidence.Narrowed == 0
 	if lossless {
