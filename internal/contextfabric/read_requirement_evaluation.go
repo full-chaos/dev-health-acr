@@ -430,25 +430,46 @@ func readRequirementOutcomeRow(
 	threshold int,
 	evidence readEvidence,
 ) (RequirementOutcomeRow, bool) {
-	// TEMPORARY, and it is the one hole in this change.
+	// NOTHING WAS READ FOR THIS REQUIREMENT, and it now says so.
 	//
-	// A requirement none of whose declared kinds was read at all has no
-	// truthful cause in the shipped coverage vocabulary: every member
-	// describes something that happened TO a read, and here no read
-	// happened -- while `answer_terminated_before_attempt` says the turn
-	// ENDED first, which is a different thing with a different remedy. The
-	// honest code is minted in this branch's last commits, after the
-	// count-population change lands, because both edit the same closed
-	// array and one edit after theirs is safer than two racing.
+	// This arm was the one hole in the change: a requirement none of whose
+	// declared kinds was read at all had no truthful cause in the shipped
+	// vocabulary, so it emitted no row and kept only its planning seed. The
+	// STATE was honest either way -- a planning-only READ identity derives
+	// `partial` -- but the CAUSE was lost, and a reader was left with an
+	// answer that was less than complete for a reason nothing named.
 	//
-	// Until then the requirement keeps only its planning-stage seed, and
-	// the completeness derivation reads a planning-only READ identity as
-	// `partial`. So this interim loses the CAUSE and never the honesty of
-	// the STATE. A reach probe fails if this branch stops executing, so it
-	// cannot quietly become permanent, and that probe is INVERTED in the
-	// commit that mints the code.
+	// `requirement_read_not_planned` is that reason, minted after the
+	// count-population member landed so the two edits to this closed array
+	// were sequenced rather than raced. See its own declaration for why each
+	// neighbouring code would have been a plausible lie.
+	//
+	// `unavailable` with impact `dimension`: the reader asked for this cell
+	// and gets none of it. Not `narrowed`, which claims a reduction of
+	// something that was there, and not `not_attempted`, which belongs to the
+	// gap-row builder for a turn that ENDED before reaching the requirement.
+	// This turn ran to completion and never planned the cell.
+	//
+	// CauseObserved is FALSE, and that is not a technicality. Nothing
+	// reported this: the evaluator inferred it from the absence of any
+	// observation. The one field a reader has for telling a reported cause
+	// from an inferred one must say inferred.
+	//
+	// Served/Declared are 0 and the requirement's own standard: zero sources
+	// served, against the number the completion quantifier demands. Both
+	// numbers are measured, neither is invented.
 	if evidence.Observed == 0 {
-		return RequirementOutcomeRow{}, false
+		return RequirementOutcomeRow{
+			Stage:         contractsv1.ContextFabricOutcomeStageAssembledResult,
+			Requirement:   requirement.Requirement,
+			Obligation:    requirement.Obligation,
+			Outcome:       contractsv1.ContextFabricRequirementUnavailable,
+			Impact:        contractsv1.ContextFabricAnswerImpactDimension,
+			CauseCoverage: contractsv1.ContextFabricCoverageDetailRequirementReadNotPlanned,
+			CauseObserved: false,
+			Served:        0,
+			Declared:      threshold,
+		}, true
 	}
 
 	// AN UNDECLARED CAUSE CODE EMITS NO ROW.

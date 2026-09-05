@@ -383,10 +383,18 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 			wantRow:  false,
 		},
 		{
-			name:       "NOT READ AT ALL emits no row while the cause vocabulary is the other lane's",
+			// Was "emits no row while the cause vocabulary is the other
+			// lane's". The member landed, so the row lands with it.
+			name:       "NOT READ AT ALL names its own cause",
 			quantifier: CompletionQuantifierAtLeastOne,
 			coverage:   factCoverage(),
-			wantRow:    false,
+			wantRow:    true, wantOutcome: contractsv1.ContextFabricRequirementUnavailable,
+			wantImpact: contractsv1.ContextFabricAnswerImpactDimension,
+			wantCause:  contractsv1.ContextFabricCoverageDetailRequirementReadNotPlanned,
+			// INFERRED from an absence, never reported. The contrast with the
+			// PROVEN EMPTY case above is the whole point of the field: there a
+			// provider ran and reported empty, here nothing ran at all.
+			wantObserved: false, wantServed: 0, wantDeclared: 1, wantRefinements: 0,
 		},
 	} {
 		testCase := testCase
@@ -899,18 +907,64 @@ func TestTheWorstObservationDecidesTheRow(t *testing.T) {
 // that says "not covered" is a claim, and it ships with a test that fails if
 // the path executes -- here, the reverse: it fails if the path stops executing,
 // so the interim cannot quietly become permanent by nobody noticing.
-func TestTheNotReadArmIsReachedAndIsTemporary(t *testing.T) {
+func TestTheNotReadArmNamesItsOwnCause(t *testing.T) {
 	t.Parallel()
 	requirement := readRequirement(CompletionQuantifierAtLeastOne)
+
+	// INVERTED, not replaced, and the previous version asked for exactly this.
+	// While the vocabulary had no truthful member the arm emitted NO row and
+	// this test asserted that, with a comment saying "invert this rather than
+	// deleting it" once the code existed. It exists now. Keeping the same test
+	// identity is what makes the interim visible in the history instead of
+	// looking like a feature that was always there.
 	evidence := evaluateReadRequirement(requirement, factCoverage())
 	if evidence.Observed != 0 {
-		t.Fatalf("the fixture no longer reaches the not-read arm (observed=%d); if the evaluator "+
-			"now covers it, this test is the one that must be inverted", evidence.Observed)
+		t.Fatalf("the fixture no longer reaches the not-read arm (observed=%d); this test would "+
+			"then be asserting something else entirely", evidence.Observed)
 	}
-	rows := appendReadRequirementEvaluations(nil, []contractsv1.ContextFabricPlanRequirement{requirement}, factCoverage())
-	if len(rows) != 0 {
-		t.Fatalf("the not-read arm emitted %d rows -- if the cause vocabulary now carries a member "+
-			"for it, invert this test rather than deleting it", len(rows))
+
+	rows := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{requirement}, factCoverage())
+	if len(rows) != 1 {
+		t.Fatalf("the not-read arm emitted %d rows, want 1 -- the requirement is now nameable and "+
+			"must be named", len(rows))
+	}
+	row := rows[0]
+	if row.Outcome != contractsv1.ContextFabricRequirementUnavailable ||
+		row.Impact != contractsv1.ContextFabricAnswerImpactDimension {
+		t.Fatalf("outcome/impact = %q/%q, want unavailable/dimension: the reader asked for this "+
+			"cell and gets none of it", row.Outcome, row.Impact)
+	}
+	if row.CauseCoverage != contractsv1.ContextFabricCoverageDetailRequirementReadNotPlanned {
+		t.Fatalf("cause = %q, want requirement_read_not_planned -- every neighbouring code names a "+
+			"mechanism that did not run here", row.CauseCoverage)
+	}
+	// INFERRED, NOT REPORTED. Nothing observed this; the evaluator concluded it
+	// from the absence of any observation, and the one field a reader has for
+	// telling those apart must say so.
+	if row.CauseObserved {
+		t.Fatal("cause_observed is true on a cause nothing reported; it was inferred from an absence")
+	}
+	if row.Served != 0 || row.Declared != 1 {
+		t.Fatalf("served/declared = %d/%d, want 0/1: zero sources served against the standard's "+
+			"own demand, both measured", row.Served, row.Declared)
+	}
+	if len(row.Refinements) != 0 {
+		t.Fatalf("the row carries %d refinements; nothing was reduced -- nothing was read",
+			len(row.Refinements))
+	}
+	// It must be publishable. A row that describes the absence correctly and
+	// cannot be served is not a fix.
+	if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(row); err != nil {
+		t.Fatalf("the not-read row is not contract-valid: %v", err)
+	}
+
+	// AND THE STATE FOLLOWS IT. `unavailable` is absorbing, so an answer that
+	// never looked at a planned read is `degraded` -- strictly stronger than
+	// the `partial` the interim produced, and the reason the interim was only
+	// ever a loss of the CAUSE.
+	if got := contractsv1.DeriveContextFabricAnswerCompletenessState(rows); got != contractsv1.ContextFabricAnswerCompletenessDegraded {
+		t.Fatalf("state = %q, want degraded", got)
 	}
 }
 

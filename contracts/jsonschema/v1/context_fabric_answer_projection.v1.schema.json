@@ -2511,7 +2511,8 @@
             "graph_validity_unbounded",
             "reuse_auxiliary_refs_stripped",
             "answer_terminated_before_attempt",
-            "population_truncated"
+            "population_truncated",
+            "requirement_read_not_planned"
           ]
         },
         "degrading": {
