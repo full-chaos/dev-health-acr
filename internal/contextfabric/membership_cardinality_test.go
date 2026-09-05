@@ -812,23 +812,46 @@ func TestFinalizingTwiceStatesOneCardinality(t *testing.T) {
 // TestATruncatedCohortsCountIsNotAPopulationClaim pins the reported limit at
 // the CONSUMER, not only in a doc comment.
 //
-// `satisfied` on a count row means "counted the RESOLVED member set exactly".
-// It does NOT mean "this is the population". The distinction is real and it
-// is the one thing about this row a reader could get wrong: where the graph
-// read stopped at the cohort ceiling, the resolved set is a lower bound and
-// the count over it is still exact.
+// THE OUTCOME ASSERTION IN THIS TEST WAS INVERTED, DELIBERATELY, AND THE
+// REASON IS THE POINT OF THE CHANGE THAT INVERTED IT.
 //
-// A doc comment cannot enforce that. What can is this: whenever the served
-// document states a count, the SAME document must carry the cohort whose
-// complete/truncated flags say whether the counted set is the whole of it. A
-// count that arrived without them would be unreadable except as a population
-// claim -- which is precisely the misreading the limit describes.
+// As shipped, this test required `satisfied` on a count taken over a truncated
+// cohort, arguing that nothing narrowed the RESOLVED set so the count over it
+// is exact -- and that the disclosure lives in the cohort's own
+// complete/truncated flags, carried on the same document.
+//
+// Both halves of that argument are still true. What was wrong was the
+// conclusion drawn from them. `satisfied` is not a neutral word for "exact
+// over what I looked at": the completeness derivation reads it as
+// CONTRIBUTING NOTHING, so a document whose only non-trivial row was this one
+// derived `complete`. The answer therefore told a reader that nothing was
+// lost, on a turn where the population was never seen. Putting the
+// qualification in a sibling field and the false reassurance in the token the
+// derivation actually consumes leaves the disclosure somewhere no consumer of
+// `state` can reach -- which is the "missing is not healthy" shape from the
+// other side, and it is what the design of record records as a P1.
+//
+// The row now says `narrowed` with the coverage code `population_truncated`
+// and EQUAL served/declared. It does not "blame this answer for a discovery
+// bound it did not apply" -- the counts stay equal precisely so no invented
+// reduction is claimed, and the cause names the axis the loss is really on.
+// What changed is that the loss is now expressible at all: the row validator
+// gained a census exception for exactly this shape, so the honest outcome
+// stopped being unrepresentable.
+//
+// EVERYTHING ELSE HERE IS KEPT UNCHANGED, because it was right the first time
+// and is the more durable half of the test: whenever the served document
+// states a count, the SAME document must carry the cohort whose flags say
+// whether the counted set is the whole of it, and the same pair must reach the
+// operator on the telemetry line. Those assertions pass identically before and
+// after; only the token the derivation consumes moved.
 func TestATruncatedCohortsCountIsNotAPopulationClaim(t *testing.T) {
 	t.Parallel()
 	frame := countingFrame(SubjectTeam)
 	// A cohort the DISCOVERY truncated: the read stopped at the ceiling, so
 	// these three are a lower bound on the population. Nothing narrowed
-	// afterwards, so the count over the resolved set is exact.
+	// afterwards, so the count over the resolved set is exact -- and the
+	// population it is a count OF is unknown, which is what the row must say.
 	cohort := countingCohort(SubjectTeam, 3)
 	cohort.Complete = false
 	cohort.Truncated = true
@@ -841,13 +864,28 @@ func TestATruncatedCohortsCountIsNotAPopulationClaim(t *testing.T) {
 		t.Fatalf("assembled-result `count` rows = %d, want 1", len(rows))
 	}
 	row := rows[0]
-	if row.Outcome != contractsv1.ContextFabricRequirementSatisfied {
-		t.Fatalf("outcome = %q, want %q -- nothing narrowed the resolved set, so the count over it IS exact; "+
-			"reporting `narrowed` here would blame this answer for a discovery bound it did not apply",
-			row.Outcome, contractsv1.ContextFabricRequirementSatisfied)
+	if row.Outcome != contractsv1.ContextFabricRequirementNarrowed {
+		t.Fatalf("outcome = %q, want %q -- the count over the resolved set is exact, but the resolved set is not "+
+			"the population and the cohort says so; `satisfied` is consumed by the completeness derivation as "+
+			"CONTRIBUTING NOTHING, so this row would make the answer claim `complete` over a census it never took",
+			row.Outcome, contractsv1.ContextFabricRequirementNarrowed)
+	}
+	if row.CauseCoverage != populationTruncatedToken {
+		t.Fatalf("cause_coverage = %q, want %q -- a qualified count must name the axis its loss is on",
+			row.CauseCoverage, populationTruncatedToken)
+	}
+	if !row.CauseObserved {
+		t.Fatal("the cohort REPORTED its own incompleteness, so the cause is observed, not defaulted")
+	}
+	// The completeness state is what the inverted token exists to change, and
+	// it is the harm the original assertion could not see.
+	if got := result.Completeness.State; got != contractsv1.ContextFabricAnswerCompletenessPartial {
+		t.Fatalf("the served answer states completeness %q, want %q", got, contractsv1.ContextFabricAnswerCompletenessPartial)
 	}
 	if row.Served != row.Declared {
-		t.Fatalf("served/declared = %d/%d; nothing narrowed, so they must agree", row.Served, row.Declared)
+		t.Fatalf("served/declared = %d/%d; nothing narrowed the resolved set, so they must agree -- raising "+
+			"declared to make this look like an ordinary reduction would publish a population size nothing measured",
+			row.Served, row.Declared)
 	}
 
 	// THE CONSUMER-SIDE ASSERTION. The count is on the document; so is the

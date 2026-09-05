@@ -49,6 +49,12 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		// Source only. No fact kind and no count, matching the field rule:
 		// nothing was read, so there is nothing to name or to count.
 		d.Source = "context-fabric:answer-plan"
+	case ContextFabricCoverageDetailPopulationTruncated:
+		// Source only. No fact kind (nothing was read) and no count: the
+		// only number available is the size of what WAS resolved, which the
+		// outcome row already states, and the population size is the one
+		// quantity nothing measured.
+		d.Source = "context-fabric:cohort-census"
 	}
 	return d
 }

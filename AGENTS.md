@@ -129,7 +129,7 @@ Any externally visible field or endpoint change must update, in the same change:
 ## CONVENTIONS
 
 - JSON fields are snake_case; Go fields are PascalCase; contract names carry a major suffix such as `.v1`.
-- Additive optional fields may stay in v1. Removed fields, tighter requiredness, changed meaning, or enum changes require a new major contract.
+- Additive optional fields may stay in v1. Removed fields, tighter requiredness, or changed meaning require a new major contract. For enums the test is whether a conforming consumer breaks: **removing, renaming, or redefining a member requires a new major; adding a member stays within the major** — and an addition is only complete when every enumeration site moves with it (the Go vocabulary, every published JSON Schema that mirrors it, the embedded MCP copies, and the parity test that holds them equal) and the consumer pin is bumped before the new member is emitted. A consumer validating with `additionalProperties: false` against a stale schema fails closed on the first answer that carries a member it has not vendored, so the pin bump is part of the change, not a follow-up.
 - Use typed sentinel errors and safe classifications; external errors must not expose raw transports, payloads, paths, or credentials.
 - Structured logging uses `log/slog`; high-cardinality request IDs are correlation fields, never metric labels.
 - Tests live beside packages. Contract parity, adversarial, fuzz, integration, and real-binary MCP tests are intentional layers.
@@ -200,6 +200,14 @@ git push -u origin HEAD:<branch>
 - Push with an explicit refspec, `HEAD:<branch>` (or `-u origin HEAD:<branch>` the first time) — never a bare `git push`.
 - Verify before the *first* push: `git for-each-ref --format='%(refname:short) -> %(upstream:short)' refs/heads/<branch>` must print nothing after `->`. After `git push -u` sets the upstream, the same command legitimately prints `origin/<branch>` — the check that matters from then on is that it never prints `origin/main`.
 - **`dev-health-go` trap:** that repo sets `push.default=upstream`. A tracked branch plus a bare `git push` pushes `main` there even faster than elsewhere — the same `--no-track` + explicit-refspec recipe is mandatory, no exceptions.
+
+## PR NAMING AND STRUCTURE
+
+- Branch name: `<type>/<topic>`, named by topic — never by lane name or date.
+- PR title: `<type>(<area>): CHAOS-<n> <short imperative description>` — `type` is `feat`/`fix`/`bug`/`enhancement`/`chore`/`docs`; `area` is the code actually touched. Every PR cites **exactly one** ticket — split a shared ticket into sub-issues **before** opening the PR. A PR that genuinely spans more than one ticket omits the id (rare; the id exists so the PR is easy to find). A follow-up ticket found during the work is noted in the body as "filed separately", never by id. Commit messages carry no ticket ids — the squash commit takes the PR title.
+- PR body carries the literal headings `## TEST-EVIDENCE` and `## RISK-NOTES` — the governance gate's parser reads them literally.
+- A PR that depends on another **open** PR's content opens **stacked** on it (base = the dependency), never parallel and main-based.
+- Body edits: one edit per pushed tip, made **before** that tip's CI goes terminal; none after.
 
 ## NOTES
 

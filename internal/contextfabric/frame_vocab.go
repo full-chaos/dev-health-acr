@@ -612,6 +612,30 @@ type ComputedStepInputs struct {
 	// and conflating them is what would let an unexecuted step's "consumes
 	// nothing" authorize a retirement.
 	Execution ComputedStepExecution
+	// RunsOverResolvedMemberSet says the step's EXECUTOR requires the
+	// RESOLVED MEMBER SET to run at all.
+	//
+	// IT IS NOT DERIVABLE FROM Class, AND CONFLATING THE TWO IS THE DEFECT
+	// THIS FIELD WAS ADDED FOR. Class says what the step READS; this says
+	// what it RUNS OVER, and rank_cohort is the case where they differ:
+	// its Class is `fact_kinds` (the five signal families it scores from),
+	// yet RankCohort is called only under `if graphContext.Cohort != nil`
+	// (engine.go's Investigate). Before this field the derivation's
+	// population guard keyed on `Class == resolved_member_set`, so it
+	// covered membership_cardinality and MISSED rank_cohort -- and a
+	// named-subject ranking frame therefore derived a SERVED row for a
+	// computation the engine can never invoke, whose declared inputs
+	// ComputedStepInputReads then planned as reads the fact request (also
+	// gated on the cohort pointer) never carried. The row's planning seed
+	// is `satisfied` by default, so the cell claimed an ordering that
+	// nothing computed over facts nothing read.
+	//
+	// A per-step DECLARATION rather than a predicate over Class, on this
+	// table's own rule: "the declaration is built from what the step
+	// EXECUTES". A future step that scores from fact kinds without needing
+	// a member set states false here and is not swept up by a rule it does
+	// not fit.
+	RunsOverResolvedMemberSet bool
 }
 
 // computedStepInputs is the declaration table.
@@ -638,6 +662,11 @@ var computedStepInputs = map[ComputedObligationStep]ComputedStepInputs{
 		// RankCohort is wired between ReadFacts and Synthesize (engine.go's
 		// Investigate) and computes the ordering from already-read facts.
 		Execution: ComputedStepServerExecuted,
+		// ...and it is invoked ONLY under `if graphContext.Cohort != nil`.
+		// The facts are its INPUT; the cohort is what it orders. A frame
+		// that resolves no member set gives it nothing to order, however
+		// many of those five kinds were read.
+		RunsOverResolvedMemberSet: true,
 	},
 	ComputedStepMembershipCardinality: {
 		Class: ComputedInputResolvedMemberSet,
@@ -657,6 +686,11 @@ var computedStepInputs = map[ComputedObligationStep]ComputedStepInputs{
 		// row, and why flipping this line without wiring the step would have
 		// authorized retiring a real fact read.
 		Execution: ComputedStepServerExecuted,
+		// Stated here as well as in Class, and the redundancy is the point:
+		// Class is what the step reads, this is what it runs over, and for
+		// THIS step they coincide. Leaving it to be inferred from Class is
+		// exactly what let rank_cohort escape the population guard.
+		RunsOverResolvedMemberSet: true,
 	},
 }
 
@@ -676,9 +710,10 @@ func InputsForComputedStep(step ComputedObligationStep) (ComputedStepInputs, boo
 		return ComputedStepInputs{}, false
 	}
 	return ComputedStepInputs{
-		Class:     declared.Class,
-		FactKinds: sortedFactKinds(declared.FactKinds),
-		Execution: declared.Execution,
+		Class:                     declared.Class,
+		FactKinds:                 sortedFactKinds(declared.FactKinds),
+		Execution:                 declared.Execution,
+		RunsOverResolvedMemberSet: declared.RunsOverResolvedMemberSet,
 	}, true
 }
 
