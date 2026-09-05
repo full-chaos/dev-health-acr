@@ -1053,7 +1053,22 @@ func rankCandidateEdges(edges []graphrank.CandidateEdge) []graphrank.CandidateEd
 // authorization-filtered or fails to resolve does not consume budget, so a
 // lower-ranked-but-admissible edge is never starved by a higher-ranked one
 // that turned out to be unauthorized.
-func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, origin contextfabric.SubjectRef, maxHops, collectLimit int, temporal temporalFilter) ([]graphrank.CandidateNode, []graphrank.ResolvedEdge, int, edgeFilterCounts, error) {
+// TRUNCATION (CHAOS-5168, r1 finding 1). The fifth return reports that this
+// walk stopped at collectLimit with candidate edges still unexamined.
+//
+// It matters to the COHORT, not only to the edge set, and that is not
+// obvious: neighbours are discovered ONLY through edges this walk admits
+// (see the neighbour loop below), so an edge dropped at the cap takes its
+// endpoint with it -- a kind-matching, authorized subject that never reaches
+// `visited`, never reaches DiscoverContext's cohortNodes, and therefore
+// never becomes a cohort member. With the retained member count still under
+// MaxCohortMembers, DiscoveredCohort has nothing to derive incompleteness
+// from and reports Complete=true over a pool this function clipped.
+//
+// Reported rather than acted on here: this function stays a retrieval
+// primitive, and the caller is the layer that knows whether an exhaustive
+// census also ran and covered the loss.
+func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, origin contextfabric.SubjectRef, maxHops, collectLimit int, temporal temporalFilter) ([]graphrank.CandidateNode, []graphrank.ResolvedEdge, int, edgeFilterCounts, bool, error) {
 	originUUID := subjectUUID(string(origin.Kind), origin.CanonicalID)
 	visited := make(map[string]graphrank.CandidateNode)
 	var edges []graphrank.ResolvedEdge
@@ -1061,12 +1076,13 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 	failedLookups := 0
 	var filterCounts edgeFilterCounts
 	frontier := []string{originUUID}
+	truncated := false
 	for hop := 0; hop < maxHops && len(frontier) > 0 && (collectLimit <= 0 || len(edges) < collectLimit); hop++ {
 		var hopCandidates []graphrank.CandidateEdge
 		for _, uuid := range frontier {
 			candidateEdges, err := a.edgesOfNode(ctx, key, orgID, uuid, temporal)
 			if err != nil {
-				return nil, nil, failedLookups, filterCounts, err
+				return nil, nil, failedLookups, filterCounts, false, err
 			}
 			for _, ce := range candidateEdges {
 				if seenEdge[ce.UUID] {
@@ -1083,6 +1099,10 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 		var next []string
 		for _, ce := range rankCandidateEdges(hopCandidates) {
 			if collectLimit > 0 && len(edges) >= collectLimit {
+				// Candidate edges remain and the budget is spent: this walk
+				// is returning less than it found, and the endpoints of
+				// everything past here are lost to the cohort.
+				truncated = true
 				break
 			}
 			resolved, resolution, reason := a.resolveEdge(ctx, key, orgID, principal, scope, ce, temporal)
@@ -1145,5 +1165,5 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 	// comes first, and a richer order can replace this key later without
 	// touching any consumer's contract.
 	sortCandidateNodesBySubjectKey(nodes)
-	return nodes, edges, failedLookups, filterCounts, nil
+	return nodes, edges, failedLookups, filterCounts, truncated, nil
 }

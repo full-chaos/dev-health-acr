@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 )
 
 // captureCohortKindBasisLine emits one cohort-kind-basis line through the
@@ -26,10 +27,19 @@ func captureCohortKindBasisLine(t *testing.T, declaredKind contextfabric.Subject
 
 func captureCohortKindBasisLineWithPoolTruncation(t *testing.T, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis) map[string]any {
 	t.Helper()
+	return captureCohortKindBasisLineFull(t, context.Background(), slog.LevelDebug, declaredKind, basis, discovered, poolTruncation, nil)
+}
+
+// captureCohortKindBasisLineFull is the one place the production sink is
+// driven. Every parameter exists because a test below varies it: the CONTEXT
+// (so request-id propagation is observable), the handler LEVEL (so the line's
+// own level is observable rather than assumed), and the arms.
+func captureCohortKindBasisLineFull(t *testing.T, ctx context.Context, level slog.Level, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis, arms []CohortPoolTruncationArm) map[string]any {
+	t.Helper()
 	var buffer bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: level}))
 	SlogTelemetry{Logger: logger}.RecordCohortKindBasis(
-		context.Background(), "org_sink_test", declaredKind, basis, discovered, poolTruncation)
+		ctx, "org_sink_test", declaredKind, basis, discovered, poolTruncation, arms)
 
 	lines := 0
 	record := map[string]any{}
@@ -46,6 +56,25 @@ func captureCohortKindBasisLineWithPoolTruncation(t *testing.T, declaredKind con
 		t.Fatalf("got %d lines, want exactly 1", lines)
 	}
 	return record
+}
+
+// captureCohortKindBasisLineCount emits one line at the given handler level
+// and returns HOW MANY lines the handler admitted, so a test can observe the
+// line being SUPPRESSED rather than only its content when it is not.
+func captureCohortKindBasisLineCount(t *testing.T, level slog.Level) int {
+	t.Helper()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: level}))
+	SlogTelemetry{Logger: logger}.RecordCohortKindBasis(
+		context.Background(), "org_sink_test", contextfabric.SubjectTeam,
+		graphrank.CohortKindFromFrameMemberKind, true, CohortPoolTruncationNone, nil)
+	count := 0
+	for _, line := range strings.Split(strings.TrimSpace(buffer.String()), "\n") {
+		if strings.TrimSpace(line) != "" {
+			count++
+		}
+	}
+	return count
 }
 
 // TestCohortKindBasisLineNamesTheRefusedKind is the REQUIRED half, and it is
@@ -127,7 +156,7 @@ func TestCohortKindBasisLineCarriesNoKeyOutsideItsAllowList(t *testing.T) {
 	allowed := map[string]bool{
 		"time": true, "level": true, "msg": true, "request_id": true,
 		"org_id": true, "member_kind": true, "basis": true, "discovered": true,
-		"pool_truncation": true,
+		"pool_truncation": true, "pool_truncation_arms": true,
 	}
 	for key := range record {
 		if !allowed[key] {
@@ -177,8 +206,8 @@ func TestCohortKindBasisLineReportsOnlyPublishedPoolTruncations(t *testing.T) {
 		published[string(basis)] = true
 	}
 	for _, basis := range vocabulary {
-		record := captureCohortKindBasisLineWithPoolTruncation(t,
-			contextfabric.SubjectRepository, graphrank.CohortKindFromFrameMemberKind, true, basis)
+		record := captureCohortKindBasisLineFull(t, context.Background(), slog.LevelDebug,
+			contextfabric.SubjectRepository, graphrank.CohortKindFromFrameMemberKind, true, basis, nil)
 		got, ok := record["pool_truncation"].(string)
 		if !ok {
 			t.Fatalf("pool_truncation = %v (%T), want a string", record["pool_truncation"], record["pool_truncation"])
@@ -203,13 +232,15 @@ func TestCohortPoolTruncationProducesOnlyPublishedBases(t *testing.T) {
 	}
 	seen := make(map[CohortPoolTruncationBasis]bool)
 	for _, fulltext := range []bool{false, true} {
-		for _, exactName := range []bool{false, true} {
-			for _, census := range []bool{false, true} {
-				basis, _ := cohortPoolTruncation(fulltext, exactName, census)
-				if !published[basis] {
-					t.Errorf("cohortPoolTruncation(%v, %v, %v) returned %q, which the vocabulary does not declare", fulltext, exactName, census, basis)
+		for _, hopWalk := range []bool{false, true} {
+			for _, exactName := range []bool{false, true} {
+				for _, census := range []bool{false, true} {
+					basis, _, _ := cohortPoolTruncation(fulltext, hopWalk, exactName, census)
+					if !published[basis] {
+						t.Errorf("cohortPoolTruncation(%v, %v, %v, %v) returned %q, which the vocabulary does not declare", fulltext, hopWalk, exactName, census, basis)
+					}
+					seen[basis] = true
 				}
-				seen[basis] = true
 			}
 		}
 	}
@@ -220,5 +251,111 @@ func TestCohortPoolTruncationProducesOnlyPublishedBases(t *testing.T) {
 		if !seen[basis] {
 			t.Errorf("vocabulary member %q is never produced by cohortPoolTruncation over its whole input space -- it is dead vocabulary", basis)
 		}
+	}
+}
+
+// TestCohortKindBasisLineCarriesTheRequestID is r1 finding 2, as a test.
+//
+// The reviewer's mutant: delete graphRequestIDLogAttrs(ctx) from the sink and
+// the whole package stays green, because every existing sink test drives it
+// with context.Background(). The key that mutant removes is the JOIN KEY --
+// without it an operator holding a suspicious member count cannot tie this
+// line to the investigation that produced it, which is the exact failure this
+// adapter already paid for once (see graphRequestIDLogAttrs' own doc comment:
+// a per-request grep returned nothing and "cannot attribute" was misread as
+// "did not run").
+//
+// WithRequestID silently rejects a non-canonical id -- `req_` plus exactly 32
+// lowercase hex characters -- and returns the context UNCHANGED, so a
+// readable label here would leave the context bare and this test would fail
+// against correct production code. The id below is canonical for that reason.
+func TestCohortKindBasisLineCarriesTheRequestID(t *testing.T) {
+	t.Parallel()
+	const canonicalRequestID = "req_0123456789abcdef0123456789abcdef"
+	ctx := observability.WithRequestID(context.Background(), canonicalRequestID)
+	if _, ok := observability.RequestIDFromContext(ctx); !ok {
+		t.Fatalf("the fixture's own context carries no request id -- WithRequestID rejected %q, so this test would pass over correct code", canonicalRequestID)
+	}
+
+	record := captureCohortKindBasisLineFull(t, ctx, slog.LevelDebug,
+		contextfabric.SubjectTeam, graphrank.CohortKindFromFrameMemberKind, true,
+		CohortPoolTruncationTruncated, []CohortPoolTruncationArm{CohortPoolTruncationArmFulltext})
+
+	if got := record["request_id"]; got != canonicalRequestID {
+		t.Errorf("request_id = %v, want %q -- without it this line cannot be attributed to an investigation, and a telemetry line that cannot be attributed cannot prove a path did or did not run",
+			got, canonicalRequestID)
+	}
+}
+
+// TestCohortKindBasisLineOmitsTheRequestIDWhenTheContextHasNone is the
+// complement: the key is absent, never present-and-empty. A line that always
+// carries the key, sometimes blank, makes "no request id" and "the id was the
+// empty string" the same reading.
+func TestCohortKindBasisLineOmitsTheRequestIDWhenTheContextHasNone(t *testing.T) {
+	t.Parallel()
+	record := captureCohortKindBasisLineFull(t, context.Background(), slog.LevelDebug,
+		contextfabric.SubjectTeam, graphrank.CohortKindFromFrameMemberKind, true, CohortPoolTruncationNone, nil)
+
+	if _, present := record["request_id"]; present {
+		t.Errorf("request_id is present on a line emitted with no request id in context: %v", record["request_id"])
+	}
+}
+
+// TestCohortKindBasisLineIsEmittedAtInfo is r1 finding 4, as a test.
+//
+// The reviewer's mutant: change the sink's Info to Debug and the package stays
+// green, because the existing sink tests configure a Debug-level handler. At
+// the production default that mutant deletes the entire diagnostic line while
+// every test still passes -- the "a measurement that did not happen must fail
+// loudly" shape, one level out.
+//
+// Asserted by OBSERVING the handler admit the line at Info and by proving the
+// same instrument can suppress one: the negative half is what makes the
+// positive half mean anything, since a handler that admitted everything would
+// pass the first assertion over any level at all.
+func TestCohortKindBasisLineIsEmittedAtInfo(t *testing.T) {
+	t.Parallel()
+	if got := captureCohortKindBasisLineCount(t, slog.LevelInfo); got != 1 {
+		t.Errorf("an Info-level handler admitted %d cohort-kind-basis lines, want 1 -- below Info this line is invisible at the production default and the whole diagnostic is gone", got)
+	}
+	if got := captureCohortKindBasisLineCount(t, slog.LevelError); got != 0 {
+		t.Fatalf("an Error-level handler admitted %d lines, want 0 -- the instrument cannot suppress anything, so the assertion above proves nothing about the line's own level", got)
+	}
+}
+
+// TestCohortKindBasisLineNamesTheCutArms pins the second key: the decision and
+// the arms are separate values, and the arms render in vocabulary order.
+func TestCohortKindBasisLineNamesTheCutArms(t *testing.T) {
+	t.Parallel()
+	record := captureCohortKindBasisLineFull(t, context.Background(), slog.LevelDebug,
+		contextfabric.SubjectTeam, graphrank.CohortKindFromFrameMemberKind, true,
+		CohortPoolTruncationTruncated,
+		// Supplied out of vocabulary order on purpose: the renderer must not
+		// let a caller's ordering reach the line, or two identical outcomes
+		// produce two different strings.
+		[]CohortPoolTruncationArm{CohortPoolTruncationArmHopWalk, CohortPoolTruncationArmFulltext})
+
+	if got := record["pool_truncation"]; got != string(CohortPoolTruncationTruncated) {
+		t.Errorf("pool_truncation = %v, want %q", got, CohortPoolTruncationTruncated)
+	}
+	if got := record["pool_truncation_arms"]; got != "fulltext,hop_walk" {
+		t.Errorf("pool_truncation_arms = %v, want %q -- rendered in vocabulary order, not the caller's", got, "fulltext,hop_walk")
+	}
+}
+
+// TestCohortKindBasisLineCarriesEmptyArmsWhenNothingWasCut keeps the two keys'
+// vocabularies from colliding: the arms key is EMPTY when no arm was cut, not
+// the string "none", which is a member of the DECISION vocabulary on the other
+// key. An operator grepping one key's value must never match the other's.
+func TestCohortKindBasisLineCarriesEmptyArmsWhenNothingWasCut(t *testing.T) {
+	t.Parallel()
+	record := captureCohortKindBasisLineFull(t, context.Background(), slog.LevelDebug,
+		contextfabric.SubjectTeam, graphrank.CohortKindFromFrameMemberKind, true, CohortPoolTruncationNone, nil)
+
+	if got := record["pool_truncation_arms"]; got != "" {
+		t.Errorf("pool_truncation_arms = %q, want the empty string", got)
+	}
+	if got := record["pool_truncation"]; got != string(CohortPoolTruncationNone) {
+		t.Errorf("pool_truncation = %v, want %q", got, CohortPoolTruncationNone)
 	}
 }

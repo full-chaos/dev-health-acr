@@ -229,9 +229,9 @@ func TestDiscoverContextClippedFulltextUnderACompletedCensusStaysComplete(t *tes
 	if len(telemetry.cohortKindBases) != 1 {
 		t.Fatalf("cohort kind basis lines = %d, want 1", len(telemetry.cohortKindBases))
 	}
-	if got := telemetry.cohortKindBases[0].poolTruncation; got != CohortPoolTruncationFulltextCoveredByCensus {
+	if got := telemetry.cohortKindBases[0].poolTruncation; got != CohortPoolTruncationCoveredByCensus {
 		t.Errorf("pool truncation basis = %q, want %q -- reporting %q here would make \"the search was never clipped\" and \"the search was clipped and the census covered it\" the same line, which is the distinction an operator holding a suspicious member count needs",
-			got, CohortPoolTruncationFulltextCoveredByCensus, CohortPoolTruncationNone)
+			got, CohortPoolTruncationCoveredByCensus, CohortPoolTruncationNone)
 	}
 }
 
@@ -269,93 +269,136 @@ func TestExactNameCensusCoversEveryServableCohortKind(t *testing.T) {
 // TestCohortPoolTruncationClassifiesEveryInput quantifies over the whole
 // closed input space rather than over the rows someone remembered.
 //
-// A classification over a closed vocabulary is an allow-list naming every
-// member's class, never a deny-list with an else -- so the expectation table
-// below is exhaustive by construction (2x2x2), and a case that reached the
-// default arm of cohortPoolTruncation without being named here would show up
-// as a missing key, not as a silent pass.
+// Sixteen rows, not eight: the third retrieval arm (hop walk) is what made the
+// old single-vocabulary design untenable, and the table is what keeps its
+// addition honest. A classification over a closed space is an allow-list
+// naming every member's class, so an input that reached the classifier's
+// default arm without being named here shows up as a MISSING KEY, never as a
+// silent pass.
 func TestCohortPoolTruncationClassifiesEveryInput(t *testing.T) {
 	t.Parallel()
-	type input struct{ fulltext, exactName, census bool }
+	type input struct{ fulltext, hopWalk, exactName, census bool }
 	type expectation struct {
 		basis     CohortPoolTruncationBasis
+		arms      string
 		truncated bool
 	}
-	// The two exactName=true, census=false rows are UNREACHABLE in
-	// production (exactNameTruncated is only ever assigned inside the
-	// censusAdmitted branch). They are classified anyway, conservatively, so
-	// that a future caller which can reach them inherits a stated answer
-	// rather than a default.
+	const (
+		ft   = "fulltext"
+		hw   = "hop_walk"
+		enc  = "exact_name_census"
+		none = ""
+	)
+	// Rows where exactName is true but census is false, and rows where hopWalk
+	// and census are both true, are UNREACHABLE in production: exactNameTruncated
+	// is only assigned inside the census branch, and censusAdmitted requires zero
+	// committed subjects while hopWalk requires at least one. They are classified
+	// anyway, conservatively, so a future caller that reaches one inherits a
+	// stated answer rather than a default.
 	want := map[input]expectation{
-		{false, false, false}: {CohortPoolTruncationNone, false},
-		{false, false, true}:  {CohortPoolTruncationNone, false},
-		{true, false, false}:  {CohortPoolTruncationFulltext, true},
-		{true, false, true}:   {CohortPoolTruncationFulltextCoveredByCensus, false},
-		{false, true, false}:  {CohortPoolTruncationExactNameCensus, true},
-		{false, true, true}:   {CohortPoolTruncationExactNameCensus, true},
-		{true, true, false}:   {CohortPoolTruncationBothArms, true},
-		{true, true, true}:    {CohortPoolTruncationBothArms, true},
+		{false, false, false, false}: {CohortPoolTruncationNone, none, false},
+		{false, false, false, true}:  {CohortPoolTruncationNone, none, false},
+		{true, false, false, false}:  {CohortPoolTruncationTruncated, ft, true},
+		{true, false, false, true}:   {CohortPoolTruncationCoveredByCensus, ft, false},
+		{false, true, false, false}:  {CohortPoolTruncationTruncated, hw, true},
+		{false, true, false, true}:   {CohortPoolTruncationCoveredByCensus, hw, false},
+		{true, true, false, false}:   {CohortPoolTruncationTruncated, ft + "," + hw, true},
+		{true, true, false, true}:    {CohortPoolTruncationCoveredByCensus, ft + "," + hw, false},
+		{false, false, true, false}:  {CohortPoolTruncationTruncated, enc, true},
+		{false, false, true, true}:   {CohortPoolTruncationTruncated, enc, true},
+		{true, false, true, false}:   {CohortPoolTruncationTruncated, ft + "," + enc, true},
+		{true, false, true, true}:    {CohortPoolTruncationTruncated, ft + "," + enc, true},
+		{false, true, true, false}:   {CohortPoolTruncationTruncated, hw + "," + enc, true},
+		{false, true, true, true}:    {CohortPoolTruncationTruncated, hw + "," + enc, true},
+		{true, true, true, false}:    {CohortPoolTruncationTruncated, ft + "," + hw + "," + enc, true},
+		{true, true, true, true}:     {CohortPoolTruncationTruncated, ft + "," + hw + "," + enc, true},
 	}
-	if len(want) != 8 {
-		t.Fatalf("expectation table has %d rows, want 8 -- the table must cover the whole input space or it is a sample", len(want))
+	if len(want) != 16 {
+		t.Fatalf("expectation table has %d rows, want 16 -- the table must cover the whole input space or it is a sample", len(want))
 	}
 	for _, fulltext := range []bool{false, true} {
-		for _, exactName := range []bool{false, true} {
-			for _, census := range []bool{false, true} {
-				key := input{fulltext, exactName, census}
-				expected, named := want[key]
-				if !named {
-					t.Fatalf("input %+v is not classified in this table", key)
-				}
-				basis, truncated := cohortPoolTruncation(fulltext, exactName, census)
-				if basis != expected.basis || truncated != expected.truncated {
-					t.Errorf("cohortPoolTruncation(%v, %v, %v) = (%q, %v), want (%q, %v)",
-						fulltext, exactName, census, basis, truncated, expected.basis, expected.truncated)
+		for _, hopWalk := range []bool{false, true} {
+			for _, exactName := range []bool{false, true} {
+				for _, census := range []bool{false, true} {
+					key := input{fulltext, hopWalk, exactName, census}
+					expected, named := want[key]
+					if !named {
+						t.Fatalf("input %+v is not classified in this table", key)
+					}
+					basis, arms, truncated := cohortPoolTruncation(fulltext, hopWalk, exactName, census)
+					got := formatCohortPoolTruncationArms(arms)
+					if basis != expected.basis || truncated != expected.truncated || got != expected.arms {
+						t.Errorf("cohortPoolTruncation(%v, %v, %v, %v) = (%q, %q, %v), want (%q, %q, %v)",
+							fulltext, hopWalk, exactName, census, basis, got, truncated, expected.basis, expected.arms, expected.truncated)
+					}
 				}
 			}
 		}
 	}
 }
 
-// TestCohortPoolTruncationBasesAreDistinct is the vocabulary's own guard: a
-// telemetry enum whose members collide reports less than it claims to, and
-// two identical string constants would make every table row above agree with
-// a broken implementation.
-func TestCohortPoolTruncationBasesAreDistinct(t *testing.T) {
+// TestCohortPoolTruncationReportsEveryCutArm is the arms vocabulary's own
+// coverage check: each arm, alone, must appear in the reported list. An arm
+// that can be cut and never named is invisible exactly when it matters.
+func TestCohortPoolTruncationReportsEveryCutArm(t *testing.T) {
 	t.Parallel()
-	all := CohortPoolTruncationBasisVocabulary()
-	if len(all) == 0 {
-		t.Fatal("CohortPoolTruncationBasisVocabulary() is empty -- the loop below cannot fail")
+	cases := []struct {
+		arm                                  CohortPoolTruncationArm
+		fulltext, hopWalk, exactName, census bool
+	}{
+		{CohortPoolTruncationArmFulltext, true, false, false, false},
+		{CohortPoolTruncationArmHopWalk, false, true, false, false},
+		{CohortPoolTruncationArmExactNameCensus, false, false, true, true},
 	}
-	seen := make(map[CohortPoolTruncationBasis]struct{}, len(all))
-	for _, basis := range all {
-		if strings.TrimSpace(string(basis)) == "" {
-			t.Errorf("a pool-truncation basis is empty; an empty telemetry value reads as an absent key")
+	if len(cases) != len(CohortPoolTruncationArmVocabulary()) {
+		t.Fatalf("%d cases for %d declared arms -- an arm with no case is unmeasured", len(cases), len(CohortPoolTruncationArmVocabulary()))
+	}
+	for _, tc := range cases {
+		_, arms, truncated := cohortPoolTruncation(tc.fulltext, tc.hopWalk, tc.exactName, tc.census)
+		if got := formatCohortPoolTruncationArms(arms); got != string(tc.arm) {
+			t.Errorf("arm %q alone reported as %q", tc.arm, got)
 		}
-		if _, duplicate := seen[basis]; duplicate {
-			t.Errorf("pool-truncation basis %q is declared twice", basis)
+		if !truncated {
+			t.Errorf("arm %q alone did not truncate the pool", tc.arm)
 		}
-		seen[basis] = struct{}{}
 	}
 }
 
-// TestCohortKindBasisLineCarriesThePoolTruncation reads the EMITTED LINE, not
-// a recorded struct: the production sink is where a key gets renamed or
-// dropped, and a fake cannot see that.
-func TestCohortKindBasisLineCarriesThePoolTruncation(t *testing.T) {
+// TestCohortPoolTruncationBasesAreDistinct is the vocabulary's own guard: a
+// telemetry enum whose members collide reports less than it claims to, and two
+// identical string constants would make every table row above agree with a
+// broken implementation. Both vocabularies are checked, since either can
+// collide independently.
+func TestCohortPoolTruncationBasesAreDistinct(t *testing.T) {
 	t.Parallel()
-	record := captureCohortKindBasisLineWithPoolTruncation(t,
-		contextfabric.SubjectTeam, graphrank.CohortKindFromFrameMemberKind, true, CohortPoolTruncationFulltext)
-
-	if got := record["pool_truncation"]; got != string(CohortPoolTruncationFulltext) {
-		t.Errorf("pool_truncation = %v, want %q -- an operator reading this line must be able to tell a cohort that is everything the graph holds from one assembled out of a clipped pool", got, CohortPoolTruncationFulltext)
+	bases := CohortPoolTruncationBasisVocabulary()
+	arms := CohortPoolTruncationArmVocabulary()
+	if len(bases) == 0 || len(arms) == 0 {
+		t.Fatal("a vocabulary is empty -- the loops below cannot fail")
 	}
-	// The keys this line already carried must survive the addition; a new
-	// field that displaced an old one is the same loss it was added to fix.
-	if got := record["member_kind"]; got != string(contextfabric.SubjectTeam) {
-		t.Errorf("member_kind = %v, want %q", got, contextfabric.SubjectTeam)
+	seenBasis := make(map[CohortPoolTruncationBasis]struct{}, len(bases))
+	for _, basis := range bases {
+		if strings.TrimSpace(string(basis)) == "" {
+			t.Errorf("a pool-truncation basis is empty; an empty telemetry value reads as an absent key")
+		}
+		if _, dup := seenBasis[basis]; dup {
+			t.Errorf("pool-truncation basis %q is declared twice", basis)
+		}
+		seenBasis[basis] = struct{}{}
 	}
-	if got := record["discovered"]; got != true {
-		t.Errorf("discovered = %v, want true", got)
+	seenArm := make(map[CohortPoolTruncationArm]struct{}, len(arms))
+	for _, arm := range arms {
+		if strings.TrimSpace(string(arm)) == "" {
+			t.Errorf("a pool-truncation arm is empty")
+		}
+		if _, dup := seenArm[arm]; dup {
+			t.Errorf("pool-truncation arm %q is declared twice", arm)
+		}
+		seenArm[arm] = struct{}{}
+		// The two vocabularies ride on different keys of the same line; a
+		// value shared between them would make a grep on one match the other.
+		if _, collides := seenBasis[CohortPoolTruncationBasis(arm)]; collides {
+			t.Errorf("arm %q collides with a decision-vocabulary member", arm)
+		}
 	}
 }

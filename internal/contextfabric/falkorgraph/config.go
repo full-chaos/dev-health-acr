@@ -523,7 +523,11 @@ type GraphTelemetry interface {
 	// re-reading source. See CohortPoolTruncationBasis' own doc comment for
 	// the closed vocabulary and for why one of its members means "cut, and
 	// it did not matter".
-	RecordCohortKindBasis(ctx context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis)
+	// poolTruncationArms names WHICH retrieval arms were cut, beside the
+	// decision -- see CohortPoolTruncationArm. Reported separately rather
+	// than folded into the basis because arm COMBINATIONS grow 2^n and a
+	// vocabulary that enumerates them is a cross-product, not a vocabulary.
+	RecordCohortKindBasis(ctx context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis, poolTruncationArms []CohortPoolTruncationArm)
 }
 
 // VectorFenceResult is CHAOS-3890's reason enum for the AC-3778-7 read
@@ -588,7 +592,7 @@ func (NoopTelemetry) RecordEdgesFilteredByReason(context.Context, string, int, i
 func (NoopTelemetry) RecordCohortDeniedByAuthorization(context.Context, string, int)       {}
 func (NoopTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bool, CohortExactNameCensusBasis) {
 }
-func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, contextfabric.SubjectKind, graphrank.CohortKindBasis, bool, CohortPoolTruncationBasis) {
+func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, contextfabric.SubjectKind, graphrank.CohortKindBasis, bool, CohortPoolTruncationBasis, []CohortPoolTruncationArm) {
 }
 
 // SlogTelemetry is the production GraphTelemetry: structured operational logs
@@ -803,8 +807,9 @@ func graphRequestIDLogAttrs(ctx context.Context) []any {
 // degradation of this component -- it is this component correctly declining
 // to guess -- so it is reported at the same level as a successful discovery
 // and is distinguished by its basis, never by its log level.
-func (t SlogTelemetry) RecordCohortKindBasis(ctx context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis) {
-	args := []any{"org_id", orgID, "member_kind", string(declaredKind), "basis", string(basis), "discovered", discovered, "pool_truncation", string(poolTruncation)}
+func (t SlogTelemetry) RecordCohortKindBasis(ctx context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis, poolTruncationArms []CohortPoolTruncationArm) {
+	args := []any{"org_id", orgID, "member_kind", string(declaredKind), "basis", string(basis), "discovered", discovered,
+		"pool_truncation", string(poolTruncation), "pool_truncation_arms", formatCohortPoolTruncationArms(poolTruncationArms)}
 	t.logger().Info("context_fabric: cohort kind basis", append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 

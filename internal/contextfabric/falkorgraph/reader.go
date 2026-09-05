@@ -571,10 +571,15 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// edgeFiltered across BOTH sources this function reads from (hopWalk's
 	// committed-origin traversal below, and the full-text-adjacent-edge loop
 	// further down), by reason -- see edgeFilterCounts' own doc comment.
+	// hopWalkTruncated (CHAOS-5168, r1 finding 1) reports that at least one
+	// committed subject's walk spent its edge budget with candidates left --
+	// see hopWalk's own doc comment for why that costs the COHORT members and
+	// not just edges.
+	hopWalkTruncated := false
 	var edgeFilters edgeFilterCounts
 
 	for _, subject := range request.Resolution.Committed {
-		nodes, edges, failed, filters, err := a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
+		nodes, edges, failed, filters, walkTruncated, err := a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
 		if err != nil {
 			// CHAOS-4077: see graphNotProjectedError's own doc comment --
 			// this is one of the two DiscoverContext sites that would
@@ -586,6 +591,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			return contextfabric.GraphContext{}, graphNotProjectedError(err)
 		}
 		failedLookups += failed
+		// ANY committed subject's walk hitting its cap clips the shared pool
+		// (CHAOS-5168, r1 finding 1): every walk appends into the same
+		// resolvedNodes that becomes cohortNodes, so this is an OR across
+		// subjects, never the last one's value.
+		hopWalkTruncated = hopWalkTruncated || walkTruncated
 		edgeFilters.Authz += filters.Authz
 		edgeFilters.TemporalWindow += filters.TemporalWindow
 		for _, n := range nodes {
@@ -808,7 +818,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// (not) infer from the length it retained. See cohortPoolTruncation for
 	// the classification and for why a clipped full-text arm under a
 	// completed census is not a truncated pool.
-	poolTruncationBasis, cohortPoolTruncated := cohortPoolTruncation(fulltextTruncated, exactNameTruncated, censusAdmitted)
+	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncated, censusAdmitted)
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here
@@ -836,7 +846,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// of the requested kind returns no cohort at all, so this line is
 		// the only place that loss is visible (see this file's own note on
 		// the nil-cohort case in the CHAOS-5168 tests).
-		a.config.Telemetry.RecordCohortKindBasis(ctx, principal.OrgID, cohortKind, cohortKindBasis, cohort != nil, poolTruncationBasis)
+		a.config.Telemetry.RecordCohortKindBasis(ctx, principal.OrgID, cohortKind, cohortKindBasis, cohort != nil, poolTruncationBasis, poolTruncationArms)
 	}
 	factRequirements := admission.FactRequirements
 	if cohort != nil {
