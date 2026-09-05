@@ -66,7 +66,7 @@ func TestSeedingTheUnrunnableRankingCellShrinksTheServedDocument(t *testing.T) {
 	}
 	delta := len(afterBytes) - len(beforeBytes)
 	t.Logf("plan requirement row: before %d B, after %d B, delta %+d B (budget %d)",
-		len(beforeBytes), len(afterBytes), delta, contractsv1.ContextFabricMaxSerializedBytesDefault)
+		len(beforeBytes), len(afterBytes), delta, contractsv1.ContextFabricSerializedBytesMin)
 	if delta >= 0 {
 		t.Errorf("the unavailable row is %+d B against the served shape it replaces; this change was supposed to REMOVE a step, an execution, an input class and %d input kinds",
 			delta, len(inputs.FactKinds))
