@@ -95,8 +95,20 @@ func TestPlanFactKindsPlansEveryDeclaredComputedStepInput(t *testing.T) {
 		t.Fatalf("family %q has a COHORT subject axis (%q), so the unconditional ranking injection would supply these kinds and this test could not attribute them", family, definition.SubjectAxis)
 	}
 
+	// THE CONTROL CARRIES A MODEL REQUIREMENT, and round 1 is why. Without one
+	// the control plan is EMPTY on this family, so the "may only widen" loop at
+	// the end of this test iterated nothing and asserted nothing -- a vacuous
+	// loop inside a test written to catch vacuity. The model's kind is chosen
+	// to be one NO computed step declares, so it can only have come from here.
+	modelKind := contextfabric.FactStatus
+	for _, planned := range planned {
+		if planned == modelKind {
+			t.Fatalf("the control's model kind %q is also a declared computed-step input, so the widen check below could not tell the two sources apart", modelKind)
+		}
+	}
 	input := contextfabric.PlanAnswerInput{
 		Family:           contextfabric.QuestionFamilyOutcome{Family: family, Source: contextfabric.QuestionFamilySourceModel},
+		Interpretation:   contextfabric.InterpretedQuestion{FactRequirements: []contextfabric.FactRequirement{{Kind: modelKind}}},
 		Budget:           contextfabric.ResponseBudget{MaxItems: 30, MaxSerializedBytes: 1 << 20},
 		MaxCohortMembers: 50,
 	}
@@ -121,6 +133,16 @@ func TestPlanFactKindsPlansEveryDeclaredComputedStepInput(t *testing.T) {
 	// EVERY kind of the control's plan survives. The new source is a
 	// WIDENING, and a union that dropped an earlier source while adding its
 	// own would satisfy every assertion above.
+	//
+	// THE SET THIS LOOP ITERATES IS ASSERTED NON-EMPTY FIRST. A loop over an
+	// empty control plan is green whatever the code does, which is exactly
+	// what round 1 found here.
+	if len(withoutRows.FactKinds) == 0 {
+		t.Fatal("the control plan names no fact kinds, so the widen-only loop below would iterate nothing and prove nothing")
+	}
+	if !containsFactKind(withoutRows.FactKinds, modelKind) {
+		t.Fatalf("the control plan %v does not carry the model's own %q, so this test is not measuring the model arm it claims to", withoutRows.FactKinds, modelKind)
+	}
 	for _, kind := range withoutRows.FactKinds {
 		if !containsFactKind(withRows.FactKinds, kind) {
 			t.Errorf("plan.FactKinds LOST %q once requirement rows were supplied; the row source may only widen", kind)
@@ -327,4 +349,44 @@ func TestOnACohortFamilyTheInputConsumerAddsNothing(t *testing.T) {
 		}
 	}
 	t.Logf("cohort family %s: %d fact kinds with and without the rows, declared inputs %v all already present", family, len(with.FactKinds), planned)
+}
+
+// TestPlanFactKindsDropsAnEmptyModelFactKind closes round 1's F3.
+//
+// `planFactKinds`' appendKind filters the empty kind before anything reaches
+// the plan, and no fixture on this branch supplied one -- so the filter was a
+// rule pinned by nothing, in a function this change routes a new source
+// through. An empty kind is not a member of the closed vocabulary, so a plan
+// carrying one is refused by its own validator; the filter is what keeps a
+// sloppy model emission from producing an invalid document rather than a
+// narrower one.
+//
+// The fixture asserts BOTH halves: the empty kind is absent, and a real kind
+// beside it survives. Asserting only the absence would pass for a filter that
+// dropped everything.
+func TestPlanFactKindsDropsAnEmptyModelFactKind(t *testing.T) {
+	family := contextfabric.QuestionFamilySubjectInvestigation
+	kept := contextfabric.FactStatus
+
+	plan := contextfabric.PlanAnswer(contextfabric.PlanAnswerInput{
+		Family: contextfabric.QuestionFamilyOutcome{Family: family, Source: contextfabric.QuestionFamilySourceModel},
+		Interpretation: contextfabric.InterpretedQuestion{FactRequirements: []contextfabric.FactRequirement{
+			{Kind: ""},
+			{Kind: kept},
+		}},
+		Budget:           contextfabric.ResponseBudget{MaxItems: 30, MaxSerializedBytes: 1 << 20},
+		MaxCohortMembers: 50,
+	})
+
+	for _, kind := range plan.FactKinds {
+		if kind == "" {
+			t.Errorf("plan.FactKinds = %v carries an EMPTY fact kind; the empty value is not a vocabulary member and the plan's own validator refuses it", plan.FactKinds)
+		}
+	}
+	// The other half: a filter that dropped everything would satisfy the loop
+	// above while destroying the model's widening.
+	if !containsFactKind(plan.FactKinds, kept) {
+		t.Fatalf("plan.FactKinds = %v lost the model's real kind %q; the empty-kind filter must drop the empty value and nothing else", plan.FactKinds, kept)
+	}
+	t.Logf("plan kinds with an empty model requirement present: %v", plan.FactKinds)
 }
