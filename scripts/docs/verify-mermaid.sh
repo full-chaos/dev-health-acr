@@ -114,9 +114,14 @@ mapfile -t md_files < "$work/mdlist.txt"
 # blocks uniquely across the whole docs/ tree without passing state back
 # out of a subshell.
 #
-# The fence lines allow up to 3 leading spaces (CommonMark permits an
-# indented code fence; requiring column zero silently dropped a
-# Markdown-valid indented block, along with any defect inside it).
+# The fence lines allow up to 3 leading LITERAL SPACES (CommonMark permits
+# an indented code fence; requiring column zero silently dropped a
+# Markdown-valid indented block, along with any defect inside it). Tabs
+# are deliberately NOT matched here: CommonMark counts a leading tab as
+# 4+ columns of indentation, which takes the line out of the "fence"
+# reading entirely (it becomes part of an indented code block instead) --
+# matching `[[:space:]]` here would extract a false positive, treating
+# inert prose as a real diagram.
 #
 # check_unclosed() fires when a new file starts (FNR==1) or at end of
 # input: if a block was opened but never closed by that point, the
@@ -135,7 +140,7 @@ if [ "${#md_files[@]}" -gt 0 ]; then
       in_block = 0
       cur_file = FILENAME
     }
-    /^[[:space:]]{0,3}```mermaid[[:space:]]*$/ && !in_block {
+    /^ {0,3}```mermaid[[:space:]]*$/ && !in_block {
       in_block = 1
       global_idx++
       body = ""
@@ -144,7 +149,7 @@ if [ "${#md_files[@]}" -gt 0 ]; then
       block_start_line = FNR
       next
     }
-    in_block && /^[[:space:]]{0,3}```[[:space:]]*$/ {
+    in_block && /^ {0,3}```[[:space:]]*$/ {
       in_block = 0
       out = work "/blocks/" global_idx ".mmd"
       printf "%s", body > out
