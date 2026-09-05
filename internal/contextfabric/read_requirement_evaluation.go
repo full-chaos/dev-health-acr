@@ -44,13 +44,41 @@ type readEvidence struct {
 	// Observed is how many of the requirement's declared kinds produced a
 	// coverage observation at all.
 	Observed int
-	// Served is how many produced USABLE evidence: available or stale.
+	// Served is how many produced usable evidence IN FULL: available or
+	// stale, AND not recorded as narrowed by the planner.
+	//
+	// "In full" is load-bearing and it is what the narrowing consultation
+	// below buys. A kind the planner narrowed did return data, so it is
+	// OBSERVED -- but it returned data for fewer subjects than the plan asked
+	// for, so it did not serve the requirement in full, and counting it as
+	// served is how a narrowed read reads `satisfied`.
 	Served int
-	// Truncated, Pruned and Failed partition the rest, and they are kept
-	// apart rather than summed because they name different causes and a
-	// reader acts on the cause, not on the total.
+	// Narrowed is how many declared kinds the PLANNER recorded as narrowed,
+	// read from Coverage.Details rather than from a source state.
+	//
+	// A NARROW EXTENSION of this evaluator's stated Sources-only scope, taken
+	// deliberately. `factDetailSpecForRead` records a planner narrowing in
+	// Coverage.Details with `Narrowed` set and the skipped subject kinds
+	// listed, while the observation's own STATE stays `available` -- the
+	// provider did return data, for a narrowed subject set. Reading only the
+	// state therefore publishes `satisfied` for a read the document itself
+	// records as narrowed, which is the false-complete class this whole
+	// change exists to remove, arriving through a different door.
+	//
+	// ONLY the Narrowed flag is consulted. No other field of a detail changes
+	// any decision here: the detail's own code, scope outcome, policy and
+	// counts belong to the coverage layer, and re-deciding them here would be
+	// the second-authority defect this evaluator is careful not to become.
+	Narrowed int
+	// Truncated and Failed partition the rest, and they are kept apart
+	// rather than summed because they name different causes and a reader
+	// acts on the cause, not on the total.
+	//
+	// There is no Pruned counter. A pruned observation is not counted at
+	// all -- see evaluateReadRequirement for why a prune is not evidence in
+	// either direction. A zero-valued counter would have been the wrong
+	// shape: it invites a later reader to add it back into a loss test.
 	Truncated int
-	Pruned    int
 	Failed    int
 	// Cause is the coverage code the worst observation implies, by the
 	// precedence table below. Empty when nothing was observed.
@@ -89,20 +117,59 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 	}
 
 	evidence := readEvidence{}
+	// The planner's own narrowing record, keyed by fact kind. Only the flag is
+	// taken; see readEvidence.Narrowed for why nothing else is.
+	narrowedKinds := map[FactKind]bool{}
+	for _, detail := range coverage.Details {
+		if detail.Narrowed && detail.FactKind != "" {
+			narrowedKinds[detail.FactKind] = true
+		}
+	}
+
 	worst := 0
 	for _, kind := range requirement.FactKinds {
 		state, seen := states[kind]
 		if !seen {
 			continue
 		}
+		// A PRUNE IS NOT EVIDENCE IN EITHER DIRECTION, and this is the one
+		// place that has to be said out loud.
+		//
+		// `factStateDegrades` refuses to degrade on `SourcePruned`
+		// DELIBERATELY, and states why: "A prune means the planner proved
+		// the source had nothing to contribute to THIS question, so nothing
+		// is missing and the answer is not degraded. Marking it partial
+		// would train every consumer to treat a correctly-scoped
+		// investigation as a compromised one."
+		//
+		// Counting it here as a loss re-degrades exactly what that decision
+		// exists to protect, one layer up -- a second authority contradicting
+		// a settled one, which is the defect class this whole change removes,
+		// pointed the other way. So a pruned observation is skipped entirely:
+		// it is not observed, not served, not a loss, and it does not rank in
+		// the worst-observation table below (a prune must not name the cause
+		// of a loss that came from somewhere else).
+		//
+		// A requirement whose every declared kind was pruned therefore
+		// reaches no row at all and keeps only its planning seed, which the
+		// completeness derivation reads as `partial`. That is the honest
+		// floor: nothing was read, and nothing was lost either.
+		if state == SourcePruned {
+			continue
+		}
 		evidence.Observed++
 		switch {
 		case state == SourceAvailable || state == SourceStale:
+			if narrowedKinds[kind] {
+				// Returned data, but for fewer subjects than planned. Counted
+				// as narrowed rather than served, so the row can state the
+				// shortfall instead of claiming the cell was filled.
+				evidence.Narrowed++
+				break
+			}
 			evidence.Served++
 		case state == SourceTruncated:
 			evidence.Truncated++
-		case state == SourcePruned:
-			evidence.Pruned++
 		default:
 			evidence.Failed++
 		}
@@ -322,8 +389,11 @@ func readRequirementOutcomeRow(
 		Declared:    declared,
 	}
 
+	// `Pruned` is deliberately absent from this conjunction: a pruned kind
+	// never reaches the counters at all (see evaluateReadRequirement), so a
+	// prune can neither lower this row nor be silently forgiven by it.
 	lossless := evidence.Served >= threshold &&
-		evidence.Truncated == 0 && evidence.Pruned == 0 && evidence.Failed == 0
+		evidence.Truncated == 0 && evidence.Failed == 0 && evidence.Narrowed == 0
 	if lossless {
 		// Served in full at the declared standard. The counts are the
 		// SOURCES THAT SERVED, not the catalogue: a satisfied row reading
@@ -334,6 +404,24 @@ func readRequirementOutcomeRow(
 		row.Impact = contractsv1.ContextFabricAnswerImpactNone
 		row.Declared = evidence.Served
 		return row, true
+	}
+
+	// A PLANNER NARROWING IS DECIDED BEFORE THE SERVED==0 ARM BELOW, because
+	// a narrowed read is not an absent one. The kinds all returned data; what
+	// is short is the subject coverage inside them. Routing this through
+	// `unavailable` would tell the reader they got NONE of a cell they got
+	// part of.
+	//
+	// The cause is OBSERVED: the planner recorded the narrowing and the
+	// document carries the detail. That is the one thing `cause_observed`
+	// means, and here it is true for the same reason it was false on the
+	// shortfall arm further down -- something reported it.
+	if evidence.Narrowed > 0 && evidence.Truncated == 0 && evidence.Failed == 0 {
+		row.Outcome = contractsv1.ContextFabricRequirementNarrowed
+		row.Impact = contractsv1.ContextFabricAnswerImpactDepth
+		row.CauseCoverage = contractsv1.ContextFabricCoverageDetailFactNarrowed
+		row.CauseObserved = true
+		return contractsv1.ContextFabricWithReductionRefinement(row), true
 	}
 
 	row.CauseCoverage = evidence.Cause

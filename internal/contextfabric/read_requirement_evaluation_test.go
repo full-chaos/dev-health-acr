@@ -105,6 +105,30 @@ func readSeed(t *testing.T, published contractsv1.ContextFabricPlanRequirement) 
 	return seed
 }
 
+// narrowedCoverage is factCoverage plus the PLANNER'S OWN narrowing record.
+//
+// The distinction this exists to express: the observation's STATE stays
+// `available` -- the provider did return data -- while Coverage.Details carries
+// `Narrowed` for the kinds whose subject set the planner cut. A fixture that
+// varied the state instead would be testing a different thing entirely, and
+// would not reproduce the shape that reads `satisfied` today.
+func narrowedCoverage(narrowed []FactKind, pairs ...any) Coverage {
+	coverage := factCoverage(pairs...)
+	for _, kind := range narrowed {
+		coverage.Details = append(coverage.Details, contractsv1.ContextFabricCoverageDetail{
+			DetailID:     "detail_" + string(kind),
+			Source:       canonicalFactSourcePrefix + string(kind),
+			Code:         contractsv1.ContextFabricCoverageDetailFactNarrowed,
+			FactKind:     kind,
+			SourceState:  SourceAvailable,
+			SkippedKinds: []SubjectKind{SubjectRepository},
+			Narrowed:     true,
+			Label:        "narrowed",
+		})
+	}
+	return coverage
+}
+
 // TestTheOutcomeRowFollowsTheEvidence is the acceptance table.
 //
 // The harm each case carries is stated positively -- the expected outcome, the
@@ -212,6 +236,81 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 			wantObserved: true, wantServed: 0, wantDeclared: 1,
 		},
 		{
+			// A PLANNER NARROWING, recorded in Coverage.Details while the
+			// source state stays `available`. Reading only the state publishes
+			// `satisfied` for a read the document itself records as narrowed.
+			name:       "a planner narrowing is not a satisfied read",
+			quantifier: CompletionQuantifierCorroborated,
+			coverage: narrowedCoverage([]FactKind{contractsv1.ContextFabricFactHealth},
+				health, SourceAvailable, workload, SourceAvailable),
+			wantRow: true, wantOutcome: contractsv1.ContextFabricRequirementNarrowed,
+			wantImpact: contractsv1.ContextFabricAnswerImpactDepth,
+			wantCause:  contractsv1.ContextFabricCoverageDetailFactNarrowed,
+			// OBSERVED: the planner recorded this and the document carries the
+			// detail. Something reported it, which is the whole of what this
+			// flag means -- and the contrast with the shortfall arm, where
+			// nothing did, is the point.
+			wantObserved: true, wantServed: 1, wantDeclared: 2, wantRefinements: 1,
+		},
+		{
+			// THE COMPLEMENT, byte-identical but for the narrowing record.
+			// Without it the case above would pass on an evaluator that had
+			// simply stopped emitting `satisfied`.
+			name:       "the same evidence WITHOUT the narrowing record is satisfied",
+			quantifier: CompletionQuantifierCorroborated,
+			coverage:   factCoverage(health, SourceAvailable, workload, SourceAvailable),
+			wantRow:    true, wantOutcome: contractsv1.ContextFabricRequirementSatisfied,
+			wantImpact: contractsv1.ContextFabricAnswerImpactNone,
+			wantServed: 2, wantDeclared: 2, wantRefinements: 0,
+		},
+		{
+			// EVERY serving kind narrowed. This must NOT reach `unavailable`:
+			// the kind returned data, so telling the reader they got none of
+			// the cell would be false. The narrowing arm is therefore decided
+			// before the served-nothing arm.
+			name:       "a narrowing on the only served kind is still narrowed, never unavailable",
+			quantifier: CompletionQuantifierAtLeastOne,
+			coverage: narrowedCoverage([]FactKind{contractsv1.ContextFabricFactHealth},
+				health, SourceAvailable),
+			wantRow: true, wantOutcome: contractsv1.ContextFabricRequirementNarrowed,
+			wantImpact:   contractsv1.ContextFabricAnswerImpactDepth,
+			wantCause:    contractsv1.ContextFabricCoverageDetailFactNarrowed,
+			wantObserved: true, wantServed: 0, wantDeclared: 1, wantRefinements: 1,
+		},
+		{
+			// A PRUNE IS NOT A LOSS. `factStateDegrades` refuses to degrade on
+			// `SourcePruned` deliberately: "A prune means the planner proved
+			// the source had nothing to contribute to THIS question, so
+			// nothing is missing and the answer is not degraded." Counting it
+			// here would re-degrade what that decision protects, one layer up.
+			name: "a pruned source does not lower a met standard", quantifier: CompletionQuantifierAtLeastOne,
+			coverage: factCoverage(health, SourceAvailable, workload, SourcePruned),
+			wantRow:  true, wantOutcome: contractsv1.ContextFabricRequirementSatisfied,
+			wantImpact: contractsv1.ContextFabricAnswerImpactNone,
+			wantServed: 1, wantDeclared: 1, wantRefinements: 0,
+		},
+		{
+			// THE COMPLEMENT of the case above, and the reason it is not
+			// vacuous: a genuinely absent source DOES lower the row, so the
+			// prune case is not passing because nothing lowers anything.
+			// Same shape, one state changed.
+			name: "a failed source beside a served one narrows the row", quantifier: CompletionQuantifierAtLeastOne,
+			coverage: factCoverage(health, SourceAvailable, workload, SourceUnavailable),
+			wantRow:  true, wantOutcome: contractsv1.ContextFabricRequirementNarrowed,
+			wantImpact:   contractsv1.ContextFabricAnswerImpactDepth,
+			wantCause:    contractsv1.ContextFabricCoverageDetailFactProviderReported,
+			wantObserved: true, wantServed: 1, wantDeclared: 2, wantRefinements: 1,
+		},
+		{
+			// EVERY declared kind pruned. No kind is observed at all, so the
+			// evaluator emits nothing and the requirement keeps its planning
+			// seed -- which the completeness derivation reads as `partial`.
+			// That is the honest floor: nothing was read, and nothing was lost.
+			name: "every declared kind pruned emits no row", quantifier: CompletionQuantifierAtLeastOne,
+			coverage: factCoverage(health, SourcePruned, workload, SourcePruned),
+			wantRow:  false,
+		},
+		{
 			name:       "NOT READ AT ALL emits no row while the cause vocabulary is the other lane's",
 			quantifier: CompletionQuantifierAtLeastOne,
 			coverage:   factCoverage(),
@@ -295,6 +394,13 @@ func TestTheStateFollowsTheEvidence(t *testing.T) {
 			contractsv1.ContextFabricAnswerCompletenessPartial},
 		{"nothing usable", factCoverage(health, SourceNoData, workload, SourceNoData),
 			contractsv1.ContextFabricAnswerCompletenessDegraded},
+		{"every source pruned",
+			factCoverage(health, SourcePruned, workload, SourcePruned),
+			// PARTIAL, never `degraded`. The row above is the complement:
+			// same shape, sources that are genuinely unusable, and THAT one
+			// degrades. A prune must not reach the same state as a failure,
+			// which is the whole of the fact layer's own rule.
+			contractsv1.ContextFabricAnswerCompletenessPartial},
 		{"nothing read at all", factCoverage(),
 			// No evaluated row exists, so the seed is the only row for this
 			// identity -- and a planning-only READ identity is exactly what

@@ -574,9 +574,20 @@ func hasPlanningOnlyReadRequirement(rows []ContextFabricPlanRequirementOutcomeRo
 		switch row.Stage {
 		case ContextFabricOutcomeStagePlanning:
 			seeded[row.Requirement] = true
-		case ContextFabricOutcomeStageAssembledResult,
-			ContextFabricOutcomeStageProjection,
-			ContextFabricOutcomeStageReuse:
+		case ContextFabricOutcomeStageAssembledResult:
+			// ASSEMBLED RESULT ONLY. `projection` and `reuse` used to count
+			// here too, and that was wrong: a projection row is a BYTE-BUDGET
+			// CUT over a finished document and a reuse row is a DEGRADE of a
+			// stored one. Neither performed a read, so neither is evidence
+			// that a read requirement was evaluated -- and a lossless row
+			// from either stage, beside a lossless planning seed, would have
+			// derived `complete` for a requirement nothing ever read.
+			//
+			// Today's emitters produce narrowed rows at both stages, so the
+			// forged shape is not currently reachable. That is not a reason
+			// to accept it: a guard that holds only because no emitter has
+			// yet produced the admitting row is not a guard, it is a
+			// coincidence with a comment.
 			evaluated[row.Requirement] = true
 		}
 	}

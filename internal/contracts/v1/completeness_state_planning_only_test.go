@@ -176,23 +176,54 @@ func TestAnUnknownStageContributesToNeitherSet(t *testing.T) {
 		})
 	}
 
-	// POSITIVE CONTROLS: the same fixture DOES register when the stage is a
-	// vocabulary member. Without these the assertions above would pass on a
-	// classifier that ignored every row.
+	// POSITIVE CONTROL: the same fixture DOES register when the stage is the
+	// one that means a read happened. Without it the assertions above would
+	// pass on a classifier that ignored every row.
+	t.Run("known stage assembled_result answers a seed", func(t *testing.T) {
+		t.Parallel()
+		answer := planningRow(identity, obligation)
+		answer.Stage = ContextFabricOutcomeStageAssembledResult
+		rows := []ContextFabricPlanRequirementOutcomeRow{planningRow(identity, obligation), answer}
+		if got := DeriveContextFabricAnswerCompletenessState(rows); got != ContextFabricAnswerCompletenessComplete {
+			t.Fatalf("an assembled-result row did NOT answer the seed: state = %q, want complete -- the "+
+				"allow-list has dropped the one stage that means a read happened", got)
+		}
+	})
+
+	// AND THE OTHER DIRECTION, in the same run: `projection` and `reuse` are
+	// VOCABULARY MEMBERS that must NOT answer a read seed.
+	//
+	// A projection row is a byte-budget cut over a finished document; a reuse
+	// row is a degrade of a stored one. Neither performed a read. A lossless
+	// row from either, beside a lossless planning seed, would otherwise derive
+	// `complete` for a requirement nothing ever read -- and it would do so
+	// through a row that is entirely valid, so no validator could catch it.
+	//
+	// These are LOSSLESS rows on purpose. A narrowed projection row would
+	// lower the state through the outcome pass and prove nothing about the
+	// stage classification, which is what is under test here. Today's emitters
+	// happen to produce narrowed rows at both stages; a guard that holds only
+	// because no emitter has yet produced the admitting row is a coincidence,
+	// not a guard.
 	for _, stage := range []ContextFabricOutcomeStage{
-		ContextFabricOutcomeStageAssembledResult,
 		ContextFabricOutcomeStageProjection,
 		ContextFabricOutcomeStageReuse,
 	} {
 		stage := stage
-		t.Run("known stage "+string(stage)+" answers a seed", func(t *testing.T) {
+		t.Run("known stage "+string(stage)+" cannot answer a read seed", func(t *testing.T) {
 			t.Parallel()
-			answer := planningRow(identity, obligation)
-			answer.Stage = stage
-			rows := []ContextFabricPlanRequirementOutcomeRow{planningRow(identity, obligation), answer}
-			if got := DeriveContextFabricAnswerCompletenessState(rows); got != ContextFabricAnswerCompletenessComplete {
-				t.Fatalf("a row at stage %q did NOT answer the seed: state = %q, want complete -- the "+
-					"allow-list has dropped a real stage", stage, got)
+			counterfeit := planningRow(identity, obligation)
+			counterfeit.Stage = stage
+			// The row is contract-valid, which is the point: validity is not
+			// what stops this, the stage classification is.
+			if err := ValidateContextFabricPlanRequirementOutcomeRow(counterfeit); err != nil {
+				t.Fatalf("the fixture row is not contract-valid, so this test would prove nothing about "+
+					"the classification: %v", err)
+			}
+			rows := []ContextFabricPlanRequirementOutcomeRow{planningRow(identity, obligation), counterfeit}
+			if got := DeriveContextFabricAnswerCompletenessState(rows); got != ContextFabricAnswerCompletenessPartial {
+				t.Fatalf("a lossless %q row answered a READ seed: state = %q, want partial -- neither stage "+
+					"performs a read, so neither is evidence that the requirement was evaluated", stage, got)
 			}
 		})
 	}
