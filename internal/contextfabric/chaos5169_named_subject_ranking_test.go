@@ -316,8 +316,25 @@ func TestNamedSubjectRankingCellNamesItsCauseRatherThanVanishing(t *testing.T) {
 	if row.Impact == contractsv1.ContextFabricAnswerImpactNone {
 		t.Error("`ranking` is unavailable yet declares impact `none` -- an obligation the answer cannot discharge is not lossless")
 	}
-	if row.CauseCoverage == "" {
-		t.Error("`ranking` is unavailable and names NO coverage cause -- a cell that neither serves nor says why is the account this layer exists to prevent")
+	// PINNED TO THE SHIPPED MAPPING, not to a literal, and not merely to
+	// "non-empty" (an adversarial round's finding: a non-empty check accepts
+	// any cause, including a wrong one).
+	//
+	// The expectation is COMPUTED by the same table production routes through,
+	// so this asserts the row went through `unavailableRequirementCause` for
+	// this reason and catches a re-point of that mapping. It deliberately does
+	// NOT hard-code the code's current value: the author's position, disclosed
+	// in the PR body and ticketed separately, is that the value that table
+	// currently yields MISNAMES this mechanism. Writing the literal here would
+	// bless a string this change argues is wrong; asserting the routing is the
+	// honest claim, and it will still hold when the mapping is corrected.
+	wantCause := unavailableRequirementCause(RequirementReasonComputedPopulationAbsent)
+	if wantCause == "" {
+		t.Fatal("the shipped mapping yields no coverage code for computed_population_absent, so the assertion below would be vacuous")
+	}
+	if row.CauseCoverage != wantCause {
+		t.Errorf("`ranking` cause = %q, want %q (the code the shipped mapping yields for this reason) -- a cell that neither serves nor routes its cause through the one table is the account this layer exists to prevent",
+			row.CauseCoverage, wantCause)
 	}
 	if !row.CauseObserved {
 		t.Error("`ranking`'s cause reads DEFAULTED; the derivation reported this reason for this cell, so claiming otherwise understates what is known")

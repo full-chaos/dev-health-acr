@@ -865,6 +865,10 @@ func requirementDerivationLogAttrs(summary RequirementDerivationSummary) []any {
 	args = append(args,
 		"requirement_computed_population_absent_not_a_population", summary.ComputedPopulationAbsentNotAPopulation,
 		"requirement_computed_population_absent_unresolvable_member_set", summary.ComputedPopulationAbsentUnresolvableMemberSet,
+		// The residual, always emitted: with it the three keys are a TOTAL
+		// partition of requirement_unavailable_computed_population_absent, so
+		// an operator can check the split adds up without leaving the line.
+		"requirement_computed_population_absent_non_computed_row", summary.ComputedPopulationAbsentNonComputedRow,
 	)
 	// What those decisions COST -- the declared inputs no read was planned
 	// for -- in the same per-kind shape as requirement_computed_input_kind_

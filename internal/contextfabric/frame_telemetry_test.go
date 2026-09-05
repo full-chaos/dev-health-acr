@@ -79,6 +79,7 @@ var requirementDerivationLogKeys = map[string]string{
 	// `requirement_unavailable_computed_population_absent` on the same line.
 	"ComputedPopulationAbsentNotAPopulation":        "requirement_computed_population_absent_not_a_population",
 	"ComputedPopulationAbsentUnresolvableMemberSet": "requirement_computed_population_absent_unresolvable_member_set",
+	"ComputedPopulationAbsentNonComputedRow":        "requirement_computed_population_absent_non_computed_row",
 	// A key PREFIX, one key per closed-vocabulary fact kind, same shape as
 	// ComputedInputKinds above: what those arms COST, so a reader can
 	// subtract declared from planned on one line.

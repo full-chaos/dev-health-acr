@@ -36,7 +36,18 @@ import (
 // ground as QuestionFrameVersion and RankingFormulaVersion: a persisted
 // receipt must be replayable against the table that produced it, and two
 // rows derived under different tables are not comparable.
-const RequirementDerivationVersion = "requirement-derivation.v1"
+//
+// v1 -> v2: a computed obligation whose SERVER STEP runs over the resolved
+// member set is now UNAVAILABLE on a frame that resolves none, where before it
+// derived SERVED and its planning row seeded `satisfied`. That is an
+// unavailable-reason classification changing meaning, which is exactly the
+// condition above -- receipts written before and after this build report
+// different rows for the same frame, and under one version marker nothing
+// downstream could tell them apart. The rows are shadow-only in this phase
+// (see reuse_key_completeness_test.go's RequirementDerivationVersion entry), so
+// the bump costs nothing today; it is made because the marker's whole purpose
+// is to be wrong the moment it is not bumped.
+const RequirementDerivationVersion = "requirement-derivation.v2"
 
 // RequirementDerivationSummary is the requirement layer's telemetry row.
 //
@@ -81,6 +92,27 @@ type RequirementDerivationSummary struct {
 	// keys let an operator check.
 	ComputedPopulationAbsentNotAPopulation        int
 	ComputedPopulationAbsentUnresolvableMemberSet int
+	// ComputedPopulationAbsentNonComputedRow is the RESIDUAL that makes the
+	// split above a TOTAL partition of its bucket rather than two counters
+	// that usually add up.
+	//
+	// The two arms are COMPUTED-only by design -- a read row has no server
+	// step and no declared step inputs, so neither arm describes it. But
+	// `UnavailableCells` counts the token on ANY row, so without this a row
+	// that is unavailable for this reason and NOT computed would leave the
+	// aggregate at one and both arms at zero: an emitted line claiming a
+	// refusal that no arm accounts for. Found by an adversarial round, on a
+	// state this package's own test constructs deliberately.
+	//
+	// It reads zero on every production frame today, because
+	// `classifyUnavailable` never returns this token for a read row. That is
+	// the point of emitting it anyway: a zero here is an OBSERVED zero, and
+	// the day it is not, the line says so instead of silently losing a row.
+	//
+	// INVARIANT, asserted rather than assumed:
+	//   not_a_population + unresolvable_member_set + non_computed_row
+	//     == UnavailableCells[computed_population_absent]
+	ComputedPopulationAbsentNonComputedRow int
 	// ComputedInputKindsUnplanned counts, per fact kind, how many computed
 	// rows declared that kind as an input the turn did NOT plan a read for,
 	// because the row's step has nothing to run over.
@@ -173,6 +205,10 @@ func RequirementDerivationSummaryFrom(rows []DerivedRequirement) RequirementDeri
 			// The arm split. Gated on the COMPUTED kind as well as the
 			// token so a future read-side classifier returning this reason
 			// cannot silently land in a computed-only counter.
+			if row.Unavailable == RequirementReasonComputedPopulationAbsent && row.Kind != ObligationKindComputed {
+				// The residual: the bucket counted it, so the split must too.
+				summary.ComputedPopulationAbsentNonComputedRow++
+			}
 			if row.Kind == ObligationKindComputed && row.Unavailable == RequirementReasonComputedPopulationAbsent {
 				if coordinateNamesAPopulation(row.RequirementCoordinate) {
 					summary.ComputedPopulationAbsentUnresolvableMemberSet++

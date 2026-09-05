@@ -227,6 +227,19 @@ func TestTheArmCountersRefuseANonComputedRow(t *testing.T) {
 	if unplanned != 0 {
 		t.Errorf("a READ row contributed %d unplanned computed-step input kinds -- a read obligation has no computed step and no declared step inputs", unplanned)
 	}
+	// THE RESIDUAL MUST ACCOUNT FOR IT. An adversarial round found that this
+	// very fixture left the aggregate bucket at one with both arms at zero --
+	// an emitted line claiming a refusal no arm explains. The split is now a
+	// TOTAL partition, and this is the row that would otherwise fall out of it.
+	if summary.ComputedPopulationAbsentNonComputedRow != 1 {
+		t.Errorf("the non-computed residual counted %d, want 1 -- the read row is in the aggregate bucket, so the split must account for it",
+			summary.ComputedPopulationAbsentNonComputedRow)
+	}
+	if got := summary.ComputedPopulationAbsentNotAPopulation +
+		summary.ComputedPopulationAbsentUnresolvableMemberSet +
+		summary.ComputedPopulationAbsentNonComputedRow; got != summary.UnavailableCells[index] {
+		t.Errorf("the three-way split sums to %d but the aggregate bucket is %d -- the partition is not total", got, summary.UnavailableCells[index])
+	}
 
 	// The COMPLEMENT, in the same run: an equivalent COMPUTED row must be
 	// counted. Without it this test passes on a fold that counts nothing.
@@ -243,6 +256,13 @@ func TestTheArmCountersRefuseANonComputedRow(t *testing.T) {
 	if both.ComputedPopulationAbsentUnresolvableMemberSet != 1 {
 		t.Errorf("the computed row was counted %d times in the `unresolvable_member_set` arm, want exactly 1 -- the read row must be refused and the computed row must not be",
 			both.ComputedPopulationAbsentUnresolvableMemberSet)
+	}
+	// And the partition stays total with BOTH rows present, which is the case
+	// a residual counter is easiest to get wrong on.
+	if got := both.ComputedPopulationAbsentNotAPopulation +
+		both.ComputedPopulationAbsentUnresolvableMemberSet +
+		both.ComputedPopulationAbsentNonComputedRow; got != both.UnavailableCells[index] {
+		t.Errorf("with a read row AND a computed row the split sums to %d but the aggregate is %d -- the partition is not total", got, both.UnavailableCells[index])
 	}
 	var bothUnplanned int
 	for _, count := range both.ComputedInputKindsUnplanned {
