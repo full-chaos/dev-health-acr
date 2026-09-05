@@ -102,6 +102,45 @@ func currencyCohort() *Cohort {
 	}
 }
 
+// currencyReuseEngine builds an engine whose recheck can actually SERVE a
+// cohort-bearing stored answer.
+//
+// IT EXISTS BECAUSE THE SHARED `reuseDegradeEngine` CANNOT, and the reason is
+// worth stating: `reuseSubjectsToRecheck` (answer_reuse.go) collects every
+// COHORT MEMBER's subject into the recheck set, and the recheck REFUSES
+// (`AnswerReuseMissAuthorization`) unless every one of them comes back in
+// `resolution.Committed`. The shared helper commits one subject, so a
+// cohort-bearing candidate misses reuse entirely and the engine falls through
+// to a fresh investigation -- which is precisely what the first version of
+// this test did, and it failed loudly on the interpreter stub rather than
+// passing while proving nothing.
+//
+// The shared helper is left ALONE rather than widened: other tests depend on
+// its exact committed set, and widening a shared fixture to fit one test is
+// how a fixture stops meaning what its other callers assume.
+func currencyReuseEngine(t *testing.T, stored InvestigationResult, telemetry *recordingTelemetry) *Engine {
+	t.Helper()
+	committed := []SubjectRef{reuseDegradeSubject()}
+	if stored.Cohort != nil {
+		for _, member := range stored.Cohort.Members {
+			committed = append(committed, member.Subject)
+		}
+	}
+	return mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed},
+			// The stored answer's own citation stays visible; the candidate's
+			// node ref and both member refs do not.
+			context: productionShapedGraphContext([]string{reuseCitationRef}, nil),
+		},
+		Results:   &resultStoreStub{},
+		Telemetry: telemetry,
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return stored, true, nil
+		}),
+	})
+}
+
 // currencyCountRow is the stored answer's own count row: satisfied over the
 // two members it carries. The strongest starting claim, and the one the
 // reported defect says a member drop would leave standing.
@@ -376,19 +415,23 @@ func TestAServedReusedAnswersCountDescribesTheMembersItServes(t *testing.T) {
 	stored.Completeness = ComputeAnswerCompleteness(stored)
 	wantMembers := append([]CohortMember(nil), stored.Cohort.Members...)
 
-	// The stored answer's own citation stays visible; the candidate's node ref
-	// and both member refs do not. A missing top-level citation would REFUSE,
-	// which is a different test -- these are all auxiliary, so this degrades.
+	// A missing top-level citation would REFUSE, which is a different test --
+	// the refs this drops are all auxiliary, so this degrades.
 	telemetry := &recordingTelemetry{}
-	engine := reuseDegradeEngine(t, stored,
-		productionShapedGraphContext([]string{reuseCitationRef}, nil), telemetry)
+	engine := currencyReuseEngine(t, stored, telemetry)
 
 	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
+	// REACH GUARD, before any assertion about the served document. A reuse
+	// MISS falls through to a fresh investigation, and a fresh result would
+	// satisfy several assertions below for reasons that have nothing to do
+	// with reuse. This test is only meaningful on the reuse path.
 	if !result.Reused {
-		t.Fatal("result.Reused = false, want true: a partial miss degrades, it does not refuse")
+		t.Fatal("result.Reused = false: the engine did not serve from the store, so nothing below is " +
+			"about the reuse path -- check that every cohort member's subject is in the recheck's " +
+			"committed set (reuseSubjectsToRecheck refuses on any that is not)")
 	}
 	if got := lastReuseOutcome(t, telemetry); got != AnswerReuseHitDegraded {
 		t.Fatalf("reuse outcome = %q, want %q -- this test needs the DEGRADED arm", got, AnswerReuseHitDegraded)
