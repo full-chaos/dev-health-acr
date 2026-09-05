@@ -73,6 +73,17 @@ var requirementDerivationLogKeys = map[string]string{
 	"ComputedInputClasses":           "requirement_computed_input_class_",
 	"ComputedInputKinds":             "requirement_computed_input_kind_",
 	"ComputedStepExecutions":         "requirement_computed_step_",
+	// The two ARMS of `computed_population_absent`. Whole keys, not
+	// prefixes: they are a two-member split of one histogram bucket, not a
+	// vocabulary of their own, and their sum is checkable against
+	// `requirement_unavailable_computed_population_absent` on the same line.
+	"ComputedPopulationAbsentNotAPopulation":        "requirement_computed_population_absent_not_a_population",
+	"ComputedPopulationAbsentUnresolvableMemberSet": "requirement_computed_population_absent_unresolvable_member_set",
+	"ComputedPopulationAbsentNonComputedRow":        "requirement_computed_population_absent_non_computed_row",
+	// A key PREFIX, one key per closed-vocabulary fact kind, same shape as
+	// ComputedInputKinds above: what those arms COST, so a reader can
+	// subtract declared from planned on one line.
+	"ComputedInputKindsUnplanned": "requirement_computed_input_kind_unplanned_",
 }
 
 // TestEveryRequirementSummaryFieldReachesTheLogLine is the structural half
@@ -362,6 +373,7 @@ func TestFrameValidationTelemetryLeaksNoQuestionContent(t *testing.T) {
 	}
 	for _, kind := range contractsv1.ContextFabricFactKindVocabulary() {
 		allowed["requirement_computed_input_kind_"+string(kind)] = true
+		allowed["requirement_computed_input_kind_unplanned_"+string(kind)] = true
 	}
 	for _, execution := range ComputedStepExecutionVocabulary() {
 		allowed["requirement_computed_step_"+string(execution)] = true
