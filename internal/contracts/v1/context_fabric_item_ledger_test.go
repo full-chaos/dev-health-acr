@@ -53,7 +53,7 @@ func ledgerGroupedFixture() ContextFabricInvestigationResult {
 			{FindingID: "finding_member_b_more", Subjects: []ContextFabricSubjectRef{memberB}},
 			{FindingID: "finding_member_b_third", Subjects: []ContextFabricSubjectRef{memberB}},
 		},
-		ClaimedFacts:  []ContextFabricClaimedFact{{ClaimID: "claim_member_b", Subject: memberB}},
+		ClaimedFacts: []ContextFabricClaimedFact{{ClaimID: "claim_member_b", Subject: memberB}},
 		// Paths are charged by Total() and NOT by Budgeted(), so they must
 		// mint no debit. Present in the fixture so that exclusion is
 		// exercised rather than assumed.
