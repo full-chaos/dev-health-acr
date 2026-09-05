@@ -84,6 +84,68 @@ func ValidContextFabricAnswerObligationKind(value string) bool {
 	return stringInVocabulary(value, contextFabricAnswerObligationKinds[:])
 }
 
+// The three kinds as named constants, so the map below and its readers speak in
+// constants rather than string literals. The values are the SAME tokens
+// contextFabricAnswerObligationKinds publishes, and the parity test asserts
+// that, so the two cannot drift into two spellings of one vocabulary.
+const (
+	contextFabricObligationKindRead           = "read"
+	contextFabricObligationKindComputed       = "computed"
+	contextFabricObligationKindAnswerContract = "answer_contract"
+)
+
+// contextFabricAnswerObligationKindByObligation MIRRORS internal/contextfabric's
+// obligationKinds: HOW each obligation is satisfied at all.
+//
+// A mirror, not an import, for the same reason the obligation vocabulary above
+// it is one: contextfabric imports this package, so the dependency cannot run
+// the other way. It is held honest the same way too -- internal/contextfabric
+// carries a parity test asserting the two maps are EQUAL IN BOTH DIRECTIONS, so
+// a new obligation cannot ship without its mirror entry and a mirror entry
+// cannot outlive its domain member.
+//
+// WHY THE MAPPING, WHEN BOTH VOCABULARIES ALREADY SHIP. The completeness
+// derivation has to ask "is this row's obligation a READ?" of an OUTCOME ROW,
+// and an outcome row carries `obligation` but not `kind` -- `kind` lives on the
+// PLAN requirement, which the derivation never receives. Both endpoints of the
+// question were already here; only the edge between them was missing. Inferring
+// it from the row's other fields would be inference over absence, which the
+// outcome layer's own header refuses.
+//
+// The two `answer_contract` obligations never reach an outcome row at all:
+// DeriveRequirementCoordinates yields no coordinate for them, so their arm is
+// dead by construction. They are here because this mirrors the domain's map,
+// and the parity test is what keeps the mirror total -- not their reachability.
+var contextFabricAnswerObligationKindByObligation = map[string]string{
+	"state":                contextFabricObligationKindRead,
+	"completion":           contextFabricObligationKindRead,
+	"readiness":            contextFabricObligationKindRead,
+	"health":               contextFabricObligationKindRead,
+	"principal_drivers":    contextFabricObligationKindRead,
+	"remaining_work":       contextFabricObligationKindRead,
+	"allocation_breakdown": contextFabricObligationKindRead,
+	"trend_series":         contextFabricObligationKindRead,
+	"period_delta":         contextFabricObligationKindRead,
+
+	"ranking": contextFabricObligationKindComputed,
+	"count":   contextFabricObligationKindComputed,
+
+	"evidence": contextFabricObligationKindAnswerContract,
+	"coverage": contextFabricObligationKindAnswerContract,
+}
+
+// ContextFabricAnswerObligationKindByObligation returns a COPY of the mirror,
+// for the domain-side parity test. A copy rather than the map itself, because a
+// returned map is a reference a caller could mutate, and this one decides a
+// published completeness state.
+func ContextFabricAnswerObligationKindByObligation() map[string]string {
+	out := make(map[string]string, len(contextFabricAnswerObligationKindByObligation))
+	for obligation, kind := range contextFabricAnswerObligationKindByObligation {
+		out[obligation] = kind
+	}
+	return out
+}
+
 // contextFabricComputedObligationSteps mirrors the domain's named server
 // steps.
 var contextFabricComputedObligationSteps = [...]string{

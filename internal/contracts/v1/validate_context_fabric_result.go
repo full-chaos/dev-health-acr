@@ -1179,10 +1179,30 @@ func validateAnswerOutcomes(c ContextFabricAnswerCompleteness, bounds contextFab
 	// re-running that function here and requiring equality is what stops a
 	// producer from stamping a state and then changing the document, or
 	// from copying a state across a surface that narrowed again.
-	if want := DeriveContextFabricAnswerCompletenessState(c.Outcomes); c.State != want {
-		return fmt.Errorf("completeness state %q does not match the state derived from its own outcome rows (want %q)", c.State, want)
+	want := DeriveContextFabricAnswerCompletenessState(c.Outcomes)
+	if c.State == want {
+		return nil
 	}
-	return nil
+	// THE LEGACY ARM, reachable from the STORED path only.
+	//
+	// bounds.completenessRequired is false exactly on stored reads -- the same
+	// switch the empty-block exemption above already turns on. A FRESH result
+	// has no equivalent excuse: the engine derives the state from the rows in
+	// one call immediately before Validate, so a state the amended rule does
+	// not produce is a half-stamped block, not a document from an older
+	// deployment.
+	//
+	// Results are IMMUTABLE and the payload IS the document, so a result
+	// stored before the read evaluator existed cannot be migrated into
+	// agreement; without this arm every one of them becomes unreadable at
+	// Store.Get, which validates on every read. What the arm admits is bounded
+	// and named on the frozen function itself: the amended rule can only turn
+	// that function's `complete` into `partial`, so the two disagree on
+	// exactly one shape.
+	if !bounds.completenessRequired && c.State == DeriveContextFabricAnswerCompletenessStateBeforeReadEvaluation(c.Outcomes) {
+		return nil
+	}
+	return fmt.Errorf("completeness state %q does not match the state derived from its own outcome rows (want %q)", c.State, want)
 }
 
 func (v ContextFabricVersionSet) Validate() error {

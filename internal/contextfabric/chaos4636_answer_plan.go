@@ -462,6 +462,23 @@ func (e *Engine) finalizeResult(result InvestigationResult, plan AnswerPlan, fra
 	// appendOutcomeRows like every other stage's row.
 	rows, _, _ := appendMembershipCardinality(result.Completeness.Outcomes, result.Cohort, plan.Narrowing)
 	result.Completeness.Outcomes = rows
+	// Say what the EVIDENCE made of each planned READ requirement.
+	//
+	// HERE, for the reason the cardinality above it runs here: the row must
+	// describe the document the route will marshal, and stage 3 can narrow
+	// the cohort and re-finalize. AFTER the seed, because the identity is
+	// read off the published plan rather than minted, and BEFORE the state
+	// is derived below -- appending after the derivation would be the
+	// measure-then-shrink defect this whole layer exists to remove,
+	// reproduced inside the fix for it.
+	//
+	// The plan is read from `stamped`, the copy this function attached to
+	// the result, so the requirements evaluated are exactly the ones the
+	// served document publishes. Reading the `plan` parameter instead would
+	// be the same value today and a second source the first time a caller
+	// stamps something else.
+	result.Completeness.Outcomes = appendReadRequirementEvaluations(
+		result.Completeness.Outcomes, stamped.Requirements, result.Coverage)
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result
 }
