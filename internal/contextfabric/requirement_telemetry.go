@@ -81,6 +81,27 @@ type RequirementDerivationSummary struct {
 	// keys let an operator check.
 	ComputedPopulationAbsentNotAPopulation        int
 	ComputedPopulationAbsentUnresolvableMemberSet int
+	// ComputedInputKindsUnplanned counts, per fact kind, how many computed
+	// rows declared that kind as an input the turn did NOT plan a read for,
+	// because the row's step has nothing to run over.
+	//
+	// It is the other half of the diagnosis. The arm counters above say a
+	// decision fired; this says what the decision COST -- which reads the
+	// answer did not get, in the same closed-vocabulary histogram shape as
+	// ComputedInputKinds beside it, so the two are directly comparable on
+	// one line ("declared N, planned N-M, dropped M").
+	//
+	// RE-DERIVED FROM THE STEP TABLE, and this is the ONE place in this file
+	// where that is right rather than wrong. The rule above -- "counted off
+	// the ROW, not re-derived from the step" -- protects a row that CARRIES
+	// a declaration from being described by a second opinion. This row
+	// deliberately carries none: the derivation clears Step, InputClass and
+	// InputFactKinds on an unavailable row, because "a row that named both a
+	// step and a reason it cannot run would be two answers to what became of
+	// the cell". The table is therefore the only source, the lookup is pure
+	// and total over the obligation, and an operator who cannot see the
+	// dropped kinds cannot tell this arm from any other unavailable cell.
+	ComputedInputKindsUnplanned [contractsv1.ContextFabricFactKindCount]int
 
 	// Quantifiers counts rows per completion quantifier, indexed by
 	// CompletionQuantifierVocabulary position.
@@ -157,6 +178,19 @@ func RequirementDerivationSummaryFrom(rows []DerivedRequirement) RequirementDeri
 					summary.ComputedPopulationAbsentUnresolvableMemberSet++
 				} else {
 					summary.ComputedPopulationAbsentNotAPopulation++
+				}
+				// What the decision cost: the inputs this cell would have
+				// planned had its step been runnable. The row carries none
+				// (the invariant clears them), so the step table is the
+				// source -- see the field's own doc comment.
+				if step, named := StepForComputedObligation(row.Obligation); named {
+					if declared, ok := InputsForComputedStep(step); ok {
+						for _, kind := range declared.FactKinds {
+							if index, ok := factKindIndex(kind); ok {
+								summary.ComputedInputKindsUnplanned[index]++
+							}
+						}
+					}
 				}
 			}
 		}

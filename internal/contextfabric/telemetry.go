@@ -866,6 +866,18 @@ func requirementDerivationLogAttrs(summary RequirementDerivationSummary) []any {
 		"requirement_computed_population_absent_not_a_population", summary.ComputedPopulationAbsentNotAPopulation,
 		"requirement_computed_population_absent_unresolvable_member_set", summary.ComputedPopulationAbsentUnresolvableMemberSet,
 	)
+	// What those decisions COST -- the declared inputs no read was planned
+	// for -- in the same per-kind shape as requirement_computed_input_kind_
+	// above, so the two are subtractable on one line. Every member present
+	// including the zeroes, for the reason every histogram here has.
+	//
+	// The FRAME KIND those counts belong to is already on this line as
+	// `proposed_kind` (RecordFrameValidation's own field, the subject
+	// expression's closed discriminator), so the arms and their cost are
+	// attributable to a topology without adding a second copy of it.
+	for index, kind := range contractsv1.ContextFabricFactKindVocabulary() {
+		args = append(args, "requirement_computed_input_kind_unplanned_"+string(kind), summary.ComputedInputKindsUnplanned[index])
+	}
 	for index, quantifier := range CompletionQuantifierVocabulary() {
 		args = append(args, "requirement_quantifier_"+string(quantifier), summary.Quantifiers[index])
 	}

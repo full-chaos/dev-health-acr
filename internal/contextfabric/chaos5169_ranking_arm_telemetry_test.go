@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"testing"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -49,7 +50,15 @@ func TestTheUnrunnableRankingArmIsNAMEDOnTheEmittedLine(t *testing.T) {
 		NewSlogEngineTelemetry(logger).RecordFrameValidation(
 			context.Background(),
 			storage.Principal{OrgID: "org_sink_test"},
-			FrameValidationEvent{Outcome: FrameValidationOutcomeValid, RequirementDerivation: summary},
+			// ProposedKind carries the topology the arms belong to. Taken
+			// from the fixture frame, never typed in beside it: a hand-typed
+			// discriminator would keep agreeing with the assertion after the
+			// fixture moved.
+			FrameValidationEvent{
+				Outcome:               FrameValidationOutcomeValid,
+				ProposedKind:          frame.SubjectExpression.Kind,
+				RequirementDerivation: summary,
+			},
 		)
 	})
 	if len(records) != 1 {
@@ -81,6 +90,53 @@ func TestTheUnrunnableRankingArmIsNAMEDOnTheEmittedLine(t *testing.T) {
 	other, _ := record[otherArmKey].(float64)
 	if aggregate, ok := record[aggregateKey].(float64); !ok || sum+other != aggregate {
 		t.Errorf("%s = %v, but the two arms sum to %v -- the split does not account for its own bucket", aggregateKey, record[aggregateKey], sum+other)
+	}
+
+	// WHAT THE DECISION COST. The arm counter says a cell went unavailable;
+	// these say which reads the answer therefore did not get. Without them
+	// this arm is indistinguishable on the line from any other unavailable
+	// cell, which is the diagnosis the ticket itself needed.
+	//
+	// Asserted per KIND against rank_cohort's own declaration rather than a
+	// hand-typed list, so a change to the formula's inputs moves this with
+	// it. The zeroes are asserted too: a kind no unplanned step consumes
+	// must still carry its key.
+	inputs, declared := InputsForComputedStep(ComputedStepRankCohort)
+	if !declared || len(inputs.FactKinds) == 0 {
+		t.Fatal("rank_cohort declares no inputs, so the cost assertion below quantifies over nothing")
+	}
+	dropped := map[FactKind]bool{}
+	for _, kind := range inputs.FactKinds {
+		dropped[kind] = true
+	}
+	seenNonZero := 0
+	for _, kind := range contractsv1.ContextFabricFactKindVocabulary() {
+		key := "requirement_computed_input_kind_unplanned_" + string(kind)
+		value, ok := record[key]
+		if !ok {
+			t.Fatalf("the emitted record is missing %q -- an omitted zero is indistinguishable from a kind the accounting never reached", key)
+		}
+		want := float64(0)
+		if dropped[FactKind(kind)] {
+			want = 1
+			seenNonZero++
+		}
+		if value != want {
+			t.Errorf("%s = %v, want %v -- this frame's ranking cell went unavailable, so exactly rank_cohort's %d declared inputs are unplanned",
+				key, value, want, len(inputs.FactKinds))
+		}
+	}
+	if seenNonZero != len(inputs.FactKinds) {
+		t.Errorf("asserted %d non-zero unplanned kinds, want %d -- the vocabulary sweep did not reach every declared input", seenNonZero, len(inputs.FactKinds))
+	}
+
+	// THE FRAME KIND the arms belong to is already on this line, and this
+	// asserts it rather than assuming it: without a topology an operator
+	// cannot tell which shape produced the unrunnable cell, and a second
+	// copy of the discriminator would be a field to keep in sync for no gain.
+	if record["proposed_kind"] != string(SubjectExpressionNamed) {
+		t.Errorf("proposed_kind = %v, want %q -- the arm counts are not attributable to a topology without it",
+			record["proposed_kind"], SubjectExpressionNamed)
 	}
 }
 
