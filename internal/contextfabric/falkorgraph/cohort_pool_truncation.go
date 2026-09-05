@@ -84,3 +84,22 @@ func cohortPoolTruncation(fulltextTruncated, exactNameTruncated, censusAdmitted 
 		return CohortPoolTruncationNone, false
 	}
 }
+
+// CohortPoolTruncationBasisVocabulary returns every declared member, in
+// declaration order.
+//
+// It exists so a test can quantify over "every value this line can carry"
+// instead of over a hand-typed list beside it. A hand list is a SAMPLE: it
+// agrees with the implementation by construction until someone adds a member,
+// at which point it goes on agreeing and stops covering. The classifier itself
+// never calls this, so it cannot become a second, drifting definition of the
+// vocabulary.
+func CohortPoolTruncationBasisVocabulary() []CohortPoolTruncationBasis {
+	return []CohortPoolTruncationBasis{
+		CohortPoolTruncationNone,
+		CohortPoolTruncationFulltext,
+		CohortPoolTruncationExactNameCensus,
+		CohortPoolTruncationBothArms,
+		CohortPoolTruncationFulltextCoveredByCensus,
+	}
+}

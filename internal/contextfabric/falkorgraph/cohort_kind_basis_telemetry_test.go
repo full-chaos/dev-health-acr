@@ -119,9 +119,15 @@ func TestCohortKindBasisLineCarriesNoKeyOutsideItsAllowList(t *testing.T) {
 	record := captureCohortKindBasisLine(t,
 		contextfabric.SubjectRepository, graphrank.CohortKindFromFrameMemberKind, true)
 
+	// pool_truncation is admitted on the SAME standard as basis and
+	// member_kind: it is a member of a published, closed vocabulary
+	// (CohortPoolTruncationBasisVocabulary), never free text and never
+	// corpus content. TestCohortKindBasisLineReportsOnlyPublishedPoolTruncations
+	// below is what holds it to that standard rather than this comment.
 	allowed := map[string]bool{
 		"time": true, "level": true, "msg": true, "request_id": true,
 		"org_id": true, "member_kind": true, "basis": true, "discovered": true,
+		"pool_truncation": true,
 	}
 	for key := range record {
 		if !allowed[key] {
@@ -150,6 +156,69 @@ func TestCohortKindBasisLineReportsOnlyPublishedKinds(t *testing.T) {
 		value, _ := record["member_kind"].(string)
 		if !published[value] {
 			t.Errorf("basis %q emitted member_kind %q, which is not a published subject kind", basis, value)
+		}
+	}
+}
+
+// TestCohortKindBasisLineReportsOnlyPublishedPoolTruncations is the
+// vocabulary half of the key added beside basis and member_kind.
+//
+// It quantifies over the DECLARED vocabulary rather than over a hand-typed
+// pair, so a member added later without a decision about how it is emitted
+// fails here. Admitting a key to the allow-list without this is how a closed
+// vocabulary becomes free text one commit at a time.
+func TestCohortKindBasisLineReportsOnlyPublishedPoolTruncations(t *testing.T) {
+	vocabulary := CohortPoolTruncationBasisVocabulary()
+	if len(vocabulary) == 0 {
+		t.Fatal("CohortPoolTruncationBasisVocabulary() is empty -- the loop below cannot fail, so this test would pass over anything")
+	}
+	published := make(map[string]bool, len(vocabulary))
+	for _, basis := range vocabulary {
+		published[string(basis)] = true
+	}
+	for _, basis := range vocabulary {
+		record := captureCohortKindBasisLineWithPoolTruncation(t,
+			contextfabric.SubjectRepository, graphrank.CohortKindFromFrameMemberKind, true, basis)
+		got, ok := record["pool_truncation"].(string)
+		if !ok {
+			t.Fatalf("pool_truncation = %v (%T), want a string", record["pool_truncation"], record["pool_truncation"])
+		}
+		if !published[got] {
+			t.Errorf("pool_truncation = %q, which is not a member of the declared vocabulary %v", got, vocabulary)
+		}
+	}
+}
+
+// TestCohortPoolTruncationProducesOnlyPublishedBases closes the other end: the
+// only producer of this value must never mint one the vocabulary does not
+// declare. Quantified over the whole closed input space, so a new arm cannot
+// return an undeclared member on a combination nobody wrote a case for.
+func TestCohortPoolTruncationProducesOnlyPublishedBases(t *testing.T) {
+	published := make(map[CohortPoolTruncationBasis]bool)
+	for _, basis := range CohortPoolTruncationBasisVocabulary() {
+		published[basis] = true
+	}
+	if len(published) == 0 {
+		t.Fatal("empty vocabulary -- nothing below can fail")
+	}
+	seen := make(map[CohortPoolTruncationBasis]bool)
+	for _, fulltext := range []bool{false, true} {
+		for _, exactName := range []bool{false, true} {
+			for _, census := range []bool{false, true} {
+				basis, _ := cohortPoolTruncation(fulltext, exactName, census)
+				if !published[basis] {
+					t.Errorf("cohortPoolTruncation(%v, %v, %v) returned %q, which the vocabulary does not declare", fulltext, exactName, census, basis)
+				}
+				seen[basis] = true
+			}
+		}
+	}
+	// A member the producer can never emit is dead vocabulary, and a dead
+	// member on a telemetry line reads to an operator as a state the system
+	// can reach.
+	for basis := range published {
+		if !seen[basis] {
+			t.Errorf("vocabulary member %q is never produced by cohortPoolTruncation over its whole input space -- it is dead vocabulary", basis)
 		}
 	}
 }

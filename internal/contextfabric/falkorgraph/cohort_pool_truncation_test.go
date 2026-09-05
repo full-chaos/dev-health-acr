@@ -323,12 +323,9 @@ func TestCohortPoolTruncationClassifiesEveryInput(t *testing.T) {
 // a broken implementation.
 func TestCohortPoolTruncationBasesAreDistinct(t *testing.T) {
 	t.Parallel()
-	all := []CohortPoolTruncationBasis{
-		CohortPoolTruncationNone,
-		CohortPoolTruncationFulltext,
-		CohortPoolTruncationExactNameCensus,
-		CohortPoolTruncationBothArms,
-		CohortPoolTruncationFulltextCoveredByCensus,
+	all := CohortPoolTruncationBasisVocabulary()
+	if len(all) == 0 {
+		t.Fatal("CohortPoolTruncationBasisVocabulary() is empty -- the loop below cannot fail")
 	}
 	seen := make(map[CohortPoolTruncationBasis]struct{}, len(all))
 	for _, basis := range all {
