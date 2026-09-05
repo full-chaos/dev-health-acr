@@ -54,13 +54,24 @@ directory's *meaning* without updating that doc, and vice versa.
 Three lessons learned the hard way while wiring this manifest into the real orchestrator/verifier
 -- keep all three in mind before editing `fixture-manifest.json` again:
 
-* **`file_hotspot_daily` and `file_complexity_snapshots` reject `FINAL`.** Both are plain
-  `MergeTree` (`PARTITION BY toYYYYMM(...)`), not `ReplacingMergeTree` -- this is exactly why
-  `file_hotspots.v1`/`file_complexity.v1` in `source_queries.go` use `GROUP BY` instead of
-  `FINAL`. Any probe or count query against those two tables must be a plain
-  `SELECT count() FROM <t> WHERE repo_id = {repo_id:UUID}` (no `FINAL`). Every other seeded
-  table is `ReplacingMergeTree` and should use `FINAL`. See `expected_row_counts_note` for the
-  full per-table breakdown.
+* **A count's UNIT follows the table's engine, and this file must never carry a second copy of
+  which engine that is.** The verifier reads `engine` from `system.tables` per table at probe
+  time (`tests/fullstack/assertrun/tableshape.go`, `describeTable`) and appends `FINAL` for any
+  `Replacing`/`Collapsing` engine. So an ops migration that changes an engine needs no edit to
+  the probe -- but it *does* change what the number in `expected_row_counts` means, and that
+  has to be re-derived by hand: **with `FINAL` the probe counts distinct sorting-key tuples,
+  without it raw inserted rows.** This is not hypothetical. Ops migration
+  `087_complexity_tables_replacing_merge_tree.py` (CHAOS-4291) turned `file_complexity_snapshots`
+  into `ReplacingMergeTree(computed_at)` while keeping
+  `ORDER BY (org_id, repo_id, as_of_day, file_path)` -- `ref` is not in that key -- so the seed's
+  4 rows became 3 visible ones (`src/checkout/cart_drawer.ts` is written twice under one key,
+  at 11:00 and again at 12:00) and every acr PR went red until this manifest caught up.
+  `file_hotspot_daily` is now the only plain `MergeTree` table this seed writes to: it rejects
+  `FINAL` outright and its 3 is a raw row count, duplicate key included. Note that neither
+  table's *product* query is affected either way: `file_hotspots.v1`/`file_complexity.v1` in
+  `source_queries.go` select their latest run explicitly with `GROUP BY` and an exact
+  run-identity match, never `FINAL`. See `expected_row_counts_note` for the per-table
+  derivation.
 * **Keep prose out of typed collections.** `fixture-manifest.json`'s verifier decodes
   `expected_row_counts` as `map[string]map[string]int` (repo slug -> table -> count). A
   reasoning/notes string dropped in as a sibling key inside that map (or a `"totals"` entry
