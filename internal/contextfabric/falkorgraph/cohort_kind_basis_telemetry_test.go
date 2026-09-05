@@ -25,9 +25,20 @@ func captureCohortKindBasisLine(t *testing.T, declaredKind contextfabric.Subject
 	return captureCohortKindBasisLineWithPoolTruncation(t, declaredKind, basis, discovered, CohortPoolTruncationNone)
 }
 
+// productionSinkLevel is the level a DEPLOYED handler is configured at, and it
+// is what every content test below captures through.
+//
+// This is not a detail. These tests used to capture at Debug, which admits
+// everything, so the line's own level was unobservable: demote it to Debug in
+// production and every assertion here still passed while the whole diagnostic
+// vanished from a real deployment. Capturing at the production default makes a
+// demoted line disappear HERE exactly as it would THERE -- so the level is
+// pinned by every test in this file, not only by the one that names it.
+const productionSinkLevel = slog.LevelInfo
+
 func captureCohortKindBasisLineWithPoolTruncation(t *testing.T, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis) map[string]any {
 	t.Helper()
-	return captureCohortKindBasisLineFull(t, context.Background(), slog.LevelDebug, declaredKind, basis, discovered, poolTruncation, nil)
+	return captureCohortKindBasisLineFull(t, context.Background(), productionSinkLevel, declaredKind, basis, discovered, poolTruncation, nil)
 }
 
 // captureCohortKindBasisLineFull is the one place the production sink is
@@ -206,7 +217,7 @@ func TestCohortKindBasisLineReportsOnlyPublishedPoolTruncations(t *testing.T) {
 		published[string(basis)] = true
 	}
 	for _, basis := range vocabulary {
-		record := captureCohortKindBasisLineFull(t, context.Background(), slog.LevelDebug,
+		record := captureCohortKindBasisLineFull(t, context.Background(), productionSinkLevel,
 			contextfabric.SubjectRepository, graphrank.CohortKindFromFrameMemberKind, true, basis, nil)
 		got, ok := record["pool_truncation"].(string)
 		if !ok {
@@ -277,7 +288,7 @@ func TestCohortKindBasisLineCarriesTheRequestID(t *testing.T) {
 		t.Fatalf("the fixture's own context carries no request id -- WithRequestID rejected %q, so this test would pass over correct code", canonicalRequestID)
 	}
 
-	record := captureCohortKindBasisLineFull(t, ctx, slog.LevelDebug,
+	record := captureCohortKindBasisLineFull(t, ctx, productionSinkLevel,
 		contextfabric.SubjectTeam, graphrank.CohortKindFromFrameMemberKind, true,
 		CohortPoolTruncationTruncated, []CohortPoolTruncationArm{CohortPoolTruncationArmFulltext})
 
@@ -293,7 +304,7 @@ func TestCohortKindBasisLineCarriesTheRequestID(t *testing.T) {
 // empty string" the same reading.
 func TestCohortKindBasisLineOmitsTheRequestIDWhenTheContextHasNone(t *testing.T) {
 	t.Parallel()
-	record := captureCohortKindBasisLineFull(t, context.Background(), slog.LevelDebug,
+	record := captureCohortKindBasisLineFull(t, context.Background(), productionSinkLevel,
 		contextfabric.SubjectTeam, graphrank.CohortKindFromFrameMemberKind, true, CohortPoolTruncationNone, nil)
 
 	if _, present := record["request_id"]; present {
@@ -313,10 +324,13 @@ func TestCohortKindBasisLineOmitsTheRequestIDWhenTheContextHasNone(t *testing.T)
 // same instrument can suppress one: the negative half is what makes the
 // positive half mean anything, since a handler that admitted everything would
 // pass the first assertion over any level at all.
-func TestCohortKindBasisLineIsEmittedAtInfo(t *testing.T) {
+func TestCohortKindBasisLineIsEmittedAtTheProductionLevel(t *testing.T) {
 	t.Parallel()
-	if got := captureCohortKindBasisLineCount(t, slog.LevelInfo); got != 1 {
-		t.Errorf("an Info-level handler admitted %d cohort-kind-basis lines, want 1 -- below Info this line is invisible at the production default and the whole diagnostic is gone", got)
+	if productionSinkLevel != slog.LevelInfo {
+		t.Fatalf("productionSinkLevel = %v, want Info -- the constant every other test captures through must be the level a deployed handler actually runs at, or those tests stop pinning anything", productionSinkLevel)
+	}
+	if got := captureCohortKindBasisLineCount(t, productionSinkLevel); got != 1 {
+		t.Errorf("a production-level handler admitted %d cohort-kind-basis lines, want 1 -- below this level the line is invisible in a real deployment and the whole diagnostic is gone", got)
 	}
 	if got := captureCohortKindBasisLineCount(t, slog.LevelError); got != 0 {
 		t.Fatalf("an Error-level handler admitted %d lines, want 0 -- the instrument cannot suppress anything, so the assertion above proves nothing about the line's own level", got)
@@ -327,7 +341,7 @@ func TestCohortKindBasisLineIsEmittedAtInfo(t *testing.T) {
 // the arms are separate values, and the arms render in vocabulary order.
 func TestCohortKindBasisLineNamesTheCutArms(t *testing.T) {
 	t.Parallel()
-	record := captureCohortKindBasisLineFull(t, context.Background(), slog.LevelDebug,
+	record := captureCohortKindBasisLineFull(t, context.Background(), productionSinkLevel,
 		contextfabric.SubjectTeam, graphrank.CohortKindFromFrameMemberKind, true,
 		CohortPoolTruncationTruncated,
 		// Supplied out of vocabulary order on purpose: the renderer must not
@@ -349,7 +363,7 @@ func TestCohortKindBasisLineNamesTheCutArms(t *testing.T) {
 // key. An operator grepping one key's value must never match the other's.
 func TestCohortKindBasisLineCarriesEmptyArmsWhenNothingWasCut(t *testing.T) {
 	t.Parallel()
-	record := captureCohortKindBasisLineFull(t, context.Background(), slog.LevelDebug,
+	record := captureCohortKindBasisLineFull(t, context.Background(), productionSinkLevel,
 		contextfabric.SubjectTeam, graphrank.CohortKindFromFrameMemberKind, true, CohortPoolTruncationNone, nil)
 
 	if got := record["pool_truncation_arms"]; got != "" {
