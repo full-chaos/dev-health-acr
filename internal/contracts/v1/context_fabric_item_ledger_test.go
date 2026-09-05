@@ -18,7 +18,10 @@ func ledgerGroupedFixture() ContextFabricInvestigationResult {
 
 	return ContextFabricInvestigationResult{
 		SubjectResolution: ContextFabricSubjectResolution{
-			Candidates: []ContextFabricSubjectCandidate{{Subject: memberA}, {Subject: memberB}},
+			Candidates: []ContextFabricSubjectCandidate{
+				{ReceiptID: "receipt_a", Subject: memberA},
+				{ReceiptID: "receipt_b", Subject: memberB},
+			},
 		},
 		Cohort: &ContextFabricCohort{
 			Members: []ContextFabricCohortMember{{Subject: memberA}, {Subject: memberB}},
@@ -293,16 +296,213 @@ func TestADuplicateDeclaredIDIsAnAccountingDefect(t *testing.T) {
 		t.Error("a duplicate occurrence was reported without naming which id, so it is not diagnosable")
 	}
 
-	// Resolution candidates are deliberately NOT id-checked: nothing
-	// promises the resolver returns each subject once, and a false
-	// accounting defect turns a servable answer into a server error.
+	// Candidates are id-checked too, on the RECEIPT id, which
+	// validate_context_fabric_result.go already requires to be unique across
+	// candidates. An earlier revision excluded them on the belief that
+	// nothing promised uniqueness; something does, and the exclusion left
+	// the one collection where a dropped occurrence paired with a duplicated
+	// one reconciled.
 	duplicateCandidate := ledgerGroupedFixture()
 	duplicateCandidate.SubjectResolution.Candidates = append(
 		duplicateCandidate.SubjectResolution.Candidates,
 		duplicateCandidate.SubjectResolution.Candidates[0])
-	if control := ReconcileContextFabricResultItems(duplicateCandidate); !control.Reconciled() {
-		t.Errorf("a repeated resolution candidate was reported as an accounting defect (%q); that is a "+
-			"false positive, and it costs a served answer", control.Status)
+	if repeat := ReconcileContextFabricResultItems(duplicateCandidate); repeat.Status != ContextFabricLedgerDuplicateOccurrence {
+		t.Errorf("a repeated candidate receipt reconciled (status %q); the collection whose ids are "+
+			"validated for uniqueness must be checked for it", repeat.Status)
+	}
+
+	// The pre-validation control: a candidate with NO receipt yet is skipped
+	// rather than reported, because a result measured before validation must
+	// not raise a false accounting defect on a field validation has not yet
+	// required -- and a false defect costs a served answer.
+	unvalidated := ledgerGroupedFixture()
+	for index := range unvalidated.SubjectResolution.Candidates {
+		unvalidated.SubjectResolution.Candidates[index].ReceiptID = ""
+	}
+	if control := ReconcileContextFabricResultItems(unvalidated); !control.Reconciled() {
+		t.Errorf("candidates carrying no receipt yet were reported as an accounting defect (%q)", control.Status)
+	}
+}
+
+// TestADroppedCandidatePairedWithADuplicateIsVisible is the review's own
+// repro: the shape that survives a matching collection count, a matching
+// bucket split AND a matching total, and is visible only because the
+// OCCURRENCE KEY is checked rather than merely documented.
+func TestADroppedCandidatePairedWithADuplicateIsVisible(t *testing.T) {
+	t.Parallel()
+	original := ReconcileContextFabricResultItems(ledgerGroupedFixture())
+	if !original.Reconciled() {
+		t.Fatalf("fixture did not reconcile: %q", original.Status)
+	}
+
+	tampered := original
+	tampered.Debits = nil
+	var duplicate ContextFabricItemDebit
+	for _, debit := range original.Debits {
+		if debit.Collection == ContextFabricChargedCandidates && debit.Ordinal == 0 {
+			continue
+		}
+		tampered.Debits = append(tampered.Debits, debit)
+		if debit.Collection == ContextFabricChargedCandidates && debit.Ordinal == 1 {
+			duplicate = debit
+		}
+	}
+	if duplicate.DeclaredID == "" {
+		t.Fatal("the fixture carries no second candidate to duplicate")
+	}
+	tampered.Debits = append(tampered.Debits, duplicate)
+
+	if tampered.Total() != original.Total() {
+		t.Fatalf("the tamper moved the total (%d then %d); it must not, or this is not the case a "+
+			"total cannot see", original.Total(), tampered.Total())
+	}
+	status, disagreement := contextFabricReconcile(tampered)
+	if status == ContextFabricLedgerReconciled {
+		t.Fatal("a dropped candidate paired with a duplicated one reconciled")
+	}
+	if disagreement == "" {
+		t.Error("the disagreement was reported without naming what disagreed")
+	}
+}
+
+// TestSparseOrdinalsAreAnAccountingDefect covers the other half of the
+// occurrence key: uniqueness alone admits {0, 2} for a two-item collection,
+// which is one occurrence dropped and another invented.
+func TestSparseOrdinalsAreAnAccountingDefect(t *testing.T) {
+	t.Parallel()
+	original := ReconcileContextFabricResultItems(ledgerGroupedFixture())
+	tampered := original
+	tampered.Debits = append([]ContextFabricItemDebit{}, original.Debits...)
+	moved := false
+	for index := range tampered.Debits {
+		if tampered.Debits[index].Collection == ContextFabricChargedCandidates && tampered.Debits[index].Ordinal == 0 {
+			tampered.Debits[index].Ordinal = 7
+			moved = true
+			break
+		}
+	}
+	if !moved {
+		t.Fatal("no candidate debit to move")
+	}
+	if status, _ := contextFabricReconcile(tampered); status != ContextFabricLedgerDuplicateOccurrence {
+		t.Fatalf("status = %q, want %q for a sparse ordinal range", status, ContextFabricLedgerDuplicateOccurrence)
+	}
+}
+
+// TestACertificateIsNotIssuedForALedgerEditedAfterReconciliation is the
+// review's second repro. Status and Debits are both exported, so a caller can
+// hold a real ledger, drop a debit and leave the status saying `reconciled`.
+// A certificate that trusted that field would be the forgeable thing the type
+// exists not to be.
+func TestACertificateIsNotIssuedForALedgerEditedAfterReconciliation(t *testing.T) {
+	t.Parallel()
+	ledger := ReconcileContextFabricResultItems(ledgerGroupedFixture())
+	if !ledger.Reconciled() {
+		t.Fatalf("fixture did not reconcile: %q", ledger.Status)
+	}
+	total := ledger.Total()
+
+	ledger.Debits = ledger.Debits[:total-1]
+	if ledger.Status != ContextFabricLedgerReconciled {
+		t.Fatal("the tamper changed the status field; the point of this test is that it does NOT")
+	}
+	certificate, verdict := CertifyContextFabricCapacity(ledger, ContextFabricResponseBudget{MaxItems: total - 1})
+	if certificate.Certified() || verdict != ContextFabricCapacityAccountingDefect {
+		t.Fatalf("a ledger edited after reconciliation was certified: verdict %q, certified %v",
+			verdict, certificate.Certified())
+	}
+}
+
+// TestAnItemNamingOneGroupTwiceParticipatesOnce pins the DISTINCT half of
+// group incidence: participation is per named group, not per mention, exactly
+// as the bucket precedence refuses to promote such an item to multi_group.
+func TestAnItemNamingOneGroupTwiceParticipatesOnce(t *testing.T) {
+	t.Parallel()
+	group := ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team_one"}
+	result := ContextFabricInvestigationResult{
+		Cohort: &ContextFabricCohort{Groups: []ContextFabricCohortGroup{{Subject: group}}},
+		Drivers: []ContextFabricDriverJudgment{{
+			DriverID:         "driver_repeats_its_group",
+			AffectedSubjects: []ContextFabricSubjectRef{group, group},
+		}},
+	}
+	ledger := ReconcileContextFabricResultItems(result)
+
+	if !ledger.Reconciled() {
+		t.Fatalf("status = %q", ledger.Status)
+	}
+	if got := ledger.GroupIncidenceCounts()[contextFabricSubjectBucketKey(group)]; got != 1 {
+		t.Fatalf("incidence = %d, want 1: a group named twice by one item is participated in once", got)
+	}
+	if len(ledger.Debits) != 1 || len(ledger.Debits[0].GroupIncidence) != 1 {
+		t.Fatalf("debit carries %d incidences, want 1: %+v", len(ledger.Debits[0].GroupIncidence), ledger.Debits[0])
+	}
+	if ledger.Debits[0].Bucket != ContextFabricItemBucketGroup {
+		t.Errorf("bucket = %q, want %q: a duplicate mention must not promote the item to multi_group",
+			ledger.Debits[0].Bucket, ContextFabricItemBucketGroup)
+	}
+}
+
+// TestACohortCarryingOneMemberTwiceIsAnAccountingDefect: member rows have no
+// id of their own and are keyed by subject, so a cohort holding the same
+// member twice charges two items that every id-keyed consumer sees as one.
+func TestACohortCarryingOneMemberTwiceIsAnAccountingDefect(t *testing.T) {
+	t.Parallel()
+	member := ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_a"}
+	result := ContextFabricInvestigationResult{
+		Cohort: &ContextFabricCohort{Members: []ContextFabricCohortMember{{Subject: member}, {Subject: member}}},
+	}
+	if ledger := ReconcileContextFabricResultItems(result); ledger.Status != ContextFabricLedgerDuplicateOccurrence {
+		t.Fatalf("status = %q, want %q", ledger.Status, ContextFabricLedgerDuplicateOccurrence)
+	}
+}
+
+// TestCandidateDebitsAreKeyedOnTheirReceipt pins WHICH id a candidate debit
+// declares. Two candidates can legitimately name the same subject; their
+// receipts are what the validator requires to be distinct.
+func TestCandidateDebitsAreKeyedOnTheirReceipt(t *testing.T) {
+	t.Parallel()
+	result := ledgerGroupedFixture()
+	ledger := ReconcileContextFabricResultItems(result)
+
+	found := 0
+	for _, debit := range ledger.Debits {
+		if debit.Collection != ContextFabricChargedCandidates {
+			continue
+		}
+		want := result.SubjectResolution.Candidates[debit.Ordinal].ReceiptID
+		if want == "" {
+			t.Fatal("the fixture's candidates carry no receipt, so this assertion tests nothing")
+		}
+		if debit.DeclaredID != want {
+			t.Errorf("candidate %d declares %q, want its receipt %q", debit.Ordinal, debit.DeclaredID, want)
+		}
+		found++
+	}
+	if found == 0 {
+		t.Fatal("no candidate debits were examined")
+	}
+}
+
+// TestACensusInflatedBeyondTheWalkIsAVisibleDisagreement is the runtime half
+// of the reflection guard's honest limit: a new charged quantity FOLDED INTO an
+// existing census field leaves the reflected shape unchanged, so the test-time
+// guard cannot see it -- but the per-collection comparison can, and does.
+func TestACensusInflatedBeyondTheWalkIsAVisibleDisagreement(t *testing.T) {
+	t.Parallel()
+	ledger := ReconcileContextFabricResultItems(ledgerGroupedFixture())
+	if !ledger.Reconciled() {
+		t.Fatalf("fixture did not reconcile: %q", ledger.Status)
+	}
+	// Exactly what "charge limitations to the candidates field" would look
+	// like to this function: the census counts more than the walk debited.
+	ledger.Counts.Candidates += 2
+	status, disagreement := contextFabricReconcile(ledger)
+	if status != ContextFabricLedgerCollectionDisagreement {
+		t.Fatalf("status = %q, want %q", status, ContextFabricLedgerCollectionDisagreement)
+	}
+	if disagreement != string(ContextFabricChargedCandidates) {
+		t.Errorf("disagreement = %q, want %q", disagreement, ContextFabricChargedCandidates)
 	}
 }
 
@@ -438,8 +638,13 @@ func TestOnlyAReconciledLedgerInsideItsCeilingIsCertified(t *testing.T) {
 	}
 	spent := ledger.Total()
 
+	// GENUINELY unreconciled, not merely labelled so: the certificate
+	// re-derives the account from the debits it is handed, so a ledger whose
+	// status field was edited while its debits still reconcile is -- correctly
+	// -- still certifiable. Dropping a debit is what an unreconciled ledger
+	// actually is.
 	broken := ledger
-	broken.Status = ContextFabricLedgerCollectionDisagreement
+	broken.Debits = append([]ContextFabricItemDebit{}, ledger.Debits[:spent-1]...)
 
 	for _, testCase := range []struct {
 		name      string

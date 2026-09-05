@@ -1,5 +1,7 @@
 package v1
 
+import "strconv"
+
 // The ITEM LEDGER: an occurrence-level account of what a Context Fabric answer
 // actually charged, reconciled against the two totals this package already
 // publishes, and the only place a result may be CERTIFIED as fitting.
@@ -101,11 +103,11 @@ type ContextFabricItemDebit struct {
 	// Ordinal is the occurrence's index within that collection, zero-based.
 	Ordinal int `json:"ordinal"`
 	// DeclaredID is the id the answer itself gives this item -- driver_id,
-	// finding_id, claim_id -- or, for a collection whose items carry no id,
-	// the subject key. It is diagnosis, and it is what a duplicate check can
-	// key on; it is never the occurrence key, because a producer that
-	// repeats an id must still be counted twice here rather than collapsing
-	// two items into one.
+	// finding_id, claim_id, receipt_id -- or, for the cohort member rows
+	// which carry none, the subject key. It is diagnosis, and it is what the
+	// duplicate check keys on; it is never the OCCURRENCE key, because a
+	// producer that repeats an id must still be counted twice here rather
+	// than collapsing two items into one.
 	DeclaredID string `json:"declared_id"`
 	// Bucket is WHAT this item is about, carried from
 	// contextFabricSubjectsBucket rather than re-derived. Two derivations of
@@ -145,18 +147,19 @@ const (
 	// collection declare the same id, so any consumer keying on that id sees
 	// one item where the budget charges two.
 	ContextFabricLedgerDuplicateOccurrence ContextFabricLedgerStatus = "duplicate_occurrence"
-	// ContextFabricLedgerTotalDisagreement: the debit count and Budgeted()
-	// differ. Kept as its own member rather than folded into the collection
-	// case so a total-level break is never reported as a per-collection one.
-	ContextFabricLedgerTotalDisagreement ContextFabricLedgerStatus = "total_disagreement"
 )
 
-var contextFabricLedgerStatuses = [5]ContextFabricLedgerStatus{
+// WHAT IS DELIBERATELY NOT A MEMBER: a "total disagreement". Once every
+// collection's debits equal its census count, len(Debits) == Budgeted()
+// FOLLOWS -- Budgeted() is the sum of exactly those census fields. A status
+// that can never be reached is not a diagnosis, it is a token a dashboard will
+// filter on forever and never see, so the property is asserted directly in the
+// tests instead of published as an unreachable member.
+var contextFabricLedgerStatuses = [4]ContextFabricLedgerStatus{
 	ContextFabricLedgerReconciled,
 	ContextFabricLedgerCollectionDisagreement,
 	ContextFabricLedgerBucketDisagreement,
 	ContextFabricLedgerDuplicateOccurrence,
-	ContextFabricLedgerTotalDisagreement,
 }
 
 // ContextFabricLedgerStatusCount is the closed vocabulary's size.
@@ -284,7 +287,15 @@ func ReconcileContextFabricResultItems(result ContextFabricInvestigationResult) 
 		ledger.Debits = append(ledger.Debits, ContextFabricItemDebit{
 			Collection: ContextFabricChargedCandidates,
 			Ordinal:    ordinal,
-			DeclaredID: contextFabricSubjectBucketKey(candidate.Subject),
+			// The RECEIPT id, which the result validator already requires
+			// to be unique across candidates
+			// (validate_context_fabric_result.go:62-65). An earlier
+			// revision keyed these on the subject and excluded them from
+			// the duplicate check on the belief that nothing promised
+			// candidate uniqueness. Something does, and excluding them
+			// left the one collection where a dropped occurrence paired
+			// with a duplicated one reconciled.
+			DeclaredID: candidate.ReceiptID,
 			Bucket:     ContextFabricItemBucketGlobal,
 		})
 	}
@@ -376,11 +387,29 @@ func contextFabricSubjectsDebit(
 // first explains the second wherever both are true.
 func contextFabricReconcile(ledger ContextFabricItemLedger) (ContextFabricLedgerStatus, string) {
 	seen := map[ContextFabricChargedCollection]map[string]struct{}{}
+	ordinals := map[ContextFabricChargedCollection]map[int]struct{}{}
 	perCollection := map[ContextFabricChargedCollection]int{}
 	perBucket := ContextFabricItemAttribution{}
 	for _, debit := range ledger.Debits {
 		perCollection[debit.Collection]++
 		perBucket.charge(debit.Bucket)
+		// THE OCCURRENCE KEY, ENFORCED rather than merely documented.
+		// (Collection, Ordinal) is what makes this an occurrence-level
+		// account, and a check that trusted the walk to produce it could
+		// not see a ledger in which one occurrence was dropped and another
+		// charged twice -- the collection count, the bucket split and the
+		// total all survive that pairing untouched. Density is checked
+		// below, once the count is known.
+		byOrdinal, ok := ordinals[debit.Collection]
+		if !ok {
+			byOrdinal = map[int]struct{}{}
+			ordinals[debit.Collection] = byOrdinal
+		}
+		if _, repeated := byOrdinal[debit.Ordinal]; repeated {
+			return ContextFabricLedgerDuplicateOccurrence,
+				string(debit.Collection) + "#" + strconv.Itoa(debit.Ordinal)
+		}
+		byOrdinal[debit.Ordinal] = struct{}{}
 		if !contextFabricCollectionHasUniqueIDs(debit.Collection) || debit.DeclaredID == "" {
 			continue
 		}
@@ -394,6 +423,18 @@ func contextFabricReconcile(ledger ContextFabricItemLedger) (ContextFabricLedger
 				string(debit.Collection) + ":" + debit.DeclaredID
 		}
 		ids[debit.DeclaredID] = struct{}{}
+	}
+
+	// DENSE ordinals: a collection charging n occurrences must charge
+	// 0..n-1. Uniqueness alone admits {0, 2} for a two-item collection,
+	// which is one occurrence dropped and another invented.
+	for collection, byOrdinal := range ordinals {
+		for ordinal := 0; ordinal < perCollection[collection]; ordinal++ {
+			if _, present := byOrdinal[ordinal]; !present {
+				return ContextFabricLedgerDuplicateOccurrence,
+					string(collection) + "#" + strconv.Itoa(ordinal)
+			}
+		}
 	}
 
 	census := contextFabricCensusByCollection(ledger.Counts)
@@ -412,9 +453,6 @@ func contextFabricReconcile(ledger ContextFabricItemLedger) (ContextFabricLedger
 		}
 	}
 
-	if ledger.Total() != ledger.Counts.Budgeted() {
-		return ContextFabricLedgerTotalDisagreement, ""
-	}
 	return ContextFabricLedgerReconciled, ""
 }
 
@@ -462,7 +500,12 @@ func contextFabricCollectionHasUniqueIDs(collection ContextFabricChargedCollecti
 		ContextFabricChargedCohortMembers:
 		return true
 	case ContextFabricChargedCandidates:
-		return false
+		// Keyed on ReceiptID, which validate_context_fabric_result.go
+		// already requires to be unique across candidates. A debit whose
+		// receipt is empty is skipped by the caller, so a result measured
+		// BEFORE validation cannot raise a false accounting defect on a
+		// field validation has not yet required.
+		return true
 	default:
 		return false
 	}
@@ -474,10 +517,17 @@ func contextFabricCollectionHasUniqueIDs(collection ContextFabricChargedCollecti
 // EVERY field of ContextFabricResultItemCounts is accounted for here or is
 // declared excluded in contextFabricCensusExcludedFields, and
 // TestEveryCensusFieldIsWalkedOrDeclaredExcluded walks the struct by reflection
-// to prove it. That test is the reason a future collection cannot be added to
-// the budget without a walker in this file: the census would charge it and the
-// ledger would not, which is precisely the class this ledger exists to make
-// impossible.
+// to prove it.
+//
+// WHAT THAT GUARD DOES AND DOES NOT COVER, stated precisely because an
+// overstated guarantee is worse than a named gap. It catches a new census FIELD
+// with no walker. It does NOT catch a new charged quantity FOLDED INTO an
+// existing field -- adding len(result.Limitations) to counts.Candidates leaves
+// the reflected shape unchanged. That case is not silent either, but it fails
+// somewhere else and later: the walk would debit two candidates where the
+// census counts two plus the limitations, and reconciliation reports a
+// collection disagreement on `candidates` at runtime rather than a test failure
+// at build time.
 func contextFabricCensusByCollection(counts ContextFabricResultItemCounts) map[ContextFabricChargedCollection]int {
 	return map[ContextFabricChargedCollection]int{
 		ContextFabricChargedCandidates:    counts.Candidates,
@@ -583,7 +633,19 @@ func (c ContextFabricCertifiedFit) MaxItems() int { return c.maxItems }
 // at all -- measuring a document whose account does not add up would report a
 // number about an answer nobody can describe.
 func CertifyContextFabricCapacity(ledger ContextFabricItemLedger, budget ContextFabricResponseBudget) (ContextFabricCertifiedFit, ContextFabricCapacityVerdict) {
-	if !ledger.Reconciled() {
+	// RE-DERIVED, never read off the field. Status is exported and the debit
+	// slice is exported, so a caller can hold a genuinely reconciled ledger,
+	// drop a debit, and leave the status saying `reconciled`. A certificate
+	// that trusted that field would be exactly the forgeable thing this type
+	// exists not to be, so the account is re-checked here against the debits
+	// actually presented.
+	//
+	// The residual, stated rather than hidden: a caller that rewrites the
+	// debits AND the census AND the split consistently has authored a
+	// different ledger, and no check inside this package can tell that from a
+	// real one. What is closed is the realistic shape -- debits edited in
+	// place while the summaries stand.
+	if status, _ := contextFabricReconcile(ledger); status != ContextFabricLedgerReconciled {
 		return ContextFabricCertifiedFit{}, ContextFabricCapacityAccountingDefect
 	}
 	if budget.MaxItems <= 0 {
