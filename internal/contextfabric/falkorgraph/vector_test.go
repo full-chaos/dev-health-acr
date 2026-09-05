@@ -1304,9 +1304,9 @@ func (r *recordingTelemetry) RecordCohortKindBasis(_ context.Context, orgID stri
 	r.cohortKindBases = append(r.cohortKindBases, cohortKindBasisRecord{orgID: orgID, declaredKind: declaredKind, basis: basis, discovered: discovered, poolTruncation: poolTruncation, poolTruncationArms: poolTruncationArms})
 }
 
-func (r *recordingTelemetry) RecordNeighborLookupFailed(_ context.Context, orgID, originCanonicalID, neighborUUID string, err error) {
+func (r *recordingTelemetry) RecordNeighborLookupFailed(_ context.Context, orgID, originCanonicalID, neighborUUID string, site NeighborLookupFailureSite, err error) {
 	r.neighborLookupFailures = append(r.neighborLookupFailures, neighborLookupFailureRecord{
-		orgID: orgID, originCanonicalID: originCanonicalID, neighborUUID: neighborUUID, err: err,
+		orgID: orgID, originCanonicalID: originCanonicalID, neighborUUID: neighborUUID, site: site, err: err,
 	})
 }
 
@@ -1317,7 +1317,11 @@ type neighborLookupFailureRecord struct {
 	orgID             string
 	originCanonicalID string
 	neighborUUID      string
-	err               error
+	// site is WHICH read failed. Recorded because one counter has three
+	// producers: without it a test can prove the loss was reported and still
+	// not prove the reported site is the one that actually fired.
+	site NeighborLookupFailureSite
+	err  error
 }
 
 func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {

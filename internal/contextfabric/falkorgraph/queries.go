@@ -2,6 +2,7 @@ package falkorgraph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -931,9 +932,39 @@ func (c *edgeFilterCounts) add(resolution edgeResolution, reason edgeFilterReaso
 // (edgeAdmitted, edgeLookupFailed); the reason is only meaningful paired
 // with edgeFiltered (CHAOS-3888) -- see edgeFilterReason's own doc comment
 // for the vocabulary.
-func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, ce graphrank.CandidateEdge, temporal temporalFilter) (graphrank.ResolvedEdge, edgeResolution, edgeFilterReason) {
+// endpointLookupError is the error resolveEdge returns when an ENDPOINT read
+// fails, carrying the endpoint's subject uuid alongside the underlying error.
+//
+// A typed error rather than a fifth return value: the identity of the thing
+// that failed belongs to the failure, and every caller that logs the error
+// wants the uuid in the same breath. `errors.As` gets it back; `Unwrap` keeps
+// the original error inspectable, so wrapping costs a caller nothing.
+type endpointLookupError struct {
+	uuid string
+	err  error
+}
+
+func (e *endpointLookupError) Error() string {
+	return "endpoint " + e.uuid + ": " + e.err.Error()
+}
+
+func (e *endpointLookupError) Unwrap() error { return e.err }
+
+// endpointLookupUUID returns the subject uuid an endpoint lookup failed on, or
+// "" when the error is not one. Never guesses: an empty uuid on the emitted
+// line says "this failure carried no identity", which is a different statement
+// from naming the wrong subject.
+func endpointLookupUUID(err error) string {
+	var ele *endpointLookupError
+	if errors.As(err, &ele) {
+		return ele.uuid
+	}
+	return ""
+}
+
+func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, ce graphrank.CandidateEdge, temporal temporalFilter) (graphrank.ResolvedEdge, edgeResolution, edgeFilterReason, error) {
 	if !graphrank.AuthorizedAttributes(principal, scope, ce.Attributes) {
-		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonAuthz
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonAuthz, nil
 	}
 	fromKind, fromID := splitSubjectUUID(ce.SourceNodeUUID)
 	toKind, toID := splitSubjectUUID(ce.TargetNodeUUID)
@@ -950,42 +981,46 @@ func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal 
 	// is not a temporal exclusion and must not be misreported as one.
 	fromNode, err := a.nodeByKindID(ctx, key, orgID, fromKind, fromID, temporal)
 	if err != nil {
-		return graphrank.ResolvedEdge{}, edgeLookupFailed, edgeFilterReasonNone
+		// THE ERROR, NOT JUST THE CLASSIFICATION. This branch previously
+		// discarded `err` outright -- it was not even returned -- so a backend
+		// failure that cost the cohort a member reached the answer only as a
+		// number. The caller logs it with the endpoint's identity.
+		return graphrank.ResolvedEdge{}, edgeLookupFailed, edgeFilterReasonNone, &endpointLookupError{uuid: ce.SourceNodeUUID, err: err}
 	}
 	if fromNode == nil {
 		if temporal.active {
-			return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonTemporalWindow
+			return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonTemporalWindow, nil
 		}
-		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonNone
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonNone, nil
 	}
 	toNode, err := a.nodeByKindID(ctx, key, orgID, toKind, toID, temporal)
 	if err != nil {
-		return graphrank.ResolvedEdge{}, edgeLookupFailed, edgeFilterReasonNone
+		return graphrank.ResolvedEdge{}, edgeLookupFailed, edgeFilterReasonNone, &endpointLookupError{uuid: ce.TargetNodeUUID, err: err}
 	}
 	if toNode == nil {
 		if temporal.active {
-			return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonTemporalWindow
+			return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonTemporalWindow, nil
 		}
-		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonNone
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonNone, nil
 	}
 	fromCandidate := toCandidateNode(fromNode)
 	toCandidate := toCandidateNode(toNode)
 	if !graphrank.AuthorizedAttributes(principal, scope, fromCandidate.Attributes) || !graphrank.AuthorizedAttributes(principal, scope, toCandidate.Attributes) {
-		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonAuthz
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonAuthz, nil
 	}
 	fromSubject, ok := graphrank.NodeSubject(fromCandidate)
 	if !ok {
-		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonInvalidSubject
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonInvalidSubject, nil
 	}
 	toSubject, ok := graphrank.NodeSubject(toCandidate)
 	if !ok {
-		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonInvalidSubject
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonInvalidSubject, nil
 	}
 	return graphrank.ResolvedEdge{
 		UUID: ce.UUID, Name: ce.Name, Fact: ce.Fact, From: fromSubject, To: toSubject,
 		Relevance: ce.Relevance, Score: ce.Score, Attributes: ce.Attributes,
 		CreatedAt: ce.CreatedAt, ValidAt: ce.ValidAt, InvalidAt: ce.InvalidAt, ExpiredAt: ce.ExpiredAt,
-	}, edgeAdmitted, edgeFilterReasonNone
+	}, edgeAdmitted, edgeFilterReasonNone, nil
 }
 
 // rankCandidateEdges sorts edges by graphrank's own relevance tie-break.
@@ -1105,11 +1140,19 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 				truncated = true
 				break
 			}
-			resolved, resolution, reason := a.resolveEdge(ctx, key, orgID, principal, scope, ce, temporal)
+			resolved, resolution, reason, resolveErr := a.resolveEdge(ctx, key, orgID, principal, scope, ce, temporal)
 			filterCounts.add(resolution, reason)
 			switch resolution {
 			case edgeLookupFailed:
 				failedLookups++
+				// SITE 1 OF 3 on this one counter. The edge was never
+				// admitted, so its endpoint never became a member -- the same
+				// cohort-level loss as a failed read-back, reached earlier and,
+				// before this, reported by nothing at all.
+				if a.config.Telemetry != nil {
+					a.config.Telemetry.RecordNeighborLookupFailed(ctx, orgID, origin.CanonicalID,
+						endpointLookupUUID(resolveErr), NeighborLookupFailureSiteEdgeEndpoint, resolveErr)
+				}
 				continue
 			case edgeFiltered:
 				continue
@@ -1141,7 +1184,8 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 					// graph identifiers, not corpus content, and the request
 					// id is what ties this line to the investigation.
 					if a.config.Telemetry != nil {
-						a.config.Telemetry.RecordNeighborLookupFailed(ctx, orgID, origin.CanonicalID, neighbor, err)
+						a.config.Telemetry.RecordNeighborLookupFailed(ctx, orgID, origin.CanonicalID, neighbor,
+							NeighborLookupFailureSiteNeighborReadback, err)
 					}
 					continue
 				}

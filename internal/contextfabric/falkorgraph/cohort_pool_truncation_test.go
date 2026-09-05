@@ -337,15 +337,33 @@ func TestExactNameCensusCoversEveryServableCohortKind(t *testing.T) {
 // TestCohortPoolTruncationClassifiesEveryInput quantifies over the whole
 // closed input space rather than over the rows someone remembered.
 //
-// Sixteen rows, not eight: the third retrieval arm (hop walk) is what made the
-// old single-vocabulary design untenable, and the table is what keeps its
-// addition honest. A classification over a closed space is an allow-list
-// naming every member's class, so an input that reached the classifier's
-// default arm without being named here shows up as a MISSING KEY, never as a
-// silent pass.
+// THIRTY-TWO rows, not sixteen and not eight: each new cause doubles the space,
+// which is exactly why the expectation is derived rather than transcribed. A
+// classification over a closed space is an allow-list naming every member's
+// class, so an input that reached the classifier's default arm without being
+// named here shows up as a disagreement, never as a silent pass.
+//
+// THE EXPECTATION FUNCTION IS INDEPENDENT OF THE PRODUCTION CODE, deliberately.
+// It calls neither cohortPoolTruncation nor formatCohortPoolTruncationArms,
+// shares no helper with them, and does not read
+// CohortPoolTruncationArmVocabulary -- it writes the arm tokens out as string
+// LITERALS and joins them in its own hand-written order. A table that computes
+// its expectation the way the subject computes its answer agrees with the
+// subject by construction and proves nothing. Two consequences are wanted:
+// renaming an arm's VALUE reds this test (the values are an operator-facing
+// telemetry contract, not an internal identifier), and the vocabulary ORDER of
+// the rendered arms is checked against a literal order rather than against the
+// same slice the renderer iterates.
+//
+// The two closing assertions carry two DIFFERENT properties and are labelled as
+// such below: the row count is ENUMERATION (the loop spanned the whole space),
+// the seenBases sweep is REACHABILITY (no declared decision is dead). Neither
+// implies the other -- a loop could span all 32 rows while a decision stayed
+// unreachable, and a decision could be reached by a loop covering half the
+// space.
 func TestCohortPoolTruncationClassifiesEveryInput(t *testing.T) {
 	t.Parallel()
-	type input struct{ fulltext, hopWalk, exactName, lookupFailed, census bool }
+	type input struct{ fulltext, hopWalk, exactName, lookupFailed, censusCovers bool }
 	const (
 		ft   = "fulltext"
 		hw   = "hop_walk"
@@ -360,8 +378,10 @@ func TestCohortPoolTruncationClassifiesEveryInput(t *testing.T) {
 	//
 	//   arms      = every cut arm, in vocabulary order
 	//   truncated = an arm was cut AND nothing covers it
-	//   covered   = ONLY bounded arms (fulltext/hop_walk) were cut, a census
-	//               ran, and the census itself was not cut
+	//   covered   = ONLY bounded arms (fulltext/hop_walk) were cut and the
+	//               census COVERS: it ran, was not itself cut, and returned at
+	//               least one row. "Ran" alone is not enough -- an empty census
+	//               is a superset of nothing but the empty set.
 	//   a failed lookup is NEVER covered: the census returns a subject only if
 	//               its own read succeeds, and this arm reports a read that
 	//               did not
@@ -385,7 +405,7 @@ func TestCohortPoolTruncationClassifiesEveryInput(t *testing.T) {
 			return CohortPoolTruncationNone, none, false
 		case in.exactName, in.lookupFailed:
 			return CohortPoolTruncationTruncated, joined, true
-		case in.census:
+		case in.censusCovers:
 			return CohortPoolTruncationCoveredByCensus, joined, false
 		default:
 			return CohortPoolTruncationTruncated, joined, true
@@ -398,11 +418,11 @@ func TestCohortPoolTruncationClassifiesEveryInput(t *testing.T) {
 		for _, hopWalk := range []bool{false, true} {
 			for _, exactName := range []bool{false, true} {
 				for _, lookupFailed := range []bool{false, true} {
-					for _, census := range []bool{false, true} {
+					for _, censusCovers := range []bool{false, true} {
 						rows++
-						in := input{fulltext, hopWalk, exactName, lookupFailed, census}
+						in := input{fulltext, hopWalk, exactName, lookupFailed, censusCovers}
 						wantBasis, wantArms, wantTrunc := expected(in)
-						basis, arms, truncated := cohortPoolTruncation(fulltext, hopWalk, exactName, lookupFailed, census)
+						basis, arms, truncated := cohortPoolTruncation(fulltext, hopWalk, exactName, lookupFailed, censusCovers)
 						got := formatCohortPoolTruncationArms(arms)
 						if basis != wantBasis || truncated != wantTrunc || got != wantArms {
 							t.Errorf("cohortPoolTruncation(%+v) = (%q, %q, %v), want (%q, %q, %v)",
@@ -414,15 +434,20 @@ func TestCohortPoolTruncationClassifiesEveryInput(t *testing.T) {
 			}
 		}
 	}
+	// PROPERTY 1 of 2 -- ENUMERATION. The loop above spanned the ENTIRE input
+	// space, not a subset of it. Without this the rows that ran would still all
+	// have agreed with the expectation while a whole dimension went unvisited.
 	if rows != 32 {
-		t.Fatalf("covered %d rows, want 32 -- the loop must span the whole input space or it is a sample", rows)
+		t.Fatalf("ENUMERATION: covered %d rows, want 32 (2^5) -- the loop must span the whole input space or it is a sample", rows)
 	}
-	// Every declared decision must be REACHABLE over that space. A member the
-	// producer can never emit is dead vocabulary, and a dead member on a
-	// telemetry line reads to an operator as a state the system can reach.
+	// PROPERTY 2 of 2 -- REACHABILITY. Every declared decision is actually
+	// produced somewhere in that space. A member the producer can never emit is
+	// dead vocabulary, and a dead member on a telemetry line reads to an
+	// operator as a state the system can reach. This does NOT follow from
+	// property 1: a full sweep can still leave a declared member unproduced.
 	for _, basis := range CohortPoolTruncationBasisVocabulary() {
 		if !seenBases[basis] {
-			t.Errorf("decision %q is never produced across the whole input space", basis)
+			t.Errorf("REACHABILITY: decision %q is never produced across the whole input space", basis)
 		}
 	}
 }

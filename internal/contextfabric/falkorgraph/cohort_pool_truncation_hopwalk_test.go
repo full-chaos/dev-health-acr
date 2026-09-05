@@ -845,6 +845,94 @@ func TestDiscoverContextFailedNeighborLookupIsNotACompleteCohort(t *testing.T) {
 	if got := formatCohortPoolTruncationArms(telemetry.cohortKindBases[0].poolTruncationArms); got != string(CohortPoolTruncationArmEndpointLookupFailed) {
 		t.Errorf("cut arms = %q, want %q -- the cause must be distinguishable from a clipped budget", got, CohortPoolTruncationArmEndpointLookupFailed)
 	}
+	// WHICH READ FAILED, not merely that one did. `failedLookups` has THREE
+	// producers feeding it, so before the site was recorded this test proved
+	// the arm was set and proved nothing about where the loss came from -- it
+	// would have passed identically had a completely different site fired.
+	// Here the injected failure is on the ENDPOINT read, so the edge is never
+	// admitted: edge_endpoint, never neighbor_readback.
+	if len(telemetry.neighborLookupFailures) != 1 {
+		t.Fatalf("failure lines = %d, want 1", len(telemetry.neighborLookupFailures))
+	}
+	if got := telemetry.neighborLookupFailures[0].site; got != NeighborLookupFailureSiteEdgeEndpoint {
+		t.Errorf("site = %q, want %q -- this fixture breaks the endpoint read, so the edge is never admitted and the read-back is never reached",
+			got, NeighborLookupFailureSiteEdgeEndpoint)
+	}
+}
+
+// TestDiscoverContextNeighborReadbackFailureIsItsOwnSite pins the site the two
+// fixtures above CANNOT reach.
+//
+// The neighbour read-back runs only after its edge was admitted, which means
+// the same subject already read successfully once in this call. So the only way
+// to reach it is a read of one subject that succeeds and then fails -- a
+// TRANSIENT backend fault, which is exactly the case worth telling apart from
+// an endpoint that never read at all. Without this fixture the read-back site
+// is unexercised and its emit could be deleted with every other test still
+// green.
+func TestDiscoverContextNeighborReadbackFailureIsItsOwnSite(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	var teamReads int
+	fake := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"), strings.Contains(cypher, "$kinds"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			if params["id"] != "p1" {
+				return nil, nil
+			}
+			return []row{
+				{"r": &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_1"}},
+					"srcKind": "project", "srcId": "p1", "dstKind": "team", "dstId": "team_flaky"},
+			}, nil
+		default:
+			if params["kind"] == "team" && params["id"] == "team_flaky" {
+				teamReads++
+				// FIRST read succeeds: resolveEdge admits the edge. SECOND
+				// read fails: the bookkeeping read-back, which is the only
+				// site reachable after an admission.
+				if teamReads == 1 {
+					return []row{fakeSubjectNodeRow("team", "team_flaky", "team_flaky")}, nil
+				}
+				return nil, errors.New("injected transient failure on the read-back")
+			}
+			if params["kind"] == "project" {
+				return []row{fakeSubjectNodeRow("project", "p1", "Origin")}, nil
+			}
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, hopWalkTruncationRequest(50))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if teamReads < 2 {
+		t.Fatalf("the team subject was read %d time(s): the fixture never reached the read-back, so it is measuring nothing", teamReads)
+	}
+	if len(telemetry.neighborLookupFailures) != 1 {
+		t.Fatalf("failure lines = %d, want 1", len(telemetry.neighborLookupFailures))
+	}
+	got := telemetry.neighborLookupFailures[0]
+	if got.site != NeighborLookupFailureSiteNeighborReadback {
+		t.Errorf("site = %q, want %q -- the edge WAS admitted here; reporting edge_endpoint would send a reader to the wrong remedy",
+			got.site, NeighborLookupFailureSiteNeighborReadback)
+	}
+	if got.neighborUUID == "" {
+		t.Error("the read-back line carries no neighbour identifier -- it is a count with extra steps")
+	}
+	if got.originCanonicalID != "p1" {
+		t.Errorf("origin = %q, want p1", got.originCanonicalID)
+	}
+	if got.err == nil {
+		t.Error("the read-back line carries no error -- the message is the part a count throws away")
+	}
+	// The cohort-level consequence is the same as every other lost member.
+	if result.Cohort != nil && result.Cohort.Complete {
+		t.Error("Cohort.Complete = true while a reached neighbour could not be confirmed")
+	}
 }
 
 // TestNeighborLookupFailureNamesTheMemberItLost is r3 finding 3 (P2).
@@ -891,6 +979,14 @@ func TestNeighborLookupFailureNamesTheMemberItLost(t *testing.T) {
 	}
 	named := map[string]bool{}
 	for _, f := range telemetry.neighborLookupFailures {
+		// Both failures here are ENDPOINT reads: this fixture breaks every
+		// team read outright, so resolveEdge fails and no edge is ever
+		// admitted. That is precisely why the first version of this test
+		// reported ZERO lines -- the instrumented site was downstream of the
+		// one that actually fires.
+		if f.site != NeighborLookupFailureSiteEdgeEndpoint {
+			t.Errorf("site = %q, want %q", f.site, NeighborLookupFailureSiteEdgeEndpoint)
+		}
 		if f.neighborUUID == "" {
 			t.Error("a failure line carries no neighbour identifier -- it is a count with extra steps")
 		}
@@ -904,5 +1000,67 @@ func TestNeighborLookupFailureNamesTheMemberItLost(t *testing.T) {
 	}
 	if len(named) != 2 {
 		t.Errorf("the two failures reported %d distinct neighbour identifiers, want 2 -- two different missing members must not be indistinguishable", len(named))
+	}
+}
+
+// TestDiscoverContextTextWalkEndpointFailureIsReported covers the THIRD
+// producer of `failedLookups`, and it exists because that producer was found
+// by counting them rather than by reading the one the review named.
+//
+// The committed-subject text walk resolves full-text-adjacent edges in its own
+// loop, with its own copy of `case edgeLookupFailed: failedLookups++; continue`.
+// It had exactly the same defect as the hop walk's: a member lost to a backend
+// error, reported as a number and nothing else. Same line, same shape, same
+// `edge_endpoint` site -- the vocabulary names the CAUSE, so two loops with one
+// cause share one value rather than multiplying members.
+func TestDiscoverContextTextWalkEndpointFailureIsReported(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	fake := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return []row{fulltextRow("team", "team_src", "Source Team", "teams struggling", nil)}, nil
+		case strings.Contains(cypher, "$kinds"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			return []row{
+				{"r": &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_text"}},
+					"srcKind": "team", "srcId": "team_src", "dstKind": "team", "dstId": "team_broken"},
+			}, nil
+		default:
+			if params["kind"] == "team" && params["id"] == "team_broken" {
+				return nil, errors.New("injected failure reading the adjacent endpoint")
+			}
+			if params["kind"] == "team" {
+				id, _ := params["id"].(string)
+				return []row{fakeSubjectNodeRow("team", id, id)}, nil
+			}
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+	request := cohortDiscoveryRequest(contextfabric.ShapeDiscoveredCohort)
+	request.Request.Options.MaxCohortMembers = 50
+
+	if _, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request); err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(telemetry.neighborLookupFailures) != 1 {
+		t.Fatalf("failure lines = %d, want 1 -- the text walk's edge-admission failure reported nothing before this",
+			len(telemetry.neighborLookupFailures))
+	}
+	got := telemetry.neighborLookupFailures[0]
+	if got.site != NeighborLookupFailureSiteEdgeEndpoint {
+		t.Errorf("site = %q, want %q", got.site, NeighborLookupFailureSiteEdgeEndpoint)
+	}
+	if got.originCanonicalID != "team_src" {
+		t.Errorf("origin = %q, want team_src -- this loop gathers across every match, so the origin has to be carried per candidate or the field is blank",
+			got.originCanonicalID)
+	}
+	if got.neighborUUID == "" {
+		t.Error("no neighbour identifier on the text walk's failure line")
+	}
+	if got.err == nil {
+		t.Error("no error on the text walk's failure line")
 	}
 }

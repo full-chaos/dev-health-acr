@@ -133,14 +133,22 @@ func CohortPoolTruncationArmVocabulary() []CohortPoolTruncationArm {
 // shape/anchor gate refused) the bounded arms ARE the pool. When the census
 // ran but was itself cut, it is no longer exhaustive and covers nothing.
 //
-// UNREACHABLE BY CONSTRUCTION, classified anyway. `censusAdmitted` requires
+// `censusCovers` IS NOT "THE CENSUS RAN". It is the caller's answer to "did an
+// exhaustive census produce a candidate set that can contain what a bounded arm
+// dropped" -- it ran, it was not itself cut, AND it returned at least one row.
+// An empty census is a superset of nothing but the empty set, so it cannot hold
+// a dropped row; worse, beside a CUT bounded arm it is a contradiction, since
+// one says no subject of any servable kind exists in this org and the other
+// found some and clipped them. The caller counts, this function decides.
+//
+// UNREACHABLE BY CONSTRUCTION, classified anyway. `censusCovers` requires
 // ZERO committed subjects and `hopWalkTruncated` requires at least one (the
 // walk only runs per committed subject), so the two are mutually exclusive in
 // production; `exactNameTruncated` is likewise only ever assigned inside the
 // census branch. Those combinations are still named below rather than left to
 // a default, because a classification over a closed space is an allow-list and
 // a future caller that reaches one should inherit a stated answer.
-func cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncated, endpointLookupFailed, censusAdmitted bool) (CohortPoolTruncationBasis, []CohortPoolTruncationArm, bool) {
+func cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncated, endpointLookupFailed, censusCovers bool) (CohortPoolTruncationBasis, []CohortPoolTruncationArm, bool) {
 	arms := make([]CohortPoolTruncationArm, 0, len(CohortPoolTruncationArmVocabulary()))
 	if fulltextTruncated {
 		arms = append(arms, CohortPoolTruncationArmFulltext)
@@ -169,8 +177,9 @@ func cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncate
 		// succeeded. Treating it as covered would turn a backend fault into a
 		// completeness claim.
 		return CohortPoolTruncationTruncated, arms, true
-	case censusAdmitted:
-		// Only bounded arms were cut and a COMPLETE census ran beside them.
+	case censusCovers:
+		// Only bounded arms were cut and a COMPLETE, NON-EMPTY census ran
+		// beside them.
 		return CohortPoolTruncationCoveredByCensus, arms, false
 	default:
 		return CohortPoolTruncationTruncated, arms, true
@@ -243,3 +252,41 @@ func formatCohortPoolTruncationArms(arms []CohortPoolTruncationArm) string {
 // become one -- a marker that says "this vocabulary could not name what it was
 // handed" stops being that the moment it is itself nameable.
 const cohortPoolTruncationUnknownArm = "unknown_arm"
+
+// NeighborLookupFailureSite names WHICH READ failed when a cohort lost a
+// member to a backend error. It is a CAUSE, not a call path: two of the three
+// emit sites report `edge_endpoint` because they are the same failure happening
+// in two loops.
+//
+// It exists because r3's fix instrumented one producer of `failedLookups` and
+// there are THREE, feeding one counter. A line that named the lost member but
+// not which read lost it still leaves an operator unable to tell a
+// never-admitted edge from an admitted edge whose endpoint could not be
+// confirmed -- different remedies, identical diagnostics. Closed vocabulary,
+// allow-list, no `else`.
+type NeighborLookupFailureSite string
+
+const (
+	// NeighborLookupFailureSiteEdgeEndpoint: an ENDPOINT of a candidate edge
+	// could not be read, so the edge was never admitted and its endpoint never
+	// became a member. Emitted from both edge-admission loops (the hop walk's
+	// and the committed-subject text walk's) because the cause is the same.
+	NeighborLookupFailureSiteEdgeEndpoint NeighborLookupFailureSite = "edge_endpoint"
+	// NeighborLookupFailureSiteNeighborReadback: the edge WAS admitted and the
+	// neighbour's own bookkeeping read then failed, so it never entered the
+	// visited set. Strictly later than the above, and reachable only when a
+	// read of the SAME subject succeeded once and then failed -- a transient
+	// backend fault, which is why it is worth telling apart from an endpoint
+	// that never read at all.
+	NeighborLookupFailureSiteNeighborReadback NeighborLookupFailureSite = "neighbor_readback"
+)
+
+// NeighborLookupFailureSiteVocabulary returns every declared site, in
+// declaration order, so a test quantifies over what the line can carry rather
+// than over a hand-typed list beside it.
+func NeighborLookupFailureSiteVocabulary() []NeighborLookupFailureSite {
+	return []NeighborLookupFailureSite{
+		NeighborLookupFailureSiteEdgeEndpoint,
+		NeighborLookupFailureSiteNeighborReadback,
+	}
+}

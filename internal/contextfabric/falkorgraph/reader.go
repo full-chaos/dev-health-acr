@@ -653,6 +653,14 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// discovered from the last matched node could never be dropped in favor
 	// of a better one found earlier, but it also had no bound at all.
 	var textCandidates []graphrank.CandidateEdge
+	// Which matched node each candidate edge was discovered FROM. This loop
+	// gathers across every full-text match before ranking, so at the failure
+	// site below there is no `subject` in scope -- and a failure line whose
+	// origin field is empty is the "present but blank" shape this change
+	// exists to remove elsewhere. Recording it here keeps ONE line shape
+	// across all three emit sites, which is what makes the site value the only
+	// thing a reader has to compare.
+	textCandidateOrigin := make(map[string]string, len(textNodes))
 	for _, n := range textNodes {
 		subject, ok := graphrank.NodeSubject(n)
 		if !ok {
@@ -678,6 +686,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 				continue
 			}
 			seenEdge[ce.UUID] = true
+			textCandidateOrigin[ce.UUID] = subject.CanonicalID
 			textCandidates = append(textCandidates, ce)
 		}
 	}
@@ -686,11 +695,20 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		if collectLimit > 0 && textAdmitted >= collectLimit {
 			break
 		}
-		resolved, resolution, reason := a.resolveEdge(ctx, key, principal.OrgID, principal, scope, ce, temporal)
+		resolved, resolution, reason, resolveErr := a.resolveEdge(ctx, key, principal.OrgID, principal, scope, ce, temporal)
 		edgeFilters.add(resolution, reason)
 		switch resolution {
 		case edgeLookupFailed:
 			failedLookups++
+			// SITE 3 OF 3 on this one counter -- the committed-subject text
+			// walk. Same cause as the hop walk's edge-admission failure, so
+			// the same `edge_endpoint` site value: the vocabulary names the
+			// CAUSE, not the loop it happened in. The origin here is the
+			// subject whose edges are being walked.
+			if a.config.Telemetry != nil {
+				a.config.Telemetry.RecordNeighborLookupFailed(ctx, principal.OrgID, textCandidateOrigin[ce.UUID],
+					endpointLookupUUID(resolveErr), NeighborLookupFailureSiteEdgeEndpoint, resolveErr)
+			}
 			continue
 		case edgeFiltered:
 			continue
@@ -760,6 +778,16 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// ShapeDiscoveredCohort alone), AND nothing was already committed.
 	shapeAnchorEligible, censusBasis := cohortExactNameCensusEligibility(request.Frame, request.ScopeAnchorResolved)
 	censusAdmitted := shapeAnchorEligible && len(request.Resolution.Committed) == 0
+	// CHAOS-5168 (r3 finding 4): "the census ran" and "the census can cover
+	// what a bounded arm dropped" are DIFFERENT claims, and only the second
+	// licenses covered_by_census. A census that returns ZERO rows is a
+	// superset of nothing but the empty set, so it cannot contain a row a
+	// bounded arm dropped -- and when a bounded arm WAS cut, an empty census
+	// contradicts it outright: one says no subject of any servable kind
+	// exists in this org, the other found some and clipped them. Under that
+	// contradiction the census is not the exhaustive superset the coverage
+	// argument rests on. Counted here, decided in cohortPoolTruncation.
+	censusMembers := 0
 	if censusBasis != "" && a.config.Telemetry != nil {
 		reportedBasis := censusBasis
 		if shapeAnchorEligible && !censusAdmitted {
@@ -797,6 +825,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// by subject key before merging, scoped to this cohort path only
 		// -- never touches chaos4348ExactNameCandidates' own single-
 		// subject callers.
+		censusMembers = len(exactNameNodes)
 		sortCandidateNodesBySubjectKey(exactNameNodes)
 		cohortNodes = make([]graphrank.CandidateNode, 0, len(resolvedNodes)+len(exactNameNodes))
 		cohortNodes = append(cohortNodes, resolvedNodes...)
@@ -824,7 +853,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// also a LOST MEMBER, and Partial beside Complete=true is a contradiction a
 	// reader cannot resolve.
 	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(
-		fulltextTruncated, hopWalkTruncated, exactNameTruncated, failedLookups > 0, censusAdmitted)
+		fulltextTruncated, hopWalkTruncated, exactNameTruncated, failedLookups > 0, censusAdmitted && censusMembers > 0)
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here

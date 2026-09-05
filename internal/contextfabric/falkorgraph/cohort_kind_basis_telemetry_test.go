@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -246,11 +247,11 @@ func TestCohortPoolTruncationProducesOnlyPublishedBases(t *testing.T) {
 		for _, hopWalk := range []bool{false, true} {
 			for _, exactName := range []bool{false, true} {
 				for _, lookupFailed := range []bool{false, true} {
-					for _, census := range []bool{false, true} {
-						basis, _, _ := cohortPoolTruncation(fulltext, hopWalk, exactName, lookupFailed, census)
+					for _, censusCovers := range []bool{false, true} {
+						basis, _, _ := cohortPoolTruncation(fulltext, hopWalk, exactName, lookupFailed, censusCovers)
 						if !published[basis] {
 							t.Errorf("cohortPoolTruncation(%v, %v, %v, %v, %v) returned %q, which the vocabulary does not declare",
-								fulltext, hopWalk, exactName, lookupFailed, census, basis)
+								fulltext, hopWalk, exactName, lookupFailed, censusCovers, basis)
 						}
 						seen[basis] = true
 					}
@@ -374,5 +375,83 @@ func TestCohortKindBasisLineCarriesEmptyArmsWhenNothingWasCut(t *testing.T) {
 	}
 	if got := record["pool_truncation"]; got != string(CohortPoolTruncationNone) {
 		t.Errorf("pool_truncation = %v, want %q", got, CohortPoolTruncationNone)
+	}
+}
+
+// captureNeighborLookupFailedLine emits ONE neighbour-lookup-failure line
+// through the production sink at the PRODUCTION level and returns it decoded.
+//
+// Through the sink, at productionSinkLevel, for the same reason every other
+// capture in this file goes that way: a line asserted from a recorded struct
+// proves the call happened, not that a deployed handler would print it. This
+// line is emitted at Warn, so it survives the Info threshold -- and that is a
+// property worth capturing rather than assuming, since a later demotion to
+// Debug would make it vanish in production while every struct-level test
+// stayed green.
+func captureNeighborLookupFailedLine(t *testing.T, ctx context.Context, site NeighborLookupFailureSite, err error) map[string]any {
+	t.Helper()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: productionSinkLevel}))
+	SlogTelemetry{Logger: logger}.RecordNeighborLookupFailed(ctx, "org_sink_test", "p1", "team:team_lost", site, err)
+	raw := strings.TrimSpace(buffer.String())
+	if raw == "" {
+		t.Fatalf("no line was emitted at the production level (%v) -- a failure a deployed handler drops is a failure nobody sees", productionSinkLevel)
+	}
+	var record map[string]any
+	if decodeErr := json.Unmarshal([]byte(raw), &record); decodeErr != nil {
+		t.Fatalf("emitted line is not JSON (%v): %s", decodeErr, raw)
+	}
+	return record
+}
+
+// TestNeighborLookupFailedLineCarriesTheSite reads the SITE off the emitted
+// line, not off a recorded call.
+//
+// One counter has three producers. The site is what makes an
+// `endpoint_lookup_failed` answer actionable: "the edge was never admitted"
+// and "the edge was admitted and the member could not be confirmed" have
+// different remedies, and before this they produced identical diagnostics.
+func TestNeighborLookupFailedLineCarriesTheSite(t *testing.T) {
+	t.Parallel()
+	for _, site := range NeighborLookupFailureSiteVocabulary() {
+		record := captureNeighborLookupFailedLine(t, context.Background(), site, errors.New("injected"))
+		if got, _ := record["site"].(string); got != string(site) {
+			t.Errorf("site = %q, want %q", got, site)
+		}
+		if got, _ := record["neighbor_uuid"].(string); got != "team:team_lost" {
+			t.Errorf("neighbor_uuid = %q -- the line must name the member it lost", got)
+		}
+		if got, _ := record["origin_canonical_id"].(string); got != "p1" {
+			t.Errorf("origin_canonical_id = %q, want p1", got)
+		}
+		if got, _ := record["error"].(string); got != "injected" {
+			t.Errorf("error = %q -- the message is the part a count throws away", got)
+		}
+		if got, _ := record["level"].(string); got != "WARN" {
+			t.Errorf("level = %q, want WARN -- a lost cohort member is not an Info-level event", got)
+		}
+	}
+}
+
+// TestNeighborLookupFailureSiteVocabularyIsClosed keeps the site vocabulary a
+// genuine allow-list.
+//
+// Every member must be distinct and non-empty: an empty site renders as a
+// present-but-blank key, which is the exact ambiguity ("was it not set, or set
+// to nothing?") that this whole change removes elsewhere.
+func TestNeighborLookupFailureSiteVocabularyIsClosed(t *testing.T) {
+	t.Parallel()
+	seen := map[NeighborLookupFailureSite]bool{}
+	for _, site := range NeighborLookupFailureSiteVocabulary() {
+		if site == "" {
+			t.Error("a declared site is the empty string -- it would render as a blank key")
+		}
+		if seen[site] {
+			t.Errorf("site %q is declared twice", site)
+		}
+		seen[site] = true
+	}
+	if len(seen) != 2 {
+		t.Errorf("vocabulary has %d distinct members, want 2 -- if a third site was added, give it a fixture that reaches it before declaring it", len(seen))
 	}
 }

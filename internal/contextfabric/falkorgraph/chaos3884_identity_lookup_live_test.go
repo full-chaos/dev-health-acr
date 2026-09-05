@@ -119,7 +119,7 @@ func (f *fakeIdentityTelemetry) RecordCohortExactNameCensusGate(context.Context,
 func (f *fakeIdentityTelemetry) RecordCohortKindBasis(_ context.Context, _ string, _ contextfabric.SubjectKind, _ graphrank.CohortKindBasis, _ bool, _ falkorgraph.CohortPoolTruncationBasis, _ []falkorgraph.CohortPoolTruncationArm) {
 }
 
-func (f *fakeIdentityTelemetry) RecordNeighborLookupFailed(context.Context, string, string, string, error) {
+func (f *fakeIdentityTelemetry) RecordNeighborLookupFailed(context.Context, string, string, string, NeighborLookupFailureSite, error) {
 }
 
 // TestLiveAliasIdentityFastPathCommitsAUniqueClaimant is CHAOS-3884 Option

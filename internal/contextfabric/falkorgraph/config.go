@@ -537,7 +537,12 @@ type GraphTelemetry interface {
 	// indistinguishable in a run's own artifacts. The neighbour's subject uuid
 	// and the walk's origin are graph identifiers, never corpus content; the
 	// error is logged for its message, which is the part a count throws away.
-	RecordNeighborLookupFailed(ctx context.Context, orgID, originCanonicalID, neighborUUID string, err error)
+	//
+	// `site` names WHICH read failed. One counter has THREE producers, and the
+	// first version of this line instrumented one of them -- so a line could
+	// name the lost member while still leaving "never admitted" and "admitted
+	// then unconfirmable" indistinguishable. See NeighborLookupFailureSite.
+	RecordNeighborLookupFailed(ctx context.Context, orgID, originCanonicalID, neighborUUID string, site NeighborLookupFailureSite, err error)
 }
 
 // VectorFenceResult is CHAOS-3890's reason enum for the AC-3778-7 read
@@ -605,7 +610,8 @@ func (NoopTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bo
 func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, contextfabric.SubjectKind, graphrank.CohortKindBasis, bool, CohortPoolTruncationBasis, []CohortPoolTruncationArm) {
 }
 
-func (NoopTelemetry) RecordNeighborLookupFailed(context.Context, string, string, string, error) {}
+func (NoopTelemetry) RecordNeighborLookupFailed(context.Context, string, string, string, NeighborLookupFailureSite, error) {
+}
 
 // SlogTelemetry is the production GraphTelemetry: structured operational logs
 // through log/slog, the repository's standard.
@@ -828,8 +834,8 @@ func (t SlogTelemetry) RecordCohortKindBasis(ctx context.Context, orgID string, 
 // RecordNeighborLookupFailed logs at Warn: unlike the cohort-kind basis, this
 // IS a degradation -- a subject that should have been in the answer is not,
 // and the operator needs it at the production level without raising verbosity.
-func (t SlogTelemetry) RecordNeighborLookupFailed(ctx context.Context, orgID, originCanonicalID, neighborUUID string, err error) {
-	args := []any{"org_id", orgID, "origin_canonical_id", originCanonicalID, "neighbor_uuid", neighborUUID}
+func (t SlogTelemetry) RecordNeighborLookupFailed(ctx context.Context, orgID, originCanonicalID, neighborUUID string, site NeighborLookupFailureSite, err error) {
+	args := []any{"org_id", orgID, "origin_canonical_id", originCanonicalID, "neighbor_uuid", neighborUUID, "site", string(site)}
 	if err != nil {
 		args = append(args, "error", err.Error())
 	}
