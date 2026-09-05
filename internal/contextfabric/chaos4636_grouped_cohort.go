@@ -245,28 +245,38 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 			byGroup[assignment.canonicalID] = append(byGroup[assignment.canonicalID], member.Subject.CanonicalID)
 		}
 	}
-	if len(order) == 0 && ungrouped > 0 {
+	if len(order) == 0 {
 		// NOT ONE member could be placed. This used to return a zero-valued
 		// outcome, which made the case indistinguishable from "grouping was
 		// never attempted" for anyone reading the persisted artifact: the
 		// only surviving trace was the caller clearing plan.GroupKind, and a
 		// cleared group kind looks exactly like a plan that never had one.
 		//
-		// `ungrouped > 0` is implied by the guard at the top of this function
-		// (a non-empty cohort's every member either lands in `order` or
-		// increments `ungrouped`) and is written anyway, for two reasons: the
-		// token can then never be stamped over an empty population however
-		// that guard is later edited, and a battery mutant that deletes the
-		// conjunct is expressible against a fixture rather than unreachable.
+		// THIS CONDITION WAS ONCE `len(order) == 0 && ungrouped > 0`, and the
+		// mutation battery is why it is not any more. The second conjunct was
+		// written on the claim that it kept the token from being stamped over
+		// an empty population "however the guard at the top is later edited",
+		// and that deleting it would be caught by a fixture. Deleting it
+		// killed NOTHING: reaching here at all means the loop above ran over a
+		// non-empty cohort, and every member of it either landed in `order` or
+		// incremented `ungrouped`, so `len(order) == 0` already implies
+		// `ungrouped > 0`. The conjunct was unreachable as a discriminator and
+		// therefore untested code dressed as a safety property -- an empty
+		// cell in the battery is a finding, not a pass, and the honest fix for
+		// a rule no fixture can isolate is to remove it as subsumed rather
+		// than to keep it for the comfort of the comment beside it.
+		//
+		// The property it CLAIMED to hold is real and is held where it is
+		// actually decidable: the guard at the top of this function returns a
+		// zero-valued outcome for an empty or absent cohort, and
+		// TestAnEmptyCohortIsNotARefusal pins that, so the token cannot be
+		// stamped over a population of nobody.
 		return nil, ungrouped, CohortGroupingOutcome{
 			Refusal:     CohortGroupingRefusalNoMemberPlaced,
 			PlannedKind: plan.GroupKind,
 			// SourceKind stays zero: nothing disagreed, nothing was named.
 			Ungrouped: ungrouped,
 		}
-	}
-	if len(order) == 0 {
-		return nil, ungrouped, CohortGroupingOutcome{}
 	}
 	sort.Strings(order)
 	groups = buildGroupsFrom(cohort, order, byGroup, labels, kinds)

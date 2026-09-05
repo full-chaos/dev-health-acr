@@ -1,10 +1,13 @@
 package contextfabric
 
 import (
+	"bytes"
 	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"log/slog"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -499,6 +502,116 @@ func TestEveryNoGroupsOutcomeNamesARefusal(t *testing.T) {
 		}
 		if !ValidCohortGroupingRefusal(outcome.Refusal) {
 			t.Errorf("%s: outcome.Refusal = %q is outside the closed vocabulary", testCase.name, outcome.Refusal)
+		}
+	}
+	if checked != len(cases) {
+		t.Fatalf("only %d of %d arms were checked", checked, len(cases))
+	}
+}
+
+// TestTheGroupingLineCarriesTheUngroupedCount closes battery finding M9.
+//
+// Deleting `"ungrouped_members", event.UngroupedMembers` from the emitter
+// killed NOTHING. Every assertion this lane wrote about the count read it off
+// the RECORDED EVENT -- the struct the fake stored -- and no test read the
+// emitted LINE. But the key IS the interface: an operator's filter, a
+// dashboard and an alert all name it in text, so removing or renaming it is a
+// silent break of every consumer, and nothing that reads the struct can see it.
+// This package already learned that once, on the `grouping_refusal` key; the
+// lesson did not carry to the field added beside it.
+func TestTheGroupingLineCarriesTheUngroupedCount(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil)))
+
+	telemetry.RecordGroupedCohortCompleteness(context.Background(), storage.Principal{OrgID: "org_1"}, GroupedCohortCompletenessEvent{
+		Family:           QuestionFamilyGroupedCohortStatus,
+		GroupCount:       0,
+		Refusal:          CohortGroupingRefusalNoMemberPlaced,
+		PlannedGroupKind: SubjectTeam,
+		UngroupedMembers: 3,
+	})
+
+	line := buf.String()
+	for _, want := range []string{
+		"grouping_refusal=" + string(CohortGroupingRefusalNoMemberPlaced),
+		"planned_group_kind=" + string(SubjectTeam),
+		"ungrouped_members=3",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the grouped-cohort completeness line does not carry %q -- an operator filter naming this key in text breaks silently, and no assertion on the recorded event can see it.\nline: %s", want, line)
+		}
+	}
+}
+
+// TestAnOrdinaryGroupedLineOmitsTheUngroupedCount is the other half of that
+// field's contract, and the reason the append sits INSIDE the refusal guard.
+//
+// A constant `ungrouped_members=0` on every grouped answer's line would break
+// the byte-identical promise the emitter's own comment makes, while looking
+// harmless -- and a reader filtering on the key would get a stream of zeros
+// instead of refusals alone.
+func TestAnOrdinaryGroupedLineOmitsTheUngroupedCount(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil)))
+
+	telemetry.RecordGroupedCohortCompleteness(context.Background(), storage.Principal{OrgID: "org_1"}, GroupedCohortCompletenessEvent{
+		Family:     QuestionFamilyGroupedCohortStatus,
+		GroupCount: 2,
+	})
+
+	line := buf.String()
+	if strings.Contains(line, "ungrouped_members") {
+		t.Errorf("an un-refused grouped answer's line carries ungrouped_members; it must be byte-identical to the pre-field line.\nline: %s", line)
+	}
+	// Positive control in the same test: the emitter CAN write the key, so the
+	// absence above is the guard working rather than a broken emitter.
+	var control bytes.Buffer
+	NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&control, nil))).RecordGroupedCohortCompleteness(
+		context.Background(), storage.Principal{OrgID: "org_1"}, GroupedCohortCompletenessEvent{
+			Refusal: CohortGroupingRefusalNoMemberPlaced, PlannedGroupKind: SubjectTeam, UngroupedMembers: 1,
+		})
+	if !strings.Contains(control.String(), "ungrouped_members=1") {
+		t.Fatal("control failed: the emitter never writes ungrouped_members at all, so the assertion above measured nothing")
+	}
+}
+
+// TestAnEmptyCohortIsNotARefusal pins the property the deleted `ungrouped > 0`
+// conjunct CLAIMED to hold, at the guard where it is actually decidable.
+//
+// The token must never be stamped over a population of nobody: an absent or
+// empty cohort, or a plan with no group axis, is not a refusal to group -- it
+// is nothing having been asked. The conjunct could not express this (it sat
+// after a loop that only runs on a non-empty cohort); this test can.
+func TestAnEmptyCohortIsNotARefusal(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		plan   AnswerPlan
+		cohort *Cohort
+	}{
+		{"no group axis planned", AnswerPlan{}, planFixtureCohort("project_a")},
+		{"nil cohort", AnswerPlan{GroupKind: SubjectTeam}, nil},
+		{"cohort with no members", AnswerPlan{GroupKind: SubjectTeam}, planFixtureCohort()},
+	}
+	if len(cases) == 0 {
+		t.Fatal("no arms enumerated")
+	}
+	checked := 0
+	for _, testCase := range cases {
+		groups, ungrouped, outcome := BuildCohortGroups(testCase.plan, testCase.cohort,
+			[]CanonicalFact{ungroupableFact("project_a")})
+		checked++
+		if outcome.Refusal != CohortGroupingRefusalNone {
+			t.Errorf("%s: outcome.Refusal = %q, want none -- nothing was asked, so nothing refused, and a refusal here would put a disclosure in front of a reader about a breakdown they never requested",
+				testCase.name, outcome.Refusal)
+		}
+		if outcome.Ungrouped != 0 {
+			t.Errorf("%s: outcome.Ungrouped = %d, want 0 -- a count over a population of nobody", testCase.name, outcome.Ungrouped)
+		}
+		if len(groups) != 0 || ungrouped != 0 {
+			t.Errorf("%s: groups = %d, ungrouped = %d, want 0 and 0", testCase.name, len(groups), ungrouped)
 		}
 	}
 	if checked != len(cases) {
