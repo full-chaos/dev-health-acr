@@ -150,7 +150,10 @@ for job in race unit; do
   meta="$(job_shard_union "$job" "$tmpdir/union.$job")"
   total="$(printf '%s' "$meta" | cut -f1)"
   with_isolated="$(printf '%s' "$meta" | cut -f2)"
-  indices="$(printf '%s' "$meta" | cut -f3)"
+  # Named apart from job_shard_union's own `indices` ARRAY: shellcheck reads
+  # the two as one variable and flags the string assignment as an array being
+  # expanded without an index.
+  shard_indices="$(printf '%s' "$meta" | cut -f3)"
 
   LC_ALL=C sort "$tmpdir/union.$job" | grep -v '^$' >"$tmpdir/union.$job.sorted"
   compare_union "$job" "$tmpdir/union.$job.sorted" "$tmpdir/all.sorted"
@@ -161,7 +164,7 @@ for job in race unit; do
     shape='round-robin plus the isolated packages'
   fi
   printf 'PASS: %s shards %s of %s cover all %s packages exactly once [%s]\n' \
-    "$job" "$indices" "$total" "$package_count" "$shape"
+    "$job" "$shard_indices" "$total" "$package_count" "$shape"
 done
 
 # ---- negative controls ---------------------------------------------------
