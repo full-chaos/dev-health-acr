@@ -117,3 +117,81 @@ func TestMemberSetResolvedTellsAnAbsentSetFromAnEmptyOne(t *testing.T) {
 		t.Fatalf("the sweep appended %d row(s) over an ABSENT member set, want 1 -- the control above would otherwise pass because the sweep never fires at all", len(got)-len(rows))
 	}
 }
+
+// TestTheRunsOverDeclarationIsPinnedWhereItIsDECIDABLE closes a conjunct that
+// no corpus fixture can isolate.
+//
+// THE PROBLEM THIS EXISTS FOR. `stepNeedsAResolvedMemberSet` is `declared &&
+// inputs.RunsOverResolvedMemberSet`, and BOTH shipped computed steps declare
+// that field true. So deleting the field read changes nothing any frame can
+// observe: the sweep's population test compares the predicate against the same
+// declaration and would agree with itself, and a mutant that deletes the
+// conjunct SURVIVES while proving only that no fixture can tell.
+//
+// A surviving mutant whose conjunct no fixture can isolate is not a pass and
+// is not something to keep with a comment. It is re-pinned where it IS
+// decidable -- here, at the pure function, over CONSTRUCTED inputs that no
+// shipped step can currently produce. The day a computed step declares that it
+// does NOT run over the member set, this is the test that already covers it.
+func TestTheRunsOverDeclarationIsPinnedWhereItIsDECIDABLE(t *testing.T) {
+	t.Parallel()
+
+	// The premise, and the reason this test cannot be written from a frame:
+	// every shipped step declares the field TRUE, so the corpus offers no
+	// discriminating case. If that ever stops being true, say so loudly rather
+	// than letting this test quietly become redundant.
+	shippedAllTrue := true
+	for _, step := range ComputedObligationStepVocabulary() {
+		inputs, declared := InputsForComputedStep(step)
+		if !declared || !inputs.RunsOverResolvedMemberSet {
+			shippedAllTrue = false
+		}
+	}
+	if !shippedAllTrue {
+		t.Log("a shipped step now declares RunsOverResolvedMemberSet false -- a frame-level fixture can " +
+			"discriminate the conjunct now, and the sweep's population test covers it too")
+	}
+
+	for _, testCase := range []struct {
+		name     string
+		inputs   ComputedStepInputs
+		declared bool
+		want     bool
+		why      string
+	}{
+		{
+			name:     "declared and runs over the member set",
+			inputs:   ComputedStepInputs{RunsOverResolvedMemberSet: true},
+			declared: true,
+			want:     true,
+			why:      "the only shape any shipped step has today",
+		},
+		{
+			name:     "declared and does NOT run over the member set",
+			inputs:   ComputedStepInputs{RunsOverResolvedMemberSet: false},
+			declared: true,
+			want:     false,
+			why: "THE DISCRIMINATING CASE. No shipped step produces it, which is exactly why " +
+				"deleting the field read is invisible to every frame-level fixture. A step that " +
+				"needs no member set must not be refused before retrieval, and must not acquire a " +
+				"post-discovery refusal row either",
+		},
+		{
+			name:     "not declared at all",
+			inputs:   ComputedStepInputs{RunsOverResolvedMemberSet: true},
+			declared: false,
+			want:     false,
+			why: "an UNDECLARED step is not a step that runs over the member set -- the guard must " +
+				"read the declaration's presence, not only its value, or an undeclared step inherits " +
+				"whatever the zero value happens to be",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := stepNeedsAResolvedMemberSet(testCase.inputs, testCase.declared); got != testCase.want {
+				t.Errorf("stepNeedsAResolvedMemberSet(RunsOver=%v, declared=%v) = %v, want %v -- %s",
+					testCase.inputs.RunsOverResolvedMemberSet, testCase.declared, got, testCase.want, testCase.why)
+			}
+		})
+	}
+}

@@ -255,10 +255,28 @@ func TestFinalizingTwiceStatesOneUnavailableRankingRow(t *testing.T) {
 	if result.AnswerPlan != nil {
 		plan = *result.AnswerPlan
 	}
-	again := engine.finalizeResult(result, plan, frame)
 
-	after := outcomeRowsFor(again, ObligationRanking, contractsv1.ContextFabricOutcomeStageAssembledResult)
-	if len(after) != 1 {
-		t.Fatalf("re-finalizing produced %d assembled `ranking` row(s), want 1 -- a reader would receive two accounts of one requirement", len(after))
+	// TWO HUNDRED RE-FINALIZATIONS, not one. The guard walks the outcome rows
+	// looking for an existing assembled row, and the ROW ORDER it walks is a
+	// function of how the stages appended -- so a single re-finalization can
+	// find the row it is looking for by luck of position. Iterating is what
+	// makes "exactly one, every time" an assertion rather than one sample of
+	// it, and it is also what catches a guard that holds for the first re-entry
+	// and not the second.
+	const refinalizations = 200
+	again := result
+	for iteration := 0; iteration < refinalizations; iteration++ {
+		again = engine.finalizeResult(again, plan, frame)
+		after := outcomeRowsFor(again, ObligationRanking, contractsv1.ContextFabricOutcomeStageAssembledResult)
+		if len(after) != 1 {
+			t.Fatalf("re-finalization %d of %d produced %d assembled `ranking` row(s), want 1 -- a reader would receive %d accounts of one requirement",
+				iteration+1, refinalizations, len(after), len(after))
+		}
+	}
+
+	// The count sibling must survive the same re-entry, or this test would pass
+	// while the OTHER row multiplied beside it.
+	if counts := outcomeRowsFor(again, ObligationCount, contractsv1.ContextFabricOutcomeStageAssembledResult); len(counts) > 1 {
+		t.Fatalf("after %d re-finalizations the `count` obligation carries %d assembled rows, want at most 1", refinalizations, len(counts))
 	}
 }
