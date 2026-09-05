@@ -531,21 +531,28 @@ func TestDiscoverContextHopWalkDeduplicatesEdgesAcrossFrontierNodes(t *testing.T
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
 
+	// The WIRE edge carries no relationship id (ContextFabricRelationshipEdge
+	// has Type/From/To and no identifier), so identity here is the endpoint
+	// pair plus the type. That is a sound key for THIS fixture and only
+	// because of how it is built -- every other edge has a distinct endpoint
+	// pair -- so the shared edge's own key is asserted to appear before its
+	// count is read, rather than assuming the key means what it should.
+	const sharedKey = "BLOCKS|team_a|team_shared"
 	seen := map[string]int{}
 	total := 0
 	for _, path := range result.Paths {
 		for _, e := range path.Edges {
-			seen[e.RelationshipID]++
+			seen[fmt.Sprintf("%s|%s|%s", e.Type, e.From.CanonicalID, e.To.CanonicalID)]++
 			total++
 		}
 	}
 	if total == 0 {
 		t.Fatal("no edges reached the served paths -- this fixture never exercised the walk, so it proves nothing about deduplication")
 	}
-	if seen[sharedEdgeID] == 0 {
-		t.Fatalf("the shared edge never reached the answer at all (admitted ids: %v) -- the fixture is not reaching the second hop, so the duplicate it exists to test was never possible", seen)
+	if seen[sharedKey] == 0 {
+		t.Fatalf("the shared edge never reached the answer at all (admitted: %v) -- the fixture is not reaching the second hop, so the duplicate it exists to test was never possible", seen)
 	}
-	if got := seen[sharedEdgeID]; got != 1 {
+	if got := seen[sharedKey]; got != 1 {
 		t.Errorf("the edge returned from BOTH frontier nodes was admitted %d times, want 1 -- each duplicate consumes the collect budget for one real edge, and at a tight budget that is a cohort member squeezed out", got)
 	}
 }
