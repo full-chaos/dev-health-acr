@@ -21,10 +21,15 @@ import (
 // the sink and the assertion drift apart, and this file exists to stop that.
 func captureCohortKindBasisLine(t *testing.T, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool) map[string]any {
 	t.Helper()
+	return captureCohortKindBasisLineWithPoolTruncation(t, declaredKind, basis, discovered, CohortPoolTruncationNone)
+}
+
+func captureCohortKindBasisLineWithPoolTruncation(t *testing.T, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis) map[string]any {
+	t.Helper()
 	var buffer bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	SlogTelemetry{Logger: logger}.RecordCohortKindBasis(
-		context.Background(), "org_sink_test", declaredKind, basis, discovered)
+		context.Background(), "org_sink_test", declaredKind, basis, discovered, poolTruncation)
 
 	lines := 0
 	record := map[string]any{}

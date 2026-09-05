@@ -603,14 +603,29 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 	}
 
-	// The search-truncation signal (fulltextSearchNodes' 2nd return value)
-	// is deliberately discarded here: it exists to gate SUBJECT-RESOLUTION
-	// auto-commit (graphrank.ResolveFromMergedCandidates' searchTruncated,
-	// via ResolveSubjects above) against an incomplete candidate set, per
-	// Codex's round-3 ruling. DiscoverContext has no analogous auto-commit
-	// decision to protect -- this call feeds cohort/edge DISCOVERY, already
-	// bounded and already best-effort, not a committed-subject gate.
-	textNodes, _, err := a.fulltextSearchNodes(ctx, key, principal.OrgID, request.Request.Question, collectLimit, temporal)
+	// fulltextTruncated (CHAOS-5168) reports that the full-text arm had MORE
+	// matches than collectLimit and the remainder were dropped.
+	//
+	// THIS SIGNAL USED TO BE DISCARDED HERE. The reasoning was that it exists
+	// to gate SUBJECT-RESOLUTION auto-commit (graphrank.
+	// ResolveFromMergedCandidates' searchTruncated, via ResolveSubjects
+	// above) and that DiscoverContext has no analogous auto-commit decision
+	// to protect, this call feeding "already bounded and already best-effort"
+	// cohort/edge discovery. That was true of the EDGE half and false of the
+	// COHORT half: DiscoveredCohort derives Complete/Truncated from the
+	// length it retained, so a pool this arm clipped from six matches to four
+	// -- four being under MaxCohortMembers -- produced Complete=true,
+	// Truncated=false, and the count step then served an exact cardinality
+	// over a clipped population as if it were a census. "Best effort" is a
+	// statement about what retrieval promises, not a licence for the answer
+	// to claim more than retrieval delivered.
+	//
+	// It reaches the cohort through cohortPoolTruncation below, which is also
+	// where the case that keeps this from being over-conservative lives: when
+	// the exhaustive census ran and was not itself cut, it already holds
+	// every candidate of every servable cohort kind and a clipped full-text
+	// arm costs the cohort nothing.
+	textNodes, fulltextTruncated, err := a.fulltextSearchNodes(ctx, key, principal.OrgID, request.Request.Question, collectLimit, temporal)
 	if err != nil {
 		// CHAOS-4077: see graphNotProjectedError's own doc comment and the
 		// hopWalk error site's identical comment above -- this is the
@@ -788,7 +803,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			cohortNodes = append(cohortNodes, n)
 		}
 	}
-	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis := graphrank.DiscoveredCohort(principal, request, cohortNodes, isInternalSubject)
+	// CHAOS-5168: what this call's candidate POOL lost, carried into the
+	// cohort's own completeness rather than left for DiscoveredCohort to
+	// (not) infer from the length it retained. See cohortPoolTruncation for
+	// the classification and for why a clipped full-text arm under a
+	// completed census is not a truncated pool.
+	poolTruncationBasis, cohortPoolTruncated := cohortPoolTruncation(fulltextTruncated, exactNameTruncated, censusAdmitted)
+	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here
 	// and DiscoveredCohort stays pure -- the same split the authzDropped
@@ -805,15 +826,17 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		// was the grouping axis rather than the member kind. An empty kind
 		// is the honest value on every refusing basis: cohortKindFromFrame
 		// yields no kind when it refuses.
-		a.config.Telemetry.RecordCohortKindBasis(ctx, principal.OrgID, cohortKind, cohortKindBasis, cohort != nil)
-	}
-	if cohort != nil && exactNameTruncated {
-		// Codex round-2 finding (P2): DiscoveredCohort computes Complete
-		// purely from len(members) vs. MaxCohortMembers, with no way to
-		// know its own node source was truncated upstream -- a truncated
-		// census with fewer than MaxCohortMembers matching members would
-		// otherwise report Complete=true despite genuinely missing some.
-		cohort.Complete = false
+		//
+		// The POOL's truncation travels on this same line (CHAOS-5168)
+		// rather than a line of its own: it is the other half of "did
+		// anything come back", and an operator holding a suspicious member
+		// count should not have to join two lines to learn that retrieval
+		// stopped short. It is reported on EVERY call, including the ones
+		// with no cohort -- a truncated pool that found no authorized member
+		// of the requested kind returns no cohort at all, so this line is
+		// the only place that loss is visible (see this file's own note on
+		// the nil-cohort case in the CHAOS-5168 tests).
+		a.config.Telemetry.RecordCohortKindBasis(ctx, principal.OrgID, cohortKind, cohortKindBasis, cohort != nil, poolTruncationBasis)
 	}
 	factRequirements := admission.FactRequirements
 	if cohort != nil {

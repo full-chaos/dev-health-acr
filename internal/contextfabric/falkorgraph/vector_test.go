@@ -1234,6 +1234,11 @@ type cohortKindBasisRecord struct {
 	declaredKind contextfabric.SubjectKind
 	basis        graphrank.CohortKindBasis
 	discovered   bool
+	// poolTruncation (CHAOS-5168) is recorded for the same reason the
+	// fields above it are: a test that asserts a cohort was built from a
+	// clipped pool must read what the production emit reported, never
+	// merely that the emit fired.
+	poolTruncation CohortPoolTruncationBasis
 }
 
 func (r *recordingTelemetry) RecordObservationTraversalDegraded(context.Context, string, int) {}
@@ -1293,8 +1298,8 @@ func (r *recordingTelemetry) RecordCohortExactNameCensusGate(_ context.Context, 
 // graph had no matching nodes" from "the seam refused this kind", so a test
 // asserting a refusal or a discovery needs to read it, not merely to have
 // caused it.
-func (r *recordingTelemetry) RecordCohortKindBasis(_ context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool) {
-	r.cohortKindBases = append(r.cohortKindBases, cohortKindBasisRecord{orgID: orgID, declaredKind: declaredKind, basis: basis, discovered: discovered})
+func (r *recordingTelemetry) RecordCohortKindBasis(_ context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis) {
+	r.cohortKindBases = append(r.cohortKindBases, cohortKindBasisRecord{orgID: orgID, declaredKind: declaredKind, basis: basis, discovered: discovered, poolTruncation: poolTruncation})
 }
 
 func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {
