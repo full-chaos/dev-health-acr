@@ -84,16 +84,6 @@ func ValidContextFabricAnswerObligationKind(value string) bool {
 	return stringInVocabulary(value, contextFabricAnswerObligationKinds[:])
 }
 
-// The three kinds as named constants, so the map below and its readers speak in
-// constants rather than string literals. The values are the SAME tokens
-// contextFabricAnswerObligationKinds publishes, and the parity test asserts
-// that, so the two cannot drift into two spellings of one vocabulary.
-const (
-	contextFabricObligationKindRead           = "read"
-	contextFabricObligationKindComputed       = "computed"
-	contextFabricObligationKindAnswerContract = "answer_contract"
-)
-
 // contextFabricAnswerObligationKindByObligation MIRRORS internal/contextfabric's
 // obligationKinds: HOW each obligation is satisfied at all.
 //
@@ -503,6 +493,13 @@ const (
 	contextFabricCompletionQuantifierNone = "none"
 	contextFabricComputedInputFactKinds   = "fact_kinds"
 	contextFabricObligationKindComputed   = "computed"
+	// The other two kinds, added here rather than in a second block beside
+	// the obligation-kind mirror, because this block already exists for
+	// exactly this reason and two blocks naming the same vocabulary would be
+	// the drift its own comment refuses. `read` is what the completeness
+	// derivation scopes its read pass on.
+	contextFabricObligationKindRead           = "read"
+	contextFabricObligationKindAnswerContract = "answer_contract"
 )
 
 // ValidateContextFabricPlanRequirements validates the whole array and its
