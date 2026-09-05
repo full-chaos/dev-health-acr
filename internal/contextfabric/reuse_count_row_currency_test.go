@@ -48,6 +48,7 @@ package contextfabric
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -60,6 +61,11 @@ const (
 	countCurrencyMemberRef  = "evidence_member_currency_a"
 	countCurrencyRankedRef  = "evidence_member_currency_ranked_b"
 	countCurrencyFindingRef = "evidence_finding_currency_a"
+	// countCurrencyKeptRef stays VISIBLE to the recheck. Without a
+	// retained reference the cohort-arm control proves only that missing
+	// refs are ABSENT afterwards, which `member.EvidenceRefIDs = nil`
+	// satisfies just as well as the correct code does.
+	countCurrencyKeptRef = "evidence_member_currency_kept_c"
 )
 
 // currencyUnrankedMember is the ordinary member shape: no ranking fields.
@@ -70,6 +76,41 @@ func currencyUnrankedMember(refs ...string) CohortMember {
 		InclusionReasons: []string{"matched"},
 		EvidenceRefIDs:   append([]string(nil), refs...),
 	}
+}
+
+// currencyGraphReader answers ResolveSubjects from the REQUEST'S OWN subject
+// hints, intersected with an authorized set.
+//
+// The shared `graphReaderStub` returns a fixed committed set without ever
+// reading the request (`engine_test.go`), which makes the reuse recheck
+// untestable from the outside: production could stop asking about cohort
+// members entirely and the stub would still commit them. Answering from the
+// hints is what lets `TestAReusedAnswerWithAnUnauthorizedCohortMemberIsRefused`
+// below mean anything.
+type currencyGraphReader struct {
+	authorized map[string]struct{}
+	context    GraphContext
+}
+
+func currencyAuthorizedKey(kind SubjectKind, id string) string { return string(kind) + "/" + id }
+
+func (g currencyGraphReader) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
+	return ResolvedGraphBinding{GraphKey: "currency-key", Epoch: 0}, nil
+}
+
+func (g currencyGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, _ *ConfirmedExpectedKind, _ *ConfirmedAnchorSelection, _ *QuestionFrame, _ SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	committed := make([]SubjectRef, 0, len(request.RequestedScope.SubjectHints))
+	for _, hint := range request.RequestedScope.SubjectHints {
+		if _, ok := g.authorized[currencyAuthorizedKey(hint.Kind, hint.ID)]; !ok {
+			continue
+		}
+		committed = append(committed, SubjectRef{Kind: hint.Kind, CanonicalID: hint.ID, Label: hint.Label})
+	}
+	return SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}, StructureOfferMaterial{}, nil, nil, nil
+}
+
+func (g currencyGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
+	return g.context, nil
 }
 
 // currencyRankedMember is the shape round 1 found missing: `RankingComputed`
@@ -97,7 +138,10 @@ func currencyCohort() *Cohort {
 	return &Cohort{
 		Kind: SubjectTeam, Rationale: "reuse currency probe", Complete: true,
 		Members: []CohortMember{
-			currencyUnrankedMember(countCurrencyMemberRef),
+			// TWO references on this member: one the recheck cannot prove
+			// (removed) and one it can (RETAINED). Proving only removal is
+			// what let `member.EvidenceRefIDs = nil` survive.
+			currencyUnrankedMember(countCurrencyMemberRef, countCurrencyKeptRef),
 			currencyRankedMember(countCurrencyRankedRef),
 		},
 	}
@@ -119,20 +163,43 @@ func currencyCohort() *Cohort {
 // The shared helper is left ALONE rather than widened: other tests depend on
 // its exact committed set, and widening a shared fixture to fit one test is
 // how a fixture stops meaning what its other callers assume.
-func currencyReuseEngine(t *testing.T, stored InvestigationResult, telemetry *recordingTelemetry) *Engine {
+func currencyReuseEngine(t *testing.T, stored InvestigationResult, telemetry *recordingTelemetry, unauthorized ...SubjectRef) *Engine {
 	t.Helper()
-	committed := []SubjectRef{reuseDegradeSubject()}
+	denied := make(map[string]struct{}, len(unauthorized))
+	for _, subject := range unauthorized {
+		denied[currencyAuthorizedKey(subject.Kind, subject.CanonicalID)] = struct{}{}
+	}
+	authorized := map[string]struct{}{}
+	authorize := func(subject SubjectRef) {
+		key := currencyAuthorizedKey(subject.Kind, subject.CanonicalID)
+		if _, isDenied := denied[key]; isDenied {
+			return
+		}
+		authorized[key] = struct{}{}
+	}
+	authorize(reuseDegradeSubject())
 	if stored.Cohort != nil {
 		for _, member := range stored.Cohort.Members {
-			committed = append(committed, member.Subject)
+			authorize(member.Subject)
 		}
 	}
 	return mustReuseTestEngine(t, EngineDependencies{
-		Graph: graphReaderStub{
-			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed},
-			// The stored answer's own citation stays visible; the candidate's
-			// node ref and both member refs do not.
-			context: productionShapedGraphContext([]string{reuseCitationRef}, nil),
+		// A NON-FATAL interpreter, deliberately. The shared default calls
+		// t.Fatal("interpreter should not be reached"), which is right for a
+		// test that must hit reuse and wrong for one that must observe a
+		// REFUSAL: a refused reuse legitimately falls through to a fresh
+		// investigation, and a fatal there would fail the test instead of
+		// letting it assert. The served tests lose nothing -- they assert
+		// result.Reused, so a fall-through fails them at this error instead.
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{}, errors.New("fresh investigation reached: reuse did not serve")
+		}),
+		Graph: currencyGraphReader{
+			authorized: authorized,
+			// The stored answer's own citation and the RETAINED member
+			// reference stay visible; the candidate's node ref and the other
+			// member references do not.
+			context: productionShapedGraphContext([]string{reuseCitationRef, countCurrencyKeptRef}, nil),
 		},
 		Results:   &resultStoreStub{},
 		Telemetry: telemetry,
@@ -142,17 +209,38 @@ func currencyReuseEngine(t *testing.T, stored InvestigationResult, telemetry *re
 	})
 }
 
-// currencyCountRow is the stored answer's own count row: satisfied over the
-// two members it carries. The strongest starting claim, and the one the
-// reported defect says a member drop would leave standing.
-func currencyCountRow(served int) RequirementOutcomeRow {
-	return RequirementOutcomeRow{
-		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
-		Requirement: string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam),
-		Obligation:  string(ObligationCount),
-		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
-		Impact:      contractsv1.ContextFabricAnswerImpactNone,
-		Served:      served, Declared: served,
+// currencyCountRequirement is the count requirement's identity, spelled once.
+func currencyCountRequirement() string {
+	return string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam)
+}
+
+// currencyCountRows is the stored answer's count history: the PLANNING seed
+// plus the assembled-result row, satisfied over the two members it carries.
+//
+// THE PLANNING ROW IS LOAD-BEARING, not decoration. `countRequirement`
+// (`membership_cardinality.go:179-188`) scans PLANNING rows only, and returns
+// empty when there is none -- so a fixture carrying just the assembled row
+// makes `appendMembershipCardinality` return before it ever reaches
+// `hasCountOutcome` at `:292`. That guard is the whole subject of the reported
+// defect, and without a planning row this test cannot reach it: disabling the
+// guard would change nothing observable here. Round 2 found exactly that.
+func currencyCountRows(served int) []RequirementOutcomeRow {
+	return []RequirementOutcomeRow{
+		{
+			Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
+			Requirement: currencyCountRequirement(),
+			Obligation:  string(ObligationCount),
+			Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+			Impact:      contractsv1.ContextFabricAnswerImpactNone,
+		},
+		{
+			Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
+			Requirement: currencyCountRequirement(),
+			Obligation:  string(ObligationCount),
+			Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+			Impact:      contractsv1.ContextFabricAnswerImpactNone,
+			Served:      served, Declared: served,
+		},
 	}
 }
 
@@ -182,6 +270,16 @@ func assertMemberIdentityPreserved(t *testing.T, where string, want, got CohortM
 			}
 		}
 	}
+	if !currencyFloatPtrEqual(got.Score, want.Score) ||
+		len(got.RankingBasis) != len(want.RankingBasis) ||
+		len(got.Drivers) != len(want.Drivers) ||
+		!currencyStringsEqual(got.MissingSignals, want.MissingSignals) {
+		t.Errorf("%s: served member ranking detail = {score:%v basis:%v drivers:%d missing:%v}, "+
+			"want {score:%v basis:%v drivers:%d missing:%v} -- these are contract fields a reader "+
+			"acts on, and the degrade may change none of them",
+			where, got.Score, got.RankingBasis, len(got.Drivers), got.MissingSignals,
+			want.Score, want.RankingBasis, len(want.Drivers), want.MissingSignals)
+	}
 	if got.RankingComputed != want.RankingComputed ||
 		got.AttentionRank != want.AttentionRank ||
 		got.DataCompleteness != want.DataCompleteness ||
@@ -191,6 +289,25 @@ func assertMemberIdentityPreserved(t *testing.T, where string, want, got CohortM
 			where, got.RankingComputed, got.AttentionRank, got.DataCompleteness, got.Outcome,
 			want.RankingComputed, want.AttentionRank, want.DataCompleteness, want.Outcome)
 	}
+}
+
+func currencyStringsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func currencyFloatPtrEqual(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 // TestStrippingEveryEvidenceRefLeavesACohortMemberValid isolates the bound
@@ -318,17 +435,24 @@ func TestTheReuseDegradeNeverDropsACohortMember(t *testing.T) {
 		// The CONTROL carrier: required refs, so this one breaks.
 		EvidenceRefIDs: []string{countCurrencyFindingRef},
 	}}
-	stored.Completeness.Outcomes = append(stored.Completeness.Outcomes, currencyCountRow(2))
+	stored.Completeness.Outcomes = append(stored.Completeness.Outcomes, currencyCountRows(2)...)
 	stored.Completeness = ComputeAnswerCompleteness(stored)
 
 	wantMembers := append([]CohortMember(nil), stored.Cohort.Members...)
 
-	// PRE-STATE for the cohort-arm control: both member refs are present now.
+	// PRE-STATE for the cohort-arm controls: every member carries at least the
+	// reference that must disappear, and one carries a reference that must
+	// SURVIVE.
 	for _, member := range stored.Cohort.Members {
-		if len(member.EvidenceRefIDs) != 1 {
-			t.Fatalf("fixture member %s carries %d refs, want 1 -- the cohort-arm control needs a reference "+
-				"to watch disappear", member.Subject.CanonicalID, len(member.EvidenceRefIDs))
+		if len(member.EvidenceRefIDs) == 0 {
+			t.Fatalf("fixture member %s carries no refs -- the cohort-arm control needs a reference to "+
+				"watch disappear", member.Subject.CanonicalID)
 		}
+	}
+	if !containsRef(stored.Cohort.Members[0].EvidenceRefIDs, countCurrencyKeptRef) {
+		t.Fatalf("fixture member %s carries no RETAINED reference; without one, proving the missing refs "+
+			"are gone cannot tell correct stripping apart from erasing every member reference",
+			stored.Cohort.Members[0].Subject.CanonicalID)
 	}
 
 	missing := map[string]struct{}{
@@ -367,6 +491,17 @@ func TestTheReuseDegradeNeverDropsACohortMember(t *testing.T) {
 					"the cohort loop", member.Subject.CanonicalID, ref)
 			}
 		}
+	}
+
+	// CONTROL 3 -- PRESERVATION, not just removal. The recheck CAN prove this
+	// reference, so correct stripping keeps it. `member.EvidenceRefIDs = nil`
+	// erases everything and satisfies the removal control above; only this
+	// assertion tells the two apart.
+	if !containsRef(degraded.Cohort.Members[0].EvidenceRefIDs, countCurrencyKeptRef) {
+		t.Fatalf("served member %s lost %q, a reference the recheck DID prove visible: the degrade "+
+			"removed more than the missing set, so 'the missing refs are gone' says nothing about "+
+			"whether stripping was correct",
+			degraded.Cohort.Members[0].Subject.CanonicalID, countCurrencyKeptRef)
 	}
 
 	// THE PREMISE OF THE REPORTED DEFECT, measured.
@@ -412,7 +547,7 @@ func TestAServedReusedAnswersCountDescribesTheMembersItServes(t *testing.T) {
 
 	stored := storedResultWithCandidateEvidence()
 	stored.Cohort = currencyCohort()
-	stored.Completeness.Outcomes = append(stored.Completeness.Outcomes, currencyCountRow(2))
+	stored.Completeness.Outcomes = append(stored.Completeness.Outcomes, currencyCountRows(2)...)
 	stored.Completeness = ComputeAnswerCompleteness(stored)
 	wantMembers := append([]CohortMember(nil), stored.Cohort.Members...)
 
@@ -462,10 +597,71 @@ func TestAServedReusedAnswersCountDescribesTheMembersItServes(t *testing.T) {
 				"the cohort arm did not run on the serving path", member.Subject.CanonicalID)
 		}
 	}
+	if !containsRef(result.Cohort.Members[0].EvidenceRefIDs, countCurrencyKeptRef) {
+		t.Fatalf("served member %s lost %q, a reference the recheck DID prove visible",
+			result.Cohort.Members[0].Subject.CanonicalID, countCurrencyKeptRef)
+	}
 	if got, want := len(result.Cohort.Members), len(wantMembers); got != want {
 		t.Fatalf("the SERVED cohort carries %d members, want %d", got, want)
 	}
 	for i := range wantMembers {
 		assertMemberIdentityPreserved(t, "served", wantMembers[i], result.Cohort.Members[i])
+	}
+
+	// THE OPERATOR'S VIEW, asserted too. The containment event is what an
+	// operator reads to know what the degrade removed; a served answer that is
+	// correct while its telemetry says otherwise is the "telemetry describes a
+	// different artifact than the one served" class, and nothing else here
+	// reads this event.
+	if len(telemetry.answerReuseContainment) != 1 {
+		t.Fatalf("containment events = %d, want exactly 1", len(telemetry.answerReuseContainment))
+	}
+	containment := telemetry.answerReuseContainment[0]
+	if containment.DroppedMembers != 0 {
+		t.Errorf("containment telemetry reports %d dropped member(s) while the served cohort is intact; "+
+			"an operator would read a member loss that did not happen", containment.DroppedMembers)
+	}
+	if containment.StrippedRefs == 0 {
+		t.Error("containment telemetry reports 0 stripped refs on a degraded reuse; the operator's own " +
+			"record of the narrowing is empty while the served answer really did lose references")
+	}
+}
+
+// TestAReusedAnswerWithAnUnauthorizedCohortMemberIsRefused pins that cohort
+// members PARTICIPATE in the reuse authorization recheck.
+//
+// Round 2's point: the shared resolver commits whatever it is handed without
+// reading the request, so production could stop asking about cohort members
+// entirely and every test above would still pass. This one cannot pass that
+// way -- the resolver here answers from the request's OWN subject hints, so a
+// member subject that production never puts in the recheck set is a member
+// whose authorization is never checked, and this test says so.
+//
+// The harm is concrete: serving a stored answer containing a subject this
+// principal can no longer resolve.
+func TestAReusedAnswerWithAnUnauthorizedCohortMemberIsRefused(t *testing.T) {
+	t.Parallel()
+
+	stored := storedResultWithCandidateEvidence()
+	stored.Cohort = currencyCohort()
+	stored.Completeness.Outcomes = append(stored.Completeness.Outcomes, currencyCountRows(2)...)
+	stored.Completeness = ComputeAnswerCompleteness(stored)
+
+	// The RANKED member is no longer resolvable for this principal. Everything
+	// else is unchanged from the served case above, so the ONLY difference is
+	// this member's authorization.
+	denied := stored.Cohort.Members[1].Subject
+	telemetry := &recordingTelemetry{}
+	engine := currencyReuseEngine(t, stored, telemetry, denied)
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err == nil && result.Reused {
+		t.Fatalf("a stored answer whose cohort member %s no longer resolves for this principal was SERVED "+
+			"from the store; the recheck must refuse rather than serve a subject it could not "+
+			"re-authorize", denied.CanonicalID)
+	}
+	if got := lastReuseOutcome(t, telemetry); got != AnswerReuseMissAuthorization {
+		t.Fatalf("reuse outcome = %q, want %q -- the miss must be attributed to authorization, or an "+
+			"operator cannot tell it from an ordinary cache miss", got, AnswerReuseMissAuthorization)
 	}
 }
