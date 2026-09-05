@@ -694,6 +694,60 @@ func TestChaos5218_ProductionSinkEmitsTheWithholdingAtTheProductionLogLevel(t *t
 	}
 }
 
+// TestResolveSubjects_ConfirmingAnUnservableKindStillEmptiesThePool pins the
+// RESIDUAL this change deliberately does not fix, so the boundary between this
+// PR and the follow-up decision ticket is visible in code rather than only in
+// prose.
+//
+// Review round 3 observed that the across-turn test above passes no confirmed
+// kind on turn 2. That is correct and deliberate -- under this rule turn 1 raises
+// no need, so a client has nothing to confirm, and the confirmed-kind filter is
+// exercised by TestResolveSubjects_ServedDeclaredKindStillReachesTheOfferAndCommits.
+// But it points at a real hole underneath: a client can still arrive with a
+// confirmed kind the pool cannot serve -- a receipt minted BEFORE this fix
+// shipped, or the caller-supplied ExpectedKinds path, which the suppression
+// deliberately does not cover because an explicit hint is caller-verified intent.
+//
+// For those callers the old behaviour stands unchanged: the filter empties the
+// pool, the bounded rescue finds nothing, and the turn ends subjectless. This
+// asserts exactly that, so the residual is a MEASURED property of this changeset
+// rather than an assumption, and a future change that alters it cannot do so
+// silently. Deciding what SHOULD happen there is the follow-up ticket's job.
+func TestResolveSubjects_ConfirmingAnUnservableKindStillEmptiesThePool(t *testing.T) {
+	t.Parallel()
+	teamNode := candidateNode(contextfabric.SubjectTeam, "team:CHAOS", "CHAOS", 0.55, "*")
+	prNode := candidateNode(contextfabric.SubjectPullRequest, "pr:1", "CHAOS pull request", 0.5, "*")
+	frame := namedSubjectFrame("CHAOS", kindOf(contractsv1.ContextFabricSubjectProject))
+	newBackend := func() *fakeGraphBackend {
+		return &fakeGraphBackend{
+			searchResults: map[string][]CandidateNode{"CHAOS": {teamNode, prNode}},
+		}
+	}
+
+	// The pool holds no project, and this change never offered one -- but the
+	// caller confirms it regardless.
+	confirmed := &contextfabric.ConfirmedExpectedKind{Kind: contractsv1.ContextFabricSubjectProject}
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("CHAOS"), newBackend().deps(), confirmed, nil, frame, "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	if len(resolution.Candidates) != 0 || len(resolution.Committed) != 0 {
+		t.Fatalf("candidates=%#v committed=%#v, want BOTH empty -- this changeset removes the CAUSE of an unhonourable confirmation (the offer), not its effect; if this now serves something, the residual has changed and the follow-up ticket's premise needs re-reading", resolution.Candidates, resolution.Committed)
+	}
+
+	// Control on the SAME fixture: confirming a kind the pool DOES hold serves.
+	// Without it the assertion above would pass for a resolver that returns
+	// nothing for every confirmed kind.
+	servedConfirmed := &contextfabric.ConfirmedExpectedKind{Kind: contractsv1.ContextFabricSubjectTeam}
+	served, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("CHAOS"), newBackend().deps(), servedConfirmed, nil, frame, "")
+	if err != nil {
+		t.Fatalf("control ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	if len(served.Candidates) == 0 && len(served.Committed) == 0 {
+		t.Fatal("control: confirming a kind the pool DOES hold returned nothing -- the assertion above is measuring a resolver that always empties, not the residual")
+	}
+}
+
 // offerPoolCandidate builds a minimal pool entry for the membership tests --
 // only Subject.Kind and Subject.CanonicalID are read by poolHasKind /
 // distinctOfferableKinds / SubjectKey.
@@ -724,41 +778,74 @@ func TestKindOfferMaterial_WithholdingOnlyEverRemovesOptions(t *testing.T) {
 		allHeld[kind] = true
 	}
 
-	shrank := 0
-	// Exhaustive over every single-kind declared hint against every
-	// single-kind and two-kind pool in the vocabulary: small enough to
-	// enumerate, wide enough that a case where the offer GREW would appear.
-	for _, declared := range vocabulary {
-		for i, poolA := range vocabulary {
-			for _, poolB := range vocabulary[i:] {
-				poolKinds := []contractsv1.ContextFabricSubjectKind{poolA, poolB}
-				declaredKinds := []contractsv1.ContextFabricSubjectKind{declared}
+	// Review round 3: this sweep passed nil explicit kinds and a singleton
+	// declared kind every time, while its comment claimed "every combination".
+	// Both axes are genuinely exercised now -- and the explicit-hint axis is the
+	// interesting one, because an explicit hint is precisely what bypasses the
+	// suppression, so it is where a widening bug would hide.
+	explicitVariants := [][]contractsv1.ContextFabricSubjectKind{
+		nil,
+		{contractsv1.ContextFabricSubjectWorkItem},
+		{contractsv1.ContextFabricSubjectCIRun, contractsv1.ContextFabricSubjectPullRequest},
+	}
 
-				old, _ := kindOfferMaterial(poolKinds, nil, declaredKinds, allHeld)
-				now, _ := kindOfferMaterial(poolKinds, nil, declaredKinds, heldFromKinds(poolKinds...))
+	shrank, withExplicit, withMultiDeclared := 0, 0, 0
+	for di, declaredA := range vocabulary {
+		for _, declaredB := range vocabulary[di:] {
+			// declaredB == declaredA gives the singleton case; the rest give
+			// genuinely multi-kind declarations, which a grouped frame always
+			// produces (invariant I6: member kind and group kind, always two
+			// different kinds).
+			declaredKinds := []contractsv1.ContextFabricSubjectKind{declaredA}
+			if declaredB != declaredA {
+				declaredKinds = append(declaredKinds, declaredB)
+			}
+			for i, poolA := range vocabulary {
+				for _, poolB := range vocabulary[i:] {
+					poolKinds := []contractsv1.ContextFabricSubjectKind{poolA, poolB}
+					for _, explicitKinds := range explicitVariants {
+						old, _ := kindOfferMaterial(poolKinds, explicitKinds, declaredKinds, allHeld)
+						now, _ := kindOfferMaterial(poolKinds, explicitKinds, declaredKinds, heldFromKinds(poolKinds...))
 
-				oldKinds := map[contractsv1.ContextFabricSubjectKind]bool{}
-				for _, option := range old.KindOptions {
-					oldKinds[option.Kind] = true
-				}
-				for _, option := range now.KindOptions {
-					if !oldKinds[option.Kind] {
-						t.Fatalf("pool=%v declared=%v: KindOptions GREW -- %q is offered now and was not before; the wire budget claim rests on this never happening", poolKinds, declaredKinds, option.Kind)
+						oldKinds := map[contractsv1.ContextFabricSubjectKind]bool{}
+						for _, option := range old.KindOptions {
+							oldKinds[option.Kind] = true
+						}
+						for _, option := range now.KindOptions {
+							if !oldKinds[option.Kind] {
+								t.Fatalf("pool=%v explicit=%v declared=%v: KindOptions GREW -- %q is offered now and was not before; the wire budget claim rests on this never happening", poolKinds, explicitKinds, declaredKinds, option.Kind)
+							}
+						}
+						if len(now.KindOptions) > len(old.KindOptions) {
+							t.Fatalf("pool=%v explicit=%v declared=%v: len(KindOptions) %d > %d", poolKinds, explicitKinds, declaredKinds, len(now.KindOptions), len(old.KindOptions))
+						}
+						if len(now.KindOptions) < len(old.KindOptions) {
+							shrank++
+							if len(explicitKinds) > 0 {
+								withExplicit++
+							}
+							if len(declaredKinds) > 1 {
+								withMultiDeclared++
+							}
+						}
 					}
-				}
-				if len(now.KindOptions) > len(old.KindOptions) {
-					t.Fatalf("pool=%v declared=%v: len(KindOptions) %d > %d", poolKinds, declaredKinds, len(now.KindOptions), len(old.KindOptions))
-				}
-				if len(now.KindOptions) < len(old.KindOptions) {
-					shrank++
 				}
 			}
 		}
 	}
-	// Positive control: the sweep must actually EXERCISE the difference. A
-	// subset assertion over a set that never changes is vacuous.
+
+	// Three positive controls, not one. A subset assertion over a set that never
+	// changes is vacuous -- and so is a WIDENED sweep whose new axes never reach
+	// a case where the two rules differ, which would leave the widening itself
+	// unproven while looking like coverage.
 	if shrank == 0 {
-		t.Fatal("no combination in the sweep produced a smaller offer -- the subset assertion above is vacuous")
+		t.Fatal("no combination in the sweep produced a smaller offer -- the subset assertion is vacuous")
 	}
-	t.Logf("combinations where the offer shrank: %d", shrank)
+	if withExplicit == 0 {
+		t.Fatal("no combination WITH an explicit hint produced a smaller offer -- that axis is not exercising the difference, so widening the sweep onto it proved nothing")
+	}
+	if withMultiDeclared == 0 {
+		t.Fatal("no combination with MORE THAN ONE declared kind produced a smaller offer -- that axis is not exercising the difference")
+	}
+	t.Logf("offer shrank in %d combinations (%d with an explicit hint, %d with multiple declared kinds)", shrank, withExplicit, withMultiDeclared)
 }
