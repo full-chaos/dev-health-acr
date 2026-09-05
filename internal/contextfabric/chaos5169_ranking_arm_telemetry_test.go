@@ -164,3 +164,91 @@ func TestTheNotAPopulationArmStillFires(t *testing.T) {
 			summary.ComputedPopulationAbsentUnresolvableMemberSet)
 	}
 }
+
+// TestTheArmCountersRefuseANonComputedRow makes the computed-kind conjunct
+// DECIDABLE, and it exists because an adversarial round predicted it would
+// survive — and it did.
+//
+// The arm counters gate on `row.Kind == ObligationKindComputed` as well as on
+// the reason token. Removing that conjunct changed nothing any fixture could
+// see: `classifyUnavailable` never returns `computed_population_absent` for a
+// READ row today, so no frame in the corpus can produce the shape the conjunct
+// exists to refuse, and the mutant `if row.Unavailable == ...` survived a
+// thirteen-test suite.
+//
+// A conjunct no fixture can isolate is not kept with a comment — it is pinned
+// where it IS decidable. `RequirementDerivationSummaryFrom` is a PURE function,
+// total over its input, so a constructed row is legitimate input to it rather
+// than a test building the decision it asserts on: the unit under test is the
+// FOLD, and the row is its argument. That is the one place this property can be
+// stated at all.
+//
+// What it protects: the day a read-side classifier gains this token — or a row
+// is built wrong — those cells must not be counted in COMPUTED-only telemetry,
+// silently inflating an arm an operator reads as a computed-step decision.
+func TestTheArmCountersRefuseANonComputedRow(t *testing.T) {
+	t.Parallel()
+
+	// A READ row carrying the computed reason. The derivation does not build
+	// this today; the conjunct is what keeps it out if anything ever does.
+	readRow := DerivedRequirement{
+		RequirementCoordinate: RequirementCoordinate{
+			Obligation: ObligationState, Role: SubjectRoleSubject, Subject: SubjectTeam,
+		},
+		Kind:        ObligationKindRead,
+		Scope:       CompletionScopeSingleSubject,
+		Quantifier:  CompletionQuantifierNone,
+		Unavailable: RequirementReasonComputedPopulationAbsent,
+	}
+	summary := RequirementDerivationSummaryFrom([]DerivedRequirement{readRow})
+
+	// REACH: the row must have landed in the aggregate bucket, or this test
+	// asserts zeroes over a row the fold never saw.
+	index, ok := unavailableReasonIndex(RequirementReasonComputedPopulationAbsent)
+	if !ok {
+		t.Fatal("computed_population_absent is not in the reason vocabulary")
+	}
+	if summary.UnavailableCells[index] != 1 {
+		t.Fatalf("the aggregate bucket counted %d, want 1 -- the fold never saw this row, so the assertions below are vacuous", summary.UnavailableCells[index])
+	}
+
+	if summary.ComputedPopulationAbsentUnresolvableMemberSet != 0 {
+		t.Errorf("a READ row was counted in the `unresolvable_member_set` arm (%d) -- the arms are COMPUTED-only telemetry",
+			summary.ComputedPopulationAbsentUnresolvableMemberSet)
+	}
+	if summary.ComputedPopulationAbsentNotAPopulation != 0 {
+		t.Errorf("a READ row was counted in the `not_a_population` arm (%d) -- the arms are COMPUTED-only telemetry",
+			summary.ComputedPopulationAbsentNotAPopulation)
+	}
+	var unplanned int
+	for _, count := range summary.ComputedInputKindsUnplanned {
+		unplanned += count
+	}
+	if unplanned != 0 {
+		t.Errorf("a READ row contributed %d unplanned computed-step input kinds -- a read obligation has no computed step and no declared step inputs", unplanned)
+	}
+
+	// The COMPLEMENT, in the same run: an equivalent COMPUTED row must be
+	// counted. Without it this test passes on a fold that counts nothing.
+	computedRow := DerivedRequirement{
+		RequirementCoordinate: RequirementCoordinate{
+			Obligation: ObligationRanking, Role: SubjectRoleSubject, Subject: SubjectTeam,
+		},
+		Kind:        ObligationKindComputed,
+		Scope:       CompletionScopeSingleSubject,
+		Quantifier:  CompletionQuantifierNone,
+		Unavailable: RequirementReasonComputedPopulationAbsent,
+	}
+	both := RequirementDerivationSummaryFrom([]DerivedRequirement{readRow, computedRow})
+	if both.ComputedPopulationAbsentUnresolvableMemberSet != 1 {
+		t.Errorf("the computed row was counted %d times in the `unresolvable_member_set` arm, want exactly 1 -- the read row must be refused and the computed row must not be",
+			both.ComputedPopulationAbsentUnresolvableMemberSet)
+	}
+	var bothUnplanned int
+	for _, count := range both.ComputedInputKindsUnplanned {
+		bothUnplanned += count
+	}
+	if bothUnplanned == 0 {
+		t.Error("neither row contributed an unplanned input kind, so the zero asserted above cannot discriminate")
+	}
+}
