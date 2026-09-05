@@ -518,6 +518,51 @@ func TestTheSeedIsNeverTheLastRowForAServedReadRequirement(t *testing.T) {
 	}
 }
 
+// TestAnUnrecognisedQuantifierEmitsNoRow closes the gap a surviving mutant
+// named: deleting the `if !known` guard changed no test result, because every
+// fixture used a recognised quantifier.
+//
+// The guard matters in one direction only, and it is the dangerous one. An
+// unrecognised quantifier defaulting to a threshold would SILENTLY LOWER a
+// standard -- `corroborated` demanding two sources becoming whatever a zero
+// value implies -- and the row would read `satisfied` on evidence that never
+// met the bar. Skipping the requirement instead loses the row and keeps the
+// planning seed, which reads `partial`: the state stays honest.
+//
+// The COMPLEMENT is asserted in the same run, because "no row" is exactly the
+// assertion that passes on an evaluator emitting nothing at all.
+func TestAnUnrecognisedQuantifierEmitsNoRow(t *testing.T) {
+	t.Parallel()
+	health := contractsv1.ContextFabricFactHealth
+	coverage := factCoverage(health, SourceAvailable)
+
+	unrecognised := readRequirement(CompletionQuantifierAtLeastOne)
+	unrecognised.Quantifier = "quantifier_from_a_later_vocabulary"
+	// The premise, asserted rather than assumed: this really is unrecognised.
+	// If it were ever added to the table, the fixture would stop reaching the
+	// guard and would prove nothing while still passing.
+	if _, known := readQuantifierThreshold(unrecognised.Quantifier); known {
+		t.Fatalf("%q is now a recognised quantifier; this fixture no longer reaches the guard",
+			unrecognised.Quantifier)
+	}
+
+	rows := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{unrecognised}, coverage)
+	if len(rows) != 0 {
+		t.Fatalf("an unrecognised quantifier produced %d rows: %+v -- evaluating against a defaulted "+
+			"threshold silently lowers the standard the requirement declared", len(rows), rows)
+	}
+
+	// COMPLEMENT: the same fixture with a RECOGNISED quantifier does emit.
+	recognised := readRequirement(CompletionQuantifierAtLeastOne)
+	got := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{recognised}, coverage)
+	if len(got) != 1 {
+		t.Fatalf("the same fixture with a recognised quantifier produced %d rows, want 1 -- the "+
+			"assertion above would pass on an evaluator that emitted nothing at all", len(got))
+	}
+}
+
 // TestAnUndeclaredCauseCodeEmitsNoRow is the REACH PROBE for the stop path, and
 // it is written to fail loudly if that path ever becomes reachable in
 // production rather than only in a fixture.
