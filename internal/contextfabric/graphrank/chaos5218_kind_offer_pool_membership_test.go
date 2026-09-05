@@ -35,11 +35,16 @@ import (
 // the clarification must not be raised for that need at all" -- and a kind
 // with nothing behind it can be honoured under neither branch.
 
-// TestKindOfferMaterial_DeclaredKindAbsentFromPoolIsNotOffered is the
+// TestKindOfferMaterial_DeclaredKindAbsentFromPoolSuppressesTheNeed is the
 // red-first pin, on the qb-scoped pool shape verbatim: two teams and a pull
-// request, frame-declared kind `project`. At 248d7ca0's rule this asserts
-// RED (project IS in KindOptions, ranked 0).
-func TestKindOfferMaterial_DeclaredKindAbsentFromPoolIsNotOffered(t *testing.T) {
+// request, frame-declared kind `project`. At 248d7ca0's rule this asserts RED
+// (project IS in KindOptions, ranked 0).
+//
+// The declared kind cannot be offered, so CHAOS-4967's own disjunction leaves
+// exactly one lawful outcome: do not raise the need at all. Offering the pool's
+// own kinds instead would hand back a list that omits the kind the question
+// names, which is the state CHAOS-4967 filed.
+func TestKindOfferMaterial_DeclaredKindAbsentFromPoolSuppressesTheNeed(t *testing.T) {
 	t.Parallel()
 	poolKinds := []contractsv1.ContextFabricSubjectKind{
 		contractsv1.ContextFabricSubjectTeam,
@@ -49,22 +54,81 @@ func TestKindOfferMaterial_DeclaredKindAbsentFromPoolIsNotOffered(t *testing.T) 
 
 	material, diag := kindOfferMaterial(poolKinds, nil, declaredKinds, heldFromKinds(poolKinds...))
 
-	for _, option := range material.KindOptions {
-		if option.Kind == contractsv1.ContextFabricSubjectProject {
-			t.Fatalf("KindOptions = %+v, want NO project -- the pool holds zero project candidates, so a caller who picks it is guaranteed an empty pool next turn", material.KindOptions)
-		}
+	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
+		t.Fatalf("kindOfferMaterial() = %+v, want NO need raised -- the pool holds zero project candidates, so the offer can neither include the declared kind nor honestly omit it", material)
 	}
-	if len(material.KindOptions) != 2 {
-		t.Fatalf("len(material.KindOptions) = %d, want 2 -- withholding the unservable declared kind must not disturb the pool kinds", len(material.KindOptions))
+	if !diag.SuppressedByUnservableDeclaredKind {
+		t.Fatalf("diag = %+v, want SuppressedByUnservableDeclaredKind true", diag)
 	}
-	if material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectTeam || material.KindOptions[1].Kind != contractsv1.ContextFabricSubjectPullRequest {
-		t.Fatalf("KindOptions = %+v, want [team, pull_request] in pool order", material.KindOptions)
+	if diag.SuppressedByCardinality {
+		t.Fatalf("diag = %+v, want SuppressedByCardinality FALSE -- the pool had two distinct kinds, so cardinality is not why this was suppressed, and conflating the two reasons would tell an operator the wrong thing", diag)
 	}
 	if diag.DeclaredHintCount != 0 || diag.DeclaredWithheldNotInPoolCount != 1 {
 		t.Fatalf("diag = %+v, want DeclaredHintCount 0 and DeclaredWithheldNotInPoolCount 1", diag)
 	}
 	if !reflect.DeepEqual(diag.DeclaredWithheldNotInPoolKinds, []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectProject}) {
 		t.Fatalf("diag.DeclaredWithheldNotInPoolKinds = %v, want [project]", diag.DeclaredWithheldNotInPoolKinds)
+	}
+}
+
+// TestKindOfferMaterial_PartiallyServedDeclaredKindsStillRaiseTheNeed is the
+// boundary between the two halves of the rule, and it is the reason suppression
+// is decided on "did ANY declared kind reach the option list" rather than on the
+// withheld count. Two declared kinds, ONE of them in the pool: the offer includes
+// a declared kind, so CHAOS-4967's FIRST branch is satisfied, the need IS raised,
+// and only the unservable sibling is withheld.
+func TestKindOfferMaterial_PartiallyServedDeclaredKindsStillRaiseTheNeed(t *testing.T) {
+	t.Parallel()
+	poolKinds := []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectTeam,
+		contractsv1.ContextFabricSubjectPullRequest,
+	}
+	declaredKinds := []contractsv1.ContextFabricSubjectKind{
+		contractsv1.ContextFabricSubjectTeam,
+		contractsv1.ContextFabricSubjectProject,
+	}
+
+	material, diag := kindOfferMaterial(poolKinds, nil, declaredKinds, heldFromKinds(poolKinds...))
+
+	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
+		t.Fatalf("material.Missing = %v, want [expected_kind] -- a served declared kind means the offer CAN include the kind the question names", material.Missing)
+	}
+	if len(material.KindOptions) != 2 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectTeam || material.KindOptions[1].Kind != contractsv1.ContextFabricSubjectPullRequest {
+		t.Fatalf("KindOptions = %+v, want [team, pull_request] -- the served declared kind ranked first, the unservable one withheld", material.KindOptions)
+	}
+	if diag.SuppressedByUnservableDeclaredKind {
+		t.Fatalf("diag = %+v, want SuppressedByUnservableDeclaredKind FALSE -- one declared kind was admitted", diag)
+	}
+	if diag.DeclaredHintCount != 1 || diag.DeclaredWithheldNotInPoolCount != 1 {
+		t.Fatalf("diag = %+v, want DeclaredHintCount 1 (team) and DeclaredWithheldNotInPoolCount 1 (project)", diag)
+	}
+}
+
+// TestKindOfferMaterial_ExplicitHintSurvivesAnUnservableDeclaredKind pins the
+// precondition on the suppression: a caller-supplied ExpectedKinds hint is
+// caller-verified intent on its own axis. Suppressing an offer the CALLER asked
+// for because the FRAME declared something unservable would discard that intent,
+// so the suppression only ever applies when there is no explicit hint at all.
+func TestKindOfferMaterial_ExplicitHintSurvivesAnUnservableDeclaredKind(t *testing.T) {
+	t.Parallel()
+	poolKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}
+	explicitKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem}
+	declaredKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectProject}
+
+	material, diag := kindOfferMaterial(poolKinds, explicitKinds, declaredKinds, heldFromKinds(poolKinds...))
+
+	if diag.SuppressedByUnservableDeclaredKind {
+		t.Fatalf("diag = %+v, want SuppressedByUnservableDeclaredKind FALSE -- an explicit caller hint is present", diag)
+	}
+	if len(material.KindOptions) != 2 || material.KindOptions[0].Kind != contractsv1.ContextFabricSubjectWorkItem {
+		t.Fatalf("KindOptions = %+v, want [work_item, team] with the explicit hint first", material.KindOptions)
+	}
+	// Control on the SAME fixture with the explicit hint removed: without it the
+	// identical inputs DO suppress. Without this the assertion above would pass
+	// for a rule that never suppresses anything.
+	material, diag = kindOfferMaterial(poolKinds, nil, declaredKinds, heldFromKinds(poolKinds...))
+	if !diag.SuppressedByUnservableDeclaredKind || len(material.KindOptions) != 0 {
+		t.Fatalf("control: kindOfferMaterial(no explicit hint) = %+v diag=%+v, want suppressed", material, diag)
 	}
 }
 
@@ -110,13 +174,14 @@ func TestKindOfferMaterial_NilPoolHeldKindsWithholdsDeclaredKinds(t *testing.T) 
 	}
 	declaredKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}
 
-	// team IS in poolKinds; only the missing poolHeld withholds it.
+	// team IS in poolKinds; only the missing poolHeld withholds it, and with the
+	// only declared kind withheld the whole need is suppressed.
 	material, diag := kindOfferMaterial(poolKinds, nil, declaredKinds, nil)
 	if diag.DeclaredHintCount != 0 || diag.DeclaredWithheldNotInPoolCount != 1 {
 		t.Fatalf("diag = %+v, want a nil poolHeld to withhold every declared kind (fail closed)", diag)
 	}
-	if len(material.KindOptions) != 2 {
-		t.Fatalf("KindOptions = %+v, want the 2 pool kinds", material.KindOptions)
+	if !diag.SuppressedByUnservableDeclaredKind || len(material.KindOptions) != 0 {
+		t.Fatalf("material = %+v diag = %+v, want the need suppressed", material, diag)
 	}
 
 	// Positive control on the SAME inputs: with membership supplied, team is
@@ -203,31 +268,43 @@ func TestOfferableKindsInPool_IsTheRepairProjectionsOwnPredicate(t *testing.T) {
 	}
 }
 
-// TestResolveSubjects_DeclaredKindAbsentFromPoolNeverReachesTheOffer is the
-// END-TO-END half: the same defect through the production resolve path, not
-// the pure function alone. The frame declares `project`; retrieval returns
-// only a team and a pull request; the offer that reaches the caller must not
-// name a kind that would empty the pool on the next turn.
-func TestResolveSubjects_DeclaredKindAbsentFromPoolNeverReachesTheOffer(t *testing.T) {
+// TestResolveSubjects_QbScopedShapeRaisesNoNeedAndKeepsThePoolAcrossTurns is the
+// END-TO-END half, through the production resolve path rather than the pure
+// function, on the shape the three regressed corpus rows share: the frame
+// declares `project`, retrieval returns a team and a pull request, and no
+// project exists anywhere.
+//
+// Turn 1 must raise no expected_kind need at all, so there is no unservable
+// option for a caller to commit. Turn 2 then runs with no confirmed kind and the
+// candidate pool survives — which is the whole point: at 248d7ca0 turn 1 offered
+// `project`, turn 2's confirmed-kind filter deleted every candidate, and the row
+// came back no_match.
+func TestResolveSubjects_QbScopedShapeRaisesNoNeedAndKeepsThePoolAcrossTurns(t *testing.T) {
 	t.Parallel()
 	teamNode := candidateNode(contextfabric.SubjectTeam, "team:CHAOS", "CHAOS", 0.55, "*")
 	prNode := candidateNode(contextfabric.SubjectPullRequest, "pr:1", "CHAOS pull request", 0.5, "*")
-	backend := &fakeGraphBackend{
-		searchResults: map[string][]CandidateNode{"CHAOS": {teamNode, prNode}},
+	newBackend := func() *fakeGraphBackend {
+		return &fakeGraphBackend{
+			searchResults: map[string][]CandidateNode{"CHAOS": {teamNode, prNode}},
+		}
 	}
-	tracer := &chaos4120Tracer{}
-	deps := backend.deps()
-	deps.ResolutionTracer = tracer
 	frame := namedSubjectFrame("CHAOS", kindOf(contractsv1.ContextFabricSubjectProject))
 
-	_, offer, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("CHAOS"), deps, nil, nil, frame, "")
+	// Turn 1: no expected_kind need, and nothing for a caller to pick.
+	tracer := &chaos4120Tracer{}
+	turnOneDeps := newBackend().deps()
+	turnOneDeps.ResolutionTracer = tracer
+	_, offer, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("CHAOS"), turnOneDeps, nil, nil, frame, "")
 	if err != nil {
-		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+		t.Fatalf("turn 1 ResolveSubjectsWithCommitBasis() error = %v", err)
 	}
-	for _, option := range offer.KindOptions {
-		if option.Kind == contractsv1.ContextFabricSubjectProject {
-			t.Fatalf("offer.KindOptions = %+v, want NO project -- nothing in the pool can serve it, and a caller who picks it gets an empty pool and a no_match", offer.KindOptions)
+	for _, need := range offer.Missing {
+		if need == contractsv1.ContextFabricStructureNeedExpectedKind {
+			t.Fatalf("turn 1 offer.Missing = %v, want NO expected_kind need -- the declared kind cannot be served and the pool's own kinds are not what the question asked about", offer.Missing)
 		}
+	}
+	if len(offer.KindOptions) != 0 {
+		t.Fatalf("turn 1 offer.KindOptions = %+v, want none", offer.KindOptions)
 	}
 
 	// The decision must be visible, not merely taken.
@@ -238,14 +315,27 @@ func TestResolveSubjects_DeclaredKindAbsentFromPoolNeverReachesTheOffer(t *testi
 	if withheld[0].KindOfferDeclaredWithheldNotInPoolCount != 1 {
 		t.Fatalf("withheld count = %d, want 1", withheld[0].KindOfferDeclaredWithheldNotInPoolCount)
 	}
+	if !withheld[0].KindOfferSuppressedByUnservableDeclaredKind {
+		t.Fatalf("withheld event = %+v, want KindOfferSuppressedByUnservableDeclaredKind true", withheld[0])
+	}
 	if !reflect.DeepEqual(withheld[0].KindOfferDeclaredWithheldKinds, []string{string(contractsv1.ContextFabricSubjectProject)}) {
 		t.Fatalf("withheld kinds = %v, want [project]", withheld[0].KindOfferDeclaredWithheldKinds)
 	}
-	// The unconditional kind_offer line carries the same count, so a 0
-	// reading stays observable.
+	// The unconditional kind_offer line carries the same readings, so a 0 stays
+	// observable.
 	offers := tracer.eventsByStage("kind_offer")
-	if len(offers) != 1 || offers[0].KindOfferDeclaredWithheldNotInPoolCount != 1 {
-		t.Fatalf("kind_offer events = %+v, want exactly 1 carrying withheld count 1", offers)
+	if len(offers) != 1 || offers[0].KindOfferDeclaredWithheldNotInPoolCount != 1 || !offers[0].KindOfferSuppressedByUnservableDeclaredKind {
+		t.Fatalf("kind_offer events = %+v, want exactly 1 carrying withheld count 1 and the suppression reason", offers)
+	}
+
+	// Turn 2: with no offer there is no kind to confirm, so the pool survives.
+	turnTwoDeps := newBackend().deps()
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted("CHAOS"), turnTwoDeps, nil, nil, frame, "")
+	if err != nil {
+		t.Fatalf("turn 2 ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	if len(resolution.Candidates) == 0 && len(resolution.Committed) == 0 {
+		t.Fatalf("turn 2 left an EMPTY pool (candidates %d, committed %d) -- this is the regressed shape: the pool must survive when no unservable kind was ever offered", len(resolution.Candidates), len(resolution.Committed))
 	}
 }
 
@@ -315,10 +405,11 @@ func TestChaos5218_ProductionSinkEmitsTheWithholdingAtTheProductionLogLevel(t *t
 	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	NewSlogResolutionTracer(logger).Trace(ResolutionTraceEvent{
 		RequestID: "req_5218_sink", Stage: "kind_offer_withheld",
-		KindOfferDeclaredWithheldNotInPoolCount: 1,
-		KindOfferDeclaredWithheldKinds:          []string{string(contractsv1.ContextFabricSubjectProject)},
-		KindOfferDeclaredHintCount:              0,
-		KindOfferDistinctKindCount:              2,
+		KindOfferDeclaredWithheldNotInPoolCount:     1,
+		KindOfferDeclaredWithheldKinds:              []string{string(contractsv1.ContextFabricSubjectProject)},
+		KindOfferSuppressedByUnservableDeclaredKind: true,
+		KindOfferDeclaredHintCount:                  0,
+		KindOfferDistinctKindCount:                  2,
 	})
 	line := strings.TrimSpace(buffer.String())
 	if line == "" {
@@ -341,6 +432,9 @@ func TestChaos5218_ProductionSinkEmitsTheWithholdingAtTheProductionLogLevel(t *t
 	kinds, ok := record["withheld_kinds"].([]any)
 	if !ok || len(kinds) != 1 || kinds[0] != string(contractsv1.ContextFabricSubjectProject) {
 		t.Fatalf("withheld_kinds = %v, want [project]", record["withheld_kinds"])
+	}
+	if got := record["suppressed_by_unservable_declared_kind"]; got != true {
+		t.Fatalf("suppressed_by_unservable_declared_kind = %v, want true -- asserted at a NON-ZERO value, since a bool asserted false would pass for a dropped assignment", got)
 	}
 	if !strings.Contains(line, "kind offer withheld") {
 		t.Fatalf("line = %q, want the kind offer withheld message", line)

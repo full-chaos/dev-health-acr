@@ -163,19 +163,21 @@ func TestKindOfferMaterial_DeclaredKindRanksFirstAlongsidePool(t *testing.T) {
 	}
 	declaredKinds := []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}
 	material, diag := kindOfferMaterial(poolKinds, nil, declaredKinds, heldFromKinds(poolKinds...))
-	if len(material.Missing) != 1 || material.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
-		t.Fatalf("material.Missing = %v, want [expected_kind] -- a genuinely multi-kind pool still raises the need", material.Missing)
+	// CHAOS-5218: repository cannot be offered, so under CHAOS-4967's own
+	// disjunction the need is not raised at all -- offering the four unrelated
+	// pool kinds instead is exactly the list-that-omits-the-named-kind state
+	// CHAOS-4967 filed.
+	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
+		t.Fatalf("kindOfferMaterial() = %+v, want NO need raised -- the declared kind has no candidate of its own", material)
 	}
-	if len(material.KindOptions) != 4 {
-		t.Fatalf("len(material.KindOptions) = %d, want 4 (the pool kinds only) -- CHAOS-5218: a declared kind with no candidate of its own is not offerable", len(material.KindOptions))
+	if !diag.SuppressedByUnservableDeclaredKind {
+		t.Fatalf("diag = %+v, want SuppressedByUnservableDeclaredKind true", diag)
 	}
-	for _, opt := range material.KindOptions {
-		if opt.Kind == contractsv1.ContextFabricSubjectRepository {
-			t.Fatalf("KindOptions = %+v, want NO repository -- the pool holds none, so the offer cannot be honoured", material.KindOptions)
-		}
+	if diag.SuppressedByCardinality {
+		t.Fatalf("diag = %+v, want SuppressedByCardinality FALSE -- the pool held four distinct kinds; cardinality is not the reason", diag)
 	}
-	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 1, DeclaredWithheldNotInPoolKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}, DistinctKindCount: 4, SuppressedByCardinality: false}) {
-		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:0 DeclaredWithheldNotInPoolCount:1 DeclaredWithheldNotInPoolKinds:[repository] DistinctKindCount:4 SuppressedByCardinality:false}", diag)
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 1, DeclaredWithheldNotInPoolKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}, SuppressedByUnservableDeclaredKind: true, DistinctKindCount: 4, SuppressedByCardinality: false}) {
+		t.Errorf("diag = %+v, want DeclaredWithheldNotInPoolCount:1 Kinds:[repository] SuppressedByUnservableDeclaredKind:true DistinctKindCount:4 SuppressedByCardinality:false", diag)
 	}
 
 	// The CHAOS-4967 property CHAOS-5218 preserves, on the SAME fixture with
@@ -215,8 +217,8 @@ func TestKindOfferMaterial_DeclaredKindAloneSuppressesNeed(t *testing.T) {
 	// diagnostics move because DistinctKindCount now reads 0 ("genuinely
 	// nothing offerable") instead of 1, which is the more accurate reading of
 	// an empty pool.
-	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 1, DeclaredWithheldNotInPoolKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}, DistinctKindCount: 0, SuppressedByCardinality: true}) {
-		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:0 DeclaredWithheldNotInPoolCount:1 DeclaredWithheldNotInPoolKinds:[repository] DistinctKindCount:0 SuppressedByCardinality:true}", diag)
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 1, DeclaredWithheldNotInPoolKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}, SuppressedByUnservableDeclaredKind: true, DistinctKindCount: 0}) {
+		t.Errorf("diag = %+v, want SuppressedByUnservableDeclaredKind:true (an empty pool cannot serve the declared kind either, and that reason now fires BEFORE the cardinality gate, so SuppressedByCardinality stays false)", diag)
 	}
 }
 
@@ -240,7 +242,7 @@ func TestKindOfferMaterial_TwoDeclaredKindsAloneSuppressesNeed(t *testing.T) {
 		t.Errorf("kindOfferMaterial(nil pool, nil explicit, [team, project] declared) = %+v, want empty -- two already-declared axes are not an ambiguity to disclose", material)
 	}
 	// CHAOS-5218: both declared kinds are withheld against an empty pool.
-	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 2, DeclaredWithheldNotInPoolKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectProject}, DistinctKindCount: 0, SuppressedByCardinality: true}) {
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 2, DeclaredWithheldNotInPoolKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectProject}, SuppressedByUnservableDeclaredKind: true, DistinctKindCount: 0}) {
 		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:0 DeclaredWithheldNotInPoolCount:2 DeclaredWithheldNotInPoolKinds:[team project] DistinctKindCount:0 SuppressedByCardinality:true}", diag)
 	}
 
@@ -255,7 +257,7 @@ func TestKindOfferMaterial_TwoDeclaredKindsAloneSuppressesNeed(t *testing.T) {
 	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
 		t.Fatalf("kindOfferMaterial([pull_request] pool, nil explicit, [team, project] declared) = %+v, want empty -- neither declared kind is in the pool, so only pull_request remains and one kind is not an ambiguity", material)
 	}
-	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 2, DeclaredWithheldNotInPoolKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectProject}, DistinctKindCount: 1, SuppressedByCardinality: true}) {
+	if !reflect.DeepEqual(diag, kindOfferDiagnostics{ExplicitHintCount: 0, DeclaredHintCount: 0, DeclaredWithheldNotInPoolCount: 2, DeclaredWithheldNotInPoolKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectProject}, SuppressedByUnservableDeclaredKind: true, DistinctKindCount: 1}) {
 		t.Errorf("diag = %+v, want {ExplicitHintCount:0 DeclaredHintCount:0 DeclaredWithheldNotInPoolCount:2 DeclaredWithheldNotInPoolKinds:[team project] DistinctKindCount:1 SuppressedByCardinality:true}", diag)
 	}
 

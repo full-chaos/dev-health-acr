@@ -214,6 +214,10 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"declared_withheld_not_in_pool_count", event.KindOfferDeclaredWithheldNotInPoolCount,
 			"distinct_kind_count", event.KindOfferDistinctKindCount,
 			"suppressed_by_cardinality", event.KindOfferSuppressedByCardinality,
+			// CHAOS-5218: the OTHER suppression reason, reported beside it -- an
+			// operator must be able to tell "nothing to disambiguate" from "the
+			// kind this question is about cannot be served".
+			"suppressed_by_unservable_declared_kind", event.KindOfferSuppressedByUnservableDeclaredKind,
 			"candidate_offer_count", event.KindOfferCandidateOfferCount,
 			"offer_kind", event.KindOfferOfferKind,
 			// CHAOS-4210: how many of candidate_offer_count's own options
@@ -267,7 +271,8 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"withheld_kinds", event.KindOfferDeclaredWithheldKinds,
 			"declared_hint_count", event.KindOfferDeclaredHintCount,
 			"distinct_kind_count", event.KindOfferDistinctKindCount,
-			"suppressed_by_cardinality", event.KindOfferSuppressedByCardinality)
+			"suppressed_by_cardinality", event.KindOfferSuppressedByCardinality,
+			"suppressed_by_unservable_declared_kind", event.KindOfferSuppressedByUnservableDeclaredKind)
 	case "anchor_offer":
 		// CHAOS-4210: unconditional, mirroring kind_offer's own "fires on
 		// EVERY resolution" discipline -- see

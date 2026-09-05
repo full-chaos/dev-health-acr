@@ -929,9 +929,17 @@ type ResolutionTraceEvent struct {
 	// carries, for the same reason: an operator diagnosing a no_match needs to
 	// know which axis went missing from the offer, and a bare count cannot say.
 	// Never a canonical id, never candidate identity.
-	KindOfferDeclaredWithheldKinds   []string
-	KindOfferDistinctKindCount       int
-	KindOfferSuppressedByCardinality bool
+	KindOfferDeclaredWithheldKinds []string
+	// KindOfferSuppressedByUnservableDeclaredKind (CHAOS-5218) is
+	// kindOfferDiagnostics.SuppressedByUnservableDeclaredKind: the frame declared
+	// at least one offerable kind, none of them could be offered, and no explicit
+	// caller hint was present, so the expected_kind need was not raised at all.
+	// Reported separately from KindOfferSuppressedByCardinality because the two
+	// answer different operator questions -- "nothing to disambiguate" versus
+	// "the kind this question is about cannot be served".
+	KindOfferSuppressedByUnservableDeclaredKind bool
+	KindOfferDistinctKindCount                  int
+	KindOfferSuppressedByCardinality            bool
 	// KindOfferCandidateOfferCount/KindOfferOfferKind (stage=="kind_offer"
 	// ONLY, CHAOS-4012 v22) describe candidateOfferMaterial's own
 	// independent axis (chaos3900_structure_offers.go): the ranked-
@@ -2789,6 +2797,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			KindOfferExplicitHintCount:                   kindOfferDiag.ExplicitHintCount,
 			KindOfferDeclaredHintCount:                   kindOfferDiag.DeclaredHintCount,
 			KindOfferDeclaredWithheldNotInPoolCount:      kindOfferDiag.DeclaredWithheldNotInPoolCount,
+			KindOfferSuppressedByUnservableDeclaredKind:  kindOfferDiag.SuppressedByUnservableDeclaredKind,
 			KindOfferDistinctKindCount:                   kindOfferDiag.DistinctKindCount,
 			KindOfferSuppressedByCardinality:             kindOfferDiag.SuppressedByCardinality,
 			KindOfferCandidateOfferCount:                 candidateOfferDiag.CandidateOfferCount,
@@ -2850,11 +2859,12 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if deps.ResolutionTracer != nil && kindOfferDiag.DeclaredWithheldNotInPoolCount > 0 {
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 			RequestID: request.RequestID, Stage: "kind_offer_withheld",
-			KindOfferDeclaredWithheldNotInPoolCount: kindOfferDiag.DeclaredWithheldNotInPoolCount,
-			KindOfferDeclaredWithheldKinds:          subjectKindStrings(kindOfferDiag.DeclaredWithheldNotInPoolKinds),
-			KindOfferDeclaredHintCount:              kindOfferDiag.DeclaredHintCount,
-			KindOfferDistinctKindCount:              kindOfferDiag.DistinctKindCount,
-			KindOfferSuppressedByCardinality:        kindOfferDiag.SuppressedByCardinality,
+			KindOfferDeclaredWithheldNotInPoolCount:     kindOfferDiag.DeclaredWithheldNotInPoolCount,
+			KindOfferSuppressedByUnservableDeclaredKind: kindOfferDiag.SuppressedByUnservableDeclaredKind,
+			KindOfferDeclaredWithheldKinds:              subjectKindStrings(kindOfferDiag.DeclaredWithheldNotInPoolKinds),
+			KindOfferDeclaredHintCount:                  kindOfferDiag.DeclaredHintCount,
+			KindOfferDistinctKindCount:                  kindOfferDiag.DistinctKindCount,
+			KindOfferSuppressedByCardinality:            kindOfferDiag.SuppressedByCardinality,
 		})
 	}
 	anchorOffer, anchorOfferDiag := anchorOfferMaterial(claimantsFromCandidateNodes(aliasClaimantsByTerm), claimantsFromCandidateNodes(authorizedClaimantNodes(principal, request.RequestedScope, aliasClaimantsByTerm)), aliasIdentityComplete, deps.AnchorMembershipOffersEnabled)

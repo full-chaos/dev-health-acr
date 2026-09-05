@@ -153,6 +153,13 @@ func poolHeldKindsOf(pool map[string]contextfabric.SubjectCandidate) poolHeldKin
 // not be raised for that need at all." A kind with nothing behind it can be
 // neither included honestly nor honoured, so it is withheld and counted.
 //
+// When the frame declared at least one offerable kind and NONE of them can be
+// offered, this function raises no expected_kind need at all -- CHAOS-4967's own
+// second branch. Raising it anyway would hand back a list that omits the kind the
+// question names, which is precisely the state CHAOS-4967 filed. The PARTIAL case
+// is different and is not suppressed: when at least one declared kind survives,
+// the offer includes a declared kind and the unservable siblings are withheld.
+//
 // CHAOS-4967: before this parameter existed, the frame's own declared kind
 // (already threaded to hintedPoolKinds/applyKindHintedPoolSearch for
 // RETRIEVAL, resolve.go:1925) had no path into the OFFER -- a
@@ -205,6 +212,15 @@ type kindOfferDiagnostics struct {
 	// makes kindOfferDiagnostics non-comparable with ==; tests use
 	// reflect.DeepEqual.
 	DeclaredWithheldNotInPoolKinds []contractsv1.ContextFabricSubjectKind
+	// SuppressedByUnservableDeclaredKind (CHAOS-5218) is true exactly when the
+	// frame declared at least one offerable kind, none of them reached the
+	// option list, and no caller-supplied explicit hint was present -- the
+	// CHAOS-4967 disjunction's second branch. It is a DIFFERENT reason from
+	// SuppressedByCardinality (which is about how many distinct kinds there are
+	// to pick between) and the two are reported separately so an operator can
+	// tell "nothing to disambiguate" from "the kind this question is about
+	// cannot be served".
+	SuppressedByUnservableDeclaredKind bool
 	// DistinctKindCount is len(ranked) at the moment the suppression check
 	// runs -- explicit hints, declared hints and pool-derived kinds,
 	// deduped, restricted to the closed structureOfferKinds set. 0 means
@@ -250,8 +266,31 @@ func kindOfferMaterial(poolKinds []contractsv1.ContextFabricSubjectKind, explici
 	declaredCount := 0
 	declaredWithheldNotInPool := 0
 	var declaredWithheldKinds []contractsv1.ContextFabricSubjectKind
+	// CHAOS-5218: declaredOfferable counts the frame-declared kinds that are in
+	// the offer vocabulary at all, deduped among themselves; declaredAdmitted
+	// counts how many of those actually reach the caller's option list, whether
+	// this loop ranked them or an explicit hint had already claimed the same
+	// kind. The pair is what the disjunction below is decided on -- neither
+	// declaredCount (which misses the explicit-hint overlap) nor
+	// declaredWithheldNotInPool (which misses kinds outside the vocabulary)
+	// answers it alone.
+	declaredOfferable := 0
+	declaredAdmitted := 0
+	seenDeclared := make(map[contractsv1.ContextFabricSubjectKind]bool, len(declaredKinds))
 	for _, kind := range declaredKinds {
-		if seen[kind] || !structureOfferKinds[kind] {
+		if !structureOfferKinds[kind] {
+			continue
+		}
+		if seenDeclared[kind] {
+			continue
+		}
+		seenDeclared[kind] = true
+		declaredOfferable++
+		if seen[kind] {
+			// Already claimed by a caller-supplied explicit hint: the kind IS
+			// in the offer, so it counts as admitted even though this loop did
+			// not put it there.
+			declaredAdmitted++
 			continue
 		}
 		// CHAOS-5218: a declared kind is offered ONLY when the pool holds at
@@ -283,6 +322,7 @@ func kindOfferMaterial(poolKinds []contractsv1.ContextFabricSubjectKind, explici
 		seen[kind] = true
 		ranked = append(ranked, kind)
 		declaredCount++
+		declaredAdmitted++
 	}
 	var poolDistinct []contractsv1.ContextFabricSubjectKind
 	for _, kind := range poolKinds {
@@ -294,6 +334,30 @@ func kindOfferMaterial(poolKinds []contractsv1.ContextFabricSubjectKind, explici
 	}
 	ranked = append(ranked, poolDistinct...)
 	diagnostics := kindOfferDiagnostics{ExplicitHintCount: explicitCount, DeclaredHintCount: declaredCount, DeclaredWithheldNotInPoolCount: declaredWithheldNotInPool, DeclaredWithheldNotInPoolKinds: declaredWithheldKinds, DistinctKindCount: len(ranked)}
+	// CHAOS-5218, the ticket's own disjunction applied mechanically. CHAOS-4967
+	// asks for one of exactly two outcomes: "The offer must include the frame's
+	// declared kind when one exists, OR the clarification must not be raised for
+	// that need at all." When the frame declared at least one offerable kind and
+	// NONE of them reached the option list, neither branch is available with the
+	// need raised -- an offer that omits the kind the question names is the very
+	// state CHAOS-4967 called a defect (a caller answering by position then
+	// manufactures a wrong-kind answer), and offering the declared kind is
+	// impossible because nothing in the pool can serve it. So the need is not
+	// raised at all.
+	//
+	// The partial case is deliberately NOT suppressed: when at least one
+	// declared kind survives, the offer includes a declared kind, CHAOS-4967's
+	// first branch is satisfied, and the unservable siblings are simply withheld
+	// (counted in DeclaredWithheldNotInPoolCount).
+	//
+	// explicitCount == 0 is a precondition, not a convenience: a caller-supplied
+	// ExpectedKinds hint is caller-verified intent on its own axis, and
+	// suppressing an offer the caller explicitly asked for because the FRAME
+	// declared something unservable would discard that intent.
+	if explicitCount == 0 && declaredOfferable > 0 && declaredAdmitted == 0 {
+		diagnostics.SuppressedByUnservableDeclaredKind = true
+		return contextfabric.StructureOfferMaterial{}, diagnostics
+	}
 	// The pool alone still needs >=2 DISTINCT kinds (its own kinds plus
 	// whatever explicit kinds already claimed) to be worth disambiguating
 	// on its own; an explicit kind is ALWAYS worth offering regardless of

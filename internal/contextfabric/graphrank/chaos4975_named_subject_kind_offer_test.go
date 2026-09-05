@@ -116,22 +116,16 @@ func TestKindOfferMaterial_NamedSubjectDeclaredKind(t *testing.T) {
 	declaredKinds := frameKindHints(namedSubjectFrame("acr", kindOf(contractsv1.ContextFabricSubjectProject)))
 
 	material, diag := kindOfferMaterial(pool, nil, declaredKinds, heldFromKinds(pool...))
-	for _, opt := range material.KindOptions {
-		if opt.Kind == contractsv1.ContextFabricSubjectProject {
-			t.Fatalf("KindOptions = %v, want NO project -- CHAOS-5218: the rig pool holds none, so the offer could not be honoured", material.KindOptions)
-		}
+	// CHAOS-5218: the rig pool holds no project, so the need is not raised at
+	// all rather than raised with a list that omits the kind the question named.
+	if len(material.Missing) != 0 || len(material.KindOptions) != 0 {
+		t.Fatalf("kindOfferMaterial() = %+v, want NO need raised", material)
+	}
+	if !diag.SuppressedByUnservableDeclaredKind {
+		t.Fatalf("diag = %+v, want SuppressedByUnservableDeclaredKind true", diag)
 	}
 	if diag.DeclaredWithheldNotInPoolCount != 1 {
 		t.Fatalf("diag = %+v, want DeclaredWithheldNotInPoolCount 1 (project declared, absent from the pool)", diag)
-	}
-	hasRepository := false
-	for _, opt := range material.KindOptions {
-		if opt.Kind == contractsv1.ContextFabricSubjectRepository {
-			hasRepository = true
-		}
-	}
-	if !hasRepository {
-		t.Fatalf("KindOptions = %v, want repository still present -- withholding an unservable declared kind must not disturb the pool kinds", material.KindOptions)
 	}
 
 	// CHAOS-4975's own property, on the SAME fixture with project in the pool:
@@ -170,7 +164,10 @@ func TestKindOfferMaterial_NamedSubjectDeclaredKindAloneNeverRaisesTheNeed(t *te
 	if len(material.KindOptions) != 0 || material.Missing != nil {
 		t.Fatalf("kindOfferMaterial() = %+v, want a suppressed (empty) offer with an empty pool", material)
 	}
-	if !diagnostics.SuppressedByCardinality {
-		t.Fatalf("diagnostics.SuppressedByCardinality = false, want true")
+	// CHAOS-5218: with an empty pool the declared kind is unservable, and that
+	// reason fires ahead of the cardinality gate -- the OUTCOME this test exists
+	// for (no need raised) is unchanged.
+	if !diagnostics.SuppressedByUnservableDeclaredKind {
+		t.Fatalf("diagnostics = %+v, want SuppressedByUnservableDeclaredKind true", diagnostics)
 	}
 }
