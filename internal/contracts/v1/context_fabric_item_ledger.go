@@ -1,6 +1,9 @@
 package v1
 
-import "strconv"
+import (
+	"sort"
+	"strconv"
+)
 
 // The ITEM LEDGER: an occurrence-level account of what a Context Fabric answer
 // actually charged, reconciled against the two totals this package already
@@ -151,6 +154,13 @@ const (
 	// That is one occurrence dropped and another charged twice, which is the
 	// shape every total in this package survives unchanged.
 	ContextFabricLedgerDuplicateOccurrence ContextFabricLedgerStatus = "duplicate_occurrence"
+	// ContextFabricLedgerInvalidDebit: a debit names a collection or a
+	// bucket outside its closed vocabulary. The ledger's fields are
+	// exported, so without this a forged debit -- a "paths" collection, a
+	// bucket that is not a bucket -- contributes to the total, escapes the
+	// per-collection comparison (which only walks KNOWN collections) and
+	// can be handed a capacity certificate.
+	ContextFabricLedgerInvalidDebit ContextFabricLedgerStatus = "invalid_debit"
 )
 
 // WHAT IS DELIBERATELY NOT A MEMBER: a "total disagreement". Once every
@@ -159,11 +169,12 @@ const (
 // that can never be reached is not a diagnosis, it is a token a dashboard will
 // filter on forever and never see, so the property is asserted directly in the
 // tests instead of published as an unreachable member.
-var contextFabricLedgerStatuses = [4]ContextFabricLedgerStatus{
+var contextFabricLedgerStatuses = [5]ContextFabricLedgerStatus{
 	ContextFabricLedgerReconciled,
 	ContextFabricLedgerCollectionDisagreement,
 	ContextFabricLedgerBucketDisagreement,
 	ContextFabricLedgerDuplicateOccurrence,
+	ContextFabricLedgerInvalidDebit,
 }
 
 // ContextFabricLedgerStatusCount is the closed vocabulary's size.
@@ -205,6 +216,21 @@ type ContextFabricItemLedger struct {
 	// source; this is the field that makes the defect diagnosable from the
 	// artifact.
 	Disagreement string `json:"disagreement,omitempty"`
+
+	// RepeatedDeclaredIDs names every id that appears on more than one debit
+	// of the same collection, in vocabulary-then-id order.
+	//
+	// AN OBSERVATION, NOT A DEFECT, and the distinction was paid for. An
+	// earlier revision made a repeated id an accounting defect, and a real
+	// engine fixture -- two claimed facts sharing one id -- became a 500 on
+	// an account that balanced. But dropping the check entirely lost a
+	// genuine signal: the occurrence key proves one debit per position and
+	// says nothing about whether two positions hold the SAME source item.
+	//
+	// So identity is observed and reported, and the account stays
+	// reconciled. Enforcement, if the answer contract wants any, belongs to
+	// validation, which is where id uniqueness is already decided.
+	RepeatedDeclaredIDs []string `json:"repeated_declared_ids,omitempty"`
 
 	// declaredGroups are the cohort's group keys in declared order.
 	//
@@ -343,6 +369,7 @@ func ReconcileContextFabricResultItems(result ContextFabricInvestigationResult) 
 	// measured zero. Carried on the ledger rather than left to the reader,
 	// because the reader is the one that would otherwise have to remember.
 	ledger.declaredGroups = declaredGroups
+	ledger.RepeatedDeclaredIDs = contextFabricRepeatedDeclaredIDs(ledger.Debits)
 	ledger.Status, ledger.Disagreement = contextFabricReconcile(ledger)
 	return ledger
 }
@@ -385,39 +412,46 @@ func contextFabricSubjectsDebit(
 // contextFabricReconcile is the accounting check: three independent derivations
 // of the same answer, compared.
 //
-// ORDER MATTERS and is stated rather than incidental: a duplicate id is
-// reported before a count disagreement, because a duplicate is a statement
-// about WHICH items exist and a count is a statement about how many, and the
-// first explains the second wherever both are true.
+// ORDER MATTERS and is stated rather than incidental. Vocabulary validity comes
+// first, because a debit naming a collection nothing knows about cannot be
+// compared to anything -- it would contribute to the total and escape every
+// per-collection comparison, which walks only KNOWN collections. Then the
+// occurrence keys, which say WHICH items exist; then the counts, which say how
+// many; then the bucket split.
 func contextFabricReconcile(ledger ContextFabricItemLedger) (ContextFabricLedgerStatus, string) {
 	ordinals := map[ContextFabricChargedCollection]map[int]struct{}{}
 	perCollection := map[ContextFabricChargedCollection]int{}
 	perBucket := ContextFabricItemAttribution{}
 	for _, debit := range ledger.Debits {
+		// FAIL CLOSED on a debit outside either closed vocabulary. The
+		// ledger's fields are exported, so this is what stops a forged
+		// debit -- a "paths" collection, a bucket that is not a bucket --
+		// from being counted, escaping the comparisons and collecting a
+		// capacity certificate.
+		if !ValidContextFabricChargedCollection(debit.Collection) {
+			return ContextFabricLedgerInvalidDebit, "collection:" + string(debit.Collection)
+		}
+		if !ValidContextFabricItemBucket(debit.Bucket) {
+			return ContextFabricLedgerInvalidDebit, "bucket:" + string(debit.Bucket)
+		}
 		perCollection[debit.Collection]++
 		perBucket.charge(debit.Bucket)
-		// THE OCCURRENCE KEY, ENFORCED rather than merely documented.
-		// (Collection, Ordinal) is what makes this an occurrence-level
-		// account, and a check that trusted the walk to produce it could
-		// not see a ledger in which one occurrence was dropped and another
-		// charged twice -- the collection count, the bucket split and the
-		// total all survive that pairing untouched. Density is checked
-		// below, once the count is known.
 		byOrdinal, ok := ordinals[debit.Collection]
 		if !ok {
 			byOrdinal = map[int]struct{}{}
 			ordinals[debit.Collection] = byOrdinal
 		}
-		if _, repeated := byOrdinal[debit.Ordinal]; repeated {
-			return ContextFabricLedgerDuplicateOccurrence,
-				string(debit.Collection) + "#" + strconv.Itoa(debit.Ordinal)
-		}
 		byOrdinal[debit.Ordinal] = struct{}{}
 	}
 
-	// DENSE ordinals: a collection charging n occurrences must charge
-	// 0..n-1. Uniqueness alone admits {0, 2} for a two-item collection,
-	// which is one occurrence dropped and another invented.
+	// THE OCCURRENCE KEY: a collection charging n occurrences must charge
+	// exactly 0..n-1.
+	//
+	// Density alone is the whole check, and a separate duplicate-ordinal
+	// guard was removed as SUBSUMED rather than kept beside it: a repeated
+	// ordinal necessarily leaves a gap in the range, because the range is
+	// sized by the debit count. Two guards where one can fire is one guard
+	// no fixture can isolate.
 	for collection, byOrdinal := range ordinals {
 		for ordinal := 0; ordinal < perCollection[collection]; ordinal++ {
 			if _, present := byOrdinal[ordinal]; !present {
@@ -444,6 +478,51 @@ func contextFabricReconcile(ledger ContextFabricItemLedger) (ContextFabricLedger
 	}
 
 	return ContextFabricLedgerReconciled, ""
+}
+
+// contextFabricRepeatedDeclaredIDs reports every id carried by more than one
+// debit of the same collection, in vocabulary-then-id order.
+//
+// OBSERVATION ONLY -- it never decides the status. What the occurrence key
+// cannot see is whether two positions hold the same SOURCE item: a producer
+// that copies one item into two slots keeps the counts, the buckets, the total
+// and the ordinal range intact. This is the signal for that, reported rather
+// than enforced, because enforcing it once turned a real answer into a server
+// error.
+func contextFabricRepeatedDeclaredIDs(debits []ContextFabricItemDebit) []string {
+	seen := map[ContextFabricChargedCollection]map[string]int{}
+	for _, debit := range debits {
+		if debit.DeclaredID == "" {
+			continue
+		}
+		byID, ok := seen[debit.Collection]
+		if !ok {
+			byID = map[string]int{}
+			seen[debit.Collection] = byID
+		}
+		byID[debit.DeclaredID]++
+	}
+	repeated := []string{}
+	for _, collection := range contextFabricChargedCollections {
+		byID, ok := seen[collection]
+		if !ok {
+			continue
+		}
+		ids := make([]string, 0, len(byID))
+		for id, count := range byID {
+			if count > 1 {
+				ids = append(ids, id)
+			}
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			repeated = append(repeated, string(collection)+":"+id)
+		}
+	}
+	if len(repeated) == 0 {
+		return nil
+	}
+	return repeated
 }
 
 // contextFabricAttributionBucket reads ONE bucket off an attribution by name.

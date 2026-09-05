@@ -728,8 +728,38 @@ func TestTheLedgerVocabulariesAreClosedAndRejectTheEmptyValue(t *testing.T) {
 			t.Errorf("published status %q is not valid", member)
 		}
 	}
+	// EVERY NAMED CONSTANT MUST BE PUBLISHED, listed here by hand. The size
+	// check above is derived from the array itself, so deleting a member
+	// from the array shrinks both sides and passes -- a constant would go on
+	// existing, reachable from the reconciler, and absent from the
+	// vocabulary a consumer enumerates.
+	for _, named := range []ContextFabricLedgerStatus{
+		ContextFabricLedgerReconciled,
+		ContextFabricLedgerCollectionDisagreement,
+		ContextFabricLedgerBucketDisagreement,
+		ContextFabricLedgerDuplicateOccurrence,
+		ContextFabricLedgerInvalidDebit,
+	} {
+		if !ValidContextFabricLedgerStatus(named) {
+			t.Errorf("status constant %q is named in the package but not published in the vocabulary", named)
+		}
+	}
 	if ValidContextFabricLedgerStatus("") {
 		t.Error("the empty ledger status validates, so an unset status could read as reconciled")
+	}
+
+	for _, named := range []ContextFabricChargedCollection{
+		ContextFabricChargedCandidates,
+		ContextFabricChargedCohortMembers,
+		ContextFabricChargedDrivers,
+		ContextFabricChargedRemainingWork,
+		ContextFabricChargedReadinessGaps,
+		ContextFabricChargedConflicts,
+		ContextFabricChargedClaimedFacts,
+	} {
+		if !ValidContextFabricChargedCollection(named) {
+			t.Errorf("collection constant %q is named but not published", named)
+		}
 	}
 
 	verdicts := ContextFabricCapacityVerdictVocabulary()
@@ -739,6 +769,16 @@ func TestTheLedgerVocabulariesAreClosedAndRejectTheEmptyValue(t *testing.T) {
 	for _, member := range verdicts {
 		if !ValidContextFabricCapacityVerdict(member) {
 			t.Errorf("published verdict %q is not valid", member)
+		}
+	}
+	for _, named := range []ContextFabricCapacityVerdict{
+		ContextFabricCapacityCertifiedFit,
+		ContextFabricCapacityOverdraw,
+		ContextFabricCapacityUnbounded,
+		ContextFabricCapacityAccountingDefect,
+	} {
+		if !ValidContextFabricCapacityVerdict(named) {
+			t.Errorf("verdict constant %q is named but not published", named)
 		}
 	}
 	if ValidContextFabricCapacityVerdict("") {
@@ -764,5 +804,155 @@ func TestTheLedgerAccountsForTheDocumentInHand(t *testing.T) {
 	}
 	if !after.Reconciled() {
 		t.Fatalf("the re-measured document did not reconcile: %q", after.Status)
+	}
+}
+
+// TestAForgedDebitCannotBeCertified is round 2's second finding. The ledger's
+// fields are exported, so a hand-built debit naming a collection nothing knows
+// about used to contribute to the total, escape the per-collection comparison
+// (which walks only KNOWN collections) and collect a capacity certificate.
+func TestAForgedDebitCannotBeCertified(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name  string
+		debit ContextFabricItemDebit
+		want  string
+	}{
+		{
+			name:  "a collection outside the vocabulary",
+			debit: ContextFabricItemDebit{Collection: ContextFabricChargedCollection("paths"), Bucket: ContextFabricItemBucketGlobal},
+			want:  "collection:paths",
+		},
+		{
+			name:  "a bucket outside the vocabulary",
+			debit: ContextFabricItemDebit{Collection: ContextFabricChargedCandidates, Bucket: ContextFabricItemBucket("not-a-bucket")},
+			want:  "bucket:not-a-bucket",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			forged := ContextFabricItemLedger{
+				Debits:      []ContextFabricItemDebit{testCase.debit},
+				Attribution: ContextFabricItemAttribution{Global: 1},
+			}
+			status, disagreement := contextFabricReconcile(forged)
+			if status != ContextFabricLedgerInvalidDebit {
+				t.Fatalf("status = %q, want %q", status, ContextFabricLedgerInvalidDebit)
+			}
+			if disagreement != testCase.want {
+				t.Errorf("disagreement = %q, want %q", disagreement, testCase.want)
+			}
+			certificate, verdict := CertifyContextFabricCapacity(forged, ContextFabricResponseBudget{MaxItems: 1})
+			if certificate.Certified() || verdict != ContextFabricCapacityAccountingDefect {
+				t.Fatalf("a forged debit was certified: verdict %q certified %v", verdict, certificate.Certified())
+			}
+		})
+	}
+}
+
+// TestTwoOccurrencesCarryingOneSourceItemAreOBSERVED is round 2's first
+// finding, and the shape of the answer is the point.
+//
+// The occurrence key proves one debit per position; it cannot prove that
+// position 1 holds a different source item from position 0. A producer that
+// copies one item into two slots keeps the counts, the buckets, the total AND
+// the ordinal range intact. Round 1 asked for an id check, round 2 showed what
+// the key cannot see, and the fixture in between showed what enforcing it costs
+// -- a real answer turned into a 500. So identity is REPORTED and the account
+// stays reconciled.
+func TestTwoOccurrencesCarryingOneSourceItemAreObserved(t *testing.T) {
+	t.Parallel()
+	member := ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_a"}
+	result := ContextFabricInvestigationResult{
+		Cohort: &ContextFabricCohort{Members: []ContextFabricCohortMember{{Subject: member}}},
+		ClaimedFacts: []ContextFabricClaimedFact{
+			{ClaimID: "claim_copied", Subject: member},
+			{ClaimID: "claim_copied", Subject: member},
+		},
+	}
+	ledger := ReconcileContextFabricResultItems(result)
+
+	// RECONCILED: this is not an accounting defect and must never become
+	// one again.
+	if !ledger.Reconciled() {
+		t.Fatalf("status = %q disagreement = %q: a repeated id is a producer defect, not an accounting "+
+			"one, and refusing it costs a served answer", ledger.Status, ledger.Disagreement)
+	}
+	// OBSERVED: and the signal is not lost.
+	want := string(ContextFabricChargedClaimedFacts) + ":claim_copied"
+	if len(ledger.RepeatedDeclaredIDs) != 1 || ledger.RepeatedDeclaredIDs[0] != want {
+		t.Fatalf("RepeatedDeclaredIDs = %v, want exactly [%q]", ledger.RepeatedDeclaredIDs, want)
+	}
+	// The clean control: distinct ids report nothing, so the field is not
+	// simply always populated.
+	clean := result
+	clean.ClaimedFacts = []ContextFabricClaimedFact{
+		{ClaimID: "claim_one", Subject: member},
+		{ClaimID: "claim_two", Subject: member},
+	}
+	if repeats := ReconcileContextFabricResultItems(clean).RepeatedDeclaredIDs; len(repeats) != 0 {
+		t.Errorf("a result with distinct ids reported repeats %v", repeats)
+	}
+}
+
+// TestEveryChargedItemCarriesItsDeclaredID pins the diagnosis field on the
+// collections whose items declare one. Without it the id could be dropped
+// wholesale and only the candidate assertion would notice.
+func TestEveryChargedItemCarriesItsDeclaredID(t *testing.T) {
+	t.Parallel()
+	result := ledgerGroupedFixture()
+	ledger := ReconcileContextFabricResultItems(result)
+
+	want := map[ContextFabricChargedCollection][]string{
+		ContextFabricChargedDrivers:       {"driver_member", "driver_group_one", "driver_both_groups", "driver_global"},
+		ContextFabricChargedRemainingWork: {"finding_group_two"},
+		ContextFabricChargedReadinessGaps: {"finding_global"},
+		ContextFabricChargedConflicts:     {"finding_member_b"},
+		ContextFabricChargedClaimedFacts:  {"claim_member_b"},
+	}
+	got := map[ContextFabricChargedCollection][]string{}
+	for _, debit := range ledger.Debits {
+		if _, tracked := want[debit.Collection]; !tracked {
+			continue
+		}
+		got[debit.Collection] = append(got[debit.Collection], debit.DeclaredID)
+	}
+	for collection, ids := range want {
+		if len(got[collection]) != len(ids) {
+			t.Fatalf("collection %q: %d debits, fixture declares %d", collection, len(got[collection]), len(ids))
+		}
+		for index, id := range ids {
+			if got[collection][index] != id {
+				t.Errorf("collection %q ordinal %d declares %q, want %q", collection, index, got[collection][index], id)
+			}
+		}
+	}
+}
+
+// TestTheBucketSplitIsComparedAgainstTheAttributionItCarries mutates the
+// attribution ALONE, which is the only way to see that the per-bucket
+// comparison is a real comparison rather than a walk agreeing with itself.
+func TestTheBucketSplitIsComparedAgainstTheAttributionItCarries(t *testing.T) {
+	t.Parallel()
+	ledger := ReconcileContextFabricResultItems(ledgerGroupedFixture())
+	if !ledger.Reconciled() {
+		t.Fatalf("fixture did not reconcile: %q", ledger.Status)
+	}
+	if ledger.Attribution.Member == 0 || ledger.Attribution.Global == 0 {
+		t.Fatal("the fixture must reach both buckets for this redistribution to be visible")
+	}
+
+	// A REDISTRIBUTION, not a change in total: this is the mutation a
+	// sum-only check cannot see.
+	tampered := ledger
+	tampered.Attribution.Global += tampered.Attribution.Member
+	tampered.Attribution.Member = 0
+
+	status, disagreement := contextFabricReconcile(tampered)
+	if status != ContextFabricLedgerBucketDisagreement {
+		t.Fatalf("status = %q, want %q", status, ContextFabricLedgerBucketDisagreement)
+	}
+	if disagreement == "" {
+		t.Error("the bucket disagreement named no bucket")
 	}
 }
