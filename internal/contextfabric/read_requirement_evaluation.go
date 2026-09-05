@@ -337,9 +337,13 @@ func readRequirementOutcomeRow(
 	}
 
 	row.CauseCoverage = evidence.Cause
-	// Observed: a provider reported these states for these kinds. Nothing
-	// here defaulted, which is exactly what this flag exists to distinguish.
-	row.CauseObserved = true
+	// OBSERVED means a provider REPORTED this cause for these kinds -- the
+	// one thing this flag exists to distinguish from a cause chosen here.
+	// It therefore tracks whether the evidence actually produced one, and is
+	// NOT set unconditionally: the shortfall arm below defaults a cause with
+	// nothing observed behind it, and claiming otherwise would put a false
+	// provenance on the only field a reader has for judging the cause.
+	row.CauseObserved = evidence.Cause != ""
 	if evidence.Served == 0 {
 		// Nothing usable came back. Dimension: the reader asked for this
 		// and gets none of it -- not fewer things, and not less detail
@@ -363,8 +367,25 @@ func readRequirementOutcomeRow(
 		// above rather than minted here, so this change adds at most one
 		// vocabulary member instead of two.
 		row.CauseCoverage = contractsv1.ContextFabricCoverageDetailFactNarrowed
+		// AND NO REFINEMENT ON THIS ARM.
+		//
+		// A refinement is a BEFORE and an AFTER with a named step between
+		// them: it says a population of `Before` was reduced to `After`.
+		// Here `Declared` is the STANDARD's demand, not a population that
+		// ever existed -- a `corroborated` requirement whose single planned
+		// kind came back usable reads 1 of 2, and minting a refinement over
+		// it would publish a 2 -> 1 reduction of a source set that never
+		// held 2. Nothing was reduced; there was less to begin with.
+		//
+		// The counts still say so truthfully: `narrowed 1/2` against a
+		// standard of 2 is exactly the shortfall, and the row's cause names
+		// it. What is withheld is the claim that a reduction STEP occurred,
+		// because none did.
+		return row, true
 	}
 	// The reduction step, derived from the row's own counts and cause so the
 	// step and the row cannot state different things about one narrowing.
+	// Reached only where the evidence itself reported the cause, so there is
+	// a real before-and-after to record.
 	return contractsv1.ContextFabricWithReductionRefinement(row), true
 }

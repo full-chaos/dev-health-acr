@@ -127,6 +127,14 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 		wantObserved bool
 		wantServed   int
 		wantDeclared int
+		// wantRefinements is asserted on EVERY case, including the zero.
+		//
+		// A refinement is a before and an after with a named step between
+		// them, so it is a claim that a reduction HAPPENED -- and the arm
+		// that defaults its own cause has no such step to record. Asserting
+		// only where one is expected would leave every other arm free to
+		// invent one, which is the defect this column was added for.
+		wantRefinements int
 	}{
 		{
 			name: "complete evidence, both kinds available", quantifier: CompletionQuantifierCorroborated,
@@ -149,6 +157,10 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 			wantImpact:   contractsv1.ContextFabricAnswerImpactDepth,
 			wantCause:    contractsv1.ContextFabricCoverageDetailFactProviderReported,
 			wantObserved: true, wantServed: 1, wantDeclared: 2,
+			// A provider REPORTED the truncation, so there is a real before
+			// and after and the step is recorded. This is the complement of
+			// the shortfall case below: same outcome, opposite provenance.
+			wantRefinements: 1,
 		},
 		{
 			name:       "a missing operand is a source shortfall against corroboration",
@@ -159,8 +171,18 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 			// Nothing was observed failing: every kind that was read came
 			// back usable, and there were fewer of them than the standard
 			// demands. The cause names the narrowing, not a provider.
-			wantCause:    contractsv1.ContextFabricCoverageDetailFactNarrowed,
-			wantObserved: true, wantServed: 1, wantDeclared: 2,
+			wantCause: contractsv1.ContextFabricCoverageDetailFactNarrowed,
+			// CauseObserved FALSE, and the comment above is why. The cause
+			// on this arm is DEFAULTED by the evaluator, not reported by a
+			// provider, and `cause_observed` is the only field a reader has
+			// for telling those apart. This assertion read `true` while the
+			// comment two lines above it said nothing was observed -- the
+			// test stated the defect and asserted its opposite.
+			wantObserved: false, wantServed: 1, wantDeclared: 2,
+			// NO REFINEMENT: `Declared` here is the standard's demand, not a
+			// population that ever existed, so a 2 -> 1 step would describe
+			// a reduction of a source set that never held 2.
+			wantRefinements: 0,
 		},
 		{
 			name: "a provider failure with nothing served is unavailable", quantifier: CompletionQuantifierAtLeastOne,
@@ -230,6 +252,12 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 			}
 			if row.CauseObserved != testCase.wantObserved {
 				t.Fatalf("cause_observed = %v, want %v", row.CauseObserved, testCase.wantObserved)
+			}
+			if len(row.Refinements) != testCase.wantRefinements {
+				t.Fatalf("row carries %d refinements, want %d: a refinement is a before and an after "+
+					"with a step between them, so one on an arm that reduced nothing publishes a "+
+					"reduction that never happened (%+v)",
+					len(row.Refinements), testCase.wantRefinements, row.Refinements)
 			}
 			if row.Served != testCase.wantServed || row.Declared != testCase.wantDeclared {
 				t.Fatalf("served/declared = %d/%d, want %d/%d",
