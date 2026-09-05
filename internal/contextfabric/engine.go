@@ -2076,6 +2076,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// asserting every field the change writes, not by reading the diff.
 			//
 			// So: every field the outcome can carry is carried here, once.
+			// That sentence was FALSE when first written -- SourceKind was on
+			// the outcome and absent from the event, the same drop this comment
+			// describes, one field over. A prose claim of completeness is not
+			// completeness: TestTheRefusalEventCarriesEveryOutcomeField now
+			// enumerates the outcome's fields and fails when one has no mapping,
+			// so a field added to CohortGroupingOutcome later cannot silently
+			// stop at this literal.
 			e.recordGroupedCohortCompleteness(ctx, principal, GroupedCohortCompletenessEvent{
 				Family:               plan.Family,
 				PreGroupingComplete:  preGroupingComplete,
@@ -2089,6 +2096,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// counted; the cohort size when nothing could be placed. The
 				// two refusals are told apart numerically as well as by name.
 				UngroupedMembers: groupingOutcome.Ungrouped,
+				SourceGroupKind:  groupingOutcome.SourceKind,
 			})
 			// Carried to assembly so the ANSWER discloses it too. The plan
 			// stops claiming a group axis it did not deliver; the reader is

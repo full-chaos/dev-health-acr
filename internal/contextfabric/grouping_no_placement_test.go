@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/token"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -616,5 +617,145 @@ func TestAnEmptyCohortIsNotARefusal(t *testing.T) {
 	}
 	if checked != len(cases) {
 		t.Fatalf("only %d of %d arms were checked", checked, len(cases))
+	}
+}
+
+// TestTheRefusalEventCarriesEveryOutcomeField closes the CLASS, not the
+// instance.
+//
+// Twice on this branch a field the outcome carried was dropped on the way to
+// the event: first UngroupedMembers (a dead engine arm set it, the live arm did
+// not), then SourceKind (never mapped at all, found by review). Both were fixed
+// per-field, and after the first fix a comment at the emit site claimed "every
+// field the outcome can carry is carried here, once" -- a prose claim of
+// completeness that was FALSE when written, and that no test could contradict.
+//
+// This is the check that can. It enumerates CohortGroupingOutcome's fields by
+// reflection and requires each to name an event field that exists. A field
+// added to the outcome later fails here until it is mapped, so the completeness
+// claim stops being prose. It cannot prove the VALUES are right -- the consumer
+// tests do that -- only that no field is structurally forgotten, which is the
+// half that kept going wrong.
+func TestTheRefusalEventCarriesEveryOutcomeField(t *testing.T) {
+	t.Parallel()
+	// The declared mapping. Every outcome field appears exactly once.
+	mapping := map[string]string{
+		"Refusal":     "Refusal",
+		"PlannedKind": "PlannedGroupKind",
+		"SourceKind":  "SourceGroupKind",
+		"Ungrouped":   "UngroupedMembers",
+	}
+
+	outcomeType := reflect.TypeOf(CohortGroupingOutcome{})
+	eventType := reflect.TypeOf(GroupedCohortCompletenessEvent{})
+	if outcomeType.NumField() == 0 {
+		t.Fatal("CohortGroupingOutcome has no fields, so this walk proves nothing")
+	}
+	seen := 0
+	for i := 0; i < outcomeType.NumField(); i++ {
+		field := outcomeType.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		seen++
+		eventField, mapped := mapping[field.Name]
+		if !mapped {
+			t.Errorf("CohortGroupingOutcome.%s has NO event field mapped to it -- the operator loses a fact the outcome carries, which is the exact defect this branch fixed twice. Add the event field, carry it at the engine's refusal arm, assert it in a consumer test, then add the row here",
+				field.Name)
+			continue
+		}
+		if _, ok := eventType.FieldByName(eventField); !ok {
+			t.Errorf("mapping says CohortGroupingOutcome.%s -> GroupedCohortCompletenessEvent.%s, but that event field does not exist",
+				field.Name, eventField)
+		}
+	}
+	if seen != len(mapping) {
+		t.Errorf("walked %d exported outcome fields but the mapping declares %d -- the table has drifted from the struct", seen, len(mapping))
+	}
+}
+
+// TestTheRefusalEventCarriesTheSourceKindAndTheStateItWasBuiltFrom asserts the
+// VALUES the reflection test above cannot: that each mapped field arrives with
+// the right content, and that the pre-grouping state the event exists to
+// preserve is actually preserved on a REFUSAL, not only on a built grouping.
+//
+// Review found three of these unpinned at once (Complete, Truncated,
+// PreGroupingComplete): every refusal-path assertion checked the refusal fields
+// and none checked the state fields, so deleting any of them from the emit
+// literal left the suite green while an operator silently read a zero value.
+func TestTheRefusalEventCarriesTheSourceKindAndTheStateItWasBuiltFrom(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	// A MISMATCH fixture, because it is the arm that HAS a source kind to
+	// carry -- a no-placement refusal correctly has none.
+	engine, request := groupingRefusalEngineFixture(t, telemetry)
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(telemetry.groupedCohortCompletenesses) != 1 {
+		t.Fatalf("groupedCohortCompletenesses = %d events, want exactly one", len(telemetry.groupedCohortCompletenesses))
+	}
+	event := telemetry.groupedCohortCompletenesses[0]
+
+	if event.SourceGroupKind != SubjectTeam {
+		t.Errorf("event.SourceGroupKind = %q, want %q: the reader is told both kinds in the disclosure, and an operator told only the planned one cannot answer the question a mismatch actually raises -- where should I look instead",
+			event.SourceGroupKind, SubjectTeam)
+	}
+	// The fixture's cohort is Complete=true, Truncated=false. A zero value here
+	// is indistinguishable from a genuinely incomplete discovery, which inverts
+	// the meaning of the field.
+	if !event.PreGroupingComplete {
+		t.Error("event.PreGroupingComplete = false on a refusal over a COMPLETE cohort -- this event exists specifically to preserve the discovery-time state, and a zero value reports the opposite of what happened")
+	}
+	if event.PreGroupingTruncated {
+		t.Error("event.PreGroupingTruncated = true on a refusal over an untruncated cohort")
+	}
+	if !event.Complete {
+		t.Error("event.Complete = false on a refusal over a complete cohort")
+	}
+	if event.Truncated {
+		t.Error("event.Truncated = true on a refusal over an untruncated cohort")
+	}
+}
+
+// TestANoPlacementRefusalNamesNoSourceKind is the complement, and the reason
+// the emitter omits the key rather than writing an empty value.
+//
+// "The source grouped by something else" and "the source named nothing at all"
+// are the two refusals this vocabulary exists to tell apart. If a no-placement
+// line carried an empty source_group_kind, a filter on that key could not
+// separate them.
+func TestANoPlacementRefusalNamesNoSourceKind(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	engine, request := groupingEngineFixture(t, telemetry, SubjectTeam,
+		[]CanonicalFact{ungroupableFact("project_a"), ungroupableFact("project_b")})
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(telemetry.groupedCohortCompletenesses) != 1 {
+		t.Fatalf("groupedCohortCompletenesses = %d events, want exactly one", len(telemetry.groupedCohortCompletenesses))
+	}
+	if got := telemetry.groupedCohortCompletenesses[0].SourceGroupKind; got != "" {
+		t.Errorf("event.SourceGroupKind = %q on a no-placement refusal, want empty: nothing in the facts named a kind, and naming one here is an invention", got)
+	}
+
+	// The emitted LINE must omit the key entirely, not write an empty value.
+	var buf bytes.Buffer
+	NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil))).RecordGroupedCohortCompleteness(
+		context.Background(), storage.Principal{OrgID: "org_1"}, telemetry.groupedCohortCompletenesses[0])
+	if strings.Contains(buf.String(), "source_group_kind") {
+		t.Errorf("the no-placement line carries source_group_kind; an operator filtering on that key must see only refusals that HAVE a source axis.\nline: %s", buf.String())
+	}
+	// Positive control: the key IS emitted when there is a kind to name.
+	var control bytes.Buffer
+	NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&control, nil))).RecordGroupedCohortCompleteness(
+		context.Background(), storage.Principal{OrgID: "org_1"}, GroupedCohortCompletenessEvent{
+			Refusal: CohortGroupingRefusalGroupKindSourceMismatch, PlannedGroupKind: SubjectRepository, SourceGroupKind: SubjectTeam,
+		})
+	if !strings.Contains(control.String(), "source_group_kind="+string(SubjectTeam)) {
+		t.Fatal("control failed: the emitter never writes source_group_kind at all, so the absence asserted above measured nothing")
 	}
 }

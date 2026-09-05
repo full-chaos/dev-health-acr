@@ -428,6 +428,22 @@ type GroupedCohortCompletenessEvent struct {
 	// A COUNT, not an identifier: closed-enums-and-counts-only, same as every
 	// other field on this event.
 	UngroupedMembers int
+	// SourceGroupKind is what the FACTS actually group by, carried only with a
+	// refusal that has one to name.
+	//
+	// WITHOUT IT THE OPERATOR CANNOT ACT ON A MISMATCH. The reader is told both
+	// kinds in the disclosure sentence; the operator was told only the planned
+	// one, so a log line said "the facts group by something else" without ever
+	// saying by what -- and "where should I look instead" is the whole question
+	// a mismatch raises. Found by review, and it is the SAME class as the defect
+	// that produced this event's ungrouped count: a field the outcome carries
+	// and the event drops.
+	//
+	// EMPTY ON A NO-PLACEMENT REFUSAL, and that absence is meaningful rather
+	// than missing: the source named no axis at all. The emitter therefore omits
+	// the key entirely rather than writing an empty value, so an operator
+	// filtering on it sees only the refusals that HAVE a source axis.
+	SourceGroupKind SubjectKind
 	// Complete/Truncated are the FINAL cohort-level flags after
 	// ApplyGroupedCohortCompleteness folded the pre-grouping state and the
 	// groups together.
