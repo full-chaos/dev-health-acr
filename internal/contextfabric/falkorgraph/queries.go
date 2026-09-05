@@ -1133,6 +1133,16 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 				n, err := a.nodeByUUID(ctx, key, orgID, neighbor, temporal)
 				if err != nil {
 					failedLookups++
+					// THE ERROR ITSELF, WITH IDENTIFIERS. Before this the
+					// failure survived only as a count, so two different
+					// missing members produced identical diagnostics and the
+					// subject that went missing could not be named from the
+					// run's own artifacts. The neighbour and the origin are
+					// graph identifiers, not corpus content, and the request
+					// id is what ties this line to the investigation.
+					if a.config.Telemetry != nil {
+						a.config.Telemetry.RecordNeighborLookupFailed(ctx, orgID, origin.CanonicalID, neighbor, err)
+					}
 					continue
 				}
 				if n == nil {

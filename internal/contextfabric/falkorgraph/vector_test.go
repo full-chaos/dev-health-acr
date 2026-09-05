@@ -1176,6 +1176,7 @@ type recordingTelemetry struct {
 	// call verbatim (CHAOS-4622 remainder) -- a slice, so a test can assert
 	// the exact admitted/basis pair reported, not merely that the gate fired.
 	cohortExactNameCensusGates []cohortExactNameCensusGateRecord
+	neighborLookupFailures     []neighborLookupFailureRecord
 
 	// embedFailureEscalations records every
 	// RecordVectorProjectionEmbedFailuresEscalated call verbatim
@@ -1301,6 +1302,22 @@ func (r *recordingTelemetry) RecordCohortExactNameCensusGate(_ context.Context, 
 // caused it.
 func (r *recordingTelemetry) RecordCohortKindBasis(_ context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis, poolTruncationArms []CohortPoolTruncationArm) {
 	r.cohortKindBases = append(r.cohortKindBases, cohortKindBasisRecord{orgID: orgID, declaredKind: declaredKind, basis: basis, discovered: discovered, poolTruncation: poolTruncation, poolTruncationArms: poolTruncationArms})
+}
+
+func (r *recordingTelemetry) RecordNeighborLookupFailed(_ context.Context, orgID, originCanonicalID, neighborUUID string, err error) {
+	r.neighborLookupFailures = append(r.neighborLookupFailures, neighborLookupFailureRecord{
+		orgID: orgID, originCanonicalID: originCanonicalID, neighborUUID: neighborUUID, err: err,
+	})
+}
+
+// neighborLookupFailureRecord is one RecordNeighborLookupFailed call, verbatim.
+// Recorded rather than counted for the same reason the production line carries
+// identifiers at all: a count cannot say WHICH member went missing.
+type neighborLookupFailureRecord struct {
+	orgID             string
+	originCanonicalID string
+	neighborUUID      string
+	err               error
 }
 
 func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {

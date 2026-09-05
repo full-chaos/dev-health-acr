@@ -2,6 +2,7 @@ package falkorgraph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -674,5 +675,234 @@ func TestDiscoverContextHopWalkBudgetSpentMidHopWithNoNewFrontier(t *testing.T) 
 	}
 	if result.Cohort.Complete {
 		t.Error("Cohort.Complete = true over a pool the walk stopped short of mid-hop")
+	}
+}
+
+// TestDiscoverContextHopWalkDisclosesWhenDepthAndBudgetBindTogether IS THE
+// RULING'S ENFORCEMENT, and it exists because reverting a mistake is not the
+// same as pinning the correct behaviour.
+//
+// The ruling: a depth bound (maxHops) DEFINES the pool and is not truncation;
+// a spent collect budget with an unvisited frontier CLIPS it and is; WHEN BOTH
+// BIND AT ONCE, DISCLOSE.
+//
+// I once added `&& hop < maxHops` to the post-loop disclosure, which suppressed
+// exactly the both-bind case, and reverted it on the ruling. But nothing in the
+// suite would have caught someone re-adding it: every existing fixture has
+// depth still available when the budget runs out, so the conjunct is invisible
+// to them. r3 found that gap independently. This is the fixture that closes it.
+//
+// Shape: budget 3, one first-hop edge, two second-hop edges. Hop 0 admits 1;
+// hop 1 admits 2, reaching exactly the budget with its candidates exhausted, so
+// the INNER break never fires; the frontier is non-empty; and `hop` has reached
+// maxHops, so the loop exits with BOTH bounds binding at once.
+func TestDiscoverContextHopWalkDisclosesWhenDepthAndBudgetBindTogether(t *testing.T) {
+	t.Parallel()
+	fake := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"), strings.Contains(cypher, "$kinds"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			id, _ := params["id"].(string)
+			switch id {
+			case "p1":
+				return []row{{
+					"r":       &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_1"}},
+					"srcKind": "project", "srcId": "p1", "dstKind": "team", "dstId": "team_a",
+				}}, nil
+			case "team_a":
+				return []row{
+					{"r": &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_2"}},
+						"srcKind": "team", "srcId": "team_a", "dstKind": "team", "dstId": "team_b"},
+					{"r": &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_3"}},
+						"srcKind": "team", "srcId": "team_a", "dstKind": "team", "dstId": "team_c"},
+				}, nil
+			}
+			// team_b and team_c are never queried: the walk stops before hop 2.
+			return nil, nil
+		default:
+			switch params["kind"] {
+			case "project":
+				return []row{fakeSubjectNodeRow("project", "p1", "Origin")}, nil
+			case "team":
+				id, _ := params["id"].(string)
+				return []row{fakeSubjectNodeRow("team", id, id)}, nil
+			}
+			return nil, nil
+		}
+	}}
+	adapter, err := newWithAPI(Config{
+		Addr: "fake:6379", GraphPrefix: "acr-cf-fake", RequestTimeout: time.Second,
+		MaxAttempts: 1, MaxResults: 3, PoolSize: 1, AllowInsecure: true,
+	}, fake)
+	if err != nil {
+		t.Fatalf("newWithAPI() error = %v", err)
+	}
+
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, hopWalkTruncationRequest(50))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil {
+		t.Fatal("Cohort = nil -- the fixture never reached cohort assembly")
+	}
+	// Reach control: team_b and team_c must be IN the cohort (their edges were
+	// admitted) while the walk never visited them as a frontier. Without this,
+	// a walk that stopped after hop 0 would look the same to the assertion.
+	members := map[string]bool{}
+	for _, m := range result.Cohort.Members {
+		members[m.Subject.CanonicalID] = true
+	}
+	if !members["team_b"] || !members["team_c"] {
+		t.Fatalf("the second hop's members are missing (%v) -- the walk did not reach the state this test is about", members)
+	}
+	if !result.Cohort.Truncated {
+		t.Error("Cohort.Truncated = false with the budget spent AND an unvisited frontier AND the depth bound reached -- " +
+			"this is the both-bind case the ruling says must disclose, and a `hop < maxHops` conjunct on the post-loop " +
+			"check would produce exactly this result")
+	}
+	if result.Cohort.Complete {
+		t.Error("Cohort.Complete = true in the both-bind case")
+	}
+}
+
+// TestDiscoverContextFailedNeighborLookupIsNotACompleteCohort is r3 finding 2
+// (P2): a THIRD way the walk stops short of an in-scope member.
+//
+// A neighbour reached through an admitted edge can fail its bookkeeping
+// read-back. It is then never added to `visited`, never becomes a cohort
+// member, and before this no arm reported it -- so `Coverage.Partial=true` sat
+// beside `Cohort.Complete=true`, which is a contradiction a reader cannot
+// resolve. Partial says "something was lost"; Complete says "nothing is
+// missing".
+//
+// The failure is its OWN arm, not folded into hop_walk: a clipped budget and an
+// unconfirmable member are different causes with different remedies.
+func TestDiscoverContextFailedNeighborLookupIsNotACompleteCohort(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	fake := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"), strings.Contains(cypher, "$kinds"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			if params["id"] != "p1" {
+				return nil, nil
+			}
+			return []row{
+				{"r": &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_ok"}},
+					"srcKind": "project", "srcId": "p1", "dstKind": "team", "dstId": "team_ok"},
+				{"r": &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_bad"}},
+					"srcKind": "project", "srcId": "p1", "dstKind": "team", "dstId": "team_unreadable"},
+			}, nil
+		default:
+			// The bookkeeping read-back FAILS for one neighbour only. Both
+			// edges resolved; only the node read is broken, which is exactly
+			// the shape the count-only reporting hid.
+			if params["kind"] == "team" && params["id"] == "team_unreadable" {
+				return nil, errors.New("injected backend failure reading team_unreadable")
+			}
+			switch params["kind"] {
+			case "project":
+				return []row{fakeSubjectNodeRow("project", "p1", "Origin")}, nil
+			case "team":
+				id, _ := params["id"].(string)
+				return []row{fakeSubjectNodeRow("team", id, id)}, nil
+			}
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, hopWalkTruncationRequest(50))
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil {
+		t.Fatal("Cohort = nil -- the readable member should still form a cohort")
+	}
+	members := map[string]bool{}
+	for _, m := range result.Cohort.Members {
+		members[m.Subject.CanonicalID] = true
+	}
+	if !members["team_ok"] {
+		t.Fatalf("the readable member is missing (%v) -- the fixture never reached cohort assembly", members)
+	}
+	if members["team_unreadable"] {
+		t.Fatalf("the unreadable member is PRESENT (%v) -- the injected failure did not take effect, so this test is measuring nothing", members)
+	}
+	if !result.Coverage.Partial {
+		t.Error("Coverage.Partial = false: the pre-existing failed-lookup disclosure regressed")
+	}
+	// THE HARM. Partial and Complete cannot both stand.
+	if !result.Cohort.Truncated {
+		t.Error("Cohort.Truncated = false while a neighbour the walk reached could not be read back -- " +
+			"a kind-matching subject is missing from this cohort and the answer claims otherwise")
+	}
+	if result.Cohort.Complete {
+		t.Error("Cohort.Complete = true beside Coverage.Partial = true -- one says nothing is missing, the other says something was lost")
+	}
+	if got := formatCohortPoolTruncationArms(telemetry.cohortKindBases[0].poolTruncationArms); got != string(CohortPoolTruncationArmEndpointLookupFailed) {
+		t.Errorf("cut arms = %q, want %q -- the cause must be distinguishable from a clipped budget", got, CohortPoolTruncationArmEndpointLookupFailed)
+	}
+}
+
+// TestNeighborLookupFailureNamesTheMemberItLost is r3 finding 3 (P2).
+//
+// The failure used to survive only as a count (`endpoint_lookup_failed:<n>`),
+// so two different missing members produced identical diagnostics and the
+// subject that went missing could not be named from the run's own artifacts.
+// Chris's standing rule: a swallowed error on a touched failure path is a
+// review finding, fixed in the same change.
+func TestNeighborLookupFailureNamesTheMemberItLost(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	fake := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"), strings.Contains(cypher, "$kinds"):
+			return nil, nil
+		case strings.Contains(cypher, "UNION"):
+			if params["id"] != "p1" {
+				return nil, nil
+			}
+			return []row{
+				{"r": &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_1"}},
+					"srcKind": "project", "srcId": "p1", "dstKind": "team", "dstId": "team_first"},
+				{"r": &edge{Properties: map[string]interface{}{propRelationType: "BLOCKS", propRelationshipID: "rel_2"}},
+					"srcKind": "project", "srcId": "p1", "dstKind": "team", "dstId": "team_second"},
+			}, nil
+		default:
+			// TWO distinct failures. A count cannot tell them apart; that is
+			// the whole point of the fixture.
+			if params["kind"] == "team" {
+				return nil, errors.New("injected backend failure")
+			}
+			return []row{fakeSubjectNodeRow("project", "p1", "Origin")}, nil
+		}
+	}}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+
+	if _, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, hopWalkTruncationRequest(50)); err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(telemetry.neighborLookupFailures) != 2 {
+		t.Fatalf("neighbour lookup failure lines = %d, want 2 (one per lost member) -- a count reports 2 and names neither",
+			len(telemetry.neighborLookupFailures))
+	}
+	named := map[string]bool{}
+	for _, f := range telemetry.neighborLookupFailures {
+		if f.neighborUUID == "" {
+			t.Error("a failure line carries no neighbour identifier -- it is a count with extra steps")
+		}
+		if f.originCanonicalID != "p1" {
+			t.Errorf("origin = %q, want p1 -- without it a failure cannot be tied to the walk that hit it", f.originCanonicalID)
+		}
+		if f.err == nil {
+			t.Error("a failure line carries no error -- the message is the part a count throws away")
+		}
+		named[f.neighborUUID] = true
+	}
+	if len(named) != 2 {
+		t.Errorf("the two failures reported %d distinct neighbour identifiers, want 2 -- two different missing members must not be indistinguishable", len(named))
 	}
 }

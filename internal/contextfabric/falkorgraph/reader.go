@@ -818,7 +818,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// (not) infer from the length it retained. See cohortPoolTruncation for
 	// the classification and for why a clipped full-text arm under a
 	// completed census is not a truncated pool.
-	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncated, censusAdmitted)
+	// failedLookups > 0 means a neighbour the walk REACHED could not be read
+	// back, so it never became a cohort member (r3 finding 2). Coverage.Partial
+	// already reported the failure; what was missing is that the same event is
+	// also a LOST MEMBER, and Partial beside Complete=true is a contradiction a
+	// reader cannot resolve.
+	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(
+		fulltextTruncated, hopWalkTruncated, exactNameTruncated, failedLookups > 0, censusAdmitted)
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here

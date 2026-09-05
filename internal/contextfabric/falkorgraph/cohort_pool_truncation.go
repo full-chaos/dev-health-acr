@@ -70,6 +70,25 @@ const (
 	// census hit its own row limit, so the census itself is not exhaustive
 	// and cannot cover anything.
 	CohortPoolTruncationArmExactNameCensus CohortPoolTruncationArm = "exact_name_census"
+	// CohortPoolTruncationArmEndpointLookupFailed: a neighbour the walk had
+	// already reached through an admitted edge could not be READ BACK -- its
+	// bookkeeping lookup errored -- so it never entered the visited set and
+	// never became a cohort member.
+	//
+	// ITS OWN ARM, not folded into hop_walk. A clipped budget and an
+	// unconfirmable member are different causes with different remedies: the
+	// first says "raise the budget or narrow the question", the second says
+	// "the backend failed on a specific subject". Collapsing them would make
+	// a transient backend fault read as a capacity problem.
+	//
+	// The COHORT-LEVEL consequence is identical, which is why it belongs here
+	// at all: an in-scope, kind-matching subject exists that this cohort does
+	// not carry, so the completeness claim cannot stand. Coverage.Partial
+	// already reported the failure (see reader.go's endpoint_lookup_failed
+	// reason and the matching contract detail code) -- what was missing is
+	// that the same event is ALSO a lost member, and Partial beside
+	// Complete=true is a contradiction a reader cannot resolve.
+	CohortPoolTruncationArmEndpointLookupFailed CohortPoolTruncationArm = "endpoint_lookup_failed"
 )
 
 // CohortPoolTruncationBasisVocabulary returns every declared decision member,
@@ -96,6 +115,7 @@ func CohortPoolTruncationArmVocabulary() []CohortPoolTruncationArm {
 		CohortPoolTruncationArmFulltext,
 		CohortPoolTruncationArmHopWalk,
 		CohortPoolTruncationArmExactNameCensus,
+		CohortPoolTruncationArmEndpointLookupFailed,
 	}
 }
 
@@ -120,8 +140,8 @@ func CohortPoolTruncationArmVocabulary() []CohortPoolTruncationArm {
 // census branch. Those combinations are still named below rather than left to
 // a default, because a classification over a closed space is an allow-list and
 // a future caller that reaches one should inherit a stated answer.
-func cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncated, censusAdmitted bool) (CohortPoolTruncationBasis, []CohortPoolTruncationArm, bool) {
-	arms := make([]CohortPoolTruncationArm, 0, 3)
+func cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncated, endpointLookupFailed, censusAdmitted bool) (CohortPoolTruncationBasis, []CohortPoolTruncationArm, bool) {
+	arms := make([]CohortPoolTruncationArm, 0, len(CohortPoolTruncationArmVocabulary()))
 	if fulltextTruncated {
 		arms = append(arms, CohortPoolTruncationArmFulltext)
 	}
@@ -131,11 +151,23 @@ func cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncate
 	if exactNameTruncated {
 		arms = append(arms, CohortPoolTruncationArmExactNameCensus)
 	}
+	if endpointLookupFailed {
+		arms = append(arms, CohortPoolTruncationArmEndpointLookupFailed)
+	}
 	switch {
 	case len(arms) == 0:
 		return CohortPoolTruncationNone, arms, false
 	case exactNameTruncated:
 		// The census is cut, so it covers nothing -- including itself.
+		return CohortPoolTruncationTruncated, arms, true
+	case endpointLookupFailed:
+		// NOT coverable by the census. The census covers a BOUNDED arm -- a
+		// subject that exists and was simply not fetched, which a term-free
+		// org-wide fetch will return anyway. A failed read is different: the
+		// backend did not answer for that subject, and there is no reason to
+		// believe a second read of the same subject in the same call
+		// succeeded. Treating it as covered would turn a backend fault into a
+		// completeness claim.
 		return CohortPoolTruncationTruncated, arms, true
 	case censusAdmitted:
 		// Only bounded arms were cut and a COMPLETE census ran beside them.
