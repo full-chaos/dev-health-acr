@@ -226,9 +226,9 @@ func (e *Engine) assertFitsBudget(ctx context.Context, principal storage.Princip
 		// for the same reason Fits itself is: an event that only fired on
 		// failure leaves "how often does the account reconcile"
 		// unanswerable from the artifacts.
-		LedgerStatus:  ledger.Status,
-		LedgerDebits:  ledger.Total(),
-		CertifiedFit:  false,
+		LedgerStatus: ledger.Status,
+		LedgerDebits: ledger.Total(),
+		CertifiedFit: false,
 	}
 	certificate, capacity := contractsv1.CertifyContextFabricCapacity(ledger, budget)
 	event.CertifiedFit = certificate.Certified()

@@ -2150,7 +2150,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	assemblyParams := synthesisAssemblyParams{
 		// The plan the allocator is derived from, inside the assembly. One
 		// authority for the ceiling every spender writes against.
-		Plan: plan,
+		Plan:    plan,
 		Request: request, Interpretation: interpretation, Frame: familyOutcome.Frame,
 		Graph: graphContext, Facts: facts,
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
