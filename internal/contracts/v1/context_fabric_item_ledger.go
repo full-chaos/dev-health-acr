@@ -205,9 +205,16 @@ type ContextFabricItemLedger struct {
 	// a disagreement is a fact recorded here rather than a comparison every
 	// caller has to remember to make.
 	Counts ContextFabricResultItemCounts `json:"counts"`
-	// Attribution is the INDEPENDENT bucket split, from the shipped
-	// function. Two independent derivations are the point: a ledger that
-	// only agreed with itself would certify its own mistakes.
+	// Attribution is the bucket split from the shipped function.
+	//
+	// The guarantee is NARROWER than "two independent derivations", and
+	// saying so precisely matters: this walk and
+	// AttributeContextFabricResultItems both classify through
+	// contextFabricSubjectsBucket, because the ownership rule requires this
+	// layer to CARRY that decision rather than re-derive it. So comparing
+	// them catches ledger mutation and any future divergence between the
+	// walk and the summary -- it does NOT catch a bug inside the shared
+	// classifier, which is covered by that function's own direct tests.
 	Attribution ContextFabricItemAttribution `json:"attribution"`
 	// Status is what reconciliation found.
 	Status ContextFabricLedgerStatus `json:"status"`
@@ -231,6 +238,19 @@ type ContextFabricItemLedger struct {
 	// reconciled. Enforcement, if the answer contract wants any, belongs to
 	// validation, which is where id uniqueness is already decided.
 	RepeatedDeclaredIDs []string `json:"repeated_declared_ids,omitempty"`
+
+	// produced records that this ledger came out of
+	// ReconcileContextFabricResultItems, over a real result.
+	//
+	// UNEXPORTED, and it is the difference between "these numbers are
+	// self-consistent" and "these numbers describe an answer". A zero
+	// ContextFabricItemLedger is perfectly self-consistent -- no debits, no
+	// counts, no attribution, everything agreeing at zero -- so a
+	// re-derivation alone hands it a capacity certificate for any positive
+	// ceiling. It is bound to no result at all. Only the reconciler sets
+	// this, so outside this package a certificate cannot be obtained for a
+	// ledger that was never reconciled against a document.
+	produced bool
 
 	// declaredGroups are the cohort's group keys in declared order.
 	//
@@ -369,6 +389,7 @@ func ReconcileContextFabricResultItems(result ContextFabricInvestigationResult) 
 	// measured zero. Carried on the ledger rather than left to the reader,
 	// because the reader is the one that would otherwise have to remember.
 	ledger.declaredGroups = declaredGroups
+	ledger.produced = true
 	ledger.RepeatedDeclaredIDs = contextFabricRepeatedDeclaredIDs(ledger.Debits)
 	ledger.Status, ledger.Disagreement = contextFabricReconcile(ledger)
 	return ledger
@@ -452,7 +473,12 @@ func contextFabricReconcile(ledger ContextFabricItemLedger) (ContextFabricLedger
 	// ordinal necessarily leaves a gap in the range, because the range is
 	// sized by the debit count. Two guards where one can fire is one guard
 	// no fixture can isolate.
-	for collection, byOrdinal := range ordinals {
+	// In VOCABULARY ORDER, not map order. Disagreement reaches telemetry, and
+	// a result with two defective collections would otherwise name whichever
+	// one Go's map iteration reached first -- different diagnosis, same
+	// input, run to run.
+	for _, collection := range contextFabricChargedCollections {
+		byOrdinal := ordinals[collection]
 		for ordinal := 0; ordinal < perCollection[collection]; ordinal++ {
 			if _, present := byOrdinal[ordinal]; !present {
 				return ContextFabricLedgerDuplicateOccurrence,
@@ -700,6 +726,14 @@ func CertifyContextFabricCapacity(ledger ContextFabricItemLedger, budget Context
 	// different ledger, and no check inside this package can tell that from a
 	// real one. What is closed is the realistic shape -- debits edited in
 	// place while the summaries stand.
+	// PRODUCED BY THE RECONCILER, over a real result. A zero ledger is
+	// perfectly self-consistent and bound to no answer, so the re-derivation
+	// below would certify it for any positive ceiling; requiring provenance
+	// is what makes the certificate a statement about a DOCUMENT rather than
+	// about a struct.
+	if !ledger.produced {
+		return ContextFabricCertifiedFit{}, ContextFabricCapacityAccountingDefect
+	}
 	if status, _ := contextFabricReconcile(ledger); status != ContextFabricLedgerReconciled {
 		return ContextFabricCertifiedFit{}, ContextFabricCapacityAccountingDefect
 	}

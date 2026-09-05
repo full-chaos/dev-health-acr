@@ -36,7 +36,13 @@ func ledgerGroupedFixture() ContextFabricInvestigationResult {
 			{DriverID: "driver_both_groups", AffectedSubjects: []ContextFabricSubjectRef{groupOne, groupTwo}},
 			{DriverID: "driver_global", AffectedSubjects: []ContextFabricSubjectRef{stranger}},
 		},
-		RemainingWork: []ContextFabricFinding{{FindingID: "finding_group_two", Subjects: []ContextFabricSubjectRef{groupTwo}}},
+		// TWO remaining-work findings and ONE readiness gap, deliberately
+		// unequal: with equal counts, swapping the two fields in the census
+		// projection is invisible to every comparison here.
+		RemainingWork: []ContextFabricFinding{
+			{FindingID: "finding_group_two", Subjects: []ContextFabricSubjectRef{groupTwo}},
+			{FindingID: "finding_group_two_more", Subjects: []ContextFabricSubjectRef{groupTwo}},
+		},
 		ReadinessGaps: []ContextFabricFinding{{FindingID: "finding_global"}},
 		Conflicts:     []ContextFabricFinding{{FindingID: "finding_member_b", Subjects: []ContextFabricSubjectRef{memberB}}},
 		ClaimedFacts:  []ContextFabricClaimedFact{{ClaimID: "claim_member_b", Subject: memberB}},
@@ -161,6 +167,24 @@ func TestEveryCensusFieldIsWalkedOrDeclaredExcluded(t *testing.T) {
 		if reason, excluded := contextFabricCensusExcludedFields[field.Name]; excluded {
 			if reason == "" {
 				t.Errorf("census field %q is excluded with no reason recorded", field.Name)
+			}
+			// AND THE EXCLUSION MUST BE REAL, not merely declared. A future
+			// change could charge a new quantity in Budgeted() and add its
+			// field to this table, and the walk above would skip it while
+			// the ledger never debits it -- an undercount that reconciles.
+			// So an excluded field is required to move Total() and NOT
+			// move Budgeted(), which is exactly what "excluded from the
+			// item budget" means.
+			probe := reflect.New(counts).Elem()
+			probe.Field(index).SetInt(sentinel)
+			value := probe.Interface().(ContextFabricResultItemCounts)
+			if value.Budgeted() != 0 {
+				t.Errorf("census field %q is declared excluded (%s) but moves Budgeted() to %d: the budget "+
+					"charges it and the ledger will not debit it", field.Name, reason, value.Budgeted())
+			}
+			if value.Total() != sentinel {
+				t.Errorf("census field %q is declared excluded but does not move Total() either (%d): it is "+
+					"counted by nothing and the declaration is stale", field.Name, value.Total())
 			}
 			continue
 		}
@@ -905,7 +929,7 @@ func TestEveryChargedItemCarriesItsDeclaredID(t *testing.T) {
 
 	want := map[ContextFabricChargedCollection][]string{
 		ContextFabricChargedDrivers:       {"driver_member", "driver_group_one", "driver_both_groups", "driver_global"},
-		ContextFabricChargedRemainingWork: {"finding_group_two"},
+		ContextFabricChargedRemainingWork: {"finding_group_two", "finding_group_two_more"},
 		ContextFabricChargedReadinessGaps: {"finding_global"},
 		ContextFabricChargedConflicts:     {"finding_member_b"},
 		ContextFabricChargedClaimedFacts:  {"claim_member_b"},
@@ -954,5 +978,126 @@ func TestTheBucketSplitIsComparedAgainstTheAttributionItCarries(t *testing.T) {
 	}
 	if disagreement == "" {
 		t.Error("the bucket disagreement named no bucket")
+	}
+}
+
+// TestAnUnreconciledLedgerCannotBeCertified is round 3's first finding: a ZERO
+// ledger is perfectly self-consistent -- no debits, no counts, no attribution,
+// everything agreeing at zero -- and is bound to no answer at all. A
+// certificate that only re-derived consistency handed it a certified fit for
+// any positive ceiling.
+func TestAnUnreconciledLedgerCannotBeCertified(t *testing.T) {
+	t.Parallel()
+	zero := ContextFabricItemLedger{}
+	if zero.Reconciled() {
+		t.Fatal("the zero ledger reports itself reconciled")
+	}
+	certificate, verdict := CertifyContextFabricCapacity(zero, ContextFabricResponseBudget{MaxItems: 1})
+	if certificate.Certified() || verdict != ContextFabricCapacityAccountingDefect {
+		t.Fatalf("a zero ledger was certified: verdict %q certified %v", verdict, certificate.Certified())
+	}
+
+	// A hand-built, internally coherent ledger that never saw a result is
+	// refused for the same reason: the certificate is a statement about a
+	// DOCUMENT, not about a struct.
+	handBuilt := ContextFabricItemLedger{
+		Debits:      []ContextFabricItemDebit{{Collection: ContextFabricChargedCandidates, Ordinal: 0, Bucket: ContextFabricItemBucketGlobal}},
+		Counts:      ContextFabricResultItemCounts{Candidates: 1},
+		Attribution: ContextFabricItemAttribution{Global: 1},
+	}
+	if status, _ := contextFabricReconcile(handBuilt); status != ContextFabricLedgerReconciled {
+		t.Fatalf("the hand-built ledger is not self-consistent (%q), so this case tests the wrong thing", status)
+	}
+	if certificate, verdict := CertifyContextFabricCapacity(handBuilt, ContextFabricResponseBudget{MaxItems: 1}); certificate.Certified() || verdict != ContextFabricCapacityAccountingDefect {
+		t.Fatalf("a self-consistent but result-unbound ledger was certified: verdict %q", verdict)
+	}
+
+	// The positive control: a ledger the reconciler produced, over the same
+	// shape, IS certifiable -- so the guard above is provenance and not a
+	// blanket refusal.
+	produced := ReconcileContextFabricResultItems(ledgerGroupedFixture())
+	if certificate, verdict := CertifyContextFabricCapacity(produced, ContextFabricResponseBudget{MaxItems: produced.Total()}); !certificate.Certified() || verdict != ContextFabricCapacityCertifiedFit {
+		t.Fatalf("a genuinely reconciled ledger was refused: verdict %q", verdict)
+	}
+}
+
+// TestReconciledReportsTheStatusItCarries pins the accessor itself. Nothing
+// else calls it on a damaged ledger, so `return true` would survive every other
+// test in this file.
+func TestReconciledReportsTheStatusItCarries(t *testing.T) {
+	t.Parallel()
+	for _, status := range ContextFabricLedgerStatusVocabulary() {
+		ledger := ContextFabricItemLedger{Status: status}
+		want := status == ContextFabricLedgerReconciled
+		if ledger.Reconciled() != want {
+			t.Errorf("Reconciled() = %v for status %q, want %v", ledger.Reconciled(), status, want)
+		}
+	}
+	if (ContextFabricItemLedger{}).Reconciled() {
+		t.Error("the empty status reports reconciled")
+	}
+}
+
+// TestTheDuplicateDiagnosisIsDeterministic is round 3's third finding: the
+// density walk iterated a MAP, so a result with two defective collections named
+// whichever one Go reached first -- different telemetry, same input, run to run.
+func TestTheDuplicateDiagnosisIsDeterministic(t *testing.T) {
+	t.Parallel()
+	ledger := ContextFabricItemLedger{
+		Debits: []ContextFabricItemDebit{
+			{Collection: ContextFabricChargedCandidates, Ordinal: 1, Bucket: ContextFabricItemBucketGlobal},
+			{Collection: ContextFabricChargedDrivers, Ordinal: 1, Bucket: ContextFabricItemBucketGlobal},
+		},
+		Counts:      ContextFabricResultItemCounts{Candidates: 1, Drivers: 1},
+		Attribution: ContextFabricItemAttribution{Global: 2},
+	}
+	// Candidates come first in the published vocabulary, so the diagnosis is
+	// candidates#0 on every run.
+	want := string(ContextFabricChargedCandidates) + "#0"
+	for attempt := 0; attempt < 200; attempt++ {
+		status, disagreement := contextFabricReconcile(ledger)
+		if status != ContextFabricLedgerDuplicateOccurrence {
+			t.Fatalf("attempt %d: status = %q", attempt, status)
+		}
+		if disagreement != want {
+			t.Fatalf("attempt %d: disagreement = %q, want %q -- the diagnosis depends on map order",
+				attempt, disagreement, want)
+		}
+	}
+}
+
+// TestRepeatedIDsAreOrderedAndAbsentWhenThereAreNone pins the two properties a
+// single-repeat fixture cannot: the ordering, and nil rather than an empty
+// slice when nothing repeats.
+func TestRepeatedIDsAreOrderedAndAbsentWhenThereAreNone(t *testing.T) {
+	t.Parallel()
+	member := ContextFabricSubjectRef{Kind: ContextFabricSubjectProject, CanonicalID: "project_a"}
+	result := ContextFabricInvestigationResult{
+		ClaimedFacts: []ContextFabricClaimedFact{
+			{ClaimID: "claim_zulu", Subject: member},
+			{ClaimID: "claim_alpha", Subject: member},
+			{ClaimID: "claim_zulu", Subject: member},
+			{ClaimID: "claim_alpha", Subject: member},
+		},
+	}
+	repeats := ReconcileContextFabricResultItems(result).RepeatedDeclaredIDs
+	want := []string{
+		string(ContextFabricChargedClaimedFacts) + ":claim_alpha",
+		string(ContextFabricChargedClaimedFacts) + ":claim_zulu",
+	}
+	if len(repeats) != len(want) {
+		t.Fatalf("RepeatedDeclaredIDs = %v, want %v", repeats, want)
+	}
+	for index, id := range want {
+		if repeats[index] != id {
+			t.Fatalf("RepeatedDeclaredIDs = %v, want %v (sorted, so the field is stable across runs)", repeats, want)
+		}
+	}
+
+	// NIL, not an empty slice: an absent observation and an observation that
+	// found nothing serialize differently, and the field is omitempty.
+	clean := ReconcileContextFabricResultItems(ledgerGroupedFixture())
+	if clean.RepeatedDeclaredIDs != nil {
+		t.Errorf("RepeatedDeclaredIDs = %#v on a clean result, want nil", clean.RepeatedDeclaredIDs)
 	}
 }
