@@ -116,7 +116,7 @@ func (f *fakeIdentityTelemetry) RecordCohortDeniedByAuthorization(context.Contex
 func (f *fakeIdentityTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bool, falkorgraph.CohortExactNameCensusBasis) {
 }
 
-func (f *fakeIdentityTelemetry) RecordCohortKindBasis(_ context.Context, _ string, _ contextfabric.SubjectKind, _ graphrank.CohortKindBasis, _ bool, _ CohortPoolTruncationBasis) {
+func (f *fakeIdentityTelemetry) RecordCohortKindBasis(_ context.Context, _ string, _ contextfabric.SubjectKind, _ graphrank.CohortKindBasis, _ bool, _ falkorgraph.CohortPoolTruncationBasis) {
 }
 
 // TestLiveAliasIdentityFastPathCommitsAUniqueClaimant is CHAOS-3884 Option
