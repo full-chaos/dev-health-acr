@@ -1,8 +1,6 @@
 package graphrank
 
 import (
-	"sort"
-
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -109,50 +107,64 @@ var cohortKindBases = [...]CohortKindBasis{
 	CohortKindMemberKindUnservable,
 }
 
-// servableCohortKinds is the set a DISCOVERY ARM CAN ACTUALLY SERVE. It is
-// deliberately a DENY-BY-DEFAULT list, and it is deliberately NARROWER than
-// the wire contract: since the contract widening, ContextFabricCohort.validate
-// admits all fifteen published subject kinds, and being carriable is not the
-// same fact as being discoverable. A subject kind added to the frame
-// vocabulary stays unservable here until the change that PROVES an arm for
-// it, which is the safe direction -- the unsafe one answers a real question
-// with a cohort nothing filled in.
+// WHERE THE ALLOW-LIST WENT, and why it is not here any more.
 //
-// `repository` was added by the change that proved the arm, not by a tidy-up
-// to match the contract. The proof is a fixture per cohort variant that can
-// carry the kind -- grouped_members, children_of_scope and discovered_kind --
-// each driving DiscoverContext through the falkorgraph reader, each red
-// before this line moved. The candidate pool was never the obstacle: the
-// exact-name census already fetches repository nodes
-// (falkorgraph/chaos4348_exact_name.go, exactNameKinds).
+// `servableCohortKinds` -- the deny-by-default set of subject kinds a
+// discovery arm can actually serve -- and its audit accessor used to live at
+// this point in this file. They now live in `internal/contextfabric` beside
+// the subject-kind vocabulary, together with the whole decision below them:
+// `contextfabric.CohortMemberKindFor`.
 //
-// NOT every question about repositories reaches this map. "Open incidents per
-// repository" declares repository as the GROUPING AXIS and `incident` as the
-// member kind -- invariant I6 refuses a grouped expression that groups a kind
-// by itself -- so it refuses here on `incident`, and serving it is an
-// incident-cohort arm with its own candidate pool, tracked separately.
-var servableCohortKinds = map[contextfabric.SubjectKind]bool{
-	contextfabric.SubjectTeam:       true,
-	contextfabric.SubjectProject:    true,
-	contextfabric.SubjectRepository: true,
-}
+// THE MOVE WAS FORCED BY A MEASURED DISAGREEMENT, not by tidiness. The
+// requirement derivation must know whether a computed step that runs over a
+// resolved member set can be served, and it cannot call into this package --
+// this package imports it. So it rebuilt the predicate by hand, and three
+// review rounds each found the next missing condition. Over the fifteen
+// published subject kinds the derivation served a ranking row for all fifteen
+// while this seam could serve three: TWELVE cells claiming an ordering that
+// nothing computed. A fourth conjunct would have been a COPY of the table,
+// which is where the drift restarts.
+//
+// So the decision moved DOWN and this file consumes it. There is no second
+// table and no second predicate to keep in step.
+//
+// WHAT STAYED. `CohortKindBasis` above is this package's published telemetry
+// vocabulary and it stays this package's, for two reasons: the vocabulary is
+// what this seam's log lines and events carry, and this seam knows one thing
+// the layer below cannot -- that retrieval was reached with no validated
+// frame at all (`frame_absent`). The reason the shared predicate returns is
+// mapped onto the basis by the explicit total table below.
 
-// ServableCohortKindsForAudit returns the allow-list's members, sorted, so a
-// test in a package that can see the real fact providers can quantify over
-// "every kind the seam admits" without importing the map.
+// cohortKindBasisForDiscoverability maps the shared predicate's reason onto
+// this seam's published basis vocabulary.
 //
-// It exists for that audit alone. The seam's own decision never calls it --
-// cohortKindFromFrame reads the map directly -- so this function cannot
-// become a second, drifting definition of what is servable.
-func ServableCohortKindsForAudit() []contextfabric.SubjectKind {
-	kinds := make([]contextfabric.SubjectKind, 0, len(servableCohortKinds))
-	for kind, admitted := range servableCohortKinds {
-		if admitted {
-			kinds = append(kinds, kind)
-		}
+// EXPLICIT AND TOTAL rather than a cast, because the two vocabularies are
+// owned by different layers: a member added below would otherwise reach this
+// seam's telemetry as a basis this seam never declared. The default arm is
+// not a fallback -- it is unreachable while the two vocabularies agree, and
+// the vocabulary test asserts they do by quantifying over
+// `contextfabric.CohortDiscoverabilityVocabulary()` and requiring every
+// member to map to a valid basis. It returns the unservable basis rather than
+// an empty one so a future member cannot make this function return a value
+// `ValidCohortKindBasis` refuses, which would be a worse failure than a
+// slightly wrong-but-refusing basis.
+//
+// `frame_absent` is deliberately NOT produced here. Only the caller knows
+// there was no frame; the predicate below is total over an expression that
+// exists.
+func cohortKindBasisForDiscoverability(reason contextfabric.CohortDiscoverability) CohortKindBasis {
+	switch reason {
+	case contextfabric.CohortDiscoverable:
+		return CohortKindFromFrameMemberKind
+	case contextfabric.CohortNotACohortVariant:
+		return CohortKindNotACohortVariant
+	case contextfabric.CohortNoMemberKind:
+		return CohortKindNoMemberKind
+	case contextfabric.CohortMemberKindUnservable:
+		return CohortKindMemberKindUnservable
+	default:
+		return CohortKindMemberKindUnservable
 	}
-	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
-	return kinds
 }
 
 // CohortKindBasisCount is the closed vocabulary's size.
@@ -197,21 +209,25 @@ func ValidCohortKindBasis(value CohortKindBasis) bool {
 // kind was read from its question text instead, in three separate documents,
 // and the reading was wrong. A refusal a run cannot attribute to a kind is a
 // refusal someone will attribute by guessing.
+//
+// IT NO LONGER DECIDES; IT ADAPTS. The three conditions it used to test in
+// line are the shared predicate now, so this function is the nil-frame case
+// plus a vocabulary mapping. Both returned kinds come straight from the
+// predicate, so the guarantees documented above are the predicate's
+// guarantees and cannot be weakened here by accident.
 func cohortKindFromFrame(frame *contextfabric.QuestionFrame) (servable contextfabric.SubjectKind, declared contextfabric.SubjectKind, basis CohortKindBasis) {
+	// The ONLY condition this seam decides for itself, because it is the
+	// only one the layer below cannot see: a turn that reached retrieval
+	// with no validated frame has no expression to ask about.
 	if frame == nil {
 		return "", "", CohortKindFrameAbsent
 	}
-	if !frame.SubjectExpression.IsCohortVariant() {
-		return "", "", CohortKindNotACohortVariant
-	}
-	kind, ok := frame.SubjectExpression.MemberKind()
-	if !ok {
-		return "", "", CohortKindNoMemberKind
-	}
-	if !servableCohortKinds[kind] {
-		return "", kind, CohortKindMemberKindUnservable
-	}
-	return kind, kind, CohortKindFromFrameMemberKind
+	// Everything else is the shared predicate -- is it a cohort variant,
+	// does it declare a member kind, is there an arm for that kind -- stated
+	// once, in the layer both this seam and the requirement derivation can
+	// reach.
+	servableKind, declaredKind, reason := contextfabric.CohortMemberKindFor(frame.SubjectExpression)
+	return servableKind, declaredKind, cohortKindBasisForDiscoverability(reason)
 }
 
 // frameKindHints returns the kinds this turn's frame declares, for the

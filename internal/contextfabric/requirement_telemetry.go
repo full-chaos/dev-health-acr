@@ -83,6 +83,16 @@ type RequirementDerivationSummary struct {
 	// One token would report both as "nothing to run over" and send an
 	// operator to the wrong half of the pipeline.
 	//
+	// `unresolvable_member_set` NOW HAS TWO CAUSES and this counter cannot
+	// tell them apart: the expression enumerates nothing, or it declares a
+	// member kind no discovery arm serves. Both are truthfully "the frame
+	// resolves no member set", so this stays a correct partition -- the
+	// distinction is carried by the frame-validation line's own
+	// `cohort_discoverability` key, on the same event, which names the
+	// shared predicate's closed reason. It is a per-FRAME fact and not a
+	// per-row one, which is why it is a field there rather than a fourth arm
+	// here.
+	//
 	// DERIVED FROM THE ROW'S OWN COORDINATE through the same pure predicate
 	// the derivation used, never re-read from the step table: the two arms
 	// partition exactly (`deriveRequirement` takes the first when

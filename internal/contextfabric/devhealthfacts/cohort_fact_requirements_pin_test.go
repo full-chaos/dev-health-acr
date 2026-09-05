@@ -87,7 +87,7 @@ func TestCohortFactRequirementsClaimNothingNoProviderServes(t *testing.T) {
 func TestCohortFactRequirementsOmitNothingAProviderServes(t *testing.T) {
 	t.Parallel()
 	table := graphrank.CohortFactRequirementKinds()
-	for _, subjectKind := range graphrank.ServableCohortKindsForAudit() {
+	for _, subjectKind := range contextfabric.ServableCohortKindsForAudit() {
 		asked := map[contextfabric.FactKind]bool{}
 		for _, factKind := range table[subjectKind] {
 			asked[factKind] = true
@@ -111,7 +111,7 @@ func TestCohortFactRequirementsOmitNothingAProviderServes(t *testing.T) {
 func TestEveryServableCohortKindHasARequirementRow(t *testing.T) {
 	t.Parallel()
 	table := graphrank.CohortFactRequirementKinds()
-	for _, subjectKind := range graphrank.ServableCohortKindsForAudit() {
+	for _, subjectKind := range contextfabric.ServableCohortKindsForAudit() {
 		if len(table[subjectKind]) == 0 {
 			t.Errorf("%q is servable at the seam but has no cohort fact-requirement row; a cohort of that kind would be served with nothing read about its members", subjectKind)
 		}
