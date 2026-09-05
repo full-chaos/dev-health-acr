@@ -73,6 +73,12 @@ var requirementDerivationLogKeys = map[string]string{
 	"ComputedInputClasses":           "requirement_computed_input_class_",
 	"ComputedInputKinds":             "requirement_computed_input_kind_",
 	"ComputedStepExecutions":         "requirement_computed_step_",
+	// The two ARMS of `computed_population_absent`. Whole keys, not
+	// prefixes: they are a two-member split of one histogram bucket, not a
+	// vocabulary of their own, and their sum is checkable against
+	// `requirement_unavailable_computed_population_absent` on the same line.
+	"ComputedPopulationAbsentNotAPopulation":        "requirement_computed_population_absent_not_a_population",
+	"ComputedPopulationAbsentUnresolvableMemberSet": "requirement_computed_population_absent_unresolvable_member_set",
 }
 
 // TestEveryRequirementSummaryFieldReachesTheLogLine is the structural half

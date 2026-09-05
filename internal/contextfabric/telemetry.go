@@ -855,6 +855,17 @@ func requirementDerivationLogAttrs(summary RequirementDerivationSummary) []any {
 	for index, reason := range RequirementUnavailableReasonVocabulary() {
 		args = append(args, "requirement_unavailable_"+string(reason), summary.UnavailableCells[index])
 	}
+	// The two arms of `computed_population_absent`, both keys on every
+	// event including the zeroes. An operator reading the aggregate key
+	// alone cannot tell an interpreter defect (a frame asking to rank the
+	// organization) from a wiring one (a legitimate coordinate whose step
+	// needs a cohort the frame resolves none of), and those send them to
+	// opposite ends of the pipeline. Their sum is checkable against the
+	// aggregate key above without leaving the line.
+	args = append(args,
+		"requirement_computed_population_absent_not_a_population", summary.ComputedPopulationAbsentNotAPopulation,
+		"requirement_computed_population_absent_unresolvable_member_set", summary.ComputedPopulationAbsentUnresolvableMemberSet,
+	)
 	for index, quantifier := range CompletionQuantifierVocabulary() {
 		args = append(args, "requirement_quantifier_"+string(quantifier), summary.Quantifiers[index])
 	}

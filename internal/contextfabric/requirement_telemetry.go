@@ -57,6 +57,31 @@ type RequirementDerivationSummary struct {
 	// UnavailableCells counts unserved cells per reason, indexed by
 	// RequirementUnavailableReasonVocabulary position.
 	UnavailableCells [RequirementUnavailableReasonCount]int
+
+	// The two ARMS of `computed_population_absent`, split because they are
+	// actionable by different parties -- the test every token in that
+	// vocabulary has to pass, applied one level down.
+	//
+	// `not_a_population` means the COORDINATE asked for the impossible: an
+	// ordering or a cardinality of the organization itself, or of a grouping
+	// axis. The remedy is upstream, in what the interpreter emitted.
+	// `unresolvable_member_set` means the coordinate was legitimate -- a
+	// named subject is a population of one -- but the FRAME resolves no
+	// member set, so the step's executor is never invoked. The remedy is a
+	// different subject expression, or a step that does not need a cohort.
+	// One token would report both as "nothing to run over" and send an
+	// operator to the wrong half of the pipeline.
+	//
+	// DERIVED FROM THE ROW'S OWN COORDINATE through the same pure predicate
+	// the derivation used, never re-read from the step table: the two arms
+	// partition exactly (`deriveRequirement` takes the first when
+	// `coordinateNamesAPopulation` is false and the second only when it is
+	// true), so this cannot disagree with the row it describes. Their sum is
+	// UnavailableCells[computed_population_absent], which the emitter's own
+	// keys let an operator check.
+	ComputedPopulationAbsentNotAPopulation        int
+	ComputedPopulationAbsentUnresolvableMemberSet int
+
 	// Quantifiers counts rows per completion quantifier, indexed by
 	// CompletionQuantifierVocabulary position.
 	Quantifiers [CompletionQuantifierCount]int
@@ -123,6 +148,16 @@ func RequirementDerivationSummaryFrom(rows []DerivedRequirement) RequirementDeri
 			summary.Unserved++
 			if index, ok := unavailableReasonIndex(row.Unavailable); ok {
 				summary.UnavailableCells[index]++
+			}
+			// The arm split. Gated on the COMPUTED kind as well as the
+			// token so a future read-side classifier returning this reason
+			// cannot silently land in a computed-only counter.
+			if row.Kind == ObligationKindComputed && row.Unavailable == RequirementReasonComputedPopulationAbsent {
+				if coordinateNamesAPopulation(row.RequirementCoordinate) {
+					summary.ComputedPopulationAbsentUnresolvableMemberSet++
+				} else {
+					summary.ComputedPopulationAbsentNotAPopulation++
+				}
 			}
 		}
 		if index, ok := quantifierIndex(row.Quantifier); ok {

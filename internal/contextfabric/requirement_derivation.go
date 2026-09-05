@@ -348,7 +348,7 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 			row.Unavailable = RequirementReasonNoDeclaringProducer
 			return row
 		}
-		// A STEP THAT CONSUMES THE RESOLVED MEMBER SET NEEDS A FRAME THAT
+		// A STEP THAT RUNS OVER THE RESOLVED MEMBER SET NEEDS A FRAME THAT
 		// PRODUCES ONE, and only a cohort variant does.
 		//
 		// Found by an adversarial round on the wiring slice. An
@@ -365,8 +365,29 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 		// fact, and it is the SAME token the served answer's own outcome row
 		// now carries when assembly finds no member set. One record, read in
 		// two places.
+		//
+		// THE PREDICATE IS `RunsOverResolvedMemberSet`, NOT
+		// `Class == ComputedInputResolvedMemberSet`, and the difference is
+		// the whole of this cell's second defect. Class says what a step
+		// READS. rank_cohort reads FACT KINDS -- its Class is `fact_kinds` --
+		// and still runs only over a cohort, so the Class test covered
+		// membership_cardinality and let rank_cohort through. A NAMED subject
+		// is a population of one, so `coordinateNamesAPopulation` above
+		// admits `ranking/subject/<named>`, and the row was then SERVED: it
+		// named rank_cohort as its server, and `planningStageOutcomeRow`
+		// seeds a served row `satisfied`. But `IsCohortVariant` is false for
+		// `named_subject` (and for `organization_scope`), so the engine
+		// resolves no cohort, RankCohort is never invoked, and
+		// ComputedStepInputReads' five declared kinds are planned as reads
+		// the fact request -- gated on the same cohort pointer -- never
+		// carries. The cell claimed an ordering that nothing computed, over
+		// facts that nothing read. Both halves close here, at the layer that
+		// owns "a computed obligation is unavailable only when its inputs
+		// are": an unavailable row is not Served, so ComputedStepInputReads
+		// plans nothing for it and the seed says `unavailable` with a named
+		// cause instead of a silent `satisfied`.
 		if inputs, declared := InputsForComputedStep(step); declared &&
-			inputs.Class == ComputedInputResolvedMemberSet && !memberSetResolvable {
+			inputs.RunsOverResolvedMemberSet && !memberSetResolvable {
 			row.Quantifier = CompletionQuantifierNone
 			row.Unavailable = RequirementReasonComputedPopulationAbsent
 			// Step stays EMPTY, and that is the row invariant rather than an
