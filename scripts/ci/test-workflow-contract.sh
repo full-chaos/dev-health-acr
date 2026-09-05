@@ -491,7 +491,7 @@ check_pin_binds_checkout_ref() {
 # across the SELF_HOSTED_RUNNERS flip), and their `if:` gates must be the
 # canonical exact-complement pair (never both true, never both false,
 # including the fork-PR carve-out that always falls back to hosted).
-V16_PAIR_BASES="mirror-preflight scripts build contracts race-devhealthschema"
+V16_PAIR_BASES="mirror-preflight scripts build race-devhealthschema"
 
 check_v16_pairs() {
   local file="$1" base status=0

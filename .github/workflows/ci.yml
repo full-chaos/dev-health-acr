@@ -829,12 +829,32 @@ jobs:
       - name: Test hosted runtime with disposable dependencies
         run: make hosted-integration
 
-  contracts-hosted:
-    name: contracts
-    if: >-
-      vars.SELF_HOSTED_RUNNERS != 'enabled'
-      || (github.event_name == 'pull_request'
-      && github.event.pull_request.head.repo.full_name != github.repository)
+  # Runner-routing contract: contracts is HOSTED-ONLY, and was measured
+  # into that position rather than assumed into it. It was a v1.6
+  # `-hosted`/`-self-hosted` pair and ran on the pool whenever
+  # SELF_HOSTED_RUNNERS was enabled. Measured across 25 green main runs:
+  # every one of 23 pool samples took >= 444s (mean ~493s in the same hours
+  # the hosted samples were taken, drifting to ~640s as pool load rose
+  # through the day, worst 944s), while both hosted samples took 296s. Per
+  # chris's routing ruling -- route only what measurably BEATS hosted under
+  # load -- this job does the opposite, so it comes back.
+  #
+  # This also takes the pool's heaviest single tenant off it, which is the
+  # second-order reason to do it: `race (devhealthschema, isolated scope)`
+  # is the critical path and its pool duration degrades with pool load
+  # (645s in quiet hours, 864s under load), while hosted and pool are
+  # indistinguishable for that job on the merits (639s vs 645s same-era).
+  # So contracts is not the critical path and moving it does not by itself
+  # shorten the run -- it buys headroom for the job that is.
+  #
+  # The pool leg is deleted rather than gated off: scripts/ci/
+  # test-workflow-contract.sh's v1.6 pair check requires both legs of a
+  # declared pair to carry the SELF_HOSTED_RUNNERS clauses, so a pair whose
+  # pool half must never win is not expressible as a pair. `contracts` is
+  # now shaped like `unit` and `race`, the other two hosted-only jobs. To
+  # revisit, re-add a `-self-hosted` twin and put `contracts` back in
+  # V16_PAIR_BASES.
+  contracts:
     runs-on: ubuntu-latest
     steps:
       # actions/checkout v7.0.0
@@ -995,85 +1015,6 @@ jobs:
           # alone closes the class.
           ACR_CONTRACT_GATE: required
         run: go test ./ci/checkendpointprofiles/...
-
-  # The self-hosted leg. Container-free (no docker login, no
-  # testcontainers) -- confirmed by grepping the job and every `make`
-  # target it runs for docker/testcontainers references, none found.
-  # Same steps as hosted, same order, including the sparse checkout of
-  # the public full-chaos/dev-health-ops repo (no token needed) and the
-  # `git fetch` probe against it -- both plain network operations, no
-  # different on arm64. Measured pool wall under load: 8m23s in this
-  # lane's earlier (reverted, pre-v1.6) revision; timeout sized from that.
-  contracts-self-hosted:
-    name: contracts
-    if: >-
-      vars.SELF_HOSTED_RUNNERS == 'enabled'
-      && (github.event_name != 'pull_request'
-      || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, oci-arc-runners]
-    timeout-minutes: 17
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with: {persist-credentials: false}
-      # cache:false -- see race-devhealthschema-self-hosted's comment above
-      # for why (shared GOMODCACHE/GOCACHE hostPath mount, helm rev 6).
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
-        with:
-          go-version: '1.27.0'
-          cache: false
-      - name: Confirm this runner is actually arm64
-        run: |
-          set -euo pipefail
-          arch="$(go env GOARCH)"
-          if [ "${arch}" != "arm64" ]; then
-            echo "expected GOARCH=arm64 on oci-arc-runners, got '${arch}'" >&2
-            exit 1
-          fi
-      - name: Verify canonical receipts
-        run: make canonical-receipts
-      - name: Verify wire contracts
-        run: make contract-test
-      - name: Verify CodeGraph contract
-        run: make codegraph-contract
-      - name: Verify trial shard layout
-        run: make shard-plan
-      - name: Verify full-stack offline contract
-        run: make fullstack-contract
-      - name: Read the pinned ops-owned contract commit
-        id: ops-pin
-        run: echo "sha=$(tr -d '[:space:]' < ci/ops-contract.pin)" >> "$GITHUB_OUTPUT"
-      - name: Verify the pin names an immutable commit, not a floating ref
-        run: |
-          set -euo pipefail
-          sha="${{ steps.ops-pin.outputs.sha }}"
-          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
-            echo "ci/ops-contract.pin must name a full 40-character lowercase commit SHA. It currently holds: $sha" >&2
-            exit 1
-          fi
-          if git fetch --depth 1 https://github.com/full-chaos/dev-health-ops.git "$sha" >/dev/null 2>&1; then
-            exit 0
-          fi
-          echo "ci/ops-contract.pin names $sha, which does not exist on full-chaos/dev-health-ops's remote (git fetch found nothing)." >&2
-          exit 1
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          repository: full-chaos/dev-health-ops
-          ref: ${{ steps.ops-pin.outputs.sha }}
-          path: .ops-contract
-          persist-credentials: false
-          sparse-checkout: |
-            contracts/auth/v1/endpoint-profile.schema.json
-            contracts/auth/v1/credential-classes.json
-            contracts/auth/v1/credential-classes.schema.json
-          sparse-checkout-cone-mode: false
-      - name: Verify endpoint-profile inventory against the pinned ops contract
-        env:
-          ACR_ENDPOINT_PROFILE_SCHEMA: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/endpoint-profile.schema.json
-          ACR_CREDENTIAL_CLASSES: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/credential-classes.json
-          ACR_CREDENTIAL_CLASSES_SCHEMA: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/credential-classes.schema.json
-          ACR_CONTRACT_GATE: required
-        run: go test ./ci/checkendpointprofiles/...
-
   container-contract-smoke:
     runs-on: ubuntu-24.04
     # See `unit`'s identical comment: mirror-preflight is now a v1.6 pair,
@@ -1347,8 +1288,8 @@ jobs:
     # never read as green. scripts/ci/test-workflow-contract.sh enforces that
     # every job is listed here, so adding a lane cannot silently escape it.
     #
-    # Runner-routing contract v1.6: five of the lanes below (mirror-preflight,
-    # scripts, build, contracts, race-devhealthschema) are now PAIRS -- a
+    # Runner-routing contract v1.6: four of the lanes below (mirror-preflight,
+    # scripts, build, race-devhealthschema) are PAIRS -- a
     # `-hosted` and a `-self-hosted` job key sharing one `name:` -- with
     # mutually exclusive, exhaustive `if:` gates, so exactly one of each pair
     # runs per workflow run and the other reports `skipped`. Both keys of
@@ -1357,7 +1298,7 @@ jobs:
     # when exactly one member succeeded, and fails if either member reports
     # anything other than success/skipped, or if BOTH report skipped (which
     # would mean that lane never ran at all). Ported from ask-dev PR #43's
-    # aggregator logic, generalized from one pair to five.
+    # aggregator logic, generalized from one pair to four.
     if: '!cancelled()'
     needs:
       - mirror-preflight-hosted
@@ -1372,8 +1313,7 @@ jobs:
       - race-devhealthschema-self-hosted
       - build-hosted
       - build-self-hosted
-      - contracts-hosted
-      - contracts-self-hosted
+      - contracts
       - container-contract-smoke
       - container-reproducible
       - container-oci-scan
@@ -1384,7 +1324,7 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
           # v1.6 pair base names -- the job-key prefix shared by each
           # `<base>-hosted` / `<base>-self-hosted` pair.
-          PAIRS: mirror-preflight scripts build contracts race-devhealthschema
+          PAIRS: mirror-preflight scripts build race-devhealthschema
         run: |
           set -euo pipefail
           failed=0
