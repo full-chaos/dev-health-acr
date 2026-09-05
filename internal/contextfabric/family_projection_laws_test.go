@@ -455,11 +455,41 @@ func TestLawL3ScopeAndQuantifierCannotConflict(t *testing.T) {
 	// Role -> the scopes observed for it, each with a witness naming the
 	// input that produced it.
 	scopeByRole := map[SubjectRole]map[CompletionScope]string{}
-	// (obligation, subject kind) -> quantifiers observed. The quantifier's
-	// declared source is the obligation and its measured serving
-	// cardinality -- NOT the topology -- so a fixed pair must yield one
-	// quantifier however the variant varies.
+	// (obligation, subject kind) -> quantifiers observed, over SERVED ROWS
+	// ONLY. The quantifier's declared source is the obligation and its
+	// measured serving cardinality -- NOT the topology -- so a fixed pair
+	// must yield one quantifier however the variant varies.
+	//
+	// WHY SERVED-ONLY, AND WHY THAT IS NOT A LOOSENING. `none` is not a
+	// third quantifier: it is what the ROW INVARIANT gives an unserved row
+	// ("an unserved row has Unavailable non-empty and Quantifier `none`",
+	// DerivedRequirement's own doc comment). Whether a cell is servable IS
+	// topology-dependent, by design and on purpose -- that is the whole of
+	// `deriveRequirement`'s population guard, which returns `none` for a
+	// computed obligation whose step has nothing to run over. Reading those
+	// rows into this partition asks the law to forbid the mechanism the
+	// layer was built with, so the partition was measuring the wrong
+	// population.
+	//
+	// THE CONTRADICTION WAS ALREADY SHIPPED; THE CORPUS HID IT. Executed at
+	// `0a172f93` (the commit before this lane's change), touching one line
+	// of family_projection_corpus_test.go and nothing else:
+	//
+	//	control  -- L3 GREEN at the untouched parent, rc=0
+	//	probe    -- organization_scope(member kind): SubjectRepository -> SubjectTeam
+	//	result   -- L3 VIOLATED: cell "count@team" carries 2 distinct
+	//	            CompletionQuantifier values
+	//
+	// `organization_scope` is not a cohort variant, so the shipped guard
+	// already gave `count@<member kind>` a `none` there and `exact` on every
+	// cohort variant. The two never met in one cell only because the corpus
+	// gives the organization shape a subject kind no cohort shape uses. The
+	// law and the derivation disagreed before this lane existed; extending
+	// the guard to rank_cohort is what made them meet.
 	quantifierByCell := map[string]map[CompletionQuantifier]string{}
+	// Cells that carried an unserved row, so the served-only filter above
+	// can be shown to be load-bearing rather than assumed to be.
+	unservedCells := map[string]string{}
 
 	for _, generated := range frames {
 		for _, row := range DeriveRequirements(generated.frame, seed, capabilities) {
@@ -470,6 +500,10 @@ func TestLawL3ScopeAndQuantifierCannotConflict(t *testing.T) {
 			scopeByRole[row.Role][row.Scope] = fmt.Sprintf("%s obligation=%s", generated, row.Obligation)
 
 			cell := string(row.Obligation) + "@" + string(row.Subject)
+			if !row.Served() {
+				unservedCells[cell] = fmt.Sprintf("%s role=%s unavailable=%s", generated, row.Role, row.Unavailable)
+				continue
+			}
 			if quantifierByCell[cell] == nil {
 				quantifierByCell[cell] = map[CompletionQuantifier]string{}
 			}
@@ -508,8 +542,25 @@ func TestLawL3ScopeAndQuantifierCannotConflict(t *testing.T) {
 	if len(quantifierByCell) < 2 {
 		t.Fatalf("L3: only %d (obligation, subject) cell(s) observed", len(quantifierByCell))
 	}
+	// THE SERVED-ONLY FILTER MUST BE LOAD-BEARING ON THIS CORPUS. A filter
+	// nothing exercises can be deleted with every assertion still green,
+	// which is exactly how the contradiction above stayed hidden: the corpus
+	// simply never put a servable and an unservable row in one cell. So the
+	// partition must contain at least one cell that carried BOTH -- if a
+	// future corpus edit stops producing one, this fails here rather than
+	// quietly turning the filter back into dead code.
+	both := map[string]string{}
+	for cell, witness := range unservedCells {
+		if _, servedToo := quantifierByCell[cell]; servedToo {
+			both[cell] = witness
+		}
+	}
+	if len(both) == 0 {
+		t.Fatalf("L3: no (obligation, subject) cell carried BOTH a served and an unserved row, so the served-only filter is untested and could be deleted with this test still green (unserved cells seen: %d)", len(unservedCells))
+	}
 	reach.require(t, len(frames))
-	t.Logf("L3: %d rows over %d roles (%d distinct scopes) and %d (obligation, subject) cells", reach.reached, len(scopeByRole), len(distinctScopes), len(quantifierByCell))
+	t.Logf("L3: %d rows over %d roles (%d distinct scopes) and %d (obligation, subject) served cells; %d cells carried an unserved row, %d carried both: %v",
+		reach.reached, len(scopeByRole), len(distinctScopes), len(quantifierByCell), len(unservedCells), len(both), both)
 }
 
 // -----------------------------------------------------------------------
