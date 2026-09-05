@@ -505,8 +505,18 @@ func TestResolveSubjects_PartialWithholdingCarriesItsCountsNonZero(t *testing.T)
 	}
 	// The served declared kind means the need IS raised -- the partial case is
 	// deliberately not suppressed.
-	if len(offer.Missing) != 1 || offer.Missing[0] != contractsv1.ContextFabricStructureNeedExpectedKind {
-		t.Fatalf("offer.Missing = %v, want [expected_kind] -- one declared kind is served", offer.Missing)
+	// Membership, not exclusivity: a grouped frame legitimately raises other
+	// needs on their own axes (subject_anchor, subject_handle). What this test
+	// is about is that the expected_kind axis IS raised, because one declared
+	// kind is served.
+	raised := false
+	for _, need := range offer.Missing {
+		if need == contractsv1.ContextFabricStructureNeedExpectedKind {
+			raised = true
+		}
+	}
+	if !raised {
+		t.Fatalf("offer.Missing = %v, want it to include expected_kind -- one declared kind is served, so the ticket's first branch applies", offer.Missing)
 	}
 	if len(offer.KindOptions) == 0 || offer.KindOptions[0].Kind != contractsv1.ContextFabricSubjectTeam {
 		t.Fatalf("offer.KindOptions = %+v, want the served declared kind (team) first", offer.KindOptions)
