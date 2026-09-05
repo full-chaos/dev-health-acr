@@ -1125,3 +1125,198 @@ func TestEverySourceStateIsRankedAndMapped(t *testing.T) {
 		}
 	}
 }
+
+// TestAPartialCoverageDetailDoesNotSuppressTheRow bounds the BLAST RADIUS of
+// the undeclared-code stop path.
+//
+// That stop path is deliberately severe: rather than publish a cause nobody
+// declared, it drops the requirement's row entirely. Severity that large is
+// only safe while it fires on a detail that genuinely names a bad cause FOR A
+// KIND. `Coverage.Details` is a shared, optional-first array -- it carries
+// every detail the coverage layer wrote for the WHOLE turn, not only the ones
+// about this requirement, and any field of one may be absent. So the two
+// guards below decide which details are allowed to speak at all, and without
+// them one unrelated half-filled entry silences an unrelated requirement's
+// disclosure. Each guard is pinned from the side it protects:
+//
+//   - NO KIND. A detail naming no fact kind cannot be about any requirement's
+//     kinds, so nothing it carries -- including a code outside the vocabulary
+//     -- may decide this row.
+//   - NO CODE. `Code` is optional, so a record written before the field
+//     existed carries none. An empty code is an ABSENT cause, not an
+//     undeclared one; reading absence as a vocabulary violation would drop
+//     rows for documents that are merely older than the field.
+func TestAPartialCoverageDetailDoesNotSuppressTheRow(t *testing.T) {
+	t.Parallel()
+	health := contractsv1.ContextFabricFactHealth
+	requirement := readRequirement(CompletionQuantifierAtLeastOne)
+
+	// The premise, asserted rather than assumed, exactly as the stop-path test
+	// asserts it: if this token were ever declared, every fixture below would
+	// stop carrying a bad code and would silently prove nothing.
+	const undeclared = contractsv1.ContextFabricCoverageDetailCode("fact_invented_by_a_future_producer")
+	for _, declared := range contractsv1.ContextFabricCoverageDetailCodeVocabulary() {
+		if declared == undeclared {
+			t.Fatalf("%q is now a declared member; these fixtures no longer carry an undeclared code", undeclared)
+		}
+	}
+
+	// One served observation, plus the one detail under test. The served
+	// observation is what makes the assertion legible: the row that must
+	// survive is a POSITIVE one, so a suppression shows up as a missing
+	// `satisfied` rather than as one flavour of absence replacing another.
+	withDetail := func(detail contractsv1.ContextFabricCoverageDetail) Coverage {
+		coverage := factCoverage(health, SourceAvailable)
+		coverage.Details = append(coverage.Details, detail)
+		return coverage
+	}
+
+	for _, testCase := range []struct {
+		name   string
+		detail contractsv1.ContextFabricCoverageDetail
+	}{
+		{
+			name: "a detail naming no fact kind",
+			detail: contractsv1.ContextFabricCoverageDetail{
+				DetailID: "detail_kindless",
+				Source:   canonicalFactSourcePrefix,
+				Code:     undeclared,
+				Label:    "kindless",
+			},
+		},
+		{
+			name: "a detail naming a kind but no code",
+			detail: contractsv1.ContextFabricCoverageDetail{
+				DetailID: "detail_codeless",
+				Source:   canonicalFactSourcePrefix + string(health),
+				FactKind: health,
+				Label:    "codeless",
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			rows := appendReadRequirementEvaluations(nil,
+				[]contractsv1.ContextFabricPlanRequirement{requirement}, withDetail(testCase.detail))
+			if len(rows) != 1 {
+				t.Fatalf("%s suppressed the row (%d rows, want 1) -- an incomplete detail is not an "+
+					"undeclared cause, and the stop path must not reach it", testCase.name, len(rows))
+			}
+			if rows[0].Outcome != contractsv1.ContextFabricRequirementSatisfied {
+				t.Fatalf("outcome = %q, want satisfied -- the served observation decides this row, "+
+					"not the half-filled detail beside it", rows[0].Outcome)
+			}
+		})
+	}
+
+	// COMPLEMENT, in the same run: the same shape with BOTH fields filled and
+	// the same bad code DOES suppress the row. Without it the two cases above
+	// would pass on an evaluator whose stop path had been deleted outright --
+	// the opposite defect, and the more dangerous one.
+	poisoned := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{requirement},
+		withDetail(contractsv1.ContextFabricCoverageDetail{
+			DetailID: "detail_poison",
+			Source:   canonicalFactSourcePrefix + string(health),
+			Code:     undeclared,
+			FactKind: health,
+			Label:    "poison",
+		}))
+	if len(poisoned) != 0 {
+		t.Fatalf("a detail naming BOTH a kind and an undeclared code produced %d rows, want 0 -- "+
+			"the cases above show the guards are NARROW only while the stop path still fires", len(poisoned))
+	}
+}
+
+// TestTheNarrowedCauseIsTheFirstDeclaredKindsCause pins WHICH narrowing names
+// the row's cause when more than one declared kind was narrowed.
+//
+// The row publishes ONE cause. When two kinds were both narrowed and the
+// coverage layer recorded a different code for each, something has to choose,
+// and the choice has to be a RULE rather than whichever entry the loop
+// happened to see last. The rule is the requirement's own declared order:
+// `FactKinds` is the plan's priority order for that cell, so the first
+// declared kind that was narrowed names the cause. Stopping at the first match
+// is what makes that true; without the stop the result is LAST-wins -- a
+// different published cause for identical evidence, chosen by the detail the
+// plan ranked LOWER.
+//
+// REACHABILITY, stated rather than assumed: `factDetailSpecForRead` mints
+// `fact_narrowed` for every narrowing today, so both codes are equal in
+// service and the choice is currently unobservable. It is pinned for the same
+// reason the undeclared-code stop path is pinned -- one producer change away
+// from mattering, and far cheaper to fix in place than to rediscover from a
+// field report about a cause that "changes for no reason".
+func TestTheNarrowedCauseIsTheFirstDeclaredKindsCause(t *testing.T) {
+	t.Parallel()
+	health := contractsv1.ContextFabricFactHealth
+	workload := contractsv1.ContextFabricFactWorkload
+
+	// Two narrowings, DIFFERENT codes, so the choice is observable at all. A
+	// fixture giving both kinds the same code could not tell first from last
+	// and would prove nothing -- which is exactly why the shipped
+	// narrowedCoverage helper (one code for every kind) does not reach this.
+	narrowing := func(kind FactKind, code contractsv1.ContextFabricCoverageDetailCode) contractsv1.ContextFabricCoverageDetail {
+		return contractsv1.ContextFabricCoverageDetail{
+			DetailID:     "detail_" + string(kind),
+			Source:       canonicalFactSourcePrefix + string(kind),
+			Code:         code,
+			FactKind:     kind,
+			SourceState:  SourceAvailable,
+			SkippedKinds: []SubjectKind{SubjectRepository},
+			Narrowed:     true,
+			Label:        "narrowed",
+		}
+	}
+	coverage := factCoverage(health, SourceAvailable, workload, SourceAvailable)
+	coverage.Details = append(coverage.Details,
+		narrowing(health, contractsv1.ContextFabricCoverageDetailFactNarrowed),
+		narrowing(workload, contractsv1.ContextFabricCoverageDetailFactScopeUnexpanded))
+
+	// The DETAIL order is held constant across both halves below and only the
+	// REQUIREMENT's declared order is varied. That is the whole point: if the
+	// answer tracked the array it would not change, and both halves would want
+	// the same code, so the test would be measuring the fixture.
+	for _, testCase := range []struct {
+		name      string
+		factKinds []FactKind
+		want      contractsv1.ContextFabricCoverageDetailCode
+	}{
+		{
+			name:      "health declared first",
+			factKinds: []FactKind{health, workload},
+			want:      contractsv1.ContextFabricCoverageDetailFactNarrowed,
+		},
+		{
+			name:      "workload declared first",
+			factKinds: []FactKind{workload, health},
+			want:      contractsv1.ContextFabricCoverageDetailFactScopeUnexpanded,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			requirement := readRequirement(CompletionQuantifierAtLeastOne)
+			requirement.FactKinds = testCase.factKinds
+
+			rows := appendReadRequirementEvaluations(nil,
+				[]contractsv1.ContextFabricPlanRequirement{requirement}, coverage)
+			if len(rows) != 1 {
+				t.Fatalf("produced %d rows, want 1: %+v", len(rows), rows)
+			}
+			if rows[0].CauseCoverage != testCase.want {
+				t.Fatalf("cause = %q, want %q -- with both kinds narrowed the FIRST kind the "+
+					"requirement declares names the cause; the detail array order is identical in "+
+					"both halves of this test, so only the declared order can have decided this",
+					rows[0].CauseCoverage, testCase.want)
+			}
+			// The cause is CARRIED here, not defaulted -- a narrowed kind
+			// ranks at zero severity, so if the carry ever stopped happening
+			// the arm would default `fact_narrowed` and the first half above
+			// would still pass while measuring nothing.
+			if !rows[0].CauseObserved {
+				t.Fatalf("cause_observed = false: the code was defaulted, not carried from the "+
+					"planner's own detail, so this test would no longer discriminate")
+			}
+		})
+	}
+}
