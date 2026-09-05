@@ -293,9 +293,26 @@ func ValidContextFabricAnswerCompletenessState(value ContextFabricAnswerComplete
 // written to prevent, and exactly the shape that has defeated one before.
 var contextFabricAnswerObligations = [...]string{
 	"state", "completion", "readiness", "health", "principal_drivers",
-	"ranking", "remaining_work", "evidence", "coverage", "count",
+	"ranking", "remaining_work", "evidence", ContextFabricAnswerObligationCoverage,
+	ContextFabricAnswerObligationCount,
 	"allocation_breakdown", "trend_series", "period_delta",
 }
+
+// ContextFabricAnswerObligationCount and ContextFabricAnswerObligationCoverage
+// are the two members of the obligation mirror that RULES elsewhere in this
+// file have to name.
+//
+// They exist so a rule can be written against the vocabulary instead of
+// against a string literal that happens to match it. A literal in a guard is
+// a second, silent copy of the vocabulary: it does not move when the mirror
+// moves, nothing relates the two, and the parity test that keeps the mirror
+// honest cannot see it. The array above is therefore written in terms of
+// these, not the other way round -- a constant the vocabulary does not
+// contain would not compile into it.
+const (
+	ContextFabricAnswerObligationCoverage = "coverage"
+	ContextFabricAnswerObligationCount    = "count"
+)
 
 // ContextFabricAnswerObligationVocabulary returns the mirrored vocabulary,
 // for the domain-side parity test.
@@ -617,7 +634,60 @@ func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequire
 	// `narrowed` means SERVED, over a reduced set. A row claiming a
 	// narrowing that served everything it declared narrowed nothing, and a
 	// row that served none of it is not narrowed -- it is unavailable.
-	if row.Outcome == ContextFabricRequirementNarrowed && row.Declared > 0 && row.Served >= row.Declared {
+	//
+	// THE ONE EXCEPTION, and it is narrow by construction. A value computed
+	// over a population the answer did not see all of loses something on an
+	// axis these two numbers do not measure: the count over the RESOLVED set
+	// is exact, so served == declared is the truthful pair, while the answer
+	// is still not the census the question asked for. Before this, that
+	// state had no legal row shape at all -- so the honest outcome could not
+	// be written and a false `satisfied` stood by default, which is the
+	// defect the exception exists to remove.
+	//
+	// Three conjuncts, each carrying its own weight:
+	//
+	//	served == declared -- and not `>=`. Serving MORE than was declared is
+	//	  refused by its own bound above, and writing `==` here means this
+	//	  exception can never become the thing that lets such a row through.
+	//	CauseObserved -- a DEFAULTED cause would let any producer opt out of
+	//	  the reduction rule by naming a code it never measured, which is the
+	//	  assumption CauseObserved was added to make unsafe.
+	//	a population-qualifying code -- an allow-list, so a coverage code
+	//	  about a fact READ can never license equal counts.
+	//	the row class itself -- stage, obligation and impact. The three
+	//	  conjuncts above say the row is HONEST; these three say the
+	//	  exception is being taken by the ONE producer it was written for.
+	//	  Without them the exception is a property of any narrowed row that
+	//	  can arrange equal counts and a census code: a `state` obligation,
+	//	  a `planning` seed row, an `impact: depth` row that claims a scope
+	//	  loss. None of those is a count over a population, and admitting
+	//	  them is the same one-token-two-states defect this exception exists
+	//	  to remove, moved up a layer. The producer sets all three on the
+	//	  single site that emits this shape (the membership-cardinality
+	//	  step), so narrowing to them costs nothing real and closes the
+	//	  false negative.
+	//	the OTHER two cause fields, empty. `named` is an OR across the
+	//	  three, so a row may legally carry more than one -- an ordinary
+	//	  reduction can have both a basis and an overrun. This row cannot.
+	//	  A narrowing basis says the survivors were selected out of a
+	//	  larger set and an overrun says a budget cut one short; both
+	//	  assert a reduction, and both are contradicted by the equal counts
+	//	  this exception exists to permit. A row carrying either beside the
+	//	  population cause tells two incompatible stories, and an exception
+	//	  that picked one of them would be choosing on the reader's behalf
+	//	  which of two contradictory claims to believe. The producer never
+	//	  writes that shape: it copies a basis and an overrun only when a
+	//	  member step actually reduced the set, and that row takes the
+	//	  ordinary narrowed path, not this one.
+	censusQualified := row.Stage == ContextFabricOutcomeStageAssembledResult &&
+		row.Obligation == ContextFabricAnswerObligationCount &&
+		row.Impact == ContextFabricAnswerImpactScope &&
+		row.Served == row.Declared &&
+		row.CauseObserved &&
+		row.CauseNarrowing == "" &&
+		row.CauseOverrun == "" &&
+		coverageDetailCodeQualifiesPopulation(row.CauseCoverage)
+	if row.Outcome == ContextFabricRequirementNarrowed && row.Declared > 0 && row.Served >= row.Declared && !censusQualified {
 		return fmt.Errorf("outcome narrowed served %d of %d declared, which is not a reduction", row.Served, row.Declared)
 	}
 	return validateContextFabricRequirementRefinements(row)

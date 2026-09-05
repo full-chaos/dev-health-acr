@@ -249,6 +249,15 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		// No count phrasing: the field rule for this code allows no count,
 		// because nothing was read and there is nothing to count.
 		label = "The answer ended before this was looked at"
+	case ContextFabricCoverageDetailPopulationTruncated:
+		// Says the NUMBER is a floor, not that anything failed. A reader
+		// told "could not be read" would go looking for a broken source;
+		// everything here was read successfully and the answer simply did
+		// not reach the end of the set.
+		// No count phrasing: the only count available is the size of what
+		// WAS found, which the outcome row already states as `served`, and
+		// the number this label is about is the one nothing measured.
+		label = "The full set could not be listed, so this is at least this many"
 	default:
 		label = "Coverage was limited"
 	}
