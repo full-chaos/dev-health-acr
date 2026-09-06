@@ -336,14 +336,23 @@ func assignsField(fn *ast.FuncDecl, receiver, field string) bool {
 			return false
 		}
 		if ifStmt, ok := n.(*ast.IfStmt); ok && isStaticallyFalse(ifStmt.Cond) {
-			// Walk the else branch (still reachable), skip the dead body.
+			// Skip the dead body; the else branch is still REACHABLE and must
+			// be walked — but walked by THIS SAME function, recursively.
+			//
+			// The first version inspected the else with a plain walk that only
+			// looked for an AssignStmt, so it did not re-apply the dead-branch
+			// test one level down. `if false { … } else if false { retry.Allocation
+			// = allocation }` therefore passed: an `else if` is an *ast.IfStmt in
+			// the parent's Else field, and the plain walk found the assignment
+			// inside it. Caught by review and reproduced here before this fix.
+			//
+			// That is this branch's own recurring shape one last time — the
+			// handling added to make the reachable case CORRECT is what
+			// reintroduced the hole a level down. Recursing is what closes the
+			// class rather than the instance; a second bespoke check for
+			// `else if` would leave `else if false { else if false { … } }`.
 			if ifStmt.Else != nil {
-				ast.Inspect(ifStmt.Else, func(inner ast.Node) bool {
-					if assign, ok := inner.(*ast.AssignStmt); ok && assignsTo(assign, receiver, field) {
-						found = true
-					}
-					return true
-				})
+				found = found || elseBranchAssigns(ifStmt.Else, receiver, field)
 			}
 			return false
 		}
@@ -352,6 +361,61 @@ func assignsField(fn *ast.FuncDecl, receiver, field string) bool {
 		// `deadDepth == 0` guard here would be a condition that can never be
 		// false — a guard that cannot fire, which is the defect this pin's own
 		// PR spent seven rounds removing.
+		if assign, ok := n.(*ast.AssignStmt); ok && assignsTo(assign, receiver, field) {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// elseBranchAssigns walks an else branch for a REACHABLE assignment, applying
+// the same statically-dead pruning at every level.
+//
+// An `else if` is an *ast.IfStmt in the parent's Else field, so this must
+// recurse rather than scan: the pruning has to hold at arbitrary depth, or the
+// hole simply moves one `else if` further down.
+func elseBranchAssigns(branch ast.Stmt, receiver, field string) bool {
+	switch node := branch.(type) {
+	case *ast.IfStmt:
+		if isStaticallyFalse(node.Cond) {
+			// Dead body; only its own else can still be reachable.
+			if node.Else != nil {
+				return elseBranchAssigns(node.Else, receiver, field)
+			}
+			return false
+		}
+		if blockAssigns(node.Body, receiver, field) {
+			return true
+		}
+		if node.Else != nil {
+			return elseBranchAssigns(node.Else, receiver, field)
+		}
+		return false
+	case *ast.BlockStmt:
+		return blockAssigns(node, receiver, field)
+	default:
+		return blockAssigns(&ast.BlockStmt{List: []ast.Stmt{branch}}, receiver, field)
+	}
+}
+
+// blockAssigns reports a reachable assignment inside one block, pruning any
+// statically dead `if` it contains.
+func blockAssigns(block *ast.BlockStmt, receiver, field string) bool {
+	if block == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(block, func(n ast.Node) bool {
+		if n == nil || found {
+			return false
+		}
+		if ifStmt, ok := n.(*ast.IfStmt); ok && isStaticallyFalse(ifStmt.Cond) {
+			if ifStmt.Else != nil && elseBranchAssigns(ifStmt.Else, receiver, field) {
+				found = true
+			}
+			return false
+		}
 		if assign, ok := n.(*ast.AssignStmt); ok && assignsTo(assign, receiver, field) {
 			found = true
 		}
