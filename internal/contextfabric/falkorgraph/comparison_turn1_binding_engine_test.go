@@ -755,11 +755,27 @@ func requireNoCommitRetraction(t *testing.T, result contextfabric.InvestigationR
 //     -- same construction, in the receipt file: both refusing doubles, so the
 //     same argument holds and for the same reason.
 //
-// The two arms that do NOT carry it are the ones that expect a PUBLISHED
-// comparison, and they are handled the other way round:
-// TestTurnOneBindsBothNamedOperandsOfAComparison affirms and asserts
-// requireNoCommitRetraction; TestANonAffirmingAnswerRetractsBothOperandCommits
-// deliberately does not affirm and asserts the retraction is served.
+// THE BINDING ARMS -- every arm that expects a PUBLISHED comparison -- are
+// handled the other way round, and there are FOUR of them, not two. An earlier
+// version of this audit named only the first two and cost a cycle for exactly
+// that omission: the two receipt binding arms were left on a non-affirming
+// synthesizer and reported `committed = [one subject]`, because a
+// receipt-bound operand commits on an IDENTITY-PROVEN basis and survives while
+// a text-resolved one commits on a STATISTICAL basis and is retracted. A
+// half-published comparison is the most misleading possible reading of an
+// operand-binding failure.
+//
+//   - TestTurnOneBindsBothNamedOperandsOfAComparison
+//   - TestAReceiptForOneOperandStillResolvesTheOtherOperandIndependently
+//   - TestASymmetricReceiptSelectionBindsTheOtherOperand
+//     -- all three affirm and call requireNoCommitRetraction.
+//   - TestANonAffirmingAnswerRetractsBothOperandCommits
+//     -- deliberately does NOT affirm, and asserts the retraction IS served.
+//
+// THE TWO BASES DIFFER, WHICH IS WHY THIS BITES ASYMMETRICALLY: only the
+// statistical half is retractable, so a fixture that does not affirm loses the
+// text-resolved operand and keeps the receipt-bound one, which looks exactly
+// like "the second operand never bound".
 //
 // A NEW HELD ARM MUST DO ONE OF THE TWO. Either drive the refusing doubles, or
 // call requireNoCommitRetraction. An arm that does neither is asserting through

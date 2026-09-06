@@ -285,9 +285,21 @@ func TestAReceiptForOneOperandStillResolvesTheOtherOperandIndependently(t *testi
 			priorCandidate(comparisonReceiptB, comparisonSubjectB),
 		),
 		receipts:    []contextfabric.BoundSubjectReceipt{{ResultID: comparisonPriorResultID, ReceiptID: comparisonReceiptA}},
-		facts:       emptyFactReader{},
-		synthesizer: countingSynthesizer{},
+		facts:       comparisonFactReader{subjects: []contextfabric.SubjectRef{comparisonSubjectA, comparisonSubjectB}},
+		synthesizer: comparisonAffirmingSynthesizer{subjects: []contextfabric.SubjectRef{comparisonSubjectA, comparisonSubjectB}},
 	}.run(t)
+
+	// THE AFFIRMATION CONTROL, and this arm is why the rule exists in the
+	// first place. It is a BINDING arm, not a hold arm, so it expects a
+	// published comparison and must therefore affirm what it expects to stay
+	// committed. Without it this arm reported `committed = [team/team_platform]`
+	// -- one subject, not zero -- because the receipt-bound operand commits on
+	// an IDENTITY-PROVEN basis and survives, while the text-resolved operand
+	// commits on a STATISTICAL basis and was retracted for want of an answer
+	// that named it. A half-published comparison is the most misleading
+	// possible reading of an operand-binding failure, and it was a fixture
+	// artefact.
+	requireNoCommitRetraction(t, result)
 
 	got := committedKeys(result.SubjectResolution)
 	if len(got) != 2 {
@@ -327,9 +339,11 @@ func TestASymmetricReceiptSelectionBindsTheOtherOperand(t *testing.T) {
 			priorCandidate(comparisonReceiptB, comparisonSubjectB),
 		),
 		receipts:    []contextfabric.BoundSubjectReceipt{{ResultID: comparisonPriorResultID, ReceiptID: comparisonReceiptB}},
-		facts:       emptyFactReader{},
-		synthesizer: countingSynthesizer{},
+		facts:       comparisonFactReader{subjects: []contextfabric.SubjectRef{comparisonSubjectA, comparisonSubjectB}},
+		synthesizer: comparisonAffirmingSynthesizer{subjects: []contextfabric.SubjectRef{comparisonSubjectA, comparisonSubjectB}},
 	}.run(t)
+
+	requireNoCommitRetraction(t, result)
 
 	if len(committedKeys(result.SubjectResolution)) != 2 {
 		t.Fatalf("committed = %v, want both operands regardless of which one the receipt answered", committedKeys(result.SubjectResolution))
