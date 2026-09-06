@@ -1268,3 +1268,102 @@ func TestTheGroupPopulationReportsTheOwnersCensusAndNarrowing(t *testing.T) {
 		}
 	})
 }
+
+// TestARequirementWithNoComparisonNeverTakesTheSamenessArm pins the guard that
+// the call-site conjunct used to duplicate.
+//
+// WHY IT EXISTS. `comparisonFullyRead`'s first clause returns false when
+// `comparisonDeclared` is zero. Without it, a requirement with NO comparison at
+// all reaches the loop over an EMPTY operand slice, every iteration vacuously
+// passes, and the predicate answers "yes, every operand was read" about a
+// comparison that does not exist -- opening the sameness arm on a plain member
+// row and reporting a depth loss against an intersection of nothing.
+//
+// IT WAS UNPINNABLE UNTIL NOW, and that is the point. While the call site ALSO
+// tested `len(comparisonOperands) > 0`, deleting this clause changed no
+// behaviour: a battery ran both deletions and BOTH SURVIVED, each dead only
+// because the other lived. The redundancy was removed rather than pinned twice,
+// so this clause is now load-bearing and this test can fail.
+func TestARequirementWithNoComparisonNeverTakesTheSamenessArm(t *testing.T) {
+	t.Parallel()
+	health, flow := contractsv1.ContextFabricFactHealth, contractsv1.ContextFabricFactFlow
+	members := []SubjectRef{projectRef("project_1"), projectRef("project_2")}
+	// COMPLETE cohort: the census arm must not be what decides this row, or the
+	// test would pass for a reason that has nothing to do with the guard.
+	cohort := cohortWith(contractsv1.ContextFabricSubjectProject, members, nil, true)
+	requirement := scopeRequirement(CompletionScopeEachMember, contractsv1.ContextFabricSubjectProject,
+		SubjectRoleMember, CompletionQuantifierCorroborated, health, flow)
+
+	// nil frame -> no explicit operand set -> comparisonDeclared == 0.
+	rows := evaluateCohort([]contractsv1.ContextFabricPlanRequirement{requirement}, cohort,
+		factCoverage(health, SourceAvailable, flow, SourceAvailable),
+		factsFor(members[0], kindList(health, flow), members[1], kindList(health, flow)))
+
+	// Every member read to the standard, and no comparison in sight: satisfied.
+	// With the guard deleted this reads narrowed/depth over an empty
+	// intersection -- a sameness failure invented for a question nobody asked.
+	assertRow(t, rowFor(t, rows, requirement.Requirement),
+		contractsv1.ContextFabricRequirementSatisfied,
+		contractsv1.ContextFabricAnswerImpactNone,
+		contractsv1.ContextFabricCoverageDetailCode(""),
+		false, 2, 2)
+}
+
+// TestAnIncompleteCensusOutranksTheSamenessArm pins the census conjunct on the
+// sameness gate, and it is the FIRST test to put an incomplete census and a
+// live comparison in the same turn.
+//
+// REACHABILITY, because it is not obvious: an OPERAND population is never
+// `populationIncomplete` -- `operandPopulation` only ever sets absent or
+// enumerated. So this conjunct can only ever bite on a MEMBER or GROUP row that
+// is evaluated while the frame ALSO names comparison operands. That shape
+// existed in no test, which is exactly why the mutant deleting the conjunct
+// survived a 3322-test suite.
+//
+// THE PROPERTY. When the owner reports its enumeration is not the whole
+// population, the row must disclose THAT -- a truncation it observed -- and not
+// a sameness shortfall computed over the part it happened to see. Claiming
+// operands share too little evidence, while admitting we do not know the whole
+// population, is a claim the turn cannot support.
+func TestAnIncompleteCensusOutranksTheSamenessArm(t *testing.T) {
+	t.Parallel()
+	health, flow := contractsv1.ContextFabricFactHealth, contractsv1.ContextFabricFactFlow
+	investment, workload := contractsv1.ContextFabricFactInvestment, contractsv1.ContextFabricFactWorkload
+	alpha, beta := teamRef("team_alpha"), projectRef("project_beta")
+	members := []SubjectRef{projectRef("project_1"), projectRef("project_2")}
+
+	// The comparison: two operands whose evidence is DISJOINT, so the sameness
+	// arm would fire on any row that reached it.
+	teamReq := operandRequirement(SubjectTeam, CompletionQuantifierCorroborated,
+		flow, health, investment, workload)
+	projectReq := operandRequirement(contractsv1.ContextFabricSubjectProject,
+		CompletionQuantifierCorroborated, flow, health, investment, workload)
+	// The member row, over a cohort whose owner says the enumeration is partial.
+	memberReq := scopeRequirement(CompletionScopeEachMember, contractsv1.ContextFabricSubjectProject,
+		SubjectRoleMember, CompletionQuantifierCorroborated, health, flow)
+	published := []contractsv1.ContextFabricPlanRequirement{teamReq, projectReq, memberReq}
+
+	cohort := cohortWith(contractsv1.ContextFabricSubjectProject, members, nil, false) // Complete=false
+	coverage := factCoverage(flow, SourceAvailable, health, SourceAvailable,
+		investment, SourceAvailable, workload, SourceAvailable)
+	facts := factsFor(
+		alpha, kindList(flow, health), beta, kindList(investment, workload),
+		members[0], kindList(health, flow), members[1], kindList(health, flow))
+
+	result := InvestigationResult{
+		Cohort:            cohort,
+		Coverage:          coverage,
+		SubjectResolution: contractsv1.ContextFabricSubjectResolution{Committed: []SubjectRef{alpha, beta}},
+	}
+	frame := namedOperandFrame(SubjectTeam, contractsv1.ContextFabricSubjectProject)
+	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts)
+	rows := appendReadRequirementEvaluations(nil, published, coverage, evidence)
+
+	// The OWNER's truncation, observed, over its own counts -- not a depth loss
+	// derived from an intersection taken over a population we admit is partial.
+	assertRow(t, rowFor(t, rows, memberReq.Requirement),
+		contractsv1.ContextFabricRequirementNarrowed,
+		contractsv1.ContextFabricAnswerImpactScope,
+		contractsv1.ContextFabricCoverageDetailPopulationTruncated,
+		true, 2, 2)
+}

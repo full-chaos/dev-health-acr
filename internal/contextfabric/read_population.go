@@ -722,8 +722,22 @@ func readPopulationOutcomeRow(
 	// intersection below then asks whether what they share meets THIS row's
 	// threshold. Asking both at this row's standard is the false-complete a
 	// keystone review reproduced -- see comparisonStandards.
-	if len(evidence.comparisonOperands) > 0 && population.Census != populationIncomplete &&
-		evidence.comparisonFullyRead() {
+	// NO `len(evidence.comparisonOperands) > 0` CONJUNCT HERE, DELIBERATELY.
+	//
+	// It used to lead this condition and it was REDUNDANT WITH the predicate's
+	// own first guard: `comparisonFullyRead` returns false when
+	// `comparisonDeclared` is zero, so a requirement with no comparison can
+	// never open this arm. A battery proved the redundancy the only way it
+	// can be proved -- BOTH deletions survived the whole suite, each dead only
+	// because the other lived, and no single-mutant test could have killed
+	// either. Two tests pinning two clauses that individually change nothing
+	// would have passed on the unfixed tree.
+	//
+	// The guard stays in the PREDICATE, not here: `comparisonFullyRead` should
+	// be total on its own inputs rather than depend on a caller checking the
+	// same thing first. That is now a load-bearing clause with a real arm
+	// against it.
+	if population.Census != populationIncomplete && evidence.comparisonFullyRead() {
 		common := commonServedKinds(evidence.comparisonOperands, servedKinds, evidence.coverage)
 		if len(common) < threshold {
 			// Depth: the subjects the answer covers are unchanged, and what
