@@ -261,7 +261,7 @@ jobs:
           # image publication; do not collapse this back into one `go test`.
           make verify
           go mod verify
-          go install golang.org/x/vuln/cmd/govulncheck@v1.5.0
+          scripts/ci/retry.sh go install golang.org/x/vuln/cmd/govulncheck@v1.5.0
           govulncheck ./...
       - name: Build deterministic matrix and final checksum manifest
         env:
@@ -281,7 +281,7 @@ jobs:
           diff -qr --no-dereference /tmp/first /tmp/second
           mkdir release; cp /tmp/first/* release/
           for archive in release/*.tar.gz release/*.zip; do
-            go run github.com/anchore/syft/cmd/syft@v1.46.0 "$archive" -o "spdx-json=${archive}.spdx.json"
+            scripts/ci/retry.sh go run github.com/anchore/syft/cmd/syft@v1.46.0 "$archive" -o "spdx-json=${archive}.spdx.json"
           done
           (
             cd release
