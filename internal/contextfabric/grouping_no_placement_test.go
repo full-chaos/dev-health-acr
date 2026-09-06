@@ -1027,3 +1027,203 @@ func TestEveryGroupedCohortEventFieldHasDeclaredCoverage(t *testing.T) {
 			seen, len(groupedCohortEventFieldCoverage))
 	}
 }
+
+// ─── KILLERS FOR THE THREE MUTANTS ROUND 3 NAMED ─────────────────────────────
+//
+// Round 3 returned CLEAN and named three surviving deletions. Under the
+// fixed-point rule a CLEAN artefact stands across ONE test-only commit whose
+// sole content is killers for the mutants that same pass named, so this block
+// is exactly that: three killers, zero production lines.
+//
+// Each one is written against the same question that has now cost this branch
+// four findings in four literals -- IS THERE A FIXTURE WHERE THE PROPERTY'S
+// VALUE IS NOT ITS ZERO VALUE? A killer that passes with the mutant applied is
+// not a killer, however healthy it reads.
+
+// TestTheDisclosureComposerToleratesANilResult kills R13.
+//
+// MUTANT: delete `if result == nil { return }` from
+// applyGroupingRefusalDisclosure.
+//
+// The discriminating power here is in the OUTCOME, not in the nil. With the
+// guard deleted, a nil result only dereferences once the composer gets PAST
+// its `!discloses` early return -- so a NON-disclosing outcome would make this
+// test pass with the guard present AND absent, pinning nothing at all. The
+// outcome below is therefore a real vocabulary member, and the control runs
+// FIRST to prove that it discloses rather than assuming it: if the control
+// ever stops disclosing, this test says so out loud instead of going quietly
+// green.
+//
+// Why pin the guard rather than delete it as subsumed, which is what happened
+// to `&& ungrouped > 0` earlier in this branch: that conjunct could not
+// discriminate anything at any call site, while this one is unreachable only
+// because TODAY's single non-test caller passes `&result`, the address of a
+// local. It is a contract for the next caller of a helper with several
+// callers, not dead weight from an argument already lost.
+func TestTheDisclosureComposerToleratesANilResult(t *testing.T) {
+	t.Parallel()
+	disclosing := CohortGroupingOutcome{
+		Refusal: CohortGroupingRefusalNoMemberPlaced, PlannedKind: SubjectTeam, Ungrouped: 2,
+	}
+	control := InvestigationResult{Status: InvestigationPartial}
+	applyGroupingRefusalDisclosure(&control, disclosing)
+	if len(control.Limitations) == 0 {
+		t.Fatal("control failed: the fixture outcome discloses nothing, so the nil call below would return at the !discloses guard and would pass with or without the nil guard -- it would pin nothing")
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("applyGroupingRefusalDisclosure(nil, %#v) panicked: %v -- the nil guard is the only thing between a future caller with no result and a crash on the answer path", disclosing, r)
+		}
+	}()
+	applyGroupingRefusalDisclosure(nil, disclosing)
+}
+
+// TestGroupedCohortCompletenessGuardsItsEmptyAndNilInputs kills R14.
+//
+// MUTANT: delete `if cohort == nil || len(cohort.Groups) == 0 { return }` from
+// ApplyGroupedCohortCompleteness. The line PRE-DATES this change and the
+// reviewer said so; it is folded in as coverage only, on the same ruling that
+// folded in the ordinary-arm fields, and it adds no production line.
+//
+// The empty arm is the one that needs care. contractsv1.CohortCompletenessFrom
+// Groups returns (false, false) for zero groups, so with the guard deleted an
+// empty-groups cohort computes `Complete = Complete && false` -- it FLIPS a
+// true to false. A fixture whose Complete is already false would therefore
+// pass with the mutant applied, because false && false is false: the zero
+// value satisfies the assertion without the guard doing anything. Complete
+// MUST start true here, and Truncated must start false so the OR arm is
+// likewise observable rather than pre-satisfied.
+func TestGroupedCohortCompletenessGuardsItsEmptyAndNilInputs(t *testing.T) {
+	t.Parallel()
+
+	// Empty groups: a no-op, NOT a recomputation from an empty set.
+	empty := Cohort{Complete: true, Truncated: false}
+	ApplyGroupedCohortCompleteness(&empty)
+	if !empty.Complete {
+		t.Error("Complete flipped true->false on a cohort with no groups: completeness was recomputed from an empty group set, which reports a fully-seen cohort as incomplete for the sole reason that it was never grouped")
+	}
+	if empty.Truncated {
+		t.Error("Truncated flipped false->true on a cohort with no groups")
+	}
+
+	// Positive control: the function DOES fold real groups, so the no-op above
+	// is a guard doing its job and not a function that never writes anything.
+	folded := Cohort{Complete: true, Truncated: false, Groups: []contractsv1.ContextFabricCohortGroup{
+		{
+			Subject: contractsv1.ContextFabricSubjectRef{
+				Kind: SubjectTeam, CanonicalID: "team_security", Label: "Security",
+			},
+			// Total > len(MemberCanonicalIDs) because the contract enforces
+			// Truncated => Total > presented; a group claiming truncation it
+			// cannot legally claim would make this control fail for a reason
+			// unrelated to the guard under test.
+			MemberCanonicalIDs: []string{"member_one"},
+			Total:              2,
+			Complete:           false,
+			Truncated:          true,
+		},
+	}}
+	ApplyGroupedCohortCompleteness(&folded)
+	if folded.Complete || !folded.Truncated {
+		t.Fatalf("control failed: Complete=%v Truncated=%v after folding an incomplete truncated group -- the assertions above measured a function that does nothing at all",
+			folded.Complete, folded.Truncated)
+	}
+
+	// Nil: surviving the call IS the property.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("ApplyGroupedCohortCompleteness(nil) panicked: %v", r)
+		}
+	}()
+	ApplyGroupedCohortCompleteness(nil)
+}
+
+// TestTheDisclosureAllowListNamesEveryVocabularyMember kills R15 -- but NOT by
+// pinning R15's own behaviour, and the difference is the point.
+//
+// MUTANT: delete `case CohortGroupingRefusalNone: return "", false` from
+// groupingRefusalDisclosure. That arm and the `default` arm return IDENTICAL
+// values, so NO behavioural fixture can tell the mutant from the original.
+// It is an EMPTY CELL in the battery -- the same shape as the `&& ungrouped >
+// 0` conjunct removed earlier in this branch -- and an empty cell is a finding,
+// never a pass. The honest options were to delete the arm as subsumed, which
+// is a production change, or to pin a DIFFERENT property that the arm's
+// presence actually carries. This is the second.
+//
+// The property: the allow-list must NAME every member of the closed
+// vocabulary explicitly. An allow-list that silently omits a known member and
+// leans on `default` is strictly worse to read -- the reader cannot tell a
+// member that was considered and given no sentence from one nobody thought
+// about -- and that ambiguity is the whole reason the pre-D10 `!=` shape was
+// a defect. Both sides are read from SOURCE so neither is a list I maintain by
+// hand: adding a fourth vocabulary member without a case fails this too.
+func TestTheDisclosureAllowListNamesEveryVocabularyMember(t *testing.T) {
+	t.Parallel()
+	const path = "chaos4636_grouped_cohort.go"
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+
+	vocabulary := map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		spec, ok := n.(*ast.ValueSpec)
+		if !ok || len(spec.Names) != 1 || spec.Names[0].Name != "canonicalCohortGroupingRefusals" {
+			return true
+		}
+		for _, value := range spec.Values {
+			lit, ok := value.(*ast.CompositeLit)
+			if !ok {
+				continue
+			}
+			for _, element := range lit.Elts {
+				kv, ok := element.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				if ident, ok := kv.Key.(*ast.Ident); ok {
+					vocabulary[ident.Name] = true
+				}
+			}
+		}
+		return true
+	})
+
+	named := map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		decl, ok := n.(*ast.FuncDecl)
+		if !ok || decl.Name.Name != "groupingRefusalDisclosure" {
+			return true
+		}
+		ast.Inspect(decl.Body, func(inner ast.Node) bool {
+			clause, ok := inner.(*ast.CaseClause)
+			if !ok {
+				return true
+			}
+			for _, expr := range clause.List { // a nil List is the `default` arm
+				if ident, ok := expr.(*ast.Ident); ok {
+					named[ident.Name] = true
+				}
+			}
+			return true
+		})
+		return false
+	})
+
+	// Both halves must be non-empty before any comparison: two empty sets are
+	// equal, and an equality that passes because the parser found nothing is
+	// the vacuous-population trap this package fails builds over elsewhere.
+	if len(vocabulary) < 3 {
+		t.Fatalf("read %d vocabulary members from %s, want at least 3 -- the map literal was not found, so the comparison below would be vacuous", len(vocabulary), path)
+	}
+	if len(named) == 0 {
+		t.Fatalf("read no case identifiers from groupingRefusalDisclosure in %s -- the switch was not found", path)
+	}
+
+	for member := range vocabulary {
+		if !named[member] {
+			t.Errorf("groupingRefusalDisclosure has no explicit case for %s, a member of the closed vocabulary: falling through to `default` makes a member that was deliberately given no sentence indistinguishable from one nobody considered, which is the ambiguity the pre-D10 `!=` shape was a defect for", member)
+		}
+	}
+}
