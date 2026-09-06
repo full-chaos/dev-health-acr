@@ -1277,6 +1277,56 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 				Rank: i + 1, Survived: keptIndex[i],
 			})
 		}
+		// The once-per-PASS Info summary (this call is one pass; a
+		// resolution can run more than one -- see
+		// ResolutionTraceEvent.RankedCutSummary's own doc comment for the
+		// full rule: no fixed count relationship to this pass's own
+		// "decision" event(s), but the LAST summary reaching the tracer for
+		// a request_id always describes the pass whose resolution was
+		// returned) -- see that same doc comment for why this is a second
+		// event on the same token rather than
+		//
+		// On an ERROR return after the first pass (e.g. resolveSubjects'
+		// own confirmed-kind scoped-snapshot failure, which returns before
+		// ever reaching a second pass): this pass's summary has ALREADY
+		// been traced by the time that error surfaces, exactly like its own
+		// "decision" event (measured: search/corroboration/ranked_cut/
+		// decision all complete, in that order, before the scoped block
+		// even runs) -- not a gap unique to the summary. A summary in the
+		// Info stream on a failed request is a log line describing a pass
+		// that ran; nothing consumes it programmatically, and the caller's
+		// own error is the authoritative outcome, exactly as it already is
+		// for the pass's decision event.
+		// promoting the per-candidate loop above (measured: that loop is
+		// one event per RETRIEVAL-sized pool candidate, up to 91 in one
+		// representative fixture, against a ceiling of 25 for an
+		// unconditional per-pass Info line). RankedCutSurvivedCount is
+		// always the TRUE survivor
+		// count (never truncated) so an operator can trust the number even
+		// when the ids list below is capped; RankedCutSurvivedIDs itself is
+		// capped at rankedCutSummaryIDCap regardless of the configured cut
+		// budget `max`, so a large-crowd resolution cannot make one log line
+		// unbounded (scale ruling: a 1000-candidate crowd must not produce a
+		// 1000-id array in one Info line).
+		survivedIDs := make([]string, 0, len(ordered))
+		for i, candidate := range ordered {
+			if keptIndex[i] {
+				survivedIDs = append(survivedIDs, candidate.Subject.CanonicalID)
+			}
+		}
+		// rankedCutSummaryIDCap bounds the summary line's id array
+		// independently of the configured cut budget `max`, which is a
+		// per-deployment tuning value with no upper bound of its own.
+		const rankedCutSummaryIDCap = 25
+		reportedIDs := survivedIDs
+		if len(reportedIDs) > rankedCutSummaryIDCap {
+			reportedIDs = reportedIDs[:rankedCutSummaryIDCap]
+		}
+		tracer.Trace(ResolutionTraceEvent{
+			RequestID: requestID, Stage: "ranked_cut", RankedCutSummary: true,
+			RankedCutCandidateCount: len(ordered), RankedCutSurvivedCount: len(survivedIDs),
+			RankedCutSurvivedIDs: reportedIDs, RankedCutMax: max,
+		})
 	}
 	if max > 0 && len(ordered) > max {
 		retained := make([]contextfabric.SubjectCandidate, 0, max)

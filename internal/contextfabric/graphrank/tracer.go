@@ -204,7 +204,13 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// discipline as boundary_kinds itself. See
 		// KindOfferBoundaryKindsBeforeRepair's own doc comment
 		// (ResolutionTraceEvent) for the full mechanism.
-		t.logger.DebugContext(ctx, "context fabric resolution trace: kind offer",
+		// Rig-visibility fix: InfoContext, matching kind_offer_withheld's own
+		// precedent below -- the production default log level is
+		// slog.LevelInfo (internal/sidecar/config.go), so a Debug line does
+		// not exist in production at all. This is the operator-visible
+		// unconditional per-resolution offer summary; ranked_cut and
+		// reserved_kind_admitted just below carry the same reasoning.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: kind offer",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"explicit_hint_count", event.KindOfferExplicitHintCount,
 			"declared_hint_count", event.KindOfferDeclaredHintCount,
@@ -283,6 +289,30 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"request_id", event.RequestID, "stage", event.Stage,
 			"labels_normalized_count", event.AnchorOfferLabelsNormalizedCount)
 	case "ranked_cut":
+		// Measured before picking a shape (a volume gate on log lines per
+		// pass) -- this per-candidate line is emitted once per RETRIEVAL-
+		// sized pool candidate (up to 91 in one representative fixture),
+		// well past the 25-per-pass ceiling for an unconditional Info
+		// line, so it STAYS DebugContext. RankedCutSummary (below) is the
+		// once-per-PASS Info line an operator actually gets on the rig --
+		// NOT in a fixed count relationship with that pass's own "decision"
+		// event(s) (an empty-pool pass decides but has nothing to cut; a
+		// multi-subject commit decides once per subject but cuts once), but
+		// the LAST summary reaching the tracer for a request_id always
+		// describes the pass whose resolution was actually returned, the
+		// same guarantee "decision" itself carries; see
+		// ResolutionTraceEvent.RankedCutSummary's own doc comment for the
+		// full rule and why this is a second event on this SAME token
+		// rather than promoting this one.
+		if event.RankedCutSummary {
+			t.logger.InfoContext(ctx, "context fabric resolution trace: ranked cut summary",
+				"request_id", event.RequestID, "stage", event.Stage,
+				"candidate_count", event.RankedCutCandidateCount,
+				"survived_count", event.RankedCutSurvivedCount,
+				"survived_ids", event.RankedCutSurvivedIDs,
+				"max", event.RankedCutMax)
+			return
+		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: ranked cut",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
@@ -297,7 +327,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// either nothing was reserved, or the ranking already kept the kind.
 		// Rank is the candidate's PRE-CUT rank, so the distance past `max`
 		// says how badly the kind lost the ranking race.
-		t.logger.DebugContext(ctx, "context fabric resolution trace: reserved kind admitted",
+		// Rig-visibility fix: InfoContext -- see kind_offer's own comment above.
+		// This event's presence is the operator-visible proof the reserve
+		// actually fired for a candidate; absence at Debug (today) is
+		// indistinguishable from "the reserve was inert," exactly the
+		// ambiguity this ticket exists to remove.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: reserved kind admitted",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"rank", event.Rank, "survived", event.Survived)

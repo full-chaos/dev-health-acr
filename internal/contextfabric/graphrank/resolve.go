@@ -1080,6 +1080,64 @@ type ResolutionTraceEvent struct {
 	Rank           int
 	Survived       bool
 	CoverageBypass bool
+	// RankedCutSummary/RankedCutCandidateCount/RankedCutSurvivedCount/
+	// RankedCutSurvivedIDs/RankedCutMax (stage=="ranked_cut" ONLY, a
+	// rig-visibility fix): the per-candidate Rank/Survived/Subject event above stays
+	// at Debug (measured: up to ~1 per pool candidate, unbounded by the
+	// resolution's own retrieval size, not the cut budget -- an operator
+	// tailing a rig log at the production default cannot afford that
+	// volume). This is a SECOND event, emitted once per PASS through
+	// ResolveFromMergedCandidatesWithGateAndBasis (RankedCutSummary=true
+	// marks it, so a consumer can tell it apart from the per-candidate
+	// events sharing the same Stage token), at Info, folding that pass's
+	// whole cut into one line: how many candidates were ranked
+	// (RankedCutCandidateCount) and how many survived (RankedCutSurvivedCount,
+	// ALWAYS the true count, never truncated), plus a SAMPLE of which ones
+	// (RankedCutSurvivedIDs, the first N survivors in rank order, capped
+	// independently of the configured cut budget `max` so a large-crowd
+	// resolution cannot make this one line unbounded), and the threshold
+	// applied. No new Stage value -- same closed-vocabulary token, a richer
+	// payload.
+	//
+	// One PASS, not one RESOLUTION -- and NOT a fixed count relative to
+	// "decision" either. A resolution can run more than one pass (a
+	// confirmed-kind scoped re-decision, an evidence-census re-decision --
+	// see resolveSubjects), and each pass traces its own "decision"
+	// event(s) unconditionally; this file's existing invariant for that
+	// ("several decision events per resolution is normal; the LAST one
+	// describes the returned resolution" -- discardableDecisionTracer's own
+	// doc comment) is the one this stage shares -- NOT a literal 1:1 count
+	// pairing with decision, which does not hold in general:
+	//   - a pass whose candidate pool is EMPTY decides (typically a
+	//     stalled/no-candidate outcome) but has nothing to cut, so it
+	//     emits ZERO ranked_cut summaries for one decision event;
+	//   - a pass that commits MULTIPLE subjects (CHAOS-4096: one "decision"
+	//     event PER committed subject) still cuts its pool exactly once, so
+	//     it emits exactly ONE ranked_cut summary for N decision events.
+	// What IS guaranteed, and is the actual property a reader needs: a
+	// DISCARDED pass (a scoped re-decision that is not kept) withholds its
+	// summary and every decision event TOGETHER -- discardableDecisionTracer
+	// buffers both under the same "ranked_cut"/"decision" cases and only
+	// replays them via keep(), called only when that pass's resolution is
+	// retained. So the LAST ranked_cut summary that reaches the tracer for
+	// a given request_id always describes the pass whose resolution was
+	// actually returned, exactly like the last decision event does -- even
+	// though the two counts need not match.
+	//
+	// ERROR RETURNS are outside this "returned resolution" framing
+	// entirely, and not a gap unique to this event: if resolveSubjects
+	// returns an error (e.g. a confirmed-kind scoped-snapshot failure)
+	// after the first pass already ran, that pass's summary -- like its
+	// own "decision" event, measured to trace in the SAME call before the
+	// error surfaces (resolution.go's emission site has the full measured
+	// order) -- has already reached the tracer. A summary on a failed
+	// request is a log line describing a pass that ran; the caller's own
+	// error is the authoritative outcome, exactly as for a stalled decision.
+	RankedCutSummary        bool
+	RankedCutCandidateCount int
+	RankedCutSurvivedCount  int
+	RankedCutSurvivedIDs    []string
+	RankedCutMax            int
 	// IdentityUniverseComplete (identity_universe stage; chris ruling,
 	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
 	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into
