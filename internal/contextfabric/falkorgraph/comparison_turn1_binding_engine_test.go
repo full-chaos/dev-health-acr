@@ -798,97 +798,114 @@ func TestANamedOperandPairedWithAScopedOperandHoldsBeforeAnyRead(t *testing.T) {
 // ARM 4 -- THE WHOLE-QUESTION-ONLY SUBJECT
 // ---------------------------------------------------------------------------
 
-// TestAWholeQuestionOnlySubjectCannotStandInForAnOperand pins the rider that a
-// whole-question search may not serve as identity evidence for either operand.
+// TestAWholeQuestionOnlySubjectStillCannotCommitOnItsOwn is a CONTROL, and it
+// is GREEN AT THE PARENT AND GREEN AFTER. It is written down as a control
+// because the first version of it was written as a red-at-parent arm and was
+// wrong about the product.
 //
-// Neither operand term retrieves anything. The whole-question pass retrieves
-// ONE high-scoring subject whose label matches neither operand. It has no
-// identity witness in either slot's own terms, so it can neither commit nor
-// be treated as having answered an operand -- the comparison holds instead.
+// WHAT THE MEASUREMENT SHOWED. A whole-question-only candidate arrives at
+// confidence 0.70 and cannot reach the lone-candidate commit gate -- not
+// because of anything this fixture does, but because two shipped facts
+// compose. `ResolveDeps.SearchQuestion` is wired to `questionVectorSearchNodes`
+// (reader.go), so the whole-question pass is VECTOR-ONLY; and the vector
+// relevance ceiling is set deliberately below graphrank's lone-candidate gate
+// so that "a vector hit alone never commits a subject" is true by ARITHMETIC
+// rather than by a rule that could later be special-cased away. That intent is
+// stated in vector.go's own doc comment on the constant, and it is pinned by
+// two existing tests -- `TestD11Class_NoVectorOnlyConfidenceCanReachTheCommitGate`
+// (graphrank/vector_ladder_regression_test.go) and
+// `TestAC_3778_3_VectorOnlyCandidateCannotReachTheLoneCommitGate`
+// (graphrank/corroboration_test.go). This file cites them by NAME and does not
+// restate the constant: a copied number here would be a second, silently
+// divergent authority for a value those two already own.
 //
-// AT THE PARENT the question pass's hit joins the same flat pool as everything
-// else, and with no rival it is free to clear the ordinary commit gate: the
-// turn commits a subject that answers neither operand and reads facts for it.
+// SO WHY KEEP THE ARM AT ALL. After this work there are TWO independent
+// reasons a question-only subject cannot stand in for an operand: the ceiling,
+// and its exclusion from every slot's identity pool. A control that passes on
+// either and fails only when BOTH are gone is exactly the property worth
+// holding -- and it is the arm that would catch someone raising the ceiling on
+// the assumption that the slot exclusion now covers it.
 //
-// THIS ARM IS MEASURABLE ONLY ON A VECTOR-CAPABLE FIXTURE, and the first
-// version of it was not one. ResolveDeps.SearchQuestion is
-// questionVectorSearchNodes (reader.go), which returns immediately when
-// a.embedder is nil -- so on a plain newFakeAdapter the whole-question pass
-// never ran and the arm's own fixture control refused to measure
-// ("candidates = []"). The rider this arm pins is about the VECTOR arm; any
-// future mutant of the question-search exclusion has to be measured here, on
-// this fixture, or it reads as killed while the path stays dead.
-func TestAWholeQuestionOnlySubjectCannotStandInForAnOperand(t *testing.T) {
+// The RED half of the original row moved to the receipt route, where the
+// ceiling gives no protection at all -- see
+// TestAQuestionOnlySubjectCarriedInOnAReceiptCannotBeBoundToAnOperand.
+func TestAWholeQuestionOnlySubjectStillCannotCommitOnItsOwn(t *testing.T) {
 	t.Parallel()
 
-	// Distance 0, i.e. as close as the ANN query can report, so the candidate
-	// arrives with the highest confidence this path can produce. The fixture
-	// control below asserts what that actually came out as rather than
-	// trusting this number to mean what it looks like it means.
+	result, conn := questionOnlyComparisonDrive(t)
+
+	// FIXTURE CONTROL 1. The whole-question vector pass must actually have
+	// REACHED the backend. Without it this control cannot tell "the pass ran
+	// and its hit could not commit" -- the property -- from "the pass never
+	// ran", which is what a fixture with no embedder silently does.
+	requireQuestionPassRan(t, conn)
+
+	// FIXTURE CONTROL 2. The subject must actually be IN the pool. A control
+	// asserting something was not committed proves nothing about a subject
+	// that was never a candidate.
+	candidate := requireRetrieved(t, result.SubjectResolution, comparisonQuestionOnlySubject,
+		"the whole-question pass is the only source this control has, and its hit is the thing under test")
+	if candidate.Confidence <= 0 {
+		t.Fatalf("the question-only candidate's confidence = %.2f -- a hit that reads as no signal at all is not the weak-evidence case this control is about", candidate.Confidence)
+	}
+
+	// THE PROPERTY.
+	if subjectCommitted(result.SubjectResolution, comparisonQuestionOnlySubject) {
+		t.Errorf("%s committed on a whole-question hit alone (confidence %.2f) -- a vector-only candidate reaching the lone commit gate means the ceiling and the slot exclusion are BOTH gone, and a subject answering neither operand is now answering the question",
+			subjectKey(comparisonQuestionOnlySubject), candidate.Confidence)
+	}
+}
+
+// questionOnlyComparisonDrive runs the two-named-operand comparison where
+// NEITHER operand term retrieves anything and the whole-question vector pass
+// retrieves one subject whose label matches neither operand.
+//
+// The receipt arm in the file beside this one builds the SAME retrieval shape
+// on the receipt-aware adapter (which additionally answers the by-kind-and-id
+// lookup a carried receipt re-authorizes through), sharing this file's
+// questionOnlyVectorRow so the two halves of the split row cannot drift into
+// measuring different subjects.
+func questionOnlyComparisonDrive(t *testing.T) (contextfabric.InvestigationResult, *comparisonConn) {
+	t.Helper()
+	conn := &comparisonConn{rowsForTerm: perOperandRows(nil, nil, nil)}
+	result := comparisonDrive{
+		frame:       twoNamedOperandComparisonFrame(),
+		family:      contextfabric.QuestionFamilyExplicitComparison,
+		terms:       []string{comparisonTermA, comparisonTermB},
+		conn:        conn,
+		vectorRows:  []row{questionOnlyVectorRow()},
+		facts:       refusingFactReader{t: t},
+		synthesizer: refusingSynthesizer{t: t},
+	}.run(t)
+	return result, conn
+}
+
+// questionOnlyVectorRow is the whole-question pass's single hit: distance 0,
+// i.e. as close as the ANN query can report, so nothing about this fixture is
+// holding the candidate back.
+func questionOnlyVectorRow() row {
 	closest := 0.0
-	questionOnlyRow := row{"node": &node{Properties: map[string]interface{}{
+	return row{"node": &node{Properties: map[string]interface{}{
 		propKind:                     string(comparisonQuestionOnlySubject.Kind),
 		propCanonicalID:              comparisonQuestionOnlySubject.CanonicalID,
 		propLabel:                    comparisonQuestionOnlySubject.Label,
 		propSearchText:               comparisonQuestion,
 		"authorization_repositories": "*",
 	}}, "score": closest}
+}
 
-	conn := &comparisonConn{rowsForTerm: perOperandRows(nil, nil, nil)}
-
-	result := comparisonDrive{
-		frame:       twoNamedOperandComparisonFrame(),
-		family:      contextfabric.QuestionFamilyExplicitComparison,
-		terms:       []string{comparisonTermA, comparisonTermB},
-		conn:        conn,
-		vectorRows:  []row{questionOnlyRow},
-		facts:       refusingFactReader{t: t},
-		synthesizer: refusingSynthesizer{t: t},
-	}.run(t)
-
-	// FIXTURE CONTROL 1. The whole-question pass must actually have REACHED
-	// the backend. Without this the arm cannot tell "the question pass ran and
-	// its hit was refused" -- the property -- from "the question pass never
-	// ran", which is what the first version of this fixture silently did.
-	sawVectorPass := false
+// requireQuestionPassRan proves the whole-question vector pass reached the
+// backend, by its own recorded marker rather than by inferring it from a
+// candidate that a term pass could also have produced.
+func requireQuestionPassRan(t *testing.T, conn *comparisonConn) {
+	t.Helper()
 	for _, query := range conn.observedQueries() {
 		if query == comparisonVectorQueryMarker {
-			sawVectorPass = true
+			return
 		}
 	}
-	if !sawVectorPass {
-		t.Fatalf("the whole-question vector pass never reached the backend (queries = %v) -- this arm measures nothing about a rider on a pass that did not run",
-			conn.observedQueries())
-	}
-
-	// FIXTURE CONTROL 2, and the sharpest one in this file. The question-only
-	// subject must actually have been RETRIEVED and must actually be
-	// commit-eligible. A fixture whose question pass returned nothing, or
-	// whose hit landed below the ordinary floor, would satisfy every
-	// assertion below while measuring the empty-pool path or a
-	// confidence refusal instead of the rider.
-	candidate := requireRetrieved(t, result.SubjectResolution, comparisonQuestionOnlySubject,
-		"the whole-question pass is the only source this arm has, and its hit is the thing under test")
-	if candidate.Confidence < 0.72 {
-		t.Fatalf("the question-only candidate's confidence = %.2f, below the ordinary commit floor -- this fixture cannot distinguish 'refused for want of an identity witness' from 'refused for want of confidence', so it measures nothing about the rider",
-			candidate.Confidence)
-	}
-
-	// AND IT MUST CARRY NO OPERAND-TERM PROVENANCE. The question pass records
-	// a bounded provenance marker rather than a caller-typed term, so a
-	// candidate that somehow arrived carrying an operand term would mean the
-	// fixture leaked a term pass into this arm.
-	for _, term := range candidate.MatchedTerms {
-		if termQueryContains(term, comparisonTermA) || termQueryContains(term, comparisonTermB) {
-			t.Fatalf("the question-only candidate carries the operand term %q in its matched terms -- it was reached by a term pass, not by the question pass, and this arm is measuring the wrong thing", term)
-		}
-	}
-
-	if subjectCommitted(result.SubjectResolution, comparisonQuestionOnlySubject) {
-		t.Errorf("%s was committed on a whole-question hit alone -- a whole-question search is not identity evidence for either operand, and this subject answers neither",
-			subjectKey(comparisonQuestionOnlySubject))
-	}
-	assertHeldComparison(t, result, comparisonTermA, comparisonTermB)
+	t.Fatalf("the whole-question vector pass never reached the backend (queries = %v) -- nothing here measures a rider on a pass that did not run",
+		conn.observedQueries())
 }
 
 func subjectCommitted(resolution contextfabric.SubjectResolution, subject contextfabric.SubjectRef) bool {

@@ -37,10 +37,11 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	comparisonPriorResultID = "result_comparison_turn_one"
-	comparisonReceiptA      = "receipt_operand_platform"
-	comparisonReceiptB      = "receipt_operand_payments"
-	comparisonReceiptRivalB = "receipt_operand_payments_rival"
+	comparisonPriorResultID       = "result_comparison_turn_one"
+	comparisonReceiptA            = "receipt_operand_platform"
+	comparisonReceiptB            = "receipt_operand_payments"
+	comparisonReceiptRivalB       = "receipt_operand_payments_rival"
+	comparisonReceiptQuestionOnly = "receipt_question_only_subject"
 )
 
 // priorComparisonStore hands back ONE fixed prior result, stamped with the
@@ -135,10 +136,14 @@ func nodeLookupRows(authorized ...contextfabric.SubjectRef) func(kind, id string
 // failing re-authorization, and every arm below would pass because nothing
 // bound -- the silent-green shape a partially-implemented double always
 // eventually produces.
-func newReceiptComparisonAdapter(t *testing.T, conn *comparisonConn, lookup func(kind, id string) []row) *Adapter {
+func newReceiptComparisonAdapter(t *testing.T, conn *comparisonConn, lookup func(kind, id string) []row, vectorRows []row) *Adapter {
 	t.Helper()
 	fake := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
-		if strings.Contains(cypher, "fulltext") {
+		switch {
+		case strings.Contains(cypher, "db.idx.vector.queryNodes"):
+			conn.record(comparisonVectorQueryMarker)
+			return vectorRows, nil
+		case strings.Contains(cypher, "fulltext"):
 			query, _ := params["query"].(string)
 			conn.record(query)
 			if conn.rowsForTerm == nil {
@@ -153,7 +158,21 @@ func newReceiptComparisonAdapter(t *testing.T, conn *comparisonConn, lookup func
 		}
 		return nil, nil
 	}}
-	return newFakeAdapter(t, fake)
+	if vectorRows == nil {
+		return newFakeAdapter(t, fake)
+	}
+	// Same reasoning as the turn-1 file's builder: the whole-question pass is
+	// the vector arm and returns nothing at all without an embedder, and the
+	// fence needs an operational index of the stub vector's own dimension.
+	fake.indexesFunc = func(context.Context, string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(comparisonVectorDimension)}, nil
+	}
+	adapter := newFakeAdapter(t, fake)
+	adapter.attachEmbedder(EmbedderOptions{
+		Embedder:        &stubEmbedder{vector: comparisonStubVector()},
+		SimilarityFloor: 0.55,
+	})
+	return adapter
 }
 
 // receiptDrive is comparisonDrive with the receipt-aware adapter and the
@@ -170,12 +189,15 @@ type receiptDrive struct {
 	receipts    []contextfabric.BoundSubjectReceipt
 	facts       contextfabric.CanonicalFactReader
 	synthesizer contextfabric.AnswerSynthesizer
+	// vectorRows, when non-nil, makes this drive's adapter vector-capable so
+	// the whole-question pass runs at all.
+	vectorRows []row
 }
 
 func (d receiptDrive) run(t *testing.T) (contextfabric.InvestigationResult, *priorComparisonStore) {
 	t.Helper()
 
-	adapter := newReceiptComparisonAdapter(t, d.conn, d.lookup)
+	adapter := newReceiptComparisonAdapter(t, d.conn, d.lookup, d.vectorRows)
 	store := &priorComparisonStore{prior: d.prior, epoch: bindingEpoch(t, adapter)}
 
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
@@ -456,6 +478,62 @@ func TestAReceiptWinnerOfTheWrongStatedKindHoldsTheComparison(t *testing.T) {
 	if subjectCommitted(result.SubjectResolution, wrongKind) {
 		t.Errorf("%s was bound to an operand whose STATED kind is %s -- the stated kind is a required check on the slot's winner, not retrieval guidance alone",
 			subjectKey(wrongKind), contextfabric.SubjectTeam)
+	}
+	assertHeldComparison(t, result, comparisonTermA, comparisonTermB)
+}
+
+// ---------------------------------------------------------------------------
+// ARM 7 -- THE QUESTION-ONLY SUBJECT, ON THE RECEIPT ROUTE
+// ---------------------------------------------------------------------------
+
+// TestAQuestionOnlySubjectCarriedInOnAReceiptCannotBeBoundToAnOperand is the
+// RED half of the split whole-question row, and the route where the arithmetic
+// that protects the other half gives no protection at all.
+//
+// WHY THE SPLIT. The lone-commit half is unchanged behaviour: the
+// whole-question pass is vector-only and the vector relevance ceiling sits
+// deliberately below graphrank's lone-candidate gate, so a question-only
+// subject can never auto-commit -- pinned by the two shipped tests named in
+// TestAWholeQuestionOnlySubjectStillCannotCommitOnItsOwn, which is that half's
+// green/green control. NONE OF THAT APPLIES HERE. A receipt-derived hint
+// PRE-COMMITS, and the ordinary commit gates run only when nothing is
+// pre-committed -- so on this route the subject's confidence is never
+// consulted, and 0.70 buys nothing.
+//
+// THE FIXTURE. Neither operand term retrieves anything; the whole-question
+// pass retrieves one subject whose label matches neither operand; and the
+// caller carries a receipt naming exactly that subject. It has no identity
+// witness in either slot's own terms -- a whole-question hit is not identity
+// evidence -- so it must bind to NEITHER operand and the comparison must hold.
+//
+// AT THE PARENT the receipt pre-commits it outright, and the turn proceeds to
+// read facts for a subject that answers neither side of the comparison.
+func TestAQuestionOnlySubjectCarriedInOnAReceiptCannotBeBoundToAnOperand(t *testing.T) {
+	t.Parallel()
+
+	conn := &comparisonConn{rowsForTerm: perOperandRows(nil, nil, nil)}
+
+	result, _ := receiptDrive{
+		frame:       twoNamedOperandComparisonFrame(),
+		terms:       []string{comparisonTermA, comparisonTermB},
+		conn:        conn,
+		vectorRows:  []row{questionOnlyVectorRow()},
+		lookup:      nodeLookupRows(comparisonQuestionOnlySubject),
+		prior:       heldComparisonPriorResult(priorCandidate(comparisonReceiptQuestionOnly, comparisonQuestionOnlySubject)),
+		receipts:    []contextfabric.BoundSubjectReceipt{{ResultID: comparisonPriorResultID, ReceiptID: comparisonReceiptQuestionOnly}},
+		facts:       refusingFactReader{t: t},
+		synthesizer: refusingSynthesizer{t: t},
+	}.run(t)
+
+	// FIXTURE CONTROL. The whole-question pass must have run, or this arm is
+	// measuring a receipt for a subject nothing else could have proposed --
+	// which is a different, weaker fixture than the one it claims to be.
+	requireQuestionPassRan(t, conn)
+
+	// THE PROPERTY.
+	if subjectCommitted(result.SubjectResolution, comparisonQuestionOnlySubject) {
+		t.Errorf("%s was bound to an operand because a receipt named it -- it has no identity witness in either slot's own terms, and the pre-commit path is exactly where the vector ceiling that refuses it elsewhere does not apply",
+			subjectKey(comparisonQuestionOnlySubject))
 	}
 	assertHeldComparison(t, result, comparisonTermA, comparisonTermB)
 }
