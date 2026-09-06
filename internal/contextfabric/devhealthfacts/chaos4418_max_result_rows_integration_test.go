@@ -4,22 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // clickHouseTooManyRowsOrBytes is ClickHouse's own TOO_MANY_ROWS_OR_BYTES
@@ -75,50 +70,9 @@ func seedRepositoryMetricsDays(t *testing.T, ctx context.Context, connection cli
 // applies `ORDER BY ... day DESC`.
 func TestCHAOS4418RepositoryMetricsAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
-			Env:        map[string]string{"CLICKHOUSE_USER": "acr", "CLICKHOUSE_PASSWORD": "acr", "CLICKHOUSE_DB": "default"},
-			WaitingFor: wait.ForListeningPort("9000/tcp").WithStartupTimeout(2 * time.Minute),
-		},
-		Started: true,
-	})
-	if err != nil {
-		t.Fatalf("start ClickHouse container: %v", err)
-	}
-	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
-	host, err := container.Host(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	port, err := container.MappedPort(ctx, "9000/tcp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := net.JoinHostPort(host, port.Port())
-
-	direct, err := clickhousedriver.Open(&clickhousedriver.Options{
-		Addr: []string{addr}, Auth: clickhousedriver.Auth{Database: "default", Username: "acr", Password: "acr"}, DialTimeout: 10 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("open native ClickHouse connection: %v", err)
-	}
-	t.Cleanup(func() { _ = direct.Close() })
-	pingDeadline := time.Now().Add(30 * time.Second)
-	for {
-		if pingErr := direct.Ping(ctx); pingErr == nil {
-			break
-		} else if time.Now().After(pingDeadline) {
-			t.Fatalf("clickhouse not ready for connections: %v", pingErr)
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	for _, statement := range devhealthschema.DDL("repo_metrics_daily") {
-		if err := direct.Exec(ctx, statement); err != nil {
-			t.Fatalf("create table: %v", err)
-		}
-	}
-	dsn := "clickhouse://acr:acr@" + addr + "/default"
+	_, direct := sharedClickHouseFixture(t)
+	dsn := sharedClickHouseDSN(t)
+	addr := sharedClickHouseAddrFor(t)
 	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	// R3_the_driver_default_max_result_rows_errors_a_multi_repository_read

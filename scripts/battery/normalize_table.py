@@ -154,7 +154,8 @@ def main():
     if args.table == "-":
         raw = sys.stdin.read()
     else:
-        raw = io.open(args.table, encoding="utf-8").read()
+        with io.open(args.table, encoding="utf-8") as f:
+            raw = f.read()
 
     form, mutants = parse(raw)
 
@@ -162,7 +163,8 @@ def main():
     if args.out == "-":
         sys.stdout.write(lines)
     else:
-        io.open(args.out, "w", encoding="utf-8").write(lines)
+        with io.open(args.out, "w", encoding="utf-8") as f:
+            f.write(lines)
     if not args.quiet:
         print(
             "normalised %d mutants (%s form), %d replacement row(s)"

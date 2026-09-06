@@ -182,10 +182,18 @@ func TestStageThreeDerivesNoAllocationOfItsOwn(t *testing.T) {
 		t.Error("the one remaining derivation is not the retry's; stage three has reintroduced a " +
 			"first-pass allocation of its own")
 	}
-	if !strings.Contains(source, "allocation := params.Allocation") {
-		t.Error("stage three no longer reads the carried allocation from the params: the guard would " +
-			"be checking an object other than the one synthesis consumed")
-	}
+	// The third assertion this pin used to carry -- that stage three reads
+	// `allocation := params.Allocation` -- is DELETED rather than updated, and
+	// deliberately so.
+	//
+	// It encoded keystone #4's invariant, which keystone #5 superseded: reading
+	// the params FIELD is not enough, because `params` is by-value and a
+	// producer-local fault can never reach it. The property is now "the guard
+	// measures what the producer RETURNED as consumed", and it is asserted in
+	// TestTheConsumedAllocationIsTheReturnedOne over the AST -- which also
+	// catches the commented-out form that a substring check cannot. Restating it
+	// here as text would duplicate a weaker version of a stronger pin, and the
+	// weaker version is the one that already passed on a broken tree once.
 }
 
 // stageThreeSource reads the stage-three file from disk. The AST helpers above

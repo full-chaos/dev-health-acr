@@ -8,6 +8,74 @@ fail() {
   exit 1
 }
 
+# gh_release_retry wraps the Releases API calls that publication cannot survive
+# losing. It exists because of one measured incident and nothing more:
+#
+#   2026-09-06T01:40:45Z  main Release run 34002287512, tip 1fc4f157
+#     HTTP 403: Resource not accessible by integration
+#     (https://api.github.com/repos/full-chaos/dev-health-acr/releases)
+#
+# That 403 arrived on a byte-identical script and identical job permissions
+# (contents: write), with a successful publish of a DIFFERENT tip in between
+# its two attempts and seven other main pushes publishing normally on either
+# side. The cause is outside this repository and remains unproven; this wrapper
+# does not claim to fix it. What it fixes is the CONSEQUENCE: a single refused
+# API call discarded roughly fifty minutes of already built, scanned, signed
+# and digest-verified assets, because there was no retry anywhere in this
+# script.
+#
+# Deliberately narrow:
+#   * Only the calls that CREATE or MUTATE the release are wrapped. The probing
+#     reads (`gh release view ... || true`) must keep failing fast and quietly;
+#     retrying those would turn "no release exists yet", the normal case, into
+#     a two-minute stall on every run.
+#   * The HTTP status is logged on every failed attempt, so a recurrence is
+#     diagnosable from the run log alone rather than needing a re-run to
+#     observe. A retry that hides what it retried past is worse than no retry.
+#   * It fails LOUD after the last attempt. A publication that silently gave up
+#     would be the same class of defect as the outcome this repository's
+#     grouping work has spent the week removing: a failure that leaves no
+#     positive trace of itself.
+gh_release_retry() {
+  # SIX attempts, waiting 5s, 15s, 45s, 90s, 180s -- about 5.5 minutes of
+  # patience in the worst case.
+  #
+  # It was four attempts (65s) until 2026-09-06, and that budget was MEASURED
+  # to be too short: the Release runs for d4a89e02 and e9345c01 both exhausted
+  # all four attempts against a continuous 403 and still failed, while
+  # 4247e92c published normally between them. So the denial window is real,
+  # intermittent, and longer than 65s. 5.5 minutes is the trade against the
+  # ~50 minutes of build, scan, sign and verify that a give-up discards.
+  #
+  # Six attempts consume FIVE waits and there are five delays, so no configured
+  # value is unreachable -- the property that made four the right number when
+  # there were three delays.
+  local -a delays=(5 15 45 90 180)
+  local max=6 attempt=1 rc out status label
+  label="gh ${1:-} ${2:-}"
+  while :; do
+    rc=0
+    out="$(gh "$@" 2>&1)" || rc=$?
+    if ((rc == 0)); then
+      [[ -n "$out" ]] && printf '%s\n' "$out"
+      if ((attempt > 1)); then
+        printf 'release publication: %s succeeded on attempt %d of %d\n' "$label" "$attempt" "$max" >&2
+      fi
+      return 0
+    fi
+    status="$(printf '%s' "$out" | grep -oE 'HTTP [0-9]{3}' | head -n 1 || true)"
+    printf 'release publication: %s FAILED attempt %d of %d (rc=%d, %s)\n' \
+      "$label" "$attempt" "$max" "$rc" "${status:-no HTTP status in output}" >&2
+    printf '%s\n' "$out" >&2
+    if ((attempt >= max)); then
+      fail "$label failed after $max attempts (last rc=$rc, ${status:-no HTTP status})"
+    fi
+    printf 'release publication: retrying %s in %ds\n' "$label" "${delays[attempt-1]}" >&2
+    sleep "${delays[attempt-1]}"
+    ((attempt++))
+  done
+}
+
 derive_main_version() {
   local commit="$1"
   local tag highest_core major minor patch
@@ -331,12 +399,12 @@ if ! "$release_exists"; then
       release_args+=(--prerelease)
     fi
   fi
-  gh "${release_args[@]}"
+  gh_release_retry "${release_args[@]}"
   draft_created=true
   draft_release_id="$(gh release view "$release_tag" --repo "$expected_repo" --json databaseId --jq .databaseId)"
   [[ "$draft_release_id" =~ ^[1-9][0-9]*$ ]] \
     || fail "created draft Release did not return a stable database ID"
-  gh release upload "$release_tag" --repo "$expected_repo" "${assets[@]}"
+  gh_release_retry release upload "$release_tag" --repo "$expected_repo" "${assets[@]}"
 
   mkdir "$tmp/draft-release"
   gh release download "$release_tag" --repo "$expected_repo" --dir "$tmp/draft-release"
@@ -385,14 +453,14 @@ fi
 
 if [[ "$channel" == main ]]; then
   if "$publish_latest"; then
-    gh release edit "$release_tag" --repo "$expected_repo" --draft=false --prerelease=false --latest
+    gh_release_retry release edit "$release_tag" --repo "$expected_repo" --draft=false --prerelease=false --latest
   else
-    gh release edit "$release_tag" --repo "$expected_repo" --draft=false --prerelease=false --latest=false
+    gh_release_retry release edit "$release_tag" --repo "$expected_repo" --draft=false --prerelease=false --latest=false
   fi
 elif [[ "$tag" == *-dev.* || "$tag" == *-beta.* ]]; then
-  gh release edit "$release_tag" --repo "$expected_repo" --draft=false --prerelease --latest=false
+  gh_release_retry release edit "$release_tag" --repo "$expected_repo" --draft=false --prerelease --latest=false
 else
-  gh release edit "$release_tag" --repo "$expected_repo" --draft=false --prerelease=false --latest=false
+  gh_release_retry release edit "$release_tag" --repo "$expected_repo" --draft=false --prerelease=false --latest=false
 fi
 
 test "$(gh release view "$release_tag" --repo "$expected_repo" --json isDraft --jq .isDraft)" = false \

@@ -133,10 +133,10 @@ test-shuffle-random:
 test-coverage:
 	mkdir -p $(COVERAGE_DIR)
 	status=0; \
-	go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --junitfile $(COVERAGE_JUNIT) --jsonfile $(COVERAGE_JSON) -- \
+	scripts/ci/retry.sh go run gotest.tools/gotestsum@$(GOTESTSUM_VERSION) --junitfile $(COVERAGE_JUNIT) --jsonfile $(COVERAGE_JSON) -- \
 		-count=1 -coverprofile=$(COVERAGE_PROFILE) $(GOTEST_PKGS) || status=$$?; \
 	if [ -f $(COVERAGE_PROFILE) ]; then \
-		go run github.com/boumenot/gocover-cobertura@$(GOCOVER_COBERTURA_VERSION) < $(COVERAGE_PROFILE) > $(COVERAGE_COBERTURA) || status=$$?; \
+		scripts/ci/retry.sh go run github.com/boumenot/gocover-cobertura@$(GOCOVER_COBERTURA_VERSION) < $(COVERAGE_PROFILE) > $(COVERAGE_COBERTURA) || status=$$?; \
 	fi; \
 	exit $$status
 

@@ -232,7 +232,23 @@ func copyCohortForRetry(cohort *Cohort) *Cohort {
 // to but NOT including render-shape selection, completeness stamping,
 // validation and persistence -- those run once, on whichever pass produced
 // the answer that is actually served.
-func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Principal, params synthesisAssemblyParams) (InvestigationResult, assemblyTelemetry, error) {
+// synthesizeAndAssemble RETURNS THE ALLOCATION IT CONSUMED, and that return
+// value is the invariant this seam now rests on.
+//
+// The rule (team-lead, 2026-09-06): *the allocation a pass CONSUMED is the value
+// the producer RETURNS; the guard measures the returned value; no consumer holds
+// a private copy the guard cannot see.*
+//
+// Three fixes reached this the long way. Each closed one instance and left the
+// class open, because each stopped at "derive it once and pass it in" -- and
+// derive-once still lets a producer alias the value into a local that the guard
+// never sees. `ItemAllocation` is a VALUE type and `params` is by-value, so no
+// fault inside this function can reach a guard in the caller: reading a
+// different FIELD cannot fix that, and only returning what was spent can.
+// Sites: the first-pass re-derivation (keystone #3), the retry inheriting the
+// first pass's grants (keystone #4), and narration spending a re-copied local
+// (keystone #5).
+func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Principal, params synthesisAssemblyParams) (InvestigationResult, ItemAllocation, assemblyTelemetry, error) {
 	// pending holds every per-investigation decision event this pass
 	// produces. NOTHING here emits -- see point 3 in this file's header.
 	var pending assemblyTelemetry
@@ -256,13 +272,19 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// to have two authorities -- and stage three did precisely that until a
 	// keystone review injected a fault into this copy and watched the guard
 	// validate the other one.
+	// THE one allocation this pass consumes, and the one it RETURNS. Every
+	// consumer below -- synthesis at the call just under this, narration further
+	// down -- reads THIS identifier, and the caller measures what comes back, so
+	// a fault applied to it is spent and seen by the same object. A second
+	// binding of `params.Allocation` anywhere below would recreate exactly the
+	// private copy this return exists to abolish.
 	synthesisAllocation := params.Allocation
 	result, err := e.synthesizer.Synthesize(ctx, principal, SynthesisInput{
 		Allocation: synthesisAllocation,
 		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
 	})
 	if err != nil {
-		return InvestigationResult{}, assemblyTelemetry{}, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
+		return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
 	}
 	result.SchemaVersion = InvestigationResultSchemaV1
 	result.ResultID = e.newResultID()
@@ -440,7 +462,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		// read) BEFORE anything is appended -- fail closed, never serve a
 		// claim that cannot be traced back to a real canonical fact.
 		if err := validateMintedClaimsGrounded(mintedClaims, facts.Facts); err != nil {
-			return InvestigationResult{}, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
+			return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 		}
 		result.Drivers = append(result.Drivers, narrated...)
 		// CHAOS-4398 PR3b: append the claims THIS composer minted (only for
@@ -529,7 +551,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		}
 		result.SubjectResolution.CommitDecisionDigests = digests
 	}
-	return result, pending, nil
+	return result, synthesisAllocation, pending, nil
 }
 
 // assemblyTelemetry is every per-investigation decision event one assembly

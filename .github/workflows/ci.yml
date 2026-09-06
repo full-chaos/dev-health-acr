@@ -151,6 +151,15 @@ jobs:
       # not both digest-pinned and present in the mirror list.
       - name: Verify every testcontainers image is pinned and mirrored
         run: scripts/ci/test-testcontainers-image-pins.sh
+      # A Go file whose NAME ends in a GOOS/GOARCH token is compiled only on
+      # that platform, whether or not the author meant it, and nothing reports
+      # it: the file simply moves into IgnoredGoFiles and `go build`/`go test`
+      # stay silent. That is how three tests in internal/contracts/v1 went
+      # unrun from the day they were written -- the name said "legacy arm" and
+      # Go read GOARCH=arm. This refuses the accidental case by requiring a
+      # platform suffix to be declared out loud with a //go:build line.
+      - name: Verify no filename silently constrains the build
+        run: scripts/ci/test-build-constraint-filenames.sh
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -181,7 +190,7 @@ jobs:
       - name: Verify the race shards cover every package
         run: scripts/ci/test-shard-closure.sh
       - name: Check known Go vulnerabilities
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
+        run: scripts/ci/retry.sh go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
 
   # Renders every fenced ```mermaid block under docs/** with mermaid-cli so a
   # diagram mermaid's own parser rejects fails CI instead of rotting silently
