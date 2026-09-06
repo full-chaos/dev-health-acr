@@ -467,6 +467,33 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 		}
 		return candidates[i].Confidence > candidates[j].Confidence
 	})
+	if tracer != nil && len(candidates) > 0 {
+		// The once-per-PASS Info summary (mirrors
+		// RankedCutSummary's own shape exactly, see
+		// ResolutionTraceEvent.CorroborationSummary's own doc comment) --
+		// emitted HERE, after the sort above, so "top" is a real rank by
+		// FinalConfidence, not encounter order. minConfidence/maxConfidence
+		// span EVERY candidate this pass corroborated, not just the capped
+		// top set below.
+		minConfidence, maxConfidence := candidates[0].Confidence, candidates[0].Confidence
+		for _, candidate := range candidates {
+			if candidate.Confidence < minConfidence {
+				minConfidence = candidate.Confidence
+			}
+			if candidate.Confidence > maxConfidence {
+				maxConfidence = candidate.Confidence
+			}
+		}
+		topIDs := make([]string, 0, traceSummaryIDCap)
+		for i := 0; i < len(candidates) && i < traceSummaryIDCap; i++ {
+			topIDs = append(topIDs, candidates[i].Subject.CanonicalID)
+		}
+		tracer.Trace(ResolutionTraceEvent{
+			RequestID: requestID, Stage: "corroboration", CorroborationSummary: true,
+			CorroborationCandidateCount: len(candidates), CorroborationTopIDs: topIDs,
+			CorroborationMinConfidence: minConfidence, CorroborationMaxConfidence: maxConfidence,
+		})
+	}
 	resolution := contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{}}
 	if len(candidates) == 0 {
 		resolution.Candidates = candidates
@@ -1304,7 +1331,7 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 		// always the TRUE survivor
 		// count (never truncated) so an operator can trust the number even
 		// when the ids list below is capped; RankedCutSurvivedIDs itself is
-		// capped at rankedCutSummaryIDCap regardless of the configured cut
+		// capped at traceSummaryIDCap regardless of the configured cut
 		// budget `max`, so a large-crowd resolution cannot make one log line
 		// unbounded (scale ruling: a 1000-candidate crowd must not produce a
 		// 1000-id array in one Info line).
@@ -1314,13 +1341,14 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 				survivedIDs = append(survivedIDs, candidate.Subject.CanonicalID)
 			}
 		}
-		// rankedCutSummaryIDCap bounds the summary line's id array
+		// traceSummaryIDCap (resolve.go) bounds the summary line's id array
 		// independently of the configured cut budget `max`, which is a
-		// per-deployment tuning value with no upper bound of its own.
-		const rankedCutSummaryIDCap = 25
+		// per-deployment tuning value with no upper bound of its own --
+		// shared with every other folded-summary event this file emits
+		// (CorroborationSummary/SurvivorVerdictSummary/IdentityGateSummary).
 		reportedIDs := survivedIDs
-		if len(reportedIDs) > rankedCutSummaryIDCap {
-			reportedIDs = reportedIDs[:rankedCutSummaryIDCap]
+		if len(reportedIDs) > traceSummaryIDCap {
+			reportedIDs = reportedIDs[:traceSummaryIDCap]
 		}
 		tracer.Trace(ResolutionTraceEvent{
 			RequestID: requestID, Stage: "ranked_cut", RankedCutSummary: true,

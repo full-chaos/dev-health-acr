@@ -689,16 +689,19 @@ func TestChaos5218_ProductionSinkEmitsTheWithholdingAtTheProductionLogLevel(t *t
 	// above would pass even if every stage were Info. The rig-visibility fix moved
 	// kind_offer itself to InfoContext (an operator-visible rig-instrument
 	// gap, same reasoning as kind_offer_withheld's own promotion below),
-	// so it can no longer serve as this control; anchor_offer is untouched
-	// by that change and still Debug-only.
+	// so it can no longer serve as this control. anchor_offer served this
+	// role next, until the rig-visibility audit promoted it too
+	// (same unconditional-per-resolution shape as kind_offer, previously
+	// just never promoted) -- "decision" is the new control: the rig-visibility audit
+	// left it untouched (out of that ticket's own scope) and it has no
+	// summary/fold branch of its own to accidentally satisfy at Info.
 	var debugBuffer bytes.Buffer
 	debugLogger := slog.New(slog.NewJSONHandler(&debugBuffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	NewSlogResolutionTracer(debugLogger).Trace(ResolutionTraceEvent{
-		RequestID: "req_5218_sink", Stage: "anchor_offer",
-		AnchorOfferLabelsNormalizedCount: 1,
+		RequestID: "req_5218_sink", Stage: "decision", Outcome: "committed",
 	})
 	if got := strings.TrimSpace(debugBuffer.String()); got != "" {
-		t.Fatalf("the anchor_offer stage emitted %q at LevelInfo, want nothing -- the control proves this test measures the LEVEL, not merely the presence of a case", got)
+		t.Fatalf("the decision stage emitted %q at LevelInfo, want nothing -- the control proves this test measures the LEVEL, not merely the presence of a case", got)
 	}
 }
 

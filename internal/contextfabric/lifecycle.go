@@ -475,8 +475,13 @@ func (t SlogGraphLifecycleTelemetry) logger() *slog.Logger {
 	return slog.Default()
 }
 
+// Measured bounded -- fires per graph-touching call
+// (resolveReadKey/resolveWriteKey/effectiveKey in falkorgraph/lifecycle.go,
+// 6 call sites total across reader.go/projection.go), a handful per
+// investigation or projection batch, never retrieval-pool-sized. Safe to
+// promote straight to Info.
 func (t SlogGraphLifecycleTelemetry) RecordResolvedGraphKey(_ context.Context, orgID string, epoch int64, role GraphKeyRole, key string) {
-	t.logger().Debug("context_fabric: resolved graph key", "org_id", orgID, "epoch", epoch, "role", string(role), "key", key)
+	t.logger().Info("context_fabric: resolved graph key", "org_id", orgID, "epoch", epoch, "role", string(role), "key", key)
 }
 
 func (t SlogGraphLifecycleTelemetry) RecordGraphKeyDivergence(_ context.Context, orgID string, epoch int64, role GraphKeyRole) {
@@ -486,7 +491,9 @@ func (t SlogGraphLifecycleTelemetry) RecordGraphKeyDivergence(_ context.Context,
 
 func (t SlogGraphLifecycleTelemetry) RecordStartupPrefixAssertion(_ context.Context, ok bool) {
 	if ok {
-		t.logger().Debug("context_fabric: startup graph key prefix assertion passed")
+		// Fires once per process boot -- trivially safe to
+		// promote straight to Info.
+		t.logger().Info("context_fabric: startup graph key prefix assertion passed")
 		return
 	}
 	t.logger().Error("context_fabric: startup graph key prefix assertion FAILED -- resolved prefix is empty")
@@ -520,13 +527,28 @@ func (t SlogGraphLifecycleTelemetry) RecordLifecycleCASConflict(_ context.Contex
 		"org_id", orgID, "losing_transition", string(losing), "observed_status", string(observedStatus))
 }
 
+// rig-visibility audit: read, not promoted. Called from
+// projectionrun/coordinator.go's recordCheckpointEpochState, which fires
+// once per (org, epoch) on EVERY Tick of the continuously-running
+// background projection scheduler (coordinator.go:949,1035, inside the
+// per-org lifecycle pass every tick makes) -- the same high-frequency,
+// steady-state-noise shape already confirmed intentional for
+// coordinator.go's own SlogObserver telemetry (ObserveProjectionOutcome/
+// ObserveProjectionDrain/emitProjectionFreshness), not a bounded
+// per-operation cost like RecordResolvedGraphKey above. Promoting this to
+// Info would reproduce ongoing background noise, not a one-time diagnostic
+// gap. Stays Debug.
 func (t SlogGraphLifecycleTelemetry) RecordCheckpointEpochState(_ context.Context, orgID string, epoch int64, state CheckpointEpochState, cursorAge time.Duration) {
 	t.logger().Debug("context_fabric: checkpoint epoch state",
 		"org_id", orgID, "epoch", epoch, "state", string(state), "cursor_age_seconds", cursorAge.Seconds())
 }
 
+// Called from pglifecycle/store.go once per source per build
+// completion -- bounded by source count (small) and builds themselves are
+// infrequent, not a per-tick background signal. Safe to promote straight
+// to Info.
 func (t SlogGraphLifecycleTelemetry) RecordBuildSourceProgress(_ context.Context, orgID string, epoch int64, source string, mode BuildCompletionMode, rowsProjected int64) {
-	t.logger().Debug("context_fabric: build source progress",
+	t.logger().Info("context_fabric: build source progress",
 		"org_id", orgID, "epoch", epoch, "source", source, "completion_mode", string(mode), "rows_projected", rowsProjected)
 }
 
