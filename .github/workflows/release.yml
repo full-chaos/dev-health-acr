@@ -601,7 +601,13 @@ jobs:
         env:
           GH_TOKEN: ${{ inputs.token_source == 'actions' && github.token || (secrets.RELEASE_TOKEN || github.token) }}
           TOKEN_SOURCE: ${{ inputs.token_source }}
-          DRY_TAG: dry-run-${{ github.run_id }}-${{ github.run_attempt }}
+          # Shaped like the tag the real publish creates -- `main-<sha>` --
+          # rather than a generic name, and it already passes the same
+          # `--target "$GITHUB_SHA"`. The point of a probe is to exercise the
+          # path that fails; a probe whose call differs from the failing call
+          # can only tell you about itself. The run id keeps two dry runs from
+          # colliding and marks the tag as disposable.
+          DRY_TAG: dryrun-main-${{ github.sha }}-${{ github.run_id }}
         run: |
           set -euo pipefail
           repo=full-chaos/dev-health-acr

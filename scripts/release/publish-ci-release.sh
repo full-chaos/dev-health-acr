@@ -37,14 +37,21 @@ fail() {
 #     grouping work has spent the week removing: a failure that leaves no
 #     positive trace of itself.
 gh_release_retry() {
-  # FOUR attempts, not three. The escalation named in the ticket is 5/15/45,
-  # and three attempts consume only TWO waits -- the 45 would never be reached
-  # and would be a configured value no code path can use, which is the same
-  # decorative-rule defect this repository has been removing all week. Four
-  # attempts make every named delay reachable: 5s, 15s, 45s, worst case 65s of
-  # waiting against the ~50 minutes of assembled work a give-up throws away.
-  local -a delays=(5 15 45)
-  local max=4 attempt=1 rc out status label
+  # SIX attempts, waiting 5s, 15s, 45s, 90s, 180s -- about 5.5 minutes of
+  # patience in the worst case.
+  #
+  # It was four attempts (65s) until 2026-09-06, and that budget was MEASURED
+  # to be too short: the Release runs for d4a89e02 and e9345c01 both exhausted
+  # all four attempts against a continuous 403 and still failed, while
+  # 4247e92c published normally between them. So the denial window is real,
+  # intermittent, and longer than 65s. 5.5 minutes is the trade against the
+  # ~50 minutes of build, scan, sign and verify that a give-up discards.
+  #
+  # Six attempts consume FIVE waits and there are five delays, so no configured
+  # value is unreachable -- the property that made four the right number when
+  # there were three delays.
+  local -a delays=(5 15 45 90 180)
+  local max=6 attempt=1 rc out status label
   label="gh ${1:-} ${2:-}"
   while :; do
     rc=0
