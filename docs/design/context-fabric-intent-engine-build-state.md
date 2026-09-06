@@ -49,8 +49,8 @@ One row per seam. "Shipped" means merged and confirmed on `origin/main`.
 | **S6** render selection reads the plan and the declared table shape | the intent-engine epic S6 | Done (pre-09-01) | — | Nothing new in this window. | — | none |
 | **S7a** stage-2 design amendment (§13 `QuestionFrame`) | the intent-engine epic | Finalized 2026-09-01 | design only | Frame becomes the single semantic object; family becomes a lossy derived projection; `Goal` became a **set** (§13.2.3). | Round 2 and round 3 both hit RE-FIND STOP; finalized by the independent Fable 5.1 reviewer after round 4. | none |
 | **S7b-i** frame layer — `QuestionFrame`, `SubjectExpression` union, derived family (shadow), seam 7 | the frame-layer ticket | In Progress | PR **#407** · `eaec310a` · 2026-09-03 (seam-7 PR-B) | Seam 7 (frame → resolution/discovery) is the seam §13.8b says the frame currently dies on; PR-B is the first half. | binding CI + fullstack acceptance, 21 jobs, 0 non-success | Seam 7 was **added by the independent review (R1)** after the six-seam list was frozen; §13.8's own rule now says the seam list is a floor, never a total. |
-| **S7b-ii** obligation → requirement derivation | the requirement-derivation ticket | In Review | PR **#384** `f51d096e`; PR **#390** `adab4d8e`; PR **#421** `f32432266c06` 09-04; PR **#424** `5631984f164c` 09-04; PR **#426** `e5e781449c82` 09-04 PR **#449** OPEN (cohort producibility). | The requirement row replaces the flattened `FactKinds` set as the planning object. §13.2.3 amended: a computed obligation now declares what its server step **consumes** and whether anything **executes** it. **The derivation no longer PREDICTS producibility.** It had rebuilt the discovery seam's predicate by hand, one conjunct per review round, and over the fifteen published subject kinds served a `ranking` row for all fifteen where the seam could serve three. The allow-list AND the decision move down into `internal/contextfabric` as `CohortMemberKindFor` with a closed `CohortDiscoverability` reason; both layers now call it, and `graphrank` maps that reason onto its own published basis through an explicit total table. This is D10's shape (an allow-list replacing a guess) applied one layer up. | Parity artifact: **98 cells** (14 frames × 7 authorities) — subsumed 18, not_subsumed 14 (8 superior, 6 blocking), not_applicable 10, disclosed drops 56, **0 authorities retirable**. Batteries: #421 11/11, #424 19/19, #426 12/12 killed. Red-at-parent reproduced the filed 12-kind measurement from a permanent cross-layer test (12 mismatch lines, one per kind); green complement `=== RUN` 2691; battery 11/11 killed, 0 survivors. | The design assumed the parity proof would retire authorities. It retired none. Two revisions claimed authorities retirable and **both were retracted** (#424's first cut; #426's intermediate branch). The design assumed the derivation could decide producibility from the frame alone. It cannot: three of the four conditions are frame-decidable and the fourth -- a servable kind whose search retains no members -- is a runtime fact, recorded in the S7c row. |
-| **S7c** requirement outcomes; completeness derived from them | the minimal-answer-floor design ticket / the assembled-result narrowing ticket | PR1 shipped | PR **#422** · `7c6eda591fb5` · 2026-09-04 PR **#449** OPEN (post-discovery correction). | Answer completeness is now **derived from the outcome set**, not inferred by synthesis. Adds a fourth completeness state, `not_derived`. Stage 3 gains a second decision arm: narrow candidates instead of refusing. Adds the correction for the condition NO layer above assembly can decide: a servable kind whose search retained no members. `finalizeResult` states it on the served document beside the `count` sibling, for every computed step the declaration table says runs over the resolved member set -- selected from the declaration, never from a list of obligation names. | Acceptance shape 18 candidates + 12 claimed facts + 5 drivers = 35 items → refused; after: 30 items / 9,586 bytes / 200. Minimum answer floor 1,001 → 1,023 bytes. 12 findings, each red-at-parent; battery 10/10. Order pinned by test (the count sibling's richer row wins through the idempotence guard); re-entry pinned over 200 double-finalizations; controls prove the correction fires on an ABSENT member set only, never on a resolved-but-empty one. | D5 ruled "C now, A ticketed". S7c does **not** deliver A (the bounded minimal-answer floor): it delivers a *reduction arm before* the planned refusal. The floor remains the minimal-answer-floor design ticket. None. It closes a gap the outcome layer implied -- "absent, never zero" -- but had only implemented for `count`. |
+| **S7b-ii** obligation → requirement derivation | the requirement-derivation ticket | In Review | PR **#384** `f51d096e`; PR **#390** `adab4d8e`; PR **#421** `f32432266c06` 09-04; PR **#424** `5631984f164c` 09-04; PR **#426** `e5e781449c82` 09-04 PR **#449** `6a8d92e7` · 09-06 (cohort producibility). | The requirement row replaces the flattened `FactKinds` set as the planning object. §13.2.3 amended: a computed obligation now declares what its server step **consumes** and whether anything **executes** it. **The derivation no longer PREDICTS producibility.** It had rebuilt the discovery seam's predicate by hand, one conjunct per review round, and over the fifteen published subject kinds served a `ranking` row for all fifteen where the seam could serve three. The allow-list AND the decision move down into `internal/contextfabric` as `CohortMemberKindFor` with a closed `CohortDiscoverability` reason; both layers now call it, and `graphrank` maps that reason onto its own published basis through an explicit total table. This is D10's shape (an allow-list replacing a guess) applied one layer up. | Parity artifact: **98 cells** (14 frames × 7 authorities) — subsumed 18, not_subsumed 14 (8 superior, 6 blocking), not_applicable 10, disclosed drops 56, **0 authorities retirable**. Batteries: #421 11/11, #424 19/19, #426 12/12 killed. Red-at-parent reproduced the filed 12-kind measurement from a permanent cross-layer test (12 mismatch lines, one per kind); green complement `=== RUN` 2691; battery 11/11 killed, 0 survivors. | The design assumed the parity proof would retire authorities. It retired none. Two revisions claimed authorities retirable and **both were retracted** (#424's first cut; #426's intermediate branch). The design assumed the derivation could decide producibility from the frame alone. It cannot: three of the four conditions are frame-decidable and the fourth -- a servable kind whose search retains no members -- is a runtime fact, recorded in the S7c row. The completion scope it publishes gained its enforcement point in the read-population ticket (D17); until then `Scope` was published, validated and budget-charged with no consumer. |
+| **S7c** requirement outcomes; completeness derived from them | the minimal-answer-floor design ticket / the assembled-result narrowing ticket | PR1 shipped | PR **#422** · `7c6eda591fb5` · 2026-09-04 PR **#449** `6a8d92e7` · 09-06 (post-discovery correction). | Answer completeness is now **derived from the outcome set**, not inferred by synthesis. Adds a fourth completeness state, `not_derived`. Stage 3 gains a second decision arm: narrow candidates instead of refusing. Adds the correction for the condition NO layer above assembly can decide: a servable kind whose search retained no members. `finalizeResult` states it on the served document beside the `count` sibling, for every computed step the declaration table says runs over the resolved member set -- selected from the declaration, never from a list of obligation names. | Acceptance shape 18 candidates + 12 claimed facts + 5 drivers = 35 items → refused; after: 30 items / 9,586 bytes / 200. Minimum answer floor 1,001 → 1,023 bytes. 12 findings, each red-at-parent; battery 10/10. Order pinned by test (the count sibling's richer row wins through the idempotence guard); re-entry pinned over 200 double-finalizations; controls prove the correction fires on an ABSENT member set only, never on a resolved-but-empty one. | D5 ruled "C now, A ticketed". S7c does **not** deliver A (the bounded minimal-answer floor): it delivers a *reduction arm before* the planned refusal. The floor remains the minimal-answer-floor design ticket. None. It closes a gap the outcome layer implied -- "absent, never zero" -- but had only implemented for `count`. Read rows now carry a population conjunct as well as a source standard (D17). |
 | **lever-2** item ceiling as configuration | the grouped-budget ticket | Live | PR **#409** · `3d9692a6` · 2026-09-03 | `ACR_MAX_ITEMS` is the D4 raise lever §12 C4 named. | prod = **45**; rig = **30** (a record saying "45 live on rig" was a plan, corrected 09-04 07:1x). | D4 deferred the magnitude to S5's measurement. The measured answer is that raising the ceiling buys **member slots only** — grouped headroom is a **constant 20 non-member items** at both 30 and 45. |
 | **lever-3** grouped-cohort budget | the grouped-budget ticket | PR1 and PR2B shipped; allocator descoped | PR **#415** · `c39f3364af85` · 2026-09-04 (PR1) · PR **#427** · `255eb4121a82` · 2026-09-04 (PR2B, observing half) | PR1 makes the cohort's own group entity a citable synthesis subject. PR2B adds a closed four-member item-attribution vocabulary. | PR1 interleaved ABBA, 60 chains / 30 per arm: revert arm served 13/30 with 3× 413 and 35× `driver_subject_out_of_scope`; fix arm served 29/30 with 0 and 0. Battery 12/12 + 7 re-run. PR2B battery 23/23. | The allocator half of PR2B is **descoped** — see D7. |
 | **chain identity** — a request names the result it follows | the chain-identity ticket | Done | PR **#428** · `5a3ab55b588f` · 2026-09-04 | Same-question containment moves from a path property to a producer property: one choke point per axis. | 18 findings; battery 23/23 on the merged tip; 3 adversarial rounds + one executed confirmation, CLEAN. | Not in the 08-30/09-01 design at all. It is the containment layer under the cross-turn carry S5 introduced. |
@@ -656,6 +656,105 @@ refusing until the continuation-token ticket's design stage; recorded here as op
 
 ---
 
+### D17 — a distributive completion scope is enforced at the read evaluator, against the population its owner declares
+
+**Context.** §13.4.2 requires that a comparison "must read the SAME evidence on every operand" and
+names that a completion SCOPE (`each_operand`) on the requirement, "NAMED here and BUILT in
+S7b-ii" (`frame_obligations.go:64-73`). S7b-ii built the scope into the PLAN — every requirement
+row publishes `Scope` (`requirement_derivation.go:349`), the contract validates it
+(`context_fabric_plan_requirement.go:367-369`), the derivation artifact renders it — and H16
+commissioned the read evaluator per SOURCE STATE without naming a scope consumer. `Scope` has
+therefore been published, validated and budget-charged since S7b-ii with no enforcement point. The
+fact registry mints one coverage observation per fact KIND for all subjects at once
+(`fact_registry.go:1266-1269`), so an evaluator reading only coverage cannot tell "both operands
+read" from "one operand read". The read-population ticket is that omission at the S7b-ii → H16
+seam — not a keying defect in the evaluator, and not a defect of requirement identity (two
+identities, one evidence pool, `requirement_trace.txt:79-81`).
+
+> ### DECIDED — the enforcement point, and what it may not assume
+>
+> *For* `each_operand`*,* `each_member` *and* `each_group`*, an assembled-result read row reaches*
+> `satisfied` *— and the answer* `complete` *— only on affirmative server-owned evidence that the
+> requirement's declared fact-kind standard was READ for every subject of the REQUIRED population,
+> where that population is declared by its OWNER — the frame's operand slots for operands, the
+> served cohort for members and groups — never by the facts a read returned and never by the
+> subject set a capability was invoked over. Returned facts are positive witnesses only. An owner
+> reporting an incomplete census qualifies the row as H18 does. A population that is NOT
+> ENUMERABLE is unverified and can neither reduce the requirement nor certify it; the row states
+> that absence with its own cause, distinct from an empty population. A comparison additionally
+> requires the SAME evidence across its operands — a comparison-wide test, not a
+> per-subject-kind one — and that conjunct is evaluated only once every operand is read.*
+> `single_subject` *keeps today's rule and stays fact-kind keyed.*
+
+**Enforcement point.** The read-requirement evaluator, at outcome-row construction, after the
+kind-level source standard and BEFORE completeness derivation — the order
+`chaos4636_answer_plan.go:480-482` already runs, on every path that finalizes a served document,
+including the stage-3 retry and the candidate-narrowing re-finalization. The evaluator enforces; it
+discovers no population and owns no census.
+
+**Limits at this pin, stated because they are not defects of this decision.**
+(a) `each_operand` is enforced from TURN 2. A hint-free comparison commits no operand and exits
+through `terminalResult` before any read evaluation (`engine.go:1869-1872`), returning a
+single-subject disambiguation prompt; its read requirements take `not_attempted` /
+`answer_terminated_before_attempt`. Seam 7's second-half operand binding is a PREREQUISITE for
+`each_operand` over unhinted text — the two-operand resolution ticket, out of this ticket's scope.
+(b) An `each_group` read requirement cannot be satisfied at this pin: group entities never enter
+the fact read (scope is `request.Subjects` else `Cohort.Members`, `fact_planner.go:314-326`; groups
+are built after the read off member facts, `engine.go:2029`), so the row states `0/N` truthfully.
+**Whether such a requirement should be DERIVED at all is filed separately** (the group-read
+derivation ticket) and is not decided here.
+
+**Not decided here.** The evidence ENCODING (in-process bundle today). Requirement identity. D15's
+source standard and its unbuilt observation-key clause (the observation-key ticket). The reuse path
+(the reuse-path backfill ticket). The word `unverified` is NOT an outcome token — the five members
+are `satisfied`, `narrowed`, `unavailable`, `not_applicable`, `not_attempted`
+(`context_fabric_requirement_outcome.go:39-72`); an absent population takes `unavailable`, which
+derives `degraded`, and `degraded` is absorbing (`:661-665`).
+
+---
+
+### D19 — readiness is asked at each operand's OWN declared standard; sameness stays comparison-wide
+
+**Decision.** The sameness gate asks two different questions and they take two different standards.
+**Readiness** — "was every operand of this comparison read?" — is asked of each operand against the
+fact-kind catalog and completion quantifier **its own published requirement declares**. **Sameness**
+— "is the evidence they share enough?" — is then asked comparison-wide, at the **current row's**
+standard, over the same operand set as before. Only the standard readiness is judged by moved; the
+set stays comparison-wide, and the intersection is untouched.
+
+**Why, and it is a defect that shipped through a full review.** D17's gate judged *every* operand at
+the *calling row's* catalog and threshold. That is harmless only while every operand is declared over
+the same catalog, which the registry does not do: the team operand is declared over
+flow/health/investment/landscape/readiness/workload, the repository operand over
+health/identity/metrics. A team read `flow+health` and a repository read `health+metrics` each meet
+their own corroborated threshold of two — but scoring the repository against the team row's
+`[flow health]` yields one, the gate closes, **both rows fall through to `satisfied 1/1`, and the
+answer derives `complete`**. A comparison whose operands share exactly one kind was certified whole.
+Reproduced against the live registry declarations, the real frame and requirement derivation, the
+planning seed and the production finalizer; the same repro reports `narrowed/depth 1/2` on both rows
+and `partial` once readiness is asked correctly.
+
+**SLOT-KEYED, COUNT-BASED, NO IDENTITY BINDING — the constraint this decision is held to.** The
+standard is carried **per declared operand subject kind**, which is the coordinate the requirement
+itself is keyed by (`obligation/role/subject`): there is exactly one `each_operand` read requirement
+per subject kind, so two operands of the same kind share one standard by construction. Nothing here
+correlates a committed subject ref to a particular operand slot. Slots are still **counted**, never
+bound — `Declared` continues to come from the frame's slot walk, and the read evaluator acquires no
+second resolution authority. A per-slot standard would require exactly that binding and is therefore
+refused, not merely unimplemented.
+
+**What did NOT change.** The comparison-wide operand set. The intersection and its threshold. The
+second conjunct requiring the committed set to be the whole named set. The precedence order. An
+operand kind that published no read requirement this turn is **not ready** rather than assumed read:
+certifying against an absent standard would be a claim from an absence.
+
+**Cost of the fix, stated.** Every existing sameness test gave both operands the *same* declared
+catalog, so none of them could fail on this shape — which is why statement coverage of the gate was
+already total while the defect stood. The pin added with this decision is the first test in the
+family whose operands are declared over different catalogs.
+
+---
+
 ## 14.3 Known holes and open questions — the list for an external reviewer
 
 Ordered by how much of the design rests on them. Nothing here is hidden in a ticket; each names
@@ -922,6 +1021,30 @@ without it.
 reads neither `state` nor the outcome rows — deliberately: exposing them before H16 and H18 land
 would show a UI-visible field the server cannot yet back. the completeness-panel ticket (Backlog, Ask Dev, staged after
 the read-requirement evaluator ticket and the count population-qualification ticket): render `completeness.state` and the outcome rows beside `terminal_status`.
+
+**H16 is DISCHARGED for read population coverage by D17**, with the two limits that decision states:
+`each_operand` is enforced from turn 2, and an `each_group` row cannot be satisfied at this pin.
+
+**NEW — the group-read derivation question is filed separately.** An `each_group` read requirement
+is derived today and cannot be served at this pin. D17 discloses the `0/N`; whether the derivation
+should refuse the cell instead — the way `computed_population_absent` already does for a computed
+obligation with no population (`requirement_derivation.go:355-358`) — is that ticket's, not D17's.
+
+**NEW — grouped frames report `0/N` on `each_group` on every served grouped answer THAT REACHES
+THE POPULATION CONJUNCT** (three of the fourteen corpus frames), retry or not. The qualifier is not
+pedantry: `0/N` occurs only AFTER the kind standard passes, so a grouped answer whose kinds failed
+keeps its kind counts, and an all-pruned requirement emits no assembled read row at all. Truthful under D17, and a rig-wide delta. **A lane must NOT
+repair it by projecting member facts onto the group entity** — that manufactures a witness for a
+subject no provider was ever asked about, which is the denominator-substitution defect arriving
+from the numerator side, and it would make `each_group` unfalsifiable.
+
+**NEW — two comparison frames are ALREADY `degraded` at this pin, before any read row exists.**
+`allocation_breakdown / operand / team` is `UNAVAILABLE table_shape_undeclared` on both
+(`requirement_trace.txt:50`, `:68`), an unavailable cell seeds
+`unavailable`/`dimension`/`CauseObserved true` (`requirement_outcomes.go:209-216`), and
+`unavailable` is absorbing. **So D17's `partial`-vs-`degraded` effect is INVISIBLE on those two and
+visible on the mixed-kind comparison frame.** Without this note a rig reader seeing `degraded`
+there will attribute it to the read-population change.
 
 ---
 

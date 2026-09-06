@@ -291,26 +291,41 @@ func TestTheCensusExceptionIsScopedToTheAssembledResultStage(t *testing.T) {
 	}
 }
 
-// TestTheCensusExceptionIsScopedToTheCountObligation plants a different
-// obligation on an otherwise identical row.
+// TestTheCensusExceptionIsScopedToPopulationOwningObligations plants a
+// non-population obligation on an otherwise identical row.
 //
-// Only a count is a value computed OVER a population. A `state` obligation
-// serving everything it declared narrowed nothing, and admitting it would
-// make the reduction rule optional for every obligation that can name a
-// census code.
-func TestTheCensusExceptionIsScopedToTheCountObligation(t *testing.T) {
+// WIDENED FROM `count` ALONE, and the boundary moved rather than dissolved. An
+// obligation may take the exception when it OWNS A POPULATION: `count`, which
+// is a value computed over one, and every READ obligation, which since the
+// read-population change completes over the population its distributive scope
+// names. `ranking` is the discriminator on the other side -- it is computed,
+// its population is the cohort's rather than its own, and it stays refused.
+//
+// Admitting a computed non-count obligation would make the reduction rule
+// optional for a row whose equal counts nothing measured over a population.
+func TestTheCensusExceptionIsScopedToPopulationOwningObligations(t *testing.T) {
 	t.Parallel()
 	row := censusQualifiedCountRow()
-	row.Requirement = "state/subject/team"
-	row.Obligation = "state"
+	row.Requirement = "ranking/member/team"
+	row.Obligation = "ranking"
 
 	err := ValidateContextFabricPlanRequirementOutcomeRow(row)
 	if err == nil {
-		t.Fatal("a STATE obligation took the census exception; only a count is a value computed over a population, " +
-			"so only a count can be qualified by one")
+		t.Fatal("the RANKING obligation took the census exception; it is computed and owns no population " +
+			"of its own, so its equal counts measured nothing a census could qualify")
 	}
 	if !strings.Contains(err.Error(), "is not a reduction") {
 		t.Fatalf("rejected for the wrong reason: %v (want the reduction rule)", err)
+	}
+
+	// THE OTHER SIDE OF THE MOVED BOUNDARY, in the same test so the widening
+	// cannot be read as a removal: a READ obligation IS admitted now.
+	read := censusQualifiedCountRow()
+	read.Requirement = "state/member/team"
+	read.Obligation = "state"
+	if err := ValidateContextFabricPlanRequirementOutcomeRow(read); err != nil {
+		t.Fatalf("a READ obligation was refused the census exception: %v -- a read requirement over a "+
+			"distributive scope reports the same shape for the same reason as a count", err)
 	}
 }
 
@@ -472,39 +487,66 @@ func TestTheCensusExceptionAdmitsExactlyOneStage(t *testing.T) {
 	}
 }
 
-// TestTheCensusExceptionAdmitsExactlyOneObligation walks the obligation mirror.
+// TestTheCensusExceptionAdmitsExactlyThePopulationOwningObligations walks the
+// whole obligation vocabulary and pins the admitted SET, not its size.
 //
-// The requirement identity is the obligation/role/subject coordinate and its
-// first segment must equal the row's own obligation, so the identity moves with
-// the obligation here -- otherwise every case would be refused by the identity
-// rule and the walk would pass while proving nothing about the exception.
-func TestTheCensusExceptionAdmitsExactlyOneObligation(t *testing.T) {
+// A count is what it admitted before; every READ obligation joins it, because a
+// read requirement over a distributive completion scope reports equal counts
+// over a population its owner reported incomplete -- the same shape for the
+// same reason. The admitted set is derived from the obligation-KIND mirror on
+// both sides, so this test cannot drift from the predicate by restating it.
+func TestTheCensusExceptionAdmitsExactlyThePopulationOwningObligations(t *testing.T) {
 	t.Parallel()
-	admitted := 0
+	var admitted, wanted []string
 	for _, obligation := range ContextFabricAnswerObligationVocabulary() {
+		if obligation == ContextFabricAnswerObligationCount ||
+			contextFabricAnswerObligationKindByObligation[obligation] == contextFabricObligationKindRead {
+			wanted = append(wanted, obligation)
+		}
 		row := censusQualifiedCountRow()
 		row.Obligation = obligation
 		row.Requirement = obligation + "/member/team"
 		err := ValidateContextFabricPlanRequirementOutcomeRow(row)
-		if obligation == ContextFabricAnswerObligationCount {
-			if err != nil {
-				t.Errorf("the count obligation was REFUSED: %v -- the exception admits no obligation at all", err)
-				continue
-			}
-			admitted++
-			continue
-		}
 		if err == nil {
-			t.Errorf("obligation %q took the census exception; only a count is a value computed over a population", obligation)
+			admitted = append(admitted, obligation)
 			continue
 		}
 		if !strings.Contains(err.Error(), "is not a reduction") {
 			t.Errorf("obligation %q was refused for the wrong reason: %v (want the reduction rule)", obligation, err)
 		}
 	}
-	if admitted != 1 {
-		t.Errorf("the exception admitted %d obligations, want exactly 1", admitted)
+	if !equalStringSets(admitted, wanted) {
+		t.Errorf("the census exception admits %v, want exactly %v (count plus every read obligation)", admitted, wanted)
 	}
+	// NON-VACUITY: the sweep must actually admit something and must actually
+	// refuse something, or a predicate stuck at true or false passes it.
+	if len(admitted) == 0 {
+		t.Error("the exception admitted NO obligation at all; the sweep proves nothing")
+	}
+	if len(admitted) == len(ContextFabricAnswerObligationVocabulary()) {
+		t.Error("the exception admitted EVERY obligation; the conjunct is not discriminating")
+	}
+}
+
+// equalStringSets compares two string slices as SETS, so the assertion does not
+// depend on vocabulary order.
+func equalStringSets(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := make(map[string]int, len(left))
+	for _, value := range left {
+		seen[value]++
+	}
+	for _, value := range right {
+		seen[value]--
+	}
+	for _, count := range seen {
+		if count != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // TestTheCensusExceptionAdmitsExactlyOneImpact walks the impact vocabulary.
@@ -549,5 +591,70 @@ func TestTheCensusExceptionAdmitsExactlyOneImpact(t *testing.T) {
 	}
 	if admitted != 1 {
 		t.Errorf("the exception admitted %d impacts, want exactly 1", admitted)
+	}
+}
+
+// TestTheCensusExceptionRefusesARoleThatOwnsNoPopulation is the role half of the
+// exception's gate, and it exists because the obligation half was passing alone.
+//
+// THE EXCEPTION ASKS TWO QUESTIONS AND ONLY ONE WAS BEING ASKED. "Is this the
+// kind of obligation whose census can be incomplete" is the obligation's
+// question. "Does this row have a population at all" is the ROLE's — and a
+// `single_subject` read is `state/subject/...`, a READ obligation with no
+// population. It therefore passed the obligation test and was admitted claiming
+// `population_truncated` over equal counts: a truncation of a population it does
+// not have.
+//
+// ALL FOUR ROLES ARE ASSERTED, and the three that must be ACCEPTED are the point.
+// A test that only checked `subject` would pass equally against a gate that had
+// been broken rather than narrowed — refusing every role would satisfy it. The
+// accepted three are what distinguish "the exception is now correct" from "the
+// exception is now gone".
+//
+// No live producer emits the refused row today: the read evaluator sends a
+// `single_subject` requirement down its caller-defect branch. This is a
+// VALIDATOR gate, and a validator's job is to refuse the illegal row whoever
+// writes it — including a producer that does not exist yet.
+func TestTheCensusExceptionRefusesARoleThatOwnsNoPopulation(t *testing.T) {
+	t.Parallel()
+	censusRow := func(identity string) ContextFabricPlanRequirementOutcomeRow {
+		return ContextFabricPlanRequirementOutcomeRow{
+			Stage:         ContextFabricOutcomeStageAssembledResult,
+			Requirement:   identity,
+			Obligation:    "state",
+			Outcome:       ContextFabricRequirementNarrowed,
+			Impact:        ContextFabricAnswerImpactScope,
+			CauseCoverage: ContextFabricCoverageDetailPopulationTruncated,
+			CauseObserved: true,
+			Served:        5,
+			Declared:      5,
+		}
+	}
+	for _, arm := range []struct {
+		identity string
+		accept   bool
+		why      string
+	}{
+		{"state/member/team", true, "the member role owns a population"},
+		{"state/group/team", true, "the group role owns a population"},
+		{"state/operand/team", true, "the operand role owns a population"},
+		{"state/subject/team", false, "single_subject owns NO population, so it has no census to be incomplete"},
+		// FAIL CLOSED: a coordinate that cannot be parsed cannot prove it owns
+		// a population, and an exception is not granted on an unparseable
+		// string. Both shapes are asserted because they fail on different
+		// clauses -- one on the segment count, one on the vocabulary.
+		{"state/team", false, "two segments: not an obligation/role/subject coordinate"},
+		{"state/nonesuch/team", false, "a role outside the closed vocabulary"},
+		{"", false, "no identity at all"},
+	} {
+		err := ValidateContextFabricPlanRequirementOutcomeRow(censusRow(arm.identity))
+		if arm.accept && err != nil {
+			t.Errorf("%q: the census exception must ADMIT this row (%s), got refused: %v",
+				arm.identity, arm.why, err)
+		}
+		if !arm.accept && err == nil {
+			t.Errorf("%q: the census exception must REFUSE this row (%s), but it was admitted",
+				arm.identity, arm.why)
+		}
 	}
 }

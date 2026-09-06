@@ -258,6 +258,16 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		// WAS found, which the outcome row already states as `served`, and
 		// the number this label is about is the one nothing measured.
 		label = "The full set could not be listed, so this is at least this many"
+	case ContextFabricCoverageDetailReadPopulationUnverified:
+		// Says WHO the answer was owed to is unknown -- not that a source
+		// failed and not that a set was cut short. Both of those send a
+		// reader somewhere useless: there is no broken provider to check and
+		// no larger set to page through. What is missing is the list of
+		// subjects this was supposed to cover, so the phrasing names that
+		// and nothing else.
+		// No count phrasing: the row carries 0/0 precisely because nothing
+		// was counted, and a number here would imply one was.
+		label = "The set this covers could not be identified"
 	case ContextFabricCoverageDetailRequirementReadNotPlanned:
 		// Says the answer NEVER LOOKED, not that looking failed. Every other
 		// phrasing in this switch would send a reader to check a source, and

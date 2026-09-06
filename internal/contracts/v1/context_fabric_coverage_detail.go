@@ -126,6 +126,44 @@ const (
 	// this code replaces. See coverageDetailCodeQualifiesPopulation, which
 	// is what the row validator consults.
 	ContextFabricCoverageDetailPopulationTruncated ContextFabricCoverageDetailCode = "population_truncated"
+	// ContextFabricCoverageDetailReadPopulationUnverified: a READ
+	// requirement whose completion scope is distributive -- `each_operand`,
+	// `each_member`, `each_group` -- over a population NOTHING CAN ENUMERATE.
+	//
+	// It names an ABSENCE OF KNOWLEDGE ABOUT THE POPULATION, which no other
+	// member of this vocabulary can say. Every neighbour describes what
+	// happened to a READ; this describes not knowing who the read was owed
+	// to. The near misses, each of which would have been a plausible lie:
+	//
+	//   * `population_truncated` says a population WAS enumerated and is
+	//     known to be a floor. Here nothing enumerated it, so there is no
+	//     floor to report -- and it must never license equal counts, which
+	//     is exactly what that code's own qualification does.
+	//   * `requirement_read_not_planned` says the turn planned no fact that
+	//     could serve the cell. Kinds may well have been planned and read;
+	//     what is unknown is FOR WHOM.
+	//   * `fact_pruned` asserts a DIFFERENT FACT: that the planner proved a
+	//     source could not contribute. Nothing here was proved about a
+	//     source -- the gap is that the POPULATION could not be identified,
+	//     which is upstream of any source question. That mismatch of
+	//     assertion is the real objection; its non-degrading declaration
+	//     (this arm IS degrading) is a second, weaker one.
+	//   * `fact_provider_reported` says a provider ran and reported a
+	//     state. The providers may have run perfectly; the gap is upstream
+	//     of them.
+	//
+	// REACHED BY: a scoped operand (its members are many subjects nothing
+	// enumerates), a cohort that never resolved, a grouped answer with no
+	// groups, and a binding so ambiguous that more subjects committed than
+	// the frame named. NOT reached by an empty named-slot operand set, which
+	// is enumerated at zero and takes the ordinary partially-read row -- the
+	// frame said who the operands are, and "none of them resolved" is a
+	// count, not an absence of knowledge.
+	//
+	// It deliberately does NOT join coverageDetailCodeQualifiesPopulation:
+	// nothing was measured over any population, so it must never license the
+	// equal-counts census exception.
+	ContextFabricCoverageDetailReadPopulationUnverified ContextFabricCoverageDetailCode = "read_population_unverified"
 	// ContextFabricCoverageDetailRequirementReadNotPlanned: a READ
 	// requirement the plan published was never read at all -- not read and
 	// failed, not read and empty, but NEVER ATTEMPTED, because the turn
@@ -171,6 +209,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped,
 	ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt,
 	ContextFabricCoverageDetailPopulationTruncated,
+	ContextFabricCoverageDetailReadPopulationUnverified,
 	ContextFabricCoverageDetailRequirementReadNotPlanned,
 }
 
@@ -363,6 +402,9 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	// the population actually is -- is precisely the one nothing measured,
 	// so there is nothing honest to put in the field.
 	ContextFabricCoverageDetailPopulationTruncated: {},
+	// No fact kind and no count: this code is about the POPULATION being
+	// unknowable, not about any one fact or any countable set.
+	ContextFabricCoverageDetailReadPopulationUnverified: {},
 	// No fact kind, no count, no source state -- every allowance off.
 	//
 	// The FACT KIND is the tempting one here and it is refused for the same

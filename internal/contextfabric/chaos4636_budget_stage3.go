@@ -183,7 +183,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// single-subject investigation has no cohort, so `declined` is
 		// always nothing_to_narrow here and the refusal was reached
 		// without any content reduction ever being attempted.
-		attempt, accountingErr := e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured)
+		attempt, accountingErr := e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts)
 		if accountingErr != nil {
 			return InvestigationResult{}, assemblyTelemetry{}, accountingErr
 		}
@@ -298,7 +298,20 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	}
 	// Finalize the retry too, or the second pass repeats round 1 finding 1's
 	// defect: measuring a pre-final shape and serving a larger one.
-	retried = e.finalizeResult(retried, *plan, params.Frame)
+	// TWO BINDINGS AT ONE SITE, and they are not alternatives.
+	//
+	// The retry is a DIFFERENT DOCUMENT from the first pass. Its EVIDENCE is
+	// `retryParams.Facts`, never `params.Facts`: this result was synthesized
+	// from the NARROWED bundle, so evaluating its read populations against
+	// the first pass's facts would report coverage for a document nobody
+	// served. Its ALLOCATION is bound separately, by the other lane's fix
+	// above -- measured from what the PRODUCER returned as consumed, never a
+	// caller-side copy.
+	//
+	// They are the same "stale document at the retry" class on different
+	// axes, found independently by two lanes. Taking one without the other
+	// re-opens the half it did not fix.
+	retried = e.finalizeResult(retried, *plan, params.Frame, retryParams.Facts)
 	// READ BACK FROM THE PRODUCER, not from the params and not from the local
 	// `retryAllocation`, and the difference is the entire lesson of this class.
 	//
@@ -334,7 +347,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	outcomeAttempt := outcomeNarrowingAttempt{Measured: retryMeasured}
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
 		var accountingErr error
-		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured)
+		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts)
 		if accountingErr != nil {
 			return InvestigationResult{}, assemblyTelemetry{}, accountingErr
 		}

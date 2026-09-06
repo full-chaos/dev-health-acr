@@ -2236,7 +2236,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// stage 3 measures that. The retry re-runs assembly AND finalization, so
 	// the shape measured on the second pass is the shape that would be
 	// served on the second pass.
-	result = e.finalizeResult(result, plan, familyOutcome.Frame)
+	result = e.finalizeResult(result, plan, familyOutcome.Frame, facts)
 	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, consumedAllocation, pendingTelemetry, retryBase)
 	if err != nil {
 		return InvestigationResult{}, err
@@ -2277,6 +2277,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// then the run's own artifacts hold two answers to "how many".
 		if event, counted := membershipCardinalityEventFrom(result, plan.Family); counted {
 			e.telemetry.RecordMembershipCardinality(ctx, principal, event)
+		}
+		// The read-population lines, emitted from the SAME once-per-served-
+		// result point and for the same reason the cardinality above is: the
+		// derivation is pure and could run inside finalizeResult, but
+		// finalizeResult runs again on a retry and a population counted twice
+		// is a coverage RATE that is wrong.
+		//
+		// It reads each row's numbers OFF THE SERVED DOCUMENT, never
+		// recomputing them for the log -- a telemetry value derived
+		// independently of the field it describes can disagree with it.
+		for _, event := range readRequirementPopulationEventsFrom(familyOutcome.Frame, result, plan, facts, plan.Family) {
+			e.telemetry.RecordReadRequirementPopulation(ctx, principal, event)
 		}
 	}
 	// CHAOS-4690: the SINGLE stamp point for the decisive path -- AFTER

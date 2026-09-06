@@ -4834,7 +4834,8 @@
             "reuse_auxiliary_refs_stripped",
             "answer_terminated_before_attempt",
             "population_truncated",
-            "requirement_read_not_planned"
+            "requirement_read_not_planned",
+            "read_population_unverified"
           ]
         },
         "degrading": {

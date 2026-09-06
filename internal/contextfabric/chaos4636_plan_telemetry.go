@@ -410,6 +410,17 @@ type PlanTelemetry interface {
 	// test still passing. A build in which nothing reports the count must
 	// not compile.
 	RecordMembershipCardinality(ctx context.Context, principal storage.Principal, event MembershipCardinalityEvent)
+	// RecordReadRequirementPopulation reports ONE distributive read row of a
+	// served answer: who the requirement was owed to, how many of them the
+	// turn read, and what is known about the population's extent.
+	//
+	// REQUIRED rather than optional, for the reason its neighbour states:
+	// while nothing consumed the completion scope, `each_operand` was a
+	// published field with no enforcement point, and an OPTIONAL telemetry
+	// method is how an entire event class disappears with every test still
+	// passing. A build in which nothing reports the population must not
+	// compile.
+	RecordReadRequirementPopulation(ctx context.Context, principal storage.Principal, event ReadRequirementPopulationEvent)
 	// RecordBudgetAssertion reports the FINAL budget assertion at one fresh
 	// result exit -- the measurement taken on the document the route will
 	// actually serialize, after every composer. It fires on a FIT as well as
