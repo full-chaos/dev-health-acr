@@ -1041,7 +1041,22 @@ func (t SlogEngineTelemetry) RecordGroupedCohortCompleteness(ctx context.Context
 			refusal = CohortGroupingRefusal("unclassified")
 		}
 		args = append(args, "grouping_refusal", string(refusal),
-			"planned_group_kind", string(event.PlannedGroupKind))
+			"planned_group_kind", string(event.PlannedGroupKind),
+			// INSIDE this guard, not beside it: an ordinary grouped answer's
+			// line must stay byte-for-byte what it was before any of these
+			// three fields existed, which is the property the comment above
+			// claims and TestSlogGroupedCohortCompletenessOmitsTheRefusalKeys
+			// WithoutARefusal enforces. Emitting a constant 0 on every
+			// grouped line would break it while looking harmless.
+			"ungrouped_members", event.UngroupedMembers)
+		// Only when the source named an axis. A no-placement refusal has no
+		// source kind to report -- the facts were silent -- and emitting an
+		// empty value would make "the source disagreed" and "the source said
+		// nothing" look alike to a filter, which is the distinction this whole
+		// vocabulary exists to draw.
+		if event.SourceGroupKind != "" {
+			args = append(args, "source_group_kind", string(event.SourceGroupKind))
+		}
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric grouped cohort completeness", args...)
@@ -1167,9 +1182,28 @@ func (t SlogEngineTelemetry) RecordItemAccounting(ctx context.Context, principal
 		"ledger_debits", event.Debits,
 		"budgeted_items", event.Budgeted,
 		"max_items", event.MaxItems,
+		// The ALLOCATOR's own verdict, as its own key. Empty when the grants
+		// agree, which is the ordinary case even on a ledger disagreement --
+		// the two checks fail independently and a reader must be able to tell
+		// which one did. Routed through the closed vocabulary so a corrupted
+		// or future value reports as unclassified rather than as free text.
+		"allocation_disagreement", string(validAllocationDisagreementOrUnclassified(event.AllocationDisagreement)),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.ErrorContext(ctx, "context fabric item accounting disagreement", args...)
+}
+
+// validAllocationDisagreementOrUnclassified fails closed on a value outside the
+// closed vocabulary. The EMPTY value is a member -- it is `AllocationAgrees`,
+// the ordinary case -- so it passes through as empty rather than as
+// `unclassified`: an allocation that agrees has not failed to be classified.
+func validAllocationDisagreementOrUnclassified(disagreement AllocationDisagreement) AllocationDisagreement {
+	for _, member := range AllocationDisagreementVocabulary() {
+		if member == disagreement {
+			return disagreement
+		}
+	}
+	return AllocationDisagreement("unclassified")
 }
 
 // validLedgerStatusOrUnclassified, validQuotaAvailabilityOrUnclassified and

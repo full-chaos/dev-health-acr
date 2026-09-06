@@ -17,7 +17,25 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  # Tag releases and manual dispatches key on the tag, which is already unique
+  # per release. MAIN PUSHES key on the SHA, and that is the point of this
+  # block: `github.ref_name` is the literal string "main" for every push to
+  # main, so every main push shared one `release-main` group. With
+  # `cancel-in-progress: false` that group still serializes, and GitHub holds
+  # at most ONE pending run per group -- so a third landing cancels the second
+  # while it is still waiting, and that commit's Release verdict is simply
+  # gone. Measured 2026-09-05: the Release runs for f43c1641 and 6a8d92e7 were
+  # both `cancelled` this way, and the run for 1fc4f157 survived only because
+  # nothing happened to land during its window.
+  #
+  # This matters more here than it did in ci.yml, where the same defect was
+  # fixed earlier the same night: a Release run takes roughly 50 minutes
+  # against ci's ~8, so its collision window is several times wider.
+  #
+  # `cancel-in-progress` stays false. Per-sha groups cannot collide, so there
+  # is nothing left to cancel, and leaving it false means a Release that is
+  # genuinely in flight is never interrupted by anything.
+  group: release-${{ github.event.inputs.tag || github.sha }}
   cancel-in-progress: false
 
 jobs:

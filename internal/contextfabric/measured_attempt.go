@@ -278,6 +278,18 @@ func (e *Engine) measureAssembledAttempt(
 		}
 		return MeasuredAttempt{}, stageError(StageValidation, accounting)
 	}
+	// THE THIRD CHECK, on the serving path. Every terminal arm reaches this
+	// function, so wiring it here is what makes "the grants describe one
+	// permitted spending" a runtime guarantee rather than a test-time one.
+	if accounting, disagreement := allocationAccountingErrorFor(stage, allocation); accounting != nil {
+		if e.telemetry != nil {
+			event := itemAccountingEventFor(stage, attempt.Ledger, budget.MaxItems)
+			event.Disagreement = "allocation:" + string(disagreement)
+			event.AllocationDisagreement = disagreement
+			e.telemetry.RecordItemAccounting(ctx, principal, event)
+		}
+		return MeasuredAttempt{}, stageError(StageValidation, accounting)
+	}
 	return attempt, nil
 }
 
@@ -291,6 +303,15 @@ type ItemAccountingEvent struct {
 	Debits       int
 	Budgeted     int
 	MaxItems     int
+	// AllocationDisagreement is the allocator's own verdict, empty when the
+	// grants agree. It is carried SEPARATELY from Status rather than folded
+	// into it: Status is the LEDGER's closed vocabulary, and an allocation
+	// that disagrees while the ledger reconciles is a real, distinct state --
+	// putting one token in the other's field would make `ledger_status` lie.
+	//
+	// This struct is telemetry only. It is not serialized to the wire and no
+	// contract type gained a field.
+	AllocationDisagreement AllocationDisagreement
 }
 
 // ErrItemAccounting is the sentinel for an answer whose item account does not
@@ -384,4 +405,33 @@ func itemAccountingEventFor(stage string, ledger contractsv1.ContextFabricItemLe
 		Budgeted:     ledger.Counts.Budgeted(),
 		MaxItems:     maxItems,
 	}
+}
+
+// allocationAccountingErrorFor is the THIRD CHECK, as a runtime guard.
+//
+// It existed only as a test-time property until a keystone review pointed out
+// that `Agreement()` had NO production caller: the grants were re-derived over
+// a sweep in tests and never once on a serving path, so a corrupted allocation
+// still produced `attempt_valid=true capacity=certified_fit`. The certificate
+// proved measured capacity, not allocation integrity, while the design claimed
+// three checks. This makes the third one true.
+//
+// It raises the SAME typed error an unreconciled ledger raises, because it is
+// the same kind of failure: the server cannot account for its own answer, and
+// the caller's question was not too big. No new error kind, no new closed
+// vocabulary token, and no wire field -- the allocator's verdict travels in the
+// diagnostic string under an `allocation:` prefix, the convention the ledger's
+// own `bucket:`/`collection:` disagreements already use.
+func allocationAccountingErrorFor(stage string, allocation ItemAllocation) (error, AllocationDisagreement) {
+	disagreement := allocation.Agreement()
+	if disagreement == AllocationAgrees {
+		return nil, AllocationAgrees
+	}
+	return ItemAccountingError{
+		Stage:        stage,
+		Status:       contractsv1.ContextFabricLedgerReconciled,
+		Disagreement: "allocation:" + string(disagreement),
+		Debits:       allocation.TotalGranted(),
+		Budgeted:     allocation.MaxItems,
+	}, disagreement
 }

@@ -200,11 +200,47 @@ const ContextFabricFactScopeAttributedPrimaryTeamLimitation = "Some evidence in 
 // corpus content -- which is the property the "fixed and non-interpolated"
 // discipline elsewhere in this file exists to guarantee, reached by a
 // different route.
+//
+// THE PREFIX IS SHARED with the unplaceable disclosure below, deliberately:
+// both are answers to "you asked for a breakdown and did not get one", and a
+// reader meeting either should recognise the same opening. What must NOT be
+// shared is recognition -- see contextFabricGroupingUnplaceableLimitationSuffix
+// for why the two families are kept disjoint by their tails rather than their
+// heads, and grouping_limitation_families_test.go for the assertion that they
+// never accept each other's sentence.
 const (
 	contextFabricGroupingRefusalLimitationPrefix = "This question asked for a breakdown by "
 	contextFabricGroupingRefusalLimitationMiddle = ", but the available facts group by "
 	contextFabricGroupingRefusalLimitationSuffix = ", so the answer is presented ungrouped."
 )
+
+// contextFabricGroupingUnplaceableLimitationSuffix is the whole tail of the
+// SECOND grouping disclosure: the plan declared a group axis and not one
+// member of the answer could be placed on it, because no member's own facts
+// named a group at all.
+//
+// A DIFFERENT DEFECT FROM THE MISMATCH ABOVE, and the reader is owed the
+// difference. A mismatch means the source disagreed -- it grouped by
+// something, just not the asked-for thing, and naming the two kinds tells the
+// reader where to look instead. This one means the source was SILENT: there
+// is no other axis to point at, so a sentence naming a second kind would have
+// to invent one. Hence ONE interpolated value, not two.
+//
+// ONE INTERPOLATION, NOT TWO, AND NO COUNT. The number of unplaced members
+// rides the telemetry line and CohortGroupingOutcome instead. Interpolating it
+// here would force the recogniser below to accept an arbitrary digit run in
+// the middle of a service-authored sentence, which widens what a model-authored
+// caveat can impersonate -- and undisplaceability is exactly what the registry
+// grants. A closed-vocabulary subject kind is a set the model never writes
+// into; an integer is not.
+//
+// WHY THE TAIL AND NOT THE HEAD DISCRIMINATES. This family shares its opening
+// with the mismatch family, and both end in the same six words, so neither
+// segment alone separates them. The whole tail from ", but" onward is one
+// constant precisely so that CutSuffix is a decision: the mismatch parse cuts
+// its own shorter suffix and then fails to find its Middle, and this parse
+// fails CutSuffix outright on a mismatch sentence. Both directions are pinned.
+const contextFabricGroupingUnplaceableLimitationSuffix = ", but none of the items in this answer could be placed under one, so the answer is presented ungrouped."
 
 // ContextFabricGroupingRefusalLimitation composes CHAOS-4636's disclosure
 // that a grouped question was answered ungrouped because the planned group
@@ -257,6 +293,48 @@ func IsContextFabricGroupingRefusalLimitation(limitation string) bool {
 		ValidContextFabricSubjectKind(ContextFabricSubjectKind(sourceKind))
 }
 
+// ContextFabricGroupingUnplaceableLimitation composes the disclosure that a
+// grouped question was answered ungrouped because NOT ONE member could be
+// placed on the planned axis.
+//
+// THE SOLE COMPOSER, for the reason its sibling above states at length: an
+// interpolated disclosure is recognised by a PARSE, so a second hand-rolled
+// Sprintf at a call site produces a string the parser may reject, and an
+// unrecognised service disclosure is silently displaceable by the next
+// composer. That is not a hypothetical here -- it is the shipped defect this
+// file's own registry comment records.
+func ContextFabricGroupingUnplaceableLimitation(plannedKind ContextFabricSubjectKind) string {
+	return contextFabricGroupingRefusalLimitationPrefix + string(plannedKind) +
+		contextFabricGroupingUnplaceableLimitationSuffix
+}
+
+// IsContextFabricGroupingUnplaceableLimitation reports whether a limitation
+// is one ContextFabricGroupingUnplaceableLimitation could have composed.
+//
+// A PARSE, not a prefix match, and for the sharper of the two reasons its
+// sibling gives. The loose-match hazard is the same -- a model caveat opening
+// with this wording would become undisplaceable and take a real caveat's place
+// -- but there is a second hazard here that the mismatch family did not have:
+// the two grouping families SHARE their opening words and their closing six.
+// A prefix match would therefore not merely admit model text, it would make
+// the two service families indistinguishable from each other, so a mismatch
+// sentence would read as an unplaceable one and vice versa. Requiring the
+// whole tail is what keeps them disjoint.
+//
+// The empty kind is not a vocabulary member, so a half-composed sentence is
+// not recognised either.
+func IsContextFabricGroupingUnplaceableLimitation(limitation string) bool {
+	body, ok := strings.CutPrefix(limitation, contextFabricGroupingRefusalLimitationPrefix)
+	if !ok {
+		return false
+	}
+	plannedKind, ok := strings.CutSuffix(body, contextFabricGroupingUnplaceableLimitationSuffix)
+	if !ok {
+		return false
+	}
+	return ValidContextFabricSubjectKind(ContextFabricSubjectKind(plannedKind))
+}
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
@@ -296,14 +374,23 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 			return true
 		}
 	}
-	// The grouping-refusal disclosure is interpolated, so it can only be
-	// recognised by parsing it -- see
-	// IsContextFabricGroupingRefusalLimitation. This predicate, NOT the
+	// The two grouping disclosures are interpolated, so they can only be
+	// recognised by parsing them -- see
+	// IsContextFabricGroupingRefusalLimitation and
+	// IsContextFabricGroupingUnplaceableLimitation. This predicate, NOT the
 	// fixed list above, is the authority every consumer asks; the list
 	// remains what it says it is (the fixed disclosures) and
 	// ContextFabricServiceAuthoredLimitations' own callers use it only to
 	// enumerate those.
-	return IsContextFabricGroupingRefusalLimitation(limitation)
+	//
+	// EVERY MEMBER OF THE GROUPING VOCABULARY THAT DISCLOSES NEEDS A LINE
+	// HERE. Omitting one does not fail loudly: the sentence is composed, is
+	// classified as a model caveat, and is displaced by the composer that runs
+	// after it, so the served answer states nothing about having been answered
+	// on a different axis than the one asked for. That is the shipped round-3
+	// defect, and it is invisible to any test that drives the composer.
+	return IsContextFabricGroupingRefusalLimitation(limitation) ||
+		IsContextFabricGroupingUnplaceableLimitation(limitation)
 }
 
 // HasContextFabricServiceAuthoredLimitation reports whether any entry is
