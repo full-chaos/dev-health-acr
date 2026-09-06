@@ -20,10 +20,12 @@ package graphrank
 // place for them to be wrong. This file decides, and publishes.
 
 import (
+	"context"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // operandSlotState is the closed vocabulary for what happened to ONE operand.
@@ -425,4 +427,142 @@ func truncateRunes(value string, limit int) string {
 	}
 	runes := []rune(value)
 	return strings.TrimSpace(string(runes[:limit]))
+}
+
+// resolveNamedComparison resolves an admitted operand pair, each operand from
+// ITS OWN terms, and decides whether publication may proceed.
+//
+// SLOT ISOLATION IS THE WHOLE MECHANISM. Every slot gets its own candidate
+// map, its own observation maps, its own vector-similarity side map and its own
+// identity-claim recorders. Nothing crosses: neither the whole-question term
+// bag nor the other operand's terms can enter a slot's identity pool, which is
+// exactly what stops two well-posed operands collapsing into one ambiguity.
+//
+// THE SIX SINGLETON COMMIT GATES STAY SINGLETON. This function does not widen
+// them, delete them, or turn their assignments into appends. It calls the
+// existing gate ONCE PER OPERAND, on that operand's own pool -- so each
+// invocation still decides about exactly one subject, with every guard it has
+// today intact, and the pair-ness lives out here instead of being pushed down
+// into a gate that was never asked to hold two.
+//
+// NO READS HAPPEN HERE. The evidence round and the census callbacks are simply
+// never invoked on this path, and that absence IS the no-read hold: a
+// comparison that cannot publish must not have read anything to publish about.
+func resolveNamedComparison(
+	ctx context.Context,
+	principal storage.Principal,
+	request contextfabric.InvestigationRequest,
+	deps ResolveDeps,
+	comparison contextfabric.ComparisonOperands,
+) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
+	run := comparisonResolutionRun{admission: comparison.Admission}
+
+	// THE SCOPED HOLD FIRES BEFORE ANY RETRIEVAL. Not after a failed attempt to
+	// resolve the anchor, and not after reading anything: the pair is refused
+	// on its VARIANT, which is knowable from the frame alone. Admitting it
+	// would flip the whole answer into the absorbing degraded state, so a
+	// limitation this resolver introduced would reach the user looking like a
+	// data problem.
+	if comparison.Admission == contextfabric.ComparisonHeldScopedOperand {
+		for _, slot := range comparison.Slots {
+			run.slots = append(run.slots, operandSlotRun{slot: slot})
+		}
+		resolution, bases, digests := publishComparisonResolution(run, request.Options.MaxSubjectCandidates)
+		return resolution, bases, digests, nil
+	}
+
+	for _, slot := range comparison.Slots {
+		if err := ctx.Err(); err != nil {
+			return contextfabric.SubjectResolution{}, nil, nil, err
+		}
+		slotRun, err := resolveOneOperandSlot(ctx, principal, request, deps, slot)
+		if err != nil {
+			return contextfabric.SubjectResolution{}, nil, nil, err
+		}
+		run.slots = append(run.slots, slotRun)
+	}
+
+	// A LAST CANCELLATION CHECK BEFORE PUBLICATION. A context cancelled after
+	// the final slot resolved but before anything was published must publish
+	// NOTHING -- a partially assembled comparison escaping on a cancelled
+	// request is the one outcome that would be both wrong and hard to see.
+	if err := ctx.Err(); err != nil {
+		return contextfabric.SubjectResolution{}, nil, nil, err
+	}
+
+	resolution, bases, digests := publishComparisonResolution(run, request.Options.MaxSubjectCandidates)
+	return resolution, bases, digests, nil
+}
+
+// resolveOneOperandSlot retrieves and decides ONE operand, in isolation.
+func resolveOneOperandSlot(
+	ctx context.Context,
+	principal storage.Principal,
+	request contextfabric.InvestigationRequest,
+	deps ResolveDeps,
+	slot contextfabric.ComparisonOperandSlot,
+) (operandSlotRun, error) {
+	// FRESH STATE, PER SLOT. Allocated here rather than passed in, so there is
+	// no way for a caller to accidentally share one operand's pool with the
+	// other's -- the isolation is structural, not a convention someone has to
+	// remember at the call site.
+	candidatesBySubject := make(map[string]contextfabric.SubjectCandidate)
+	observationParentKey := make(map[string]string)
+	observationBlocked := make(map[string]bool)
+	vectorArmSimilarity := make(map[string]float64)
+	identity := identityClaimants{}
+	identityTerms := identityMatchTerms{}
+
+	// THIS SLOT'S OWN TERMS. Never SubjectTerms(request, interpreted) -- that
+	// is the flat bag whose existence is the defect.
+	retrieval, err := retrieveCandidatesForTerms(ctx, principal, request, deps, slot.Terms,
+		candidatesBySubject, observationParentKey, observationBlocked, vectorArmSimilarity, identity, identityTerms)
+	if err != nil {
+		return operandSlotRun{}, err
+	}
+
+	gate := deps.CommitGatePolicy
+	if gate == (CommitGatePolicy{}) {
+		// Same reasoning as the single-subject path: a zero-valued policy means
+		// "not overridden", and passing it straight through would run an
+		// unconfigured backend on a zero-threshold auto-commit-everything gate.
+		gate = DefaultCommitGatePolicy()
+	}
+	effectiveSearchLimit := request.Options.MaxSubjectCandidates
+	if deps.MaxResultsCap > 0 && (effectiveSearchLimit <= 0 || effectiveSearchLimit > deps.MaxResultsCap) {
+		effectiveSearchLimit = deps.MaxResultsCap
+	}
+
+	// aliasIdentityComplete is FALSE for a slot, deliberately and
+	// conservatively. It is a claim that a keyed identity read enumerated the
+	// whole population, and no such read has run for this operand's terms on
+	// this path. False cannot make anything commit that otherwise would not --
+	// it only withholds the identity fast path's completeness bump, which is
+	// the safe direction for a claim nobody has proven here.
+	//
+	// evidenceCensusAttestedKey is "" and the census is never invoked: that is
+	// the no-read hold, stated as an absence rather than a flag.
+	//
+	// reservedKinds is THIS SLOT'S OWN stated kind. The question stated it, so
+	// a candidate of that kind must not vanish from this operand's own list
+	// under truncation -- reserving the pair's other kind here would be
+	// meaningless, since the other operand has its own invocation.
+	resolution, bases, digests := ResolveFromMergedCandidatesWithGateAndBasis(
+		candidatesBySubject, observationParentKey, observationBlocked,
+		request.Options.MaxSubjectCandidates, request.Options.AllowClarification,
+		retrieval.searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold,
+		retrieval.retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK,
+		unscopedVisibilityFor(principal, request), gate, identity, identityTerms,
+		false, deps.ResolutionTracer, request.RequestID, "", false, false,
+		[]contextfabric.SubjectKind{slot.Kind},
+	)
+
+	return operandSlotRun{
+		slot:              slot,
+		candidates:        resolution.Candidates,
+		committed:         resolution.Committed,
+		bases:             bases,
+		digests:           digests,
+		retrievalDegraded: retrieval.retrievalDegraded,
+	}, nil
 }

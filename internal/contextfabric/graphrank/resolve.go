@@ -1528,6 +1528,38 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if err := ctx.Err(); err != nil {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 	}
+	// COMPARISON DISPATCH -- BEFORE SubjectTerms FLATTENS THE QUESTION.
+	//
+	// This position is the fix. One line below, SubjectTerms reduces the
+	// question to a flat, deduped term bag, and at that moment which operand
+	// each term belonged to is gone: the resolver can only resolve "a" subject
+	// from a pool, so two well-posed operands become one ambiguity. Dispatching
+	// here is what lets each operand keep its own terms.
+	//
+	// ONLY THE ADMITTED PAIR AND THE SCOPED HOLD ARE TAKEN. Every other shape
+	// -- not a comparison at all, an operand count outside the cut, an operand
+	// whose kind the question did not state -- falls through to exactly the
+	// behaviour it has today. The cut is narrow deliberately, and "narrow"
+	// means the shapes outside it are untouched, not that they are refused.
+	//
+	// offersOnly is excluded: that pass exists to build StructureOfferMaterial,
+	// which this path does not produce, and the engine discards its resolution
+	// unconditionally (chaos4234_offers_only.go). Running a comparison for a
+	// resolution nobody keeps would be waste at best and a second, divergent
+	// decision path at worst.
+	if !contextfabric.OffersOnlyResolution(ctx) {
+		comparison := contextfabric.ClassifyComparisonOperands(frame)
+		switch comparison.Admission {
+		case contextfabric.ComparisonAdmittedNamedPair, contextfabric.ComparisonHeldScopedOperand:
+			resolution, bases, digests, err := resolveNamedComparison(ctx, principal, request, deps, comparison)
+			if err != nil {
+				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
+			}
+			commitBases.ResetTo(bases)
+			commitDigests.ResetTo(digests)
+			return resolution, contextfabric.StructureOfferMaterial{}, nil
+		}
+	}
 	terms := SubjectTerms(request, interpreted)
 	// offersOnly (CHAOS-4234): the class-default window gate's offers-only
 	// mode -- every commit MECHANISM below that only exists to reach a
