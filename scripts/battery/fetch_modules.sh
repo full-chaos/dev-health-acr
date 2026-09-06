@@ -30,11 +30,20 @@ cd "$ROOT" || { echo "fetch_modules.sh: cannot cd $ROOT" >&2; exit 2; }
 attempt=1
 while : ; do
   echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] go mod download: attempt $attempt/$TRIES in $ROOT"
-  if go mod download all; then
+  # rc is captured IMMEDIATELY after the command, not read from `$?` after an
+  # `if cmd; then ...; fi` whose condition was false -- an `if` compound
+  # command with no branch taken exits 0 itself (POSIX; verified live:
+  # `if false_cmd; then :; fi; echo $?` prints 0 even when false_cmd returns
+  # 17), so the old `rc=$?` below this block always read 0 on a genuine
+  # download failure, and the "FAILED: go mod download rc=$rc" line below
+  # always logged rc=0 -- the exact silent-cold-cache-proceeds bug this
+  # script exists to prevent.
+  go mod download all
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
     echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] ok modules: cache warm after $attempt attempt(s)"
     exit 0
   fi
-  rc=$?
   if [ "$attempt" -ge "$TRIES" ]; then
     # FAIL LOUDLY AND EARLY. Better a red step named "could not fetch modules"
     # before any mutation than a battery whose arms each rediscover it and
