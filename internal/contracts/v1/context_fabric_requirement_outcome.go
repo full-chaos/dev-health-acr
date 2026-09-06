@@ -812,6 +812,7 @@ func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequire
 	//	  ordinary narrowed path, not this one.
 	censusQualified := row.Stage == ContextFabricOutcomeStageAssembledResult &&
 		censusQualifyingObligation(row.Obligation) &&
+		censusQualifyingRole(row.Requirement) &&
 		row.Impact == ContextFabricAnswerImpactScope &&
 		row.Served == row.Declared &&
 		row.CauseObserved &&
@@ -848,6 +849,47 @@ func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequire
 func censusQualifyingObligation(obligation string) bool {
 	return obligation == ContextFabricAnswerObligationCount ||
 		contextFabricAnswerObligationKindByObligation[obligation] == contextFabricObligationKindRead
+}
+
+// censusQualifyingRole says which requirement ROLES may take the census
+// exception: the three that OWN A POPULATION, and not `subject`.
+//
+// THE OBLIGATION WAS NEVER THE WHOLE TEST, and this function is the half that
+// was missing. `censusQualifyingObligation` above answers "is this the kind of
+// obligation whose census can be incomplete"; it cannot answer "does this row
+// have a population at all", because that is the ROLE's question. A review
+// reproduced the gap: `state/subject/team` is a READ obligation, so it passed
+// the obligation test, and a single-subject row was admitted claiming
+// `population_truncated` over equal counts -- a truncation of a population it
+// does not have.
+//
+// No live producer emits that row today: the read evaluator sends a
+// `single_subject` requirement down its caller-defect branch rather than the
+// population arms. That is why this is a GATE defect and not a served-answer
+// defect -- and it is exactly why it is worth closing. A validator's job is to
+// refuse the illegal row whoever writes it, including a producer that does not
+// exist yet.
+//
+// DERIVED FROM THE ROLE MIRROR, never a hand-kept list: `subject` is the one
+// member that owns no population, so every future role is population-owning by
+// default. That is the same fail-closed direction `distributiveScope` takes on
+// the domain side, and it means a new role cannot inherit this exception by
+// being added quietly.
+//
+// FAIL CLOSED ON AN ABSENT OR MALFORMED COORDINATE. The identity is
+// `obligation/role/subject`; a row that does not carry three segments cannot
+// prove it owns a population, and an exception is not something to grant on the
+// strength of an unparseable string.
+func censusQualifyingRole(requirement string) bool {
+	parts := strings.Split(requirement, "/")
+	if len(parts) != 3 {
+		return false
+	}
+	role := parts[1]
+	if !ValidContextFabricSubjectRole(role) {
+		return false
+	}
+	return role != contextFabricSubjectRoleSubject
 }
 
 // validateContextFabricRequirementRefinements enforces that the refinement

@@ -593,3 +593,68 @@ func TestTheCensusExceptionAdmitsExactlyOneImpact(t *testing.T) {
 		t.Errorf("the exception admitted %d impacts, want exactly 1", admitted)
 	}
 }
+
+// TestTheCensusExceptionRefusesARoleThatOwnsNoPopulation is the role half of the
+// exception's gate, and it exists because the obligation half was passing alone.
+//
+// THE EXCEPTION ASKS TWO QUESTIONS AND ONLY ONE WAS BEING ASKED. "Is this the
+// kind of obligation whose census can be incomplete" is the obligation's
+// question. "Does this row have a population at all" is the ROLE's — and a
+// `single_subject` read is `state/subject/...`, a READ obligation with no
+// population. It therefore passed the obligation test and was admitted claiming
+// `population_truncated` over equal counts: a truncation of a population it does
+// not have.
+//
+// ALL FOUR ROLES ARE ASSERTED, and the three that must be ACCEPTED are the point.
+// A test that only checked `subject` would pass equally against a gate that had
+// been broken rather than narrowed — refusing every role would satisfy it. The
+// accepted three are what distinguish "the exception is now correct" from "the
+// exception is now gone".
+//
+// No live producer emits the refused row today: the read evaluator sends a
+// `single_subject` requirement down its caller-defect branch. This is a
+// VALIDATOR gate, and a validator's job is to refuse the illegal row whoever
+// writes it — including a producer that does not exist yet.
+func TestTheCensusExceptionRefusesARoleThatOwnsNoPopulation(t *testing.T) {
+	t.Parallel()
+	censusRow := func(identity string) ContextFabricPlanRequirementOutcomeRow {
+		return ContextFabricPlanRequirementOutcomeRow{
+			Stage:         ContextFabricOutcomeStageAssembledResult,
+			Requirement:   identity,
+			Obligation:    "state",
+			Outcome:       ContextFabricRequirementNarrowed,
+			Impact:        ContextFabricAnswerImpactScope,
+			CauseCoverage: ContextFabricCoverageDetailPopulationTruncated,
+			CauseObserved: true,
+			Served:        5,
+			Declared:      5,
+		}
+	}
+	for _, arm := range []struct {
+		identity string
+		accept   bool
+		why      string
+	}{
+		{"state/member/team", true, "the member role owns a population"},
+		{"state/group/team", true, "the group role owns a population"},
+		{"state/operand/team", true, "the operand role owns a population"},
+		{"state/subject/team", false, "single_subject owns NO population, so it has no census to be incomplete"},
+		// FAIL CLOSED: a coordinate that cannot be parsed cannot prove it owns
+		// a population, and an exception is not granted on an unparseable
+		// string. Both shapes are asserted because they fail on different
+		// clauses -- one on the segment count, one on the vocabulary.
+		{"state/team", false, "two segments: not an obligation/role/subject coordinate"},
+		{"state/nonesuch/team", false, "a role outside the closed vocabulary"},
+		{"", false, "no identity at all"},
+	} {
+		err := ValidateContextFabricPlanRequirementOutcomeRow(censusRow(arm.identity))
+		if arm.accept && err != nil {
+			t.Errorf("%q: the census exception must ADMIT this row (%s), got refused: %v",
+				arm.identity, arm.why, err)
+		}
+		if !arm.accept && err == nil {
+			t.Errorf("%q: the census exception must REFUSE this row (%s), but it was admitted",
+				arm.identity, arm.why)
+		}
+	}
+}
