@@ -154,6 +154,10 @@ func TestATwoOperandCompareReadOnOneSideIsNotSatisfied(t *testing.T) {
 		factsFor(alpha, kindList(flow, health)),
 	)
 	row := rowFor(t, rows, requirement.Requirement)
+	// Logged so the red proof is self-quoting: at the BASE this same evidence
+	// reads `satisfied` 2/2 and the answer reads `complete`.
+	t.Logf("AT-TIP OBSERVED: outcome=%q impact=%q cause=%q served=%d declared=%d",
+		row.Outcome, row.Impact, row.CauseCoverage, row.Served, row.Declared)
 	assertRow(t, row,
 		contractsv1.ContextFabricRequirementNarrowed,
 		contractsv1.ContextFabricAnswerImpactScope,
