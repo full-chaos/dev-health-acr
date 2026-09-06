@@ -1277,13 +1277,16 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 				Rank: i + 1, Survived: keptIndex[i],
 			})
 		}
-		// The once-per-resolution Info summary -- see
-		// ResolutionTraceEvent.RankedCutSummary's own doc comment for why
-		// this is a second event on the same token rather than promoting
-		// the per-candidate loop above (measured: that loop is one event
-		// per RETRIEVAL-sized pool candidate, up to 91 in one representative
-		// fixture, against a ceiling of 25 for an unconditional per-resolution
-		// Info line). RankedCutSurvivedCount is always the TRUE survivor
+		// The once-per-PASS Info summary (this call is one pass; a
+		// resolution can run more than one -- see
+		// ResolutionTraceEvent.RankedCutSummary's own doc comment for the
+		// full pairing-with-"decision" rule) -- see that same doc comment
+		// for why this is a second event on the same token rather than
+		// promoting the per-candidate loop above (measured: that loop is
+		// one event per RETRIEVAL-sized pool candidate, up to 91 in one
+		// representative fixture, against a ceiling of 25 for an
+		// unconditional per-pass Info line). RankedCutSurvivedCount is
+		// always the TRUE survivor
 		// count (never truncated) so an operator can trust the number even
 		// when the ids list below is capped; RankedCutSurvivedIDs itself is
 		// capped at rankedCutSummaryIDCap regardless of the configured cut

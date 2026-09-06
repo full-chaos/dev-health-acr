@@ -1086,10 +1086,11 @@ type ResolutionTraceEvent struct {
 	// at Debug (measured: up to ~1 per pool candidate, unbounded by the
 	// resolution's own retrieval size, not the cut budget -- an operator
 	// tailing a rig log at the production default cannot afford that
-	// volume). This is a SECOND event, emitted ONCE per resolution
-	// (RankedCutSummary=true marks it, so a consumer can tell it apart from
-	// the per-candidate events sharing the same Stage token), at Info,
-	// folding the whole cut into one line: how many candidates were ranked
+	// volume). This is a SECOND event, emitted once per PASS through
+	// ResolveFromMergedCandidatesWithGateAndBasis (RankedCutSummary=true
+	// marks it, so a consumer can tell it apart from the per-candidate
+	// events sharing the same Stage token), at Info, folding that pass's
+	// whole cut into one line: how many candidates were ranked
 	// (RankedCutCandidateCount) and how many survived (RankedCutSurvivedCount,
 	// ALWAYS the true count, never truncated), plus a SAMPLE of which ones
 	// (RankedCutSurvivedIDs, the first N survivors in rank order, capped
@@ -1097,6 +1098,18 @@ type ResolutionTraceEvent struct {
 	// resolution cannot make this one line unbounded), and the threshold
 	// applied. No new Stage value -- same closed-vocabulary token, a richer
 	// payload.
+	//
+	// One PASS, not one RESOLUTION: a resolution can run more than one
+	// pass (a confirmed-kind scoped re-decision, an evidence-census
+	// re-decision -- see resolveSubjects), and each pass traces its OWN
+	// "decision" event unconditionally; this file's existing invariant for
+	// that ("several decision events per resolution is normal; the LAST
+	// one describes the returned resolution" -- discardableDecisionTracer's
+	// own doc comment) applies identically here. RankedCutSummary is this
+	// stage's companion to "decision": exactly one per pass, 1:1 with that
+	// pass's own decision event, not exactly one per resolution. A reader
+	// wanting "the cut that actually decided this resolution" reads the
+	// LAST ranked_cut summary, exactly like the last decision event.
 	RankedCutSummary        bool
 	RankedCutCandidateCount int
 	RankedCutSurvivedCount  int

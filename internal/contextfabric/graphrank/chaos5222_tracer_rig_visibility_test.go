@@ -42,10 +42,15 @@ import (
 //
 // ranked_cut's own per-candidate line stays Debug (team-lead's volume
 // gate, measured 2026-09-06: up to 91 lines for one resolution against a
-// 25-per-resolution ceiling) -- what must reach Info is the ONE
-// RankedCutSummary line per resolution (ResolutionTraceEvent's own doc
-// comment). This test asserts exactly that: the stage token appears
-// exactly once at Info, carrying the folded candidate/survivor counts.
+// 25-per-pass ceiling) -- what must reach Info is the RankedCutSummary
+// line, one per PASS through ResolveFromMergedCandidatesWithGateAndBasis,
+// paired 1:1 with that pass's own "decision" event (ResolutionTraceEvent's
+// own doc comment; a resolution running more than one pass gets more than
+// one summary -- see TestRankedCutSummary_PairedOneToOneWithDecisionAcrossReDecisionPasses
+// for that shape measured directly). This fixture takes exactly ONE pass
+// (no confirmed kind, no evidence census configured), so 1 decision means
+// exactly 1 summary here -- this test asserts that, plus the folded
+// candidate/survivor counts.
 func TestSlogResolutionTracer_StageLinesVisibleAtProductionLogLevel(t *testing.T) {
 	t.Parallel()
 	const crowd = 90
@@ -84,11 +89,14 @@ func TestSlogResolutionTracer_StageLinesVisibleAtProductionLogLevel(t *testing.T
 		}
 	}
 	// The volume gate's whole point: exactly ONE ranked_cut line reaches
-	// Info for this resolution (the summary), not one per pool candidate --
-	// a regression back to per-candidate Info logging would silently
-	// reproduce the >25-lines-per-resolution volume this design avoids.
+	// Info for this SINGLE-PASS resolution (the summary), not one per pool
+	// candidate -- a regression back to per-candidate Info logging would
+	// silently reproduce the >25-lines-per-pass volume this design avoids.
+	// (This fixture takes exactly one pass; see
+	// TestRankedCutSummary_PairedOneToOneWithDecisionAcrossReDecisionPasses
+	// for the multi-pass count, which is NOT 1.)
 	if got := strings.Count(log, `"stage":"ranked_cut"`); got != 1 {
-		t.Errorf("ranked_cut Info lines = %d, want exactly 1 (the per-resolution summary) -- a value >1 means the per-candidate line leaked back to Info", got)
+		t.Errorf("ranked_cut Info lines = %d, want exactly 1 for this single-pass fixture -- a value >1 means the per-candidate line leaked back to Info", got)
 	}
 	if !strings.Contains(log, `"msg":"context fabric resolution trace: ranked cut summary"`) {
 		t.Error("the ranked_cut Info line is not the summary shape (msg mismatch) -- the folded-array design")
@@ -163,5 +171,75 @@ func TestRankedCutSummary_SurvivedIDsCappedIndependentlyOfCutBudget(t *testing.T
 		if id != wantOrder[i] {
 			t.Errorf("RankedCutSurvivedIDs[%d] = %q, want %q (first %d survivors in rank order)", i, id, wantOrder[i], idCap)
 		}
+	}
+}
+
+// TestRankedCutSummary_PairedOneToOneWithDecisionAcrossReDecisionPasses is
+// the measured half of the pairing rule (ResolutionTraceEvent.RankedCutSummary's
+// own doc comment): a RankedCutSummary is emitted once per PASS through
+// ResolveFromMergedCandidatesWithGateAndBasis, not once per resolution --
+// exactly the same multiplicity contract this file already applies to the
+// "decision" stage (discardableDecisionTracer's own doc comment: "several
+// decision events per resolution is normal; the LAST one describes the
+// returned resolution"). A codex review round reproduced a resolution
+// emitting 2 RankedCutSummary events under this exact shape (a confirmed-kind
+// scoped re-decision superseding the first pass) and initially read that as
+// a defect against an "exactly once per resolution" claim; the claim was
+// wrong, not the emission -- this test measures and pins the CORRECT
+// invariant: count(ranked_cut summaries) == count(decision events),
+// deliberately on a fixture that exercises a re-decision (reusing
+// TestResolveSubjects_ConfirmedKindScope_Case57ShapeClearsStaleGlobalTruncation's
+// own shape, chaos4154_confirmed_kind_scope_test.go), so the pairing is
+// proven where it actually matters, not just in the trivial single-pass
+// case TestSlogResolutionTracer_StageLinesVisibleAtProductionLogLevel
+// already covers.
+func TestRankedCutSummary_PairedOneToOneWithDecisionAcrossReDecisionPasses(t *testing.T) {
+	t.Parallel()
+	kind := contextfabric.SubjectWorkItem
+	term := "widget rollout"
+	subject := contextfabric.SubjectRef{Kind: kind, CanonicalID: "wi_1", Label: "Widget Rollout Backend Task"}
+	node := candidateNode(kind, subject.CanonicalID, subject.Label, 0.9, "*")
+	// rival: a same-kind, unscoped-only candidate for the SAME term -- see
+	// Case57's own doc comment for why its presence matters (without it, a
+	// broken implementation that skips the scoped re-decision entirely
+	// would still happen to commit the right subject here).
+	rival := candidateNode(kind, "wi_rival", "Something Else Entirely", 0.85, "*")
+	backend := &fakeGraphBackend{
+		enableSearchKind: true,
+		searchResults:    map[string][]CandidateNode{term: {rival}},
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			term: {kind: {node}},
+		},
+		// The earlier, unrelated unscoped stage that trips the
+		// resolution-wide truncation bit -- Case57's own shape, needed so
+		// the confirmed-kind scoped re-decision actually runs.
+		searchTruncated: true,
+	}
+	confirmed := &contextfabric.ConfirmedExpectedKind{Kind: kind}
+	tracer := &recordingTracer{}
+	deps := backend.deps()
+	deps.ResolutionTracer = tracer
+	resolution, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term), deps, confirmed, nil)
+	if err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 || resolution.Committed[0] != subject {
+		t.Fatalf("resolution.Committed = %#v, want the scoped re-decision's own subject -- this test's pairing count is only meaningful if a real re-decision actually fired and committed", resolution.Committed)
+	}
+	decisions := 0
+	summaries := 0
+	for _, event := range tracer.events {
+		if event.Stage == "decision" {
+			decisions++
+		}
+		if event.Stage == "ranked_cut" && event.RankedCutSummary {
+			summaries++
+		}
+	}
+	if decisions < 2 {
+		t.Fatalf("decision events = %d, want >= 2 -- this fixture must exercise a re-decision (first pass + scoped pass) for the pairing count to be meaningful; got %d", decisions, decisions)
+	}
+	if summaries != decisions {
+		t.Errorf("ranked_cut summary events = %d, decision events = %d -- want exactly 1:1 pairing (one summary per pass, matching one decision per pass)", summaries, decisions)
 	}
 }

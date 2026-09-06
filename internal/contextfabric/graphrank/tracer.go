@@ -290,13 +290,17 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"labels_normalized_count", event.AnchorOfferLabelsNormalizedCount)
 	case "ranked_cut":
 		// Measured before picking a shape (a volume gate on log lines per
-		// resolution) -- this per-candidate line is emitted once per RETRIEVAL-
+		// pass) -- this per-candidate line is emitted once per RETRIEVAL-
 		// sized pool candidate (up to 91 in one representative fixture),
-		// well past the 25-per-resolution ceiling for an unconditional Info
+		// well past the 25-per-pass ceiling for an unconditional Info
 		// line, so it STAYS DebugContext. RankedCutSummary (below) is the
-		// once-per-resolution Info line an operator actually gets on the
-		// rig; see its own doc comment (ResolutionTraceEvent) for why it is
-		// a second event on this SAME token rather than promoting this one.
+		// once-per-PASS Info line an operator actually gets on the rig,
+		// paired 1:1 with that pass's own "decision" event -- a resolution
+		// that runs more than one pass (a scoped or census re-decision)
+		// gets more than one summary, exactly like it gets more than one
+		// decision event; see ResolutionTraceEvent.RankedCutSummary's own
+		// doc comment for the full rule and why this is a second event on
+		// this SAME token rather than promoting this one.
 		if event.RankedCutSummary {
 			t.logger.InfoContext(ctx, "context fabric resolution trace: ranked cut summary",
 				"request_id", event.RequestID, "stage", event.Stage,
