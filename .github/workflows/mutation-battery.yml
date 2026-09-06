@@ -97,6 +97,7 @@ jobs:
     name: config
     runs-on: ubuntu-latest
     outputs:
+      harness_sha: ${{ steps.h.outputs.harness_sha }}
       mode: ${{ steps.c.outputs.mode }}
       tip: ${{ steps.c.outputs.tip }}
       packages: ${{ steps.c.outputs.packages }}
@@ -106,6 +107,26 @@ jobs:
       go_test_timeout: ${{ steps.c.outputs.go_test_timeout }}
       max_parallel: ${{ steps.c.outputs.max_parallel }}
     steps:
+      # The HARNESS at this PR's/branch's ref -- the smoke table is read from
+      # here, never from the pinned older target, which does not have one.
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          path: harness
+          persist-credentials: false
+
+      - name: Record the harness sha
+        id: h
+        run: |
+          set -euo pipefail
+          # THE INSTRUMENT'S OWN SHA. A battery runs the CURRENT rules against a
+          # historical tip -- the rules are the instrument, the tip is the
+          # specimen -- which is only readable later if the provenance names
+          # BOTH. github.sha is the merge ref on a pull request, so the real
+          # checkout is asked directly.
+          echo "harness_sha=$(git -C harness rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
       - name: Resolve the run parameters
         id: c
         env:
@@ -124,12 +145,29 @@ jobs:
             # one arm that must be KILLED and one that must be a
             # HARNESS_ERROR. Small enough to be a gate, real enough that every
             # rule in scripts/battery/ is exercised on the way through.
+            #
+            # THE SMOKE'S TARGET IS A PINNED OLDER SHA, DELIBERATELY -- NOT the
+            # PR head. fbcd3585 is on main, predates scripts/battery/ entirely
+            # (zero entries there), and still carries both smoke needles exactly
+            # once. So on the PR itself harness != target, and the smoke proves
+            # the SPLIT rather than merely the layout: run the harness out of
+            # the target checkout and this configuration cannot find it, which
+            # is exactly how the first real dispatch failed.
+            #
+            # Reachable-on-main matters. 63011dec also predates the harness, but
+            # it is a deleted branch tip unreachable from any ref, so a
+            # permanent gate pinned to it depends on GitHub not garbage
+            # collecting an unreferenced object.
+            #
+            # If a future change edits those two lines in
+            # memorymodelconfig/store.go, preflight refuses by name against this
+            # pinned tree -- the needles are asserted, not assumed.
             {
               echo "mode=smoke"
-              echo "tip=$PR_HEAD_SHA"
+              echo "tip=fbcd35854de0e4a598c4aef5d72ae724af34113a"
               echo "packages=./internal/contextfabric/memorymodelconfig/"
-              echo "table_path=scripts/battery/testdata/smoke.jsonl"
-              echo "table_b64="
+              echo "table_path="
+              echo "table_b64=$(base64 -w0 < harness/scripts/battery/testdata/smoke.jsonl)"
               echo "expected_survivors="
               echo "go_test_timeout=10m"
               echo "max_parallel=3"
@@ -260,6 +298,7 @@ jobs:
       - name: Publish the plan to the job summary
         env:
           TIP: ${{ needs.config.outputs.tip }}
+          HARNESS_SHA: ${{ needs.config.outputs.harness_sha }}
           PACKAGES: ${{ needs.config.outputs.packages }}
           ARM_COUNT: ${{ steps.plan.outputs.arm_count }}
           MATRIX_SIZE: ${{ steps.plan.outputs.matrix_size }}
@@ -272,7 +311,8 @@ jobs:
             echo
             echo "| field | value |"
             echo "|---|---|"
-            echo "| tip | \`$TIP\` |"
+            echo "| tip (tree under test) | \`$TIP\` |"
+            echo "| harness sha (rules that classify) | \`$HARNESS_SHA\` |"
             echo "| packages | \`$PACKAGES\` |"
             echo "| arms | $ARM_COUNT |"
             echo "| matrix jobs (arms + baseline + sentinel) | $MATRIX_SIZE |"
@@ -420,6 +460,7 @@ jobs:
           EXPECTED_SURVIVORS: ${{ needs.config.outputs.expected_survivors }}
           PACKAGES: ${{ needs.config.outputs.packages }}
           TIP: ${{ needs.config.outputs.tip }}
+          HARNESS_SHA: ${{ needs.config.outputs.harness_sha }}
           FLOOR: ${{ needs.plan.outputs.floor }}
         run: |
           # THIS STEP REPORTS; IT DOES NOT JUDGE. GitHub runs every `run:` under
@@ -439,6 +480,7 @@ jobs:
             --execution-shape hosted \
             --packages "$PACKAGES" \
             --tip "$TIP" \
+            --harness-sha "$HARNESS_SHA" \
             --floor "$FLOOR" \
             --summary-out summary.txt
           rc=$?
@@ -478,6 +520,7 @@ jobs:
           EXPECTED_SURVIVORS: ${{ needs.config.outputs.expected_survivors }}
           PACKAGES: ${{ needs.config.outputs.packages }}
           TIP: ${{ needs.config.outputs.tip }}
+          HARNESS_SHA: ${{ needs.config.outputs.harness_sha }}
           FLOOR: ${{ needs.plan.outputs.floor }}
         run: |
           python3 harness/scripts/battery/aggregate.py \
@@ -487,6 +530,7 @@ jobs:
             --execution-shape hosted \
             --packages "$PACKAGES" \
             --tip "$TIP" \
+            --harness-sha "$HARNESS_SHA" \
             --floor "$FLOOR" \
             --summary-out /dev/null > /dev/null
 
