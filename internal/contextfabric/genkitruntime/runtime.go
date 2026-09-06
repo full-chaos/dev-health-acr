@@ -2241,12 +2241,30 @@ type synthesisInput struct {
 // mechanism -- S7c owns enforcement -- but it is the only way prediction and
 // outcome converge rather than being reconciled after the fact.
 type synthesisAnswerBudget struct {
-	// ItemsPerGroup is the per-group allowance, omitted when the answer has
-	// no group axis. It is derived from the group AND shared grants
-	// together, so an item naming several groups is funded by the same
-	// allowance its usage is measured against.
-	ItemsPerGroup int `json:"items_per_group,omitempty"`
-	// Groups is how many groups that allowance is repeated across.
+	// ItemsPerGroup is the per-group allowance, ABSENT when the answer has no
+	// group axis and PRESENT-AND-ZERO when it has one whose allowance is
+	// zero. It is derived from the group AND shared grants together, so an
+	// item naming several groups is funded by the same allowance its usage
+	// is measured against.
+	//
+	// A POINTER, and that is the whole point. As a plain int with omitempty
+	// this field could not tell those two states apart: a grouped answer
+	// whose allowance is zero serialized with no `items_per_group` at all,
+	// identical on the wire to an answer with no groups -- while `groups: 1`
+	// was still emitted beside it. The model was shown a group axis and no
+	// allowance for it, and the prompt paragraph promising the field became
+	// false for exactly the answers where the budget bites hardest.
+	//
+	// That is the same absence-versus-measured-zero distinction the
+	// enforcement side keeps as `unavailable` versus `bounded_zero`, and the
+	// same one this file's own modelFacingAnswerBudget doc comment states
+	// one level up about nil-versus-zeroed structs. It was being kept in two
+	// places and broken in the third.
+	ItemsPerGroup *int `json:"items_per_group,omitempty"`
+	// Groups is how many groups that allowance is repeated across. Omitted
+	// when there is no group axis, which is the SAME condition that makes
+	// ItemsPerGroup nil -- the two are emitted and withheld together, never
+	// one without the other.
 	Groups int `json:"groups,omitempty"`
 	// Global is the allowance for items belonging to the answer as a whole
 	// rather than to any member or group.
@@ -2290,12 +2308,19 @@ func modelFacingAnswerBudget(allocation contextfabric.ItemAllocation) *synthesis
 	if !allocation.InForce() {
 		return nil
 	}
-	return &synthesisAnswerBudget{
-		ItemsPerGroup: allocation.GroupAllowance(),
-		Groups:        allocation.Groups,
-		Global:        allocation.Grant(contractsv1.ContextFabricItemBucketGlobal),
-		PerMember:     allocation.PerMemberGrant(),
+	budget := &synthesisAnswerBudget{
+		Groups:    allocation.Groups,
+		Global:    allocation.Grant(contractsv1.ContextFabricItemBucketGlobal),
+		PerMember: allocation.PerMemberGrant(),
 	}
+	// Present exactly when there IS a group axis, whatever the allowance
+	// comes to -- including zero, which is a real instruction ("every group
+	// item is over budget") and not an absence.
+	if allocation.Groups > 0 {
+		perGroup := allocation.GroupAllowance()
+		budget.ItemsPerGroup = &perGroup
+	}
+	return budget
 }
 
 // modelFacingFacts returns a copy of facts with every Rows-shaped field
