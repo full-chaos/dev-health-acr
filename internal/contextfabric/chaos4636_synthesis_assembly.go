@@ -156,11 +156,29 @@ func (p synthesisAssemblyParams) snapshot() synthesisAssemblyParams {
 // The copies are explicit rather than relying on GraphContext and
 // SubjectResolution being passed by value: they are structs, so the copy is
 // SHALLOW, and the slices underneath are exactly what bites.
-func (p synthesisAssemblyParams) forRetry(graph GraphContext, facts CanonicalFactBundle) synthesisAssemblyParams {
+//
+// THE ALLOCATION IS A PARAMETER, and that is the whole point of this signature.
+//
+// It used to ride through on `retry := p`, so the retry's synthesis SPENT the
+// first pass's grants -- written for the un-narrowed cohort -- while stage
+// three derived the narrowed cohort's allocation AFTER synthesis and measured
+// against that one. Consumed and validated were two different documents, which
+// is the same defect a keystone review found in the first pass and 91408cc1
+// fixed there and only there.
+//
+// The lesson that shapes this signature: that first fix pinned the first pass
+// by COUNTING derivations, and this recurrence was introduced by OMISSION --
+// nobody wrote a second derivation, they merely failed to carry the right one
+// through a struct copy, which a counting pin cannot see. Requiring the
+// allocation here makes the omission a compile error, so a future retry path
+// must state which allocation its document is produced under rather than
+// silently inheriting one.
+func (p synthesisAssemblyParams) forRetry(graph GraphContext, facts CanonicalFactBundle, allocation ItemAllocation) synthesisAssemblyParams {
 	retry := p
 	retry.Retry = true
 	retry.Graph = graph
 	retry.Facts = facts
+	retry.Allocation = allocation
 	retry.Resolution = copySubjectResolutionForRetry(p.Resolution)
 	retry.Graph.Cohort = copyCohortForRetry(graph.Cohort)
 	retry.Graph.Resolution = retry.Resolution
