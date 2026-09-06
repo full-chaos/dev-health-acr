@@ -44,7 +44,8 @@ def main():
     ap.add_argument("--expected-survivors", default="", help="space-separated ids; empty = none")
     ap.add_argument("--execution-shape", default="hosted")
     ap.add_argument("--packages", default="")
-    ap.add_argument("--tip", default="")
+    ap.add_argument("--tip", default="", help="the TREE UNDER TEST (the specimen)")
+    ap.add_argument("--harness-sha", default="", help="the acr sha of scripts/battery/* that classified (the instrument)")
     ap.add_argument("--floor", default="0")
     ap.add_argument("--summary-out", default="-")
     args = ap.parse_args()
@@ -117,7 +118,13 @@ def main():
     lines = []
     lines.append("mutation battery summary")
     lines.append("execution_shape=%s" % args.execution_shape)
-    lines.append("tip=%s" % args.tip)
+    # BOTH SHAS, ALWAYS. A battery runs the CURRENT rules against a historical
+    # tip: the rules are the instrument and the tip is the specimen. That is the
+    # right way round -- but it means the same tip can classify differently
+    # after a rules change, so a summary naming only the tip is not reproducible
+    # evidence. Naming both makes the pair readable months later.
+    lines.append("tip=%s  (tree under test / specimen)" % args.tip)
+    lines.append("harness_sha=%s  (scripts/battery that classified / instrument)" % (args.harness_sha or "UNRECORDED"))
     lines.append("packages=%s" % args.packages)
     lines.append("floor=%s (SUM over the package list)" % args.floor)
     lines.append("arms_in_table=%d arms_reported=%d" % (len(ids), sum(1 for i in ids if i in verdicts)))
