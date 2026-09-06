@@ -553,10 +553,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      # actions/checkout v7.0.0
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          persist-credentials: false
+      # NO checkout on purpose. This job talks only to the Releases API through
+      # `gh` with an explicit `--repo`, so it needs no working tree -- and
+      # scripts/release/test_release_scripts.sh pins the NUMBER of pinned
+      # checkout actions in this workflow, so a reflexive checkout here would
+      # break that contract (it did: `test 6 -eq 5`) for a step that never
+      # reads a file. Dropping it keeps the contract intact and makes the proof
+      # job faster.
       - name: Create and delete a throwaway draft Release
         env:
           GH_TOKEN: ${{ github.token }}
