@@ -10,7 +10,6 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -98,32 +97,26 @@ func newDevHealthClickHouseIntegrationClient(t *testing.T, ctx context.Context) 
 	return query, direct
 }
 
-// seedTwoTenantRepoIDCollision creates every table entityTables (tables.go)
-// reads from -- all but repos/work_items stay empty, since this test's
-// focus is that one join, not full coverage -- and inserts one colliding
-// repos row per organization plus one work item that belongs to org-a.
-func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection clickhousedriver.Conn, at time.Time) {
+// seedTwoTenantRepoIDCollision inserts one colliding repos row per
+// organization plus one work item that belongs to orgA. Schema creation
+// moved to the shared fixture (CHAOS-5270): this and
+// TestClickHouseProjectionSourceScopesTheRepositoryJoinByOrganization now
+// share a container with the package's other org-isolation tests, and
+// devhealthschema.DDL's CREATE TABLE is not idempotent. orgA/orgB are
+// parameters rather than the literal "org-a"/"org-b" this function used
+// before CHAOS-5270: TestClickHouseProjectionSourceRelaxedRepoJoinStaysOrganizationScoped
+// used those same two literals for its own, different fixture, which would
+// collide under a shared container -- each caller now passes its own
+// sharedTestOrgID-derived pair.
+func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection clickhousedriver.Conn, at time.Time, orgA, orgB string) {
 	t.Helper()
-	// Rendered from the SHARED production declaration rather than
-	// hand-written (CHAOS-3781 round-2 F4). These fixtures previously
-	// declared their own types -- DateTime64(6,'UTC') where production is
-	// mostly DateTime64(3), repo_id as String where production is UUID --
-	// so they proved organization isolation against a schema production
-	// does not have, and could not have caught the UInt32 drift that
-	// prompted the parity guard in the first place.
-	statements := devhealthschema.DDL(sourceSchemaTables...)
-	for _, statement := range statements {
-		if err := connection.Exec(ctx, statement); err != nil {
-			t.Fatalf("create table: %v", err)
-		}
-	}
-	if err := connection.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, collidingRepoID, "org-a", "org-a/service", "github", at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, collidingRepoID, orgA, "org-a/service", "github", at); err != nil {
 		t.Fatalf("seed org-a repo: %v", err)
 	}
-	if err := connection.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, collidingRepoID, "org-b", "org-b/other-service", "github", at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, collidingRepoID, orgB, "org-b/other-service", "github", at); err != nil {
 		t.Fatalf("seed org-b repo: %v", err)
 	}
-	if err := connection.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "WI-1", collidingRepoID, "org-a", "Org A task", "open", "", at, ""); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, updated_at, parent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "WI-1", collidingRepoID, orgA, "Org A task", "open", "", at, ""); err != nil {
 		t.Fatalf("seed org-a work item: %v", err)
 	}
 
@@ -131,24 +124,24 @@ func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection 
 	// same (repo_id, number) key -- the collision codex round-2 finding K1
 	// warns about for the reviews->PR join, distinct from the repos-join
 	// collision above.
-	if err := connection.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, collidingRepoID, "org-a", uint32(1042), "Typed session tokens", "open", at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, collidingRepoID, orgA, uint32(1042), "Typed session tokens", "open", at); err != nil {
 		t.Fatalf("seed org-a pull request: %v", err)
 	}
-	if err := connection.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, collidingRepoID, "org-b", uint32(1042), "Other org's PR", "open", at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced) VALUES (?, ?, ?, ?, ?, ?)`, collidingRepoID, orgB, uint32(1042), "Other org's PR", "open", at); err != nil {
 		t.Fatalf("seed org-b pull request: %v", err)
 	}
 	// A single org-a review: if either the reviews->PR join or the PR/review
 	// ->repos join is missing its org_id predicate, this row can fan out
 	// across org-b's colliding PR/repo rows too (a duplicate-subject
 	// contract violation) or silently pick up org-b's slug.
-	if err := connection.Exec(ctx, `INSERT INTO git_pull_request_reviews (review_id, repo_id, org_id, number, state, submitted_at) VALUES (?, ?, ?, ?, ?, ?)`, "review-1", collidingRepoID, "org-a", uint32(1042), "approved", at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO git_pull_request_reviews (review_id, repo_id, org_id, number, state, submitted_at) VALUES (?, ?, ?, ?, ?, ?)`, "review-1", collidingRepoID, orgA, uint32(1042), "approved", at); err != nil {
 		t.Fatalf("seed org-a pull request review: %v", err)
 	}
 
 	// ci_pipeline_runs: a single org-a run against the colliding repo_id,
 	// proving its repos join stays scoped to org-a even though org-b has a
 	// repos row with the same id.
-	if err := connection.Exec(ctx, `INSERT INTO ci_pipeline_runs (run_id, repo_id, org_id, branch, status, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, "run-1", collidingRepoID, "org-a", "main", "success", at, at); err != nil {
+	if err := connection.Exec(ctx, `INSERT INTO ci_pipeline_runs (run_id, repo_id, org_id, branch, status, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, "run-1", collidingRepoID, orgA, "main", "success", at, at); err != nil {
 		t.Fatalf("seed org-a ci run: %v", err)
 	}
 }
@@ -162,14 +155,15 @@ func seedTwoTenantRepoIDCollision(t *testing.T, ctx context.Context, connection 
 func TestClickHouseProjectionSourceScopesTheRepositoryJoinByOrganization(t *testing.T) {
 	ctx := context.Background()
 	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
-	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
-	seedTwoTenantRepoIDCollision(t, ctx, direct, at)
+	query, direct := orgIsolationClickHouseFixture(t)
+	orgA, orgB := sharedTestOrgID(t)+"-a", sharedTestOrgID(t)+"-b"
+	seedTwoTenantRepoIDCollision(t, ctx, direct, at, orgA, orgB)
 
 	source, err := devhealthsource.NewClickHouseProjectionSource(query)
 	if err != nil {
 		t.Fatalf("new source: %v", err)
 	}
-	batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: "org-a", Source: devhealthsource.SourceName})
+	batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: orgA, Source: devhealthsource.SourceName})
 	if err != nil {
 		t.Fatalf("next projection batch: %v", err)
 	}
@@ -257,25 +251,18 @@ const zeroRepoID = "00000000-0000-0000-0000-000000000000"
 // acceptance criterion 2 requires: an org-scoped query must never let one
 // organization's row (Linear-shaped or repo-backed) answer for another's,
 // regardless of which producer or which JOIN kind reads it.
-func seedTwoTenantLinearWorkItems(t *testing.T, ctx context.Context, connection clickhousedriver.Conn, at time.Time) {
+// seedTwoTenantLinearWorkItems takes orgA/orgB as parameters (CHAOS-5270):
+// schema creation moved to the shared fixture, and this test shares a
+// container with TestClickHouseProjectionSourceScopesTheRepositoryJoinByOrganization,
+// which used the same literal "org-a"/"org-b" pair for a different fixture
+// before CHAOS-5270 -- each caller now passes its own
+// sharedTestOrgID-derived pair. repoSlug/title stay the readable literal
+// text they always were; only the org_id VALUE changed.
+func seedTwoTenantLinearWorkItems(t *testing.T, ctx context.Context, connection clickhousedriver.Conn, at time.Time, orgA, orgB string) {
 	t.Helper()
-	// Rendered from the SHARED production declaration rather than
-	// hand-written (CHAOS-3781 round-2 F4). These fixtures previously
-	// declared their own types -- DateTime64(6,'UTC') where production is
-	// mostly DateTime64(3), repo_id as String where production is UUID --
-	// so they proved organization isolation against a schema production
-	// does not have, and could not have caught the UInt32 drift that
-	// prompted the parity guard in the first place.
-	statements := devhealthschema.DDL(sourceSchemaTables...)
-	for _, statement := range statements {
-		if err := connection.Exec(ctx, statement); err != nil {
-			t.Fatalf("create table: %v", err)
-		}
-	}
-
 	for _, org := range []struct{ id, repoSlug, title string }{
-		{"org-a", "org-a/service", "org-a task"},
-		{"org-b", "org-b/other-service", "org-b task"},
+		{orgA, "org-a/service", "org-a task"},
+		{orgB, "org-b/other-service", "org-b task"},
 	} {
 		if err := connection.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, collidingRepoID, org.id, org.repoSlug, "github", at); err != nil {
 			t.Fatalf("seed %s repo: %v", org.id, err)
@@ -316,14 +303,15 @@ func seedTwoTenantLinearWorkItems(t *testing.T, ctx context.Context, connection 
 func TestClickHouseProjectionSourceRelaxedRepoJoinStaysOrganizationScoped(t *testing.T) {
 	ctx := context.Background()
 	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
-	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
-	seedTwoTenantLinearWorkItems(t, ctx, direct, at)
+	query, direct := orgIsolationClickHouseFixture(t)
+	orgA, orgB := sharedTestOrgID(t)+"-a", sharedTestOrgID(t)+"-b"
+	seedTwoTenantLinearWorkItems(t, ctx, direct, at, orgA, orgB)
 
 	source, err := devhealthsource.NewClickHouseProjectionSource(query)
 	if err != nil {
 		t.Fatalf("new source: %v", err)
 	}
-	batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: "org-a", Source: devhealthsource.SourceName})
+	batch, available, err := source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{OrgID: orgA, Source: devhealthsource.SourceName})
 	if err != nil {
 		t.Fatalf("next projection batch: %v", err)
 	}
@@ -419,21 +407,7 @@ func TestClickHouseProjectionSourceRelaxedRepoJoinStaysOrganizationScoped(t *tes
 func TestClickHouseProjectionSourceFiltersSelfReferentialParentID(t *testing.T) {
 	ctx := context.Background()
 	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
-	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
-
-	// Rendered from the SHARED production declaration rather than
-	// hand-written (CHAOS-3781 round-2 F4). These fixtures previously
-	// declared their own types -- DateTime64(6,'UTC') where production is
-	// mostly DateTime64(3), repo_id as String where production is UUID --
-	// so they proved organization isolation against a schema production
-	// does not have, and could not have caught the UInt32 drift that
-	// prompted the parity guard in the first place.
-	statements := devhealthschema.DDL(sourceSchemaTables...)
-	for _, statement := range statements {
-		if err := direct.Exec(ctx, statement); err != nil {
-			t.Fatalf("create table: %v", err)
-		}
-	}
+	query, direct := orgIsolationClickHouseFixture(t)
 	repoID := "22222222-2222-2222-2222-222222222222"
 	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repoID, "org-m3", "org-m3/service", "github", at); err != nil {
 		t.Fatalf("seed repo: %v", err)

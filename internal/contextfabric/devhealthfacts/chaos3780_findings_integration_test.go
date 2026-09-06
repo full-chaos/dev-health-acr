@@ -147,8 +147,7 @@ func createCHAOS3780Tables(t *testing.T, ctx context.Context, connection clickho
 // its own org_id to stay isolated from the others.
 func TestCHAOS3780FindingsAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
-	createCHAOS3780Tables(t, ctx, direct)
+	query, direct := sharedClickHouseFixture(t)
 	providers := devhealthfacts.NewProviders(query)
 
 	t.Run("F1_deficiency_does_not_resurrect_after_ops_clears_it", func(t *testing.T) {
