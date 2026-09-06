@@ -123,11 +123,12 @@ emit() {
   python3 - "$OUT" "$ARM_ID" "$1" "$2" "${3:-0}" "${4:-0}" "$PKGS" "$FLOOR" "$GO_TEST_TIMEOUT" <<'PYEOF'
 import json, sys
 out, arm, state, detail, ran, named, pkgs, floor, timeout = sys.argv[1:10]
-json.dump({
-    "id": arm, "state": state, "detail": detail,
-    "ran": int(ran), "named_failures": int(named),
-    "packages": pkgs, "floor": int(floor), "go_test_timeout": timeout,
-}, open(out, "w"), sort_keys=True, indent=2)
+with open(out, "w") as f:
+    json.dump({
+        "id": arm, "state": state, "detail": detail,
+        "ran": int(ran), "named_failures": int(named),
+        "packages": pkgs, "floor": int(floor), "go_test_timeout": timeout,
+    }, f, sort_keys=True, indent=2)
 PYEOF
   say "$ARM_ID: $1 -- $2"
 }
