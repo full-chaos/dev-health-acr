@@ -2,6 +2,7 @@ package falkorgraph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -931,9 +932,39 @@ func (c *edgeFilterCounts) add(resolution edgeResolution, reason edgeFilterReaso
 // (edgeAdmitted, edgeLookupFailed); the reason is only meaningful paired
 // with edgeFiltered (CHAOS-3888) -- see edgeFilterReason's own doc comment
 // for the vocabulary.
-func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, ce graphrank.CandidateEdge, temporal temporalFilter) (graphrank.ResolvedEdge, edgeResolution, edgeFilterReason) {
+// endpointLookupError is the error resolveEdge returns when an ENDPOINT read
+// fails, carrying the endpoint's subject uuid alongside the underlying error.
+//
+// A typed error rather than a fifth return value: the identity of the thing
+// that failed belongs to the failure, and every caller that logs the error
+// wants the uuid in the same breath. `errors.As` gets it back; `Unwrap` keeps
+// the original error inspectable, so wrapping costs a caller nothing.
+type endpointLookupError struct {
+	uuid string
+	err  error
+}
+
+func (e *endpointLookupError) Error() string {
+	return "endpoint " + e.uuid + ": " + e.err.Error()
+}
+
+func (e *endpointLookupError) Unwrap() error { return e.err }
+
+// endpointLookupUUID returns the subject uuid an endpoint lookup failed on, or
+// "" when the error is not one. Never guesses: an empty uuid on the emitted
+// line says "this failure carried no identity", which is a different statement
+// from naming the wrong subject.
+func endpointLookupUUID(err error) string {
+	var ele *endpointLookupError
+	if errors.As(err, &ele) {
+		return ele.uuid
+	}
+	return ""
+}
+
+func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, ce graphrank.CandidateEdge, temporal temporalFilter) (graphrank.ResolvedEdge, edgeResolution, edgeFilterReason, error) {
 	if !graphrank.AuthorizedAttributes(principal, scope, ce.Attributes) {
-		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonAuthz
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonAuthz, nil
 	}
 	fromKind, fromID := splitSubjectUUID(ce.SourceNodeUUID)
 	toKind, toID := splitSubjectUUID(ce.TargetNodeUUID)
@@ -950,42 +981,46 @@ func (a *Adapter) resolveEdge(ctx context.Context, key, orgID string, principal 
 	// is not a temporal exclusion and must not be misreported as one.
 	fromNode, err := a.nodeByKindID(ctx, key, orgID, fromKind, fromID, temporal)
 	if err != nil {
-		return graphrank.ResolvedEdge{}, edgeLookupFailed, edgeFilterReasonNone
+		// THE ERROR, NOT JUST THE CLASSIFICATION. This branch previously
+		// discarded `err` outright -- it was not even returned -- so a backend
+		// failure that cost the cohort a member reached the answer only as a
+		// number. The caller logs it with the endpoint's identity.
+		return graphrank.ResolvedEdge{}, edgeLookupFailed, edgeFilterReasonNone, &endpointLookupError{uuid: ce.SourceNodeUUID, err: err}
 	}
 	if fromNode == nil {
 		if temporal.active {
-			return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonTemporalWindow
+			return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonTemporalWindow, nil
 		}
-		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonNone
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonNone, nil
 	}
 	toNode, err := a.nodeByKindID(ctx, key, orgID, toKind, toID, temporal)
 	if err != nil {
-		return graphrank.ResolvedEdge{}, edgeLookupFailed, edgeFilterReasonNone
+		return graphrank.ResolvedEdge{}, edgeLookupFailed, edgeFilterReasonNone, &endpointLookupError{uuid: ce.TargetNodeUUID, err: err}
 	}
 	if toNode == nil {
 		if temporal.active {
-			return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonTemporalWindow
+			return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonTemporalWindow, nil
 		}
-		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonNone
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonNone, nil
 	}
 	fromCandidate := toCandidateNode(fromNode)
 	toCandidate := toCandidateNode(toNode)
 	if !graphrank.AuthorizedAttributes(principal, scope, fromCandidate.Attributes) || !graphrank.AuthorizedAttributes(principal, scope, toCandidate.Attributes) {
-		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonAuthz
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonAuthz, nil
 	}
 	fromSubject, ok := graphrank.NodeSubject(fromCandidate)
 	if !ok {
-		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonInvalidSubject
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonInvalidSubject, nil
 	}
 	toSubject, ok := graphrank.NodeSubject(toCandidate)
 	if !ok {
-		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonInvalidSubject
+		return graphrank.ResolvedEdge{}, edgeFiltered, edgeFilterReasonInvalidSubject, nil
 	}
 	return graphrank.ResolvedEdge{
 		UUID: ce.UUID, Name: ce.Name, Fact: ce.Fact, From: fromSubject, To: toSubject,
 		Relevance: ce.Relevance, Score: ce.Score, Attributes: ce.Attributes,
 		CreatedAt: ce.CreatedAt, ValidAt: ce.ValidAt, InvalidAt: ce.InvalidAt, ExpiredAt: ce.ExpiredAt,
-	}, edgeAdmitted, edgeFilterReasonNone
+	}, edgeAdmitted, edgeFilterReasonNone, nil
 }
 
 // rankCandidateEdges sorts edges by graphrank's own relevance tie-break.
@@ -1053,7 +1088,22 @@ func rankCandidateEdges(edges []graphrank.CandidateEdge) []graphrank.CandidateEd
 // authorization-filtered or fails to resolve does not consume budget, so a
 // lower-ranked-but-admissible edge is never starved by a higher-ranked one
 // that turned out to be unauthorized.
-func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, origin contextfabric.SubjectRef, maxHops, collectLimit int, temporal temporalFilter) ([]graphrank.CandidateNode, []graphrank.ResolvedEdge, int, edgeFilterCounts, error) {
+// TRUNCATION (CHAOS-5168, r1 finding 1). The fifth return reports that this
+// walk stopped at collectLimit with candidate edges still unexamined.
+//
+// It matters to the COHORT, not only to the edge set, and that is not
+// obvious: neighbours are discovered ONLY through edges this walk admits
+// (see the neighbour loop below), so an edge dropped at the cap takes its
+// endpoint with it -- a kind-matching, authorized subject that never reaches
+// `visited`, never reaches DiscoverContext's cohortNodes, and therefore
+// never becomes a cohort member. With the retained member count still under
+// MaxCohortMembers, DiscoveredCohort has nothing to derive incompleteness
+// from and reports Complete=true over a pool this function clipped.
+//
+// Reported rather than acted on here: this function stays a retrieval
+// primitive, and the caller is the layer that knows whether an exhaustive
+// census also ran and covered the loss.
+func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal storage.Principal, scope contextfabric.RequestedScope, origin contextfabric.SubjectRef, maxHops, collectLimit int, temporal temporalFilter) ([]graphrank.CandidateNode, []graphrank.ResolvedEdge, int, edgeFilterCounts, bool, error) {
 	originUUID := subjectUUID(string(origin.Kind), origin.CanonicalID)
 	visited := make(map[string]graphrank.CandidateNode)
 	var edges []graphrank.ResolvedEdge
@@ -1061,12 +1111,13 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 	failedLookups := 0
 	var filterCounts edgeFilterCounts
 	frontier := []string{originUUID}
+	truncated := false
 	for hop := 0; hop < maxHops && len(frontier) > 0 && (collectLimit <= 0 || len(edges) < collectLimit); hop++ {
 		var hopCandidates []graphrank.CandidateEdge
 		for _, uuid := range frontier {
 			candidateEdges, err := a.edgesOfNode(ctx, key, orgID, uuid, temporal)
 			if err != nil {
-				return nil, nil, failedLookups, filterCounts, err
+				return nil, nil, failedLookups, filterCounts, false, err
 			}
 			for _, ce := range candidateEdges {
 				if seenEdge[ce.UUID] {
@@ -1083,13 +1134,25 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 		var next []string
 		for _, ce := range rankCandidateEdges(hopCandidates) {
 			if collectLimit > 0 && len(edges) >= collectLimit {
+				// Candidate edges remain and the budget is spent: this walk
+				// is returning less than it found, and the endpoints of
+				// everything past here are lost to the cohort.
+				truncated = true
 				break
 			}
-			resolved, resolution, reason := a.resolveEdge(ctx, key, orgID, principal, scope, ce, temporal)
+			resolved, resolution, reason, resolveErr := a.resolveEdge(ctx, key, orgID, principal, scope, ce, temporal)
 			filterCounts.add(resolution, reason)
 			switch resolution {
 			case edgeLookupFailed:
 				failedLookups++
+				// SITE 1 OF 3 on this one counter. The edge was never
+				// admitted, so its endpoint never became a member -- the same
+				// cohort-level loss as a failed read-back, reached earlier and,
+				// before this, reported by nothing at all.
+				if a.config.Telemetry != nil {
+					a.config.Telemetry.RecordNeighborLookupFailed(ctx, orgID, origin.CanonicalID,
+						endpointLookupUUID(resolveErr), NeighborLookupFailureSiteEdgeEndpoint, resolveErr)
+				}
 				continue
 			case edgeFiltered:
 				continue
@@ -1113,6 +1176,17 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 				n, err := a.nodeByUUID(ctx, key, orgID, neighbor, temporal)
 				if err != nil {
 					failedLookups++
+					// THE ERROR ITSELF, WITH IDENTIFIERS. Before this the
+					// failure survived only as a count, so two different
+					// missing members produced identical diagnostics and the
+					// subject that went missing could not be named from the
+					// run's own artifacts. The neighbour and the origin are
+					// graph identifiers, not corpus content, and the request
+					// id is what ties this line to the investigation.
+					if a.config.Telemetry != nil {
+						a.config.Telemetry.RecordNeighborLookupFailed(ctx, orgID, origin.CanonicalID, neighbor,
+							NeighborLookupFailureSiteNeighborReadback, err)
+					}
 					continue
 				}
 				if n == nil {
@@ -1144,6 +1218,32 @@ func (a *Adapter) hopWalk(ctx context.Context, key, orgID string, principal stor
 	// (reproducibility once the caller's cap makes order outcome-affecting)
 	// comes first, and a richer order can replace this key later without
 	// touching any consumer's contract.
+	// THE SECOND EXIT (CHAOS-5168 r2 finding 1). The flag above is set at the
+	// INNER break, which fires only when a hop still has candidates after the
+	// budget is spent. The OUTER loop has its own budget exit
+	// (`len(edges) < collectLimit`), and a hop that admits EXACTLY
+	// collectLimit edges and exhausts its candidate list reaches it with the
+	// inner break never taken -- leaving an unvisited frontier and, before
+	// this, truncated=false. A cohort built from that pool then claimed
+	// completeness over subjects the walk had stopped short of.
+	//
+	// BUDGET, NOT DEPTH. A spent collect budget with an unvisited frontier
+	// CLIPS the pool and is truncation; the maxHops bound DEFINES the pool
+	// (this walk is two hops by construction, and what lies beyond is not
+	// missing, it is out of scope) and is not. When both bind at once this
+	// discloses, because the budget's loss is real whether or not the depth
+	// bound would also have stopped the walk.
+	// NO DEPTH CONJUNCT HERE, deliberately. An earlier version of this check
+	// added `hop < maxHops`, reasoning that a walk stopped by its depth bound
+	// has lost nothing in scope. That contradicts the ruling this arm is
+	// built on: a depth bound DEFINES the pool and is not truncation, a spent
+	// budget with an unvisited frontier CLIPS it and is, and WHEN BOTH BIND AT
+	// ONCE THIS DISCLOSES. Suppressing the both-bind case is exactly the
+	// over-claim the whole change exists to remove -- the budget's loss is
+	// real whether or not the depth bound would also have stopped the walk.
+	if len(frontier) > 0 && collectLimit > 0 && len(edges) >= collectLimit {
+		truncated = true
+	}
 	sortCandidateNodesBySubjectKey(nodes)
-	return nodes, edges, failedLookups, filterCounts, nil
+	return nodes, edges, failedLookups, filterCounts, truncated, nil
 }

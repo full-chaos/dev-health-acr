@@ -25,11 +25,24 @@ func TestAProjectionThatDropsContentCannotServeACompleteAnswer(t *testing.T) {
 		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
 		Impact:      contractsv1.ContextFabricAnswerImpactNone,
 	}
+	// THE EVALUATED ROW, added with the read-requirement evaluator: a
+	// canonical answer that is genuinely `complete` now has to show that its
+	// read requirements were EVALUATED, not merely planned. A lone planning
+	// seed says the registry COULD serve the cell and never that anything
+	// was read, so a set of nothing but seeds no longer derives `complete`.
+	//
+	// Without it this fixture's canonical state is `partial` before the
+	// projection does anything, which does not describe the situation either
+	// test is about -- one needs a `complete` answer to walk back, the other
+	// needs a `complete` answer to leave alone.
+	evaluated := satisfied
+	evaluated.Stage = contractsv1.ContextFabricOutcomeStageAssembledResult
+	evaluated.Served, evaluated.Declared = 1, 1
 	projection := contractsv1.ContextFabricAnswerProjection{
 		Completeness: contractsv1.ContextFabricAnswerCompleteness{
 			TerminalStatus: contractsv1.ContextFabricInvestigationComplete,
 			State:          contractsv1.ContextFabricAnswerCompletenessComplete,
-			Outcomes:       []contractsv1.ContextFabricPlanRequirementOutcomeRow{satisfied},
+			Outcomes:       []contractsv1.ContextFabricPlanRequirementOutcomeRow{satisfied, evaluated},
 		},
 		ProjectionBudget: contractsv1.ContextFabricProjectionBudget{
 			// A whole group vanished, and two members with it.
@@ -57,7 +70,13 @@ func TestAProjectionThatDropsContentCannotServeACompleteAnswer(t *testing.T) {
 	// The vanished GROUP is named in its own right, not folded into a
 	// members count. A generic counter standing in for a class is what a
 	// closed vocabulary exists to replace.
-	appended := served.Completeness.Outcomes[1:]
+	// SLICE AT THE CANONICAL LENGTH, not at a hard-coded 1. The index used
+	// to be `[1:]`, which silently encoded "the fixture carries exactly one
+	// canonical row" into an assertion about what the PROJECTION appended --
+	// so growing the fixture by one row would have folded a canonical row
+	// into `appended` and failed here for a reason unrelated to the
+	// projection.
+	appended := served.Completeness.Outcomes[len(projection.Completeness.Outcomes):]
 	if len(appended) != 2 {
 		t.Fatalf("appended %d rows for two distinct omissions, want 2: %+v", len(appended), appended)
 	}
@@ -120,16 +139,32 @@ func TestAProjectionThatDropsNothingAppendsNothing(t *testing.T) {
 		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
 		Impact:      contractsv1.ContextFabricAnswerImpactNone,
 	}
+	// THE EVALUATED ROW, added with the read-requirement evaluator: a
+	// canonical answer that is genuinely `complete` now has to show that its
+	// read requirements were EVALUATED, not merely planned. A lone planning
+	// seed says the registry COULD serve the cell and never that anything
+	// was read, so a set of nothing but seeds no longer derives `complete`.
+	//
+	// Without it this fixture's canonical state is `partial` before the
+	// projection does anything, which does not describe the situation either
+	// test is about -- one needs a `complete` answer to walk back, the other
+	// needs a `complete` answer to leave alone.
+	evaluated := satisfied
+	evaluated.Stage = contractsv1.ContextFabricOutcomeStageAssembledResult
+	evaluated.Served, evaluated.Declared = 1, 1
 	projection := contractsv1.ContextFabricAnswerProjection{
 		Completeness: contractsv1.ContextFabricAnswerCompleteness{
 			TerminalStatus: contractsv1.ContextFabricInvestigationComplete,
 			State:          contractsv1.ContextFabricAnswerCompletenessComplete,
-			Outcomes:       []contractsv1.ContextFabricPlanRequirementOutcomeRow{satisfied},
+			Outcomes:       []contractsv1.ContextFabricPlanRequirementOutcomeRow{satisfied, evaluated},
 		},
 	}
+	// COUNTED RELATIVE TO THE INPUT, because the assertion is "appended
+	// nothing" and a literal `!= 1` states that only for a one-row fixture.
+	before := len(projection.Completeness.Outcomes)
 	served := appendProjectionOutcomes(projection)
-	if len(served.Completeness.Outcomes) != 1 {
-		t.Fatalf("appended %d rows to a projection that dropped nothing", len(served.Completeness.Outcomes)-1)
+	if got := len(served.Completeness.Outcomes); got != before {
+		t.Fatalf("appended %d rows to a projection that dropped nothing", got-before)
 	}
 	if served.Completeness.State != contractsv1.ContextFabricAnswerCompletenessComplete {
 		t.Fatalf("state = %q, want complete", served.Completeness.State)

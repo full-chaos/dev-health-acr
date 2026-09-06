@@ -68,7 +68,7 @@ func TestGroupedProjectQuestionDiscoversProjectsNotTeams(t *testing.T) {
 		candidateNode(contextfabric.SubjectProject, "project_a", "Project A", 0.9, "*"),
 		candidateNode(contextfabric.SubjectProject, "project_b", "Project B", 0.9, "*"),
 		candidateNode(contextfabric.SubjectTeam, "team_1", "Team One", 0.9, "*"),
-	}, noInternal)
+	}, false, noInternal)
 
 	if basis != CohortKindFromFrameMemberKind {
 		t.Fatalf("basis = %q, want %q", basis, CohortKindFromFrameMemberKind)
@@ -125,7 +125,7 @@ func TestRepositoryCohortIsDiscoveredAndNeverRewrittenToTeam(t *testing.T) {
 	cohort, _, _, declared, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
 		candidateNode(contextfabric.SubjectRepository, "repo_a", "Repo A", 0.9, "*"),
 		candidateNode(contextfabric.SubjectTeam, "team_1", "Team One", 0.9, "*"),
-	}, noInternal)
+	}, false, noInternal)
 
 	if basis != CohortKindFromFrameMemberKind {
 		t.Fatalf("basis = %q, want %q", basis, CohortKindFromFrameMemberKind)
@@ -157,7 +157,7 @@ func TestNoFrameDiscoversNothingAndNamesWhy(t *testing.T) {
 
 	cohort, _, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
 		candidateNode(contextfabric.SubjectTeam, "team_1", "Team One", 0.9, "*"),
-	}, noInternal)
+	}, false, noInternal)
 
 	if cohort != nil {
 		t.Fatalf("cohort = %#v, want nil -- prose said \"teams\", and reading it would be the deleted matcher returning", cohort)
@@ -194,7 +194,7 @@ func TestNonCohortAndMemberlessExpressionsRefuseWithTheirOwnBasis(t *testing.T) 
 			discovery := frameDiscovery(tc.expression, "status", []string{"teams"})
 			cohort, _, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
 				candidateNode(contextfabric.SubjectTeam, "team_1", "Team One", 0.9, "*"),
-			}, noInternal)
+			}, false, noInternal)
 			if cohort != nil {
 				t.Fatalf("cohort = %#v, want nil", cohort)
 			}
@@ -234,7 +234,7 @@ func TestUnservableCohortKindRefusesInsteadOfBuildingAnInvalidCohort(t *testing.
 				Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: kind},
 			}, "status", []string{"things"})
 			cohort, _, _, declared, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery,
-				[]CandidateNode{candidateNode(kind, "node_a", "Node A", 0.9, "*")}, noInternal)
+				[]CandidateNode{candidateNode(kind, "node_a", "Node A", 0.9, "*")}, false, noInternal)
 			if cohort != nil {
 				t.Fatalf("built a %q cohort no discovery arm was proven for", kind)
 			}
@@ -263,7 +263,7 @@ func TestServableCohortKindsStillDiscover(t *testing.T) {
 				Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: kind},
 			}, "status", []string{"things"})
 			cohort, _, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery,
-				[]CandidateNode{candidateNode(kind, "node_a", "Node A", 0.9, "*")}, noInternal)
+				[]CandidateNode{candidateNode(kind, "node_a", "Node A", 0.9, "*")}, false, noInternal)
 			if basis != CohortKindFromFrameMemberKind || cohort == nil {
 				t.Fatalf("kind %q no longer discovers: basis=%q cohort=%v", kind, basis, cohort != nil)
 			}

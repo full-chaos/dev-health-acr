@@ -201,6 +201,63 @@ check_isolated_devhealthschema_job() {
       "$found_job" >&2
     return 1
   }
+
+  # Name the job this resolved to. The scan takes the FIRST job in file order
+  # that invokes the isolated form, so which job that is, is load-bearing and
+  # invisible otherwise: the `unit` matrix sits above race-devhealthschema in
+  # this file, and a unit job that reached for the isolated form directly
+  # (rather than test-shard.sh's --with-isolated) would capture this check and
+  # move the timeout requirement onto a job that has, and needs, no -timeout.
+  printf 'isolated package(s) run in job "%s": %s\n' "$found_job" "$isolated"
+}
+
+# A main push whose run gets cancelled leaves that commit with NO terminal
+# verdict, which is invisible: the run simply is not there to read, and a lane
+# watching its own landing waits on nothing. This fired for real on 2026-09-05
+# (four consecutive main runs cancelled, 53 minutes without a verdict) because
+# the concurrency group fell back to `github.ref`, so every main push shared
+# one group.
+#
+# The fix pins the fallback to `github.sha` -- one group per main commit, which
+# cannot collide. This check exists because the alternative shape people reach
+# for first, `cancel-in-progress: false` on a ref-keyed group, LOOKS correct
+# and is not: GitHub holds at most one PENDING run per group, so a third
+# landing cancels the second while it waits. Reverting the fallback to
+# `github.ref` therefore has to fail here whether cancellation is on or off.
+check_main_runs_get_a_verdict() {
+  local file="$1" block group
+  block="$(awk '
+    /^concurrency:/ { grab=1; print; next }
+    grab && /^[^[:space:]#]/ { grab=0 }
+    grab { print }
+  ' "$file")"
+
+  if [ -z "$block" ]; then
+    printf 'no top-level concurrency: block in %s\n' "$file" >&2
+    return 1
+  fi
+
+  group="$(printf '%s\n' "$block" | sed -n -E 's/^[[:space:]]*group:[[:space:]]*(.*)$/\1/p' | head -n1)"
+  if [ -z "$group" ]; then
+    printf 'concurrency: block has no group:\n' >&2
+    return 1
+  fi
+
+  case "$group" in
+    *github.sha*) ;;
+    *)
+      printf 'concurrency group does not key main pushes on github.sha, so every main push shares one group and a landing can cancel the previous main commit'"'"'s run, leaving that sha with no terminal verdict: %s\n' \
+        "$group" >&2
+      return 1
+      ;;
+  esac
+
+  case "$group" in
+    *github.ref*)
+      printf 'concurrency group still falls back to github.ref; main pushes must be keyed per-sha: %s\n' "$group" >&2
+      return 1
+      ;;
+  esac
 }
 
 check_go_cache() {
@@ -218,17 +275,14 @@ check_go_cache() {
     local block
     block="$(job_block "$file" "$job")"
     if grep -qE 'runs-on: *\[self-hosted' <<<"$block"; then
-      if grep -q 'cache: true' <<<"$block"; then
-        printf 'self-hosted job "%s" has setup-go cache: true -- it shares a GOMODCACHE/GOCACHE mount with every other pool job; a cache restore here can race and corrupt it\n' \
-          "$job" >&2
-        status=1
-      fi
-    else
-      if grep -q 'cache: false' <<<"$block"; then
-        printf 'hosted job "%s" has setup-go cache: false -- only self-hosted legs skip setup-go'"'"'s cache (they share a hostPath mount instead)\n' \
-          "$job" >&2
-        status=1
-      fi
+      printf 'job "%s" targets a self-hosted runner, but every lane is hosted now -- the ARC pool is gone\n' \
+        "$job" >&2
+      status=1
+    fi
+    if grep -q 'cache: false' <<<"$block"; then
+      printf 'job "%s" has setup-go cache: false -- that existed only for self-hosted legs sharing a GOMODCACHE/GOCACHE hostPath mount; on a hosted runner it just throws the cache away\n' \
+        "$job" >&2
+      status=1
     fi
   done < <(list_jobs "$file")
   if ! grep -q 'cache: true' "$file"; then
@@ -238,44 +292,77 @@ check_go_cache() {
   return "$status"
 }
 
-check_race_shard_agreement() {
-  local file="$1"
-  local race_block shard_line shard_inside shard_count shard_call total
-  race_block="$(job_block "$file" race)"
+# Both `race` and `unit` shard their suite with scripts/ci/test-shard.sh, so
+# both can drift the same way: a matrix whose indices no longer match the
+# `total` the script is invoked with runs a partition that is not a partition,
+# and every job still reports success. The check is written once and applied
+# to each sharded job by name.
+check_shard_agreement() {
+  local file="$1" job="$2"
+  local block shard_line shard_inside shard_count shard_call total
+  block="$(job_block "$file" "$job")"
 
-  shard_line="$(printf '%s\n' "$race_block" | grep -E 'shard: *\[' | head -n1 || true)"
+  shard_line="$(printf '%s\n' "$block" | grep -E 'shard: *\[' | head -n1 || true)"
   if [ -z "$shard_line" ]; then
-    printf 'race job has no "shard: [...]" matrix\n' >&2
+    printf '%s job has no "shard: [...]" matrix\n' "$job" >&2
     return 1
   fi
   shard_inside="$(printf '%s' "$shard_line" | sed -E 's/.*\[([^]]*)\].*/\1/')"
   shard_count="$(printf '%s' "$shard_inside" | awk -F',' '{print NF}')"
 
-  shard_call="$(printf '%s\n' "$race_block" | grep -E '^[[:space:]]*[a-z_]+="?\$\(scripts/ci/test-shard\.sh' | head -n1 || true)"
+  shard_call="$(printf '%s\n' "$block" | grep -E '^[[:space:]]*[a-z_]+="?\$\(scripts/ci/test-shard\.sh' | head -n1 || true)"
   if [ -z "$shard_call" ]; then
-    printf 'race job does not invoke scripts/ci/test-shard.sh\n' >&2
+    printf '%s job does not invoke scripts/ci/test-shard.sh\n' "$job" >&2
     return 1
   fi
   total="$(printf '%s\n' "$shard_call" | grep -oE '[0-9]+' | tail -n1 || true)"
 
   if [ -z "$total" ] || [ "$shard_count" != "$total" ]; then
-    printf 'race matrix has %s shard(s) but test-shard.sh is called with total=%s\n' \
-      "$shard_count" "${total:-<none>}" >&2
+    printf '%s matrix has %s shard(s) but test-shard.sh is called with total=%s\n' \
+      "$job" "$shard_count" "${total:-<none>}" >&2
     return 1
   fi
 
   # Counting entries is not enough: `shard: [1, 2, 3, 3]` has four entries and
   # would satisfy a count check while running shard 3 twice and shard 4 never,
-  # silently dropping that shard's packages from the race suite with every job
+  # silently dropping that shard's packages from the suite with every job
   # still green. Require the matrix to be exactly the set 1..total.
   local expected actual
   expected="$(seq 1 "$total" | LC_ALL=C sort)"
   actual="$(printf '%s' "$shard_inside" | tr ',' '\n' | tr -d '[:blank:]' | grep -v '^$' | LC_ALL=C sort)"
   if [ "$expected" != "$actual" ]; then
-    printf 'race matrix indices must be exactly 1..%s, got: %s\n' \
-      "$total" "$(printf '%s' "$shard_inside" | tr -d '[:space:]')" >&2
+    printf '%s matrix indices must be exactly 1..%s, got: %s\n' \
+      "$job" "$total" "$(printf '%s' "$shard_inside" | tr -d '[:space:]')" >&2
     return 1
   fi
+}
+
+check_race_shard_agreement() {
+  check_shard_agreement "$1" race
+}
+
+# `unit` is the non-race coverage suite. It must shard with --with-isolated:
+# scripts/ci/test-shard.sh's default form EXCLUDES the isolated package(s),
+# which exist only because their declaration walk is expensive under -race.
+# The unsharded `./...` this matrix replaced covered them, and no other
+# non-race job does, so a unit matrix on the default form would drop them
+# from the coverage suite while staying green -- and test-shard-closure.sh's
+# runtime union check would agree with it, because it reads the shape out of
+# this same invocation.
+check_unit_shard_agreement() {
+  local file="$1" block shard_call
+  check_shard_agreement "$file" unit || return 1
+
+  block="$(job_block "$file" unit)"
+  shard_call="$(printf '%s\n' "$block" | grep -E '^[[:space:]]*[a-z_]+="?\$\(scripts/ci/test-shard\.sh' | head -n1 || true)"
+  case "$shard_call" in
+    *--with-isolated*) ;;
+    *)
+      printf 'unit job shards with test-shard.sh but without --with-isolated, so the isolated package(s) would run in no non-race job: %s\n' \
+        "${shard_call:-<no invocation>}" >&2
+      return 1
+      ;;
+  esac
 }
 
 # The endpoint-profile contract gate is the one CI step that runs the
@@ -395,145 +482,6 @@ check_pin_binds_checkout_ref() {
   fi
 }
 
-# Runner-routing contract v1.6 pair invariants. Every entry names a
-# `<base>-hosted` / `<base>-self-hosted` job pair: both must exist, both
-# must carry the identical `name:` (the stable check name a PR sees
-# across the SELF_HOSTED_RUNNERS flip), and their `if:` gates must be the
-# canonical exact-complement pair (never both true, never both false,
-# including the fork-PR carve-out that always falls back to hosted).
-V16_PAIR_BASES="mirror-preflight scripts build contracts race-devhealthschema"
-
-check_v16_pairs() {
-  local file="$1" base status=0
-  for base in $V16_PAIR_BASES; do
-    local hosted_key="${base}-hosted" pool_key="${base}-self-hosted"
-    local hosted_block pool_block hosted_name pool_name
-
-    if ! grep -qE "^  ${hosted_key}:" "$file"; then
-      printf 'v1.6 pair "%s": no job "%s" found\n' "$base" "$hosted_key" >&2
-      status=1
-      continue
-    fi
-    if ! grep -qE "^  ${pool_key}:" "$file"; then
-      printf 'v1.6 pair "%s": no job "%s" found\n' "$base" "$pool_key" >&2
-      status=1
-      continue
-    fi
-
-    hosted_block="$(job_block "$file" "$hosted_key")"
-    pool_block="$(job_block "$file" "$pool_key")"
-
-    # Both legs must declare an explicit `name:` (a bare job key is not
-    # enough -- the whole point is a STABLE name across the flip), and
-    # those two names must be identical.
-    hosted_name="$(printf '%s' "$hosted_block" | sed -n -E 's/^    name: (.*)$/\1/p' | head -n1)"
-    pool_name="$(printf '%s' "$pool_block" | sed -n -E 's/^    name: (.*)$/\1/p' | head -n1)"
-    if [ -z "$hosted_name" ] || [ -z "$pool_name" ]; then
-      printf 'v1.6 pair "%s": both "%s" and "%s" must declare an explicit name:\n' \
-        "$base" "$hosted_key" "$pool_key" >&2
-      status=1
-    elif [ "$hosted_name" != "$pool_name" ]; then
-      printf 'v1.6 pair "%s": "%s" is named "%s" but "%s" is named "%s" -- the check reported to a PR would move when the switch flips\n' \
-        "$base" "$hosted_key" "$hosted_name" "$pool_key" "$pool_name" >&2
-      status=1
-    fi
-
-    # The canonical exact-complement `if:` markers. Not a full logical
-    # proof of exhaustiveness/exclusivity -- that would need a real
-    # expression evaluator -- but pins the known-correct textual pattern
-    # (both directions of the switch check, plus the fork-PR carve-out on
-    # both legs) so a hand-edit that drops one clause is caught.
-    if ! grep -qF "vars.SELF_HOSTED_RUNNERS != 'enabled'" <<<"$hosted_block"; then
-      printf 'v1.6 pair "%s": hosted leg "%s" if: is missing the SELF_HOSTED_RUNNERS != enabled clause\n' \
-        "$base" "$hosted_key" >&2
-      status=1
-    fi
-    if ! grep -qF 'head.repo.full_name != github.repository' <<<"$hosted_block"; then
-      printf 'v1.6 pair "%s": hosted leg "%s" if: is missing the fork-PR carve-out (forks must always fall back to hosted)\n' \
-        "$base" "$hosted_key" >&2
-      status=1
-    fi
-    if ! grep -qF "vars.SELF_HOSTED_RUNNERS == 'enabled'" <<<"$pool_block"; then
-      printf 'v1.6 pair "%s": self-hosted leg "%s" if: is missing the SELF_HOSTED_RUNNERS == enabled clause\n' \
-        "$base" "$pool_key" >&2
-      status=1
-    fi
-    if ! grep -qF 'head.repo.full_name == github.repository' <<<"$pool_block"; then
-      printf 'v1.6 pair "%s": self-hosted leg "%s" if: is missing the fork-PR exclusion (forks must never reach the pool)\n' \
-        "$base" "$pool_key" >&2
-      status=1
-    fi
-  done
-  return "$status"
-}
-
-# The aggregator's own pair-tolerant logic: verify's assertion script must
-# actually implement "one success + partner skipped = pass, both skipped
-# = fail" for every v1.6 pair, not just list the pair's two job keys in
-# `needs:` (check_needs_matches_jobs already proves that half). Scoped to
-# the verify job block so a copy of this text living only in a comment
-# elsewhere in the file cannot satisfy it.
-check_verify_pair_logic() {
-  local file="$1" block status=0
-  block="$(job_block "$file" verify)"
-
-  if ! grep -qF 'PAIRS' <<<"$block"; then
-    printf 'verify job has no PAIRS-driven pair check -- the v1.6 hosted/self-hosted pairs would be asserted as if they were plain single jobs, and a by-design skip on the leg that did not run would fail the whole gate\n' >&2
-    return 1
-  fi
-  # shellcheck disable=SC2016
-  if ! grep -qF '!= success ] && [ "$hosted_result" != skipped' <<<"$block"; then
-    printf 'verify'"'"'s pair check does not tolerate a skipped hosted leg\n' >&2
-    status=1
-  fi
-  if ! grep -qF 'neither' <<<"$block"; then
-    printf 'verify has no "neither ... ran" guard -- if both pair members were somehow skipped, the gate would not notice that lane never ran at all\n' >&2
-    status=1
-  fi
-  return "$status"
-}
-
-# EXECUTED, not hypothetical: the first version of the mirror-preflight
-# fan-out consumers' `if:` used `always() && (...)`, and every one of
-# them silently skipped on EVERY run, switch on or off -- a bare `if:
-# <expr>` implicitly ANDs with success() over the job's own `needs:`, and
-# since one pair member always resolves to `skipped` by design, that
-# implicit check failed regardless of the OR logic actually written.
-# `always()` "fixed" that but is itself wrong in a different way: it also
-# proceeds when the WORKFLOW RUN was cancelled (#414's
-# cancel-in-progress), spinning up pool/hosted work for a superseded run
-# nobody will read. `!cancelled()` is the one status-check function that
-# is both an explicit override (so the real OR logic actually runs) and
-# correctly stops on cancellation. Every job that consumes a v1.6 pair's
-# result (its `needs:` names a `<base>-hosted` or `<base>-self-hosted`
-# key) must gate on it.
-check_pair_consumers_guard_cancellation() {
-  local file="$1" status=0 job
-  while IFS= read -r job; do
-    local block needs_list depends_on_pair=0 base
-    block="$(job_block "$file" "$job")"
-    needs_list="$(printf '%s' "$block" | list_needs)"
-    for base in $V16_PAIR_BASES; do
-      if grep -qxE "${base}-hosted|${base}-self-hosted" <<<"$needs_list"; then
-        depends_on_pair=1
-      fi
-    done
-    [ "$depends_on_pair" -eq 1 ] || continue
-
-    if ! grep -qE '^ {4}if: ' <<<"$block"; then
-      printf '%s: depends on a v1.6 pair member but has no if: -- the default needs skip-cascade would wrongly skip it whenever the pair leg that never ran (by design) reports skipped\n' \
-        "$job" >&2
-      status=1
-      continue
-    fi
-    if ! grep -qF '!cancelled()' <<<"$block"; then
-      printf '%s: if: does not guard with !cancelled() -- always() (or a bare needs-result expression with no status-check function at all) either spins this job up on a cancelled/superseded run, or silently skips it on every run regardless of the pair'"'"'s actual result\n' \
-        "$job" >&2
-      status=1
-    fi
-  done < <(list_jobs "$file")
-  return "$status"
-}
 
 run_all_checks() {
   local file="$1"
@@ -542,15 +490,14 @@ run_all_checks() {
   check_verify_if_always "$file"
   check_gate_rejects_nonsuccess "$file"
   check_go_cache "$file"
+  check_main_runs_get_a_verdict "$file"
   check_race_shard_agreement "$file"
+  check_unit_shard_agreement "$file"
   check_container_oci_scan_same_job "$file"
   check_isolated_devhealthschema_job "$file"
   check_endpoint_profile_gate_step "$file"
   check_pin_requires_full_sha "$file"
   check_pin_binds_checkout_ref "$file"
-  check_v16_pairs "$file"
-  check_verify_pair_logic "$file"
-  check_pair_consumers_guard_cancellation "$file"
 }
 
 # ---- positive run -------------------------------------------------------
@@ -576,8 +523,8 @@ assert_check_fails() {
 
 # (a) drop one job name from verify's needs.
 needs_missing_job="$tmpdir/needs-missing-job.yml"
-awk '/^ {6}- build-hosted$/ { next } { print }' "$workflow" > "$needs_missing_job"
-assert_check_fails 'dropped "build-hosted" from verify.needs' check_needs_matches_jobs "$needs_missing_job"
+awk '/^ {6}- build$/ { next } { print }' "$workflow" > "$needs_missing_job"
+assert_check_fails 'dropped "build" from verify.needs' check_needs_matches_jobs "$needs_missing_job"
 
 # (b) remove "if: '!cancelled()'" from verify.
 missing_if_always="$tmpdir/missing-if-always.yml"
@@ -597,12 +544,15 @@ cache_false="$tmpdir/cache-false.yml"
 awk '!done && /cache: true/ { sub(/cache: true/, "cache: false"); done=1 } { print }' "$workflow" > "$cache_false"
 assert_check_fails 'flipped a hosted job'"'"'s cache: true to cache: false' check_go_cache "$cache_false"
 
-# (c2) flip a SELF-HOSTED job's "cache: false" to "cache: true" -- v1.6
-# self-hosted legs share one GOMODCACHE/GOCACHE mount, and setup-go's own
-# cache would race it.
-cache_true_on_pool="$tmpdir/cache-true-on-pool.yml"
-awk '!done && /cache: false/ { sub(/cache: false/, "cache: true"); done=1 } { print }' "$workflow" > "$cache_true_on_pool"
-assert_check_fails 'flipped a self-hosted job'"'"'s cache: false to cache: true' check_go_cache "$cache_true_on_pool"
+# (c2) point a job at the ARC pool again. The pool is gone; a job that targets
+# it would queue forever rather than fail, which is the worst shape of red --
+# invisible. This is the control for the self-hosted assertion that replaced
+# the old hosted/pool cache split.
+pool_job_returns="$tmpdir/pool-job-returns.yml"
+awk '!done && /^    runs-on: ubuntu-latest$/ { sub(/runs-on: ubuntu-latest/, "runs-on: [self-hosted, oci-arc-runners]"); done=1 } { print }' \
+  "$workflow" > "$pool_job_returns"
+assert_check_fails 'pointed a job back at the removed ARC pool' \
+  check_go_cache "$pool_job_returns"
 
 # (d) shrink the race matrix to 3 shards while test-shard.sh is still
 # called with total 4.
@@ -647,19 +597,73 @@ sed 's/shard: \[1, 2, 3, 4\]/shard: [1, 2, 5, 9]/' "$workflow" > "$out_of_range_
 assert_check_fails 'used shard indices outside 1..total' \
   check_race_shard_agreement "$out_of_range_shard"
 
-# (j) remove BOTH race-devhealthschema-{hosted,self-hosted} pair members
-# so the isolated package's dedicated scope silently disappears while
-# test-shard.sh still excludes it from the round-robin shards. Removing
-# only one member would not trip this check -- the other still satisfies
-# it, which is the whole point of the v1.6 pair (exactly one runs).
+# (i4) revert the concurrency group's fallback to github.ref while LEAVING
+# cancel-in-progress: true -- the exact shape that cancelled four consecutive
+# main runs on 2026-09-05.
+# NOTE on the sed form: the group line contains `||`, so `|` cannot be the
+# sed delimiter here. Address the group: line and swap only the token.
+main_group_by_ref="$tmpdir/main-group-by-ref.yml"
+sed '/^  group: ci-/ s/github\.sha/github.ref/' "$workflow" > "$main_group_by_ref"
+assert_check_fails 'reverted the concurrency group to a shared github.ref key for main' \
+  check_main_runs_get_a_verdict "$main_group_by_ref"
+
+# (i5) the same revert, but with cancellation turned OFF -- the shape that
+# looks like a fix and is not, because GitHub keeps only one PENDING run per
+# group and a third landing cancels the second while it waits. This control
+# is the reason the check keys on the group expression rather than on
+# cancel-in-progress.
+main_group_by_ref_no_cancel="$tmpdir/main-group-by-ref-no-cancel.yml"
+sed -e '/^  group: ci-/ s/github\.sha/github.ref/' \
+    -e 's/^  cancel-in-progress: true$/  cancel-in-progress: false/' \
+  "$workflow" > "$main_group_by_ref_no_cancel"
+assert_check_fails 'shared main group with cancellation merely disabled (still drops a pending run)' \
+  check_main_runs_get_a_verdict "$main_group_by_ref_no_cancel"
+
+# (i6) delete the concurrency block entirely.
+no_concurrency="$tmpdir/no-concurrency.yml"
+awk '
+  /^concurrency:/ { skip=1; next }
+  skip && /^[^[:space:]#]/ { skip=0 }
+  !skip { print }
+' "$workflow" > "$no_concurrency"
+assert_check_fails 'removed the concurrency block' \
+  check_main_runs_get_a_verdict "$no_concurrency"
+
+# (i2) shrink the UNIT matrix to 3 shards while test-shard.sh is still called
+# with total 4. Mutating only the unit job's own line matters here: the (d)/
+# (h)/(i) controls above rewrite every "shard: [1, 2, 3, 4]" line in the file
+# and are only ever handed to the race check, so they would not show that the
+# unit check reads the unit job rather than the first matrix in the file.
+unit_mismatched_shards="$tmpdir/unit-mismatched-shards.yml"
+awk '
+  /^  unit:/ { in_unit=1 }
+  in_unit && /^  [A-Za-z0-9_-]+:/ && !/^  unit:/ { in_unit=0 }
+  in_unit && /shard: \[1, 2, 3, 4\]/ { sub(/shard: \[1, 2, 3, 4\]/, "shard: [1, 2, 3]") }
+  { print }
+' "$workflow" > "$unit_mismatched_shards"
+assert_check_fails 'shrank the unit matrix to 3 shards without updating test-shard.sh total' \
+  check_unit_shard_agreement "$unit_mismatched_shards"
+
+# (i3) drop --with-isolated from the unit job's invocation. The matrix still
+# agrees with the total, so the shape check above is the only thing standing
+# between this and a coverage suite that silently stops running the isolated
+# package(s) -- test-shard-closure.sh reads the shape from this same line, so
+# it would call the shrunken union total and agree.
+unit_without_isolated="$tmpdir/unit-without-isolated.yml"
+sed 's|test-shard\.sh --with-isolated|test-shard.sh|' "$workflow" > "$unit_without_isolated"
+assert_check_fails 'dropped --with-isolated from the unit job'"'"'s test-shard.sh invocation' \
+  check_unit_shard_agreement "$unit_without_isolated"
+
+# (j) remove the race-devhealthschema job so the isolated package's dedicated
+# scope silently disappears while test-shard.sh still excludes it from the
+# round-robin shards.
 isolated_job_removed="$tmpdir/isolated-job-removed.yml"
 awk '
-  /^  race-devhealthschema-hosted:/ { skip=1 }
-  /^  race-devhealthschema-self-hosted:/ { skip=1 }
-  skip && /^  [A-Za-z0-9_-]+:/ && !/^  race-devhealthschema-hosted:/ && !/^  race-devhealthschema-self-hosted:/ { skip=0 }
+  /^  race-devhealthschema:/ { skip=1 }
+  skip && /^  [A-Za-z0-9_-]+:/ && !/^  race-devhealthschema:/ { skip=0 }
   !skip { print }
 ' "$workflow" > "$isolated_job_removed"
-assert_check_fails 'removed both race-devhealthschema pair members entirely' \
+assert_check_fails 'removed the race-devhealthschema job entirely' \
   check_isolated_devhealthschema_job "$isolated_job_removed"
 
 # (k) keep the job but drop its explicit timeout override, so it would
@@ -724,72 +728,6 @@ sed "s|grep -Eq '\^\[0-9a-f\]{40}\$'|grep -Eq '^[a-z0-9]+\$' # [0-9a-f]{40}|" \
   "$workflow" > "$pin_decoy_comment"
 assert_check_fails 'loosened the pin regex while leaving a decoy [0-9a-f]{40} in a comment' \
   check_pin_requires_full_sha "$pin_decoy_comment"
-
-# (s) rename one pair member's name: away from its partner's -- the check
-# reported to a PR would move when the switch flips.
-pair_name_mismatch="$tmpdir/pair-name-mismatch.yml"
-awk '!done && /^    name: scripts$/ { sub(/name: scripts/, "name: scripts-renamed"); done=1 } { print }' \
-  "$workflow" > "$pair_name_mismatch"
-assert_check_fails 'renamed scripts-hosted'"'"'s name: away from scripts-self-hosted'"'"'s' \
-  check_v16_pairs "$pair_name_mismatch"
-
-# (t) drop the fork-PR carve-out from a self-hosted leg's if: -- would let
-# a fork PR reach the pool.
-pair_fork_guard_dropped="$tmpdir/pair-fork-guard-dropped.yml"
-sed "s|&& (github.event_name != 'pull_request'\$|\&\& (true|" "$workflow" \
-  | awk '!done && /head.repo.full_name == github.repository/ { sub(/head.repo.full_name == github.repository/, "true"); done=1 } { print }' \
-  > "$pair_fork_guard_dropped"
-assert_check_fails 'dropped the fork-PR exclusion from a self-hosted leg'"'"'s if:' \
-  check_v16_pairs "$pair_fork_guard_dropped"
-
-# (u) a pair base with a hosted leg but no self-hosted leg at all.
-pair_member_missing="$tmpdir/pair-member-missing.yml"
-awk '
-  /^  scripts-self-hosted:/ { skip=1 }
-  skip && /^  [A-Za-z0-9_-]+:/ && !/^  scripts-self-hosted:/ { skip=0 }
-  !skip { print }
-' "$workflow" > "$pair_member_missing"
-assert_check_fails 'removed scripts-self-hosted while scripts-hosted remains' \
-  check_v16_pairs "$pair_member_missing"
-
-# (v) verify's pair check keeps the pair's two keys in `needs:` but drops the
-# both-skipped guard -- a pair where neither leg ran would silently pass.
-pair_neither_guard_dropped="$tmpdir/pair-neither-guard-dropped.yml"
-awk '/printf .neither/ { next } /neither .base.-hosted/ { next } { print }' "$workflow" \
-  > "$pair_neither_guard_dropped"
-assert_check_fails 'dropped verify'"'"'s "neither ... ran" guard' \
-  check_verify_pair_logic "$pair_neither_guard_dropped"
-
-# (w) verify's pair check loses the PAIRS-driven loop entirely, reverting to
-# treating every need as a plain job that must be a literal success -- which
-# would fail the gate on every run, since the leg that did not run always
-# reports skipped.
-pair_check_removed="$tmpdir/pair-check-removed.yml"
-awk '!/PAIRS/ { print }' "$workflow" > "$pair_check_removed"
-assert_check_fails 'removed every reference to PAIRS from verify'"'"'s pair check' \
-  check_verify_pair_logic "$pair_check_removed"
-
-# (x) reproduce the EXECUTED regression directly: a mirror-preflight
-# consumer's if: reverts to `always()` -- would spin up unit on a
-# cancelled/superseded run.
-consumer_uses_always="$tmpdir/consumer-uses-always.yml"
-awk '!done && /^      !cancelled\(\)$/ { sub(/!cancelled\(\)/, "always()"); done=1 } { print }' \
-  "$workflow" > "$consumer_uses_always"
-assert_check_fails 'a mirror-preflight consumer reverted to always()' \
-  check_pair_consumers_guard_cancellation "$consumer_uses_always"
-
-# (y) reproduce the OTHER direction of the same regression: a consumer's
-# if: drops the status-check function entirely and goes straight to the
-# bare OR -- GitHub implicitly ANDs that with success() over needs:, so
-# it silently skips on every run since one pair member is always skipped.
-consumer_bare_or="$tmpdir/consumer-bare-or.yml"
-awk '
-  !done && /^      !cancelled\(\)$/ { done=1; next }
-  !done2 && done && /^      && \(needs\./ { sub(/^      && /, "      "); done2=1 }
-  { print }
-' "$workflow" > "$consumer_bare_or"
-assert_check_fails 'a mirror-preflight consumer dropped the !cancelled() guard entirely' \
-  check_pair_consumers_guard_cancellation "$consumer_bare_or"
 
 printf 'PASS: all negative controls correctly failed their check\n'
 

@@ -15,15 +15,31 @@ import (
 // answer depends on, so "this step consumes no fact" could not license
 // retiring the thing that caused the facts to be read.
 //
-// WHAT IT DOES NOT CLOSE, stated here rather than left to be discovered.
-// The step's declared input is the RESOLVED MEMBER SET, and that is exactly
-// what it counts. Whether the resolved set is the whole population is a
-// COVERAGE question, and the answer already carries it: `Cohort.Complete`
-// and `Cohort.Truncated`. A count served over a cohort the graph read
-// stopped short of is a true count OF THE RESOLVED SET and a lower bound on
-// the population, and this file does not pretend otherwise. Making the
-// population itself countable needs a census the pre-read clamp currently
-// makes unobservable, which is its own change.
+// WHAT IT COUNTS, AND WHAT IT SAYS ABOUT THE POPULATION. The step's declared
+// input is the RESOLVED MEMBER SET, and that is exactly what it counts.
+// Whether the resolved set is the whole population is a COVERAGE question,
+// and the answer already carries it: `Cohort.Complete` and `Cohort.Truncated`.
+//
+// The step now CONSULTS those two. It used to only say so in this paragraph:
+// the file's prose called the number "a lower bound on the population" while
+// the row it emitted said `satisfied` with impact `none` and no cause, and the
+// completeness derivation read that as contributing nothing -- so an answer
+// whose discovery clamped at N stated an exact count over a population it had
+// stopped short of, and called itself `complete`. The disclosure existed only
+// where no consumer could reach it.
+//
+// A count over an incomplete population is now `narrowed` with the coverage
+// code `population_truncated`, equal served/declared, and the answer reads
+// `partial`. The two numbers are deliberately left equal -- see
+// membershipCardinalityOutcomeRow.
+//
+// WHAT IS STILL NOT CLOSED: the population itself is not COUNTABLE. This step
+// says the resolved set is a subset; it does not say of what size. Making the
+// population countable needs a census the pre-read clamp makes unobservable,
+// which is its own change. And a count that a member step ALSO narrowed
+// reports that step's own before/after, so its `declared` is the largest count
+// this turn observed rather than the population -- a residual disclosed here
+// rather than papered over, for the same reason the original limit was.
 //
 // AND THE ANSWER PROSE IS STILL THE MODEL'S. This step makes the count a
 // SERVER RESULT with a requirement identity; it does not stop synthesis from
@@ -64,6 +80,17 @@ type MembershipCardinality struct {
 	// Both empty when nothing narrowed.
 	Basis   contractsv1.ContextFabricNarrowingBasis
 	Overrun contractsv1.ContextFabricBudgetOverrun
+	// PopulationIncomplete reports that the member set counted above is NOT
+	// the whole population -- read from the cohort's own coverage flags,
+	// which are the authority this file's header already names.
+	//
+	// It is a THIRD statement, not a refinement of the two numbers, and that
+	// is the distinction the step turns on. Served and Declared describe the
+	// set the turn OBSERVED; this describes whether that set is the set the
+	// question asked about. A count can be exact over everything observed
+	// and still be a floor on the population, and the two numbers cannot say
+	// so between them.
+	PopulationIncomplete bool
 }
 
 // Narrowed reports whether the answer carries fewer members than were found.
@@ -82,13 +109,26 @@ func (m MembershipCardinality) Narrowed() bool {
 // population is genuinely empty are different answers, and one number
 // standing for both is the shape "missing is not healthy" forbids.
 func ComputeMembershipCardinality(cohort *Cohort, narrowing []contractsv1.ContextFabricPlanNarrowing) (MembershipCardinality, bool) {
-	if cohort == nil {
+	if !memberSetResolved(cohort) {
 		return MembershipCardinality{}, false
 	}
 	cardinality := MembershipCardinality{
 		Kind:     cohort.Kind,
 		Served:   len(cohort.Members),
 		Declared: len(cohort.Members),
+		// THE DISJUNCTION IS LOAD-BEARING, and a check on `Truncated` alone
+		// would be silently wrong on a real path. The graph reader sets
+		// `Complete = false` WITHOUT setting `Truncated` when its own node
+		// source was truncated upstream -- a truncated census with fewer
+		// than MaxCohortMembers matching members would otherwise report
+		// complete despite genuinely missing some. That cohort reads as a
+		// full census to a Truncated-only predicate.
+		//
+		// It is also fail-closed on the pair the setters never write
+		// together: anything other than "complete and not truncated" is
+		// treated as incomplete, so a future setter cannot introduce a
+		// third shape that silently reads as a full census.
+		PopulationIncomplete: !cohort.Complete || cohort.Truncated,
 	}
 	if step, found := firstMemberNarrowing(narrowing); found && step.Before > cardinality.Served {
 		cardinality.Declared = step.Before
@@ -148,24 +188,12 @@ func countRequirement(rows []RequirementOutcomeRow) (string, string) {
 	return "", ""
 }
 
-// hasCountOutcome reports whether an assembled-result `count` row has
-// already been appended for this requirement.
-//
-// finalizeResult runs more than once on some paths -- the stage-3 retry
-// re-finalizes a fresh result, and the outcome layer's own candidate
-// reduction re-finalizes one that already carries rows -- so an unguarded
-// append would publish two cardinalities for one requirement and leave a
-// reader with two answers to one question.
-func hasCountOutcome(rows []RequirementOutcomeRow, requirement string) bool {
-	for _, row := range rows {
-		if row.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult &&
-			row.Requirement == requirement &&
-			row.Obligation == string(ObligationCount) {
-			return true
-		}
-	}
-	return false
-}
+// The idempotence guard this step used to own is now
+// `hasAssembledOutcome` in unresolved_member_set_outcomes.go, generalised
+// over the obligation. It moved because a SECOND computed step needs the same
+// guard for the same reason, and because it is what orders the two: the count
+// step runs first and this guard is why the general sweep beside it leaves the
+// richer row alone.
 
 // membershipCardinalityOutcomeRow states the computed cardinality as an
 // outcome row.
@@ -190,6 +218,38 @@ func membershipCardinalityOutcomeRow(cardinality MembershipCardinality, requirem
 		Declared:    cardinality.Declared,
 	}
 	if !cardinality.Narrowed() {
+		if !cardinality.PopulationIncomplete {
+			return row
+		}
+		// EXACT OVER THE RESOLVED SET, AND A FLOOR ON THE POPULATION.
+		//
+		// Nothing narrowed the member set this turn, so the two numbers are
+		// equal and both are true -- and the answer still did not see the
+		// whole population, which the cohort itself reported. Reporting that
+		// as `satisfied` was the defect: `satisfied` means served in full at
+		// the declared scope, the completeness derivation reads it as
+		// contributing nothing, and the answer then called itself `complete`
+		// over a census it had stopped short of.
+		//
+		// The numbers are LEFT ALONE. Raising Declared to make this look
+		// like an ordinary reduction would publish a population size nothing
+		// measured; the honest row is equal counts plus a cause that says
+		// which axis the loss is on. That shape is legal only because of the
+		// census exception in the row validator, and this is the one site
+		// that produces it.
+		row.Outcome = contractsv1.ContextFabricRequirementNarrowed
+		// Scope: the reader is shown fewer of the counted things than exist.
+		row.Impact = contractsv1.ContextFabricAnswerImpactScope
+		row.CauseCoverage = contractsv1.ContextFabricCoverageDetailPopulationTruncated
+		// Observed: the cohort REPORTED its own incompleteness. Nothing here
+		// defaulted, and the validator's exception refuses a defaulted one.
+		row.CauseObserved = true
+		// No refinement, and not by omission: the derivation declines to mint
+		// one when Declared <= Served, because a refinement records a
+		// population shrinking from Before to After and nothing shrank
+		// between these two numbers. Calling the derivation anyway would be a
+		// second authority for that; leaving it out is the same statement,
+		// made once.
 		return row
 	}
 	row.Outcome = contractsv1.ContextFabricRequirementNarrowed
@@ -217,7 +277,7 @@ func appendMembershipCardinality(rows []RequirementOutcomeRow, cohort *Cohort, n
 	if requirement == "" {
 		return rows, MembershipCardinality{}, false
 	}
-	if hasCountOutcome(rows, requirement) {
+	if hasAssembledOutcome(rows, requirement, obligation) {
 		return rows, MembershipCardinality{}, false
 	}
 	cardinality, counted := ComputeMembershipCardinality(cohort, narrowing)
@@ -237,38 +297,17 @@ func appendMembershipCardinality(rows []RequirementOutcomeRow, cohort *Cohort, n
 		// wrong about staying quiet. A requirement the answer could not
 		// meet is stated as unmet; the completeness state derived from the
 		// set then reads degraded, which is what it is.
-		return appendOutcomeRows(rows, unservedCardinalityOutcomeRow(requirement, obligation)), MembershipCardinality{}, false
+		return appendOutcomeRows(rows, unresolvedMemberSetOutcomeRow(requirement, obligation)), MembershipCardinality{}, false
 	}
 	return appendOutcomeRows(rows, membershipCardinalityOutcomeRow(cardinality, requirement, obligation)), cardinality, true
 }
 
-// unservedCardinalityOutcomeRow states a count requirement that had no member
-// set to count.
-//
-// It carries 0/0 because nothing was counted -- not a zero-member population,
-// which is a different answer and gets a `satisfied` 0/0 row from the normal
-// path. The two are told apart by the OUTCOME token, which is the whole
-// reason that vocabulary is closed.
-//
-// The cause is taken from the derivation's own mapping for this concept
-// rather than picked by hand here: `computed_population_absent` is already
-// the reason a computed obligation with no population carries, and routing
-// through the same table means one record of that fact, not two.
-func unservedCardinalityOutcomeRow(requirement, obligation string) RequirementOutcomeRow {
-	return RequirementOutcomeRow{
-		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
-		Requirement: requirement,
-		Obligation:  obligation,
-		Outcome:     contractsv1.ContextFabricRequirementUnavailable,
-		// Dimension: the reader asked how many and gets no answer at all --
-		// not fewer things (scope) and not less detail about them (depth).
-		Impact:        contractsv1.ContextFabricAnswerImpactDimension,
-		CauseCoverage: unavailableRequirementCause(RequirementReasonComputedPopulationAbsent),
-		// Observed: assembly looked for a member set and there was none.
-		// Nothing here defaulted.
-		CauseObserved: true,
-	}
-}
+// The row this step used to build for an absent member set is now
+// `unresolvedMemberSetOutcomeRow` in unresolved_member_set_outcomes.go. It
+// moved and was generalised because it was never count-specific: it states a
+// COMPUTED requirement whose server step had no member set to run over, which
+// is true of the ranking step in exactly the same way and for exactly the same
+// reason. One builder, one record of that fact.
 
 // membershipCardinalityEventFrom builds the telemetry event by READING the
 // served document's own count row.

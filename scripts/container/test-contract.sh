@@ -615,10 +615,31 @@ test "$signal_status" -eq 143 || {
   printf 'externally terminated build returned %s, expected 143\n' "$signal_status" >&2
   exit 1
 }
+# `wait` above returns when the shell reaps build.sh ITSELF -- not when the
+# descendants build.sh's own TERM handler is tearing down have actually gone.
+# The fixture's children install `trap "" TERM INT`, so build.sh has to
+# escalate to SIGKILL, and a process that has been SIGKILLed still answers
+# `kill -0` until the kernel finishes reaping it. Checking instantly is
+# therefore a race, and it fired on main (run 33997012280 attempt 1:
+# "external termination left process 14204 running", 34s in; attempt 2 passed
+# on the identical tree).
+#
+# The timeout block above does NOT need this: it runs build.sh in the
+# FOREGROUND, so build.sh's cleanup has already completed by the time the
+# command returns. Only this block waits on a BACKGROUND build.
+#
+# So: poll, bounded, and then still assert. The assertion after the loop is
+# the point -- a bounded wait with nothing evaluated afterwards would only
+# prove the wait did not hang. A descendant that genuinely survives (one that
+# escaped the process group, say) exhausts the budget and fails the test.
 for pid_file in "$timeout_parent_pid" "$timeout_child_pid" "$timeout_late_child_pid"; do
   pid="$(cat "$pid_file")"
+  for _ in {1..100}; do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.05
+  done
   if kill -0 "$pid" 2>/dev/null; then
-    printf 'external termination left process %s running\n' "$pid" >&2
+    printf 'external termination left process %s running after 5s\n' "$pid" >&2
     exit 1
   fi
 done

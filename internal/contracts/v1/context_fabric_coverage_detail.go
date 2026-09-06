@@ -101,6 +101,57 @@ const (
 	// replaced a false `satisfied` with a false `fact_pruned`, which is not a
 	// repair.
 	ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt ContextFabricCoverageDetailCode = "answer_terminated_before_attempt"
+	// ContextFabricCoverageDetailPopulationTruncated: a value was computed
+	// over a member set that is NOT the whole population. The set the answer
+	// resolved is a subset of the set the question named, and the answer
+	// knows it because the cohort said so -- `complete` / `truncated`.
+	//
+	// It names the POPULATION a computation was taken over, where every
+	// other code in this vocabulary names something that happened to a READ
+	// or to the served document. That is why it exists rather than
+	// borrowing a neighbour. `fact_provider_reported` with a truncated
+	// source state is about a fact read, and no fact was read here;
+	// `graph_exact_name_candidates_truncated` is about the candidate list a
+	// resolver saw, not the members a cohort holds. Either borrowing would
+	// replace a false `satisfied` with a true-sounding statement about a
+	// mechanism that did not run, which is not a repair.
+	//
+	// It is also the only code that makes `narrowed` legal with
+	// `served == declared`, and the reason is arithmetic rather than
+	// convenience: the count over the resolved set is EXACT, so those two
+	// numbers are equal and truthful, and what is unknown is how much
+	// larger the population is -- a quantity nothing measured. Inventing a
+	// bigger `declared` to make the row look like a reduction would publish
+	// a fabricated population size, which is a worse answer than the one
+	// this code replaces. See coverageDetailCodeQualifiesPopulation, which
+	// is what the row validator consults.
+	ContextFabricCoverageDetailPopulationTruncated ContextFabricCoverageDetailCode = "population_truncated"
+	// ContextFabricCoverageDetailRequirementReadNotPlanned: a READ
+	// requirement the plan published was never read at all -- not read and
+	// failed, not read and empty, but NEVER ATTEMPTED, because the turn
+	// planned no fact of any kind that could serve it.
+	//
+	// It names the ABSENCE OF AN ATTEMPT, and every other member of this
+	// vocabulary names something that happened to an attempt. That is why it
+	// exists rather than borrowing a neighbour, and the near misses are worth
+	// naming because each would have been a plausible lie:
+	//
+	//   * `fact_provider_reported` says a provider ran and reported a state.
+	//     No provider ran.
+	//   * `fact_unconfigured` says the deployment declares no producer. One
+	//     may well be declared; it simply was not planned for this question.
+	//   * `fact_pruned` says the planner proved a source could not
+	//     contribute. Nothing was proved; the requirement was not considered.
+	//   * `answer_terminated_before_attempt` is the closest and still wrong:
+	//     it says the TURN ENDED before the read could happen, which has a
+	//     different remedy. Here the turn ran to completion and simply never
+	//     planned this cell.
+	//
+	// Borrowing any of them would have replaced a false `satisfied` with a
+	// true-sounding statement about a mechanism that never ran, which is not
+	// a repair -- the same reasoning `population_truncated` above records for
+	// its own case.
+	ContextFabricCoverageDetailRequirementReadNotPlanned ContextFabricCoverageDetailCode = "requirement_read_not_planned"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -119,6 +170,8 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailGraphValidityUnbounded,
 	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped,
 	ContextFabricCoverageDetailAnswerTerminatedBeforeAttempt,
+	ContextFabricCoverageDetailPopulationTruncated,
+	ContextFabricCoverageDetailRequirementReadNotPlanned,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -302,6 +355,52 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	ContextFabricCoverageDetailGraphUnknownRelationshipType:     {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailGraphValidityUnbounded:           {requireCount: true, allowCount: true},
 	ContextFabricCoverageDetailReuseAuxiliaryRefsStripped:       {requireCount: true, allowCount: true},
+	// No fact kind and NO COUNT. The count is the tempting one and it is
+	// refused deliberately: the only number available here is the size of
+	// the set that WAS resolved, which the outcome row already carries as
+	// `served`, and putting it on the detail as well would give a reader two
+	// places to learn one fact. The number this code is about -- how large
+	// the population actually is -- is precisely the one nothing measured,
+	// so there is nothing honest to put in the field.
+	ContextFabricCoverageDetailPopulationTruncated: {},
+	// No fact kind, no count, no source state -- every allowance off.
+	//
+	// The FACT KIND is the tempting one here and it is refused for the same
+	// reason the count is refused above: this code says NO FACT WAS PLANNED
+	// for the requirement, so naming one would describe a read that was never
+	// attempted. A requirement's declared kinds are already published on the
+	// plan's own row for a reader who wants them, and they are what the turn
+	// COULD have read, not what it did.
+	//
+	// A source state is refused for the same reason: no source produced one.
+	ContextFabricCoverageDetailRequirementReadNotPlanned: {},
+}
+
+// coverageDetailCodeQualifiesPopulation names the codes that describe the
+// POPULATION a value was computed over, rather than a reduction of the set
+// the answer served.
+//
+// It is the predicate ValidateContextFabricPlanRequirementOutcomeRow consults
+// to admit `narrowed` with `served == declared`, and it is an ALLOW-LIST over
+// a closed vocabulary for the reason the refinement rule one file over states
+// in its own words: a deny-list would admit the next code added by default,
+// and admit it silently. A code that qualifies a population is a deliberate
+// membership, never an omission from a list of refusals.
+func coverageDetailCodeQualifiesPopulation(code ContextFabricCoverageDetailCode) bool {
+	switch code {
+	case ContextFabricCoverageDetailPopulationTruncated:
+		return true
+	default:
+		// `requirement_read_not_planned` deliberately does NOT qualify. It
+		// says nothing was read, so there is no value computed over any
+		// population at all -- and admitting it would let a row claim
+		// `narrowed` with served == declared for a cell nothing measured,
+		// which is the exact fabrication the population code exists to avoid.
+		// Named here rather than left to the default, because an allow-list's
+		// silence about a new member is what the allow-list is guarding
+		// against.
+		return false
+	}
 }
 
 // coverageDetailCodeDegrades declares, per the settled design, which codes

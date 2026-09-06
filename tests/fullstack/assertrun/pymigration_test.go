@@ -236,6 +236,152 @@ def upgrade(client):
 	}
 }
 
+// TestApplyMigrationPython_CommentProseIsNotDDL is the regression this file exists to prevent
+// after the 2026-09-05 acceptance failure: ops migration 087 shipped a "#" comment reading
+// "(SHOW / # CREATE TABLE always renders SETTINGS, if present, as the trailing clause)", and
+// the residual scan reported an unhandled `always` table for it. Two identical false positives
+// already existed on ops main (075 and 084 each yield `returned` from a comment). None was
+// blocking only because none of those words names a seeded table -- verify-seed-schema fails
+// CLOSED when one does, so a comment reading "... CREATE TABLE git_commits ..." would have
+// turned a required check red with no DDL behind it at all. Docstrings were already stripped;
+// comments are prose in exactly the same way.
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration parser under test,
+// never a fixture any Context Fabric reader queries -- it is a copy of the migration's own
+// COMMENT, and the point of the test is that no table is read out of it at all.
+func TestApplyMigrationPython_CommentProseIsNotDDL(t *testing.T) {
+	schema := newCHSchema()
+
+	source := `
+import re
+
+# Whether a CREATE TABLE DDL already has its own SETTINGS clause (SHOW
+# CREATE TABLE always renders SETTINGS, if present, as the trailing clause).
+_SETTINGS_RE = re.compile(r"\bSETTINGS\s+", re.IGNORECASE)
+
+def upgrade(client):
+    # The shadow is DROP TABLE'd here only if the swap never happened; the rebuilt DDL is
+    # a runtime value, so nothing below is a literal this replay could interpret anyway.
+    for table in TABLES:
+        client.command(f"CREATE TABLE ` + "`{table}_087_lock`" + ` (x UInt8) ENGINE = Memory")
+`
+	unhandled := applyMigrationPython(schema, source, "087_complexity_tables_replacing_merge_tree.py")
+	if len(unhandled) != 0 {
+		t.Fatalf("prose in a # comment must not be reported as DDL, got %v", unhandled)
+	}
+}
+
+// TestApplyMigrationPython_CommentQuotesDoNotDesyncTheScanner covers the hazard that makes this
+// a scanner rather than a regex: a comment routinely contains an apostrophe ("another runner's
+// lock"), and treating that as the start of a string literal would swallow every statement
+// after it -- turning a cosmetic false positive into a silent false PASS, which is the one
+// outcome this replay must never produce.
+func TestApplyMigrationPython_CommentQuotesDoNotDesyncTheScanner(t *testing.T) {
+	schema := newCHSchema()
+	schema.createTable("deployments")
+
+	source := `
+def upgrade(client):
+    # Returns False if another runner's lock is already held -- don't retry here.
+    client.command("""ALTER TABLE deployments ADD COLUMN IF NOT EXISTS release_ref String DEFAULT ''""")
+`
+	unhandled := applyMigrationPython(schema, source, "099_apostrophe_comment.py")
+	if len(unhandled) != 0 {
+		t.Fatalf("expected no unhandled notes, got %v", unhandled)
+	}
+	if !schema.columnExists("deployments", "release_ref") {
+		t.Fatal("the ALTER after an apostrophe-bearing comment must still be interpreted")
+	}
+}
+
+// TestApplyMigrationPython_HashInsideAStringIsNotAComment is the other side of the scanner: a
+// "#" inside a real DDL argument is part of that argument, not the start of a comment, so
+// stripping must not truncate the statement it appears in.
+func TestApplyMigrationPython_HashInsideAStringIsNotAComment(t *testing.T) {
+	schema := newCHSchema()
+	schema.createTable("git_commits")
+
+	source := `
+def upgrade(client):
+    client.command("ALTER TABLE git_commits ADD COLUMN IF NOT EXISTS ref_marker String DEFAULT '#head'")
+`
+	unhandled := applyMigrationPython(schema, source, "099_hash_default.py")
+	if len(unhandled) != 0 {
+		t.Fatalf("expected no unhandled notes, got %v", unhandled)
+	}
+	if !schema.columnExists("git_commits", "ref_marker") {
+		t.Fatal("a '#' inside a string literal must not truncate the statement around it")
+	}
+}
+
+// TestApplyMigrationPython_ShowCreateTableIsARead covers the second false-positive shape found
+// on ops main alongside 087's: `SHOW CREATE TABLE` is the READ that opens every shadow-table
+// rebuild, and its error strings mention it in prose. 075:257 and 084:323 each carry
+// `f"{table}: SHOW CREATE TABLE returned no DDL"`, which the residual scan read as a
+// `CREATE TABLE returned` statement.
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration parser under test,
+// never a fixture any Context Fabric reader queries. No table name appears in it at all -- the
+// statement under test is a SHOW, and the assertion is that nothing is read out of it.
+func TestApplyMigrationPython_ShowCreateTableIsARead(t *testing.T) {
+	schema := newCHSchema()
+	source := `
+def _live_ddl(client, table):
+    res = client.query(f"SHOW CREATE TABLE ` + "`{table}`" + `")
+    rows = getattr(res, "result_rows", None) or []
+    if not rows:
+        raise RuntimeError(f"{table}: SHOW CREATE TABLE returned no DDL")
+    return rows[0][0]
+`
+	unhandled := applyMigrationPython(schema, source, "084_issue_pr_provenance_version_precedence.py")
+	if len(unhandled) != 0 {
+		t.Fatalf("SHOW CREATE TABLE is a read, not DDL, and must not be reported: got %v", unhandled)
+	}
+}
+
+// TestPrecededBySHOW_RequiresAWordBoundary keeps the SHOW exclusion from swallowing a real
+// CREATE TABLE that merely follows an identifier ending in "show".
+// devhealthschema:not-a-production-replica this DDL is INPUT to the migration parser under test,
+// never a fixture any Context Fabric reader queries -- these are three-token fragments handed
+// to a string predicate, and the table they name is the placeholder "x".
+func TestPrecededBySHOW_RequiresAWordBoundary(t *testing.T) {
+	if !precededBySHOW("SHOW CREATE TABLE x", len("SHOW ")) {
+		t.Fatal("a real SHOW CREATE TABLE must be recognized")
+	}
+	if precededBySHOW("roadshow CREATE TABLE x", len("roadshow ")) {
+		t.Fatal("an identifier ending in 'show' is not the SHOW keyword")
+	}
+	if precededBySHOW("client.command(CREATE TABLE x", len("client.command(")) {
+		t.Fatal("nothing resembling SHOW precedes this CREATE TABLE")
+	}
+}
+
+// (That comment stripping did not buy its quiet by going blind -- a genuine literal
+// CREATE TABLE in code is still reported -- is already covered by
+// TestApplyMigrationPython_LiteralNonShadowCreateAndDropTableReported below, which this change
+// deliberately leaves untouched rather than duplicating.)
+
+// TestStripPythonComments_DocstringsAreStrippedFirst pins the ordering applyMigrationPython
+// depends on. A "#" inside a docstring, on the same line as that docstring's closing quotes,
+// would take the closing quotes with it -- and the docstring regex would then run on to the
+// NEXT triple quote in the file, deleting real DDL in between. Stripping docstrings first
+// makes that unreachable.
+func TestStripPythonComments_DocstringsAreStrippedFirst(t *testing.T) {
+	schema := newCHSchema()
+	schema.createTable("deployments")
+
+	source := `
+def upgrade(client):
+    """Rebuild the table. See CHAOS-1234 # for the measured duplication."""
+    client.command("""ALTER TABLE deployments ADD COLUMN IF NOT EXISTS release_ref String DEFAULT ''""")
+`
+	unhandled := applyMigrationPython(schema, source, "099_hash_in_docstring.py")
+	if len(unhandled) != 0 {
+		t.Fatalf("expected no unhandled notes, got %v", unhandled)
+	}
+	if !schema.columnExists("deployments", "release_ref") {
+		t.Fatal("a '#' inside a docstring must not consume the DDL statement that follows it")
+	}
+}
+
 // TestReplayMigrationsDir_PythonAndSQLInterleaved is the end-to-end shape: a .sql CREATE
 // TABLE, a .py migration adding org_id via the table-list convention (027's shape), and a
 // later .sql ALTER -- all replayed together in lexical filename order, matching how

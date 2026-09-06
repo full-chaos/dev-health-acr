@@ -46,12 +46,13 @@
 # colliding with a tag on a path it now exclusively owns.
 #
 # THE ONE EXCEPTION is clickhouse/clickhouse-server: acr's pin
-# (internal/chfixture.Image, CHAOS-4549) is a TAG, "26.7.5.10", with no
-# digest -- deliberately, per that file's own doc comment, so it can be
-# bumped by hand as prod's floor advances. TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX
-# prepends the registry to whatever ref the Go code declares UNCHANGED; it
-# cannot rename the tag. So for this one image, and only this one, the
-# destination tag must be the literal upstream tag "26.7.5.10".
+# (internal/chfixture.Image, CHAOS-4549, minor-only per chris's 2026-09-05
+# ruling) is a TAG, "26.7", with no digest -- deliberately, per that file's
+# own doc comment, so it floats patch/bugfix updates while staying pinned to
+# the minor line. TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX prepends the registry
+# to whatever ref the Go code declares UNCHANGED; it cannot rename the tag.
+# So for this one image, and only this one, the destination tag must be the
+# literal upstream tag "26.7".
 #
 # NO setup-buildx-action, and NO Docker Hub login -- both deliberate, same
 # reasoning as ops's #2111: setup-buildx-action's default driver pulls

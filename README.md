@@ -150,6 +150,16 @@ troubleshooting, and sidecar setup is in
 bash scripts/docs/verify.sh
 ```
 
+Every fenced ```mermaid block under `docs/**` is also rendered with a pinned
+mermaid-cli (`scripts/docs/mermaid-cli-version.txt`) so a diagram mermaid's
+own parser rejects fails CI instead of rendering broken. This one needs a
+one-time `npm install` (not offline, unlike the gate above):
+
+```bash
+npm install --no-save "@mermaid-js/mermaid-cli@$(cat scripts/docs/mermaid-cli-version.txt)"
+scripts/docs/verify-mermaid.sh
+```
+
 ## Container images
 
 Reproducible, hardened container images for `acr-api` (plus the separate

@@ -37,12 +37,37 @@ func TestAReusedAnswerThatWasStrippedCannotStillClaimCompleteness(t *testing.T) 
 	// requirement satisfied, state `complete`. That is the strongest
 	// starting claim, and therefore the one a later reduction must be able
 	// to walk back.
+	//
+	// TWO ROWS, SEEDED AND EVALUATED, and the second one is not decoration.
+	// The completeness derivation now asks a second question of a `complete`
+	// set: did any READ requirement reach the served document carrying
+	// nothing but its planning seed? A seed says the registry COULD serve
+	// the cell; it never says anything was read. So a lone planning row for
+	// a read obligation -- which is what this fixture used to carry -- no
+	// longer describes a fully-derived answer at all, and the state it
+	// derives is `partial` before the reuse degrade does anything.
+	//
+	// The assertions below are UNCHANGED, deliberately. Relaxing the
+	// precondition to `partial` instead would have been the cheaper edit and
+	// would have gutted the test: the assertion this test exists for is that
+	// the degrade WALKS `complete` BACK, and a fixture that starts at
+	// `partial` satisfies it without the degrade doing anything at all. The
+	// fixture is what moved, so the fixture is what is corrected -- to the
+	// shape a genuinely fully-derived answer has under the amended rule.
 	stored.Completeness.Outcomes = []RequirementOutcomeRow{{
 		Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
 		Requirement: "state/subject/team",
 		Obligation:  string(ObligationState),
 		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
 		Impact:      contractsv1.ContextFabricAnswerImpactNone,
+	}, {
+		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
+		Requirement: "state/subject/team",
+		Obligation:  string(ObligationState),
+		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+		Impact:      contractsv1.ContextFabricAnswerImpactNone,
+		Served:      2,
+		Declared:    2,
 	}}
 	stored.Completeness = ComputeAnswerCompleteness(stored)
 	if stored.Completeness.State != contractsv1.ContextFabricAnswerCompletenessComplete {

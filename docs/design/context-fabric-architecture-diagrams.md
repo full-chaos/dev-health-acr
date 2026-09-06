@@ -925,7 +925,7 @@ sequenceDiagram
 
   C->>E: turn 3: PriorCandidateReceipts ONLY<br/>window NEVER re-sent (already applied)
   Note over E: nothing carries the confirmed window<br/>across this call server-side (CHAOS-4360 gap) --<br/>it arrives INFERRED again
-  E-->>C: window_canonicalization_outcome=gated_class_default (reverted!)<br/>window re-appears in missing; candidate receipt applies<br/>but resolution stays subjectless -- never decisive
+  E-->>C: window_canonicalization_outcome=gated_class_default (reverted!)<br/>window re-appears in missing -- candidate receipt applies<br/>but resolution stays subjectless -- never decisive
 ```
 
 **Carry measurement.** `ContextFabricConfirmedStructureEntry.Source`
@@ -1155,7 +1155,7 @@ flowchart LR
     WUI["work_unit_investments<br/>theme_distribution_json<br/>subcategory_distribution_json"] -->|ARRAY JOIN theme_kv| J
     WITA["work_item_team_attributions<br/>FINAL, is_primary=1,<br/>latest computed_at"] -->|majority vote per work unit,<br/>lexicographically-largest tie-break| J["ReadTeamThemeMix<br/>(dev-health-go/readers)"]
     J -->|current window| P["readTeamThemeMix<br/>(acr devhealthfacts/investment.go)<br/>normalizes to shares, sums to ~1.0"]
-    J -.->|SECOND explicit query,<br/>[start-duration, start)<br/>ONLY when window has an explicit start<br/>(CHAOS-4040: never inferred)| P
+    J -.->|"SECOND explicit query,<br/>[start-duration, start)<br/>ONLY when window has an explicit start<br/>(CHAOS-4040: never inferred)"| P
     P --> F2["FactInvestment (team)<br/>theme_*, theme_quality_bugfix,<br/>prior_theme_* (omitted if no prior data)"]
 ```
 
@@ -1182,8 +1182,8 @@ flowchart TB
     S["scoreMember<br/>(cohort_ranking.go)"] --> W["per available signal family:<br/>weightedSum += weight*value<br/>availableWeight += weight"]
     W --> SC["Score = 100*weightedSum/availableWeight"]
     W --> DR["Drivers: one entry per available family<br/>weight_contributed = 100*weight*value/availableWeight"]
-    DR -.->|Sum(weight_contributed) == Score,<br/>enforced by validateDrivers| SC
-    DR -.->|PR3: narrated result.Drivers cites<br/>a member driver by (team, signal),<br/>introduces no new numbers| ND["ContextFabricDriverJudgment<br/>(§5a budget/Standing rules, unchanged)"]
+    DR -.->|"Sum(weight_contributed) == Score,<br/>enforced by validateDrivers"| SC
+    DR -.->|"PR3: narrated result.Drivers cites<br/>a member driver by (team, signal),<br/>introduces no new numbers"| ND["ContextFabricDriverJudgment<br/>(§5a budget/Standing rules, unchanged)"]
 ```
 
 **Not yet built** (tracked follow-ups, subject-model-and-cohort-answers.md
@@ -2072,7 +2072,12 @@ flowchart TB
     R1 --> RR["row.FactKinds = serving kinds<br/>row.Dimensions = their declared dimensions"]
 
     K -- computed --> S["StepForComputedObligation<br/>rank_cohort | membership_cardinality"]
-    S --> I["InputsForComputedStep<br/>THE AMENDMENT"]
+    S --> P{"stepNeedsAResolvedMemberSet<br/>reads RunsOverResolvedMemberSet,<br/>NOT the input class"}
+    P -->|"does not run over a member set"| I
+    P -->|"runs over a member set"| Q{"contextfabric.CohortMemberKindFor<br/>ONE predicate, read by this layer<br/>AND by the discovery seam"}
+    Q -- discoverable --> I
+    Q -->|"not_a_cohort_variant<br/>no_member_kind<br/>member_kind_unservable"| U["row.Unavailable =<br/>computed_population_absent<br/>Step stays EMPTY, Quantifier none<br/>so no read is planned for its inputs"]
+    I["InputsForComputedStep<br/>THE AMENDMENT"]
     I --> IC{"input CLASS"}
     IC -- fact_kinds --> IK["row.InputFactKinds<br/>= cohortRankingFormulaKinds<br/>(health, workload, readiness,<br/>operational_deficiencies, investment)"]
     IC -- resolved_member_set --> IN["no fact input<br/>row.InputFactKinds empty,<br/>stated POSITIVELY by the class"]
@@ -2084,6 +2089,8 @@ flowchart TB
     EX -- server_executed --> XC["ComputeMembershipCardinality<br/>in finalizeResult, over the SERVED member set"]
     XC --> OUT["appended as the count requirement's<br/>assembled_result outcome row:<br/>served / declared + the outcome token"]
     OUT --> TEL["RecordMembershipCardinality<br/>reads the SERVED row, never recounts"]
+    XC --> XU["appendUnresolvedMemberSetOutcomes<br/>in finalizeResult, immediately AFTER the count sibling<br/>over EVERY step the declaration table says<br/>runs over the resolved member set"]
+    XU --> OUT2["a SERVABLE kind whose search retained no members:<br/>assembled_result row, unavailable,<br/>computed_population_absent<br/>(idempotent, so the count sibling's richer row stands)"]
 
     RR --> T["RequirementDerivationSummary<br/>+ requirement_computed_input_kind_* counts<br/>+ ComputedStepExecutions<br/>(histograms over the closed vocabularies,<br/>zeroes included)"]
     CR --> T
@@ -2094,6 +2101,28 @@ counts the resolved member set and reads no fact. Spelling that as an empty
 kinds list would be indistinguishable from "nobody has declared this step's
 inputs yet" — the silent emptiness the seam exists to forbid, reproduced
 inside its own fix. The class makes "consumes no fact" an assertion.
+
+**Why producibility is decided in TWO places, and why that is not two authorities.**
+A computed step that runs over the resolved member set can fail to run for four
+reasons, and only three of them are knowable before retrieval: the expression
+enumerates nothing, it declares no member kind, or it declares a kind no
+discovery arm serves. Those three are one closed decision,
+`CohortMemberKindFor`, and it lives in `internal/contextfabric` beside the
+subject-kind vocabulary precisely so BOTH readers can reach it — this
+derivation, and the discovery seam one layer up, which imports this package and
+could never be imported back. It was rebuilt by hand here once, a conjunct per
+review round, and over the fifteen published subject kinds the two answers
+disagreed for TWELVE: a ranking row named `rank_cohort` as its server while the
+seam refused to build the cohort, so nothing computed the ordering the answer
+claimed.
+
+The FOURTH reason is a runtime fact nobody can decide at derivation time: a
+perfectly servable kind whose search retains no members. `DiscoveredCohort`
+returns a nil cohort in that case, so the correction belongs on the served
+document, and `finalizeResult` makes it beside the count sibling — for every
+step the declaration table says runs over the member set, not for the two that
+exist today. The two places are one decision each, taken where its fact lives;
+what is not duplicated is the predicate.
 
 **Why the inputs are NOT folded into `FactKinds`.** `FactKinds` means *kinds
 that can SERVE this cell*, and every existing reader — the plan projection

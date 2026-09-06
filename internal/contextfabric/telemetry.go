@@ -820,6 +820,16 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		"emitted_shape", string(event.EmittedShape),
 		"derived_shape", string(event.DerivedShape),
 		"frame_version", event.FrameVersion,
+		// WHY the frame can or cannot produce a discovered cohort. It
+		// disambiguates the `unresolvable_member_set` arm below, whose two
+		// causes -- an expression that enumerates nothing, and a declared
+		// member kind with no discovery arm -- send an operator to opposite
+		// ends of the pipeline. Emitted on EVERY frame-validation line,
+		// including a refused frame, where it is empty: the empty value is
+		// not a member of the vocabulary, so "no validated expression" and a
+		// real reason cannot be confused, and this line's own `outcome` key
+		// says which.
+		"cohort_discoverability", string(event.CohortDiscoverability),
 	}
 	args = append(args, requirementDerivationLogAttrs(event.RequirementDerivation)...)
 	args = append(args, requestIDLogAttrs(ctx)...)
@@ -854,6 +864,33 @@ func requirementDerivationLogAttrs(summary RequirementDerivationSummary) []any {
 	}
 	for index, reason := range RequirementUnavailableReasonVocabulary() {
 		args = append(args, "requirement_unavailable_"+string(reason), summary.UnavailableCells[index])
+	}
+	// The two arms of `computed_population_absent`, both keys on every
+	// event including the zeroes. An operator reading the aggregate key
+	// alone cannot tell an interpreter defect (a frame asking to rank the
+	// organization) from a wiring one (a legitimate coordinate whose step
+	// needs a cohort the frame resolves none of), and those send them to
+	// opposite ends of the pipeline. Their sum is checkable against the
+	// aggregate key above without leaving the line.
+	args = append(args,
+		"requirement_computed_population_absent_not_a_population", summary.ComputedPopulationAbsentNotAPopulation,
+		"requirement_computed_population_absent_unresolvable_member_set", summary.ComputedPopulationAbsentUnresolvableMemberSet,
+		// The residual, always emitted: with it the three keys are a TOTAL
+		// partition of requirement_unavailable_computed_population_absent, so
+		// an operator can check the split adds up without leaving the line.
+		"requirement_computed_population_absent_non_computed_row", summary.ComputedPopulationAbsentNonComputedRow,
+	)
+	// What those decisions COST -- the declared inputs no read was planned
+	// for -- in the same per-kind shape as requirement_computed_input_kind_
+	// above, so the two are subtractable on one line. Every member present
+	// including the zeroes, for the reason every histogram here has.
+	//
+	// The FRAME KIND those counts belong to is already on this line as
+	// `proposed_kind` (RecordFrameValidation's own field, the subject
+	// expression's closed discriminator), so the arms and their cost are
+	// attributable to a topology without adding a second copy of it.
+	for index, kind := range contractsv1.ContextFabricFactKindVocabulary() {
+		args = append(args, "requirement_computed_input_kind_unplanned_"+string(kind), summary.ComputedInputKindsUnplanned[index])
 	}
 	for index, quantifier := range CompletionQuantifierVocabulary() {
 		args = append(args, "requirement_quantifier_"+string(quantifier), summary.Quantifiers[index])

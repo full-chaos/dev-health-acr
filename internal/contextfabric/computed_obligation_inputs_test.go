@@ -60,6 +60,15 @@ func TestEveryComputedStepDeclaresItsInputs(t *testing.T) {
 			if len(inputs.FactKinds) != 0 {
 				t.Errorf("computed step %q declares class %q yet names fact kinds %v", step, inputs.Class, inputs.FactKinds)
 			}
+			// The run-over declaration may never be WEAKER than the class
+			// it replaced as the derivation's population guard. A step that
+			// consumes the resolved member set self-evidently runs over it,
+			// so a `false` here would silently narrow a guard that used to
+			// cover this step -- the exact fail-open direction the guard was
+			// widened to close.
+			if !inputs.RunsOverResolvedMemberSet {
+				t.Errorf("computed step %q declares input class %q yet says it does NOT run over the resolved member set -- the population guard would stop covering it", step, inputs.Class)
+			}
 		}
 	}
 
@@ -106,6 +115,17 @@ func TestRankCohortInputsAreTheKindsItsSignalsActuallyRead(t *testing.T) {
 		if !containsKind(inputs.FactKinds, want) {
 			t.Errorf("rank_cohort declared inputs omit %q, which one of its five signal families reads", want)
 		}
+	}
+	// WHAT IT READS IS NOT WHAT IT RUNS OVER, and rank_cohort is the step
+	// where the two differ. Its class is `fact_kinds`, yet RankCohort is
+	// invoked only under `if graphContext.Cohort != nil` (engine.go's
+	// Investigate) -- so a frame that resolves no member set gives it
+	// nothing to order however many of those five kinds were read. While
+	// the derivation's population guard inferred this from the class,
+	// rank_cohort escaped it and a named-subject ranking cell derived as
+	// SERVED for a computation the engine can never invoke.
+	if !inputs.RunsOverResolvedMemberSet {
+		t.Error("rank_cohort does not declare that it runs over the resolved member set, yet RankCohort is called only when a cohort exists -- the derivation's population guard would let a named-subject ranking cell derive as served")
 	}
 }
 

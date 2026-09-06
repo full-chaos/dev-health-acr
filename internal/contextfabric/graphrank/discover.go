@@ -278,7 +278,25 @@ func SortEdgesByRelevance(edges []CandidateEdge) []CandidateEdge {
 // authzDropped -- codex round-1 P2, reproduced: a "which teams" cohort with
 // zero teams but one unauthorized repository node previously reported
 // authzDropped=1 even though no team was ever denied.
-func DiscoveredCohort(principal storage.Principal, discovery contextfabric.GraphDiscoveryRequest, nodes []CandidateNode, isInternal func(contextfabric.SubjectRef) bool) (*contextfabric.Cohort, int, int, contextfabric.SubjectKind, CohortKindBasis) {
+// poolTruncated reports that the CANDIDATE POOL handed to this call was
+// already cut before assembly -- the backend's retrieval stopped short of the
+// matches that exist, so a member this cohort does not carry may exist and
+// simply never reached `nodes`. It is the caller's fact to supply because
+// only the I/O boundary knows what its own queries dropped, and this function
+// stays pure; the same split the authzDropped counters use.
+//
+// It is a SEPARATE input from `len(members) >= MaxCohortMembers` because the
+// two are different losses that this function cannot tell apart from the node
+// slice alone: the cap is this function trimming a pool it saw all of, and
+// poolTruncated is the pool never having been whole. Deriving completeness
+// from the retained length alone -- which is what this function did -- means a
+// four-of-six pool below the cap reports Complete=true, Truncated=false, and a
+// count served over it reads as a census. That is the discovery-level cap
+// CHAOS-4733 ruled is carried on the COHORT's own Truncated (option (b) of its
+// acceptance criteria: "a reader must read cohort.truncated, not assume a
+// capped discovery always shows up as some group's truncated=true"), so it is
+// carried here rather than re-derived downstream.
+func DiscoveredCohort(principal storage.Principal, discovery contextfabric.GraphDiscoveryRequest, nodes []CandidateNode, poolTruncated bool, isInternal func(contextfabric.SubjectRef) bool) (*contextfabric.Cohort, int, int, contextfabric.SubjectKind, CohortKindBasis) {
 	kind, declaredKind, basis := cohortKindFromFrame(discovery.Frame)
 	if basis != CohortKindFromFrameMemberKind {
 		return nil, 0, 0, declaredKind, basis
@@ -317,10 +335,18 @@ func DiscoveredCohort(principal storage.Principal, discovery contextfabric.Graph
 	if len(members) == 0 {
 		return nil, authzDropped, kindScopedAuthzDropped, declaredKind, basis
 	}
+	// Either loss forbids a completeness claim, and both are the same claim
+	// to a reader: members of this kind exist that this cohort does not
+	// carry. Complete and Truncated stay mutually exclusive (the v1
+	// validator refuses a cohort that is both -- see
+	// validate_context_fabric_result.go's cohort bounds), so they are
+	// derived from one condition rather than two.
+	cappedAtCohortLimit := len(members) >= discovery.Request.Options.MaxCohortMembers
+	membersMayBeMissing := cappedAtCohortLimit || poolTruncated
 	return &contextfabric.Cohort{
 		Kind: kind, Members: members, Exclusions: []contextfabric.CohortExclusion{},
 		Rationale: "Subjects were discovered from the authorized Context Fabric graph using the user's open-ended cohort question.",
-		Complete:  len(members) < discovery.Request.Options.MaxCohortMembers, Truncated: len(members) >= discovery.Request.Options.MaxCohortMembers,
+		Complete:  !membersMayBeMissing, Truncated: membersMayBeMissing,
 	}, authzDropped, kindScopedAuthzDropped, declaredKind, basis
 }
 

@@ -12,8 +12,8 @@ import (
 
 // TestFlowProviderTeamDailySeriesAgainstRealClickHouse proves CHAOS-4645's
 // new queryTeamFlowDailySeries against a REAL ClickHouse server (CI-pinned
-// clickhouse-server:26.7.5.10 via testcontainers, seeded/fixture data --
-// NOT kiac/dh_0830 live org data). The fakeClient cannot exercise this: a
+// clickhouse-server:26.7 via testcontainers, seeded/fixture data -- NOT
+// kiac/dh_0830 live org data). The fakeClient cannot exercise this: a
 // fake hands back pre-baked Go values regardless of the SQL text, so a
 // column-type mismatch (the CHAOS-4645 bug: selecting a raw Date/
 // LowCardinality(String) column into a Go string scan target without an

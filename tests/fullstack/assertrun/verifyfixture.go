@@ -433,6 +433,7 @@ func runFixtureProbes(manifest fixtureManifest, orgID, database string, probeWor
 			}
 			sql := rowCountSQL(table, slug, repoID, orgID, shape)
 			check := executeProbe(name, sql, strconv.Itoa(expected), probeWords)
+			check = withCountingContext(check, shape)
 			checks = append(checks, check)
 			if check.OK {
 				if n, err := strconv.Atoi(check.Actual); err == nil {
@@ -451,6 +452,7 @@ func runFixtureProbes(manifest fixtureManifest, orgID, database string, probeWor
 		name := fmt.Sprintf("expected_row_counts.%s (org-scoped: no repo_id column)", table)
 		sql := rowCountSQL(table, "", "", orgID, orgScopedShape[table])
 		check := executeProbe(name, sql, strconv.Itoa(orgScopedExpected[table]), probeWords)
+		check = withCountingContext(check, orgScopedShape[table])
 		checks = append(checks, check)
 		if check.OK {
 			if n, err := strconv.Atoi(check.Actual); err == nil {
@@ -491,6 +493,24 @@ func runFixtureProbes(manifest fixtureManifest, orgID, database string, probeWor
 }
 
 func quotedOrgID(orgID string) string { return "'" + orgID + "'" }
+
+// withCountingContext annotates a FAILED row-count probe with the engine the count was taken
+// against. A passing probe is left exactly as it was: the engine is already disclosed by the
+// probe's own recorded SQL (FINAL or no FINAL), and only the failure needs to explain itself.
+//
+// This exists because of a real, and initially opaque, failure: ops migration 087 converted
+// file_complexity_snapshots from MergeTree to ReplacingMergeTree(computed_at), describeTable
+// (correctly) started appending FINAL, and the count silently changed meaning from "rows the
+// seed inserted" to "distinct sorting-key tuples" -- 4 became 3. The message said only that
+// the probe "did not match the manifest's expected value", which reads like a broken seed
+// and is what made an ops-side engine change look like an acr-side regression.
+func withCountingContext(check probeCheck, shape tableShape) probeCheck {
+	if check.OK || check.Message == "" {
+		return check
+	}
+	check.Message += countingContext(shape)
+	return check
+}
 
 func executeProbe(name, sql, expected string, probeWords []string) probeCheck {
 	check := probeCheck{Name: name, SQLRedacted: redact(sql), Expected: expected}

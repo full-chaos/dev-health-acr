@@ -492,17 +492,59 @@ func TestRankingTheOrganizationItselfIsUnavailable(t *testing.T) {
 		t.Errorf("an unavailable row carries quantifier %q", row.Quantifier)
 	}
 
-	// The counterpart must still WORK: with a counted member kind (invariant
-	// I17's own case) the population exists and ranking is served. Without
-	// this, the fix above could be "never rank under organization scope",
-	// which would be a different defect.
+	// SUPERSEDED ASSERTION, recorded rather than quietly rewritten.
+	//
+	// This block used to assert that `organization_scope` WITH a counted
+	// member kind derives a SERVED ranking row named by rank_cohort. That
+	// claim was false in the same way the block above it is about, one field
+	// over: `organization_scope` is not a cohort variant, so
+	// `IsCohortVariant` is false, so nothing discovers that population and
+	// the engine resolves no cohort -- and `RankCohort` is invoked only when
+	// a cohort exists. The row named a server that could never run.
+	//
+	// The incoherence was visible ON THIS VERY FIXTURE and is asserted below
+	// rather than argued: `count` over the SAME frame was already unavailable
+	// for exactly this reason, because the population guard read
+	// `InputClass == resolved_member_set` -- which membership_cardinality
+	// declares and rank_cohort (class `fact_kinds`) does not. Two computed
+	// cells on one frame disagreed about whether that frame has a population,
+	// and the disagreement was an artifact of which field the guard happened
+	// to read.
+	//
+	// The counterpart's PURPOSE stands and is preserved below: the fix must
+	// not collapse to "never rank". The honest control is a frame that
+	// genuinely resolves a member set -- a cohort variant -- not an
+	// organization scope that never did.
 	kind := SubjectTeam
-	served := DeriveRequirements(
-		frameWith([]InvestigationGoal{GoalRankOrSurvey}, orgExpression(&kind), TemporalIntentCurrent, nil),
+	orgWithMemberKind := DeriveRequirements(
+		frameWith([]InvestigationGoal{GoalRankOrSurvey, GoalCountOrAggregate}, orgExpression(&kind), TemporalIntentCurrent, nil),
 		fixtureSeed(), fixtureCapabilities())
-	memberRow := requirementFor(t, served, ObligationRanking, SubjectTeam)
-	if !memberRow.Served() || memberRow.Step != ComputedStepRankCohort {
-		t.Errorf("ranking a counted member kind should be served by rank_cohort; got served=%v step=%q unavailable=%q", memberRow.Served(), memberRow.Step, memberRow.Unavailable)
+	memberRow := requirementFor(t, orgWithMemberKind, ObligationRanking, SubjectTeam)
+	if memberRow.Served() {
+		t.Errorf("ranking a counted member kind under ORGANIZATION SCOPE reports server %q: that expression is not a cohort variant, so no member set is discovered and RankCohort is never invoked", memberRow.Step)
+	}
+	if memberRow.Unavailable != RequirementReasonComputedPopulationAbsent {
+		t.Errorf("unavailable reason is %q, want %q", memberRow.Unavailable, RequirementReasonComputedPopulationAbsent)
+	}
+	// The parity statement, executed: the two computed cells on ONE frame
+	// must agree about whether that frame has a population. This is the
+	// assertion that makes the supersession above a correction rather than
+	// an opinion.
+	countRow := requirementFor(t, orgWithMemberKind, ObligationCount, SubjectTeam)
+	if countRow.Served() != memberRow.Served() {
+		t.Errorf("on one organization-scope frame `count` is served=%v and `ranking` is served=%v -- two computed cells disagree about whether the frame resolves a population (count unavailable=%q, ranking unavailable=%q)",
+			countRow.Served(), memberRow.Served(), countRow.Unavailable, memberRow.Unavailable)
+	}
+
+	// THE COUNTERPART THAT MUST STILL WORK, on a frame that really does
+	// resolve a member set. Without it the fix above could be "never rank",
+	// which would be a different defect.
+	cohortServed := DeriveRequirements(
+		frameWith([]InvestigationGoal{GoalRankOrSurvey}, discoveredExpression(SubjectTeam), TemporalIntentCurrent, nil),
+		fixtureSeed(), fixtureCapabilities())
+	cohortRow := requirementFor(t, cohortServed, ObligationRanking, SubjectTeam)
+	if !cohortRow.Served() || cohortRow.Step != ComputedStepRankCohort {
+		t.Errorf("ranking a DISCOVERED member set should be served by rank_cohort; got served=%v step=%q unavailable=%q", cohortRow.Served(), cohortRow.Step, cohortRow.Unavailable)
 	}
 }
 

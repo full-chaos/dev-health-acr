@@ -305,10 +305,37 @@ func (r DerivedRequirement) Served() bool {
 // map iteration order.
 func DeriveRequirements(frame QuestionFrame, seed ObligationSeed, capabilities []FactCapability) []DerivedRequirement {
 	coordinates := DeriveRequirementCoordinates(frame)
-	// Whether THIS FRAME can produce a resolved member set at all. Only a
-	// cohort variant is ever discovered into one, so an organization-scope
-	// frame naming a member kind states a population nothing retrieves.
-	memberSetResolvable := frame.SubjectExpression.IsCohortVariant()
+	// Whether THIS FRAME can produce a resolved member set at all.
+	//
+	// COHORT-SHAPED IS NOT THE SAME AS COHORT-PRODUCING, and reading the
+	// shape alone was this predicate's first defect. `DiscoveredCohort` is
+	// the only production cohort producer and it builds nothing unless the
+	// frame is a cohort variant, declares a member kind, AND a discovery arm
+	// exists for that kind.
+	//
+	// THIS LINE IS NOW A CALL RATHER THAN A CHAIN OF CONJUNCTS, and that is
+	// the change, not a tidy-up. The predicate was rebuilt here by hand and
+	// three review rounds each found the next missing condition -- what a
+	// step READS versus what it RUNS OVER, then expression SHAPE versus
+	// declaring a member kind, then declaring a member kind versus that kind
+	// being SERVABLE. The third gap was measured over the fifteen published
+	// subject kinds: this derivation served a ranking row for all fifteen
+	// while the discovery seam could serve three, so TWELVE cells claimed an
+	// ordering that nothing computed. The fix for a fourth gap would have
+	// been a COPY of the seam's deny-by-default allow-list, which is where
+	// the drift restarts.
+	//
+	// So the decision was moved DOWN, into this package beside the
+	// subject-kind vocabulary, and the discovery seam consumes it too --
+	// `graphrank` still cannot be imported from here, and now nothing needs
+	// to be. One predicate, two readers, no agreement to maintain.
+	//
+	// What this deliberately does NOT try to decide: whether discovery will
+	// actually FIND any members. A servable kind whose search returns
+	// nothing is a runtime fact, unknowable here by anyone, and it is
+	// corrected on the served document by `finalizeResult` -- see
+	// `appendUnresolvedMemberSetOutcomes`.
+	memberSetResolvable := CohortMemberSetResolvable(frame.SubjectExpression)
 	rows := make([]DerivedRequirement, 0, len(coordinates))
 	for _, coordinate := range coordinates {
 		rows = append(rows, deriveRequirement(coordinate, seed, capabilities, memberSetResolvable))
@@ -348,7 +375,7 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 			row.Unavailable = RequirementReasonNoDeclaringProducer
 			return row
 		}
-		// A STEP THAT CONSUMES THE RESOLVED MEMBER SET NEEDS A FRAME THAT
+		// A STEP THAT RUNS OVER THE RESOLVED MEMBER SET NEEDS A FRAME THAT
 		// PRODUCES ONE, and only a cohort variant does.
 		//
 		// Found by an adversarial round on the wiring slice. An
@@ -365,8 +392,29 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 		// fact, and it is the SAME token the served answer's own outcome row
 		// now carries when assembly finds no member set. One record, read in
 		// two places.
-		if inputs, declared := InputsForComputedStep(step); declared &&
-			inputs.Class == ComputedInputResolvedMemberSet && !memberSetResolvable {
+		//
+		// THE PREDICATE IS `RunsOverResolvedMemberSet`, NOT
+		// `Class == ComputedInputResolvedMemberSet`, and the difference is
+		// the whole of this cell's second defect. Class says what a step
+		// READS. rank_cohort reads FACT KINDS -- its Class is `fact_kinds` --
+		// and still runs only over a cohort, so the Class test covered
+		// membership_cardinality and let rank_cohort through. A NAMED subject
+		// is a population of one, so `coordinateNamesAPopulation` above
+		// admits `ranking/subject/<named>`, and the row was then SERVED: it
+		// named rank_cohort as its server, and `planningStageOutcomeRow`
+		// seeds a served row `satisfied`. But `IsCohortVariant` is false for
+		// `named_subject` (and for `organization_scope`), so the engine
+		// resolves no cohort, RankCohort is never invoked, and
+		// ComputedStepInputReads' five declared kinds are planned as reads
+		// the fact request -- gated on the same cohort pointer -- never
+		// carries. The cell claimed an ordering that nothing computed, over
+		// facts that nothing read. Both halves close here, at the layer that
+		// owns "a computed obligation is unavailable only when its inputs
+		// are": an unavailable row is not Served, so ComputedStepInputReads
+		// plans nothing for it and the seed says `unavailable` with a named
+		// cause instead of a silent `satisfied`.
+		if inputs, declared := InputsForComputedStep(step); stepNeedsAResolvedMemberSet(inputs, declared) &&
+			!memberSetResolvable {
 			row.Quantifier = CompletionQuantifierNone
 			row.Unavailable = RequirementReasonComputedPopulationAbsent
 			// Step stays EMPTY, and that is the row invariant rather than an
@@ -398,7 +446,11 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 	}
 	row.FactKinds = kinds
 	row.Dimensions = dimensionsOfFactKinds(kinds, capabilities)
-	row.Quantifier = quantifierForCardinality(len(kinds))
+	// The DECLARED standard for this obligation, never the count of kinds
+	// that happen to serve it -- see readQuantifiers for why the cardinality
+	// rule was reversed. `kinds` is still what the row publishes as its
+	// serving set; it just no longer decides how much of that set is enough.
+	row.Quantifier = quantifierForRead(coordinate.Obligation)
 	return row
 }
 
@@ -514,6 +566,28 @@ func dimensionsOfFactKinds(kinds []FactKind, capabilities []FactCapability) []He
 	return out
 }
 
+// stepNeedsAResolvedMemberSet reports whether a computed step's own
+// declaration says it cannot run without a resolved member set.
+//
+// EXTRACTED SO THE CONJUNCT IS DECIDABLE, which is the whole reason this
+// function exists rather than the expression sitting inline. An adversarial
+// round deleted `inputs.RunsOverResolvedMemberSet &&` from the inline guard
+// and the mutant SURVIVED a fourteen-test suite -- correctly, because both
+// steps in the declaration table set the flag today, so the conjunct
+// discriminates nothing that any frame-driven fixture can reach. A conjunct
+// no fixture can isolate is not kept with a comment; it is re-pinned where it
+// IS decidable. This is a pure function, total over its arguments, so a unit
+// test can hand it a step that does NOT run over the member set -- the case
+// the table cannot currently produce -- and the guard's read of the
+// declaration stops being an untested assumption.
+//
+// `declared` is carried rather than assumed: a step absent from the table
+// declares nothing, and a missing declaration must not read as "needs
+// nothing" (which would silently serve a cell whose step cannot run).
+func stepNeedsAResolvedMemberSet(inputs ComputedStepInputs, declared bool) bool {
+	return declared && inputs.RunsOverResolvedMemberSet
+}
+
 // coordinateNamesAPopulation reports whether a coordinate names a set a
 // server step can run over.
 //
@@ -546,21 +620,69 @@ func quantifierForComputed(obligation AnswerObligation) CompletionQuantifier {
 	return CompletionQuantifierAll
 }
 
-// quantifierForCardinality is law L3's rule, derived from the MEASURED
-// cardinality of the generated seed.
+// readQuantifiers is the completion standard of each READ obligation.
 //
-// §13.15.2 records why the frozen constant could not stand: `state =
-// corroborated` "cannot be met by a one-kind seed anywhere", and its escape
-// clause ("or the registry declares only one kind") silently degraded it to
-// at_least_one wherever it bit -- a bar asserted and then quietly lowered.
-// Deriving it means the plan demands corroboration exactly where
-// corroboration is AVAILABLE and says at_least_one where it is not, which
-// is a claim a reader can check against the seed.
-func quantifierForCardinality(cardinality int) CompletionQuantifier {
-	if cardinality >= 2 {
-		return CompletionQuantifierCorroborated
+// KEYED ON THE OBLIGATION AND NOTHING ELSE. Not on the registry's cardinality
+// (see the superseded function above), and not on the requirement's derived
+// Dimensions either -- those are computed from the serving fact kinds' own
+// declarations, so keying on them would re-introduce the registry dependence
+// through a second door. The law is stated as (obligation, dimension); no read
+// obligation varies its standard by dimension today, so the dimension axis is
+// deliberately CONSTANT here rather than absent, and a test says so rather than
+// this comment.
+//
+// TOTAL over the read obligations, asserted by
+// TestEveryReadObligationDeclaresItsQuantifier rather than by a default arm,
+// because a default is exactly how a standard gets lowered without anyone
+// deciding to.
+//
+// THE VALUES REPRODUCE THE SHIPPED ARTIFACT for every obligation the corpus
+// exercises: `state`, `principal_drivers`, `trend_series` and `period_delta`
+// read `corroborated` and `health` reads `at_least_one` in
+// testdata/requirement_trace.txt today, and they still do. That byte-identity
+// is the evidence this change RE-DERIVES the same standards from an honest key
+// rather than re-deciding what they are.
+//
+// FOUR ENTRIES ARE NOT EXERCISED BY THAT ARTIFACT -- `completion`, `readiness`,
+// `remaining_work` and `allocation_breakdown` derive no served coordinate in
+// any of its thirteen frames. Their value is the law's stated default,
+// `at_least_one`, and that is a DECLARATION, not a measurement. Said plainly
+// because the alternative is a reader assuming all nine were checked against
+// something: if a future frame derives one of the four, its standard is a
+// decision to take deliberately then, not a number to inherit from whichever
+// producers happen to be registered that week.
+var readQuantifiers = map[AnswerObligation]CompletionQuantifier{
+	ObligationState:            CompletionQuantifierCorroborated,
+	ObligationPrincipalDrivers: CompletionQuantifierCorroborated,
+	ObligationTrendSeries:      CompletionQuantifierCorroborated,
+	ObligationPeriodDelta:      CompletionQuantifierCorroborated,
+
+	// One authoritative source is the standard for a single derived
+	// measure. It reads at_least_one in the artifact today for a DIFFERENT
+	// reason -- exactly one fact kind serves it -- and telling a decision
+	// apart from that coincidence is the whole point of the new key.
+	ObligationHealth: CompletionQuantifierAtLeastOne,
+
+	// The law's default, unexercised by the corpus. See the header.
+	ObligationCompletion:          CompletionQuantifierAtLeastOne,
+	ObligationReadiness:           CompletionQuantifierAtLeastOne,
+	ObligationRemainingWork:       CompletionQuantifierAtLeastOne,
+	ObligationAllocationBreakdown: CompletionQuantifierAtLeastOne,
+}
+
+// quantifierForRead returns the declared standard for a read obligation.
+//
+// An obligation absent from the table yields `none`, which is the honest
+// answer -- no standard was declared, so none is claimed. The read evaluator
+// skips a requirement whose quantifier it does not recognise rather than
+// defaulting it to one source, and the completeness derivation then reads that
+// requirement's planning-only rows as `partial`. So a gap in this table costs
+// an accurate CAUSE and never an unearned `complete`.
+func quantifierForRead(obligation AnswerObligation) CompletionQuantifier {
+	if quantifier, declared := readQuantifiers[obligation]; declared {
+		return quantifier
 	}
-	return CompletionQuantifierAtLeastOne
+	return CompletionQuantifierNone
 }
 
 // classifyUnavailable attributes an empty cell to the FIRST clause that

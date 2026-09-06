@@ -12,7 +12,7 @@ func TestAtLeastVersionFloor(t *testing.T) {
 		version string
 		want    bool
 	}{
-		{"exact floor", "26.7.5.10", true},
+		{"exact floor", "26.7.0.0", true},
 		{"higher patch", "26.7.9.1", true},
 		{"higher minor", "26.10.1.1", true},
 		{"higher major", "27.1.1.1", true},

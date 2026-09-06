@@ -1176,6 +1176,7 @@ type recordingTelemetry struct {
 	// call verbatim (CHAOS-4622 remainder) -- a slice, so a test can assert
 	// the exact admitted/basis pair reported, not merely that the gate fired.
 	cohortExactNameCensusGates []cohortExactNameCensusGateRecord
+	neighborLookupFailures     []neighborLookupFailureRecord
 
 	// embedFailureEscalations records every
 	// RecordVectorProjectionEmbedFailuresEscalated call verbatim
@@ -1234,6 +1235,12 @@ type cohortKindBasisRecord struct {
 	declaredKind contextfabric.SubjectKind
 	basis        graphrank.CohortKindBasis
 	discovered   bool
+	// poolTruncation (CHAOS-5168) is recorded for the same reason the
+	// fields above it are: a test that asserts a cohort was built from a
+	// clipped pool must read what the production emit reported, never
+	// merely that the emit fired.
+	poolTruncation     CohortPoolTruncationBasis
+	poolTruncationArms []CohortPoolTruncationArm
 }
 
 func (r *recordingTelemetry) RecordObservationTraversalDegraded(context.Context, string, int) {}
@@ -1293,8 +1300,28 @@ func (r *recordingTelemetry) RecordCohortExactNameCensusGate(_ context.Context, 
 // graph had no matching nodes" from "the seam refused this kind", so a test
 // asserting a refusal or a discovery needs to read it, not merely to have
 // caused it.
-func (r *recordingTelemetry) RecordCohortKindBasis(_ context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool) {
-	r.cohortKindBases = append(r.cohortKindBases, cohortKindBasisRecord{orgID: orgID, declaredKind: declaredKind, basis: basis, discovered: discovered})
+func (r *recordingTelemetry) RecordCohortKindBasis(_ context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis, poolTruncationArms []CohortPoolTruncationArm) {
+	r.cohortKindBases = append(r.cohortKindBases, cohortKindBasisRecord{orgID: orgID, declaredKind: declaredKind, basis: basis, discovered: discovered, poolTruncation: poolTruncation, poolTruncationArms: poolTruncationArms})
+}
+
+func (r *recordingTelemetry) RecordNeighborLookupFailed(_ context.Context, orgID, originCanonicalID, neighborUUID string, site NeighborLookupFailureSite, err error) {
+	r.neighborLookupFailures = append(r.neighborLookupFailures, neighborLookupFailureRecord{
+		orgID: orgID, originCanonicalID: originCanonicalID, neighborUUID: neighborUUID, site: site, err: err,
+	})
+}
+
+// neighborLookupFailureRecord is one RecordNeighborLookupFailed call, verbatim.
+// Recorded rather than counted for the same reason the production line carries
+// identifiers at all: a count cannot say WHICH member went missing.
+type neighborLookupFailureRecord struct {
+	orgID             string
+	originCanonicalID string
+	neighborUUID      string
+	// site is WHICH read failed. Recorded because one counter has three
+	// producers: without it a test can prove the loss was reported and still
+	// not prove the reported site is the one that actually fired.
+	site NeighborLookupFailureSite
+	err  error
 }
 
 func vectorAdapterWithTelemetry(t *testing.T, fake *fakeConn, embedder contextfabric.Embedder, telemetry GraphTelemetry) *Adapter {

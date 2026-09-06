@@ -94,9 +94,9 @@ func SeedRequirementOutcomes(requirements []DerivedRequirement) []RequirementOut
 	return rows
 }
 
-// SeedOutcomesFromPublishedPlanRequirements builds the same planning-stage
-// rows from the requirement array a PLAN publishes, rather than from the
-// derivation the plan was projected out of.
+// SeedOutcomesFromPublishedPlanRequirements builds planning-stage rows for the
+// requirements a PLAN publishes, for the exits the derivation-side seed above
+// never reaches.
 //
 // It exists because the two halves of the account were produced at two
 // different places, and only one of them ran on every exit. The requirement
@@ -108,9 +108,27 @@ func SeedRequirementOutcomes(requirements []DerivedRequirement) []RequirementOut
 //
 // The input is the published array precisely so this cannot become a second
 // opinion about what the requirements ARE. It reads what the plan already
-// says; a row it emits cannot describe a requirement the plan does not
-// publish, and it re-uses the SAME row builder and the SAME cause table as
-// the derivation-side seed, so the two cannot drift.
+// says, so a row it emits cannot describe a requirement the plan does not
+// publish.
+//
+// ITS ROWS ARE NOT THE SEED'S ROWS, AND THAT IS DELIBERATE. This header used
+// to end "it re-uses the SAME row builder and the SAME cause table as the
+// derivation-side seed, so the two cannot drift". That stopped being true when
+// the gap path got its own builder: a row minted HERE describes a requirement
+// the turn NEVER REACHED, so it reads `not_attempted` with impact `dimension`
+// and the cause `answer_terminated_before_attempt`, while the derivation-side
+// seed reads `satisfied` with impact `none` for a requirement the registry can
+// serve. See unattemptedRequirementRow for why sharing one builder between the
+// two situations forced one default to stand for both and the wrong one won.
+// What the two still share is the IDENTITY and the cause table for an
+// unservable requirement, which is exactly what
+// TestTheSeedAndTheGapRowAgreeOnIdentityAndDisagreeOnOutcome pins.
+//
+// So a CALLER MUST NOT reach for this function to obtain "a planning seed".
+// It is the gap builder. A test fixture that takes its seed from here and then
+// expects seed semantics gets a row that is already not-lossless, which makes
+// the completeness derivation return `partial` before any later pass is
+// consulted -- an outcome that looks like the behaviour under test and is not.
 func SeedOutcomesFromPublishedPlanRequirements(published []contractsv1.ContextFabricPlanRequirement) []RequirementOutcomeRow {
 	if len(published) == 0 {
 		return nil

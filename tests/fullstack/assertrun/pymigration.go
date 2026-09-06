@@ -63,7 +63,10 @@ var (
 	// there (it is always either a literal client.command("""...""") argument, matched
 	// directly by the regexes above, or a dynamically-built string this file cannot see at
 	// all); stripping docstrings before the *residual* CREATE/DROP/unrecognized-ALTER scan
-	// keeps that scan from misreading narration as code.
+	// keeps that scan from misreading narration as code. "#" comments narrate exactly the
+	// same way and are stripped too, by stripPythonComments rather than by a regex -- a
+	// comment can contain a quote character, so where one ends has to be scanned, not
+	// matched.
 	pyModuleDocstringRE = regexp.MustCompile(`(?s)\A\s*("""(?:.*?)"""|'''(?:.*?)''')`)
 	pyBlockDocstringRE  = regexp.MustCompile(`(?s):[ \t]*\n[ \t]*("""(?:.*?)"""|'''(?:.*?)''')`)
 )
@@ -90,6 +93,33 @@ func isPlausibleIdentifier(name string) bool {
 	return !notAPlausibleTableOrColumnName[strings.ToLower(name)]
 }
 
+// precededBySHOW reports whether the "CREATE TABLE" beginning at index at is really the tail
+// of a `SHOW CREATE TABLE`, which is a READ -- the first step of every shadow-table rebuild in
+// this migration directory (027, 042, 055, 084, 087, ...) -- and never DDL. Go's RE2 engine
+// has no lookbehind, so the pattern itself cannot exclude it; this checks the preceding token
+// instead.
+//
+// Without this, an f-string like `f"{table}: SHOW CREATE TABLE returned no DDL"` (075:257 and
+// 084:323 on ops main today) is scanned as `CREATE TABLE returned`, and the replay reports an
+// unhandled `returned` table for a statement that never existed. That is not merely noise:
+// verify-seed-schema fails CLOSED on an unattributed note naming a table the seed writes to,
+// so a prose word that happened to match a seeded table name would turn a required check red
+// with no DDL behind it.
+func precededBySHOW(source string, at int) bool {
+	prefix := strings.TrimRight(source[:at], " \t\r\n")
+	if !strings.HasSuffix(strings.ToUpper(prefix), "SHOW") {
+		return false
+	}
+	// Require a word boundary, so a hypothetical identifier ending in "show" is not mistaken
+	// for the keyword.
+	rest := prefix[:len(prefix)-len("SHOW")]
+	if rest == "" {
+		return true
+	}
+	last := rest[len(rest)-1]
+	return !(last == '_' || (last >= 'a' && last <= 'z') || (last >= 'A' && last <= 'Z') || (last >= '0' && last <= '9'))
+}
+
 // stripPythonDocstrings removes docstrings (module-level, at the very start of the file, and
 // function/class-level, immediately after a ":") from source, leaving everything else --
 // including every real client.command(...) DDL argument, which is never a bare docstring
@@ -107,6 +137,80 @@ func stripPythonDocstrings(source string) string {
 	return source
 }
 
+// stripPythonComments removes "# ..." to end-of-line, but only where the "#" is outside a
+// string literal, so a "#" inside a real DDL argument is never touched. It is the exact
+// counterpart of stripPythonDocstrings, for the same reason and against the same hazard:
+// these migrations narrate in prose, and a comment is as much prose as a docstring is.
+//
+// It was added after ops migration 087 shipped a comment reading "(SHOW / # CREATE TABLE
+// always renders SETTINGS, if present, as the trailing clause)". The residual scan read
+// "CREATE TABLE always" as a statement and reported an unhandled `always` table. Two more
+// already existed on ops main -- 075 and 084 each yield a `returned` table the same way.
+// None was blocking, but only by luck: verify-seed-schema fails CLOSED when an unattributed
+// note names a table the seed writes to, so one comment happening to read "... CREATE TABLE
+// git_commits ..." would have turned a required check red with no DDL behind it at all.
+//
+// Ordering matters and is not interchangeable: docstrings are stripped FIRST. A "#" inside a
+// docstring would otherwise be stripped to end-of-line, and a docstring whose closing """
+// sits on such a line would lose it -- leaving the docstring regex to run on to the NEXT
+// """ in the file and delete real code between them. The reverse ordering is safe, because
+// this scanner skips a comment's whole body without interpreting quotes inside it (so an
+// apostrophe in "another runner's lock" cannot open a string state, and neither can a """).
+func stripPythonComments(source string) string {
+	var out strings.Builder
+	runes := []rune(source)
+	quote := "" // "", "'", `"`, "'''" or `"""`
+	for i := 0; i < len(runes); i++ {
+		c := runes[i]
+		if quote == "" {
+			if c == '#' {
+				for i < len(runes) && runes[i] != '\n' {
+					i++
+				}
+				// Preserve the newline: every regex below is line-sensitive (pyListAssignment
+				// anchors with (?m)^) and dropping it would splice two lines together.
+				if i < len(runes) {
+					out.WriteRune('\n')
+				}
+				continue
+			}
+			if c == '\'' || c == '"' {
+				quote = string(c)
+				if i+2 < len(runes) && runes[i+1] == c && runes[i+2] == c {
+					quote = strings.Repeat(string(c), 3)
+				}
+				out.WriteString(quote)
+				i += len(quote) - 1
+				continue
+			}
+			out.WriteRune(c)
+			continue
+		}
+		if c == '\\' && i+1 < len(runes) {
+			out.WriteRune(c)
+			out.WriteRune(runes[i+1])
+			i++
+			continue
+		}
+		if len(quote) == 1 && c == '\n' {
+			// Python forbids a raw newline inside a single-quoted string, so an unbalanced
+			// quote in code (or in text this file failed to recognize as prose) cannot
+			// swallow the rest of the file: close the state at the line end instead.
+			quote = ""
+			out.WriteRune(c)
+			continue
+		}
+		if i+len(quote) <= len(runes) && string(runes[i:i+len(quote)]) == quote {
+			out.WriteString(quote)
+			i += len(quote) - 1
+			quote = ""
+			continue
+		}
+		out.WriteRune(c)
+	}
+	return out.String()
+}
+
 // looksLikeShadowTable reports whether name matches the "<table>_new" / "*shadow*" naming
 // convention every real shadow-table-rebuild migration in this codebase uses for its
 // temporary copy. Those tables are created and dropped within the same migration and never
@@ -122,11 +226,13 @@ func looksLikeShadowTable(name string) bool {
 // interpret, so the caller can surface the uncertainty (and, for verify-seed-schema, fail
 // closed when it matters) instead of silently trusting an incomplete replay.
 func applyMigrationPython(schema *chSchema, source, fileName string) (unhandled []unhandledDDL) {
-	// Strip docstrings once, up front, so every scan below (including the ADD/DROP/RENAME
+	// Strip prose once, up front, so every scan below (including the ADD/DROP/RENAME
 	// matchers, not just the residual CREATE/DROP/unrecognized-ALTER one) sees the same
-	// offsets and the same text -- real DDL is never a bare docstring statement, so this
-	// cannot affect anything this file is meant to recognize.
+	// offsets and the same text -- real DDL is never a bare docstring statement nor a "#"
+	// comment, so this cannot affect anything this file is meant to recognize. Docstrings
+	// first, then comments: see stripPythonComments for why that order is load-bearing.
 	source = stripPythonDocstrings(source)
+	source = stripPythonComments(source)
 
 	lists := map[string][]string{}
 	for _, m := range pyListAssignment.FindAllStringSubmatch(source, -1) {
@@ -231,6 +337,9 @@ func applyMigrationPython(schema *chSchema, source, fileName string) (unhandled 
 	}
 
 	for _, loc := range pyLiteralCreateTable.FindAllStringIndex(source, -1) {
+		if precededBySHOW(source, loc[0]) {
+			continue
+		}
 		m := pyLiteralCreateTable.FindStringSubmatch(source[loc[0]:loc[1]])
 		if looksLikeShadowTable(m[1]) || !isPlausibleIdentifier(m[1]) {
 			continue

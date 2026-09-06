@@ -1,6 +1,6 @@
 {
   "schema_version": "fullstack_fixture_manifest.v1",
-  "fixture_version": "2026-07-25.1",
+  "fixture_version": "2026-09-05.1",
   "description": "Deterministic ClickHouse projection of testdata/evaluation/v1 (CHAOS-2918) for the CHAOS-3065 full-stack OpenCode acceptance gate.",
   "source_corpus": {
     "path": "testdata/evaluation/v1",
@@ -181,7 +181,7 @@
       "deployments": 1,
       "work_graph_deployment_incident_edges": 1,
       "file_hotspot_daily": 3,
-      "file_complexity_snapshots": 4
+      "file_complexity_snapshots": 3
     },
     "example-org/other-service": {
       "repos": 1,
@@ -202,7 +202,7 @@
       "file_complexity_snapshots": 0
     }
   },
-  "expected_row_counts_note": "Counts are per repo_id, optionally tightened with org_id (joined through repos, or filtered directly for the tables listed in org_id_substitution.org_id_on_git_ci_deployment_tables, all of which now have org_id set by this seed: e.g. 'SELECT count() FROM <t> FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID}'). Two tables must NEVER use FINAL: file_hotspot_daily and file_complexity_snapshots are plain MergeTree (PARTITION BY toYYYYMM(...), not ReplacingMergeTree), so FINAL is rejected outright -- count them with a plain 'SELECT count() FROM <t> WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID}' because this seed sets org_id explicitly on both tables (matching why the catalog queries for file_hotspots.v1/file_complexity.v1 use GROUP BY instead of FINAL). Every other table listed here (repos, git_commits, git_commit_stats, ci_pipeline_runs, git_pull_requests, git_pull_request_reviews, work_items, work_item_dependencies, work_graph_edges, ai_workflow_runs, ai_workflow_artifact_edges, work_graph_pr_review_outcome_edges, deployments, work_graph_deployment_incident_edges) is ReplacingMergeTree, has org_id set by this seed, and should use FINAL. Totals are intentionally not listed here: every key must resolve to a repository in fixed_identities.repositories. incidents is never seeded (see background_density_rows and CHAOS-3068).",
+  "expected_row_counts_note": "Counts are per repo_id, optionally tightened with org_id (joined through repos, or filtered directly for the tables listed in org_id_substitution.org_id_on_git_ci_deployment_tables, all of which now have org_id set by this seed: e.g. 'SELECT count() FROM <t> FINAL WHERE org_id = {org_id:String} AND repo_id = {repo_id:UUID}'). WHICH TABLES USE FINAL IS NOT LISTED HERE, AND MUST NOT BE: the verifier reads each table's engine from system.tables at probe time (tests/fullstack/assertrun/tableshape.go, describeTable) and appends FINAL for any Replacing/Collapsing engine, precisely so an ops migration that changes an engine does not need an edit here. What DOES have to be kept in step is the UNIT each number below is counted in, because that unit follows the engine: with FINAL the probe counts DISTINCT sorting-key tuples, without it raw inserted rows. file_hotspot_daily is the only plain MergeTree table this seed writes to (ORDER BY (org_id, repo_id, day, file_path)); a plain MergeTree collapses nothing, so its 3 is the 3 rows the seed inserts -- src/checkout/cart_drawer.ts twice (computed_at 11:00 and 12:00, the same key) plus src/checkout/replaced.ts once -- and FINAL against it is rejected outright. file_complexity_snapshots became ReplacingMergeTree(computed_at) in ops migration 087_complexity_tables_replacing_merge_tree.py (CHAOS-4291), keeping ORDER BY (org_id, repo_id, as_of_day, file_path) -- note that ref is NOT in that key: its 3 is the 3 distinct key tuples among the 4 rows the seed inserts, because cart_drawer.ts is written at 11:00 and again at 12:00 under the same key and the newest computed_at wins. Counting that table WITHOUT FINAL would be 4 before background merges and 3 after, i.e. not deterministic, so FINAL is the stable read and 3 is the count of rows a reader can actually see. Neither table's product query is affected: file_hotspots.v1/file_complexity.v1 in source_queries.go pick their latest run explicitly (GROUP BY plus an exact run-identity match), never FINAL. Every other table listed here (repos, git_commits, git_commit_stats, ci_pipeline_runs, git_pull_requests, git_pull_request_reviews, work_items, work_item_dependencies, work_graph_edges, ai_workflow_runs, ai_workflow_artifact_edges, work_graph_pr_review_outcome_edges, deployments, work_graph_deployment_incident_edges) is ReplacingMergeTree, has org_id set by this seed, and is counted with FINAL. Totals are intentionally not listed here: every key must resolve to a repository in fixed_identities.repositories. incidents is never seeded (see background_density_rows and CHAOS-3068).",
   "scope_probes": [
     {
       "description": "widget-service resolves to exactly one repository row for the authenticated org",
