@@ -307,6 +307,78 @@ func TestAMixedKindComparisonEnforcesSamenessAcrossOperands(t *testing.T) {
 	}
 }
 
+// TestOperandsWithDIFFERENTCatalogsStillReachTheSamenessArm is the pin for the
+// readiness/sameness split, and it exists because the test ABOVE cannot fail on
+// this shape.
+//
+// EVERY EXISTING SAMENESS TEST GIVES BOTH OPERANDS THE SAME DECLARED CATALOG.
+// That is the blind spot a keystone review found: the readiness gate judged
+// every operand at the CALLING ROW's catalog and threshold, which is harmless
+// while the catalogs agree and wrong the moment they do not. The real registry
+// does not make them agree -- `team` is declared over flow/health/investment/
+// landscape/readiness/workload, `repository` over health/identity/metrics --
+// so this is the production shape, not a corner.
+//
+// THE DEFECT IT PINS, reproduced on the tip before the fix: team read
+// flow+health and repository read health+metrics, each meeting ITS OWN
+// corroborated threshold of 2. Scoring repository against the team row's
+// [flow health] gave 1, the gate closed, BOTH rows fell through to
+// `satisfied/none 1/1`, and the answer derived `complete` -- a comparison
+// certified whole while its operands shared exactly one kind. The completeness
+// consequence follows from these rows and is pinned by the derivation's own
+// tests; what is asserted here is the rows, which is what the gate decides.
+//
+// The intersection is NOT empty here, which is what separates this from the
+// test above: team and repository share `health`, so `len(common)` is 1
+// against a threshold of 2. `1/2`, not `0/2` -- a shortfall that is only
+// visible once readiness stops being asked at the wrong standard.
+//
+// SLOT-KEYED, COUNT-BASED, NO IDENTITY BINDING. The standard the gate applies
+// is looked up by declared operand SUBJECT KIND -- the coordinate the
+// requirement is keyed by -- never by matching a committed ref to a slot. The
+// two operands here are of different kinds, so each finds its own standard;
+// two operands of the SAME kind would share one, which is exactly what one
+// requirement per coordinate means. Slots remain counted and unbound, and this
+// test asserts row content only, never which ref answered which slot.
+func TestOperandsWithDIFFERENTCatalogsStillReachTheSamenessArm(t *testing.T) {
+	t.Parallel()
+	alpha := teamRef("team_alpha")
+	beta := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:beta", Label: "beta"}
+	flow, health := contractsv1.ContextFabricFactFlow, contractsv1.ContextFabricFactHealth
+	identity, metrics := contractsv1.ContextFabricFactIdentity, contractsv1.ContextFabricFactMetrics
+	investment, workload := contractsv1.ContextFabricFactInvestment, contractsv1.ContextFabricFactWorkload
+
+	// DIFFERENT CATALOGS, mirroring the registry's own declarations. Neither
+	// operand is declared over the other's full catalog, so neither can be
+	// judged by it.
+	teamReq := operandRequirement(SubjectTeam, CompletionQuantifierCorroborated,
+		flow, health, investment, workload)
+	repoReq := operandRequirement(SubjectRepository, CompletionQuantifierCorroborated,
+		health, identity, metrics)
+	published := []contractsv1.ContextFabricPlanRequirement{teamReq, repoReq}
+
+	rows := evaluateOperands(published,
+		namedOperandFrame(SubjectTeam, SubjectRepository),
+		[]SubjectRef{alpha, beta},
+		factCoverage(flow, SourceAvailable, health, SourceAvailable,
+			identity, SourceAvailable, metrics, SourceAvailable,
+			investment, SourceAvailable, workload, SourceAvailable),
+		// Each operand is read to ITS OWN standard -- team flow+health (2 of
+		// its 4 declared), repository health+metrics (2 of its 3). Both are
+		// ready; they share only `health`.
+		factsFor(alpha, kindList(flow, health), beta, kindList(health, metrics)),
+	)
+
+	for _, requirement := range published {
+		row := rowFor(t, rows, requirement.Requirement)
+		assertRow(t, row,
+			contractsv1.ContextFabricRequirementNarrowed,
+			contractsv1.ContextFabricAnswerImpactDepth,
+			contractsv1.ContextFabricCoverageDetailFactNarrowed,
+			false, 1, 2)
+	}
+}
+
 // ARM 21 sub-arm — DIFFERENT QUANTIFIERS over the SAME empty intersection must
 // publish DIFFERENT denominators, because each row evaluates conjunct 2 with
 // its OWN threshold.

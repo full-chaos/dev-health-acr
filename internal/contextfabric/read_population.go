@@ -130,6 +130,44 @@ type readPopulationEvidence struct {
 	// its own kinds, so both rows would certify while the operands share no
 	// evidence at all.
 	comparisonOperands []SubjectRef
+	// comparisonStandards is each operand kind's OWN declared standard, keyed
+	// by subject kind and read off the published plan.
+	//
+	// READINESS AND SAMENESS ARE DIFFERENT QUESTIONS, and one clause used to
+	// answer both. "Was every operand read" must be asked of each operand
+	// against the catalog and quantifier ITS OWN requirement declares; "is the
+	// evidence the same" is then asked comparison-wide at the CURRENT row's
+	// standard. Judging readiness at the current row's standard measures an
+	// operand against a catalog it was never declared over: a keystone review
+	// reproduced a repository operand (declared over [health identity
+	// metrics], read health+metrics) scoring 1 against the team row's [flow
+	// health], failing the gate, and both rows falling through to
+	// `satisfied/none 1/1` while the answer derived `complete` -- a false
+	// complete on precisely the comparison this layer exists to disclose.
+	//
+	// KEYED BY DECLARED OPERAND KIND, AND THAT IS NOT AN IDENTITY BINDING.
+	// The requirement coordinate IS obligation/role/subject, so there is
+	// exactly one `each_operand` read requirement per subject kind and two
+	// operands of the same kind share one standard by construction. Nothing
+	// here correlates a committed ref to a particular operand SLOT: slots stay
+	// COUNTED (`Declared` is still the frame's slot walk) and are never bound
+	// to refs, so this layer acquires no second resolution authority. A
+	// per-slot standard would REQUIRE that binding, which is why it is refused
+	// rather than merely unbuilt.
+	comparisonStandards map[SubjectKind]operandStandard
+}
+
+// operandStandard is one operand kind's declared completion standard: the
+// catalog of kinds that can serve it, and how many of them its quantifier
+// demands.
+//
+// CARRIED, NEVER RE-DERIVED. Both fields are read off the published plan
+// requirement -- the same row the kind-level evaluator judges that operand by
+// -- so the readiness gate and the operand's own row cannot disagree about
+// what that operand's standard is.
+type operandStandard struct {
+	kinds     []FactKind
+	threshold int
 }
 
 // populationFor returns the population a requirement's scope names, and
@@ -431,11 +469,39 @@ func readPopulationEvidenceFrom(
 	facts CanonicalFactBundle,
 ) readPopulationEvidence {
 	evidence := readPopulationEvidence{
-		Present:            true,
-		coverage:           subjectReadCoverage(facts),
-		memberPopulation:   cohortMemberPopulation(result.Cohort, plan.Narrowing),
-		groupPopulation:    cohortGroupPopulation(result.Cohort, plan.Narrowing),
-		operandPopulations: map[SubjectKind]readPopulation{},
+		Present:             true,
+		coverage:            subjectReadCoverage(facts),
+		memberPopulation:    cohortMemberPopulation(result.Cohort, plan.Narrowing),
+		groupPopulation:     cohortGroupPopulation(result.Cohort, plan.Narrowing),
+		operandPopulations:  map[SubjectKind]readPopulation{},
+		comparisonStandards: map[SubjectKind]operandStandard{},
+	}
+
+	// EACH OPERAND KIND'S OWN STANDARD, off the published plan.
+	//
+	// The filter is the kind-level evaluator's own filter
+	// (read_requirement_evaluation.go:418-427), deliberately: a requirement
+	// that evaluator will not judge must not be a standard this gate judges
+	// by, or the readiness question and the operand's own row would be
+	// answered from different rows. An unknown quantifier is skipped here for
+	// the same reason it is skipped there -- it yields no threshold, and the
+	// gate below treats a missing standard as not-ready rather than inventing
+	// one.
+	for _, requirement := range plan.Requirements {
+		if requirement.Kind != string(ObligationKindRead) || !requirement.Served() {
+			continue
+		}
+		if requirement.Scope != string(CompletionScopeEachOperand) {
+			continue
+		}
+		threshold, known := readQuantifierThreshold(requirement.Quantifier)
+		if !known {
+			continue
+		}
+		evidence.comparisonStandards[requirement.Subject] = operandStandard{
+			kinds:     requirement.FactKinds,
+			threshold: threshold,
+		}
 	}
 
 	// The operand populations, one per subject kind the frame's explicit set
@@ -647,11 +713,17 @@ func readPopulationOutcomeRow(
 	// own row says `scope 0/1`.
 	//
 	// So the intersection runs only when the comparison-wide set is complete
-	// AND every member of it meets this row's standard. Otherwise this row
-	// falls through to its own arms, which describe what happened to ITS
-	// population and claim nothing about the comparison.
+	// AND every member of it meets ITS OWN standard. Otherwise this row falls
+	// through to its own arms, which describe what happened to ITS population
+	// and claim nothing about the comparison.
+	//
+	// READINESS AT THE OPERAND'S STANDARD, SAMENESS AT THIS ROW'S. The gate
+	// asks whether each operand was read as its own requirement demands; the
+	// intersection below then asks whether what they share meets THIS row's
+	// threshold. Asking both at this row's standard is the false-complete a
+	// keystone review reproduced -- see comparisonStandards.
 	if len(evidence.comparisonOperands) > 0 && population.Census != populationIncomplete &&
-		evidence.comparisonFullyRead(servedKinds, threshold) {
+		evidence.comparisonFullyRead() {
 		common := commonServedKinds(evidence.comparisonOperands, servedKinds, evidence.coverage)
 		if len(common) < threshold {
 			// Depth: the subjects the answer covers are unchanged, and what
@@ -845,18 +917,32 @@ func rowCountUnits(row RequirementOutcomeRow) countUnits {
 }
 
 // comparisonFullyRead reports whether EVERY operand the frame names, across all
-// subject kinds, was read to this requirement's own standard.
+// subject kinds, was read to THAT OPERAND'S OWN declared standard.
 //
-// TWO CONJUNCTS, and both are needed. Every committed operand must meet the
+// TWO CONJUNCTS, and both are needed. Every committed operand must meet its own
 // threshold -- and the committed set must be the whole named set, because an
 // operand that never resolved has no subject to test and would otherwise be
 // skipped into a false "all read".
-func (e readPopulationEvidence) comparisonFullyRead(servedKinds []FactKind, threshold int) bool {
+//
+// THE STANDARD IS THE OPERAND'S, NOT THE CALLING ROW'S. This function takes no
+// servedKinds/threshold parameters on purpose: it once did, and judging every
+// operand at the calling row's standard is what let a fully-read operand score
+// short against a catalog it was never declared over and suppress the very
+// disclosure it was gated for. The comparison-wide SET stays comparison-wide;
+// only the STANDARD each member is judged by became its own.
+func (e readPopulationEvidence) comparisonFullyRead() bool {
 	if e.comparisonDeclared == 0 || len(e.comparisonOperands) != e.comparisonDeclared {
 		return false
 	}
 	for _, subject := range e.comparisonOperands {
-		if len(servedKindsForSubject(subject, servedKinds, e.coverage)) < threshold {
+		// NO STANDARD IS NOT-READY, never a pass. An operand whose kind
+		// published no read requirement this turn has nothing to be measured
+		// against, and certifying it read would be a claim from an absence.
+		standard, declared := e.comparisonStandards[subject.Kind]
+		if !declared {
+			return false
+		}
+		if len(servedKindsForSubject(subject, standard.kinds, e.coverage)) < standard.threshold {
 			return false
 		}
 	}

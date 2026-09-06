@@ -206,9 +206,17 @@ func TestTheTelemetryUnitsAndCensusCannotLie(t *testing.T) {
 // by this layer's not-enumerable arm AND by two KIND-level arms, and labelling
 // the latter `population` reported the wrong denominator on 21 combinations.
 //
-// So this drives EVERY arm that can reach the event and asserts its units
+// So this enumerates every arm that can reach the event and asserts its units
 // against what the row's numbers actually count. A new arm that acquires a
 // silent label fails here.
+//
+// WHAT IT DOES NOT DO, corrected after a keystone review read this comment as
+// a stronger claim than the code makes: it drives CONSTRUCTED rows straight
+// through `rowCountUnits`. It does not run the event BUILDER, so it cannot
+// show that the builder reaches these arms or that it hands them these rows --
+// only that `rowCountUnits` labels each shape correctly once it has one. The
+// builder's own reachability is pinned elsewhere; a comment claiming coverage
+// this test does not have is how a gap gets banked as closed.
 func TestEveryArmsCountUnitsMatchItsQuantity(t *testing.T) {
 	t.Parallel()
 	for _, arm := range []struct {

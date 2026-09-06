@@ -713,6 +713,48 @@ derives `degraded`, and `degraded` is absorbing (`:661-665`).
 
 ---
 
+### D19 — readiness is asked at each operand's OWN declared standard; sameness stays comparison-wide
+
+**Decision.** The sameness gate asks two different questions and they take two different standards.
+**Readiness** — "was every operand of this comparison read?" — is asked of each operand against the
+fact-kind catalog and completion quantifier **its own published requirement declares**. **Sameness**
+— "is the evidence they share enough?" — is then asked comparison-wide, at the **current row's**
+standard, over the same operand set as before. Only the standard readiness is judged by moved; the
+set stays comparison-wide, and the intersection is untouched.
+
+**Why, and it is a defect that shipped through a full review.** D17's gate judged *every* operand at
+the *calling row's* catalog and threshold. That is harmless only while every operand is declared over
+the same catalog, which the registry does not do: the team operand is declared over
+flow/health/investment/landscape/readiness/workload, the repository operand over
+health/identity/metrics. A team read `flow+health` and a repository read `health+metrics` each meet
+their own corroborated threshold of two — but scoring the repository against the team row's
+`[flow health]` yields one, the gate closes, **both rows fall through to `satisfied 1/1`, and the
+answer derives `complete`**. A comparison whose operands share exactly one kind was certified whole.
+Reproduced against the live registry declarations, the real frame and requirement derivation, the
+planning seed and the production finalizer; the same repro reports `narrowed/depth 1/2` on both rows
+and `partial` once readiness is asked correctly.
+
+**SLOT-KEYED, COUNT-BASED, NO IDENTITY BINDING — the constraint this decision is held to.** The
+standard is carried **per declared operand subject kind**, which is the coordinate the requirement
+itself is keyed by (`obligation/role/subject`): there is exactly one `each_operand` read requirement
+per subject kind, so two operands of the same kind share one standard by construction. Nothing here
+correlates a committed subject ref to a particular operand slot. Slots are still **counted**, never
+bound — `Declared` continues to come from the frame's slot walk, and the read evaluator acquires no
+second resolution authority. A per-slot standard would require exactly that binding and is therefore
+refused, not merely unimplemented.
+
+**What did NOT change.** The comparison-wide operand set. The intersection and its threshold. The
+second conjunct requiring the committed set to be the whole named set. The precedence order. An
+operand kind that published no read requirement this turn is **not ready** rather than assumed read:
+certifying against an absent standard would be a claim from an absence.
+
+**Cost of the fix, stated.** Every existing sameness test gave both operands the *same* declared
+catalog, so none of them could fail on this shape — which is why statement coverage of the gate was
+already total while the defect stood. The pin added with this decision is the first test in the
+family whose operands are declared over different catalogs.
+
+---
+
 ## 14.3 Known holes and open questions — the list for an external reviewer
 
 Ordered by how much of the design rests on them. Nothing here is hidden in a ticket; each names
