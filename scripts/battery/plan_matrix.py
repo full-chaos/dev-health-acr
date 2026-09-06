@@ -34,7 +34,8 @@ def main():
     )
     args = ap.parse_args()
 
-    mutants = [json.loads(l) for l in io.open(args.table, encoding="utf-8") if l.strip()]
+    with io.open(args.table, encoding="utf-8") as f:
+        mutants = [json.loads(l) for l in f if l.strip()]
     if not mutants:
         print("REFUSING: the table names no mutants", file=sys.stderr)
         return 2
