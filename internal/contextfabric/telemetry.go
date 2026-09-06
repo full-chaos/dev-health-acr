@@ -1121,9 +1121,28 @@ func (t SlogEngineTelemetry) RecordItemAccounting(ctx context.Context, principal
 		"ledger_debits", event.Debits,
 		"budgeted_items", event.Budgeted,
 		"max_items", event.MaxItems,
+		// The ALLOCATOR's own verdict, as its own key. Empty when the grants
+		// agree, which is the ordinary case even on a ledger disagreement --
+		// the two checks fail independently and a reader must be able to tell
+		// which one did. Routed through the closed vocabulary so a corrupted
+		// or future value reports as unclassified rather than as free text.
+		"allocation_disagreement", string(validAllocationDisagreementOrUnclassified(event.AllocationDisagreement)),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.ErrorContext(ctx, "context fabric item accounting disagreement", args...)
+}
+
+// validAllocationDisagreementOrUnclassified fails closed on a value outside the
+// closed vocabulary. The EMPTY value is a member -- it is `AllocationAgrees`,
+// the ordinary case -- so it passes through as empty rather than as
+// `unclassified`: an allocation that agrees has not failed to be classified.
+func validAllocationDisagreementOrUnclassified(disagreement AllocationDisagreement) AllocationDisagreement {
+	for _, member := range AllocationDisagreementVocabulary() {
+		if member == disagreement {
+			return disagreement
+		}
+	}
+	return AllocationDisagreement("unclassified")
 }
 
 // validLedgerStatusOrUnclassified, validQuotaAvailabilityOrUnclassified and

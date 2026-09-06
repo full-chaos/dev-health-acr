@@ -649,7 +649,24 @@ func (e *Engine) recordCandidateNarrowing(
 	})
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, basis)
 	event.recordMeasurement(attempt.Measured)
-	event.PredictedItems = PredictedItemsForPlan(*plan, after)
+	// PREDICT FROM THE COHORT THE MEASURED DOCUMENT ACTUALLY CARRIES, not from
+	// `after`.
+	//
+	// `after` is the count the cohort retry SELECTED. On the candidate-rescue
+	// path that selection was DISCARDED -- the retry was declined, the candidate
+	// trim rescued the original answer, and the served document still carries
+	// the original members. Predicting from `after` published `predicted_items=2`
+	// beside a measurement of a four-member answer: a prediction for a cohort
+	// nobody synthesized and nobody received.
+	//
+	// This is the same class as the two refusal sites -- one decision described
+	// by two documents -- at a third site, and it reproduces at the base, so it
+	// is older than this branch. It is fixed here because this branch's own
+	// claim is that every attempt is measured, and a served answer publishing a
+	// prediction for a discarded selection is that claim failing.
+	//
+	// The measurement is the authority: it is the document that was served.
+	event.PredictedItems = PredictedItemsForPlan(*plan, attempt.Measured.Measurement.Items.CohortMembers)
 	event.RetryAttempted = retryAttempted
 	// The RETRY's own outcome, not this reduction's. Hardcoding true said a
 	// re-synthesis had fitted the answer on exactly the runs where it had

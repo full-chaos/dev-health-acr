@@ -35,11 +35,31 @@ import (
 //	recordCandidateNarrowing         (:315,:643) served attempt      none         n/a
 //	cardinality / synthesis_input    (engine.go) no measurement      none         n/a
 
-// refusalSiteFunctions are the functions that may pair a narrowing event with a
-// budget refusal about the same decision. A new one is not forbidden -- it must
-// simply be added here deliberately, with its documents bound, which is the
-// point.
-var refusalSiteFunctions = []string{"fitAssembledResult", "planRefusal"}
+// decisionEventFunctions are the functions that emit a narrowing event about a
+// decision. A new one is not forbidden -- it must simply be added here
+// deliberately, with its documents bound, which is the point.
+//
+// THE POPULATION WAS WIDENED, and the reason matters more than the list. It
+// used to be "emits a narrowing event AND raises a refusal", which let a third
+// site through: `recordCandidateNarrowing` emits an event and never refuses, and
+// it published a prediction for a cohort selection the served answer had
+// discarded. The refusal was never part of the class. The class is ONE DECISION
+// DESCRIBED BY TWO DOCUMENTS, and every function that emits a decision event is
+// in it whether or not it also refuses.
+var decisionEventFunctions = []string{
+	"fitAssembledResult",
+	"planRefusal",
+	"recordCandidateNarrowing",
+	// Investigate emits two narrowing events -- cardinality and
+	// synthesis_input -- and is listed after CHECKING, not to silence the
+	// population check. Neither call sets a measurement or a prediction:
+	// verified by walking Investigate's body for `recordMeasurement` and
+	// `PredictedItems`, which returns nothing. An event carrying one document
+	// and no second one cannot describe two, so it is outside the class while
+	// still being inside the population -- which is exactly the distinction
+	// this list exists to make explicit rather than leave to a reader.
+	"Investigate",
+}
 
 // TestEveryRefusalSitePairsOneDocument pins the enumeration.
 //
@@ -57,16 +77,11 @@ func TestEveryRefusalSitePairsOneDocument(t *testing.T) {
 	t.Parallel()
 	_, files := parsePackageForQuantifier(t)
 
-	for _, function := range refusalSiteFunctions {
+	for _, function := range decisionEventFunctions {
 		calls := callsWithin(t, files, function)
-		emits := calls["recordPlanNarrowing"] || calls["recordCandidateNarrowing"]
-		refuses := calls["refusalFrom"] || calls["planRefusal"]
-		if !emits {
+		if !calls["recordPlanNarrowing"] && !calls["recordCandidateNarrowing"] {
 			t.Errorf("%s no longer emits a narrowing event; the enumeration in this test is stale and "+
 				"must be re-derived rather than left asserting nothing", function)
-		}
-		if !refuses {
-			t.Errorf("%s no longer raises a refusal; the enumeration is stale", function)
 		}
 	}
 
@@ -81,7 +96,7 @@ func TestEveryRefusalSitePairsOneDocument(t *testing.T) {
 			if !ok || fn.Body == nil {
 				continue
 			}
-			emits, refuses := false, false
+			emits := false
 			ast.Inspect(fn.Body, func(node ast.Node) bool {
 				call, isCall := node.(*ast.CallExpr)
 				if !isCall {
@@ -90,16 +105,14 @@ func TestEveryRefusalSitePairsOneDocument(t *testing.T) {
 				switch calleeName(call) {
 				case "recordPlanNarrowing", "recordCandidateNarrowing":
 					emits = true
-				case "refusalFrom", "planRefusal":
-					refuses = true
 				}
 				return true
 			})
-			if !emits || !refuses {
+			if !emits {
 				continue
 			}
 			listed := false
-			for _, known := range refusalSiteFunctions {
+			for _, known := range decisionEventFunctions {
 				if fn.Name.Name == known {
 					listed = true
 					break
@@ -111,10 +124,10 @@ func TestEveryRefusalSitePairsOneDocument(t *testing.T) {
 		}
 	}
 	if len(unlisted) != 0 {
-		t.Errorf("these functions emit a narrowing event AND raise a refusal but are not in the bound "+
-			"enumeration: %v. Each is a place where the event, the refusal and the measurement can "+
-			"describe different documents -- the defect found twice already. Bind the documents and "+
-			"add the site here.", unlisted)
+		t.Errorf("these functions emit a narrowing decision event but are not in the bound enumeration: "+
+			"%v. Each is a place where the event, its prediction and its measurement can describe "+
+			"different documents -- the defect found at THREE sites now. Bind the documents and add "+
+			"the site here.", unlisted)
 	}
 }
 
@@ -182,5 +195,77 @@ func TestTheRetryRefusalAndItsEventDescribeTheSameDocument(t *testing.T) {
 	if refusal.MeasuredItems <= refusal.MaxItems && refusal.Overrun == "items" {
 		t.Errorf("the refusal names overrun=items with %d items against a ceiling of %d",
 			refusal.MeasuredItems, refusal.MaxItems)
+	}
+}
+
+// TestTheCandidateRescueEventPredictsTheCohortItServed is the third site's
+// behavioural pin, and the one that fails on the defect.
+//
+// The structural pin above enumerates emitters; it cannot see whether a given
+// emitter's prediction and measurement describe the same document. On the
+// candidate-rescue path the cohort retry is DECLINED and its selection
+// discarded, the candidate trim rescues the original answer, and the served
+// document still carries the original members — but the event predicted from
+// the discarded selection, publishing a prediction for a cohort nobody
+// synthesized and nobody received.
+//
+// Adapted from the keystone round's own reproduction, and driven over BOTH
+// decline reasons because each reaches the arm by a different route.
+func TestTheCandidateRescueEventPredictsTheCohortItServed(t *testing.T) {
+	t.Parallel()
+	for _, reason := range []RetryDeclinedReason{RetryDeclinedNoReserve, RetryDeclinedInsufficientDeadline} {
+		t.Run(string(reason), func(t *testing.T) {
+			t.Parallel()
+			var sink bytes.Buffer
+			var cohortSizes []int
+			options := budgetStageOptions(30, 0)
+			ctx := context.Background()
+			if reason == RetryDeclinedInsufficientDeadline {
+				options.SynthesisDeadlineReserve = time.Hour
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, time.Minute)
+				defer cancel()
+			}
+			engine, _ := attributionEngine(t, attributionFixtureSpec{
+				members: 4, globalFindings: 3, groupDrivers: 5, multiGroupDrivers: 6,
+				memberDrivers: 1, candidates: 12,
+			}, &sink, options, &cohortSizes)
+
+			request := validInvestigationRequestWithConfirmedWindow()
+			request.Options.MaxSubjectCandidates = 12
+			request.Options.MaxDrivers = 50
+			if err := request.Validate(); err != nil {
+				t.Fatalf("the fixture request does not validate: %v", err)
+			}
+			result, err := engine.Investigate(ctx, storage.Principal{OrgID: "org_1"}, request)
+			if err != nil {
+				t.Fatalf("Investigate() error = %v, want a served answer", err)
+			}
+			line := assembledResultLine(t, sink.String())
+
+			// PREMISES, each asserted: the arm only exists when synthesis ran
+			// ONCE over four members, the answer was rescued by the candidate
+			// trim, and the cohort retry was declined for this reason.
+			if len(cohortSizes) != 1 || cohortSizes[0] != 4 {
+				t.Fatalf("synthesis cohorts %v: the fixture must synthesize exactly once, over 4 members",
+					cohortSizes)
+			}
+			if result.Cohort == nil || len(result.Cohort.Members) != 4 {
+				t.Fatalf("the served answer does not carry the 4 original members: %+v", result.Cohort)
+			}
+			if !strings.Contains(line, "outcome_reduction_applied=true") ||
+				!strings.Contains(line, "retry_declined="+string(reason)) {
+				t.Fatalf("the fixture did not reach the candidate rescue with the cohort retry "+
+					"declined as %q.\nline: %s", reason, line)
+			}
+
+			// THE ASSERTION: the prediction is for the cohort that was served.
+			want := PredictedItemsForPlan(*result.AnswerPlan, cohortSizes[0])
+			if !strings.Contains(line, fmt.Sprintf("predicted_items=%d ", want)) {
+				t.Errorf("the event's prediction belongs to the DISCARDED cohort selection. Want "+
+					"predicted_items=%d for the %d members actually synthesized and served.\nline: %s",
+					want, cohortSizes[0], line)
+			}
+		})
 	}
 }
