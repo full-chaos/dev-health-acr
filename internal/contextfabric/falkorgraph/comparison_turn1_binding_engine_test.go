@@ -686,8 +686,11 @@ func TestTurnOneBindsBothNamedOperandsOfAComparison(t *testing.T) {
 		t.Fatalf("committed = %v (%d subjects), want both operands %v -- a two-operand comparison whose operands are each unambiguously named must bind both on turn one.\n"+
 			"PUBLISHED POOL: %v\n"+
 			"(an empty pool means retrieval never reached the slots; a populated pool with conf=1 and a MatchExact mechanism means the per-slot gate refused a lone exact match, which is a different defect entirely)\n"+
-			"RESOLVER SAID: %v",
-			got, len(got), want, committedCandidateKeys(result.SubjectResolution), tracer.decisionSummary())
+			"RESOLVER SAID: %v\n"+
+			"SERVED STATUS: %q  prompt=%q  facts=%d  limitations=%v\n"+
+			"(the resolver committing while the SERVED document carries none means the loss is between the resolver's return and the served result, not in resolution at all)",
+			got, len(got), want, committedCandidateKeys(result.SubjectResolution), tracer.decisionSummary(),
+			result.Status, result.SubjectResolution.ClarificationPrompt, len(result.ClaimedFacts), result.Limitations)
 	}
 	present := map[string]bool{got[0]: true, got[1]: true}
 	for _, key := range want {
