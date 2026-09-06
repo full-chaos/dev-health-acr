@@ -31,8 +31,12 @@ package falkorgraph
 // this file.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -1223,4 +1227,167 @@ func TestANonAffirmingAnswerRetractsBothOperandCommits(t *testing.T) {
 		t.Errorf("the served document carries no retraction limitation after both commits were dropped (limitations = %v) -- a subject removed without disclosure is the silent drop this gate exists to prevent",
 			result.Limitations)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// T-TELEMETRY, END TO END -- the lines must fire on the PRODUCTION path
+// ---------------------------------------------------------------------------
+
+// TestAHeldComparisonEmitsItsObservableThroughTheRealEngine is the half a
+// sink-level unit test cannot prove: that these events actually reach a real
+// handler when a real request goes through the real engine, adapter and
+// resolver -- with the REQUEST'S OWN context, not a background one.
+//
+// WHY THAT DISTINCTION IS THE WHOLE POINT. The existing resolution tracer
+// emits plenty about resolution, and none of it is usable for this: it builds
+// its own context.Background() and logs at Debug. A sink that were wired the
+// same way would pass every unit test in the package and still produce nothing
+// a rig operator could read or correlate. Only driving the production path
+// against a real handler at the production level can tell the two apart.
+//
+// The fixture is a HELD comparison, deliberately: a hold is the outcome whose
+// served document says least, so it is the one most dependent on telemetry to
+// be diagnosable at all.
+func TestAHeldComparisonEmitsItsObservableThroughTheRealEngine(t *testing.T) {
+	t.Parallel()
+
+	var buffer bytes.Buffer
+	// AT INFO, which is what a production rig runs at. If the sink were wired
+	// at Debug -- the tracer's level -- this handler would capture nothing and
+	// the assertions below would fail rather than quietly pass.
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	conn := &comparisonConn{rowsForTerm: perOperandRows(
+		[]row{comparisonAuthorizedRow(comparisonSubjectA, comparisonTermA, 1)},
+		nil,
+		nil,
+	)}
+	adapter := newComparisonAdapter(t, conn, nil)
+	adapter.config.OperandResolutionSink = graphrank.NewSlogOperandResolutionSink(logger)
+
+	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
+		Interpreter: comparisonInterpreter{
+			interpreted: contextfabric.InterpretedQuestion{
+				Shape: contextfabric.ShapeExplicitCohort, RequestedJudgment: "comparison",
+				SubjectTerms:     []string{comparisonTermA, comparisonTermB},
+				TimeContext:      contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+				FactRequirements: []contextfabric.FactRequirement{},
+			},
+			frame:  twoNamedOperandComparisonFrame(),
+			family: contextfabric.QuestionFamilyExplicitComparison,
+		},
+		Graph:        adapter,
+		Facts:        refusingFactReader{t: t},
+		Synthesizer:  refusingSynthesizer{t: t},
+		Results:      discardingResultStore{},
+		Requirements: productionRequirementDeriver{},
+	}, contextfabric.EngineOptions{ServiceVersion: "acr-test", NewResultID: func() string { return "result_telemetry" }})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	const requestID = "request_comparison_telemetry"
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.InvestigationRequest{
+		SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: requestID,
+		Question: comparisonQuestion,
+		TimeContext: contextfabric.TimeContext{
+			Axis:           contextfabric.TemporalCurrent,
+			EvidenceWindow: &contextfabric.RequestedEvidenceWindow{RelativeID: contextfabric.RelativeWindowTrailing90D},
+		},
+		Options: contextfabric.InvestigationOptions{
+			MaxSubjectCandidates: 10, MaxCohortMembers: 10, MaxRelationshipPaths: 50,
+			MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144, AllowClarification: true,
+		},
+		Consumer: contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"},
+	}); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+
+	// DECODED JSON, key:value -- never a substring of the formatted output.
+	byMessage := map[string]map[string]any{}
+	for _, line := range strings.Split(strings.TrimSpace(buffer.String()), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("emitted line is not valid JSON: %v", err)
+		}
+		if message, ok := record["msg"].(string); ok {
+			byMessage[message] = record
+		}
+	}
+
+	// THE POLICY AND DECISION LINES MUST BOTH BE PRESENT. Policy proves the
+	// dispatch happened at all -- the regression that otherwise leaves no
+	// trace, because the flat path serves a well-formed answer. Decision
+	// proves the hold was a hold.
+	policy, ok := byMessage["context fabric comparison resolution policy"]
+	if !ok {
+		t.Fatalf("no comparison policy line reached the handler at Info -- the dispatch is unobservable on a production rig.\ncaptured messages = %v", messageNames(byMessage))
+	}
+	decision, ok := byMessage["context fabric comparison decision"]
+	if !ok {
+		t.Fatalf("no comparison decision line reached the handler at Info.\ncaptured messages = %v", messageNames(byMessage))
+	}
+
+	// THE REQUEST'S OWN ID, which is what proves the caller's context reached
+	// the sink rather than a background one being substituted somewhere.
+	for name, record := range map[string]map[string]any{"policy": policy, "decision": decision} {
+		if got := record["request_id"]; got != requestID {
+			t.Errorf("%s line request_id = %v, want %q -- without the real request id these lines cannot be correlated with each other or with the affirmation gate's retraction warning",
+				name, got, requestID)
+		}
+		if got, ok := record["org_id"].(string); !ok || got != "org-1" {
+			t.Errorf("%s line org_id = %v, want the calling principal's", name, record["org_id"])
+		}
+	}
+
+	if got := policy["admission"]; got != "admitted_named_pair" {
+		t.Errorf("policy admission = %v, want admitted_named_pair", got)
+	}
+	if got := policy["question_search_suppressed"]; got != true {
+		t.Errorf("policy question_search_suppressed = %v, want true -- the no-read hold's own suppression must be visible, or its lapsing would be silent", got)
+	}
+	if got := decision["decision"]; got != "held" {
+		t.Errorf("decision = %v, want held", got)
+	}
+	if got := decision["published_committed"]; got != float64(0) {
+		t.Errorf("published_committed = %v, want 0 for a held comparison", got)
+	}
+
+	// TWO SLOT LINES, ONE PER OPERAND, WITH DIFFERENT OUTCOMES. This is the
+	// closed-vocabulary rule on the real path: a resolved operand beside an
+	// unresolved one is two lines, never one combined token -- and it is the
+	// only place slot term isolation is observable at all, since the served
+	// candidate list is merged.
+	slotLines := 0
+	outcomes := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(buffer.String()), "\n") {
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) != nil {
+			continue
+		}
+		if record["msg"] == "context fabric operand slot resolution" {
+			slotLines++
+			if outcome, ok := record["outcome"].(string); ok {
+				outcomes[outcome] = true
+			}
+		}
+	}
+	if slotLines != 2 {
+		t.Errorf("operand slot lines = %d, want one per operand -- per-slot counts are the only observable for term isolation", slotLines)
+	}
+	if len(outcomes) != 2 {
+		t.Errorf("slot outcomes = %v, want two DIFFERENT outcomes (one resolved, one not) -- a single combined token cannot be counted", outcomes)
+	}
+}
+
+func messageNames(byMessage map[string]map[string]any) []string {
+	names := make([]string, 0, len(byMessage))
+	for name := range byMessage {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
