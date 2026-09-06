@@ -1280,8 +1280,11 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 		// The once-per-PASS Info summary (this call is one pass; a
 		// resolution can run more than one -- see
 		// ResolutionTraceEvent.RankedCutSummary's own doc comment for the
-		// full pairing-with-"decision" rule) -- see that same doc comment
-		// for why this is a second event on the same token rather than
+		// full rule: no fixed count relationship to this pass's own
+		// "decision" event(s), but the LAST summary reaching the tracer for
+		// a request_id always describes the pass whose resolution was
+		// returned) -- see that same doc comment for why this is a second
+		// event on the same token rather than
 		// promoting the per-candidate loop above (measured: that loop is
 		// one event per RETRIEVAL-sized pool candidate, up to 91 in one
 		// representative fixture, against a ceiling of 25 for an

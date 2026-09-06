@@ -294,13 +294,16 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// sized pool candidate (up to 91 in one representative fixture),
 		// well past the 25-per-pass ceiling for an unconditional Info
 		// line, so it STAYS DebugContext. RankedCutSummary (below) is the
-		// once-per-PASS Info line an operator actually gets on the rig,
-		// paired 1:1 with that pass's own "decision" event -- a resolution
-		// that runs more than one pass (a scoped or census re-decision)
-		// gets more than one summary, exactly like it gets more than one
-		// decision event; see ResolutionTraceEvent.RankedCutSummary's own
-		// doc comment for the full rule and why this is a second event on
-		// this SAME token rather than promoting this one.
+		// once-per-PASS Info line an operator actually gets on the rig --
+		// NOT in a fixed count relationship with that pass's own "decision"
+		// event(s) (an empty-pool pass decides but has nothing to cut; a
+		// multi-subject commit decides once per subject but cuts once), but
+		// the LAST summary reaching the tracer for a request_id always
+		// describes the pass whose resolution was actually returned, the
+		// same guarantee "decision" itself carries; see
+		// ResolutionTraceEvent.RankedCutSummary's own doc comment for the
+		// full rule and why this is a second event on this SAME token
+		// rather than promoting this one.
 		if event.RankedCutSummary {
 			t.logger.InfoContext(ctx, "context fabric resolution trace: ranked cut summary",
 				"request_id", event.RequestID, "stage", event.Stage,

@@ -1099,17 +1099,30 @@ type ResolutionTraceEvent struct {
 	// applied. No new Stage value -- same closed-vocabulary token, a richer
 	// payload.
 	//
-	// One PASS, not one RESOLUTION: a resolution can run more than one
-	// pass (a confirmed-kind scoped re-decision, an evidence-census
-	// re-decision -- see resolveSubjects), and each pass traces its OWN
-	// "decision" event unconditionally; this file's existing invariant for
-	// that ("several decision events per resolution is normal; the LAST
-	// one describes the returned resolution" -- discardableDecisionTracer's
-	// own doc comment) applies identically here. RankedCutSummary is this
-	// stage's companion to "decision": exactly one per pass, 1:1 with that
-	// pass's own decision event, not exactly one per resolution. A reader
-	// wanting "the cut that actually decided this resolution" reads the
-	// LAST ranked_cut summary, exactly like the last decision event.
+	// One PASS, not one RESOLUTION -- and NOT a fixed count relative to
+	// "decision" either. A resolution can run more than one pass (a
+	// confirmed-kind scoped re-decision, an evidence-census re-decision --
+	// see resolveSubjects), and each pass traces its own "decision"
+	// event(s) unconditionally; this file's existing invariant for that
+	// ("several decision events per resolution is normal; the LAST one
+	// describes the returned resolution" -- discardableDecisionTracer's own
+	// doc comment) is the one this stage shares -- NOT a literal 1:1 count
+	// pairing with decision, which does not hold in general:
+	//   - a pass whose candidate pool is EMPTY decides (typically a
+	//     stalled/no-candidate outcome) but has nothing to cut, so it
+	//     emits ZERO ranked_cut summaries for one decision event;
+	//   - a pass that commits MULTIPLE subjects (CHAOS-4096: one "decision"
+	//     event PER committed subject) still cuts its pool exactly once, so
+	//     it emits exactly ONE ranked_cut summary for N decision events.
+	// What IS guaranteed, and is the actual property a reader needs: a
+	// DISCARDED pass (a scoped re-decision that is not kept) withholds its
+	// summary and every decision event TOGETHER -- discardableDecisionTracer
+	// buffers both under the same "ranked_cut"/"decision" cases and only
+	// replays them via keep(), called only when that pass's resolution is
+	// retained. So the LAST ranked_cut summary that reaches the tracer for
+	// a given request_id always describes the pass whose resolution was
+	// actually returned, exactly like the last decision event does -- even
+	// though the two counts need not match.
 	RankedCutSummary        bool
 	RankedCutCandidateCount int
 	RankedCutSurvivedCount  int
