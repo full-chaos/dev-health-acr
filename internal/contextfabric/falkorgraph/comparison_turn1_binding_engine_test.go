@@ -483,10 +483,25 @@ func requireRetrieved(t *testing.T, resolution contextfabric.SubjectResolution, 
 	return *candidate
 }
 
+// committedCandidateKeys renders the published pool with the THREE fields a
+// commit decision actually reads: state, confidence, and match mechanisms.
+//
+// The mechanisms are here because of a real diagnosis: "committed = []" alone
+// cannot tell a pool that was never retrieved from one that was retrieved and
+// refused, nor an exact-label match that the gate declined from a candidate
+// that never carried MatchExact at all. A failure message that forces the next
+// person to re-run with a debugger is a failure message that has not finished
+// its job.
 func committedCandidateKeys(resolution contextfabric.SubjectResolution) []string {
 	keys := make([]string, 0, len(resolution.Candidates))
 	for _, candidate := range resolution.Candidates {
-		keys = append(keys, fmt.Sprintf("%s(state=%s,conf=%.2f)", subjectKey(candidate.Subject), candidate.State, candidate.Confidence))
+		mechanisms := make([]string, 0, len(candidate.MatchMechanisms))
+		for _, mechanism := range candidate.MatchMechanisms {
+			mechanisms = append(mechanisms, string(mechanism))
+		}
+		keys = append(keys, fmt.Sprintf("%s(state=%s,conf=%.2f,mechanisms=[%s],terms=%v)",
+			subjectKey(candidate.Subject), candidate.State, candidate.Confidence,
+			strings.Join(mechanisms, "+"), candidate.MatchedTerms))
 	}
 	return keys
 }
@@ -611,8 +626,10 @@ func TestTurnOneBindsBothNamedOperandsOfAComparison(t *testing.T) {
 	got := committedKeys(result.SubjectResolution)
 	want := []string{subjectKey(comparisonSubjectA), subjectKey(comparisonSubjectB)}
 	if len(got) != 2 {
-		t.Fatalf("committed = %v (%d subjects), want both operands %v -- a two-operand comparison whose operands are each unambiguously named must bind both on turn one",
-			got, len(got), want)
+		t.Fatalf("committed = %v (%d subjects), want both operands %v -- a two-operand comparison whose operands are each unambiguously named must bind both on turn one.\n"+
+			"PUBLISHED POOL: %v\n"+
+			"(an empty pool means retrieval never reached the slots; a populated pool with conf=1 and a MatchExact mechanism means the per-slot gate refused a lone exact match, which is a different defect entirely)",
+			got, len(got), want, committedCandidateKeys(result.SubjectResolution))
 	}
 	present := map[string]bool{got[0]: true, got[1]: true}
 	for _, key := range want {
