@@ -9,9 +9,24 @@ name: Release
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to build and publish (vX.Y.Z[-dev.N|-beta.N])
-        required: true
+        # Not `required: true` any more, because a dry run needs no tag. The
+        # invariant is unchanged: the resolver still rejects anything that is
+        # not vMAJOR.MINOR.PATCH[-dev.N|-beta.N], so an empty tag on a real
+        # dispatch fails with that message rather than proceeding.
+        description: Existing release tag to build and publish (vX.Y.Z[-dev.N|-beta.N]); leave blank for a dry run
+        required: false
         type: string
+      dry_run:
+        # Proves the GitHub Release publish path on demand -- creates a draft
+        # for the current SHA and deletes it again -- without waiting for a
+        # push to main and without spending the ~50 minutes of build, scan and
+        # sign that a real release costs. It exists because the incident this
+        # workflow's retry was written for was only observable on a main push,
+        # which made it expensive to study and impossible to test a fix against.
+        description: Create and delete a throwaway draft Release to prove the publish path, then stop
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -40,7 +55,10 @@ concurrency:
 
 jobs:
   preflight:
-    if: github.repository == 'full-chaos/dev-health-acr'
+    # A dry run must not trigger the real pipeline: every other job reaches the
+    # graph through preflight, so skipping it here skips the whole ~50-minute
+    # build rather than needing a guard on each job.
+    if: github.repository == 'full-chaos/dev-health-acr' && !inputs.dry_run
     runs-on: ubuntu-24.04
     outputs:
       channel: ${{ steps.release.outputs.channel }}
@@ -520,3 +538,52 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with: {name: release, path: release/, if-no-files-found: error, retention-days: 7}
+
+  publish-dry-run:
+    # The on-demand proof of the publish path, and nothing else. It deliberately
+    # does NOT build or upload assets: the question it answers is whether this
+    # repository's Actions token can create a Release right now, which is the
+    # exact call that returned
+    #   HTTP 403: Resource not accessible by integration
+    #             (https://api.github.com/repos/full-chaos/dev-health-acr/releases)
+    # on run 34002287512, and the only call a full pipeline run has to spend
+    # fifty minutes to reach.
+    if: github.repository == 'full-chaos/dev-health-acr' && inputs.dry_run
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - name: Create and delete a throwaway draft Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_TAG: dry-run-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          repo=full-chaos/dev-health-acr
+          # The tag carries the run id, so two dry runs can never collide and a
+          # leftover from a failed run is identifiable rather than anonymous.
+          printf 'dry run: creating draft Release %s on %s\n' "$DRY_TAG" "$GITHUB_SHA"
+          gh release create "$DRY_TAG" \
+            --repo "$repo" \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "publish path dry run $DRY_TAG" \
+            --notes 'Throwaway draft created to prove the Release publish path. Deleted by the same job.'
+          id="$(gh release view "$DRY_TAG" --repo "$repo" --json databaseId --jq .databaseId)"
+          draft="$(gh release view "$DRY_TAG" --repo "$repo" --json isDraft --jq .isDraft)"
+          printf 'dry run: created release id=%s isDraft=%s\n' "$id" "$draft"
+          [[ "$id" =~ ^[1-9][0-9]*$ ]] || { printf 'dry run: no stable release id\n' >&2; exit 1; }
+          test "$draft" = true || { printf 'dry run: release was not created as a draft\n' >&2; exit 1; }
+          # Delete before asserting absence, and assert it: a dry run that
+          # leaves its draft behind turns a diagnostic into litter, and one that
+          # only *asks* for deletion has not shown the draft is gone.
+          gh release delete "$DRY_TAG" --repo "$repo" --yes
+          if gh release view "$DRY_TAG" --repo "$repo" --json id >/dev/null 2>&1; then
+            printf 'dry run: draft %s still exists after delete\n' "$DRY_TAG" >&2
+            exit 1
+          fi
+          printf 'dry run: draft %s (id %s) created and deleted; the publish path is reachable\n' "$DRY_TAG" "$id"
