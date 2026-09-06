@@ -1123,6 +1123,16 @@ type ResolutionTraceEvent struct {
 	// a given request_id always describes the pass whose resolution was
 	// actually returned, exactly like the last decision event does -- even
 	// though the two counts need not match.
+	//
+	// ERROR RETURNS are outside this "returned resolution" framing
+	// entirely, and not a gap unique to this event: if resolveSubjects
+	// returns an error (e.g. a confirmed-kind scoped-snapshot failure)
+	// after the first pass already ran, that pass's summary -- like its
+	// own "decision" event, measured to trace in the SAME call before the
+	// error surfaces (resolution.go's emission site has the full measured
+	// order) -- has already reached the tracer. A summary on a failed
+	// request is a log line describing a pass that ran; the caller's own
+	// error is the authoritative outcome, exactly as for a stalled decision.
 	RankedCutSummary        bool
 	RankedCutCandidateCount int
 	RankedCutSurvivedCount  int

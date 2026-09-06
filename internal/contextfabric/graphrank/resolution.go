@@ -1285,6 +1285,18 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 		// a request_id always describes the pass whose resolution was
 		// returned) -- see that same doc comment for why this is a second
 		// event on the same token rather than
+		//
+		// On an ERROR return after the first pass (e.g. resolveSubjects'
+		// own confirmed-kind scoped-snapshot failure, which returns before
+		// ever reaching a second pass): this pass's summary has ALREADY
+		// been traced by the time that error surfaces, exactly like its own
+		// "decision" event (measured: search/corroboration/ranked_cut/
+		// decision all complete, in that order, before the scoped block
+		// even runs) -- not a gap unique to the summary. A summary in the
+		// Info stream on a failed request is a log line describing a pass
+		// that ran; nothing consumes it programmatically, and the caller's
+		// own error is the authoritative outcome, exactly as it already is
+		// for the pass's decision event.
 		// promoting the per-candidate loop above (measured: that loop is
 		// one event per RETRIEVAL-sized pool candidate, up to 91 in one
 		// representative fixture, against a ceiling of 25 for an
