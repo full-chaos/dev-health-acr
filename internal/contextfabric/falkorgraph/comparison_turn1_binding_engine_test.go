@@ -244,6 +244,45 @@ func newComparisonAdapter(t *testing.T, conn *comparisonConn, vectorRows []row) 
 	return adapter
 }
 
+// comparisonDecisionTracer captures the resolver's own decision-stage events on
+// the REAL path.
+//
+// It exists because an end-to-end fixture can only see what left the far end,
+// and "nothing was committed" is the same observation for a gate that refused,
+// a pool that was never built, and a publication that held. The resolver
+// already states which branch it took; this just keeps what it said, so the
+// next question is answered by the code rather than by elimination.
+type comparisonDecisionTracer struct {
+	mu     sync.Mutex
+	events []graphrank.ResolutionTraceEvent
+}
+
+func (c *comparisonDecisionTracer) Trace(event graphrank.ResolutionTraceEvent) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, event)
+}
+
+// decisionSummary renders the stages that explain a commit outcome, in order.
+func (c *comparisonDecisionTracer) decisionSummary() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]string, 0, len(c.events))
+	for _, event := range c.events {
+		switch event.Stage {
+		case "decision":
+			out = append(out, fmt.Sprintf("decision{outcome=%s gate=%s subject=%s truncated=%t tiedTop=%t}",
+				event.Outcome, event.CommitGate, event.Subject.CanonicalID, event.SearchTruncated, event.TiedStatisticalTop))
+		case "search":
+			out = append(out, fmt.Sprintf("search{results=%d truncated=%t}", event.SearchResultCount, event.Truncated))
+		case "corroboration":
+			out = append(out, fmt.Sprintf("corroboration{subject=%s base=%.2f final=%.2f mechanisms=%d}",
+				event.Subject.CanonicalID, event.BaseConfidence, event.FinalConfidence, event.DistinctMechanisms))
+		}
+	}
+	return out
+}
+
 // comparisonVectorQueryMarker is what the recorder logs for the vector arm, so
 // an arm can prove the whole-question pass actually reached the backend rather
 // than inferring it from a candidate that could have come from a term pass.
@@ -376,6 +415,22 @@ type comparisonDrive struct {
 	// vectorRows, when non-nil, makes this drive's adapter vector-capable so
 	// the whole-question pass runs at all. See newComparisonAdapter.
 	vectorRows []row
+	// tracer, when non-nil, is wired into the REAL adapter so an arm can
+	// report what the resolver decided rather than only what it published.
+	tracer *comparisonDecisionTracer
+}
+
+// adapter builds this drive's REAL adapter, with the decision tracer attached
+// when one was supplied. The tracer is set on the adapter's own config, which
+// is the single field reader.go reads it from -- so the events captured are
+// the production path's, not a parallel one this test invented.
+func (d comparisonDrive) adapter(t *testing.T) *Adapter {
+	t.Helper()
+	adapter := newComparisonAdapter(t, d.conn, d.vectorRows)
+	if d.tracer != nil {
+		adapter.config.ResolutionTracer = d.tracer
+	}
+	return adapter
 }
 
 func (d comparisonDrive) run(t *testing.T) contextfabric.InvestigationResult {
@@ -402,7 +457,7 @@ func (d comparisonDrive) run(t *testing.T) contextfabric.InvestigationResult {
 			frame:  d.frame,
 			family: d.family,
 		},
-		Graph:        newComparisonAdapter(t, d.conn, d.vectorRows),
+		Graph:        d.adapter(t),
 		Facts:        d.facts,
 		Synthesizer:  d.synthesizer,
 		Results:      results,
@@ -595,6 +650,7 @@ func TestTurnOneBindsBothNamedOperandsOfAComparison(t *testing.T) {
 		nil,
 	)}
 
+	tracer := &comparisonDecisionTracer{}
 	result := comparisonDrive{
 		frame:       twoNamedOperandComparisonFrame(),
 		family:      contextfabric.QuestionFamilyExplicitComparison,
@@ -602,6 +658,7 @@ func TestTurnOneBindsBothNamedOperandsOfAComparison(t *testing.T) {
 		conn:        conn,
 		facts:       emptyFactReader{},
 		synthesizer: countingSynthesizer{},
+		tracer:      tracer,
 	}.run(t)
 
 	// FIXTURE CONTROL. Both operands must actually have been searched for,
@@ -628,8 +685,9 @@ func TestTurnOneBindsBothNamedOperandsOfAComparison(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("committed = %v (%d subjects), want both operands %v -- a two-operand comparison whose operands are each unambiguously named must bind both on turn one.\n"+
 			"PUBLISHED POOL: %v\n"+
-			"(an empty pool means retrieval never reached the slots; a populated pool with conf=1 and a MatchExact mechanism means the per-slot gate refused a lone exact match, which is a different defect entirely)",
-			got, len(got), want, committedCandidateKeys(result.SubjectResolution))
+			"(an empty pool means retrieval never reached the slots; a populated pool with conf=1 and a MatchExact mechanism means the per-slot gate refused a lone exact match, which is a different defect entirely)\n"+
+			"RESOLVER SAID: %v",
+			got, len(got), want, committedCandidateKeys(result.SubjectResolution), tracer.decisionSummary())
 	}
 	present := map[string]bool{got[0]: true, got[1]: true}
 	for _, key := range want {
