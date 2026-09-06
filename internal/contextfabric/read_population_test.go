@@ -1367,3 +1367,59 @@ func TestAnIncompleteCensusOutranksTheSamenessArm(t *testing.T) {
 		contractsv1.ContextFabricCoverageDetailPopulationTruncated,
 		true, 2, 2)
 }
+
+// TestAnOperandKindWithNoPublishedStandardIsNotReady pins the fail-closed half
+// of D19: an operand this turn published no read requirement for cannot be
+// certified read, and therefore cannot let the comparison claim sameness.
+//
+// THE SHAPE, because it is not obvious and no other test builds it. The
+// comparison-wide operand set comes from the FRAME -- every committed ref of
+// every operand kind the frame names. The per-operand STANDARDS come from the
+// published PLAN, and the plan only publishes an `each_operand` read
+// requirement for a kind whose state obligation is actually served by a read.
+// The two sets are therefore not guaranteed equal: a comparison can name an
+// operand kind that has a population and subjects but NO published standard.
+//
+// WHAT THE GUARD DOES ABOUT IT. `comparisonFullyRead` returns false for such an
+// operand rather than skipping it. Deleting the guard does not skip it either
+// -- it is worse than that. The map lookup yields the ZERO VALUE, whose
+// threshold is 0, and `len(served) < 0` is false for every subject alive, so
+// the operand passes readiness VACUOUSLY. An operand nobody could measure gets
+// certified as read, the gate opens, and the row reports a sameness shortfall
+// computed partly over evidence it was never entitled to judge.
+//
+// Certifying from an absent standard is a claim from an absence, which is the
+// rule this whole layer exists to enforce, so the guard fails closed.
+func TestAnOperandKindWithNoPublishedStandardIsNotReady(t *testing.T) {
+	t.Parallel()
+	alpha := teamRef("team_alpha")
+	beta := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:beta", Label: "beta"}
+	flow, health := contractsv1.ContextFabricFactFlow, contractsv1.ContextFabricFactHealth
+	identity, metrics := contractsv1.ContextFabricFactIdentity, contractsv1.ContextFabricFactMetrics
+
+	// ONLY the team requirement is published. The frame still names a
+	// repository operand, so repository contributes a slot and a committed
+	// subject to the comparison -- but no standard to judge it by.
+	teamReq := operandRequirement(SubjectTeam, CompletionQuantifierCorroborated, flow, health)
+	published := []contractsv1.ContextFabricPlanRequirement{teamReq}
+
+	rows := evaluateOperands(published,
+		namedOperandFrame(SubjectTeam, SubjectRepository),
+		[]SubjectRef{alpha, beta},
+		factCoverage(flow, SourceAvailable, health, SourceAvailable,
+			identity, SourceAvailable, metrics, SourceAvailable),
+		// DISJOINT from the team's evidence, so if the unmeasurable operand
+		// were ever admitted the intersection would be empty and the arm would
+		// fire loudly -- the test would not depend on a subtle count.
+		factsFor(alpha, kindList(flow, health), beta, kindList(identity, metrics)),
+	)
+
+	// The team read its own standard in full and no sameness claim is
+	// available, because one operand of the comparison cannot be judged at all.
+	// With the guard deleted this reads narrowed/depth 0/2.
+	assertRow(t, rowFor(t, rows, teamReq.Requirement),
+		contractsv1.ContextFabricRequirementSatisfied,
+		contractsv1.ContextFabricAnswerImpactNone,
+		contractsv1.ContextFabricCoverageDetailCode(""),
+		false, 1, 1)
+}
