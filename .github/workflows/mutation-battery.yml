@@ -393,6 +393,15 @@ jobs:
           TIP: ${{ needs.config.outputs.tip }}
           FLOOR: ${{ needs.plan.outputs.floor }}
         run: |
+          # THIS STEP REPORTS; IT DOES NOT JUDGE. GitHub runs every `run:` under
+          # `bash -eo pipefail`, and a plain `set -uo pipefail` does NOT clear
+          # the inherited -e -- so the aggregate's non-zero verdict killed this
+          # step before the summary could be published or the artifact uploaded,
+          # and a PR smoke whose EXPECTED result contains a harness error could
+          # never go green. `set +e` and an explicit `exit 0` keep the verdict
+          # where it belongs: the dispatch-only step below, and the smoke-assert
+          # job on a pull request.
+          set +e
           set -uo pipefail
           python3 scripts/battery/aggregate.py \
             --table .battery/table.jsonl \
@@ -403,7 +412,10 @@ jobs:
             --tip "$TIP" \
             --floor "$FLOOR" \
             --summary-out summary.txt
-          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "aggregate rc=$rc (recorded; the verdict is owned by a later step/job)"
+          exit 0
 
       - name: Publish the summary
         if: always()
