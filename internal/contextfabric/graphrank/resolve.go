@@ -1081,19 +1081,22 @@ type ResolutionTraceEvent struct {
 	Survived       bool
 	CoverageBypass bool
 	// RankedCutSummary/RankedCutCandidateCount/RankedCutSurvivedCount/
-	// RankedCutSurvivedIDs/RankedCutMax (stage=="ranked_cut" ONLY,
-	// CHAOS-5222): the per-candidate Rank/Survived/Subject event above stays
+	// RankedCutSurvivedIDs/RankedCutMax (stage=="ranked_cut" ONLY, a
+	// rig-visibility fix): the per-candidate Rank/Survived/Subject event above stays
 	// at Debug (measured: up to ~1 per pool candidate, unbounded by the
 	// resolution's own retrieval size, not the cut budget -- an operator
 	// tailing a rig log at the production default cannot afford that
 	// volume). This is a SECOND event, emitted ONCE per resolution
 	// (RankedCutSummary=true marks it, so a consumer can tell it apart from
 	// the per-candidate events sharing the same Stage token), at Info,
-	// folding the whole cut into one line: how many candidates were ranked,
-	// how many survived, which ones (bounded by the cut's own `max`, so its
-	// size is the CONFIGURED budget, not the retrieval size), and the
-	// threshold applied. No new Stage value -- same closed-vocabulary
-	// token, a richer payload.
+	// folding the whole cut into one line: how many candidates were ranked
+	// (RankedCutCandidateCount) and how many survived (RankedCutSurvivedCount,
+	// ALWAYS the true count, never truncated), plus a SAMPLE of which ones
+	// (RankedCutSurvivedIDs, the first N survivors in rank order, capped
+	// independently of the configured cut budget `max` so a large-crowd
+	// resolution cannot make this one line unbounded), and the threshold
+	// applied. No new Stage value -- same closed-vocabulary token, a richer
+	// payload.
 	RankedCutSummary        bool
 	RankedCutCandidateCount int
 	RankedCutSurvivedCount  int

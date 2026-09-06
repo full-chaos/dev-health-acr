@@ -204,7 +204,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// discipline as boundary_kinds itself. See
 		// KindOfferBoundaryKindsBeforeRepair's own doc comment
 		// (ResolutionTraceEvent) for the full mechanism.
-		// CHAOS-5222: InfoContext, matching kind_offer_withheld's own
+		// Rig-visibility fix: InfoContext, matching kind_offer_withheld's own
 		// precedent below -- the production default log level is
 		// slog.LevelInfo (internal/sidecar/config.go), so a Debug line does
 		// not exist in production at all. This is the operator-visible
@@ -289,8 +289,8 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"request_id", event.RequestID, "stage", event.Stage,
 			"labels_normalized_count", event.AnchorOfferLabelsNormalizedCount)
 	case "ranked_cut":
-		// CHAOS-5222: measured before picking a shape (team-lead's volume
-		// gate) -- this per-candidate line is emitted once per RETRIEVAL-
+		// Measured before picking a shape (a volume gate on log lines per
+		// resolution) -- this per-candidate line is emitted once per RETRIEVAL-
 		// sized pool candidate (up to 91 in one representative fixture),
 		// well past the 25-per-resolution ceiling for an unconditional Info
 		// line, so it STAYS DebugContext. RankedCutSummary (below) is the
@@ -320,7 +320,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// either nothing was reserved, or the ranking already kept the kind.
 		// Rank is the candidate's PRE-CUT rank, so the distance past `max`
 		// says how badly the kind lost the ranking race.
-		// CHAOS-5222: InfoContext -- see kind_offer's own comment above.
+		// Rig-visibility fix: InfoContext -- see kind_offer's own comment above.
 		// This event's presence is the operator-visible proof the reserve
 		// actually fired for a candidate; absence at Debug (today) is
 		// indistinguishable from "the reserve was inert," exactly the

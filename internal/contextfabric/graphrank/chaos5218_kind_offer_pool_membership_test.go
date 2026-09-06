@@ -619,7 +619,7 @@ func TestResolveSubjects_PartialWithholdingCarriesItsCountsNonZero(t *testing.T)
 // internal/sidecar/config.go's defaultLogLevel is LevelInfo, so a decision
 // line emitted at Debug does not exist in production at all. That is exactly
 // why lane-corpus-bisect found no ResolutionTraceEvent line in any rig log.
-// CHAOS-5222 later promoted kind_offer/ranked_cut/reserved_kind_admitted to
+// A later rig-visibility fix promoted kind_offer/ranked_cut/reserved_kind_admitted to
 // Info for the same reason (see tracer.go), so kind_offer_withheld is no
 // longer the ONLY Info line on this sink -- this test still pins its own
 // specific fields, and the control below now uses anchor_offer (still
@@ -686,7 +686,7 @@ func TestChaos5218_ProductionSinkEmitsTheWithholdingAtTheProductionLogLevel(t *t
 
 	// NEGATIVE CONTROL for the level assertion itself: some stage must stay
 	// Debug, so at LevelInfo it emits nothing -- without this, the test
-	// above would pass even if every stage were Info. CHAOS-5222 moved
+	// above would pass even if every stage were Info. The rig-visibility fix moved
 	// kind_offer itself to InfoContext (an operator-visible rig-instrument
 	// gap, same reasoning as kind_offer_withheld's own promotion below),
 	// so it can no longer serve as this control; anchor_offer is untouched

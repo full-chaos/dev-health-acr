@@ -327,7 +327,7 @@ func lastEventForStage(tracer *captureResolutionTracer, stage string) (Resolutio
 	return events[len(events)-1], true
 }
 
-// perCandidateRankedCutEvents is CHAOS-5222 (the per-resolution
+// perCandidateRankedCutEvents is the rig-visibility fix's helper (the per-resolution
 // RankedCutSummary line shares the SAME "ranked_cut" Stage token as the
 // per-candidate events this file's own tests expect -- see
 // ResolutionTraceEvent.RankedCutSummary's own doc comment). Every existing
