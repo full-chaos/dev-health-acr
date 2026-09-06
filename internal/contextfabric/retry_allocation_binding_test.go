@@ -184,14 +184,38 @@ func TestTheConsumedAllocationIsTheReturnedOne(t *testing.T) {
 	// three legs -- one binding, every consumer reads it, and the return is that
 	// same identifier -- and only the third one makes the other two observable
 	// outside the function.
+	// QUANTIFIER, and the first version of this block got it backwards.
+	//
+	// It asked "is each RETURNED identifier present among the consumers?" —
+	// an EXISTENTIAL — while the comment above it stated the universal the
+	// invariant actually needs. Those differ exactly when the consumers
+	// DISAGREE WITH EACH OTHER: point narration at `params.Allocation` while
+	// synthesis keeps `synthesisAllocation`, and the returned identifier is
+	// still findable among the consumers, so the check passed on a tree where
+	// the two consumers spend different objects. Keystone #6 found it by
+	// executing exactly that mutation.
+	//
+	// A comment stating the property while the code asserts something weaker is
+	// this branch's defect class living in its own pin, which is why the fix is
+	// the quantifier and not another special case.
+	//
+	// Both halves are required. Collapsing the RETURNED set to one identifier
+	// alone would still permit two return paths handing back different locals;
+	// requiring every consumer to match without it would not notice that.
 	consumers, returned := producerAllocationIdents(t, files)
-	for _, r := range returned {
-		if r == "" {
-			continue
-		}
-		if !containsIdent(consumers, r) {
-			t.Errorf("synthesizeAndAssemble returns %q, which is not the identifier its consumers "+
-				"spend (%v): the guard would measure a copy the producer never used", r, consumers)
+	distinctReturned := distinctIdents(returned)
+	if len(distinctReturned) != 1 {
+		t.Fatalf("synthesizeAndAssemble returns %d distinct allocation identifiers (%v), want exactly 1: "+
+			"two return paths handing back different objects means the caller's guard measures whichever "+
+			"path happened to run", len(distinctReturned), distinctReturned)
+	}
+	consumed := distinctReturned[0]
+	for _, c := range consumers {
+		if c != consumed {
+			t.Errorf("a consumer inside synthesizeAndAssemble spends %q while the producer returns %q "+
+				"(consumers seen: %v). EVERY consumer must spend the returned identifier: if one of them "+
+				"spends a different object, a fault applied to it is invisible to the guard, which is the "+
+				"whole defect this seam exists to prevent.", c, consumed, consumers)
 		}
 	}
 
@@ -443,16 +467,12 @@ func producerAllocationIdents(t *testing.T, files []*ast.File) ([]string, []stri
 					continue
 				}
 				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Allocation" {
-					if ident, ok := kv.Value.(*ast.Ident); ok {
-						consumers = append(consumers, ident.Name)
-					}
+					consumers = append(consumers, exprSource(t, kv.Value))
 				}
 			}
 		case *ast.CallExpr:
 			if ident, ok := node.Fun.(*ast.Ident); ok && ident.Name == "narrateCohortDriverJudgments" && len(node.Args) > 0 {
-				if last, ok := node.Args[len(node.Args)-1].(*ast.Ident); ok {
-					consumers = append(consumers, last.Name)
-				}
+				consumers = append(consumers, exprSource(t, node.Args[len(node.Args)-1]))
 			}
 		case *ast.ReturnStmt:
 			// The allocation is the SECOND result.
@@ -478,11 +498,43 @@ func producerAllocationIdents(t *testing.T, files []*ast.File) ([]string, []stri
 	return consumers, returned
 }
 
-func containsIdent(haystack []string, needle string) bool {
-	for _, h := range haystack {
-		if h == needle {
-			return true
-		}
+// exprSource renders any expression as its source text.
+//
+// EVERY consumer is recorded, whatever its shape — and that is the point.
+// The first version of this walk only recorded a consumer when the argument was
+// a bare `*ast.Ident`, so when keystone #6 pointed narration at
+// `params.Allocation` — a SelectorExpr — the mutated consumer was SILENTLY
+// DROPPED from the list rather than recorded as a mismatch. The check then saw
+// one consumer, agreed with itself, and passed. A checker that skips what it
+// cannot parse reports "all consumers agree" when it has simply not looked at
+// the disagreeing one, which is the same silent-skip defect as a battery that
+// quietly drops an arm.
+func exprSource(t *testing.T, expr ast.Expr) string {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, token.NewFileSet(), expr); err != nil {
+		t.Fatalf("print consumer expression: %v", err)
 	}
-	return false
+	return buf.String()
 }
+
+// distinctIdents collapses the identifier list, preserving first-seen order so
+// the failure message reads in source order.
+func distinctIdents(idents []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, id := range idents {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// containsIdent is deliberately GONE. It existed only for the existential form
+// of the check above ("is the returned identifier somewhere among the
+// consumers"), which is the weaker property that let a divergent consumer pass.
+// The universal form needs no membership helper, and leaving the helper behind
+// would invite the weaker check back.
