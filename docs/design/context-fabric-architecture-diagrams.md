@@ -1746,6 +1746,17 @@ apportions.
 per-bucket item attribution now on every assembled-result line, and the reasons
 the apportioning half was deliberately left out rather than shipped.
 
+**Candidates are reducible and are NOT committed.** The allocator charges the
+mandatory cohort member ROWS off the top and grants the rest; resolution
+candidates are never part of that commitment basis, so `Agreement()` stays green
+while S7c trims them. Their allowance is the REMAINDER — the ceiling less every
+non-candidate bucket's real measured spend, with members floored at the
+committed rows — read from the allocation the assembling stage already measured,
+never recounted from the raw ceiling. That keeps one authority over the
+apportionment while leaving candidates in the shared non-member headroom they
+have always occupied: a bounded, disclosed reduction rather than a share
+predicted before synthesis ran.
+
 **What this does NOT deliver.** Assembly still MEASURES and then reduces.
 Bounding assembly BY CONSTRUCTION — planning against declared caps so the
 unfittable shape is never created — is a separate, larger change. A post-hoc

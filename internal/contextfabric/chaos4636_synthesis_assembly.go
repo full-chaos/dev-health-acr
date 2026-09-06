@@ -98,6 +98,25 @@ type synthesisAssemblyParams struct {
 	// so the ANSWER can disclose it. Zero on every request that grouped, and
 	// on every request that never planned a group axis.
 	GroupingRefusal CohortGroupingOutcome
+	// Plan is the answer plan this pass was budgeted against. Carried so the
+	// ONE allocator can be derived HERE, from the same plan every other
+	// spender reads, rather than each spender consulting a ceiling of its
+	// own -- which is exactly how narration came to charge the static
+	// contract caps while the budget charged something else.
+	Plan AnswerPlan
+	// Allocation is the ONE allocation this pass is budgeted against, derived
+	// where these params are built and CARRIED to every reader.
+	//
+	// It is a field rather than a per-reader `AllocateItems` call because a
+	// keystone review found the alternative in the wild: synthesis derived one
+	// here and stage three derived another from the same inputs. They agreed on
+	// every honest input -- AllocateItems is pure -- so nothing noticed, until a
+	// producer-local corruption of synthesis's copy sailed past a guard that was
+	// re-deriving a replacement. One derivation, one object, every reader.
+	//
+	// The RETRY re-allocates deliberately, and that is not a second authority:
+	// it is a different cohort, so it is a different budget.
+	Allocation ItemAllocation
 	// Retry marks the SECOND pass. It exists so the doubled emissions above
 	// are attributable rather than silent.
 	Retry bool
@@ -137,11 +156,29 @@ func (p synthesisAssemblyParams) snapshot() synthesisAssemblyParams {
 // The copies are explicit rather than relying on GraphContext and
 // SubjectResolution being passed by value: they are structs, so the copy is
 // SHALLOW, and the slices underneath are exactly what bites.
-func (p synthesisAssemblyParams) forRetry(graph GraphContext, facts CanonicalFactBundle) synthesisAssemblyParams {
+//
+// THE ALLOCATION IS A PARAMETER, and that is the whole point of this signature.
+//
+// It used to ride through on `retry := p`, so the retry's synthesis SPENT the
+// first pass's grants -- written for the un-narrowed cohort -- while stage
+// three derived the narrowed cohort's allocation AFTER synthesis and measured
+// against that one. Consumed and validated were two different documents, which
+// is the same defect a keystone review found in the first pass and 91408cc1
+// fixed there and only there.
+//
+// The lesson that shapes this signature: that first fix pinned the first pass
+// by COUNTING derivations, and this recurrence was introduced by OMISSION --
+// nobody wrote a second derivation, they merely failed to carry the right one
+// through a struct copy, which a counting pin cannot see. Requiring the
+// allocation here makes the omission a compile error, so a future retry path
+// must state which allocation its document is produced under rather than
+// silently inheriting one.
+func (p synthesisAssemblyParams) forRetry(graph GraphContext, facts CanonicalFactBundle, allocation ItemAllocation) synthesisAssemblyParams {
 	retry := p
 	retry.Retry = true
 	retry.Graph = graph
 	retry.Facts = facts
+	retry.Allocation = allocation
 	retry.Resolution = copySubjectResolutionForRetry(p.Resolution)
 	retry.Graph.Cohort = copyCohortForRetry(graph.Cohort)
 	retry.Graph.Resolution = retry.Resolution
@@ -195,7 +232,23 @@ func copyCohortForRetry(cohort *Cohort) *Cohort {
 // to but NOT including render-shape selection, completeness stamping,
 // validation and persistence -- those run once, on whichever pass produced
 // the answer that is actually served.
-func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Principal, params synthesisAssemblyParams) (InvestigationResult, assemblyTelemetry, error) {
+// synthesizeAndAssemble RETURNS THE ALLOCATION IT CONSUMED, and that return
+// value is the invariant this seam now rests on.
+//
+// The rule (team-lead, 2026-09-06): *the allocation a pass CONSUMED is the value
+// the producer RETURNS; the guard measures the returned value; no consumer holds
+// a private copy the guard cannot see.*
+//
+// Three fixes reached this the long way. Each closed one instance and left the
+// class open, because each stopped at "derive it once and pass it in" -- and
+// derive-once still lets a producer alias the value into a local that the guard
+// never sees. `ItemAllocation` is a VALUE type and `params` is by-value, so no
+// fault inside this function can reach a guard in the caller: reading a
+// different FIELD cannot fix that, and only returning what was spent can.
+// Sites: the first-pass re-derivation (keystone #3), the retry inheriting the
+// first pass's grants (keystone #4), and narration spending a re-copied local
+// (keystone #5).
+func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Principal, params synthesisAssemblyParams) (InvestigationResult, ItemAllocation, assemblyTelemetry, error) {
 	// pending holds every per-investigation decision event this pass
 	// produces. NOTHING here emits -- see point 3 in this file's header.
 	var pending assemblyTelemetry
@@ -213,11 +266,25 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	commitBases := params.CommitBases
 	commitDigests := params.CommitDigests
 
+	// The SAME allocator every other spender reads, derived ONCE where these
+	// params were built and CARRIED here. A second derivation at the prompt
+	// site, inside narration, or in stage three is exactly how one budget came
+	// to have two authorities -- and stage three did precisely that until a
+	// keystone review injected a fault into this copy and watched the guard
+	// validate the other one.
+	// THE one allocation this pass consumes, and the one it RETURNS. Every
+	// consumer below -- synthesis at the call just under this, narration further
+	// down -- reads THIS identifier, and the caller measures what comes back, so
+	// a fault applied to it is spent and seen by the same object. A second
+	// binding of `params.Allocation` anywhere below would recreate exactly the
+	// private copy this return exists to abolish.
+	synthesisAllocation := params.Allocation
 	result, err := e.synthesizer.Synthesize(ctx, principal, SynthesisInput{
-		Request: request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
+		Allocation: synthesisAllocation,
+		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
 	})
 	if err != nil {
-		return InvestigationResult{}, assemblyTelemetry{}, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
+		return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
 	}
 	result.SchemaVersion = InvestigationResultSchemaV1
 	result.ResultID = e.newResultID()
@@ -380,7 +447,11 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// be tracked independently of the driver budget, not assumed to always
 	// have headroom).
 	if graphContext.Cohort != nil {
-		narrated, mintedClaims, narrationEvent := narrateCohortDriverJudgments(graphContext.Cohort, result.Drivers, len(result.ClaimedFacts), cohortSignalCitations)
+		// synthesisAllocation, NOT a second AllocateItems call. Two
+		// derivations in one function would be two authorities over one
+		// number -- the defect this allocator exists to remove,
+		// reintroduced at the site that removes it.
+		narrated, mintedClaims, narrationEvent := narrateCohortDriverJudgments(graphContext.Cohort, result.Drivers, len(result.ClaimedFacts), cohortSignalCitations, synthesisAllocation)
 		// codex R1 (CHAOS-4398 PR3b), team-lead ruling: every narration-
 		// minted claim must pass the SAME grounding check a model-authored
 		// claim gets from SynthesisDraft.ValidateAgainst -- which this
@@ -391,7 +462,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		// read) BEFORE anything is appended -- fail closed, never serve a
 		// claim that cannot be traced back to a real canonical fact.
 		if err := validateMintedClaimsGrounded(mintedClaims, facts.Facts); err != nil {
-			return InvestigationResult{}, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
+			return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 		}
 		result.Drivers = append(result.Drivers, narrated...)
 		// CHAOS-4398 PR3b: append the claims THIS composer minted (only for
@@ -480,7 +551,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		}
 		result.SubjectResolution.CommitDecisionDigests = digests
 	}
-	return result, pending, nil
+	return result, synthesisAllocation, pending, nil
 }
 
 // assemblyTelemetry is every per-investigation decision event one assembly

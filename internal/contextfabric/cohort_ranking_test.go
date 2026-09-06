@@ -928,7 +928,7 @@ func TestNarrateCohortDriverJudgments_NeverNarratesTheDeficiencyAvailableZeroDri
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
 	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
 
-	judgments, minted, _ := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+	judgments, minted, _ := narrateCohortDriverJudgments(ranked, nil, 0, citations, ItemAllocation{})
 	for _, j := range judgments {
 		if j.Category == "operational_deficiency" {
 			t.Fatalf("narrated a judgment for the available-zero deficiency driver: %+v", j)
@@ -961,7 +961,7 @@ func TestRankCohort_ResultLevelClaimedFactsSatisfyTheWritePathValidator(t *testi
 	member.EvidenceRefIDs = []string{"evidence_team_a_roster"}
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
 	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
-	narratedJudgments, mintedClaims, _ := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+	narratedJudgments, mintedClaims, _ := narrateCohortDriverJudgments(ranked, nil, 0, citations, ItemAllocation{})
 
 	result := InvestigationResult{
 		SchemaVersion: InvestigationResultSchemaV1,
@@ -1021,7 +1021,7 @@ func TestRankCohort_MintedClaimIDsAreDeterministicAcrossRepeatedRuns(t *testing.
 	}
 	runOnce := func() (driverIDs, claimIDs []string) {
 		ranked, _, citations := RankCohort(newCohort(), facts, availableCoverage())
-		_, minted, _ := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+		_, minted, _ := narrateCohortDriverJudgments(ranked, nil, 0, citations, ItemAllocation{})
 		for _, d := range ranked.Members[0].Drivers {
 			driverIDs = append(driverIDs, d.SourceClaimedFactIDs...)
 		}
@@ -1170,7 +1170,7 @@ func TestNarrateCohortDriverJudgments_EveryMintedClaimIsGrounded(t *testing.T) {
 	cohort := &Cohort{Kind: SubjectTeam, Rationale: "r", Members: []CohortMember{member}}
 	ranked, _, citations := RankCohort(cohort, facts, availableCoverage())
 
-	_, minted, _ := narrateCohortDriverJudgments(ranked, nil, 0, citations)
+	_, minted, _ := narrateCohortDriverJudgments(ranked, nil, 0, citations, ItemAllocation{})
 	if len(minted) == 0 {
 		t.Fatal("expected at least one minted claim from a realistic multi-family scenario")
 	}

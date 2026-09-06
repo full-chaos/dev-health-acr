@@ -2181,7 +2181,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 
 	assemblyParams := synthesisAssemblyParams{
-		Request: request, Interpretation: interpretation, Frame: familyOutcome.Frame,
+		// The plan the allocator is derived from, and the allocation itself.
+		// ONE authority for the ceiling every spender writes against, derived
+		// HERE and carried -- not re-derived by each reader from the same
+		// inputs, which is what let a corrupted producer copy pass a guard
+		// checking a replacement.
+		Plan:       plan,
+		Allocation: AllocateItems(plan, groupCountOf(graphContext.Cohort), cohortMemberCount(graphContext.Cohort)),
+		Request:    request, Interpretation: interpretation, Frame: familyOutcome.Frame,
 		Graph: graphContext, Facts: facts,
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
 		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarry: windowCarry,
@@ -2195,7 +2202,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// synthesisAssemblyParams.snapshot for the two fields and why ordering,
 	// not the existence of a copy, was the defect.
 	retryBase := assemblyParams.snapshot()
-	result, pendingTelemetry, err := e.synthesizeAndAssemble(ctx, principal, assemblyParams)
+	result, consumedAllocation, pendingTelemetry, err := e.synthesizeAndAssemble(ctx, principal, assemblyParams)
 	if err != nil {
 		// CHAOS-4726: attach the narrowing state as of THIS call site --
 		// stage 1 and (if it ran) stage 2 are the only stages that can have
@@ -2230,7 +2237,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// the shape measured on the second pass is the shape that would be
 	// served on the second pass.
 	result = e.finalizeResult(result, plan, familyOutcome.Frame)
-	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, pendingTelemetry, retryBase)
+	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, consumedAllocation, pendingTelemetry, retryBase)
 	if err != nil {
 		return InvestigationResult{}, err
 	}

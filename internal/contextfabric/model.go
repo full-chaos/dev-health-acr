@@ -879,4 +879,16 @@ type SynthesisInput struct {
 	Interpretation InterpretedQuestion  `json:"interpretation"`
 	Graph          GraphContext         `json:"graph"`
 	Facts          CanonicalFactBundle  `json:"facts"`
+	// Allocation is the ONE allocator's published grants for this request.
+	//
+	// It is carried into synthesis because a bound the model is not told
+	// about is not a bound, it is a surprise: the model decides how many
+	// drivers, findings and claims to write, so a per-group allowance it
+	// never sees can only be discovered afterwards, as an overrun. Telling
+	// it the number is what makes measured follow predicted.
+	//
+	// A zero Allocation means no quota is in force, and the prompt then
+	// states no numbers at all rather than stating zero -- a model shown a
+	// quota of zero has been told to write nothing.
+	Allocation ItemAllocation `json:"allocation"`
 }

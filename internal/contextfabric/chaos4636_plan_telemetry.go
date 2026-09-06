@@ -67,6 +67,35 @@ type PlanNarrowingEvent struct {
 	// member-narrowing either mislabel its order or falsely increment this
 	// counter. See PlanNarrowingEventFrom's two separate parameters.
 	Groups bool
+	// LedgerStatus is the reconciler's own verdict on the document this
+	// event describes: did every charged occurrence have exactly one debit.
+	// Carried on every line, not only on the failure path, so "how often
+	// does the account reconcile" has a denominator -- the same finding a
+	// prior round made against the stage-3 fit, applied here before it can
+	// be made again.
+	LedgerStatus contractsv1.ContextFabricLedgerStatus
+	// QuotaAvailability says what the four quota numbers below MEAN: a
+	// bounded allowance, a bounded allowance of ZERO, no ceiling at all, no
+	// group axis to report, or an account that did not reconcile. Zero used
+	// to be all five of those at once, which is the whole of class B: the
+	// number meant to prevent an overrun was only computed after one had
+	// already happened, and its absence was indistinguishable from a
+	// measured zero.
+	QuotaAvailability ItemQuotaAvailability
+	// QuotaGroupAllowance is the published per-group allowance.
+	QuotaGroupAllowance int
+	// QuotaGroupsGranted is how many groups that allowance was granted
+	// across; QuotaGroupsMeasured is how many the MEASURED document
+	// declares. They are separate because a retry narrows the cohort, and an
+	// attempt whose measured count differs from its granted one is measuring
+	// a document the grants were not written for -- publishing one number
+	// for both would hide exactly that.
+	QuotaGroupsGranted  int
+	QuotaGroupsMeasured int
+	// QuotaGroupsOverAllowance is how many measured groups used more than
+	// the allowance, under the declared every_group rule. Incidence, never
+	// summed as physical cost.
+	QuotaGroupsOverAllowance int
 	// Overrun names which budget axis forced the step, empty when nothing
 	// was measured (stage 1) or nothing was over (a recorded fit).
 	Overrun contractsv1.ContextFabricBudgetOverrun
@@ -276,9 +305,19 @@ func PlanNarrowingEventFrom(plan AnswerPlan, stage contractsv1.ContextFabricPlan
 	}
 }
 
-// recordMeasurement stamps the THREE numbers that describe one measured
-// document -- the charged item total, the serialized size, and the per-bucket
-// split of that same total -- from a single ContextFabricResponseMeasurement.
+// recordMeasurement stamps everything that describes ONE measured attempt --
+// the charged item total, the serialized size, the per-bucket split of that
+// same total, and the quota exposure with its availability -- from a single
+// MeasuredAttempt.
+//
+// THE NAME IS KEPT although the parameter is now an attempt rather than a bare
+// measurement. Three shipped assertions key on this identifier -- the AST pin
+// that forbids stamping outside it, that pin's own positive control, and the
+// arm reconciliation that requires one call site per driven arm -- and renaming
+// it would rewrite all three for a cosmetic gain while the property they pin is
+// unchanged. What changed is the SIZE of the group that must move together: the
+// quota fields joined it, which is exactly the widening this seam needed, since
+// three rounds found arms that carried the measurement and forgot the quota.
 //
 // It exists because this seam's whole failure history is arms that carry some
 // of a group of related fields and not the rest: stage three emits its
@@ -291,10 +330,16 @@ func PlanNarrowingEventFrom(plan AnswerPlan, stage contractsv1.ContextFabricPlan
 // per arm. TestEveryAssembledResultArmStampsItsMeasurementThroughOnePath walks
 // the package's syntax tree and fails if any arm assigns MeasuredItems
 // directly again.
-func (e *PlanNarrowingEvent) recordMeasurement(measurement contractsv1.ContextFabricResponseMeasurement) {
-	e.MeasuredItems = measurement.Items.Budgeted()
-	e.MeasuredBytes = measurement.Bytes
-	e.Attribution = measurement.Attribution
+func (e *PlanNarrowingEvent) recordMeasurement(attempt MeasuredAttempt) {
+	e.MeasuredItems = attempt.Measurement.Items.Budgeted()
+	e.MeasuredBytes = attempt.Measurement.Bytes
+	e.Attribution = attempt.Measurement.Attribution
+	e.LedgerStatus = attempt.Ledger.Status
+	e.QuotaAvailability = attempt.Availability
+	e.QuotaGroupAllowance = attempt.GroupAllowance
+	e.QuotaGroupsGranted = attempt.GroupsGranted
+	e.QuotaGroupsMeasured = attempt.GroupsMeasured
+	e.QuotaGroupsOverAllowance = attempt.GroupsOverAllowance
 }
 
 // planStageBasis names the order a stage takes members in. It is derived
@@ -378,6 +423,22 @@ type PlanTelemetry interface {
 	// implementation that cannot report this must be a COMPILE ERROR, never
 	// a silently empty stream.
 	RecordBudgetAssertion(ctx context.Context, principal storage.Principal, event BudgetAssertionEvent)
+	// RecordItemAccounting reports an answer whose item ACCOUNT did not
+	// reconcile with the answer itself -- a debit missing, an occurrence
+	// charged twice, a bucket split that disagrees with the published one.
+	//
+	// It fires only on the defect, and that asymmetry is deliberate: the
+	// reconciled case is already countable from the assertion and narrowing
+	// events, which carry the ledger's status on every line. What has no
+	// other representation is the disagreement, and it is a SERVER defect --
+	// the one outcome that must never present to a caller as an oversized
+	// question.
+	//
+	// Required on this interface for the CHAOS-4085 reason above: a sink
+	// that cannot report an accounting defect must be a compile error, not a
+	// silently empty stream on the one path that means the answer's own
+	// numbers do not add up.
+	RecordItemAccounting(ctx context.Context, principal storage.Principal, event ItemAccountingEvent)
 }
 
 // GroupedCohortCompletenessEvent (CHAOS-4733) is CLOSED ENUMS AND COUNTS
