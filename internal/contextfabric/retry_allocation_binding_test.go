@@ -308,25 +308,84 @@ func hasParam(fn *ast.FuncDecl, name, typeName string) bool {
 // assignsField reports whether the body contains a real assignment to
 // <receiver>.<field>. An assignment inside a comment is not in the AST at all,
 // which is the entire reason this is a parse and not a grep.
+// assignsField reports whether the body contains a REACHABLE assignment to
+// <receiver>.<field>.
+//
+// PRESENCE IS NOT REACHABILITY, and this pin asserted only presence. A keystone
+// review disabled the assignment by burying it in a statically dead branch:
+//
+//	if false { retry.Allocation = allocation }
+//
+// That compiles, the assignment node is still in the tree, and the pin passed.
+// The mutation is caught overall — the behavioural pin
+// TestTheRetryIsSynthesizedUnderItsOwnCohortsAllocation fails on it, so no tree
+// could ship with the assignment disabled — but the STRUCTURAL pin is the one
+// that names the property, and a pin that passes on a tree it should fail is
+// worth nothing as documentation of that property.
+//
+// Statically-dead detection is deliberately narrow: a constant `false` (or a
+// parenthesised one) as an `if` condition. That is what a disabling mutation
+// looks like, and it is decidable by inspection. Anything requiring real
+// constant folding is out of scope — a pin that pretends to evaluate arbitrary
+// conditions would make a promise it cannot keep, which is the failure this
+// whole family of fixes exists to remove.
 func assignsField(fn *ast.FuncDecl, receiver, field string) bool {
 	found := false
 	ast.Inspect(fn, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok {
-			return true
+		if n == nil {
+			return false
 		}
-		for _, lhs := range assign.Lhs {
-			sel, ok := lhs.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != field {
-				continue
+		if ifStmt, ok := n.(*ast.IfStmt); ok && isStaticallyFalse(ifStmt.Cond) {
+			// Walk the else branch (still reachable), skip the dead body.
+			if ifStmt.Else != nil {
+				ast.Inspect(ifStmt.Else, func(inner ast.Node) bool {
+					if assign, ok := inner.(*ast.AssignStmt); ok && assignsTo(assign, receiver, field) {
+						found = true
+					}
+					return true
+				})
 			}
-			if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == receiver {
-				found = true
-			}
+			return false
+		}
+		// No depth counter is needed: returning false above PRUNES the dead
+		// branch's subtree, so nothing inside it reaches this line. A
+		// `deadDepth == 0` guard here would be a condition that can never be
+		// false — a guard that cannot fire, which is the defect this pin's own
+		// PR spent seven rounds removing.
+		if assign, ok := n.(*ast.AssignStmt); ok && assignsTo(assign, receiver, field) {
+			found = true
 		}
 		return true
 	})
 	return found
+}
+
+// isStaticallyFalse reports whether an expression is the literal `false`,
+// possibly parenthesised.
+func isStaticallyFalse(expr ast.Expr) bool {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	ident, ok := expr.(*ast.Ident)
+	return ok && ident.Name == "false"
+}
+
+// assignsTo reports whether an assignment writes <receiver>.<field>.
+func assignsTo(assign *ast.AssignStmt, receiver, field string) bool {
+	for _, lhs := range assign.Lhs {
+		sel, ok := lhs.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != field {
+			continue
+		}
+		if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == receiver {
+			return true
+		}
+	}
+	return false
 }
 
 // measureArgFor returns the source form of the allocation argument passed to
