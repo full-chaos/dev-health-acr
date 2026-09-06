@@ -38,6 +38,10 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+// devhealthschema:not-a-production-replica the table names below select what devhealthschema.DDL renders below; the schema itself
+// is the declaration's, not this file's -- the same exemption chaos3780/chaos4099's own DDL calls already carried before CHAOS-5270
+// folded their table lists into this one shared union.
+//
 // sharedClickHouseTables is the UNION of every table this package's
 // real-ClickHouse tests need, rendered once at first use rather than once
 // per test -- devhealthschema.DDL's CREATE TABLE is not idempotent, so a
