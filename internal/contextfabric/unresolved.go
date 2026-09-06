@@ -135,6 +135,23 @@ const (
 	// qualified slug, then repository basename). See
 	// noMatchLimitationForEmptyPool, the seam that branch will extend.
 	noMatchLimitationUnproven = "Retrieval found no candidate for this question in this organization's graph, so no canonical facts were read. This search is not exhaustive, so it does not confirm that no matching subject exists."
+
+	// COMPARISON-SPECIFIC PROSE, deliberately NOT the single-subject wording.
+	//
+	// A held comparison is not "more than one authorized subject matched" and
+	// it is not "retrieval found no candidate": it is a two-subject question
+	// where the pair could not be bound as a pair, which is a third thing.
+	// Borrowing either existing sentence would tell the reader something
+	// false about their own question -- the single-subject wording in
+	// particular would describe an ambiguity between candidates that this
+	// outcome may not have at all.
+	comparisonHeldLimitation = "This question compares two subjects, and both must be confirmed together before any canonical facts are read. The comparison is described in the clarification, and no facts were read for either side."
+
+	// The clarification-disabled twin. No-match is PRESERVED for this case
+	// (the caller refused clarification, so there is no question to ask), but
+	// the prose still says what actually happened rather than claiming
+	// retrieval found nothing.
+	comparisonHeldNoClarificationLimitation = "This question compares two subjects and the pair could not be confirmed together. This request did not allow clarification, so neither side was confirmed and no canonical facts were read."
 	// noMatchLimitationGraphNotProjected (CHAOS-4077, codex xhigh review
 	// round 2, confirmed real LOW finding): noMatchLimitationUnproven's own
 	// text claims retrieval ran "in this organization's graph" -- false for
@@ -223,7 +240,9 @@ func (e *Engine) terminalResult(
 	// silently drop a validated prior-subject receipt on exactly the paths
 	// where one exists.
 	ancestryParent string) (InvestigationResult, error) {
-	status, limitation := resolveTerminalStatus(request, &resolution)
+	// THE FRAME COMES OFF THE FAMILY OUTCOME THIS TURN ALREADY PRODUCED --
+	// carried, never reconstructed here from the interpretation or the shape.
+	status, limitation := resolveTerminalStatus(request, &resolution, familyOutcome.Frame)
 	// CHAOS-4634 (subsumes CHAOS-4579/CHAOS-4531's §1.3 class-conditional
 	// gate): applied HERE, at the top, before ANY reader of
 	// structureMaterial below -- both the schemaVersion dispatch
@@ -541,8 +560,45 @@ func subjectlessTerminalReason(resolution SubjectResolution, subjectCandidatesAu
 	return "empty_pool"
 }
 
-func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution) (InvestigationStatus, string) {
+// comparisonHeldWithoutCandidates reports whether an EMPTY candidate pool is a
+// held comparison rather than an ordinary empty pool.
+//
+// KEYED OFF THE FRAME, which is the only thing that can tell the two apart. An
+// empty pool means "retrieval found nothing" for every other shape, and that
+// is what the existing no-match branch correctly says about it. For a
+// comparison the pool can be empty for a completely different reason: a scoped
+// pair is HELD BEFORE ANY RETRIEVAL RUNS, deliberately, so there was never
+// anything to find. Reporting that as "retrieval found no candidate" would
+// describe a search that did not happen.
+//
+// The prompt is required as well as the frame. Publication writes one for
+// every hold, so its presence is the evidence that this empty pool came from
+// the comparison path and not from some other route that happens to be running
+// under a comparison frame. Frame alone would be a claim about which code ran;
+// frame plus prompt is a fact about what it produced.
+func comparisonHeldWithoutCandidates(frame *QuestionFrame, resolution *SubjectResolution) bool {
+	if resolution == nil || strings.TrimSpace(resolution.ClarificationPrompt) == "" {
+		return false
+	}
+	switch ClassifyComparisonOperands(frame).Admission {
+	case ComparisonAdmittedNamedPair, ComparisonHeldScopedOperand:
+		return true
+	}
+	return false
+}
+
+func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution, frame *QuestionFrame) (InvestigationStatus, string) {
 	if len(resolution.Candidates) == 0 {
+		// THE COMPARISON-ONLY BRANCH. Every OTHER empty-pool outcome is
+		// unchanged: this returns early only for a held comparison that
+		// already wrote its own prompt, and falls through to the existing
+		// no-match wording for everything else.
+		if comparisonHeldWithoutCandidates(frame, resolution) {
+			if !request.Options.AllowClarification {
+				return InvestigationNoMatch, comparisonHeldNoClarificationLimitation
+			}
+			return InvestigationClarificationRequired, comparisonHeldLimitation
+		}
 		return InvestigationNoMatch, noMatchLimitationForEmptyPool(resolution)
 	}
 	// Exactly one uncommitted candidate is a REACHABLE state, not a
