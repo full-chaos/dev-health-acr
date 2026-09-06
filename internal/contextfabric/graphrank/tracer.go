@@ -54,7 +54,11 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 	ctx := context.Background()
 	switch event.Stage {
 	case "search":
-		t.logger.DebugContext(ctx, "context fabric resolution trace: search",
+		// Rig-visibility fix: measured bounded (1 event per
+		// term this resolution's own terms list carries, typically a
+		// handful) -- safe to promote straight to Info, same reasoning as
+		// kind_offer's own unconditional-and-bounded promotion (CHAOS-5222).
+		t.logger.InfoContext(ctx, "context fabric resolution trace: search",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"term_hash", event.TermHash, "result_count", event.SearchResultCount,
 			"truncated", event.Truncated)
@@ -66,11 +70,16 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// evidence_source_native were each found missing this case for.
 		// No term_hash: this pass has no per-term identity, only ONE call
 		// per resolution.
-		t.logger.DebugContext(ctx, "context fabric resolution trace: search question",
+		// Rig-visibility fix: one call per resolution -- safe
+		// to promote straight to Info.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: search question",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"result_count", event.SearchResultCount, "truncated", event.Truncated)
 	case "alias_lookup":
-		t.logger.DebugContext(ctx, "context fabric resolution trace: alias lookup",
+		// Rig-visibility fix: a single emission site
+		// (resolve.go), no per-candidate loop -- safe to promote straight
+		// to Info.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: alias lookup",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"complete", event.AliasLookupComplete, "matched_claimants", event.AliasLookupMatchedClaimants)
 	case "kind_hint_search":
@@ -81,18 +90,39 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// is what a codex review caught this against -- see that function's
 		// own two-functions-not-one-parameterized doc comment for why the
 		// AST walk needed a literal Stage per call site to see it at all).
-		t.logger.DebugContext(ctx, "context fabric resolution trace: kind hint search",
+		// Rig-visibility fix: bounded by matched-node count,
+		// small in practice -- safe to promote straight to Info.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: kind hint search",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"term_hash", event.TermHash, "subject_kind", string(event.Subject.Kind),
 			"subject_canonical_id", event.Subject.CanonicalID)
 	case "exact_name_search":
 		// CHAOS-4348: traceExactNameSearch's own event, same convention as
 		// kind_hint_search immediately above.
-		t.logger.DebugContext(ctx, "context fabric resolution trace: exact name search",
+		// Rig-visibility fix: same bounded shape as
+		// kind_hint_search -- safe to promote straight to Info.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: exact name search",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"term_hash", event.TermHash, "subject_kind", string(event.Subject.Kind),
 			"subject_canonical_id", event.Subject.CanonicalID)
 	case "corroboration":
+		// Measured retrieval-pool-sized (96 events on a
+		// 90-candidate crowd, past the per-pass Info ceiling, same class
+		// as ranked_cut's own per-candidate line) -- this per-candidate
+		// line STAYS Debug. CorroborationSummary (below) is the
+		// once-per-pass Info line an operator actually gets; see
+		// ResolutionTraceEvent.CorroborationSummary's own doc comment for
+		// the full rule and why this is a second event on this SAME token
+		// rather than promoting this one.
+		if event.CorroborationSummary {
+			t.logger.InfoContext(ctx, "context fabric resolution trace: corroboration summary",
+				"request_id", event.RequestID, "stage", event.Stage,
+				"candidate_count", event.CorroborationCandidateCount,
+				"top_ids", event.CorroborationTopIDs,
+				"min_confidence", event.CorroborationMinConfidence,
+				"max_confidence", event.CorroborationMaxConfidence)
+			return
+		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: corroboration",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
@@ -145,7 +175,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// KindCoverageMissingKindsList's own doc comment
 		// (ResolutionTraceEvent) for the CHAOS-4012 re-smoke ambiguity this
 		// resolves.
-		t.logger.DebugContext(ctx, "context fabric resolution trace: kind coverage floor",
+		t.logger.InfoContext(ctx, "context fabric resolution trace: kind coverage floor",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"fired", event.KindCoverageFloorFired,
 			"missing_kinds", event.KindCoverageMissingKinds,
@@ -170,7 +200,11 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// about whether "no candidate" is an exhaustive census or a skipped
 		// one. That misreading has already happened once. A reader should
 		// not need the source to interpret the line.
-		t.logger.DebugContext(ctx, "context fabric resolution trace: confirmed kind rescue",
+		//
+		// Rig-visibility fix: gated behind the rescue's own
+		// trigger, fires at most once per pass -- safe to promote straight
+		// to Info.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: confirmed kind rescue",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"attempted", true,
 			"fired", event.ConfirmedKindRescueFired,
@@ -285,7 +319,11 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// AnchorOfferLabelsNormalizedCount's own doc comment
 		// (ResolutionTraceEvent) for why this must be diagnosable from the
 		// run's own artifacts, not just applied silently.
-		t.logger.DebugContext(ctx, "context fabric resolution trace: anchor offer",
+		// Rig-visibility fix: this event fires unconditionally,
+		// once per resolution -- the SAME shape kind_offer already has at
+		// Info (CHAOS-5222) -- so it was already safe to promote and had
+		// simply never been. Safe straight promotion.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: anchor offer",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"labels_normalized_count", event.AnchorOfferLabelsNormalizedCount)
 	case "ranked_cut":
@@ -355,7 +393,11 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// (state=="") whenever the shadow arm was never invoked, matching
 		// ConfirmedKindScopeState's own "absent means not attempted"
 		// convention.
-		t.logger.DebugContext(ctx, "context fabric resolution trace: confirmed kind scope",
+		//
+		// Rig-visibility fix: gated behind this mechanism's own
+		// trigger, fires at most once per pass -- safe to promote straight
+		// to Info.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: confirmed kind scope",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"state", event.ConfirmedKindScopeState,
 			"candidate_count", event.ConfirmedKindScopeCandidateCount,
@@ -390,10 +432,32 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// LowPopulationKindScopeOutcome's own doc comment.
 			"outcome", event.LowPopulationKindScopeOutcome)
 	case "identity_universe":
-		t.logger.DebugContext(ctx, "context fabric resolution trace: identity universe read",
+		// Rig-visibility fix: a single emission site
+		// (falkorgraph/reader.go), once per resolution's identity read --
+		// safe to promote straight to Info.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: identity universe read",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"complete", event.IdentityUniverseComplete)
 	case "identity_gate":
+		// Measured retrieval-pool-sized (90 events on a
+		// 90-Repository-candidate crowd -- identity_gate fires per
+		// alias-lookup-scoped candidate NodeCandidate builds, unbounded by
+		// this event's own gating and scaling with however many
+		// Repository/Project/Team candidates the pool holds) -- this
+		// per-candidate line STAYS Debug. IdentityGateSummary (emitted by
+		// identityGateSummaryBuffer, resolve.go, once per
+		// ResolveSubjectsWithCommitBasis call) is the folded Info line an
+		// operator actually gets; see
+		// ResolutionTraceEvent.IdentityGateSummary's own doc comment for
+		// the full rule.
+		if event.IdentityGateSummary {
+			t.logger.InfoContext(ctx, "context fabric resolution trace: identity gate summary",
+				"request_id", event.RequestID, "stage", event.Stage,
+				"candidate_count", event.IdentityGateCandidateCount,
+				"fired_count", event.IdentityGateFiredCount,
+				"fired_ids", event.IdentityGateFiredIDs)
+			return
+		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: identity gate",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
@@ -406,7 +470,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// commit-path decision this slice, logged for measurement only.
 		// Content-safe: ShadowDIdentityHash is a SHA-256, never handle/
 		// anchor text; every other field is a count/enum/bool.
-		t.logger.DebugContext(ctx, "context fabric resolution trace: evidence round (shadow)",
+		t.logger.InfoContext(ctx, "context fabric resolution trace: evidence round (shadow)",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"shadow_outcome", event.ShadowOutcome, "shadow_reason", event.ShadowReason,
 			"shadow_d_identity_hash", event.ShadowDIdentityHash,
@@ -447,7 +511,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 	case "evidence_probe":
 		// CHAOS-3899: ONE per-kind census receipt (brief §1.3(3), "Per-kind,
 		// never aggregated across kinds").
-		t.logger.DebugContext(ctx, "context fabric resolution trace: evidence probe (shadow census)",
+		t.logger.InfoContext(ctx, "context fabric resolution trace: evidence probe (shadow census)",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"census_kind", string(event.CensusKind), "census_complete", event.CensusComplete,
 			"census_count", event.CensusCount, "census_read_at_unix", event.CensusReadAtUnix,
@@ -469,7 +533,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// shape every other stage already logs), CensusCommitReason is a
 		// closed-vocabulary DegradationReason string, never term/question
 		// text.
-		t.logger.DebugContext(ctx, "context fabric resolution trace: evidence census commit",
+		t.logger.InfoContext(ctx, "context fabric resolution trace: evidence census commit",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"outcome", event.Outcome, "graph_existence_ok", event.GraphExistenceOK,
@@ -484,7 +548,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// both non-request-id/stage fields are a count and a bool.
 		// request_id/stage pass through sanitizeLogString -- see its own
 		// doc comment (CodeQL go/log-injection).
-		t.logger.DebugContext(ctx, "context fabric resolution trace: evidence source native (shadow widening)",
+		t.logger.InfoContext(ctx, "context fabric resolution trace: evidence source native (shadow widening)",
 			"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
 			"source_native_match_count", event.ShadowSourceNativeMatchCount,
 			"source_native_any_resolved", event.ShadowSourceNativeAnyResolved)
@@ -500,7 +564,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// through sanitizeLogString -- see its own doc comment (CodeQL
 		// go/log-injection): a static analyzer cannot credit "this string
 		// is registry-constant by construction" the way a human review can.
-		t.logger.DebugContext(ctx, "context fabric resolution trace: evidence source native probe (shadow widening)",
+		t.logger.InfoContext(ctx, "context fabric resolution trace: evidence source native probe (shadow widening)",
 			"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
 			"source_native_grammar", sanitizeLogString(event.ShadowSourceNativeGrammar),
 			"source_native_resolved", event.ShadowSourceNativeResolved,
@@ -512,6 +576,23 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// "silence means never reached, not everything neutral" contract.
 		// Content-safe: Subject is the graph's own stable kind+canonical_id,
 		// SurvivorVerdict is the closed "neutral"/"eliminated" vocabulary.
+		//
+		// This per-candidate line is bounded by the FINAL
+		// candidate list, which the scale ruling treats as unbounded
+		// (MaxSubjectCandidates carries no ceiling of its own) -- STAYS
+		// Debug. SurvivorVerdictSummary (emitted by SurvivorsFirstOrder
+		// itself, chaos3896_slice_b_presentation.go) is the folded Info
+		// line; see ResolutionTraceEvent.SurvivorVerdictSummary's own doc
+		// comment for the full rule.
+		if event.SurvivorVerdictSummary {
+			t.logger.InfoContext(ctx, "context fabric resolution trace: slice b survivor verdict summary",
+				"request_id", event.RequestID, "stage", event.Stage,
+				"candidate_count", event.SurvivorVerdictCandidateCount,
+				"neutral_count", event.SurvivorVerdictNeutralCount,
+				"eliminated_count", event.SurvivorVerdictEliminatedCount,
+				"eliminated_ids", event.SurvivorVerdictEliminatedIDs)
+			return
+		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: slice b survivor verdict",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,

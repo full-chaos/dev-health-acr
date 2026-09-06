@@ -235,11 +235,18 @@ func TestSurvivorsFirstOrder_TracesEveryClassifiedCandidate(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("SurvivorsFirstOrder returned %d candidates, want 2", len(got))
 	}
-	if len(tracer.events) != 2 {
-		t.Fatalf("tracer recorded %d events, want exactly one per classified candidate (2)", len(tracer.events))
+	// SurvivorsFirstOrder now ALSO emits one folded
+	// SurvivorVerdictSummary event sharing this SAME stage token (see
+	// ResolutionTraceEvent.SurvivorVerdictSummary's own doc comment) --
+	// filtered out here via perCandidateSurvivorVerdictEvents so this
+	// test's own "one event per classified candidate" claim still holds
+	// on just the per-candidate events, not the summary.
+	perCandidateEvents := perCandidateSurvivorVerdictEvents(tracer.events)
+	if len(perCandidateEvents) != 2 {
+		t.Fatalf("tracer recorded %d per-candidate events, want exactly one per classified candidate (2)", len(perCandidateEvents))
 	}
 	byCanonicalID := map[string]ResolutionTraceEvent{}
-	for _, event := range tracer.events {
+	for _, event := range perCandidateEvents {
 		if event.Stage != "slice_b_survivor_verdict" {
 			t.Fatalf("event.Stage = %q, want %q", event.Stage, "slice_b_survivor_verdict")
 		}

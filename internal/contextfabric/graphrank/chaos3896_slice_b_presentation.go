@@ -173,6 +173,37 @@ func SurvivorsFirstOrder(candidates []contextfabric.SubjectCandidate, attestatio
 			})
 		}
 	}
+	if tracer != nil && len(ordered) > 0 {
+		// The once-per-call Info summary (mirrors
+		// RankedCutSummary's own shape, see
+		// ResolutionTraceEvent.SurvivorVerdictSummary's own doc comment):
+		// this stage's per-candidate line is bounded by the FINAL candidate
+		// list, which the scale ruling treats as unbounded (MaxSubjectCandidates
+		// carries no ceiling of its own) -- so it stays Debug and this one
+		// folded line is what an operator actually gets at Info.
+		// eliminatedIDs names the OUTCOME-AFFECTING subset (an elimination
+		// changes what SurvivorsFirstOrder returns), not the neutral
+		// majority, mirroring RankedCutSummary's own "the kept set, not the
+		// dropped one" choice for the same reason: it is the half that
+		// changed something.
+		neutralCount, eliminatedCount := 0, 0
+		eliminatedIDs := make([]string, 0, traceSummaryIDCap)
+		for i, candidate := range ordered {
+			if verdicts[i] == verdictEliminated {
+				eliminatedCount++
+				if len(eliminatedIDs) < traceSummaryIDCap {
+					eliminatedIDs = append(eliminatedIDs, candidate.Subject.CanonicalID)
+				}
+				continue
+			}
+			neutralCount++
+		}
+		tracer.Trace(ResolutionTraceEvent{
+			RequestID: requestID, Stage: "slice_b_survivor_verdict", SurvivorVerdictSummary: true,
+			SurvivorVerdictCandidateCount: len(ordered), SurvivorVerdictNeutralCount: neutralCount,
+			SurvivorVerdictEliminatedCount: eliminatedCount, SurvivorVerdictEliminatedIDs: eliminatedIDs,
+		})
+	}
 	if !anyEliminated {
 		// Nothing to reorder -- also keeps this the common, no-op case
 		// (design brief §9/chris's own expectation-setting: most rounds

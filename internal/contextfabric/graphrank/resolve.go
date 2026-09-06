@@ -517,6 +517,18 @@ type ResolutionTracer interface {
 	Trace(event ResolutionTraceEvent)
 }
 
+// traceSummaryIDCap bounds every folded-summary event's own id array
+// (RankedCutSummary's own precedent; CorroborationSummary/SurvivorVerdictSummary/
+// IdentityGateSummary all reuse it) independently of whatever per-resolution
+// budget produced the underlying candidate set -- MaxSubjectCandidates and
+// similar knobs are per-deployment tuning values with no upper bound of
+// their own, so a large-org resolution must not be able to make any one of
+// these Info lines unbounded (the scale ruling: a 1000-candidate crowd must
+// not produce a 1000-id array in one log line). A shared constant, not one
+// per fold, so every future fold this file adds inherits the same ceiling
+// without re-deriving it.
+const traceSummaryIDCap = 25
+
 // discardableDecisionTracer (CHAOS-4154, codex R2, Medium, confirmed) wraps
 // a real ResolutionTracer for exactly one ResolveFromMergedCandidatesWithGateAndBasis
 // call whose OWN resolution the caller may go on to discard. It holds back
@@ -688,6 +700,29 @@ type ResolutionTraceEvent struct {
 	BaseConfidence     float64
 	FinalConfidence    float64
 	DistinctMechanisms int
+	// CorroborationSummary/CorroborationCandidateCount/
+	// CorroborationTopIDs/CorroborationMinConfidence/
+	// CorroborationMaxConfidence (stage=="corroboration" ONLY):
+	// the per-candidate BaseConfidence/FinalConfidence/DistinctMechanisms
+	// event above stays at Debug (measured: 96 events in a 90-candidate
+	// crowd fixture -- retrieval-pool-sized, the same volume class
+	// RankedCutSummary's own per-candidate line already established).
+	// This is a SECOND event, discriminated by CorroborationSummary,
+	// emitted once per pass (ResolveFromMergedCandidatesWithGateAndBasis's
+	// own corroboration loop, mirroring RankedCutSummary's per-pass shape
+	// exactly since both fire from the SAME call): how many candidates
+	// were corroborated (CorroborationCandidateCount, ALWAYS the true
+	// count), the TOP candidates by FinalConfidence (CorroborationTopIDs,
+	// capped at traceSummaryIDCap, computed AFTER this pass's own
+	// confidence sort so "top" is a real rank, not encounter order), and
+	// the confidence spread across the WHOLE pass (CorroborationMinConfidence/
+	// CorroborationMaxConfidence, over every candidate, not just the
+	// capped top set).
+	CorroborationSummary        bool
+	CorroborationCandidateCount int
+	CorroborationTopIDs         []string
+	CorroborationMinConfidence  float64
+	CorroborationMaxConfidence  float64
 	// Outcome/WinningMechanism (decision stage): "committed" / "ambiguous"
 	// / "no_commit". WinningMechanism is the strongest mechanism on the
 	// committed/considered candidate (empty for a no-candidate outcome).
@@ -1178,6 +1213,32 @@ type ResolutionTraceEvent struct {
 	AliasMatched            bool
 	ProviderMatched         bool
 	GateFired               bool
+	// IdentityGateSummary/IdentityGateCandidateCount/IdentityGateFiredCount/
+	// IdentityGateFiredIDs (stage=="identity_gate" ONLY): the
+	// per-candidate GateFired/FromKeyedIdentityLookup/etc event above stays
+	// at Debug (measured: 90 events on a 90-Repository-candidate crowd,
+	// well past the per-operation Info ceiling, same volume class as
+	// RankedCutSummary's own per-candidate line). This is a SECOND event,
+	// discriminated the same way (a bool marking it apart from the
+	// per-candidate events sharing this Stage token), folding the WHOLE
+	// ResolveSubjectsWithCommitBasis call's identity-gate activity into one
+	// Info line: how many alias-lookup-scoped candidates were checked
+	// (IdentityGateCandidateCount) and how many the gate actually fired for
+	// (IdentityGateFiredCount, ALWAYS the true count, never truncated),
+	// plus a SAMPLE of which ones (IdentityGateFiredIDs, capped at
+	// traceSummaryIDCap in the order encountered -- this stage has no
+	// natural rank the way a cut does). Emitted once per call (see
+	// identityGateSummaryBuffer, ResolveSubjectsWithCommitBasis), not once
+	// per pass -- identity_gate fires during candidate merging, before any
+	// pass/decision structure exists, so there is no per-pass ambiguity to
+	// resolve the way ranked_cut's summary had to. Absent entirely when
+	// IdentityGateCandidateCount would be 0 (no alias-lookup-scoped
+	// candidate reached the gate this call) -- silence means never
+	// reached, the same convention SurvivorVerdict's own doc comment uses.
+	IdentityGateSummary        bool
+	IdentityGateCandidateCount int
+	IdentityGateFiredCount     int
+	IdentityGateFiredIDs       []string
 	// ShadowOutcome/ShadowReason/ShadowDIdentityHash/ShadowPreconditionUnproven/
 	// ShadowUnscopedVisibility/ShadowNonCensusedSurvivor/
 	// ShadowHandleGrammarBound/ShadowAnchorUniqueClaimant/ShadowKindsCensused
@@ -1387,6 +1448,30 @@ type ResolutionTraceEvent struct {
 	// commit-basis-shaped traces durable, at which point this signal is a
 	// candidate for that same treatment.
 	SurvivorVerdict string
+	// SurvivorVerdictSummary/SurvivorVerdictCandidateCount/
+	// SurvivorVerdictNeutralCount/SurvivorVerdictEliminatedCount/
+	// SurvivorVerdictEliminatedIDs (stage=="slice_b_survivor_verdict"
+	// ONLY): the per-candidate SurvivorVerdict event above
+	// stays at Debug (measured: bounded by the FINAL candidate list, which
+	// the scale ruling treats as unbounded -- MaxSubjectCandidates carries
+	// no ceiling of its own). This is a SECOND event, discriminated by
+	// SurvivorVerdictSummary, emitted once per SurvivorsFirstOrder call:
+	// the total classified (SurvivorVerdictCandidateCount, ALWAYS the true
+	// count), the neutral/eliminated split (SurvivorVerdictNeutralCount/
+	// SurvivorVerdictEliminatedCount), and which candidates were
+	// eliminated (SurvivorVerdictEliminatedIDs, capped at
+	// traceSummaryIDCap, in the order SurvivorsFirstOrder classified them
+	// -- the eliminated set, not neutral, since an elimination is the
+	// outcome-affecting fact an operator needs to see, exactly like
+	// RankedCutSummary's own survived_ids names the KEPT set, the
+	// consequential half of that cut). Same "absence means never reached"
+	// convention as the per-candidate event above: absent entirely when
+	// SurvivorVerdictCandidateCount would be 0.
+	SurvivorVerdictSummary         bool
+	SurvivorVerdictCandidateCount  int
+	SurvivorVerdictNeutralCount    int
+	SurvivorVerdictEliminatedCount int
+	SurvivorVerdictEliminatedIDs   []string
 	// PopulationBasis (decision stage ONLY, CHAOS-4154): closed vocabulary
 	// naming WHICH candidate population a STATISTICAL commit (CommitBasis ==
 	// "statistical") was actually decided over --
@@ -1569,7 +1654,33 @@ func ResolveSubjects(ctx context.Context, principal storage.Principal, request c
 func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, frame *contextfabric.QuestionFrame, scopeAnchorKind contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
 	bases := make(contextfabric.CommitBasisSet)
 	digests := make(contextfabric.CommitDecisionDigestSet)
+	// identityGateFold: identity_gate fires once per
+	// alias-lookup-scoped candidate NodeCandidate ever builds (candidate.go)
+	// -- measured retrieval-pool-sized (90 events on a 90-Repository
+	// crowd), so the per-candidate line stays Debug and this call gets ONE
+	// folded Info summary instead, matching ranked_cut's own volume-gate
+	// shape. Unlike ranked_cut, identity_gate has no existing multi-pass
+	// "read the last one" convention to inherit -- NodeCandidate fires
+	// during candidate MERGING (mergeSearchResults, resolveSubjects' own
+	// per-term loop), before any pass/decision structure exists, so a
+	// single aggregate summary covering every identity_gate event this
+	// WHOLE call produces (across every pass, if more than one runs) is
+	// the correct shape, not a per-pass one -- avoids re-litigating the
+	// exact multiplicity trap CHAOS-5222 hit for ranked_cut.
+	//
+	// Wrapping HERE, not inside resolveSubjects, is deliberate: this
+	// function is resolveSubjects' ONLY caller, so wrapping here covers
+	// every per-term mergeSearchResults call resolveSubjects' body makes
+	// without editing that body at all.
+	var idGateFold *identityGateSummaryBuffer
+	if deps.ResolutionTracer != nil {
+		idGateFold = &identityGateSummaryBuffer{real: deps.ResolutionTracer, requestID: request.RequestID}
+		deps.ResolutionTracer = idGateFold
+	}
 	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases, digests, frame, scopeAnchorKind)
+	if idGateFold != nil {
+		idGateFold.flush()
+	}
 	if err != nil {
 		// An error path commits nothing, so a basis (or digest) some
 		// partial pass happened to record describes a resolution no
@@ -1577,6 +1688,55 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 		return resolution, offerMaterial, make(contextfabric.CommitBasisSet), make(contextfabric.CommitDecisionDigestSet), err
 	}
 	return resolution, offerMaterial, bases, digests, nil
+}
+
+// identityGateSummaryBuffer holds back every per-candidate "identity_gate"
+// event traced during ONE ResolveSubjectsWithCommitBasis call and, once
+// that call returns, forwards ONE additional Info-level summary event
+// folding them all: how many alias-lookup-scoped candidates were gate-
+// checked, how many the gate actually fired for, and which of those
+// (capped at traceSummaryIDCap, in the order encountered -- identity_gate
+// has no natural "rank" the way ranked_cut's cut does). Every per-candidate
+// event still passes through to the real tracer immediately, unchanged --
+// only the new summary is held back, exactly mirroring RankedCutSummary's
+// own "per-candidate stays live, one extra folded event at the end" shape.
+type identityGateSummaryBuffer struct {
+	real           ResolutionTracer
+	requestID      string
+	candidateCount int
+	firedCount     int
+	firedIDs       []string
+}
+
+func (b *identityGateSummaryBuffer) Trace(event ResolutionTraceEvent) {
+	b.real.Trace(event)
+	if event.Stage != "identity_gate" {
+		return
+	}
+	b.candidateCount++
+	if event.GateFired {
+		b.firedCount++
+		if len(b.firedIDs) < traceSummaryIDCap {
+			b.firedIDs = append(b.firedIDs, event.Subject.CanonicalID)
+		}
+	}
+}
+
+func (b *identityGateSummaryBuffer) flush() {
+	if b.candidateCount == 0 {
+		// No alias-lookup-scoped candidate reached the gate at all this
+		// call -- an empty summary would be pure noise on every ordinary
+		// resolution whose pool never touches Repository/Project/Team
+		// kinds. Absence of the summary means absence of the gate, same
+		// "silence means never reached" convention this file's other
+		// stages already use (see SurvivorVerdict's own doc comment).
+		return
+	}
+	b.real.Trace(ResolutionTraceEvent{
+		RequestID: b.requestID, Stage: "identity_gate", IdentityGateSummary: true,
+		IdentityGateCandidateCount: b.candidateCount, IdentityGateFiredCount: b.firedCount,
+		IdentityGateFiredIDs: b.firedIDs,
+	})
 }
 
 func resolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, commitBases contextfabric.CommitBasisSet, commitDigests contextfabric.CommitDecisionDigestSet, frame *contextfabric.QuestionFrame, scopeAnchorKind contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {

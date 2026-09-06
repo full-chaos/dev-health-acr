@@ -477,7 +477,7 @@ func TestResolveSubjects_TracerObservesAliasLookupReachedThroughWiredComposition
 		t.Fatalf("decision events = %#v, want exactly one committed", decisionEvents)
 	}
 
-	identityGateEvents := tracer.eventsForStage("identity_gate")
+	identityGateEvents := perCandidateIdentityGateEvents(tracer.eventsForStage("identity_gate"))
 	if len(identityGateEvents) != 1 {
 		t.Fatalf("identity_gate events = %d, want exactly 1", len(identityGateEvents))
 	}
@@ -527,7 +527,7 @@ func TestResolveSubjects_TracerObservesIdentityTrustBoostDespiteStaleGraphAttrib
 		t.Fatalf("resolution.Committed = %#v, want r1 committed via the identity-trust bump despite the stale graph attribute", resolution.Committed)
 	}
 
-	corroborationEvents := tracer.eventsForStage("corroboration")
+	corroborationEvents := perCandidateCorroborationEvents(tracer.eventsForStage("corroboration"))
 	if len(corroborationEvents) != 1 {
 		t.Fatalf("corroboration events = %d, want exactly 1", len(corroborationEvents))
 	}
@@ -547,7 +547,7 @@ func TestResolveSubjects_TracerObservesIdentityTrustBoostDespiteStaleGraphAttrib
 	// GateFired=true anyway (the fix), FinalConfidence=1. Pre-fix this same
 	// event would have read GateFired=false, FinalConfidence=0.5 -- the
 	// exact bug, visible in the trace instead of hidden by a collapsed bool.
-	identityGateEvents := tracer.eventsForStage("identity_gate")
+	identityGateEvents := perCandidateIdentityGateEvents(tracer.eventsForStage("identity_gate"))
 	if len(identityGateEvents) != 1 {
 		t.Fatalf("identity_gate events = %d, want exactly 1", len(identityGateEvents))
 	}
