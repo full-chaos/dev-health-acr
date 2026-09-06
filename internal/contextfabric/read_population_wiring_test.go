@@ -81,8 +81,35 @@ func TestTheRetryEvaluatesReadsOverTheBundleItSynthesizedFrom(t *testing.T) {
 			"retried document against the first pass's grants is the sibling of evaluating it against " +
 			"the first pass's facts")
 	}
-	if !strings.Contains(source, "e.measureAssembledAttempt(ctx, principal, \"re_synthesized_result\", retryAllocation, retried, budget)") {
-		t.Error("the retry is not measured against its own allocation")
+	// THE ALLOCATION MUST BE HANDED TO THE PRODUCER, AND READ BACK FROM IT.
+	//
+	// This assertion used to require `..., retryAllocation, retried, budget)`
+	// -- measuring the LOCAL variable. The other lane's own keystone review
+	// showed that is the weaker binding and superseded it: `ItemAllocation` is
+	// a VALUE type, so passing it to `forRetry` hands the producer a COPY, and
+	// measuring the local then measures a different object that merely happens
+	// to be equal. Equal on every honest input, separable only under a fault
+	// -- which is exactly the defect class this whole site exists to close.
+	//
+	// SO THIS PIN WAS UPDATED, NOT BUMPED. It now requires the STRONGER shape
+	// (the allocation is passed INTO forRetry, and the measurement reads
+	// `retryParams.Allocation` back off the params the producer was handed)
+	// and REFUSES the shape it used to demand. A pin that keeps asserting a
+	// superseded form would have forced the merge to re-open the other lane's
+	// defect in order to go green -- a test dictating a regression.
+	if !strings.Contains(source, "params.forRetry(narrowed.Graph, narrowed.Facts, retryAllocation)") {
+		t.Error("the retry's allocation is not handed to the producer; a document must be PRODUCED " +
+			"under the grants it is later MEASURED against, or the measurement describes a shape " +
+			"nobody synthesized")
+	}
+	if !strings.Contains(source, "e.measureAssembledAttempt(ctx, principal, \"re_synthesized_result\", retryParams.Allocation, retried, budget)") {
+		t.Error("the retry is not measured against the allocation the PRODUCER was handed; reading the " +
+			"local `retryAllocation` measures an equal COPY, not the bound object")
+	}
+	if strings.Contains(source, "e.measureAssembledAttempt(ctx, principal, \"re_synthesized_result\", retryAllocation, retried, budget)") {
+		t.Error("the retry is measured against the LOCAL allocation. ItemAllocation is a value type, " +
+			"so this is a copy that agrees with the producer's on every honest input and diverges " +
+			"only under a fault; measure `retryParams.Allocation` instead")
 	}
 
 	// The FIRST planCandidateNarrowing runs on the first-pass result and must
