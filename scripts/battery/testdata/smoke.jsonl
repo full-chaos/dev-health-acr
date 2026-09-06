@@ -1,0 +1,2 @@
+{"file": "internal/contextfabric/memorymodelconfig/store.go", "id": "SMOKE_KILL_credential_carry", "kind": "delete", "needle": "Credential:    record.credential,", "replacement": ""}
+{"file": "internal/contextfabric/memorymodelconfig/store.go", "id": "SMOKE_HARNESS_ERROR_broken_compile", "kind": "replace", "needle": "orgID = strings.TrimSpace(orgID)", "replacement": "orgID = strings.TrimSpace("}
