@@ -459,6 +459,18 @@ type ResolveDeps struct {
 	// own doc comment for the corpus-safety discipline every event field
 	// is held to.
 	ResolutionTracer ResolutionTracer
+
+	// OperandResolutionSink (turn-1 comparison work) is the INFO-level,
+	// CONTEXT-TAKING observable for comparison resolution. Optional and
+	// nil-safe: a backend that does not set it costs nothing and behaves
+	// exactly as before.
+	//
+	// It is a SEPARATE dependency from ResolutionTracer, not an extension of
+	// it, for two structural reasons: that tracer builds its own
+	// context.Background() so it cannot carry the request context these events
+	// exist to correlate by, and it emits at Debug, which is off on a
+	// production rig. See comparison_telemetry.go.
+	OperandResolutionSink OperandResolutionSink
 	// CensusFunc (CHAOS-3899, SHADOW ONLY -- design brief v5 §6 Slice A) is
 	// the shadow evidence round's census execution dependency. nil by
 	// default -- the same "not wired" convention every other optional

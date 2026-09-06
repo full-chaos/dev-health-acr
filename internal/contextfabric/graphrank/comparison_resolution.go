@@ -465,11 +465,25 @@ func resolveNamedComparison(
 	// data problem.
 	if comparison.Admission == contextfabric.ComparisonHeldScopedOperand {
 		for _, slot := range comparison.Slots {
-			run.slots = append(run.slots, operandSlotRun{slot: slot})
+			slotRun := operandSlotRun{slot: slot}
+			// THE SCOPED HOLD IS STILL OBSERVED. It resolves nothing, and a
+			// hold that emitted no slot lines would be indistinguishable in
+			// the logs from a dispatch that never happened -- the two failures
+			// this telemetry most needs to tell apart.
+			recordOperandSlot(ctx, principal, request, deps, slotRun)
+			run.slots = append(run.slots, slotRun)
 		}
 		resolution, bases, digests := publishComparisonResolution(run, request.Options.MaxSubjectCandidates)
+		recordComparisonDecision(ctx, principal, request, deps, run, resolution)
 		return resolution, bases, digests, nil
 	}
+
+	// THE POLICY LINE FIRES AT DISPATCH, before anything can fail. If it is
+	// absent from a rig's logs for a question that should be a comparison,
+	// the dispatch did not happen -- which is the one regression that leaves
+	// no other trace, because the flat pooled path serves a perfectly
+	// well-formed answer.
+	recordComparisonPolicy(ctx, principal, request, deps, comparison)
 
 	// RECEIPTS BIND BEFORE ANY SLOT RESOLVES. The binding decision is about
 	// the current question's operand terms, and it must be complete before a
@@ -480,6 +494,23 @@ func resolveNamedComparison(
 		return contextfabric.SubjectResolution{}, nil, nil, err
 	}
 	run.unboundReceipts = unbound
+	if len(request.RequestedScope.SubjectHints) > 0 && deps.OperandResolutionSink != nil {
+		positions := make([]int, 0, len(preCommitted))
+		boundCount := 0
+		for index := range comparison.Slots {
+			if candidates := preCommitted[index]; len(candidates) > 0 {
+				positions = append(positions, index)
+				boundCount += len(candidates)
+			}
+		}
+		deps.OperandResolutionSink.RecordComparisonReceiptBinding(ctx, ComparisonReceiptBindingEvent{
+			RequestID: request.RequestID, OrgID: principal.OrgID,
+			ReceiptsConsidered: len(request.RequestedScope.SubjectHints),
+			BoundCount:         boundCount,
+			UnboundCount:       unbound,
+			BoundSlotPositions: positions,
+		})
+	}
 
 	for index, slot := range comparison.Slots {
 		if err := ctx.Err(); err != nil {
@@ -493,6 +524,7 @@ func resolveNamedComparison(
 		if err != nil {
 			return contextfabric.SubjectResolution{}, nil, nil, err
 		}
+		recordOperandSlot(ctx, principal, request, deps, slotRun)
 		run.slots = append(run.slots, slotRun)
 	}
 
@@ -505,7 +537,69 @@ func resolveNamedComparison(
 	}
 
 	resolution, bases, digests := publishComparisonResolution(run, request.Options.MaxSubjectCandidates)
+	recordComparisonDecision(ctx, principal, request, deps, run, resolution)
 	return resolution, bases, digests, nil
+}
+
+// ---------------------------------------------------------------------------
+// EMISSION HELPERS -- one per event, nil-sink-safe
+// ---------------------------------------------------------------------------
+
+func recordComparisonPolicy(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, comparison contextfabric.ComparisonOperands) {
+	if deps.OperandResolutionSink == nil {
+		return
+	}
+	deps.OperandResolutionSink.RecordComparisonPolicy(ctx, ComparisonPolicyEvent{
+		RequestID: request.RequestID, OrgID: principal.OrgID,
+		Admission: comparison.Admission,
+		SlotCount: len(comparison.Slots),
+		// BOTH SUPPRESSIONS ARE REPORTED AS FACTS OF THIS PATH, not read back
+		// from a flag. Comparison resolution never wires the question pass or
+		// the census -- that absence IS the no-read hold -- so these are true
+		// by construction here, and the line exists so their lapsing would be
+		// visible rather than silent.
+		QuestionSearchSuppressed: true,
+		EvidenceCensusSuppressed: true,
+		CandidateBudget:          request.Options.MaxSubjectCandidates,
+	})
+}
+
+func recordOperandSlot(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, slot operandSlotRun) {
+	if deps.OperandResolutionSink == nil {
+		return
+	}
+	deps.OperandResolutionSink.RecordOperandSlot(ctx, OperandSlotEvent{
+		RequestID: request.RequestID, OrgID: principal.OrgID,
+		SlotPosition:      slot.slot.Position,
+		SlotKind:          slot.slot.Kind,
+		TermCount:         len(slot.slot.Terms),
+		CandidateCount:    len(slot.candidates),
+		CommittedCount:    len(slot.committed),
+		Outcome:           slot.state(),
+		ReceiptBound:      slot.receiptBound,
+		RetrievalDegraded: slot.retrievalDegraded,
+	})
+}
+
+func recordComparisonDecision(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, run comparisonResolutionRun, resolution contextfabric.SubjectResolution) {
+	if deps.OperandResolutionSink == nil {
+		return
+	}
+	decision := comparisonDecisionHeld
+	if run.publishable() {
+		decision = comparisonDecisionPublished
+	}
+	deps.OperandResolutionSink.RecordComparisonDecision(ctx, ComparisonDecisionEvent{
+		RequestID: request.RequestID, OrgID: principal.OrgID,
+		Decision: decision,
+		// The count PUBLISHED, read back off the resolution that is actually
+		// returned rather than from the run's own opinion of it -- a decision
+		// line disagreeing with the document it describes would be worse than
+		// no line at all.
+		PublishedCommitted: len(resolution.Committed),
+		UnboundReceipts:    run.unboundReceipts,
+		RetrievalDegraded:  run.retrievalDegraded(),
+	})
 }
 
 // resolveOneOperandSlot retrieves and decides ONE operand, in isolation.
