@@ -317,8 +317,27 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		retryPending.CohortRanked = &retryRanked
 		return outcomeAttempt.Result, retryPending, nil
 	}
-	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, narrowed.Basis)
-	event.recordMeasurement(outcomeAttempt.Measured)
+	// ONE DOCUMENT: the RETRY's, which is what the refusal below reports.
+	//
+	// This event used to take its axis from `overrun` -- the FIRST pass's --
+	// and its measurement from `outcomeAttempt.Measured`, which on the
+	// insufficient exit is the REDUCED document, while the refusal at the end
+	// of this arm reports `retryMeasurement`/`retryOverrun`. Three documents
+	// for one decision. Measured by a keystone review: the refusal reported 29
+	// items / 11,567 bytes while its sole assembled_result event reported 20
+	// items / 9,918 bytes and kept `overrun=items` against a 20-item ceiling.
+	//
+	// It is the sibling of the same defect at the declined arm, and finding it
+	// is why a defect class gets a SWEEP rather than a patch at the reported
+	// line. The pair is now enumerated and pinned by
+	// TestEveryRefusalSitePairsOneDocument.
+	//
+	// `outcomeAttempt` still supplies the reduction's own dimensions below --
+	// Declined, and the served/declared counts on the served path -- because
+	// WHY the reduction did not save this answer is a different fact from WHAT
+	// was measured, and it is not a measurement.
+	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, retryMeasured.Overrun, narrowed.Basis)
+	event.recordMeasurement(retryMeasured)
 	// `after`, not `before`: this event measures the RE-synthesized answer,
 	// which ran against the narrowed cohort. Predicting from `before` would
 	// pair a measurement of one cohort with an expectation for a larger one.
