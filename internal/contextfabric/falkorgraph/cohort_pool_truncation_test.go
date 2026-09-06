@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -314,7 +313,7 @@ func TestDiscoverContextClippedFulltextUnderAnEmptyCensusIsNotCovered(t *testing
 // with no test failing. This is that test.
 func TestExactNameCensusCoversEveryServableCohortKind(t *testing.T) {
 	t.Parallel()
-	servable := graphrank.ServableCohortKindsForAudit()
+	servable := contextfabric.ServableCohortKindsForAudit()
 	if len(servable) == 0 {
 		t.Fatal("ServableCohortKindsForAudit() returned nothing -- the control this comparison needs is empty, so the comparison below cannot fail")
 	}
