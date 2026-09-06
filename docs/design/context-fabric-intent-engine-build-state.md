@@ -988,8 +988,10 @@ is derived today and cannot be served at this pin. D17 discloses the `0/N`; whet
 should refuse the cell instead — the way `computed_population_absent` already does for a computed
 obligation with no population (`requirement_derivation.go:355-358`) — is that ticket's, not D17's.
 
-**NEW — grouped frames report `0/N` on `each_group` on every served grouped answer** (three of the
-fourteen corpus frames), retry or not. Truthful under D17, and a rig-wide delta. **A lane must NOT
+**NEW — grouped frames report `0/N` on `each_group` on every served grouped answer THAT REACHES
+THE POPULATION CONJUNCT** (three of the fourteen corpus frames), retry or not. The qualifier is not
+pedantry: `0/N` occurs only AFTER the kind standard passes, so a grouped answer whose kinds failed
+keeps its kind counts, and an all-pruned requirement emits no assembled read row at all. Truthful under D17, and a rig-wide delta. **A lane must NOT
 repair it by projecting member facts onto the group entity** — that manufactures a witness for a
 subject no provider was ever asked about, which is the denominator-substitution defect arriving
 from the numerator side, and it would make `each_group` unfalsifiable.

@@ -114,6 +114,11 @@ type readPopulationEvidence struct {
 	// obligation/role/subject) while a comparison may name operands of
 	// several kinds.
 	operandPopulations map[SubjectKind]readPopulation
+	// comparisonDeclared is how many operand SLOTS the frame names across ALL
+	// kinds. It is the denominator the sameness gate needs: "is every operand
+	// of this comparison read" cannot be answered from one kind's population,
+	// which is the defect the gate below was written wrong for once already.
+	comparisonDeclared int
 	// comparisonOperands is the union of every operand population's subjects
 	// ACROSS ALL KINDS, in a deterministic order.
 	//
@@ -374,11 +379,15 @@ func cohortGroupPopulation(cohort *Cohort, narrowing []contractsv1.ContextFabric
 	for _, group := range cohort.Groups {
 		population.Subjects = append(population.Subjects, group.Subject)
 	}
-	// The cohort-level fold is the census authority for groups too: when
-	// Groups is present, Complete and Truncated are the conjunction/
-	// disjunction over the groups, so a reader that ignores Groups still
-	// gets a conservative summary.
-	if !cohort.Complete || cohort.Truncated {
+	// THE CENSUS IS THE OWNER'S, HERE TOO. This used to restate
+	// `!cohort.Complete || cohort.Truncated` while the file header and the
+	// member path both claimed the predicate is never restated -- a keystone
+	// review caught the claim being stronger than the code. The cardinality
+	// owner computes the same cohort-level fold (for groups, `Complete` and
+	// `Truncated` are the conjunction/disjunction over the groups), so it is
+	// ASKED rather than copied. Only `Declared` differs between the two axes,
+	// and that is taken from the group narrowing below.
+	if cardinality, resolved := ComputeMembershipCardinality(cohort, narrowing); resolved && cardinality.PopulationIncomplete {
 		population.Census = populationIncomplete
 	}
 	if step, found := firstGroupNarrowing(narrowing); found && step.Before > population.Declared {
@@ -442,6 +451,7 @@ func readPopulationEvidenceFrom(
 			// order then owner order, so it is deterministic without a sort
 			// over a map.
 			evidence.comparisonOperands = append(evidence.comparisonOperands, population.Subjects...)
+			evidence.comparisonDeclared += population.Declared
 		}
 	}
 	return evidence
@@ -624,14 +634,24 @@ func readPopulationOutcomeRow(
 		return row
 	}
 
-	// SAMENESS, and it is evaluated ONLY once every subject is read.
+	// SAMENESS, and it is evaluated ONLY once every operand OF THE WHOLE
+	// COMPARISON is read -- not merely every subject of THIS row's kind.
 	//
-	// Ordering is load-bearing: computing the intersection while a subject is
-	// still unread would fold that subject's empty served set into it and
-	// publish a depth loss over the whole comparison, where the truthful
-	// answer is the SCOPE loss above. That is what keeps "one operand
-	// unread" and "both read but differently" distinguishable rows.
-	if len(evidence.comparisonOperands) > 0 && population.Census != populationIncomplete {
+	// THE GATE MUST BE COMPARISON-WIDE BECAUSE THE INTERSECTION IS. Gating on
+	// this kind's population while intersecting across every kind is the
+	// defect a keystone review reproduced: with a fully-read team and an
+	// unread project, the team row satisfied its own `read == Declared`, took
+	// the sameness arm, and reported `depth 0/2` -- telling a reader the
+	// operands' evidence DIFFERS before the missing operand had any evidence
+	// to differ with. The shortfall is the unread operand's to report, and its
+	// own row says `scope 0/1`.
+	//
+	// So the intersection runs only when the comparison-wide set is complete
+	// AND every member of it meets this row's standard. Otherwise this row
+	// falls through to its own arms, which describe what happened to ITS
+	// population and claim nothing about the comparison.
+	if len(evidence.comparisonOperands) > 0 && population.Census != populationIncomplete &&
+		evidence.comparisonFullyRead(servedKinds, threshold) {
 		common := commonServedKinds(evidence.comparisonOperands, servedKinds, evidence.coverage)
 		if len(common) < threshold {
 			// Depth: the subjects the answer covers are unchanged, and what
@@ -787,17 +807,58 @@ func readRequirementPopulationEventsFrom(
 	return events
 }
 
-// rowCountUnits derives the unit token from the SAME distinction the arms use:
-// the sameness-failure arm is the one distributive arm that publishes KIND
-// counts, and it is identifiable by its impact.
+// rowCountUnits says which quantity a distributive row's two integers carry.
 //
-// `depth` means less evidence per subject -- which is what a sameness shortfall
-// is. Every other distributive arm reduces or certifies over the POPULATION and
-// carries `scope`, `none` or `dimension`. Deriving the token this way rather
-// than passing a flag is what keeps the label from disagreeing with the number.
+// IMPACT ALONE CANNOT DECIDE IT, and believing it could was a defect a keystone
+// review reproduced through the engine: `dimension` is carried BOTH by this
+// layer's not-enumerable arm (population units, 0/0) AND by two KIND-level arms
+// that never reach this layer at all -- the not-planned arm and the
+// non-fact-bearing arm, which keep source counts. Labelling those `population`
+// told an operator the wrong denominator on 21 measured combinations.
+//
+// The CAUSE is what separates them, because only this layer emits the
+// population-absence code:
+//
+//	none                                        -> population  (read everywhere)
+//	scope                                       -> population  (partially read / census incomplete)
+//	depth                                       -> kind        (sameness shortfall)
+//	dimension + read_population_unverified      -> population  (not enumerable, 0/0)
+//	dimension + any other cause                 -> kind        (kind-level arms)
+//
+// A SWEEP TEST DRIVES EVERY ARM THROUGH THE EVENT BUILDER and asserts its
+// units, because this function reads a FINISHED ROW rather than being told by
+// the branch that chose the counts -- which is precisely how it drifted. The
+// row is a contract type and cannot carry a units field without a wire change,
+// so the sweep is the guard that a new arm cannot acquire a silent label.
 func rowCountUnits(row RequirementOutcomeRow) countUnits {
-	if row.Impact == contractsv1.ContextFabricAnswerImpactDepth {
+	switch row.Impact {
+	case contractsv1.ContextFabricAnswerImpactDepth:
+		return countUnitsKind
+	case contractsv1.ContextFabricAnswerImpactDimension:
+		if row.CauseCoverage == contractsv1.ContextFabricCoverageDetailReadPopulationUnverified {
+			return countUnitsPopulation
+		}
+		// A kind-level arm: nothing here was measured over a population.
 		return countUnitsKind
 	}
 	return countUnitsPopulation
+}
+
+// comparisonFullyRead reports whether EVERY operand the frame names, across all
+// subject kinds, was read to this requirement's own standard.
+//
+// TWO CONJUNCTS, and both are needed. Every committed operand must meet the
+// threshold -- and the committed set must be the whole named set, because an
+// operand that never resolved has no subject to test and would otherwise be
+// skipped into a false "all read".
+func (e readPopulationEvidence) comparisonFullyRead(servedKinds []FactKind, threshold int) bool {
+	if e.comparisonDeclared == 0 || len(e.comparisonOperands) != e.comparisonDeclared {
+		return false
+	}
+	for _, subject := range e.comparisonOperands {
+		if len(servedKindsForSubject(subject, servedKinds, e.coverage)) < threshold {
+			return false
+		}
+	}
+	return true
 }

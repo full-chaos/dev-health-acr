@@ -602,6 +602,30 @@ func TestEveryPopulationCensusMemberIsHandled(t *testing.T) {
 			t.Fatalf("census member %q is not handled by the population arms", census)
 		}
 	}
+	// DRIVE THE PRODUCTION FUNCTION for every census member, not just switch
+	// over the vocabulary. r1 caught this arm asserting a `switch` it had
+	// written itself: it never called readPopulationOutcomeRow, so a census
+	// member could reach no arm at all and still "be handled".
+	health := contractsv1.ContextFabricFactHealth
+	for _, census := range populationCensusVocabulary() {
+		population := readPopulation{Census: census, Declared: 1,
+			Subjects: []SubjectRef{teamRef("team_alpha")}}
+		row := readPopulationOutcomeRow(
+			RequirementOutcomeRow{Stage: contractsv1.ContextFabricOutcomeStageAssembledResult,
+				Requirement: "state/member/team", Obligation: string(ObligationState)},
+			population, readPopulationEvidence{Present: true,
+				coverage: map[string]map[FactKind]SourceState{
+					SubjectMapKey(teamRef("team_alpha")): {health: SourceAvailable},
+				}},
+			[]FactKind{health}, 1)
+		if row.Outcome == "" {
+			t.Fatalf("census %q reached no arm: the row carries no outcome", census)
+		}
+		if err := contractsv1.ValidateContextFabricPlanRequirementOutcomeRow(row); err != nil {
+			t.Fatalf("census %q produced a row the validator refuses: %v (%+v)", census, err, row)
+		}
+	}
+
 	// Every completion scope is either distributive or the one documented
 	// exception. A new member defaults to DISTRIBUTIVE (fail-closed toward
 	// asking who), and this asserts the exception set is exactly one.
@@ -640,7 +664,17 @@ func TestEveryPopulationCensusMemberIsHandled(t *testing.T) {
 // produce a row. Without the control, an implementation that dropped every
 // distributive row would pass the first half.
 func TestADistributiveRowWithoutPopulationEvidenceReachesTheCallerDefectBranch(t *testing.T) {
-	t.Parallel()
+	// DELIBERATELY NOT PARALLEL. This arm captures the process-wide default
+	// slog logger, and `slog.SetDefault` is global: a sibling parallel test
+	// that installs its own logger and restores the original in `t.Cleanup`
+	// will restore it OUT FROM UNDER this one, sending the Warn somewhere this
+	// buffer cannot see and failing the assertion with an empty log.
+	//
+	// That is a race, not a logic failure, and it is worth pinning by
+	// construction rather than by retry: Go holds parallel tests until every
+	// sequential test in the package has finished, so a non-parallel test owns
+	// the global logger for its whole run. The neighbouring undeclared-code
+	// arm has the same latent hazard.
 	flow, health := contractsv1.ContextFabricFactFlow, contractsv1.ContextFabricFactHealth
 	requirement := operandRequirement(SubjectTeam, CompletionQuantifierCorroborated, flow, health)
 	coverage := factCoverage(flow, SourceAvailable, health, SourceAvailable)
@@ -703,6 +737,14 @@ func TestADistributiveRowWithoutPopulationEvidenceReachesTheCallerDefectBranch(t
 		t.Fatalf("the same fixture with REAL population evidence produced %d rows, want 1 -- "+
 			"without this the assertion above passes on an evaluator that drops everything", len(rows))
 	}
+	// AND ITS SHAPE, not merely its existence. r1 caught this control checking
+	// only the count, so an evaluator emitting a WRONG row would satisfy it --
+	// one committed operand of two named slots is a partially-read row.
+	assertRow(t, rowFor(t, rows, requirement.Requirement),
+		contractsv1.ContextFabricRequirementNarrowed,
+		contractsv1.ContextFabricAnswerImpactScope,
+		contractsv1.ContextFabricCoverageDetailFactNarrowed,
+		false, 1, 2)
 }
 
 // TestTheDenominatorIsNeverTheReturnedOrInvokedSet (T-DENOM) pins the first
@@ -844,13 +886,29 @@ func TestReadPopulationAgreesWithTheCohortOwnersOwnRule(t *testing.T) {
 // of slots would reproduce this ticket's own defect inside its fix.
 func TestOperandPopulationAgreesWithFrameRoleSlots(t *testing.T) {
 	t.Parallel()
-	frame := namedOperandFrame(SubjectTeam, SubjectTeam, contractsv1.ContextFabricSubjectProject)
-	slots := frameRoleSlots(frame.SubjectExpression)
-
-	wantByKind := map[SubjectKind]int{}
-	for _, slot := range slots {
-		if slot.Role == SubjectRoleOperand {
-			wantByKind[slot.Subject]++
+	// THE EXPECTATION IS INDEPENDENT OF THE PRODUCTION HELPER. r1 caught this
+	// arm deriving `want` from frameRoleSlots and then asserting the function
+	// that calls frameRoleSlots -- a tautology that would survive both walks
+	// being wrong together. The fixture's shape is known here, so the counts
+	// are written down rather than computed from the code under test.
+	fixture := []SubjectKind{SubjectTeam, SubjectTeam, contractsv1.ContextFabricSubjectProject}
+	frame := namedOperandFrame(fixture...)
+	wantByKind := map[SubjectKind]int{
+		SubjectTeam:                             2,
+		contractsv1.ContextFabricSubjectProject: 1,
+	}
+	// The fixture and the hand-written expectation must agree, or the constants
+	// above have drifted from the frame they describe.
+	counted := map[SubjectKind]int{}
+	for _, kind := range fixture {
+		counted[kind]++
+	}
+	if len(counted) != len(wantByKind) {
+		t.Fatalf("the fixture names %d kinds but the expectation lists %d", len(counted), len(wantByKind))
+	}
+	for kind, n := range counted {
+		if wantByKind[kind] != n {
+			t.Fatalf("fixture has %d %q slots, expectation says %d", n, kind, wantByKind[kind])
 		}
 	}
 	if len(wantByKind) == 0 {
@@ -957,4 +1015,149 @@ func TestAStaleFactStillReadsTheSubject(t *testing.T) {
 	assertRow(t, rowFor(t, rows, requirement.Requirement),
 		contractsv1.ContextFabricRequirementSatisfied,
 		contractsv1.ContextFabricAnswerImpactNone, "", false, 2, 2)
+}
+
+// TestAnUnreadOperandDoesNotTriggerASamenessFailureElsewhere is astra's
+// reproduction, kept as a permanent pin.
+//
+// THE DEFECT IT CLOSES. The sameness gate tested THIS row's own subject-kind
+// population while the intersection it guards is COMPARISON-WIDE. With a fully
+// read team and an unread project, the team row satisfied `read == Declared`
+// (1 of 1 team slots), took the sameness arm, and reported `depth 0/2` — telling
+// a reader the operands' evidence DIFFERS before the missing operand had any
+// evidence to differ with.
+//
+// The shortfall belongs to the operand that is missing. The project row says
+// `scope 0/1`; the team row describes ITS OWN population and claims nothing
+// about the comparison.
+func TestAnUnreadOperandDoesNotTriggerASamenessFailureElsewhere(t *testing.T) {
+	t.Parallel()
+	team, project := teamRef("team_alpha"), projectRef("project_beta")
+	flow, health := contractsv1.ContextFabricFactFlow, contractsv1.ContextFabricFactHealth
+
+	teamReq := operandRequirement(SubjectTeam, CompletionQuantifierCorroborated, flow, health)
+	projectReq := operandRequirement(contractsv1.ContextFabricSubjectProject, CompletionQuantifierCorroborated, flow, health)
+
+	rows := evaluateOperands(
+		[]contractsv1.ContextFabricPlanRequirement{teamReq, projectReq},
+		namedOperandFrame(SubjectTeam, contractsv1.ContextFabricSubjectProject),
+		[]SubjectRef{team, project},
+		factCoverage(flow, SourceAvailable, health, SourceAvailable),
+		// The TEAM is fully read; the PROJECT has nothing.
+		factsFor(team, kindList(flow, health)),
+	)
+
+	teamRow := rowFor(t, rows, teamReq.Requirement)
+	projectRow := rowFor(t, rows, projectReq.Requirement)
+	t.Logf("team=%q/%q %d/%d   project=%q/%q %d/%d",
+		teamRow.Outcome, teamRow.Impact, teamRow.Served, teamRow.Declared,
+		projectRow.Outcome, projectRow.Impact, projectRow.Served, projectRow.Declared)
+
+	// The unread operand reports the shortfall, as a SCOPE loss over its own
+	// population.
+	assertRow(t, projectRow,
+		contractsv1.ContextFabricRequirementNarrowed,
+		contractsv1.ContextFabricAnswerImpactScope,
+		contractsv1.ContextFabricCoverageDetailFactNarrowed,
+		false, 0, 1)
+
+	// The read operand does NOT report a sameness failure. Before the fix this
+	// row read `narrowed`/`depth` 0/2.
+	if teamRow.Impact == contractsv1.ContextFabricAnswerImpactDepth {
+		t.Fatalf("the team row reports a DEPTH (sameness) loss %d/%d while the project operand was "+
+			"never read -- the intersection was taken over an operand that has no evidence to compare",
+			teamRow.Served, teamRow.Declared)
+	}
+	assertRow(t, teamRow,
+		contractsv1.ContextFabricRequirementSatisfied,
+		contractsv1.ContextFabricAnswerImpactNone, "", false, 1, 1)
+
+	// The ANSWER is still partial: the unread operand's row says so.
+	if state := contractsv1.DeriveContextFabricAnswerCompletenessState(rows); state != contractsv1.ContextFabricAnswerCompletenessPartial {
+		t.Fatalf("answer state = %q, want partial", state)
+	}
+
+	// CONTROL: with BOTH operands read and their evidence DISJOINT, the
+	// sameness arm must still fire — otherwise this fix would have bought
+	// correctness by disabling the conjunct.
+	both := evaluateOperands(
+		[]contractsv1.ContextFabricPlanRequirement{teamReq, projectReq},
+		namedOperandFrame(SubjectTeam, contractsv1.ContextFabricSubjectProject),
+		[]SubjectRef{team, project},
+		factCoverage(flow, SourceAvailable, health, SourceAvailable),
+		factsFor(team, kindList(flow, health), project, kindList(flow, health)))
+	control := rowFor(t, both, teamReq.Requirement)
+	if control.Outcome != contractsv1.ContextFabricRequirementSatisfied {
+		t.Fatalf("control: both operands read with the SAME two kinds must be satisfied, got %q %d/%d",
+			control.Outcome, control.Served, control.Declared)
+	}
+}
+
+// TestTheGroupPopulationReportsTheOwnersCensusAndNarrowing closes two mutants
+// that r1 confirmed SURVIVE by running them: weakening the group census to
+// `cohort.Truncated` alone, and deleting the group-narrowing lookup entirely.
+//
+// Both were unpinned because every earlier group arm used a COMPLETE, unnarrowed
+// cohort — so the census disjunction and the narrowing carry had no fixture that
+// could tell them apart from doing nothing.
+func TestTheGroupPopulationReportsTheOwnersCensusAndNarrowing(t *testing.T) {
+	t.Parallel()
+	groups := []SubjectRef{teamRef("team_a"), teamRef("team_b")}
+	members := []SubjectRef{projectRef("project_1")}
+
+	t.Run("Complete=false with Truncated=false still reads incomplete", func(t *testing.T) {
+		t.Parallel()
+		// THE SHAPE A TRUNCATED-ONLY PREDICATE READS AS A FULL CENSUS. The
+		// graph reader sets Complete=false without setting Truncated when its
+		// own source was truncated upstream, so the disjunction is what makes
+		// this cohort report incomplete at all.
+		cohort := cohortWith(contractsv1.ContextFabricSubjectProject, members, groups, false)
+		if cohort.Truncated {
+			t.Fatal("the fixture must have Truncated=false, or it cannot distinguish the disjunction")
+		}
+		population := cohortGroupPopulation(cohort, nil)
+		if population.Census != populationIncomplete {
+			t.Fatalf("group census = %q for a cohort the owner reports incomplete, want %q",
+				population.Census, populationIncomplete)
+		}
+	})
+
+	t.Run("a GROUP-axis narrowing supplies Declared, Basis and Overrun", func(t *testing.T) {
+		t.Parallel()
+		cohort := cohortWith(contractsv1.ContextFabricSubjectProject, members, groups, true)
+		narrowing := []contractsv1.ContextFabricPlanNarrowing{
+			// A MEMBER step first: it must be skipped, or the group axis would
+			// inherit the member axis's numbers.
+			{Stage: contractsv1.ContextFabricPlanNarrowingAssembledResult, Before: 99, After: 1,
+				Groups: false, Basis: contractsv1.ContextFabricNarrowingBasisAttentionRank},
+			{Stage: contractsv1.ContextFabricPlanNarrowingAssembledResult, Before: 5, After: 2,
+				Groups: true, Basis: contractsv1.ContextFabricNarrowingBasisAttentionRank,
+				Overrun: contractsv1.ContextFabricBudgetOverrunItems},
+		}
+		population := cohortGroupPopulation(cohort, narrowing)
+		if population.Declared != 5 {
+			t.Fatalf("group Declared = %d, want 5 from the GROUP step's Before -- deleting the group "+
+				"narrowing lookup leaves it at len(Groups)=2 and no test noticed", population.Declared)
+		}
+		if population.Basis != contractsv1.ContextFabricNarrowingBasisAttentionRank {
+			t.Fatalf("group Basis = %q, want the step's own", population.Basis)
+		}
+		if population.Overrun != contractsv1.ContextFabricBudgetOverrunItems {
+			t.Fatalf("group Overrun = %q, want the step's own", population.Overrun)
+		}
+	})
+
+	t.Run("the MEMBER narrowing is not borrowed for the group axis", func(t *testing.T) {
+		t.Parallel()
+		cohort := cohortWith(contractsv1.ContextFabricSubjectProject, members, groups, true)
+		// ONLY a member step. The group population must fall back to
+		// len(Groups) rather than adopting the member step's Before.
+		population := cohortGroupPopulation(cohort, []contractsv1.ContextFabricPlanNarrowing{
+			{Stage: contractsv1.ContextFabricPlanNarrowingAssembledResult, Before: 99, After: 1, Groups: false},
+		})
+		if population.Declared != len(groups) {
+			t.Fatalf("group Declared = %d, want %d -- a MEMBER-axis narrowing must not set the group "+
+				"denominator", population.Declared, len(groups))
+		}
+	})
 }

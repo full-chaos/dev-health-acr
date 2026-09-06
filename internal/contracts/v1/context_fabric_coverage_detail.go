@@ -142,10 +142,12 @@ const (
 	//   * `requirement_read_not_planned` says the turn planned no fact that
 	//     could serve the cell. Kinds may well have been planned and read;
 	//     what is unknown is FOR WHOM.
-	//   * `fact_pruned` says the planner proved a source could not
-	//     contribute, and is declared NEVER DEGRADING. This arm IS
-	//     degrading -- the reader asked for a cell and gets none of it --
-	//     so borrowing it would contradict that code's own declaration.
+	//   * `fact_pruned` asserts a DIFFERENT FACT: that the planner proved a
+	//     source could not contribute. Nothing here was proved about a
+	//     source -- the gap is that the POPULATION could not be identified,
+	//     which is upstream of any source question. That mismatch of
+	//     assertion is the real objection; its non-degrading declaration
+	//     (this arm IS degrading) is a second, weaker one.
 	//   * `fact_provider_reported` says a provider ran and reported a
 	//     state. The providers may have run perfectly; the gap is upstream
 	//     of them.

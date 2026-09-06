@@ -196,3 +196,149 @@ func TestTheTelemetryUnitsAndCensusCannotLie(t *testing.T) {
 		}
 	})
 }
+
+// TestEveryArmsCountUnitsMatchItsQuantity is the SWEEP, and it is the closure
+// for a defect that survived 100 % statement coverage.
+//
+// `rowCountUnits` reads a FINISHED ROW rather than being told by the branch
+// that chose the counts, so it can drift from the arms without any line going
+// unexecuted. A keystone review reproduced exactly that: `dimension` is carried
+// by this layer's not-enumerable arm AND by two KIND-level arms, and labelling
+// the latter `population` reported the wrong denominator on 21 combinations.
+//
+// So this drives EVERY arm that can reach the event and asserts its units
+// against what the row's numbers actually count. A new arm that acquires a
+// silent label fails here.
+func TestEveryArmsCountUnitsMatchItsQuantity(t *testing.T) {
+	t.Parallel()
+	for _, arm := range []struct {
+		name string
+		row  RequirementOutcomeRow
+		want countUnits
+		why  string
+	}{
+		{
+			name: "read everywhere",
+			row:  RequirementOutcomeRow{Impact: contractsv1.ContextFabricAnswerImpactNone, Served: 2, Declared: 2},
+			want: countUnitsPopulation, why: "satisfied over the population",
+		},
+		{
+			name: "partially read",
+			row: RequirementOutcomeRow{Impact: contractsv1.ContextFabricAnswerImpactScope,
+				CauseCoverage: contractsv1.ContextFabricCoverageDetailFactNarrowed, Served: 1, Declared: 2},
+			want: countUnitsPopulation, why: "subjects read over subjects declared",
+		},
+		{
+			name: "census incomplete",
+			row: RequirementOutcomeRow{Impact: contractsv1.ContextFabricAnswerImpactScope,
+				CauseCoverage: contractsv1.ContextFabricCoverageDetailPopulationTruncated, Served: 2, Declared: 2},
+			want: countUnitsPopulation, why: "the owner's own population counts",
+		},
+		{
+			name: "sameness shortfall",
+			row: RequirementOutcomeRow{Impact: contractsv1.ContextFabricAnswerImpactDepth,
+				CauseCoverage: contractsv1.ContextFabricCoverageDetailFactNarrowed, Served: 1, Declared: 2},
+			want: countUnitsKind, why: "shared KINDS over the kind standard",
+		},
+		{
+			name: "population NOT ENUMERABLE",
+			row: RequirementOutcomeRow{Impact: contractsv1.ContextFabricAnswerImpactDimension,
+				CauseCoverage: contractsv1.ContextFabricCoverageDetailReadPopulationUnverified},
+			want: countUnitsPopulation, why: "0/0 means nothing was counted OVER A POPULATION",
+		},
+		{
+			// THE ARM THE OLD DERIVATION GOT WRONG.
+			name: "KIND-level: the requirement was never planned",
+			row: RequirementOutcomeRow{Impact: contractsv1.ContextFabricAnswerImpactDimension,
+				CauseCoverage: contractsv1.ContextFabricCoverageDetailRequirementReadNotPlanned,
+				Served:        0, Declared: 2},
+			want: countUnitsKind, why: "zero SOURCES against the quantifier's own demand",
+		},
+		{
+			// AND ITS SIBLING, also `dimension`, also kind-counted.
+			name: "KIND-level: nothing came back fact-bearing",
+			row: RequirementOutcomeRow{Impact: contractsv1.ContextFabricAnswerImpactDimension,
+				CauseCoverage: contractsv1.ContextFabricCoverageDetailFactProviderReported,
+				Served:        0, Declared: 2},
+			want: countUnitsKind, why: "kind counts from the kind-level evaluation",
+		},
+	} {
+		arm := arm
+		t.Run(arm.name, func(t *testing.T) {
+			t.Parallel()
+			if got := rowCountUnits(arm.row); got != arm.want {
+				t.Fatalf("count_units = %q, want %q -- the row carries %s", got, arm.want, arm.why)
+			}
+		})
+	}
+
+	// NON-VACUITY: the sweep must actually exercise BOTH members, or a
+	// function stuck at one value would pass a table that only asserts it.
+	seen := map[countUnits]bool{}
+	for _, impact := range []contractsv1.ContextFabricAnswerImpactKind{
+		contractsv1.ContextFabricAnswerImpactNone,
+		contractsv1.ContextFabricAnswerImpactScope,
+		contractsv1.ContextFabricAnswerImpactDepth,
+		contractsv1.ContextFabricAnswerImpactDimension,
+	} {
+		seen[rowCountUnits(RequirementOutcomeRow{Impact: impact})] = true
+	}
+	if !seen[countUnitsKind] || !seen[countUnitsPopulation] {
+		t.Fatalf("the sweep produced units %v; it must reach BOTH members or it proves nothing", seen)
+	}
+}
+
+// TestTheEventBuilderCarriesTheCohortFlagsFromTheDocument closes the third
+// mutant r1 confirmed SURVIVES: deleting the cohort-flag copy in the event
+// builder.
+//
+// It also answers r1's separate objection that the sink test hand-builds its
+// event: this one drives `readRequirementPopulationEventsFrom` — the real
+// builder — over a real served document, so a builder that stops copying the
+// flags fails here rather than passing a fixture that never called it.
+func TestTheEventBuilderCarriesTheCohortFlagsFromTheDocument(t *testing.T) {
+	t.Parallel()
+	health := contractsv1.ContextFabricFactHealth
+	members := []SubjectRef{projectRef("project_1"), projectRef("project_2")}
+	requirement := scopeRequirement(CompletionScopeEachMember, contractsv1.ContextFabricSubjectProject,
+		SubjectRoleMember, CompletionQuantifierAtLeastOne, health)
+	published := []contractsv1.ContextFabricPlanRequirement{requirement}
+	coverage := factCoverage(health, SourceAvailable)
+	facts := factsFor(members[0], kindList(health), members[1], kindList(health))
+
+	// A cohort the owner reports INCOMPLETE and TRUNCATED, so both flags are
+	// non-zero: a fixture with both false cannot tell a copied flag from a
+	// dropped one.
+	cohort := cohortWith(contractsv1.ContextFabricSubjectProject, members, nil, false)
+	cohort.Truncated = true
+
+	result := InvestigationResult{Cohort: cohort, Coverage: coverage}
+	plan := AnswerPlan{Requirements: published}
+	result.Completeness.Outcomes = appendReadRequirementEvaluations(nil, published, coverage,
+		readPopulationEvidenceFrom(nil, result, plan, facts))
+	stamped := plan
+	result.AnswerPlan = &stamped
+
+	events := readRequirementPopulationEventsFrom(nil, result, plan, facts, QuestionFamilyScopedCohortStatus)
+	if len(events) != 1 {
+		t.Fatalf("population events = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.CohortComplete {
+		t.Fatalf("cohort_complete = %v, want false -- the document's cohort is incomplete", event.CohortComplete)
+	}
+	if !event.CohortTruncated {
+		t.Fatalf("cohort_truncated = %v, want true -- deleting the flag copy leaves it false and "+
+			"an operator reads a truncated cohort as intact", event.CohortTruncated)
+	}
+
+	// AND THE LINE ITSELF, through the production sink, so the flags are
+	// asserted where an operator actually reads them.
+	record := readPopulationSink(t, event)
+	if record["cohort_truncated"] != true {
+		t.Fatalf("cohort_truncated = %v on the sink line, want true", record["cohort_truncated"])
+	}
+	if record["cohort_complete"] != false {
+		t.Fatalf("cohort_complete = %v on the sink line, want false", record["cohort_complete"])
+	}
+}
