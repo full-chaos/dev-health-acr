@@ -157,7 +157,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// single-subject investigation has no cohort, so `declined` is
 		// always nothing_to_narrow here and the refusal was reached
 		// without any content reduction ever being attempted.
-		attempt := e.planCandidateNarrowing(plan, params.Frame, result, budget, measurement, overrun)
+		attempt := e.planCandidateNarrowing(plan, params.Frame, result, budget, measurement, overrun, params.Facts)
 		if attempt.Served {
 			e.recordCandidateNarrowing(ctx, principal, plan, attempt, overrun, grouped, narrowed.Basis, before, after, declined, false, false)
 			return attempt.Result, firstPass, nil
@@ -227,7 +227,10 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	}
 	// Finalize the retry too, or the second pass repeats round 1 finding 1's
 	// defect: measuring a pre-final shape and serving a larger one.
-	retried = e.finalizeResult(retried, *plan, params.Frame)
+	// retryParams.Facts, NEVER params.Facts: this result was synthesized from
+	// the NARROWED bundle, and evaluating it against the first pass's facts
+	// would report coverage for a document nobody served.
+	retried = e.finalizeResult(retried, *plan, params.Frame, retryParams.Facts)
 	retryMeasurement, err := contractsv1.MeasureContextFabricResponse(retried)
 	if err != nil {
 		return InvestigationResult{}, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("measure re-synthesized result: %w", err))
@@ -242,7 +245,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// in this file already fix elsewhere.
 	outcomeAttempt := outcomeNarrowingAttempt{}
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
-		outcomeAttempt = e.planCandidateNarrowing(plan, params.Frame, retried, budget, retryMeasurement, retryOverrun)
+		outcomeAttempt = e.planCandidateNarrowing(plan, params.Frame, retried, budget, retryMeasurement, retryOverrun, retryParams.Facts)
 	}
 	// ONE decision event per investigation. When the reduction rescues a
 	// retry that did not fit, the event that describes the SERVED answer is

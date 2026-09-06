@@ -402,7 +402,7 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			requirement := readRequirement(testCase.quantifier)
-			rows := appendReadRequirementEvaluations(nil, []contractsv1.ContextFabricPlanRequirement{requirement}, testCase.coverage)
+			rows := appendReadRequirementEvaluations(nil, []contractsv1.ContextFabricPlanRequirement{requirement}, testCase.coverage, readPopulationEvidence{})
 
 			if !testCase.wantRow {
 				if len(rows) != 0 {
@@ -495,7 +495,7 @@ func TestTheStateFollowsTheEvidence(t *testing.T) {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			rows := appendReadRequirementEvaluations(seed, []contractsv1.ContextFabricPlanRequirement{requirement}, testCase.coverage)
+			rows := appendReadRequirementEvaluations(seed, []contractsv1.ContextFabricPlanRequirement{requirement}, testCase.coverage, readPopulationEvidence{})
 			if got := contractsv1.DeriveContextFabricAnswerCompletenessState(rows); got != testCase.want {
 				t.Fatalf("state = %q, want %q (rows: %+v)", got, testCase.want, rows)
 			}
@@ -516,7 +516,7 @@ func TestTheSeedIsNeverTheLastRowForAServedReadRequirement(t *testing.T) {
 
 	rows := appendReadRequirementEvaluations(seed,
 		[]contractsv1.ContextFabricPlanRequirement{requirement},
-		factCoverage(contractsv1.ContextFabricFactHealth, SourceAvailable))
+		factCoverage(contractsv1.ContextFabricFactHealth, SourceAvailable), readPopulationEvidence{})
 
 	evaluated := 0
 	for _, row := range rows {
@@ -560,7 +560,7 @@ func TestAnUnrecognisedQuantifierEmitsNoRow(t *testing.T) {
 	}
 
 	rows := appendReadRequirementEvaluations(nil,
-		[]contractsv1.ContextFabricPlanRequirement{unrecognised}, coverage)
+		[]contractsv1.ContextFabricPlanRequirement{unrecognised}, coverage, readPopulationEvidence{})
 	if len(rows) != 0 {
 		t.Fatalf("an unrecognised quantifier produced %d rows: %+v -- evaluating against a defaulted "+
 			"threshold silently lowers the standard the requirement declared", len(rows), rows)
@@ -569,7 +569,7 @@ func TestAnUnrecognisedQuantifierEmitsNoRow(t *testing.T) {
 	// COMPLEMENT: the same fixture with a RECOGNISED quantifier does emit.
 	recognised := readRequirement(CompletionQuantifierAtLeastOne)
 	got := appendReadRequirementEvaluations(nil,
-		[]contractsv1.ContextFabricPlanRequirement{recognised}, coverage)
+		[]contractsv1.ContextFabricPlanRequirement{recognised}, coverage, readPopulationEvidence{})
 	if len(got) != 1 {
 		t.Fatalf("the same fixture with a recognised quantifier produced %d rows, want 1 -- the "+
 			"assertion above would pass on an evaluator that emitted nothing at all", len(got))
@@ -616,7 +616,7 @@ func TestAnUndeclaredCauseCodeEmitsNoRow(t *testing.T) {
 
 	rows := appendReadRequirementEvaluations(nil,
 		[]contractsv1.ContextFabricPlanRequirement{requirement},
-		codedCoverage(undeclared, health, health, SourceUnavailable))
+		codedCoverage(undeclared, health, health, SourceUnavailable), readPopulationEvidence{})
 	if len(rows) != 0 {
 		t.Fatalf("an undeclared cause code produced %d rows: %+v -- it must reach the wire "+
 			"neither as itself nor remapped onto a declared code", len(rows), rows)
@@ -666,7 +666,7 @@ func TestAnUndeclaredCauseCodeEmitsNoRow(t *testing.T) {
 	// COMPLEMENT: the same fixture with a DECLARED code does emit its row.
 	declaredRows := appendReadRequirementEvaluations(nil,
 		[]contractsv1.ContextFabricPlanRequirement{requirement},
-		codedCoverage(contractsv1.ContextFabricCoverageDetailFactReadFailed, health, health, SourceUnavailable))
+		codedCoverage(contractsv1.ContextFabricCoverageDetailFactReadFailed, health, health, SourceUnavailable), readPopulationEvidence{})
 	if len(declaredRows) != 1 {
 		t.Fatalf("the same fixture with a DECLARED code produced %d rows, want 1 -- the assertion "+
 			"above would pass on an evaluator that had stopped emitting rows at all", len(declaredRows))
@@ -770,7 +770,7 @@ func TestFinalizingAServedTurnEvaluatesItsReadRequirements(t *testing.T) {
 		Coverage: factCoverage(
 			contractsv1.ContextFabricFactHealth, SourceAvailable,
 			contractsv1.ContextFabricFactWorkload, SourceAvailable),
-	}, AnswerPlan{Requirements: published}, &frame)
+	}, AnswerPlan{Requirements: published}, &frame, CanonicalFactBundle{})
 
 	evaluated, seeded := 0, 0
 	for _, row := range served.Completeness.Outcomes {
@@ -829,8 +829,8 @@ func TestEvaluatingTwiceAppendsOneRow(t *testing.T) {
 	published := []contractsv1.ContextFabricPlanRequirement{requirement}
 	coverage := factCoverage(contractsv1.ContextFabricFactHealth, SourceAvailable)
 
-	once := appendReadRequirementEvaluations(readSeed(t, requirement), published, coverage)
-	twice := appendReadRequirementEvaluations(once, published, coverage)
+	once := appendReadRequirementEvaluations(readSeed(t, requirement), published, coverage, readPopulationEvidence{})
+	twice := appendReadRequirementEvaluations(once, published, coverage, readPopulationEvidence{})
 
 	total := 0
 	for _, row := range twice {
@@ -851,11 +851,37 @@ func TestUnservableAndComputedRequirementsAreNotEvaluated(t *testing.T) {
 	t.Parallel()
 	coverage := factCoverage(contractsv1.ContextFabricFactHealth, SourceAvailable)
 
+	// REAL POPULATION EVIDENCE, and it is what keeps every refusal below
+	// NON-VACUOUS for a third time.
+	//
+	// The computed and control fixtures carry `each_member` (inherited from
+	// the computed row they are cloned from), and a distributive requirement
+	// reaching the evaluator with NO population evidence is a caller defect
+	// that emits no row on its own. Passing an empty evidence here would
+	// therefore suppress them through the caller-defect branch whether or not
+	// the kind-and-served entry guard exists at all -- the same "passes for
+	// the wrong reason" shape this test was rewritten twice to remove, arriving
+	// through a door that did not exist when it was written.
+	//
+	// With this evidence present, each fixture reaches the guard it exists to
+	// measure, and the positive control's row is a real distributive row.
+	member := SubjectRef{Kind: SubjectTeam, CanonicalID: "team_control", Label: "Control"}
+	populations := readPopulationEvidenceFrom(nil,
+		InvestigationResult{Cohort: &Cohort{
+			Kind:     SubjectTeam,
+			Members:  []contractsv1.ContextFabricCohortMember{{Subject: member}},
+			Complete: true,
+		}},
+		AnswerPlan{},
+		CanonicalFactBundle{Facts: []CanonicalFact{
+			{Kind: contractsv1.ContextFabricFactHealth, Subject: member, SourceState: SourceAvailable},
+		}})
+
 	unservable := readRequirement(CompletionQuantifierAtLeastOne)
 	unservable.Unavailable = string(RequirementReasonNoDeclaringProducer)
 	unservable.Quantifier = string(CompletionQuantifierNone)
 	unservable.FactKinds = nil
-	if rows := appendReadRequirementEvaluations(nil, []contractsv1.ContextFabricPlanRequirement{unservable}, coverage); len(rows) != 0 {
+	if rows := appendReadRequirementEvaluations(nil, []contractsv1.ContextFabricPlanRequirement{unservable}, coverage, populations); len(rows) != 0 {
 		t.Fatalf("an UNSERVABLE requirement was evaluated (%d rows) -- the derivation already "+
 			"attributed that cell and re-deciding it here is a second authority", len(rows))
 	}
@@ -866,7 +892,7 @@ func TestUnservableAndComputedRequirementsAreNotEvaluated(t *testing.T) {
 		Kind: string(ObligationKindComputed), Step: string(ComputedStepRankCohort),
 		Scope: string(CompletionScopeEachMember), Quantifier: string(CompletionQuantifierAll),
 	}
-	if rows := appendReadRequirementEvaluations(nil, []contractsv1.ContextFabricPlanRequirement{computed}, coverage); len(rows) != 0 {
+	if rows := appendReadRequirementEvaluations(nil, []contractsv1.ContextFabricPlanRequirement{computed}, coverage, populations); len(rows) != 0 {
 		t.Fatalf("a COMPUTED requirement was evaluated (%d rows) -- this evaluator observes fact "+
 			"reads and cannot observe a server step", len(rows))
 	}
@@ -895,7 +921,7 @@ func TestUnservableAndComputedRequirementsAreNotEvaluated(t *testing.T) {
 			computedButOtherwiseEligible.Quantifier)
 	}
 	if rows := appendReadRequirementEvaluations(nil,
-		[]contractsv1.ContextFabricPlanRequirement{computedButOtherwiseEligible}, coverage); len(rows) != 0 {
+		[]contractsv1.ContextFabricPlanRequirement{computedButOtherwiseEligible}, coverage, populations); len(rows) != 0 {
 		t.Fatalf("a COMPUTED requirement carrying a READ quantifier and observed fact kinds was "+
 			"evaluated (%d rows) -- nothing downstream would have stopped it, so the kind guard is "+
 			"the only thing keeping a server step from being reported as a fact read", len(rows))
@@ -924,7 +950,7 @@ func TestUnservableAndComputedRequirementsAreNotEvaluated(t *testing.T) {
 			"is stopped by the threshold check and measures nothing", unservableButOtherwiseEligible.Quantifier)
 	}
 	if rows := appendReadRequirementEvaluations(nil,
-		[]contractsv1.ContextFabricPlanRequirement{unservableButOtherwiseEligible}, coverage); len(rows) != 0 {
+		[]contractsv1.ContextFabricPlanRequirement{unservableButOtherwiseEligible}, coverage, populations); len(rows) != 0 {
 		t.Fatalf("an UNSERVABLE requirement carrying a READ quantifier and observed fact kinds was "+
 			"evaluated (%d rows) -- nothing downstream would have stopped it, so the served half of "+
 			"the entry guard is the only thing keeping this evaluator from overriding the "+
@@ -937,7 +963,7 @@ func TestUnservableAndComputedRequirementsAreNotEvaluated(t *testing.T) {
 	served := computedButOtherwiseEligible
 	served.Kind = string(ObligationKindRead)
 	if rows := appendReadRequirementEvaluations(nil,
-		[]contractsv1.ContextFabricPlanRequirement{served}, coverage); len(rows) != 1 {
+		[]contractsv1.ContextFabricPlanRequirement{served}, coverage, populations); len(rows) != 1 {
 		t.Fatalf("the same requirement as a READ produced %d rows, want 1 -- without this the "+
 			"refusals above would pass on an evaluator that appends nothing", len(rows))
 	}
@@ -964,7 +990,7 @@ func TestGraphSourcesAreNotReadAsFactEvidence(t *testing.T) {
 	// never looked at -- which is a POSITIVE statement that the graph source
 	// contributed nothing, where absence was only the lack of a statement.
 	rows := appendReadRequirementEvaluations(nil,
-		[]contractsv1.ContextFabricPlanRequirement{requirement}, coverage)
+		[]contractsv1.ContextFabricPlanRequirement{requirement}, coverage, readPopulationEvidence{})
 	if len(rows) != 1 {
 		t.Fatalf("want exactly the not-planned row, got %d: %+v", len(rows), rows)
 	}
@@ -979,7 +1005,7 @@ func TestGraphSourcesAreNotReadAsFactEvidence(t *testing.T) {
 	// nothing at all as fact evidence.
 	served := appendReadRequirementEvaluations(nil,
 		[]contractsv1.ContextFabricPlanRequirement{requirement},
-		factCoverage(contractsv1.ContextFabricFactHealth, SourceAvailable))
+		factCoverage(contractsv1.ContextFabricFactHealth, SourceAvailable), readPopulationEvidence{})
 	if len(served) != 1 || served[0].Outcome != contractsv1.ContextFabricRequirementSatisfied {
 		t.Fatalf("the complement did not serve: %+v -- this test would then be asserting that "+
 			"nothing is ever read as fact evidence", served)
@@ -1010,7 +1036,7 @@ func TestTheWorstObservationDecidesTheRow(t *testing.T) {
 			t.Parallel()
 			rows := appendReadRequirementEvaluations(nil,
 				[]contractsv1.ContextFabricPlanRequirement{requirement},
-				factCoverage(health, order.first, health, order.last))
+				factCoverage(health, order.first, health, order.last), readPopulationEvidence{})
 			if len(rows) != 1 {
 				t.Fatalf("appended %d rows, want 1", len(rows))
 			}
@@ -1059,7 +1085,7 @@ func TestTheWorstObservationDecidesTheRow(t *testing.T) {
 		})
 
 	rows := appendReadRequirementEvaluations(nil,
-		[]contractsv1.ContextFabricPlanRequirement{twoKinds}, coverage)
+		[]contractsv1.ContextFabricPlanRequirement{twoKinds}, coverage, readPopulationEvidence{})
 	if len(rows) != 1 {
 		t.Fatalf("appended %d rows, want 1: %+v", len(rows), rows)
 	}
@@ -1105,7 +1131,7 @@ func TestTheNotReadArmNamesItsOwnCause(t *testing.T) {
 	}
 
 	rows := appendReadRequirementEvaluations(nil,
-		[]contractsv1.ContextFabricPlanRequirement{requirement}, factCoverage())
+		[]contractsv1.ContextFabricPlanRequirement{requirement}, factCoverage(), readPopulationEvidence{})
 	if len(rows) != 1 {
 		t.Fatalf("the not-read arm emitted %d rows, want 1 -- the requirement is now nameable and "+
 			"must be named", len(rows))
@@ -1208,7 +1234,7 @@ func TestFactBearingAgreesWithTheRegistrysOwnRule(t *testing.T) {
 			t.Parallel()
 			rows := appendReadRequirementEvaluations(nil,
 				[]contractsv1.ContextFabricPlanRequirement{requirement},
-				factCoverage(health, state))
+				factCoverage(health, state), readPopulationEvidence{})
 
 			// A PRUNE IS ITS OWN CASE and the two layers still agree: the
 			// registry says it contributes no facts, and this evaluator emits
@@ -1368,7 +1394,7 @@ func TestAPartialCoverageDetailDoesNotSuppressTheRow(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			rows := appendReadRequirementEvaluations(nil,
-				[]contractsv1.ContextFabricPlanRequirement{requirement}, withDetail(testCase.detail))
+				[]contractsv1.ContextFabricPlanRequirement{requirement}, withDetail(testCase.detail), readPopulationEvidence{})
 			if len(rows) != 1 {
 				t.Fatalf("%s suppressed the row (%d rows, want 1) -- an incomplete detail is not an "+
 					"undeclared cause, and the stop path must not reach it", testCase.name, len(rows))
@@ -1392,7 +1418,7 @@ func TestAPartialCoverageDetailDoesNotSuppressTheRow(t *testing.T) {
 			Code:     undeclared,
 			FactKind: health,
 			Label:    "poison",
-		}))
+		}), readPopulationEvidence{})
 	if len(poisoned) != 0 {
 		t.Fatalf("a detail naming BOTH a kind and an undeclared code produced %d rows, want 0 -- "+
 			"the cases above show the guards are NARROW only while the stop path still fires", len(poisoned))
@@ -1483,7 +1509,7 @@ func TestTheNarrowedCauseIsTheFirstNarrowedKindInPublishedOrder(t *testing.T) {
 		narrowing(health, contractsv1.ContextFabricCoverageDetailFactNarrowed))
 
 	rows := appendReadRequirementEvaluations(nil,
-		[]contractsv1.ContextFabricPlanRequirement{requirement}, coverage)
+		[]contractsv1.ContextFabricPlanRequirement{requirement}, coverage, readPopulationEvidence{})
 	if len(rows) != 1 {
 		t.Fatalf("produced %d rows, want 1: %+v", len(rows), rows)
 	}
@@ -1526,7 +1552,7 @@ func TestTheNarrowedCauseIsTheFirstNarrowedKindInPublishedOrder(t *testing.T) {
 		narrowing(workload, contractsv1.ContextFabricCoverageDetailFactNarrowed))
 
 	mixedRows := appendReadRequirementEvaluations(nil,
-		[]contractsv1.ContextFabricPlanRequirement{requirement}, mixed)
+		[]contractsv1.ContextFabricPlanRequirement{requirement}, mixed, readPopulationEvidence{})
 	if len(mixedRows) != 1 {
 		t.Fatalf("produced %d rows, want 1: %+v", len(mixedRows), mixedRows)
 	}

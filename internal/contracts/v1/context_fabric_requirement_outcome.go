@@ -811,7 +811,7 @@ func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequire
 	//	  member step actually reduced the set, and that row takes the
 	//	  ordinary narrowed path, not this one.
 	censusQualified := row.Stage == ContextFabricOutcomeStageAssembledResult &&
-		row.Obligation == ContextFabricAnswerObligationCount &&
+		censusQualifyingObligation(row.Obligation) &&
 		row.Impact == ContextFabricAnswerImpactScope &&
 		row.Served == row.Declared &&
 		row.CauseObserved &&
@@ -822,6 +822,32 @@ func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequire
 		return fmt.Errorf("outcome narrowed served %d of %d declared, which is not a reduction", row.Served, row.Declared)
 	}
 	return validateContextFabricRequirementRefinements(row)
+}
+
+// censusQualifyingObligation says which obligations may take the census
+// exception: `count`, and every READ obligation.
+//
+// WIDENED FROM `count` ALONE because a read requirement over a distributive
+// completion scope now reports the same shape for the same reason -- an
+// incomplete census over a population its owner enumerated, where the counts
+// are equal and truthful and what is unknown is how much larger the population
+// is. Refusing it would force a read row to either invent a bigger `Declared`
+// (publishing a fabricated population size) or drop the disclosure entirely.
+//
+// THE ALLOW-LIST IS DERIVED FROM THE OBLIGATION-KIND MIRROR, never a string
+// literal or a hand-kept list: a new read obligation joins by declaring its
+// kind, and a computed one cannot join by being spelled similarly. `ranking`
+// stays refused because its kind is computed.
+//
+// The exception stays as narrow as its own doc comment claims. No third
+// producer can reach the shape: candidateNarrowingOutcomeRow always carries an
+// overrun and Served < Declared; the planning seed is stage `planning`; the
+// depth-narrowed read arm carries impact `depth`; and every `unavailable` arm
+// fails the equal-counts, observed-cause and qualifying-code conjuncts
+// together.
+func censusQualifyingObligation(obligation string) bool {
+	return obligation == ContextFabricAnswerObligationCount ||
+		contextFabricAnswerObligationKindByObligation[obligation] == contextFabricObligationKindRead
 }
 
 // validateContextFabricRequirementRefinements enforces that the refinement

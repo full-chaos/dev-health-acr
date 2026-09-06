@@ -432,7 +432,21 @@ func stampAnswerPlan(result InvestigationResult, plan AnswerPlan) InvestigationR
 // Pure, and deliberately telemetry-free: it runs once per synthesis pass, and
 // a retry must not double-count a render-selection decision. The engine emits
 // that event once, for the result it actually serves.
-func (e *Engine) finalizeResult(result InvestigationResult, plan AnswerPlan, frame *QuestionFrame) InvestigationResult {
+func (e *Engine) finalizeResult(
+	result InvestigationResult, plan AnswerPlan, frame *QuestionFrame,
+	// facts is BY VALUE: the bundle is already copied per attempt, and the
+	// population is derived INSIDE this function rather than threaded as a
+	// second parameter. Every input a population needs -- the frame's operand
+	// slots, the committed refs, the cohort, the plan's narrowing -- is
+	// already in this scope, so a second carrier would add a way for the two
+	// to disagree without adding information.
+	//
+	// IT MUST BE THE BUNDLE THIS RESULT WAS SYNTHESIZED FROM. On the retry
+	// path that is `narrowed.Facts`, never the first pass's: a retry
+	// evaluated against stale facts reports coverage for a document nobody
+	// served.
+	facts CanonicalFactBundle,
+) InvestigationResult {
 	stamped := plan
 	result.AnswerPlan = &stamped
 	renderShapes, _ := SelectRenderShapes(result, frame)
@@ -514,7 +528,8 @@ func (e *Engine) finalizeResult(result InvestigationResult, plan AnswerPlan, fra
 	// be the same value today and a second source the first time a caller
 	// stamps something else.
 	result.Completeness.Outcomes = appendReadRequirementEvaluations(
-		result.Completeness.Outcomes, stamped.Requirements, result.Coverage)
+		result.Completeness.Outcomes, stamped.Requirements, result.Coverage,
+		readPopulationEvidenceFrom(frame, result, stamped, facts))
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result
 }

@@ -352,6 +352,7 @@ type recordingTelemetry struct {
 	// completeness fold verbatim, same list-not-count discipline.
 	groupedCohortCompletenesses []GroupedCohortCompletenessEvent
 	membershipCardinalities     []MembershipCardinalityEvent
+	readRequirementPopulations  []ReadRequirementPopulationEvent
 	commitAffirmations          int
 	// categoryFactCompositions (CHAOS-4347) records every status-category
 	// composition event verbatim, same list-not-count discipline.
@@ -629,6 +630,14 @@ func (r *recordingTelemetry) RecordGroupedCohortCompleteness(_ context.Context, 
 // Engine.Investigate; deleting the production emit must fail it.
 func (r *recordingTelemetry) RecordMembershipCardinality(_ context.Context, _ storage.Principal, event MembershipCardinalityEvent) {
 	r.membershipCardinalities = append(r.membershipCardinalities, event)
+}
+
+// RecordReadRequirementPopulation records the whole event, same
+// list-not-count discipline: a test must be able to assert WHICH row was
+// reported and what its units and census were, not merely that something was
+// recorded.
+func (r *recordingTelemetry) RecordReadRequirementPopulation(_ context.Context, _ storage.Principal, event ReadRequirementPopulationEvent) {
+	r.readRequirementPopulations = append(r.readRequirementPopulations, event)
 }
 
 // RecordBudgetAssertion (Y3) records the whole event, same list-not-count

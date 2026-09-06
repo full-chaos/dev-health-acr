@@ -507,6 +507,14 @@ func (e *Engine) planCandidateNarrowing(
 	budget ResponseBudget,
 	measurement ResponseMeasurement,
 	overrun contractsv1.ContextFabricBudgetOverrun,
+	// facts is an EXPLICIT parameter rather than a field on the attempt
+	// measurement object, because folding evidence into that object would
+	// hide an input this stage reads -- against the rule its own params type
+	// states for itself, that adding an input is a visible change to the
+	// stage's contract -- and would couple the evaluator's evidence to the
+	// allocator's lifetime. Each of this function's TWO call sites passes
+	// the bundle matching ITS pass.
+	facts CanonicalFactBundle,
 ) outcomeNarrowingAttempt {
 	narrowedResult, narrowing, declined := narrowCandidatesToBudget(result, budget, measurement, overrun)
 	if !narrowing.Narrowed {
@@ -515,7 +523,7 @@ func (e *Engine) planCandidateNarrowing(
 	requirement, obligation := subjectScopeRequirement(narrowedResult.Completeness.Outcomes)
 	row := candidateNarrowingOutcomeRow(narrowing, overrun, requirement, obligation)
 	narrowedResult.Completeness.Outcomes = appendOutcomeRows(narrowedResult.Completeness.Outcomes, row)
-	narrowedResult = e.finalizeResult(narrowedResult, *plan, frame)
+	narrowedResult = e.finalizeResult(narrowedResult, *plan, frame, facts)
 
 	// Measure what will actually be served. If the reduction did not
 	// deliver a fitting document the refusal stands -- serving an answer

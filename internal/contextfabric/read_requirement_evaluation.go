@@ -54,6 +54,17 @@ type readEvidence struct {
 	// for, so it did not serve the requirement in full, and counting it as
 	// served is how a narrowed read reads `satisfied`.
 	Served int
+	// ServedKinds are WHICH kinds were counted Served above, in the
+	// requirement's own declared order.
+	//
+	// It exists so the population layer can ask "was this kind read for THIS
+	// subject" without re-deciding whether the kind was served at all. That
+	// separation is the whole reason this file does not become a second
+	// authority twice over: the kind-level arms below classify, and the
+	// population layer only distributes. A kind this file called narrowed,
+	// truncated, failed or pruned never appears here and therefore
+	// contributes nothing in either direction to a per-subject test.
+	ServedKinds []FactKind
 	// Narrowed is how many declared kinds the PLANNER recorded as narrowed,
 	// read from Coverage.Details rather than from a source state.
 	//
@@ -223,6 +234,7 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 				break
 			}
 			evidence.Served++
+			evidence.ServedKinds = append(evidence.ServedKinds, kind)
 		case state == SourceTruncated:
 			evidence.Truncated++
 		default:
@@ -396,6 +408,7 @@ func appendReadRequirementEvaluations(
 	rows []RequirementOutcomeRow,
 	published []contractsv1.ContextFabricPlanRequirement,
 	coverage Coverage,
+	populations readPopulationEvidence,
 ) []RequirementOutcomeRow {
 	if len(published) == 0 {
 		return rows
@@ -412,7 +425,7 @@ func appendReadRequirementEvaluations(
 		if !known {
 			continue
 		}
-		row, ok := readRequirementOutcomeRow(requirement, threshold, evaluateReadRequirement(requirement, coverage))
+		row, ok := readRequirementOutcomeRow(requirement, threshold, evaluateReadRequirement(requirement, coverage), populations)
 		if !ok {
 			continue
 		}
@@ -439,6 +452,7 @@ func readRequirementOutcomeRow(
 	requirement contractsv1.ContextFabricPlanRequirement,
 	threshold int,
 	evidence readEvidence,
+	populations readPopulationEvidence,
 ) (RequirementOutcomeRow, bool) {
 	// NOTHING WAS READ FOR THIS REQUIREMENT, and it now says so.
 	//
@@ -551,6 +565,45 @@ func readRequirementOutcomeRow(
 	lossless := evidence.Served >= threshold &&
 		evidence.Truncated == 0 && evidence.Failed == 0 && evidence.Narrowed == 0
 	if lossless {
+		// THE KIND STANDARD IS MET. For a `single_subject` requirement that
+		// is the whole question and the row is finished here, exactly as it
+		// was before this change.
+		//
+		// For a DISTRIBUTIVE scope it is only half: the kinds were read, and
+		// nothing yet says FOR WHOM. The population conjunct answers that,
+		// and it runs HERE -- after the kind arms, never before -- so a
+		// requirement that lost a kind takes the kind arm and this is never
+		// consulted. One mechanism per row.
+		if distributiveScope(requirement.Scope) {
+			if !populations.Present {
+				// A CALLER DEFECT, not an absent population: a distributive
+				// requirement reached the evaluator with no population
+				// evidence supplied at all, which means a finalization path
+				// did not thread the bundle. Emitting the absent arm here
+				// would publish a coverage claim about the ANSWER for what
+				// is a wiring bug in this process, so the requirement keeps
+				// its planning seed (deriving `partial`) and the line names
+				// the site.
+				//
+				// It logs for the same reason the undeclared-code branch
+				// does: dropping a row silently would send the answer out a
+				// disclosure short with nothing anywhere saying why.
+				slog.Default().Warn("context fabric distributive read requirement reached the evaluator with no population evidence",
+					"requirement", requirement.Requirement,
+					"obligation", requirement.Obligation,
+					"scope", requirement.Scope)
+				return RequirementOutcomeRow{}, false
+			}
+			population, owned := populations.populationFor(requirement)
+			if !owned {
+				slog.Default().Warn("context fabric distributive read requirement has no population owner",
+					"requirement", requirement.Requirement,
+					"obligation", requirement.Obligation,
+					"scope", requirement.Scope)
+				return RequirementOutcomeRow{}, false
+			}
+			return readPopulationOutcomeRow(row, population, populations, evidence.ServedKinds, threshold), true
+		}
 		// Served in full at the declared standard. The counts are the
 		// SOURCES THAT SERVED, not the catalogue: a satisfied row reading
 		// "1 of 6" would describe a loss that did not happen, and the six

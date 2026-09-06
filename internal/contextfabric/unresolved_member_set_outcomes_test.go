@@ -266,7 +266,7 @@ func TestFinalizingTwiceStatesOneUnavailableRankingRow(t *testing.T) {
 	const refinalizations = 200
 	again := result
 	for iteration := 0; iteration < refinalizations; iteration++ {
-		again = engine.finalizeResult(again, plan, frame)
+		again = engine.finalizeResult(again, plan, frame, CanonicalFactBundle{})
 		after := outcomeRowsFor(again, ObligationRanking, contractsv1.ContextFabricOutcomeStageAssembledResult)
 		if len(after) != 1 {
 			t.Fatalf("re-finalization %d of %d produced %d assembled `ranking` row(s), want 1 -- a reader would receive %d accounts of one requirement",

@@ -1033,6 +1033,42 @@ func (t SlogEngineTelemetry) RecordGroupedCohortCompleteness(ctx context.Context
 // event, because a cardinality without them reads as a claim about the
 // population that the step does not make -- it counts the RESOLVED member
 // set, and those two are what say whether that set is the whole of it.
+// RecordReadRequirementPopulation emits one line per distributive read row of
+// the served answer.
+//
+// EVERY KEY ON EVERY LINE, INCLUDING THE ZEROES -- no omitempty posture for any
+// of them. A field that vanishes when it is false or zero makes "0" and "never
+// measured" look alike to a reader filtering on it, which is the distinction
+// this whole event exists to preserve.
+//
+// `count_units` is what makes `row_served`/`row_declared` readable: three arms
+// publish KIND counts and the rest publish POPULATION counts, and without the
+// token an operator cannot tell one served subject from one served fact kind.
+//
+// `population_census` comes from the population AUTHORITY rather than from the
+// row's cause, so a precedence decision about which cause a row names can never
+// silently restate what the census was.
+func (t SlogEngineTelemetry) RecordReadRequirementPopulation(ctx context.Context, principal storage.Principal, event ReadRequirementPopulationEvent) {
+	args := []any{
+		"org_id", principal.OrgID,
+		"family", string(event.Family),
+		"requirement", event.Requirement,
+		"scope", event.Scope,
+		"outcome", string(event.Outcome),
+		"impact", string(event.Impact),
+		"cause_coverage", string(event.Cause),
+		"cause_observed", event.CauseObserved,
+		"row_served", event.Served,
+		"row_declared", event.Declared,
+		"count_units", string(event.Units),
+		"population_census", string(event.Census),
+		"cohort_complete", event.CohortComplete,
+		"cohort_truncated", event.CohortTruncated,
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric read requirement population", args...)
+}
+
 func (t SlogEngineTelemetry) RecordMembershipCardinality(ctx context.Context, principal storage.Principal, event MembershipCardinalityEvent) {
 	args := []any{
 		"org_id", principal.OrgID,

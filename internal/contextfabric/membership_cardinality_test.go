@@ -782,11 +782,11 @@ func TestFinalizingTwiceStatesOneCardinality(t *testing.T) {
 				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 			}
 
-			once := engine.finalizeResult(result, plan, frame)
+			once := engine.finalizeResult(result, plan, frame, CanonicalFactBundle{})
 			if got := len(countOutcomeRows(once, contractsv1.ContextFabricOutcomeStageAssembledResult)); got != 1 {
 				t.Fatalf("after ONE finalization: %d count rows, want 1", got)
 			}
-			twice := engine.finalizeResult(once, plan, frame)
+			twice := engine.finalizeResult(once, plan, frame, CanonicalFactBundle{})
 			rows := countOutcomeRows(twice, contractsv1.ContextFabricOutcomeStageAssembledResult)
 			if len(rows) != 1 {
 				t.Fatalf("after TWO finalizations: %d count rows, want 1 -- re-entry appended a second "+

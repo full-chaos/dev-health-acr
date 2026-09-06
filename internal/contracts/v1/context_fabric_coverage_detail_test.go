@@ -61,6 +61,12 @@ func validDetailForCode(code ContextFabricCoverageDetailCode) ContextFabricCover
 		// never attempted. No source state: no source produced one. No count:
 		// nothing was read, so there is nothing to count.
 		d.Source = "context-fabric:answer-plan"
+	case ContextFabricCoverageDetailReadPopulationUnverified:
+		// Source only, matching the field rule. No fact kind: the kinds may
+		// well have been read, and naming one would suggest THAT was the gap.
+		// No count: the population size is precisely the quantity nothing
+		// could enumerate, and a number here would claim one was measured.
+		d.Source = "context-fabric:read-population"
 	}
 	return d
 }
