@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 
@@ -136,4 +137,65 @@ func TestAnAgreeingAllocationEmitsNoAllocationDisagreement(t *testing.T) {
 			t.Errorf("%s: got %q, want %q", one.name, got, one.want)
 		}
 	}
+}
+
+// TestStageThreeDerivesNoAllocationOfItsOwn is the structural half, and it is
+// the honest instrument for this defect.
+//
+// A keystone review injected `synthesisAllocation.Grants[0]++` at the producer
+// and watched the guard pass the answer: stage three was re-deriving its own
+// allocation from the same inputs and checking THAT. Because `AllocateItems` is
+// pure the two agreed on every honest input, so the duplication was invisible.
+//
+// MY FIRST ATTEMPT AT PINNING THIS WAS WRONG and is recorded here so it is not
+// tried again. I wrote a test that corrupted `input.Allocation` inside a
+// synthesizer wrapper. That cannot work: `SynthesisInput` is passed by value, so
+// the corruption lands on the synthesizer's own copy and reaches neither the
+// engine's allocation nor the guard. It failed identically before and after the
+// fix — a test that cannot distinguish them.
+//
+// The keystone's fault was a SOURCE mutant, not a test hook, so the behavioural
+// half belongs in the mutation battery (`corrupt_consumed_allocation`), and what
+// belongs here is the structural property the fix actually establishes: there is
+// no second allocation for the guard to check the wrong one of.
+func TestStageThreeDerivesNoAllocationOfItsOwn(t *testing.T) {
+	t.Parallel()
+	_, files := parsePackageForQuantifier(t)
+
+	calls := callsWithin(t, files, "fitAssembledResult")
+	if !calls["measureAssembledAttempt"] {
+		t.Fatal("fitAssembledResult no longer measures anything; this pin is stale and asserts nothing")
+	}
+
+	// EXACTLY ONE AllocateItems call may remain in stage three: the retry's,
+	// which allocates for a NARROWED cohort and is therefore a different budget
+	// for a different document, not a second authority over the same one.
+	source := stageThreeSource(t)
+	derivations := strings.Count(source, "AllocateItems(")
+	if derivations != 1 {
+		t.Errorf("stage three contains %d AllocateItems calls, want exactly 1 (the retry's). The "+
+			"first-pass allocation must be the one synthesis CONSUMED, carried on the assembly "+
+			"params -- a second derivation from the same inputs is what let a corrupted producer "+
+			"copy pass a guard checking a clean replacement.", derivations)
+	}
+	if !strings.Contains(source, "retryAllocation := AllocateItems(") {
+		t.Error("the one remaining derivation is not the retry's; stage three has reintroduced a " +
+			"first-pass allocation of its own")
+	}
+	if !strings.Contains(source, "allocation := params.Allocation") {
+		t.Error("stage three no longer reads the carried allocation from the params: the guard would " +
+			"be checking an object other than the one synthesis consumed")
+	}
+}
+
+// stageThreeSource reads the stage-three file from disk. The AST helpers above
+// answer "which functions call what"; this question is "how many times is one
+// constructor called in this file", which is a text property and is read as one.
+func stageThreeSource(t *testing.T) string {
+	t.Helper()
+	body, err := os.ReadFile("chaos4636_budget_stage3.go")
+	if err != nil {
+		t.Fatalf("read stage three source: %v", err)
+	}
+	return string(body)
 }

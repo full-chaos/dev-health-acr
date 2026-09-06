@@ -104,6 +104,19 @@ type synthesisAssemblyParams struct {
 	// own -- which is exactly how narration came to charge the static
 	// contract caps while the budget charged something else.
 	Plan AnswerPlan
+	// Allocation is the ONE allocation this pass is budgeted against, derived
+	// where these params are built and CARRIED to every reader.
+	//
+	// It is a field rather than a per-reader `AllocateItems` call because a
+	// keystone review found the alternative in the wild: synthesis derived one
+	// here and stage three derived another from the same inputs. They agreed on
+	// every honest input -- AllocateItems is pure -- so nothing noticed, until a
+	// producer-local corruption of synthesis's copy sailed past a guard that was
+	// re-deriving a replacement. One derivation, one object, every reader.
+	//
+	// The RETRY re-allocates deliberately, and that is not a second authority:
+	// it is a different cohort, so it is a different budget.
+	Allocation ItemAllocation
 	// Retry marks the SECOND pass. It exists so the doubled emissions above
 	// are attributable rather than silent.
 	Retry bool
@@ -219,10 +232,13 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	commitBases := params.CommitBases
 	commitDigests := params.CommitDigests
 
-	// The SAME allocator every other spender reads, derived ONCE here and
-	// carried. A second derivation at the prompt site or inside narration is
-	// exactly how one budget came to have two authorities.
-	synthesisAllocation := AllocateItems(params.Plan, groupCountOf(graphContext.Cohort), cohortMemberCount(graphContext.Cohort))
+	// The SAME allocator every other spender reads, derived ONCE where these
+	// params were built and CARRIED here. A second derivation at the prompt
+	// site, inside narration, or in stage three is exactly how one budget came
+	// to have two authorities -- and stage three did precisely that until a
+	// keystone review injected a fault into this copy and watched the guard
+	// validate the other one.
+	synthesisAllocation := params.Allocation
 	result, err := e.synthesizer.Synthesize(ctx, principal, SynthesisInput{
 		Allocation: synthesisAllocation,
 		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,

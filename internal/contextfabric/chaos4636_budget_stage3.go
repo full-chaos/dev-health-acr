@@ -107,7 +107,16 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// allocator that did not commit capacity for them would publish grants
 	// that, fully respected, still overrun the ceiling by exactly the number
 	// of rows -- which is the defect three rounds found in three shapes.
-	allocation := AllocateItems(*plan, groupCountOf(params.Graph.Cohort), cohortMemberCount(params.Graph.Cohort))
+	// THE ALLOCATION SYNTHESIS CONSUMED, carried on the params -- not a second
+	// derivation from the same inputs.
+	//
+	// This line used to be its own `AllocateItems` call. It produced an equal
+	// value on every honest input, because AllocateItems is pure, so the
+	// duplication was invisible: a keystone review injected `Grants[0]++` into
+	// the copy synthesis actually spent, and the runtime guard here passed the
+	// answer because it was re-deriving a clean replacement rather than
+	// checking the object that was spent. The guard now checks what was spent.
+	allocation := params.Allocation
 	measured, err := e.measureAssembledAttempt(ctx, principal, "assembled_result", allocation, result, budget)
 	if err != nil {
 		// A result that cannot be marshaled is a server defect, not an
@@ -276,6 +285,11 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// pass's. Measuring a document against grants written for a different
 	// member and group population is the "selecting the wrong attempt"
 	// residual, and binding the two here is what narrows it.
+	// A DELIBERATE re-allocation, and NOT a second authority over the same
+	// number: the retry ran against a NARROWED cohort, so this is a different
+	// budget for a different document. Reusing the first pass's allocation here
+	// would measure the re-synthesized answer against grants written for a
+	// member and group population it no longer has.
 	retryAllocation := AllocateItems(*plan, groupCountOf(narrowed.Graph.Cohort), cohortMemberCount(narrowed.Graph.Cohort))
 	retryMeasured, err := e.measureAssembledAttempt(ctx, principal, "re_synthesized_result", retryAllocation, retried, budget)
 	if err != nil {

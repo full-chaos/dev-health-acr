@@ -2181,10 +2181,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 
 	assemblyParams := synthesisAssemblyParams{
-		// The plan the allocator is derived from, inside the assembly. One
-		// authority for the ceiling every spender writes against.
-		Plan:    plan,
-		Request: request, Interpretation: interpretation, Frame: familyOutcome.Frame,
+		// The plan the allocator is derived from, and the allocation itself.
+		// ONE authority for the ceiling every spender writes against, derived
+		// HERE and carried -- not re-derived by each reader from the same
+		// inputs, which is what let a corrupted producer copy pass a guard
+		// checking a replacement.
+		Plan:       plan,
+		Allocation: AllocateItems(plan, groupCountOf(graphContext.Cohort), cohortMemberCount(graphContext.Cohort)),
+		Request:    request, Interpretation: interpretation, Frame: familyOutcome.Frame,
 		Graph: graphContext, Facts: facts,
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
 		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarry: windowCarry,
