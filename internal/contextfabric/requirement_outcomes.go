@@ -344,7 +344,7 @@ func OutcomeReductionDeclinedVocabulary() []OutcomeReductionDeclined {
 // honest alternatives are a guess dressed as arithmetic or an iterated
 // shrink loop. Both are refused here: a byte overrun keeps the existing
 // planned refusal, and the residual is stated rather than hidden.
-func narrowCandidatesToBudget(result InvestigationResult, budget ResponseBudget, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun) (InvestigationResult, candidateNarrowing, OutcomeReductionDeclined) {
+func narrowCandidatesToBudget(result InvestigationResult, budget ResponseBudget, allocation ItemAllocation, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun) (InvestigationResult, candidateNarrowing, OutcomeReductionDeclined) {
 	declared := len(result.SubjectResolution.Candidates)
 	unchanged := candidateNarrowing{Served: declared, Declared: declared}
 	// Each precondition returns its OWN token. Collapsing them into one
@@ -359,8 +359,43 @@ func narrowCandidatesToBudget(result InvestigationResult, budget ResponseBudget,
 	case declared == 0:
 		return result, unchanged, OutcomeReductionNothingReducible
 	}
-	fixed := measurement.Items.Budgeted() - declared
-	allowance := budget.MaxItems - fixed
+	// THE ALLOWANCE IS THE REMAINDER, computed from the allocation's own
+	// ledger and from nothing else.
+	//
+	// It used to be `budget.MaxItems - (measurement.Items.Budgeted() - declared)`:
+	// a SECOND count of the ceiling, made without reference to the allocator.
+	// That became a second authority the moment the allocator began
+	// apportioning MaxItems, and the PR2B design of record (2026-09-04) names
+	// this exact row as the double-count to rebase, predicting that no compiler
+	// would catch it.
+	//
+	// It is the REMAINDER, not a predicted share. Bounding candidates by the
+	// allocator's predicted global GRANT was tried and rejected on the record:
+	// the non-member allowance -- drivers, claims, findings and candidates --
+	// is ONE shared headroom (rulings 2026-09-04), so candidates get whatever
+	// the ceiling has left after every other bucket's REAL spend. A predicted
+	// share would also have zeroed a regime that serves thirteen candidates
+	// today, which moves the yardstick backwards: the design asked for one
+	// authority, not for fewer subjects.
+	//
+	// Members are FLOORED at their committed rows. The rows are charged off the
+	// top whether or not the document happens to carry that many yet, so
+	// letting a short member count enlarge the candidate allowance would spend
+	// capacity the allocator has already committed elsewhere.
+	//
+	// Candidates charge the GLOBAL bucket, so they are removed from it to leave
+	// the non-candidate global spend.
+	attribution := measurement.Attribution
+	nonCandidateGlobal := attribution.Global - declared
+	if nonCandidateGlobal < 0 {
+		nonCandidateGlobal = 0
+	}
+	members := attribution.Member
+	if committed := allocation.MemberRowCommitment; members < committed {
+		members = committed
+	}
+	spentElsewhere := nonCandidateGlobal + members + attribution.Group + attribution.MultiGroup
+	allowance := budget.MaxItems - spentElsewhere
 	if allowance < 0 {
 		allowance = 0
 	}
@@ -515,7 +550,7 @@ func (e *Engine) planCandidateNarrowing(
 	budget ResponseBudget,
 	measured MeasuredAttempt,
 ) (outcomeNarrowingAttempt, error) {
-	narrowedResult, narrowing, declined := narrowCandidatesToBudget(result, budget, measured.Measurement, measured.Overrun)
+	narrowedResult, narrowing, declined := narrowCandidatesToBudget(result, budget, measured.Allocation, measured.Measurement, measured.Overrun)
 	if !narrowing.Narrowed {
 		// The attempt the caller was given is still the one that describes
 		// this document: a reduction that did not run leaves the measured

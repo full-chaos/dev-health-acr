@@ -129,11 +129,21 @@ func TestTheReductionRefusesToCutACandidateListTheCeilingAlreadyAdmits(t *testin
 		SubjectResolution: SubjectResolution{Candidates: outcomeAssemblyCandidates(4)},
 	}
 	budget := ResponseBudget{MaxItems: 30}
-	// 10 budgeted items of which 4 are candidates: the fixed terms take 6, so
-	// the ceiling admits 26 candidates and only 4 were declared.
-	measurement := ResponseMeasurement{Items: contractsv1.ContextFabricResultItemCounts{Candidates: 4, ClaimedFacts: 6}}
+	// The allowance is now the ALLOCATOR's global grant less the global items
+	// that are not candidates, so the fixture states an attribution rather than
+	// letting the function recount the whole ceiling. Same intent as before:
+	// the allowance comfortably admits every declared candidate.
+	//
+	// The allowance is the REMAINDER: the ceiling less every non-candidate
+	// bucket's real spend, read from the allocation's ledger. Six member items
+	// and no other non-candidate spend leaves 24 against 4 declared.
+	allocation := AllocateItems(allocationPlan(30), 0, 0)
+	measurement := ResponseMeasurement{
+		Items:       contractsv1.ContextFabricResultItemCounts{Candidates: 4, ClaimedFacts: 6},
+		Attribution: contractsv1.ContextFabricItemAttribution{Global: 4, Member: 6},
+	}
 
-	narrowedResult, narrowing, declined := narrowCandidatesToBudget(result, budget, measurement, contractsv1.ContextFabricBudgetOverrunItems)
+	narrowedResult, narrowing, declined := narrowCandidatesToBudget(result, budget, allocation, measurement, contractsv1.ContextFabricBudgetOverrunItems)
 	if narrowing.Narrowed {
 		t.Fatal("the reduction reports a narrowing, but the ceiling already admits every declared candidate; publishing that as a narrowing states that dropping content fixed something it did not")
 	}
@@ -149,8 +159,13 @@ func TestTheReductionRefusesToCutACandidateListTheCeilingAlreadyAdmits(t *testin
 	// The control the mutant needs: on an allowance that genuinely binds, the
 	// same call DOES reduce. Without this the assertions above would also
 	// pass against a function that never narrows anything.
-	binding := ResponseMeasurement{Items: contractsv1.ContextFabricResultItemCounts{Candidates: 4, ClaimedFacts: 29}}
-	reduced, reduction, declinedBinding := narrowCandidatesToBudget(result, budget, binding, contractsv1.ContextFabricBudgetOverrunItems)
+	// Twenty-nine non-candidate items against a 30-item ceiling leaves an
+	// allowance of exactly 1, so the same call serves 1 of 4.
+	binding := ResponseMeasurement{
+		Items:       contractsv1.ContextFabricResultItemCounts{Candidates: 4, ClaimedFacts: 29},
+		Attribution: contractsv1.ContextFabricItemAttribution{Global: 4, Member: 29},
+	}
+	reduced, reduction, declinedBinding := narrowCandidatesToBudget(result, budget, allocation, binding, contractsv1.ContextFabricBudgetOverrunItems)
 	if !reduction.Narrowed || reduction.Served != 1 || reduction.Declared != 4 {
 		t.Fatalf("binding allowance produced served/declared = %d/%d narrowed=%v, want 1/4 narrowed", reduction.Served, reduction.Declared, reduction.Narrowed)
 	}
