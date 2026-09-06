@@ -1672,15 +1672,22 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 	// function is resolveSubjects' ONLY caller, so wrapping here covers
 	// every per-term mergeSearchResults call resolveSubjects' body makes
 	// without editing that body at all.
+	// flush is deferred, not called plainly after resolveSubjects returns
+	// (an adversarial review round reproduced this: a panic anywhere
+	// inside resolveSubjects -- a genuinely reachable failure path, not a
+	// hypothetical one -- skips a bare post-call statement entirely,
+	// silently dropping the buffered summary even though the per-candidate
+	// events it aggregates already reached the real tracer. A deferred
+	// flush still runs during panic unwinding, before the panic
+	// propagates further, closing that gap without changing behavior on
+	// any non-panicking path).
 	var idGateFold *identityGateSummaryBuffer
 	if deps.ResolutionTracer != nil {
 		idGateFold = &identityGateSummaryBuffer{real: deps.ResolutionTracer, requestID: request.RequestID}
 		deps.ResolutionTracer = idGateFold
+		defer idGateFold.flush()
 	}
 	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases, digests, frame, scopeAnchorKind)
-	if idGateFold != nil {
-		idGateFold.flush()
-	}
 	if err != nil {
 		// An error path commits nothing, so a basis (or digest) some
 		// partial pass happened to record describes a resolution no

@@ -38,8 +38,13 @@ func TestSlogResolutionTracer_RigVisibilityAuditPromotedStagesReachInfo(t *testi
 		{"search", ResolutionTraceEvent{Stage: "search", TermHash: "h", SearchResultCount: 1}},
 		{"search_question", ResolutionTraceEvent{Stage: "search_question", SearchResultCount: 1}},
 		{"alias_lookup", ResolutionTraceEvent{Stage: "alias_lookup", AliasLookupComplete: true}},
-		{"kind_hint_search", ResolutionTraceEvent{Stage: "kind_hint_search", TermHash: "h"}},
-		{"exact_name_search", ResolutionTraceEvent{Stage: "exact_name_search", TermHash: "h"}},
+		// kind_hint_search, exact_name_search, and evidence_source_native_probe
+		// are DELIBERATELY not in this table -- an adversarial review round
+		// reproduced all three as retrieval-pool-sized (90 Info lines each
+		// on realistic multi-match fixtures), so they were reverted to
+		// Debug rather than promoted; see
+		// TestSlogResolutionTracer_RevertedStagesStayDebug below for their
+		// own negative proof.
 		{"kind_coverage_floor", ResolutionTraceEvent{Stage: "kind_coverage_floor", KindCoverageFloorFired: true}},
 		{"confirmed_kind_rescue", ResolutionTraceEvent{Stage: "confirmed_kind_rescue", ConfirmedKindRescueFired: true}},
 		{"confirmed_kind_scope", ResolutionTraceEvent{Stage: "confirmed_kind_scope", ConfirmedKindScopeState: "complete"}},
@@ -49,7 +54,6 @@ func TestSlogResolutionTracer_RigVisibilityAuditPromotedStagesReachInfo(t *testi
 		{"evidence_probe", ResolutionTraceEvent{Stage: "evidence_probe", CensusComplete: true}},
 		{"evidence_census_commit", ResolutionTraceEvent{Stage: "evidence_census_commit", Outcome: "merged"}},
 		{"evidence_source_native", ResolutionTraceEvent{Stage: "evidence_source_native", ShadowSourceNativeMatchCount: 1}},
-		{"evidence_source_native_probe", ResolutionTraceEvent{Stage: "evidence_source_native_probe", ShadowSourceNativeResolved: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -63,6 +67,75 @@ func TestSlogResolutionTracer_RigVisibilityAuditPromotedStagesReachInfo(t *testi
 				t.Fatalf("stage %q's Info line does not carry its own stage token: %s", tc.name, buf.String())
 			}
 		})
+	}
+}
+
+// TestSlogResolutionTracer_RevertedStagesStayDebug is the negative proof
+// for the three stages an adversarial review round found genuinely
+// retrieval-pool-sized, contrary to this PR's own first-pass claim that
+// they were bounded: kind_hint_search and exact_name_search (measured 90
+// Info lines each on a 90-node fixture, reproduced independently by the
+// round), and evidence_source_native_probe (90 lines from 45 grammar
+// matches -- its sibling "evidence_source_native" event already carries
+// the bounded aggregate an operator needs, so this one was reverted
+// rather than folded). Red on the tree between this PR's first commit and
+// this fix: all three appeared at Info; green here: none do.
+func TestSlogResolutionTracer_RevertedStagesStayDebug(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		event ResolutionTraceEvent
+	}{
+		{"kind_hint_search", ResolutionTraceEvent{Stage: "kind_hint_search", TermHash: "h"}},
+		{"exact_name_search", ResolutionTraceEvent{Stage: "exact_name_search", TermHash: "h"}},
+		{"evidence_source_native_probe", ResolutionTraceEvent{Stage: "evidence_source_native_probe", ShadowSourceNativeResolved: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			NewSlogResolutionTracer(logger).Trace(tc.event)
+			if got := strings.TrimSpace(buf.String()); got != "" {
+				t.Fatalf("stage %q emitted %q at the production default level (Info) -- an adversarial review round found this stage genuinely retrieval-pool-sized, it must stay Debug", tc.name, got)
+			}
+		})
+	}
+}
+
+// TestIdentityGateSummaryBuffer_FlushSurvivesAPanic is the red-first proof
+// for the panic-safety fix an adversarial review round's own attack found:
+// the buffer's flush was originally a bare statement placed right after
+// the resolveSubjects(...) call in ResolveSubjectsWithCommitBasis, which a
+// panic anywhere inside that call skips entirely -- the already-observed
+// per-candidate identity_gate events still reach the real tracer (Trace
+// forwards them immediately, unconditionally), but the aggregate summary
+// silently never fires. Fixed by deferring the flush instead. This test
+// exercises identityGateSummaryBuffer directly (not through a full
+// resolution, which would need a genuinely panicking backend) --
+// confirming the buffer itself correctly flushes from within a deferred
+// call even when the goroutine is already unwinding a panic.
+func TestIdentityGateSummaryBuffer_FlushSurvivesAPanic(t *testing.T) {
+	tracer := &recordingTracer{}
+	func() {
+		defer func() {
+			_ = recover()
+		}()
+		buf := &identityGateSummaryBuffer{real: tracer, requestID: "req-panic"}
+		defer buf.flush()
+		buf.Trace(ResolutionTraceEvent{Stage: "identity_gate", Subject: contextfabric.SubjectRef{CanonicalID: "r1"}, GateFired: true})
+		panic("deliberate: simulating a genuinely reachable backend panic mid-resolution")
+	}()
+	summaries := 0
+	for _, e := range tracer.events {
+		if e.Stage == "identity_gate" && e.IdentityGateSummary {
+			summaries++
+			if e.IdentityGateCandidateCount != 1 || e.IdentityGateFiredCount != 1 {
+				t.Fatalf("summary = %+v, want CandidateCount=1 FiredCount=1", e)
+			}
+		}
+	}
+	if summaries != 1 {
+		t.Fatalf("identity_gate summaries after a panic = %d, want exactly 1 -- the deferred flush must still run during panic unwinding", summaries)
 	}
 }
 

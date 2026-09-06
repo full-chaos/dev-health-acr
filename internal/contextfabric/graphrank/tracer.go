@@ -90,18 +90,26 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// is what a codex review caught this against -- see that function's
 		// own two-functions-not-one-parameterized doc comment for why the
 		// AST walk needed a literal Stage per call site to see it at all).
-		// Rig-visibility fix: bounded by matched-node count,
-		// small in practice -- safe to promote straight to Info.
-		t.logger.InfoContext(ctx, "context fabric resolution trace: kind hint search",
+		// STAYS Debug: an adversarial review round reproduced this as
+		// genuinely retrieval-pool-sized (the sibling exact_name_search
+		// case, same shape, measured 90 events on a 90-node fixture) --
+		// "bounded by matched-node count, small in practice" does not hold
+		// in general, and no existing summary event covers this stage's
+		// own aggregate, so it stays at Debug rather than being folded.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: kind hint search",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"term_hash", event.TermHash, "subject_kind", string(event.Subject.Kind),
 			"subject_canonical_id", event.Subject.CanonicalID)
 	case "exact_name_search":
 		// CHAOS-4348: traceExactNameSearch's own event, same convention as
 		// kind_hint_search immediately above.
-		// Rig-visibility fix: same bounded shape as
-		// kind_hint_search -- safe to promote straight to Info.
-		t.logger.InfoContext(ctx, "context fabric resolution trace: exact name search",
+		// STAYS Debug: measured retrieval-pool-sized (90 Info lines on a
+		// 90-node exact-name-match fixture) -- an adversarial review round
+		// found this promotion unsafe; reverted rather than folded, since
+		// no operator-facing aggregate need was established for this
+		// stage (unlike corroboration/identity_gate/slice_b_survivor_verdict,
+		// each of which folds into a genuine summary).
+		t.logger.DebugContext(ctx, "context fabric resolution trace: exact name search",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"term_hash", event.TermHash, "subject_kind", string(event.Subject.Kind),
 			"subject_canonical_id", event.Subject.CanonicalID)
@@ -564,7 +572,16 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// through sanitizeLogString -- see its own doc comment (CodeQL
 		// go/log-injection): a static analyzer cannot credit "this string
 		// is registry-constant by construction" the way a human review can.
-		t.logger.InfoContext(ctx, "context fabric resolution trace: evidence source native probe (shadow widening)",
+		// STAYS Debug: an adversarial review round reproduced this as
+		// genuinely retrieval-pool-sized (90 Info lines from 45 grammar
+		// matches -- "ONE per-match receipt" is not the small count its own
+		// doc comment implies). The sibling "evidence_source_native" event
+		// just above ALREADY carries the bounded aggregate an operator
+		// needs (source_native_match_count/source_native_any_resolved,
+		// exactly once per call) -- reverted rather than folded, since that
+		// existing sibling event already IS this stage's own summary in
+		// substance, just under a different token.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: evidence source native probe (shadow widening)",
 			"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
 			"source_native_grammar", sanitizeLogString(event.ShadowSourceNativeGrammar),
 			"source_native_resolved", event.ShadowSourceNativeResolved,
