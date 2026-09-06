@@ -6,7 +6,6 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -23,12 +22,7 @@ import (
 // the per-day grouping and the same-day cross-scope summation.
 func TestFlowProviderTeamDailySeriesAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
-	for _, statement := range devhealthschema.DDL("work_item_metrics_daily") {
-		if err := direct.Exec(ctx, statement); err != nil {
-			t.Fatalf("create table: %v\n%s", err, statement)
-		}
-	}
+	query, direct := sharedClickHouseFixture(t)
 	providers := devhealthfacts.NewProviders(query)
 
 	const orgID = "org-flow-daily-series"
@@ -109,12 +103,7 @@ func TestFlowProviderTeamDailySeriesAgainstRealClickHouse(t *testing.T) {
 // teams' contributions for the SAME day, against a real ClickHouse server.
 func TestFlowProviderProjectDailySeriesAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
-	for _, statement := range devhealthschema.DDL("projects", "work_item_metrics_daily") {
-		if err := direct.Exec(ctx, statement); err != nil {
-			t.Fatalf("create table: %v\n%s", err, statement)
-		}
-	}
+	query, direct := sharedClickHouseFixture(t)
 	providers := devhealthfacts.NewProviders(query)
 
 	const orgID = "org-flow-project-daily-series"

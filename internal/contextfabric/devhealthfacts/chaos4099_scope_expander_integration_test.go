@@ -10,7 +10,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/chfixture"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -126,18 +125,17 @@ func newChaos4099ScopeExpanderClient(t *testing.T, ctx context.Context) (query *
 //     matching repos row (an orphan -- must never expand to a fake
 //     repository either)
 //   - two pull requests and one review on the real repository
+//
+// seedChaos4099Fixture takes orgID as a parameter (CHAOS-5270) rather than
+// closing over the package-level chaos4099OrgID constant: the nine tests
+// below now share ONE package-wide container, and a caller-local shadow of
+// chaos4099OrgID (see each Test func) is invisible from inside this
+// separate function -- Go resolves an unshadowed package-level identifier
+// lexically, not from the caller's locals.
 func seedChaos4099Fixture(t *testing.T, ctx context.Context, direct interface {
 	Exec(ctx context.Context, query string, args ...any) error
-}, at time.Time) {
+}, at time.Time, orgID string) {
 	t.Helper()
-	// devhealthschema:not-a-production-replica the table names passed to
-	// devhealthschema.DDL below select what to render; the schema itself
-	// is the declaration's, not this file's.
-	for _, statement := range devhealthschema.DDL("projects", "repos", "work_items", "git_pull_requests", "git_pull_request_reviews") {
-		if err := direct.Exec(ctx, statement); err != nil {
-			t.Fatalf("create table: %v\n%s", err, statement)
-		}
-	}
 	mustSeed := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -146,26 +144,26 @@ func seedChaos4099Fixture(t *testing.T, ctx context.Context, direct interface {
 	}
 
 	mustSeed("gitlab project", `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		chaos4099GitLabProjectID, chaos4099OrgID, "acme api", chaos4099GitLabProjectKey, "gitlab", "", "https://gitlab.com/"+chaos4099GitLabProjectKey, uint8(1), at)
+		chaos4099GitLabProjectID, orgID, "acme api", chaos4099GitLabProjectKey, "gitlab", "", "https://gitlab.com/"+chaos4099GitLabProjectKey, uint8(1), at)
 	mustSeed("real repo", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
-		chaos4099GitLabRepoID, chaos4099OrgID, chaos4099GitLabRepoSlug, "gitlab", at)
+		chaos4099GitLabRepoID, orgID, chaos4099GitLabRepoSlug, "gitlab", at)
 
 	// project_id carries the PROJECT_KEY value, never projects.id -- the
 	// exact shape a real gitlab work item carries (CHAOS-4108's own
 	// verified finding).
 	mustSeed("real work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"gitlab:acme/api#42", chaos4099GitLabRepoID, chaos4099OrgID, "GitLab issue", "open", "", "", chaos4099GitLabProjectKey, at)
+		"gitlab:acme/api#42", chaos4099GitLabRepoID, orgID, "GitLab issue", "open", "", "", chaos4099GitLabProjectKey, at)
 	mustSeed("zero-uuid work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"gitlab:acme/api#43", chaos4099ZeroRepositoryID, chaos4099OrgID, "GitLab issue (repo-less)", "open", "", "", chaos4099GitLabProjectKey, at)
+		"gitlab:acme/api#43", chaos4099ZeroRepositoryID, orgID, "GitLab issue (repo-less)", "open", "", "", chaos4099GitLabProjectKey, at)
 	mustSeed("orphan work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"gitlab:acme/api#44", chaos4099OrphanRepoID, chaos4099OrgID, "GitLab issue (orphan repo)", "open", "", "", chaos4099GitLabProjectKey, at)
+		"gitlab:acme/api#44", chaos4099OrphanRepoID, orgID, "GitLab issue (orphan repo)", "open", "", "", chaos4099GitLabProjectKey, at)
 
 	mustSeed("pull request 1", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
-		chaos4099GitLabRepoID, chaos4099OrgID, uint32(1), "Add widget", "open", at, at, "feat/widget", "")
+		chaos4099GitLabRepoID, orgID, uint32(1), "Add widget", "open", at, at, "feat/widget", "")
 	mustSeed("pull request 2", `INSERT INTO git_pull_requests (repo_id, org_id, number, title, state, last_synced, created_at, merged_at, closed_at, head_branch, body) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
-		chaos4099GitLabRepoID, chaos4099OrgID, uint32(2), "Fix widget", "merged", at, at, "fix/widget", "")
+		chaos4099GitLabRepoID, orgID, uint32(2), "Fix widget", "merged", at, at, "fix/widget", "")
 	mustSeed("pull request review", `INSERT INTO git_pull_request_reviews (review_id, repo_id, org_id, number, state, submitted_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		"review-1", chaos4099GitLabRepoID, chaos4099OrgID, uint32(1), "approved", at)
+		"review-1", chaos4099GitLabRepoID, orgID, uint32(1), "approved", at)
 }
 
 func chaos4099ProjectSubject(t *testing.T) contextfabric.SubjectRef {
@@ -183,9 +181,10 @@ func chaos4099ProjectSubject(t *testing.T) contextfabric.SubjectRef {
 // repo_id -- neither may ever become a fake repository target.
 func TestScopeExpander_ProjectToRepository_WidenedJoinArmAndSentinelExclusion(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	chaos4099OrgID := sharedTestOrgID(t)
+	query, direct := sharedClickHouseFixture(t)
 	at := time.Now().UTC()
-	seedChaos4099Fixture(t, ctx, direct, at)
+	seedChaos4099Fixture(t, ctx, direct, at, chaos4099OrgID)
 
 	expander := devhealthfacts.NewScopeExpander(query)
 	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
@@ -241,9 +240,10 @@ func TestScopeExpander_ProjectToRepository_WidenedJoinArmAndSentinelExclusion(t 
 // pre-mutation file, never via git checkout or a build/vet pass alone.
 func TestScopeExpander_ProjectToRepository_ZeroUUIDNeverAdmitsEvenIfARepoRowClaimsIt(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	chaos4099OrgID := sharedTestOrgID(t)
+	query, direct := sharedClickHouseFixture(t)
 	at := time.Now().UTC()
-	seedChaos4099Fixture(t, ctx, direct, at)
+	seedChaos4099Fixture(t, ctx, direct, at, chaos4099OrgID)
 	// The pathological row: a repos entry whose id happens to be the
 	// sentinel value, with a real-looking slug. Nothing in the repos
 	// table schema forbids this; it is exactly the shape that would let a
@@ -281,9 +281,10 @@ func TestScopeExpander_ProjectToRepository_ZeroUUIDNeverAdmitsEvenIfARepoRowClai
 // silently absorbed).
 func TestScopeExpander_ProjectToRepository_UnauthorizedPrincipalDropsTheCandidate(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	chaos4099OrgID := sharedTestOrgID(t)
+	query, direct := sharedClickHouseFixture(t)
 	at := time.Now().UTC()
-	seedChaos4099Fixture(t, ctx, direct, at)
+	seedChaos4099Fixture(t, ctx, direct, at, chaos4099OrgID)
 
 	expander := devhealthfacts.NewScopeExpander(query)
 	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
@@ -312,9 +313,10 @@ func TestScopeExpander_ProjectToRepository_UnauthorizedPrincipalDropsTheCandidat
 // -> pull requests, only from an authorized repository.
 func TestScopeExpander_ProjectToPullRequest(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	chaos4099OrgID := sharedTestOrgID(t)
+	query, direct := sharedClickHouseFixture(t)
 	at := time.Now().UTC()
-	seedChaos4099Fixture(t, ctx, direct, at)
+	seedChaos4099Fixture(t, ctx, direct, at, chaos4099OrgID)
 
 	expander := devhealthfacts.NewScopeExpander(query)
 	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
@@ -367,9 +369,10 @@ func TestScopeExpander_ProjectToPullRequest(t *testing.T) {
 // says stays `expanded`/`expanded_partial`, never `matched_unauthorized`.
 func TestScopeExpander_ProjectToPullRequest_MixedAuthorizationOnlyAdmitsTheAuthorizedRepository(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	chaos4099OrgID := sharedTestOrgID(t)
+	query, direct := sharedClickHouseFixture(t)
 	at := time.Now().UTC()
-	seedChaos4099Fixture(t, ctx, direct, at)
+	seedChaos4099Fixture(t, ctx, direct, at, chaos4099OrgID)
 
 	const mixedUnauthorizedRepoID = "a2518fbc-1945-3717-05d8-eb78866b4e83"
 	const mixedUnauthorizedRepoSlug = "acme/other"
@@ -432,9 +435,10 @@ func TestScopeExpander_ProjectToPullRequest_MixedAuthorizationOnlyAdmitsTheAutho
 // gap this test pins.
 func TestScopeExpander_ProjectToRepository_CrossProviderIDCollisionIsOmittedNotGuessed(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	chaos4099OrgID := sharedTestOrgID(t)
+	query, direct := sharedClickHouseFixture(t)
 	at := time.Now().UTC()
-	seedChaos4099Fixture(t, ctx, direct, at)
+	seedChaos4099Fixture(t, ctx, direct, at, chaos4099OrgID)
 
 	// A second project, DIFFERENT provider, whose id is IDENTICAL to the
 	// requested project's own id (schema-legal: the dedup key is
@@ -485,9 +489,10 @@ func TestScopeExpander_ProjectToRepository_CrossProviderIDCollisionIsOmittedNotG
 // attributed to the repository hop.
 func TestScopeExpander_ProjectToPullRequest_UnauthorizedRepositoryNeverQueried(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	chaos4099OrgID := sharedTestOrgID(t)
+	query, direct := sharedClickHouseFixture(t)
 	at := time.Now().UTC()
-	seedChaos4099Fixture(t, ctx, direct, at)
+	seedChaos4099Fixture(t, ctx, direct, at, chaos4099OrgID)
 
 	expander := devhealthfacts.NewScopeExpander(query)
 	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
@@ -515,9 +520,10 @@ func TestScopeExpander_ProjectToPullRequest_UnauthorizedRepositoryNeverQueried(t
 // devhealthsource/tables.go's queryPullRequestReviews' own minted id would.
 func TestScopeExpander_ProjectToPullRequestReview(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	chaos4099OrgID := sharedTestOrgID(t)
+	query, direct := sharedClickHouseFixture(t)
 	at := time.Now().UTC()
-	seedChaos4099Fixture(t, ctx, direct, at)
+	seedChaos4099Fixture(t, ctx, direct, at, chaos4099OrgID)
 
 	expander := devhealthfacts.NewScopeExpander(query)
 	result, err := expander.ExpandFactScope(ctx, contextfabric.FactScopeExpansionRequest{
@@ -579,9 +585,10 @@ const chaos4099AmbiguousProjectID = "acme/api"
 // indiscriminately conservative.
 func TestScopeExpander_ProjectToRepository_AmbiguousJoinKeyIsOmittedNotGuessed(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newChaos4099ScopeExpanderClient(t, ctx)
+	chaos4099OrgID := sharedTestOrgID(t)
+	query, direct := sharedClickHouseFixture(t)
 	at := time.Now().UTC()
-	seedChaos4099Fixture(t, ctx, direct, at)
+	seedChaos4099Fixture(t, ctx, direct, at, chaos4099OrgID)
 
 	// A work item reachable ONLY via the requested project's OWN id arm
 	// (chaos4099GitLabProjectID, never its project_key) -- the control case:
