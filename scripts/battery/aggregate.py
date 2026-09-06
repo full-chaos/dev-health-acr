@@ -46,6 +46,12 @@ def main():
     ap.add_argument("--packages", default="")
     ap.add_argument("--tip", default="", help="the TREE UNDER TEST (the specimen)")
     ap.add_argument("--harness-sha", default="", help="the acr sha of scripts/battery/* that classified (the instrument)")
+    ap.add_argument(
+        "--only-arms",
+        default="",
+        help="comma-separated ids this run measured. Marks the summary PARTIAL so a "
+        "subset can never be read as a full verdict.",
+    )
     ap.add_argument("--floor", default="0")
     ap.add_argument("--summary-out", default="-")
     args = ap.parse_args()
@@ -54,8 +60,26 @@ def main():
     for line in io.open(args.table, encoding="utf-8"):
         if line.strip():
             table.append(json.loads(line))
-    ids = [m["id"] for m in table]
+    all_ids = [m["id"] for m in table]
     kinds = {m["id"]: m.get("kind", "delete") for m in table}
+
+    # A PARTIAL RUN IS LABELLED, LOUDLY, AND ITS UNMEASURED ARMS ARE LISTED.
+    # A subset re-measurement is a legitimate answer to an infrastructure flake,
+    # but it is NOT a battery verdict: the arms it did not run are unknown, not
+    # passing. Counting only the measured ones without saying so would let
+    # "killed=1 survived=0 harness_error=0" from a one-arm re-measure look
+    # exactly like a clean full run.
+    only = [x.strip() for x in args.only_arms.split(",") if x.strip()]
+    unknown_only = [o for o in only if o not in all_ids]
+    if unknown_only:
+        print(
+            "REFUSING: only_arms names %s, which %s not in the table"
+            % (", ".join(unknown_only), "is" if len(unknown_only) == 1 else "are"),
+            file=sys.stderr,
+        )
+        return 2
+    ids = [i for i in all_ids if i in only] if only else all_ids
+    not_measured = [i for i in all_ids if i not in ids]
 
     expected = [x for x in args.expected_survivors.split() if x]
     unknown = [e for e in expected if e not in ids]
@@ -125,6 +149,15 @@ def main():
     # evidence. Naming both makes the pair readable months later.
     lines.append("tip=%s  (tree under test / specimen)" % args.tip)
     lines.append("harness_sha=%s  (scripts/battery that classified / instrument)" % (args.harness_sha or "UNRECORDED"))
+    if only:
+        lines.append(
+            "run_scope=PARTIAL -- %d of %d arms measured; THIS IS NOT A FULL VERDICT"
+            % (len(ids), len(all_ids))
+        )
+        lines.append("measured_arms=%s" % " ".join(ids))
+        lines.append("not_measured=%s" % " ".join(not_measured))
+    else:
+        lines.append("run_scope=full -- every arm in the table was measured")
     lines.append("packages=%s" % args.packages)
     lines.append("floor=%s (SUM over the package list)" % args.floor)
     lines.append("arms_in_table=%d arms_reported=%d" % (len(ids), sum(1 for i in ids if i in verdicts)))

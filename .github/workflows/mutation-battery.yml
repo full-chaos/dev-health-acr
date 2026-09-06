@@ -60,6 +60,11 @@ on:
         required: false
         type: string
         default: ''
+      only_arms:
+        description: 'Comma-separated mutant ids to re-measure instead of the whole table, for recovering from an INFRASTRUCTURE arm. _BASELINE and _SENTINEL always run. The summary is marked PARTIAL and lists what was not measured, so a subset can never read as a full verdict.'
+        required: false
+        type: string
+        default: ''
       go_test_timeout:
         description: 'Explicit -timeout for every go test invocation. A whole-package acr suite has been measured at 559-600s against go''s 600s default.'
         required: false
@@ -105,6 +110,7 @@ jobs:
       table_b64: ${{ steps.c.outputs.table_b64 }}
       expected_survivors: ${{ steps.c.outputs.expected_survivors }}
       go_test_timeout: ${{ steps.c.outputs.go_test_timeout }}
+      only_arms: ${{ steps.c.outputs.only_arms }}
       max_parallel: ${{ steps.c.outputs.max_parallel }}
     steps:
       # The HARNESS at this PR's/branch's ref -- the smoke table is read from
@@ -137,6 +143,7 @@ jobs:
           IN_TABLE_B64: ${{ inputs.table_b64 }}
           IN_EXPECTED: ${{ inputs.expected_survivors }}
           IN_TIMEOUT: ${{ inputs.go_test_timeout }}
+          IN_ONLY_ARMS: ${{ inputs.only_arms }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
@@ -170,6 +177,7 @@ jobs:
               echo "table_b64=$(base64 -w0 < harness/scripts/battery/testdata/smoke.jsonl)"
               echo "expected_survivors="
               echo "go_test_timeout=10m"
+              echo "only_arms="
               echo "max_parallel=3"
             } >> "$GITHUB_OUTPUT"
           else
@@ -181,6 +189,7 @@ jobs:
               echo "table_b64=$IN_TABLE_B64"
               echo "expected_survivors=$IN_EXPECTED"
               echo "go_test_timeout=$IN_TIMEOUT"
+              echo "only_arms=$IN_ONLY_ARMS"
               echo "max_parallel=50"
             } >> "$GITHUB_OUTPUT"
           fi
@@ -194,6 +203,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       arm_count: ${{ steps.plan.outputs.arm_count }}
       matrix_size: ${{ steps.plan.outputs.matrix_size }}
+      run_scope: ${{ steps.plan.outputs.run_scope }}
       sentinel_file: ${{ steps.plan.outputs.sentinel_file }}
       floor: ${{ steps.floor.outputs.floor }}
     steps:
@@ -270,6 +280,12 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      - name: Warm the module cache, with retries
+        # BEFORE the floor and before any arm. A proxy reset here fails a
+        # retryable step by name; left inside a per-arm `go build` it arrives as
+        # a non-zero build and reads like a broken mutant.
+        run: bash harness/scripts/battery/fetch_modules.sh target 3 5
+
       - name: Derive the func Test floor, with its negative control
         id: floor
         env:
@@ -288,12 +304,15 @@ jobs:
 
       - name: Build the matrix
         id: plan
+        env:
+          ONLY_ARMS: ${{ needs.config.outputs.only_arms }}
         run: |
           set -euo pipefail
-          python3 harness/scripts/battery/plan_matrix.py --table table.jsonl > matrix.json 2> plan.err
+          python3 harness/scripts/battery/plan_matrix.py --table table.jsonl \
+            --only-arms "$ONLY_ARMS" > matrix.json 2> plan.err
           cat plan.err
           echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
-          grep -E '^(arm_count|matrix_size|sentinel_file)=' plan.err >> "$GITHUB_OUTPUT"
+          grep -E '^(arm_count|table_arm_count|matrix_size|sentinel_file|run_scope)=' plan.err >> "$GITHUB_OUTPUT"
 
       - name: Publish the plan to the job summary
         env:
@@ -301,6 +320,7 @@ jobs:
           HARNESS_SHA: ${{ needs.config.outputs.harness_sha }}
           PACKAGES: ${{ needs.config.outputs.packages }}
           ARM_COUNT: ${{ steps.plan.outputs.arm_count }}
+          RUN_SCOPE: ${{ steps.plan.outputs.run_scope }}
           MATRIX_SIZE: ${{ steps.plan.outputs.matrix_size }}
           FLOOR: ${{ steps.floor.outputs.floor }}
           GO_TEST_TIMEOUT: ${{ needs.config.outputs.go_test_timeout }}
@@ -314,7 +334,8 @@ jobs:
             echo "| tip (tree under test) | \`$TIP\` |"
             echo "| harness sha (rules that classify) | \`$HARNESS_SHA\` |"
             echo "| packages | \`$PACKAGES\` |"
-            echo "| arms | $ARM_COUNT |"
+            echo "| arms measured | $ARM_COUNT |"
+            echo "| run scope | $RUN_SCOPE |"
             echo "| matrix jobs (arms + baseline + sentinel) | $MATRIX_SIZE |"
             echo "| floor (SUM over the package list) | $FLOOR |"
             echo "| go test timeout | \`$GO_TEST_TIMEOUT\` |"
@@ -368,6 +389,11 @@ jobs:
         with:
           name: battery-table
           path: .battery
+
+      - name: Warm the module cache, with retries
+        # BEFORE the mutation is applied, so a transient fetch failure fails a
+        # retryable step rather than corrupting this arm's measurement.
+        run: bash harness/scripts/battery/fetch_modules.sh target 3 5
 
       - name: Extract this arm's spec
         env:
@@ -461,6 +487,7 @@ jobs:
           PACKAGES: ${{ needs.config.outputs.packages }}
           TIP: ${{ needs.config.outputs.tip }}
           HARNESS_SHA: ${{ needs.config.outputs.harness_sha }}
+          ONLY_ARMS: ${{ needs.config.outputs.only_arms }}
           FLOOR: ${{ needs.plan.outputs.floor }}
         run: |
           # THIS STEP REPORTS; IT DOES NOT JUDGE. GitHub runs every `run:` under
@@ -481,6 +508,7 @@ jobs:
             --packages "$PACKAGES" \
             --tip "$TIP" \
             --harness-sha "$HARNESS_SHA" \
+            --only-arms "$ONLY_ARMS" \
             --floor "$FLOOR" \
             --summary-out summary.txt
           rc=$?
@@ -521,6 +549,7 @@ jobs:
           PACKAGES: ${{ needs.config.outputs.packages }}
           TIP: ${{ needs.config.outputs.tip }}
           HARNESS_SHA: ${{ needs.config.outputs.harness_sha }}
+          ONLY_ARMS: ${{ needs.config.outputs.only_arms }}
           FLOOR: ${{ needs.plan.outputs.floor }}
         run: |
           python3 harness/scripts/battery/aggregate.py \
@@ -531,6 +560,7 @@ jobs:
             --packages "$PACKAGES" \
             --tip "$TIP" \
             --harness-sha "$HARNESS_SHA" \
+            --only-arms "$ONLY_ARMS" \
             --floor "$FLOOR" \
             --summary-out /dev/null > /dev/null
 
@@ -604,6 +634,18 @@ jobs:
             echo "SMOKE FAILED: the HARNESS_ERROR arm was not classified as BUILD_FAILED"
             fail=1
           fi
+
+          # The provenance must name BOTH shas and the scope. A summary that
+          # names only the tip is not reproducible evidence once the rules move,
+          # and an unlabelled subset can masquerade as a full verdict.
+          for want in 'tree under test / specimen' 'scripts/battery that classified / instrument'; do
+            if grep -qF "$want" summary.txt; then echo "ok provenance names the $want"; else
+              echo "SMOKE FAILED: provenance is missing '$want'"; fail=1; fi
+          done
+          if grep -qE '^run_scope=full' summary.txt; then echo "ok run_scope=full"; else
+            echo "SMOKE FAILED: the smoke is a FULL run and must say so -- got: $(grep -E '^run_scope=' summary.txt || echo '<no run_scope line>')"; fail=1; fi
+          if grep -qE '^harness_sha=[0-9a-f]{40} ' summary.txt; then echo "ok harness_sha is a real 40-hex sha"; else
+            echo "SMOKE FAILED: harness_sha is not a 40-hex sha -- got: $(grep -E '^harness_sha=' summary.txt || echo '<absent>')"; fail=1; fi
 
           for line in 'baseline=PASS' 'sentinel=PASS' 'unexpected_survivors=none'; do
             if grep -qxF "$line" summary.txt; then echo "ok $line"; else
