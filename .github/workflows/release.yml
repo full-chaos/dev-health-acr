@@ -16,6 +16,17 @@ name: Release
         description: Existing release tag to build and publish (vX.Y.Z[-dev.N|-beta.N]); leave blank for a dry run
         required: false
         type: string
+      token_source:
+        # Which credential the DRY RUN uses. Both paths stay provable on
+        # demand: `actions` reproduces the exact call that has been refused
+        # with HTTP 403, and `release_token` proves the credential the publish
+        # step now prefers. Only the dry run reads this -- a real release
+        # always takes the precedence set on the publish step.
+        description: Credential the dry run should use
+        required: false
+        default: release_token
+        type: choice
+        options: [release_token, actions]
       dry_run:
         # Proves the GitHub Release publish path on demand -- creates a draft
         # for the current SHA and deletes it again -- without waiting for a
@@ -50,7 +61,24 @@ concurrency:
   # `cancel-in-progress` stays false. Per-sha groups cannot collide, so there
   # is nothing left to cancel, and leaving it false means a Release that is
   # genuinely in flight is never interrupted by anything.
-  group: release-${{ github.event.inputs.tag || github.sha }}
+  # A DRY RUN GETS ITS OWN GROUP, keyed on its run id. Without this a dispatch
+  # with no `tag` falls through to `github.sha` and collides with the
+  # push-triggered Release for that same commit -- measured 2026-09-06T08:26Z,
+  # when a dry run on main sat `pending` behind main's own Release for
+  # 68172493. That is the opposite of the input's purpose: the on-demand proof
+  # exists so nobody waits ~50 minutes for a landing, and it was waiting for
+  # one. Run ids are unique, so two dry runs cannot collide either. Real
+  # releases keep the per-sha keying that stopped main pushes cancelling each
+  # other.
+  # Kept on ONE line deliberately: scripts/release/test_release_scripts.sh
+  # asserts the key and its value appear together on a single line, and a
+  # folded block splits them so that contract fails (it did). The comment is
+  # worded to avoid the asserted literal on purpose -- an earlier draft spelled
+  # it out here, which satisfied the grep from the COMMENT and made the
+  # contract pass even when the value was folded. A comment that defeats the
+  # check it describes is worse than no comment. The file already disables the
+  # line-length rule at the top.
+  group: release-${{ inputs.dry_run && format('dryrun-{0}', github.run_id) || github.event.inputs.tag || github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -524,7 +552,16 @@ jobs:
           skopeo copy --help | grep -F -- '--preserve-digests'
       - name: Publish GHCR images and GitHub Release assets
         env:
-          GH_TOKEN: ${{ github.token }}
+          # RELEASE_TOKEN first, the Actions token as the fallback. The Actions
+          # token has been refused with
+          #   HTTP 403: Resource not accessible by integration
+          # on POST /releases across separate runs -- 1fc4f157 on both of its
+          # attempts, then d4a89e02 and e9345c01, the last two AFTER the
+          # four-attempt retry had spent its whole 65s budget. The denial window
+          # is longer than any retry worth having, so the credential has to
+          # change. The `||` keeps this working in a checkout where the secret is
+          # absent, rather than failing on an empty token.
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
           TAG: ${{ needs.preflight.outputs.tag }}
           VERSION: ${{ needs.preflight.outputs.version }}
           COMMIT: ${{ needs.preflight.outputs.commit }}
@@ -562,13 +599,18 @@ jobs:
       # job faster.
       - name: Create and delete a throwaway draft Release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ inputs.token_source == 'actions' && github.token || (secrets.RELEASE_TOKEN || github.token) }}
+          TOKEN_SOURCE: ${{ inputs.token_source }}
           DRY_TAG: dry-run-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
           repo=full-chaos/dev-health-acr
           # The tag carries the run id, so two dry runs can never collide and a
           # leftover from a failed run is identifiable rather than anonymous.
+          # Name the credential in the log. A dry run that does not say which
+          # token it used cannot tell "the PAT works" from "the Actions token
+          # happened to work this minute", which is the whole question.
+          printf 'dry run: token_source=%s\n' "${TOKEN_SOURCE:-release_token}"
           printf 'dry run: creating draft Release %s on %s\n' "$DRY_TAG" "$GITHUB_SHA"
           gh release create "$DRY_TAG" \
             --repo "$repo" \
