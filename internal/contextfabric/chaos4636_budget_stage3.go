@@ -232,7 +232,17 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		Overrun: overrun,
 	})
 
-	retryParams := params.forRetry(narrowed.Graph, narrowed.Facts)
+	// The retry's OWN allocation, derived HERE -- BEFORE synthesis -- and
+	// carried into it, so the retried document is PRODUCED under exactly the
+	// grants it is later MEASURED against.
+	//
+	// A DELIBERATE re-allocation, and NOT a second authority over the same
+	// number: the retry runs against a NARROWED cohort, so this is a different
+	// budget for a different document. What was wrong before was not that it
+	// existed but WHEN it was computed -- after synthesis, so the producer had
+	// already spent the first pass's grants and only the measurement saw these.
+	retryAllocation := AllocateItems(*plan, groupCountOf(narrowed.Graph.Cohort), cohortMemberCount(narrowed.Graph.Cohort))
+	retryParams := params.forRetry(narrowed.Graph, narrowed.Facts, retryAllocation)
 	// The re-rank's citations MUST travel with the re-ranked cohort:
 	// narrateCohortDriverJudgments resolves them per member, so citations
 	// computed against the wider member set would narrate against members the
@@ -294,17 +304,32 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	//     different member and group population is the "selecting the wrong
 	//     attempt" residual.
 	//
-	// They are the same "stale document at the retry" class on different
-	// axes, and each was found independently by a different lane. Taking one
-	// without the other re-opens the half it did not fix.
+	// They are the same "stale document at the retry" class on different axes,
+	// and each was found independently by a different lane. Taking one without
+	// the other re-opens the half it did not fix.
+	//
+	// THE TWO ARE BOUND BY DIFFERENT MECHANISMS AND THAT IS NOT AN
+	// INCONSISTENCY. The evidence is passed EXPLICITLY here, because
+	// `finalizeResult` is what reads it and a field on the params would make
+	// the bundle ambient. The allocation travels THROUGH the params -- derived
+	// above, handed to `forRetry`, and read back below as
+	// `retryParams.Allocation` -- because the producer must be GIVEN it before
+	// synthesis and the measurement must then read the object the producer was
+	// actually handed, not an equal copy. Neither mechanism will do the other's
+	// job: an ambient bundle loses the explicitness this call needs, and an
+	// allocation bound only at the call site is a copy.
 	retried = e.finalizeResult(retried, *plan, params.Frame, retryParams.Facts)
-	// A DELIBERATE re-allocation, and NOT a second authority over the same
-	// number: the retry ran against a NARROWED cohort, so this is a different
-	// budget for a different document. Reusing the first pass's allocation here
-	// would measure the re-synthesized answer against grants written for a
-	// member and group population it no longer has.
-	retryAllocation := AllocateItems(*plan, groupCountOf(narrowed.Graph.Cohort), cohortMemberCount(narrowed.Graph.Cohort))
-	retryMeasured, err := e.measureAssembledAttempt(ctx, principal, "re_synthesized_result", retryAllocation, retried, budget)
+	// READ BACK FROM THE PARAMS, not from the local `retryAllocation`, and the
+	// difference is the entire lesson of this defect class.
+	//
+	// `ItemAllocation` is a VALUE type, so `forRetry(..., retryAllocation)`
+	// hands the producer a COPY. Measuring the local variable would measure a
+	// different object that merely happens to be equal -- a re-derivation that
+	// agrees on every honest input and separates only under a fault.
+	// Binding the VALUE at the call site is not the same as binding the
+	// OBJECT; the guard has to read the field the producer was actually
+	// handed, mirroring `allocation := params.Allocation` in the first pass.
+	retryMeasured, err := e.measureAssembledAttempt(ctx, principal, "re_synthesized_result", retryParams.Allocation, retried, budget)
 	if err != nil {
 		return InvestigationResult{}, assemblyTelemetry{}, err
 	}

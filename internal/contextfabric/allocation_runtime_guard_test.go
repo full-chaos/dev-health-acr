@@ -155,7 +155,7 @@ func TestAnAgreeingAllocationEmitsNoAllocationDisagreement(t *testing.T) {
 // fix — a test that cannot distinguish them.
 //
 // The keystone's fault was a SOURCE mutant, not a test hook, so the behavioural
-// half belongs in the mutation battery (`corrupt_consumed_allocation`), and what
+// half belongs in the mutation battery (`stage_three_rederives_the_allocation`), and what
 // belongs here is the structural property the fix actually establishes: there is
 // no second allocation for the guard to check the wrong one of.
 func TestStageThreeDerivesNoAllocationOfItsOwn(t *testing.T) {
