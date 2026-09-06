@@ -93,7 +93,11 @@ func (r AnswerBudgetRefusal) Unwrap() error { return ErrAnswerExceedsBudget }
 // retry runs the assembly twice and discards the first pass's answer, so
 // emitting from inside the assembly double-counted every event in it -- see
 // assemblyTelemetry.
-func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Principal, plan *AnswerPlan, result InvestigationResult, firstPass assemblyTelemetry, params synthesisAssemblyParams) (InvestigationResult, assemblyTelemetry, error) {
+// fitAssembledResult takes `consumed` -- the allocation the FIRST pass actually
+// spent, as RETURNED by synthesizeAndAssemble -- rather than reading
+// params.Allocation. Same invariant as the retry below: the guard measures what
+// the producer returned, never the caller's own copy of what it was handed.
+func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Principal, plan *AnswerPlan, result InvestigationResult, consumed ItemAllocation, firstPass assemblyTelemetry, params synthesisAssemblyParams) (InvestigationResult, assemblyTelemetry, error) {
 	budget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes}
 	if budget.MaxItems <= 0 && budget.MaxSerializedBytes <= 0 {
 		// Nothing to measure against. An engine composed without either
@@ -107,16 +111,15 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// allocator that did not commit capacity for them would publish grants
 	// that, fully respected, still overrun the ceiling by exactly the number
 	// of rows -- which is the defect three rounds found in three shapes.
-	// THE ALLOCATION SYNTHESIS CONSUMED, carried on the params -- not a second
-	// derivation from the same inputs.
+	// THE ALLOCATION SYNTHESIS RETURNED AS CONSUMED -- not params.Allocation,
+	// and not a second derivation from the same inputs.
 	//
-	// This line used to be its own `AllocateItems` call. It produced an equal
-	// value on every honest input, because AllocateItems is pure, so the
-	// duplication was invisible: a keystone review injected `Grants[0]++` into
-	// the copy synthesis actually spent, and the runtime guard here passed the
-	// answer because it was re-deriving a clean replacement rather than
-	// checking the object that was spent. The guard now checks what was spent.
-	allocation := params.Allocation
+	// This line was its own `AllocateItems` call once (keystone #3), then
+	// `params.Allocation` (keystone #4's fix). Both were still the caller's own
+	// object: `params` is BY VALUE, so a producer-local fault could never reach
+	// this guard, which is how narration came to spend a re-copied local that
+	// nothing validated (keystone #5). It now reads what the producer returned.
+	allocation := consumed
 	measured, err := e.measureAssembledAttempt(ctx, principal, "assembled_result", allocation, result, budget)
 	if err != nil {
 		// A result that cannot be marshaled is a server defect, not an
@@ -248,7 +251,13 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// computed against the wider member set would narrate against members the
 	// retry no longer carries.
 	retryParams.CohortSignalCitations = narrowed.Citations
-	retried, retryPending, retryErr := e.synthesizeAndAssemble(ctx, principal, retryParams)
+	// consumedRetryAllocation is what the retry pass ACTUALLY SPENT -- synthesis
+	// and narration both read it inside the producer -- and it is what the guard
+	// measures below. Measuring `retryParams.Allocation` instead would measure the
+	// caller's copy: equal on every honest input, and blind to any fault the
+	// producer applied to its own, which is the defect keystone #5 found in
+	// narration.
+	retried, consumedRetryAllocation, retryPending, retryErr := e.synthesizeAndAssemble(ctx, principal, retryParams)
 	if retryErr != nil {
 		// PROPAGATE the retry's own error. An earlier revision discarded it
 		// and returned a budget refusal, so a transient ErrModelUnavailable
@@ -290,18 +299,20 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// Finalize the retry too, or the second pass repeats round 1 finding 1's
 	// defect: measuring a pre-final shape and serving a larger one.
 	retried = e.finalizeResult(retried, *plan, params.Frame)
-	// READ BACK FROM THE PARAMS, not from the local `retryAllocation`, and the
-	// difference is the entire lesson of this defect class.
+	// READ BACK FROM THE PRODUCER, not from the params and not from the local
+	// `retryAllocation`, and the difference is the entire lesson of this class.
 	//
 	// `ItemAllocation` is a VALUE type, so `forRetry(..., retryAllocation)`
 	// hands the producer a COPY. Measuring the local variable would measure a
 	// different object that merely happens to be equal -- which is exactly the
 	// shape keystone review #3 caught in the first pass, where a re-derivation
 	// was equal on every honest input and only a fault separated the two.
-	// Binding the VALUE at the call site is not the same as binding the
-	// OBJECT; the guard has to read the field the producer was actually
-	// handed, mirroring `allocation := params.Allocation` in the first pass.
-	retryMeasured, err := e.measureAssembledAttempt(ctx, principal, "re_synthesized_result", retryParams.Allocation, retried, budget)
+	// Binding the VALUE at the call site is not the same as binding the OBJECT,
+	// and reading the params field is not enough either: `params` is BY VALUE, so
+	// no fault inside the producer can ever reach a guard that reads the caller's
+	// copy. The only formulation a value type admits across a function boundary is
+	// that the producer RETURNS what it consumed and the guard measures that.
+	retryMeasured, err := e.measureAssembledAttempt(ctx, principal, "re_synthesized_result", consumedRetryAllocation, retried, budget)
 	if err != nil {
 		return InvestigationResult{}, assemblyTelemetry{}, err
 	}

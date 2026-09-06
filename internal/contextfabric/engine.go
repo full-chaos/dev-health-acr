@@ -2202,7 +2202,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// synthesisAssemblyParams.snapshot for the two fields and why ordering,
 	// not the existence of a copy, was the defect.
 	retryBase := assemblyParams.snapshot()
-	result, pendingTelemetry, err := e.synthesizeAndAssemble(ctx, principal, assemblyParams)
+	result, consumedAllocation, pendingTelemetry, err := e.synthesizeAndAssemble(ctx, principal, assemblyParams)
 	if err != nil {
 		// CHAOS-4726: attach the narrowing state as of THIS call site --
 		// stage 1 and (if it ran) stage 2 are the only stages that can have
@@ -2237,7 +2237,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// the shape measured on the second pass is the shape that would be
 	// served on the second pass.
 	result = e.finalizeResult(result, plan, familyOutcome.Frame)
-	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, pendingTelemetry, retryBase)
+	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, consumedAllocation, pendingTelemetry, retryBase)
 	if err != nil {
 		return InvestigationResult{}, err
 	}
