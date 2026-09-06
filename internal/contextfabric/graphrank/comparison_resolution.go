@@ -471,11 +471,25 @@ func resolveNamedComparison(
 		return resolution, bases, digests, nil
 	}
 
-	for _, slot := range comparison.Slots {
+	// RECEIPTS BIND BEFORE ANY SLOT RESOLVES. The binding decision is about
+	// the current question's operand terms, and it must be complete before a
+	// slot's own retrieval can influence it -- otherwise a slot that happened
+	// to retrieve the selected subject anyway would look like a binding.
+	preCommitted, unbound, err := bindReceiptsToSlots(ctx, principal, request, deps, comparison.Slots)
+	if err != nil {
+		return contextfabric.SubjectResolution{}, nil, nil, err
+	}
+	run.unboundReceipts = unbound
+
+	for index, slot := range comparison.Slots {
 		if err := ctx.Err(); err != nil {
 			return contextfabric.SubjectResolution{}, nil, nil, err
 		}
-		slotRun, err := resolveOneOperandSlot(ctx, principal, request, deps, slot)
+		// ONLY THIS SLOT'S OWN BOUND SELECTIONS. An unbound hint reaches no
+		// slot at all: it is never appended to another operand's term bag or
+		// committed set, which is the difference between "we could not tell"
+		// and a guess.
+		slotRun, err := resolveOneOperandSlot(ctx, principal, request, deps, slot, preCommitted[index])
 		if err != nil {
 			return contextfabric.SubjectResolution{}, nil, nil, err
 		}
@@ -501,6 +515,7 @@ func resolveOneOperandSlot(
 	request contextfabric.InvestigationRequest,
 	deps ResolveDeps,
 	slot contextfabric.ComparisonOperandSlot,
+	preCommitted []contextfabric.SubjectCandidate,
 ) (operandSlotRun, error) {
 	// FRESH STATE, PER SLOT. Allocated here rather than passed in, so there is
 	// no way for a caller to accidentally share one operand's pool with the
@@ -512,6 +527,21 @@ func resolveOneOperandSlot(
 	vectorArmSimilarity := make(map[string]float64)
 	identity := identityClaimants{}
 	identityTerms := identityMatchTerms{}
+
+	// THIS SLOT'S OWN BOUND SELECTIONS, seeded before retrieval so the gate's
+	// existing pre-committed tier sees them exactly as it does on the
+	// single-subject hint path.
+	//
+	// THIS IS WHERE CONSTRAINT (3.2) IS MET WITHOUT DELETING ANYTHING. The
+	// ordinary commit gates run only when nothing is pre-committed -- so a
+	// selection bound HERE suppresses the gates for THIS SLOT, which is
+	// correct because the user's selection IS this slot's decision, while the
+	// other slot's invocation starts empty and runs every ordinary gate it
+	// always has. The suppression that used to swallow the second operand is
+	// now scoped to the operand the selection actually answered.
+	for _, candidate := range preCommitted {
+		candidatesBySubject[SubjectKey(candidate.Subject)] = candidate
+	}
 
 	// THIS SLOT'S OWN TERMS. Never SubjectTerms(request, interpreted) -- that
 	// is the flat bag whose existence is the defect.
@@ -563,6 +593,148 @@ func resolveOneOperandSlot(
 		committed:         resolution.Committed,
 		bases:             bases,
 		digests:           digests,
+		receiptBound:      len(preCommitted) > 0,
 		retrievalDegraded: retrieval.retrievalDegraded,
 	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// RECEIPT BINDING -- server-side, from the CURRENT question
+// ---------------------------------------------------------------------------
+
+// bindReceiptsToSlots decides which operand, if any, each carried selection
+// answers. It returns the per-slot pre-commits and the count of selections that
+// could not be associated with exactly one operand.
+//
+// NO NEW REQUEST FIELD, AND NONE IS NEEDED. Which operand a follow-up answers
+// is DERIVED from the current question's own operand terms, not declared by the
+// client. The wire carries no slot index and this work does not add one.
+//
+// ALL MATCHING SLOTS ARE DETERMINED BEFORE ANY RECEIPT IS ASSIGNED. Assigning
+// as we go would make the outcome depend on receipt order and on slot order --
+// the first slot to match would win a subject that also matched the second, and
+// nobody would ever see the ambiguity. Exactly one match binds; ZERO OR TWO
+// leave the selection UNBOUND, which holds the comparison. Two is exactly as
+// unbindable as zero: a selection the server cannot associate with one operand
+// has completed neither, and guessing between them is the behaviour this design
+// exists to refuse.
+//
+// THE MATCH REQUIRES AN IDENTITY-CLASS WITNESS FROM THAT SLOT'S OWN TERMS, and
+// it gets one by running the EXISTING identity machinery (NodeCandidate) with
+// the slot's term -- never a new matcher written beside it. A fuzzy retrieval
+// hit, a confidence value, a whole-question hit, the receipt's prior position
+// and the order the receipts arrived in are ALL insufficient, and they are
+// insufficient by construction here: only a genuine label, alias or
+// provider-key match sets one of the three mechanisms this function accepts.
+func bindReceiptsToSlots(
+	ctx context.Context,
+	principal storage.Principal,
+	request contextfabric.InvestigationRequest,
+	deps ResolveDeps,
+	slots []contextfabric.ComparisonOperandSlot,
+) (map[int][]contextfabric.SubjectCandidate, int, error) {
+	bound := make(map[int][]contextfabric.SubjectCandidate, len(slots))
+	unbound := 0
+	if deps.ExactHint == nil {
+		return bound, 0, nil
+	}
+	// seenInSlot deduplicates repeated selections of the SAME canonical
+	// identity within one slot. Two receipts naming one subject are one
+	// selection said twice, not an over-commit -- counting them as two would
+	// hold a comparison the user has actually answered unambiguously.
+	seenInSlot := make(map[int]map[string]struct{}, len(slots))
+
+	for _, hint := range request.RequestedScope.SubjectHints {
+		if strings.TrimSpace(hint.ID) == "" || hint.Kind == "" {
+			continue
+		}
+		subject := contextfabric.SubjectRef{
+			Kind: hint.Kind, CanonicalID: strings.TrimSpace(hint.ID), Label: strings.TrimSpace(hint.Label),
+		}
+		if subject.Label == "" {
+			subject.Label = subject.CanonicalID
+		}
+		// RE-READ AND RE-AUTHORIZED under THIS principal, scope and binding.
+		// A carried selection is a caller-supplied reference, never a proof
+		// that the subject is still there or still visible to this caller.
+		node, ok, err := deps.ExactHint(ctx, subject)
+		if err != nil {
+			return nil, 0, err
+		}
+		if !ok {
+			// Unloadable or no longer visible. The existing receipt
+			// disposition vocabulary already reports this outcome; it is not
+			// an ambiguous binding, so it is not counted as one.
+			continue
+		}
+
+		matches := matchingSlotsForReceipt(principal, request, deps, slots, subject, node)
+		if len(matches) != 1 {
+			unbound++
+			continue
+		}
+		index := matches[0]
+		if seenInSlot[index] == nil {
+			seenInSlot[index] = make(map[string]struct{}, 2)
+		}
+		key := SubjectKey(subject)
+		if _, repeated := seenInSlot[index][key]; repeated {
+			continue
+		}
+		seenInSlot[index][key] = struct{}{}
+
+		candidate, admitted := NodeCandidate(principal, request.RequestedScope, subject.Label, node, deps.IsInternal, true, deps.ResolutionTracer, request.RequestID)
+		if !admitted {
+			continue
+		}
+		// The SAME arrival state the single-subject hint path stamps, so the
+		// existing gate's pre-committed tier recognises it unchanged.
+		candidate.Confidence = 1
+		candidate.State = contextfabric.ResolutionCommitted
+		candidate.MatchReasons = []string{"Exact canonical subject hint matched the organization graph."}
+		candidate.MatchMechanisms = MergeMechanisms(candidate.MatchMechanisms, []contextfabric.MatchMechanism{contextfabric.MatchExact})
+		bound[index] = append(bound[index], candidate)
+	}
+	return bound, unbound, nil
+}
+
+// matchingSlotsForReceipt returns EVERY slot this selection has identity
+// evidence in. Every one, not the first -- the count is the decision.
+func matchingSlotsForReceipt(
+	principal storage.Principal,
+	request contextfabric.InvestigationRequest,
+	deps ResolveDeps,
+	slots []contextfabric.ComparisonOperandSlot,
+	subject contextfabric.SubjectRef,
+	node CandidateNode,
+) []int {
+	var matches []int
+	for index, slot := range slots {
+		// THE STATED KIND IS A REQUIREMENT, not a preference. The question
+		// said what kind this operand is; a selection of another kind answers
+		// a question that was not asked.
+		if subject.Kind != slot.Kind {
+			continue
+		}
+		for _, term := range slot.Terms {
+			if strings.TrimSpace(term) == "" {
+				continue
+			}
+			// The EXISTING identity machinery, asked about THIS SLOT'S term.
+			// Tracer deliberately nil: this is a matching probe, not a
+			// retrieval, and emitting identity-gate events for probes would
+			// put decisions in the trace that no resolution ever made.
+			candidate, ok := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal, true, nil, request.RequestID)
+			if !ok {
+				continue
+			}
+			if HasMechanism(candidate.MatchMechanisms, contextfabric.MatchExact) ||
+				HasMechanism(candidate.MatchMechanisms, contextfabric.MatchAlias) ||
+				HasMechanism(candidate.MatchMechanisms, contextfabric.MatchProviderKey) {
+				matches = append(matches, index)
+				break
+			}
+		}
+	}
+	return matches
 }

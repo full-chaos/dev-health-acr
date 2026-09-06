@@ -109,7 +109,7 @@ func TestOneOperandSlotCommitsItsLoneExactMatch(t *testing.T) {
 		Kind: contextfabric.SubjectTeam, Terms: []string{"alpha"},
 	}
 
-	run, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, slot)
+	run, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, slot, nil)
 	if err != nil {
 		t.Fatalf("resolveOneOperandSlot() error = %v", err)
 	}
@@ -153,7 +153,7 @@ func TestOneOperandSlotSeesOnlyItsOwnTerms(t *testing.T) {
 		Position: 0, Variant: contextfabric.ComparisonOperandNamed,
 		Kind: contextfabric.SubjectTeam, Terms: []string{"alpha"},
 	}
-	run, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, slot)
+	run, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, slot, nil)
 	if err != nil {
 		t.Fatalf("resolveOneOperandSlot() error = %v", err)
 	}
@@ -266,11 +266,11 @@ func TestOneSlotsAmbiguityDoesNotSuppressTheOthersCommit(t *testing.T) {
 		},
 	}
 
-	runA, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, comparison.Slots[0])
+	runA, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, comparison.Slots[0], nil)
 	if err != nil {
 		t.Fatalf("slot A: %v", err)
 	}
-	runB, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, comparison.Slots[1])
+	runB, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, comparison.Slots[1], nil)
 	if err != nil {
 		t.Fatalf("slot B: %v", err)
 	}
