@@ -155,6 +155,30 @@ type FrameValidationEvent struct {
 	// read against the table that produced it.
 	FrameVersion string
 
+	// CohortDiscoverability is WHY this frame can or cannot produce a
+	// discovered cohort, taken from the shared predicate that the
+	// requirement derivation and the discovery seam BOTH read.
+	//
+	// IT NAMES A DECISION THE COUNTERS BELOW CANNOT DISTINGUISH, which is
+	// why it is a field of its own rather than a fourth arm. A refusal
+	// counted as `unresolvable_member_set` can now have two quite different
+	// remedies: the expression cannot enumerate anything (ask a different
+	// question) or the declared member kind has NO DISCOVERY ARM (prove one).
+	// Both are truthfully "the frame resolves no member set", so the arm
+	// stays a correct partition; this key is what says which, and it sends an
+	// operator to the retrieval work rather than back to the interpreter.
+	//
+	// One CLOSED value per event, never a set: the reasons are mutually
+	// exclusive by construction, so a cross-product vocabulary would be a
+	// combination wearing a vocabulary's clothes.
+	//
+	// EMPTY ON A REFUSED FRAME, and distinguishably so: the empty value is
+	// not a member of the vocabulary, and the same line carries the outcome
+	// that explains it. A frame the server declined to act on has no
+	// validated expression to ask about, and inventing a member for "not
+	// evaluated" would put a non-decision in a decision vocabulary.
+	CohortDiscoverability CohortDiscoverability
+
 	// RequirementDerivation is the obligation -> requirement layer's row:
 	// how many requirement cells the validated frame demanded, how many
 	// the registry can serve, and the closed reason token for each one it
@@ -204,6 +228,10 @@ func FrameValidationEventFrom(proposed QuestionFrame, result FrameValidationResu
 		if requirements != nil {
 			event.RequirementDerivation = RequirementDerivationSummaryFrom(requirements)
 		}
+		// Read from the VALIDATED frame's expression, through the same
+		// predicate the derivation used to decide the rows summarised above,
+		// so the key and the counters describe one decision.
+		_, _, event.CohortDiscoverability = CohortMemberKindFor(result.Frame.SubjectExpression)
 		if divergence, diverged := ShapeAgreement(emittedShape, result.Frame.SubjectExpression); diverged {
 			event.ShapeDiverged = true
 			event.EmittedShape = divergence.Emitted

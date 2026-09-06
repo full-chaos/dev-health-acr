@@ -97,6 +97,30 @@ const (
 	// source, and once group subjects became citable it would have been a
 	// forgery route into a served answer. Fail closed: build nothing.
 	CohortGroupingRefusalGroupKindSourceMismatch CohortGroupingRefusal = "group_kind_source_mismatch"
+	// CohortGroupingRefusalNoMemberPlaced: the plan declared a group axis
+	// and NOT ONE member could be placed on it, because no member's own
+	// canonical facts carried a group-scoped row at all.
+	//
+	// DISTINCT FROM THE MISMATCH ABOVE, in the one way that matters to
+	// whoever reads the artifact. A mismatch means the source DISAGREED: it
+	// grouped by something, and naming that something tells the reader where
+	// to look instead. This means the source was SILENT -- there is no other
+	// axis to point at, and SourceKind stays zero because there is no kind to
+	// name rather than because the field was forgotten.
+	//
+	// DISTINCT FROM A PARTIAL PLACEMENT, which is not a refusal at all. Some
+	// members unplaced while groups were built is the deliberate, documented
+	// behaviour of BuildCohortGroups and is pinned by
+	// TestBuildCohortGroupsLeavesAnUnplaceableMemberUngrouped; stamping this
+	// token there would relabel a served grouped answer as a refusal. The
+	// firing condition is ZERO groups built, never "some member was unplaced".
+	//
+	// WHY THIS IS A REFUSAL AND NOT A NEW VOCABULARY. The engine's own
+	// comment on the mismatch branch already calls this case "the same
+	// posture as the nothing-placed branch below, for a different and more
+	// serious reason": both deliver no group axis, both clear plan.GroupKind,
+	// both owe the reader a sentence. Two postures, one vocabulary.
+	CohortGroupingRefusalNoMemberPlaced CohortGroupingRefusal = "no_member_placed"
 )
 
 // canonicalCohortGroupingRefusals maps each member to ITSELF, so a telemetry
@@ -105,6 +129,7 @@ const (
 var canonicalCohortGroupingRefusals = map[CohortGroupingRefusal]CohortGroupingRefusal{
 	CohortGroupingRefusalNone:                    CohortGroupingRefusalNone,
 	CohortGroupingRefusalGroupKindSourceMismatch: CohortGroupingRefusalGroupKindSourceMismatch,
+	CohortGroupingRefusalNoMemberPlaced:          CohortGroupingRefusalNoMemberPlaced,
 }
 
 // CohortGroupingOutcome carries WHY grouping refused and the two kinds that
@@ -116,8 +141,23 @@ type CohortGroupingOutcome struct {
 	// PlannedKind is what the question frame asked to group by.
 	PlannedKind SubjectKind
 	// SourceKind is what the facts actually group by. Zero unless a refusal
-	// names a mismatch.
+	// names a mismatch -- on CohortGroupingRefusalNoMemberPlaced the source
+	// named no kind at all, so zero there is the truthful value rather than
+	// an unset one.
 	SourceKind SubjectKind
+	// Ungrouped is how many members could not be placed on the planned axis.
+	//
+	// Non-zero only with CohortGroupingRefusalNoMemberPlaced, where it is the
+	// whole cohort by construction. BuildCohortGroups already returns this
+	// number as its second result; carrying it HERE is what lets the reader's
+	// disclosure and the operator's telemetry line read one object instead of
+	// each re-deriving it from a sibling variable at its own call site -- the
+	// re-derivation being where a count and its reason drift apart.
+	//
+	// It is deliberately NOT populated on a partial placement: a partial
+	// placement is not a refusal, this struct is the refusal record, and a
+	// count on a zero-valued refusal would be a number with no sentence.
+	Ungrouped int
 }
 
 // ValidCohortGroupingRefusal reports membership of the closed vocabulary.
@@ -206,7 +246,37 @@ func BuildCohortGroups(plan AnswerPlan, cohort *Cohort, facts []CanonicalFact) (
 		}
 	}
 	if len(order) == 0 {
-		return nil, ungrouped, CohortGroupingOutcome{}
+		// NOT ONE member could be placed. This used to return a zero-valued
+		// outcome, which made the case indistinguishable from "grouping was
+		// never attempted" for anyone reading the persisted artifact: the
+		// only surviving trace was the caller clearing plan.GroupKind, and a
+		// cleared group kind looks exactly like a plan that never had one.
+		//
+		// THIS CONDITION WAS ONCE `len(order) == 0 && ungrouped > 0`, and the
+		// mutation battery is why it is not any more. The second conjunct was
+		// written on the claim that it kept the token from being stamped over
+		// an empty population "however the guard at the top is later edited",
+		// and that deleting it would be caught by a fixture. Deleting it
+		// killed NOTHING: reaching here at all means the loop above ran over a
+		// non-empty cohort, and every member of it either landed in `order` or
+		// incremented `ungrouped`, so `len(order) == 0` already implies
+		// `ungrouped > 0`. The conjunct was unreachable as a discriminator and
+		// therefore untested code dressed as a safety property -- an empty
+		// cell in the battery is a finding, not a pass, and the honest fix for
+		// a rule no fixture can isolate is to remove it as subsumed rather
+		// than to keep it for the comfort of the comment beside it.
+		//
+		// The property it CLAIMED to hold is real and is held where it is
+		// actually decidable: the guard at the top of this function returns a
+		// zero-valued outcome for an empty or absent cohort, and
+		// TestAnEmptyCohortIsNotARefusal pins that, so the token cannot be
+		// stamped over a population of nobody.
+		return nil, ungrouped, CohortGroupingOutcome{
+			Refusal:     CohortGroupingRefusalNoMemberPlaced,
+			PlannedKind: plan.GroupKind,
+			// SourceKind stays zero: nothing disagreed, nothing was named.
+			Ungrouped: ungrouped,
+		}
 	}
 	sort.Strings(order)
 	groups = buildGroupsFrom(cohort, order, byGroup, labels, kinds)
@@ -554,6 +624,38 @@ func RemovedCohortMembers(before, after []CohortMember) []CohortMember {
 	return removed
 }
 
+// groupingRefusalDisclosure names, per vocabulary member, the sentence the
+// READER is told, and reports whether there is one.
+//
+// AN ALLOW-LIST, NOT A DENY-LIST, and not by preference. The vocabulary is
+// CLOSED, and the ruling recorded as D10 one package over says a
+// classification over a closed vocabulary names each member's class rather
+// than testing for the members it excludes: a deny-list (`!= None`) admits the
+// NEXT member by default, silently, with whatever sentence happened to be
+// written for its neighbour -- or with none, which is the defect this whole
+// change exists to remove. The `default` arm therefore fails closed: an
+// unknown member discloses NOTHING rather than something wrong, and the
+// telemetry emitter's own `unclassified` fallback is what surfaces it.
+//
+// The pre-D10 shape of this function was `!= GroupKindSourceMismatch`, which
+// was an allow-list of one only because the vocabulary had one disclosing
+// member. Growing the vocabulary is exactly the event that turns that
+// accident into a defect.
+func groupingRefusalDisclosure(outcome CohortGroupingOutcome) (string, bool) {
+	switch outcome.Refusal {
+	case CohortGroupingRefusalGroupKindSourceMismatch:
+		return contractsv1.ContextFabricGroupingRefusalLimitation(outcome.PlannedKind, outcome.SourceKind), true
+	case CohortGroupingRefusalNoMemberPlaced:
+		// One kind, not two: the source named none. See the constant's own
+		// comment for why a count is not interpolated here.
+		return contractsv1.ContextFabricGroupingUnplaceableLimitation(outcome.PlannedKind), true
+	case CohortGroupingRefusalNone:
+		return "", false
+	default:
+		return "", false
+	}
+}
+
 // applyGroupingRefusalDisclosure states on the WIRE that a grouped question
 // was answered ungrouped, and why.
 //
@@ -592,16 +694,18 @@ func RemovedCohortMembers(before, after []CohortMember) []CohortMember {
 //     also puts the result's own count at odds with the validator's
 //     coherence rule.
 func applyGroupingRefusalDisclosure(result *InvestigationResult, outcome CohortGroupingOutcome) {
-	if result == nil || outcome.Refusal != CohortGroupingRefusalGroupKindSourceMismatch {
+	if result == nil {
+		return
+	}
+	sentence, discloses := groupingRefusalDisclosure(outcome)
+	if !discloses {
 		return
 	}
 	// Through the BOUNDED appender, not a raw append: the limitations
 	// collection has a contract cap, and this package's own closure test
 	// rejects any limitations-destined write that bypasses it. Caught here by
 	// that test rather than by a reviewer, which is the guard working.
-	composed, displaced := appendBoundedLimitations(result.Limitations, []string{
-		contractsv1.ContextFabricGroupingRefusalLimitation(outcome.PlannedKind, outcome.SourceKind),
-	})
+	composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
 	result.Limitations = composed
 	result.LimitationsDisplaced += displaced
 	result.Coverage.Partial = true

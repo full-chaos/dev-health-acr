@@ -1944,23 +1944,52 @@ do, grouping is refused **wholesale** — keeping the members whose source
 happened to agree would present a partial axis as a complete one — and the
 question is answered flat.
 
+**There are TWO ways the axis fails, not one, and the reader is owed the
+difference.** A *mismatch* means the source disagreed: it grouped by something,
+just not the asked-for thing, so the disclosure can name where to look instead.
+*No placement* means the source was **silent** — not one member's facts carried
+a group-scoped row of any kind — so there is no second axis to name, and the
+outcome carries the planned kind and the unplaced COUNT rather than a second
+kind. Both deliver no group axis, both clear `plan.GroupKind`, both owe the
+reader a sentence; they are two members of one closed vocabulary
+(`CohortGroupingRefusal`), not two mechanisms.
+
+The no-placement arm used to be **silent in both directions**: it returned a
+zero-valued outcome and its engine branch emitted no telemetry line at all, so
+the only surviving trace was the cleared `plan.GroupKind` — indistinguishable
+from a plan that never asked for a group axis. Neither the operator nor the
+reader was told.
+
+**A partial placement is neither of these and is not a refusal.** Some members
+unplaced while groups were built is a served grouped answer; the unplaced
+members ride the flat list and the outcome stays zero-valued. The firing
+condition for `no_member_placed` is ZERO groups built.
+
 A flat answer to a grouped question is only honest if the reader is told. That
 is the half this sub-diagram exists to make visible, because it is the half
 that broke: the disclosure was composed correctly and then silently **dropped**
 by a later composer, and nothing in this document showed that such a thing
-could happen.
+could happen. That hazard is now doubled and named: the two disclosure families
+share their opening and closing words, so each must be **registered** in
+`IsContextFabricServiceAuthoredLimitation` and each recogniser must refuse the
+other's sentence — an unregistered interpolated disclosure is, to the
+displacement rule, a model caveat.
 
 ```mermaid
 flowchart TD
     PLAN["AnswerPlan.GroupKind<br/>(the model's question frame)"]
     ROWS["group assignment rows<br/>(kind read where the row was ACCEPTED)"]
-    PLAN --> CMP{"kinds agree?"}
-    ROWS --> CMP
-    CMP -->|yes| BUILD["build groups<br/>COHORT_GROUP per group"]
-    CMP -->|"no"| REFUSE["REFUSE WHOLESALE<br/>outcome.Refusal = group_kind_source_mismatch<br/>+ planned_group_kind on grouping telemetry"]
+    PLAN --> ANY{"any row names a group?"}
+    ROWS --> ANY
+    ANY -->|"no row, any member"| NONE["REFUSE — SOURCE SILENT<br/>outcome.Refusal = no_member_placed<br/>+ planned_group_kind, ungrouped_members<br/>on grouping telemetry"]
+    ANY -->|yes| CMP{"kinds agree?"}
+    CMP -->|"yes, every row"| BUILD["build groups<br/>COHORT_GROUP per group<br/>(members with no row stay ungrouped —<br/>a SERVED answer, not a refusal)"]
+    CMP -->|"no"| REFUSE["REFUSE WHOLESALE — SOURCE DISAGREED<br/>outcome.Refusal = group_kind_source_mismatch<br/>+ planned_group_kind on grouping telemetry"]
 
     REFUSE --> FLAT["answer is composed FLAT"]
+    NONE --> FLAT
     REFUSE --> DISC["applyGroupingRefusalDisclosure"]
+    NONE --> DISC
 
     subgraph bounded["appendBoundedLimitations — the ONE path into Limitations"]
         DEDUP["dedup → normalize to cap → append"]
@@ -1972,8 +2001,8 @@ flowchart TD
         FULL -->|no| COUNT
     end
 
-    DISC -->|"sentence from contracts/v1<br/>ContextFabricGroupingRefusalLimitation(planned, source)"| DEDUP
-    REG["IsContextFabricServiceAuthoredLimitation<br/>= fixed list OR a PARSE of the interpolated sentence<br/>(both kinds must be closed-vocabulary members)"]
+    DISC -->|"ALLOW-LIST per vocabulary member (D10)<br/>mismatch → ContextFabricGroupingRefusalLimitation(planned, source)<br/>no_member_placed → ContextFabricGroupingUnplaceableLimitation(planned)<br/>unknown → discloses NOTHING (fail closed)"| DEDUP
+    REG["IsContextFabricServiceAuthoredLimitation<br/>= fixed list OR a PARSE of EITHER interpolated family<br/>(every interpolated kind must be a closed-vocabulary member;<br/>the two parses must refuse each other's sentence)"]
     REG -.->|"answers 'service or model?'"| DROP
     REG -.->|"coherence oracle for a positive count"| VAL
 
@@ -2054,7 +2083,12 @@ flowchart TB
     R1 --> RR["row.FactKinds = serving kinds<br/>row.Dimensions = their declared dimensions"]
 
     K -- computed --> S["StepForComputedObligation<br/>rank_cohort | membership_cardinality"]
-    S --> I["InputsForComputedStep<br/>THE AMENDMENT"]
+    S --> P{"stepNeedsAResolvedMemberSet<br/>reads RunsOverResolvedMemberSet,<br/>NOT the input class"}
+    P -->|"does not run over a member set"| I
+    P -->|"runs over a member set"| Q{"contextfabric.CohortMemberKindFor<br/>ONE predicate, read by this layer<br/>AND by the discovery seam"}
+    Q -- discoverable --> I
+    Q -->|"not_a_cohort_variant<br/>no_member_kind<br/>member_kind_unservable"| U["row.Unavailable =<br/>computed_population_absent<br/>Step stays EMPTY, Quantifier none<br/>so no read is planned for its inputs"]
+    I["InputsForComputedStep<br/>THE AMENDMENT"]
     I --> IC{"input CLASS"}
     IC -- fact_kinds --> IK["row.InputFactKinds<br/>= cohortRankingFormulaKinds<br/>(health, workload, readiness,<br/>operational_deficiencies, investment)"]
     IC -- resolved_member_set --> IN["no fact input<br/>row.InputFactKinds empty,<br/>stated POSITIVELY by the class"]
@@ -2066,6 +2100,8 @@ flowchart TB
     EX -- server_executed --> XC["ComputeMembershipCardinality<br/>in finalizeResult, over the SERVED member set"]
     XC --> OUT["appended as the count requirement's<br/>assembled_result outcome row:<br/>served / declared + the outcome token"]
     OUT --> TEL["RecordMembershipCardinality<br/>reads the SERVED row, never recounts"]
+    XC --> XU["appendUnresolvedMemberSetOutcomes<br/>in finalizeResult, immediately AFTER the count sibling<br/>over EVERY step the declaration table says<br/>runs over the resolved member set"]
+    XU --> OUT2["a SERVABLE kind whose search retained no members:<br/>assembled_result row, unavailable,<br/>computed_population_absent<br/>(idempotent, so the count sibling's richer row stands)"]
 
     RR --> T["RequirementDerivationSummary<br/>+ requirement_computed_input_kind_* counts<br/>+ ComputedStepExecutions<br/>(histograms over the closed vocabularies,<br/>zeroes included)"]
     CR --> T
@@ -2076,6 +2112,28 @@ counts the resolved member set and reads no fact. Spelling that as an empty
 kinds list would be indistinguishable from "nobody has declared this step's
 inputs yet" — the silent emptiness the seam exists to forbid, reproduced
 inside its own fix. The class makes "consumes no fact" an assertion.
+
+**Why producibility is decided in TWO places, and why that is not two authorities.**
+A computed step that runs over the resolved member set can fail to run for four
+reasons, and only three of them are knowable before retrieval: the expression
+enumerates nothing, it declares no member kind, or it declares a kind no
+discovery arm serves. Those three are one closed decision,
+`CohortMemberKindFor`, and it lives in `internal/contextfabric` beside the
+subject-kind vocabulary precisely so BOTH readers can reach it — this
+derivation, and the discovery seam one layer up, which imports this package and
+could never be imported back. It was rebuilt by hand here once, a conjunct per
+review round, and over the fifteen published subject kinds the two answers
+disagreed for TWELVE: a ranking row named `rank_cohort` as its server while the
+seam refused to build the cohort, so nothing computed the ordering the answer
+claimed.
+
+The FOURTH reason is a runtime fact nobody can decide at derivation time: a
+perfectly servable kind whose search retains no members. `DiscoveredCohort`
+returns a nil cohort in that case, so the correction belongs on the served
+document, and `finalizeResult` makes it beside the count sibling — for every
+step the declaration table says runs over the member set, not for the two that
+exist today. The two places are one decision each, taken where its fact lives;
+what is not duplicated is the predicate.
 
 **Why the inputs are NOT folded into `FactKinds`.** `FactKinds` means *kinds
 that can SERVE this cell*, and every existing reader — the plan projection

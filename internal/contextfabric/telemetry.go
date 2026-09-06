@@ -828,6 +828,16 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		"emitted_shape", string(event.EmittedShape),
 		"derived_shape", string(event.DerivedShape),
 		"frame_version", event.FrameVersion,
+		// WHY the frame can or cannot produce a discovered cohort. It
+		// disambiguates the `unresolvable_member_set` arm below, whose two
+		// causes -- an expression that enumerates nothing, and a declared
+		// member kind with no discovery arm -- send an operator to opposite
+		// ends of the pipeline. Emitted on EVERY frame-validation line,
+		// including a refused frame, where it is empty: the empty value is
+		// not a member of the vocabulary, so "no validated expression" and a
+		// real reason cannot be confused, and this line's own `outcome` key
+		// says which.
+		"cohort_discoverability", string(event.CohortDiscoverability),
 	}
 	args = append(args, requirementDerivationLogAttrs(event.RequirementDerivation)...)
 	args = append(args, requestIDLogAttrs(ctx)...)
@@ -1031,7 +1041,22 @@ func (t SlogEngineTelemetry) RecordGroupedCohortCompleteness(ctx context.Context
 			refusal = CohortGroupingRefusal("unclassified")
 		}
 		args = append(args, "grouping_refusal", string(refusal),
-			"planned_group_kind", string(event.PlannedGroupKind))
+			"planned_group_kind", string(event.PlannedGroupKind),
+			// INSIDE this guard, not beside it: an ordinary grouped answer's
+			// line must stay byte-for-byte what it was before any of these
+			// three fields existed, which is the property the comment above
+			// claims and TestSlogGroupedCohortCompletenessOmitsTheRefusalKeys
+			// WithoutARefusal enforces. Emitting a constant 0 on every
+			// grouped line would break it while looking harmless.
+			"ungrouped_members", event.UngroupedMembers)
+		// Only when the source named an axis. A no-placement refusal has no
+		// source kind to report -- the facts were silent -- and emitting an
+		// empty value would make "the source disagreed" and "the source said
+		// nothing" look alike to a filter, which is the distinction this whole
+		// vocabulary exists to draw.
+		if event.SourceGroupKind != "" {
+			args = append(args, "source_group_kind", string(event.SourceGroupKind))
+		}
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric grouped cohort completeness", args...)

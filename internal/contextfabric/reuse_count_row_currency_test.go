@@ -3,7 +3,7 @@ package contextfabric
 // IS THE REUSED COUNT ROW EVER STALE? THE PREMISE, MEASURED RATHER THAN READ.
 //
 // The reported defect is this: the reuse degrade drops cohort members and
-// sets `Complete=false, Truncated=true`, while `hasCountOutcome` sees the
+// sets `Complete=false, Truncated=true`, while `hasAssembledOutcome` sees the
 // STORED document's assembled-result `count` row and returns early -- so the
 // backfill never re-states the cardinality and the served answer claims an
 // exact census over a population it no longer carries.
@@ -352,7 +352,7 @@ func currencyCountRequirement() string {
 // (`membership_cardinality.go:179-188`) scans PLANNING rows only, and returns
 // empty when there is none -- so a fixture carrying just the assembled row
 // makes `appendMembershipCardinality` return before it ever reaches
-// `hasCountOutcome` at `:292`. That guard is the whole subject of the reported
+// `hasAssembledOutcome`. That guard is the whole subject of the reported
 // defect, and without a planning row this test cannot reach it: disabling the
 // guard would change nothing observable here. Round 2 found exactly that.
 func currencyCountRows(served int) []RequirementOutcomeRow {
@@ -671,7 +671,7 @@ func TestTheReuseDegradeNeverDropsACohortMember(t *testing.T) {
 	// THE PREMISE OF THE REPORTED DEFECT, measured.
 	if counts.DroppedMembers != 0 {
 		t.Fatalf("the reuse degrade dropped %d cohort member(s). The reported stale-count defect becomes "+
-			"REACHABLE the moment this is non-zero: `hasCountOutcome` would then return early over a stored "+
+			"REACHABLE the moment this is non-zero: `hasAssembledOutcome` would then return early over a stored "+
 			"row describing a population the served answer no longer carries", counts.DroppedMembers)
 	}
 	if got, want := len(degraded.Cohort.Members), len(wantMembers); got != want {

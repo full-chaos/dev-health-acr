@@ -1,7 +1,6 @@
 package graphrank
 
 import (
-	"sort"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -19,7 +18,8 @@ import (
 // wrong-kind team cohort, and the first honest attempt to carry the declared
 // kind produced an HTTP 500.
 //
-// So the rule is: servableCohortKinds admits exactly the kinds a discovery
+// So the rule is: the servable-cohort-kinds allow-list admits exactly the
+// kinds a discovery
 // arm can actually serve. It grows only in the same change that proves the
 // arm, never as a tidy-up to "match the contract". A future reader who sees
 // the contract admitting 15 kinds and this map admitting 2 is looking at the
@@ -30,40 +30,17 @@ import (
 // these tests moved in that same commit rather than after it. A pin that is
 // relaxed in a later tidy-up commit is not a pin.
 
-// TestSeamAllowListAdmitsExactlyTheServableKinds pins the allow-list's
-// membership in both directions -- nothing missing, nothing extra.
+// THE MEMBERSHIP PIN MOVED WITH THE TABLE. The allow-list itself now lives
+// in internal/contextfabric (the requirement derivation needs the same
+// answer and cannot import this package), so the test that pins its exact
+// three members lives beside it, written against the map in that package.
+// It moved in the SAME change that moved the table: a pin left behind is a
+// pin against a symbol that no longer exists, and a pin re-created later is
+// not a pin.
 //
-// Written against the map rather than through cohortKindFromFrame so that a
-// kind added to the map is caught even if no frame fixture happens to reach
-// it; the behavioural half is the test below.
-func TestSeamAllowListAdmitsExactlyTheServableKinds(t *testing.T) {
-	t.Parallel()
-	want := []string{
-		string(contextfabric.SubjectProject),
-		string(contextfabric.SubjectRepository),
-		string(contextfabric.SubjectTeam),
-	}
-	sort.Strings(want)
-
-	got := make([]string, 0, len(servableCohortKinds))
-	for kind, admitted := range servableCohortKinds {
-		if !admitted {
-			t.Errorf("servableCohortKinds maps %q to false; the map is a membership set, so a false entry is a contradiction -- remove the key instead", kind)
-			continue
-		}
-		got = append(got, string(kind))
-	}
-	sort.Strings(got)
-
-	if len(got) != len(want) {
-		t.Fatalf("servableCohortKinds admits %v, want exactly %v -- if a discovery arm was proven for a new kind, this pin moves in THAT change and says so", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("servableCohortKinds admits %v, want exactly %v", got, want)
-		}
-	}
-}
+// What stays here is the BEHAVIOURAL half -- that this seam refuses every
+// kind outside the list and serves every kind inside it -- because that is
+// this seam's own behaviour and no other package can see it.
 
 // TestSeamStaysNarrowerThanTheWireContract states the divergence as an
 // enforced property.
@@ -79,10 +56,21 @@ func TestSeamAllowListAdmitsExactlyTheServableKinds(t *testing.T) {
 // into a loop that must.
 func TestSeamStaysNarrowerThanTheWireContract(t *testing.T) {
 	t.Parallel()
+	// Read through the audit accessor, which exists for exactly this: a
+	// package that needs to quantify over "every kind an arm exists for"
+	// without reaching into the table. Built once so the loop below does not
+	// re-derive it per kind.
+	servable := make(map[contextfabric.SubjectKind]bool)
+	for _, kind := range contextfabric.ServableCohortKindsForAudit() {
+		servable[kind] = true
+	}
+	if len(servable) == 0 {
+		t.Fatal("ServableCohortKindsForAudit() returned nothing -- every kind below would then read as unservable and this test would pass while proving the opposite of what it claims")
+	}
 	carriedNotServable := 0
 	for _, published := range contractsv1.ContextFabricSubjectKindVocabulary() {
 		kind := contextfabric.SubjectKind(published)
-		if servableCohortKinds[kind] {
+		if servable[kind] {
 			continue
 		}
 		carriedNotServable++

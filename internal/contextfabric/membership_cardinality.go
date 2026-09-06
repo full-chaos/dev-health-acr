@@ -109,7 +109,7 @@ func (m MembershipCardinality) Narrowed() bool {
 // population is genuinely empty are different answers, and one number
 // standing for both is the shape "missing is not healthy" forbids.
 func ComputeMembershipCardinality(cohort *Cohort, narrowing []contractsv1.ContextFabricPlanNarrowing) (MembershipCardinality, bool) {
-	if cohort == nil {
+	if !memberSetResolved(cohort) {
 		return MembershipCardinality{}, false
 	}
 	cardinality := MembershipCardinality{
@@ -188,24 +188,12 @@ func countRequirement(rows []RequirementOutcomeRow) (string, string) {
 	return "", ""
 }
 
-// hasCountOutcome reports whether an assembled-result `count` row has
-// already been appended for this requirement.
-//
-// finalizeResult runs more than once on some paths -- the stage-3 retry
-// re-finalizes a fresh result, and the outcome layer's own candidate
-// reduction re-finalizes one that already carries rows -- so an unguarded
-// append would publish two cardinalities for one requirement and leave a
-// reader with two answers to one question.
-func hasCountOutcome(rows []RequirementOutcomeRow, requirement string) bool {
-	for _, row := range rows {
-		if row.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult &&
-			row.Requirement == requirement &&
-			row.Obligation == string(ObligationCount) {
-			return true
-		}
-	}
-	return false
-}
+// The idempotence guard this step used to own is now
+// `hasAssembledOutcome` in unresolved_member_set_outcomes.go, generalised
+// over the obligation. It moved because a SECOND computed step needs the same
+// guard for the same reason, and because it is what orders the two: the count
+// step runs first and this guard is why the general sweep beside it leaves the
+// richer row alone.
 
 // membershipCardinalityOutcomeRow states the computed cardinality as an
 // outcome row.
@@ -289,7 +277,7 @@ func appendMembershipCardinality(rows []RequirementOutcomeRow, cohort *Cohort, n
 	if requirement == "" {
 		return rows, MembershipCardinality{}, false
 	}
-	if hasCountOutcome(rows, requirement) {
+	if hasAssembledOutcome(rows, requirement, obligation) {
 		return rows, MembershipCardinality{}, false
 	}
 	cardinality, counted := ComputeMembershipCardinality(cohort, narrowing)
@@ -309,38 +297,17 @@ func appendMembershipCardinality(rows []RequirementOutcomeRow, cohort *Cohort, n
 		// wrong about staying quiet. A requirement the answer could not
 		// meet is stated as unmet; the completeness state derived from the
 		// set then reads degraded, which is what it is.
-		return appendOutcomeRows(rows, unservedCardinalityOutcomeRow(requirement, obligation)), MembershipCardinality{}, false
+		return appendOutcomeRows(rows, unresolvedMemberSetOutcomeRow(requirement, obligation)), MembershipCardinality{}, false
 	}
 	return appendOutcomeRows(rows, membershipCardinalityOutcomeRow(cardinality, requirement, obligation)), cardinality, true
 }
 
-// unservedCardinalityOutcomeRow states a count requirement that had no member
-// set to count.
-//
-// It carries 0/0 because nothing was counted -- not a zero-member population,
-// which is a different answer and gets a `satisfied` 0/0 row from the normal
-// path. The two are told apart by the OUTCOME token, which is the whole
-// reason that vocabulary is closed.
-//
-// The cause is taken from the derivation's own mapping for this concept
-// rather than picked by hand here: `computed_population_absent` is already
-// the reason a computed obligation with no population carries, and routing
-// through the same table means one record of that fact, not two.
-func unservedCardinalityOutcomeRow(requirement, obligation string) RequirementOutcomeRow {
-	return RequirementOutcomeRow{
-		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
-		Requirement: requirement,
-		Obligation:  obligation,
-		Outcome:     contractsv1.ContextFabricRequirementUnavailable,
-		// Dimension: the reader asked how many and gets no answer at all --
-		// not fewer things (scope) and not less detail about them (depth).
-		Impact:        contractsv1.ContextFabricAnswerImpactDimension,
-		CauseCoverage: unavailableRequirementCause(RequirementReasonComputedPopulationAbsent),
-		// Observed: assembly looked for a member set and there was none.
-		// Nothing here defaulted.
-		CauseObserved: true,
-	}
-}
+// The row this step used to build for an absent member set is now
+// `unresolvedMemberSetOutcomeRow` in unresolved_member_set_outcomes.go. It
+// moved and was generalised because it was never count-specific: it states a
+// COMPUTED requirement whose server step had no member set to run over, which
+// is true of the ranking step in exactly the same way and for exactly the same
+// reason. One builder, one record of that fact.
 
 // membershipCardinalityEventFrom builds the telemetry event by READING the
 // served document's own count row.

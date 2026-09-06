@@ -30,7 +30,7 @@ const (
 	// CohortPoolTruncationCoveredByCensus: an arm was cut, but the exhaustive
 	// org-wide kind census ran and was NOT itself cut, and that census
 	// fetches every kind a cohort can be served for (proven equal to
-	// graphrank.ServableCohortKindsForAudit by a test in this package). A
+	// contextfabric.ServableCohortKindsForAudit by a test in this package). A
 	// member a bounded arm dropped is therefore still in the pool via the
 	// census, so the pool is NOT truncated -- the cohort keeps its
 	// completeness claim, and the fact that the decision was made at all is
