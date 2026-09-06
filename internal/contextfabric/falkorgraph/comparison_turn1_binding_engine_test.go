@@ -39,6 +39,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -625,6 +626,146 @@ func assertHeldComparison(t *testing.T, result contextfabric.InvestigationResult
 }
 
 // ---------------------------------------------------------------------------
+// AFFIRMATION -- the gate a served-document assertion is really asserting through
+// ---------------------------------------------------------------------------
+//
+// THE LESSON THIS SECTION EXISTS TO KEEP. An arm asserting on
+// `result.SubjectResolution.Committed` is reading the SERVED document, and the
+// served committed set has already passed the post-synthesis commit-affirmation
+// gate (chaos4085_commit_affirmation.go). That gate RETRACTS any subject
+// committed on statistical grounds which the produced answer does not
+// independently support -- and the exact-label tier stamps a statistical basis
+// deliberately, because label equality is not identity.
+//
+// The first version of the discriminating arm used a synthesizer that returned
+// a fixed string naming neither operand. Both operands committed -- the
+// resolver's own decision trace says so, twice, at `exact_index` -- and both
+// were then correctly retracted. The arm reported `committed = []` and read
+// exactly like a resolution failure for a resolver that had done its job.
+//
+// So an end-to-end arm about BINDING must make the answer AFFIRM what was
+// bound, which is also what a real comparison answer does: it names both
+// sides. The affirming doubles below do that through the gate's own shape 1 --
+// a claim about the subject standing on a canonical fact the engine actually
+// read for that same subject.
+
+// comparisonFactReader returns one canonical fact per subject it is given, so
+// the affirmation gate's "the engine actually read a fact for this subject"
+// half is satisfied by a real read rather than by a claim asserting itself.
+type comparisonFactReader struct{ subjects []contextfabric.SubjectRef }
+
+func (r comparisonFactReader) ReadFacts(context.Context, storage.Principal, contextfabric.CanonicalFactRequest) (contextfabric.CanonicalFactBundle, error) {
+	facts := make([]contextfabric.CanonicalFact, 0, len(r.subjects))
+	for index, subject := range r.subjects {
+		value := int64(index + 1)
+		facts = append(facts, contextfabric.CanonicalFact{
+			Kind:           contextfabric.FactMetrics,
+			Subject:        subject,
+			Fields:         map[string]contextfabric.FactValue{"throughput": {Integer: &value}},
+			EvidenceRefIDs: []string{"evidence_" + subject.CanonicalID},
+			SourceState:    contractsv1.ContextFabricSourceAvailable,
+			Source:         "test",
+			SourceVersion:  "v1",
+		})
+	}
+	return contextfabric.CanonicalFactBundle{
+		Facts:      facts,
+		Coverage:   contextfabric.Coverage{Sources: []contextfabric.SourceObservation{}, DegradedReasons: []string{}},
+		Version:    "ops-v1",
+		Versions:   map[contextfabric.FactKind]string{},
+		Watermarks: map[contextfabric.FactKind]string{},
+	}, nil
+}
+
+// comparisonAffirmingSynthesizer answers ABOUT BOTH OPERANDS, claiming a fact
+// for each. That is what a real two-subject comparison answer looks like, and
+// it is what lets the affirmation gate leave both commits standing.
+type comparisonAffirmingSynthesizer struct{ subjects []contextfabric.SubjectRef }
+
+func (s comparisonAffirmingSynthesizer) Synthesize(context.Context, storage.Principal, contextfabric.SynthesisInput) (contextfabric.InvestigationResult, error) {
+	claims := make([]contextfabric.ClaimedFact, 0, len(s.subjects))
+	for index, subject := range s.subjects {
+		value := int64(index + 1)
+		claims = append(claims, contextfabric.ClaimedFact{
+			ClaimID: "claim_" + subject.CanonicalID,
+			Kind:    contextfabric.FactMetrics,
+			Subject: subject,
+			Field:   "throughput",
+			Value:   contextfabric.ScalarValue{Integer: &value},
+		})
+	}
+	return contextfabric.InvestigationResult{
+		Status:         contextfabric.InvestigationComplete,
+		DirectJudgment: "Both subjects were compared on throughput.", CurrentState: "Nominal.",
+		StrongestPressures: []string{}, Drivers: []contextfabric.DriverJudgment{},
+		RemainingWork: []contextfabric.Finding{}, ReadinessGaps: []contextfabric.Finding{},
+		Paths: []contextfabric.RelationshipPath{}, Conflicts: []contextfabric.Finding{},
+		Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: claims,
+		Coverage:            contextfabric.Coverage{Sources: []contextfabric.SourceObservation{}, DegradedReasons: []string{}},
+		DeterministicAnswer: "Both subjects were compared on throughput.", Warnings: []string{},
+		Versions: contextfabric.VersionSet{
+			Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+			InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+		},
+	}, nil
+}
+
+// requireNoCommitRetraction is the control that stops this whole class of
+// mistake recurring. If the affirmation gate retracted anything, the arm above
+// it was measuring the gate rather than the property it names -- and it says so
+// in those words rather than leaving the next reader to rediscover it.
+func requireNoCommitRetraction(t *testing.T, result contextfabric.InvestigationResult) {
+	t.Helper()
+	for _, limitation := range result.Limitations {
+		if limitation == contractsv1.ContextFabricCommitRetractionLimitation {
+			t.Fatalf("the affirmation gate RETRACTED a commit, so this arm is measuring affirmation and not operand binding.\n"+
+				"served limitations = %v\n"+
+				"(the fixture's answer must name and claim a fact about every subject it expects to stay committed -- see this file's affirmation section)",
+				result.Limitations)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HOLD-ARM AUDIT -- why each held arm proves "held" and not "retracted"
+// ---------------------------------------------------------------------------
+//
+// The affirmation gate can ONLY ever empty the committed set. So an arm that
+// asserts "committed is empty" cannot, on that assertion alone, tell a
+// comparison that HELD from one that published and was then retracted. Every
+// held arm in this file therefore needs a second, independent reason, and this
+// is the audit of which one each carries. Stated per arm rather than claimed
+// wholesale, because "they are all fine" is exactly the sentence that stops
+// anyone checking.
+//
+//  1. TestOneResolvedOperandAndOneMissingOperandHoldsTheWholeComparison
+//  2. TestOneResolvedOperandAndOneAmbiguousOperandHoldsTheWholeComparison
+//  3. TestReversedOperandOrderHoldsTheSameComparison
+//  4. TestANamedOperandPairedWithAScopedOperandHoldsBeforeAnyRead
+//  5. TestAWholeQuestionOnlySubjectStillCannotCommitOnItsOwn
+//     -- all five drive refusingFactReader AND refusingSynthesizer. The
+//     affirmation gate runs AFTER synthesis, so a retraction is only reachable
+//     through a synthesizer call, and a synthesizer call fails these arms
+//     outright. Their emptiness therefore cannot be a retraction: the path
+//     that produces one is itself the failure condition.
+//
+//  6. TestTwoDistinctReceiptsTargetingOneOperandHoldTheComparison
+//  7. TestAReceiptWhoseIdentityAnswersBothOperandsStaysUnbound
+//  8. TestAReceiptWinnerOfTheWrongStatedKindHoldsTheComparison
+//     -- same construction, in the receipt file: both refusing doubles, so the
+//     same argument holds and for the same reason.
+//
+// The two arms that do NOT carry it are the ones that expect a PUBLISHED
+// comparison, and they are handled the other way round:
+// TestTurnOneBindsBothNamedOperandsOfAComparison affirms and asserts
+// requireNoCommitRetraction; TestANonAffirmingAnswerRetractsBothOperandCommits
+// deliberately does not affirm and asserts the retraction is served.
+//
+// A NEW HELD ARM MUST DO ONE OF THE TWO. Either drive the refusing doubles, or
+// call requireNoCommitRetraction. An arm that does neither is asserting through
+// a gate it has not accounted for.
+
+// ---------------------------------------------------------------------------
 // ARM 1 -- THE DISCRIMINATING ARM
 // ---------------------------------------------------------------------------
 
@@ -656,10 +797,14 @@ func TestTurnOneBindsBothNamedOperandsOfAComparison(t *testing.T) {
 		family:      contextfabric.QuestionFamilyExplicitComparison,
 		terms:       []string{comparisonTermA, comparisonTermB},
 		conn:        conn,
-		facts:       emptyFactReader{},
-		synthesizer: countingSynthesizer{},
+		facts:       comparisonFactReader{subjects: []contextfabric.SubjectRef{comparisonSubjectA, comparisonSubjectB}},
+		synthesizer: comparisonAffirmingSynthesizer{subjects: []contextfabric.SubjectRef{comparisonSubjectA, comparisonSubjectB}},
 		tracer:      tracer,
 	}.run(t)
+
+	// THE CONTROL THAT KEEPS THIS ARM HONEST, before any assertion about
+	// binding: if affirmation retracted, the numbers below describe the gate.
+	requireNoCommitRetraction(t, result)
 
 	// FIXTURE CONTROL. Both operands must actually have been searched for,
 	// separately. If the resolver only ever issued one retrieval pass, the
@@ -993,4 +1138,73 @@ func subjectCommitted(resolution contextfabric.SubjectResolution, subject contex
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// THE AFFIRMATION GATE, ON THE COMPARISON PATH
+// ---------------------------------------------------------------------------
+
+// TestANonAffirmingAnswerRetractsBothOperandCommits measures the gate's
+// behaviour on this path instead of assuming it.
+//
+// WHY IT IS WORTH AN ARM. Everything else in this file is written so the gate
+// does NOT fire; that makes the gate invisible, and an invisible dependency is
+// one that changes without anyone noticing. This arm is the complement: the
+// SAME admitted pair, resolved the SAME way, with an answer that names neither
+// operand. Both subjects must be committed by the resolver -- the trace says so
+// -- and both must then be retracted, with the contract's own retraction
+// limitation served.
+//
+// It also gives step 7's telemetry something real to name: a comparison whose
+// operands bound and were then retracted is a distinct outcome from one that
+// never bound, and only a fixture that produces it can prove the two are
+// reported differently.
+func TestANonAffirmingAnswerRetractsBothOperandCommits(t *testing.T) {
+	t.Parallel()
+
+	conn := &comparisonConn{rowsForTerm: perOperandRows(
+		[]row{comparisonAuthorizedRow(comparisonSubjectA, comparisonTermA, 1)},
+		[]row{comparisonAuthorizedRow(comparisonSubjectB, comparisonTermB, 1)},
+		nil,
+	)}
+
+	tracer := &comparisonDecisionTracer{}
+	result := comparisonDrive{
+		frame:  twoNamedOperandComparisonFrame(),
+		family: contextfabric.QuestionFamilyExplicitComparison,
+		terms:  []string{comparisonTermA, comparisonTermB},
+		conn:   conn,
+		facts:  comparisonFactReader{subjects: []contextfabric.SubjectRef{comparisonSubjectA, comparisonSubjectB}},
+		// NAMES NEITHER OPERAND. This is the whole fixture.
+		synthesizer: countingSynthesizer{},
+		tracer:      tracer,
+	}.run(t)
+
+	// FIXTURE CONTROL. The resolver must have committed BOTH, or this arm is
+	// measuring a resolution that never happened rather than a retraction.
+	committed := 0
+	for _, line := range tracer.decisionSummary() {
+		if strings.Contains(line, "outcome=committed") {
+			committed++
+		}
+	}
+	if committed != 2 {
+		t.Fatalf("the resolver reported %d committed decisions, want 2 -- without both operands binding first there is no retraction to measure.\nresolver said: %v",
+			committed, tracer.decisionSummary())
+	}
+
+	// THE PROPERTY: bound, then retracted, and SAID SO.
+	if got := committedKeys(result.SubjectResolution); len(got) != 0 {
+		t.Errorf("served committed = %v, want none -- an answer naming neither operand must not leave either standing", got)
+	}
+	retracted := false
+	for _, limitation := range result.Limitations {
+		if limitation == contractsv1.ContextFabricCommitRetractionLimitation {
+			retracted = true
+		}
+	}
+	if !retracted {
+		t.Errorf("the served document carries no retraction limitation after both commits were dropped (limitations = %v) -- a subject removed without disclosure is the silent drop this gate exists to prevent",
+			result.Limitations)
+	}
 }
