@@ -18,6 +18,7 @@ package graphrank
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -165,5 +166,59 @@ func TestOneOperandSlotSeesOnlyItsOwnTerms(t *testing.T) {
 	}
 	if len(run.candidates) == 0 {
 		t.Fatal("the slot retrieved nothing at all, so this arm cannot distinguish isolation from a dead fixture")
+	}
+}
+
+// TestAnAdmittedPairCommitsBothOperandsAtTheResolverUnit is the SECOND step of
+// a deliberate bisection.
+//
+// The slot arm above proves one operand commits its lone exact match. This one
+// proves the PAIR does, at the same unit, with the same stub. Together they
+// partition the search space for the end-to-end `committed = []`: if this
+// passes, the defect is not in slot resolution, not in the publication
+// decision, and not in the clarification -- it is in the engine or adapter
+// wiring above this call, and the next question is about that layer rather
+// than this one.
+//
+// A bisection arm is worth keeping after it has served its debugging purpose:
+// it is the tightest possible statement of "the resolver, given two clean
+// operands, publishes both".
+func TestAnAdmittedPairCommitsBothOperandsAtTheResolverUnit(t *testing.T) {
+	t.Parallel()
+
+	tracer := &slotGateTracer{}
+	deps := slotGateDeps(map[string][]CandidateNode{
+		"alpha": {exactMatchNode(contextfabric.SubjectTeam, "team_alpha", "alpha")},
+		"beta":  {exactMatchNode(contextfabric.SubjectTeam, "team_beta", "beta")},
+	}, tracer)
+
+	comparison := contextfabric.ComparisonOperands{
+		Admission: contextfabric.ComparisonAdmittedNamedPair,
+		Slots: []contextfabric.ComparisonOperandSlot{
+			{Position: 0, Variant: contextfabric.ComparisonOperandNamed, Kind: contextfabric.SubjectTeam, Terms: []string{"alpha"}},
+			{Position: 1, Variant: contextfabric.ComparisonOperandNamed, Kind: contextfabric.SubjectTeam, Terms: []string{"beta"}},
+		},
+	}
+
+	resolution, bases, _, err := resolveNamedComparison(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, comparison)
+	if err != nil {
+		t.Fatalf("resolveNamedComparison() error = %v", err)
+	}
+
+	if len(resolution.Candidates) != 2 {
+		t.Fatalf("published candidates = %d, want 2 -- retrieval did not reach both slots, so nothing below measures publication", len(resolution.Candidates))
+	}
+	if len(resolution.Committed) != 2 {
+		t.Fatalf("published committed = %v (%d), want both operands.\nprompt = %q\ndecisions = %#v",
+			resolution.Committed, len(resolution.Committed), resolution.ClarificationPrompt, tracer.decisions())
+	}
+	if resolution.Committed[0].CanonicalID != "team_alpha" {
+		t.Errorf("published order = %v, want the frame's operand order (alpha first)", resolution.Committed)
+	}
+	if strings.TrimSpace(resolution.ClarificationPrompt) != "" {
+		t.Errorf("a fully resolved pair published a clarification prompt %q", resolution.ClarificationPrompt)
+	}
+	if len(bases) != 2 {
+		t.Errorf("published commit bases = %d, want one per committed subject", len(bases))
 	}
 }
