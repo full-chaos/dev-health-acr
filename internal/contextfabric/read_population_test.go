@@ -439,6 +439,41 @@ func TestAPartiallyEnumeratedOperandSetIsNotAbsent(t *testing.T) {
 			contractsv1.ContextFabricCoverageDetailReadPopulationUnverified,
 			true, 0, 0)
 	})
+
+	// A SCOPED OPERAND OF ANOTHER KIND IS NOT THIS KIND'S PROBLEM.
+	//
+	// Enumerability is asked PER KIND. The scoped walk disables it only when
+	// the scoped operand's MemberKind is the kind under evaluation -- a scoped
+	// set of repositories says nothing about whether the TEAM operands were
+	// named, and letting it speak would retract a population the frame did
+	// enumerate.
+	//
+	// This subtest exists because a mutation SURVIVED without it: dropping the
+	// `&& operand.Scoped.MemberKind == kind` conjunct -- so that ANY scoped
+	// operand made EVERY kind unenumerable -- broke nothing in the suite. The
+	// arm above pins that a scoped operand of the SAME kind is absent; nothing
+	// pinned that one of a DIFFERENT kind is not.
+	t.Run("a scoped operand of a DIFFERENT kind leaves this kind enumerable", func(t *testing.T) {
+		t.Parallel()
+		named := SubjectTeam
+		frame := &QuestionFrame{SubjectExpression: SubjectExpression{
+			Kind: SubjectExpressionExplicitSet,
+			Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+				{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{ExpectedKind: &named}},
+				{Kind: SubjectOperandScoped, Scoped: &ScopedSetExpression{MemberKind: SubjectRepository}},
+			}},
+		}}
+		rows := evaluateOperands(
+			[]contractsv1.ContextFabricPlanRequirement{requirement},
+			frame, []SubjectRef{alpha}, coverage,
+			factsFor(alpha, kindList(flow, health)))
+		// The ONE named team slot is enumerated and read, so this reads
+		// satisfied 1/1 -- NOT the absent arm the same-kind scoped operand takes.
+		assertRow(t, rowFor(t, rows, requirement.Requirement),
+			contractsv1.ContextFabricRequirementSatisfied,
+			contractsv1.ContextFabricAnswerImpactNone,
+			"", false, 1, 1)
+	})
 }
 
 // cohortWith builds a served cohort with members and optional groups.
